@@ -154,10 +154,31 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     ) -> Read<'graph, Tree<'graph>> {
         let shape = self.scope_shape(scope);
         if let Scope::Chain(_) = scope
-            && let Some(tree) = self.trees.get(&(address(shape), written))
+            && let Some((tree, frontier)) = self.trees.get(&(address(shape), written)).copied()
         {
-            return Ok(*tree);
+            self.note_frontier(frontier);
+            return Ok(tree);
         }
+        self.open();
+        let tree = self.tree_read(scope, form, written, named);
+        let frontier = self.close();
+        let tree = tree?;
+        if let Scope::Chain(_) = scope {
+            self.trees
+                .insert((address(shape), written), (tree, frontier));
+        }
+        Ok(tree)
+    }
+
+    /// [`tree_form`](Self::tree_form) unmemoized.
+    fn tree_read(
+        &mut self,
+        scope: Scope<'graph>,
+        form: Form<'graph>,
+        written: Written,
+        named: Option<Slot>,
+    ) -> Read<'graph, Tree<'graph>> {
+        let shape = self.scope_shape(scope);
         let site = written.site();
         let tree = match form {
             Form::Name(name) => match shape.mention(Site::of(name)) {
@@ -223,9 +244,6 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             },
             _ => self.fallback(scope, named, site)?,
         };
-        if let Scope::Chain(_) = scope {
-            self.trees.insert((address(shape), written), tree);
-        }
         Ok(tree)
     }
 
@@ -797,13 +815,13 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             }
             return Ok(None);
         }
-        if let Some(summary) = self.summaries.get(&address(callee)) {
-            return Ok(*summary);
+        if let Some(summary) = self.summary_of(callee) {
+            return Ok(summary);
         }
         if self.done(callee) || !self.typed_on_demand(callee)? {
             return Ok(None);
         }
-        Ok(self.summaries.get(&address(callee)).copied().flatten())
+        Ok(self.summary_of(callee).flatten())
     }
 
     /// Whether the callable body `body` is typed, typing it now where the walk has not reached it:

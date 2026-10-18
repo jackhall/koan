@@ -199,3 +199,19 @@ impl<'a> Binding<'a> {
         (other.0.iter()).all(|(unknown, bound)| self.bound(*unknown) == Some(*bound))
     }
 }
+
+/// Where in a body a seam lies: at its entry, or at a unit, by index into the body's units — the
+/// order a body binds in, entry first.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub enum SeamAt {
+    Entry,
+    Unit(u32),
+}
+
+/// A binding site at which some frontier's last member binds, beside every unknown the frontiers
+/// completed there wait on: where a resumption over the binding the seam takes lands.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Seam<'a> {
+    pub at: SeamAt,
+    pub waits_on: Frontier<'a>,
+}

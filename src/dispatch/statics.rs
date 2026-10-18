@@ -146,10 +146,11 @@ use crate::memory::{
 use crate::parse::BuiltinShapeId;
 use crate::parse::{ExpressionPart, KExpression, KLiteral};
 use crate::scope::{
-    BodyClass, BodyShape, BuiltinIndex, Candidate, CandidateList, CaptureSlot, CaptureSource,
-    Coordinate, HandedTo, Handoff, InstanceRead, Leaf, Listed, Narrowing, Position, Print,
-    ShapeError, ShapeKind, Site, Slot, Source, Static, StaticSolution, StaticType, SurfacedHead,
-    Target, Tree, UnitWork, UseStatics, Variable as Located, ViewSlots, Within, source_of,
+    Address, BodyClass, BodyShape, BuiltinIndex, Candidate, CandidateList, CaptureSlot,
+    CaptureSource, Coordinate, FactKey, Frontier, HandedTo, Handoff, InstanceRead, Leaf, Listed,
+    Narrowing, Position, Print, ShapeError, ShapeKind, Site, Slot, Source, Static, StaticSolution,
+    StaticType, SurfacedHead, Target, Tree, UnitWork, Unknown, UseStatics, Variable as Located,
+    ViewSlots, Within, source_of,
 };
 use crate::source::SourceRef;
 use crate::symbols::{BinderSymbol, TypeSymbol};
@@ -196,13 +197,10 @@ pub(super) fn statics<'graph>(
         scratch,
         chain: BumpVec::new_in(scratch),
         unfilled: false,
-        ran: BumpVec::new_in(scratch),
         trees: bump_table(scratch),
         reading: BumpVec::new_in(scratch),
         typing: BumpVec::new_in(scratch),
         recursive: bump_set(scratch),
-        summaries: bump_table(scratch),
-        signatures: bump_table(scratch),
         views: bump_table(scratch),
         steps: bump_table(scratch),
         rebuilds: bump_table(scratch),
@@ -217,7 +215,10 @@ pub(super) fn statics<'graph>(
         module_mints: bump_table(scratch),
         heading: false,
         components: BumpVec::new_in(scratch),
+        scopes: std::cell::Cell::new(BumpVec::new_in(scratch)),
     };
+    // The walk's outermost gathering, which no rule closes.
+    pass.open();
     pass.push(root, true);
     pass.open_paths(root);
     let visited = pass.visit(0, None);
@@ -311,6 +312,9 @@ enum Landing {
 struct Followed {
     landing: Landing,
     crossed: bool,
+    /// The capture of a quote's code the walk took into it, or ended at: a hole, a `\` mark or a
+    /// `$` name, each a name the code is run with.
+    entered: Option<Unknown>,
 }
 
 /// One shape on the chain, innermost last, with what the pass has typed of it so far.
@@ -358,6 +362,15 @@ struct Level<'p, 'graph> {
     throughs: BumpVec<'p, (usize, &'graph [Located<'graph>])>,
     /// Each `LET` binder, by its right-hand side's site.
     rhs: BumpBackedMap<'p, Site, Slot>,
+    /// Each fact of the shape that waits on an unknown, by the key its rule ran at, beside its
+    /// frontier.
+    residual: BumpVec<'p, (FactKey, Frontier<'graph>)>,
+    /// What each binder's, statement's, part's and use's fact waits on, parallel to `binders`,
+    /// `statements`, `parts` and `uses`.
+    binder_frontiers: BumpVec<'p, Frontier<'graph>>,
+    statement_frontiers: BumpVec<'p, Frontier<'graph>>,
+    part_frontiers: BumpVec<'p, Frontier<'graph>>,
+    use_frontiers: BumpVec<'p, Frontier<'graph>>,
     /// Each slot a `:|` in this activation, or a block inside it, reads a capture from: the slots
     /// that keep a digest memo.
     digested: BumpVec<'p, Slot>,
@@ -385,10 +398,8 @@ struct Pass<'p, 'x, 'graph> {
     /// Whether the pass is typing a quote's code as a traced `EVAL` runs it, no hole filled: it
     /// fixes nothing.
     unfilled: bool,
-    /// Each quote's code beside its last statement's static type as it runs unfilled.
-    ran: BumpVec<'p, (&'graph BodyShape<'graph>, Interval)>,
     /// Each content tree read on the chain, by its shape's address and where it is written.
-    trees: BumpBackedMap<'p, (usize, Written), Tree<'graph>>,
+    trees: BumpBackedMap<'p, (usize, Written), (Tree<'graph>, Frontier<'graph>)>,
     /// Each binder whose tree is being read, by its shape's address: a binder read through itself
     /// reads as a leaf.
     reading: BumpVec<'p, (usize, Slot)>,
@@ -396,13 +407,8 @@ struct Pass<'p, 'x, 'graph> {
     typing: BumpVec<'p, &'graph BodyShape<'graph>>,
     /// Each callable body met while it was being typed, and each typed since: none unfolds.
     recursive: BumpBackedSet<'p, usize>,
-    /// Each typed callable body's summary: the tree of its last statement.
-    summaries: BumpBackedMap<'p, usize, Option<Tree<'graph>>>,
-    /// Each `MODULE` or `GROUP` body the pass typed exactly, by its address: the signature every
-    /// run of it ties, which its content tree does not record.
-    signatures: BumpBackedMap<'p, usize, KType>,
     /// What each view over a closed tree binds, by its print: a chain of views reads each once.
-    views: BumpBackedMap<'p, Print, Option<ViewTypes<'graph>>>,
+    views: BumpBackedMap<'p, Print, (Option<ViewTypes<'graph>>, Frontier<'graph>)>,
     /// What each read of a value a lay may reach twice yields, so a chain of views reads each
     /// member once.
     steps: BumpBackedMap<'p, (views::Identity, views::Step), Option<views::Carried<'graph, 'p>>>,
@@ -431,6 +437,8 @@ struct Pass<'p, 'x, 'graph> {
     module_mints: BumpBackedMap<'p, usize, bool>,
     /// Whether the name the pass is about to read sits at a call's head.
     heading: bool,
+    /// The open gatherings of the rules running, innermost last ([`store`]).
+    scopes: std::cell::Cell<store::Scopes<'p>>,
     /// Each component being typed, outermost first, by its shape's level and its members: a
     /// fellow's callable is not typed on demand while its component is, since its body reads the
     /// fellows' facts, not their seeds.
@@ -546,9 +554,20 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                 rhs.entry(Site::of(part)).or_insert(slot);
             }
         }
+        let mut binder_frontiers = BumpVec::with_capacity_in(shape.slots(), scratch);
+        binder_frontiers.resize(shape.slots(), Frontier::EMPTY);
+        let mut statement_frontiers = BumpVec::with_capacity_in(shape.body().len(), scratch);
+        statement_frontiers.resize(shape.body().len(), Frontier::EMPTY);
+        let mut use_frontiers = BumpVec::with_capacity_in(uses.len(), scratch);
+        use_frontiers.resize(uses.len(), Frontier::EMPTY);
         self.chain.push(Level {
             shape,
             roots_chain,
+            residual: BumpVec::new_in(scratch),
+            binder_frontiers,
+            statement_frontiers,
+            part_frontiers: BumpVec::new_in(scratch),
+            use_frontiers,
             parts: BumpVec::new_in(scratch),
             statements,
             binders,
@@ -583,8 +602,10 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     ) -> Result<(), ShapeError<'graph>> {
         let shape = self.chain[level].shape;
         for slot in 0..shape.slots() {
+            self.open();
             let seeded = self.seeded(level, Slot(slot as u32), surfacing);
-            self.set_binder(level, Slot(slot as u32), seeded);
+            let frontier = self.close_as(level, FactKey::Slot(Slot(slot as u32)));
+            self.set_binder(level, Slot(slot as u32), seeded, frontier);
             // A registration's body is called only through the keyworded uses its key reaches.
             if shape.registration(Slot(slot as u32)).is_some()
                 && let Some(body) = shape.births(Slot(slot as u32))
@@ -619,9 +640,12 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             }
             match unit.work {
                 UnitWork::Statement(index) => {
+                    self.open();
                     let wanted = self.tail(level, index as usize);
                     let typed = self.node(level, &shape.body()[index as usize], wanted)?;
-                    self.set_statement(level, index as usize, typed);
+                    let frontier = self.snapshot();
+                    self.set_statement(level, index as usize, typed, frontier);
+                    self.close_as(level, FactKey::Statement(index));
                     self.tail_edges(level, index as usize);
                 }
                 UnitWork::Component(index) => self.component(level, index.index())?,
@@ -656,17 +680,19 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         if shape.kind() == ShapeKind::Callable && !self.unfilled {
             let recursive = |pass: &Self| pass.recursive.contains(&address(shape));
             let mut summary = None;
+            self.open();
             if !recursive(self) {
                 summary = self.summarize(level)?;
             }
+            let frontier = self.close();
             // Summarizing may meet the callable itself, through a callee it unfolds.
             if recursive(self) {
                 summary = None;
             }
-            self.summaries.insert(address(shape), summary);
             let recursive = recursive(self);
             self.fix_shape_facts(shape, |facts| {
                 facts.summary = Some(summary);
+                facts.summary_frontier = frontier;
                 facts.recursive = recursive;
             });
         }
@@ -696,18 +722,29 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         nested: &'graph BodyShape<'graph>,
     ) -> Result<(), ShapeError<'graph>> {
         let code = nested.kind() == ShapeKind::Code;
+        let depth = self.depth();
         let visited = self.nested(level, nested, code, None);
         match visited {
             Err(error) if code => {
+                // A refused quote's rules closed nothing.
+                self.unwind(depth);
                 self.refuse_code(nested, resident(self.writer, error));
                 Ok(())
             }
             Ok(_) if code => {
                 let unfilled = std::mem::replace(&mut self.unfilled, true);
+                self.open();
+                let ran = self.nested(level, nested, true, None);
+                if ran.is_err() {
+                    self.unwind(depth + 1);
+                }
+                let frontier = self.close();
                 // A use unfilled code can never run refuses nothing: its `EVAL` faults.
-                if let Ok(Some(last)) = self.nested(level, nested, true, None) {
-                    self.ran.push((nested, last));
-                    self.fix_shape_facts(nested, |facts| facts.ran = Some(last));
+                if let Ok(Some(last)) = ran {
+                    self.fix_shape_facts(nested, |facts| {
+                        facts.ran = Some(last);
+                        facts.ran_frontier = frontier;
+                    });
                 }
                 self.unfilled = unfilled;
                 Ok(())
@@ -742,6 +779,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         }
         let last = self.last_statement(level + 1);
         let popped = self.chain.pop().expect("the shape was pushed");
+        self.leave(nested);
         if nested.kind() == ShapeKind::Block {
             self.fold(level, &popped);
         }
@@ -758,10 +796,30 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         level: usize,
         body: &'graph BodyShape<'graph>,
     ) -> Result<Interval, ShapeError<'graph>> {
+        self.open();
+        let typed = self.module_signed(level, body);
+        let frontier = self.close();
+        let (typed, signature) = typed?;
+        if let Some(signature) = signature.filter(|_| !self.unfilled) {
+            self.fix_shape_facts(body, |facts| {
+                facts.signature = Some(signature);
+                facts.signature_frontier = frontier;
+            });
+        }
+        Ok(typed)
+    }
+
+    /// [`module`](Self::module)'s static type, beside the exact signature where it is one.
+    fn module_signed(
+        &mut self,
+        level: usize,
+        body: &'graph BodyShape<'graph>,
+    ) -> Result<(Interval, Option<KType>), ShapeError<'graph>> {
         let (types, scratch) = (self.types, self.scratch);
         self.push(body, false);
         let visited = self.visit(level + 1, None);
         let popped = self.chain.pop().expect("the body was pushed");
+        self.leave(body);
         self.fold(level, &popped);
         let mints = !popped.minting.is_empty() || popped.minted_within;
         self.module_mints.insert(address(body), mints);
@@ -792,7 +850,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                 BinderSymbol::Registration(_) => {
                     let typed = self.resolved_registered(level, self.registered_cell(body, slot));
                     let Static::Closed(registered) = typed else {
-                        return Ok(under(KType::EMPTY_SIGNATURE.into()));
+                        return Ok((under(KType::EMPTY_SIGNATURE.into()), None));
                     };
                     keyworded.push(registered.shape);
                     continue;
@@ -800,16 +858,12 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                 BinderSymbol::Key(_) => unreachable!("no binder declares a key"),
             };
             let Some(exact) = exact else {
-                return Ok(under(KType::EMPTY_SIGNATURE.into()));
+                return Ok((under(KType::EMPTY_SIGNATURE.into()), None));
             };
             members.push((slot, exact));
         }
         let signature = module_signature(body, members, &keyworded, types, scratch);
-        if !self.unfilled {
-            self.signatures.insert(address(body), signature);
-            self.fix_shape_facts(body, |facts| facts.signature = Some(signature));
-        }
-        Ok(Interval::point(signature.into()))
+        Ok((Interval::point(signature.into()), Some(signature)))
     }
 
     /// Fold `inner`, a block or module body the shape at `level` runs, into it: its exits and
@@ -1206,32 +1260,36 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             if body.form().is_none() {
                 continue;
             }
-            let typed = match self.callable(level, body) {
+            self.open();
+            let mut typed = match self.callable(level, body) {
                 DeclaredType::Scheme(scheme) => self.bound(level, *member, body, scheme)?,
                 typed => typed,
             };
-            self.set_binder(level, *member, typed);
             // The tie births an annotated member at its annotation, so a mention through a
             // fellow's edge reads the binder at its retype, as the slot does.
-            if let (DeclaredType::Type(typed), Some(annotation)) =
-                (typed, shape.annotation(*member))
+            if let (DeclaredType::Type(held), Some(annotation)) = (typed, shape.annotation(*member))
             {
-                let held = self.annotated(level, *member, annotation, typed)?;
-                self.set_binder(level, *member, DeclaredType::Type(held));
+                typed = DeclaredType::Type(self.annotated(level, *member, annotation, held)?);
             }
+            let frontier = self.snapshot();
+            self.set_binder(level, *member, typed, frontier);
+            self.close_as(level, FactKey::Slot(*member));
         }
         // Every other member is seeded before any is typed: a fellow read while the component is
         // typed is its seed, whatever order the members are typed in.
         for member in component.members {
-            if let Some(seed) = self.seed(level, *member) {
-                self.set_binder(level, *member, seed);
+            self.open();
+            let seed = self.seed(level, *member);
+            let frontier = self.close();
+            if let Some(seed) = seed {
+                self.set_binder(level, *member, seed, frontier);
             }
         }
         self.components.push((level, component.members));
         let typed = self.members(level, component.members);
         self.components.pop();
-        for (member, typed) in typed?.iter() {
-            self.set_binder(level, *member, DeclaredType::Type(*typed));
+        for (member, typed, frontier) in typed?.iter() {
+            self.set_binder(level, *member, DeclaredType::Type(*typed), *frontier);
         }
         // A binding statement's value is the one binder it writes, where it writes only one.
         let mut values = component
@@ -1242,8 +1300,12 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             // A statement binding a quantified callable is typed by no scheme: its value is read
             // only by name, at a call's head.
             if let Some(statement) = self.statement_of(level, *only) {
-                let typed = self.binder_at(level, *only);
-                self.set_statement(level, statement, typed.as_type().unwrap_or_else(unknown));
+                let (typed, frontier) = self.binder_fact(level, *only);
+                let typed = typed.as_type().unwrap_or_else(unknown);
+                self.open_with(frontier.unknowns());
+                self.set_statement(level, statement, typed, frontier);
+                self.close();
+                self.keep(level, FactKey::Statement(statement as u32), frontier);
             }
         }
         Ok(())
@@ -1277,11 +1339,19 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         &mut self,
         level: usize,
         members: &[Slot],
-    ) -> Result<BumpVec<'p, (Slot, Interval)>, ShapeError<'graph>> {
+    ) -> Result<BumpVec<'p, (Slot, Interval, Frontier<'graph>)>, ShapeError<'graph>> {
         let shape = self.chain[level].shape;
         let mut typed = BumpVec::with_capacity_in(members.len(), self.scratch);
         for member in members {
             let annotation = shape.annotation(*member);
+            if shape
+                .births(*member)
+                .is_some_and(|body| body.form().is_some())
+                || (shape.births(*member).is_none() && shape.rhs(*member).is_none())
+            {
+                continue;
+            }
+            self.open();
             let value = match shape.births(*member) {
                 Some(body) if body.form().is_some() => continue,
                 Some(body) if body.kind() == ShapeKind::Module => self.module(level, body)?,
@@ -1302,7 +1372,8 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                 Some(annotation) => self.annotated(level, *member, annotation, value)?,
                 None => value,
             };
-            typed.push((*member, value));
+            let frontier = self.close_as(level, FactKey::Slot(*member));
+            typed.push((*member, value, frontier));
         }
         Ok(typed)
     }
@@ -1931,11 +2002,29 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         part: &'graph ExpressionPart<'graph>,
         wanted: Option<Parametric>,
     ) -> Result<Interval, ShapeError<'graph>> {
+        // The type a part is wanted at is read by its caller, so the part's rule reads it too.
+        let seed = match wanted {
+            Some(_) => self.snapshot(),
+            None => Frontier::EMPTY,
+        };
+        self.part_seeded(level, part, wanted, seed)
+    }
+
+    /// [`part_at`](Self::part_at), its rule run reading what `seed` waits on beside what it reads
+    /// itself.
+    fn part_seeded(
+        &mut self,
+        level: usize,
+        part: &'graph ExpressionPart<'graph>,
+        wanted: Option<Parametric>,
+        seed: Frontier<'graph>,
+    ) -> Result<Interval, ShapeError<'graph>> {
+        self.open_with(seed.unknowns());
         let shape = self.chain[level].shape;
         let form = of_part(shape, part);
         let typed = self.form(level, form, wanted)?;
         let typed = self.viewed_tree(level, form, Written::Part(Site::of(part)), typed)?;
-        self.record_part(level, Site::of(part), typed);
+        self.close_part(level, Site::of(part), typed);
         Ok(typed)
     }
 
@@ -2108,7 +2197,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                     // A scheme over a parameter the load cannot name: the run solves the call.
                     Some((_, Some(_))) => {
                         let typed = self.narrow(level, node, list)?;
-                        self.record_part(level, Site::of(head), typed);
+                        self.record_written_part(level, Site::of(head), typed);
                         return Ok(DeclaredType::Type(unknown()));
                     }
                     // An operand read only by typing it: the head is read as it is, as `part`
@@ -2119,7 +2208,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                         let form = of_part(self.chain[level].shape, head);
                         let typed =
                             self.viewed_tree(level, form, Written::Part(Site::of(head)), typed)?;
-                        self.record_part(level, Site::of(head), typed);
+                        self.record_written_part(level, Site::of(head), typed);
                         return Ok(DeclaredType::Type(typed));
                     }
                     None => None,
@@ -2448,8 +2537,9 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                     _ => None,
                 });
                 let mut typed = BumpVec::with_capacity_in(items.len(), scratch);
+                let seed = self.snapshot();
                 for item in items.iter() {
-                    typed.push(self.part_at(level, item, element)?);
+                    typed.push(self.part_seeded(level, item, element, seed)?);
                 }
                 self.record_composite(
                     level,
@@ -2467,8 +2557,10 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                     _ => None,
                 });
                 let mut typed = BumpVec::with_capacity_in(pairs.len(), scratch);
+                let seed = self.snapshot();
                 for (key, value) in pairs.iter() {
-                    typed.push((self.part(level, key)?, self.part_at(level, value, values)?));
+                    let key = self.part(level, key)?;
+                    typed.push((key, self.part_seeded(level, value, values, seed)?));
                 }
                 let each = pairs.iter().zip(typed.iter());
                 self.record_composite(
@@ -2495,9 +2587,10 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                     _ => None,
                 });
                 let mut typed = BumpVec::with_capacity_in(fields.len(), scratch);
+                let seed = self.snapshot();
                 for (name, value) in fields.iter() {
                     let field = declared.and_then(|declared| declared.get(name.symbol()));
-                    typed.push((*name, self.part_at(level, value, field)?));
+                    typed.push((*name, self.part_seeded(level, value, field, seed)?));
                 }
                 let each = fields.iter().zip(typed.iter());
                 self.record_composite(
@@ -2554,7 +2647,14 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     /// there no path of whose class this shape reaches read through its bounds; one crossing into a
     /// quote's code reads it through its bounds.
     fn read_declared(&self, level: usize, coordinate: Coordinate) -> Bound {
-        let Followed { landing, crossed } = self.follow(level, coordinate);
+        let Followed {
+            landing,
+            crossed,
+            entered,
+        } = self.follow(level, coordinate);
+        if let Some(entered) = entered {
+            self.note(&[entered]);
+        }
         let read = match landing {
             Landing::Builtin(index) => {
                 return self
@@ -2588,9 +2688,11 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     /// takes.
     fn follow(&self, mut level: usize, mut coordinate: Coordinate) -> Followed {
         let mut crossed = false;
-        let open = |hole, crossed| Followed {
+        let mut entered = None;
+        let open = |hole, crossed, entered| Followed {
             landing: Landing::Open { hole },
             crossed,
+            entered,
         };
         loop {
             let (hops, target) = match coordinate {
@@ -2598,23 +2700,31 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                     return Followed {
                         landing: Landing::Builtin(index),
                         crossed,
+                        entered,
                     };
                 }
                 Coordinate::Activation { hops, target } => (hops, target),
             };
             let Some(at) = level.checked_sub(hops as usize) else {
-                return open(false, crossed);
+                return open(false, crossed, entered);
             };
             let capture = match target {
                 Target::Local(slot) => {
                     return Followed {
                         landing: Landing::Slot { level: at, slot },
                         crossed,
+                        entered,
                     };
                 }
                 Target::Capture(capture) => capture,
             };
             let holder = &self.chain[at];
+            if holder.roots_chain && entered.is_none() {
+                entered = Some(Unknown {
+                    segment: holder.shape.segment(),
+                    at: Address::Capture(capture),
+                });
+            }
             let outer = at.checked_sub(1);
             // A type capture the pass added reads its source as a builder capture does.
             let builder = holder.shape.captures();
@@ -2625,8 +2735,8 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                 }
             };
             match (source, outer) {
-                (CaptureSource::Hole, _) => return open(true, crossed),
-                (CaptureSource::Offered, _) | (_, None) => return open(false, crossed),
+                (CaptureSource::Hole, _) => return open(true, crossed, entered),
+                (CaptureSource::Offered, _) | (_, None) => return open(false, crossed, entered),
                 (CaptureSource::Read(inner), Some(outer)) => {
                     crossed |= holder.roots_chain;
                     (level, coordinate) = (outer, inner);
@@ -2639,6 +2749,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                             slot: members[index as usize],
                         },
                         crossed: crossed || holder.roots_chain,
+                        entered,
                     };
                 }
             }
@@ -2950,7 +3061,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             .any(|typed| typed.upper == KType::NEVER.into())
         {
             let never = Interval::point(KType::NEVER.into());
-            self.record_part(level, Site::of(argument), never);
+            self.record_written_part(level, Site::of(argument), never);
             return Ok(None);
         }
         let mut arguments = BumpVec::with_capacity_in(callee.names.len(), scratch);
@@ -2992,7 +3103,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             lower: ends(|each| each.lower),
             upper: ends(|each| each.upper),
         };
-        self.record_part(level, Site::of(argument), payload);
+        self.record_written_part(level, Site::of(argument), payload);
         Ok(Some((payload.upper, arguments.leak(), contributions)))
     }
 
@@ -3708,7 +3819,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     /// part's static type, and its solution by its site or in its body's born-instance cell.
     fn record_instance(&mut self, level: usize, site: &InstanceArgument<'graph>, made: Made<'_>) {
         let (typed, solution) = made;
-        self.record_part(level, Site::of(site.part), typed);
+        self.record_written_part(level, Site::of(site.part), typed);
         if self.unfilled {
             return;
         }
@@ -3766,7 +3877,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     /// written, so nothing composed or `USING` filled it.
     fn traced(&self, level: usize, operand: &'graph ExpressionPart<'graph>) -> Option<KType> {
         let code = self.traced_code(level, operand)?;
-        let (_, last) = self.ran.iter().find(|(ran, _)| std::ptr::eq(*ran, code))?;
+        let last = self.ran_of(code)?;
         Some(bound_above(self.types, self.scratch, last.upper))
     }
 
@@ -3805,6 +3916,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             Followed {
                 landing: Landing::Open { hole: true },
                 crossed: false,
+                ..
             }
         )
     }
@@ -3853,10 +3965,15 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             }
             Candidate::One(coordinate) => coordinate,
         };
+        let followed = self.follow(level, coordinate);
+        if let Some(entered) = followed.entered {
+            self.note(&[entered]);
+        }
         let Followed {
             landing: Landing::Slot { level: at, slot },
             crossed,
-        } = self.follow(level, coordinate)
+            ..
+        } = followed
         else {
             return Known::Unknown;
         };

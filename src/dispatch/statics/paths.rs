@@ -30,7 +30,7 @@ use crate::elaborate::{
 use crate::memory::{BumpBackedMap, BumpVec, bump_hash_table, bump_table, collect};
 use crate::parse::ExpressionPart;
 use crate::scope::{
-    Binder, BodyShape, Callable, CaptureSlot, CaptureSource, Coordinate, Leaf, PathEntry,
+    Binder, BodyShape, Callable, CaptureSlot, CaptureSource, Coordinate, Frontier, Leaf, PathEntry,
     PathIndex, Position, Print, Registered, Resolution, Resolved, Root, ShapeError, ShapeKind,
     Site, Source, Static, StaticCallable, StaticRegistered, StaticType, Target, Tree,
     Variable as Located, each_part, part_of,
@@ -214,6 +214,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     ) -> Read<'graph, Resolved> {
         let table = self.table(level);
         if let Some((_, Some(resolution))) = self.paths[table].at(entry.level) {
+            self.note_frontier(resolution.frontier);
             return Ok(resolution.resolved);
         }
         // A path met while it is being resolved stands for itself.
@@ -221,9 +222,12 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             return Ok(Resolved::Class(entry.level));
         }
         self.paths[table].resolving.push(entry.level);
+        self.open();
         let resolution = self.resolve_entry(level, entry);
+        let frontier = self.close();
         self.paths[table].resolving.pop();
-        let (resolution, at) = resolution?;
+        let (mut resolution, at) = resolution?;
+        resolution.frontier = frontier;
         let index = entry.level - self.paths[table].base;
         let channel = index < self.paths[table].channel;
         if let (Root::Inline(_), Resolved::Class(_), true, Some(at)) =
@@ -261,6 +265,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                         Resolution {
                             tree: leaf,
                             resolved,
+                            frontier: Frontier::EMPTY,
                         },
                         None,
                     ));
@@ -334,7 +339,15 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             Some(closed) => Resolved::Closed(closed),
             None => Resolved::Class(self.class_of(level, entry, tree)),
         };
-        Ok((Resolution { tree, resolved }, at))
+        let frontier = Frontier::EMPTY;
+        Ok((
+            Resolution {
+                tree,
+                resolved,
+                frontier,
+            },
+            at,
+        ))
     }
 
     /// The tree, exact signature and a site of the binder `binder` a path's root names, read from
@@ -397,6 +410,9 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                 return None;
             };
             let (_, resolution) = table.at(at)?;
+            if let Some(resolution) = resolution {
+                self.note_frontier(resolution.frontier);
+            }
             match resolution.map(|resolution| resolution.resolved) {
                 None => {
                     unresolved = true;
@@ -427,7 +443,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         let mut closed = BumpVec::with_capacity_in(variables.len(), self.scratch);
         for variable in variables {
             let point = match variable.source {
-                Source::Path { .. } => match table.at(variable.level)?.1?.resolved {
+                Source::Path { .. } => match self.noted(table.at(variable.level)?.1?).resolved {
                     Resolved::Closed(point) => Some(point),
                     Resolved::Class(_) => None,
                 },
@@ -573,7 +589,11 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         let table = &self.paths[self.table(level)];
         variables.iter().all(|variable| match variable.source {
             Source::Type(_) => true,
-            Source::Path { .. } => match table.at(variable.level).and_then(|(_, held)| held) {
+            Source::Path { .. } => match table
+                .at(variable.level)
+                .and_then(|(_, held)| held)
+                .map(|held| self.noted(held))
+            {
                 Some(Resolution {
                     resolved: Resolved::Class(rep),
                     ..
@@ -631,7 +651,10 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         let from = table.members.partition_point(|(class, _)| *class < rep);
         let to = table.members.partition_point(|(class, _)| *class <= rep);
         table.members[from..to].iter().find_map(|(_, member)| {
-            let (entry, _) = table.at(*member)?;
+            let (entry, resolution) = table.at(*member)?;
+            if let Some(resolution) = resolution {
+                self.note_frontier(resolution.frontier);
+            }
             if !self.locatable(level, entry) {
                 return None;
             }
@@ -660,6 +683,12 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             },
         );
         !paths
+    }
+
+    /// `resolution`, its frontier gathered.
+    fn noted(&self, resolution: Resolution<'graph>) -> Resolution<'graph> {
+        self.note_frontier(resolution.frontier);
+        resolution
     }
 
     /// Whether `level` is a path level of the chain the shape at `from` sits on.

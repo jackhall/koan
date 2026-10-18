@@ -4,8 +4,9 @@
 
 use crate::memory::BumpAllocator;
 use crate::scope::{
-    BodyShape, CaptureSlot, Coordinate, Elaboration, FunctionGroupMap, PathEntry, ShapeError,
-    ShapeKind, Slot, Source, Static, StaticType, Target, TypeExpression, Variable,
+    Address, BodyShape, CaptureSlot, Coordinate, Elaboration, FactKey, FunctionGroupMap, PathEntry,
+    ShapeError, ShapeKind, Slot, Source, Static, StaticType, Target, TypeExpression, Unknown,
+    Variable, frontier_at,
 };
 use crate::symbols::{BinderSymbol, SymbolInterner};
 use crate::type_lattice::{DeclaredType, KType, Parametric, TypeNode};
@@ -682,5 +683,127 @@ fn a_type_binder_over_a_path_stays_unknown() {
             1,
             "the run reads it through its entry"
         );
+    });
+}
+
+/// The frontier the channel records for the one type expression `shape` records.
+fn only_frontier<'graph>(shape: &'graph BodyShape<'graph>) -> &'graph [Unknown] {
+    let [expression] = shape.type_expressions() else {
+        panic!("one type expression")
+    };
+    frontier_at(shape.channel_residual(), FactKey::Site(expression.site)).unknowns()
+}
+
+/// The unknown the type slot `name` of `shape` is.
+fn unknown_at(program: &Program<'_, '_, '_>, shape: &BodyShape<'_>, name: &str) -> Unknown {
+    Unknown {
+        segment: shape.segment(),
+        at: Address::Slot(type_slot(program, shape, name)),
+    }
+}
+
+#[test]
+fn a_cell_over_a_for_all_name_waits_on_its_callable_s_slot() {
+    let source = "LET f = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(:(LIST OF Elt)))";
+    typed(source, |program| {
+        let body = program.birth("f");
+        assert_eq!(only_frontier(body), [unknown_at(program, body, "Elt")]);
+    });
+}
+
+#[test]
+fn a_cell_that_reads_no_unknown_is_fixed() {
+    typed("LET t = :(LIST OF Number)", |program| {
+        assert!(only_frontier(program.activation.shape()).is_empty());
+    });
+    let source = "LET f = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(:(LIST OF Number)))";
+    typed(source, |program| {
+        assert!(only_frontier(program.birth("f")).is_empty());
+    });
+}
+
+#[test]
+fn an_inner_cell_over_an_outer_name_waits_on_the_outer_slot() {
+    let source = "LET f = (FN FOR ALL #[Ay] :{x :Ay} -> Ay = \
+                  #(\n  LET g = (FN FOR ALL #[Be] :{y :Be} -> Be = #(:(MAP Ay -> Be)))\n  x\n))";
+    typed(source, |program| {
+        let outer = program.birth("f");
+        let inner = nested(outer, ShapeKind::Callable);
+        let mut expected = [
+            unknown_at(program, outer, "Ay"),
+            unknown_at(program, inner, "Be"),
+        ];
+        expected.sort();
+        assert_eq!(only_frontier(inner), expected);
+        let callable = frontier_at(inner.channel_residual(), FactKey::Shape);
+        assert!(callable.is_empty(), "`g`'s type reads no outer name");
+    });
+}
+
+#[test]
+fn sibling_bodies_numbering_their_names_alike_wait_on_distinct_unknowns() {
+    let source = "LET f = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(\n  \
+                  LET g = (FN FOR ALL #[Ay] :{a :Ay} -> Ay = #(:(LIST OF Ay)))\n  \
+                  LET h = (FN FOR ALL #[Be] :{b :Be} -> Be = #(:(LIST OF Be)))\n  \
+                  x\n))";
+    typed(source, |program| {
+        let [g, h] = callables(program.birth("f"))[..] else {
+            panic!("two inner callables")
+        };
+        assert_eq!(g.group_levels().len(), 1);
+        assert_eq!(
+            g.group_levels(),
+            h.group_levels()
+                .iter()
+                .map(|_| g.group_levels()[0])
+                .collect::<Vec<_>>(),
+            "the two numbers their names alike"
+        );
+        let (one, other) = (only_frontier(g), only_frontier(h));
+        assert_eq!((one.len(), other.len()), (1, 1));
+        assert_ne!(one, other);
+        assert_eq!(one[0].segment, g.segment());
+        assert_eq!(other[0].segment, h.segment());
+    });
+}
+
+#[test]
+fn a_type_binder_over_a_run_bound_name_waits_on_it_and_its_reader_on_both() {
+    let source = "LET f = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(\
+                  (NEWTYPE Boxed = :{v :Elt}) \
+                  (:(LIST OF Boxed))))";
+    typed(source, |program| {
+        let body = program.birth("f");
+        let (elt, boxed) = (
+            unknown_at(program, body, "Elt"),
+            unknown_at(program, body, "Boxed"),
+        );
+        let slot = type_slot(program, body, "Boxed");
+        let declared = frontier_at(body.channel_residual(), FactKey::Slot(slot));
+        assert_eq!(declared.unknowns(), [elt]);
+        let mut both = [elt, boxed];
+        both.sort();
+        assert_eq!(only_frontier(body), both);
+    });
+}
+
+#[test]
+fn a_meet_over_a_for_all_name_waits_on_it() {
+    let source = "LET f = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(:(Elt & Number)))";
+    typed(source, |program| {
+        let body = program.birth("f");
+        assert_eq!(only_frontier(body), [unknown_at(program, body, "Elt")]);
+    });
+}
+
+#[test]
+fn an_inner_callable_over_an_outer_name_waits_on_the_outer_slot() {
+    let source = "LET f = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = \
+                  #(\n  LET g = (FN FOR ALL #[Tee] :{t :Tee, u :Elt} -> Tee = #(t))\n  x\n))";
+    typed(source, |program| {
+        let outer = program.birth("f");
+        let inner = nested(outer, ShapeKind::Callable);
+        let callable = frontier_at(inner.channel_residual(), FactKey::Shape).unknowns();
+        assert_eq!(callable, [unknown_at(program, outer, "Elt")]);
     });
 }

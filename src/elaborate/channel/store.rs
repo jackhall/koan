@@ -5,7 +5,7 @@
 //! read is recorded.
 
 use crate::scope::{
-    BodyShape, Keyed, PathEntry, PathRead, ShapeError, Site, Slot, StaticCallable,
+    BodyShape, Keyed, PathEntry, PathRead, Residual, ShapeError, Site, Slot, StaticCallable,
     StaticRegistered, StaticType, Target, TypeExpression,
 };
 use crate::type_lattice::Parametric;
@@ -61,6 +61,21 @@ impl<'p, 'graph, X> Pass<'p, 'graph, '_, X> {
         shape: &BodyShape<'graph>,
     ) -> &'graph [TypeExpression<'graph>] {
         shape.type_expressions()
+    }
+
+    /// Every cell of `shape` the walk fixed that waits on an unknown, once the walk has visited
+    /// `shape`.
+    pub(super) fn residual_of(&self, shape: &BodyShape<'graph>) -> Residual<'graph> {
+        shape.channel_residual()
+    }
+
+    /// Lay `shape`'s residual down.
+    pub(super) fn fix_channel_residual(
+        &self,
+        shape: &BodyShape<'graph>,
+        residual: Residual<'graph>,
+    ) {
+        shape.fix_channel_residual(residual);
     }
 
     /// Fix `expression`'s cell.

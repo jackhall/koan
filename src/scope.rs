@@ -47,7 +47,9 @@ pub(crate) use signature::pair_label;
 pub use activation::{Activation, ActivationView};
 pub use builtins::Builtins;
 pub use closure::ClosureBindings;
-pub use facts::{Address, Binding, FactKey, Frontier, Residual, Unknown, frontier_at, merge_into};
+pub use facts::{
+    Address, Binding, FactKey, Frontier, Residual, Seam, SeamAt, Unknown, frontier_at, merge_into,
+};
 pub use groups::{BuiltinGroup, GroupFrame, is_equal, is_equality, is_unequal};
 pub use keyed::{Keyed, KeyedEntry};
 pub use shape::{

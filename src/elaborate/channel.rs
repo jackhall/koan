@@ -26,6 +26,11 @@
 //! `SIG` declares it, each head parameter read at the ascription's pin or, unpinned, at the block's
 //! own type parameter of that name.
 //!
+//! Each cell records its **frontier** in its shape's residual where it waits on an unknown
+//! ([`store`]): every run-bound name its reader read — a `FOR ALL` name, a type binder left
+//! unknown beside what that binder waits on, a name a quote's code is run with — in either mode,
+//! named by the slot or capture of the shape that declares it.
+//!
 //! See [README.md § The type channel at load](README.md#the-type-channel-at-load).
 
 use std::cell::Cell;
@@ -35,16 +40,16 @@ use crate::parse::KExpression;
 use crate::parse::Role;
 use crate::parse::quoted_body;
 use crate::scope::{
-    Binder, BodyShape, Builtins, Callable, CaptureSlot, CaptureSource, Coordinate, Elaboration,
-    FunctionGroupMap, Keyed, ParameterBinding, PathEntry, PathIndex, PathRead, Position,
-    Registered, Registration, Root, ShapeError, ShapeGroupMap, ShapeKind, Site, Slot, Source,
-    Static, StaticRegistered, StaticType, SurfacedHead, Target, TypeExpression, UnitWork, Variable,
-    source_of,
+    Address, Binder, BodyShape, Builtins, Callable, CaptureSlot, CaptureSource, Coordinate,
+    Elaboration, FactKey, Frontier, FunctionGroupMap, Keyed, ParameterBinding, PathEntry,
+    PathIndex, PathRead, Position, Registered, Registration, Root, ShapeError, ShapeGroupMap,
+    ShapeKind, Site, Slot, Source, Static, StaticRegistered, StaticType, SurfacedHead, Target,
+    TypeExpression, UnitWork, Unknown, Variable, frontier_at, merge_into, source_of,
 };
 use crate::source::SourceRef;
 use crate::symbols::{BinderSymbol, TypeSymbol, ValueSymbol};
 use crate::type_lattice::{
-    DeclaredType, KType, Members, Parametric, TypeNode, substitute_parameters,
+    DeclaredType, KType, Members, Parametric, SigSchema, TypeNode, substitute_parameters,
 };
 use crate::values::{Chain, Knotted, Types, Value};
 
@@ -113,6 +118,8 @@ struct Level<'p, 'graph> {
     paths: Option<(usize, Cell<BumpVec<'p, &'graph PathEntry<'graph>>>)>,
     /// At a chain root: its path entries' indices, by root, chain and label.
     found: Cell<PathIndex<'p>>,
+    /// Each cell of the shape fixed so far that waits on an unknown, beside its frontier.
+    residual: BumpVec<'p, (FactKey, Frontier<'graph>)>,
 }
 
 impl<'p, 'graph> Level<'p, 'graph> {
@@ -133,6 +140,7 @@ impl<'p, 'graph> Level<'p, 'graph> {
             reads: Cell::new(BumpVec::new_in(scratch)),
             paths: root.then(|| (path_base(shape), Cell::new(BumpVec::new_in(scratch)))),
             found: Cell::new(bump_hash_table(scratch)),
+            residual: BumpVec::new_in(scratch),
         }
     }
 }
@@ -174,6 +182,19 @@ enum Class {
     Variable(Parametric),
 }
 
+/// The unknown the run-bound name `key` is: its declaring shape's segment, and where that shape's
+/// activation holds it.
+fn unknown_of(chain: &[Level<'_, '_>], key: Key) -> Unknown {
+    let (level, at) = match key {
+        Key::Slot(level, slot) => (level, Address::Slot(slot)),
+        Key::Capture(level, capture) => (level, Address::Capture(capture)),
+    };
+    Unknown {
+        segment: chain[level].shape.segment(),
+        at,
+    }
+}
+
 /// Whether a reader is typing a type binder, which is closed or unknown, or anything else.
 #[derive(Clone, Copy, PartialEq, Eq)]
 enum Mode {
@@ -198,6 +219,8 @@ struct Reader<'e, 'p, 'graph, 'cell, X> {
     rigid: Cell<u32>,
     /// Each rigid variable read, once per level.
     variables: Cell<BumpVec<'p, Variable<'graph>>>,
+    /// Every unknown a read reached, transitively: the frontier of the cell being typed.
+    frontier: Cell<BumpVec<'p, Unknown>>,
 }
 
 impl<'graph, X: Knotted> Reads<'graph> for Reader<'_, '_, 'graph, '_, X> {
@@ -206,7 +229,12 @@ impl<'graph, X: Knotted> Reads<'graph> for Reader<'_, '_, 'graph, '_, X> {
     }
 
     fn type_at(&self, at: Coordinate) -> TypeAt {
-        match self.pass.classify(self.from, at) {
+        let note = |unknowns: &[Unknown]| {
+            edit(&self.frontier, self.pass.scratch, |frontier| {
+                merge_into(frontier, unknowns)
+            })
+        };
+        match self.pass.classify(self.from, at, &note) {
             Class::Type(handle) => TypeAt::Type(handle),
             Class::NotAType => TypeAt::NotAType,
             _ if self.mode == Mode::Declaring => TypeAt::Unknown,
@@ -320,7 +348,31 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
             mode,
             rigid: Cell::new(0),
             variables: Cell::new(BumpVec::new_in(self.scratch)),
+            frontier: Cell::new(BumpVec::new_in(self.scratch)),
         }
+    }
+
+    /// The frontier of what `reader` read, laid down: the frontier of the cell it typed.
+    fn frontier_of(&self, reader: &Reader<'_, 'p, 'graph, 'cell, X>) -> Frontier<'graph> {
+        edit(&reader.frontier, self.scratch, |frontier| {
+            Frontier::laid(self.writer, frontier)
+        })
+    }
+
+    /// Record `frontier` as the frontier of the cell at `key` of the shape at `level`, where it
+    /// waits on an unknown.
+    fn keep(&mut self, level: usize, key: FactKey, frontier: Frontier<'graph>) {
+        if !frontier.is_empty() {
+            self.chain[level].residual.push((key, frontier));
+        }
+    }
+
+    /// The frontier recorded for the cell at `key` of the shape at `level`, while its shape is on
+    /// the chain.
+    fn staged(&self, level: usize, key: FactKey) -> Frontier<'graph> {
+        (self.chain[level].residual.iter())
+            .find(|(held, _)| *held == key)
+            .map_or(Frontier::EMPTY, |(_, frontier)| *frontier)
     }
 
     /// The lexical variable the run-bound name `key` is, bounded by `bound`: its name, at the level
@@ -432,8 +484,9 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
         type_expression(annotation, &reader, self.types, self.scratch).ok()
     }
 
-    /// What `at`, read in the shape at level `from`, holds.
-    fn classify(&self, from: usize, at: Coordinate) -> Class {
+    /// What `at`, read in the shape at level `from`, holds, each unknown the read reaches handed to
+    /// `note`: a run-bound name, and a type binder left unknown beside its own frontier.
+    fn classify(&self, from: usize, at: Coordinate, note: &dyn Fn(&[Unknown])) -> Class {
         let (hops, target) = match at {
             Coordinate::Builtin(index) => {
                 return match self.builtins.get(index) {
@@ -447,27 +500,32 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
             .checked_sub(hops as usize)
             .expect("a coordinate steps out only through shapes on the chain");
         match target {
-            Target::Local(slot) => self.slot_at(level, slot),
-            Target::Capture(capture) => self.capture_at(level, capture),
+            Target::Local(slot) => self.slot_at(level, slot, note),
+            Target::Capture(capture) => self.capture_at(level, capture, note),
         }
     }
 
     /// What the slot `slot` of the shape at `level` holds.
-    fn slot_at(&self, level: usize, slot: Slot) -> Class {
+    fn slot_at(&self, level: usize, slot: Slot, note: &dyn Fn(&[Unknown])) -> Class {
         let shape = self.chain[level].shape;
         let key = Key::Slot(level, slot);
         if shape.declarations(slot).is_some() {
             return match self.declared_cell(shape, slot) {
                 Static::Closed(handle) => Class::Type(handle),
-                _ => Class::RunBound {
-                    key,
-                    bound: KType::ANY,
-                },
+                _ => {
+                    note(&[unknown_of(&self.chain, key)]);
+                    note(self.staged(level, FactKey::Slot(slot)).unknowns());
+                    Class::RunBound {
+                        key,
+                        bound: KType::ANY,
+                    }
+                }
             };
         }
         let BinderSymbol::Type(name) = shape.slot_name(slot) else {
             return Class::NotAType;
         };
+        note(&[unknown_of(&self.chain, key)]);
         if let Some(own) = self.chain[level].own
             && let Some(index) = own.map.get(name)
         {
@@ -483,23 +541,29 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
     /// shape is born — the very name, and so its level, when the shape shares its parent's chain —
     /// and otherwise, crossing into code, a run-bound name of the code's own, bounded as the name
     /// it reads.
-    fn capture_at(&self, level: usize, capture: CaptureSlot) -> Class {
+    fn capture_at(&self, level: usize, capture: CaptureSlot, note: &dyn Fn(&[Unknown])) -> Class {
         let key = Key::Capture(level, capture);
+        // A name crossing into code is one of the code's own, beside the name it reads.
+        if self.chain[level].root {
+            note(&[unknown_of(&self.chain, key)]);
+        }
         match self.chain[level].shape.captures()[capture.index()].source {
-            CaptureSource::Read(inner) if level > 0 => match self.classify(level - 1, inner) {
-                read if !self.chain[level].root => read,
-                Class::Type(handle) => Class::Type(handle),
-                Class::NotAType => Class::NotAType,
-                Class::RunBound { bound, .. } => Class::RunBound { key, bound },
-                Class::Variable(variable) => Class::RunBound {
-                    key,
-                    bound: self
-                        .types
-                        .node(variable)
-                        .rigid_bound()
-                        .expect("a lexical variable has a bound"),
-                },
-            },
+            CaptureSource::Read(inner) if level > 0 => {
+                match self.classify(level - 1, inner, note) {
+                    read if !self.chain[level].root => read,
+                    Class::Type(handle) => Class::Type(handle),
+                    Class::NotAType => Class::NotAType,
+                    Class::RunBound { bound, .. } => Class::RunBound { key, bound },
+                    Class::Variable(variable) => Class::RunBound {
+                        key,
+                        bound: self
+                            .types
+                            .node(variable)
+                            .rigid_bound()
+                            .expect("a lexical variable has a bound"),
+                    },
+                }
+            }
             // A type name is never a knot member.
             CaptureSource::Member { .. } => Class::NotAType,
             _ => Class::RunBound {
@@ -547,6 +611,7 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
         registration: &Registration<'graph>,
         heads: &[SurfacedHead<'graph>],
         signatures: &mut Signatures<'p>,
+        frontier: &mut BumpVec<'_, Unknown>,
     ) -> Option<StaticRegistered<'graph>> {
         match heads {
             [
@@ -558,10 +623,9 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
             ] => self.signature_head(
                 level,
                 registration,
-                head,
-                *signature,
-                *ascription,
+                (head, *signature, *ascription),
                 signatures,
+                frontier,
             ),
             // A body's definition is typed where the body is: its closed shape is the entry.
             [
@@ -580,7 +644,11 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
                 };
                 match self.registered_cell(body, held.slot) {
                     Static::Closed(registered) => Some(Static::Closed(registered)),
-                    _ => None,
+                    _ => {
+                        let waits = frontier_at(self.residual_of(body), FactKey::Slot(held.slot));
+                        merge_into(frontier, waits.unknowns());
+                        None
+                    }
                 }
             }
             _ => None,
@@ -588,18 +656,23 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
     }
 
     /// The bucket entry of `registration`, the surfaced signature head `head` of the block at chain
-    /// level `level`: the shape the head's `SIG` declares under the registration's key and ranking,
+    /// level `level`, beside its `SIG`'s binder and the ascription naming it, each where it lies:
+    /// the shape the head's `SIG` declares under the registration's key and ranking,
     /// each head parameter read at the ascription's pin or, unpinned, at the block's own type
     /// parameter of that name. `None` where the ascription is no closed signature or application
-    /// of one, or the signature does not type where it is declared.
+    /// of one, or the signature does not type where it is declared. What the entry waits on is
+    /// added to `frontier`.
     fn signature_head(
         &self,
         level: usize,
         registration: &Registration<'graph>,
-        head: &KExpression<'graph>,
-        (declared_hops, slot): (u32, Slot),
-        (hops, site): (u32, Site),
+        (head, (declared_hops, slot), (hops, site)): (
+            &KExpression<'graph>,
+            (u32, Slot),
+            (u32, Site),
+        ),
         signatures: &mut Signatures<'p>,
+        frontier: &mut BumpVec<'_, Unknown>,
     ) -> Option<StaticRegistered<'graph>> {
         let (types, scratch) = (self.types, self.scratch);
         let ascribing = self.chain[level - hops as usize].shape;
@@ -619,6 +692,11 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
             _ => return None,
         };
         let declaring = (level - declared_hops as usize, slot);
+        // The `SIG` declaration's heads read what its binder reads.
+        merge_into(
+            frontier,
+            self.staged(declaring.0, FactKey::Slot(slot)).unknowns(),
+        );
         let index = match signatures.iter().position(|(held, _)| *held == declaring) {
             Some(index) => index,
             None => {
@@ -643,7 +721,24 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
             unreachable!("an application applies a signature");
         };
         let reader = self.reader(level, Mode::Typing);
-        let block = self.chain[level].shape;
+        let registered = self.head_entry(&reader, registration, *shape, &schema, &pins);
+        merge_into(frontier, self.frontier_of(&reader).unknowns());
+        registered
+    }
+
+    /// The bucket entry of `registration`, a surfaced signature head whose `SIG` declares `shape`
+    /// over `schema`'s head parameters, read through `reader` at the block: each head parameter at
+    /// its pin among `pins` or, unpinned, at the block's own type parameter of that name.
+    fn head_entry(
+        &self,
+        reader: &Reader<'_, 'p, 'graph, 'cell, X>,
+        registration: &Registration<'graph>,
+        shape: DeclaredType<Parametric>,
+        schema: &SigSchema,
+        pins: &[(BinderSymbol, KType)],
+    ) -> Option<StaticRegistered<'graph>> {
+        let (types, scratch) = (self.types, self.scratch);
+        let block = self.chain[reader.from].shape;
         let mut bindings = BumpVec::with_capacity_in(schema.parameters.len(), scratch);
         for (name, _) in schema.parameters.iter() {
             let pinned = pins
@@ -666,13 +761,13 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
             };
             bindings.push((*name, bound));
         }
-        let read = substitute_parameters(types, scratch, *shape, Members::from_table(bindings));
+        let read = substitute_parameters(types, scratch, shape, Members::from_table(bindings));
         let registered = Registered {
             shape: ranked(types, scratch, read, registration.classes),
             quantifier_map: ShapeGroupMap::default(),
             parameters: ParameterBinding::Named(&[]),
         };
-        Some(self.fixed(&reader, registered, |registered| {
+        Some(self.fixed(reader, registered, |registered| {
             close_registered(types, registered)
         }))
     }
@@ -691,7 +786,18 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
                 continue;
             }
             let reader = self.reader(level, Mode::Declaring);
-            match type_declarations(component, &reader, types, scratch) {
+            let typed = type_declarations(component, &reader, types, scratch);
+            let frontier = self.frontier_of(&reader);
+            drop(reader);
+            if !frontier.is_empty() {
+                (self.chain[level].residual).extend(
+                    component
+                        .members
+                        .iter()
+                        .map(|slot| (FactKey::Slot(*slot), frontier)),
+                );
+            }
+            match typed {
                 Ok(handles) => {
                     for (slot, handle) in component.members.iter().zip(handles) {
                         self.fix_declared(shape, *slot, Static::Closed(*handle));
@@ -741,9 +847,14 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
                 }
                 None => type_expression(expression.part, &reader, types, scratch),
             };
+            if let Ok(handle) = typed {
+                self.fix_expression(expression, self.fixed_type(&reader, handle));
+            }
+            let frontier = self.frontier_of(&reader);
+            drop(reader);
+            self.keep(level, FactKey::Site(expression.site), frontier);
             match typed {
-                Ok(handle) => self.fix_expression(expression, self.fixed_type(&reader, handle)),
-                Err(Elaboration::Unknown { .. }) => {}
+                Ok(_) | Err(Elaboration::Unknown { .. }) => {}
                 Err(error) => {
                     let statement = &shape.body()[expression.statement as usize];
                     return Err(ShapeError::Type {
@@ -760,8 +871,15 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
         let mut signatures: Signatures<'p> = BumpVec::new_in(scratch);
         for registration in shape.registrations() {
             if let Some(head) = registration.surfaced {
-                if let Some(typed) = self.surfaced(level, registration, head, &mut signatures) {
+                let mut frontier = BumpVec::new_in(scratch);
+                let surfaced =
+                    self.surfaced(level, registration, head, &mut signatures, &mut frontier);
+                if let Some(typed) = surfaced {
                     self.fix_registered(shape, registration.slot, typed);
+                }
+                if !frontier.is_empty() {
+                    let frontier = Frontier::laid(self.writer, &mut frontier);
+                    (self.chain[level].residual).push((FactKey::Slot(registration.slot), frontier));
                 }
                 continue;
             }
@@ -769,18 +887,22 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
                 continue;
             };
             let reader = self.reader(level, Mode::Typing);
-            match callable_type(form, &reader, types, scratch, Some(registration)) {
-                Ok(callable) => {
-                    let registered = callable
-                        .registered
-                        .expect("a callable born for a registration carries its bucket entry");
-                    let registered = laid_registered(self.writer, registered);
-                    let typed = self.fixed(&reader, registered, |registered| {
-                        close_registered(types, registered)
-                    });
-                    self.fix_registered(shape, registration.slot, typed);
-                }
-                Err(Elaboration::Unknown { .. }) => {}
+            let typed = callable_type(form, &reader, types, scratch, Some(registration));
+            if let Ok(callable) = typed {
+                let registered = callable
+                    .registered
+                    .expect("a callable born for a registration carries its bucket entry");
+                let registered = laid_registered(self.writer, registered);
+                let typed = self.fixed(&reader, registered, |registered| {
+                    close_registered(types, registered)
+                });
+                self.fix_registered(shape, registration.slot, typed);
+            }
+            let frontier = self.frontier_of(&reader);
+            drop(reader);
+            self.keep(level, FactKey::Slot(registration.slot), frontier);
+            match typed {
+                Ok(_) | Err(Elaboration::Unknown { .. }) => {}
                 Err(error) => {
                     return Err(ShapeError::Type {
                         error,
@@ -800,6 +922,7 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
                 true => 0,
                 false => self.chain[level].base + self.chain[level].count,
             };
+            let mut own_frontier = Frontier::EMPTY;
             let own = match nested.kind() {
                 ShapeKind::Callable => {
                     let form = nested.form().expect("a callable body sits in its form");
@@ -818,6 +941,7 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
                             });
                         }
                     };
+                    own_frontier = self.frontier_of(&reader);
                     drop(reader);
                     self.fix_callable(nested, typed);
                     let group = match typed {
@@ -842,6 +966,9 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
             };
             self.chain
                 .push(Level::new(nested, root, base, own, scratch));
+            if !own_frontier.is_empty() {
+                (self.chain[level + 1].residual).push((FactKey::Shape, own_frontier));
+            }
             let visited = self.visit(level + 1);
             self.chain.pop();
             match visited {
@@ -850,6 +977,13 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
                 }
                 visited => visited?,
             }
+        }
+        let mut residual = std::mem::replace(
+            &mut self.chain[level].residual,
+            BumpVec::new_in(self.scratch),
+        );
+        if !residual.is_empty() {
+            self.fix_channel_residual(shape, Keyed::sorted(self.writer, &mut residual));
         }
         let at = &self.chain[level];
         let mut reads = at.reads.replace(BumpVec::new_in(self.scratch));

@@ -24,6 +24,7 @@ use crate::type_lattice::{DeclaredType, Interval, KType, Parametric, Verdict, di
 use crate::values::{Chain, KnottedFamily, Value};
 
 use super::activation::ActivationView;
+use super::facts::Frontier;
 use super::keyed::Keyed;
 use super::shape::{BodyShape, Candidate, Coordinate, Site, Slot};
 use super::tree::{Binder, Tree};
@@ -353,6 +354,9 @@ impl fmt::Debug for PathEntry<'_> {
 pub struct Resolution<'graph> {
     pub tree: Tree<'graph>,
     pub resolved: Resolved,
+    /// Every unknown the resolution read: a path through a module binder whose type a binding
+    /// may pin resolves otherwise under it.
+    pub frontier: Frontier<'graph>,
 }
 
 /// The type a path is at load.
@@ -568,6 +572,9 @@ pub struct Statics<'graph> {
     /// Each call that passes a digested slot bare, by the site its contributions are keyed by,
     /// sorted: which argument each such slot is.
     pub handoffs: Keyed<'graph, (Site, &'graph [Handoff])>,
+    /// What each keyworded use's narrowing, contributions and selection wait on, by index into
+    /// the shape's candidate lists.
+    pub use_frontiers: &'graph [Frontier<'graph>],
 }
 
 /// What the static pass fixes about a body as a whole, each where it computes it: a callable's
@@ -585,6 +592,12 @@ pub struct ShapeFacts<'graph> {
     pub signature: Option<KType>,
     /// A quote's code's last statement's static type as a traced `EVAL` runs it unfilled.
     pub ran: Option<Interval<Parametric>>,
+    /// What the summary, the signature, the unfilled code's type and the callable's born instance
+    /// each wait on.
+    pub summary_frontier: Frontier<'graph>,
+    pub signature_frontier: Frontier<'graph>,
+    pub ran_frontier: Frontier<'graph>,
+    pub born_frontier: Frontier<'graph>,
 }
 
 /// At a `:|` over a module binder read bare: the module's body, and per capture its content

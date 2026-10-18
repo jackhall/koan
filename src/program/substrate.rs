@@ -185,6 +185,7 @@ impl CellSubstrate {
                 .map_err(refused)?;
                 type_channel(shape, builtins, types, brand.writer(), &scratch).map_err(refused)?;
                 L::check(shape, builtins, types, brand.writer(), &scratch).map_err(refused)?;
+                crate::build::list_seams(shape, brand.writer(), &scratch);
                 let error = builtin_error(types, &owner.symbols, &scratch);
                 let root = builder.freeze();
                 let writer = brand.writer();

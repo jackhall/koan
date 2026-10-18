@@ -68,6 +68,7 @@ use crate::type_lattice::{DeclaredGroup, KType, ReductionMode, dense_classes};
 
 use super::super::builtins::{BuiltinNames, Builtins};
 use super::super::channels::Channels;
+use super::super::facts::Frontier;
 use super::super::groups::{self, Claim, Claims, GroupFrame};
 use super::super::keyed::Keyed;
 use super::super::signature::{
@@ -3436,6 +3437,8 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 channel_residual: resident_cell(writer, Keyed::from_sorted(&[])),
                 statics_residual: resident_cell(writer, Keyed::from_sorted(&[])),
                 shape_facts: resident_cell(writer, ShapeFacts::default()),
+                seams: resident_cell(writer, &[][..]),
+                reach: resident_cell(writer, Frontier::EMPTY),
             },
         )
     }

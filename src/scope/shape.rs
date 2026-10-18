@@ -63,7 +63,7 @@ use crate::values::{Chain, ContentDigest, Knotted};
 
 use super::builtins::Builtins;
 use super::channels::Channels;
-use super::facts::Residual;
+use super::facts::{Frontier, Residual, Seam};
 use super::groups::GroupFrame;
 use super::keyed::{Keyed, KeyedEntry};
 use super::tree::Tree;
@@ -593,6 +593,10 @@ pub struct BodyShape<'graph> {
     statics_residual: &'graph Cell<Residual<'graph>>,
     /// The static pass's facts about the body as a whole.
     shape_facts: &'graph Cell<ShapeFacts<'graph>>,
+    /// Each seam of this body, in binding order.
+    seams: &'graph Cell<&'graph [Seam<'graph>]>,
+    /// Every unknown a fact of this body, or of a body nested in it, waits on.
+    reach: &'graph Cell<Frontier<'graph>>,
 }
 
 /// One entry of a `MODULE` or `GROUP` body's `OVER` list: a name, or a registration's key written
@@ -1153,6 +1157,54 @@ impl<'graph> BodyShape<'graph> {
     pub fn fix_statics_residual(&self, residual: Residual<'graph>) {
         debug_assert!(self.statics_residual.get().is_empty());
         self.statics_residual.set(residual);
+    }
+
+    /// Each seam of this body, in binding order: entry first, then unit by unit.
+    pub fn seams(&self) -> &'graph [Seam<'graph>] {
+        self.seams.get()
+    }
+
+    /// Every unknown a fact of this body, or of a body nested in it, waits on.
+    pub fn reach(&self) -> Frontier<'graph> {
+        self.reach.get()
+    }
+
+    /// Written once, once the load's passes quiesce.
+    pub fn fix_seams(&self, seams: &'graph [Seam<'graph>], reach: Frontier<'graph>) {
+        debug_assert!(self.seams.get().is_empty() && self.reach.get().is_empty());
+        self.seams.set(seams);
+        self.reach.set(reach);
+    }
+
+    /// The `USING … SCOPE` nested in this body whose body sits at `block`: the index of the
+    /// statement holding it, beside where it reads its operand where the operand is a name.
+    pub fn using_at(&self, block: Site) -> Option<(usize, Option<Coordinate>)> {
+        for (index, statement) in self.body.iter().enumerate() {
+            let mut found = None;
+            let mut look = |node: &KExpression<'graph>| {
+                if node.cache().builtin_shape().map(|shape| shape.id)
+                    == Some(BuiltinShapeId::UsingScope)
+                    && Site::of_body(node) == Some(block)
+                {
+                    let operand = node.parts.get(1).map(|part| &part.value);
+                    let read = operand
+                        .filter(|operand| matches!(operand, ExpressionPart::Identifier(_)))
+                        .and_then(|operand| self.mention(Site::of(operand)))
+                        .map(|mention| mention.coordinate);
+                    found = Some(read);
+                }
+            };
+            look(statement);
+            each_part(statement, |part| {
+                if let ExpressionPart::Expression(node) = part {
+                    look(node.reference());
+                }
+            });
+            if let Some(read) = found {
+                return Some((index, read));
+            }
+        }
+        None
     }
 
     /// The static pass's facts about this body as a whole.

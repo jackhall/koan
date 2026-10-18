@@ -32,8 +32,8 @@ use crate::type_lattice::{
 use crate::values::digest::Operator;
 use crate::values::{Chain, applications, retyped_to};
 
+use super::Pass;
 use super::trees::Scope;
-use super::{Pass, address};
 
 type Read<'graph, T> = Result<T, ShapeError<'graph>>;
 
@@ -232,9 +232,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     ) -> Read<'graph, Option<KType>> {
         Ok(match carried {
             Carried::Typed(held) => Some(held),
-            Carried::Tree(Tree::Body { shape, .. }) => {
-                self.signatures.get(&address(shape)).copied()
-            }
+            Carried::Tree(Tree::Body { shape, .. }) => self.signature_of(shape),
             Carried::Tree(tree @ Tree::View { .. }) => {
                 self.view_of(tree, site)?.map(|viewed| viewed.view)
             }
@@ -252,7 +250,6 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         tree: Tree<'graph>,
         site: Site,
     ) -> Read<'graph, Option<ViewTypes<'graph>>> {
-        let (types, scratch) = (self.types, self.scratch);
         let Tree::View {
             operator,
             application,
@@ -263,9 +260,29 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             return Ok(None);
         };
         let closed = matches!(print, Print::Closed(_));
-        if closed && let Some(viewed) = self.views.get(&print) {
-            return Ok(*viewed);
+        if closed && let Some((viewed, frontier)) = self.views.get(&print).copied() {
+            self.note_frontier(frontier);
+            return Ok(viewed);
         }
+        self.open();
+        let viewed = self.view_read(operator, application, source, site);
+        let frontier = self.close();
+        let viewed = viewed?;
+        if closed {
+            self.views.insert(print, (viewed, frontier));
+        }
+        Ok(viewed)
+    }
+
+    /// [`view_of`](Self::view_of) unmemoized.
+    fn view_read(
+        &mut self,
+        operator: Operator,
+        application: KType,
+        source: &'graph Tree<'graph>,
+        site: Site,
+    ) -> Read<'graph, Option<ViewTypes<'graph>>> {
+        let (types, scratch) = (self.types, self.scratch);
         let held = self.carried_type(Carried::Tree(*source), site)?;
         let viewed = match operator {
             Operator::Opaque => source.bare().digest().and_then(|digest| {
@@ -273,9 +290,6 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             }),
             Operator::Reviewed => None,
         };
-        if closed {
-            self.views.insert(print, viewed);
-        }
         Ok(viewed)
     }
 
@@ -388,8 +402,8 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                 if seen {
                     Some(Carried::Tree(tree))
                 } else {
-                    (self.signatures.get(&address(shape)))
-                        .and_then(|held| slot_type(*held, name, types, scratch))
+                    (self.signature_of(shape))
+                        .and_then(|held| slot_type(held, name, types, scratch))
                         .map(Carried::Typed)
                 }
             }
