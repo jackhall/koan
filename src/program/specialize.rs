@@ -60,7 +60,7 @@ pub fn specialize<'graph>(
 ) -> Action<'graph, KBundle> {
     let (step, state) = step.state();
     match state {
-        KState::Born(KBirth::Specialize) => step.enlist(),
+        KState::Born(KBirth::Specialize) => step.enlist(None),
         _ => step.failed(StepError::Refused),
     }
 }

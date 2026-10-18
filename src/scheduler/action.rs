@@ -28,7 +28,7 @@ use crate::scheduler::continuation::{
 };
 use crate::scheduler::delivery::KDelivery;
 use crate::scheduler::seek::{Lending, Seek};
-use crate::scope::RegionHeader;
+use crate::scope::{RegionHeader, Settled};
 use crate::type_lattice::Root;
 use crate::type_lattice::{Habitat, Halves, Own};
 use crate::values::{BuildRef, Chain, Half, Types};
@@ -489,6 +489,12 @@ where
         })
     }
 
+    /// The facts the specialization this cell borrows settled, read through its lend: `None` for a
+    /// cell that borrows no specialization, or one whose specialization settled none.
+    pub fn settled(&self) -> Option<&'lent Settled<'lent>> {
+        (self.context.lent_region()).and_then(|(_, header)| header.get()?.settled())
+    }
+
     /// The build cell this cell's frame runs under: the specialization whose region it borrows,
     /// where it was born borrowing one, and `fallback` otherwise.
     pub fn build_ref(&self, fallback: BuildRef) -> BuildRef {
@@ -618,11 +624,12 @@ where
     }
 
     /// End a specialization's step: lay this cell's own header and its table, as long as the
-    /// nested bound its parent's table records. The drain enters the cell in its parent's table and
-    /// sets its home once the step returns. The cell stays alive with no continuation. Refused for
-    /// a cell that asked for children, one that is no tree cell, one that borrows no region, and
-    /// one whose lent region holds no table.
-    pub fn enlist(self) -> Action<'graph, B> {
+    /// nested bound its parent's table records, and rest `settled`, the facts its resumption
+    /// settled, in the header. The drain enters the cell in its parent's table and sets its home
+    /// once the step returns. The cell stays alive with no continuation, so its facts are set
+    /// once. Refused for a cell that asked for children, one that is no tree cell, one that
+    /// borrows no region, and one whose lent region holds no table.
+    pub fn enlist(self, settled: Option<&'here Settled<'here>>) -> Action<'graph, B> {
         if !self.spawns.is_empty() {
             return self.failed(StepError::Unparked);
         }
@@ -640,6 +647,9 @@ where
         let half = Half::of(self.writer(), self.header());
         let header = (self.header()).get_or_lay(|| RegionHeader::lay(self.writer()));
         header.lay_table(half, nested, nested);
+        if let Some(settled) = settled {
+            header.settle(settled);
+        }
         Action(Kind::Quiesced)
     }
 
