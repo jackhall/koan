@@ -122,8 +122,9 @@ statements and resolves its names through, closure bindings and activations — 
 [src/scope/README.md](src/scope/README.md)),
 [elaborate/](src/elaborate.rs) (type expressions elaborated into lattice handles
 where they are read — see [src/elaborate/README.md](src/elaborate/README.md)),
-[build/](src/build.rs) (the build tree: the build root the load runs in and
-the specializations a binding settles, beside the run tree — see
+[build/](src/build.rs) (the build tree: the build root the load runs in, the
+seams the load's type facts wait at, and the specializations a binding
+settles, beside the run tree — see
 [src/build/README.md](src/build/README.md)),
 [knot/](src/knot.rs) (functions, quotes, modules and circular data as values:
 the node each one is, the tie that births a component as one knot, the doors

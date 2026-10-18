@@ -68,7 +68,6 @@ use crate::type_lattice::{DeclaredGroup, KType, ReductionMode, dense_classes};
 
 use super::super::builtins::{BuiltinNames, Builtins};
 use super::super::channels::Channels;
-use super::super::facts::Frontier;
 use super::super::groups::{self, Claim, Claims, GroupFrame};
 use super::super::keyed::Keyed;
 use super::super::signature::{
@@ -76,6 +75,7 @@ use super::super::signature::{
     quantifier_bounds, quoted_body, signature_run,
 };
 use super::super::typed::{ShapeFacts, Static};
+use super::facts::Frontier;
 use super::{
     Arm, Binder, BodyShape, BuiltinIndex, Candidate, CandidateList, CaptureSlot, CaptureSource,
     CaptureSpec, Component, ComponentIndex, Coordinate, Listed, Mention, MentionClass, Offer,

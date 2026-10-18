@@ -618,6 +618,28 @@ cells do, and the shape reads it by site (`value_type`, `use_statics`,
 `settled`, `instance_at`, `named_contributions`) or statement index; a shape the
 pass has not fixed — a quote's code it refused — has no static types, every
 candidate of every use in it is *maybe*, and no ascription in it is settled.
+The cell also keeps every binder's static type, each use's selection beside
+the closed point its group solves to, and what each use's narrowing waits on;
+a further cell (`ShapeFacts`) keeps what the pass fixes about the body as a
+whole — a callable's summary and whether it recurses, a `MODULE` or `GROUP`
+body's exact signature, a quote's code's type as it runs unfilled.
+
+**What a fact waits on.** [`shape::facts`](shape/facts.rs) holds the solver's
+vocabulary, beside the shape whose sites, slots and segments it keys on
+([type facts and the solver](../build/README.md#type-facts-and-the-solver)):
+an `Unknown`, a name a binding may remove, by its lexical address — the
+declaring body's segment and the slot or capture its activation holds the name
+at; a `Frontier`, the sorted unknowns a fact waits on; a `FactKey`, where in a
+shape a fact's rule runs; a `Binding`, unknowns beside the closed types they
+are given; and a `Seam`, a binding site beside what it completes.
+[`settled`](settled.rs) holds what one resumption re-ran, laid beside the
+load's cells (`Settled`, per pass `ChannelSettled` and `StaticsSettled`), and
+the `Resumption` a pass runs over the ones it extends. Each shape holds a
+**residual** per pass (`channel_residual`, `statics_residual`), every fact of
+that pass waiting on an unknown, by its key beside its frontier — a fact absent
+from it is fixed — and, once the passes quiesce, its **seams** in binding
+order and its **reach**, every unknown a fact of it or of a body nested in it
+waits on (`seams`, `reach`). A path's `Resolution` carries its own frontier.
 
 **Content trees.** The value channel's trees are [`tree`](tree.rs)'s
 vocabulary: what the load knows of a module-valued expression's content
@@ -1204,9 +1226,5 @@ type outside the one error that lists names, and on a retired lifetime name.
   default, which lifts the dict-default refusal.
 - [Code splicing](../../roadmap/metaprogramming/code-splicing.md) — how several parts
   are spliced into a quote at once, and a kind for built code.
-- [Monotone elaboration](../../roadmap/gradual-build/monotone-elaboration.md)
-  — the write-once cell as a monotone type fact, beside the vocabulary of
-  unknowns, frontiers, the residual and a binding, per
-  [the build module](../build/README.md).
 - [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — `CLOSE
   OVER`, and a warning for an unmarked keyworded use in a quote.

@@ -10,7 +10,9 @@
 
 use std::cell::Cell;
 
-use crate::memory::{BumpAllocator, BumpBackedMap, BumpVec, Writer, bump_table, collect};
+use crate::memory::{
+    BumpAllocator, BumpBackedMap, BumpBackedSet, BumpVec, Writer, bump_set, bump_table, collect,
+};
 use crate::scope::{
     BodyShape, ChannelSettled, FactKey, Keyed, PathEntry, PathRead, Residual, Resumption, Segment,
     Settled, ShapeError, Site, Slot, StaticCallable, StaticRegistered, StaticType, Target,
@@ -18,7 +20,7 @@ use crate::scope::{
 };
 use crate::type_lattice::Parametric;
 
-use super::{Pass, edit};
+use super::Pass;
 
 /// A cell a resumption re-ran.
 #[derive(Clone, Copy)]
@@ -29,16 +31,19 @@ enum Rerun<'graph> {
     Callable(StaticCallable<'graph>),
 }
 
+/// One shape's fact by its segment, the newest the walk wrote.
+type BySegment<'p, T> = Cell<BumpBackedMap<'p, Segment, T>>;
+
 /// A resumption the walk runs: what it resumes under, and each cell it re-ran, by its shape's
 /// segment and where the cell lies.
 pub(super) struct Resume<'p, 'graph> {
     pub(super) over: Resumption<'p, 'graph>,
     cells: Cell<BumpBackedMap<'p, (Segment, FactKey), Rerun<'graph>>>,
-    levels: Cell<BumpVec<'p, (Segment, &'graph [Parametric])>>,
-    residuals: Cell<BumpVec<'p, (Segment, Residual<'graph>)>>,
-    refusals: Cell<BumpVec<'p, (Segment, &'graph ShapeError<'graph>)>>,
-    /// How many cells the walk re-ran.
-    pub(super) reran: Cell<u32>,
+    levels: BySegment<'p, &'graph [Parametric]>,
+    residuals: BySegment<'p, Residual<'graph>>,
+    refusals: BySegment<'p, &'graph ShapeError<'graph>>,
+    /// Each cell the walk re-ran, by its shape's segment and key.
+    reran: Cell<BumpBackedSet<'p, (Segment, FactKey)>>,
     scratch: BumpAllocator<'p>,
 }
 
@@ -47,10 +52,10 @@ impl<'p, 'graph> Resume<'p, 'graph> {
         Resume {
             over,
             cells: Cell::new(bump_table(scratch)),
-            levels: Cell::new(BumpVec::new_in(scratch)),
-            residuals: Cell::new(BumpVec::new_in(scratch)),
-            refusals: Cell::new(BumpVec::new_in(scratch)),
-            reran: Cell::new(0),
+            levels: Cell::new(bump_table(scratch)),
+            residuals: Cell::new(bump_table(scratch)),
+            refusals: Cell::new(bump_table(scratch)),
+            reran: Cell::new(bump_set(scratch)),
             scratch,
         }
     }
@@ -62,41 +67,58 @@ impl<'p, 'graph> Resume<'p, 'graph> {
         held
     }
 
+    /// Count a cell the walk re-runs. A cell re-runs at most once in a resumption that skips.
+    fn count(&self, segment: Segment, key: FactKey) {
+        let mut reran = self.reran.replace(bump_set(self.scratch));
+        let new = reran.insert((segment, key));
+        self.reran.set(reran);
+        debug_assert!(
+            new || self.over.everything,
+            "a cell re-runs at most once in a resumption"
+        );
+    }
+
     fn rerun(&self, segment: Segment, key: FactKey, cell: Rerun<'graph>) {
         let mut cells = self.cells.replace(bump_table(self.scratch));
         cells.insert((segment, key), cell);
         self.cells.set(cells);
     }
 
-    fn found<T: Copy>(
-        held: &Cell<BumpVec<'p, (Segment, T)>>,
-        scratch: BumpAllocator<'p>,
-        segment: Segment,
-    ) -> Option<T> {
-        edit(held, scratch, |held| {
-            (held.iter().rev())
-                .find(|(at, _)| *at == segment)
-                .map(|(_, found)| *found)
-        })
+    /// What the walk wrote in `held` for `segment`.
+    fn found<T: Copy>(&self, held: &BySegment<'p, T>, segment: Segment) -> Option<T> {
+        let table = held.replace(bump_table(self.scratch));
+        let found = table.get(&segment).copied();
+        held.set(table);
+        found
+    }
+
+    /// Write `value` for `segment` in `held`, in place of what the walk wrote there.
+    fn write<T>(&self, held: &BySegment<'p, T>, segment: Segment, value: T) {
+        let mut table = held.replace(bump_table(self.scratch));
+        table.insert(segment, value);
+        held.set(table);
     }
 
     /// What the walk settled, laid down: each shape's cells it re-ran, by segment.
     pub(super) fn settled(self, writer: Writer<'graph, 'graph>) -> &'graph Settled<'graph> {
         let scratch = self.scratch;
-        let cells = self.cells.into_inner();
-        let mut segments = BumpVec::new_in(scratch);
-        segments.extend(cells.keys().map(|(segment, _)| *segment));
         let (levels, residuals, refusals) = (
             self.levels.into_inner(),
             self.residuals.into_inner(),
             self.refusals.into_inner(),
         );
-        segments.extend(levels.iter().map(|(segment, _)| *segment));
-        segments.extend(residuals.iter().map(|(segment, _)| *segment));
-        segments.extend(refusals.iter().map(|(segment, _)| *segment));
+        let mut cells = BumpVec::new_in(scratch);
+        cells.extend(self.cells.into_inner());
+        cells.sort_unstable_by_key(|(key, _)| *key);
+        let mut segments = BumpVec::new_in(scratch);
+        segments.extend(cells.iter().map(|((segment, _), _)| *segment));
+        segments.extend(levels.keys().copied());
+        segments.extend(residuals.keys().copied());
+        segments.extend(refusals.keys().copied());
         segments.sort_unstable();
         segments.dedup();
         let mut settled = BumpVec::with_capacity_in(segments.len(), scratch);
+        let mut at = 0;
         for segment in segments.iter().copied() {
             let (mut declared, mut registered, mut expressions) = (
                 BumpVec::new_in(scratch),
@@ -104,25 +126,22 @@ impl<'p, 'graph> Resume<'p, 'graph> {
                 BumpVec::new_in(scratch),
             );
             let mut callable = None;
-            for ((at, key), cell) in cells.iter() {
-                match (*at == segment, *key, *cell) {
-                    (true, FactKey::Slot(slot), Rerun::Declared(typed)) => {
-                        declared.push((slot, typed))
-                    }
-                    (true, FactKey::Slot(slot), Rerun::Registered(typed)) => {
+            // `cells` is sorted by segment, as `segments` is.
+            while let Some(((held, key), cell)) = cells.get(at).copied()
+                && held == segment
+            {
+                match (key, cell) {
+                    (FactKey::Slot(slot), Rerun::Declared(typed)) => declared.push((slot, typed)),
+                    (FactKey::Slot(slot), Rerun::Registered(typed)) => {
                         registered.push((slot, typed))
                     }
-                    (true, FactKey::Site(site), Rerun::Expression(typed)) => {
+                    (FactKey::Site(site), Rerun::Expression(typed)) => {
                         expressions.push((site, typed))
                     }
-                    (true, FactKey::Shape, Rerun::Callable(typed)) => callable = Some(typed),
+                    (FactKey::Shape, Rerun::Callable(typed)) => callable = Some(typed),
                     _ => {}
                 }
-            }
-            fn last<T: Copy>(held: &[(Segment, T)], segment: Segment) -> Option<T> {
-                (held.iter().rev())
-                    .find(|(at, _)| *at == segment)
-                    .map(|(_, found)| *found)
+                at += 1;
             }
             settled.push((
                 segment,
@@ -131,15 +150,15 @@ impl<'p, 'graph> Resume<'p, 'graph> {
                     registered: Keyed::sorted(writer, &mut registered),
                     expressions: Keyed::sorted(writer, &mut expressions),
                     callable,
-                    levels: last(&levels, segment),
-                    residual: last(&residuals, segment).unwrap_or(Keyed::from_sorted(&[])),
-                    refusal: last(&refusals, segment),
+                    levels: levels.get(&segment).copied(),
+                    residual: (residuals.get(&segment).copied()).unwrap_or(Keyed::from_sorted(&[])),
+                    refusal: refusals.get(&segment).copied(),
                 },
             ));
         }
         let mut laid = Settled::empty(self.over.binding);
         laid.channel = Keyed::from_sorted(collect(writer, settled.iter().copied()));
-        laid.reran.0 = self.reran.get();
+        laid.reran.0 = self.reran.into_inner().len() as u32;
         crate::memory::resident(writer, laid)
     }
 }
@@ -240,7 +259,8 @@ impl<'p, 'graph, X> Pass<'p, 'graph, '_, X> {
         let Some(resume) = &self.resume else {
             return body.group_levels();
         };
-        Resume::found(&resume.levels, self.scratch, body.segment())
+        resume
+            .found(&resume.levels, body.segment())
             .or_else(|| (resume.over.channel(body.segment())).find_map(|settled| settled.levels))
             .unwrap_or_else(|| body.group_levels())
     }
@@ -256,7 +276,7 @@ impl<'p, 'graph, X> Pass<'p, 'graph, '_, X> {
     pub(super) fn code_refused(&self, code: &BodyShape<'graph>) -> bool {
         code.refusal().is_some()
             || self.resume.as_ref().is_some_and(|resume| {
-                Resume::found(&resume.refusals, self.scratch, code.segment()).is_some()
+                resume.found(&resume.refusals, code.segment()).is_some()
                     || (resume.over.channel(code.segment())).any(|held| held.refusal.is_some())
             })
     }
@@ -275,7 +295,8 @@ impl<'p, 'graph, X> Pass<'p, 'graph, '_, X> {
         let Some(resume) = &self.resume else {
             return shape.channel_residual();
         };
-        Resume::found(&resume.residuals, self.scratch, shape.segment())
+        resume
+            .found(&resume.residuals, shape.segment())
             .or_else(|| (resume.over.channel(shape.segment()).next()).map(|held| held.residual))
             .unwrap_or_else(|| shape.channel_residual())
     }
@@ -287,9 +308,7 @@ impl<'p, 'graph, X> Pass<'p, 'graph, '_, X> {
         residual: Residual<'graph>,
     ) {
         match &self.resume {
-            Some(resume) => edit(&resume.residuals, self.scratch, |held| {
-                held.push((shape.segment(), residual))
-            }),
+            Some(resume) => resume.write(&resume.residuals, shape.segment(), residual),
             None if residual.is_empty() => {}
             None => shape.fix_channel_residual(residual),
         }
@@ -355,9 +374,7 @@ impl<'p, 'graph, X> Pass<'p, 'graph, '_, X> {
     /// Fix the callable body `body`'s own group as its body reads it.
     pub(super) fn fix_group_levels(&self, body: &BodyShape<'graph>, levels: &'graph [Parametric]) {
         match &self.resume {
-            Some(resume) => edit(&resume.levels, self.scratch, |held| {
-                held.push((body.segment(), levels))
-            }),
+            Some(resume) => resume.write(&resume.levels, body.segment(), levels),
             None => body.fix_group_levels(levels),
         }
     }
@@ -369,9 +386,7 @@ impl<'p, 'graph, X> Pass<'p, 'graph, '_, X> {
         refusal: &'graph ShapeError<'graph>,
     ) {
         match &self.resume {
-            Some(resume) => edit(&resume.refusals, self.scratch, |held| {
-                held.push((code.segment(), refusal))
-            }),
+            Some(resume) => resume.write(&resume.refusals, code.segment(), refusal),
             None => code.refuse_typing(refusal),
         }
     }
@@ -418,16 +433,22 @@ impl<'p, 'graph, X> Pass<'p, 'graph, '_, X> {
         }
     }
 
-    /// Whether the cell the walk is about to type, waiting on `frontier`, is one a resumption
-    /// skips: its frontier waits on nothing it binds. Counts the cell where it re-runs.
-    pub(super) fn skips(&self, frontier: crate::scope::Frontier<'_>) -> bool {
+    /// Whether the cell at `key` of `shape` the walk is about to type, waiting on `frontier`, is
+    /// one a resumption skips: its frontier waits on nothing it binds. Counts the cell where it
+    /// re-runs — once, since a re-run cell waits on nothing it binds.
+    pub(super) fn skips(
+        &self,
+        shape: &BodyShape<'graph>,
+        key: FactKey,
+        frontier: crate::scope::Frontier<'_>,
+    ) -> bool {
         let Some(resume) = &self.resume else {
             return false;
         };
         if !resume.over.wakes(frontier) {
             return true;
         }
-        resume.reran.set(resume.reran.get() + 1);
+        resume.count(shape.segment(), key);
         false
     }
 

@@ -196,3 +196,89 @@ fn a_quote_s_hole_seams_at_its_code_s_entry() {
         ));
     });
 }
+
+/// A signature with an unpinned head parameter `Carrier` and a member over it.
+const COUNTER: &str = "SIG Counter FOR ALL #[Carrier] = \
+                       #[(VAL zero :Carrier) (VAL succ :(FN :{x :Carrier} -> Carrier))]\n";
+
+/// The one block `shape` nests.
+fn block<'graph>(shape: &'graph BodyShape<'graph>) -> &'graph BodyShape<'graph> {
+    let (_, block) = (shape.nested_shapes().iter())
+        .find(|(_, nested)| nested.kind() == ShapeKind::Block)
+        .expect("a block");
+    block
+}
+
+/// Whether `shape` lists a seam where `at` holds that waits on `unknown`.
+fn seams_on(shape: &BodyShape<'_>, at: impl Fn(SeamAt) -> bool, unknown: Unknown) -> bool {
+    seams(shape)
+        .iter()
+        .any(|(seam, waits)| at(*seam) && waits.contains(&unknown))
+}
+
+#[test]
+fn a_fact_over_a_local_module_seams_at_the_unit_binding_it() {
+    let source = format!(
+        "{COUNTER}{PICK}LET step = (FN :{{mk :(FN :{{}} -> Counter)}} -> Any = #(\n  \
+         LET n = (mk {{}})\n  LET s = (PICK n.zero)\n  s\n))"
+    );
+    loaded(&source, |program| {
+        let step = body(program, program.shape(), "step");
+        let n = unknown(program, step, "n");
+        assert!(waits(program, step, "s").contains(&n));
+        assert!(seams_on(step, |at| matches!(at, SeamAt::Unit(_)), n));
+    });
+}
+
+#[test]
+fn a_name_using_surfaces_from_a_parameter_seams_at_the_unit_holding_it() {
+    let source = format!(
+        "{COUNTER}{PICK}LET step = (FN :{{m :Counter}} -> Any = #(\n  \
+         LET s = (USING (m :! Counter) SCOPE (PICK zero))\n  s\n))"
+    );
+    loaded(&source, |program| {
+        let step = body(program, program.shape(), "step");
+        let carrier = unknown(program, block(step), "Carrier");
+        assert!(seams_on(step, |at| matches!(at, SeamAt::Unit(_)), carrier));
+        assert!(!seams_on(step, |at| at == SeamAt::Entry, carrier));
+    });
+}
+
+#[test]
+fn a_quote_s_mark_seams_at_its_code_s_entry() {
+    loaded(&format!("{PICK}LET q = #(PICK \\y)"), |program| {
+        let (_, code) = (program.shape().nested_shapes().iter())
+            .find(|(_, nested)| nested.kind() == ShapeKind::Code)
+            .expect("the quote's code");
+        let listed = seams(code);
+        assert_eq!(listed.len(), 1);
+        assert_eq!(listed[0].0, SeamAt::Entry);
+        assert!(matches!(
+            listed[0].1[..],
+            [Unknown {
+                at: Address::Capture(_),
+                ..
+            }]
+        ));
+    });
+}
+
+#[test]
+fn a_dollar_name_in_a_quote_waits_on_the_outer_binder_s_type() {
+    let source = format!(
+        "{PICK}EXPR FOR ALL #[Elt] #(WRAP x :Elt) -> Any = #(\n  LET q = #(PICK $x)\n  q\n)"
+    );
+    loaded(&source, |program| {
+        let f = quantified(program);
+        let (_, code) = (f.nested_shapes().iter())
+            .find(|(_, nested)| nested.kind() == ShapeKind::Code)
+            .expect("the quote's code");
+        let elt = unknown(program, f, "Elt");
+        let residual = code.statics_residual();
+        assert!(
+            (residual.entries().iter()).any(|(_, frontier)| frontier.contains(elt)),
+            "the code's call reads `x` through its outer binder"
+        );
+        assert!(seams_on(f, |at| at == SeamAt::Entry, elt));
+    });
+}

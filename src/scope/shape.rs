@@ -63,7 +63,6 @@ use crate::values::{Chain, ContentDigest, Knotted};
 
 use super::builtins::Builtins;
 use super::channels::Channels;
-use super::facts::{Frontier, Residual, Seam};
 use super::groups::GroupFrame;
 use super::keyed::{Keyed, KeyedEntry};
 use super::tree::Tree;
@@ -72,8 +71,10 @@ use super::typed::{
     Static, StaticCallable, StaticRegistered, StaticSolution, StaticType, Statics, UseStatics,
     Variable, ViewSlots,
 };
+use facts::{Frontier, Residual, Seam};
 
 mod build;
+pub(super) mod facts;
 
 pub(crate) use build::IMPLICIT;
 
@@ -1162,43 +1163,12 @@ impl<'graph> BodyShape<'graph> {
         self.reach.set(reach);
     }
 
-    /// The `USING … SCOPE` nested in this body whose body sits at `block`: the index of the
-    /// statement holding it, beside where it reads its operand where the operand is a name.
-    pub fn using_at(&self, block: Site) -> Option<(usize, Option<Coordinate>)> {
-        for (index, statement) in self.body.iter().enumerate() {
-            let mut found = None;
-            let mut look = |node: &KExpression<'graph>| {
-                if node.cache().builtin_shape().map(|shape| shape.id)
-                    == Some(BuiltinShapeId::UsingScope)
-                    && Site::of_body(node) == Some(block)
-                {
-                    let operand = node.parts.get(1).map(|part| &part.value);
-                    let read = operand
-                        .filter(|operand| matches!(operand, ExpressionPart::Identifier(_)))
-                        .and_then(|operand| self.mention(Site::of(operand)))
-                        .map(|mention| mention.coordinate);
-                    found = Some(read);
-                }
-            };
-            look(statement);
-            each_part(statement, |part| {
-                if let ExpressionPart::Expression(node) = part {
-                    look(node.reference());
-                }
-            });
-            if let Some(read) = found {
-                return Some((index, read));
-            }
-        }
-        None
-    }
-
     /// The static pass's facts about this body as a whole.
     pub fn shape_facts(&self) -> ShapeFacts<'graph> {
         self.shape_facts.get()
     }
 
-    /// Written by the static pass, each field once, where it fixes that fact.
+    /// Written by the static pass, each fact once, where it fixes it; the pass checks each is unset.
     pub fn fix_shape_facts(&self, edit: impl FnOnce(&mut ShapeFacts<'graph>)) {
         let mut facts = self.shape_facts.get();
         edit(&mut facts);

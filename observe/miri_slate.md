@@ -321,9 +321,9 @@ and read back through `peek` between steps.
 Prepended by `python3 tools/miri.py --log` on a clean run, trimmed to five.
 
 <!-- slate-durations:start -->
+- 2026-10-18: 872s — 42 tests, 0 leaks, 0 UB
 - 2026-10-17: 596s — 42 tests, 0 leaks, 0 UB
 - 2026-10-17: 671s — 42 tests, 0 leaks, 0 UB
 - 2026-10-16: 990s — 41 tests, 0 leaks, 0 UB
 - 2026-10-16: 300s — 37 tests, 0 leaks, 0 UB
-- 2026-10-15: 280s — 36 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

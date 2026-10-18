@@ -41,7 +41,9 @@
 
 use std::cell::Cell;
 
-use crate::memory::{BumpAllocator, BumpVec, Writer, bump_hash_table, collect, resident};
+use crate::memory::{
+    BumpAllocator, BumpBackedMap, BumpVec, Writer, bump_hash_table, bump_table, collect, resident,
+};
 use crate::parse::KExpression;
 use crate::parse::Role;
 use crate::parse::quoted_body;
@@ -158,7 +160,7 @@ struct Level<'p, 'graph> {
     /// At a chain root: its path entries' indices, by root, chain and label.
     found: Cell<PathIndex<'p>>,
     /// Each cell of the shape fixed so far that waits on an unknown, beside its frontier.
-    residual: BumpVec<'p, (FactKey, Frontier<'graph>)>,
+    residual: BumpBackedMap<'p, FactKey, Frontier<'graph>>,
 }
 
 impl<'p, 'graph> Level<'p, 'graph> {
@@ -179,7 +181,7 @@ impl<'p, 'graph> Level<'p, 'graph> {
             reads: Cell::new(BumpVec::new_in(scratch)),
             paths: root.then(|| (path_base(shape), Cell::new(BumpVec::new_in(scratch)))),
             found: Cell::new(bump_hash_table(scratch)),
-            residual: BumpVec::new_in(scratch),
+            residual: bump_table(scratch),
         }
     }
 }
@@ -407,13 +409,16 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
     /// Record `frontier` as the frontier of the cell at `key` of the shape at `level`, where it
     /// waits on an unknown.
     fn keep(&mut self, level: usize, key: FactKey, frontier: Frontier<'graph>) {
+        let writer = self.writer;
         let residual = &mut self.chain[level].residual;
         // A resumption's walk starts from the residual the facts it skips leave.
         if self.resume.is_some() {
-            residual.retain(|(held, _)| *held != key);
+            residual.remove(&key);
         }
         if !frontier.is_empty() {
-            residual.push((key, frontier));
+            (residual.entry(key))
+                .and_modify(|held| *held = held.union(frontier, writer))
+                .or_insert(frontier);
         }
     }
 
@@ -451,9 +456,7 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
     /// The frontier recorded for the cell at `key` of the shape at `level`, while its shape is on
     /// the chain.
     fn staged(&self, level: usize, key: FactKey) -> Frontier<'graph> {
-        (self.chain[level].residual.iter())
-            .find(|(held, _)| *held == key)
-            .map_or(Frontier::EMPTY, |(_, frontier)| *frontier)
+        (self.chain[level].residual.get(&key)).map_or(Frontier::EMPTY, |frontier| *frontier)
     }
 
     /// The lexical variable the run-bound name `key` is, bounded by `bound`: its name, at the level
@@ -885,7 +888,11 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
                 continue;
             }
             // A component's members share one frontier.
-            if self.skips(self.staged(level, FactKey::Slot(component.members[0]))) {
+            if self.skips(
+                self.chain[level].shape,
+                FactKey::Slot(component.members[0]),
+                self.staged(level, FactKey::Slot(component.members[0])),
+            ) {
                 self.bind_declared(level, component.members);
                 continue;
             }
@@ -931,7 +938,11 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
         written.extend(expressions.iter());
         written.sort_unstable_by_key(|expression| expression.order);
         for expression in written {
-            if self.skips(self.staged(level, FactKey::Site(expression.site))) {
+            if self.skips(
+                self.chain[level].shape,
+                FactKey::Site(expression.site),
+                self.staged(level, FactKey::Site(expression.site)),
+            ) {
                 continue;
             }
             let reader = self.reader(level, Mode::Typing);
@@ -973,7 +984,11 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
 
         let mut signatures: Signatures<'p> = BumpVec::new_in(scratch);
         for registration in shape.registrations() {
-            if self.skips(self.staged(level, FactKey::Slot(registration.slot))) {
+            if self.skips(
+                self.chain[level].shape,
+                FactKey::Slot(registration.slot),
+                self.staged(level, FactKey::Slot(registration.slot)),
+            ) {
                 continue;
             }
             if let Some(head) = registration.surfaced {
@@ -1031,7 +1046,11 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
             let own = match nested.kind() {
                 ShapeKind::Callable => {
                     let form = nested.form().expect("a callable body sits in its form");
-                    skipped = self.skips(frontier_at(self.residual_of(nested), FactKey::Shape));
+                    skipped = self.skips(
+                        nested,
+                        FactKey::Shape,
+                        frontier_at(self.residual_of(nested), FactKey::Shape),
+                    );
                     let reader = self.reader(level, Mode::Typing);
                     let typed = match skipped {
                         true => Ok(None),
@@ -1092,10 +1111,9 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
                 visited => visited?,
             }
         }
-        let mut residual = std::mem::replace(
-            &mut self.chain[level].residual,
-            BumpVec::new_in(self.scratch),
-        );
+        let mut residual =
+            BumpVec::with_capacity_in(self.chain[level].residual.len(), self.scratch);
+        residual.extend(self.chain[level].residual.drain());
         self.fix_channel_residual(shape, Keyed::sorted(self.writer, &mut residual));
         let at = &self.chain[level];
         let mut reads = at.reads.replace(BumpVec::new_in(self.scratch));

@@ -287,6 +287,32 @@ fn a_check_a_binding_no_longer_settles_is_dropped() {
 }
 
 #[test]
+fn a_binding_that_starves_a_refused_check_vacates_it() {
+    let source = "EXPR FOR ALL #[Elt Key] #(WRAP x :Elt AND k :Key) -> Any = #(\n  \
+                  LET s0 = (x :! Key)\n  x\n)";
+    let (half, whole) = resumed(source, |loaded| {
+        let symbols = loaded.symbols();
+        let f = quantified(loaded.shape());
+        let (elt, key) = (unknown(symbols, f, "Elt"), unknown(symbols, f, "Key"));
+        let half = loaded.resume(&[], loaded.binding(&[(key, KType::NEVER)]), false);
+        let half = half
+            .map(|_| ())
+            .map_err(|error| error.display(symbols, loaded.types()).to_string());
+        let both = loaded.binding(&[(elt, KType::NEVER), (key, KType::NEVER)]);
+        let whole = loaded
+            .resume(&[], both, false)
+            .expect("the resumption refuses nothing");
+        (half, upper(loaded, f, statics(whole, f), "s0"))
+    });
+    let refused = half.expect_err("binding `Key` alone refuses the check");
+    assert!(
+        refused.contains("this value is Any, which can never satisfy its ascription Never"),
+        "{refused}"
+    );
+    assert_eq!(whole, "Never");
+}
+
+#[test]
 fn a_resumption_extends_the_one_before_it() {
     let source = format!(
         "{PICK}EXPR FOR ALL #[Elt Key] #(WRAP x :Elt AND k :Key) -> Any = #(\n  \
@@ -589,7 +615,8 @@ mod laws {
         }
 
         /// Resumptions are confluent: reaching a binding in two steps, either half first, settles
-        /// what reaching it in one does.
+        /// what reaching it in one does. A refusal on the way agrees with a binding that leaves
+        /// its site vacuous, as the monotone law reads one typed `Never`.
         #[test]
         fn resumptions_are_confluent(case in resumable(), split in any::<u8>()) {
             let names: Vec<&str> = case.bound.entries().iter().map(|(name, _)| *name).collect();
@@ -603,6 +630,7 @@ mod laws {
                 let stepped = resume_rendered(&case, &[case.bound.only(half), case.bound.clone()], false);
                 match (&stepped, &whole) {
                     (Err(_), Err(_)) => {}
+                    (Err(_), Ok(_)) if vacated(&case, half) => {}
                     _ => prop_assert_eq!(&stepped, &whole, "in\n{}\nfirst {:?}", case.render(), half),
                 }
             }
@@ -626,7 +654,8 @@ mod laws {
 
         /// A resumption is monotone: each fact it re-runs lies within the load's with the binding
         /// substituted, a verdict of *always* stays, a narrowing only shrinks, and a settled site
-        /// stays settled.
+        /// stays settled. A fact typed `Never` never arrives: it is the bottom, within every fact,
+        /// and a statement typed so never runs its uses and checks.
         #[test]
         fn a_resumption_is_monotone(case in resumable()) {
             let broken = resumed(&case.render(), |loaded| monotone(loaded, &case.bound));
@@ -646,6 +675,42 @@ mod laws {
                 prop_assert!(channel <= woken.0 && statics <= woken.1, "{:?} > {:?} in\n{}", (channel, statics), woken, case.render());
             }
         }
+    }
+
+    /// Whether the refusal met reaching `case`'s binding by `first` and then the rest lies in a
+    /// statement the whole binding types `Never`, of `SUBJECT`'s body or a body nested in it: no
+    /// operator run reaches it.
+    fn vacated(case: &Resumable, first: &[&str]) -> bool {
+        resumed(&case.render(), |loaded| {
+            let whole = binding(loaded, &case.bound);
+            let refused = match loaded.resume(&[], binding(loaded, &case.bound.only(first)), false)
+            {
+                Ok(settled) => loaded.resume(&[settled], whole, false).err(),
+                Err(error) => Some(error),
+            };
+            let (Some(refused), Ok(settled)) = (refused, loaded.resume(&[], whole, false)) else {
+                return false;
+            };
+            let at = refused.at().span;
+            let mut shapes = vec![subject(loaded.shape())];
+            while let Some(shape) = shapes.pop() {
+                shapes.extend(shape.nested_shapes().iter().map(|(_, nested)| *nested));
+                let Some(now) = statics_in(&[settled], shape) else {
+                    continue;
+                };
+                let vacuous =
+                    (shape.body().iter().zip(now.statements)).any(|(statement, typed)| {
+                        let span = statement.source.span;
+                        typed.upper == KType::NEVER.into()
+                            && span.start <= at.start
+                            && at.end <= span.end
+                    });
+                if vacuous {
+                    return true;
+                }
+            }
+            false
+        })
     }
 
     /// Each residual entry of `shape` and the shapes nested in it that waits on nothing, or on an
@@ -744,7 +809,12 @@ mod laws {
             Some(substitute_levels(types, &scratch, value, &bindings))
         };
         let mut broken = Vec::new();
+        // A fact that never arrives is the bottom, within every fact.
+        let never = |typed: Interval| typed.upper == KType::NEVER.into();
         let outside = |what: String, load: Interval, now: Interval| -> Option<String> {
+            if never(now) {
+                return None;
+            }
             let (lower, upper) = (substituted(load.lower)?, substituted(load.upper)?);
             let within =
                 fits(types, &scratch, lower, now.lower) && fits(types, &scratch, now.upper, upper);
@@ -777,7 +847,16 @@ mod laws {
                     broken.extend(outside(format!("part {site:?}"), *was, *is));
                 }
             }
+            // A use or a check in a statement that never completes never runs.
+            let vacuous = |site: Site| {
+                (shape.body().iter().zip(now.statements)).any(|(statement, typed)| {
+                    never(*typed) && crate::scope::source_of(statement, site).is_some()
+                })
+            };
             for (site, fixed) in load.uses.iter() {
+                if vacuous(*site) {
+                    continue;
+                }
                 let was = fixed.narrowing;
                 let is = now
                     .uses
@@ -788,7 +867,7 @@ mod laws {
                 }
             }
             for site in load.settled.iter() {
-                if now.settled.get(*site).is_none() {
+                if now.settled.get(*site).is_none() && !vacuous(*site) {
                     broken.push(format!("settled {site:?} unsettled"));
                 }
             }

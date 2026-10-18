@@ -153,6 +153,16 @@ The retype law ([`retypes.rs`](src/dispatch/tests/retypes.rs)) retypes a value d
 type — a dict or a nominal type among them — and a quote's code or a type value under a drawn code
 kind or kind, at each retype site, the evaluator's debug net its oracle: the value lies within the
 static type the load gives it there.
+The resumption laws ([`resumption.rs`](src/dispatch/tests/resumption.rs)) draw a never-called
+quantified registration and a binding of the unknowns its body reads, each to any closed type,
+`Never`, `Any` and unions included, and resume the load under it: the resumption renders as a load of the
+program with the binding declared (its restart), reaching the binding in two steps settles what one
+does, re-running every fact settles what re-running the woken ones does, each re-run fact lies
+within its load value with the binding substituted, and a resumption re-runs at most the facts its
+binding wakes. A fact typed `Never` never arrives and is the bottom: the monotone law reads it as
+within every fact and skips a use or settled check in a statement typed `Never`, and the confluence
+law lets a refusal met on the way agree with a whole binding that types `Never` the statement
+holding the refused site.
 
 ## Tutorial snippets
 

@@ -523,6 +523,24 @@ expression or declaration holding it. Inside a quote's code the refusal is kept
 on the code shape instead, and the `EVAL` that runs the code reports it, since a
 quote is checked where its code runs ([quotes](../scope/README.md#building-code)).
 
+**Frontiers.** The pass reaches every cell through its fact store
+([`store`](channel/store.rs)), and its reader records each unknown it reads
+([what a fact waits on](../scope/README.md#load-time-types)): every name in
+[what a run binds](#the-type-channel-at-load) — a `FOR ALL` name, a `:Type`
+parameter, a surfaced type name, a quote's hole, mark or `$` name, and a type
+binder left unknown beside what that binder waits on — in either
+mode, so a type binder declared unknown over a run-bound name waits on it. A
+cell whose reads met any unknown is recorded in its shape's residual beside
+that frontier.
+
+**Resumption.** `resume_channel` walks the shape tree again under a binding,
+once the load has quiesced. A bound name reads as the closed type it binds, in
+either mode, so a type binder over it declares closed, and a callable body's
+own bound `FOR ALL` name is that type at its group level. The walk skips a
+shape whose reach the binding misses and a cell whose frontier it misses,
+numbers each chain as the load did, reads the path entries the load laid and
+mints none, and writes each cell it re-runs beside the load's, never into it.
+
 ## Refusals
 
 A type expression that does not elaborate is an `Elaboration`,
@@ -624,18 +642,23 @@ one variable past every name level, two spellings sharing it, and one through a
 parameter reading through its declared application; each spelling left
 unknown, a type binder over a path among them; a
 nominal over a
-run-bound type left unknown and a reader of it rigid; each repeated guard; and a
-refusal refusing the load, or kept on its quote's code shape.
+run-bound type left unknown and a reader of it rigid; each repeated guard; a
+refusal refusing the load, or kept on its quote's code shape; and the frontier
+each cell records — a cell over a `FOR ALL` name or a meet over one waiting on
+its callable's slot, a nested cell or callable over an outer name on the outer
+slot, sibling bodies' alike-numbered names apart, a type binder over a
+run-bound name and its reader, and a closed cell waiting on nothing.
+[`tests::boundary`](tests/boundary.rs) also holds the pass to reaching every
+cell through its store.
 
 ## Open work
 
 - [Families as parameters](../../roadmap/rewrite/families-as-parameters.md) —
   higher-kinded head parameters, and a constructor application leaving a
   parameter unpinned.
-- [Monotone elaboration](../../roadmap/gradual-build/monotone-elaboration.md)
-  — the load pass as a worklist its own walk schedules, each read recording
-  the unknown it reads and a resumption re-running the cells a binding wakes,
-  entered from a build cell's step, per [the build module](../build/README.md).
+- [Activation typing](../../roadmap/gradual-build/activation-typing.md) — a
+  resumption entered from a specialization's step, over the content a frame's
+  binding brings.
 - [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — a family's
   variance, which no declaration states, a nominal over a run-bound type
   declared per call, and a pin read through its bounds.

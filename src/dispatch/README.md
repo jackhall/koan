@@ -706,6 +706,37 @@ call by name and
 its keyworded twin over one class therefore load, fault or return alike, and a
 call by name is blind to the order its record's fields are written in.
 
+**A component.** The members of a component of value binders are typed against
+one another's seeds, so no member's static type depends on the order they are
+typed in. A callable member is its declared type first, which reads no fellow.
+Every other member is then seeded — at its annotation as a retype to it reads,
+at most `Module` for a `MODULE` or `GROUP` body, else `[Never, Any]` — and a
+fellow mentioned while the component is typed, in its own statements or a block
+or `MODULE` or `GROUP` body they run inline, reads that seed and waits on
+nothing the fellow reads; each member's type is written once every member is
+typed. A callable body nested in a member is typed after the component and
+reads the fellow's own type. So in `LET a = {next = b, v = x}` and
+`LET b = {next = a, v = 1}`, `b` is typed over `a`'s seed alone.
+
+**Frontiers and resumption.** The pass reaches every load-time fact through
+its fact store ([`store`](statics/store.rs)), which records what each rule
+reads ([type facts and the solver](../build/README.md#type-facts-and-the-solver)):
+a lexical variable's home, a type binder the type channel left unknown, and a
+module binder whose declared signature leaves a head parameter unpinned, read
+through its binder or a path rooted at it, each beside the frontier of every
+fact the rule read, and of every memo hit. A name a `USING … SCOPE` surfaces
+waits on what its module's static type waits on. A rule run at a part, a statement or
+a binder records its frontier in the shape's residual where it is not empty,
+and a fact recorded beside it waits on what the rule had read by then.
+[`resume`](statics/resume.rs) walks the pass again under a binding, after the
+type channel's resumption: a bound type name seeds as a closed type binder
+does, and a bound module binder is exactly the type it binds. The walk skips a
+shape whose reach the binding misses, starts each level it enters from the
+facts it skips, re-runs each woken fact once, writes what it re-runs beside the
+load's cells, keeps none of the load's bookkeeping for the run — caching, type
+captures, tail edges, path entries — and refuses where a load with the binding
+declared would.
+
 What the pass fixes rests in each shape's write-once
 [value-channel cell](../scope/README.md#load-time-types), which the call reads.
 Inside a quote's code a refusal is kept on the code shape, and the `EVAL` running
@@ -996,7 +1027,8 @@ koan has no warning channel ([unplanned work](../../roadmap/rewrite/README.md#un
 Outside `#[cfg(test)]` this module names `crate::elaborate`, `crate::knot`,
 `crate::memory`, `crate::parse`, `crate::program`, `crate::scheduler`,
 `crate::scope`, `crate::symbols`, `crate::type_lattice` and `crate::values`;
-[`tests::boundary`](tests/boundary.rs) reads the source to hold it there.
+[`tests::boundary`](tests/boundary.rs) reads the source to hold it there, and
+holds the static pass to reaching every load-time fact through its store.
 
 ## Testing
 
@@ -1012,8 +1044,10 @@ several and no candidate, the load refusals in a program, an uncalled body and
 a quote's code, an `EVAL` whose traced code can never meet its declared return,
 an argument that never arrives, each call of a quantified function typed by its
 own arguments, a `USING … SCOPE` block's surfaced heads typed through the
-ascription's pins, and a wider signature *always* at a narrower one's slot and
-outranking it;
+ascription's pins, a wider signature *always* at a narrower one's slot and
+outranking it, and a component's members typed alike whatever their order —
+an annotated fellow read at its annotation, a fellow's callable body reading
+the fellow's own type;
 [generic](tests/generic.rs) — generic code at load: a nested callable
 substituted by level and agreeing with its load-time type where it is born, a
 quote's code typed twice interning nothing, a nested group's parameters and
@@ -1118,6 +1152,30 @@ another scheme, a keyworded member's covering overload picked through a
 header, ambiguous where two rank alike, and a quantified keyworded member
 returning what its declared shape returns through a header and a view; [generate](tests/generate.rs) holds the types,
 values and programs these laws and `rules` draw;
+[frontiers](tests/frontiers.rs) — what a fact waits on: a call over a `FOR ALL`
+name against closed overloads, a path through a module parameter, a fact in an
+inner body over an outer name, an `EVAL`'s declared type fixed however wide, a
+knot's fellow read at its seed, a `$` name in a quote waiting on its outer
+binder's type; and the seams a body lists — at its entry for its own `FOR ALL`
+name, at the unit binding an unknown type binder or a local module, at the
+unit holding the `USING` for a name it surfaces, an inner body's where its last
+member binds, a quote's hole and `\` mark at its code's entry;
+[resumption](tests/resumption.rs) — a load resumed under a binding: an
+overload selected at a bound `FOR ALL` name, a module parameter's paths closed
+at its pin, an inner callable settled under its outer name's binding, a type
+binder declared closed, a refusal the binding reaches, a binding no fact reads
+re-running only its own slot, a settled check a `Never` binding drops, a
+check one half of a binding refuses that the whole binding starves,
+re-running every fact agreeing with skipping, and a resumption extending the
+one before it; and the laws, over a never-called quantified registration drawn
+with its parameters, statements and a binding of any closed types — a
+resumption is the restart with the binding declared, resumptions are
+confluent, quiescence is exact, a resumption is monotone, and it re-runs only
+what it wakes. A fact typed `Never` never arrives, so the monotone and
+confluence laws read it as the bottom: it lies within every fact, a use or
+settled check in a statement typed `Never` is vacuous, and a refusal on the
+way to a binding agrees with the binding where it types `Never` the statement
+holding the refused site;
 [surface](tests/surface.rs) — printing, `==`, `ATTR`, `FROM` and a field read
 through a newtype or a family seeing only what the carried type names, one node
 seen at two types, a widened literal's element, and `FROM` sharing its record's
@@ -1198,11 +1256,9 @@ tutorial snippet is checked against its shown output by
   and `Result`.
 - [Invariance around a tail cycle](../../roadmap/gradual-build/cycle-invariance.md)
   — an argument built over invariant leaves classed invariant.
-- [Monotone elaboration](../../roadmap/gradual-build/monotone-elaboration.md)
-  — the static pass as a worklist its own walk schedules, re-entered under a
-  binding, a component's fellow read at its seed whatever the members' order,
-  and selection reading verdicts through a run cell's borrow, per
-  [the build module](../build/README.md).
+- [Activation typing](../../roadmap/gradual-build/activation-typing.md) — a
+  frame's facts settled at its seams, and selection reading the verdicts a
+  specialization holds, per [the build module](../build/README.md).
 - [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — the
   overlap check skipping a quantified registration, a warning for an overload
   never selected, a pin read through its bounds, a member read exact through a

@@ -1088,19 +1088,6 @@ fn closed() -> BoxedStrategy<Desc> {
     .boxed()
 }
 
-/// A type a value carries, which a run's solve reads off its argument: never `Never`, `Any` or a
-/// union, though a list's element may be any closed type.
-fn carried() -> BoxedStrategy<Desc> {
-    let leaf = prop_oneof![Just(Desc::Number), Just(Desc::Str), Just(Desc::Null)];
-    leaf.prop_recursive(2, 6, 2, |inner| {
-        prop_oneof![
-            closed().prop_map(|each| Desc::List(Box::new(each))),
-            prop::collection::vec((0..3u8, inner), 1..3).prop_map(Desc::Record),
-        ]
-    })
-    .boxed()
-}
-
 /// `desc` with `Elt`, its variable 0, read as `elt`.
 fn substituted(desc: &Desc, elt: &Desc) -> Desc {
     match desc {
@@ -1134,12 +1121,11 @@ pub(super) fn resumable() -> impl Strategy<Value = Resumable> {
         ]),
         prop::collection::vec(statement(), 1..5),
     );
-    // `Elt` and `Key` are solved from what `x` and `k` carry, and `Pair` is read over `Elt`: a
-    // binding gives each what one operator run's solve gives it.
+    // `Pair` is read over `Elt`: a binding gives it what the solve that gives `Elt` its type does.
     let bindings = (
-        carried(),
+        closed(),
         prop::option::weighted(0.6, Just(())),
-        prop::option::weighted(0.4, carried()),
+        prop::option::weighted(0.4, closed()),
         prop::option::weighted(0.4, closed()),
         prop::option::weighted(0.4, Just(())),
         prop::option::weighted(0.5, closed()),

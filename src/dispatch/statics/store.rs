@@ -100,27 +100,24 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         if self.unfilled {
             return;
         }
+        let writer = self.writer;
         let at = &mut self.chain[level];
         // A resumption's walk starts from the residual its skipped facts leave: a fact it re-runs
         // replaces its entry.
         if self.resume.is_some() && at.kept.insert(key) {
-            at.residual.retain(|(held, _)| *held != key);
+            at.residual.remove(&key);
         }
+        // A rule run twice at one key, or a fact written beside one, waits on all it read.
         if !frontier.is_empty() {
-            at.residual.push((key, frontier));
+            (at.residual.entry(key))
+                .and_modify(|held| *held = held.union(frontier, writer))
+                .or_insert(frontier);
         }
     }
 
     /// The frontier the shape at `level` holds for the fact at `key`, as the walk has it now.
     pub(super) fn staged(&self, level: usize, key: FactKey) -> Frontier<'graph> {
-        let writer = self.writer;
-        let mut held = (self.chain[level].residual.iter()).filter(|(at, _)| *at == key);
-        let first = held
-            .next()
-            .map_or(Frontier::EMPTY, |(_, frontier)| *frontier);
-        held.fold(first, |joined, (_, frontier)| {
-            joined.union(*frontier, writer)
-        })
+        (self.chain[level].residual.get(&key)).map_or(Frontier::EMPTY, |frontier| *frontier)
     }
 
     /// Whether the rule at `key` of the shape at `level` runs: always at the load, and in a
@@ -756,9 +753,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         if let Some(index) = at.shape.candidate_lists().position(site) {
             self.note_frontier(at.use_frontiers[index]);
         }
-        (at.selections.iter())
-            .find(|(held, _)| *held == site)
-            .map(|(_, points)| *points)
+        at.selections.get(&site).copied()
     }
 
     /// Record the points the candidate selected at the use at `site` solves to.
@@ -768,8 +763,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         site: Site,
         points: &'graph [Option<KType>],
     ) {
-        let replaces = self.resume.is_some();
-        replace(&mut self.chain[level].selections, replaces, site, points);
+        self.chain[level].selections.insert(site, points);
     }
 
     /// Each binder's static type in `popped`, a shape the pass typed and took off the chain.
@@ -802,17 +796,13 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         tree: &'graph crate::scope::Tree<'graph>,
     ) {
         self.keep_side(level, site);
-        let replaces = self.resume.is_some();
-        replace(&mut self.chain[level].trees, replaces, site, tree);
+        self.chain[level].trees.push((site, tree));
     }
 
     /// Record that the ascription or annotated binder's type part at `site` is settled.
     pub(super) fn record_settled(&mut self, level: usize, site: Site) {
         self.keep_side(level, site);
-        let settled = &mut self.chain[level].settled;
-        if self.resume.is_none() || !settled.contains(&site) {
-            settled.push(site);
-        }
+        self.chain[level].settled.push(site);
     }
 
     /// Record what the pass fixed where a quantified function is read at `site`.
@@ -823,8 +813,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         read: crate::scope::InstanceRead<'graph>,
     ) {
         self.keep_side(level, site);
-        let replaces = self.resume.is_some();
-        replace(&mut self.chain[level].instances, replaces, site, read);
+        self.chain[level].instances.push((site, read));
     }
 
     /// Record a call by name's contributions by its argument part's site.
@@ -835,8 +824,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         contributions: &'graph [StaticType<'graph>],
     ) {
         self.keep_side(level, site);
-        let replaces = self.resume.is_some();
-        replace(&mut self.chain[level].named, replaces, site, contributions);
+        self.chain[level].named.push((site, contributions));
     }
 
     /// Keep what the innermost gathering holds as the frontier of a side fact recorded at `site`:
@@ -975,13 +963,22 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         );
         at.digested.sort_unstable();
         at.digested.dedup();
+        if self.resume.is_some() {
+            newest(&mut at.instances);
+            newest(&mut at.named);
+            newest(&mut at.trees);
+            at.settled.sort_unstable();
+            at.settled.dedup();
+        }
+        let mut selections = BumpVec::with_capacity_in(at.selections.len(), scratch);
+        selections.extend(at.selections.iter().map(|(site, points)| (*site, *points)));
         let shape = at.shape;
         let statics = Statics {
             parts: Keyed::sorted(writer, &mut at.parts),
             statements: collect(writer, at.statements.iter().copied()),
             binders: collect(writer, at.binders.iter().copied()),
             uses: Keyed::sorted(writer, &mut uses),
-            selections: Keyed::sorted(writer, &mut at.selections),
+            selections: Keyed::sorted(writer, &mut selections),
             settled: Keyed::sorted(writer, &mut at.settled),
             instances: Keyed::sorted(writer, &mut at.instances),
             named: Keyed::sorted(writer, &mut at.named),
@@ -1004,17 +1001,10 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             },
             None => statics,
         };
-        // A rule run twice at one key, or a fact written beside one, waits on all it read.
-        at.residual.sort_by_key(|(key, _)| *key);
         let mut residual: BumpVec<'_, (FactKey, Frontier<'graph>)> =
             BumpVec::with_capacity_in(at.residual.len(), scratch);
-        for (key, frontier) in at.residual.iter() {
-            match residual.last_mut() {
-                Some((held, joined)) if held == key => *joined = joined.union(*frontier, writer),
-                _ => residual.push((*key, *frontier)),
-            }
-        }
-        let residual = Keyed::from_sorted(collect(writer, residual.iter().copied()));
+        residual.extend(at.residual.iter().map(|(key, frontier)| (*key, *frontier)));
+        let residual = Keyed::sorted(writer, &mut residual);
         if let Some(resume) = &self.resume {
             let settled = StaticsSettled { statics, residual };
             resume.write(&resume.statics, shape.segment(), settled);
@@ -1046,12 +1036,20 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         edit: impl FnOnce(&mut ShapeFacts<'graph>),
     ) {
         let Some(resume) = &self.resume else {
+            debug_assert!(
+                !whole.is_set(&shape.shape_facts()),
+                "a shape's fact as a whole is fixed once"
+            );
             return shape.fix_shape_facts(edit);
         };
+        debug_assert!(
+            resume.over.everything || !resume.reran_whole(shape.segment(), whole),
+            "a shape's fact as a whole re-runs at most once in a resumption"
+        );
         let mut facts = self.shape_facts(shape);
         edit(&mut facts);
         resume.write(&resume.facts, shape.segment(), facts);
-        resume.write(&resume.wholes, shape.segment(), whole);
+        resume.rerun_whole(shape.segment(), whole);
     }
 
     /// Keep the refusal of the quote's code `code`.
@@ -1121,11 +1119,11 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     }
 }
 
-/// Record `value` at `site` in `held`: in a resumption in place of what the walk started from.
-fn replace<T>(held: &mut BumpVec<'_, (Site, T)>, replaces: bool, site: Site, value: T) {
-    if replaces && let Some(at) = held.iter().position(|(at, _)| *at == site) {
-        held[at].1 = value;
-        return;
-    }
-    held.push((site, value));
+/// Keep the newest of `held`'s records at each site: a resumption's walk records a site it
+/// re-runs after the one it started from.
+fn newest<T>(held: &mut BumpVec<'_, (Site, T)>) {
+    // A stable sort keeps the records at one site in order, the newest last.
+    held.sort_by_key(|(site, _)| *site);
+    held.reverse();
+    held.dedup_by_key(|(site, _)| *site);
 }

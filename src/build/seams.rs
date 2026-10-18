@@ -5,20 +5,23 @@
 //! An unknown binds where its declaring body binds it: a callable's parameter, `FOR ALL` name or
 //! `:Type` parameter and a quote's code's hole, mark or `$` name at that body's entry; a type
 //! binder or a local at the unit that binds it; and a `USING … SCOPE` block's surfaced name at
-//! the entry of the frame body whose parameter its operand names, or else at the unit holding the
-//! `USING`. Binding order follows the lexical chain — an outer body before an inner one, and in a
-//! body its entry before its units in order — so a frontier's seam is the latest of its members'
-//! sites. Each body's **reach**, every unknown a fact of it or of a body nested in it waits on —
+//! the unit holding the `USING`. Binding order follows the lexical chain — an outer body before
+//! an inner one, and in a body its entry before its units in order — so a frontier's seam is the
+//! latest of its members' sites. Each body's **reach**, every unknown a fact of it or of a body nested in it waits on —
 //! its own facts as a whole among them — is laid beside its seams.
 
-use crate::memory::{BumpAllocator, BumpVec, Writer, collect};
+use crate::memory::{BumpAllocator, BumpBackedMap, BumpVec, Writer, bump_table, collect};
 use crate::scope::{
-    Address, BodyShape, Coordinate, Frontier, Position, Seam, SeamAt, ShapeKind, Slot, Target,
-    UnitWork, Unknown, merge_into,
+    Address, BodyShape, Frontier, Position, Seam, SeamAt, ShapeKind, Slot, UnitWork, Unknown,
+    merge_into,
 };
 
 /// A seam found for one frontier: the chain depth of its body, the body, and where in it.
 type Found<'graph> = (usize, &'graph BodyShape<'graph>, SeamAt);
+
+/// Where each unknown met so far binds. An unknown's declaring body lies at one depth of every
+/// chain it is read from, below the same bodies, so where it binds is found once.
+type Sites<'x, 'graph> = BumpBackedMap<'x, Unknown, Option<Found<'graph>>>;
 
 /// List the seams of `root` and every body nested in it, and lay each body's reach down, once the
 /// load's passes have quiesced.
@@ -30,7 +33,15 @@ pub fn list_seams<'graph>(
     let mut chain = BumpVec::new_in(scratch);
     let mut found = BumpVec::new_in(scratch);
     let mut reaches = BumpVec::new_in(scratch);
-    walk(root, &mut chain, &mut found, &mut reaches, scratch);
+    let mut sites = bump_table(scratch);
+    walk(
+        root,
+        &mut chain,
+        &mut found,
+        &mut reaches,
+        &mut sites,
+        scratch,
+    );
     found.sort_unstable_by_key(|(shape, at, _): &(&BodyShape<'_>, SeamAt, Unknown)| {
         (shape.segment(), *at)
     });
@@ -64,6 +75,7 @@ fn walk<'graph, 'x>(
     chain: &mut BumpVec<'x, &'graph BodyShape<'graph>>,
     found: &mut BumpVec<'x, (&'graph BodyShape<'graph>, SeamAt, Unknown)>,
     reaches: &mut BumpVec<'x, (&'graph BodyShape<'graph>, BumpVec<'x, Unknown>)>,
+    sites: &mut Sites<'x, 'graph>,
     scratch: BumpAllocator<'x>,
 ) -> BumpVec<'x, Unknown> {
     chain.push(shape);
@@ -72,7 +84,11 @@ fn walk<'graph, 'x>(
     for (_, frontier) in channel.entries().iter().chain(statics.entries()) {
         merge_into(&mut reach, frontier.unknowns());
         let latest = (frontier.unknowns().iter())
-            .filter_map(|unknown| site(*unknown, chain))
+            .filter_map(|unknown| {
+                *sites
+                    .entry(*unknown)
+                    .or_insert_with(|| site(*unknown, chain))
+            })
             .max_by_key(|(depth, _, at)| (*depth, *at));
         if let Some((_, body, at)) = latest {
             found.extend(
@@ -94,7 +110,7 @@ fn walk<'graph, 'x>(
         merge_into(&mut reach, frontier.unknowns());
     }
     for (_, nested) in shape.nested_shapes() {
-        let inner = walk(nested, chain, found, reaches, scratch);
+        let inner = walk(nested, chain, found, reaches, sites, scratch);
         merge_into(&mut reach, &inner);
     }
     chain.pop();
@@ -125,9 +141,8 @@ fn site<'graph>(unknown: Unknown, chain: &[&'graph BodyShape<'graph>]) -> Option
     }
 }
 
-/// Where a name the block `block`, at `depth` on `chain`, binds as a parameter binds: at the
-/// entry of the frame body whose parameter its `USING`'s operand names, and otherwise at the unit
-/// of the body enclosing it that holds the expression it is.
+/// Where a name the block `block`, at `depth` on `chain`, binds as a parameter binds: a `USING`
+/// surfaces it as it runs, at the unit of the body enclosing the block that holds it.
 fn surfaced<'graph>(
     depth: usize,
     block: &'graph BodyShape<'graph>,
@@ -137,23 +152,7 @@ fn surfaced<'graph>(
     let encloser = chain[outer];
     let (site, _) =
         (encloser.nested_shapes().iter()).find(|(_, nested)| std::ptr::eq(*nested, block))?;
-    let (statement, operand) = encloser
-        .using_at(*site)
-        .unwrap_or((statement_of(encloser, *site)?, None));
-    if let Some(Coordinate::Activation {
-        hops,
-        target: Target::Local(slot),
-    }) = operand
-    {
-        let at = outer.checked_sub(hops as usize)?;
-        let frame = chain[at];
-        if matches!(frame.kind(), ShapeKind::Callable | ShapeKind::Code)
-            && frame.position_of(slot) == Position::PARAMETER
-        {
-            return Some((at, frame, SeamAt::Entry));
-        }
-    }
-    let unit = unit_at(encloser, statement)?;
+    let unit = unit_at(encloser, statement_of(encloser, *site)?)?;
     Some((outer, encloser, SeamAt::Unit(unit)))
 }
 

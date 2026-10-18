@@ -94,10 +94,16 @@ that order is a topological one: each fact is popped once, after every fact
 it reads. Every read a rule makes of a load-time fact goes through a fact
 store, which adds the read fact's frontier, and the read unknown where the
 fact is one, to the frontier of the fact being computed; a memo the walk
-keeps carries the frontier it was computed under. A resumption re-walks the
+keeps carries the frontier it was computed under. A fact a rule records
+beside its own — a settled check, an instance read, a call by name's
+contributions, a view's tree — waits on what that rule had read when it
+recorded it. A resumption re-walks the
 program under its binding, skipping every shape, unit and part whose
 frontier the binding misses and re-running the rest, so each woken fact
-re-runs once. A bound unknown enters at the readers alone: the type
+re-runs once. What it re-runs is written beside the load's cells, never into
+them; resumptions stack newest first, each binding extending the one before
+it, and a fact one skips reads as the newest resumption below it left it, or
+as the load did. A bound unknown enters at the readers alone: the type
 channel's reader answers a bound name closed, a callable's own bound
 `FOR ALL` name takes its binding as its group level, a bound type name seeds
 as a closed type binder does, and a bound module binder's static type is
@@ -106,13 +112,14 @@ through a root whose static type is exact resolves closed.
 
 Every lexical variable is an unknown, a `USING … SCOPE` block's surfaced names
 and a quote's holes, `\` marks and `$` names among them, and so is a type binder
-the type channel leaves unknown and a module binder whose path is a class. A
+the type channel leaves unknown and a module binder whose declared signature
+leaves a head parameter unpinned, so that a path through it is a class. A
 binding removes a parameter's content, which is its path class
 ([paths](../dispatch/README.md#paths)), a `FOR ALL` group's solution and a
 `:Type` argument at frame entry; a lexical variable's type at the statement
 that binds it; and a path variable's hop at the statement that binds its
-root. A surfaced name binds at entry where its operand is a parameter, and at
-its `USING` statement otherwise; a quote's code is the seam of its own holes,
+root. A surfaced name binds at its `USING` statement, which surfaces it as
+the statement runs; a quote's code is the seam of its own holes,
 marks and `$` names. A module binder binds to the exact type it carries: for a
 parameter, the application of its declared signature the retype stamps, every
 head parameter pinned. A value's carried type is never an unknown: a static
@@ -146,9 +153,11 @@ unifier are what the rules call, and this module lives downstream of them.
   seam** is cold: its binding is content the run produces, an `EVAL`'s or an
   action's result, which keys nothing, so the run cell resumes the frontier
   into its own scratch and its lend never changes. A statement's binding that
-  entry content determines — a `MATCH` arm's `it` over a parameter, a
-  `USING … SCOPE` key over one, a path hop rooted at one — is settled at the
-  entry seam, since a load with that content declared would type it closed.
+  entry content determines — a `MATCH` arm's `it` over a parameter, a path
+  hop rooted at one — is settled at the entry seam, since a load with that
+  content declared would type it closed. A `USING … SCOPE` block's surfaced
+  names are not among them: the load cannot type what a `USING` binds from
+  content, so they seam at the `USING` statement.
 - **One build cell per seam per observed binding.** Facts that wake together,
   settle together and mint types under the same binding are one build cell
   with one type branch, never several. The build cell holds every fact any
@@ -432,7 +441,5 @@ tree, and the scheduler hands a step its borrow's doors and no more.
 
 - [Setting the specialization bounds](../../roadmap/gradual-build/bound-settings.md)
   — the bounds as a setting a user names.
-- [Monotone elaboration](../../roadmap/gradual-build/monotone-elaboration.md)
-  — the worklist driver, frontiers and seams, and the properties as laws.
 - [Activation typing](../../roadmap/gradual-build/activation-typing.md) — a
   frame's facts settled at its seams over the content its bindings bring.

@@ -89,9 +89,6 @@ and the run binds a path variable per read (`elaborate::bound_path`).
 
 ## Dependencies
 
-**Requires:**
-
-- [Monotone elaboration](monotone-elaboration.md) — the solver that parks and
-  resumes.
+**Requires:** none — its prerequisites have shipped.
 
 **Unblocks:** none — a leaf.

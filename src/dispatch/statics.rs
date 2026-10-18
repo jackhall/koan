@@ -377,7 +377,7 @@ struct Level<'p, 'graph> {
     uses: BumpVec<'p, UseStatics<'graph>>,
     /// Each keyworded use the pass selected a candidate at, by its node's site, beside the closed
     /// point each variable of the candidate's group solves to there, by group index.
-    selections: BumpVec<'p, (Site, &'graph [Option<KType>])>,
+    selections: BumpBackedMap<'p, Site, &'graph [Option<KType>]>,
     /// Each `:!` whose operand's static upper end lies under its type, and each annotated binder's
     /// type part whose value's does.
     settled: BumpVec<'p, Site>,
@@ -412,7 +412,7 @@ struct Level<'p, 'graph> {
     rhs: BumpBackedMap<'p, Site, Slot>,
     /// Each fact of the shape that waits on an unknown, by the key its rule ran at, beside its
     /// frontier.
-    residual: BumpVec<'p, (FactKey, Frontier<'graph>)>,
+    residual: BumpBackedMap<'p, FactKey, Frontier<'graph>>,
     /// In a resumption, each key whose fact the walk re-ran: its residual entry replaced.
     kept: BumpBackedSet<'p, FactKey>,
     /// What each binder's, statement's, part's and use's fact waits on, parallel to `binders`,
@@ -615,7 +615,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         self.chain.push(Level {
             shape,
             roots_chain,
-            residual: BumpVec::new_in(scratch),
+            residual: bump_table(scratch),
             kept: bump_set(scratch),
             binder_frontiers,
             statement_frontiers,
@@ -625,7 +625,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             statements,
             binders,
             uses,
-            selections: BumpVec::new_in(scratch),
+            selections: bump_table(scratch),
             settled: BumpVec::new_in(scratch),
             instances: BumpVec::new_in(scratch),
             named: BumpVec::new_in(scratch),

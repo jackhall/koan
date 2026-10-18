@@ -30,9 +30,9 @@ mod activation;
 mod builtins;
 mod channels;
 mod closure;
-mod facts;
 mod groups;
 mod keyed;
+mod settled;
 mod shape;
 mod signature;
 mod tree;
@@ -47,12 +47,12 @@ pub(crate) use signature::pair_label;
 pub use activation::{Activation, ActivationView};
 pub use builtins::Builtins;
 pub use closure::ClosureBindings;
-pub use facts::{
-    Address, Binding, ChannelSettled, FactKey, Frontier, Residual, Resumption, Seam, SeamAt,
-    Settled, StaticsSettled, Unknown, frontier_at, merge_into,
-};
 pub use groups::{BuiltinGroup, GroupFrame, is_equal, is_equality, is_unequal};
 pub use keyed::{Keyed, KeyedEntry};
+pub use settled::{ChannelSettled, Resumption, Settled, StaticsSettled};
+pub use shape::facts::{
+    Address, Binding, FactKey, Frontier, Residual, Seam, SeamAt, Unknown, frontier_at, merge_into,
+};
 pub use shape::{
     Arm, BodyShape, BuiltinIndex, Candidate, CandidateList, CaptureSlot, CaptureSource,
     CaptureSpec, Component, ComponentIndex, Coordinate, Listed, Mention, MentionClass, Offer,
