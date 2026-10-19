@@ -78,9 +78,9 @@ and the run binds a path variable per read (`elaborate::bound_path`).
   waits at `outer`'s entry, so `outer` keys on `xs` where `xs` is a
   parameter that keys, and a fact whose frontier the chain's keys do not
   cover stays unsettled. A body whose name
-  escapes keys on its names like any other, since a hop into another callee
-  seeks with the actual content and only a hop of the same callee reuses a
-  specialization with no lookup; its mint sites stay varying.
+  escapes keys on its names like any other, and its every hop seeks with the
+  actual content, since it can tail-call itself through a value the load
+  cannot follow; its mint sites stay varying.
 - *Where a resumption runs* — decided. Only in a build cell's step. A fact no
   key covers stays unsettled and is read per read: the same programs, values
   and refusals on every taken path, with such a refusal surfacing at the use
@@ -94,12 +94,15 @@ and the run binds a path variable per read (`elaborate::bound_path`).
   nothing and is born borrowing its parent's scratch, which cannot read them.
   It may seek on its segment alone, a child of the specialization its closure
   was born under, or borrow that specialization itself.
+- *Which side of a keyed module argument a binding reads* — open. The asker
+  digests a keyed module argument and lays its types as it holds it, while the
+  frame binds it retyped to its parameter's declared type, and past a barrier
+  crossed: a loop handing its own `m` to an arm binds the retyped module the
+  loop's frame holds. A resumption settles its facts against the binding's
+  types, so it must reach the content the frame binds.
 
 ## Dependencies
 
-**Requires:**
-
-- [Specialization keys over frontiers](specialization-keys.md) — a fact is
-  settled only under a key that covers its frontier.
+**Requires:** none.
 
 **Unblocks:** none — a leaf.

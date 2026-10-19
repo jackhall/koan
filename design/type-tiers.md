@@ -254,8 +254,8 @@ soundness rests on the sealed class and the lend alone.
 ## The specialization as the warm tier
 
 A caching frame whose body keys a specialization — its caching record lists
-the parameters its invariant sites read, or an entry seam in its subtree waits
-on one of its names
+the parameters its invariant sites read, or a fact seamed at an entry in its
+subtree, other than a parameter's own type, waits on one of its names
 ([keys](../src/build/README.md#keys-which-bindings-make-a-specialization)) —
 is born borrowing a **specialization** of its body under the content at those
 names: a build cell the drain finds in, or builds into, the table of the build

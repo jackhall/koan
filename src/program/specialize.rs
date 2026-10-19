@@ -8,7 +8,8 @@
 //! digested as the type value the frame binds: carried by a keyworded call, held by an instance,
 //! and solved here, on the asker's region, for a call by name. A call past a header or a barrier
 //! of a body keyed on a `FOR ALL` name is born cold, since its frame solves only once the arguments
-//! are retyped or have crossed. That step only lays the cell's own header and table; the drain
+//! are retyped or have crossed, unless it calls an instance, whose solution holds wherever it is
+//! called from. That step only lays the cell's own header and table; the drain
 //! enters it in its parent's table, and what it holds is the nodes the drain laid from its binding
 //! and the warm types its borrowers intern into it. See
 //! [build/README.md](../build/README.md).

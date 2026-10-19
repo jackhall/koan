@@ -19,7 +19,10 @@
 //! A tail edge from a body into itself keeps a parameter only where it passes that same parameter
 //! on: one passing another, a swap, rebinds it. A callable's own record also lays the parameters
 //! that may key its specialization — each one `Pass::keys` admits that no such edge rebinds — and
-//! whether the body escapes, so that a hop of it seeks; `build::lay_keys` reads both.
+//! whether the body escapes, so that a hop of it seeks; `build::lay_keys` reads both. Unlike a
+//! class, these are not forgiving: a hop that borrows its predecessor's specialization with no
+//! lookup is sound only where the pass records every self-edge and every escape
+//! ([keys](../../build/README.md#keys-which-bindings-make-a-specialization)).
 
 use crate::memory::{BumpAllocator, BumpBackedSet, BumpVec, bump_set, collect};
 use crate::parse::ExpressionPart;

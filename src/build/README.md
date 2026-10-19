@@ -150,7 +150,8 @@ unifier are what the rules call, and this module lives downstream of them.
   frame entry when a rigid's binding completes a frontier, a statement when a
   binding there completes one. A statement that binds nothing any frontier
   waits on is no seam, and costs its run cell nothing. The load lists the
-  seams per segment. An **entry seam** keys a specialization
+  seams per segment. An **entry seam** keys a specialization on the names its
+  facts wait on, a parameter's own type aside
   ([below](#keys-which-bindings-make-a-specialization)). A **statement
   seam** settles nothing: its binding is content the run produces, an
   `EVAL`'s or an action's result, which keys nothing, so the facts waiting on
@@ -214,9 +215,12 @@ the one shape builder gives every body it seals, in seal order, so it is the
 same in every load of one text and tells apart two bodies of one text whose
 captures differ in type; then the content at each **keyed name**, in slot
 order: each of the body's own parameters, `FOR ALL` names and `:Type`
-arguments that an entry seam of the body, or of a callable nested in it,
-waits on, beside the parameters its caching record's invariant sites read,
-the frame's blocks included ([`key_of`](key.rs)). Every callable keys on its
+arguments that a fact seamed at the entry of the body, or of a callable
+nested in it, waits on, beside the parameters its caching record's invariant
+sites read, the frame's blocks included ([`key_of`](key.rs)). A parameter's
+own type fact keys nothing: it waits on the names its declared type reads,
+and whatever reads the parameter waits on them too, so a parameter no fact
+reads keys nothing and its type stays unsettled. Every callable keys on its
 frontier names, whether or not it caches; only a caching body's invariant
 sites name a warm tier, and a frame that does not cache borrows its
 specialization without reading a type tier through it. A frontier
@@ -238,7 +242,8 @@ value the frame binds for it: a keyworded call carries the solution, an
 instance holds it, and for a call by name the asker runs the solve the frame
 runs at its entry. Past a header or a barrier the frame solves the node's own
 group only once it has retyped or crossed the arguments, so such a call of a
-body keyed on a `FOR ALL` name is born cold.
+body keyed on a `FOR ALL` name is born cold, unless the callee is an instance,
+whose solution the frame binds wherever it is called from.
 
 A name a hop of the body's own tail rebinds, passing anything but that same
 parameter at it, is not keyed, since a hop of the same callee borrows its
@@ -249,8 +254,9 @@ place, a `MODULE` body's member, a callable read as a value — can tail-call
 itself through a value the load cannot follow, so its every hop seeks with the
 actual content, as a hop into another callee does; it keys on its names like
 any other, though its mint sites stay varying. Nothing else a frame binds
-enters the key, so a name no frontier or invariant site reads costs a birth
-nothing, a body that keys nothing seeks nothing, and a keyed frame seeks
+enters the key, so a name no fact but its own type, and no invariant site,
+reads costs a birth nothing, a body that keys nothing seeks nothing, and a
+keyed frame seeks
 whatever its placement. A capture never enters a key: `inner`'s fact on a
 capture `xs` waits at `outer`'s entry, so `outer` keys on `xs`, and a fact
 whose frontier the chain's keys do not cover stays unsettled.
@@ -491,7 +497,5 @@ through a projection it defines.
 
 - [Setting the specialization bounds](../../roadmap/gradual-build/bound-settings.md)
   — the bounds as a setting a user names.
-- [Specialization keys over frontiers](../../roadmap/gradual-build/specialization-keys.md)
-  — the key names the content at every name a frontier at the entry waits on.
 - [Activation typing](../../roadmap/gradual-build/activation-typing.md) — a
   frame's facts settled at its seams over the content its bindings bring.

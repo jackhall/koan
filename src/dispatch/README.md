@@ -884,13 +884,14 @@ resumption. A caching frame
 body's own record also lists the parameters its invariant sites read, its
 blocks' and module bodies' included, which key its
 [specialization](../build/README.md#keys-which-bindings-make-a-specialization)
-beside the names the solver's frontiers wait on at its entry:
+beside the names the facts seamed at an entry in its subtree wait on, a
+parameter's own type fact aside:
 none where they read captures alone, and no list at all where it has no
 invariant site, since such a frame reads no warm tier. Every callable's own
 record, whether or not it caches, also lists the parameters that may key its
 specialization — each one that keys, which no tail edge from the body into
-itself rebinds — and says whether the body escapes; the build unions them
-with the names its entry seams wait on once the seams are listed. A leaf is
+itself rebinds — and says whether the body escapes; the build keys each one
+that those facts wait on once the seams are listed. A leaf is
 invariant where it is a capture, or a parameter every tail edge into its body
 passes on bare from an invariant parameter of the caller, and every edge from
 the body into itself passes on as itself: a greatest fixpoint
@@ -1265,9 +1266,6 @@ tutorial snippet is checked against its shown output by
   and `Result`.
 - [Invariance around a tail cycle](../../roadmap/gradual-build/cycle-invariance.md)
   — an argument built over invariant leaves classed invariant.
-- [Specialization keys over frontiers](../../roadmap/gradual-build/specialization-keys.md)
-  — the static pass keys a specialization on its frontier names beside its
-  invariant-site parameters.
 - [Activation typing](../../roadmap/gradual-build/activation-typing.md) — a
   frame's facts settled at its seams, and selection reading the verdicts a
   specialization holds, per [the build module](../build/README.md).

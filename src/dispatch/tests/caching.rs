@@ -1584,7 +1584,7 @@ const BOXED: &str = "EXPR #(BOXED Elt :Type) -> Number = #((NEWTYPE Box = :{v :E
 
 #[test]
 fn a_type_composed_at_run_reaches_the_specialization_it_keys_by_value() {
-    // Each asker keys its own `Elt`, which its binder's static type waits on, and `HOP` keys the
+    // Each asker keys its own `Elt`, which its statement's call reads, and `HOP` keys the
     // record it is handed: one specialization per keyed frame, and the record relayed into each
     // one keyed on it.
     for (asker, keyed, relayed) in [("ASK", 2, 1), ("HOPPING", 3, 2)] {

@@ -226,7 +226,8 @@ src/
 │   └── reads.rs          Reads / TypeAt — what elaboration reads names through: an activation, its view, or the load pass's reader
 ├── build.rs          pub mod build — the build tree: the build root the load runs in and the specializations a binding settles; what decides a specialization's identity
 ├── build/
-│   └── key.rs            key_of — a specialization's key: its callee's segment and the argument digests at the parameters its invariant sites read
+│   ├── key.rs            key_of — a specialization's key: its callee's segment and the content digests at its keyed names; lay_keys — each callable's keyed names: those its facts seamed at an entry wait on, a parameter's own type aside, that its caching record lets key
+│   └── seams.rs          list_seams — the seams the load's frontiers decide, and each body's reach
 ├── knot.rs           pub mod knot — functions, modules and circular data as values: the 16-byte Knotted member that closes Value's parameter, the Node it holds, the KValue / KActivation aliases, Supplied and Untieable, and the field a USING source names
 ├── knot/
 │   ├── function.rs       Function — a function node: its memoized type, body shape, closure bindings and knot weight; the staging a tie does for a function member

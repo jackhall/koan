@@ -5,7 +5,7 @@
 //! root, and the drain resolves a frame's specialization before the frame is born. This module
 //! holds what decides a specialization's identity: [`key_of`], the digest a parent's table finds a
 //! child by; the seams the load's frontiers decide ([`list_seams`]); and the names each callable's
-//! key reads, laid from those seams ([`lay_keys`]).
+//! key reads, laid from where its facts' seams fall ([`lay_keys`]).
 //!
 //! **Imports.** Outside doc comments and `#[cfg(test)]` this module names `crate::memory`,
 //! `crate::scope` and `crate::values`, and nothing else in the crate; [`tests::boundary`] reads the source to hold it
