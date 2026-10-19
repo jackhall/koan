@@ -209,6 +209,17 @@ fn a_type_through_an_inline_call_over_a_leaf_refuses_the_load() {
     );
 }
 
+/// A quote's code that leaves a path's root name open reads the path as a path, left for the code's
+/// `EVAL` to read through what it is run with.
+#[test]
+fn a_path_through_a_name_a_quote_leaves_open_is_left_for_its_eval() {
+    assert_eq!(
+        run("SIG Zeroed FOR ALL #[Carrier] = #[(VAL zero :Carrier)]\n\
+             LET q = #(LET y :(m.Carrier) = 1)\nPRINT \"loaded\""),
+        "loaded"
+    );
+}
+
 /// Once the load ends, each path over a tree with a leaf reads back that tree: through a parameter,
 /// a leaf on it; through a call that unfolds, the view it builds over the leaf it binds.
 /// `SIG Mapper`, whose `apply` is quantified over its own `Elt` and the signature's `Carrier`,

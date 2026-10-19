@@ -37,6 +37,7 @@ mod relay;
 mod settled;
 mod shape;
 mod signature;
+mod spelling;
 mod tree;
 mod typed;
 
@@ -45,6 +46,7 @@ pub(crate) mod tests;
 
 pub(crate) use shape::IMPLICIT;
 pub(crate) use signature::pair_label;
+pub(crate) use spelling::{PathSpelling, SpelledRoot, path_spelling};
 
 pub use activation::{Activation, ActivationView};
 pub use builtins::Builtins;

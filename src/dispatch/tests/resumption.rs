@@ -17,6 +17,10 @@ use super::{Koan, output};
 const PICK: &str = "EXPR #(PICK x :Number) -> Str = #(\"n\")\n\
                     EXPR #(PICK x :Str) -> Number = #(1)\n";
 
+/// `SIG Counter`, a module signature over a `Carrier` head parameter.
+const COUNTER: &str = "SIG Counter FOR ALL #[Carrier] = \
+                       #[(VAL zero :Carrier) (VAL succ :(FN :{x :Carrier} -> Carrier))]\n";
+
 /// Load `source` and hand `inspect` the load before its root freezes.
 fn resumed<R: 'static>(
     source: &str,
@@ -158,6 +162,33 @@ fn binding_a_module_parameter_closes_its_paths() {
     });
     assert_eq!(before, "full");
     assert_eq!(after, "selected");
+}
+
+/// A resumption that binds a path's root module beside a `FOR ALL` name reads the path as a path,
+/// not as a projection out of the type the root is bound to.
+#[test]
+fn binding_a_module_binder_beside_a_name_keeps_its_paths() {
+    let source = format!(
+        "{COUNTER}LET Pinned = :(Counter WITH {{Carrier = Number}})\n\
+         EXPR FOR ALL #[Elt] #(WRAP x :Elt AND m :Counter) -> Any = #(\n  \
+         LET s :{{a :Elt b :(m.Carrier)}} = {{a = x, b = m.zero}}\n  x\n)"
+    );
+    let resumed = resumed(&source, |loaded| {
+        let symbols = loaded.symbols();
+        let root = loaded.shape();
+        let Static::Closed(pinned) = root.declared_type(slot(symbols, root, "Pinned")) else {
+            panic!("the application declares closed");
+        };
+        let f = quantified(root);
+        let binding = loaded.binding(&[
+            (unknown(symbols, f, "Elt"), KType::NUMBER),
+            (unknown(symbols, f, "m"), pinned),
+        ]);
+        (loaded.resume(&[], binding, false))
+            .map(|_| ())
+            .map_err(|error| error.display(symbols, loaded.types()).to_string())
+    });
+    assert_eq!(resumed, Ok(()));
 }
 
 #[test]
