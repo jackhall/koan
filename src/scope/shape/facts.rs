@@ -14,7 +14,7 @@
 //! since `elaborate` and `dispatch` both name it and neither names `build`; the passes compute it,
 //! and `build` lists the seams it decides.
 
-use crate::memory::{BumpVec, Writer, collect};
+use crate::memory::{BumpVec, Lays, collect};
 use crate::type_lattice::KType;
 
 use super::super::keyed::Keyed;
@@ -52,10 +52,10 @@ impl<'a> Frontier<'a> {
     }
 
     /// `staged`, sorted, deduplicated and laid down through `writer`.
-    pub fn laid(writer: Writer<'a, '_>, staged: &mut BumpVec<'_, Unknown>) -> Self {
+    pub fn laid(lay: impl Lays<'a>, staged: &mut BumpVec<'_, Unknown>) -> Self {
         staged.sort_unstable();
         staged.dedup();
-        Frontier(collect(writer, staged.iter().copied()))
+        Frontier(collect(lay, staged.iter().copied()))
     }
 
     pub fn unknowns(self) -> &'a [Unknown] {
@@ -84,7 +84,7 @@ impl<'a> Frontier<'a> {
     }
 
     /// This frontier with `other`'s unknowns, laid down through `writer` where it grows.
-    pub fn union<'w>(self, other: Frontier<'_>, writer: Writer<'w, '_>) -> Frontier<'w>
+    pub fn union<'w>(self, other: Frontier<'_>, lay: impl Lays<'w>) -> Frontier<'w>
     where
         'a: 'w,
     {
@@ -97,7 +97,7 @@ impl<'a> Frontier<'a> {
         };
         let count = merged().count();
         let mut each = merged();
-        Frontier(writer.fill(count, |_| each.next().expect("the merge yields its count")))
+        Frontier(lay.fill(count, |_| each.next().expect("the merge yields its count")))
     }
 }
 
@@ -171,13 +171,13 @@ impl<'a> Binding<'a> {
     pub const EMPTY: Binding<'static> = Binding(&[]);
 
     /// `staged`, sorted and laid down through `writer`. Each unknown is bound once.
-    pub fn laid(writer: Writer<'a, '_>, staged: &mut BumpVec<'_, (Unknown, KType)>) -> Self {
+    pub fn laid(lay: impl Lays<'a>, staged: &mut BumpVec<'_, (Unknown, KType)>) -> Self {
         staged.sort_unstable_by_key(|(unknown, _)| *unknown);
         debug_assert!(
             staged.windows(2).all(|pair| pair[0].0 != pair[1].0),
             "a binding binds each unknown once"
         );
-        Binding(collect(writer, staged.iter().copied()))
+        Binding(collect(lay, staged.iter().copied()))
     }
 
     /// The type `unknown` is bound to, where it is bound.

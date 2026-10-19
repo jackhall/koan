@@ -5,7 +5,7 @@
 use std::fmt;
 use std::ops::Deref;
 
-use crate::memory::{Writer, collect};
+use crate::memory::{Lays, collect};
 
 /// An entry of a [`Keyed`] table: the key it is found by.
 pub trait KeyedEntry {
@@ -55,13 +55,13 @@ impl<'a, T: KeyedEntry> Keyed<'a, T> {
         Keyed(entries)
     }
 
-    /// `staged` sorted by key and laid down in `writer`'s region.
-    pub(crate) fn sorted(writer: Writer<'a, '_>, staged: &mut [T]) -> Self
+    /// `staged` sorted by key and laid down through `lay`.
+    pub(crate) fn sorted(lay: impl Lays<'a>, staged: &mut [T]) -> Self
     where
         T: Copy,
     {
         staged.sort_unstable_by_key(KeyedEntry::key);
-        Keyed(collect(writer, staged.iter().copied()))
+        Keyed(collect(lay, staged.iter().copied()))
     }
 
     /// Every entry, sorted by key.

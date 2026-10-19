@@ -52,21 +52,41 @@ pub type StepContext<
     H = NoHeader,
 > = cellgraph::StepContext<'graph, 'step, 'here, 'scratch, 'lent, C, S, D, WIDTH, H>;
 
-/// Store one value in the region and hand back its resident borrow — [`Writer::fill`] at length
-/// one.
-pub fn resident<'cell, T>(writer: Writer<'cell, '_>, value: T) -> &'cell T {
-    let mut value = Some(value);
-    &writer.fill(1, |_| value.take().expect("one cell is filled once"))[0]
+/// What lays a run of drop-free values for `'a`: a region's [`Writer`], or a bump — a walk's
+/// scratch, which a fact is laid in before what keeps it copies it out.
+pub trait Lays<'a>: Copy {
+    /// Lay a run of `len` values, each built from its index.
+    fn fill<T>(self, len: usize, fill: impl FnMut(usize) -> T) -> &'a [T];
 }
 
-/// Copy an exact-length run into the region — [`Writer::fill`] driven by the iterator, with no
-/// growth path.
+impl<'a> Lays<'a> for Writer<'a, '_> {
+    fn fill<T>(self, len: usize, fill: impl FnMut(usize) -> T) -> &'a [T] {
+        Writer::fill(self, len, fill)
+    }
+}
+
+impl<'a> Lays<'a> for crate::memory::BumpAllocator<'a> {
+    fn fill<T>(self, len: usize, fill: impl FnMut(usize) -> T) -> &'a [T] {
+        // The same drop-glue assert as a writer's: a fact laid here may be copied into a region.
+        const { assert!(!std::mem::needs_drop::<T>()) };
+        self.alloc_slice_fill_with(len, fill)
+    }
+}
+
+/// Store one value through `lay` and hand back its borrow — [`Lays::fill`] at length one.
+pub fn resident<'cell, T>(lay: impl Lays<'cell>, value: T) -> &'cell T {
+    let mut value = Some(value);
+    &lay.fill(1, |_| value.take().expect("one cell is filled once"))[0]
+}
+
+/// Copy an exact-length run through `lay` — [`Lays::fill`] driven by the iterator, with no growth
+/// path.
 pub fn collect<'cell, T>(
-    writer: Writer<'cell, '_>,
+    lay: impl Lays<'cell>,
     items: impl ExactSizeIterator<Item = T>,
 ) -> &'cell [T] {
     let mut items = items;
-    writer.fill(items.len(), |_| {
+    lay.fill(items.len(), |_| {
         items
             .next()
             .expect("an exact-size iterator yields its reported length")
