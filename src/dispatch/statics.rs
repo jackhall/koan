@@ -128,11 +128,16 @@
 //! reads the view's digest.
 //!
 //! Every load-time fact the pass reads — a type channel cell, a binder's or a part's static type,
-//! another shape's cell — and every one it writes goes through its fact [`store`].
+//! another shape's cell — and every one it writes goes through its fact [`store`]. The files here
+//! but the store's and [`resume`] hold the pass's **rules**: they lay every value they compute in
+//! the walk's scratch, intern every type through the chain they are handed for work, and hand each
+//! fact they fix to the store's write half, so they never ask whether they run at the load or in a
+//! resumption; `tests::boundary` holds them to that. The two entries ([`entry`]) build the write
+//! half and run the one walk.
 //!
-//! [`resume_statics`] runs the pass again under a binding, once the load has quiesced ([`resume`]):
-//! a bound type name or module binder is the closed type it binds, and only the facts the binding
-//! wakes re-run.
+//! [`resume_statics`] runs the pass again under a binding, once the load has quiesced, at any
+//! step's brand ([`resume`]): a bound type name or module binder is the closed type it binds, and
+//! only the facts the binding wakes re-run.
 //!
 //! Under test, `unnarrowed` loads a program with every keyworded use left whole and none refused,
 //! each contribution still recorded: the narrowing law compares a run so loaded with the narrowed
@@ -144,8 +149,7 @@ use crate::elaborate::{SignatureMember, declares_nominal, module_signature, sign
 use crate::knot::module::view::{self, Ascription, ViewTypes, opaque_view_types};
 use crate::knot::{BuiltinFunction, KBuiltins};
 use crate::memory::{
-    BumpAllocator, BumpBackedMap, BumpBackedSet, BumpVec, Writer, bump_set, bump_table, collect,
-    resident,
+    BumpAllocator, BumpBackedMap, BumpBackedSet, BumpVec, bump_set, bump_table, collect, resident,
 };
 use crate::parse::BuiltinShapeId;
 use crate::parse::{ExpressionPart, KExpression, KLiteral};
@@ -166,11 +170,12 @@ use crate::type_lattice::{
     solving_slots,
 };
 use crate::values::{
-    Chain, ConstructionRefused, Types, Value, construction, dict_type, list_type, pinned_at_fit,
+    Chain, ConstructionRefused, Value, construction, dict_type, list_type, pinned_at_fit,
     record_type, retype_target, retyped_to, under, unknown,
 };
 
 mod caching;
+mod entry;
 mod memos;
 mod paths;
 mod resume;
@@ -178,7 +183,8 @@ mod store;
 mod trees;
 mod views;
 
-use resume::{Resume, Whole};
+pub(super) use entry::{resume_statics, statics};
+use resume::Whole;
 use trees::Written;
 
 use super::builtins::Native;
@@ -187,100 +193,10 @@ use super::one_name;
 use super::rules::{self, Given, Lacks, member_read};
 use super::select;
 
-/// Give every value expression and value binder of `root`, and of every shape nested in it, a
-/// static type, and narrow every keyworded use's candidates; refuse a use no candidate can admit.
-pub(super) fn statics<'graph>(
-    root: &'graph BodyShape<'graph>,
-    builtins: &KBuiltins<'graph, 'graph>,
-    types: &Chain<'graph, 'graph, 'graph, '_>,
-    writer: Writer<'graph, 'graph>,
-    scratch: BumpAllocator<'_>,
-) -> Result<(), ShapeError<'graph>> {
-    let mut pass = Pass::new(builtins, types, writer, scratch, None);
-    // The walk's outermost gathering, which no rule closes.
-    pass.open();
-    pass.push(root, true);
-    pass.open_paths(root);
-    let visited = pass.visit(0, None);
-    pass.close_paths(root);
-    pass.chain.pop();
-    // A site's class reads tail edges from every body, so the classes are fixed last.
-    if visited.is_ok() {
-        pass.cache();
-    }
-    visited
-}
-
-/// Resume the static pass over `root` under `over`'s binding, beside `channel`, what the type
-/// channel's resumption under it settled ([`resume`]). What it settles, laid down through
-/// `writer`; a use the binding leaves no candidate refuses as the load would.
-pub(super) fn resume_statics<'graph>(
-    root: &'graph BodyShape<'graph>,
-    builtins: &KBuiltins<'graph, 'graph>,
-    types: &Chain<'graph, 'graph, 'graph, '_>,
-    writer: Writer<'graph, 'graph>,
-    scratch: BumpAllocator<'_>,
-    over: crate::scope::Resumption<'_, 'graph>,
-    channel: &'graph crate::scope::Settled<'graph>,
-) -> Result<&'graph crate::scope::Settled<'graph>, ShapeError<'graph>> {
-    let resume = Resume::new(over, channel, scratch);
-    let mut pass = Pass::new(builtins, types, writer, scratch, Some(resume));
-    if pass.typed_shape(root) {
-        let resume = pass.resume.take().expect("the walk resumes");
-        return Ok(resume.settled(writer));
-    }
-    pass.open();
-    pass.push(root, true);
-    pass.open_paths(root);
-    let visited = pass.visit(0, None);
-    pass.close_paths(root);
-    pass.chain.pop();
-    visited?;
-    let resume = pass.resume.take().expect("the walk resumes");
-    Ok(resume.settled(writer))
-}
-
-impl<'p, 'x, 'graph: 'p> Pass<'p, 'x, 'graph> {
+impl<'p, 'graph: 'p, 'tier: 'p> Pass<'p, '_, 'graph, 'tier, '_, '_> {
     /// The shape the load built at `segment`, found through the chain's root.
     fn shape_at(&self, segment: Segment) -> &'graph BodyShape<'graph> {
         self.chain[0].shape.shape_at(segment)
-    }
-
-    fn new(
-        builtins: &'x KBuiltins<'graph, 'graph>,
-        types: &'x Types<'graph, 'x>,
-        writer: Writer<'graph, 'graph>,
-        scratch: BumpAllocator<'p>,
-        resume: Option<Resume<'p, 'graph>>,
-    ) -> Self {
-        Pass {
-            builtins,
-            types,
-            writer,
-            scratch,
-            chain: BumpVec::new_in(scratch),
-            unfilled: false,
-            trees: bump_table(scratch),
-            reading: BumpVec::new_in(scratch),
-            typing: BumpVec::new_in(scratch),
-            recursive: bump_set(scratch),
-            views: bump_table(scratch),
-            steps: bump_table(scratch),
-            rebuilds: bump_table(scratch),
-            modules: bump_table(scratch),
-            paths: BumpVec::new_in(scratch),
-            sites: BumpVec::new_in(scratch),
-            composites: bump_table(scratch),
-            edges: BumpVec::new_in(scratch),
-            escaping: bump_set(scratch),
-            bound_at_binder: bump_set(scratch),
-            holders: BumpVec::new_in(scratch),
-            module_mints: bump_table(scratch),
-            heading: false,
-            components: BumpVec::new_in(scratch),
-            scopes: std::cell::Cell::new(BumpVec::new_in(scratch)),
-            resume,
-        }
     }
 }
 
@@ -379,18 +295,18 @@ struct Level<'p, 'graph> {
     statements: BumpVec<'p, Interval>,
     binders: BumpVec<'p, Bound>,
     /// What the pass fixed about each keyworded use, by index into the shape's candidate lists.
-    uses: BumpVec<'p, UseStatics<'graph>>,
+    uses: BumpVec<'p, UseStatics<'p>>,
     /// Each keyworded use the pass selected a candidate at, by its node's site, beside the closed
     /// point each variable of the candidate's group solves to there, by group index.
-    selections: BumpBackedMap<'p, Site, &'graph [Option<KType>]>,
+    selections: BumpBackedMap<'p, Site, &'p [Option<KType>]>,
     /// Each `:!` whose operand's static upper end lies under its type, and each annotated binder's
     /// type part whose value's does.
     settled: BumpVec<'p, Site>,
     /// Each site where a quantified function is read, beside what the load fixed there.
-    instances: BumpVec<'p, (Site, InstanceRead<'graph>)>,
+    instances: BumpVec<'p, (Site, InstanceRead<'p>)>,
     /// Each call by name's contributions, by its argument part's site: per parameter in symbol
     /// order.
-    named: BumpVec<'p, (Site, &'graph [StaticType<'graph>])>,
+    named: BumpVec<'p, (Site, &'p [StaticType<'p>])>,
     /// Each type capture a contribution read in a shape nested here added, by the variable's level,
     /// beside the coordinate it reads in the enclosing activation.
     /// Each type capture's variable's name, and the use that added it, ride beside it: a module
@@ -409,30 +325,30 @@ struct Level<'p, 'graph> {
     /// tree included.
     minted_within: bool,
     /// Each `:|` ascription's site, beside its operand's content tree.
-    trees: BumpVec<'p, (Site, &'graph Tree<'graph>)>,
+    trees: BumpVec<'p, (Site, &'p Tree<'p>)>,
     /// Each path the shape spells whose declared application names a lexical variable, by its
     /// level, beside where the shape reads each variable.
-    throughs: BumpVec<'p, (usize, &'graph [Located])>,
+    throughs: BumpVec<'p, (usize, &'p [Located])>,
     /// Each `LET` binder, by its right-hand side's site.
     rhs: BumpBackedMap<'p, Site, Slot>,
     /// Each fact of the shape that waits on an unknown, by the key its rule ran at, beside its
     /// frontier.
-    residual: BumpBackedMap<'p, FactKey, Frontier<'graph>>,
+    residual: BumpBackedMap<'p, FactKey, Frontier<'p>>,
     /// In a resumption, each key whose fact the walk re-ran: its residual entry replaced.
     kept: BumpBackedSet<'p, FactKey>,
     /// What each binder's, statement's, part's and use's fact waits on, parallel to `binders`,
     /// `statements`, `parts` and `uses`.
-    binder_frontiers: BumpVec<'p, Frontier<'graph>>,
-    statement_frontiers: BumpVec<'p, Frontier<'graph>>,
-    part_frontiers: BumpVec<'p, Frontier<'graph>>,
-    use_frontiers: BumpVec<'p, Frontier<'graph>>,
+    binder_frontiers: BumpVec<'p, Frontier<'p>>,
+    statement_frontiers: BumpVec<'p, Frontier<'p>>,
+    part_frontiers: BumpVec<'p, Frontier<'p>>,
+    use_frontiers: BumpVec<'p, Frontier<'p>>,
     /// Each slot a `:|` in this activation, or a block inside it, reads a capture from: the slots
     /// that keep a digest memo.
     digested: BumpVec<'p, Slot>,
     /// Each `:|` over a module binder read bare, beside where its captures' memos sit.
-    view_slots: BumpVec<'p, (Site, ViewSlots<'graph>)>,
+    view_slots: BumpVec<'p, (Site, ViewSlots<'p>)>,
     /// Each call passing a digested slot bare, by the site its contributions are keyed by.
-    handoffs: BumpVec<'p, (Site, &'graph [Handoff])>,
+    handoffs: BumpVec<'p, (Site, &'p [Handoff])>,
 }
 
 impl Level<'_, '_> {
@@ -443,18 +359,19 @@ impl Level<'_, '_> {
     }
 }
 
-/// The walk's state: the chain of enclosing shapes.
-struct Pass<'p, 'x, 'graph> {
+/// The walk's state: the chain of enclosing shapes. Every value a rule computes is laid in
+/// `scratch` and every type interned through `types`, the chain the walk is handed for work; the
+/// store's write half keeps what it keeps ([`store`]).
+struct Pass<'p, 'x, 'graph, 'tier, 'pair, 'reg> {
     builtins: &'x KBuiltins<'graph, 'graph>,
-    types: &'x Types<'graph, 'x>,
-    writer: Writer<'graph, 'graph>,
+    types: &'x Chain<'tier, 'pair, 'reg, 'x>,
     scratch: BumpAllocator<'p>,
     chain: BumpVec<'p, Level<'p, 'graph>>,
     /// Whether the pass is typing a quote's code as a traced `EVAL` runs it, no hole filled: it
     /// fixes nothing.
     unfilled: bool,
     /// Each content tree read on the chain, by its shape's address and where it is written.
-    trees: BumpBackedMap<'p, (usize, Written), (Tree<'graph>, Frontier<'graph>)>,
+    trees: BumpBackedMap<'p, (usize, Written), (Tree<'p>, Frontier<'p>)>,
     /// Each binder whose tree is being read, by its shape's address: a binder read through itself
     /// reads as a leaf.
     reading: BumpVec<'p, (usize, Slot)>,
@@ -463,14 +380,14 @@ struct Pass<'p, 'x, 'graph> {
     /// Each callable body met while it was being typed, and each typed since: none unfolds.
     recursive: BumpBackedSet<'p, usize>,
     /// What each view over a closed tree binds, by its print: a chain of views reads each once.
-    views: BumpBackedMap<'p, Print, (Option<ViewTypes<'graph>>, Frontier<'graph>)>,
+    views: BumpBackedMap<'p, Print, (Option<ViewTypes<'p>>, Frontier<'p>)>,
     /// What each read of a value a lay may reach twice yields, so a chain of views reads each
     /// member once.
-    steps: BumpBackedMap<'p, (views::Identity, views::Step), Option<views::Carried<'graph, 'p>>>,
+    steps: BumpBackedMap<'p, (views::Identity, views::Step), Option<views::Carried<'p>>>,
     /// Each value a view rebuilt, by what it was rebuilt from.
-    rebuilds: BumpBackedMap<'p, views::Rebuild, views::Carried<'graph, 'p>>,
+    rebuilds: BumpBackedMap<'p, views::Rebuild, views::Carried<'p>>,
     /// The modules each rebuilt union of cells' signatures may be, cell by cell.
-    modules: BumpBackedMap<'p, views::Identity, &'p [views::Carried<'graph, 'p>]>,
+    modules: BumpBackedMap<'p, views::Identity, &'p [views::Carried<'p>]>,
     /// The path table of each chain being typed, outermost first.
     paths: BumpVec<'p, paths::ChainPaths<'p, 'graph>>,
     /// Each minting and composite site of a body that may cache, beside what it depends on.
@@ -498,8 +415,13 @@ struct Pass<'p, 'x, 'graph> {
     /// fellow's callable is not typed on demand while its component is, since its body reads the
     /// fellows' facts, not their seeds.
     components: BumpVec<'p, (usize, &'graph [Slot])>,
-    /// Set in a resumption: what it binds, and each fact it re-runs.
-    resume: Option<Resume<'p, 'graph>>,
+    /// Set in a resumption: what it binds, and the resumptions it extends. Read by the store's
+    /// read half alone.
+    over: Option<crate::scope::Resumption<'p, 'p>>,
+    /// In a resumption, what the type channel's resumption under it settled.
+    channel: Option<crate::scope::Settled<'p>>,
+    /// Where each fact the walk fixes goes.
+    write: &'p dyn store::Write<'p, 'graph>,
 }
 
 /// What the load knows of one candidate's registered expression shape.
@@ -575,7 +497,7 @@ enum Unsolved<'p> {
 
 /// A call by name's argument laid onto its callee's slots: the argument's static upper end, each
 /// slot's static type, and each slot's contribution.
-type Laid<'p, 'graph> = (Parametric, &'p [Interval], &'p [StaticType<'graph>]);
+type Laid<'p, 'graph> = (Parametric, &'p [Interval], &'p [StaticType<'p>]);
 
 /// A call by name's callee, read as a keyworded use's lone candidate.
 #[derive(Clone, Copy)]
@@ -596,7 +518,7 @@ struct Callee<'p> {
     exact: bool,
 }
 
-impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
+impl<'p, 'graph: 'p, 'tier: 'p> Pass<'p, '_, 'graph, 'tier, '_, '_> {
     fn push(&mut self, shape: &'graph BodyShape<'graph>, roots_chain: bool) {
         let scratch = self.scratch;
         let mut statements = BumpVec::with_capacity_in(shape.body().len(), scratch);
@@ -657,15 +579,13 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     fn visit(
         &mut self,
         level: usize,
-        surfacing: Option<(Interval, Frontier<'graph>)>,
-    ) -> Result<(), ShapeError<'graph>> {
+        surfacing: Option<(Interval, Frontier<'p>)>,
+    ) -> Result<(), ShapeError<'p>> {
         let shape = self.chain[level].shape;
         for slot in 0..shape.slots() {
             // A resumption re-runs a slot a value component types where its component does.
             let slot = Slot(slot as u32);
-            if (self.resume.is_some() && self.component_types(shape, slot))
-                || !self.runs(level, FactKey::Slot(slot))
-            {
+            if self.rides_component(shape, slot) || !self.runs(level, FactKey::Slot(slot)) {
                 continue;
             }
             // A surfaced name reads the module's static type, which its `USING` read.
@@ -717,7 +637,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                     let frontier = self.snapshot();
                     self.set_statement(level, index as usize, typed, frontier);
                     self.close_as(level, FactKey::Statement(index));
-                    if self.resume.is_none() {
+                    if self.bookkeeps() {
                         self.tail_edges(level, index as usize);
                     }
                 }
@@ -726,7 +646,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         }
         self.resolve_spelled(level)?;
         self.returns(level)?;
-        if self.resume.is_none() {
+        if self.bookkeeps() {
             self.return_exits(level)?;
         }
 
@@ -735,7 +655,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                 self.nest(level, nested)?;
             }
         }
-        if !self.unfilled && self.resume.is_none() {
+        if !self.unfilled && self.bookkeeps() {
             self.throughs(level);
         }
         // A nested shape adds a type capture to each shape between it and the variable's home, so
@@ -745,7 +665,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             self.fix_type_captures(
                 at.shape,
                 collect(
-                    self.writer,
+                    self.scratch,
                     at.type_captures.iter().map(|(_, source, _)| *source),
                 ),
             );
@@ -782,7 +702,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         let at = &self.chain[level];
         // A module body reads a type its enclosing callable binds only where its `OVER` list
         // names it.
-        if at.shape.kind() == ShapeKind::Module && self.resume.is_none() {
+        if at.shape.kind() == ShapeKind::Module && self.bookkeeps() {
             let listed = at.shape.over().unwrap_or(&[]);
             for (_, _, (name, used)) in at.type_captures.iter() {
                 let name = BinderSymbol::Type(*name);
@@ -800,7 +720,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         &mut self,
         level: usize,
         nested: &'graph BodyShape<'graph>,
-    ) -> Result<(), ShapeError<'graph>> {
+    ) -> Result<(), ShapeError<'p>> {
         let code = nested.kind() == ShapeKind::Code;
         let depth = self.depth();
         let visited = self.nested(level, nested, code, None);
@@ -808,7 +728,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             Err(error) if code => {
                 // A refused quote's rules closed nothing.
                 self.unwind(depth);
-                self.refuse_code(nested, resident(self.writer, error));
+                self.refuse_code(nested, error);
                 Ok(())
             }
             Ok(_) if code && !self.runs_whole(nested, Whole::Ran) => Ok(()),
@@ -841,8 +761,8 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         level: usize,
         nested: &'graph BodyShape<'graph>,
         roots_chain: bool,
-        surfacing: Option<(Interval, Frontier<'graph>)>,
-    ) -> Result<Option<Interval>, ShapeError<'graph>> {
+        surfacing: Option<(Interval, Frontier<'p>)>,
+    ) -> Result<Option<Interval>, ShapeError<'p>> {
         self.push(nested, roots_chain);
         let callable = nested.kind() == ShapeKind::Callable;
         if callable {
@@ -876,7 +796,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         &mut self,
         level: usize,
         body: &'graph BodyShape<'graph>,
-    ) -> Result<Interval, ShapeError<'graph>> {
+    ) -> Result<Interval, ShapeError<'p>> {
         self.open();
         let typed = self.module_signed(level, body);
         let frontier = self.close();
@@ -895,7 +815,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         &mut self,
         level: usize,
         body: &'graph BodyShape<'graph>,
-    ) -> Result<(Interval, Option<KType>), ShapeError<'graph>> {
+    ) -> Result<(Interval, Option<KType>), ShapeError<'p>> {
         let (types, scratch) = (self.types, self.scratch);
         self.push(body, false);
         let visited = self.visit(level + 1, None);
@@ -991,7 +911,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     /// not type it — is too, and a quote's code whose last statement's value is porous, its
     /// `EVAL`'s declared return unknown to the shape. A body that never arrives returns nothing,
     /// and a value [holding nothing it minted](Self::returns_nothing_minted) carries nothing out.
-    fn return_exits(&mut self, level: usize) -> Result<(), ShapeError<'graph>> {
+    fn return_exits(&mut self, level: usize) -> Result<(), ShapeError<'p>> {
         let at = &self.chain[level];
         let Some(last) = self.last_statement(level) else {
             return Ok(());
@@ -1024,7 +944,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         &mut self,
         level: usize,
         last: Interval,
-    ) -> Result<bool, ShapeError<'graph>> {
+    ) -> Result<bool, ShapeError<'p>> {
         let shape = self.chain[level].shape;
         let node = shape
             .body()
@@ -1101,11 +1021,10 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         named: (TypeSymbol, SourceRef),
         source: Coordinate,
     ) -> CaptureSlot {
-        // A resumption reads a variable through the capture the load laid for it.
+        // A variable is read through the capture the load laid for it, where it laid one: none
+        // while the load walks the shape.
         let laid = self.laid_captures(self.chain[level].shape);
-        if self.resume.is_some()
-            && let Some(index) = laid.iter().position(|held| *held == source)
-        {
+        if let Some(index) = laid.iter().position(|held| *held == source) {
             let shape = self.chain[level].shape;
             return CaptureSlot((shape.captures().len() + index) as u32);
         }
@@ -1121,18 +1040,13 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                 at.type_captures.len() - 1
             }
         };
-        CaptureSlot((at.shape.captures().len() + index) as u32)
+        CaptureSlot((at.shape.captures().len() + laid.len() + index) as u32)
     }
 
     /// What an argument whose static upper end is `upper`, in the shape at `level`, contributes to
     /// a solve where its call runs: `Unknown` — the carried type — where `upper` is `Any`; `upper`
     /// where it is closed; and `upper` beside where each lexical variable it names is read.
-    fn contribution(
-        &mut self,
-        level: usize,
-        upper: Parametric,
-        at: SourceRef,
-    ) -> StaticType<'graph> {
+    fn contribution(&mut self, level: usize, upper: Parametric, at: SourceRef) -> StaticType<'p> {
         if upper == KType::ANY.into() {
             return Static::Unknown;
         }
@@ -1157,12 +1071,12 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         level: usize,
         solution: &[Parametric],
         at: SourceRef,
-    ) -> StaticSolution<'graph> {
+    ) -> StaticSolution<'p> {
         let types = self.types;
         let mut closed = BumpVec::with_capacity_in(solution.len(), self.scratch);
         closed.extend(solution.iter().map_while(|each| types.concrete(*each)));
         if closed.len() == solution.len() {
-            return StaticSolution::Closed(collect(self.writer, closed.iter().copied()));
+            return StaticSolution::Closed(collect(self.scratch, closed.iter().copied()));
         }
         let variables = self.located(level, solution, at);
         assert!(
@@ -1170,7 +1084,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             "an instance's solution names no variable but its chain's lexical ones"
         );
         StaticSolution::Rigid {
-            value: collect(self.writer, solution.iter().copied()),
+            value: collect(self.scratch, solution.iter().copied()),
             variables,
         }
     }
@@ -1179,12 +1093,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     /// block and a type capture per callable or module between the read and the variable's home,
     /// each added for the use at `used`, and a path variable through the root of a path of its
     /// class. Empty where they name none.
-    fn located(
-        &mut self,
-        level: usize,
-        values: &[Parametric],
-        used: SourceRef,
-    ) -> &'graph [Located] {
+    fn located(&mut self, level: usize, values: &[Parametric], used: SourceRef) -> &'p [Located] {
         let (types, scratch) = (self.types, self.scratch);
         let mut levels: BumpVec<'_, (usize, TypeSymbol)> = BumpVec::new_in(scratch);
         for value in values {
@@ -1228,7 +1137,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                 source: Source::Type(at),
             });
         }
-        collect(self.writer, located.iter().copied())
+        collect(self.scratch, located.iter().copied())
     }
 
     /// A slot's static type before any unit runs: a registration's function type, a type name's
@@ -1336,7 +1245,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     /// every other member seeded ([`seed`](Self::seed)) and typed against its fellows' seeds
     /// ([`members`](Self::members)), so no member's type depends on the order the members are
     /// typed in. A component of type binders is the type channel's.
-    fn component(&mut self, level: usize, index: usize) -> Result<(), ShapeError<'graph>> {
+    fn component(&mut self, level: usize, index: usize) -> Result<(), ShapeError<'p>> {
         let shape = self.chain[level].shape;
         let component = &shape.components()[index];
         if let Some(first) = shape.declarations(component.members[0]) {
@@ -1449,7 +1358,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         &mut self,
         level: usize,
         members: &[Slot],
-    ) -> Result<BumpVec<'p, (Slot, Interval, Frontier<'graph>)>, ShapeError<'graph>> {
+    ) -> Result<BumpVec<'p, (Slot, Interval, Frontier<'p>)>, ShapeError<'p>> {
         let shape = self.chain[level].shape;
         let mut typed = BumpVec::with_capacity_in(members.len(), self.scratch);
         for member in members {
@@ -1528,7 +1437,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         member: Slot,
         body: &'graph BodyShape<'graph>,
         scheme: Scheme,
-    ) -> Result<Bound, ShapeError<'graph>> {
+    ) -> Result<Bound, ShapeError<'p>> {
         let shape = self.chain[level].shape;
         let Some(index) = self.statement_of(level, member) else {
             return Ok(DeclaredType::Scheme(scheme));
@@ -1561,7 +1470,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         scheme: Scheme,
         wanted: Option<Parametric>,
         at: SourceRef,
-    ) -> Result<Made<'p>, ShapeError<'graph>> {
+    ) -> Result<Made<'p>, ShapeError<'p>> {
         let (types, scratch) = (self.types, self.scratch);
         let quantifiers = scheme.group(types).names;
         let Some(wanted) =
@@ -1581,7 +1490,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             Err(InstanceFailure::Unfixed(unfixed)) => {
                 return Err(ShapeError::Unfixed {
                     variables: collect(
-                        self.writer,
+                        self.scratch,
                         unfixed.iter().map(|index| quantifiers[*index]),
                     ),
                     wanted: Some(bound_above(types, scratch, wanted)),
@@ -1611,7 +1520,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         &mut self,
         level: usize,
         part: &'graph ExpressionPart<'graph>,
-    ) -> Result<Option<(Instanced<'graph>, Scheme, SourceRef)>, ShapeError<'graph>> {
+    ) -> Result<Option<(Instanced<'graph>, Scheme, SourceRef)>, ShapeError<'p>> {
         let shape = self.chain[level].shape;
         Ok(match of_part(shape, part) {
             Form::Name(leaf) => {
@@ -1660,7 +1569,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         level: usize,
         operand: &'graph ExpressionPart<'graph>,
         name: BinderSymbol,
-    ) -> Result<Option<(Scheme, Option<BinderSymbol>)>, ShapeError<'graph>> {
+    ) -> Result<Option<(Scheme, Option<BinderSymbol>)>, ShapeError<'p>> {
         match self.peeked(level, operand) {
             Some(peeked) => self.member_scheme(level, operand, peeked.upper, name),
             None => Ok(None),
@@ -1678,7 +1587,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         operand: &'graph ExpressionPart<'graph>,
         upper: Parametric,
         name: BinderSymbol,
-    ) -> Result<Option<(Scheme, Option<BinderSymbol>)>, ShapeError<'graph>> {
+    ) -> Result<Option<(Scheme, Option<BinderSymbol>)>, ShapeError<'p>> {
         Ok(match self.member_read(level, operand, upper, name)? {
             Some(SignatureMember {
                 declared: DeclaredType::Scheme(scheme),
@@ -1698,7 +1607,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         label: BinderSymbol,
         (scheme, unpinned): (Scheme, Option<BinderSymbol>),
         wanted: Option<Parametric>,
-    ) -> Result<Interval, ShapeError<'graph>> {
+    ) -> Result<Interval, ShapeError<'p>> {
         if let Some(parameter) = unpinned {
             return Err(ShapeError::UnpinnedMember {
                 member: label,
@@ -1864,7 +1773,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         &self,
         shape: DeclaredType<Parametric>,
         position: usize,
-        contributions: &[StaticType<'graph>],
+        contributions: &[StaticType<'p>],
     ) -> Result<&'p [Option<Parametric>], Unsolved<'p>> {
         let (types, scratch) = (self.types, self.scratch);
         let DeclaredType::Scheme(scheme) = shape else {
@@ -1978,7 +1887,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         &self,
         shape: DeclaredType<Parametric>,
         arguments: &[Interval],
-        contributions: &[StaticType<'graph>],
+        contributions: &[StaticType<'p>],
     ) -> &'p [Interval] {
         let solving = solving_slots(self.types, self.scratch, shape);
         let mut read = BumpVec::with_capacity_in(arguments.len(), self.scratch);
@@ -2008,8 +1917,8 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         shape: Option<DeclaredType<Parametric>>,
         sites: &[InstanceArgument<'graph>],
         arguments: &[Interval],
-        contributions: &[StaticType<'graph>],
-    ) -> Result<&'p [Made<'p>], Option<ShapeError<'graph>>> {
+        contributions: &[StaticType<'p>],
+    ) -> Result<&'p [Made<'p>], Option<ShapeError<'p>>> {
         let (types, scratch) = (self.types, self.scratch);
         let mut slots = BumpVec::new_in(scratch);
         let Some(shape) = shape else {
@@ -2046,7 +1955,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                     Err(Unsolved::Open(open)) => {
                         return Err(Some(ShapeError::Unfixed {
                             variables: collect(
-                                self.writer,
+                                self.scratch,
                                 open.iter().map(|index| quantifiers[*index]),
                             ),
                             wanted: None,
@@ -2061,12 +1970,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     }
 
     /// `Unfixed` for the quantified function typed by `scheme` at `at`, naming its whole group.
-    fn unfixed(
-        &self,
-        scheme: Scheme,
-        wanted: Option<Parametric>,
-        at: SourceRef,
-    ) -> ShapeError<'graph> {
+    fn unfixed(&self, scheme: Scheme, wanted: Option<Parametric>, at: SourceRef) -> ShapeError<'p> {
         let (types, scratch) = (self.types, self.scratch);
         ShapeError::Unfixed {
             variables: scheme.group(types).names,
@@ -2077,7 +1981,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
 
     /// Refuse a callable body whose static type can never satisfy its declared return — every call
     /// of it would fault on its contract.
-    fn returns(&self, level: usize) -> Result<(), ShapeError<'graph>> {
+    fn returns(&self, level: usize) -> Result<(), ShapeError<'p>> {
         let at = &self.chain[level];
         let shape = at.shape;
         if shape.kind() != ShapeKind::Callable || shape.body().is_empty() {
@@ -2110,7 +2014,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         &mut self,
         level: usize,
         part: &'graph ExpressionPart<'graph>,
-    ) -> Result<Interval, ShapeError<'graph>> {
+    ) -> Result<Interval, ShapeError<'p>> {
         self.part_at(level, part, None)
     }
 
@@ -2121,7 +2025,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         level: usize,
         part: &'graph ExpressionPart<'graph>,
         wanted: Option<Parametric>,
-    ) -> Result<Interval, ShapeError<'graph>> {
+    ) -> Result<Interval, ShapeError<'p>> {
         // The type a part is wanted at is read by its caller, so the part's rule reads it too.
         let seed = match wanted {
             Some(_) => self.snapshot(),
@@ -2137,8 +2041,8 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         level: usize,
         part: &'graph ExpressionPart<'graph>,
         wanted: Option<Parametric>,
-        seed: Frontier<'graph>,
-    ) -> Result<Interval, ShapeError<'graph>> {
+        seed: Frontier<'p>,
+    ) -> Result<Interval, ShapeError<'p>> {
         // A part a resumption skips, or re-ran already, is the type the walk holds for it.
         let site = Site::of(part);
         if !self.reruns(level, FactKey::Site(site))
@@ -2162,7 +2066,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         level: usize,
         node: &'graph KExpression<'graph>,
         wanted: Option<Parametric>,
-    ) -> Result<Interval, ShapeError<'graph>> {
+    ) -> Result<Interval, ShapeError<'p>> {
         let shape = self.chain[level].shape;
         let form = of_node(shape, node);
         let typed = self.form(level, form, wanted)?;
@@ -2180,7 +2084,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         form: Form<'graph>,
         written: Written,
         typed: Interval,
-    ) -> Result<Interval, ShapeError<'graph>> {
+    ) -> Result<Interval, ShapeError<'p>> {
         let (types, scratch) = (self.types, self.scratch);
         if !matches!(
             form,
@@ -2223,7 +2127,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         level: usize,
         form: Form<'graph>,
         wanted: Option<Parametric>,
-    ) -> Result<Interval, ShapeError<'graph>> {
+    ) -> Result<Interval, ShapeError<'p>> {
         let shape = self.chain[level].shape;
         Ok(match form {
             Form::Leaf(part) => self.leaf(level, part, wanted)?,
@@ -2300,7 +2204,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         &mut self,
         level: usize,
         head: &'graph ExpressionPart<'graph>,
-    ) -> Result<Bound, ShapeError<'graph>> {
+    ) -> Result<Bound, ShapeError<'p>> {
         let shape = self.chain[level].shape;
         let read = match of_part(shape, head) {
             Form::Name(name) => shape
@@ -2363,7 +2267,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         level: usize,
         node: &'graph KExpression<'graph>,
         mode: Ascription,
-    ) -> Result<Interval, ShapeError<'graph>> {
+    ) -> Result<Interval, ShapeError<'p>> {
         let [operand_part, _, ascribed] = node.parts else {
             unreachable!("an ascription has an operand, its keyword and a type")
         };
@@ -2374,7 +2278,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             // An opaque view hides each unpinned head parameter behind a carrier it mints.
             self.chain[level].minting.push(Site::of_node(node));
             let tree = self.tree(level, &operand_part.value)?;
-            let tree = resident(self.writer, tree);
+            let tree = resident(self.scratch, tree);
             let site = Site::of_node(node);
             if tree.closed() {
                 self.chain[level].closed += 1;
@@ -2384,7 +2288,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             let signature = declared.and_then(|declared| types.concrete(declared));
             if let Some(signature) = signature {
                 let viewed = self.view_tree(signature, *tree, site)?;
-                self.record_view_tree(level, site, resident(self.writer, viewed));
+                self.record_view_tree(level, site, resident(self.scratch, viewed));
             }
             // Over a closed tree the load lays every type the view door computes from types
             // alone, so the run's view interns none of its own.
@@ -2439,7 +2343,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         node: &'graph KExpression<'graph>,
         typed: Interval,
         declared: Option<Parametric>,
-    ) -> Result<Interval, ShapeError<'graph>> {
+    ) -> Result<Interval, ShapeError<'p>> {
         let (types, scratch) = (self.types, self.scratch);
         if typed.upper == KType::NEVER.into() {
             return Ok(Interval::point(KType::NEVER.into()));
@@ -2494,7 +2398,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         member: Slot,
         annotation: &'graph ExpressionPart<'graph>,
         typed: Interval,
-    ) -> Result<Interval, ShapeError<'graph>> {
+    ) -> Result<Interval, ShapeError<'p>> {
         let held = self.held(level, typed, annotation, Site::of(annotation));
         held.map_err(|(value, annotated)| {
             let shape = self.chain[level].shape;
@@ -2564,7 +2468,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         &mut self,
         level: usize,
         node: &'graph KExpression<'graph>,
-    ) -> Result<Interval, ShapeError<'graph>> {
+    ) -> Result<Interval, ShapeError<'p>> {
         let [_, operand, _, _] = node.parts else {
             unreachable!("a `USING … SCOPE` has its keyword, its module, `SCOPE` and a body")
         };
@@ -2588,7 +2492,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         &mut self,
         level: usize,
         node: &'graph KExpression<'graph>,
-    ) -> Result<Interval, ShapeError<'graph>> {
+    ) -> Result<Interval, ShapeError<'p>> {
         let [_, operand, _, declared] = node.parts else {
             unreachable!("an `EVAL` has its keyword, its code, `->` and a type")
         };
@@ -2643,7 +2547,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         level: usize,
         part: &'graph ExpressionPart<'graph>,
         wanted: Option<Parametric>,
-    ) -> Result<Interval, ShapeError<'graph>> {
+    ) -> Result<Interval, ShapeError<'p>> {
         let shape = self.chain[level].shape;
         let (types, scratch) = (self.types, self.scratch);
         Ok(match part {
@@ -2748,7 +2652,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         level: usize,
         part: &'graph ExpressionPart<'graph>,
         wanted: Option<Parametric>,
-    ) -> Result<Interval, ShapeError<'graph>> {
+    ) -> Result<Interval, ShapeError<'p>> {
         let site = Site::of(part);
         let Some(mention) = self.chain[level].shape.mention(site) else {
             return Ok(unknown());
@@ -2903,7 +2807,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         &mut self,
         level: usize,
         node: &'graph KExpression<'graph>,
-    ) -> Result<Interval, ShapeError<'graph>> {
+    ) -> Result<Interval, ShapeError<'p>> {
         let [head, argument] = node.parts else {
             unreachable!("an application is a head and its argument")
         };
@@ -3038,7 +2942,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         callee: Callee<'p>,
         argument: &'graph ExpressionPart<'graph>,
         node: &'graph KExpression<'graph>,
-    ) -> Result<Interval, ShapeError<'graph>> {
+    ) -> Result<Interval, ShapeError<'p>> {
         if let ExpressionPart::RecordLiteral(fields) = argument {
             let mut handed = BumpVec::new_in(self.scratch);
             handed.extend((fields.iter()).filter_map(|(field, value)| {
@@ -3095,7 +2999,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             }
         };
         if !self.unfilled && (contributions.iter()).any(|each| !matches!(each, Static::Unknown)) {
-            let recorded = collect(self.writer, contributions.iter().copied());
+            let recorded = collect(self.scratch, contributions.iter().copied());
             self.record_named(level, Site::of(argument), recorded);
         }
         let (types, scratch) = (self.types, self.scratch);
@@ -3121,7 +3025,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         arguments: &[Interval],
         at: SourceRef,
         typed: impl Fn(usize) -> bool,
-    ) -> &'p [StaticType<'graph>] {
+    ) -> &'p [StaticType<'p>] {
         let solving = solving_slots(self.types, self.scratch, callee.shape);
         let mut contributions = BumpVec::with_capacity_in(arguments.len(), self.scratch);
         for (slot, argument) in arguments.iter().enumerate() {
@@ -3146,7 +3050,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         argument: &'graph ExpressionPart<'graph>,
         fields: &'graph [(BinderSymbol, ExpressionPart<'graph>)],
         node: &'graph KExpression<'graph>,
-    ) -> Result<Option<Laid<'p, 'graph>>, ShapeError<'graph>> {
+    ) -> Result<Option<Laid<'p, 'graph>>, ShapeError<'p>> {
         let (types, scratch) = (self.types, self.scratch);
         let slot_of = |name: BinderSymbol| {
             (callee.names.iter()).position(|each| each.symbol() == name.symbol())
@@ -3245,7 +3149,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         callee: Callee<'_>,
         payload: Parametric,
         node: &KExpression<'_>,
-    ) -> ShapeError<'graph> {
+    ) -> ShapeError<'p> {
         let (types, scratch) = (self.types, self.scratch);
         ShapeError::CallNeverSatisfied {
             callee: match callee.function {
@@ -3332,7 +3236,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         level: usize,
         node: &'graph KExpression<'graph>,
         list: &'graph CandidateList<'graph>,
-    ) -> Result<Interval, ShapeError<'graph>> {
+    ) -> Result<Interval, ShapeError<'p>> {
         let (types, scratch) = (self.types, self.scratch);
         let wanted = slots(node, scratch);
         // A builtin runs no frame to keep a memo in, so a use that can select only builtins hands
@@ -3448,10 +3352,10 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             .any(|contribution| !matches!(contribution, Static::Unknown));
 
         // Each argument as a refusal lists it: its upper end, or an instance argument's scheme.
-        let writer = self.writer;
+        let lay = self.scratch;
         let uppers = || {
             collect(
-                writer,
+                lay,
                 arguments.iter().enumerate().map(|(position, argument)| {
                     match sites.iter().find(|site| site.position == position) {
                         Some(site) => DeclaredType::Scheme(site.scheme),
@@ -3545,7 +3449,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             }
         }
         if contributes && !self.unfilled {
-            let contributions = collect(self.writer, contributions.iter().copied());
+            let contributions = collect(self.scratch, contributions.iter().copied());
             self.set_contributions(level, index, contributions);
         }
         // The narrowing law's unnarrowed load: see `unnarrowed`.
@@ -3642,7 +3546,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                             .then(|| types.concrete(interval.upper))
                             .flatten()
                     }));
-                    let points = collect(self.writer, points.iter().copied());
+                    let points = collect(self.scratch, points.iter().copied());
                     self.record_selection(level, Site::of_node(node), points);
                 }
                 self.set_narrowing(level, index, Narrowing::Selected(coordinate));
@@ -3655,7 +3559,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                 .any(|judgement| judgement.verdict == Verdict::Always)
         {
             let kept = collect(
-                self.writer,
+                self.scratch,
                 judged
                     .iter()
                     .map(|judgement| (judgement.candidate, judgement.verdict)),
@@ -3790,7 +3694,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         form: Form<'graph>,
         written: Written,
         typed: Interval,
-    ) -> Result<bool, ShapeError<'graph>> {
+    ) -> Result<bool, ShapeError<'p>> {
         if !porous_site(self.types, typed) || self.received_form(level, form) {
             return Ok(true);
         }
@@ -3819,7 +3723,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         level: usize,
         part: &'graph ExpressionPart<'graph>,
         typed: Interval,
-    ) -> Result<bool, ShapeError<'graph>> {
+    ) -> Result<bool, ShapeError<'p>> {
         let form = of_part(self.chain[level].shape, part);
         self.holds_nothing_minted(level, form, Written::Part(Site::of(part)), typed)
     }
@@ -3830,7 +3734,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     /// site, in itself or in a block or module body it runs, or capturing what reaches it; or a
     /// leaf on anything but a value the frame body received. A leaf reading a member, or keyed on
     /// an unfolded call, reaches it too: the tree does not say the member read was the builtin's.
-    fn reaches_minted(&self, level: usize, tree: &Tree<'graph>) -> bool {
+    fn reaches_minted(&self, level: usize, tree: &Tree<'p>) -> bool {
         let frame = self.frame_level(level);
         let mut stack = BumpVec::new_in(self.scratch);
         stack.push(*tree);
@@ -3890,7 +3794,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         names: &[BinderSymbol],
         argument: &'graph ExpressionPart<'graph>,
         whole: Option<Interval>,
-    ) -> Result<&'p [bool], ShapeError<'graph>> {
+    ) -> Result<&'p [bool], ShapeError<'p>> {
         let scratch = self.scratch;
         let mut free = BumpVec::with_capacity_in(names.len(), scratch);
         match argument {
@@ -3929,7 +3833,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         list: &'graph CandidateList<'graph>,
         sites: &[InstanceArgument<'graph>],
         kept: &[Judgement<'_>],
-    ) -> Result<(), ShapeError<'graph>> {
+    ) -> Result<(), ShapeError<'p>> {
         for (index, site) in sites.iter().enumerate() {
             let made = kept[0].instances[index];
             if kept

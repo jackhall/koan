@@ -5,22 +5,25 @@
 //! The walk skips a shape whose reach waits on none of it, and in a shape it walks starts each
 //! level from the facts it skips — every fact whose frontier the binding misses, as the
 //! resumptions it extends left it, else as the load did — so a rule that reads one finds it, and a
-//! rule run at a skipped fact's key returns it without descending. A fact it re-runs is written
-//! beside the load's, never into it, and each shape it walks is laid down whole, with its residual
-//! ([`Settled`]). The load's bookkeeping for the run — caching, type captures, the path entries —
-//! is the load's alone: a resumption reads it, and mints no path entry.
+//! rule run at a skipped fact's key returns it without descending. A fact it re-runs is kept
+//! beside the load's, never in it, and each shape it walks is kept whole, with its residual: in
+//! [`Resume`], the write half of the store a resumption runs over, which relays what it keeps into
+//! the [`Settled`] it lays once the walk ends. The load's bookkeeping for the run — caching, type
+//! captures, the path entries — is the load's alone: a resumption reads it, and mints no path entry
+//! and no type capture.
 
 use std::cell::Cell;
 
 use crate::memory::{
-    BumpAllocator, BumpBackedMap, BumpBackedSet, BumpVec, Writer, bump_set, bump_table, collect,
-    resident,
+    BumpAllocator, BumpBackedMap, BumpBackedSet, BumpVec, bump_set, bump_table, resident,
 };
 use crate::scope::{
-    ChannelSettled, FactKey, Frontier, Keyed, Resolution, Resumption, Segment, Settled, ShapeError,
-    ShapeFacts, StaticSolution, StaticsSettled, Unknown,
+    BodyShape, Caching, Coordinate, FactKey, Keyed, PathEntry, Relay, Resolution, Segment, Settled,
+    ShapeError, ShapeFacts, StaticSolution, StaticsSettled,
 };
-use crate::type_lattice::KType;
+use crate::type_lattice::Habitat;
+
+use super::store::Write;
 
 /// One of a shape's own facts as a whole, which a resumption re-runs at most once.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
@@ -45,35 +48,28 @@ impl Whole {
 }
 
 /// A fact by its key, the newest the walk wrote.
-pub(super) type Held<'p, K, T> = Cell<BumpBackedMap<'p, K, T>>;
+type Held<'p, K, T> = Cell<BumpBackedMap<'p, K, T>>;
 
-/// A resumption the static pass runs: what it resumes under, the type channel's settlement under
-/// it, and each fact it re-runs.
-pub(super) struct Resume<'p, 'graph> {
-    pub(super) over: Resumption<'p, 'graph>,
-    /// What the type channel's resumption settled.
-    pub(super) channel: &'graph Settled<'graph>,
-    pub(super) statics: Held<'p, Segment, StaticsSettled<'graph>>,
-    pub(super) facts: Held<'p, Segment, ShapeFacts<'graph>>,
+/// A resumption's write half: each fact the walk re-runs, kept in the walk's scratch.
+pub(super) struct Resume<'p> {
+    /// Whether the resumption re-runs every fact, not only those its binding wakes.
+    everything: bool,
+    statics: Held<'p, Segment, StaticsSettled<'p>>,
+    facts: Held<'p, Segment, ShapeFacts<'p>>,
     /// Each of a shape's own facts the walk re-ran.
     wholes: Cell<BumpBackedSet<'p, (Segment, Whole)>>,
-    pub(super) born: Held<'p, Segment, StaticSolution<'graph>>,
-    pub(super) refusals: Held<'p, Segment, &'graph ShapeError<'graph>>,
-    pub(super) resolutions: Held<'p, (Segment, usize), Resolution<'graph>>,
+    born: Held<'p, Segment, StaticSolution<'p>>,
+    refusals: Held<'p, Segment, &'p ShapeError<'p>>,
+    resolutions: Held<'p, (Segment, usize), Resolution<'p>>,
     /// Each fact the walk re-ran, by its shape's segment and key.
-    pub(super) reran: Cell<BumpBackedSet<'p, (Segment, FactKey)>>,
+    reran: Cell<BumpBackedSet<'p, (Segment, FactKey)>>,
     scratch: BumpAllocator<'p>,
 }
 
-impl<'p, 'graph> Resume<'p, 'graph> {
-    pub(super) fn new(
-        over: Resumption<'p, 'graph>,
-        channel: &'graph Settled<'graph>,
-        scratch: BumpAllocator<'p>,
-    ) -> Self {
+impl<'p> Resume<'p> {
+    pub(super) fn new(everything: bool, scratch: BumpAllocator<'p>) -> Self {
         Resume {
-            over,
-            channel,
+            everything,
             statics: Cell::new(bump_table(scratch)),
             facts: Cell::new(bump_table(scratch)),
             wholes: Cell::new(bump_set(scratch)),
@@ -85,18 +81,8 @@ impl<'p, 'graph> Resume<'p, 'graph> {
         }
     }
 
-    /// The type the resumption binds `unknown` to.
-    pub(super) fn bound(&self, unknown: Unknown) -> Option<KType> {
-        self.over.bound(unknown)
-    }
-
-    /// Whether a fact waiting on `frontier` re-runs.
-    pub(super) fn wakes(&self, frontier: Frontier<'_>) -> bool {
-        self.over.wakes(frontier)
-    }
-
     /// What the walk wrote in `held` for `segment`.
-    pub(super) fn own<T: Copy>(&self, held: &Held<'p, Segment, T>, segment: Segment) -> Option<T> {
+    fn own<T: Copy>(&self, held: &Held<'p, Segment, T>, segment: Segment) -> Option<T> {
         let table = held.replace(bump_table(self.scratch));
         let found = table.get(&segment).copied();
         held.set(table);
@@ -104,90 +90,137 @@ impl<'p, 'graph> Resume<'p, 'graph> {
     }
 
     /// Write `value` for `key` in `held`, in place of what the walk wrote there.
-    pub(super) fn write<K: Eq + std::hash::Hash, T>(
-        &self,
-        held: &Held<'p, K, T>,
-        key: K,
-        value: T,
-    ) {
+    fn write<K: Eq + std::hash::Hash, T>(&self, held: &Held<'p, K, T>, key: K, value: T) {
         let mut table = held.replace(bump_table(self.scratch));
         table.insert(key, value);
         held.set(table);
     }
 
-    /// Record that the walk re-ran `whole` of `segment`.
-    pub(super) fn rerun_whole(&self, segment: Segment, whole: Whole) {
+    /// What the walk settled, beside `channel`, what the type channel's resumption settled: the
+    /// facts it kept relayed out through `relay`, and one `Settled` laid holding both.
+    pub(super) fn settled<'out, 'w, 'from, H: Habitat<'from>>(
+        &self,
+        channel: Settled<'out>,
+        relay: &Relay<'out, 'w, 'from, H>,
+    ) -> &'out Settled<'out> {
+        let scratch = self.scratch;
+        /// `held` by key, sorted.
+        fn sorted<'a, K: Ord + Copy, T: Copy>(
+            scratch: BumpAllocator<'a>,
+            held: BumpBackedMap<'_, K, T>,
+        ) -> Keyed<'a, (K, T)> {
+            let mut kept = BumpVec::with_capacity_in(held.len(), scratch);
+            kept.extend(held);
+            Keyed::sorted(scratch, &mut kept)
+        }
+        let statics = sorted(scratch, self.statics.replace(bump_table(scratch)));
+        let facts = sorted(scratch, self.facts.replace(bump_table(scratch)));
+        let born = sorted(scratch, self.born.replace(bump_table(scratch)));
+        let refusals = sorted(scratch, self.refusals.replace(bump_table(scratch)));
+        let resolutions = sorted(scratch, self.resolutions.replace(bump_table(scratch)));
+        let mut settled = channel;
+        settled.statics = relay.keyed(statics, |held| relay.statics_settled(*held));
+        settled.facts = relay.keyed(facts, |held| relay.shape_facts(*held));
+        settled.born = relay.keyed(born, |held| relay.static_solution(*held));
+        settled.refusals = relay.keyed(refusals, |refusal| relay.shape_error_ref(refusal));
+        settled.resolutions = relay.keyed(resolutions, |held| relay.resolution(*held));
+        settled.reran.1 = self.reran.replace(bump_set(scratch)).len() as u32;
+        resident(relay.writer(), settled)
+    }
+}
+
+impl<'p, 'graph> Write<'p, 'graph> for Resume<'p> {
+    fn fix_statics(&self, shape: &'graph BodyShape<'graph>, settled: StaticsSettled<'p>) {
+        self.write(&self.statics, shape.segment(), settled);
+    }
+
+    fn fix_shape_facts(
+        &self,
+        shape: &'graph BodyShape<'graph>,
+        whole: Whole,
+        facts: ShapeFacts<'p>,
+    ) {
+        let segment = shape.segment();
+        debug_assert!(
+            self.everything || !Write::<'p, 'graph>::reran_whole(self, segment, whole),
+            "a shape's fact as a whole re-runs at most once in a resumption"
+        );
+        self.write(&self.facts, segment, facts);
         let mut wholes = self.wholes.replace(bump_set(self.scratch));
         wholes.insert((segment, whole));
         self.wholes.set(wholes);
     }
 
-    /// The type channel's cell of `segment`, read through `of`: as this resumption settled it,
-    /// else as the newest one it extends did.
-    pub(super) fn channel_cell<T>(
-        &self,
-        segment: Segment,
-        of: impl Fn(&ChannelSettled<'graph>) -> Option<T>,
-    ) -> Option<T> {
-        let settled = self.channel.channel.get(segment).map(|(_, held)| held);
-        settled
-            .and_then(&of)
-            .or_else(|| self.over.channel(segment).find_map(&of))
+    fn fix_born_instance(&self, body: &'graph BodyShape<'graph>, solution: StaticSolution<'p>) {
+        self.write(&self.born, body.segment(), solution);
     }
 
-    /// The type channel's residual of `segment`, where a resumption re-walked it.
-    pub(super) fn channel_residual(
-        &self,
-        segment: Segment,
-    ) -> Option<crate::scope::Residual<'graph>> {
-        (self
-            .channel
-            .channel
-            .get(segment)
-            .map(|(_, held)| held.residual))
-        .or_else(|| self.over.channel(segment).next().map(|held| held.residual))
+    fn refuse_code(&self, code: &'graph BodyShape<'graph>, refusal: ShapeError<'p>) {
+        let refusal = resident(self.scratch, refusal);
+        self.write(&self.refusals, code.segment(), refusal);
     }
 
-    /// Count a fact the walk re-runs. A fact re-runs at most once in a resumption that skips.
-    pub(super) fn rerun(&self, segment: Segment, key: FactKey) {
-        let mut reran = self.reran.replace(bump_set(self.scratch));
-        let new = reran.insert((segment, key));
-        self.reran.set(reran);
-        debug_assert!(
-            new || self.over.everything,
-            "a fact re-runs at most once in a resumption"
+    fn fix_resolutions(
+        &self,
+        root: &'graph BodyShape<'graph>,
+        resolutions: &mut [(usize, Resolution<'p>)],
+    ) {
+        for (level, resolution) in resolutions.iter() {
+            self.write(&self.resolutions, (root.segment(), *level), *resolution);
+        }
+    }
+
+    fn fix_paths(&self, root: &'graph BodyShape<'graph>, paths: &'p [PathEntry<'p>]) {
+        assert_eq!(
+            paths.len(),
+            root.paths().len(),
+            "a resumption mints no path entry"
         );
     }
 
-    /// Whether the walk re-ran `whole` of `segment`.
-    pub(super) fn reran_whole(&self, segment: Segment, whole: Whole) -> bool {
+    fn fix_type_captures(&self, _: &'graph BodyShape<'graph>, captures: &'p [Coordinate]) {
+        assert!(captures.is_empty(), "a resumption lays no type capture");
+    }
+
+    fn fix_caching(&self, _: &'graph BodyShape<'graph>, _: Caching<'p>) {
+        unreachable!("only the load's entry fixes where a body's types intern")
+    }
+
+    fn own_statics(&self, segment: Segment) -> Option<StaticsSettled<'p>> {
+        self.own(&self.statics, segment)
+    }
+
+    fn own_facts(&self, segment: Segment) -> Option<ShapeFacts<'p>> {
+        self.own(&self.facts, segment)
+    }
+
+    fn own_born(&self, segment: Segment) -> Option<StaticSolution<'p>> {
+        self.own(&self.born, segment)
+    }
+
+    fn own_refusal(&self, segment: Segment) -> bool {
+        self.own(&self.refusals, segment).is_some()
+    }
+
+    fn reran_whole(&self, segment: Segment, whole: Whole) -> bool {
         let wholes = self.wholes.replace(bump_set(self.scratch));
         let found = wholes.contains(&(segment, whole));
         self.wholes.set(wholes);
         found
     }
 
-    /// What the walk settled, beside what the type channel's resumption did, laid down.
-    pub(super) fn settled(self, writer: Writer<'graph, 'graph>) -> &'graph Settled<'graph> {
-        /// `held` by key, laid down.
-        fn laid<'graph, K: Ord + Copy, T: Copy>(
-            writer: Writer<'graph, 'graph>,
-            scratch: BumpAllocator<'_>,
-            held: BumpBackedMap<'_, K, T>,
-        ) -> Keyed<'graph, (K, T)> {
-            let mut kept = BumpVec::with_capacity_in(held.len(), scratch);
-            kept.extend(held);
-            kept.sort_unstable_by_key(|(key, _)| *key);
-            Keyed::from_sorted(collect(writer, kept.iter().copied()))
-        }
-        let scratch = self.scratch;
-        let mut settled = *self.channel;
-        settled.statics = laid(writer, scratch, self.statics.into_inner());
-        settled.facts = laid(writer, scratch, self.facts.into_inner());
-        settled.born = laid(writer, scratch, self.born.into_inner());
-        settled.refusals = laid(writer, scratch, self.refusals.into_inner());
-        settled.resolutions = laid(writer, scratch, self.resolutions.into_inner());
-        settled.reran.1 = self.reran.into_inner().len() as u32;
-        resident(writer, settled)
+    /// A fact re-runs at most once in a resumption that skips.
+    fn count(&self, segment: Segment, key: FactKey) {
+        let mut reran = self.reran.replace(bump_set(self.scratch));
+        let new = reran.insert((segment, key));
+        self.reran.set(reran);
+        debug_assert!(
+            new || self.everything,
+            "a fact re-runs at most once in a resumption"
+        );
+    }
+
+    fn bookkeeps(&self) -> bool {
+        false
     }
 }

@@ -149,7 +149,7 @@ impl<'p, 'graph> SiteRecord<'p, 'graph> {
 fn tree_deps<'p, 'graph>(
     shapes: &[&'graph BodyShape<'graph>],
     frame: usize,
-    tree: &Tree<'graph>,
+    tree: &Tree<'p>,
     scratch: BumpAllocator<'p>,
 ) -> Deps<'p> {
     let mut deps = Deps::Closed;
@@ -212,7 +212,7 @@ fn binder_deps<'p>(
     Deps::Varying
 }
 
-impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
+impl<'p, 'graph: 'p, 'tier: 'p> Pass<'p, '_, 'graph, 'tier, '_, '_> {
     /// Whether `frame`'s parameter at `slot` keys a specialization: where every argument it holds
     /// digests at a constant cost — a type value, by its handle, or a module, by the content it
     /// keeps. A list's or a record's digest costs its size, so any other parameter keys nothing;
@@ -285,7 +285,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     }
 
     /// Record the `:|` site at `site` in the shape at `level`, over its operand's content tree.
-    pub(super) fn record_view(&mut self, level: usize, site: Site, tree: &Tree<'graph>) {
+    pub(super) fn record_view(&mut self, level: usize, site: Site, tree: &Tree<'p>) {
         if !self.records(level) {
             return;
         }
@@ -554,11 +554,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
 
     /// The parameter each slot of the registration `coordinate` lands on binds, in slot order:
     /// `None` for one the load has not typed, or that packs its slots into one list.
-    fn registered_names(
-        &self,
-        level: usize,
-        coordinate: Coordinate,
-    ) -> Option<&'graph [BinderSymbol]> {
+    fn registered_names(&self, level: usize, coordinate: Coordinate) -> Option<&'p [BinderSymbol]> {
         let Landing::Slot { level: home, slot } = self.follow(level, coordinate).landing else {
             return None;
         };
@@ -706,7 +702,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                     let from = keyed_slots.partition_point(|(each, _)| *each < at);
                     let to = keyed_slots.partition_point(|(each, _)| *each <= at);
                     collect(
-                        self.writer,
+                        self.scratch,
                         keyed_slots[from..to].iter().map(|(_, slot)| *slot),
                     )
                 });
@@ -719,14 +715,14 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                         && !rebound.contains(&(at, *slot))
                 }));
             }
-            let keyable = collect(self.writer, keyable.iter().copied());
+            let keyable = collect(self.scratch, keyable.iter().copied());
             let escapes = !own || !invariant_body(self, frame);
             self.fix_caching(
                 holder,
                 Caching {
                     caches,
-                    mints: Keyed::sorted(self.writer, &mut mints),
-                    warm: Keyed::sorted(self.writer, &mut warm),
+                    mints: Keyed::sorted(self.scratch, &mut mints),
+                    warm: Keyed::sorted(self.scratch, &mut warm),
                     invariant,
                     keyable,
                     escapes,

@@ -139,7 +139,7 @@ pub struct Unfolded<'graph> {
 
 impl<'graph> Tree<'graph> {
     /// A `MODULE` or `GROUP` body's tree over the captures its content composes.
-    pub fn body(shape: &'graph BodyShape<'graph>, captures: &'graph [(u32, Tree<'graph>)]) -> Self {
+    pub fn body(shape: &BodyShape<'_>, captures: &'graph [(u32, Tree<'graph>)]) -> Self {
         let print = Print::over(captures.iter().map(|(_, tree)| tree.print()), |digests| {
             lone_member(body_content(
                 shape.code_digest(),

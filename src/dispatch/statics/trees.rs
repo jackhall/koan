@@ -41,15 +41,15 @@ use super::super::evaluate::{Form, Wanted, of_node, of_part, slots};
 use super::{Landing, Pass, address};
 use crate::knot::module::view::{self, Ascription};
 
-type Read<'graph, T> = Result<T, ShapeError<'graph>>;
+type Read<'p, T> = Result<T, ShapeError<'p>>;
 
 /// Where a tree is read: a shape on the chain, or a `MODULE` body read through its tree.
 #[derive(Clone, Copy)]
-pub(super) enum Scope<'graph> {
+pub(super) enum Scope<'p, 'graph> {
     Chain(usize),
     Body {
         shape: &'graph BodyShape<'graph>,
-        captures: &'graph [(u32, Tree<'graph>)],
+        captures: &'p [(u32, Tree<'p>)],
     },
 }
 
@@ -82,9 +82,9 @@ impl Written {
     }
 }
 
-impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
+impl<'p, 'graph: 'p, 'tier: 'p> Pass<'p, '_, 'graph, 'tier, '_, '_> {
     /// The shape `scope` reads in.
-    fn scope_shape(&self, scope: Scope<'graph>) -> &'graph BodyShape<'graph> {
+    fn scope_shape(&self, scope: Scope<'p, 'graph>) -> &'graph BodyShape<'graph> {
         match scope {
             Scope::Chain(level) => self.chain[level].shape,
             Scope::Body { shape, .. } => shape,
@@ -93,7 +93,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
 
     /// A chain level whose chain `scope` reads in: a body read through its tree sits on the chain
     /// being typed.
-    fn scope_level(&self, scope: Scope<'graph>) -> usize {
+    fn scope_level(&self, scope: Scope<'p, 'graph>) -> usize {
         match scope {
             Scope::Chain(level) => level,
             Scope::Body { .. } => self.chain.len() - 1,
@@ -105,12 +105,12 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         &mut self,
         level: usize,
         part: &'graph ExpressionPart<'graph>,
-    ) -> Read<'graph, Tree<'graph>> {
+    ) -> Read<'p, Tree<'p>> {
         self.tree_in(Scope::Chain(level), part, None)
     }
 
     /// The summary of the callable body at chain level `level`: the tree of its last statement.
-    pub(super) fn summarize(&mut self, level: usize) -> Read<'graph, Option<Tree<'graph>>> {
+    pub(super) fn summarize(&mut self, level: usize) -> Read<'p, Option<Tree<'p>>> {
         let shape = self.chain[level].shape;
         let Some(last) = shape.body().len().checked_sub(1) else {
             return Ok(None);
@@ -131,10 +131,10 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     /// side it is.
     fn tree_in(
         &mut self,
-        scope: Scope<'graph>,
+        scope: Scope<'p, 'graph>,
         part: &'graph ExpressionPart<'graph>,
         named: Option<Slot>,
-    ) -> Read<'graph, Tree<'graph>> {
+    ) -> Read<'p, Tree<'p>> {
         let shape = self.scope_shape(scope);
         self.tree_form(
             scope,
@@ -147,11 +147,11 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     /// The tree of what the evaluator reads as `form`, written as `written` in `scope`.
     pub(super) fn tree_form(
         &mut self,
-        scope: Scope<'graph>,
+        scope: Scope<'p, 'graph>,
         form: Form<'graph>,
         written: Written,
         named: Option<Slot>,
-    ) -> Read<'graph, Tree<'graph>> {
+    ) -> Read<'p, Tree<'p>> {
         let shape = self.scope_shape(scope);
         if let Scope::Chain(_) = scope
             && let Some((tree, frontier)) = self.trees.get(&(address(shape), written)).copied()
@@ -173,11 +173,11 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     /// [`tree_form`](Self::tree_form) unmemoized.
     fn tree_read(
         &mut self,
-        scope: Scope<'graph>,
+        scope: Scope<'p, 'graph>,
         form: Form<'graph>,
         written: Written,
         named: Option<Slot>,
-    ) -> Read<'graph, Tree<'graph>> {
+    ) -> Read<'p, Tree<'p>> {
         let shape = self.scope_shape(scope);
         let site = written.site();
         let tree = match form {
@@ -250,10 +250,10 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     /// The tree of what `coordinate` holds, read in `scope` at the part at `site`.
     fn resolve(
         &mut self,
-        scope: Scope<'graph>,
+        scope: Scope<'p, 'graph>,
         coordinate: Coordinate,
         site: Site,
-    ) -> Read<'graph, Tree<'graph>> {
+    ) -> Read<'p, Tree<'p>> {
         let unnamed = Tree::Leaf(Leaf::Unnamed(site));
         Ok(match scope {
             Scope::Chain(level) => match self.follow(level, coordinate).landing {
@@ -282,10 +282,10 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     /// The tree of what the binder at `slot` of `scope`'s shape holds, read at the part at `site`.
     pub(super) fn slot_tree(
         &mut self,
-        scope: Scope<'graph>,
+        scope: Scope<'p, 'graph>,
         slot: Slot,
         site: Site,
-    ) -> Read<'graph, Tree<'graph>> {
+    ) -> Read<'p, Tree<'p>> {
         let shape = self.scope_shape(scope);
         let key = (std::ptr::from_ref(shape).addr(), slot);
         if self.reading.contains(&key) {
@@ -299,10 +299,10 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
 
     fn binder_tree(
         &mut self,
-        scope: Scope<'graph>,
+        scope: Scope<'p, 'graph>,
         slot: Slot,
         site: Site,
-    ) -> Read<'graph, Tree<'graph>> {
+    ) -> Read<'p, Tree<'p>> {
         let shape = self.scope_shape(scope);
         if let BinderSymbol::Type(_) = shape.slot_name(slot) {
             return match self.declared_cell(shape, slot) {
@@ -361,10 +361,10 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     /// whose whole right-hand side it is, else a leaf no binder names, keyed on `site`.
     fn fallback(
         &mut self,
-        scope: Scope<'graph>,
+        scope: Scope<'p, 'graph>,
         named: Option<Slot>,
         site: Site,
-    ) -> Read<'graph, Tree<'graph>> {
+    ) -> Read<'p, Tree<'p>> {
         match named {
             Some(slot) => self.leaf_on(scope, slot),
             None => Ok(Tree::Leaf(Leaf::Unnamed(site))),
@@ -374,11 +374,11 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     /// `tree`, or where there is none, the [fallback](Self::fallback).
     fn or_fallback(
         &mut self,
-        tree: Option<Tree<'graph>>,
-        scope: Scope<'graph>,
+        tree: Option<Tree<'p>>,
+        scope: Scope<'p, 'graph>,
         named: Option<Slot>,
         site: Site,
-    ) -> Read<'graph, Tree<'graph>> {
+    ) -> Read<'p, Tree<'p>> {
         match tree {
             Some(tree) => Ok(tree),
             None => self.fallback(scope, named, site),
@@ -389,11 +389,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     /// one value per run of the body, and the body's captures say which run, so its leaf is keyed
     /// on them wherever it is read: on the chain, as the shape enclosing the body resolves them,
     /// and through a body's tree, as the tree holds them.
-    pub(super) fn leaf_on(
-        &mut self,
-        scope: Scope<'graph>,
-        slot: Slot,
-    ) -> Read<'graph, Tree<'graph>> {
+    pub(super) fn leaf_on(&mut self, scope: Scope<'p, 'graph>, slot: Slot) -> Read<'p, Tree<'p>> {
         let shape = self.scope_shape(scope);
         let key = match scope {
             _ if shape.kind() != ShapeKind::Module => &[][..],
@@ -406,7 +402,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                         .filter(|(at, _)| (*at as usize) < builder)
                         .copied(),
                 );
-                collect(self.writer, key.iter().copied())
+                collect(self.scratch, key.iter().copied())
             }
             // A body with no statement reads nothing, so captures nothing.
             Scope::Chain(level) => match shape.body().first() {
@@ -416,7 +412,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                 None => &[][..],
             },
         };
-        let within = (!key.is_empty()).then(|| resident(self.writer, Within::Body(key)));
+        let within = (!key.is_empty()).then(|| resident(self.scratch, Within::Body(key)));
         Ok(Tree::bound(
             Binder {
                 body: shape.segment(),
@@ -432,10 +428,10 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     /// else.
     pub(super) fn read_member(
         &mut self,
-        tree: Tree<'graph>,
+        tree: Tree<'p>,
         label: ValueSymbol,
         site: Site,
-    ) -> Read<'graph, Option<Tree<'graph>>> {
+    ) -> Read<'p, Option<Tree<'p>>> {
         Ok(match tree {
             Tree::Body { body, captures, .. } => {
                 match self.shape_at(body).slot(BinderSymbol::Value(label)) {
@@ -455,7 +451,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                 let mut extended = BumpVec::with_capacity_in(chain.len() + 1, self.scratch);
                 extended.extend(chain.iter().copied());
                 extended.push(label);
-                let chain = collect(self.writer, extended.iter().copied());
+                let chain = collect(self.scratch, extended.iter().copied());
                 Some(Tree::bound(binder, chain, within))
             }
             Tree::Leaf(Leaf::Unnamed(site)) => Some(Tree::Leaf(Leaf::Unnamed(site))),
@@ -490,10 +486,10 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     pub(super) fn retyped_tree(
         &mut self,
         level: usize,
-        tree: Tree<'graph>,
+        tree: Tree<'p>,
         declared: crate::type_lattice::Parametric,
         site: Site,
-    ) -> Read<'graph, Tree<'graph>> {
+    ) -> Read<'p, Tree<'p>> {
         let (types, scratch) = (self.types, self.scratch);
         let unnamed = Tree::Leaf(Leaf::Unnamed(site));
         if let Tree::Leaf(Leaf::Unnamed(_)) = tree {
@@ -541,12 +537,12 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                 };
                 match (target.as_type(), bare_own) {
                     (Some(target), Some(bare_own)) if target == bare_own => bare,
-                    (Some(target), _) => Tree::retyped(target, resident(self.writer, bare)),
+                    (Some(target), _) => Tree::retyped(target, resident(self.scratch, bare)),
                     (None, _) => unnamed,
                 }
             }
             None if tree.closed() => unnamed,
-            None => Tree::retyped(declared, resident(self.writer, tree)),
+            None => Tree::retyped(declared, resident(self.scratch, tree)),
         })
     }
 
@@ -555,12 +551,12 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     pub(super) fn view_tree(
         &mut self,
         application: KType,
-        source: Tree<'graph>,
+        source: Tree<'p>,
         site: Site,
-    ) -> Read<'graph, Tree<'graph>> {
+    ) -> Read<'p, Tree<'p>> {
         let held = self.carried_type(super::views::Carried::Tree(source), site)?;
         let from = view::fit_of(held, application, self.types, self.scratch);
-        let source = resident(self.writer, source);
+        let source = resident(self.scratch, source);
         Ok(Tree::view(Operator::Opaque, application, source, from))
     }
 
@@ -568,10 +564,10 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     /// content counts, beside its closure slot — a builder capture's source, and a type capture's.
     fn captures_of(
         &mut self,
-        scope: Scope<'graph>,
+        scope: Scope<'p, 'graph>,
         body: &'graph BodyShape<'graph>,
         site: Site,
-    ) -> Read<'graph, &'graph [(u32, Tree<'graph>)]> {
+    ) -> Read<'p, &'p [(u32, Tree<'p>)]> {
         self.composed_captures(scope, body, body.capture_count(), site)
     }
 
@@ -580,21 +576,21 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     /// from, known before the body is typed.
     fn builder_captures(
         &mut self,
-        scope: Scope<'graph>,
+        scope: Scope<'p, 'graph>,
         body: &'graph BodyShape<'graph>,
         site: Site,
-    ) -> Read<'graph, &'graph [(u32, Tree<'graph>)]> {
+    ) -> Read<'p, &'p [(u32, Tree<'p>)]> {
         self.composed_captures(scope, body, body.captures().len(), site)
     }
 
     /// The trees of the first `count` closure slots of `body` its content composes.
     fn composed_captures(
         &mut self,
-        scope: Scope<'graph>,
+        scope: Scope<'p, 'graph>,
         body: &'graph BodyShape<'graph>,
         count: usize,
         site: Site,
-    ) -> Read<'graph, &'graph [(u32, Tree<'graph>)]> {
+    ) -> Read<'p, &'p [(u32, Tree<'p>)]> {
         let mut captures = BumpVec::with_capacity_in(count, self.scratch);
         for index in 0..count {
             let capture = CaptureSlot(index as u32);
@@ -607,7 +603,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             };
             captures.push((index as u32, tree));
         }
-        Ok(collect(self.writer, captures.iter().copied()))
+        Ok(collect(self.scratch, captures.iter().copied()))
     }
 
     /// The knot of closures `bodies` are born as in `scope` at the part at `site`, beside member
@@ -615,11 +611,11 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     /// say what solution one is born at.
     fn knot(
         &mut self,
-        scope: Scope<'graph>,
+        scope: Scope<'p, 'graph>,
         bodies: &[(&'graph BodyShape<'graph>, bool)],
         index: u32,
         site: Site,
-    ) -> Read<'graph, Option<Tree<'graph>>> {
+    ) -> Read<'p, Option<Tree<'p>>> {
         let mut members = BumpVec::with_capacity_in(bodies.len(), self.scratch);
         for (body, keeps_scheme) in bodies.iter().copied() {
             // A closure's type captures are laid down once its body is typed.
@@ -649,12 +645,12 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             members.push(KnotNode {
                 body: body.segment(),
                 instance,
-                captures: collect(self.writer, captures.iter().copied()),
+                captures: collect(self.scratch, captures.iter().copied()),
             });
         }
         Ok(Some(Tree::knot(
             self.chain[0].shape,
-            collect(self.writer, members.iter().copied()),
+            collect(self.scratch, members.iter().copied()),
             index,
         )))
     }
@@ -667,7 +663,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         level: usize,
         body: &'graph BodyShape<'graph>,
         keeps_scheme: bool,
-    ) -> Option<&'graph [KType]> {
+    ) -> Option<&'p [KType]> {
         match self.born_instance(body) {
             Some(StaticSolution::Closed(solution)) => Some(solution),
             Some(StaticSolution::Rigid { .. }) => None,
@@ -687,7 +683,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         &mut self,
         level: usize,
         node: &'graph KExpression<'graph>,
-    ) -> Read<'graph, Option<Tree<'graph>>> {
+    ) -> Read<'p, Option<Tree<'p>>> {
         let shape = self.chain[level].shape;
         let Some(index) = shape.candidate_lists().position(Site::of_node(node)) else {
             return Ok(None);
@@ -752,7 +748,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         &mut self,
         level: usize,
         node: &'graph KExpression<'graph>,
-    ) -> Read<'graph, Option<Tree<'graph>>> {
+    ) -> Read<'p, Option<Tree<'p>>> {
         let [head, argument] = node.parts else {
             return Ok(None);
         };
@@ -785,17 +781,17 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     fn unfold(
         &mut self,
         callee: &'graph BodyShape<'graph>,
-        arguments: &[(Slot, Tree<'graph>)],
+        arguments: &[(Slot, Tree<'p>)],
         solution: &[(Slot, KType)],
         site: Site,
-    ) -> Read<'graph, Option<Tree<'graph>>> {
+    ) -> Read<'p, Option<Tree<'p>>> {
         let Some(summary) = self.summary(callee)? else {
             return Ok(None);
         };
         let call = Unfolded {
             callee: callee.segment(),
-            arguments: collect(self.writer, arguments.iter().copied()),
-            solution: collect(self.writer, solution.iter().copied()),
+            arguments: collect(self.scratch, arguments.iter().copied()),
+            solution: collect(self.scratch, solution.iter().copied()),
         };
         let mut done = bump_table(self.scratch);
         let substituted = self.substituted(summary, &call, site, &mut done)?;
@@ -816,7 +812,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
 
     /// The summary of `callee`, typing it first where the walk has not: `None` where it is
     /// recursive, or where the pass is typing unfilled code.
-    fn summary(&mut self, callee: &'graph BodyShape<'graph>) -> Read<'graph, Option<Tree<'graph>>> {
+    fn summary(&mut self, callee: &'graph BodyShape<'graph>) -> Read<'p, Option<Tree<'p>>> {
         if self.unfilled {
             return Ok(None);
         }
@@ -838,7 +834,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     /// Whether the callable body `body` is typed, typing it now where the walk has not reached it:
     /// `false` where it is being typed, where the chain does not hold the shape it is nested in, and
     /// where it is a fellow of a component being typed.
-    fn typed_on_demand(&mut self, body: &'graph BodyShape<'graph>) -> Read<'graph, bool> {
+    fn typed_on_demand(&mut self, body: &'graph BodyShape<'graph>) -> Read<'p, bool> {
         if self.done(body) {
             return Ok(true);
         }
@@ -880,11 +876,11 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     /// substituted once.
     fn substituted(
         &mut self,
-        tree: Tree<'graph>,
-        call: &Unfolded<'graph>,
+        tree: Tree<'p>,
+        call: &Unfolded<'p>,
         site: Site,
-        done: &mut BumpBackedMap<'p, Print, Tree<'graph>>,
-    ) -> Read<'graph, Tree<'graph>> {
+        done: &mut BumpBackedMap<'p, Print, Tree<'p>>,
+    ) -> Read<'p, Tree<'p>> {
         let print = tree.print();
         // A closed tree holds no leaf to substitute.
         if let Print::Closed(_) = print {
@@ -915,13 +911,13 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                         ));
                     }
                     nodes.push(KnotNode {
-                        captures: collect(self.writer, captures.iter().copied()),
+                        captures: collect(self.scratch, captures.iter().copied()),
                         ..*node
                     });
                 }
                 Tree::knot(
                     self.chain[0].shape,
-                    collect(self.writer, nodes.iter().copied()),
+                    collect(self.scratch, nodes.iter().copied()),
                     index,
                 )
             }
@@ -958,12 +954,12 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     fn substituted_leaf(
         &mut self,
         binder: Binder,
-        chain: &'graph [ValueSymbol],
-        within: Option<&'graph Within<'graph>>,
-        call: &Unfolded<'graph>,
+        chain: &'p [ValueSymbol],
+        within: Option<&'p Within<'p>>,
+        call: &Unfolded<'p>,
         site: Site,
-        done: &mut BumpBackedMap<'p, Print, Tree<'graph>>,
-    ) -> Read<'graph, Tree<'graph>> {
+        done: &mut BumpBackedMap<'p, Print, Tree<'p>>,
+    ) -> Read<'p, Tree<'p>> {
         if binder.body == call.callee {
             let callee = self.shape_at(call.callee);
             if let Some((_, argument)) =
@@ -1011,7 +1007,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                     arguments.push((*slot, self.substituted(*tree, call, site, done)?));
                 }
                 Some(Within::Call(Unfolded {
-                    arguments: collect(self.writer, arguments.iter().copied()),
+                    arguments: collect(self.scratch, arguments.iter().copied()),
                     ..*inner
                 }))
             }
@@ -1020,27 +1016,27 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             None if inside(binder.body, self.shape_at(call.callee)) => Some(Within::Call(*call)),
             None => None,
         };
-        let within = within.map(|within| resident(self.writer, within));
+        let within = within.map(|within| resident(self.scratch, within));
         Ok(Tree::bound(binder, chain, within))
     }
 
     fn substituted_captures(
         &mut self,
-        captures: &'graph [(u32, Tree<'graph>)],
-        call: &Unfolded<'graph>,
+        captures: &'p [(u32, Tree<'p>)],
+        call: &Unfolded<'p>,
         site: Site,
-        done: &mut BumpBackedMap<'p, Print, Tree<'graph>>,
-    ) -> Read<'graph, &'graph [(u32, Tree<'graph>)]> {
+        done: &mut BumpBackedMap<'p, Print, Tree<'p>>,
+    ) -> Read<'p, &'p [(u32, Tree<'p>)]> {
         let mut substituted = BumpVec::with_capacity_in(captures.len(), self.scratch);
         for (slot, tree) in captures {
             substituted.push((*slot, self.substituted(*tree, call, site, done)?));
         }
-        Ok(collect(self.writer, substituted.iter().copied()))
+        Ok(collect(self.scratch, substituted.iter().copied()))
     }
 }
 
 /// The tree of a type value naming `named` at its own kind, as the run births it.
-fn named_type<'graph>(types: &crate::values::Chain<'_, '_, '_, '_>, named: KType) -> Tree<'graph> {
+fn named_type<'p>(types: &crate::values::Chain<'_, '_, '_, '_>, named: KType) -> Tree<'p> {
     Tree::Digest(type_digest(named, KType::of_kind(named.kind_of(types))))
 }
 

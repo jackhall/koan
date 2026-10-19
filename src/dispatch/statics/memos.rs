@@ -21,7 +21,7 @@ use crate::scope::{
 
 use super::{Form, Pass, of_part};
 
-impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
+impl<'p, 'graph: 'p, 'tier: 'p> Pass<'p, '_, 'graph, 'tier, '_, '_> {
     /// Record where the captures of the module the `:|` at `site` in the shape at `level` views
     /// keep their memos, where its `operand` is a module binder of this activation chain read
     /// bare, and mark each capture's source slot digested.
@@ -68,7 +68,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             self.chain[at].digested.push(source);
         }
         if !captures.is_empty() {
-            let captures = collect(self.writer, captures.iter().copied());
+            let captures = collect(self.scratch, captures.iter().copied());
             self.chain[level].view_slots.push((
                 site,
                 ViewSlots {
@@ -99,7 +99,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     /// Record the `handed` arguments of the call keyed by `site` in the shape at `level`.
     pub(super) fn handoffs(&mut self, level: usize, site: Site, handed: &[Handoff]) {
         if !self.unfilled && !handed.is_empty() {
-            let handed = collect(self.writer, handed.iter().copied());
+            let handed = collect(self.scratch, handed.iter().copied());
             self.chain[level].handoffs.push((site, handed));
         }
     }

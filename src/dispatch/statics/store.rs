@@ -19,10 +19,15 @@
 //! a reader outside reads them as the load does, and a shape leaving the chain takes its own
 //! unknowns with it.
 //!
-//! In a [resumption](super::resume) the store reads each fact as the resumption has it — the type
-//! channel's as its resumption settled it, a shape's own facts as this walk re-ran them, else as
-//! the resumptions it extends left them, else the load's — and writes each fact beside the load's.
-//! A name the resumption binds is closed, and no gathering holds it.
+//! The store has a read half and a write half. The read half is one set of methods, the load's
+//! and a resumption's alike: in a [resumption](super::resume) it reads each fact as the resumption
+//! has it — the type channel's as its resumption settled it, a shape's own facts as this walk
+//! re-ran them, else as the resumptions it extends left them, else the load's. A name the
+//! resumption binds is closed, and no gathering holds it. The write half is a [`Write`]: [`Load`]
+//! relays each fact it is handed out of the walk's scratch into program storage and writes the
+//! shape's cell; a resumption's ([`Resume`](super::resume::Resume)) keeps each beside the load's.
+//! The rules lay into the walk's scratch and never ask which half they run over: the load's
+//! bookkeeping for the run is asked for by name ([`bookkeeps`](Pass::bookkeeps)).
 //!
 //! [opens]: Pass::open
 
@@ -30,11 +35,12 @@ use crate::elaborate::schema_of;
 use crate::memory::{BumpVec, collect, resident};
 use crate::scope::{
     Address, BodyShape, Caching, Coordinate, FactKey, Frontier, Keyed, Narrowing, PathEntry,
-    PathRead, Resolution, Segment, ShapeFacts, Site, Slot, Static, StaticCallable,
-    StaticRegistered, StaticSolution, StaticType, Statics, Target, Unknown, UseStatics,
-    frontier_at, merge_into,
+    PathRead, Relay, Resolution, Segment, ShapeError, ShapeFacts, Site, Slot, Static,
+    StaticCallable, StaticRegistered, StaticSolution, StaticType, Statics, Target, Unknown,
+    UseStatics, frontier_at, merge_into,
 };
 use crate::symbols::BinderSymbol;
+use crate::type_lattice::Habitat;
 use crate::type_lattice::{
     DeclaredType, Interval, KType, Parametric, Side, TypeNode, Variable, bound_above, read_through,
 };
@@ -64,7 +70,155 @@ pub(super) fn resolution_of<'graph>(
     root.resolution(level)
 }
 
-impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
+/// The write half of the static pass's store: where each fact the walk fixes goes, what the walk
+/// itself wrote, which the read half reads first, and whether the walk keeps the load's
+/// bookkeeping for the run.
+pub(super) trait Write<'p, 'graph> {
+    /// A shape's cell and its residual, once the walk has typed it.
+    fn fix_statics(&self, shape: &'graph BodyShape<'graph>, settled: StaticsSettled<'p>);
+    /// `shape`'s facts as a whole, `whole` among them just fixed.
+    fn fix_shape_facts(
+        &self,
+        shape: &'graph BodyShape<'graph>,
+        whole: Whole,
+        facts: ShapeFacts<'p>,
+    );
+    fn fix_born_instance(&self, body: &'graph BodyShape<'graph>, solution: StaticSolution<'p>);
+    fn refuse_code(&self, code: &'graph BodyShape<'graph>, refusal: ShapeError<'p>);
+    /// What each path of the chain `root` roots this walk resolved resolved to, by level.
+    fn fix_resolutions(
+        &self,
+        root: &'graph BodyShape<'graph>,
+        resolutions: &mut [(usize, Resolution<'p>)],
+    );
+    /// Every path entry of the chain `root` roots, the type channel's first.
+    fn fix_paths(&self, root: &'graph BodyShape<'graph>, paths: &'p [PathEntry<'p>]);
+    /// The type captures the walk added to `shape`.
+    fn fix_type_captures(&self, shape: &'graph BodyShape<'graph>, captures: &'p [Coordinate]);
+    /// Where `holder`'s types intern at run.
+    fn fix_caching(&self, holder: &'graph BodyShape<'graph>, caching: Caching<'p>);
+    fn own_statics(&self, segment: Segment) -> Option<StaticsSettled<'p>>;
+    fn own_facts(&self, segment: Segment) -> Option<ShapeFacts<'p>>;
+    fn own_born(&self, segment: Segment) -> Option<StaticSolution<'p>>;
+    fn own_refusal(&self, segment: Segment) -> bool;
+    /// Whether the walk re-ran `whole` of the shape at `segment`.
+    fn reran_whole(&self, segment: Segment, whole: Whole) -> bool;
+    /// Count a fact the walk re-runs.
+    fn count(&self, segment: Segment, key: FactKey);
+    /// Whether the walk records the load's bookkeeping for the run: tail edges, return exits, the
+    /// throughs a shape locates, a module body's `OVER` check, and where a body's types intern.
+    fn bookkeeps(&self) -> bool;
+}
+
+/// The load's write half: each fact relayed into program storage, into the shape's cell.
+pub(super) struct Load<'relay, 'graph, 'w, 'from, H: Habitat<'from>> {
+    pub(super) relay: &'relay Relay<'graph, 'w, 'from, H>,
+}
+
+impl<'p, 'graph, 'w, 'from, H: Habitat<'from>> Write<'p, 'graph>
+    for Load<'_, 'graph, 'w, 'from, H>
+{
+    fn fix_statics(&self, shape: &'graph BodyShape<'graph>, settled: StaticsSettled<'p>) {
+        let StaticsSettled { statics, residual } = settled;
+        debug_assert!(
+            (statics.parts.windows(2)).all(|pair| pair[0].0 != pair[1].0 || pair[0].1 == pair[1].1),
+            "a part typed twice is typed alike"
+        );
+        if !residual.is_empty() {
+            shape.fix_statics_residual(self.relay.residual(residual));
+        }
+        shape.fix_statics(self.relay.statics(statics));
+    }
+
+    fn fix_shape_facts(
+        &self,
+        shape: &'graph BodyShape<'graph>,
+        whole: Whole,
+        facts: ShapeFacts<'p>,
+    ) {
+        debug_assert!(
+            !whole.is_set(&shape.shape_facts()),
+            "a shape's fact as a whole is fixed once"
+        );
+        let relay = self.relay;
+        shape.fix_shape_facts(|held| match whole {
+            Whole::Summary => {
+                held.summary = facts
+                    .summary
+                    .map(|summary| summary.map(|tree| relay.tree(tree)));
+                held.summary_frontier = relay.frontier(facts.summary_frontier);
+                held.recursive = facts.recursive;
+            }
+            Whole::Signature => {
+                held.signature = facts.signature.map(|signature| relay.handle(signature));
+                held.signature_frontier = relay.frontier(facts.signature_frontier);
+            }
+            Whole::Ran => {
+                held.ran = facts.ran.map(|ran| relay.interval(ran));
+                held.ran_frontier = relay.frontier(facts.ran_frontier);
+            }
+            Whole::Born => held.born_frontier = relay.frontier(facts.born_frontier),
+        });
+    }
+
+    fn fix_born_instance(&self, body: &'graph BodyShape<'graph>, solution: StaticSolution<'p>) {
+        body.fix_born_instance(self.relay.static_solution(solution));
+    }
+
+    fn refuse_code(&self, code: &'graph BodyShape<'graph>, refusal: ShapeError<'p>) {
+        code.refuse_typing(self.relay.shape_error_ref(&refusal));
+    }
+
+    fn fix_resolutions(
+        &self,
+        root: &'graph BodyShape<'graph>,
+        resolutions: &mut [(usize, Resolution<'p>)],
+    ) {
+        resolutions.sort_unstable_by_key(|(level, _)| *level);
+        let resolutions = Keyed::from_sorted(&*resolutions);
+        root.fix_resolutions((self.relay).keyed(resolutions, |held| self.relay.resolution(*held)));
+    }
+
+    fn fix_paths(&self, root: &'graph BodyShape<'graph>, paths: &'p [PathEntry<'p>]) {
+        root.fix_paths(self.relay.path_entries(paths));
+    }
+
+    fn fix_type_captures(&self, shape: &'graph BodyShape<'graph>, captures: &'p [Coordinate]) {
+        shape.fix_type_captures(self.relay.coordinates(captures));
+    }
+
+    fn fix_caching(&self, holder: &'graph BodyShape<'graph>, caching: Caching<'p>) {
+        holder.fix_caching(resident(self.relay.writer(), self.relay.caching(caching)));
+    }
+
+    fn own_statics(&self, _: Segment) -> Option<StaticsSettled<'p>> {
+        None
+    }
+
+    fn own_facts(&self, _: Segment) -> Option<ShapeFacts<'p>> {
+        None
+    }
+
+    fn own_born(&self, _: Segment) -> Option<StaticSolution<'p>> {
+        None
+    }
+
+    fn own_refusal(&self, _: Segment) -> bool {
+        false
+    }
+
+    fn reran_whole(&self, _: Segment, _: Whole) -> bool {
+        false
+    }
+
+    fn count(&self, _: Segment, _: FactKey) {}
+
+    fn bookkeeps(&self) -> bool {
+        true
+    }
+}
+
+impl<'p, 'graph: 'p, 'tier: 'p> Pass<'p, '_, 'graph, 'tier, '_, '_> {
     /// Open a gathering for a rule starting to run.
     pub(super) fn open(&self) {
         self.open_with(&[]);
@@ -79,47 +233,47 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
 
     /// Close the innermost gathering, hand what it gathered to the one enclosing it, and lay its
     /// frontier down.
-    pub(super) fn close(&self) -> Frontier<'graph> {
-        let writer = self.writer;
+    pub(super) fn close(&self) -> Frontier<'p> {
+        let scratch = self.scratch;
         self.edit_scopes(|scopes| {
             let mut closed = scopes.pop().expect("a gathering is open");
             if let Some(enclosing) = scopes.last_mut() {
                 merge_into(enclosing, &closed);
             }
-            Frontier::laid(writer, &mut closed)
+            Frontier::laid(scratch, &mut closed)
         })
     }
 
     /// [`close`](Self::close) the gathering of the rule run at `key` of the shape at `level`, and
     /// record its frontier in the shape's residual where it waits on an unknown.
-    pub(super) fn close_as(&mut self, level: usize, key: FactKey) -> Frontier<'graph> {
+    pub(super) fn close_as(&mut self, level: usize, key: FactKey) -> Frontier<'p> {
         let frontier = self.close();
         self.keep(level, key, frontier);
         frontier
     }
 
     /// Record `frontier` in the residual of the shape at `level` for the fact at `key`.
-    pub(super) fn keep(&mut self, level: usize, key: FactKey, frontier: Frontier<'graph>) {
+    pub(super) fn keep(&mut self, level: usize, key: FactKey, frontier: Frontier<'p>) {
         if self.unfilled {
             return;
         }
-        let writer = self.writer;
+        let scratch = self.scratch;
         let at = &mut self.chain[level];
         // A resumption's walk starts from the residual its skipped facts leave: a fact it re-runs
         // replaces its entry.
-        if self.resume.is_some() && at.kept.insert(key) {
+        if self.over.is_some() && at.kept.insert(key) {
             at.residual.remove(&key);
         }
         // A rule run twice at one key, or a fact written beside one, waits on all it read.
         if !frontier.is_empty() {
             (at.residual.entry(key))
-                .and_modify(|held| *held = held.union(frontier, writer))
+                .and_modify(|held| *held = held.union(frontier, scratch))
                 .or_insert(frontier);
         }
     }
 
     /// The frontier the shape at `level` holds for the fact at `key`, as the walk has it now.
-    pub(super) fn staged(&self, level: usize, key: FactKey) -> Frontier<'graph> {
+    pub(super) fn staged(&self, level: usize, key: FactKey) -> Frontier<'p> {
         (self.chain[level].residual.get(&key)).map_or(Frontier::EMPTY, |frontier| *frontier)
     }
 
@@ -128,21 +282,34 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     /// waits on nothing it binds. Counts each fact a resumption re-runs.
     pub(super) fn runs(&self, level: usize, key: FactKey) -> bool {
         let runs = self.reruns(level, key);
-        if let Some(resume) = &self.resume
-            && runs
-            && !self.unfilled
-        {
-            resume.rerun(self.chain[level].shape.segment(), key);
+        if self.over.is_some() && runs && !self.unfilled {
+            self.write.count(self.chain[level].shape.segment(), key);
         }
         runs
     }
 
     /// [`runs`](Self::runs), counting nothing.
     pub(super) fn reruns(&self, level: usize, key: FactKey) -> bool {
-        match &self.resume {
-            Some(resume) if !self.unfilled => resume.wakes(self.staged(level, key)),
+        match self.over {
+            Some(over) if !self.unfilled => over.wakes(self.staged(level, key)),
             _ => true,
         }
+    }
+
+    /// Whether the walk records the load's bookkeeping for the run ([`Write::bookkeeps`]).
+    pub(super) fn bookkeeps(&self) -> bool {
+        self.write.bookkeeps()
+    }
+
+    /// Whether a resumption types the slot `slot` of `shape` with the value component holding it,
+    /// rather than on its own: it re-runs the slot where it re-runs its component.
+    pub(super) fn rides_component(&self, shape: &BodyShape<'graph>, slot: Slot) -> bool {
+        self.over.is_some() && self.component_types(shape, slot)
+    }
+
+    /// Whether a resumption starts a chain's path table from the resolutions the binding leaves.
+    pub(super) fn resumes_paths(&self) -> bool {
+        self.over.is_some() && !self.unfilled
     }
 
     /// The unknown the slot `slot` of the shape at `level` is, where a binding gives it a type.
@@ -163,10 +330,10 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     }
 
     /// What the innermost gathering holds so far, laid down.
-    pub(super) fn snapshot(&self) -> Frontier<'graph> {
-        let writer = self.writer;
+    pub(super) fn snapshot(&self) -> Frontier<'p> {
+        let scratch = self.scratch;
         self.edit_scopes(|scopes| match scopes.last() {
-            Some(open) => Frontier::from_sorted(collect(writer, open.iter().copied())),
+            Some(open) => Frontier::from_sorted(collect(scratch, open.iter().copied())),
             None => Frontier::EMPTY,
         })
     }
@@ -281,48 +448,50 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     }
 
     /// The type channel's cell for the type expression at `site` of `shape`.
-    pub(super) fn type_cell(&self, shape: &BodyShape<'graph>, site: Site) -> StaticType<'graph> {
+    pub(super) fn type_cell(&self, shape: &BodyShape<'graph>, site: Site) -> StaticType<'p> {
         self.note_frontier(frontier_at(
             self.channel_residual(shape),
             FactKey::Site(site),
         ));
-        let settled = |held: &ChannelSettled<'graph>| held.expressions.get(site).map(|(_, at)| *at);
+        let settled = |held: &ChannelSettled<'p>| held.expressions.get(site).map(|(_, at)| *at);
         (self.channel_cell(shape, settled)).unwrap_or_else(|| shape.typed_expression(site))
     }
 
     /// The type channel's residual of `shape`, as a resumption leaves it.
-    fn channel_residual(&self, shape: &BodyShape<'graph>) -> Residual<'graph> {
-        (self.resume.as_ref())
-            .and_then(|resume| resume.channel_residual(shape.segment()))
+    fn channel_residual(&self, shape: &BodyShape<'graph>) -> Residual<'p> {
+        let segment = shape.segment();
+        let own = (self.channel)
+            .and_then(|channel| channel.channel.get(segment).map(|(_, held)| held.residual));
+        own.or_else(|| self.over?.channel(segment).next().map(|held| held.residual))
             .unwrap_or_else(|| shape.channel_residual())
     }
 
-    /// The type channel cell of `shape` a resumption settled, read through `of`.
+    /// The type channel cell of `shape` a resumption settled, read through `of`: as this one's
+    /// type channel settled it, else as the newest one it extends did.
     fn channel_cell<T>(
         &self,
         shape: &BodyShape<'graph>,
-        of: impl Fn(&ChannelSettled<'graph>) -> Option<T>,
+        of: impl Fn(&ChannelSettled<'p>) -> Option<T>,
     ) -> Option<T> {
-        self.resume.as_ref()?.channel_cell(shape.segment(), of)
+        let segment = shape.segment();
+        let own = self.channel?.channel.get(segment).map(|(_, held)| held);
+        own.and_then(&of)
+            .or_else(|| self.over?.channel(segment).find_map(&of))
     }
 
     /// The type a resumption binds `unknown` to.
     pub(super) fn binds(&self, unknown: Unknown) -> Option<KType> {
-        self.resume.as_ref()?.bound(unknown)
+        self.over?.bound(unknown)
     }
 
     /// The type channel's cell for the type binder at `slot` of `shape`, and the binder itself
     /// where the channel left it unknown.
-    pub(super) fn declared_cell(
-        &self,
-        shape: &BodyShape<'graph>,
-        slot: Slot,
-    ) -> StaticType<'graph> {
+    pub(super) fn declared_cell(&self, shape: &BodyShape<'graph>, slot: Slot) -> StaticType<'p> {
         self.note_frontier(frontier_at(
             self.channel_residual(shape),
             FactKey::Slot(slot),
         ));
-        let settled = |held: &ChannelSettled<'graph>| held.declared.get(slot).map(|(_, at)| *at);
+        let settled = |held: &ChannelSettled<'p>| held.declared.get(slot).map(|(_, at)| *at);
         let typed =
             (self.channel_cell(shape, settled)).unwrap_or_else(|| shape.declared_type(slot));
         if shape.declarations(slot).is_some() && !matches!(typed, Static::Closed(_)) {
@@ -339,17 +508,17 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         &self,
         shape: &BodyShape<'graph>,
         slot: Slot,
-    ) -> StaticRegistered<'graph> {
+    ) -> StaticRegistered<'p> {
         self.note_frontier(frontier_at(
             self.channel_residual(shape),
             FactKey::Slot(slot),
         ));
-        let settled = |held: &ChannelSettled<'graph>| held.registered.get(slot).map(|(_, at)| *at);
+        let settled = |held: &ChannelSettled<'p>| held.registered.get(slot).map(|(_, at)| *at);
         (self.channel_cell(shape, settled)).unwrap_or_else(|| shape.registered_type(slot))
     }
 
     /// The type channel's cell for the callable body `body`'s type.
-    pub(super) fn callable_cell(&self, body: &BodyShape<'graph>) -> StaticCallable<'graph> {
+    pub(super) fn callable_cell(&self, body: &BodyShape<'graph>) -> StaticCallable<'p> {
         self.note_frontier(frontier_at(self.channel_residual(body), FactKey::Shape));
         (self.channel_cell(body, |held| held.callable)).unwrap_or_else(|| body.callable_type())
     }
@@ -405,13 +574,13 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
 
     /// Whether the quote's code `code` holds a refusal: the builder's, or the type channel's.
     pub(super) fn code_refused(&self, code: &BodyShape<'graph>) -> bool {
+        let segment = code.segment();
         code.refusal().is_some()
-            || self.resume.as_ref().is_some_and(|resume| {
-                let segment = code.segment();
-                resume.channel_cell(segment, |held| held.refusal).is_some()
-                    || resume.own(&resume.refusals, segment).is_some()
-                    || resume.over.refusal(segment).is_some()
-            })
+            || self.channel_cell(code, |held| held.refusal).is_some()
+            || self.write.own_refusal(segment)
+            || self
+                .over
+                .is_some_and(|over| over.refusal(segment).is_some())
     }
 
     /// Each lexical variable `shape` declares, by level, beside where its activation holds it.
@@ -430,48 +599,41 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     }
 
     /// The entry of the path spelling `read`, which `shape` reads: one the type channel minted.
-    pub(super) fn spelled_entry(
-        &self,
-        shape: &BodyShape<'graph>,
-        read: PathRead,
-    ) -> PathEntry<'graph> {
+    pub(super) fn spelled_entry(&self, shape: &BodyShape<'graph>, read: PathRead) -> PathEntry<'p> {
         (shape.shape_at(read.root).path_entry(read.level))
             .expect("a spelling reads an entry the type channel minted")
     }
 
     /// The path entries the type channel minted for the chain `root` roots.
-    pub(super) fn channel_entries(&self, root: &BodyShape<'graph>) -> &'graph [PathEntry<'graph>] {
+    pub(super) fn channel_entries(&self, root: &BodyShape<'graph>) -> &'p [PathEntry<'p>] {
         root.channel_paths()
     }
 
     /// Every path entry of the chain `root` roots the load minted, the type channel's first.
-    pub(super) fn loaded_entries(&self, root: &BodyShape<'graph>) -> &'graph [PathEntry<'graph>] {
+    pub(super) fn loaded_entries(&self, root: &BodyShape<'graph>) -> &'p [PathEntry<'p>] {
         root.paths()
     }
 
     /// The type captures the pass laid on `body`.
-    pub(super) fn laid_captures(&self, body: &BodyShape<'graph>) -> &'graph [Coordinate] {
+    pub(super) fn laid_captures(&self, body: &BodyShape<'graph>) -> &'p [Coordinate] {
         body.type_captures()
     }
 
     /// The solution the callable body `body` is born instantiated at, where the pass fixed one.
-    pub(super) fn born_instance(&self, body: &BodyShape<'graph>) -> Option<StaticSolution<'graph>> {
+    pub(super) fn born_instance(&self, body: &BodyShape<'graph>) -> Option<StaticSolution<'p>> {
         let facts = self.facts_of(body, Whole::Born)?;
         self.note_frontier(facts.born_frontier);
-        let Some(resume) = &self.resume else {
-            return body.born_instance();
-        };
         let segment = body.segment();
-        (resume.own(&resume.born, segment))
-            .or_else(|| resume.over.born(segment))
+        (self.write.own_born(segment))
+            .or_else(|| self.over?.born(segment))
             .or_else(|| body.born_instance())
     }
 
     /// The facts the static pass fixed about `body` as a whole, as the walk has them: `None` in a
     /// resumption where `whole` waits on what it binds and the walk has not re-run it yet.
-    fn facts_of(&self, body: &BodyShape<'graph>, whole: Whole) -> Option<ShapeFacts<'graph>> {
+    fn facts_of(&self, body: &BodyShape<'graph>, whole: Whole) -> Option<ShapeFacts<'p>> {
         let facts = self.shape_facts(body);
-        let Some(resume) = &self.resume else {
+        let Some(over) = self.over else {
             return Some(facts);
         };
         let frontier = match whole {
@@ -480,34 +642,31 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             Whole::Ran => facts.ran_frontier,
             Whole::Born => facts.born_frontier,
         };
-        let ready = !resume.wakes(frontier) || resume.reran_whole(body.segment(), whole);
+        let ready = !over.wakes(frontier) || self.write.reran_whole(body.segment(), whole);
         ready.then_some(facts)
     }
 
     /// `body`'s facts as a whole as the walk has them, whether or not they wait on it.
-    fn shape_facts(&self, body: &BodyShape<'graph>) -> ShapeFacts<'graph> {
-        let Some(resume) = &self.resume else {
-            return body.shape_facts();
-        };
+    fn shape_facts(&self, body: &BodyShape<'graph>) -> ShapeFacts<'p> {
         let segment = body.segment();
-        (resume.own(&resume.facts, segment))
-            .or_else(|| resume.over.facts(segment))
+        (self.write.own_facts(segment))
+            .or_else(|| self.over?.facts(segment))
             .unwrap_or_else(|| body.shape_facts())
     }
 
     /// Whether `body` is recursive: met while it was typed at the load, or since.
     pub(super) fn recursive_at_load(&self, body: &BodyShape<'graph>) -> bool {
-        self.resume.is_some() && body.shape_facts().recursive
+        self.over.is_some() && body.shape_facts().recursive
     }
 
     /// Whether a resumption re-runs `body`'s fact `whole`.
     pub(super) fn runs_whole(&self, body: &BodyShape<'graph>, whole: Whole) -> bool {
-        self.resume.is_none() || self.unfilled || self.facts_of(body, whole).is_none()
+        self.over.is_none() || self.unfilled || self.facts_of(body, whole).is_none()
     }
 
     /// The summary of the callable body `body`, where the pass typed it: `Some(None)` where it has
     /// none.
-    pub(super) fn summary_of(&self, body: &BodyShape<'graph>) -> Option<Option<Tree<'graph>>> {
+    pub(super) fn summary_of(&self, body: &BodyShape<'graph>) -> Option<Option<Tree<'p>>> {
         let facts = self.facts_of(body, Whole::Summary)?;
         self.note_frontier(facts.summary_frontier);
         facts.summary
@@ -571,20 +730,18 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
 
     /// Whether the pass has fixed `shape`'s cell.
     pub(super) fn typed_shape(&self, shape: &BodyShape<'graph>) -> bool {
-        let Some(resume) = &self.resume else {
+        let Some(over) = self.over else {
             return shape.statics().is_some();
         };
         // A shape the resumption skips is typed as it was.
-        let segment = shape.segment();
-        resume.own(&resume.statics, segment).is_some()
-            || (!resume.wakes(shape.reach()) && self.statics_of(shape).is_some())
+        self.write.own_statics(shape.segment()).is_some()
+            || (!over.wakes(shape.reach()) && self.statics_of(shape).is_some())
     }
 
     /// `shape`'s cell and residual as the resumptions this one extends left them, else as the
     /// load did; `None` where neither typed it.
-    pub(super) fn statics_of(&self, shape: &BodyShape<'graph>) -> Option<StaticsSettled<'graph>> {
-        let settled =
-            (self.resume.as_ref()).and_then(|resume| resume.over.statics(shape.segment()));
+    pub(super) fn statics_of(&self, shape: &BodyShape<'graph>) -> Option<StaticsSettled<'p>> {
+        let settled = self.over.and_then(|over| over.statics(shape.segment()));
         settled.or_else(|| {
             Some(StaticsSettled {
                 statics: shape.statics()?,
@@ -613,7 +770,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
 
     /// The static type of the binder at `slot` of the shape at `level` beside its frontier,
     /// read without gathering it.
-    pub(super) fn binder_fact(&self, level: usize, slot: Slot) -> (Bound, Frontier<'graph>) {
+    pub(super) fn binder_fact(&self, level: usize, slot: Slot) -> (Bound, Frontier<'p>) {
         let at = &self.chain[level];
         (at.binders[slot.index()], at.binder_frontiers[slot.index()])
     }
@@ -625,7 +782,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         level: usize,
         slot: Slot,
         bound: Bound,
-        frontier: Frontier<'graph>,
+        frontier: Frontier<'p>,
     ) {
         if let DeclaredType::Type(typed) = bound {
             self.sound(level, &[typed.lower, typed.upper]);
@@ -642,7 +799,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         level: usize,
         slot: Slot,
         bound: Bound,
-        frontier: Frontier<'graph>,
+        frontier: Frontier<'p>,
     ) {
         let at = &mut self.chain[level];
         at.binders[slot.index()] = bound;
@@ -668,7 +825,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         level: usize,
         index: usize,
         typed: Interval,
-        frontier: Frontier<'graph>,
+        frontier: Frontier<'p>,
     ) {
         self.sound(level, &[typed.lower, typed.upper]);
         let at = &mut self.chain[level];
@@ -712,7 +869,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     }
 
     /// What the pass fixed about the keyworded use at `index` of the shape at `level`.
-    pub(super) fn use_at(&self, level: usize, index: usize) -> UseStatics<'graph> {
+    pub(super) fn use_at(&self, level: usize, index: usize) -> UseStatics<'p> {
         let at = &self.chain[level];
         self.note_frontier(at.use_frontiers[index]);
         at.uses[index]
@@ -720,12 +877,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
 
     /// Fix the narrowing of the keyworded use at `index` of the shape at `level`, under what the
     /// innermost gathering holds.
-    pub(super) fn set_narrowing(
-        &mut self,
-        level: usize,
-        index: usize,
-        narrowing: Narrowing<'graph>,
-    ) {
+    pub(super) fn set_narrowing(&mut self, level: usize, index: usize, narrowing: Narrowing<'p>) {
         let frontier = self.snapshot();
         let at = &mut self.chain[level];
         at.uses[index].narrowing = narrowing;
@@ -738,7 +890,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         &mut self,
         level: usize,
         index: usize,
-        contributions: &'graph [StaticType<'graph>],
+        contributions: &'p [StaticType<'p>],
     ) {
         let frontier = self.snapshot();
         let at = &mut self.chain[level];
@@ -748,7 +900,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
 
     /// The closed point each variable of the candidate selected at the use at `site` of the shape
     /// at `level` solves to, where the pass selected one there.
-    pub(super) fn selection_at(&self, level: usize, site: Site) -> Option<&'graph [Option<KType>]> {
+    pub(super) fn selection_at(&self, level: usize, site: Site) -> Option<&'p [Option<KType>]> {
         let at = &self.chain[level];
         if let Some(index) = at.shape.candidate_lists().position(site) {
             self.note_frontier(at.use_frontiers[index]);
@@ -761,7 +913,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         &mut self,
         level: usize,
         site: Site,
-        points: &'graph [Option<KType>],
+        points: &'p [Option<KType>],
     ) {
         self.chain[level].selections.insert(site, points);
     }
@@ -783,7 +935,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         &mut self,
         level: usize,
         path_level: usize,
-        located: &'graph [crate::scope::Variable],
+        located: &'p [crate::scope::Variable],
     ) {
         self.chain[level].throughs.push((path_level, located));
     }
@@ -793,7 +945,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         &mut self,
         level: usize,
         site: Site,
-        tree: &'graph crate::scope::Tree<'graph>,
+        tree: &'p crate::scope::Tree<'p>,
     ) {
         self.keep_side(level, site);
         self.chain[level].trees.push((site, tree));
@@ -810,7 +962,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         &mut self,
         level: usize,
         site: Site,
-        read: crate::scope::InstanceRead<'graph>,
+        read: crate::scope::InstanceRead<'p>,
     ) {
         self.keep_side(level, site);
         self.chain[level].instances.push((site, read));
@@ -821,7 +973,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         &mut self,
         level: usize,
         site: Site,
-        contributions: &'graph [StaticType<'graph>],
+        contributions: &'p [StaticType<'p>],
     ) {
         self.keep_side(level, site);
         self.chain[level].named.push((site, contributions));
@@ -838,15 +990,11 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     /// innermost gathering holds.
     pub(super) fn fix_born_instance(
         &self,
-        body: &BodyShape<'graph>,
-        solution: StaticSolution<'graph>,
+        body: &'graph BodyShape<'graph>,
+        solution: StaticSolution<'p>,
     ) {
         let frontier = self.snapshot();
-        if let Some(resume) = &self.resume {
-            resume.write(&resume.born, body.segment(), solution);
-        } else {
-            body.fix_born_instance(solution);
-        }
+        self.write.fix_born_instance(body, solution);
         self.fix_shape_facts(body, Whole::Born, |facts| facts.born_frontier = frontier);
     }
 
@@ -854,11 +1002,11 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     /// frontier waits on nothing it binds — as the resumptions it extends left it, else as the load
     /// did, beside the shape's residual.
     pub(super) fn prefill(&mut self, level: usize) {
-        let Some(resume) = &self.resume else {
+        let Some(resume) = self.over else {
             return;
         };
         let at = &self.chain[level];
-        if self.unfilled || resume.over.everything {
+        if self.unfilled || resume.everything {
             return;
         }
         let Some(held) = self.statics_of(at.shape) else {
@@ -928,12 +1076,10 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     /// Lay the type captures the pass added to `shape` down.
     pub(super) fn fix_type_captures(
         &self,
-        shape: &BodyShape<'graph>,
-        captures: &'graph [Coordinate],
+        shape: &'graph BodyShape<'graph>,
+        captures: &'p [Coordinate],
     ) {
-        if self.resume.is_none() {
-            shape.fix_type_captures(captures);
-        }
+        self.write.fix_type_captures(shape, captures);
     }
 
     /// Lay what the pass typed of the shape at `level` down in its cell.
@@ -941,14 +1087,10 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         if self.unfilled {
             return;
         }
-        let (writer, scratch) = (self.writer, self.scratch);
-        // A resumption keeps the load's bookkeeping for the run.
-        let loaded = match self.resume {
-            Some(_) => self
-                .statics_of(self.chain[level].shape)
-                .map(|held| held.statics),
-            None => None,
-        };
+        let scratch = self.scratch;
+        // A resumption keeps the load's bookkeeping for the run; the load fixes the cell once, so
+        // the cell is empty while it does.
+        let loaded = (self.statics_of(self.chain[level].shape)).map(|held| held.statics);
         let class = match loaded {
             Some(loaded) => loaded.class,
             None => self.class(level),
@@ -963,7 +1105,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         );
         at.digested.sort_unstable();
         at.digested.dedup();
-        if self.resume.is_some() {
+        if self.over.is_some() {
             newest(&mut at.instances);
             newest(&mut at.named);
             newest(&mut at.trees);
@@ -974,22 +1116,22 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         selections.extend(at.selections.iter().map(|(site, points)| (*site, *points)));
         let shape = at.shape;
         let statics = Statics {
-            parts: Keyed::sorted(writer, &mut at.parts),
-            statements: collect(writer, at.statements.iter().copied()),
-            binders: collect(writer, at.binders.iter().copied()),
-            uses: Keyed::sorted(writer, &mut uses),
-            selections: Keyed::sorted(writer, &mut selections),
-            settled: Keyed::sorted(writer, &mut at.settled),
-            instances: Keyed::sorted(writer, &mut at.instances),
-            named: Keyed::sorted(writer, &mut at.named),
+            parts: Keyed::sorted(scratch, &mut at.parts),
+            statements: collect(scratch, at.statements.iter().copied()),
+            binders: collect(scratch, at.binders.iter().copied()),
+            uses: Keyed::sorted(scratch, &mut uses),
+            selections: Keyed::sorted(scratch, &mut selections),
+            settled: Keyed::sorted(scratch, &mut at.settled),
+            instances: Keyed::sorted(scratch, &mut at.instances),
+            named: Keyed::sorted(scratch, &mut at.named),
             class,
-            minting: Keyed::sorted(writer, &mut at.minting),
-            trees: Keyed::sorted(writer, &mut at.trees),
-            throughs: Keyed::sorted(writer, &mut at.throughs),
-            digested: collect(writer, at.digested.iter().copied()),
-            view_slots: Keyed::sorted(writer, &mut at.view_slots),
-            handoffs: Keyed::sorted(writer, &mut at.handoffs),
-            use_frontiers: collect(writer, at.use_frontiers.iter().copied()),
+            minting: Keyed::sorted(scratch, &mut at.minting),
+            trees: Keyed::sorted(scratch, &mut at.trees),
+            throughs: Keyed::sorted(scratch, &mut at.throughs),
+            digested: collect(scratch, at.digested.iter().copied()),
+            view_slots: Keyed::sorted(scratch, &mut at.view_slots),
+            handoffs: Keyed::sorted(scratch, &mut at.handoffs),
+            use_frontiers: collect(scratch, at.use_frontiers.iter().copied()),
         };
         let statics = match loaded {
             Some(loaded) => Statics {
@@ -1001,89 +1143,44 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             },
             None => statics,
         };
-        let mut residual: BumpVec<'_, (FactKey, Frontier<'graph>)> =
+        let mut residual: BumpVec<'_, (FactKey, Frontier<'p>)> =
             BumpVec::with_capacity_in(at.residual.len(), scratch);
         residual.extend(at.residual.iter().map(|(key, frontier)| (*key, *frontier)));
-        let residual = Keyed::sorted(writer, &mut residual);
-        if let Some(resume) = &self.resume {
-            let settled = StaticsSettled { statics, residual };
-            resume.write(&resume.statics, shape.segment(), settled);
-            return;
-        }
-        if !residual.is_empty() {
-            shape.fix_statics_residual(residual);
-        }
-        self.fix_statics(shape, statics);
+        let residual = Keyed::sorted(scratch, &mut residual);
+        self.write
+            .fix_statics(shape, StaticsSettled { statics, residual });
     }
 
-    /// Lay `shape`'s cell down.
-    pub(super) fn fix_statics(&self, shape: &BodyShape<'graph>, statics: Statics<'graph>) {
-        debug_assert!(
-            statics
-                .parts
-                .windows(2)
-                .all(|pair| pair[0].0 != pair[1].0 || pair[0].1 == pair[1].1),
-            "a part typed twice is typed alike"
-        );
-        shape.fix_statics(statics);
-    }
-
-    /// Write the static pass's facts about `shape` as a whole.
+    /// Write the static pass's facts about `shape` as a whole, `whole` among them edited by
+    /// `edit`.
     pub(super) fn fix_shape_facts(
         &self,
-        shape: &BodyShape<'graph>,
+        shape: &'graph BodyShape<'graph>,
         whole: Whole,
-        edit: impl FnOnce(&mut ShapeFacts<'graph>),
+        edit: impl FnOnce(&mut ShapeFacts<'p>),
     ) {
-        let Some(resume) = &self.resume else {
-            debug_assert!(
-                !whole.is_set(&shape.shape_facts()),
-                "a shape's fact as a whole is fixed once"
-            );
-            return shape.fix_shape_facts(edit);
-        };
-        debug_assert!(
-            resume.over.everything || !resume.reran_whole(shape.segment(), whole),
-            "a shape's fact as a whole re-runs at most once in a resumption"
-        );
         let mut facts = self.shape_facts(shape);
         edit(&mut facts);
-        resume.write(&resume.facts, shape.segment(), facts);
-        resume.rerun_whole(shape.segment(), whole);
+        self.write.fix_shape_facts(shape, whole, facts);
     }
 
     /// Keep the refusal of the quote's code `code`.
-    pub(super) fn refuse_code(
-        &self,
-        code: &BodyShape<'graph>,
-        refusal: &'graph crate::scope::ShapeError<'graph>,
-    ) {
-        match &self.resume {
-            Some(resume) => resume.write(&resume.refusals, code.segment(), refusal),
-            None => code.refuse_typing(refusal),
-        }
+    pub(super) fn refuse_code(&self, code: &'graph BodyShape<'graph>, refusal: ShapeError<'p>) {
+        self.write.refuse_code(code, refusal);
     }
 
-    /// Lay where `holder`'s types intern at run down.
-    pub(super) fn fix_caching(&self, holder: &BodyShape<'graph>, caching: Caching<'graph>) {
-        holder.fix_caching(resident(self.writer, caching));
+    /// Fix where `holder`'s types intern at run.
+    pub(super) fn fix_caching(&self, holder: &'graph BodyShape<'graph>, caching: Caching<'p>) {
+        self.write.fix_caching(holder, caching);
     }
 
     /// Fix what each path of the chain `root` roots this walk resolved resolved to, by level.
     pub(super) fn fix_resolutions(
         &self,
-        root: &BodyShape<'graph>,
-        resolutions: &mut [(usize, Resolution<'graph>)],
+        root: &'graph BodyShape<'graph>,
+        resolutions: &mut [(usize, Resolution<'p>)],
     ) {
-        match &self.resume {
-            Some(resume) => {
-                for (level, resolution) in resolutions.iter() {
-                    let key = (root.segment(), *level);
-                    resume.write(&resume.resolutions, key, *resolution);
-                }
-            }
-            None => root.fix_resolutions(Keyed::sorted(self.writer, resolutions)),
-        }
+        self.write.fix_resolutions(root, resolutions);
     }
 
     /// What `entry`, a path of the chain `root` roots, resolved to before this walk: as the
@@ -1091,28 +1188,21 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     pub(super) fn resolved_before(
         &self,
         root: &BodyShape<'graph>,
-        entry: PathEntry<'graph>,
-    ) -> Option<Resolution<'graph>> {
-        (self.resume.as_ref())
-            .and_then(|resume| resume.over.resolution(root.segment(), entry.level))
+        entry: PathEntry<'p>,
+    ) -> Option<Resolution<'p>> {
+        (self.over)
+            .and_then(|over| over.resolution(root.segment(), entry.level))
             .or_else(|| root.resolution(entry.level))
     }
 
     /// Whether a resumption re-resolves a path whose resolution waits on `frontier`.
     pub(super) fn resolves_again(&self, frontier: Frontier<'_>) -> bool {
-        (self.resume.as_ref()).is_some_and(|resume| resume.wakes(frontier))
+        self.over.is_some_and(|over| over.wakes(frontier))
     }
 
-    /// Lay every path entry of the chain `root` roots down, the type channel's first.
-    pub(super) fn fix_paths(&self, root: &BodyShape<'graph>, paths: &'graph [PathEntry<'graph>]) {
-        match self.resume {
-            Some(_) => assert_eq!(
-                paths.len(),
-                root.paths().len(),
-                "a resumption mints no path entry"
-            ),
-            None => root.fix_paths(paths),
-        }
+    /// Fix every path entry of the chain `root` roots, the type channel's first.
+    pub(super) fn fix_paths(&self, root: &'graph BodyShape<'graph>, paths: &'p [PathEntry<'p>]) {
+        self.write.fix_paths(root, paths);
     }
 }
 

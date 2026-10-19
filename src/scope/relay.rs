@@ -25,7 +25,7 @@ use crate::values::Types;
 use super::keyed::Keyed;
 use super::settled::{ChannelSettled, Settled, StaticsSettled};
 use super::shape::facts::{Binding, Frontier, Residual};
-use super::shape::{ShapeError, Site, Slot, Target};
+use super::shape::{Coordinate, ShapeError, Site, Slot, Target};
 use super::tree::{KnotNode, Leaf, NodeCapture, Tree, Unfolded, Within};
 use super::typed::{
     Caching, Callable, Elaboration, FunctionGroupMap, InstanceRead, Narrowing, ParameterBinding,
@@ -98,7 +98,7 @@ impl<'out, 'w, 'from, H: Habitat<'from>> Relay<'out, 'w, 'from, H> {
         self.handle(declared)
     }
 
-    fn interval<T: Copy + Into<DeclaredType<Parametric>>>(
+    pub fn interval<T: Copy + Into<DeclaredType<Parametric>>>(
         &self,
         Interval { lower, upper }: Interval<T>,
     ) -> Interval<T> {
@@ -121,7 +121,8 @@ impl<'out, 'w, 'from, H: Habitat<'from>> Relay<'out, 'w, 'from, H> {
         collect(self.writer, items.iter().copied())
     }
 
-    fn keyed<K: Ord + Copy, V, U>(
+    /// `keyed`, each value copied through `each`, which relays what the value holds.
+    pub fn keyed<K: Ord + Copy, V, U>(
         &self,
         keyed: Keyed<'_, (K, V)>,
         mut each: impl FnMut(&V) -> U,
@@ -543,6 +544,11 @@ impl<'out, 'w, 'from, H: Habitat<'from>> Relay<'out, 'w, 'from, H> {
     /// Each path spelling a shape reads, by site.
     pub fn path_reads(&self, reads: Keyed<'_, (Site, PathRead)>) -> Keyed<'out, (Site, PathRead)> {
         self.keyed_copied(reads)
+    }
+
+    /// The coordinates of a callable's type captures.
+    pub fn coordinates(&self, coordinates: &[Coordinate]) -> &'out [Coordinate] {
+        self.copied(coordinates)
     }
 
     /// Each lexical variable a shape declares, beside where its activation holds it.

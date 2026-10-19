@@ -87,10 +87,13 @@ fn the_static_pass_reaches_every_fact_through_its_store() {
     let mut sources = vec![manifest.join("src/dispatch/statics.rs")];
     collect_sources(&pass, &mut sources);
     let mut offenders = Vec::new();
-    for source in sources
-        .iter()
-        .filter(|source| !source.ends_with("store.rs"))
-    {
+    // The store's two halves and the entries that build them; every other file holds rules.
+    let rules = |source: &&std::path::PathBuf| {
+        !["store.rs", "resume.rs", "entry.rs"]
+            .iter()
+            .any(|half| source.ends_with(half))
+    };
+    for source in sources.iter().filter(rules) {
         let code = strip_comments_and_strings(&std::fs::read_to_string(source).unwrap());
         for found in store_bypasses(&code, ACCESSORS, FIELDS) {
             offenders.push(format!("{}:{found}", source.display()));
@@ -99,6 +102,30 @@ fn the_static_pass_reaches_every_fact_through_its_store() {
     assert!(
         offenders.is_empty(),
         "read past the store:\n{}",
+        offenders.join("\n")
+    );
+}
+
+#[test]
+fn the_static_pass_s_rules_never_ask_which_half_they_run_over() {
+    use crate::tests::boundary::{collect_sources, mode_branches, strip_comments_and_strings};
+    let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let mut sources = vec![manifest.join("src/dispatch/statics.rs")];
+    collect_sources(&manifest.join("src/dispatch/statics"), &mut sources);
+    let mut offenders = Vec::new();
+    for source in sources.iter().filter(|source| {
+        !["store.rs", "resume.rs", "entry.rs"]
+            .iter()
+            .any(|half| source.ends_with(half))
+    }) {
+        let code = strip_comments_and_strings(&std::fs::read_to_string(source).unwrap());
+        for found in mode_branches(&code) {
+            offenders.push(format!("{}:{found}", source.display()));
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "a rule asks which half it runs over:\n{}",
         offenders.join("\n")
     );
 }

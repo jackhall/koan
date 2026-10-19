@@ -44,7 +44,7 @@ use crate::type_lattice::{
 use super::trees::Scope;
 use super::{Bound, Pass, under, unknown};
 
-type Read<'graph, T> = Result<T, ShapeError<'graph>>;
+type Read<'p, T> = Result<T, ShapeError<'p>>;
 
 /// An application's pins, by parameter.
 type Pins<'p> = BumpVec<'p, (BinderSymbol, Parametric)>;
@@ -58,7 +58,7 @@ pub(super) struct ChainPaths<'p, 'graph> {
     /// How many entries the type channel minted.
     channel: usize,
     /// Every entry, by its level less `base`.
-    entries: BumpVec<'p, (PathEntry<'graph>, Option<Resolution<'graph>>)>,
+    entries: BumpVec<'p, (PathEntry<'p>, Option<Resolution<'p>>)>,
     /// Each entry's index in `entries`, by root, chain and label.
     found: PathIndex<'p>,
     /// Each class's representative's level, by the label, application and tree print its paths
@@ -72,19 +72,19 @@ pub(super) struct ChainPaths<'p, 'graph> {
     resolved: BumpVec<'p, usize>,
 }
 
-impl<'graph> ChainPaths<'_, 'graph> {
+impl<'p> ChainPaths<'p, '_> {
     /// The entry at `level`, beside its resolution: `None` where `level` is a name level.
-    fn at(&self, level: usize) -> Option<(PathEntry<'graph>, Option<Resolution<'graph>>)> {
+    fn at(&self, level: usize) -> Option<(PathEntry<'p>, Option<Resolution<'p>>)> {
         self.entries.get(level.checked_sub(self.base)?).copied()
     }
 }
 
-impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
+impl<'p, 'graph: 'p, 'tier: 'p> Pass<'p, '_, 'graph, 'tier, '_, '_> {
     /// Open the path table of the chain `root` roots, holding the type channel's entries.
     pub(super) fn open_paths(&mut self, root: &'graph BodyShape<'graph>) {
         // A resumption reads every entry the load minted, and starts from each resolution whose
         // frontier waits on nothing it binds.
-        let resuming = self.resume.is_some() && !self.unfilled;
+        let resuming = self.resumes_paths();
         let held = self.loaded_entries(root);
         let channel = match resuming {
             true => self.channel_entries(root).len(),
@@ -147,8 +147,9 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         }
         let mut resolutions = BumpVec::new_in(self.scratch);
         for (index, (entry, resolution)) in table.entries.iter().enumerate() {
-            let resolved = self.resume.is_none() || table.resolved.contains(&index);
-            if let (Some(resolution), true) = (resolution, resolved) {
+            // Every resolution the walk computed: each at the load, the ones it re-ran in a
+            // resumption, which starts from the rest.
+            if let (Some(resolution), true) = (resolution, table.resolved.contains(&index)) {
                 resolutions.push((entry.level, *resolution));
             }
         }
@@ -156,7 +157,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         if table.entries.len() > table.channel {
             self.fix_paths(
                 root,
-                collect(self.writer, table.entries.iter().map(|(entry, _)| *entry)),
+                collect(self.scratch, table.entries.iter().map(|(entry, _)| *entry)),
             );
         }
     }
@@ -191,8 +192,8 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         chain: &[ValueSymbol],
         label: TypeSymbol,
         through: Option<Parametric>,
-    ) -> PathEntry<'graph> {
-        let writer = self.writer;
+    ) -> PathEntry<'p> {
+        let lay = self.scratch;
         let table = self.table(level);
         let table = &mut self.paths[table];
         let hash = PathEntry::hash_of(root, chain, label);
@@ -203,17 +204,13 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         }) {
             return entries[*at].0;
         }
-        assert!(
-            self.resume.is_none() || self.unfilled,
-            "a resumption mints no path entry"
-        );
         let table = self.table(level);
         let table = &mut self.paths[table];
         let entries = &table.entries;
         let level = table.base + table.entries.len();
         let entry = PathEntry {
             root,
-            chain: collect(writer, chain.iter().copied()),
+            chain: collect(lay, chain.iter().copied()),
             label,
             level,
             through,
@@ -228,7 +225,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
 
     /// Each path the shape at `level` spells in one of its statements, beside the statement's
     /// index: by statement, then as written.
-    pub(super) fn spelled(&self, level: usize) -> BumpVec<'p, (usize, PathEntry<'graph>)> {
+    pub(super) fn spelled(&self, level: usize) -> BumpVec<'p, (usize, PathEntry<'p>)> {
         let shape = self.chain[level].shape;
         let mut spelled = BumpVec::new_in(self.scratch);
         if self.spellings(shape).is_empty() {
@@ -246,9 +243,9 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
 
     /// Resolve each path the shape at `level` spells: those not resolved with their statement, in
     /// the order the type channel minted them.
-    pub(super) fn resolve_spelled(&mut self, level: usize) -> Read<'graph, ()> {
+    pub(super) fn resolve_spelled(&mut self, level: usize) -> Read<'p, ()> {
         let shape = self.chain[level].shape;
-        let mut entries: BumpVec<'_, PathEntry<'graph>> =
+        let mut entries: BumpVec<'_, PathEntry<'p>> =
             BumpVec::with_capacity_in(self.spellings(shape).len(), self.scratch);
         entries.extend(
             (self.spellings(shape).iter()).map(|(_, read)| self.spelled_entry(shape, *read)),
@@ -265,8 +262,8 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     pub(super) fn resolve_path(
         &mut self,
         level: usize,
-        entry: PathEntry<'graph>,
-    ) -> Read<'graph, Resolved> {
+        entry: PathEntry<'p>,
+    ) -> Read<'p, Resolved> {
         let table = self.table(level);
         if let Some((_, Some(resolution))) = self.paths[table].at(entry.level) {
             self.note_frontier(resolution.frontier);
@@ -307,8 +304,8 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     fn resolve_entry(
         &mut self,
         level: usize,
-        entry: PathEntry<'graph>,
-    ) -> Read<'graph, (Resolution<'graph>, Option<crate::source::SourceRef>)> {
+        entry: PathEntry<'p>,
+    ) -> Read<'p, (Resolution<'p>, Option<crate::source::SourceRef>)> {
         let (types, scratch) = (self.types, self.scratch);
         let (root, held, site, at) = match entry.root {
             Root::Binder(binder) => match self.binder_root(level, binder)? {
@@ -413,7 +410,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         &mut self,
         level: usize,
         binder: Binder,
-    ) -> Read<'graph, Option<(Tree<'graph>, Option<KType>, Site)>> {
+    ) -> Read<'p, Option<(Tree<'p>, Option<KType>, Site)>> {
         let first = self.chain_root(level);
         let Some(home) = (first..=level)
             .rev()
@@ -442,7 +439,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
 
     /// The representative of `entry`'s class: the first path resolved over a tree like `tree`, at
     /// its label, through its application; `entry` itself where there is none yet.
-    fn class_of(&mut self, level: usize, entry: PathEntry<'graph>, tree: Tree<'graph>) -> usize {
+    fn class_of(&mut self, level: usize, entry: PathEntry<'p>, tree: Tree<'p>) -> usize {
         let table = self.table(level);
         let table = &mut self.paths[table];
         // A tree holding a leaf no binder names is like no other.
@@ -532,11 +529,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
 
     /// A type cell of the shape at `level`, read through its paths' resolutions: unknown where one
     /// is not resolved yet, closed where every path it reads is.
-    pub(super) fn resolved_type(
-        &self,
-        level: usize,
-        typed: StaticType<'graph>,
-    ) -> StaticType<'graph> {
+    pub(super) fn resolved_type(&self, level: usize, typed: StaticType<'p>) -> StaticType<'p> {
         let Static::Rigid { value, variables } = typed else {
             return typed;
         };
@@ -557,8 +550,8 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     pub(super) fn resolved_callable(
         &self,
         level: usize,
-        typed: StaticCallable<'graph>,
-    ) -> StaticCallable<'graph> {
+        typed: StaticCallable<'p>,
+    ) -> StaticCallable<'p> {
         let Static::Rigid { value, variables } = typed else {
             return typed;
         };
@@ -596,8 +589,8 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     pub(super) fn resolved_registered(
         &self,
         level: usize,
-        typed: StaticRegistered<'graph>,
-    ) -> StaticRegistered<'graph> {
+        typed: StaticRegistered<'p>,
+    ) -> StaticRegistered<'p> {
         let Static::Rigid { value, variables } = typed else {
             return typed;
         };
@@ -614,9 +607,9 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     fn registered_through(
         &self,
         level: usize,
-        registered: Registered<'graph>,
+        registered: Registered<'p>,
         variables: &[Located],
-    ) -> Option<(Registered<'graph>, bool)> {
+    ) -> Option<(Registered<'p>, bool)> {
         let (shape, closed) = self.declared_through(level, registered.shape, variables)?;
         Some((
             Registered {
@@ -665,7 +658,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     /// the binder's slot stepped in through every shape between — a hop per block, and the builder
     /// capture reading it per callable or module. `None` where a shape between captures no such
     /// thing, or the root is written in place.
-    fn path_coordinate(&self, level: usize, entry: PathEntry<'graph>) -> Option<Coordinate> {
+    fn path_coordinate(&self, level: usize, entry: PathEntry<'p>) -> Option<Coordinate> {
         let Root::Binder(binder) = entry.root else {
             return None;
         };
@@ -702,7 +695,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         &self,
         level: usize,
         rep: usize,
-    ) -> Option<(PathEntry<'graph>, Coordinate)> {
+    ) -> Option<(PathEntry<'p>, Coordinate)> {
         let table = &self.paths[self.table(level)];
         table.at(rep)?;
         let from = table.members.partition_point(|(class, _)| *class < rep);
@@ -721,7 +714,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
 
     /// Whether the application `entry` is read through names no path variable, so the shape at
     /// `level` can locate what it names.
-    fn locatable(&self, level: usize, entry: PathEntry<'graph>) -> bool {
+    fn locatable(&self, level: usize, entry: PathEntry<'p>) -> bool {
         let Some(through) = entry.through else {
             return true;
         };
@@ -743,7 +736,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     }
 
     /// `resolution`, its frontier gathered.
-    fn noted(&self, resolution: Resolution<'graph>) -> Resolution<'graph> {
+    fn noted(&self, resolution: Resolution<'p>) -> Resolution<'p> {
         self.note_frontier(resolution.frontier);
         resolution
     }
@@ -795,7 +788,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         root: Root,
         chain: &[ValueSymbol],
         upper: Parametric,
-    ) -> Read<'graph, Option<(KType, Pins<'p>)>> {
+    ) -> Read<'p, Option<(KType, Pins<'p>)>> {
         let types = self.types;
         let (signature, pinned) = match types.node(upper) {
             TypeNode::Signature { .. } => match types.concrete(upper) {
@@ -840,7 +833,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         operand: &'graph ExpressionPart<'graph>,
         upper: Parametric,
         name: BinderSymbol,
-    ) -> Read<'graph, Option<SignatureMember>> {
+    ) -> Read<'p, Option<SignatureMember>> {
         let (types, scratch) = (self.types, self.scratch);
         let member = signature_member(types, scratch, upper, name);
         if !matches!(
@@ -877,7 +870,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         operand: &'graph ExpressionPart<'graph>,
         label: BinderSymbol,
         typed: Interval,
-    ) -> Read<'graph, Interval> {
+    ) -> Read<'p, Interval> {
         let (types, scratch) = (self.types, self.scratch);
         if !matches!(label, BinderSymbol::Value(_)) || typed.upper == KType::NEVER.into() {
             return Ok(typed);
@@ -953,10 +946,10 @@ fn exact(types: &crate::values::Chain<'_, '_, '_, '_>, typed: Interval) -> Optio
 /// closed type, so no variable is left to reach.
 const CLOSED: &str = "a type over closed paths alone is closed";
 
-fn closed_registered<'graph>(
-    pass: &Pass<'_, '_, '_>,
-    registered: Registered<'graph>,
-) -> Registered<'graph, KType> {
+fn closed_registered<'p>(
+    pass: &Pass<'_, '_, '_, '_, '_, '_>,
+    registered: Registered<'p>,
+) -> Registered<'p, KType> {
     Registered {
         shape: pass
             .types

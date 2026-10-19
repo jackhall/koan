@@ -48,9 +48,9 @@ use crate::memory::{BumpAllocator, Writer};
 use crate::parse::{ExpressionPart, KExpression};
 use crate::program::{Contract, KBirth, KBundle, Language, Program, Within};
 use crate::scheduler::NativeStep;
-use crate::scope::{BodyShape, Resumption, Settled, ShapeError};
+use crate::scope::{BodyShape, Relay, Resumption, Settled, ShapeError};
 use crate::symbols::{BinderSymbol, SymbolInterner};
-use crate::type_lattice::KType;
+use crate::type_lattice::{Habitat, KType};
 use crate::values::Chain;
 
 /// Koan's language: what [`CellSubstrate::load`](crate::program::CellSubstrate::load) runs a
@@ -82,17 +82,16 @@ impl Language for Koan {
         statics::statics(shape, builtins, types, writer, scratch)
     }
 
-    fn resume<'graph>(
+    fn resume<'graph, 'out, 'w, 'from, H: Habitat<'from>>(
         shape: &'graph BodyShape<'graph>,
         builtins: &'graph KBuiltins<'graph, 'graph>,
-        types: &Chain<'graph, 'graph, 'graph, '_>,
-        writer: Writer<'graph, 'graph>,
+        work: &Chain<'_, '_, '_, '_>,
+        output: &Relay<'out, 'w, 'from, H>,
         scratch: BumpAllocator<'_>,
-        over: Resumption<'_, 'graph>,
-        channel: Settled<'graph>,
-    ) -> Result<&'graph Settled<'graph>, ShapeError<'graph>> {
-        let channel = crate::memory::resident(writer, channel);
-        statics::resume_statics(shape, builtins, types, writer, scratch, over, channel)
+        over: Resumption<'_, 'out>,
+        channel: Settled<'out>,
+    ) -> Result<&'out Settled<'out>, ShapeError<'out>> {
+        statics::resume_statics(shape, builtins, work, output, scratch, over, channel)
     }
 }
 

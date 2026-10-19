@@ -325,7 +325,7 @@ impl<'graph, 'l, 'door, L: Language> Loaded<'graph, 'l, 'door, L> {
             self.shape,
             self.builtins,
             self.types,
-            self.writer,
+            &relay,
             self.scratch,
             over,
             channel,
