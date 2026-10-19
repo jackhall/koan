@@ -122,7 +122,7 @@ and the run binds a path variable per read (`elaborate::bound_path`).
 
 **Requires:**
 
-- [Every spelled path minted at the load](paths-minted-at-load.md) — a resumption mints no path entry.
+- [Every pinned path minted at the load](pins-minted-at-load.md) — a resumption mints no path entry for a member read's pin.
 
 **Unblocks:**
 
