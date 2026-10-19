@@ -979,6 +979,9 @@ pub(super) struct Resumable {
     /// of its drawn statements.
     pub(super) local: bool,
     pub(super) pair: Option<Desc>,
+    /// Whether the body binds the type binder `Both = :{a :Elt b :(m.Carrier)}`, a path after a
+    /// run-bound name in a type binder; only when it takes `m`.
+    pub(super) both: bool,
     pub(super) statements: Vec<Statement>,
     /// What the binding gives each unknown it binds: `Elt`, `Key`, `Item`, `Pair`, and `m`'s and
     /// `n`'s `Carrier` pin.
@@ -1047,6 +1050,9 @@ pub(super) enum Statement {
     Inner,
     /// `LET s = (USING (m :! Counter) SCOPE (OP zero))`.
     Using,
+    /// `LET s :{a :(Elt & Number) b :(m.Carrier)} = {a = x, b = m.zero}`: a path after a spelling
+    /// the load leaves unknown over `Elt`.
+    PathAfterMeet,
 }
 
 /// What a drawn `OP` call is applied to.
@@ -1120,6 +1126,7 @@ pub(super) fn resumable() -> impl Strategy<Value = Resumable> {
             )),
         ]),
         prop::collection::vec(statement(), 1..5),
+        any::<bool>(),
     );
     // `Pair` is read over `Elt`: a binding gives it what the solve that gives `Elt` its type does.
     let bindings = (
@@ -1132,7 +1139,7 @@ pub(super) fn resumable() -> impl Strategy<Value = Resumable> {
         prop::option::weighted(0.5, closed()),
     );
     (parameters, bodies, bindings).prop_map(
-        |((key, list, item, module, maker), (local, pair, statements), bindings)| {
+        |((key, list, item, module, maker), (local, pair, statements, both), bindings)| {
             let (solved, elt, bound_key, bound_item, bound_pair, bound_module, bound_local) =
                 bindings;
             let bound_pair = bound_pair
@@ -1148,6 +1155,7 @@ pub(super) fn resumable() -> impl Strategy<Value = Resumable> {
                 maker,
                 local,
                 pair: pair.clone(),
+                both: both && module,
                 statements,
                 bound: Bound {
                     elt,
@@ -1163,7 +1171,10 @@ pub(super) fn resumable() -> impl Strategy<Value = Resumable> {
             case.statements.retain(|statement| match statement {
                 Statement::Call(Argument::Xs) => list,
                 Statement::Call(Argument::K) => key,
-                Statement::Call(Argument::MZero) | Statement::Member | Statement::Using => module,
+                Statement::Call(Argument::MZero)
+                | Statement::Member
+                | Statement::Using
+                | Statement::PathAfterMeet => module,
                 Statement::Call(Argument::NZero) => local,
                 Statement::Annotated(Typed::Item) | Statement::Ascribed(Typed::Item) => item,
                 Statement::Annotated(Typed::Pair) | Statement::Ascribed(Typed::Pair) => pair,
@@ -1197,6 +1208,7 @@ fn statement() -> impl Strategy<Value = Statement> {
         1 => typed.prop_map(Statement::Ascribed),
         1 => Just(Statement::Inner),
         1 => Just(Statement::Using),
+        1 => Just(Statement::PathAfterMeet),
     ]
 }
 
@@ -1290,6 +1302,9 @@ impl Resumable {
             };
             out += &format!("  LET Pair = {written}\n");
         }
+        if self.both {
+            out += "  LET Both = :{a :Elt b :(m.Carrier)}\n";
+        }
         for (index, statement) in self.statements.iter().enumerate() {
             out += &format!("  {}\n", statement.render(index));
         }
@@ -1329,6 +1344,9 @@ impl Statement {
                 )
             }
             Statement::Using => format!("LET s{index} = (USING (m :! Counter) SCOPE (OP zero))"),
+            Statement::PathAfterMeet => format!(
+                "LET s{index} :{{a :(Elt & Number) b :(m.Carrier)}} = {{a = x, b = m.zero}}"
+            ),
         }
     }
 }
