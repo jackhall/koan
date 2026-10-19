@@ -58,3 +58,21 @@ fn the_type_channel_reaches_every_cell_through_its_store() {
         offenders.join("\n")
     );
 }
+
+#[test]
+fn the_type_channel_s_rules_never_ask_which_half_they_run_over() {
+    use crate::tests::boundary::{mode_branches, strip_comments_and_strings};
+    let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let source = manifest.join("src/elaborate/channel.rs");
+    let code = strip_comments_and_strings(&std::fs::read_to_string(&source).unwrap());
+    // The scan bites on each spelling of a mode branch, and passes a call named for a resumption.
+    let branches =
+        "if self.over.is_some() {}\nlet writer = self.writer;\nself.resume\nresume_channel()";
+    assert_eq!(mode_branches(branches).len(), 4);
+    let offenders = mode_branches(&code);
+    assert!(
+        offenders.is_empty(),
+        "a rule asks which half it runs over:\n{}",
+        offenders.join("\n")
+    );
+}

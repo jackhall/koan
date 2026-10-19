@@ -66,10 +66,10 @@ pub trait Language {
         writer: Writer<'graph, 'graph>,
         scratch: BumpAllocator<'_>,
         over: Resumption<'_, 'graph>,
-        channel: &'graph Settled<'graph>,
+        channel: Settled<'graph>,
     ) -> Result<&'graph Settled<'graph>, ShapeError<'graph>> {
-        let _ = (shape, builtins, types, writer, scratch, over);
-        Ok(channel)
+        let _ = (shape, builtins, types, scratch, over);
+        Ok(crate::memory::resident(writer, channel))
     }
 }
 

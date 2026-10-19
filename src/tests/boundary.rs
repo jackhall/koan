@@ -173,6 +173,25 @@ pub(crate) fn collect_sources(directory: &Path, out: &mut Vec<PathBuf>) {
     }
 }
 
+/// Every place `code`, a pass's rule file, asks which half of its store it runs over: a writer
+/// named, a resumption named, or the resumption the store's read half alone reads. A rule lays in
+/// the walk's scratch and hands what it fixes to the store, which knows.
+pub(crate) fn mode_branches(code: &str) -> Vec<String> {
+    let lines: Vec<&str> = code.lines().collect();
+    let mut found = Vec::new();
+    let mut at = 0;
+    for token in code.split(|ch: char| !(ch.is_alphanumeric() || ch == '_')) {
+        let start = code[at..].find(token).map_or(at, |offset| at + offset);
+        at = start + token.len();
+        let over = token == "over" && code[..start].ends_with('.');
+        if over || ["writer", "Writer", "resume"].contains(&token) {
+            let number = code[..start].matches('\n').count();
+            found.push(format!("{}: {token}: {}", number + 1, lines[number].trim()));
+        }
+    }
+    found
+}
+
 /// Each place `code` reaches a fact past its pass's store, as `line: text`: a call of one of
 /// `accessors` on any receiver but `self` — the store's own methods share their names — and a read
 /// of one of `fields` through an index into `chain` or a level named `at`, `popped` or `inner`.

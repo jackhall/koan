@@ -25,12 +25,12 @@ use crate::values::Types;
 use super::keyed::Keyed;
 use super::settled::{ChannelSettled, Settled, StaticsSettled};
 use super::shape::facts::{Binding, Frontier, Residual};
-use super::shape::{ShapeError, Slot};
+use super::shape::{ShapeError, Site, Slot, Target};
 use super::tree::{KnotNode, Leaf, NodeCapture, Tree, Unfolded, Within};
 use super::typed::{
     Caching, Callable, Elaboration, FunctionGroupMap, InstanceRead, Narrowing, ParameterBinding,
-    PathEntry, Registered, Resolution, Resolved, ShapeFacts, ShapeGroupMap, Static, StaticCallable,
-    StaticRegistered, StaticSolution, StaticType, Statics, UseStatics, ViewSlots,
+    PathEntry, PathRead, Registered, Resolution, Resolved, ShapeFacts, ShapeGroupMap, Static,
+    StaticCallable, StaticRegistered, StaticSolution, StaticType, Statics, UseStatics, ViewSlots,
 };
 
 /// What a write half copies a kept fact through: the writer it lays into, the chain it adopts
@@ -533,6 +533,26 @@ impl<'out, 'w, 'from, H: Habitat<'from>> Relay<'out, 'w, 'from, H> {
             level,
             through: through.map(|through| self.handle(through)),
         }
+    }
+
+    /// A run of path entries, each copied.
+    pub fn path_entries(&self, entries: &[PathEntry<'_>]) -> &'out [PathEntry<'out>] {
+        self.run(entries, |entry| self.path_entry(*entry))
+    }
+
+    /// Each path spelling a shape reads, by site.
+    pub fn path_reads(&self, reads: Keyed<'_, (Site, PathRead)>) -> Keyed<'out, (Site, PathRead)> {
+        self.keyed_copied(reads)
+    }
+
+    /// Each lexical variable a shape declares, beside where its activation holds it.
+    pub fn declared_variables(&self, variables: &[(usize, Target)]) -> &'out [(usize, Target)] {
+        self.copied(variables)
+    }
+
+    /// A callable's own group as its body reads it.
+    pub fn levels(&self, levels: &[Parametric]) -> &'out [Parametric] {
+        self.run(levels, |level| self.handle(*level))
     }
 
     fn elaboration(&self, error: Elaboration) -> Elaboration {

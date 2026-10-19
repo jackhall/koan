@@ -15,7 +15,7 @@ use crate::parse::parse_with_path;
 use crate::scheduler::{
     DrainStalled, Graph, NativeStep, Placement, Resting, Roots, Scheduler, Work,
 };
-use crate::scope::{Binding, BodyShape, Resumption, Settled, ShapeError, Unknown};
+use crate::scope::{Binding, BodyShape, Relay, Resumption, Settled, ShapeError, Unknown};
 use crate::symbols::SymbolInterner;
 use crate::type_lattice::{Halves, KType, RootBuilder};
 use crate::values::{Chain, Half, SpecBounds, Types};
@@ -312,12 +312,13 @@ impl<'graph, 'l, 'door, L: Language> Loaded<'graph, 'l, 'door, L> {
             base,
             everything,
         };
+        let relay = Relay::new(self.writer, self.types, self.types, self.scratch);
         let channel = resume_channel(
             self.shape,
             over,
             self.builtins,
             self.types,
-            self.writer,
+            &relay,
             self.scratch,
         )?;
         L::resume(

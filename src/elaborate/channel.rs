@@ -2,6 +2,12 @@
 //! a loaded program typed where the program loads, a quote's code included, each result written
 //! into the write-once cell the shape builder laid beside it.
 //!
+//! These are the walk's **rules**. They lay every value they compute in the walk's scratch, intern
+//! every type through the chain they are handed for work, and hand each fact they fix to the
+//! store ([`store`]), whose write half keeps it — in its cell at the load, in a resumption's own
+//! tables otherwise — so the rules never ask which they run under; `tests::boundary` holds them to
+//! that. The two entries ([`entry`]) build the write half and run the one walk.
+//!
 //! The pass walks the shape tree from the root, keeping the chain of shapes enclosing the one it
 //! types. Its reader answers a coordinate from the builtin table and from the cells the pass has
 //! already filled — a type binder is typed before anything reads it, since a shape's binders are
@@ -31,27 +37,26 @@
 //! unknown beside what that binder waits on, a name a quote's code is run with — in either mode,
 //! named by the slot or capture of the shape that declares it.
 //!
-//! [`resume_channel`] runs the walk again under a binding, once the load has quiesced: a bound name
-//! reads as the closed type it binds, and a callable body's own bound `FOR ALL` name is that type
-//! at its group level. It skips a shape whose reach misses the binding and a cell whose frontier
-//! does, numbers the chain as the load did, reads the path entries the load minted, and writes each
-//! cell it re-runs beside the load's ([`store`]).
+//! [`resume_channel`] runs the walk again under a binding, once the load has quiesced, at any
+//! step's brand: a bound name reads as the closed type it binds, and a callable body's own bound
+//! `FOR ALL` name is that type at its group level. It skips a shape whose reach misses the binding
+//! and a cell whose frontier does, numbers the chain as the load did, reads the path entries the
+//! load minted, and keeps each cell it re-runs beside the load's ([`store`]), relaying what it
+//! keeps into the `Settled` it returns.
 //!
 //! See [README.md § The type channel at load](README.md#the-type-channel-at-load).
 
 use std::cell::Cell;
 
-use crate::memory::{
-    BumpAllocator, BumpBackedMap, BumpVec, Writer, bump_hash_table, bump_table, collect, resident,
-};
+use crate::memory::{BumpAllocator, BumpBackedMap, BumpVec, bump_hash_table, bump_table, collect};
 use crate::parse::KExpression;
 use crate::parse::Role;
 use crate::parse::quoted_body;
 use crate::scope::{
     Address, Binder, BodyShape, Builtins, Callable, CaptureSlot, CaptureSource, Coordinate,
     Elaboration, FactKey, Frontier, FunctionGroupMap, Keyed, ParameterBinding, PathEntry,
-    PathIndex, PathRead, Position, Registered, Registration, Resumption, Root, Segment, Settled,
-    ShapeError, ShapeGroupMap, ShapeKind, Site, Slot, Source, Static, StaticRegistered, StaticType,
+    PathIndex, PathRead, Position, Registered, Registration, Resumption, Root, Segment, ShapeError,
+    ShapeGroupMap, ShapeKind, Site, Slot, Source, Static, StaticRegistered, StaticType,
     SurfacedHead, Target, TypeExpression, UnitWork, Unknown, Variable, frontier_at, merge_into,
     source_of,
 };
@@ -60,7 +65,7 @@ use crate::symbols::{BinderSymbol, TypeSymbol, ValueSymbol};
 use crate::type_lattice::{
     DeclaredType, KType, Members, Parametric, SigSchema, TypeNode, substitute_parameters,
 };
-use crate::values::{Chain, Knotted, Types, Value};
+use crate::values::{Chain, Knotted, Value};
 
 use super::declaration::{HeadShape, signature_heads, type_declarations};
 use super::expression::{Elaborator, Groups, type_expression};
@@ -68,61 +73,10 @@ use super::paths::declared_through;
 use super::reads::{Reads, TypeAt};
 use super::signature::callable_type;
 
+mod entry;
 mod store;
 
-/// Type `root`'s type channel and every shape nested in it, writing each result into its cell and
-/// laying the records it keeps down through `writer`. A closed type that does not elaborate, or a
-/// `MATCH … WITH` arm set guarding one type twice, refuses the load; inside a quote's code the
-/// refusal is kept on the code shape instead.
-pub fn type_channel<'graph, X: Knotted>(
-    root: &'graph BodyShape<'graph>,
-    builtins: &Builtins<'_, X>,
-    types: &Chain<'graph, 'graph, 'graph, '_>,
-    writer: Writer<'graph, 'graph>,
-    scratch: BumpAllocator<'_>,
-) -> Result<(), ShapeError<'graph>> {
-    let mut pass = Pass {
-        builtins,
-        types,
-        writer,
-        scratch,
-        chain: BumpVec::new_in(scratch),
-        resume: None,
-    };
-    pass.chain.push(Level::new(root, true, 0, None, scratch));
-    pass.visit(0)
-}
-
-/// Resume `root`'s type channel under `over`'s binding, once the load has typed it: the walk the
-/// load runs, each bound name read as the closed type it binds, re-running only the cells whose
-/// frontier waits on what it binds and writing each beside the load's. What it settles, laid
-/// down through `writer`; a closed type that no longer elaborates refuses as the load would.
-pub fn resume_channel<'graph, X: Knotted>(
-    root: &'graph BodyShape<'graph>,
-    over: Resumption<'_, 'graph>,
-    builtins: &Builtins<'_, X>,
-    types: &Chain<'graph, 'graph, 'graph, '_>,
-    writer: Writer<'graph, 'graph>,
-    scratch: BumpAllocator<'_>,
-) -> Result<&'graph Settled<'graph>, ShapeError<'graph>> {
-    let mut pass = Pass {
-        builtins,
-        types,
-        writer,
-        scratch,
-        chain: BumpVec::new_in(scratch),
-        resume: Some(store::Resume::new(over, scratch)),
-    };
-    if !pass.skips_shape(root) {
-        let level = Level::new(root, true, 0, None, scratch);
-        pass.chain.push(level);
-        pass.prefill(0);
-        pass.visit(0)?;
-        pass.chain.clear();
-    }
-    let resume = pass.resume.take().expect("the walk resumes");
-    Ok(resume.settled(writer))
-}
+pub use entry::{resume_channel, type_channel};
 
 /// A run-bound name, by the chain level of the shape that declares it.
 #[derive(Clone, Copy, PartialEq, Eq)]
@@ -134,9 +88,9 @@ enum Key {
 /// A quantified callable's own `FOR ALL` names, read off its load-time type: each one's index in
 /// its group, and the lexical variable each variable of the group is in its body.
 #[derive(Clone, Copy)]
-struct Own<'graph> {
-    map: FunctionGroupMap<'graph>,
-    levels: &'graph [Parametric],
+struct Own<'p> {
+    map: FunctionGroupMap<'p>,
+    levels: &'p [Parametric],
 }
 
 /// One shape on the chain, innermost last.
@@ -149,18 +103,18 @@ struct Level<'p, 'graph> {
     /// How many levels the shape's own names take, its own group included.
     count: usize,
     /// Set for a quantified callable body whose load-time type is known.
-    own: Option<Own<'graph>>,
+    own: Option<Own<'p>>,
     /// Every other run-bound name the shape declares, beside its level.
     names: BumpVec<'p, (Key, usize)>,
     /// Each path spelling the shape's type expressions read, by site.
     reads: Cell<BumpVec<'p, (Site, PathRead)>>,
     /// At a chain root: the level past every name level of the chain, and the chain's path entries
     /// in the order they were minted, each at that level plus its index.
-    paths: Option<(usize, Cell<BumpVec<'p, PathEntry<'graph>>>)>,
+    paths: Option<(usize, Cell<BumpVec<'p, PathEntry<'p>>>)>,
     /// At a chain root: its path entries' indices, by root, chain and label.
     found: Cell<PathIndex<'p>>,
     /// Each cell of the shape fixed so far that waits on an unknown, beside its frontier.
-    residual: BumpBackedMap<'p, FactKey, Frontier<'graph>>,
+    residual: BumpBackedMap<'p, FactKey, Frontier<'p>>,
 }
 
 impl<'p, 'graph> Level<'p, 'graph> {
@@ -168,7 +122,7 @@ impl<'p, 'graph> Level<'p, 'graph> {
         shape: &'graph BodyShape<'graph>,
         root: bool,
         base: usize,
-        own: Option<Own<'graph>>,
+        own: Option<Own<'p>>,
         scratch: BumpAllocator<'p>,
     ) -> Self {
         Level {
@@ -243,20 +197,24 @@ enum Mode {
     Typing,
 }
 
-/// The walk's state: the chain of enclosing shapes, each numbering its names.
-struct Pass<'p, 'graph, 'cell, X> {
+/// The walk's state: the chain of enclosing shapes, each numbering its names. Every value a rule
+/// computes is laid in `scratch` and every type interned through `types`, the chain the walk is
+/// handed for work; the store's write half keeps what it keeps ([`store`]).
+struct Pass<'p, 'graph, 'cell, 'tier, 'pair, 'reg, X> {
     builtins: &'p Builtins<'cell, X>,
-    types: &'p Types<'graph, 'p>,
-    writer: Writer<'graph, 'graph>,
+    types: &'p Chain<'tier, 'pair, 'reg, 'p>,
     scratch: BumpAllocator<'p>,
     chain: BumpVec<'p, Level<'p, 'graph>>,
-    /// Set in a resumption: what it binds, and each cell it re-runs.
-    resume: Option<store::Resume<'p, 'graph>>,
+    /// Set in a resumption: what it binds, and the resumptions it extends. Read by the store's
+    /// read half alone.
+    over: Option<Resumption<'p, 'p>>,
+    /// Where each fact the walk fixes goes.
+    write: &'p dyn store::Write<'p, 'graph>,
 }
 
 /// The load-time reader: reads the names mentioned in the shape at chain level `from`.
-struct Reader<'e, 'p, 'graph, 'cell, X> {
-    pass: &'e Pass<'p, 'graph, 'cell, X>,
+struct Reader<'e, 'p, 'graph, 'cell, 'tier, 'pair, 'reg, X> {
+    pass: &'e Pass<'p, 'graph, 'cell, 'tier, 'pair, 'reg, X>,
     from: usize,
     mode: Mode,
     rigid: Cell<u32>,
@@ -266,7 +224,7 @@ struct Reader<'e, 'p, 'graph, 'cell, X> {
     frontier: Cell<BumpVec<'p, Unknown>>,
 }
 
-impl<'graph, X: Knotted> Reads<'graph> for Reader<'_, '_, 'graph, '_, X> {
+impl<'graph, X: Knotted> Reads<'graph> for Reader<'_, '_, 'graph, '_, '_, '_, '_, X> {
     fn shape(&self) -> &'graph BodyShape<'graph> {
         self.pass.chain[self.from].shape
     }
@@ -338,7 +296,7 @@ impl<'graph, X: Knotted> Reads<'graph> for Reader<'_, '_, 'graph, '_, X> {
     }
 }
 
-impl<'graph, X> Reader<'_, '_, 'graph, '_, X> {
+impl<'p, 'graph, X> Reader<'_, 'p, 'graph, '_, '_, '_, '_, X> {
     /// The lexical variable `variable`, read at `at`.
     fn rigid(&self, variable: Parametric, at: Coordinate) -> TypeAt {
         let TypeNode::Lexical { level, .. } = self.pass.types.node(variable) else {
@@ -356,7 +314,7 @@ impl<'graph, X> Reader<'_, '_, 'graph, '_, X> {
         site: Site,
         at: Option<Coordinate>,
         root: Segment,
-        entry: PathEntry<'graph>,
+        entry: PathEntry<'p>,
     ) -> TypeAt {
         let level = entry.level;
         edit(
@@ -398,8 +356,27 @@ fn edit<'x, T, R>(
     out
 }
 
-impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
-    fn reader(&self, from: usize, mode: Mode) -> Reader<'_, 'p, 'graph, 'cell, X> {
+impl<'p, 'graph, 'cell, 'tier, 'pair, 'reg, X: Knotted>
+    Pass<'p, 'graph, 'cell, 'tier, 'pair, 'reg, X>
+{
+    /// Type `root` and every shape nested in it the walk does not skip.
+    fn walk(&mut self, root: &'graph BodyShape<'graph>) -> Result<(), ShapeError<'p>> {
+        if self.skips_shape(root) {
+            return Ok(());
+        }
+        let level = Level::new(root, true, 0, None, self.scratch);
+        self.chain.push(level);
+        self.prefill(0);
+        let walked = self.visit(0);
+        self.chain.clear();
+        walked
+    }
+
+    fn reader(
+        &self,
+        from: usize,
+        mode: Mode,
+    ) -> Reader<'_, 'p, 'graph, 'cell, 'tier, 'pair, 'reg, X> {
         Reader {
             pass: self,
             from,
@@ -411,7 +388,10 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
     }
 
     /// The frontier of what `reader` read, laid down: the frontier of the cell it typed.
-    fn frontier_of(&self, reader: &Reader<'_, 'p, 'graph, 'cell, X>) -> Frontier<'graph> {
+    fn frontier_of(
+        &self,
+        reader: &Reader<'_, 'p, 'graph, 'cell, 'tier, 'pair, 'reg, X>,
+    ) -> Frontier<'p> {
         edit(&reader.frontier, self.scratch, |frontier| {
             self.lay(frontier)
         })
@@ -419,27 +399,20 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
 
     /// Record `frontier` as the frontier of the cell at `key` of the shape at `level`, where it
     /// waits on an unknown.
-    fn keep(&mut self, level: usize, key: FactKey, frontier: Frontier<'graph>) {
-        let writer = self.writer;
+    fn keep(&mut self, level: usize, key: FactKey, frontier: Frontier<'p>) {
         let residual = &mut self.chain[level].residual;
-        // A resumption's walk starts from the residual the facts it skips leave.
-        if self.resume.is_some() {
-            residual.remove(&key);
-        }
+        // A resumption's walk starts from the residual the facts it skips leave; the load's from
+        // none.
+        residual.remove(&key);
         if !frontier.is_empty() {
-            (residual.entry(key))
-                .and_modify(|held| *held = held.union(frontier, writer))
-                .or_insert(frontier);
+            residual.insert(key, frontier);
         }
     }
 
     /// Start a resumption's walk of the shape at `level` from the residual it has: each cell it
     /// skips keeps its frontier.
     fn prefill(&mut self, level: usize) {
-        if self.resume.is_none() {
-            return;
-        }
-        let residual = self.residual_of(self.chain[level].shape);
+        let residual = self.starting_residual(self.chain[level].shape);
         self.chain[level].residual.extend(residual.iter().copied());
     }
 
@@ -459,14 +432,14 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
     }
 
     /// Lay `frontier`, the unknowns a cell's rule read, down.
-    fn lay(&self, frontier: &mut BumpVec<'_, Unknown>) -> Frontier<'graph> {
+    fn lay(&self, frontier: &mut BumpVec<'_, Unknown>) -> Frontier<'p> {
         frontier.retain(|unknown| self.bound(*unknown).is_none());
-        Frontier::laid(self.writer, frontier)
+        Frontier::laid(self.scratch, frontier)
     }
 
     /// The frontier recorded for the cell at `key` of the shape at `level`, while its shape is on
     /// the chain.
-    fn staged(&self, level: usize, key: FactKey) -> Frontier<'graph> {
+    fn staged(&self, level: usize, key: FactKey) -> Frontier<'p> {
         (self.chain[level].residual.get(&key)).map_or(Frontier::EMPTY, |frontier| *frontier)
     }
 
@@ -525,21 +498,17 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
         chain: &[ValueSymbol],
         label: TypeSymbol,
         declared: impl FnOnce() -> Option<Parametric>,
-    ) -> (Segment, PathEntry<'graph>) {
+    ) -> (Segment, PathEntry<'p>) {
         let at = (0..=from)
             .rev()
             .find(|level| self.chain[*level].root)
             .expect("every chain has a root");
         let segment = self.chain[at].shape.segment();
-        // A resumption reads the paths the load minted, finding each where the load did.
-        if self.resume.is_some() {
-            let minted = self.loaded_paths(self.chain[at].shape).iter();
-            let entry = (minted
-                .into_iter()
-                .find(|entry| entry.is(root, chain, label))
-                .copied())
-            .expect("a resumption mints no path entry");
-            return (segment, entry);
+        // The paths the load minted, found where the load found them: none while the load walks
+        // the chain, every one a resumption reads.
+        let loaded = self.loaded_paths(self.chain[at].shape);
+        if let Some(entry) = loaded.iter().find(|entry| entry.is(root, chain, label)) {
+            return (segment, *entry);
         }
         let (base, paths) = self.chain[at]
             .paths
@@ -562,13 +531,13 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
         let through = declared().and_then(|declared| {
             declared_through(self.types, self.scratch, declared, chain, label)
         });
-        let chain = collect(self.writer, chain.iter().copied());
+        let chain = collect(self.scratch, chain.iter().copied());
         edit(paths, self.scratch, |paths| {
             let entry = PathEntry {
                 root,
                 chain,
                 label,
-                level: base + paths.len(),
+                level: base + loaded.len() + paths.len(),
                 through,
             };
             let mut index = found.replace(bump_hash_table(self.scratch));
@@ -696,18 +665,18 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
     }
 
     /// `value`, typed through `reader`: closed when it read no lexical variable — then concrete,
-    /// through `close` — else rigid over the variables it read, laid down in program storage.
+    /// through `close` — else rigid over the variables it read.
     fn fixed<C, R>(
         &self,
-        reader: &Reader<'_, 'p, 'graph, 'cell, X>,
+        reader: &Reader<'_, 'p, 'graph, 'cell, 'tier, 'pair, 'reg, X>,
         value: R,
         close: impl FnOnce(R) -> C,
-    ) -> Static<'graph, C, R> {
+    ) -> Static<'p, C, R> {
         if reader.rigid.get() == 0 {
             return Static::Closed(close(value));
         }
         let variables = edit(&reader.variables, self.scratch, |variables| {
-            collect(self.writer, variables.iter().copied())
+            collect(self.scratch, variables.iter().copied())
         });
         Static::Rigid { value, variables }
     }
@@ -715,9 +684,9 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
     /// [`fixed`](Self::fixed) for a type.
     fn fixed_type(
         &self,
-        reader: &Reader<'_, 'p, 'graph, 'cell, X>,
+        reader: &Reader<'_, 'p, 'graph, 'cell, 'tier, 'pair, 'reg, X>,
         value: Parametric,
-    ) -> StaticType<'graph> {
+    ) -> StaticType<'p> {
         self.fixed(reader, value, |value| {
             self.types.concrete(value).expect(FREE)
         })
@@ -734,7 +703,7 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
         heads: &[SurfacedHead<'graph>],
         signatures: &mut Signatures<'p>,
         frontier: &mut BumpVec<'_, Unknown>,
-    ) -> Option<StaticRegistered<'graph>> {
+    ) -> Option<StaticRegistered<'p>> {
         match heads {
             [
                 SurfacedHead::Signature {
@@ -795,7 +764,7 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
         ),
         signatures: &mut Signatures<'p>,
         frontier: &mut BumpVec<'_, Unknown>,
-    ) -> Option<StaticRegistered<'graph>> {
+    ) -> Option<StaticRegistered<'p>> {
         let (types, scratch) = (self.types, self.scratch);
         let ascribing = self.chain[level - hops as usize].shape;
         let Static::Closed(ascribed) = self.type_cell(ascribing, site) else {
@@ -853,12 +822,12 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
     /// its pin among `pins` or, unpinned, at the block's own type parameter of that name.
     fn head_entry(
         &self,
-        reader: &Reader<'_, 'p, 'graph, 'cell, X>,
+        reader: &Reader<'_, 'p, 'graph, 'cell, 'tier, 'pair, 'reg, X>,
         registration: &Registration<'graph>,
         shape: DeclaredType<Parametric>,
         schema: &SigSchema,
         pins: &[(BinderSymbol, KType)],
-    ) -> Option<StaticRegistered<'graph>> {
+    ) -> Option<StaticRegistered<'p>> {
         let (types, scratch) = (self.types, self.scratch);
         let block = self.chain[reader.from].shape;
         let mut bindings = BumpVec::with_capacity_in(schema.parameters.len(), scratch);
@@ -895,7 +864,7 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
     }
 
     /// Type the shape at chain level `level`, then every shape nested in it.
-    fn visit(&mut self, level: usize) -> Result<(), ShapeError<'graph>> {
+    fn visit(&mut self, level: usize) -> Result<(), ShapeError<'p>> {
         let shape = self.chain[level].shape;
         let (types, scratch) = (self.types, self.scratch);
 
@@ -999,7 +968,7 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
             }
         }
         repeated_guards(shape, expressions, |expression| {
-            self.expression_cell(shape, expression)
+            self.type_cell(shape, expression.site)
         })?;
 
         let mut signatures: Signatures<'p> = BumpVec::new_in(scratch);
@@ -1031,7 +1000,6 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
                 let registered = callable
                     .registered
                     .expect("a callable born for a registration carries its bucket entry");
-                let registered = laid_registered(self.writer, registered);
                 let typed = self.fixed(&reader, registered, |registered| {
                     close_registered(types, registered)
                 });
@@ -1078,11 +1046,9 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
                     };
                     let typed = match typed {
                         Ok(None) => self.callable_cell(nested),
-                        Ok(Some(callable)) => {
-                            self.fixed(&reader, laid_callable(self.writer, callable), |callable| {
-                                close_callable(types, callable)
-                            })
-                        }
+                        Ok(Some(callable)) => self.fixed(&reader, callable, |callable| {
+                            close_callable(types, callable)
+                        }),
                         Err(Elaboration::Unknown { .. }) => Static::Unknown,
                         Err(error) => {
                             return Err(ShapeError::Type {
@@ -1125,16 +1091,14 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
             let visited = self.visit(level + 1);
             self.chain.pop();
             match visited {
-                Err(error) if nested.kind() == ShapeKind::Code => {
-                    self.refuse_code(nested, resident(self.writer, error));
-                }
+                Err(error) if nested.kind() == ShapeKind::Code => self.refuse_code(nested, error),
                 visited => visited?,
             }
         }
         let mut residual =
             BumpVec::with_capacity_in(self.chain[level].residual.len(), self.scratch);
         residual.extend(self.chain[level].residual.drain());
-        self.fix_channel_residual(shape, Keyed::sorted(self.writer, &mut residual));
+        self.fix_channel_residual(shape, Keyed::sorted(self.scratch, &mut residual));
         let at = &self.chain[level];
         let mut reads = at.reads.replace(BumpVec::new_in(self.scratch));
         if !reads.is_empty() {
@@ -1143,13 +1107,13 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
             reads.dedup_by_key(|(site, _)| *site);
             self.fix_path_reads(
                 shape,
-                Keyed::from_sorted(collect(self.writer, reads.iter().copied())),
+                Keyed::from_sorted(collect(self.scratch, reads.iter().copied())),
             );
         }
         if let Some((_, paths)) = &at.paths {
             let paths = paths.replace(BumpVec::new_in(self.scratch));
             if !paths.is_empty() {
-                self.fix_channel_paths(shape, collect(self.writer, paths.iter().copied()));
+                self.fix_channel_paths(shape, collect(self.scratch, paths.iter().copied()));
             }
         }
         Ok(())
@@ -1218,7 +1182,7 @@ fn close_registered<'graph>(
     }
 }
 
-impl<'p, 'graph, X> Pass<'p, 'graph, '_, X> {
+impl<'p, 'graph, X> Pass<'p, 'graph, '_, '_, '_, '_, X> {
     /// Number the run-bound names the shape at chain level `level` declares, after its own group:
     /// each type name in slot order but a closed type binder's, then, at a chain root, each
     /// capture naming a type. The shape records each one's level beside where its activation
@@ -1266,7 +1230,7 @@ impl<'p, 'graph, X> Pass<'p, 'graph, '_, X> {
             Key::Capture(_, capture) => (*numbered, Target::Capture(*capture)),
         }));
         if !homes.is_empty() {
-            self.fix_declared_variables(shape, collect(self.writer, homes.iter().copied()));
+            self.fix_declared_variables(shape, collect(self.scratch, homes.iter().copied()));
         }
         let at = &mut self.chain[level];
         at.count = next - at.base;
@@ -1275,15 +1239,14 @@ impl<'p, 'graph, X> Pass<'p, 'graph, '_, X> {
 
     /// The quantified callable `body`'s own group, read off its load-time type `ktype` and its
     /// group map `map`: the group's variable `i` is the lexical variable at level `base + i`, named
-    /// as the declaration wrote it — or, where a resumption binds it, the type it binds — laid down
-    /// in program storage.
+    /// as the declaration wrote it — or, where a resumption binds it, the type it binds.
     fn own(
         &self,
         body: &BodyShape<'graph>,
-        map: FunctionGroupMap<'graph>,
+        map: FunctionGroupMap<'p>,
         ktype: DeclaredType<Parametric>,
         base: usize,
-    ) -> Own<'graph> {
+    ) -> Own<'p> {
         let bounds = match ktype {
             DeclaredType::Scheme(scheme) => scheme.group(self.types).bounds,
             // An empty group binds nothing.
@@ -1307,18 +1270,18 @@ impl<'p, 'graph, X> Pass<'p, 'graph, '_, X> {
         }));
         Own {
             map,
-            levels: collect(self.writer, levels.iter().copied()),
+            levels: collect(self.scratch, levels.iter().copied()),
         }
     }
 }
 
 /// Refuse the first `MATCH … WITH` guard among `shape`'s `expressions`, in program order, that
 /// `typed` gives the handle an earlier guard of its arm set has.
-fn repeated_guards<'graph>(
+fn repeated_guards<'graph, 'p>(
     shape: &'graph BodyShape<'graph>,
     expressions: &'graph [TypeExpression<'graph>],
-    typed: impl Fn(&TypeExpression<'graph>) -> StaticType<'graph>,
-) -> Result<(), ShapeError<'graph>> {
+    typed: impl Fn(&TypeExpression<'graph>) -> StaticType<'p>,
+) -> Result<(), ShapeError<'p>> {
     let handle = |typed: StaticType<'_>| match typed {
         Static::Closed(handle) => Some(Parametric::from(handle)),
         Static::Rigid { value: handle, .. } => Some(handle),
@@ -1368,35 +1331,4 @@ pub fn writes_for_all(form: &KExpression<'_>) -> bool {
     form.cache()
         .builtin_shape()
         .is_some_and(|shape| shape.roles().any(|role| role == Role::Quantifiers))
-}
-
-/// `callable`'s runs laid down in program storage.
-fn laid_callable<'graph>(
-    writer: Writer<'graph, 'graph>,
-    callable: Callable<'_>,
-) -> Callable<'graph> {
-    Callable {
-        ktype: callable.ktype,
-        quantifier_map: FunctionGroupMap(collect(writer, callable.quantifier_map.iter())),
-        registered: callable
-            .registered
-            .map(|registered| laid_registered(writer, registered)),
-    }
-}
-
-/// `registered`'s runs laid down in program storage.
-fn laid_registered<'graph>(
-    writer: Writer<'graph, 'graph>,
-    registered: Registered<'_>,
-) -> Registered<'graph> {
-    Registered {
-        shape: registered.shape,
-        quantifier_map: ShapeGroupMap(collect(writer, registered.quantifier_map.iter())),
-        parameters: match registered.parameters {
-            ParameterBinding::Named(names) => {
-                ParameterBinding::Named(collect(writer, names.iter().copied()))
-            }
-            ParameterBinding::Operands => ParameterBinding::Operands,
-        },
-    }
 }

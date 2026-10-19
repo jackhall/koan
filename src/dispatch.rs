@@ -89,8 +89,9 @@ impl Language for Koan {
         writer: Writer<'graph, 'graph>,
         scratch: BumpAllocator<'_>,
         over: Resumption<'_, 'graph>,
-        channel: &'graph Settled<'graph>,
+        channel: Settled<'graph>,
     ) -> Result<&'graph Settled<'graph>, ShapeError<'graph>> {
+        let channel = crate::memory::resident(writer, channel);
         statics::resume_statics(shape, builtins, types, writer, scratch, over, channel)
     }
 }
