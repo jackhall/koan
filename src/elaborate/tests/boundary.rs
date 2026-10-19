@@ -29,6 +29,7 @@ const ACCESSORS: &[&str] = &[
     "registered_type",
     "typed_expression",
     "type_expressions",
+    "path_spellings",
     "typed",
     "in_body",
     "refusal",

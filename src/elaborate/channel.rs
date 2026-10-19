@@ -24,9 +24,13 @@
 //! A **path** — a type member read through a module-valued expression, `m.Carrier` — is a lexical
 //! variable of its own, its *path variable*, at a level past every name level of its chain: one
 //! [`PathEntry`] per root, member chain and label, laid on the chain's root, and each spelling a
-//! shape reads recorded beside where it reads the root. The static pass resolves each one. An entry whose root's declared type leaves
-//! the label an unpinned head parameter keeps that application, which the run fits the module to
-//! ([`paths`](super::paths)).
+//! shape reads recorded beside where it reads the root. The builder records each path a type
+//! spells by its tokens, and the pass reads all of a shape's once its type binders are typed and
+//! its names numbered, before its other types ([`Pass::read_spelled`]): so each has its entry
+//! however far the elaborator reads the type holding it, and a type binder, reading a path as
+//! unknown, touches none. The static pass resolves each one. An entry whose root's declared type
+//! leaves the label an unpinned head parameter keeps that application, which the run fits the
+//! module to ([`paths`](super::paths)).
 //!
 //! A `USING … SCOPE` block's surfaced head is typed from its signature: the head's shape as the
 //! `SIG` declares it, each head parameter read at the ascription's pin or, unpinned, at the block's
@@ -49,9 +53,9 @@
 use std::cell::Cell;
 
 use crate::memory::{BumpAllocator, BumpBackedMap, BumpVec, bump_hash_table, bump_table, collect};
-use crate::parse::KExpression;
 use crate::parse::Role;
 use crate::parse::quoted_body;
+use crate::parse::{ExpressionPart, KExpression};
 use crate::scope::{
     Address, Binder, BodyShape, Builtins, Callable, CaptureSlot, CaptureSource, Coordinate,
     Elaboration, FactKey, Frontier, FunctionGroupMap, Keyed, ParameterBinding, PathEntry,
@@ -252,9 +256,9 @@ impl<'graph, X: Knotted> Reads<'graph> for Reader<'_, '_, 'graph, '_, '_, '_, '_
         self.rigid.get()
     }
 
-    /// A path through the binder `at` lands at: its path variable, minted for the chain where it
-    /// is new. `Unknown` where `at` lands past a chain root, and while typing a type binder, which
-    /// is closed or unknown.
+    /// A path through the binder `at` lands at: its path variable, of the entry the shape's
+    /// spellings found ([`Pass::read_spelled`]). `Unknown` where `at` lands past a chain root, and
+    /// while typing a type binder, which is closed or unknown and touches no entry.
     fn member_type(
         &self,
         at: Coordinate,
@@ -263,7 +267,14 @@ impl<'graph, X: Knotted> Reads<'graph> for Reader<'_, '_, 'graph, '_, '_, '_, '_
         label: TypeSymbol,
         _types: &Chain<'_, '_, '_, '_>,
     ) -> Option<(TypeAt, KType)> {
+        debug_assert!(
+            self.pass.spells(self.from, site),
+            "the builder records every path a type spells"
+        );
         let unknown = Some((TypeAt::Unknown, KType::EMPTY_SIGNATURE));
+        if self.mode == Mode::Declaring {
+            return unknown;
+        }
         let Some((level, slot)) = self.pass.landing(self.from, at) else {
             return unknown;
         };
@@ -282,6 +293,8 @@ impl<'graph, X: Knotted> Reads<'graph> for Reader<'_, '_, 'graph, '_, '_, '_, '_
         ))
     }
 
+    /// A path through the expression at `root`, written in place: its path variable, of the entry
+    /// the shape's spellings found. `Unknown` while typing a type binder, which touches no entry.
     fn inline_member(
         &self,
         site: Site,
@@ -289,6 +302,13 @@ impl<'graph, X: Knotted> Reads<'graph> for Reader<'_, '_, 'graph, '_, '_, '_, '_
         chain: &[ValueSymbol],
         label: TypeSymbol,
     ) -> TypeAt {
+        debug_assert!(
+            self.pass.spells(self.from, site),
+            "the builder records every path a type spells"
+        );
+        if self.mode == Mode::Declaring {
+            return TypeAt::Unknown;
+        }
         let (root, entry) = self
             .pass
             .path(self.from, Root::Inline(root), chain, label, || None);
@@ -307,8 +327,7 @@ impl<'p, 'graph, X> Reader<'_, 'p, 'graph, '_, '_, '_, '_, X> {
     }
 
     /// The path variable of `entry`, of the chain the body at `root` roots, spelled at `site` with
-    /// its root read at `at`: recorded on the shape read, and rigid where the reader types anything
-    /// but a type binder.
+    /// its root read at `at`: recorded on the shape read, and rigid.
     fn path(
         &self,
         site: Site,
@@ -322,9 +341,6 @@ impl<'p, 'graph, X> Reader<'_, 'p, 'graph, '_, '_, '_, '_, X> {
             self.pass.scratch,
             |reads| reads.push((site, PathRead { at, root, level })),
         );
-        if self.mode == Mode::Declaring {
-            return TypeAt::Unknown;
-        }
         self.read(level, Source::Path { at, root, level });
         TypeAt::Rigid(
             self.pass
@@ -863,6 +879,35 @@ impl<'p, 'graph, 'cell, 'tier, 'pair, 'reg, X: Knotted>
         }))
     }
 
+    /// Read every path the shape at chain level `level`'s types spell, as the builder met them:
+    /// each finds its entry, minted where it is new, and records its read, however far the
+    /// elaborator later reads the type holding it. It runs once the shape's type binders are typed
+    /// and its names numbered, since minting a path types an annotated root's declaration, which
+    /// may read them, and before the shape's other types, so each reads an entry minted already.
+    fn read_spelled(&self, level: usize) {
+        let reader = self.reader(level, Mode::Typing);
+        let elaborator = Elaborator {
+            reader: &reader,
+            types: self.types,
+            scratch: self.scratch,
+            fellows: &[],
+            locals: &[],
+            binder: Cell::new(false),
+        };
+        for &part in self.path_spellings(self.chain[level].shape) {
+            let (ExpressionPart::Expression(node) | ExpressionPart::SigiledTypeExpr(node)) = part
+            else {
+                unreachable!("the builder records a path's node");
+            };
+            elaborator.module_member(Site::of(part), node.reference());
+        }
+    }
+
+    /// Whether the shape at chain level `level` records a path spelled at `site`.
+    fn spells(&self, level: usize, site: Site) -> bool {
+        (self.path_spellings(self.chain[level].shape).iter()).any(|part| Site::of(*part) == site)
+    }
+
     /// Type the shape at chain level `level`, then every shape nested in it.
     fn visit(&mut self, level: usize) -> Result<(), ShapeError<'p>> {
         let shape = self.chain[level].shape;
@@ -915,13 +960,14 @@ impl<'p, 'graph, 'cell, 'tier, 'pair, 'reg, X: Knotted>
         }
 
         self.number(level);
+        self.read_spelled(level);
 
         let top = Groups {
             names: &[],
             bounds: &[],
             outer: None,
         };
-        // In program order, so each path variable this mints takes the same level at every load.
+        // In program order.
         let expressions = self.type_expressions(shape);
         let mut written = BumpVec::with_capacity_in(expressions.len(), scratch);
         written.extend(expressions.iter());
@@ -1102,7 +1148,8 @@ impl<'p, 'graph, 'cell, 'tier, 'pair, 'reg, X: Knotted>
         let at = &self.chain[level];
         let mut reads = at.reads.replace(BumpVec::new_in(self.scratch));
         if !reads.is_empty() {
-            // A spelling typed twice is recorded twice; its first record stands.
+            // The load reads each spelling first, and a later typing of it records it again; its
+            // first record stands.
             reads.sort_by_key(|(site, _)| *site);
             reads.dedup_by_key(|(site, _)| *site);
             self.fix_path_reads(

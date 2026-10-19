@@ -15,6 +15,7 @@
 use std::cell::Cell;
 
 use crate::memory::{BumpAllocator, BumpBackedMap, BumpBackedSet, BumpVec, bump_set, bump_table};
+use crate::parse::ExpressionPart;
 use crate::scope::{
     BodyShape, ChannelSettled, FactKey, Frontier, Keyed, PathEntry, PathRead, Relay, Residual,
     Segment, Settled, ShapeError, Site, Slot, StaticCallable, StaticRegistered, StaticType, Target,
@@ -465,6 +466,14 @@ impl<'p, 'graph, X> Pass<'p, 'graph, '_, '_, '_, '_, X> {
         shape: &'graph BodyShape<'graph>,
     ) -> &'graph [TypeExpression<'graph>] {
         shape.type_expressions()
+    }
+
+    /// Every part holding a path `shape`'s types spell, as the builder met them.
+    pub(super) fn path_spellings(
+        &self,
+        shape: &'graph BodyShape<'graph>,
+    ) -> &'graph [&'graph ExpressionPart<'graph>] {
+        shape.path_spellings()
     }
 
     /// Every cell of `shape` the walk fixed that waits on an unknown, once the walk has visited

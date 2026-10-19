@@ -675,6 +675,30 @@ fn a_path_through_a_parameter_reads_through_its_declared_application() {
     });
 }
 
+/// A type binder spelling a path through an annotated binder of its own body, whose annotation
+/// reads another of the body's type binders: the path is read once the binders are typed and the
+/// body's names numbered, through the annotation's application.
+#[test]
+fn a_path_through_an_annotated_binder_reads_after_the_binders() {
+    let source = "SIG Counter FOR ALL #[Carrier] = \
+                  #[(VAL zero :Carrier) (VAL succ :(FN :{x :Carrier} -> Carrier))]\n\
+                  EXPR FOR ALL #[Elt] #(WRAP x :Elt AND mk :(FN :{} -> Counter)) -> Any = #(\n  \
+                  LET Items = :(LIST OF Elt)\n  \
+                  LET n :(Counter WITH {Carrier = Items}) = (mk {})\n  \
+                  LET Holder = :{b :(n.Carrier)}\n  x\n)";
+    typed(source, |program| {
+        let body = nested(program.activation.shape(), ShapeKind::Callable);
+        let [(_, read)] = body.path_reads() else {
+            panic!("one path read, not {}", body.path_reads().len())
+        };
+        let entry = (body.shape_at(read.root).path_entry(read.level)).expect("a minted entry");
+        assert!(
+            entry.through.is_some(),
+            "the annotation's application names `Carrier` a head parameter"
+        );
+    });
+}
+
 #[test]
 fn a_type_binder_over_a_path_stays_unknown() {
     let source = "MODULE ints = (LET Carrier = Number)\nLET Elt = :(ints.Carrier)";

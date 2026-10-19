@@ -209,6 +209,20 @@ fn a_type_through_an_inline_call_over_a_leaf_refuses_the_load() {
     );
 }
 
+/// An inline path the elaborator never reaches, after a meet it leaves unknown over a `FOR ALL`
+/// name, refuses the load as one it reaches does.
+#[test]
+fn a_type_through_an_inline_call_after_an_unknown_refuses_the_load() {
+    assert_eq!(
+        run(&format!(
+            "{ORDERED}EXPR FOR ALL #[Elt] #(USE p :Ordered AND e :Elt) -> Any = \
+             #(LET t = :{{a :(Elt & Number) b :((PICK p).Set)}})"
+        )),
+        "load: <test>:20:93: this type reads a member of a module built by a call written in \
+         place, and a call in a type is never made; bind the call with `LET` to name its type"
+    );
+}
+
 /// A quote's code that leaves a path's root name open reads the path as a path, left for the code's
 /// `EVAL` to read through what it is run with.
 #[test]

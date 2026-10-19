@@ -191,6 +191,56 @@ fn binding_a_module_binder_beside_a_name_keeps_its_paths() {
     assert_eq!(resumed, Ok(()));
 }
 
+/// A type binder that reads a `FOR ALL` name before a path declares unknown at the name, and the
+/// load still mints the path's entry: a resumption binding the name finds it, and the binder stays
+/// unknown over the path.
+#[test]
+fn binding_a_name_a_type_binder_reads_before_a_path_resumes() {
+    let source = format!(
+        "{COUNTER}EXPR FOR ALL #[Elt] #(WRAP x :Elt AND m :Counter) -> Any = #(\n  \
+         LET Both = :{{a :Elt b :(m.Carrier)}}\n  x\n)"
+    );
+    let (reads, closed) = resumed(&source, |loaded| {
+        let f = quantified(loaded.shape());
+        let at = slot(loaded.symbols(), f, "Both");
+        let binding = loaded.binding(&[(unknown(loaded.symbols(), f, "Elt"), KType::NUMBER)]);
+        let settled = loaded
+            .resume(&[], binding, false)
+            .expect("the resumption refuses nothing");
+        let channel = settled
+            .channel
+            .get(f.segment())
+            .map(|(_, held)| held.declared);
+        let after = channel
+            .and_then(|declared| declared.get(at))
+            .map(|(_, typed)| *typed);
+        (
+            f.path_reads().len(),
+            matches!(after, Some(Static::Closed(_))),
+        )
+    });
+    assert_eq!(reads, 1, "the load reads the path the binder spells");
+    assert!(!closed, "the binder stays unknown over the path");
+}
+
+/// A type expression the load leaves unknown at a meet over a `FOR ALL` name, before a path: a
+/// resumption binding the name finds the path's entry.
+#[test]
+fn binding_a_name_a_type_reads_before_a_path_finds_its_entry() {
+    let source = format!(
+        "{COUNTER}EXPR FOR ALL #[Elt] #(WRAP x :Elt AND m :Counter) -> Any = #(\n  \
+         LET s :{{a :(Elt & Number) b :(m.Carrier)}} = {{a = x, b = m.zero}}\n  x\n)"
+    );
+    let resumed = resumed(&source, |loaded| {
+        let f = quantified(loaded.shape());
+        let binding = loaded.binding(&[(unknown(loaded.symbols(), f, "Elt"), KType::NUMBER)]);
+        (loaded.resume(&[], binding, false))
+            .map(|_| ())
+            .map_err(|error| error.display(loaded.symbols(), loaded.types()).to_string())
+    });
+    assert_eq!(resumed, Ok(()));
+}
+
 #[test]
 fn binding_a_name_no_fact_reads_re_runs_only_its_own() {
     let source = format!(
