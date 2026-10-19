@@ -905,7 +905,7 @@ impl<'p, 'graph, 'cell, 'tier, 'pair, 'reg, X: Knotted>
 
     /// Whether the shape at chain level `level` records a path spelled at `site`.
     fn spells(&self, level: usize, site: Site) -> bool {
-        (self.path_spellings(self.chain[level].shape).iter()).any(|part| Site::of(*part) == site)
+        (self.path_spellings(self.chain[level].shape).iter()).any(|part| Site::of(part) == site)
     }
 
     /// Type the shape at chain level `level`, then every shape nested in it.
