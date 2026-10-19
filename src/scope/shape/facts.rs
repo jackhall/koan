@@ -51,7 +51,7 @@ impl<'a> Frontier<'a> {
         Frontier(unknowns)
     }
 
-    /// `staged`, sorted, deduplicated and laid down through `writer`.
+    /// `staged`, sorted, deduplicated and laid down through `lay`.
     pub fn laid(lay: impl Lays<'a>, staged: &mut BumpVec<'_, Unknown>) -> Self {
         staged.sort_unstable();
         staged.dedup();
@@ -83,7 +83,7 @@ impl<'a> Frontier<'a> {
         false
     }
 
-    /// This frontier with `other`'s unknowns, laid down through `writer` where it grows.
+    /// This frontier with `other`'s unknowns, laid down through `lay` where it grows.
     pub fn union<'w>(self, other: Frontier<'_>, lay: impl Lays<'w>) -> Frontier<'w>
     where
         'a: 'w,
@@ -170,7 +170,7 @@ impl<'a> Binding<'a> {
     /// The binding that binds nothing.
     pub const EMPTY: Binding<'static> = Binding(&[]);
 
-    /// `staged`, sorted and laid down through `writer`. Each unknown is bound once.
+    /// `staged`, sorted and laid down through `lay`. Each unknown is bound once.
     pub fn laid(lay: impl Lays<'a>, staged: &mut BumpVec<'_, (Unknown, KType)>) -> Self {
         staged.sort_unstable_by_key(|(unknown, _)| *unknown);
         debug_assert!(

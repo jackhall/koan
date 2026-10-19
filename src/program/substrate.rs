@@ -313,18 +313,10 @@ impl<'graph, 'l, 'door, L: Language> Loaded<'graph, 'l, 'door, L> {
             everything,
         };
         let relay = Relay::new(self.writer, self.types, self.types, self.scratch);
-        let channel = resume_channel(
-            self.shape,
-            over,
-            self.builtins,
-            self.types,
-            &relay,
-            self.scratch,
-        )?;
+        let channel = resume_channel(self.shape, over, self.builtins, &relay, self.scratch)?;
         L::resume(
             self.shape,
             self.builtins,
-            self.types,
             &relay,
             self.scratch,
             over,

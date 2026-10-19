@@ -145,14 +145,13 @@ impl<'p, 'graph: 'p, 'tier: 'p> Pass<'p, '_, 'graph, 'tier, '_, '_> {
         if self.unfilled {
             return;
         }
-        let mut resolutions = BumpVec::new_in(self.scratch);
-        for (index, (entry, resolution)) in table.entries.iter().enumerate() {
-            // Every resolution the walk computed: each at the load, the ones it re-ran in a
-            // resumption, which starts from the rest.
-            if let (Some(resolution), true) = (resolution, table.resolved.contains(&index)) {
-                resolutions.push((entry.level, *resolution));
-            }
-        }
+        // Every resolution the walk computed: each at the load, the ones it re-ran in a
+        // resumption, which starts from the rest.
+        let mut resolutions = BumpVec::with_capacity_in(table.resolved.len(), self.scratch);
+        resolutions.extend(table.resolved.iter().filter_map(|index| {
+            let (entry, resolution) = table.entries[*index];
+            Some((entry.level, resolution?))
+        }));
         self.fix_resolutions(root, &mut resolutions);
         if table.entries.len() > table.channel {
             self.fix_paths(

@@ -539,7 +539,21 @@ either mode, so a type binder over it declares closed, and a callable body's
 own bound `FOR ALL` name is that type at its group level. The walk skips a
 shape whose reach the binding misses and a cell whose frontier it misses,
 numbers each chain as the load did, reads the path entries the load laid and
-mints none, and writes each cell it re-runs beside the load's, never into it.
+mints none, and keeps each cell it re-runs beside the load's, never in it. It
+runs at any step's brand: the walk lays in the scratch it is handed and interns
+through the chain its relay copies from — a step's scratch chain — and returns
+its `Settled` relayed through the writer and chain of the region it lands in.
+
+**One rule set.** The load's walk and a resumption's run the same rules
+([`channel`](channel.rs)); the two [entries](channel/entry.rs) differ only in
+the fact store's write half. The store's read half reads each cell as the walk
+has it — written by this walk, else as the resumptions it extends settled it,
+else the load's. Its write half is a `Write`: the load's relays each fact into
+program storage and writes the shape's cell; a resumption's keeps each in its
+own tables in scratch and relays what it keeps into its `Settled` once the walk
+ends. A rule holds no writer, lays every value in the walk's scratch, and never
+asks which half it runs over, which [`tests::boundary`](tests/boundary.rs)
+holds it to.
 
 ## Refusals
 
@@ -649,7 +663,7 @@ its callable's slot, a nested cell or callable over an outer name on the outer
 slot, sibling bodies' alike-numbered names apart, a type binder over a
 run-bound name and its reader, and a closed cell waiting on nothing.
 [`tests::boundary`](tests/boundary.rs) also holds the pass to reaching every
-cell through its store.
+cell through its store, and its rules to naming no writer and no resumption.
 
 ## Open work
 

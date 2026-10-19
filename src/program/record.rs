@@ -14,10 +14,10 @@ use crate::knot::{KActivationView, KBuiltins, KValue};
 use crate::memory::{Bump, BumpAllocator, Writer};
 use crate::parse::{ExpressionPart, KExpression, ParseError};
 use crate::scheduler::{NativeStep, Work};
-use crate::scope::{BodyShape, Relay, Resumption, Settled, ShapeError, Slot};
+use crate::scope::{BodyShape, ChainRelay, Resumption, Settled, ShapeError, Slot};
 use crate::symbols::{BinderSymbol, SymbolInterner};
 use crate::type_lattice::{
-    DeclaredType, Habitat, KType, Root, TypeNode, display_name, satisfied_by, substitute_quantified,
+    DeclaredType, KType, Root, TypeNode, display_name, satisfied_by, substitute_quantified,
 };
 use crate::values::{Chain, Record, Tagged, Value, satisfies};
 
@@ -58,18 +58,18 @@ pub trait Language {
 
     /// Resume what [`check`](Self::check) fixed under `over`'s binding, beside `channel`, what the
     /// type channel's resumption under it settled, at any step's brand: the walk lays in `scratch`
-    /// and interns through `work`, and what it settles is relayed out through `output` and laid
-    /// there with `channel` as one `Settled`. The language's resumption settles nothing by default.
-    fn resume<'graph, 'out, 'w, 'from, H: Habitat<'from>>(
+    /// and interns through `output`'s source chain, and what it settles is relayed out through
+    /// `output` and laid there with `channel` as one `Settled`. The language's resumption settles
+    /// nothing by default.
+    fn resume<'graph, 'out, 'w>(
         shape: &'graph BodyShape<'graph>,
         builtins: &'graph KBuiltins<'graph, 'graph>,
-        work: &Chain<'_, '_, '_, '_>,
-        output: &Relay<'out, 'w, 'from, H>,
+        output: &ChainRelay<'out, 'w, '_, '_, '_, '_>,
         scratch: BumpAllocator<'_>,
         over: Resumption<'_, 'out>,
         channel: Settled<'out>,
     ) -> Result<&'out Settled<'out>, ShapeError<'out>> {
-        let _ = (shape, builtins, work, scratch, over);
+        let _ = (shape, builtins, scratch, over);
         Ok(crate::memory::resident(output.writer(), channel))
     }
 }

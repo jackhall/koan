@@ -20,7 +20,7 @@ brands each tier's door and owns the scratch habitat's reset.
 | tier | lives from | to | holds |
 |---|---|---|---|
 | root | the load | the program's end | every type the load builds |
-| specialization branch | the first miss on its binding | its own or an ancestor's eviction, then its last borrower's disposal | the binding's nodes, and what the invariant sites of a caching frame keyed on that binding mint and copy |
+| specialization branch | the first miss on its binding | its own or an ancestor's eviction, then its last borrower's disposal | the binding's nodes, and the types its resumption's settled facts name, among them what the invariant sites of a caching frame keyed on that binding mint and copy |
 | region branch | the region's birth | its death | a porous body's run-built types, and what a caching body's exits carry |
 | scratch branch | the habitat's reset | its next reset | a step's scratch types, and every type a caching body builds |
 

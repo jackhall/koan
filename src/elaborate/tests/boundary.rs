@@ -66,9 +66,9 @@ fn the_type_channel_s_rules_never_ask_which_half_they_run_over() {
     let source = manifest.join("src/elaborate/channel.rs");
     let code = strip_comments_and_strings(&std::fs::read_to_string(&source).unwrap());
     // The scan bites on each spelling of a mode branch, and passes a call named for a resumption.
-    let branches =
-        "if self.over.is_some() {}\nlet writer = self.writer;\nself.resume\nresume_channel()";
-    assert_eq!(mode_branches(branches).len(), 4);
+    let branches = "if self.over.is_some() {}\nlet writer = self.writer;\nself.resume\n\
+                    self.pass.over\nself.channel\nresume_channel()\nself.channel_entries()";
+    assert_eq!(mode_branches(branches).len(), 6);
     let offenders = mode_branches(&code);
     assert!(
         offenders.is_empty(),

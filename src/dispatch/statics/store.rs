@@ -136,28 +136,61 @@ impl<'p, 'graph, 'w, 'from, H: Habitat<'from>> Write<'p, 'graph>
         whole: Whole,
         facts: ShapeFacts<'p>,
     ) {
+        let held = shape.shape_facts();
         debug_assert!(
-            !whole.is_set(&shape.shape_facts()),
+            !whole.is_set(&held),
             "a shape's fact as a whole is fixed once"
         );
-        let relay = self.relay;
-        shape.fix_shape_facts(|held| match whole {
+        let ShapeFacts {
+            summary,
+            recursive,
+            signature,
+            ran,
+            summary_frontier,
+            signature_frontier,
+            ran_frontier,
+            born_frontier,
+        } = facts;
+        // Only `whole`'s fields are new: the rest are the cell's own, kept as they lie.
+        let alike = |of: Whole| match of {
             Whole::Summary => {
-                held.summary = facts
-                    .summary
-                    .map(|summary| summary.map(|tree| relay.tree(tree)));
-                held.summary_frontier = relay.frontier(facts.summary_frontier);
-                held.recursive = facts.recursive;
+                recursive == held.recursive
+                    && summary_frontier == held.summary_frontier
+                    && match (summary, held.summary) {
+                        (Some(Some(mine)), Some(Some(cell))) => mine.same_as(&cell),
+                        (mine, cell) => {
+                            mine.map(|tree| tree.is_none()) == cell.map(|tree| tree.is_none())
+                        }
+                    }
             }
             Whole::Signature => {
-                held.signature = facts.signature.map(|signature| relay.handle(signature));
-                held.signature_frontier = relay.frontier(facts.signature_frontier);
+                signature == held.signature && signature_frontier == held.signature_frontier
+            }
+            Whole::Ran => ran == held.ran && ran_frontier == held.ran_frontier,
+            Whole::Born => born_frontier == held.born_frontier,
+        };
+        debug_assert!(
+            [Whole::Summary, Whole::Signature, Whole::Ran, Whole::Born]
+                .into_iter()
+                .all(|of| of == whole || alike(of)),
+            "a shape's fact as a whole edits its own fields alone"
+        );
+        let relay = self.relay;
+        shape.fix_shape_facts(|cell| match whole {
+            Whole::Summary => {
+                cell.summary = summary.map(|summary| summary.map(|tree| relay.tree(tree)));
+                cell.summary_frontier = relay.frontier(summary_frontier);
+                cell.recursive = recursive;
+            }
+            Whole::Signature => {
+                cell.signature = signature.map(|signature| relay.handle(signature));
+                cell.signature_frontier = relay.frontier(signature_frontier);
             }
             Whole::Ran => {
-                held.ran = facts.ran.map(|ran| relay.interval(ran));
-                held.ran_frontier = relay.frontier(facts.ran_frontier);
+                cell.ran = ran.map(|ran| relay.interval(ran));
+                cell.ran_frontier = relay.frontier(ran_frontier);
             }
-            Whole::Born => held.born_frontier = relay.frontier(facts.born_frontier),
+            Whole::Born => cell.born_frontier = relay.frontier(born_frontier),
         });
     }
 

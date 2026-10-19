@@ -732,10 +732,24 @@ and a fact recorded beside it waits on what the rule had read by then.
 type channel's resumption: a bound type name seeds as a closed type binder
 does, and a bound module binder is exactly the type it binds. The walk skips a
 shape whose reach the binding misses, starts each level it enters from the
-facts it skips, re-runs each woken fact once, writes what it re-runs beside the
+facts it skips, re-runs each woken fact once, keeps what it re-runs beside the
 load's cells, keeps none of the load's bookkeeping for the run — caching, type
 captures, tail edges, path entries — and refuses where a load with the binding
-declared would.
+declared would. Like the type channel's, it runs at any step's brand, laying in
+its scratch and interning through the chain its relay copies from — a step's
+scratch chain — and lays one `Settled`, the type channel's parts beside its own,
+through the region's writer.
+
+The load's walk and a resumption's run one set of rules; the two
+[entries](statics/entry.rs) differ only in the fact store's write half, a
+`Write`. The load's relays each fact out of the walk's scratch into program
+storage and writes the shape's cell; a resumption's keeps each in its own
+tables and relays what it keeps into the `Settled` once the walk ends
+([covariant facts](../scope/README.md#load-time-types)). A rule holds no writer
+and never asks which half it runs over: it asks the read half what a fact is,
+and the write half by name whether the walk keeps the load's bookkeeping
+(`bookkeeps`). A resumption mints no path entry and lays no type capture: it
+reads the load's, and the write half asserts it was handed none of its own.
 
 What the pass fixes rests in each shape's write-once
 [value-channel cell](../scope/README.md#load-time-types), which the call reads.
@@ -1037,8 +1051,9 @@ koan has no warning channel ([unplanned work](../../roadmap/rewrite/README.md#un
 Outside `#[cfg(test)]` this module names `crate::elaborate`, `crate::knot`,
 `crate::memory`, `crate::parse`, `crate::program`, `crate::scheduler`,
 `crate::scope`, `crate::symbols`, `crate::type_lattice` and `crate::values`;
-[`tests::boundary`](tests/boundary.rs) reads the source to hold it there, and
-holds the static pass to reaching every load-time fact through its store.
+[`tests::boundary`](tests/boundary.rs) reads the source to hold it there,
+holds the static pass to reaching every load-time fact through its store, and
+holds its rules to naming no writer and no resumption.
 
 ## Testing
 

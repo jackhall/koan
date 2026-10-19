@@ -52,7 +52,7 @@ pub use closure::ClosureBindings;
 pub use groups::{BuiltinGroup, GroupFrame, is_equal, is_equality, is_unequal};
 pub use header::{HalfHeader, RegionHeader};
 pub use keyed::{Keyed, KeyedEntry};
-pub use relay::Relay;
+pub use relay::{ChainRelay, Relay};
 pub use settled::{ChannelSettled, Resumption, Settled, StaticsSettled};
 pub use shape::facts::{
     Address, Binding, FactKey, Frontier, Residual, Seam, SeamAt, Unknown, frontier_at, merge_into,

@@ -5,8 +5,7 @@
 
 use crate::knot::KBuiltins;
 use crate::memory::{BumpAllocator, BumpVec, Writer, bump_set, bump_table};
-use crate::scope::{BodyShape, Relay, Resumption, Settled, ShapeError};
-use crate::type_lattice::Habitat;
+use crate::scope::{BodyShape, ChainRelay, Relay, Resumption, Settled, ShapeError};
 use crate::values::Chain;
 
 use super::Pass;
@@ -89,18 +88,18 @@ pub(in crate::dispatch) fn statics<'graph>(
 
 /// Resume the static pass over `root` under `over`'s binding, beside `channel`, what the type
 /// channel's resumption under it settled ([`resume`](super::resume)). The walk lays in `scratch`
-/// and interns through `work`; what it settles is relayed out through `output`, the types it
-/// names adopted into `output`'s chain, and laid there with `channel` as one `Settled`. A use the
-/// binding leaves no candidate refuses as the load would.
-pub(in crate::dispatch) fn resume_statics<'graph, 'out, 'w, 'from, H: Habitat<'from>>(
+/// and interns through `output`'s source chain; what it settles is relayed out through `output`,
+/// the types it names adopted into `output`'s chain, and laid there with `channel` as one
+/// `Settled`. A use the binding leaves no candidate refuses as the load would.
+pub(in crate::dispatch) fn resume_statics<'graph, 'out, 'w>(
     root: &'graph BodyShape<'graph>,
     builtins: &KBuiltins<'graph, 'graph>,
-    work: &Chain<'_, '_, '_, '_>,
-    output: &Relay<'out, 'w, 'from, H>,
+    output: &ChainRelay<'out, 'w, '_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
     over: Resumption<'_, 'out>,
     channel: Settled<'out>,
 ) -> Result<&'out Settled<'out>, ShapeError<'out>> {
+    let work = output.source();
     // Laid in the walk's scratch, which outlives the walk that borrows it.
     let resume = scratch.alloc(Resume::new(over.everything, scratch));
     let mut pass = Pass::new(builtins, work, scratch, Some(over), Some(channel), resume);

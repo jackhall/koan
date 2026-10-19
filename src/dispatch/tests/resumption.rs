@@ -968,11 +968,9 @@ fn resuming_at_its_brand<'graph>(
         everything: false,
     };
     let builtins = program.builtins();
-    let channel = crate::elaborate::resume_channel(root, over, builtins, &work, &relay, &scratch);
+    let channel = crate::elaborate::resume_channel(root, over, builtins, &relay, &scratch);
     let settled = match channel {
-        Ok(channel) => {
-            <Koan as Language>::resume(root, builtins, &work, &relay, &scratch, over, channel)
-        }
+        Ok(channel) => <Koan as Language>::resume(root, builtins, &relay, &scratch, over, channel),
         Err(error) => Err(error),
     };
     let seen = match settled {

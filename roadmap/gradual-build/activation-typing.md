@@ -30,8 +30,8 @@ and the run binds a path variable per read (`elaborate::bound_path`).
   key — stays unsettled and is admitted, ranked and substituted per read, and
   no run cell's lend changes after its creation.
 - No run cell lays into a build cell: a specialization's branch holds the
-  nodes the drain laid from its binding and what its resumption minted, and a
-  frame lays only into its region and scratch.
+  nodes the drain laid from its binding and the types its resumption's settled
+  facts name, and a frame lays only into its region and scratch.
 - Every refusal a resumption reaches — a use left with no candidate, an
   ambiguity, or a return, ascription, annotation or call by name that can
   never be satisfied — faults the asker at the resumption point, worded as
@@ -122,7 +122,6 @@ and the run binds a path variable per read (`elaborate::bound_path`).
 
 **Requires:**
 
-- [A resumption at any brand](resumption-at-a-brand.md) — the specialization's step runs the resumption at its own brand.
 - [Every spelled path minted at the load](paths-minted-at-load.md) — a resumption mints no path entry.
 
 **Unblocks:**

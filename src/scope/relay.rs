@@ -19,8 +19,8 @@
 use std::cell::Cell;
 
 use crate::memory::{BumpAllocator, BumpBackedMap, BumpVec, Writer, bump_table, collect, resident};
-use crate::type_lattice::{DeclaredType, Habitat, Interval, Parametric, TypeChain};
-use crate::values::Types;
+use crate::type_lattice::{DeclaredType, Habitat, Halves, Interval, Parametric, TypeChain};
+use crate::values::{Half, Types};
 
 use super::keyed::Keyed;
 use super::settled::{ChannelSettled, Settled, StaticsSettled};
@@ -46,6 +46,16 @@ pub struct Relay<'out, 'w, 'from, H: Habitat<'from>> {
     /// Each capture run relayed, by its source's address and length, and by its copy's own.
     captures: Cell<BumpBackedMap<'w, (usize, usize), Captures<'out>>>,
 }
+
+/// A relay whose source is a koan chain: the work chain a pass's rules intern through, which the
+/// pass reads off the relay it writes through, so the chain a fact was interned in and the one its
+/// types are adopted from are one.
+pub type ChainRelay<'out, 'w, 'tier, 'pair, 'reg, 'door> = Relay<
+    'out,
+    'w,
+    'tier,
+    Halves<'reg, 'tier, Half<'tier, 'pair, 'door>, Half<'reg, 'pair, 'door>>,
+>;
 
 /// A capture run of a body's tree or a leaf's run.
 type Captures<'a> = &'a [(u32, Tree<'a>)];
@@ -77,6 +87,11 @@ impl<'out, 'w, 'from, H: Habitat<'from>> Relay<'out, 'w, 'from, H> {
     /// The writer the relay lays through.
     pub fn writer(&self) -> Writer<'out, 'w> {
         self.writer
+    }
+
+    /// The chain the relay adopts from: what the facts it copies were interned through.
+    pub fn source(&self) -> &'w TypeChain<'from, H> {
+        self.from
     }
 
     /// The chain the relay adopts into.

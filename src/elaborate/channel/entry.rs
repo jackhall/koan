@@ -3,8 +3,7 @@
 //! the `Settled` it returns ([`store`](super::store)). Both run the one walk ([`Pass::walk`]).
 
 use crate::memory::{BumpAllocator, BumpVec, Writer};
-use crate::scope::{BodyShape, Builtins, Relay, Resumption, Settled, ShapeError};
-use crate::type_lattice::Habitat;
+use crate::scope::{BodyShape, Builtins, ChainRelay, Relay, Resumption, Settled, ShapeError};
 use crate::values::{Chain, Knotted};
 
 use super::Pass;
@@ -48,17 +47,17 @@ pub fn type_channel<'graph, X: Knotted>(
 
 /// Resume `root`'s type channel under `over`'s binding, once the load has typed it: the walk the
 /// load runs, each bound name read as the closed type it binds, re-running only the cells whose
-/// frontier waits on what it binds. The walk lays in `scratch` and interns through `work`; what it
-/// settles is relayed out through `output`, the types it names adopted into `output`'s chain. A
-/// closed type that no longer elaborates refuses as the load would.
-pub fn resume_channel<'graph, 'out, 'w, 'from, H: Habitat<'from>, X: Knotted>(
+/// frontier waits on what it binds. The walk lays in `scratch` and interns through `output`'s
+/// source chain; what it settles is relayed out through `output`, the types it names adopted into
+/// `output`'s chain. A closed type that no longer elaborates refuses as the load would.
+pub fn resume_channel<'graph, 'out, 'w, X: Knotted>(
     root: &'graph BodyShape<'graph>,
     over: Resumption<'_, 'out>,
     builtins: &Builtins<'_, X>,
-    work: &Chain<'_, '_, '_, '_>,
-    output: &Relay<'out, 'w, 'from, H>,
+    output: &ChainRelay<'out, 'w, '_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
 ) -> Result<Settled<'out>, ShapeError<'out>> {
+    let work = output.source();
     // Laid in the walk's scratch, which outlives the walk that borrows it.
     let resume = scratch.alloc(Resume::new(over.everything, scratch));
     let mut pass = Pass::new(builtins, work, scratch, Some(over), resume);

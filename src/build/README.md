@@ -348,9 +348,10 @@ whose frontier the chain's keys do not cover stays unsettled.
   type nodes over the root tier and itself alone: a fact of a child that
   names a type its parent minted relays that type into the child's branch,
   insert-if-absent, so no branch links its parent's. A specialization's branch
-  holds the nodes the drain laid from its binding and what its resumption
-  minted, and nothing a frame lays: a frame lays into its region and scratch
-  alone. A run cell's scratch tier
+  holds the nodes the drain laid from its binding and the types its settled
+  facts name, and nothing a frame lays: a frame lays into its region and
+  scratch alone. The resumption interns into its step's scratch branch, and
+  only what its `Settled` keeps is adopted into the specialization's. A run cell's scratch tier
   may reference its specialization's nodes, as a scratch tier references the
   lent branch's today; its region reaches them only by adopt at an exit, as
   it reaches the lent branch's; and the reverse never holds. A composite a
@@ -374,7 +375,8 @@ whose frontier the chain's keys do not cover stays unsettled.
   specialization is a tree cell the drain creates and runs as it does a run
   cell: its one step lays its region header and its own table, runs the
   resumption under its binding — whose nodes the drain laid in its branch
-  before the step — to quiescence and quiesces, staying alive with no
+  before the step — to quiescence over the step's scratch chain, lays the
+  `Settled` it reaches in its region, and quiesces, staying alive with no
   continuation and reporting to nobody. The drain then enters it in its
   parent's table and records the parent in its header, so the drain keeps
   every table's books and no step writes another cell's region. What the
@@ -435,7 +437,7 @@ time.
 | cell | lives from | to | holds |
 |---|---|---|---|
 | build root | the load | the program's end | the root-level table; it writes the shapes, facts, residual and root tier into the owner's storage |
-| specialization | first miss on its binding | its own or an ancestor's eviction, then its last borrower's disposal | settled facts, its residual, verdicts, warm types, its children's table |
+| specialization | first miss on its binding | its own or an ancestor's eviction, then its last borrower's disposal | settled facts and the warm types they name, its residual, verdicts, its children's table |
 | composed-code cell | the code value's birth | the value's home's death | the code's shape and facts |
 | run root | the load | the program's end | top-level bindings |
 | run cell | its birth | its disposal | activation, values, region branch, scratch |

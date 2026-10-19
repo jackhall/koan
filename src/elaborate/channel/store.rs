@@ -206,11 +206,11 @@ impl<'p> Resume<'p> {
         held.set(table);
     }
 
-    /// What the walk settled under `binding` — each shape's cells it re-ran, by segment — relayed
-    /// out through `relay`.
+    /// What the walk settled under `binding`, already laid in the output — each shape's cells it
+    /// re-ran, by segment — relayed out through `relay`.
     pub(super) fn settled<'out, 'w, 'from, H: Habitat<'from>>(
         &self,
-        binding: crate::scope::Binding<'p>,
+        binding: crate::scope::Binding<'out>,
         relay: &Relay<'out, 'w, 'from, H>,
     ) -> Settled<'out> {
         let scratch = self.scratch;
@@ -268,10 +268,17 @@ impl<'p> Resume<'p> {
                 },
             ));
         }
-        let mut laid = Settled::empty(binding);
+        debug_assert!(
+            (binding.entries().iter()).all(|(_, bound)| relay.types().resolves(*bound)),
+            "a settled binding's handles resolve through the output chain"
+        );
+        let mut laid = Settled::empty(crate::scope::Binding::EMPTY);
         laid.channel = Keyed::from_sorted(scratch.alloc_slice_copy(&settled));
         laid.reran.0 = self.reran.replace(bump_set(scratch)).len() as u32;
-        relay.settled(laid)
+        Settled {
+            binding,
+            ..relay.settled(laid)
+        }
     }
 }
 

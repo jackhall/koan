@@ -25,7 +25,9 @@ A scope is built in three tiers, each at the moment its contents become known.
   one shape builder assigns in the order it seals shapes: distinct per shape,
   the same in every load of one text, and what a
   [specialization's key](../build/README.md#keys-which-bindings-make-a-specialization)
-  names the body by.
+  names the body by. Every shape of a load reaches the one table the builder
+  fills once the root seals, so any shape finds any other by its segment
+  (`BodyShape::shape_at`).
 
   **A reader takes a body's statements from `BodyShape::body()`, never from the
   parse.** Every site a shape records — a mention's part, a nested shape's
@@ -568,19 +570,21 @@ elaborated — and the pass fills it, once, where the program loads:
   where its code cannot be built, else the load pass's where the built code
   does not type, which `BodyShape::refusal` reports when an `EVAL` runs it;
 - at a chain's root, its **path entries** (`BodyShape::paths`, by level through
-  `path_entry`): one `PathEntry` per path the chain reads — its root, a binder
-  or a part written in place, its value-member chain, its label, its level and
-  the declared application it is read through, if any — each with a write-once
-  `Resolution`, the path's content tree beside what the
-  [static pass](../dispatch/README.md#paths) resolved it to, closed at a type
-  or the variable of its class; and, per shape, the entry each path its type
-  expressions spell reads (`BodyShape::path_read`, by site).
+  `path_entry`): one `PathEntry` per path the chain reads, a plain value — its
+  root, a binder or a part written in place, its value-member chain, its label,
+  its level and the declared application it is read through, if any; beside
+  them a write-once table of each path's `Resolution`, by level
+  (`BodyShape::resolution`, `path_closed`), the path's content tree beside what
+  the [static pass](../dispatch/README.md#paths) resolved it to, closed at a
+  type or the variable of its class; and, per shape, the path each path its
+  type expressions spell reads, by its chain root's segment and its level
+  (`BodyShape::path_read`, by site).
 
 A cell holds `Unknown`, a closed value, or a rigid value beside the
 `Variable`s that the run substitutes: each a variable's level and its source —
-a name's coordinate (`Source::Type`), or a path's entry beside the coordinate
-of its root (`Source::Path`), which the run binds by reading the module there
-and the member through it. The born-instance cell holds a
+a name's coordinate (`Source::Type`), or a path, by its chain root's segment and
+its level there, beside the coordinate of its root (`Source::Path`), which the
+run binds by reading the module there and the member through it. The born-instance cell holds a
 `StaticSolution`, closed or rigid, or nothing: it has no unknown arm. The
 vocabulary lives here, beside the shape that holds it: `Static`,
 `StaticSolution`, `Variable`, and the callable-typing records the
@@ -653,8 +657,23 @@ it — a body's builder captures, or a call the load unfolded — or an expressi
 no binder names (`Leaf::Unnamed`), unlike every tree, itself included. A tree
 with no leaf is closed, and its digest is the run's, computed through the run's
 own [recipes](../values/README.md#content-digests). `Tree::same_as` is the one
-equality: closed trees by digest, any other structurally. Trees are `Copy` and
-laid in program storage beside the cells that hold them.
+equality: closed trees by digest, any other structurally. Trees are `Copy`, and
+a tree names a body, and a binder its body, by segment.
+
+**Covariant facts.** The facts vocabulary — static types, trees, path entries,
+resolutions, `Statics`, `ShapeFacts`, `Settled` — names a body by its segment and
+a path by its chain root's segment and level, never by a reference into program
+storage, so every vocabulary type is covariant in its one lifetime: a fact laid
+in program storage for a shape's cell reads as one laid in any shorter-lived
+region, where a resumption run in a specialization's step lays its `Settled`.
+A pass's rules lay every fact in the walk's scratch; what keeps one copies it
+out through a [`Relay`](relay.rs), which re-lays every run and tree it holds
+through the output's writer, each shared subtree once, and adopts every type
+it names into the output's chain from the chain the walk interned through: the
+relay's source, which a resumption reads its work chain off, so the two are one. Each
+copy destructures its value whole, so a field added later fails to compile
+until the relay copies it, and a debug build asserts each handle resolves once
+adopted.
 
 ## Names that arrive at run time
 
