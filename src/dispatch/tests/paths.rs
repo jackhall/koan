@@ -228,8 +228,7 @@ fn a_type_through_an_inline_call_after_an_unknown_refuses_the_load() {
 #[test]
 fn a_path_through_a_name_a_quote_leaves_open_is_left_for_its_eval() {
     assert_eq!(
-        run("SIG Zeroed FOR ALL #[Carrier] = #[(VAL zero :Carrier)]\n\
-             LET q = #(LET y :(m.Carrier) = 1)\nPRINT \"loaded\""),
+        run("LET q = #(LET y :(m.Carrier) = 1)\nPRINT \"loaded\""),
         "loaded"
     );
 }

@@ -95,7 +95,9 @@ registry's own doors:
   fits it: `p.Carrier` under `p :Mapper` is the type a plain module's members
   realize, whatever type member of that name it binds, and under
   `p :(Mapper WITH {Carrier = Number})` it is `Number`, the pin. Any other path
-  reads the module's own member. At load a path is a
+  reads the module's own member. A member read is a path by its tokens
+  ([`path_spelling`](../scope/spelling.rs)) and its root name's mention, never
+  by what the root holds. At load a path is a
   [path variable](#the-type-channel-at-load). A path that reads no type is
   `NoSuchMember`;
 - `Pair {Key = Number}` is a declared type constructor applied to its arguments
@@ -468,8 +470,12 @@ annotated binder's. The channel lays the chain's entries on its root shape and
 records which entry each spelled path reads, and dispatch's
 [static pass](../dispatch/README.md#paths) resolves each to a closed type or a
 class off the module's content tree. Where it runs, a path variable binds as
-the path reads (`bound_path`). A type binder over a path stays unknown, as
-below.
+the path reads (`bound_path`). The builder records each path a shape's types
+spell ([`path_spellings`](../scope/README.md#load-time-types)), and the channel
+reads every one as soon as the shape's type binders are typed and its names
+numbered, so each path has its entry however far the elaborator reads the type
+holding it. A type binder over a path stays unknown, as below, and touches no
+entry.
 
 **A surfaced key.** A `USING … SCOPE` block's
 [surfaced key](../scope/README.md#names-that-arrive-at-run-time) is typed by the
@@ -503,12 +509,16 @@ answers every run-bound name *unknown*.
 1. each component of type binders, in [unit](../scope/README.md#units) order,
    through [the declaration door](#declarations), so a component reads the
    binders before it;
-2. each type expression the shape records — a sigiled type in value position, a
+2. each path the shape's types spell, in the order the builder met them, which
+   finds its entry, minted where it is new: after the binders, since minting a
+   path through an annotated binder types the annotation, which may read them,
+   and before anything reads the path;
+3. each type expression the shape records — a sigiled type in value position, a
    type part of an expression shape that births no callable, a `MATCH … WITH`
    guard;
-3. each registration's expression shape, through [`callable_type`](signature.rs),
+4. each registration's expression shape, through [`callable_type`](signature.rs),
    or through its signature for a surfaced head;
-4. each nested shape: a callable's signature first, through the enclosing shape's
+5. each nested shape: a callable's signature first, through the enclosing shape's
    reader, then its body, with every binder of every enclosing shape already
    typed.
 
@@ -538,8 +548,8 @@ once the load has quiesced. A bound name reads as the closed type it binds, in
 either mode, so a type binder over it declares closed, and a callable body's
 own bound `FOR ALL` name is that type at its group level. The walk skips a
 shape whose reach the binding misses and a cell whose frontier it misses,
-numbers each chain as the load did, reads the path entries the load laid and
-mints none, and keeps each cell it re-runs beside the load's, never in it. It
+numbers each chain as the load did, finds the entry the load laid for every
+path a shape spells and mints none, and keeps each cell it re-runs beside the load's, never in it. It
 runs at any step's brand: the walk lays in the scratch it is handed and interns
 through the chain its relay copies from — a step's scratch chain — and returns
 its `Settled` relayed through the writer and chain of the region it lands in.
@@ -652,8 +662,9 @@ own names alike; a nested `FOR ALL` callable rigid over its enclosing names,
 and one whose bound names a run-bound name left unknown; a `:Type` parameter,
 an outer quantifier inside an inner group, a quote's hole and a `$` name
 crossing into code each as a lexical variable; a path through a module name
-one variable past every name level, two spellings sharing it, and one through a
-parameter reading through its declared application; each spelling left
+one variable past every name level, two spellings sharing it, one through a
+parameter reading through its declared application, and one through an
+annotated binder of a type binder's own body read once the binders are typed; each spelling left
 unknown, a type binder over a path among them; a
 nominal over a
 run-bound type left unknown and a reader of it rigid; each repeated guard; a

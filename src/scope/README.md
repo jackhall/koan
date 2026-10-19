@@ -578,7 +578,11 @@ elaborated — and the pass fills it, once, where the program loads:
   the [static pass](../dispatch/README.md#paths) resolved it to, closed at a
   type or the variable of its class; and, per shape, the path each path its
   type expressions spell reads, by its chain root's segment and its level
-  (`BodyShape::path_read`, by site).
+  (`BodyShape::path_read`, by site). The builder records, per shape, each part
+  holding a path its types spell, decided by its tokens
+  ([`path_spelling`](spelling.rs)), as it meets them
+  (`BodyShape::path_spellings`), from which the pass finds every path's entry
+  however far it reads the type holding it.
 
 A cell holds `Unknown`, a closed value, or a rigid value beside the
 `Variable`s that the run substitutes: each a variable's level and its source —

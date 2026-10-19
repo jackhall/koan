@@ -1187,13 +1187,16 @@ unit holding the `USING` for a name it surfaces, an inner body's where its last
 member binds, a quote's hole and `\` mark at its code's entry;
 [resumption](tests/resumption.rs) — a load resumed under a binding: an
 overload selected at a bound `FOR ALL` name, a module parameter's paths closed
-at its pin, an inner callable settled under its outer name's binding, a type
+at its pin, a module binder bound beside a name keeping its paths, a name a
+type binder or a meet reads before a path bound to find the entry the load
+minted, an inner callable settled under its outer name's binding, a type
 binder declared closed, a refusal the binding reaches, a binding no fact reads
 re-running only its own slot, a settled check a `Never` binding drops, a
 check one half of a binding refuses that the whole binding starves,
 re-running every fact agreeing with skipping, and a resumption extending the
 one before it; and the laws, over a never-called quantified registration drawn
-with its parameters, statements and a binding of any closed types — a
+with its parameters, statements — a path after a run-bound name, in a type
+binder and in a type expression, among them — and a binding of any closed types — a
 resumption is the restart with the binding declared, resumptions are
 confluent, quiescence is exact, a resumption is monotone, and it re-runs only
 what it wakes. A fact typed `Never` never arrives, so the monotone and
@@ -1228,7 +1231,9 @@ closed tree's digest against the run's, a functor ignoring its argument, a leaf
 keyed on a call's arguments or a body's captures, recursive functors never
 unfolding, and a closure retyped at a parameter closed at the run's digest; [paths](tests/paths.rs) — two member reads through one path sharing
 a type, two paths compared by their trees, a path through a call the carrier
-the run computes, a type through an inline call over a leaf refused, each open
+the run computes, a type through an inline call over a leaf refused, after an
+unknown too, a path through a name a quote leaves open left for its
+`EVAL`, each open
 path's tree read back, a quantified member read through a call instanced or
 refused, a functor body written on one line unfolding, and the law that a load
 verdict on two paths through drawn modules, views and functor calls holds at
