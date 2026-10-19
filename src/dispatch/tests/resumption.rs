@@ -75,7 +75,7 @@ fn born<'graph>(
 }
 
 /// `shape`'s cell as `settled` leaves it.
-fn statics<'graph>(settled: &Settled<'graph>, shape: &BodyShape<'graph>) -> Statics<'graph> {
+fn statics<'a, 'graph: 'a>(settled: &Settled<'a>, shape: &BodyShape<'graph>) -> Statics<'a> {
     match settled.statics.get(shape.segment()) {
         Some((_, held)) => held.statics,
         None => shape.statics().expect("the load typed the shape"),
@@ -917,4 +917,117 @@ mod laws {
             }
         }
     }
+}
+
+thread_local! {
+    /// What [`resuming_at_its_brand`] saw inside its step, read once the step has run.
+    static AT_ITS_BRAND: std::cell::RefCell<Option<AtItsBrand>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// What a resumption run in a step settled, as the step read it.
+#[derive(Debug, PartialEq)]
+struct AtItsBrand {
+    refused: bool,
+    /// Whether `p`'s settled upper end is the bound type.
+    binder_is_bound: bool,
+    /// Whether `Pair`'s settled declared type is closed at a record the root lacks, which resolves
+    /// in the step's region chain.
+    record_adopted: bool,
+    /// Whether the root's node count stayed what it was.
+    root_unchanged: bool,
+}
+
+/// A root work that resumes the top-level quantified callable under `Elt ↦ List of List of Bool`
+/// at its own brand: the walk lays in a local scratch and interns through the step's scratch
+/// chain, and what it settles lands in the step's region.
+fn resuming_at_its_brand<'graph>(
+    step: crate::scheduler::Step<'_, 'graph, '_, '_, '_, '_, crate::program::KBundle>,
+) -> crate::scheduler::Action<'graph, crate::program::KBundle> {
+    use crate::program::{KBirth, KState, Language};
+    use crate::scope::{Binding, Relay, Resumption};
+    let (step, state) = step.state();
+    let KState::Born(birth @ KBirth::Inspect { program, .. }) = state else {
+        return step.failed(crate::scheduler::StepError::Refused);
+    };
+    let before = program.root().len();
+    let (types, work) = (step.types(), step.scratch_types());
+    let scratch = crate::memory::Bump::new();
+    let bound = types.list(types.list(KType::BOOL));
+    assert!(!types.in_root(bound), "the bound type is the step's own");
+    let root = program.shape();
+    let f = quantified(root);
+    let symbols = program.symbols();
+    let mut staged = crate::memory::BumpVec::new_in(&scratch);
+    staged.push((unknown(symbols, f, "Elt"), bound));
+    let binding = Binding::laid(step.writer(), &mut staged);
+    let relay = Relay::new(step.writer(), &types, &work, &scratch);
+    let over = Resumption {
+        binding,
+        base: &[],
+        everything: false,
+    };
+    let builtins = program.builtins();
+    let channel = crate::elaborate::resume_channel(root, over, builtins, &work, &relay, &scratch);
+    let settled = match channel {
+        Ok(channel) => {
+            <Koan as Language>::resume(root, builtins, &work, &relay, &scratch, over, channel)
+        }
+        Err(error) => Err(error),
+    };
+    let seen = match settled {
+        Err(_) => AtItsBrand {
+            refused: true,
+            binder_is_bound: false,
+            record_adopted: false,
+            root_unchanged: program.root().len() == before,
+        },
+        Ok(settled) => {
+            let p = slot(symbols, f, "p");
+            let binder_is_bound = matches!(
+                statics(settled, f).binders[p.index()],
+                DeclaredType::Type(typed) if typed.upper == bound.into()
+            );
+            let pair = slot(symbols, f, "Pair");
+            let declared = (settled.channel.get(f.segment()))
+                .and_then(|(_, held)| held.declared.get(pair).map(|(_, typed)| *typed));
+            let record_adopted = matches!(
+                declared,
+                Some(Static::Closed(record)) if !types.in_root(record) && types.resolves(record)
+            );
+            AtItsBrand {
+                refused: false,
+                binder_is_bound,
+                record_adopted,
+                root_unchanged: program.root().len() == before,
+            }
+        }
+    };
+    AT_ITS_BRAND.with(|held| *held.borrow_mut() = Some(seen));
+    step.leave(birth)
+}
+
+#[test]
+fn a_step_resumes_at_its_own_brand() {
+    let source = "EXPR FOR ALL #[Elt] #(WRAP x :Elt) -> Any = #(\n  \
+                  LET p = x\n  LET Pair = :{a :Elt}\n  p\n)";
+    let mut substrate =
+        CellSubstrate::load::<Koan>(source, "<test>", 8, SpecBounds::default(), output())
+            .unwrap_or_else(|error| panic!("the program loads: {error}"));
+    substrate.with(|running| {
+        running.run().expect("the program runs");
+        running
+            .inspect(resuming_at_its_brand)
+            .expect("the inspection runs to completion");
+    });
+    let seen = AT_ITS_BRAND.with(|held| held.borrow_mut().take());
+    assert_eq!(
+        seen,
+        Some(AtItsBrand {
+            refused: false,
+            binder_is_bound: true,
+            record_adopted: true,
+            root_unchanged: true,
+        })
+    );
 }
