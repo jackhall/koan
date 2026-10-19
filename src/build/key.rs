@@ -10,10 +10,10 @@
 //! found as [`list_seams`](super::list_seams) finds it. The asker computes the digests; the drain
 //! looks the key up in the parent's table.
 
-use crate::memory::{BumpAllocator, BumpVec, Writer, collect};
+use crate::memory::{BumpAllocator, BumpVec, Writer, bump_table, collect};
 use crate::scope::{Address, BodyShape, FactKey, Position, SeamAt, Segment, ShapeKind, Slot};
 
-use super::seams::site;
+use super::seams::{Sites, seam_of};
 use crate::values::digest::{DigestHasher, Tag};
 use crate::values::{ContentDigest, SpecKey};
 
@@ -39,7 +39,8 @@ pub fn lay_keys<'graph>(
 ) {
     let mut chain = BumpVec::new_in(scratch);
     let mut named = BumpVec::new_in(scratch);
-    collect_names(root, &mut chain, &mut named);
+    let mut sites = bump_table(scratch);
+    collect_names(root, &mut chain, &mut named, &mut sites);
     named.sort_unstable();
     named.dedup();
     fix(root, &named, writer, scratch);
@@ -51,6 +52,7 @@ fn collect_names<'graph>(
     shape: &'graph BodyShape<'graph>,
     chain: &mut BumpVec<'_, &'graph BodyShape<'graph>>,
     named: &mut BumpVec<'_, (Segment, Slot)>,
+    sites: &mut Sites<'_, 'graph>,
 ) {
     chain.push(shape);
     let (channel, statics) = (shape.channel_residual(), shape.statics_residual());
@@ -63,10 +65,7 @@ fn collect_names<'graph>(
         {
             continue;
         }
-        let seam = (frontier.unknowns().iter())
-            .filter_map(|unknown| site(*unknown, chain))
-            .max_by_key(|(depth, _, at)| (*depth, *at));
-        let Some((_, body, SeamAt::Entry)) = seam else {
+        let Some((body, SeamAt::Entry)) = seam_of(frontier.unknowns(), chain, sites) else {
             continue;
         };
         if body.kind() != ShapeKind::Callable {
@@ -88,7 +87,7 @@ fn collect_names<'graph>(
         }
     }
     for (_, nested) in shape.nested_shapes() {
-        collect_names(nested, chain, named);
+        collect_names(nested, chain, named, sites);
     }
     chain.pop();
 }

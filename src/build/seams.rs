@@ -21,7 +21,7 @@ type Found<'graph> = (usize, &'graph BodyShape<'graph>, SeamAt);
 
 /// Where each unknown met so far binds. An unknown's declaring body lies at one depth of every
 /// chain it is read from, below the same bodies, so where it binds is found once.
-type Sites<'x, 'graph> = BumpBackedMap<'x, Unknown, Option<Found<'graph>>>;
+pub(super) type Sites<'x, 'graph> = BumpBackedMap<'x, Unknown, Option<Found<'graph>>>;
 
 /// List the seams of `root` and every body nested in it, and lay each body's reach down, once the
 /// load's passes have quiesced.
@@ -83,14 +83,7 @@ fn walk<'graph, 'x>(
     let (channel, statics) = (shape.channel_residual(), shape.statics_residual());
     for (_, frontier) in channel.entries().iter().chain(statics.entries()) {
         merge_into(&mut reach, frontier.unknowns());
-        let latest = (frontier.unknowns().iter())
-            .filter_map(|unknown| {
-                *sites
-                    .entry(*unknown)
-                    .or_insert_with(|| site(*unknown, chain))
-            })
-            .max_by_key(|(depth, _, at)| (*depth, *at));
-        if let Some((_, body, at)) = latest {
+        if let Some((body, at)) = seam_of(frontier.unknowns(), chain, sites) {
             found.extend(
                 frontier
                     .unknowns()
@@ -120,12 +113,27 @@ fn walk<'graph, 'x>(
     reach
 }
 
+/// The seam of a frontier over `unknowns`, read from the bodies `chain` holds: the body and the
+/// site at which its latest member binds, the deepest body first and then the latest site in it.
+/// `None` where no body on `chain` declares any of them. `sites` memoizes each unknown's site.
+pub(super) fn seam_of<'graph>(
+    unknowns: &[Unknown],
+    chain: &[&'graph BodyShape<'graph>],
+    sites: &mut Sites<'_, 'graph>,
+) -> Option<(&'graph BodyShape<'graph>, SeamAt)> {
+    let (_, body, at) = (unknowns.iter())
+        .filter_map(|unknown| {
+            *sites
+                .entry(*unknown)
+                .or_insert_with(|| site(*unknown, chain))
+        })
+        .max_by_key(|(depth, _, at)| (*depth, *at))?;
+    Some((body, at))
+}
+
 /// Where `unknown` binds, read from the bodies `chain` holds, outermost first: `None` where no
 /// body on it declares it.
-pub(super) fn site<'graph>(
-    unknown: Unknown,
-    chain: &[&'graph BodyShape<'graph>],
-) -> Option<Found<'graph>> {
+fn site<'graph>(unknown: Unknown, chain: &[&'graph BodyShape<'graph>]) -> Option<Found<'graph>> {
     let depth = chain
         .iter()
         .position(|shape| shape.segment() == unknown.segment)?;
