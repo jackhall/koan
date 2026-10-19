@@ -122,7 +122,10 @@ fn walk<'graph, 'x>(
 
 /// Where `unknown` binds, read from the bodies `chain` holds, outermost first: `None` where no
 /// body on it declares it.
-fn site<'graph>(unknown: Unknown, chain: &[&'graph BodyShape<'graph>]) -> Option<Found<'graph>> {
+pub(super) fn site<'graph>(
+    unknown: Unknown,
+    chain: &[&'graph BodyShape<'graph>],
+) -> Option<Found<'graph>> {
     let depth = chain
         .iter()
         .position(|shape| shape.segment() == unknown.segment)?;

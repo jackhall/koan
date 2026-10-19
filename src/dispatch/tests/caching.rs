@@ -647,10 +647,9 @@ fn a_shares_loop_handing_a_keyed_shares_helper_a_module_over_its_link_holds_adop
     let [(few, few_adopted), _, (many, _)] = &runs;
     assert_eq!((few.printed.as_str(), few.root), ("done", 0));
     // `PEEK` keys on the module it is handed, so it borrows a specialization of its own each hop,
-    // and `WRAP` one across the loop and one for its `null` arm; the region and each lent branch
-    // hold flat.
+    // and `WRAP` one across the loop; the region and each lent branch hold flat.
     for ((ran, _), depth) in runs.iter().zip(DEPTHS) {
-        assert_eq!(ran.tiers.specialized, depth as usize + 2);
+        assert_eq!(ran.tiers.specialized, depth as usize + 1);
     }
     assert_eq!(
         (few.tiers.region, few.tiers.lent),
@@ -709,17 +708,12 @@ fn a_fresh_loop_over_an_invariant_module_holds_its_lent_branch_flat() {
 #[test]
 fn a_shares_loop_parking_each_hop_holds_its_hosts_scratch_bytes_flat() {
     // The parking keeps the host's scratch named across the loop: each hop reuses the receipt run
-    // the last released. `TOUCH` keys `m`, so each hop's call of it seeks once, and finds it.
+    // the last released.
     let source = PARKING_LOOP;
     assert_eq!(caching(source), 1);
-    let [few, mut many] = at_ends(source);
+    let [few, many] = at_ends(source);
     assert_eq!(few.printed, "done");
     assert!(few.tiers.scratch_bytes > 0);
-    assert_eq!(
-        many.tiers.sought - few.tiers.sought,
-        (ENDS[1] - ENDS[0]) as usize
-    );
-    many.tiers.sought = few.tiers.sought;
     assert_eq!(few, many);
 }
 
@@ -1200,11 +1194,10 @@ fn a_loop_seeks_its_specialization_once_and_a_second_caller_finds_it_warm() {
     let [(alone, ..)] = runs(&once, 1, |_| {})[..] else {
         unreachable!()
     };
-    // The `null` arm keys `m` too, which its own binder's static type waits on.
     assert_eq!(
         (alone.sought, alone.specialized),
-        (2, 2),
-        "one seek for the whole loop, and one for its `null` arm"
+        (1, 1),
+        "one seek for the whole loop"
     );
     let twice = format!("{once}PRINT (COUNTDOWN ints chain)");
     let [(both, table, ref printed)] = runs(&twice, 1, |_| {})[..] else {
@@ -1213,10 +1206,10 @@ fn a_loop_seeks_its_specialization_once_and_a_second_caller_finds_it_warm() {
     assert_eq!(printed, "7\n7");
     assert_eq!(
         (both.sought, both.specialized),
-        (4, 2),
+        (2, 1),
         "the second caller builds nothing"
     );
-    assert_eq!(table, Some(2));
+    assert_eq!(table, Some(1));
     let warm = |source: &str| -> usize {
         laid(&program(1, source))
             .iter()
@@ -1234,11 +1227,8 @@ fn a_loop_seeks_its_specialization_once_and_a_second_caller_finds_it_warm() {
     else {
         unreachable!()
     };
-    assert_eq!(
-        apart.specialized, 4,
-        "two bindings, two specializations of each arm"
-    );
-    assert_eq!(table, Some(4));
+    assert_eq!(apart.specialized, 2, "two bindings, two specializations");
+    assert_eq!(table, Some(2));
 }
 
 #[test]
@@ -1278,15 +1268,14 @@ fn an_evicted_specialization_is_rebuilt_on_the_next_miss_with_the_same_answer() 
         },
     );
     assert_eq!(tight.printed, "7\n7\n7");
-    // Each operator run's `null` arm keys `m` too, and evicts the loop's arm before it.
     assert_eq!(
         (tight.tiers.specialized, tight.tiers.evicted),
-        (6, 5),
+        (3, 2),
         "`words` evicts `ints`, and `ints` again evicts `words`"
     );
     let roomy = ran(DEPTHS[0], &source);
     assert_eq!(roomy.printed, tight.printed);
-    assert_eq!((roomy.tiers.specialized, roomy.tiers.evicted), (4, 0));
+    assert_eq!((roomy.tiers.specialized, roomy.tiers.evicted), (2, 0));
 }
 
 /// Bounds of `root` and `nested`.
@@ -1301,7 +1290,6 @@ pub(super) fn bounds(root: usize, nested: usize) -> SpecBounds {
 fn a_loop_handing_a_keyed_helper_a_new_module_each_hop_holds_its_specializations_flat() {
     // `PEEK` keys on a new module each hop and `WRAP` on `ints` across the loop, both under the
     // root: each `PEEK` miss evicts the last `PEEK`, never `WRAP`, whose hops are newer births.
-    // `WRAP`'s `null` arm keys `m` too, and its miss evicts the last `PEEK`.
     let source = wrapped_peeks();
     let [few, many] = ENDS.map(|depth| ran_under(depth, &source, bounds(2, 2)));
     for (ran, depth) in [(&few, ENDS[0]), (&many, ENDS[1])] {
@@ -1313,7 +1301,7 @@ fn a_loop_handing_a_keyed_helper_a_new_module_each_hop_holds_its_specializations
                 ran.tiers.evicted,
                 ran.tiers.cold_births
             ),
-            (depth + 2, depth, 0),
+            (depth + 1, depth - 1, 0),
             "every `WRAP` hop runs warm"
         );
         assert_eq!(ran.live, 2);
@@ -1327,7 +1315,7 @@ fn a_loop_handing_a_keyed_helper_a_new_module_each_hop_holds_its_specializations
     let depth = bound + 4;
     let past = ran(depth as u32, &source);
     assert_eq!(past.printed, "done");
-    assert_eq!((past.tiers.specialized, past.live), (depth + 2, bound));
+    assert_eq!((past.tiers.specialized, past.live), (depth + 1, bound));
 }
 
 #[test]
@@ -1477,11 +1465,10 @@ fn a_shares_loop_seeks_its_specialization_once_and_a_second_park_finds_it_warm()
     let [(alone, ..)] = runs(&once, 1, |_| {})[..] else {
         unreachable!()
     };
-    // The `null` arm keys `m` too, which its own binder's static type waits on.
     assert_eq!(
         (alone.sought, alone.specialized),
-        (2, 2),
-        "one seek for the whole loop, and one for its `null` arm"
+        (1, 1),
+        "one seek for the whole loop"
     );
     let twice = format!("{once}PRINT (COUNTDOWN ints chain)");
     let [(both, table, ref printed)] = runs(&twice, 1, |_| {})[..] else {
@@ -1490,10 +1477,10 @@ fn a_shares_loop_seeks_its_specialization_once_and_a_second_park_finds_it_warm()
     assert_eq!(printed, "seven\nseven");
     assert_eq!(
         (both.sought, both.specialized),
-        (4, 2),
+        (2, 1),
         "the second park builds nothing"
     );
-    assert_eq!(table, Some(2));
+    assert_eq!(table, Some(1));
     let warm = |source: &str| -> usize {
         laid(&program(1, source))
             .iter()
@@ -1626,12 +1613,9 @@ fn a_type_composed_at_run_reaches_the_specialization_it_keys_by_value() {
             "`{asker}`'s second call hits, and a hit relays nothing"
         );
     }
-    let direct = format!("{INVARIANT}PRINT (COUNTDOWN ints null)");
     assert_eq!(
-        ran(DEPTHS[0], &direct).tiers.relayed,
+        ran(DEPTHS[0], &invariant_loop()).tiers.relayed,
         0,
         "a written module's types are the root's"
     );
-    // The loop hands its `null` arm `m` as its own frame binds it, retyped at run.
-    assert_eq!(ran(DEPTHS[0], &invariant_loop()).tiers.relayed, 1);
 }

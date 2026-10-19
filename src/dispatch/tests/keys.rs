@@ -127,6 +127,9 @@ fn a_body_keys_on_its_own_names_a_nested_body_s_entry_frontier_waits_on() {
         assert_eq!(listed(program, outer), some(&["m"]));
         assert_eq!(listed(program, paired), some(&["Inner"]));
     });
+    // Without `PAIRED`, only `m`'s own type waits on `m`, which keys nothing.
+    let alone = format!("{PRELUDE}EXPR #(OUTER m :Counter) -> Any = #(1)\n");
+    assert_eq!(keyed(&alone, &["m"]), None);
 }
 
 #[test]
@@ -328,7 +331,7 @@ fn past_a_header_or_a_barrier_a_body_keyed_on_a_for_all_name_is_born_cold() {
 fn an_escaping_body_s_hop_seeks_with_its_own_content() {
     // `hop`'s name escapes into `CHOOSE`, so it reaches its second and third frames through
     // `next`, a value the load cannot follow, passing `words` where the first frame bound `ints`:
-    // each hop seeks, and `done`, keyed on `m` too, ends the chain.
+    // each hop seeks. `done`, which reads nothing, keys nothing.
     let source = format!(
         "{SAME}EXPR #(CHOOSE link :Link f :Any g :Any) -> Any = #(f)\n\
          EXPR #(CHOOSE end :Null f :Any g :Any) -> Any = #(g)\n\
@@ -344,9 +347,9 @@ fn an_escaping_body_s_hop_seeks_with_its_own_content() {
     let shapes = keys(&format!("{PRELUDE}LET chain = null\n{source}"));
     let hop = (shapes.iter()).find(|(names, _)| names.contains(&"next".to_string()));
     assert_eq!(hop.map(|(_, keys)| keys.clone()), Some(some(&["m"])));
-    // Three `hop` frames at `ints`, `words` and `words`, then `done`; two of `SAME`'s calls at
-    // `Number` and one at `Str`.
+    // Three `hop` frames at `ints`, `words` and `words`, and `SAME`'s calls in each, one at
+    // `Number` and two at `Str`.
     let ran = ran(&source);
     assert_eq!(ran.printed, "7");
-    assert_eq!((ran.tiers.sought, ran.tiers.specialized), (7, 5));
+    assert_eq!((ran.tiers.sought, ran.tiers.specialized), (6, 4));
 }

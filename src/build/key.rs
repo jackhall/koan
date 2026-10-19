@@ -2,14 +2,18 @@
 //!
 //! A [`SpecKey`] names a callee's body by its [`Segment`], so two bodies of one text whose captures
 //! differ in type never share one, and its binding by the content digests of the arguments at the
-//! names its key list holds, in slot order. [`lay_keys`] lays that list on every callable once the
-//! seams are listed: the parameters its invariant sites read, and each of its own entry-bound names
-//! an entry seam of it, or of a callable nested in it, waits on, where its caching record lets that
-//! name key ([keys](README.md#keys-which-bindings-make-a-specialization)). The asker computes the
-//! digests; the drain looks the key up in the parent's table.
+//! names its key list holds, in slot order. [`lay_keys`] lays that list on every callable: the
+//! parameters its invariant sites read, and each of its own entry-bound names that a fact whose
+//! seam is the entry of it, or of a callable nested in it, waits on, where its caching record lets
+//! that name key ([keys](README.md#keys-which-bindings-make-a-specialization)). A parameter's own
+//! type fact keys nothing: whatever reads the parameter waits on its names too. A fact's seam is
+//! found as [`list_seams`](super::list_seams) finds it. The asker computes the digests; the drain
+//! looks the key up in the parent's table.
 
 use crate::memory::{BumpAllocator, BumpVec, Writer, collect};
-use crate::scope::{Address, BodyShape, SeamAt, Segment, ShapeKind, Slot};
+use crate::scope::{Address, BodyShape, FactKey, Position, SeamAt, Segment, ShapeKind, Slot};
+
+use super::seams::site;
 use crate::values::digest::{DigestHasher, Tag};
 use crate::values::{ContentDigest, SpecKey};
 
@@ -24,10 +28,10 @@ pub fn key_of(segment: Segment, digests: impl Iterator<Item = ContentDigest>) ->
     SpecKey(hasher.finished())
 }
 
-/// Lay every callable body's specialization keys under `root`, once its seams are listed: the
-/// parameters its invariant sites read, and each of its own entry-bound names an entry seam of it,
-/// or of a callable nested in it, waits on, where its record lets that name key. A seam at a unit
-/// or at a quote's code entry keys nothing.
+/// Lay every callable body's specialization keys under `root`: the parameters its invariant sites
+/// read, and each of its own entry-bound names a fact seamed at the entry of it, or of a callable
+/// nested in it, waits on, where its record lets that name key. A fact seamed at a unit or at a
+/// quote's code entry keys nothing, nor does a callable parameter's own type fact.
 pub fn lay_keys<'graph>(
     root: &'graph BodyShape<'graph>,
     writer: Writer<'graph, '_>,
@@ -41,17 +45,34 @@ pub fn lay_keys<'graph>(
     fix(root, &named, writer, scratch);
 }
 
-/// Gather, under `shape` with `chain` the bodies enclosing it, each `(segment, slot)` a callable's
-/// entry seam waits on that the declaring callable's record lets key.
+/// Gather, under `shape` with `chain` the bodies enclosing it, each `(segment, slot)` that a fact
+/// seamed at a callable's entry waits on and that the declaring callable's record lets key.
 fn collect_names<'graph>(
     shape: &'graph BodyShape<'graph>,
     chain: &mut BumpVec<'_, &'graph BodyShape<'graph>>,
     named: &mut BumpVec<'_, (Segment, Slot)>,
 ) {
     chain.push(shape);
-    let entry = (shape.seams().iter()).filter(|seam| seam.at == SeamAt::Entry);
-    if shape.kind() == ShapeKind::Callable {
-        for unknown in entry.flat_map(|seam| seam.waits_on.unknowns()) {
+    let (channel, statics) = (shape.channel_residual(), shape.statics_residual());
+    for (key, frontier) in channel.entries().iter().chain(statics.entries()) {
+        // A parameter's type waits on the names its declared type reads; a fact reading the
+        // parameter waits on them too, so the type alone keys nothing.
+        if let FactKey::Slot(slot) = key
+            && shape.kind() == ShapeKind::Callable
+            && shape.position_of(*slot) == Position::PARAMETER
+        {
+            continue;
+        }
+        let seam = (frontier.unknowns().iter())
+            .filter_map(|unknown| site(*unknown, chain))
+            .max_by_key(|(depth, _, at)| (*depth, *at));
+        let Some((_, body, SeamAt::Entry)) = seam else {
+            continue;
+        };
+        if body.kind() != ShapeKind::Callable {
+            continue;
+        }
+        for unknown in frontier.unknowns() {
             let Address::Slot(slot) = unknown.at else {
                 continue;
             };
