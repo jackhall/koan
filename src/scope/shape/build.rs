@@ -28,7 +28,9 @@
 //! the draft is built, so nothing one draft leaves is taken by the next.
 //!
 //! A keyworded node inside a type expression is a type the elaborator reads, not a use, so the walk
-//! counts the type expressions it is inside and resolves no candidates there.
+//! counts the type expressions it is inside and resolves no candidates there. It records each path
+//! a type spells by its tokens ([`path_spelling`]), so the type channel mints every path's entry
+//! however far it reads the type holding it.
 //!
 //! A callable body records the form node holding it. Each binder's facts land in a per-slot draft
 //! record as the walk finds them — the body a binder whose right-hand side is a callable form at
@@ -74,6 +76,7 @@ use super::super::signature::{
     body_of, declare_family_parameters, declare_parameters, declare_quantifiers, pair_label,
     quantifier_bounds, quoted_body, signature_run,
 };
+use super::super::spelling::path_spelling;
 use super::super::typed::{ShapeFacts, Static};
 use super::facts::Frontier;
 use super::{
@@ -587,6 +590,8 @@ struct Draft<'graph, 'x> {
     binders: BumpVec<'x, DraftBinder<'graph>>,
     /// Each type expression the load pass types on its own, as met.
     type_expressions: BumpVec<'x, Recorded<'graph>>,
+    /// Each part holding a path a type spells, as met.
+    path_spellings: BumpVec<'x, &'graph ExpressionPart<'graph>>,
     component_of: BumpVec<'x, ComponentIndex>,
     /// Every component's members, one run after another, each run sorted.
     members: BumpVec<'x, Slot>,
@@ -963,6 +968,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             children: BumpVec::new_in(scratch),
             binders: draft_binders,
             type_expressions: BumpVec::new_in(scratch),
+            path_spellings: BumpVec::new_in(scratch),
             nodes: BumpVec::new_in(scratch),
             frame: self.frame,
             held: &[],
@@ -1561,6 +1567,14 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         } else {
             std::mem::take(&mut self.admits)
         };
+        // A path a type spells is recorded by its tokens, so the type channel mints its entry
+        // however far the elaborator reads the type holding it.
+        if let ExpressionPart::Expression(node) | ExpressionPart::SigiledTypeExpr(node) = part
+            && (self.in_type > 0 || matches!(part, ExpressionPart::SigiledTypeExpr(_)))
+            && path_spelling(node.reference(), self.scratch).is_some()
+        {
+            self.chain[level].path_spellings.push(part);
+        }
         match part {
             ExpressionPart::Identifier(name) => self.mention_through(
                 level,
@@ -3434,6 +3448,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 candidates,
                 required: collect(writer, required.iter().copied()),
                 type_expressions,
+                path_spellings: collect(writer, draft.path_spellings.iter().copied()),
                 callable: resident_cell(writer, Static::Unknown),
                 group_levels: resident_cell(writer, &[][..]),
                 born_instance: resident_cell(writer, None),

@@ -565,6 +565,8 @@ pub struct BodyShape<'graph> {
     required: &'graph [KeySymbol],
     /// Each type expression this body records, by site.
     type_expressions: Keyed<'graph, TypeExpression<'graph>>,
+    /// Each part holding a path one of this body's types spells, as the builder met them.
+    path_spellings: &'graph [&'graph ExpressionPart<'graph>],
     /// A callable body's load-time type; `Unknown` for every other kind.
     callable: &'graph Cell<StaticCallable<'graph>>,
     /// A callable body's own `FOR ALL` group as its body reads it; empty for every other kind.
@@ -887,6 +889,15 @@ impl<'graph> BodyShape<'graph> {
     /// Every type expression this body records, sorted by site.
     pub fn type_expressions(&self) -> &'graph [TypeExpression<'graph>] {
         self.type_expressions.entries()
+    }
+
+    /// Each part holding a path one of this body's types spells ([`path_spelling`]), in the order
+    /// the builder met them: what the type channel mints each path's entry from, however far it
+    /// reads the type holding it.
+    ///
+    /// [`path_spelling`]: super::path_spelling
+    pub fn path_spellings(&self) -> &'graph [&'graph ExpressionPart<'graph>] {
+        self.path_spellings
     }
 
     /// What the load pass fixed for the type expression at `site`: `Unknown` where this body
