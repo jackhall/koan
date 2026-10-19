@@ -69,9 +69,13 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         }
         if !captures.is_empty() {
             let captures = collect(self.writer, captures.iter().copied());
-            self.chain[level]
-                .view_slots
-                .push((site, ViewSlots { body, captures }));
+            self.chain[level].view_slots.push((
+                site,
+                ViewSlots {
+                    body: body.segment(),
+                    captures,
+                },
+            ));
         }
     }
 

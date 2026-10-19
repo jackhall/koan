@@ -29,8 +29,8 @@ use crate::memory::{BumpBackedMap, BumpVec, bump_table, collect, resident};
 use crate::parse::{ExpressionPart, KExpression};
 use crate::scope::{
     Binder, BodyShape, CaptureSlot, CaptureSource, Coordinate, KnotNode, Leaf, Narrowing,
-    NodeCapture, ParameterBinding, Position, Print, ShapeError, ShapeKind, Site, Slot, Static,
-    StaticSolution, Target, Tree, Unfolded, Within,
+    NodeCapture, ParameterBinding, Position, Print, Segment, ShapeError, ShapeKind, Site, Slot,
+    Static, StaticSolution, Target, Tree, Unfolded, Within,
 };
 use crate::symbols::{BinderSymbol, ValueSymbol};
 use crate::type_lattice::{KType, TypeNode};
@@ -417,7 +417,14 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             },
         };
         let within = (!key.is_empty()).then(|| resident(self.writer, Within::Body(key)));
-        Ok(Tree::bound(Binder { shape, slot }, &[], within))
+        Ok(Tree::bound(
+            Binder {
+                body: shape.segment(),
+                slot,
+            },
+            &[],
+            within,
+        ))
     }
 
     /// `tree`'s value member `label`, read at the part at `site`: through a body, the member's
@@ -430,14 +437,15 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         site: Site,
     ) -> Read<'graph, Option<Tree<'graph>>> {
         Ok(match tree {
-            Tree::Body {
-                shape, captures, ..
-            } => match shape.slot(BinderSymbol::Value(label)) {
-                Some((slot, _)) => {
-                    Some(self.slot_tree(Scope::Body { shape, captures }, slot, site)?)
+            Tree::Body { body, captures, .. } => {
+                match self.shape_at(body).slot(BinderSymbol::Value(label)) {
+                    Some((slot, _)) => {
+                        let shape = self.shape_at(body);
+                        Some(self.slot_tree(Scope::Body { shape, captures }, slot, site)?)
+                    }
+                    None => None,
                 }
-                None => None,
-            },
+            }
             Tree::Leaf(Leaf::Bound {
                 binder,
                 chain,
@@ -508,7 +516,9 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             } => (*source, tree.closed().then_some(carried)),
             Tree::Knot { members, index, .. } => {
                 let node = members[index as usize];
-                let own = match self.resolved_callable(level, self.callable_cell(node.shape)) {
+                let own = match self
+                    .resolved_callable(level, self.callable_cell(self.shape_at(node.body)))
+                {
                     Static::Closed(callable) if node.instance.is_empty() => {
                         callable.ktype.as_type()
                     }
@@ -637,12 +647,13 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                 captures.push((slot as u32, held));
             }
             members.push(KnotNode {
-                shape: body,
+                body: body.segment(),
                 instance,
                 captures: collect(self.writer, captures.iter().copied()),
             });
         }
         Ok(Some(Tree::knot(
+            self.chain[0].shape,
             collect(self.writer, members.iter().copied()),
             index,
         )))
@@ -751,7 +762,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         let Tree::Knot { members, index, .. } = self.tree(level, &head.value)? else {
             return Ok(None);
         };
-        let callee = members[index as usize].shape;
+        let callee = self.shape_at(members[index as usize].body);
         let typed = self.resolved_callable(level, self.callable_cell(callee));
         if !matches!(typed, Static::Closed(callable) if callable.ktype.as_type().is_some()) {
             return Ok(None);
@@ -782,7 +793,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             return Ok(None);
         };
         let call = Unfolded {
-            callee,
+            callee: callee.segment(),
             arguments: collect(self.writer, arguments.iter().copied()),
             solution: collect(self.writer, solution.iter().copied()),
         };
@@ -884,10 +895,8 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         }
         let substituted = match tree {
             Tree::Digest(_) | Tree::Leaf(Leaf::Unnamed(_)) => tree,
-            Tree::Body {
-                shape, captures, ..
-            } => Tree::body(
-                shape,
+            Tree::Body { body, captures, .. } => Tree::body(
+                self.shape_at(body),
                 self.substituted_captures(captures, call, site, done)?,
             ),
             Tree::Knot { members, index, .. } => {
@@ -910,7 +919,11 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                         ..*node
                     });
                 }
-                Tree::knot(collect(self.writer, nodes.iter().copied()), index)
+                Tree::knot(
+                    self.chain[0].shape,
+                    collect(self.writer, nodes.iter().copied()),
+                    index,
+                )
             }
             Tree::View {
                 application,
@@ -944,24 +957,24 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     /// `within` names.
     fn substituted_leaf(
         &mut self,
-        binder: Binder<'graph>,
+        binder: Binder,
         chain: &'graph [ValueSymbol],
         within: Option<&'graph Within<'graph>>,
         call: &Unfolded<'graph>,
         site: Site,
         done: &mut BumpBackedMap<'p, Print, Tree<'graph>>,
     ) -> Read<'graph, Tree<'graph>> {
-        if std::ptr::eq(binder.shape, call.callee) {
+        if binder.body == call.callee {
+            let callee = self.shape_at(call.callee);
             if let Some((_, argument)) =
                 (call.arguments.iter()).find(|(slot, _)| *slot == binder.slot)
             {
                 // The frame binds the argument retyped to the parameter's declared type.
                 let level = self.chain.len() - 1;
-                let declared = match self.resolved_callable(level, self.callable_cell(call.callee))
-                {
+                let declared = match self.resolved_callable(level, self.callable_cell(callee)) {
                     Static::Closed(callable) => match callable.ktype.view(self.types).body {
                         TypeNode::KFunction { params, .. } => {
-                            params.get(binder.shape.slot_name(binder.slot).symbol())
+                            params.get(callee.slot_name(binder.slot).symbol())
                         }
                         _ => None,
                     },
@@ -1003,8 +1016,8 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                 }))
             }
             // A module body's binder is keyed on its captures, which read nothing.
-            None if binder.shape.kind() == ShapeKind::Module => None,
-            None if inside(binder.shape, call.callee) => Some(Within::Call(*call)),
+            None if self.shape_at(binder.body).kind() == ShapeKind::Module => None,
+            None if inside(binder.body, self.shape_at(call.callee)) => Some(Within::Call(*call)),
             None => None,
         };
         let within = within.map(|within| resident(self.writer, within));
@@ -1033,10 +1046,10 @@ fn named_type<'graph>(types: &crate::values::Chain<'_, '_, '_, '_>, named: KType
 
 /// Whether `shape` is `callee` or a body nested in it, at any depth: a binder bound once per call
 /// of `callee`.
-fn inside<'graph>(shape: &BodyShape<'graph>, callee: &BodyShape<'graph>) -> bool {
+fn inside(body: Segment, callee: &BodyShape<'_>) -> bool {
     // Every body a binder births is a nested shape too.
-    std::ptr::eq(shape, callee)
-        || (callee.nested_shapes().iter()).any(|(_, nested)| inside(shape, nested))
+    body == callee.segment()
+        || (callee.nested_shapes().iter()).any(|(_, nested)| inside(body, nested))
 }
 
 /// Where capture `capture` of `body`, whose type captures are `laid`, is read from at birth: a

@@ -81,17 +81,14 @@ pub fn path_binding(
 }
 
 /// The type a path entry binds to, read through the module at `at` of `view`: its `through`
-/// solved where `view`'s shape locates its variables, then [`path_binding`] — or, where the load
-/// resolved it closed, that type. What [`solutions`] is handed to bind a path variable.
+/// solved where `view`'s shape locates its variables, then [`path_binding`]. What [`solutions`] is
+/// handed to bind a path variable the load did not resolve closed.
 pub fn bound_path<'graph, XF: KnottedFamily<'graph>>(
     view: &ActivationView<'graph, '_, XF>,
     types: &Chain<'_, '_, '_, '_>,
     at: Coordinate,
-    entry: &PathEntry<'graph>,
+    entry: PathEntry<'graph>,
 ) -> Option<KType> {
-    if let Some(closed) = entry.closed() {
-        return Some(closed);
-    }
     let held = view.read(at);
     held.as_module()?;
     let scratch = Bump::new();

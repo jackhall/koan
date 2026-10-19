@@ -55,10 +55,13 @@ fn address_of(target: Target) -> Address {
 /// The open gatherings of the rules running, innermost last.
 pub(super) type Scopes<'p> = BumpVec<'p, BumpVec<'p, Unknown>>;
 
-/// What the pass resolved `entry` to, once it has: read once the walk ends, by the caching
-/// fixpoint alone.
-pub(super) fn resolution_of<'graph>(entry: &PathEntry<'graph>) -> Option<Resolution<'graph>> {
-    entry.resolution()
+/// What the pass resolved the path at `level` of the chain `root` roots to, once it has: read once
+/// the walk ends, by the caching fixpoint alone.
+pub(super) fn resolution_of<'graph>(
+    root: &BodyShape<'graph>,
+    level: usize,
+) -> Option<Resolution<'graph>> {
+    root.resolution(level)
 }
 
 impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
@@ -417,35 +420,32 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     }
 
     /// Each path spelling `shape`'s type expressions read, by site.
-    pub(super) fn spellings(
-        &self,
-        shape: &BodyShape<'graph>,
-    ) -> &'graph [(Site, PathRead<'graph>)] {
+    pub(super) fn spellings(&self, shape: &BodyShape<'graph>) -> &'graph [(Site, PathRead)] {
         shape.path_reads()
     }
 
     /// The path spelling `shape`'s type expressions read at `site`, where they read one.
-    pub(super) fn spelling(
-        &self,
-        shape: &BodyShape<'graph>,
-        site: Site,
-    ) -> Option<PathRead<'graph>> {
+    pub(super) fn spelling(&self, shape: &BodyShape<'graph>, site: Site) -> Option<PathRead> {
         shape.path_read(site)
     }
 
-    /// The path entries the type channel minted for the chain `root` roots.
-    pub(super) fn channel_entries(
+    /// The entry of the path spelling `read`, which `shape` reads: one the type channel minted.
+    pub(super) fn spelled_entry(
         &self,
-        root: &BodyShape<'graph>,
-    ) -> &'graph [&'graph PathEntry<'graph>] {
+        shape: &BodyShape<'graph>,
+        read: PathRead,
+    ) -> PathEntry<'graph> {
+        (shape.shape_at(read.root).path_entry(read.level))
+            .expect("a spelling reads an entry the type channel minted")
+    }
+
+    /// The path entries the type channel minted for the chain `root` roots.
+    pub(super) fn channel_entries(&self, root: &BodyShape<'graph>) -> &'graph [PathEntry<'graph>] {
         root.channel_paths()
     }
 
     /// Every path entry of the chain `root` roots the load minted, the type channel's first.
-    pub(super) fn loaded_entries(
-        &self,
-        root: &BodyShape<'graph>,
-    ) -> &'graph [&'graph PathEntry<'graph>] {
+    pub(super) fn loaded_entries(&self, root: &BodyShape<'graph>) -> &'graph [PathEntry<'graph>] {
         root.paths()
     }
 
@@ -783,7 +783,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         &mut self,
         level: usize,
         path_level: usize,
-        located: &'graph [crate::scope::Variable<'graph>],
+        located: &'graph [crate::scope::Variable],
     ) {
         self.chain[level].throughs.push((path_level, located));
     }
@@ -1069,19 +1069,20 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         holder.fix_caching(resident(self.writer, caching));
     }
 
-    /// Fix what the path `entry` resolved to.
-    pub(super) fn fix_resolution(
+    /// Fix what each path of the chain `root` roots this walk resolved resolved to, by level.
+    pub(super) fn fix_resolutions(
         &self,
         root: &BodyShape<'graph>,
-        entry: &PathEntry<'graph>,
-        resolution: Resolution<'graph>,
+        resolutions: &mut [(usize, Resolution<'graph>)],
     ) {
         match &self.resume {
             Some(resume) => {
-                let key = (root.segment(), entry.level);
-                resume.write(&resume.resolutions, key, resolution);
+                for (level, resolution) in resolutions.iter() {
+                    let key = (root.segment(), *level);
+                    resume.write(&resume.resolutions, key, *resolution);
+                }
             }
-            None => entry.fix_resolution(resolution),
+            None => root.fix_resolutions(Keyed::sorted(self.writer, resolutions)),
         }
     }
 
@@ -1090,11 +1091,11 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     pub(super) fn resolved_before(
         &self,
         root: &BodyShape<'graph>,
-        entry: &PathEntry<'graph>,
+        entry: PathEntry<'graph>,
     ) -> Option<Resolution<'graph>> {
         (self.resume.as_ref())
             .and_then(|resume| resume.over.resolution(root.segment(), entry.level))
-            .or_else(|| entry.resolution())
+            .or_else(|| root.resolution(entry.level))
     }
 
     /// Whether a resumption re-resolves a path whose resolution waits on `frontier`.
@@ -1103,11 +1104,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     }
 
     /// Lay every path entry of the chain `root` roots down, the type channel's first.
-    pub(super) fn fix_paths(
-        &self,
-        root: &BodyShape<'graph>,
-        paths: &'graph [&'graph PathEntry<'graph>],
-    ) {
+    pub(super) fn fix_paths(&self, root: &BodyShape<'graph>, paths: &'graph [PathEntry<'graph>]) {
         match self.resume {
             Some(_) => assert_eq!(
                 paths.len(),

@@ -232,7 +232,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     ) -> Read<'graph, Option<KType>> {
         Ok(match carried {
             Carried::Typed(held) => Some(held),
-            Carried::Tree(Tree::Body { shape, .. }) => self.signature_of(shape),
+            Carried::Tree(Tree::Body { body, .. }) => self.signature_of(self.shape_at(body)),
             Carried::Tree(tree @ Tree::View { .. }) => {
                 self.view_of(tree, site)?.map(|viewed| viewed.view)
             }
@@ -389,9 +389,8 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         let (types, scratch) = (self.types, self.scratch);
         Ok(match carried {
             Carried::Typed(held) => slot_type(held, name, types, scratch).map(Carried::Typed),
-            Carried::Tree(Tree::Body {
-                shape, captures, ..
-            }) => {
+            Carried::Tree(Tree::Body { body, captures, .. }) => {
+                let shape = self.shape_at(body);
                 let Some((slot, _)) = shape.slot(BinderSymbol::Value(name)) else {
                     return Ok(None);
                 };

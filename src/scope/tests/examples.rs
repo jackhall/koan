@@ -1187,3 +1187,36 @@ fn nested_shapes_follow_program_order_not_address() {
     assert!(segments.is_sorted(), "segments follow program order");
     assert_eq!(forward, backward, "address order changes nothing");
 }
+
+#[test]
+fn every_shape_a_load_builds_is_found_by_its_segment() {
+    let source = "\
+LET f = (FN :{x :Number} -> Number = #((LET g = (FN :{} -> Number = #(x))) (g)))
+MODULE m = (LET h = (FN :{} -> Number = #(1)))
+LET q = #(PRINT $f)";
+    shaped(source, |_, _, shape| {
+        let shape = shape.expect("the program shapes");
+        fn visit<'graph>(
+            root: &BodyShape<'graph>,
+            shape: &'graph BodyShape<'graph>,
+            seen: &mut usize,
+        ) {
+            *seen += 1;
+            assert!(std::ptr::eq(shape, root.shape_at(shape.segment())));
+            for (_, nested) in shape.nested_shapes() {
+                visit(root, nested, seen);
+            }
+        }
+        let mut seen = 0;
+        visit(shape, shape, &mut seen);
+        assert!(
+            seen >= 6,
+            "the program nests its callables, module and quote"
+        );
+        assert_eq!(
+            shape.segment().index() as usize,
+            seen - 1,
+            "the root seals last"
+        );
+    })
+}

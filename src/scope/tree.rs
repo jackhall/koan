@@ -18,8 +18,9 @@
 //! digest cost the same however deep the tree or however often a subtree is shared.
 //!
 //! The static pass ([`dispatch::statics`](../dispatch/statics.rs)) builds the trees, through the
-//! constructors here; everything here is `Copy` and laid in program storage, so a shape's cell
-//! holds the trees it reads back.
+//! constructors here. Everything here is `Copy` and names a body by its [`Segment`], never by a
+//! reference into program storage, so a tree is covariant in its lifetime: laid in program storage
+//! for a shape's cell, or in a shorter-lived region for a resumption's settled facts.
 
 use std::fmt;
 
@@ -31,7 +32,7 @@ use crate::values::digest::{
     member_digest, retyped_content, view_content,
 };
 
-use super::shape::{BodyShape, Site, Slot};
+use super::shape::{BodyShape, Segment, Site, Slot};
 
 /// What the load knows of one module-valued expression's content. Built through the constructors
 /// below, which compute each node's [`Print`].
@@ -41,7 +42,7 @@ pub enum Tree<'graph> {
     Digest(ContentDigest),
     /// A `MODULE` or `GROUP` body over each capture its content composes, beside its closure slot.
     Body {
-        shape: &'graph BodyShape<'graph>,
+        body: Segment,
         captures: &'graph [(u32, Tree<'graph>)],
         print: Print,
     },
@@ -84,7 +85,7 @@ pub enum Print {
 /// composes, beside its closure slot.
 #[derive(Clone, Copy)]
 pub struct KnotNode<'graph> {
-    pub shape: &'graph BodyShape<'graph>,
+    pub body: Segment,
     pub instance: &'graph [KType],
     pub captures: &'graph [(u32, NodeCapture<'graph>)],
 }
@@ -102,7 +103,7 @@ pub enum Leaf<'graph> {
     /// The value `binder` holds, read through `chain`'s value members: one value per run of the
     /// binder's body, the run `within` names where it is not the one being typed.
     Bound {
-        binder: Binder<'graph>,
+        binder: Binder,
         chain: &'graph [ValueSymbol],
         within: Option<&'graph Within<'graph>>,
         print: Print,
@@ -111,21 +112,12 @@ pub enum Leaf<'graph> {
     Unnamed(Site),
 }
 
-/// A binder, by the body declaring it and its slot there. Equal by the body's address, which is
-/// never part of a digest.
-#[derive(Clone, Copy)]
-pub struct Binder<'graph> {
-    pub shape: &'graph BodyShape<'graph>,
+/// A binder, by the body declaring it and its slot there.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct Binder {
+    pub body: Segment,
     pub slot: Slot,
 }
-
-impl PartialEq for Binder<'_> {
-    fn eq(&self, other: &Self) -> bool {
-        std::ptr::eq(self.shape, other.shape) && self.slot == other.slot
-    }
-}
-
-impl Eq for Binder<'_> {}
 
 /// Which run of a leaf's body holds its binder: a `MODULE` or `GROUP` body's by its builder
 /// captures, or a callee's by the call the load unfolded.
@@ -140,7 +132,7 @@ pub enum Within<'graph> {
 /// variable's slot there.
 #[derive(Clone, Copy)]
 pub struct Unfolded<'graph> {
-    pub callee: &'graph BodyShape<'graph>,
+    pub callee: Segment,
     pub arguments: &'graph [(Slot, Tree<'graph>)],
     pub solution: &'graph [(Slot, KType)],
 }
@@ -155,14 +147,15 @@ impl<'graph> Tree<'graph> {
             ))
         });
         Tree::Body {
-            shape,
+            body: shape.segment(),
             captures,
             print,
         }
     }
 
-    /// Member `index` of the knot `members` tie.
-    pub fn knot(members: &'graph [KnotNode<'graph>], index: u32) -> Self {
+    /// Member `index` of the knot `members` tie; `shapes` is any shape of their load, which finds
+    /// each member's body.
+    pub fn knot(shapes: &BodyShape<'_>, members: &'graph [KnotNode<'graph>], index: u32) -> Self {
         let captured = members.iter().flat_map(|node| {
             node.captures
                 .iter()
@@ -180,7 +173,11 @@ impl<'graph> Tree<'graph> {
                     };
                     (*slot as usize, digest)
                 });
-                function_content(node.shape.code_digest(), node.instance, captures)
+                function_content(
+                    shapes.shape_at(node.body).code_digest(),
+                    node.instance,
+                    captures,
+                )
             });
             member_digest(knot_digest(members.len(), contents), index as usize)
         });
@@ -230,7 +227,7 @@ impl<'graph> Tree<'graph> {
 
     /// A leaf on `binder`, read through `chain`, in the run `within` names.
     pub fn bound(
-        binder: Binder<'graph>,
+        binder: Binder,
         chain: &'graph [ValueSymbol],
         within: Option<&'graph Within<'graph>>,
     ) -> Self {
@@ -248,7 +245,7 @@ impl<'graph> Tree<'graph> {
         let print = match Print::over(children, |digests| {
             let mut hasher = DigestHasher::new(Tag::Leaf);
             hasher
-                .count(std::ptr::from_ref(binder.shape).addr())
+                .count(binder.body.index() as usize)
                 .count(binder.slot.index())
                 .count(chain.len());
             for label in chain {
@@ -264,7 +261,7 @@ impl<'graph> Tree<'graph> {
                 Some(Within::Call(call)) => {
                     hasher
                         .count(2)
-                        .count(std::ptr::from_ref(call.callee).addr())
+                        .count(call.callee.index() as usize)
                         .count(call.solution.len());
                     for (slot, point) in call.solution {
                         hasher.count(slot.index()).feed(point);
@@ -373,11 +370,9 @@ impl fmt::Debug for Tree<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
             Tree::Digest(digest) => f.debug_tuple("Digest").field(digest).finish(),
-            Tree::Body {
-                shape, captures, ..
-            } => f
+            Tree::Body { body, captures, .. } => f
                 .debug_struct("Body")
-                .field("code", &shape.code_digest())
+                .field("body", body)
                 .field("captures", captures)
                 .finish(),
             Tree::Knot { members, index, .. } => f

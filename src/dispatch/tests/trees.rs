@@ -61,11 +61,12 @@ fn leaf_binder<'graph>(
         panic!("a leaf keyed on a binder: {tree:?}");
     };
     assert!(chain.is_empty());
+    let declaring = shape.shape_at(binder.body);
     let name = program
         .symbols()
-        .display(binder.shape.slot_name(binder.slot).symbol())
+        .display(declaring.slot_name(binder.slot).symbol())
         .to_string();
-    (name, std::ptr::eq(binder.shape, shape))
+    (name, binder.body == shape.segment())
 }
 
 #[test]

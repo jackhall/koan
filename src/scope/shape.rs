@@ -67,9 +67,9 @@ use super::groups::GroupFrame;
 use super::keyed::{Keyed, KeyedEntry};
 use super::tree::Tree;
 use super::typed::{
-    BodyClass, Caching, Elaboration, Handoff, InstanceRead, Mint, PathEntry, PathRead, ShapeFacts,
-    Static, StaticCallable, StaticRegistered, StaticSolution, StaticType, Statics, UseStatics,
-    Variable, ViewSlots,
+    BodyClass, Caching, Elaboration, Handoff, InstanceRead, Mint, PathEntry, PathRead, Resolution,
+    Resolved, ShapeFacts, Static, StaticCallable, StaticRegistered, StaticSolution, StaticType,
+    Statics, UseStatics, Variable, ViewSlots,
 };
 use facts::{Frontier, Residual, Seam};
 
@@ -501,6 +501,8 @@ pub struct BodyShape<'graph> {
     kind: ShapeKind,
     /// This body's index among the shapes its load built.
     segment: Segment,
+    /// Every shape its load built, by segment: the load's one table, filled once the root seals.
+    bodies: &'graph Cell<&'graph [&'graph BodyShape<'graph>]>,
     /// Each declared name at its slot, beside the position it writes at.
     names: Channels<'graph, Position>,
     /// This body's own statements, rewritten — the run every reader takes them from, and the one
@@ -579,11 +581,14 @@ pub struct BodyShape<'graph> {
     type_captures: &'graph Cell<&'graph [Coordinate]>,
     /// Each path spelling this body's type expressions read, by site: where the body reads its
     /// root, and its entry. Written once, by the type channel.
-    path_reads: &'graph Cell<Keyed<'graph, (Site, PathRead<'graph>)>>,
+    path_reads: &'graph Cell<Keyed<'graph, (Site, PathRead)>>,
     /// Every path entry of the chain this body roots, by level: empty for a body rooting none.
     /// Written by the type channel, then by the static pass, which adds its own: beside how many
     /// the type channel minted.
-    paths: &'graph Cell<(&'graph [&'graph PathEntry<'graph>], usize)>,
+    paths: &'graph Cell<(&'graph [PathEntry<'graph>], usize)>,
+    /// What the static pass resolved each path of the chain this body roots to, by level. Written
+    /// once, by the static pass.
+    resolutions: &'graph Cell<Keyed<'graph, (usize, Resolution<'graph>)>>,
     /// The value channel's static types and each keyworded use's statics, fixed by the language's
     /// load pass.
     statics: &'graph Cell<Option<Statics<'graph>>>,
@@ -664,6 +669,16 @@ impl<'graph> BodyShape<'graph> {
     /// This body's index among the shapes its load built.
     pub fn segment(&self) -> Segment {
         self.segment
+    }
+
+    /// The shape its load built at `segment`: any shape finds any other by name.
+    pub fn shape_at(&self, segment: Segment) -> &'graph BodyShape<'graph> {
+        let bodies = self.bodies.get();
+        debug_assert!(
+            !bodies.is_empty(),
+            "the shape table fills once the root seals"
+        );
+        bodies[segment.index() as usize]
     }
 
     /// How many slots an activation of this shape holds.
@@ -1004,61 +1019,83 @@ impl<'graph> BodyShape<'graph> {
     }
 
     /// Every path spelling this body's type expressions read, sorted by site.
-    pub fn path_reads(&self) -> &'graph [(Site, PathRead<'graph>)] {
+    pub fn path_reads(&self) -> &'graph [(Site, PathRead)] {
         self.path_reads.get().entries()
     }
 
     /// The path spelling this body's type expressions read at `site`, where they read one.
-    pub fn path_read(&self, site: Site) -> Option<PathRead<'graph>> {
+    pub fn path_read(&self, site: Site) -> Option<PathRead> {
         self.path_reads.get().get(site).map(|(_, read)| *read)
     }
 
     /// Written once, by the type channel.
-    pub fn fix_path_reads(&self, reads: Keyed<'graph, (Site, PathRead<'graph>)>) {
+    pub fn fix_path_reads(&self, reads: Keyed<'graph, (Site, PathRead)>) {
         debug_assert!(self.path_reads.get().is_empty());
         self.path_reads.set(reads);
     }
 
     /// The path entry at `level` of the chain this body roots.
-    pub fn path_entry(&self, level: usize) -> Option<&'graph PathEntry<'graph>> {
+    pub fn path_entry(&self, level: usize) -> Option<PathEntry<'graph>> {
         let paths = self.paths();
         let first = paths.first()?.level;
         paths.get(level.checked_sub(first)?).copied()
     }
 
     /// Every path entry of the chain this body roots, in level order.
-    pub fn paths(&self) -> &'graph [&'graph PathEntry<'graph>] {
+    pub fn paths(&self) -> &'graph [PathEntry<'graph>] {
         self.paths.get().0
     }
 
     /// The path entries of the chain this body roots that the type channel minted, the first of
     /// [`paths`](Self::paths).
-    pub fn channel_paths(&self) -> &'graph [&'graph PathEntry<'graph>] {
+    pub fn channel_paths(&self) -> &'graph [PathEntry<'graph>] {
         let (paths, channel) = self.paths.get();
         &paths[..channel]
     }
 
     /// Written once, by the type channel, on a chain's root.
-    pub fn fix_channel_paths(&self, paths: &'graph [&'graph PathEntry<'graph>]) {
+    pub fn fix_channel_paths(&self, paths: &'graph [PathEntry<'graph>]) {
         debug_assert!(matches!(self.kind, ShapeKind::Program | ShapeKind::Code));
         debug_assert!(self.paths().is_empty());
         self.paths.set((paths, paths.len()));
     }
 
     /// Written once, by the static pass, on a chain's root: every entry, the type channel's first.
-    pub fn fix_paths(&self, paths: &'graph [&'graph PathEntry<'graph>]) {
+    pub fn fix_paths(&self, paths: &'graph [PathEntry<'graph>]) {
         debug_assert!(matches!(self.kind, ShapeKind::Program | ShapeKind::Code));
         debug_assert!(
             (self.paths().iter())
                 .zip(paths)
-                .all(|(channel, all)| std::ptr::eq(*channel, *all))
+                .all(|(channel, all)| channel == all)
         );
         self.paths.set((paths, self.paths.get().1));
     }
 
+    /// What the static pass resolved the path at `level` of the chain this body roots to, once it
+    /// has.
+    pub fn resolution(&self, level: usize) -> Option<Resolution<'graph>> {
+        (self.resolutions.get().get(level)).map(|(_, resolution)| *resolution)
+    }
+
+    /// The type the path at `level` of the chain this body roots is at every run, where the static
+    /// pass resolved it to one.
+    pub fn path_closed(&self, level: usize) -> Option<KType> {
+        match self.resolution(level)?.resolved {
+            Resolved::Closed(closed) => Some(closed),
+            Resolved::Class(_) => None,
+        }
+    }
+
+    /// Written once, by the static pass, on a chain's root.
+    pub fn fix_resolutions(&self, resolutions: Keyed<'graph, (usize, Resolution<'graph>)>) {
+        debug_assert!(matches!(self.kind, ShapeKind::Program | ShapeKind::Code));
+        debug_assert!(self.resolutions.get().is_empty());
+        self.resolutions.set(resolutions);
+    }
+
     /// Where this body reads each lexical variable of the path at `level`'s
     /// [`through`](PathEntry::through), where it names any.
-    pub fn through_at(&self, level: usize) -> Option<&'graph [Variable<'graph>]> {
+    pub fn through_at(&self, level: usize) -> Option<&'graph [Variable]> {
         let statics = self.statics.get()?;
         statics.throughs.get(level).map(|(_, located)| *located)
     }

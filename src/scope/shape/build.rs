@@ -138,7 +138,9 @@ pub(super) fn program<'graph, X: Knotted>(
         Position::PARAMETER,
         statements,
     )?;
-    Ok(builder.seal(draft, None))
+    let root = builder.seal(draft, None);
+    (builder.bodies).set(collect(brand.writer(), builder.sealed.iter().copied()));
+    Ok(root)
 }
 
 /// The parameters a node declares before any of its parts is read: a signature's or an `EXPR`
@@ -730,6 +732,10 @@ struct Builder<'graph, 'x, 'e> {
     admits: Admits,
     /// The segment index the next sealed shape takes, so every shape one load builds has its own.
     next_segment: Cell<u32>,
+    /// Every shape this load builds, by segment: filled once the root seals, and shared by each.
+    bodies: &'graph Cell<&'graph [&'graph BodyShape<'graph>]>,
+    /// Each shape sealed so far, at its segment.
+    sealed: BumpVec<'x, &'graph BodyShape<'graph>>,
 }
 
 impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
@@ -760,6 +766,8 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             in_type: 0,
             admits: Admits::Nothing,
             next_segment: Cell::new(0),
+            bodies: resident_cell(brand.writer(), &[][..]),
+            sealed: BumpVec::new_in(scratch),
         }
     }
 
@@ -3307,7 +3315,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
     }
 
     fn seal(
-        &self,
+        &mut self,
         draft: Draft<'graph, 'x>,
         form: Option<&'graph KExpression<'graph>>,
     ) -> &'graph BodyShape<'graph> {
@@ -3388,11 +3396,12 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         }));
         let segment = Segment(self.next_segment.get());
         self.next_segment.set(segment.0 + 1);
-        resident(
+        let shape = resident(
             writer,
             BodyShape {
                 kind: draft.kind,
                 segment,
+                bodies: self.bodies,
                 names: Channels::new(
                     collect(writer, draft.values.iter().copied()),
                     collect(writer, draft.types.iter().copied()),
@@ -3432,6 +3441,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 type_captures: resident_cell(writer, &[][..]),
                 path_reads: resident_cell(writer, Keyed::from_sorted(&[])),
                 paths: resident_cell(writer, (&[][..], 0)),
+                resolutions: resident_cell(writer, Keyed::from_sorted(&[])),
                 statics: resident_cell(writer, None),
                 caching: resident_cell(writer, None),
                 channel_residual: resident_cell(writer, Keyed::from_sorted(&[])),
@@ -3441,7 +3451,14 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 reach: resident_cell(writer, Frontier::EMPTY),
                 specialization_keys: resident_cell(writer, None),
             },
-        )
+        );
+        debug_assert_eq!(
+            self.sealed.len(),
+            segment.index() as usize,
+            "a shape seals at its segment"
+        );
+        self.sealed.push(shape);
+        shape
     }
 }
 

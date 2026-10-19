@@ -28,7 +28,7 @@ use crate::memory::{BumpAllocator, BumpBackedSet, BumpVec, bump_set, collect};
 use crate::parse::ExpressionPart;
 use crate::scope::{
     BodyClass, BodyShape, Caching, Candidate, Coordinate, Keyed, Leaf, Mint, NodeCapture,
-    ParameterBinding, PathEntry, Position, ShapeKind, Site, Slot, Static, Tree,
+    ParameterBinding, Position, ShapeKind, Site, Slot, Static, Tree,
 };
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::{Interval, KType, Side, TypeNode, Variable, is_subtype_of, read_through};
@@ -46,12 +46,12 @@ pub(super) enum Deps<'p> {
     Varying,
 }
 
-/// What a site reads as the pass types it: what it depends on already, beside the path entries it
-/// reads, each resolved to its content tree once the pass has written it.
+/// What a site reads as the pass types it: what it depends on already, beside the paths it reads,
+/// each by its chain root and level, resolved to its content tree once the pass has written it.
 #[derive(Clone, Copy)]
 pub(super) struct Reads<'p, 'graph> {
     deps: Deps<'p>,
-    pending: &'p [&'graph PathEntry<'graph>],
+    pending: &'p [(&'graph BodyShape<'graph>, usize)],
 }
 
 /// One classed site of a frame body that may cache.
@@ -129,8 +129,8 @@ impl<'p, 'graph> SiteRecord<'p, 'graph> {
     /// What the site depends on, each path entry it reads resolved to its content tree.
     fn deps(&self, scratch: BumpAllocator<'p>) -> Deps<'p> {
         let mut deps = self.reads.deps;
-        for entry in self.reads.pending {
-            let each = match resolution_of(entry) {
+        for (root, level) in self.reads.pending {
+            let each = match resolution_of(root, *level) {
                 Some(resolution) => {
                     tree_deps(self.shapes, self.frame_at, &resolution.tree, scratch)
                 }
@@ -180,7 +180,7 @@ fn tree_deps<'p, 'graph>(
             Tree::Leaf(Leaf::Bound { binder, .. }) => {
                 let at = (0..shapes.len())
                     .rev()
-                    .find(|at| std::ptr::eq(shapes[*at], binder.shape));
+                    .find(|at| shapes[*at].segment() == binder.body);
                 let each = match at {
                     Some(at) => binder_deps(shapes, frame, at, binder.slot, scratch),
                     None => Deps::Varying,
@@ -418,7 +418,9 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                 .then(|| self.reachable(level, variable))
                 .flatten();
             match entry {
-                Some((entry, _)) => pending.push(entry),
+                Some((entry, _)) => {
+                    pending.push((self.chain[self.chain_root(level)].shape, entry.level))
+                }
                 None => return Reads::known(Deps::Varying),
             }
         }

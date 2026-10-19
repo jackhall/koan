@@ -152,9 +152,9 @@ use crate::parse::{ExpressionPart, KExpression, KLiteral};
 use crate::scope::{
     Address, BodyClass, BodyShape, BuiltinIndex, Candidate, CandidateList, CaptureSlot,
     CaptureSource, Coordinate, FactKey, Frontier, HandedTo, Handoff, InstanceRead, Leaf, Listed,
-    Narrowing, Position, Print, ShapeError, ShapeKind, Site, Slot, Source, Static, StaticSolution,
-    StaticType, SurfacedHead, Target, Tree, UnitWork, Unknown, UseStatics, Variable as Located,
-    ViewSlots, Within, source_of,
+    Narrowing, Position, Print, Segment, ShapeError, ShapeKind, Site, Slot, Source, Static,
+    StaticSolution, StaticType, SurfacedHead, Target, Tree, UnitWork, Unknown, UseStatics,
+    Variable as Located, ViewSlots, Within, source_of,
 };
 use crate::source::SourceRef;
 use crate::symbols::{BinderSymbol, TypeSymbol};
@@ -241,6 +241,11 @@ pub(super) fn resume_statics<'graph>(
 }
 
 impl<'p, 'x, 'graph: 'p> Pass<'p, 'x, 'graph> {
+    /// The shape the load built at `segment`, found through the chain's root.
+    fn shape_at(&self, segment: Segment) -> &'graph BodyShape<'graph> {
+        self.chain[0].shape.shape_at(segment)
+    }
+
     fn new(
         builtins: &'x KBuiltins<'graph, 'graph>,
         types: &'x Types<'graph, 'x>,
@@ -407,7 +412,7 @@ struct Level<'p, 'graph> {
     trees: BumpVec<'p, (Site, &'graph Tree<'graph>)>,
     /// Each path the shape spells whose declared application names a lexical variable, by its
     /// level, beside where the shape reads each variable.
-    throughs: BumpVec<'p, (usize, &'graph [Located<'graph>])>,
+    throughs: BumpVec<'p, (usize, &'graph [Located])>,
     /// Each `LET` binder, by its right-hand side's site.
     rhs: BumpBackedMap<'p, Site, Slot>,
     /// Each fact of the shape that waits on an unknown, by the key its rule ran at, beside its
@@ -699,7 +704,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                     let from = spelled.partition_point(|(at, _)| *at < index);
                     let to = spelled.partition_point(|(at, _)| *at <= index);
                     for (_, entry) in spelled[from..to].iter() {
-                        self.resolve_path(level, entry)?;
+                        self.resolve_path(level, *entry)?;
                     }
                 }
             }
@@ -1179,7 +1184,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
         level: usize,
         values: &[Parametric],
         used: SourceRef,
-    ) -> &'graph [Located<'graph>] {
+    ) -> &'graph [Located] {
         let (types, scratch) = (self.types, self.scratch);
         let mut levels: BumpVec<'_, (usize, TypeSymbol)> = BumpVec::new_in(scratch);
         for value in values {
@@ -1211,7 +1216,8 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                     level: variable,
                     source: Source::Path {
                         at: Some(at),
-                        entry,
+                        root: self.chain_root_segment(level),
+                        level: entry.level,
                     },
                 });
                 continue;
@@ -1295,7 +1301,7 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
     fn throughs(&mut self, level: usize) {
         let shape = self.chain[level].shape;
         for (site, read) in self.spellings(shape) {
-            let entry = read.entry;
+            let entry = self.spelled_entry(shape, *read);
             let Some(through) = entry.through else {
                 continue;
             };
@@ -3832,9 +3838,8 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
             match tree {
                 Tree::Digest(_) => {}
                 Tree::Retyped { source, .. } => stack.push(*source),
-                Tree::Body {
-                    shape, captures, ..
-                } => {
+                Tree::Body { body, captures, .. } => {
+                    let shape = self.shape_at(body);
                     let mints = self.module_mints.get(&address(shape)).copied();
                     // A read of the program's top level is no capture the tree holds; it is the
                     // program's own where the program is the frame body.
@@ -3860,11 +3865,12 @@ impl<'p, 'graph: 'p> Pass<'p, '_, 'graph> {
                     }
                     let at = (0..=level)
                         .rev()
-                        .find(|at| std::ptr::eq(self.chain[*at].shape, binder.shape));
+                        .find(|at| self.chain[*at].shape.segment() == binder.body);
                     let received = at.is_some_and(|at| {
                         at < frame
                             || (at == frame
-                                && binder.shape.position_of(binder.slot) == Position::PARAMETER)
+                                && self.chain[at].shape.position_of(binder.slot)
+                                    == Position::PARAMETER)
                     });
                     if !received {
                         return true;

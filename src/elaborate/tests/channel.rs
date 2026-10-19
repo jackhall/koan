@@ -598,26 +598,30 @@ fn an_enclosing_for_all_name_keeps_its_level_along_the_chain() {
     });
 }
 
-/// The one path variable among `variables`: its entry.
-fn path_entry<'graph>(variables: &[Variable<'graph>]) -> &'graph PathEntry<'graph> {
+/// The one path variable among `variables`, which `shape` reads: its entry.
+fn path_entry<'graph>(shape: &BodyShape<'graph>, variables: &[Variable]) -> PathEntry<'graph> {
     let [
         Variable {
-            source: Source::Path { entry, .. },
+            source: Source::Path { root, level, .. },
             ..
         },
     ] = variables
     else {
         panic!("one path variable, not {variables:?}")
     };
-    entry
+    (shape.shape_at(*root).path_entry(*level)).expect("a path variable reads a minted entry")
 }
 
-/// The path variable `typed` is rigid over: its value, a lexical variable, and its entry.
-fn path<'graph>(typed: StaticType<'graph>) -> (Parametric, &'graph PathEntry<'graph>) {
+/// The path variable `typed`, which `shape` reads, is rigid over: its value, a lexical variable,
+/// and its entry.
+fn path<'graph>(
+    shape: &BodyShape<'graph>,
+    typed: StaticType<'graph>,
+) -> (Parametric, PathEntry<'graph>) {
     let Static::Rigid { value, variables } = typed else {
         panic!("a rigid type, not {typed:?}")
     };
-    (value, path_entry(variables))
+    (value, path_entry(shape, variables))
 }
 
 #[test]
@@ -632,17 +636,17 @@ fn a_path_through_a_module_name_is_one_variable_past_every_name_level() {
             let [expression] = written_in(shape, statement)[..] else {
                 panic!("one type expression in statement {statement}")
             };
-            path(expression.typed())
+            path(shape, expression.typed())
         });
-        assert!(std::ptr::eq(x.1, y.1), "two spellings of one path share it");
+        assert!(x.1 == y.1, "two spellings of one path share it");
         assert_eq!(x.0, y.0);
-        assert!(!std::ptr::eq(x.1, z.1), "another label is another path");
+        assert!(x.1 != z.1, "another label is another path");
         // `ints`'s own `Carrier` takes level 0; the paths start past it.
         assert_eq!((x.1.level, z.1.level), (1, 2));
         assert_eq!(x.0, lexical(program, 1, "Carrier"));
         assert!(x.1.through.is_none(), "a binder with no declared type");
         assert_eq!(shape.paths().len(), 2);
-        assert!(std::ptr::eq(shape.path_entry(2).expect("an entry"), z.1));
+        assert!(shape.path_entry(2).expect("an entry") == z.1);
     });
 }
 
@@ -657,7 +661,7 @@ fn a_path_through_a_parameter_reads_through_its_declared_application() {
         let Static::Rigid { variables, .. } = inner.callable_type() else {
             panic!("`g`'s type is rigid over the path")
         };
-        let entry = path_entry(variables);
+        let entry = path_entry(inner, variables);
         assert!(
             entry.through.is_some(),
             "`Mapper` leaves `Carrier` unpinned, so the path reads through it"

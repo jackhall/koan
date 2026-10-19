@@ -50,8 +50,8 @@ use crate::parse::quoted_body;
 use crate::scope::{
     Address, Binder, BodyShape, Builtins, Callable, CaptureSlot, CaptureSource, Coordinate,
     Elaboration, FactKey, Frontier, FunctionGroupMap, Keyed, ParameterBinding, PathEntry,
-    PathIndex, PathRead, Position, Registered, Registration, Resumption, Root, Settled, ShapeError,
-    ShapeGroupMap, ShapeKind, Site, Slot, Source, Static, StaticRegistered, StaticType,
+    PathIndex, PathRead, Position, Registered, Registration, Resumption, Root, Segment, Settled,
+    ShapeError, ShapeGroupMap, ShapeKind, Site, Slot, Source, Static, StaticRegistered, StaticType,
     SurfacedHead, Target, TypeExpression, UnitWork, Unknown, Variable, frontier_at, merge_into,
     source_of,
 };
@@ -153,10 +153,10 @@ struct Level<'p, 'graph> {
     /// Every other run-bound name the shape declares, beside its level.
     names: BumpVec<'p, (Key, usize)>,
     /// Each path spelling the shape's type expressions read, by site.
-    reads: Cell<BumpVec<'p, (Site, PathRead<'graph>)>>,
+    reads: Cell<BumpVec<'p, (Site, PathRead)>>,
     /// At a chain root: the level past every name level of the chain, and the chain's path entries
     /// in the order they were minted, each at that level plus its index.
-    paths: Option<(usize, Cell<BumpVec<'p, &'graph PathEntry<'graph>>>)>,
+    paths: Option<(usize, Cell<BumpVec<'p, PathEntry<'graph>>>)>,
     /// At a chain root: its path entries' indices, by root, chain and label.
     found: Cell<PathIndex<'p>>,
     /// Each cell of the shape fixed so far that waits on an unknown, beside its frontier.
@@ -261,7 +261,7 @@ struct Reader<'e, 'p, 'graph, 'cell, X> {
     mode: Mode,
     rigid: Cell<u32>,
     /// Each rigid variable read, once per level.
-    variables: Cell<BumpVec<'p, Variable<'graph>>>,
+    variables: Cell<BumpVec<'p, Variable>>,
     /// Every unknown a read reached, transitively: the frontier of the cell being typed.
     frontier: Cell<BumpVec<'p, Unknown>>,
 }
@@ -310,15 +310,18 @@ impl<'graph, X: Knotted> Reads<'graph> for Reader<'_, '_, 'graph, '_, X> {
             return unknown;
         };
         let binder = Binder {
-            shape: self.pass.chain[level].shape,
+            body: self.pass.chain[level].shape.segment(),
             slot,
         };
-        let entry = self
+        let (root, entry) = self
             .pass
             .path(self.from, Root::Binder(binder), chain, label, || {
                 self.pass.declared(level, slot)
             });
-        Some((self.path(site, Some(at), entry), KType::EMPTY_SIGNATURE))
+        Some((
+            self.path(site, Some(at), root, entry),
+            KType::EMPTY_SIGNATURE,
+        ))
     }
 
     fn inline_member(
@@ -328,10 +331,10 @@ impl<'graph, X: Knotted> Reads<'graph> for Reader<'_, '_, 'graph, '_, X> {
         chain: &[ValueSymbol],
         label: TypeSymbol,
     ) -> TypeAt {
-        let entry = self
+        let (root, entry) = self
             .pass
             .path(self.from, Root::Inline(root), chain, label, || None);
-        self.path(site, None, entry)
+        self.path(site, None, root, entry)
     }
 }
 
@@ -345,18 +348,26 @@ impl<'graph, X> Reader<'_, '_, 'graph, '_, X> {
         TypeAt::Rigid(variable)
     }
 
-    /// The path variable of `entry`, spelled at `site` with its root read at `at`: recorded on the
-    /// shape read, and rigid where the reader types anything but a type binder.
-    fn path(&self, site: Site, at: Option<Coordinate>, entry: &'graph PathEntry<'graph>) -> TypeAt {
+    /// The path variable of `entry`, of the chain the body at `root` roots, spelled at `site` with
+    /// its root read at `at`: recorded on the shape read, and rigid where the reader types anything
+    /// but a type binder.
+    fn path(
+        &self,
+        site: Site,
+        at: Option<Coordinate>,
+        root: Segment,
+        entry: PathEntry<'graph>,
+    ) -> TypeAt {
+        let level = entry.level;
         edit(
             &self.pass.chain[self.from].reads,
             self.pass.scratch,
-            |reads| reads.push((site, PathRead { at, entry })),
+            |reads| reads.push((site, PathRead { at, root, level })),
         );
         if self.mode == Mode::Declaring {
             return TypeAt::Unknown;
         }
-        self.read(entry.level, Source::Path { at, entry });
+        self.read(level, Source::Path { at, root, level });
         TypeAt::Rigid(
             self.pass
                 .types
@@ -365,7 +376,7 @@ impl<'graph, X> Reader<'_, '_, 'graph, '_, X> {
     }
 
     /// Record a rigid read of the variable at `level`, once per level.
-    fn read(&self, level: usize, source: Source<'graph>) {
+    fn read(&self, level: usize, source: Source) {
         self.rigid.set(self.rigid.get() + 1);
         edit(&self.variables, self.pass.scratch, |variables| {
             if !variables.iter().any(|held| held.level == level) {
@@ -504,28 +515,31 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
     }
 
     /// The path entry of the chain the shape at level `from` sits on for `root`, `chain` and
-    /// `label`: the one minted already, or a new one at the chain's next path level, read through
-    /// what `declared` gives — the root's declared type — where it leaves `label` unpinned.
+    /// `label`, beside the segment of the body rooting that chain: the one minted already, or a new
+    /// one at the chain's next path level, read through what `declared` gives — the root's declared
+    /// type — where it leaves `label` unpinned.
     fn path(
         &self,
         from: usize,
-        root: Root<'graph>,
+        root: Root,
         chain: &[ValueSymbol],
         label: TypeSymbol,
         declared: impl FnOnce() -> Option<Parametric>,
-    ) -> &'graph PathEntry<'graph> {
+    ) -> (Segment, PathEntry<'graph>) {
         let at = (0..=from)
             .rev()
             .find(|level| self.chain[*level].root)
             .expect("every chain has a root");
+        let segment = self.chain[at].shape.segment();
         // A resumption reads the paths the load minted, finding each where the load did.
         if self.resume.is_some() {
             let minted = self.loaded_paths(self.chain[at].shape).iter();
-            return (minted
+            let entry = (minted
                 .into_iter()
                 .find(|entry| entry.is(root, chain, label))
                 .copied())
             .expect("a resumption mints no path entry");
+            return (segment, entry);
         }
         let (base, paths) = self.chain[at]
             .paths
@@ -541,16 +555,22 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
             held
         });
         if let Some(entry) = held {
-            return entry;
+            return (segment, entry);
         }
         // Typing the declared type may mint the paths it reads, so it runs before the level is
         // taken.
         let through = declared().and_then(|declared| {
             declared_through(self.types, self.scratch, declared, chain, label)
         });
+        let chain = collect(self.writer, chain.iter().copied());
         edit(paths, self.scratch, |paths| {
-            let entry =
-                PathEntry::new(self.writer, root, chain, label, base + paths.len(), through);
+            let entry = PathEntry {
+                root,
+                chain,
+                label,
+                level: base + paths.len(),
+                through,
+            };
             let mut index = found.replace(bump_hash_table(self.scratch));
             index.insert_unique(hash, paths.len(), |at| {
                 let held = paths[*at];
@@ -558,7 +578,7 @@ impl<'p, 'graph, 'cell, X: Knotted> Pass<'p, 'graph, 'cell, X> {
             });
             found.set(index);
             paths.push(entry);
-            entry
+            (segment, entry)
         })
     }
 

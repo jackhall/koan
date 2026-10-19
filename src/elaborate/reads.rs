@@ -126,11 +126,16 @@ impl<'graph, XF: KnottedFamily<'graph>> Reads<'graph> for ActivationView<'graph,
         let signature = held.concrete_ktype();
         // The load records every path its type expressions spell; one it read through a declared
         // application binds as the run's path variable does.
-        if let Some(read) = self.shape().path_read(site)
-            && read.entry.through.is_some()
-        {
-            let bound = bound_path(self, types, at, read.entry);
-            return Some((bound.map_or(TypeAt::NotAType, TypeAt::Type), signature));
+        if let Some(read) = self.shape().path_read(site) {
+            let root = self.shape().shape_at(read.root);
+            let entry = root.path_entry(read.level)?;
+            if entry.through.is_some() {
+                let bound = match root.path_closed(read.level) {
+                    Some(closed) => Some(closed),
+                    None => bound_path(self, types, at, entry),
+                };
+                return Some((bound.map_or(TypeAt::NotAType, TypeAt::Type), signature));
+            }
         }
         let scratch = Bump::new();
         Some((
@@ -149,7 +154,8 @@ impl<'graph, XF: KnottedFamily<'graph>> Reads<'graph> for ActivationView<'graph,
         _name: TypeSymbol,
     ) -> TypeAt {
         let read = self.shape().path_read(site);
-        match read.and_then(|read| read.entry.closed()) {
+        let shape = self.shape();
+        match read.and_then(|read| shape.shape_at(read.root).path_closed(read.level)) {
             Some(closed) => TypeAt::Type(closed),
             None => TypeAt::Unknown,
         }

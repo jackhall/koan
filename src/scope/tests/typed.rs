@@ -3,9 +3,51 @@
 //! callable or a binder is typed with, nor a type nested in a recorded one.
 
 use crate::parse::ExpressionPart;
-use crate::scope::{BodyShape, Builtins, Static};
+use crate::scope::{
+    BodyShape, Builtins, PathEntry, Resolution, Settled, ShapeFacts, Static, StaticType, Statics,
+    Tree,
+};
 
 use super::{builtins, with_fixture};
+
+// The facts vocabulary names a body by its segment and holds no reference into program storage, so
+// each type is covariant in its one lifetime: one laid in program storage reads as one laid in any
+// shorter-lived region.
+
+#[allow(dead_code)]
+fn a_static_type_shortens<'short, 'long: 'short>(x: StaticType<'long>) -> StaticType<'short> {
+    x
+}
+
+#[allow(dead_code)]
+fn statics_shorten<'short, 'long: 'short>(x: Statics<'long>) -> Statics<'short> {
+    x
+}
+
+#[allow(dead_code)]
+fn shape_facts_shorten<'short, 'long: 'short>(x: ShapeFacts<'long>) -> ShapeFacts<'short> {
+    x
+}
+
+#[allow(dead_code)]
+fn a_resolution_shortens<'short, 'long: 'short>(x: Resolution<'long>) -> Resolution<'short> {
+    x
+}
+
+#[allow(dead_code)]
+fn settled_shortens<'short, 'long: 'short>(x: Settled<'long>) -> Settled<'short> {
+    x
+}
+
+#[allow(dead_code)]
+fn a_tree_shortens<'short, 'long: 'short>(x: Tree<'long>) -> Tree<'short> {
+    x
+}
+
+#[allow(dead_code)]
+fn a_path_entry_shortens<'short, 'long: 'short>(x: PathEntry<'long>) -> PathEntry<'short> {
+    x
+}
 
 #[test]
 fn the_builder_records_each_type_expression_once() {

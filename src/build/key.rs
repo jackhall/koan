@@ -75,12 +75,10 @@ fn collect_names<'graph>(
             let Address::Slot(slot) = unknown.at else {
                 continue;
             };
-            let declaring = chain.iter().find(|body| body.segment() == unknown.segment);
-            let keys = declaring.is_some_and(|body| {
-                body.kind() == ShapeKind::Callable
-                    && (body.caching())
-                        .is_some_and(|caching| caching.keyable.binary_search(&slot).is_ok())
-            });
+            let declaring = shape.shape_at(unknown.segment);
+            let keys = declaring.kind() == ShapeKind::Callable
+                && (declaring.caching())
+                    .is_some_and(|caching| caching.keyable.binary_search(&slot).is_ok());
             if keys {
                 named.push((unknown.segment, slot));
             }

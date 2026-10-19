@@ -395,7 +395,7 @@ fn solved<'graph, 'x>(
     match solution {
         StaticSolution::Closed(solution) => scratch.alloc_slice_copy(solution),
         StaticSolution::Rigid { value, variables } => {
-            let paths = |at, entry: &_| bound_path(activation, types, at, entry);
+            let paths = |at, entry| bound_path(activation, types, at, entry);
             let bindings = solutions(variables, activation, scratch, &paths).expect(BOUND);
             let mut solved = BumpVec::with_capacity_in(value.len(), scratch);
             solved.extend(value.iter().map(|each| {
@@ -443,7 +443,7 @@ fn loaded<'graph, 'x>(
             .concrete_declared(substitute_levels(types, scratch, value, bindings))
             .expect(BORN)
     };
-    let paths = |at, entry: &_| bound_path(activation, types, at, entry);
+    let paths = |at, entry| bound_path(activation, types, at, entry);
     let callable =
         body.callable_type()
             .solved(activation, scratch, &paths, |callable, bindings| {

@@ -274,8 +274,9 @@ fn each_open_path_reads_back_its_tree() {
          LET one = (asc :| Ordered)\nLET a = (BUILD one)\nLET z = a.zero"
     );
     loaded(&source, |program| {
-        let mut trees = program.shape().paths().iter().filter_map(|entry| {
-            let resolution = entry.resolution().expect("the load resolves every path");
+        let root = program.shape();
+        let mut trees = root.paths().iter().filter_map(|entry| {
+            let resolution = (root.resolution(entry.level)).expect("the load resolves every path");
             match resolution.resolved {
                 Resolved::Class(_) => Some((entry.label, resolution.tree)),
                 Resolved::Closed(_) => None,
@@ -288,7 +289,8 @@ fn each_open_path_reads_back_its_tree() {
             panic!("a leaf on `p`: {tree:?}");
         };
         assert!(chain.is_empty());
-        assert_eq!(label(binder.shape.slot_name(binder.slot).symbol()), "p");
+        let declaring = root.shape_at(binder.body);
+        assert_eq!(label(declaring.slot_name(binder.slot).symbol()), "p");
         let (carrier, tree) = trees.next().expect("`a`'s `Carrier` is open");
         assert_eq!(label(carrier.symbol()), "Carrier");
         let Tree::View { source, .. } = tree else {

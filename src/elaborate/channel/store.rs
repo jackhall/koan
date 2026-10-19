@@ -396,7 +396,7 @@ impl<'p, 'graph, X> Pass<'p, 'graph, '_, X> {
     pub(super) fn fix_path_reads(
         &self,
         shape: &BodyShape<'graph>,
-        reads: Keyed<'graph, (Site, PathRead<'graph>)>,
+        reads: Keyed<'graph, (Site, PathRead)>,
     ) {
         if self.resume.is_none() {
             shape.fix_path_reads(reads);
@@ -404,10 +404,7 @@ impl<'p, 'graph, X> Pass<'p, 'graph, '_, X> {
     }
 
     /// The path entries the channel minted for the chain `root` roots, at the load.
-    pub(super) fn loaded_paths(
-        &self,
-        root: &BodyShape<'graph>,
-    ) -> &'graph [&'graph PathEntry<'graph>] {
+    pub(super) fn loaded_paths(&self, root: &BodyShape<'graph>) -> &'graph [PathEntry<'graph>] {
         root.channel_paths()
     }
 
@@ -415,7 +412,7 @@ impl<'p, 'graph, X> Pass<'p, 'graph, '_, X> {
     pub(super) fn fix_channel_paths(
         &self,
         root: &BodyShape<'graph>,
-        paths: &'graph [&'graph PathEntry<'graph>],
+        paths: &'graph [PathEntry<'graph>],
     ) {
         if self.resume.is_none() {
             root.fix_channel_paths(paths);
