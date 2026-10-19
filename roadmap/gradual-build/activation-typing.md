@@ -69,9 +69,8 @@ and the run binds a path variable per read (`elaborate::bound_path`).
   one binding, what its resumption leaves parked waits on a binding its key
   does not fix, and two frames under it may fix that binding differently,
   so the parked remainder is the cell's residual and the work over it runs
-  in the cell the next binding names — a child specialization, which reads
-  the residual through the parent region it borrows. `Step::enlist` grows no
-  successor. A case where the same cell is
+  in the cell the next binding names — a child specialization. `Step::enlist`
+  grows no successor. A case where the same cell is
   the right place to resume — a remaining unknown with one possible binding
   — would reopen this; none is known. A capture is
   answered by keying on the seam's names: `inner`'s fact on a capture `xs`
@@ -89,20 +88,43 @@ and the run binds a path variable per read (`elaborate::bound_path`).
   a body remainder born as a cell with its own lend would reopen it, and
   nothing here forecloses that.
 - *A frame of a body that keys nothing, under an encloser's specialization* —
-  open. A callable whose facts all wait on its encloser's names keys nothing of
-  its own, so the encloser's specialization settles them, but its frame seeks
-  nothing and is born borrowing its parent's scratch, which cannot read them.
-  It may seek on its segment alone, a child of the specialization its closure
-  was born under, or borrow that specialization itself.
-- *Which side of a keyed module argument a binding reads* — open. The asker
-  digests a keyed module argument and lays its types as it holds it, while the
-  frame binds it retyped to its parameter's declared type, and past a barrier
-  crossed: a loop handing its own `m` to an arm binds the retyped module the
-  loop's frame holds. A resumption settles its facts against the binding's
-  types, so it must reach the content the frame binds.
+  decided. It borrows the specialization its closure was born under, as a hop
+  of the same callee borrows its frame's, and reads that specialization's facts
+  for its own segment; where that specialization is no longer live it is born
+  cold.
+- *Where a child specialization gets its ancestors' facts* — open. A frame
+  reaches only its own specialization's header, so a child's settled facts must
+  include what its ancestors settled for the bodies under it. Recommended: the
+  child resumes from the load, with no base, under its parent's binding
+  restricted to its callee's reach and extended by its own keyed names, its
+  step first copying those binding handles from its lend into its branch.
+  Each specialization's binding then holds exactly the ancestor bindings its
+  callee's facts wait on, the parent's binding carrying the grandparents'.
+  The alternative extends the parent's settled facts and residual, read
+  through the lend, and relays every type they name.
+- *A frame's last statement* — open. A frame's last statement runs as a tenant
+  of the frame's parent and copies the parent's lend, so it reads none of the
+  frame's settled facts, and in a one-statement body that is all of them. It
+  may borrow the frame's specialization through a lend of its own, as a
+  `Shares` frame does, or a cell's typing context may become a borrow apart
+  from its memory lend; a design pass decides.
+- *Invariant view sites* — decided. A `:|` over a keyed module parameter, and a
+  composite over its carriers, mint in the frame's scratch: a view's carriers
+  are keyed on the module's content, which a binding of types does not carry.
+  The invariant site class and the keys it contributed go, so a body keys on
+  its frontier names alone. [Views settled from content](content-settled-views.md)
+  settles them.
+- *Verdicts a frame reaches* — decided. A run cell reads its lend read-only, so
+  a verdict a frame reaches over two of its specialization's types is not kept
+  across hops; the resumption's verdicts are.
 
 ## Dependencies
 
-**Requires:** none.
+**Requires:**
 
-**Unblocks:** none — a leaf.
+- [A resumption at any brand](resumption-at-a-brand.md) — the specialization's step runs the resumption at its own brand.
+- [Every spelled path minted at the load](paths-minted-at-load.md) — a resumption mints no path entry.
+
+**Unblocks:**
+
+- [Views settled from content](content-settled-views.md) — the step settles a view's types once the binding carries content.
