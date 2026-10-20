@@ -21,11 +21,11 @@
 //! branch the same way ([`RegionTier`]), held by value in the chain's [`Halves`] and re-reading the
 //! region's header on every probe so a branch the region lays during the step is seen. A branch
 //! never holds a region tier: the region's door is valid for one step, a branch for its half's
-//! life. A link never cycles: it points at a spawner, linked
-//! before its child existed, or at a region a scratch branch is linked to late, which reaches no
-//! scratch branch. A branch records its link depth and its chain's bottom as it is linked, which a
-//! merge's reach check reads ([transfer.rs](super::transfer)); so a branch is linked late only
-//! where nothing links it, which it records too, and nothing has recorded its stamps.
+//! life. A link never cycles: it points at a spawner, linked before its child existed, and a
+//! branch links once, as it is laid. A branch records its link depth and its chain's bottom as it
+//! is linked, which a merge's reach check reads ([transfer.rs](super::transfer)). No tier is read
+//! at a brand unrelated to the chain's own: a link's brand outlives its branch's, and a region's
+//! outlives its scratch's.
 //!
 //! How a chain reaches the tier it writes is the [`Habitat`] it is built over: a [`LaysRuns`]
 //! with the half's own tier ([`Own`]) beside it. Koan implements it for a region's writer beside
@@ -453,9 +453,6 @@ pub struct Branch<'t> {
     /// The [tag](self::bottom_tag) of the chain's last branch, the one that links nothing; unread at
     /// depth 0, where the branch is its own bottom, since a branch moves after [`Branch::new`].
     bottom: Cell<u32>,
-    /// Whether another branch links this one, and so has recorded its depth and bottom: what keeps
-    /// a late link from changing stamps another branch holds.
-    linked: Cell<bool>,
     /// How many reach steps the merges into the branch have taken.
     #[cfg(any(test, feature = "counters"))]
     reach_steps: Cell<usize>,
@@ -472,7 +469,6 @@ impl<'t> Branch<'t> {
             link: Cell::new(None),
             depth: Cell::new(0),
             bottom: Cell::new(0),
-            linked: Cell::new(false),
             #[cfg(any(test, feature = "counters"))]
             reach_steps: Cell::new(0),
         }
@@ -604,9 +600,8 @@ impl<'t> Branch<'t> {
         }
     }
 
-    /// Link `tier`, the branch at `home`, taking the depth and bottom it gives. Called once: as the
-    /// branch is laid, or late, before any branch links it, so a branch's depth never changes once
-    /// another links it.
+    /// Link `tier`, the branch at `home`, taking the depth and bottom it gives. Called once, as the
+    /// branch is laid, so a branch's depth never changes once another links it.
     pub(super) fn set_link(&self, tier: &'t dyn Tier<'t>, home: ChainPosition) {
         assert!(
             self.link.replace(Some(tier)).is_none(),
@@ -614,27 +609,6 @@ impl<'t> Branch<'t> {
         );
         self.depth.set(home.depth + 1);
         self.bottom.set(home.bottom);
-    }
-
-    /// Record that another branch links this one.
-    pub(super) fn mark_linked(&self) {
-        self.linked.set(true);
-    }
-
-    /// Whether another branch links this one.
-    pub(super) fn is_linked(&self) -> bool {
-        self.linked.get()
-    }
-
-    /// Whether the branch links anything.
-    pub(super) fn links_any(&self) -> bool {
-        self.link.get().is_some()
-    }
-
-    /// Whether the branch links the branch at `home` itself: one link above it, on its chain.
-    pub(super) fn links(&self, home: ChainPosition) -> bool {
-        self.depth.get() == home.depth + 1
-            && (self.link.get()).is_some_and(|link| link.reaches_at(home, &Cell::new(0)))
     }
 
     pub(super) fn verdict(&self, key: VerdictKey) -> Option<bool> {
@@ -768,9 +742,10 @@ impl<'a, 't> RegionRead<'a, 't> {
 }
 
 /// What a scratch habitat's chain is built over: the half it writes, and the region whose tier it
-/// reads between the root and its own, held by value since a region's door lives one step. `None`
-/// for a half read alone, so a caller may hold one type for both. `'r: 't` is declared, so a
-/// function handed a chain over one may read the region at the chain's brand.
+/// reads between the agent tier and its own, held by value since a region's door lives one step.
+/// `None` for a half read alone, whose region type and brand are the half's own, so no brand is
+/// left free. `'r: 't` is declared, so a function handed a chain over one may read the region at
+/// the chain's brand.
 #[derive(Clone, Copy)]
 pub struct Halves<'r, 't, H, R>
 where
@@ -782,7 +757,7 @@ where
 }
 
 impl<'t, H> Halves<'t, 't, H, H> {
-    /// `half` alone. The region's type is the half's own, so no brand is left free.
+    /// `half` alone.
     pub fn alone(half: H) -> Self {
         Halves {
             half,
@@ -793,7 +768,7 @@ impl<'t, H> Halves<'t, 't, H, H> {
 }
 
 impl<'r: 't, 't, H, R> Halves<'r, 't, H, R> {
-    /// `half`, reading `region` between the root and its own tier.
+    /// `half`, reading `region` between the agent tier and its own.
     pub fn over(half: H, region: R) -> Self {
         Halves {
             half,
