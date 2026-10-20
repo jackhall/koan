@@ -12,14 +12,15 @@
 //! A crossing re-lays a component another half holds with [`Component::absolute`], over a table
 //! that is already absolute, so it ties nothing.
 //!
-//! The table sits behind [`Tied`], a cell that erases its slice's lifetime so a node stays covariant
-//! in `'run`, as a `Cell<&'run [T]>` would not. Its read is the crate's one `unsafe`; its soundness
+//! The table sits behind [`Tied`], an atomic pointer beside a fixed length that erases its slice's
+//! lifetime, so a node stays covariant in `'run`, as a `Cell<&'run [T]>` would not, and a sealed
+//! component a frozen load holds can be read from any thread. Its read is the crate's one `unsafe`; its soundness
 //! rests on writes this module alone makes. See [identity.md](identity.md) § Recursive groups.
 
 #![allow(unsafe_code)]
 
-use std::cell::Cell;
 use std::marker::PhantomData;
+use std::sync::atomic::{AtomicPtr, Ordering};
 
 use crate::bump::LaysRuns;
 
@@ -80,34 +81,39 @@ impl<'run> Component<'run> {
     }
 }
 
-/// A slice held by a lifetime-erased pointer, so its holder is covariant in `'run` and `T`.
+/// A slice held by a lifetime-erased pointer beside a fixed length, so its holder is covariant in
+/// `'run` and `T`, and `Sync` where `T` is.
 ///
 /// **Soundness.** [`get`](Self::get) reads the slice as `&'run [T]`, which holds while every slice
-/// the cell has held lives for `'run`. A covariant holder can be viewed at a shorter lifetime, so
-/// a write through such a view could store a slice that dies first; hence the one write,
-/// [`set`](Self::set), is private here, and its one caller, [`Component::tie`], writes once, into
-/// the component it has just laid, a slice of that component's own `'run`.
+/// the cell has held lives for `'run` and has the cell's length. A covariant holder can be viewed at
+/// a shorter lifetime, so a write through such a view could store a slice that dies first; hence the
+/// one write, [`set`](Self::set), is private here, and its one caller, [`Component::tie`], writes
+/// once, into the component it has just laid, a slice of that component's own `'run` and of the
+/// same length. The write is relaxed: every reader on another thread is spawned after the load's
+/// last write, and a spawn synchronizes.
 struct Tied<'run, T> {
-    slice: Cell<*const [()]>,
+    ptr: AtomicPtr<()>,
+    len: usize,
     held: PhantomData<&'run [T]>,
 }
 
 impl<'run, T> Tied<'run, T> {
     fn new(slice: &'run [T]) -> Self {
         Self {
-            slice: Cell::new(slice as *const [T] as *const [()]),
+            ptr: AtomicPtr::new(slice.as_ptr() as *mut ()),
+            len: slice.len(),
             held: PhantomData,
         }
     }
 
     fn set(&self, slice: &'run [T]) {
-        self.slice.set(slice as *const [T] as *const [()]);
+        assert_eq!(slice.len(), self.len, "a tie keeps its table's length");
+        self.ptr.store(slice.as_ptr() as *mut (), Ordering::Relaxed);
     }
 
     fn get(&self) -> &'run [T] {
-        // SAFETY: the pointer came from a `&'run [T]` in `new` or `set`, and the type's soundness
-        // note holds every such slice to `'run`. A slice cast keeps its element count, and the
-        // slice is only ever read.
-        unsafe { &*(self.slice.get() as *const [T]) }
+        // SAFETY: the pointer came from a `&'run [T]` of `self.len` elements in `new` or `set`,
+        // and the type's soundness note holds every such slice to `'run`. The slice is only read.
+        unsafe { std::slice::from_raw_parts(self.ptr.load(Ordering::Relaxed) as *const T, self.len) }
     }
 }
