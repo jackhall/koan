@@ -106,7 +106,7 @@ pub use shape::{
 };
 pub use sig_relations::{FitsFailure, InstanceFailure};
 pub use substitute::Side;
-pub use tiers::{Branch, Frozen, Habitat, Halves, Own, RegionRead, RootBuilder};
+pub use tiers::{Agent, Branch, Frozen, Habitat, Halves, Own, RegionRead, RootBuilder};
 #[cfg(any(test, feature = "counters"))]
 pub use transfer::{ADOPT_ASKED, ADOPT_HITS, ADOPT_LAID, ADOPT_PROBES};
 pub use typed::{

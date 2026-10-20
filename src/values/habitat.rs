@@ -18,12 +18,14 @@ use std::cell::Cell;
 use std::marker::PhantomData;
 
 use crate::memory::{Header, LaysRuns, Projected, Projects, Writer, reattachable};
-use crate::type_lattice::{Branch, Frozen, Habitat, Halves, Own, RootBuilder, TypeChain};
+use crate::type_lattice::{Agent, Branch, Frozen, Habitat, Halves, Own, RootBuilder, TypeChain};
 
-/// The tiers every chain of the program's one agent reads above its own halves: the frozen load.
+/// The two tiers every chain of the program's one agent reads above its own halves: the frozen
+/// load, and the agent tier, which outlives every cell and is released with the program.
 #[derive(Clone, Copy)]
 pub struct TypeTiers<'graph> {
     pub frozen: &'graph Frozen<'graph>,
+    pub agent: &'graph Agent<'graph>,
 }
 
 impl<'graph> TypeTiers<'graph> {
@@ -32,7 +34,7 @@ impl<'graph> TypeTiers<'graph> {
     where
         'graph: 'tier,
     {
-        TypeChain::new(self.frozen, half)
+        TypeChain::new(self.frozen, self.agent, half)
     }
 
     /// A scratch chain over `half`, reading the tiers, then `region`'s branch, before its own.
@@ -44,7 +46,7 @@ impl<'graph> TypeTiers<'graph> {
     where
         'graph: 'reg,
     {
-        TypeChain::scratch(self.frozen, region, half)
+        TypeChain::scratch(self.frozen, self.agent, region, half)
     }
 }
 

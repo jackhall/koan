@@ -44,7 +44,7 @@ use crate::types::operators::{FoldDirection, ReductionMode};
 use crate::types::schema::{SchemaDraft, SigOrigin};
 use crate::types::shape::shape_slots;
 use crate::types::shape::{DeferredReturnSurface, DispatchTokenElement, RawRank, dense_classes};
-use crate::types::tiers::{Branch, BumpHalf, Frozen, Habitat, Own, RootBuilder};
+use crate::types::tiers::{Agent, Branch, BumpHalf, Frozen, Habitat, Own, RootBuilder};
 use crate::types::typed::{instantiate_quantified, is_subtype_of, join, meet};
 use crate::types::walk::Variance;
 use crate::types::walk::unary::Visit;
@@ -174,6 +174,7 @@ impl World {
         World {
             types: Rc::new(TypeChain::new(
                 frozen,
+                Agent::in_region(arena),
                 WorldHalf::Branch(BumpHalf::new(arena)),
             )),
             frozen,

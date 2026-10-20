@@ -1,11 +1,15 @@
-//! The tiers a type lives in: the [`Frozen`] load, and a [`Branch`] per habitat half the run builds
-//! in. A [`TypeChain`] reads and writes them.
+//! The tiers a type lives in: the [`Frozen`] load every agent shares, the [`Agent`] tier one agent
+//! lays above it, and a [`Branch`] per habitat half the run builds in. A [`TypeChain`] reads and
+//! writes them.
 //!
 //! - The **frozen load** holds the load's types and outlives every run. While the load runs, its
 //!   [`RootBuilder`] grows a hashbrown table and a lossless verdict table in the bump it is laid in;
 //!   the load's end ([`RootBuilder::freeze`]) lays both into [`FrozenTable`]s, runs of slots that
 //!   are never written. The frozen load has no intern door and no record door, holds no cell, and
 //!   so is `Sync`; it is covariant, so a chain holds it at its own lifetime.
+//! - The **agent tier** holds what one agent rests above the load: insert-only nodes laid alone in
+//!   its bump, which never move, indexed by a hashbrown table there, and a lossless verdict table.
+//!   It is released whole at the agent's death.
 //! - A **branch** is a [`DigestTable`] of the nodes one habitat half — a cell region or a scratch
 //!   habitat — interned, laid in that half at its smallest size by the first door that needs it,
 //!   and released with the half. Its verdicts are a second table, laid at its first verdict. A
@@ -80,7 +84,7 @@ impl Keyed for StoredNode<'_> {
 
 /// A tier grown through shared borrows in the bump it is laid in: a hashbrown node table, whose
 /// miss is one group probe, and a verdict table laid at the first verdict, which keeps every
-/// verdict it is given. The root builder's storage.
+/// verdict it is given. The root builder's storage, and the agent tier's.
 struct Grown<'g> {
     bump: BumpAllocator<'g>,
     nodes: RefCell<NodeTable<'g>>,
@@ -120,9 +124,15 @@ impl<'g> Grown<'g> {
         record_in(&self.verdicts, self.bump, key, verdict);
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "counters"))]
     fn verdict_count(&self) -> usize {
         self.verdicts.get().map_or(0, DigestTable::len)
+    }
+
+    fn each_digest(&self, mut each: impl FnMut(TypeDigest)) {
+        for node in self.nodes.borrow().iter() {
+            each(node.digest());
+        }
     }
 }
 
@@ -322,6 +332,93 @@ impl<'g> Frozen<'g> {
     #[cfg(test)]
     pub(super) fn verdict_count(&self) -> usize {
         self.verdicts.len()
+    }
+}
+
+/// The agent tier: the nodes and verdicts one agent lays above the frozen load, insert-only, in a
+/// bump released whole at the agent's death. A node is laid alone and entered in a hashbrown index,
+/// whose miss is one group probe, since every intern that misses the load probes here next; it
+/// never moves, and nothing here is released before the tier. Its verdicts are a [`DigestTable`],
+/// as a branch's are. A chain reads it through the object-safe [`AgentTier`], at the chain's own
+/// brand, since a tier written through shared borrows is invariant in its lifetime.
+pub struct Agent<'a> {
+    grown: Grown<'a>,
+}
+
+impl<'a> Agent<'a> {
+    /// An empty agent tier over `bump`, laid there.
+    pub fn in_region(bump: BumpAllocator<'a>) -> &'a Self {
+        bump.alloc(Agent {
+            grown: Grown::new(bump, bump_hash_table(bump)),
+        })
+    }
+
+    /// How many nodes the tier holds. Tests read it — koan's among them.
+    pub fn len(&self) -> usize {
+        self.grown.len()
+    }
+
+    /// Whether the tier holds no node.
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    /// Every digest the tier holds, in no particular order. Tests read it — koan's among them.
+    pub fn each_digest(&self, each: impl FnMut(TypeDigest)) {
+        self.grown.each_digest(each);
+    }
+
+    /// How many verdicts the tier holds. Tests read it — koan's among them, through the `counters`
+    /// feature, since `cfg(test)` does not reach a dependency.
+    #[cfg(any(test, feature = "counters"))]
+    pub fn verdict_count(&self) -> usize {
+        self.grown.verdict_count()
+    }
+}
+
+impl<'a> LaysRuns<'a> for &'a Agent<'a> {
+    fn lay<T>(self, len: usize, fill: impl FnMut(usize) -> T) -> &'a [T] {
+        self.grown.bump.lay(len, fill)
+    }
+
+    fn text(self, text: &str) -> &'a str {
+        self.grown.bump.text(text)
+    }
+}
+
+impl<'a> Habitat<'a> for &'a Agent<'a> {
+    fn own(self) -> Option<Own<'a>> {
+        Some(Own::Agent(self))
+    }
+
+    fn own_or_lay(self) -> Own<'a> {
+        Own::Agent(self)
+    }
+}
+
+/// The agent tier as a chain reads it, at the chain's brand.
+pub(super) trait AgentTier<'t> {
+    /// The node under `digest` in the tier.
+    fn find(&self, digest: TypeDigest) -> Option<Linked<'t>>;
+
+    /// The tier's recorded verdict for `key`.
+    fn verdict(&self, key: VerdictKey) -> Option<bool>;
+
+    /// Record `verdict` for `key` in the tier.
+    fn record(&self, key: VerdictKey, verdict: bool);
+}
+
+impl<'a: 't, 't> AgentTier<'t> for Agent<'a> {
+    fn find(&self, digest: TypeDigest) -> Option<Linked<'t>> {
+        self.grown.find(digest)
+    }
+
+    fn verdict(&self, key: VerdictKey) -> Option<bool> {
+        self.grown.verdict(key)
+    }
+
+    fn record(&self, key: VerdictKey, verdict: bool) {
+        self.grown.record(key, verdict);
     }
 }
 
@@ -551,12 +648,14 @@ impl<'t> Branch<'t> {
     }
 }
 
-/// The tier a chain writes: the root builder during the load, a habitat half's branch at the run.
-/// A chain reaches it through its [`Habitat`] and never matches on it.
+/// The tier a chain writes: the root builder during the load, a habitat half's branch at the run,
+/// or the agent tier on the chain that lays into it. A chain reaches it through its [`Habitat`] and
+/// never matches on it.
 #[derive(Clone, Copy)]
 pub enum Own<'t> {
     Builder(&'t RootBuilder<'t>),
     Branch(&'t Branch<'t>),
+    Agent(&'t Agent<'t>),
 }
 
 impl<'t> Own<'t> {
@@ -564,6 +663,7 @@ impl<'t> Own<'t> {
         match self {
             Own::Builder(builder) => builder.find(digest),
             Own::Branch(branch) => branch.find(digest),
+            Own::Agent(agent) => agent.grown.find(digest),
         }
     }
 
@@ -571,12 +671,13 @@ impl<'t> Own<'t> {
         match self {
             Own::Builder(builder) => builder.find(digest),
             Own::Branch(branch) => branch.reach(digest),
+            Own::Agent(agent) => agent.grown.find(digest),
         }
     }
 
     pub(super) fn link_reach(self, digest: TypeDigest) -> Option<Linked<'t>> {
         match self {
-            Own::Builder(_) => None,
+            Own::Builder(_) | Own::Agent(_) => None,
             Own::Branch(branch) => branch.link_reach(digest),
         }
     }
@@ -585,6 +686,7 @@ impl<'t> Own<'t> {
         match self {
             Own::Builder(builder) => builder.insert(node),
             Own::Branch(branch) => branch.insert(lay, node),
+            Own::Agent(agent) => agent.grown.insert(node),
         }
     }
 
@@ -592,6 +694,7 @@ impl<'t> Own<'t> {
         match self {
             Own::Builder(builder) => builder.len(),
             Own::Branch(branch) => branch.len(),
+            Own::Agent(agent) => agent.len(),
         }
     }
 
@@ -599,6 +702,7 @@ impl<'t> Own<'t> {
         match self {
             Own::Builder(builder) => builder.verdict(key),
             Own::Branch(branch) => branch.verdict(key),
+            Own::Agent(agent) => agent.grown.verdict(key),
         }
     }
 
@@ -606,21 +710,23 @@ impl<'t> Own<'t> {
         match self {
             Own::Builder(builder) => builder.record(key, verdict),
             Own::Branch(branch) => branch.record(lay, key, verdict),
+            Own::Agent(agent) => agent.grown.record(key, verdict),
         }
     }
 
-    /// [`Branch::reaches_at`] over the tier; the root builder reaches no branch.
+    /// [`Branch::reaches_at`] over the tier; the root builder and the agent tier reach no branch.
     pub(super) fn reaches_at(self, at: ChainPosition, steps: &Cell<usize>) -> bool {
         match self {
-            Own::Builder(_) => false,
+            Own::Builder(_) | Own::Agent(_) => false,
             Own::Branch(branch) => branch.reaches_at(at, steps),
         }
     }
 
-    /// [`Branch::reaches_branch`] over the tier; the root builder reaches no branch.
+    /// [`Branch::reaches_branch`] over the tier; the root builder and the agent tier reach no
+    /// branch.
     pub(super) fn reaches_branch(self, address: *const ()) -> bool {
         match self {
-            Own::Builder(_) => false,
+            Own::Builder(_) | Own::Agent(_) => false,
             Own::Branch(branch) => branch.reaches_branch(address),
         }
     }
@@ -629,6 +735,7 @@ impl<'t> Own<'t> {
     pub(super) fn branch(self) -> &'t Branch<'t> {
         match self {
             Own::Builder(_) => panic!("the root builder is not a branch"),
+            Own::Agent(_) => panic!("the agent tier is not a branch"),
             Own::Branch(branch) => branch,
         }
     }

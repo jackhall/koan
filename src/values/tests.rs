@@ -28,7 +28,8 @@ use crate::memory::{
 use crate::parse::{ExpressionPart, KExpression, ProgramNode, parse};
 use crate::symbols::{SymbolInterner, TypeSymbol};
 use crate::type_lattice::{
-    DeclaredType, Halves, KType, Parametric, RecursiveGroupWindow, RelativeSchema, RootBuilder,
+    Agent, DeclaredType, Halves, KType, Parametric, RecursiveGroupWindow, RelativeSchema,
+    RootBuilder,
 };
 use crate::values::{
     Circular, CodeView, DeepCopy, Knotted, KnottedFamily, MemoBits, Resolved, Seen, TypeTiers,
@@ -92,6 +93,7 @@ pub(super) fn held<'cell, X: Copy>(
 /// so a cell reads no live builder: the load ends before the run starts, as a program's does.
 pub(crate) struct TestTypes<'graph> {
     builder: &'graph RootBuilder<'graph>,
+    agent: &'graph Agent<'graph>,
     tiers: std::cell::Cell<Option<TypeTiers<'graph>>>,
 }
 
@@ -100,6 +102,7 @@ impl<'graph> TestTypes<'graph> {
     pub fn new(bump: &'graph Bump) -> Self {
         TestTypes {
             builder: RootBuilder::in_region(bump),
+            agent: Agent::in_region(bump),
             tiers: std::cell::Cell::new(None),
         }
     }
@@ -112,6 +115,7 @@ impl<'graph> TestTypes<'graph> {
         }
         let tiers = TypeTiers {
             frozen: self.builder.freeze(),
+            agent: self.agent,
         };
         self.tiers.set(Some(tiers));
         tiers
@@ -237,12 +241,16 @@ impl<'graph> TestTypes<'graph> {
 pub(crate) fn seeded_tiers(bump: &Bump) -> TypeTiers<'_> {
     TypeTiers {
         frozen: RootBuilder::in_region(bump).freeze(),
+        agent: Agent::in_region(bump),
     }
 }
 
 /// A chain that reads `tiers` and interns anything a test asks of it into a builder of its own in
 /// `bump`: how a test reads the types a load built, outside any step.
-pub(crate) fn reading<'tier>(tiers: TypeTiers<'tier>, bump: &'tier Bump) -> Types<'tier, 'tier> {
+pub(crate) fn reading<'graph: 'tier, 'tier>(
+    tiers: TypeTiers<'graph>,
+    bump: &'tier Bump,
+) -> Types<'tier, 'tier> {
     tiers.chain(Halves::alone(Half::load(RootBuilder::in_region(bump))))
 }
 

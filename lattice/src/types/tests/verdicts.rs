@@ -11,7 +11,7 @@ use crate::symbols::{BinderSymbol, SymbolInterner};
 use crate::types::chain::TypeChain;
 use crate::types::digest::TypeDigest;
 use crate::types::handle::{Handle, KType, TypeHandle};
-use crate::types::tiers::{BumpHalf, RootBuilder};
+use crate::types::tiers::{Agent, BumpHalf, RootBuilder};
 use crate::types::verdicts::Relation;
 
 /// A root handle over `n`: the suite runs on the load's chain, where every handle is in-root.
@@ -112,7 +112,11 @@ fn the_loads_verdict_table_keeps_every_verdict() {
         building.record_verdict(key(i), key(i + 1), Relation::Subtype, i % 3 == 0);
     }
     assert_eq!(building.load_verdict_count() - seeded, n as usize);
-    let types = TypeChain::new(builder.freeze(), BumpHalf::new(&region));
+    let types = TypeChain::new(
+        builder.freeze(),
+        Agent::in_region(&region),
+        BumpHalf::new(&region),
+    );
     for i in 0..n {
         assert_eq!(
             types.verdict(key(i), key(i + 1), Relation::Subtype),

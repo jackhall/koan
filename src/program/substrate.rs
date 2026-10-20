@@ -17,7 +17,7 @@ use crate::scheduler::{
 };
 use crate::scope::{Binding, BodyShape, Relay, Resumption, Settled, ShapeError, Unknown};
 use crate::symbols::SymbolInterner;
-use crate::type_lattice::{Halves, KType, RootBuilder};
+use crate::type_lattice::{Agent, Halves, KType, RootBuilder};
 use crate::values::{Chain, Half, SpecBounds, TypeTiers, Types};
 
 use super::body;
@@ -33,12 +33,14 @@ pub const STACK_BYTES: usize = 64 << 20;
 /// What the substrate owns outright. It borrows nothing, and `self_cell` boxes it and only ever
 /// lends it shared, so everything that borrows it lives in [`Running`].
 ///
-/// `registry` is the bump the [type lattice](crate::type_lattice)'s root is built over — the one
-/// tier that still needs a collections arena rather than program storage's write surface. It is
-/// released whole with the rest, and nothing laid in it runs a destructor.
+/// `registry` is the bump the [type lattice](crate::type_lattice)'s load is built over, and
+/// `agent` the bump its agent tier grows in: the tiers that still need a collections arena rather
+/// than program storage's write surface. Both are released whole with the rest, and nothing laid
+/// in them runs a destructor.
 struct Owner {
     storage: ProgramStorage,
     registry: Bump,
+    agent: Bump,
     symbols: SymbolInterner,
 }
 
@@ -175,6 +177,7 @@ impl CellSubstrate {
         let owner = Owner {
             storage: program_storage(),
             registry: Bump::new(),
+            agent: Bump::new(),
             symbols: SymbolInterner::new(),
         };
         Joined::try_new(owner, |owner| {
@@ -220,6 +223,7 @@ impl CellSubstrate {
                 let error = builtin_error(types, &owner.symbols, &scratch);
                 let tiers = TypeTiers {
                     frozen: builder.freeze(),
+                    agent: Agent::in_region(&owner.agent),
                 };
                 let writer = brand.writer();
                 let program = resident(

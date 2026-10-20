@@ -36,7 +36,7 @@ use crate::types::node::{TypeNode, Variable};
 use crate::types::schema::{Members, canonical_overloads};
 use crate::types::shape::{DispatchTokenElement, Specificity, shape_slots};
 use crate::types::sig_relations::InstanceFailure;
-use crate::types::tiers::{BumpHalf, Habitat};
+use crate::types::tiers::{Agent, BumpHalf, Habitat};
 use crate::types::typed::{
     fits, instance_under, instantiate_quantified, is_subtype_of, join, meet, satisfied_by,
 };
@@ -1859,9 +1859,13 @@ proptest! {
 
 // --- Tiers ---
 
-/// A fresh branch chain over the world's root, in `region`.
+/// A fresh branch chain over the world's frozen load and a fresh agent tier, in `region`.
 fn beside<'r>(world: &World, region: &'r Bump) -> TypeChain<'r, BumpHalf<'r>> {
-    TypeChain::new(world.frozen, BumpHalf::new(region))
+    TypeChain::new(
+        world.frozen,
+        Agent::in_region(region),
+        BumpHalf::new(region),
+    )
 }
 
 /// Whether `kt` reads in `there` exactly as in the world: one digest recomputed off its content,
