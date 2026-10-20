@@ -146,9 +146,10 @@ type Taking<'a, 'graph, 'step, 'here, 'scratch, 'lent> =
 /// frame, or as a block.
 ///
 /// Each step runs on one chain ([type tiers](../../design/type-tiers.md#where-each-body-interns)):
-/// the reading chain in the own body of a routing caching frame — a `Fresh` one, which holds its
-/// scratch at its first step, or a `Shares` one borrowing a specialization; the `Shares` chain
-/// elsewhere in a caching body; and its region's anywhere else.
+/// the caching chain in a caching body, or in the own body of a routing caching frame — a `Fresh`
+/// one, which holds its scratch at its first step, or a `Shares` one borrowing a specialization —
+/// and its region's anywhere else. Under `routes`, an invariant site's types are adopted into the
+/// agent tier where the frame borrows a specialization.
 pub fn run<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'graph, KBundle> {
     let (step, state) = step.state();
     let (mut step, scratch) = step.scratch();
@@ -177,12 +178,9 @@ pub fn run<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'g
         let address = shape.map(|shape| std::ptr::from_ref(shape).addr());
         crate::scheduler::CACHING.set(address);
     }
-    if routes {
-        let types = step.reading_types().expect("a routing frame has a lender");
+    if routes || caches {
+        let types = step.caching_types();
         ran(step, state, scratch, routes, &types)
-    } else if caches {
-        let types = step.shares_types();
-        ran(step, state, scratch, false, &types)
     } else {
         let types = step.types();
         ran(step, state, scratch, false, &types)
@@ -1580,7 +1578,7 @@ fn declared<'graph, 'here>(
         let site = (shape.declarations(component.members[0])).map(Site::of_node);
         if runner.within.routes
             && site.and_then(|site| shape.mint_at(site)) == Some(Mint::Invariant)
-            && let Some(warm) = step.warm_types()
+            && let Some(warm) = step.agent_types()
         {
             for handle in declared.iter() {
                 warm.adopt_from(types, *handle);

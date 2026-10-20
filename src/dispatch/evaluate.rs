@@ -34,7 +34,8 @@
 //! and adopts what leaves the body into its region through an [`Exit`]: a call's callee, arguments,
 //! contributions and the contract it hands on, an `EVAL`'s code, offered record and declared type,
 //! and a value owed a frame's contract. Under `routes` an invariant view's operand and view, and a
-//! warm composite's own memo, are adopted into the warm tier.
+//! warm composite's own memo, are adopted into the agent tier where the frame borrows a
+//! specialization.
 //!
 //! A call to a body keyed on its bindings is handed to the drain with what it seeks ([`seek`]), so
 //! its frame is born borrowing its specialization; a hop of the frame's own callee borrows the
@@ -132,8 +133,7 @@ enum Gathered<'x, 'graph, 'here> {
 }
 
 /// The step. It runs on one chain, as the body runner's steps do ([`run`](crate::program::run)):
-/// the reading chain where it routes, the `Shares` chain elsewhere in a caching body, and its
-/// region's anywhere else.
+/// the caching chain where it routes or its body caches, and its region's anywhere else.
 pub(super) fn evaluate<'graph>(
     step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>,
 ) -> Action<'graph, KBundle> {
@@ -152,13 +152,8 @@ pub(super) fn evaluate<'graph>(
         let address = std::ptr::from_ref(view.shape()).addr();
         crate::scheduler::CACHING.set(Some(address));
     }
-    if within.routes {
-        let types = step
-            .reading_types()
-            .expect("a routing evaluation has a lender");
-        evaluate_on(step, birth, stage, types)
-    } else if view.shape().caches() {
-        let types = step.shares_types();
+    if within.routes || view.shape().caches() {
+        let types = step.caching_types();
         evaluate_on(step, birth, stage, types)
     } else {
         let types = step.types();
@@ -412,7 +407,7 @@ fn ascribe<'graph, 'here>(
         // the next hop finds both there and the verdicts over them stay warm.
         let invariant = at.view.shape().mint_at(Site::of_node(node)) == Some(Mint::Invariant);
         let warm = (at.within.routes && invariant)
-            .then(|| step.warm_types())
+            .then(|| step.agent_types())
             .flatten();
         let region = step.types();
         let into = |warm| Destination::Warm {
@@ -703,7 +698,7 @@ fn warmed<'graph, 'here>(
 ) {
     if at.within.routes
         && at.view.shape().warm_at(site)
-        && let Some(warm) = step.warm_types()
+        && let Some(warm) = step.agent_types()
     {
         warm.adopt_from(&at.types, value.ktype());
     }

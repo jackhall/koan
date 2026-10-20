@@ -37,8 +37,8 @@ use crate::scheduler::seek::{Lending, Seek};
 #[cfg(test)]
 use crate::scope::HalfHeader;
 use crate::scope::RegionHeader;
-use crate::type_lattice::{Branch, Halves};
-use crate::values::{Decision, Half, SpecBinding, SpecHome, TypeTiers};
+use crate::type_lattice::Branch;
+use crate::values::{Chain, Decision, SpecBinding, SpecHome, TypeTiers};
 
 /// The graph of cells a drain runs over: `cellgraph`'s graph closed over the continuation family,
 /// the bundle's scratch family and the delivery bundle.
@@ -176,10 +176,10 @@ pub(crate) struct Tiers {
     pub region: usize,
     /// Nodes in the scratch branch.
     pub scratch: usize,
-    /// Nodes in the lent branch.
-    pub lent: usize,
-    /// Verdicts recorded in the lent branch.
-    pub lent_verdicts: usize,
+    /// Nodes in the agent tier.
+    pub agent: usize,
+    /// Verdicts recorded in the agent tier.
+    pub agent_verdicts: usize,
     /// Bytes the scratch bump has handed out.
     pub scratch_bytes: usize,
     /// How many frames sought a specialization: a count, not a high-water mark.
@@ -191,7 +191,7 @@ pub(crate) struct Tiers {
     /// How many frames were born cold because the build cell their seek or hop named is dead: a
     /// count.
     pub cold_births: usize,
-    /// Nodes the drain laid into new specializations' branches from their askers': a count.
+    /// Nodes the drain laid into the agent tier from new specializations' askers' branches: a count.
     pub relayed: usize,
 }
 
@@ -212,8 +212,8 @@ thread_local! {
         std::cell::Cell::new(Tiers {
             region: 0,
             scratch: 0,
-            lent: 0,
-            lent_verdicts: 0,
+            agent: 0,
+            agent_verdicts: 0,
             scratch_bytes: 0,
             sought: 0,
             specialized: 0,
@@ -236,7 +236,7 @@ thread_local! {
     pub(crate) static CACHING: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
 
     /// Per caching body, by its shape's address: the nodes its steps laid in the scratch branch,
-    /// and in the lent branch. Tests reset it.
+    /// and in the agent tier. Tests reset it.
     pub(crate) static LAID: std::cell::RefCell<std::collections::BTreeMap<usize, (usize, usize)>> =
         const { std::cell::RefCell::new(std::collections::BTreeMap::new()) };
 
@@ -564,7 +564,7 @@ where
             Some(Decision::Hit(spec)) => {
                 #[cfg(debug_assertions)]
                 assert!(
-                    self.holds_binding(spec, &binding),
+                    self.holds_binding(&binding),
                     "a hit's specialization holds its binding's nodes: its key digests the \
                      content they are read from"
                 );
@@ -616,27 +616,14 @@ where
         }
     }
 
-    /// Whether the live specialization `spec`'s branch, with the root, holds the node of every
-    /// handle `binding` carries. Read through `peek`; lays nothing and opens no step. `adopt` lays
-    /// children before parents, so a found handle's children are there too.
+    /// Whether the frozen load or the agent tier holds the node of every handle `binding` carries,
+    /// as a specialization's seed laid them. Lays nothing. `adopt` lays children before parents,
+    /// so a found handle's children are there too.
     #[cfg(debug_assertions)]
-    fn holds_binding(&self, spec: TreeHandle, binding: &SpecBinding) -> bool {
-        let frozen = self.graph.tiers.frozen;
-        let held = |branch: Option<&Branch<'_>>, digest| {
-            let mut found = false;
-            if let Some(branch) = branch {
-                branch.each_digest(|at| found |= at == digest);
-            }
-            if !found {
-                frozen.each_digest(|at| found |= at == digest);
-            }
-            found
-        };
-        let holds = self.graph.cells.peek(spec, |header, _| {
-            let branch = header.into_value().branch();
-            binding.handles().all(|kt| held(branch, kt.digest()))
-        });
-        binding.is_empty() || holds.ok().flatten().unwrap_or(false)
+    fn holds_binding(&self, binding: &SpecBinding) -> bool {
+        let tiers = self.graph.tiers;
+        let resting = crate::type_lattice::TypeChain::resting(tiers.frozen, tiers.agent);
+        binding.handles().all(|kt| resting.resolves(kt))
     }
 
     /// Stamp the entry of the live specialization `spec` in its parent's table: a hop of the same
@@ -743,10 +730,10 @@ where
     }
 
     /// Enter the new specialization `spec` beside `asker` and run its one step, laying the node of
-    /// every handle `binding` carries into its branch first: read from the region branch of the
+    /// every handle `binding` carries into the agent tier first: read from the region branch of the
     /// asker's write home, where the request's birth rests and so where every type its arguments
-    /// carry resolves; insert-if-absent, a root handle at a bit test. The read sits at a brand of
-    /// its own, so the branch keeps no reference into the run tree: a copy by value, made while
+    /// carry resolves; insert-if-absent, a load handle at a bit test. The read sits at a brand of
+    /// its own, so the agent tier keeps no reference into the run tree: a copy by value, made while
     /// the asker is between steps. An empty binding opens no read.
     fn step_beside(
         &mut self,
@@ -870,30 +857,25 @@ where
             }
         },
     };
-    // A specialization's state is awake, so nothing above precedes its seeding.
+    // A specialization's state is awake, so nothing above precedes its seeding. Its binding rests
+    // in the agent tier, which every frame under the specialization reads.
     if let Some((source, binding)) = seed {
-        let types = tiers.chain(Halves::alone(Half::of(context.writer(), context.header())));
+        let types: Chain<'graph, 'here, 'graph, 'step> = tiers.resting();
+        #[cfg(test)]
+        let before = types.own_len();
         for kt in binding.handles() {
             types.adopt(source, kt);
         }
         #[cfg(test)]
-        tally(|tiers| tiers.relayed += types.own_len());
+        tally(|tiers| tiers.relayed += types.own_len() - before);
     }
     #[cfg(test)]
-    let before = {
-        let len = |branch: Option<&crate::type_lattice::Branch<'_>>| {
-            branch.map_or(0, crate::type_lattice::Branch::len)
-        };
-        // The half a step's warm chain reads: a specialization's region, or a scratch.
-        let lent = (context.lent_region())
-            .or_else(|| context.lent_scratch())
-            .and_then(|(_, header)| header.get())
-            .and_then(HalfHeader::branch);
-        (
-            len(context.scratch_header().get().and_then(HalfHeader::branch)),
-            len(lent),
-        )
-    };
+    let before = (
+        (context.scratch_header().get())
+            .and_then(HalfHeader::branch)
+            .map_or(0, Branch::len),
+        tiers.agent.len(),
+    );
     let step = step(Step::new(
         context,
         tiers,
@@ -904,18 +886,12 @@ where
     ));
     #[cfg(test)]
     {
-        let len = |branch: Option<&crate::type_lattice::Branch<'_>>| {
-            branch.map_or(0, crate::type_lattice::Branch::len)
-        };
-        // The half a step's warm chain reads: a specialization's region, or a scratch.
-        let lent = (context.lent_region())
-            .or_else(|| context.lent_scratch())
-            .and_then(|(_, header)| header.get())
-            .and_then(HalfHeader::branch);
+        let len = |branch: Option<&Branch<'_>>| branch.map_or(0, Branch::len);
+        let agent = tiers.agent;
         if let Some(shape) = CACHING.take() {
             let scratch = len(context.scratch_header().get().and_then(HalfHeader::branch))
                 .saturating_sub(before.0);
-            let warm = len(lent).saturating_sub(before.1);
+            let warm = agent.len().saturating_sub(before.1);
             LAID.with(|laid| {
                 let mut laid = laid.borrow_mut();
                 let entry = laid.entry(shape).or_default();
@@ -932,9 +908,8 @@ where
                     .scratch_header()
                     .get()
                     .and_then(HalfHeader::branch))),
-                lent: most.lent.max(len(lent)),
-                lent_verdicts: (most.lent_verdicts)
-                    .max(lent.map_or(0, crate::type_lattice::Branch::verdict_count)),
+                agent: most.agent.max(agent.len()),
+                agent_verdicts: most.agent_verdicts.max(agent.verdict_count()),
                 scratch_bytes: most.scratch_bytes.max(context.scratch_writer().in_use()),
                 ..most
             });

@@ -8,7 +8,9 @@
 //! [`TypeTiers`] the load built and a [`Half`]: the writer that lays a
 //! value beside the projected header door of the same half, so a value door that takes both at one
 //! brand interns its type into the branch of the habitat it lays the value in. During the load the
-//! chain writes the root builder instead ([`Half::Load`]).
+//! chain writes the root builder instead ([`Half::Load`]), and the agent chain writes the agent
+//! tier ([`Half::Agent`]): where a specialization's binding and an invariant site's types rest, so
+//! every later frame of the program finds them.
 //!
 //! `memory` names no type tier, so the habitat a chain writes is assembled here, where values pair
 //! writers with types. See [README.md § Crossing](README.md#crossing) for how a crossing makes a
@@ -48,6 +50,15 @@ impl<'graph> TypeTiers<'graph> {
     {
         TypeChain::scratch(self.frozen, self.agent, region, half)
     }
+
+    /// The agent chain: the frozen load, then the agent tier, which it writes. Paired to the writer
+    /// at `'pair`, whose values take their types from it by digest alone.
+    pub fn resting<'pair, 'door>(self) -> Chain<'graph, 'pair, 'graph, 'door> {
+        TypeChain::resting(
+            self.frozen,
+            Halves::alone(Half::Agent(self.agent, PhantomData)),
+        )
+    }
 }
 
 /// A half's branch slot, as its header keeps it: empty until the first door that interns into
@@ -61,7 +72,7 @@ pub struct BranchCell;
 reattachable!(BranchCell => BranchSlot<'cell>);
 
 /// The tier a chain interns into, beside the runs it lays content through: a habitat half's
-/// writer and header door at one brand, or the root builder during the load.
+/// writer and header door at one brand, the root builder during the load, or the agent tier.
 ///
 /// `'pair` is the pairing brand: the brand of the writer the chain serves, which a value door
 /// pairs its writer with. A half built by [`of`](Half::of) or [`load`](Half::load) is paired to
@@ -82,6 +93,8 @@ pub enum Half<'cell, 'pair, 'door> {
     },
     /// The load: the root builder the load's chain writes, at `'cell = 'graph`.
     Load(&'cell RootBuilder<'cell>, Pairing<'pair>),
+    /// The agent tier the agent chain writes, at `'cell = 'graph`, which outlives every half.
+    Agent(&'cell Agent<'cell>, Pairing<'pair>),
 }
 
 /// The pairing brand a [`Half`] carries, invariant so a chain paired to one brand is never read
@@ -130,6 +143,7 @@ impl<'cell, 'pair, 'door> Half<'cell, 'pair, 'door> {
         match self {
             Half::Habitat { own_brand, .. } => *own_brand,
             Half::Load(..) => true,
+            Half::Agent(..) => false,
         }
     }
 }
@@ -139,6 +153,7 @@ impl<'cell> LaysRuns<'cell> for Half<'cell, '_, '_> {
         match self {
             Half::Habitat { writer, .. } => writer.fill(len, fill),
             Half::Load(builder, _) => builder.lay(len, fill),
+            Half::Agent(agent, _) => agent.lay(len, fill),
         }
     }
 
@@ -146,6 +161,7 @@ impl<'cell> LaysRuns<'cell> for Half<'cell, '_, '_> {
         match self {
             Half::Habitat { writer, .. } => writer.text(text),
             Half::Load(builder, _) => builder.text(text),
+            Half::Agent(agent, _) => agent.text(text),
         }
     }
 }
@@ -155,6 +171,7 @@ impl<'cell> Habitat<'cell> for Half<'cell, '_, '_> {
         match self {
             Half::Habitat { branch, .. } => branch.get()?.get().map(Own::Branch),
             Half::Load(builder, _) => Some(Own::Builder(builder)),
+            Half::Agent(agent, _) => Some(Own::Agent(agent)),
         }
     }
 
@@ -171,6 +188,7 @@ impl<'cell> Habitat<'cell> for Half<'cell, '_, '_> {
                 Own::Branch(laid)
             }
             Half::Load(builder, _) => Own::Builder(builder),
+            Half::Agent(agent, _) => Own::Agent(agent),
         }
     }
 }
@@ -227,7 +245,7 @@ impl<'cell> Habitat<'cell> for Half<'cell, '_, '_> {
 /// fn cached_list<'graph>(
 ///     step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>,
 /// ) -> Action<'graph, KBundle> {
-///     let types = step.shares_types();
+///     let types = step.caching_types();
 ///     let items = [Value::Number(1.0)].into_iter();
 ///     let _: &List<'_> = List::new(step.writer(), items, &types, &Bump::new());
 ///     step.done()
@@ -246,7 +264,7 @@ impl<'cell> Habitat<'cell> for Half<'cell, '_, '_> {
 /// fn cached_list<'graph>(
 ///     step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>,
 /// ) -> Action<'graph, KBundle> {
-///     let types = step.shares_types();
+///     let types = step.caching_types();
 ///     let items = [Value::Number(1.0)].into_iter();
 ///     let _: &List<'_> = List::new(step.scratch_writer(), items, &types, &Bump::new());
 ///     step.done()

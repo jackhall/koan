@@ -168,7 +168,7 @@ impl<'graph> TestTypes<'graph> {
         )))
     }
 
-    /// The chain a `Shares` caching body runs on, as a step's `shares_types` builds it: the cell's
+    /// The chain a `Shares` caching body runs on, as a step's `caching_types` builds it: the cell's
     /// branch, then its scratch's, paired to the cell's writer.
     pub fn shares<'step, 'here, 'scratch, C, S, D>(
         &self,

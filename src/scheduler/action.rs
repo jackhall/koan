@@ -29,7 +29,7 @@ use crate::scheduler::continuation::{
 use crate::scheduler::delivery::KDelivery;
 use crate::scheduler::seek::{Lending, Seek};
 use crate::scope::{RegionHeader, Settled};
-use crate::type_lattice::{Habitat, Halves, Own};
+use crate::type_lattice::Halves;
 use crate::values::{BuildRef, Chain, Half, TypeTiers, Types};
 
 /// The raw context a step runs in: every door `cellgraph` hands one, over the bundle's families.
@@ -376,10 +376,11 @@ where
         )
     }
 
-    /// The chain a `Shares` caching body runs on: [`scratch_types`](Self::scratch_types)'s tiers,
-    /// paired to this step's region writer, so a value laid at `'here` takes its types from the
-    /// write home's scratch and nothing the body mints lands in its region.
-    pub fn shares_types(&self) -> Chain<'scratch, 'here, 'here, 'step> {
+    /// The chain a caching body runs on, `Fresh` or `Shares`, routing or not:
+    /// [`scratch_types`](Self::scratch_types)'s tiers, paired to this step's region writer, so a
+    /// value laid at `'here` takes its types from the write home's scratch and nothing the body
+    /// mints lands in its region. A tree cell's scratch is its own; a tenant's is its host's.
+    pub fn caching_types(&self) -> Chain<'scratch, 'here, 'here, 'step> {
         self.tiers.scratch(
             Half::of(self.writer(), self.header()),
             Half::paired(self.scratch_writer(), self.context.scratch_header()),
@@ -399,50 +400,14 @@ where
         self.context.lent_region().is_some()
     }
 
-    /// The half this cell borrows, whichever it is: a specialization's region, or the scratch of
-    /// the cell its asker parked in. `None` for a cell with no lender.
-    fn lent(
-        &self,
-    ) -> Option<(
-        Writer<'lent, 'step>,
-        Header<'graph, 'lent, 'step, RegionHeader>,
-    )> {
-        (self.context.lent_region()).or_else(|| self.context.lent_scratch())
-    }
-
-    /// The chain a routing caching frame's own body reads and lays through: the graph's type tiers,
-    /// the lent branch — its specialization's region, or the scratch of the cell its asker parked
-    /// in — then this cell's write home's scratch, whose branch links its region. A scratch
-    /// chain reads one tier between the root and its own, so the region is reached through that
-    /// link, which this lays: with the scratch branch where it is unlaid, late where another door
-    /// laid it first. No branch links a scratch branch, so the late link is always open. Paired to
-    /// the region writer. `None` for a cell with no lender.
-    pub fn reading_types(&self) -> Option<Chain<'scratch, 'here, 'lent, 'step>> {
-        let (lent_writer, lent_header) = self.lent()?;
-        let Own::Branch(region) = Half::of(self.writer(), self.header()).own_or_lay() else {
-            unreachable!("a step's region half lays a branch");
-        };
-        let scratch_header = self.context.scratch_header();
-        let scratch: Chain<'scratch, 'here, 'scratch, 'step> = self.tiers.chain(Halves::alone(
-            Half::paired(self.scratch_writer(), scratch_header),
-        ));
-        scratch.link_late(region);
-        Some(self.tiers.scratch(
-            Half::paired(lent_writer, lent_header),
-            Half::paired(self.scratch_writer(), scratch_header),
-        ))
-    }
-
-    /// The warm tier alone, over the graph's type tiers: the lent branch, which outlives every hop
-    /// born under the same specialization, or under the asker's park. What an invariant site's
-    /// types are adopted into, so the next hop finds them. Paired to the region writer; `None` for
-    /// a cell with no lender.
-    pub fn warm_types(&self) -> Option<Chain<'lent, 'here, 'lent, 'step>> {
-        let (lent_writer, lent_header) = self.lent()?;
-        Some(
-            self.tiers
-                .chain(Halves::alone(Half::paired(lent_writer, lent_header))),
-        )
+    /// The agent chain, the warm tier of a cell that borrows a specialization: the frozen load,
+    /// then the agent tier, which it writes and which outlives every hop born under the
+    /// specialization. What an invariant site's types are adopted into, so the next hop finds them.
+    /// Paired to the region writer; `None` for a cell that borrows no specialization, whose own
+    /// scratch is its warm tier.
+    pub fn agent_types(&self) -> Option<Chain<'graph, 'here, 'graph, 'step>> {
+        self.context.lent_region()?;
+        Some(self.tiers.resting())
     }
 
     /// Ask for one child, and take back the slot of this step's run it will report to. The drain

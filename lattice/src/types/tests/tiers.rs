@@ -773,3 +773,18 @@ fn a_verdict_over_an_agent_type_and_a_branch_type_lands_in_the_branch() {
     assert_eq!(agent.verdict_count(), 0);
     assert_eq!(BumpHalf::branch_of(&types).verdict_count(), 1);
 }
+
+/// A resting chain reads the load and the agent tier alone: a branch type is no child it can lay.
+#[test]
+#[should_panic(expected = "names no interned node")]
+fn a_resting_chain_reads_no_branch() {
+    let symbols = SymbolInterner::new();
+    let (load, tier, region) = (Bump::new(), Bump::new(), Bump::new());
+    let (frozen, agent) = (Frozen::seeded(&load), Agent::in_region(&tier));
+    let minted = record_in(
+        &TypeChain::new(frozen, agent, BumpHalf::new(&region)),
+        &symbols,
+        "x",
+    );
+    TypeChain::resting(frozen, agent).list(minted);
+}

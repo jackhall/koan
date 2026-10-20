@@ -84,8 +84,9 @@ pub enum KBirth<'graph, 'cell> {
 }
 
 /// What a body runs within, handed to every evaluation and block it asks for: whether it runs in
-/// the own body of a routing caching frame, whose reading chain it then interns through, and the
-/// build cell its frame runs under, which a callable born in it is born under.
+/// the own body of a routing caching frame, whose caching chain it then interns through and whose
+/// invariant sites it adopts into the agent tier under a specialization, and the build cell its
+/// frame runs under, which a callable born in it is born under.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Within {
     pub routes: bool,

@@ -647,21 +647,20 @@ fn a_shares_loop_handing_a_keyed_shares_helper_a_module_over_its_link_holds_adop
     let [(few, few_adopted), _, (many, _)] = &runs;
     assert_eq!((few.printed.as_str(), few.root), ("done", 0));
     // `PEEK` keys on the module it is handed, so it borrows a specialization of its own each hop,
-    // and `WRAP` one across the loop; the region and each lent branch hold flat.
+    // and `WRAP` one across the loop; the region holds flat. The agent tier grows by each `PEEK`
+    // binding, run content, until the build rewrite keys a build cell on load content alone
+    // (roadmap/gradual-build/build-rewrite.md).
     for ((ran, _), depth) in runs.iter().zip(DEPTHS) {
         assert_eq!(ran.tiers.specialized, depth as usize + 1);
     }
-    assert_eq!(
-        (few.tiers.region, few.tiers.lent),
-        (many.tiers.region, many.tiers.lent)
-    );
+    assert_eq!(few.tiers.region, many.tiers.region);
     assert!(*few_adopted > 0, "the loop's exits adopt");
     assert_flat("adoptions", runs.each_ref().map(|(_, adopted)| *adopted));
 }
 
 #[test]
 fn a_fresh_loop_handing_a_fresh_helper_a_module_over_its_link_holds_adoptions_flat() {
-    // `PEEK` adopts the module it views into the lent branch at an invariant site, which stops at
+    // `PEEK` adopts the module it views into the warm tier at an invariant site, which stops at
     // the link the module holds, settled by the exit that handed it on.
     let source = FRESH_WRAPPED;
     assert_eq!(caching(source), 2, "`WRAP` and `PEEK` cache");
@@ -692,14 +691,14 @@ fn a_member_reached_through_a_call_is_not_entered() {
 }
 
 #[test]
-fn a_fresh_loop_over_an_invariant_module_holds_its_lent_branch_flat() {
+fn a_fresh_loop_over_an_invariant_module_holds_its_agent_tier_flat() {
     let source = invariant_loop();
     assert_eq!(caching(&source), 1);
     let [few, many] = at_ends(&source);
     assert_eq!(few.printed, "7");
-    assert!(few.tiers.lent > 0, "the view's types are adopted warm");
+    assert!(few.tiers.agent > 0, "the view's types are adopted warm");
     assert!(
-        few.tiers.lent_verdicts > 0,
+        few.tiers.agent_verdicts > 0,
         "the view's verdicts are recorded warm, once across hops"
     );
     assert_eq!(few, many);
@@ -780,8 +779,8 @@ fn a_loops_scratch_resets_once_its_value_is_delivered() {
 #[test]
 fn two_loops_a_frame_asks_for_in_turn_leave_what_the_larger_leaves() {
     // A `Fresh` frame asks for two loops in turn, over content of different types: the second
-    // starts on the branch the first's delivery reset or, where it keys a specialization, on a
-    // specialization of its own binding, so the two leave what the larger leaves.
+    // starts on the scratch the first's delivery reset, so the two leave in it what the larger
+    // leaves; where each keys a specialization of its own binding, the agent tier keeps both.
     let cases = [
         (
             INVARIANT.to_string(),
@@ -820,9 +819,9 @@ fn two_loops_a_frame_asks_for_in_turn_leave_what_the_larger_leaves() {
         );
         assert_eq!(both.printed, "0");
         assert_eq!(
-            (both.tiers.lent, both.tiers.scratch),
+            (both.tiers.agent, both.tiers.scratch),
             (
-                one.tiers.lent.max(other.tiers.lent),
+                one.tiers.agent + other.tiers.agent,
                 one.tiers.scratch.max(other.tiers.scratch)
             ),
             "{first}, then {second}"
@@ -916,7 +915,7 @@ fn a_barrier_called_caching_frame_keeps_its_blocks_value() {
 }
 
 /// The nodes each caching body's steps laid through its chains over one run of `program`, by the
-/// body's kind: in the scratch branch, then in the lent branch. Empty where `program` refuses at
+/// body's kind: in the scratch branch, then in the agent tier. Empty where `program` refuses at
 /// load.
 fn laid(program: &str) -> Vec<(&'static str, usize, usize)> {
     let Ok(mut substrate) =
@@ -1306,10 +1305,9 @@ fn a_loop_handing_a_keyed_helper_a_new_module_each_hop_holds_its_specializations
         );
         assert_eq!(ran.live, 2);
     }
-    assert_eq!(
-        (few.tiers.region, few.tiers.lent),
-        (many.tiers.region, many.tiers.lent)
-    );
+    // The agent tier grows by each `PEEK` binding, run content, until the build rewrite keys a
+    // build cell on load content alone (roadmap/gradual-build/build-rewrite.md).
+    assert_eq!(few.tiers.region, many.tiers.region);
     // `ENDS` stops at the root's default bound, so an operator run past it shows the bound biting.
     let bound = SpecBounds::default().root.get();
     let depth = bound + 4;
@@ -1361,10 +1359,10 @@ fn a_loop_whose_keyed_frame_calls_a_keyed_callable_holds_its_specializations_fla
             (2 * depth, 2 * depth - 4, 4)
         );
     }
-    assert_eq!(
-        (few.tiers.region, few.tiers.lent),
-        (many.tiers.region, many.tiers.lent)
-    );
+    // `OUTER` keys on a module built over each hop's link, so the agent tier grows by each
+    // binding, run content, until the build rewrite keys a build cell on load content alone
+    // (roadmap/gradual-build/build-rewrite.md).
+    assert_eq!(few.tiers.region, many.tiers.region);
 }
 
 #[test]
@@ -1495,11 +1493,11 @@ fn a_shares_loop_seeks_its_specialization_once_and_a_second_park_finds_it_warm()
         "the second park finds every warm type laid"
     );
     assert!(
-        alone.lent_verdicts > 0,
+        alone.agent_verdicts > 0,
         "the view's verdicts are recorded warm"
     );
     assert_eq!(
-        both.lent_verdicts, alone.lent_verdicts,
+        both.agent_verdicts, alone.agent_verdicts,
         "the second park records no verdict anew"
     );
 }
@@ -1543,9 +1541,9 @@ fn an_unkeyed_shares_callee_in_a_keyed_frame_keys_its_callables_under_its_own_bi
 }
 
 #[test]
-fn a_keyed_shares_call_links_a_host_scratch_laid_before_it() {
-    // `VARY` caches but keys nothing, so it lays its host's scratch branch through the `Shares`
-    // chain, unlinked; the keyed loop asked for at the same park reads through it next.
+fn a_keyed_shares_call_runs_beside_a_host_scratch_laid_before_it() {
+    // `VARY` caches but keys nothing, so it lays its host's scratch branch through the caching
+    // chain; the keyed loop asked for at the same park runs on a caching chain over it next.
     let vary = "EXPR #(VARY link :Link) -> Str = \
                 #((MODULE m OVER #[link] = (LET held = link)) \
                 (LET seen = (m :| Holder)) (VARY (ATTR link next)))\n\
@@ -1585,9 +1583,9 @@ const BOXED: &str = "EXPR #(BOXED Elt :Type) -> Number = #((NEWTYPE Box = :{v :E
 #[test]
 fn a_type_composed_at_run_reaches_the_specialization_it_keys_by_value() {
     // Each asker keys its own `Elt`, which its statement's call reads, and `HOP` keys the
-    // record it is handed: one specialization per keyed frame, and the record relayed into each
-    // one keyed on it.
-    for (asker, keyed, relayed) in [("ASK", 2, 1), ("HOPPING", 3, 2)] {
+    // record it is handed: one specialization per keyed frame, and the record relayed into the
+    // agent tier once, where every specialization keyed on it reads it.
+    for (asker, keyed, relayed) in [("ASK", 2, 1), ("HOPPING", 3, 1)] {
         let once = ran(DEPTHS[0], &format!("{BOXED}PRINT ({asker} Number)\n"));
         let twice = ran(
             DEPTHS[0],

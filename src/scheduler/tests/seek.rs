@@ -24,7 +24,7 @@ use crate::values::{BuildRef, KeyedTypes, SpecBinding, SpecBounds, SpecKey};
 thread_local! {
     /// The build cell each observing step ran under, in the order they ran.
     static BUILDS: RefCell<Vec<BuildRef>> = const { RefCell::new(Vec::new()) };
-    /// A type a frame laid in its lent region before it parked, to read again once it wakes.
+    /// A type a frame laid in the agent tier before it parked, to read again once it wakes.
     static LAID: std::cell::Cell<KType> = const { std::cell::Cell::new(KType::NUMBER) };
     /// The keys a [`sequence`] seeks, in order: each under the sequence's own build cell where
     /// the flag is set, else under the root.
@@ -242,8 +242,8 @@ fn a_frame_reads_its_specializations_settled_facts_through_its_lend() {
     );
 }
 
-/// How many nodes the drains on this thread have laid into new specializations' branches since
-/// the last [`fresh_tally`].
+/// How many nodes the drains on this thread have laid into the agent tier for new specializations
+/// since the last [`fresh_tally`].
 fn relayed() -> usize {
     TIERS.with(|tiers| tiers.get().relayed)
 }
@@ -269,7 +269,8 @@ fn seek_bound<'graph>(
 }
 
 /// A specialization's step over a binding the asker minted: its own chain resolves the binding's
-/// type through its own branch before it lays anything, then it enlists.
+/// type through the agent tier before it lays anything, and its region lays no branch; then it
+/// enlists.
 fn holding<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
     {
         let types = step.types();
@@ -279,9 +280,10 @@ fn holding<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'gr
             types.resolves(bound),
             "the drain laid the binding's node before the step"
         );
-        assert!(
-            types.own_len() > 0,
-            "through the specialization's own branch"
+        assert_eq!(
+            types.own_len(),
+            0,
+            "the specialization's region lays no branch"
         );
     }
     step.enlist(None)
@@ -297,15 +299,18 @@ fn holding_root<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Actio
     step.enlist(None)
 }
 
-/// A frame that reads its binding's type, a list of a list of `Bool`, through its lend, and
+/// A frame that reads its binding's type, a list of a list of `Bool`, through the agent chain, and
 /// finishes.
 fn reading<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
     {
         let warm = step
-            .warm_types()
+            .agent_types()
             .expect("the frame borrows its specialization");
         let bound = BOUND.get();
-        assert!(warm.resolves(bound), "the frame's lend holds its binding");
+        assert!(
+            warm.resolves(bound),
+            "the agent tier holds the frame's binding"
+        );
         let TypeNode::List { element } = warm.node(bound) else {
             panic!("the binding is a list")
         };
@@ -917,13 +922,13 @@ fn a_shares_hop_of_the_same_callee_keeps_its_lend() {
     assert_eq!(specialized(), 1, "a hop looks nothing up");
 }
 
-/// A keyed frame: lay a type in its lent region, ask for its specialization's eviction
-/// before the next step, and park on a child.
+/// A keyed frame: lay a type in the agent tier, ask for its specialization's eviction before the
+/// next step, and park on a child.
 fn evicted<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
     log("frame");
     let (mut step, _) = step.state();
     let warm = step
-        .warm_types()
+        .agent_types()
         .expect("the frame borrows its specialization");
     let laid = warm.list(warm.list(KType::BOOL));
     LAID.with(|slot| slot.set(laid));
@@ -934,23 +939,21 @@ fn evicted<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'gr
     step.park(asked, woken, KValue::Null, None)
 }
 
-/// Wake after the eviction and read the type laid before it, through both chains over the lent
-/// region, then finish.
+/// Wake after the eviction and read the type laid before it, through the agent chain and the
+/// caching chain, then finish.
 fn woken<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
     log("frame woken");
     let laid = LAID.with(std::cell::Cell::get);
     let warm = step
-        .warm_types()
+        .agent_types()
         .expect("the frame still borrows its specialization");
     let before = warm.own_len();
     assert_eq!(
         warm.list(laid),
         warm.list(laid),
-        "the lent region still reads"
+        "the agent tier still reads"
     );
-    let chain = step
-        .reading_types()
-        .expect("the frame still borrows its specialization");
+    let chain = step.caching_types();
     let _ = chain.list(laid);
     assert_eq!(
         warm.own_len(),

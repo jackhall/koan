@@ -449,15 +449,15 @@ fn settle_knot<X: Knotted>(member: &X) {
 }
 
 /// Where [`adopt_value`] makes a value's types resolve.
-pub enum Destination<'d, 'here, 'lent, 'door> {
+pub enum Destination<'d, 'here, 'graph, 'door> {
     /// An exit: the region chain of the step whose caching body the value leaves. The adoption
     /// marks every value it entered settled.
     Region(&'d Types<'here, 'door>),
-    /// An invariant site under `routes`: the warm tier, beside the region chain of the step the
-    /// value lies in, which a test build's audit reads. Marks nothing: the warm tier is not where
-    /// the value lies.
+    /// An invariant site under `routes`: the warm tier — the agent chain, under a specialization —
+    /// beside the region chain of the step the value lies in, which a test build's audit reads.
+    /// Marks nothing: the warm tier is not where the value lies.
     Warm {
-        warm: &'d Chain<'lent, 'here, 'lent, 'door>,
+        warm: &'d Chain<'graph, 'here, 'graph, 'door>,
         region: &'d Types<'here, 'door>,
     },
 }
