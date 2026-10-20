@@ -12,7 +12,7 @@
 //!
 //! [`DigestTable`] is the one structure here that grows without an allocator: it lays fixed runs
 //! through [`LaysRuns`], which a bump implements here and a region's writer implements in koan, so
-//! a cell's region can host it.
+//! a cell's region can host it. [`FrozenTable`] is its read-only copy, which holds no cell.
 //!
 //! This is the crate's only import of `bumpalo`, `allocator_api2` and `hashbrown`.
 //!
@@ -24,9 +24,11 @@ use std::hash::BuildHasher;
 
 mod components;
 mod digest_table;
+mod frozen_table;
 
 pub use components::strongly_connected_components;
 pub use digest_table::{DigestTable, Keyed, LaysRuns};
+pub use frozen_table::FrozenTable;
 
 /// The arena the tier allocates from; its owner releases it whole.
 pub type Bump = bumpalo::Bump;

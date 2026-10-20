@@ -26,7 +26,10 @@ fn interned_digests<'graph>(
         return step.failed(StepError::Refused);
     };
     let mut digests = Vec::new();
-    program.root().each_digest(|digest| digests.push(digest));
+    program
+        .tiers()
+        .frozen
+        .each_digest(|digest| digests.push(digest));
     if let Some(branch) = step.header().get().and_then(HalfHeader::branch) {
         branch.each_digest(|digest| digests.push(digest));
     }

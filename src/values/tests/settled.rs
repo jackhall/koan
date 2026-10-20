@@ -165,7 +165,7 @@ fn a_copy_is_settled_at_its_destination() {
                 let record = Record::new(writer, &fields, types, scratch);
                 assert_eq!(record.bits(), MemoBits::NONE);
                 let source = context.lift::<ValueFamily>(Value::Record(record));
-                let crossed = cross(context, dest, &source, fixture.tiers.root()).unwrap();
+                let crossed = cross(context, dest, &source, fixture.tiers.tiers()).unwrap();
                 assert_eq!(record.bits(), MemoBits::NONE, "the original is unchanged");
                 context.keep(crossed)
             })

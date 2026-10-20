@@ -7,7 +7,6 @@ use crate::memory::Bump;
 use crate::scheduler::tests::bundle::{Native, TestGraph};
 use crate::scheduler::tests::native::{fresh, record, recorded, reset, work};
 use crate::scheduler::{Action, Hold, Placement, Received, Scheduler, Step, StepError, Use};
-use crate::type_lattice::Root;
 
 /// Deeper than the sixty-four slots a one-word matrix has, several times over.
 const DEPTH: f64 = 200.0;
@@ -71,7 +70,8 @@ fn a_subtree_two_hundred_deep_takes_no_slab_slot_but_its_root() {
     // level that reached for a slab slot would be refused and the drain would stall before the
     // bottom.
     let type_region = Bump::new();
-    let mut graph: TestGraph<'_> = TestGraph::new(1, Root::seeded(&type_region));
+    let mut graph: TestGraph<'_> =
+        TestGraph::new(1, crate::values::tests::seeded_tiers(&type_region));
     let root = graph.root().expect("a fresh slab admits a root");
     Scheduler::over(&mut graph)
         .run(work(start, KValue::Null), root, Placement::Fresh)

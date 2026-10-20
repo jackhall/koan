@@ -17,7 +17,7 @@ use crate::scheduler::{
     WATCH_LOG, WATCHED, Watched, Work,
 };
 use crate::scope::{Binding, Settled};
-use crate::type_lattice::{KType, Root, TypeNode};
+use crate::type_lattice::{KType, TypeNode};
 use crate::values::digest::{DigestHasher, Tag};
 use crate::values::{BuildRef, KeyedTypes, SpecBinding, SpecBounds, SpecKey};
 
@@ -135,9 +135,10 @@ fn seek_two<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'g
 
 /// A graph stood up by the load door under `bounds`, its build root's header and table laid.
 fn loaded(type_region: &Bump, bounds: SpecBounds) -> (TestGraph<'_>, crate::scheduler::Roots) {
-    let (graph, roots, ()) =
-        TestGraph::load(2, bounds, || Ok::<_, ()>((Root::seeded(type_region), ())))
-            .expect("the load succeeds");
+    let (graph, roots, ()) = TestGraph::load(2, bounds, || {
+        Ok::<_, ()>((crate::values::tests::seeded_tiers(type_region), ()))
+    })
+    .expect("the load succeeds");
     (graph, roots)
 }
 
@@ -456,7 +457,7 @@ fn a_graph_with_no_build_root_births_every_seeking_frame_cold() {
     reset();
     fresh_tally();
     let type_region = Bump::new();
-    let mut graph = TestGraph::new(1, Root::seeded(&type_region));
+    let mut graph = TestGraph::new(1, crate::values::tests::seeded_tiers(&type_region));
     let root = graph.root().expect("a fresh slab admits a root");
     let mut scheduler = Scheduler::over(&mut graph);
     scheduler

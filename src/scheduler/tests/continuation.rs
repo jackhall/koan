@@ -10,7 +10,6 @@ use crate::memory::CellHandle;
 use crate::scheduler::continuation::{Continuation, Provenance, Rested};
 use crate::scheduler::tests::bundle::{Native, ScratchState, TestGraph};
 use crate::scheduler::{Action, Step};
-use crate::type_lattice::Root;
 
 fn place(cell: CellHandle) -> Provenance {
     Provenance {
@@ -28,7 +27,8 @@ fn inert<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'grap
 #[test]
 fn a_birth_continuation_comes_back_at_the_step_brand_and_a_successor_survives_to_the_next_step() {
     let type_region = Bump::new();
-    let mut graph: TestGraph<'_> = TestGraph::new(2, Root::seeded(&type_region));
+    let mut graph: TestGraph<'_> =
+        TestGraph::new(2, crate::values::tests::seeded_tiers(&type_region));
     let root: CellHandle = graph.root().expect("a fresh slab admits a root").into();
     let cells = graph.cells();
     let cell = cells

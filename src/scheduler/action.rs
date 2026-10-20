@@ -29,9 +29,8 @@ use crate::scheduler::continuation::{
 use crate::scheduler::delivery::KDelivery;
 use crate::scheduler::seek::{Lending, Seek};
 use crate::scope::{RegionHeader, Settled};
-use crate::type_lattice::Root;
 use crate::type_lattice::{Habitat, Halves, Own};
-use crate::values::{BuildRef, Chain, Half, Types};
+use crate::values::{BuildRef, Chain, Half, TypeTiers, Types};
 
 /// The raw context a step runs in: every door `cellgraph` hands one, over the bundle's families.
 /// Only a [`Step`] and the drain hold one.
@@ -204,9 +203,8 @@ pub struct Step<
     'lent: 'scratch,
 {
     context: &'a mut Context<'graph, 'step, 'here, 'scratch, 'lent, B>,
-    /// The frozen type root of the graph this step runs over, which every chain it builds reads
-    /// first.
-    type_root: &'graph Root<'graph>,
+    /// The type tiers of the graph this step runs over, which every chain it builds reads first.
+    tiers: TypeTiers<'graph>,
     provenance: &'a Provenance,
     spawns: &'a mut Spawns<'graph, B>,
     state: S::Of<StateAt<'graph, 'here, B>>,
@@ -243,12 +241,12 @@ where
     'here: 'scratch,
     'lent: 'scratch,
 {
-    /// The step the drain hands a cell's continuation, over its graph's type root, the provenance
+    /// The step the drain hands a cell's continuation, over its graph's type tiers, the provenance
     /// it read off that same continuation, the buffer it cleared for this step, and both slots the
     /// cell parked in.
     pub(super) fn new(
         context: &'a mut Context<'graph, 'step, 'here, 'scratch, 'lent, B>,
-        type_root: &'graph Root<'graph>,
+        tiers: TypeTiers<'graph>,
         provenance: &'a Provenance,
         spawns: &'a mut Spawns<'graph, B>,
         state: StateAt<'graph, 'here, B>,
@@ -256,7 +254,7 @@ where
     ) -> Self {
         Step {
             context,
-            type_root,
+            tiers,
             provenance,
             spawns,
             state,
@@ -284,7 +282,7 @@ where
     ) {
         let Step {
             context,
-            type_root,
+            tiers,
             provenance,
             spawns,
             state,
@@ -292,7 +290,7 @@ where
         } = self;
         let step = Step {
             context,
-            type_root,
+            tiers,
             provenance,
             spawns,
             state: (),
@@ -321,7 +319,7 @@ where
     ) {
         let Step {
             context,
-            type_root,
+            tiers,
             provenance,
             spawns,
             state,
@@ -329,7 +327,7 @@ where
         } = self;
         let step = Step {
             context,
-            type_root,
+            tiers,
             provenance,
             spawns,
             state,
@@ -363,19 +361,16 @@ where
     }
 
     /// The chain this step reads and interns types through for what it lays at `'here`: the
-    /// graph's type root, then its write home's branch. Built once per step, never parked.
+    /// graph's type tiers, then its write home's branch. Built once per step, never parked.
     pub fn types(&self) -> Types<'here, 'step> {
-        Types::new(
-            self.type_root,
-            Halves::alone(Half::of(self.writer(), self.header())),
-        )
+        self.tiers
+            .chain(Halves::alone(Half::of(self.writer(), self.header())))
     }
 
-    /// The chain for what the step lays in its scratch habitat: the graph's type root, its write
+    /// The chain for what the step lays in its scratch habitat: the graph's type tiers, its write
     /// home's branch, then the scratch habitat's own, released with it at the step's end.
     pub fn scratch_types(&self) -> Chain<'scratch, 'scratch, 'here, 'step> {
-        Chain::scratch(
-            self.type_root,
+        self.tiers.scratch(
             Half::paired(self.writer(), self.header()),
             Half::of(self.scratch_writer(), self.context.scratch_header()),
         )
@@ -385,8 +380,7 @@ where
     /// paired to this step's region writer, so a value laid at `'here` takes its types from the
     /// write home's scratch and nothing the body mints lands in its region.
     pub fn shares_types(&self) -> Chain<'scratch, 'here, 'here, 'step> {
-        Chain::scratch(
-            self.type_root,
+        self.tiers.scratch(
             Half::of(self.writer(), self.header()),
             Half::paired(self.scratch_writer(), self.context.scratch_header()),
         )
@@ -416,7 +410,7 @@ where
         (self.context.lent_region()).or_else(|| self.context.lent_scratch())
     }
 
-    /// The chain a routing caching frame's own body reads and lays through: the graph's type root,
+    /// The chain a routing caching frame's own body reads and lays through: the graph's type tiers,
     /// the lent branch — its specialization's region, or the scratch of the cell its asker parked
     /// in — then this cell's write home's scratch, whose branch links its region. A scratch
     /// chain reads one tier between the root and its own, so the region is reached through that
@@ -429,28 +423,26 @@ where
             unreachable!("a step's region half lays a branch");
         };
         let scratch_header = self.context.scratch_header();
-        Chain::new(
-            self.type_root,
-            Halves::alone(Half::paired(self.scratch_writer(), scratch_header)),
-        )
-        .link_late(region);
-        Some(Chain::scratch(
-            self.type_root,
+        let scratch: Chain<'scratch, 'here, 'scratch, 'step> = self.tiers.chain(Halves::alone(
+            Half::paired(self.scratch_writer(), scratch_header),
+        ));
+        scratch.link_late(region);
+        Some(self.tiers.scratch(
             Half::paired(lent_writer, lent_header),
             Half::paired(self.scratch_writer(), scratch_header),
         ))
     }
 
-    /// The warm tier alone, over the graph's type root: the lent branch, which outlives every hop
+    /// The warm tier alone, over the graph's type tiers: the lent branch, which outlives every hop
     /// born under the same specialization, or under the asker's park. What an invariant site's
     /// types are adopted into, so the next hop finds them. Paired to the region writer; `None` for
     /// a cell with no lender.
     pub fn warm_types(&self) -> Option<Chain<'lent, 'here, 'lent, 'step>> {
         let (lent_writer, lent_header) = self.lent()?;
-        Some(Chain::new(
-            self.type_root,
-            Halves::alone(Half::paired(lent_writer, lent_header)),
-        ))
+        Some(
+            self.tiers
+                .chain(Halves::alone(Half::paired(lent_writer, lent_header))),
+        )
     }
 
     /// Ask for one child, and take back the slot of this step's run it will report to. The drain
@@ -505,7 +497,7 @@ where
 
     /// The results of the children this cell parked on, in the order it asked for them: a scratch
     /// fill at `'scratch`, a carrier fill redeemed and crossed to `'here`, its types made to
-    /// resolve over the graph's type root. Each slot is taken as it is read, so a second pass finds
+    /// resolve over the graph's type tiers. Each slot is taken as it is read, so a second pass finds
     /// it empty.
     pub fn results(
         &mut self,
@@ -526,13 +518,13 @@ where
         &'c mut self,
         check: Option<&'c Chain<'_, '_, '_, '_>>,
     ) -> impl Iterator<Item = Result<Received<'graph, 'here, 'scratch>, StepError>> + 'c {
-        let root = self.type_root;
+        let tiers = self.tiers;
         let context = &mut *self.context;
         let count = context.receipt_count().unwrap_or(0);
         (0..count).map(move |slot| match context.receipt(slot) {
             Ok(Receipt::Value(value)) => Ok(Received::Scratch(value)),
             Ok(Receipt::Carrier(Ok(carrier))) => Ok(Received::Here(crate::values::cross_here(
-                context, &carrier, root, check,
+                context, &carrier, tiers, check,
             ))),
             _ => Err(StepError::Unredeemable),
         })
@@ -661,7 +653,7 @@ where
     /// is built in the consumer's scratch habitat and read back at its `'scratch`; under `Keeps` or
     /// `Forwards` it is built in this cell's home and filed as a carrier the consumer reads at its
     /// `'here`. One build serves both, because it is quantified over the brand it is built at; it
-    /// is handed the chain of the half it builds in, over the graph's type root, which reads no
+    /// is handed the chain of the half it builds in, over the graph's type tiers, which reads no
     /// other half's branch, so it takes no handle from this step's chain.
     pub fn finish_fresh(
         self,
@@ -671,7 +663,7 @@ where
             &'their &'graph (),
         ) -> Active<'graph, 'their, KValueFamily>,
     ) -> Action<'graph, B> {
-        let root = self.type_root;
+        let tiers = self.tiers;
         let report = match self.report() {
             Ok(report) => report,
             Err(error) => return self.failed(error),
@@ -683,7 +675,7 @@ where
                 |writer, header, witness| {
                     build(
                         writer,
-                        &Types::new(root, Halves::alone(Half::of(writer, header))),
+                        &tiers.chain(Halves::alone(Half::of(writer, header))),
                         witness,
                     )
                 },
@@ -699,7 +691,7 @@ where
             |writer, header, _: &[CrossedOperand<'graph, '_, '_, KValueFamily, RegionHeader>]| {
                 build(
                     writer,
-                    &Types::new(root, Halves::alone(Half::of(writer, header))),
+                    &tiers.chain(Halves::alone(Half::of(writer, header))),
                     &&(),
                 )
             },
@@ -710,7 +702,7 @@ where
     /// Finish with a result built by `build` over `operands`, values this step holds, in this
     /// cell's home, and deliver it as a carrier. Each operand reaches the build pinned or copied as
     /// the verdict ruled, at the home's brand, its types made to resolve there over the graph's
-    /// type root; the build is handed the home's chain beside its writer. Every `Use` takes this
+    /// type tiers; the build is handed the home's chain beside its writer. Every `Use` takes this
     /// door: a build over operands never goes through scratch, where what it embeds could not
     /// follow.
     pub fn finish_in_home<const N: usize>(
@@ -741,7 +733,7 @@ where
             Ok(report) => report,
             Err(error) => return self.failed(error),
         };
-        let root = self.type_root;
+        let tiers = self.tiers;
         let weights = operands.map(|value| value.weight().bytes());
         let lifted = operands.map(|value| self.context.lift::<KValueFamily>(value));
         let crossing: [Operand<'graph, '_, 'step, KValueFamily>; N] =
@@ -753,7 +745,7 @@ where
             self.provenance.home,
             &crossing,
             |writer, header, views| {
-                let types = Types::new(root, Halves::alone(Half::of(writer, header)));
+                let types = tiers.chain(Halves::alone(Half::of(writer, header)));
                 let values = std::array::from_fn(|index| {
                     crate::values::cross_view_against(writer, &types, &views[index], check)
                 });
@@ -764,7 +756,7 @@ where
     }
 
     /// Finish with `value`, crossed into this cell's home at the verdict's price, its types made
-    /// to resolve there over the graph's type root, and deliver it as a carrier.
+    /// to resolve there over the graph's type tiers, and deliver it as a carrier.
     pub fn finish(self, value: KValue<'graph, 'here>) -> Action<'graph, B> {
         self.finish_in_home([value], |_, _, [value], _| Active::new(value))
     }
@@ -797,7 +789,7 @@ where
         if !self.spawns.is_empty() {
             return self.failed(StepError::Unparked);
         }
-        let root = self.type_root;
+        let tiers = self.tiers;
         let copy_bytes = B::weight(&birth);
         let lifted = self.context.lift::<B::Birth>(birth);
         let placed = self.context.alloc_into::<B::Birth, B::Birth>(
@@ -807,7 +799,7 @@ where
                 copy_bytes,
             }],
             |writer, header, views| {
-                Active::new(B::cross(writer, header, &views[0], Born::Left, root))
+                Active::new(B::cross(writer, header, &views[0], Born::Left, tiers))
             },
         );
         let Ok(placed) = placed else {

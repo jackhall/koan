@@ -145,6 +145,9 @@ never a bundle — the lattice knows about types and symbols and nothing else.
 
 ## Open work
 
+- [The frozen load and the agent tier](../../../roadmap/gradual-build/load-and-agent-tiers.md)
+  — a `Sync` frozen load, an insert-only tier per agent, and a chain over
+  ordered tiers alone.
 - [Presizing a branch](../../../roadmap/gradual-build/branch-presizing.md) — a
   branch's table laid at a predicted size, and the width of its slots.
 - [Recursion over run-time types](../../../roadmap/rewrite/recursion-over-run-time-types.md)

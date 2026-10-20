@@ -16,7 +16,6 @@ use crate::scheduler::tests::bundle::{AnyStep, Native, TestGraph, TestStep};
 use crate::scheduler::tests::native::{fresh, record, recorded, reset, shares, work};
 use crate::scheduler::{Action, Placement, Scheduler, Step, Use, Work};
 use crate::type_lattice::KType;
-use crate::type_lattice::Root;
 
 thread_local! {
     /// How many types the spawner mints before it spawns.
@@ -90,7 +89,8 @@ fn run(cells: u32, start: AnyStep) -> Vec<String> {
     reset();
     HANDED.with(|handed| handed.set(KType::NUMBER));
     let type_region = Bump::new();
-    let mut graph: TestGraph<'_> = TestGraph::new(cells, Root::seeded(&type_region));
+    let mut graph: TestGraph<'_> =
+        TestGraph::new(cells, crate::values::tests::seeded_tiers(&type_region));
     let root = graph.root().expect("a fresh slab admits a root");
     Scheduler::over(&mut graph)
         .run(work(start, KValue::Null), root, Placement::Fresh)

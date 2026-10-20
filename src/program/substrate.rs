@@ -18,7 +18,7 @@ use crate::scheduler::{
 use crate::scope::{Binding, BodyShape, Relay, Resumption, Settled, ShapeError, Unknown};
 use crate::symbols::SymbolInterner;
 use crate::type_lattice::{Halves, KType, RootBuilder};
-use crate::values::{Chain, Half, SpecBounds, Types};
+use crate::values::{Chain, Half, SpecBounds, TypeTiers, Types};
 
 use super::body;
 use super::bundle::{KBirth, KBundle};
@@ -44,7 +44,7 @@ struct Owner {
 
 /// Everything that names `'graph`: the graph by value, since reclaiming a region needs exclusive
 /// access, and its two roots — the build root the load ran in, and the run root every root work is
-/// born under and the top level's bindings live in; the program record in program storage, holding the types' frozen root, so what a step
+/// born under and the top level's bindings live in; the program record in program storage, holding the type tiers, so what a step
 /// reads is a `'graph` borrow; and what the top level left at rest when it last ran.
 pub struct Running<'graph> {
     graph: Graph<'graph, KBundle>,
@@ -218,14 +218,16 @@ impl CellSubstrate {
                     language: std::marker::PhantomData,
                 }));
                 let error = builtin_error(types, &owner.symbols, &scratch);
-                let root = builder.freeze();
+                let tiers = TypeTiers {
+                    frozen: builder.freeze(),
+                };
                 let writer = brand.writer();
                 let program = resident(
                     writer,
                     Program::new(
                         shape,
                         builtins,
-                        root,
+                        tiers,
                         error,
                         &owner.symbols,
                         L::evaluator(),
@@ -233,7 +235,7 @@ impl CellSubstrate {
                         &writer.fill(1, |_| Cell::new(false))[0],
                     ),
                 );
-                Ok((root, program))
+                Ok((tiers, program))
             })?;
             Ok(Running {
                 graph,

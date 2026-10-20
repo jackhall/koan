@@ -10,7 +10,6 @@ use crate::memory::Bump;
 use crate::scheduler::tests::bundle::{AnyStep, Native, TestGraph, TestStep};
 use crate::scheduler::tests::native::{describe, fresh, record, recorded, reset, shares, work};
 use crate::scheduler::{Action, Placement, Received, Scheduler, Step, StepError, Taken, Use, Work};
-use crate::type_lattice::Root;
 
 /// Enough hops that a per-hop cost would be unmissable in the allocation count.
 const MANY: usize = 10_000;
@@ -132,7 +131,8 @@ fn run(hops: usize, start: AnyStep) -> Run {
     reset();
     REMAINING.with(|remaining| remaining.set(hops));
     let type_region = Bump::new();
-    let mut graph: TestGraph<'_> = TestGraph::new(1, Root::seeded(&type_region));
+    let mut graph: TestGraph<'_> =
+        TestGraph::new(1, crate::values::tests::seeded_tiers(&type_region));
     let root = graph.root().expect("a fresh slab admits a root");
     let mut scheduler = Scheduler::over(&mut graph);
     let before = crate::tests::allocation_count();

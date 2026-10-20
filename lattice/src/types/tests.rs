@@ -19,7 +19,7 @@ mod verdicts;
 
 use crate::bump::BumpAllocator;
 use crate::symbols::{BinderSymbol, TypeSymbol};
-use crate::types::tiers::{BumpHalf, Root, RootBuilder};
+use crate::types::tiers::{BumpHalf, Frozen, RootBuilder};
 
 use super::chain::TypeChain;
 use super::handle::{Handle, KType, Parametric, wrap};
@@ -29,7 +29,7 @@ use super::tiers::Habitat;
 /// A chain over a branch of a freshly seeded root in `region`: two tiers, so what a test interns
 /// lands in the branch over the root's constants. The suite's default fixture.
 pub(super) fn tiered(region: BumpAllocator<'_>) -> TypeChain<'_, BumpHalf<'_>> {
-    TypeChain::new(Root::seeded(region), BumpHalf::new(region))
+    TypeChain::new(Frozen::seeded(region), BumpHalf::new(region))
 }
 
 /// The load's chain over a fresh root builder in `region`: one table, for a test about the root's

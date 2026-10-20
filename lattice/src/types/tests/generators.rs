@@ -44,7 +44,7 @@ use crate::types::operators::{FoldDirection, ReductionMode};
 use crate::types::schema::{SchemaDraft, SigOrigin};
 use crate::types::shape::shape_slots;
 use crate::types::shape::{DeferredReturnSurface, DispatchTokenElement, RawRank, dense_classes};
-use crate::types::tiers::{Branch, BumpHalf, Habitat, Own, Root, RootBuilder};
+use crate::types::tiers::{Branch, BumpHalf, Frozen, Habitat, Own, RootBuilder};
 use crate::types::typed::{instantiate_quantified, is_subtype_of, join, meet};
 use crate::types::walk::Variance;
 use crate::types::walk::unary::Visit;
@@ -123,8 +123,8 @@ const SEEDED: usize = 256;
 #[derive(Clone)]
 pub struct World {
     pub types: Rc<TypeChain<'static, WorldHalf>>,
-    /// The frozen root under `types`, seeded from the generators.
-    pub root: &'static Root<'static>,
+    /// The frozen load under `types`, seeded from the generators.
+    pub frozen: &'static Frozen<'static>,
     pub symbols: Rc<SymbolInterner>,
     pub binders: Rc<Vec<BinderSymbol>>,
     pub type_names: Rc<Vec<TypeSymbol>>,
@@ -146,8 +146,8 @@ impl World {
         let builder = RootBuilder::in_region(arena);
         let seeding = World {
             types: Rc::new(TypeChain::building(WorldHalf::Building(builder))),
-            // Read by no seeding draw; the frozen root replaces it below.
-            root: Root::seeded(arena),
+            // Read by no seeding draw; the frozen load replaces it below.
+            frozen: Frozen::seeded(arena),
             binders: Rc::new(vec![
                 declare_binder("x"),
                 declare_binder("y"),
@@ -170,13 +170,13 @@ impl World {
                 .current();
         }
         drop(pool);
-        let root = builder.freeze();
+        let frozen = builder.freeze();
         World {
             types: Rc::new(TypeChain::new(
-                root,
+                frozen,
                 WorldHalf::Branch(BumpHalf::new(arena)),
             )),
-            root,
+            frozen,
             ..seeding
         }
     }

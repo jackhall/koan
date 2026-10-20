@@ -1,12 +1,11 @@
-//! The tiers a type lives in: the frozen [`Root`] the load builds, and a [`Branch`] per habitat
-//! half the run builds in. A [`TypeChain`] reads and writes them.
+//! The tiers a type lives in: the [`Frozen`] load, and a [`Branch`] per habitat half the run builds
+//! in. A [`TypeChain`] reads and writes them.
 //!
-//! - The **root** holds the load's types and outlives every run. While the load runs, its
-//!   [`RootBuilder`] grows a hashbrown table in the bump it is laid in; the load's end freezes it
-//!   ([`RootBuilder::freeze`]), moving the table out of its `RefCell` into a [`Root`] that has no
-//!   intern door, so the run can never intern into it. A frozen root is read-only apart from its
-//!   lossy verdict slots, which are cells, so it is covariant and a chain holds it at its own
-//!   lifetime.
+//! - The **frozen load** holds the load's types and outlives every run. While the load runs, its
+//!   [`RootBuilder`] grows a hashbrown table and a lossless verdict table in the bump it is laid in;
+//!   the load's end ([`RootBuilder::freeze`]) lays both into [`FrozenTable`]s, runs of slots that
+//!   are never written. The frozen load has no intern door and no record door, holds no cell, and
+//!   so is `Sync`; it is covariant, so a chain holds it at its own lifetime.
 //! - A **branch** is a [`DigestTable`] of the nodes one habitat half — a cell region or a scratch
 //!   habitat — interned, laid in that half at its smallest size by the first door that needs it,
 //!   and released with the half. Its verdicts are a second table, laid at its first verdict. A
@@ -34,16 +33,18 @@ use std::cell::{Cell, RefCell};
 use std::hash::BuildHasher;
 use std::marker::PhantomData;
 
-use crate::bump::{BumpAllocator, BumpHashTable, DigestTable, Keyed, LaysRuns, bump_hash_table};
+use crate::bump::{
+    BumpAllocator, BumpHashTable, DigestTable, FrozenTable, Keyed, LaysRuns, bump_hash_table,
+};
 use crate::symbols::IdentityBuildHasher;
 
 use super::chain::TypeChain;
 use super::digest::{TypeDigest, node_digest};
 use super::node::TypeNode;
 use super::stored::{Content, Flags, Linked, StoredNode};
-use super::verdicts::{FixedVerdicts, VERDICT_SLOTS, VerdictEntry, VerdictKey, VerdictTable};
+use super::verdicts::{VerdictEntry, VerdictKey};
 
-/// The root's node table: a reference to each stored node, bucket array in the root's bump.
+/// The root builder's node table: a reference to each stored node, bucket array in its bump.
 /// A node holds its own digest, so the table holds no second copy of it.
 type NodeTable<'g> = BumpHashTable<'g, Linked<'g>>;
 
@@ -58,7 +59,7 @@ pub(super) fn lay_one<'r, T>(lay: impl LaysRuns<'r>, value: T) -> &'r T {
     &lay.lay(1, |_| value.take().expect("a run of one fills once"))[0]
 }
 
-/// The root's node under `digest` in `nodes`, or `None`.
+/// The node under `digest` in `nodes`, or `None`.
 fn find_in<'g>(nodes: &NodeTable<'g>, digest: TypeDigest) -> Option<Linked<'g>> {
     nodes
         .find(slot_hash(digest), |node| node.digest() == digest)
@@ -77,23 +78,90 @@ impl Keyed for StoredNode<'_> {
     }
 }
 
-/// The root while the load builds it: the node table in its `RefCell`, grown in the bump it is
-/// laid in, and the verdict table laid there at the first verdict. The load's chain writes it;
-/// [`freeze`](Self::freeze) ends the load.
-pub struct RootBuilder<'g> {
+/// A tier grown through shared borrows in the bump it is laid in: a hashbrown node table, whose
+/// miss is one group probe, and a verdict table laid at the first verdict, which keeps every
+/// verdict it is given. The root builder's storage.
+struct Grown<'g> {
     bump: BumpAllocator<'g>,
     nodes: RefCell<NodeTable<'g>>,
-    verdicts: VerdictTable<'g>,
+    verdicts: Cell<Option<&'g DigestTable<'g, VerdictEntry>>>,
+}
+
+impl<'g> Grown<'g> {
+    fn new(bump: BumpAllocator<'g>, nodes: NodeTable<'g>) -> Self {
+        Grown {
+            bump,
+            nodes: RefCell::new(nodes),
+            verdicts: Cell::new(None),
+        }
+    }
+
+    fn find(&self, digest: TypeDigest) -> Option<Linked<'g>> {
+        find_in(&self.nodes.borrow(), digest)
+    }
+
+    fn insert(&self, node: Linked<'g>) {
+        self.nodes
+            .borrow_mut()
+            .insert_unique(slot_hash(node.digest()), node, |node| {
+                slot_hash(node.digest())
+            });
+    }
+
+    fn len(&self) -> usize {
+        self.nodes.borrow().len()
+    }
+
+    fn verdict(&self, key: VerdictKey) -> Option<bool> {
+        self.verdicts.get()?.get(key).map(VerdictEntry::verdict)
+    }
+
+    fn record(&self, key: VerdictKey, verdict: bool) {
+        record_in(&self.verdicts, self.bump, key, verdict);
+    }
+
+    #[cfg(test)]
+    fn verdict_count(&self) -> usize {
+        self.verdicts.get().map_or(0, DigestTable::len)
+    }
+}
+
+/// Record `verdict` in `verdicts` unless it holds one for `key`, laying the table through `lay` on
+/// the first.
+fn record_in<'t>(
+    verdicts: &Cell<Option<&'t DigestTable<'t, VerdictEntry>>>,
+    lay: impl LaysRuns<'t>,
+    key: VerdictKey,
+    verdict: bool,
+) {
+    let table = match verdicts.get() {
+        Some(table) => table,
+        None => {
+            let table = lay_one(lay, DigestTable::new(lay));
+            verdicts.set(Some(table));
+            table
+        }
+    };
+    if table.get(key).is_none() {
+        table.insert_unique(lay, lay_one(lay, VerdictEntry::new(key, verdict)));
+    }
+}
+
+/// The load's tier while the load builds it: a hashbrown node table and a lossless verdict table,
+/// grown in the bump it is laid in. The load's chain writes it; [`freeze`](Self::freeze) ends the
+/// load.
+pub struct RootBuilder<'g> {
+    grown: Grown<'g>,
     never: Linked<'g>,
     any: Linked<'g>,
     frozen: Cell<bool>,
 }
 
 impl<'g> RootBuilder<'g> {
-    /// A builder whose content lives in `bump`, laid there, with `Never` and `Any` laid so a chain
-    /// can hold them, its verdict table `verdict_slots` long, seeded with the constants through a
-    /// chain over it.
-    fn seeded(bump: BumpAllocator<'g>, verdict_slots: usize) -> &'g Self {
+    /// A builder over `bump`, laid there, seeded with the fixed handles — the leaves, the `OfKind`
+    /// values, `List<Any>`, `Dict<Any, Any>`, the empty signature and the code composites — so the
+    /// constants those names lower to resolve in a load that holds nothing else.
+    pub fn in_region(bump: BumpAllocator<'g>) -> &'g Self {
         let mut nodes = bump_hash_table(bump);
         let mut lay_leaf = |leaf: TypeNode<'g, Linked<'g>>| -> Linked<'g> {
             let digest = node_digest(bump, &leaf);
@@ -107,9 +175,7 @@ impl<'g> RootBuilder<'g> {
         };
         let (never, any) = (lay_leaf(TypeNode::Never), lay_leaf(TypeNode::Any));
         let builder = bump.alloc(RootBuilder {
-            bump,
-            nodes: RefCell::new(nodes),
-            verdicts: VerdictTable::with_slots(verdict_slots),
+            grown: Grown::new(bump, nodes),
             never,
             any,
             frozen: Cell::new(false),
@@ -118,28 +184,23 @@ impl<'g> RootBuilder<'g> {
         builder
     }
 
-    /// A builder over `bump`, seeded with the fixed handles — the leaves, the `OfKind` values,
-    /// `List<Any>`, `Dict<Any, Any>`, the empty signature and the code composites — so the
-    /// constants those names lower to resolve in a root that holds nothing else.
-    pub fn in_region(bump: BumpAllocator<'g>) -> &'g Self {
-        Self::seeded(bump, VERDICT_SLOTS)
-    }
-
-    /// `test`-only: a builder whose verdict table holds `slots` slots, so a test can fill a bucket.
-    #[cfg(test)]
-    pub(super) fn with_verdict_slots(bump: BumpAllocator<'g>, slots: usize) -> &'g Self {
-        Self::seeded(bump, slots)
-    }
-
-    /// End the load: move the node table out into a frozen [`Root`] laid in the bump, beside the
-    /// verdict table, laid now if nothing recorded a verdict. Nothing is rebuilt. An insert after
-    /// the freeze panics.
-    pub fn freeze(&self) -> &'g Root<'g> {
-        assert!(!self.frozen.replace(true), "a root freezes once");
-        let nodes = self.nodes.replace(bump_hash_table(self.bump));
-        self.bump.alloc(Root {
-            nodes,
-            verdicts: self.verdicts.freeze(self.bump),
+    /// End the load: lay its nodes and its verdicts into the [`Frozen`] load's read-only tables,
+    /// each slot placed as a digest table places it, and lay the load in the bump. The staging
+    /// table the nodes pass through is stranded there. An insert after the freeze panics.
+    pub fn freeze(&self) -> &'g Frozen<'g> {
+        assert!(!self.frozen.replace(true), "a load freezes once");
+        let bump = self.grown.bump;
+        let staging = DigestTable::with_capacity(bump, self.grown.len());
+        for &node in self.grown.nodes.borrow().iter() {
+            staging.insert_unique(bump, node);
+        }
+        let verdicts = match self.grown.verdicts.get() {
+            Some(table) => table.frozen(bump),
+            None => DigestTable::new(bump).frozen(bump),
+        };
+        bump.alloc(Frozen {
+            nodes: staging.frozen(bump),
+            verdicts,
             never: self.never,
             any: self.any,
         })
@@ -154,44 +215,40 @@ impl<'g> RootBuilder<'g> {
     }
 
     pub(super) fn find(&self, digest: TypeDigest) -> Option<Linked<'g>> {
-        find_in(&self.nodes.borrow(), digest)
+        self.grown.find(digest)
     }
 
     pub(super) fn insert(&self, node: Linked<'g>) {
-        assert!(!self.frozen.get(), "a frozen root takes no intern");
-        self.nodes
-            .borrow_mut()
-            .insert_unique(slot_hash(node.digest()), node, |node| {
-                slot_hash(node.digest())
-            });
+        assert!(!self.frozen.get(), "a frozen load takes no intern");
+        self.grown.insert(node);
     }
 
     pub(super) fn len(&self) -> usize {
-        self.nodes.borrow().len()
+        self.grown.len()
     }
 
     pub(super) fn verdict(&self, key: VerdictKey) -> Option<bool> {
-        self.verdicts.get(key)
+        self.grown.verdict(key)
     }
 
     pub(super) fn record(&self, key: VerdictKey, verdict: bool) {
-        self.verdicts.record(self.bump, key, verdict);
+        self.grown.record(key, verdict);
     }
 
-    /// `test`-only: how many verdicts were recorded, and how many of those evicted another.
+    /// `test`-only: how many verdicts the builder holds.
     #[cfg(test)]
-    pub(super) fn verdict_tally(&self) -> (u64, u64) {
-        self.verdicts.tally()
+    pub(super) fn verdict_count(&self) -> usize {
+        self.grown.verdict_count()
     }
 }
 
 impl<'g> LaysRuns<'g> for &'g RootBuilder<'g> {
     fn lay<T>(self, len: usize, fill: impl FnMut(usize) -> T) -> &'g [T] {
-        self.bump.lay(len, fill)
+        self.grown.bump.lay(len, fill)
     }
 
     fn text(self, text: &str) -> &'g str {
-        self.bump.text(text)
+        self.grown.bump.text(text)
     }
 }
 
@@ -205,36 +262,42 @@ impl<'g> Habitat<'g> for &'g RootBuilder<'g> {
     }
 }
 
-/// The frozen root: the load's node table, read-only, and its fixed, lossy verdict table. It has
-/// no intern door. Covariant in `'g`, so a chain holds it at its own lifetime.
-pub struct Root<'g> {
-    nodes: NodeTable<'g>,
-    verdicts: FixedVerdicts<'g>,
+/// The frozen load: its node index and its verdict table, each a run of (digest word, entry) slots
+/// laid at the freeze and never written. It has no intern door and no record door, so no run writes
+/// it. It holds no cell, so every agent may read one load from its own thread; and it is
+/// covariant in `'g`, so a chain holds it at its own lifetime.
+pub struct Frozen<'g> {
+    nodes: FrozenTable<'g, StoredNode<'g>>,
+    verdicts: FrozenTable<'g, VerdictEntry>,
     never: Linked<'g>,
     any: Linked<'g>,
 }
 
-impl<'g> Root<'g> {
-    /// A root over `bump` holding the fixed handles and nothing else: a builder seeded and frozen
+const _: () = assert!(!std::mem::needs_drop::<Frozen<'static>>());
+const _: fn() = || {
+    fn sync<T: Sync>() {}
+    sync::<Frozen<'static>>();
+};
+
+impl<'g> Frozen<'g> {
+    /// A load over `bump` holding the fixed handles and nothing else: a builder seeded and frozen
     /// at once. What a test that needs no load builds its chains over.
     pub fn seeded(bump: BumpAllocator<'g>) -> &'g Self {
         RootBuilder::in_region(bump).freeze()
     }
 
-    /// How many nodes the root holds. Tests read it — koan's among them, which is why it is not
+    /// How many nodes the load holds. Tests read it — koan's among them, which is why it is not
     /// `cfg(test)`: that does not reach a dependency.
     pub fn len(&self) -> usize {
         self.nodes.len()
     }
 
-    /// Every digest the root holds, in no particular order. Tests read it — koan's among them.
+    /// Every digest the load holds, in no particular order. Tests read it — koan's among them.
     pub fn each_digest(&self, mut each: impl FnMut(TypeDigest)) {
-        for node in self.nodes.iter() {
-            each(node.digest());
-        }
+        self.nodes.each(|node| each(node.digest()));
     }
 
-    /// Whether the root holds no node; never, since `Never` and `Any` are laid before it exists.
+    /// Whether the load holds no node; never, since `Never` and `Any` are laid before it exists.
     pub fn is_empty(&self) -> bool {
         self.nodes.is_empty()
     }
@@ -248,21 +311,17 @@ impl<'g> Root<'g> {
     }
 
     pub(super) fn find(&self, digest: TypeDigest) -> Option<Linked<'g>> {
-        find_in(&self.nodes, digest)
+        self.nodes.get(digest)
     }
 
     pub(super) fn verdict(&self, key: VerdictKey) -> Option<bool> {
-        self.verdicts.get(key)
+        self.verdicts.get(key).map(VerdictEntry::verdict)
     }
 
-    pub(super) fn record(&self, key: VerdictKey, verdict: bool) {
-        self.verdicts.record(key, verdict);
-    }
-
-    /// `test`-only: how many verdicts were recorded, and how many of those evicted another.
+    /// `test`-only: how many verdicts the load holds.
     #[cfg(test)]
-    pub(super) fn verdict_tally(&self) -> (u64, u64) {
-        self.verdicts.tally()
+    pub(super) fn verdict_count(&self) -> usize {
+        self.verdicts.len()
     }
 }
 
@@ -488,17 +547,7 @@ impl<'t> Branch<'t> {
     /// Record `verdict` unless the branch holds one for `key`, laying the verdict table through
     /// `lay` on the first.
     pub(super) fn record(&self, lay: impl LaysRuns<'t>, key: VerdictKey, verdict: bool) {
-        let table = match self.verdicts.get() {
-            Some(table) => table,
-            None => {
-                let table = lay_one(lay, DigestTable::new(lay));
-                self.verdicts.set(Some(table));
-                table
-            }
-        };
-        if table.get(key).is_none() {
-            table.insert_unique(lay, lay_one(lay, VerdictEntry::new(key, verdict)));
-        }
+        record_in(&self.verdicts, lay, key, verdict);
     }
 }
 
@@ -625,8 +674,8 @@ where
     brand: PhantomData<&'t ()>,
 }
 
-impl<'r: 't, 't, H, R> Halves<'r, 't, H, R> {
-    /// `half` alone.
+impl<'t, H> Halves<'t, 't, H, H> {
+    /// `half` alone. The region's type is the half's own, so no brand is left free.
     pub fn alone(half: H) -> Self {
         Halves {
             half,
@@ -634,7 +683,9 @@ impl<'r: 't, 't, H, R> Halves<'r, 't, H, R> {
             brand: PhantomData,
         }
     }
+}
 
+impl<'r: 't, 't, H, R> Halves<'r, 't, H, R> {
     /// `half`, reading `region` between the root and its own tier.
     pub fn over(half: H, region: R) -> Self {
         Halves {

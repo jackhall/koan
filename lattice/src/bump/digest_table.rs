@@ -14,10 +14,14 @@
 //! and has no allocator, so a table that grows only by laying runs is one a cell's region can
 //! host. The bump tier implements [`LaysRuns`] for a bump (`bump.rs`).
 //!
-//! The type lattice's root keeps a hashbrown table and a branch keeps this one; see
+//! [`DigestTable::frozen`] copies a table into a [`FrozenTable`], which holds the same slots and is
+//! never written. The type lattice's root builder keeps a hashbrown table, which it freezes into a
+//! frozen table, and a branch keeps a digest table; see
 //! [identity.md § Storage](../types/identity.md#storage-a-root-and-its-branches).
 
 use std::cell::Cell;
+
+use super::FrozenTable;
 
 /// What lays a fixed run of drop-free values and hands back its borrow for `'r`: the one
 /// capability a [`DigestTable`] grows by, and the one a type branch lays its nodes through. A bump
@@ -45,8 +49,8 @@ pub trait Keyed {
 }
 
 /// One slot: the key's low word beside the entry. Empty when `entry` is `None`; the word of an
-/// empty slot is never read.
-struct Slot<'r, N> {
+/// empty slot is never read. A [`FrozenTable`](super::FrozenTable) holds the same slots.
+pub(super) struct Slot<'r, N> {
     word: u64,
     entry: Option<&'r N>,
 }
@@ -60,11 +64,16 @@ impl<N> Clone for Slot<'_, N> {
 
 impl<N> Copy for Slot<'_, N> {}
 
-impl<N> Slot<'_, N> {
+impl<'r, N> Slot<'r, N> {
     const EMPTY: Self = Slot {
         word: 0,
         entry: None,
     };
+
+    /// The entry the slot holds, or `None` where it is empty.
+    pub(super) fn entry(self) -> Option<&'r N> {
+        self.entry
+    }
 }
 
 /// The smallest run: one 64 B line of slots.
@@ -101,18 +110,7 @@ impl<'r, N: Keyed> DigestTable<'r, N> {
     /// The entry whose key is `key`, if the table holds one.
     pub fn get(&self, key: N::Key) -> Option<&'r N> {
         let run = self.run.get();
-        let mask = run.len() - 1;
-        let word = N::word(key);
-        let mut index = word as usize & mask;
-        // Ends: the load is at most one half, so an empty slot always lies ahead.
-        loop {
-            let slot = run[index].get();
-            let entry = slot.entry?;
-            if slot.word == word && entry.key() == key {
-                return Some(entry);
-            }
-            index = (index + 1) & mask;
-        }
+        probe(run.len(), |index| run[index].get(), key)
     }
 
     /// Insert `entry`, whose key the caller guarantees is absent, growing through `lay` first if
@@ -157,6 +155,13 @@ impl<'r, N: Keyed> DigestTable<'r, N> {
         }
     }
 
+    /// A read-only copy of the table, its run laid through `lay` slot by slot, so every entry
+    /// keeps the slot it holds here.
+    pub fn frozen(&self, lay: impl LaysRuns<'r>) -> FrozenTable<'r, N> {
+        let run = self.run.get();
+        FrozenTable::over(lay.lay(run.len(), |index| run[index].get()), self.len.get())
+    }
+
     /// Lay a run twice the length and re-place every occupied slot by its stored word.
     fn grow(&self, lay: impl LaysRuns<'r>) {
         let old = self.run.get();
@@ -168,6 +173,27 @@ impl<'r, N: Keyed> DigestTable<'r, N> {
             }
         }
         self.run.set(new);
+    }
+}
+
+/// The entry under `key` in a run of `len` slots, each read through `slot`, probing linearly from
+/// the key's home: the one probe a [`DigestTable`] and a [`FrozenTable`] share.
+pub(super) fn probe<'r, N: Keyed>(
+    len: usize,
+    slot: impl Fn(usize) -> Slot<'r, N>,
+    key: N::Key,
+) -> Option<&'r N> {
+    let mask = len - 1;
+    let word = N::word(key);
+    let mut index = word as usize & mask;
+    // Ends: the load is at most one half, so an empty slot always lies ahead.
+    loop {
+        let slot = slot(index);
+        let entry = slot.entry?;
+        if slot.word == word && entry.key() == key {
+            return Some(entry);
+        }
+        index = (index + 1) & mask;
     }
 }
 

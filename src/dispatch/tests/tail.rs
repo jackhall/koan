@@ -149,11 +149,11 @@ fn walking(depth: u32, body: &str) -> Walk {
     let mut substrate =
         CellSubstrate::load::<Koan>(&source, "<test>", 2, SpecBounds::default(), output())
             .unwrap_or_else(|error| panic!("the countdown loads: {error}"));
-    let before = substrate.with(|running| running.program().root().len());
+    let before = substrate.with(|running| running.program().tiers().frozen.len());
     substrate
         .with(|running| running.run())
         .expect("the countdown runs");
-    let after = substrate.with(|running| running.program().root().len());
+    let after = substrate.with(|running| running.program().tiers().frozen.len());
     substrate
         .with(|running| running.inspect(branch_length))
         .expect("the inspection runs");

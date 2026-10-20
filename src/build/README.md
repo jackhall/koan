@@ -501,3 +501,6 @@ through a projection it defines.
   — the bounds as a setting a user names.
 - [Activation typing](../../roadmap/gradual-build/activation-typing.md) — a
   frame's facts settled at its seams over the content its bindings bring.
+- [The build as the second embedder](../../roadmap/gradual-build/build-rewrite.md)
+  — the build rewritten in this module on cellgraph's ordinary step protocol,
+  deciding everything the run executes.

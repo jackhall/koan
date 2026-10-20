@@ -5,7 +5,7 @@
 //! A [`Half`] reaches the header only through a door projected to the branch's slot
 //! ([`BranchSlot`], whose family is [`BranchCell`]): any header family that projects to it serves,
 //! and a half that never interns lays no header at all. A [`Types`] chain is built per step over the
-//! frozen [`Root`](crate::type_lattice::Root) the load built and a [`Half`]: the writer that lays a
+//! [`TypeTiers`] the load built and a [`Half`]: the writer that lays a
 //! value beside the projected header door of the same half, so a value door that takes both at one
 //! brand interns its type into the branch of the habitat it lays the value in. During the load the
 //! chain writes the root builder instead ([`Half::Load`]).
@@ -18,7 +18,35 @@ use std::cell::Cell;
 use std::marker::PhantomData;
 
 use crate::memory::{Header, LaysRuns, Projected, Projects, Writer, reattachable};
-use crate::type_lattice::{Branch, Habitat, Halves, Own, RootBuilder, TypeChain};
+use crate::type_lattice::{Branch, Frozen, Habitat, Halves, Own, RootBuilder, TypeChain};
+
+/// The tiers every chain of the program's one agent reads above its own halves: the frozen load.
+#[derive(Clone, Copy)]
+pub struct TypeTiers<'graph> {
+    pub frozen: &'graph Frozen<'graph>,
+}
+
+impl<'graph> TypeTiers<'graph> {
+    /// A chain over `half`, reading the tiers first.
+    pub fn chain<'tier, H: Habitat<'tier>>(self, half: H) -> TypeChain<'tier, H>
+    where
+        'graph: 'tier,
+    {
+        TypeChain::new(self.frozen, half)
+    }
+
+    /// A scratch chain over `half`, reading the tiers, then `region`'s branch, before its own.
+    pub fn scratch<'reg: 'tier, 'tier, H: Habitat<'tier>, R: Habitat<'reg>>(
+        self,
+        region: R,
+        half: H,
+    ) -> TypeChain<'tier, Halves<'reg, 'tier, H, R>>
+    where
+        'graph: 'reg,
+    {
+        TypeChain::scratch(self.frozen, region, half)
+    }
+}
 
 /// A half's branch slot, as its header keeps it: empty until the first door that interns into
 /// the half lays the branch.
@@ -95,7 +123,7 @@ impl<'cell, 'pair, 'door> Half<'cell, 'pair, 'door> {
     }
 
     /// Whether a value door beside this half lays its value where the half interns: a half paired
-    /// to its own brand, or the load's, whose types all land in the root.
+    /// to its own brand, or the load's, whose types all land in the load.
     pub(crate) fn interns_where_it_lays(&self) -> bool {
         match self {
             Half::Habitat { own_brand, .. } => *own_brand,
@@ -227,7 +255,7 @@ pub type Types<'cell, 'door> = Chain<'cell, 'cell, 'cell, 'door>;
 /// A chain whose tiers sit at `'tier`, paired to the writer at `'pair`: what a value door takes
 /// beside a writer at `'pair`. A caching body's chains lay into a scratch tier, so their tier brand
 /// differs from the region writer they are paired to. A scratch chain reads a region at `'reg`
-/// between the root and its own tier, holding the region's half by value ([`Halves`]), so building
+/// between the load's tiers and its own, holding the region's half by value ([`Halves`]), so building
 /// one lays nothing; the region's half takes the chain's pairing brand, which it lays no value
 /// under. A chain over a half alone holds none, and its `'reg` names nothing. The chain holds its
 /// halves' doors, so it is branded `'door` to the step that built it.

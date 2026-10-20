@@ -67,7 +67,7 @@ use super::shape::{
 use super::signatures::canonical_applications;
 use super::stored::{Content, Flags, Linked, StoredNode, copied, mapped_fields};
 use super::substitute::{rewrite_siblings, substitute_quantified};
-use super::tiers::{ChainPosition, Habitat, Halves, Own, Root, lay_one};
+use super::tiers::{ChainPosition, Frozen, Habitat, Halves, Own, lay_one};
 use super::verdicts::{Relation, VerdictKey};
 use super::walk::Variance;
 use super::walk::unary::{Visit, children, visit, visit_free_quantified};
@@ -135,8 +135,8 @@ pub struct GroupIntern<'s> {
 /// Invariant in `'t`, as the half's writer is: a value door pairs a writer with a chain at one
 /// brand, so a type is interned into the branch of the habitat its value is laid in.
 pub struct TypeChain<'t, H> {
-    /// The frozen root; `None` only on the load's chain, whose own tier is the root builder.
-    root: Option<&'t Root<'t>>,
+    /// The frozen load; `None` only on the load's chain, whose own tier is the root builder.
+    frozen: Option<&'t Frozen<'t>>,
     /// The bottom and the top, held so producing either costs no lookup.
     never: Linked<'t>,
     any: Linked<'t>,
@@ -147,7 +147,7 @@ pub struct TypeChain<'t, H> {
     lookups: Cell<usize>,
     /// `test`-only: how many probes the frozen root's node or verdict table has taken.
     #[cfg(test)]
-    root_probes: Cell<usize>,
+    load_probes: Cell<usize>,
     /// `test`-only: how many probes the own or region tier's verdict table has taken.
     #[cfg(test)]
     branch_verdict_probes: Cell<usize>,
@@ -157,7 +157,7 @@ impl<'r: 't, 't, H: Habitat<'t>, R: Habitat<'r>> TypeChain<'t, Halves<'r, 't, H,
     /// A scratch habitat's chain over `half`, reading `region`'s tier between the root and its
     /// own. The region is held by value, so building the chain lays nothing, and it is re-read on
     /// every probe, so a branch the region lays during the step is seen.
-    pub fn scratch(root: &'t Root<'t>, region: R, half: H) -> Self {
+    pub fn scratch(root: &'t Frozen<'t>, region: R, half: H) -> Self {
         debug_assert!(
             !matches!(region.own(), Some(Own::Builder(_))),
             "a root builder is no region tier: its nodes are the root's, and a lookup by handle \
@@ -170,7 +170,7 @@ impl<'r: 't, 't, H: Habitat<'t>, R: Habitat<'r>> TypeChain<'t, Halves<'r, 't, H,
 /// Which tier holds a type, longest-lived first: where a verdict over it is placed.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Placed {
-    Root,
+    Load,
     Region,
     Own,
 }
@@ -185,20 +185,20 @@ impl<'t, H: Habitat<'t>> TypeChain<'t, H> {
     }
 
     /// A chain over `half`, reading `root` first.
-    pub fn new(root: &'t Root<'t>, half: H) -> Self {
+    pub fn new(root: &'t Frozen<'t>, half: H) -> Self {
         Self::over(Some(root), root.never(), root.any(), half)
     }
 
-    fn over(root: Option<&'t Root<'t>>, never: Linked<'t>, any: Linked<'t>, half: H) -> Self {
+    fn over(frozen: Option<&'t Frozen<'t>>, never: Linked<'t>, any: Linked<'t>, half: H) -> Self {
         TypeChain {
-            root,
+            frozen,
             never,
             any,
             half,
             #[cfg(test)]
             lookups: Cell::new(0),
             #[cfg(test)]
-            root_probes: Cell::new(0),
+            load_probes: Cell::new(0),
             #[cfg(test)]
             branch_verdict_probes: Cell::new(0),
         }
@@ -234,8 +234,8 @@ impl<'t, H: Habitat<'t>> TypeChain<'t, H> {
 
     /// `test`-only: how many probes the frozen root's node or verdict table has taken.
     #[cfg(test)]
-    pub(super) fn root_probes(&self) -> usize {
-        self.root_probes.get()
+    pub(super) fn load_probes(&self) -> usize {
+        self.load_probes.get()
     }
 
     /// `test`-only: how many probes the own or region tier's verdict table has taken.
@@ -245,9 +245,9 @@ impl<'t, H: Habitat<'t>> TypeChain<'t, H> {
     }
 
     /// `test`-only: count one probe of the frozen root's tables.
-    fn count_root_probe(&self) {
+    fn count_load_probe(&self) {
         #[cfg(test)]
-        self.root_probes.set(self.root_probes.get() + 1);
+        self.load_probes.set(self.load_probes.get() + 1);
     }
 
     /// `test`-only: count one probe of a branch tier's verdict table.
@@ -374,7 +374,7 @@ impl<'t, H: Habitat<'t>> TypeChain<'t, H> {
         // The load's chain, the one with no root, lays into the root builder.
         let node: Linked<'t> = lay_one(
             self.half,
-            StoredNode::new(digest, content, self.root.is_none()),
+            StoredNode::new(digest, content, self.frozen.is_none()),
         );
         self.half.own_or_lay().insert(self.half, node);
         node
@@ -467,8 +467,8 @@ impl<'t, H: Habitat<'t>> TypeChain<'t, H> {
     /// The node under `digest` in the root, the region tier or the own tier, longest-lived first —
     /// the intern's probe, which knows no bits and reads no link.
     pub(super) fn find(&self, digest: TypeDigest) -> Option<Linked<'t>> {
-        if let Some(root) = self.root {
-            self.count_root_probe();
+        if let Some(root) = self.frozen {
+            self.count_load_probe();
             if let Some(found) = root.find(digest) {
                 return Some(found);
             }
@@ -485,9 +485,9 @@ impl<'t, H: Habitat<'t>> TypeChain<'t, H> {
     pub(super) fn locate(&self, handle: Handle) -> Option<Linked<'t>> {
         let digest = handle.digest();
         if handle.in_root() {
-            return match self.root {
+            return match self.frozen {
                 Some(root) => {
-                    self.count_root_probe();
+                    self.count_load_probe();
                     root.find(digest)
                 }
                 None => self.half.own()?.find(digest),
@@ -504,8 +504,8 @@ impl<'t, H: Habitat<'t>> TypeChain<'t, H> {
     /// tier, and the own tier where neither finds it — a child of a node read through a link.
     fn tier_of(&self, handle: Handle) -> Placed {
         if handle.in_root() {
-            return if self.root.is_some() {
-                Placed::Root
+            return if self.frozen.is_some() {
+                Placed::Load
             } else {
                 Placed::Own
             };
@@ -1514,9 +1514,9 @@ impl<'t, H: Habitat<'t>> TypeChain<'t, H> {
             relation,
         };
         if subject.in_root() && candidate.in_root() {
-            return match self.root {
+            return match self.frozen {
                 Some(root) => {
-                    self.count_root_probe();
+                    self.count_load_probe();
                     root.verdict(key)
                 }
                 None => self.half.own()?.verdict(key),
@@ -1552,11 +1552,8 @@ impl<'t, H: Habitat<'t>> TypeChain<'t, H> {
             relation,
         };
         match self.tier_of(subject).max(self.tier_of(candidate)) {
-            Placed::Root => {
-                if let Some(root) = self.root {
-                    root.record(key, verdict);
-                }
-            }
+            // No run writes the frozen load's table.
+            Placed::Load => {}
             Placed::Region => {
                 if let Some(region) = self.half.region() {
                     region.tier().record(key, verdict);
@@ -1566,14 +1563,13 @@ impl<'t, H: Habitat<'t>> TypeChain<'t, H> {
         }
     }
 
-    /// `test`-only: how many verdicts the root, or the root builder, recorded, and how many of
-    /// those evicted another.
+    /// `test`-only: how many verdicts the frozen load, or the root builder, holds.
     #[cfg(test)]
-    pub(super) fn verdict_tally(&self) -> (u64, u64) {
-        match (self.root, self.half.own()) {
-            (Some(root), _) => root.verdict_tally(),
-            (None, Some(Own::Builder(builder))) => builder.verdict_tally(),
-            (None, _) => unreachable!("a chain with no root writes the root builder"),
+    pub(super) fn load_verdict_count(&self) -> usize {
+        match (self.frozen, self.half.own()) {
+            (Some(frozen), _) => frozen.verdict_count(),
+            (None, Some(Own::Builder(builder))) => builder.verdict_count(),
+            (None, _) => unreachable!("a chain with no frozen load writes the root builder"),
         }
     }
 }

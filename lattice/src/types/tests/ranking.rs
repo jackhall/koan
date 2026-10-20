@@ -417,9 +417,11 @@ fn class_verdicts_are_recorded_and_reused() {
         &[],
     );
     let _ = shape_specificity(&world.types, world.region, a, b);
-    let (recorded, _) = world.types.verdict_tally();
+    let held = || crate::types::tiers::BumpHalf::branch_of(&world.types).verdict_count();
+    let recorded = held();
+    assert!(recorded > 0, "a class verdict is recorded");
     let _ = shape_specificity(&world.types, world.region, a, b);
-    assert_eq!(world.types.verdict_tally().0, recorded);
+    assert_eq!(held(), recorded);
 }
 
 /// A signature member ranked `2 … 1` is not satisfied by a module whose bucket is written-order.

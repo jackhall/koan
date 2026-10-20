@@ -13,8 +13,8 @@ use crate::scheduler::{Born, StepBundle};
 use crate::scope::RegionHeader;
 use crate::scope::{BodyShape, Site};
 use crate::symbols::Symbol;
-use crate::type_lattice::{DeclaredType, Halves, KType, Root};
-use crate::values::{BuildRef, ContentDigest, Half, Types, copy_severed};
+use crate::type_lattice::{DeclaredType, Halves, KType};
+use crate::values::{BuildRef, ContentDigest, Half, TypeTiers, copy_severed};
 
 use super::body::Runner;
 use super::record::{CallKind, Contract, Evaluated, Program};
@@ -217,14 +217,14 @@ impl<'graph> StepBundle<'graph> for KBundle {
         header: Header<'graph, 'cell, '_, RegionHeader>,
         view: &CrossedOperand<'graph, 'cell, '_, KBirthFamily, RegionHeader>,
         born: Born,
-        type_root: &'graph Root<'graph>,
+        tiers: TypeTiers<'graph>,
     ) -> KBirth<'graph, 'cell>
     where
         'graph: 'cell,
     {
         match view {
             CrossedOperand::Pinned { view, home, .. } => {
-                let types = Types::new(type_root, Halves::alone(Half::of(writer, header)));
+                let types = tiers.chain(Halves::alone(Half::of(writer, header)));
                 home.read(|header, _| {
                     let Some(branch) = header.into_value().branch() else {
                         return;
@@ -253,7 +253,7 @@ impl<'graph> StepBundle<'graph> for KBundle {
                     handed,
                     owed,
                 } => {
-                    let types = Types::new(type_root, Halves::alone(Half::of(writer, header)));
+                    let types = tiers.chain(Halves::alone(Half::of(writer, header)));
                     let [callee, arguments] = copy_severed::<_, KnottedFamily, _, 2>(
                         writer,
                         &types,
@@ -276,7 +276,7 @@ impl<'graph> StepBundle<'graph> for KBundle {
                     offered,
                     contract,
                 } => {
-                    let types = Types::new(type_root, Halves::alone(Half::of(writer, header)));
+                    let types = tiers.chain(Halves::alone(Half::of(writer, header)));
                     let [code, offered] = copy_severed::<_, KnottedFamily, _, 2>(
                         writer,
                         &types,

@@ -17,9 +17,9 @@ use crate::scheduler::{NativeStep, Work};
 use crate::scope::{BodyShape, ChainRelay, Resumption, Settled, ShapeError, Slot};
 use crate::symbols::{BinderSymbol, SymbolInterner};
 use crate::type_lattice::{
-    DeclaredType, KType, Root, TypeNode, display_name, satisfied_by, substitute_quantified,
+    DeclaredType, KType, TypeNode, display_name, satisfied_by, substitute_quantified,
 };
-use crate::values::{Chain, Record, Tagged, Value, satisfies};
+use crate::values::{Chain, Record, Tagged, TypeTiers, Value, satisfies};
 
 use super::bundle::{KBirth, KBundle, Within};
 
@@ -152,15 +152,15 @@ pub enum Evaluated<'graph> {
     Part(&'graph ExpressionPart<'graph>),
 }
 
-/// A loaded program's facts, laid down in program storage: its shape, its builtin table, the frozen
-/// root of the types the load built and the interner its names live in, the step that evaluates a
+/// A loaded program's facts, laid down in program storage: its shape, its builtin table, the tiers
+/// of the types the load built and the interner its names live in, the step that evaluates a
 /// node, the sinks it writes to, the builtin `Error` type, and whether its last run ended uncaught.
 /// `Copy` and without drop glue, so it rests in program storage beside the table it names.
 #[derive(Clone, Copy)]
 pub struct Program<'graph> {
     shape: &'graph BodyShape<'graph>,
     builtins: &'graph KBuiltins<'graph, 'graph>,
-    root: &'graph Root<'graph>,
+    tiers: TypeTiers<'graph>,
     symbols: &'graph SymbolInterner,
     evaluator: NativeStep<'graph, KBundle>,
     output: Output,
@@ -175,7 +175,7 @@ impl<'graph> Program<'graph> {
     pub(super) fn new(
         shape: &'graph BodyShape<'graph>,
         builtins: &'graph KBuiltins<'graph, 'graph>,
-        root: &'graph Root<'graph>,
+        tiers: TypeTiers<'graph>,
         error: KType,
         symbols: &'graph SymbolInterner,
         evaluator: NativeStep<'graph, KBundle>,
@@ -185,7 +185,7 @@ impl<'graph> Program<'graph> {
         Program {
             shape,
             builtins,
-            root,
+            tiers,
             symbols,
             evaluator,
             output,
@@ -203,10 +203,10 @@ impl<'graph> Program<'graph> {
         self.builtins
     }
 
-    /// The frozen root of the types the load built: what the program's graph hands every step's
-    /// chain to read first, and what a reader outside a step reads over.
-    pub fn root(&self) -> &'graph Root<'graph> {
-        self.root
+    /// The tiers of the types the load built: what the program's graph hands every step's chain to
+    /// read first, and what a reader outside a step reads over.
+    pub fn tiers(&self) -> TypeTiers<'graph> {
+        self.tiers
     }
 
     pub fn symbols(&self) -> &'graph SymbolInterner {

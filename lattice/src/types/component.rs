@@ -114,6 +114,8 @@ impl<'run, T> Tied<'run, T> {
     fn get(&self) -> &'run [T] {
         // SAFETY: the pointer came from a `&'run [T]` of `self.len` elements in `new` or `set`,
         // and the type's soundness note holds every such slice to `'run`. The slice is only read.
-        unsafe { std::slice::from_raw_parts(self.ptr.load(Ordering::Relaxed) as *const T, self.len) }
+        unsafe {
+            std::slice::from_raw_parts(self.ptr.load(Ordering::Relaxed) as *const T, self.len)
+        }
     }
 }

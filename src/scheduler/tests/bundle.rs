@@ -11,8 +11,8 @@ use crate::knot::{KValue, KValueFamily};
 use crate::memory::{CrossedOperand, Header, Writer, reattachable};
 use crate::scheduler::{Action, Born, Graph, NativeStep, Step, StepBundle};
 use crate::scope::RegionHeader;
-use crate::type_lattice::{Halves, Root};
-use crate::values::{Half, Types};
+use crate::type_lattice::Halves;
+use crate::values::Half;
 
 /// The bundle the scheduler's tests run over.
 pub struct Native;
@@ -37,12 +37,12 @@ impl<'graph> StepBundle<'graph> for Native {
         header: Header<'graph, 'cell, '_, RegionHeader>,
         view: &CrossedOperand<'graph, 'cell, '_, KValueFamily, RegionHeader>,
         born: Born,
-        type_root: &'graph Root<'graph>,
+        tiers: crate::values::TypeTiers<'graph>,
     ) -> KValue<'graph, 'cell>
     where
         'graph: 'cell,
     {
-        let types = Types::new(type_root, Halves::alone(Half::of(writer, header)));
+        let types = tiers.chain(Halves::alone(Half::of(writer, header)));
         match view {
             CrossedOperand::Pinned { view, home, .. } => {
                 home.read(|header, _| {

@@ -70,7 +70,7 @@ pub use digest::{ContentDigest, Digests};
 #[cfg(test)]
 pub use digest::{DIGEST_DEMANDS, DIGEST_VISITS};
 pub use equality::Incomparable;
-pub use habitat::{BranchCell, BranchSlot, Chain, Half, Types};
+pub use habitat::{BranchCell, BranchSlot, Chain, Half, TypeTiers, Types};
 pub use link::Link;
 pub use list::List;
 pub use record::Record;

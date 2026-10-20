@@ -48,7 +48,7 @@ pub(super) fn binder(program: &Program<'_>, shape: &BodyShape<'_>, name: &str) -
     };
     display_name(
         rendered,
-        &reading(program.root(), &Bump::new()),
+        &reading(program.tiers(), &Bump::new()),
         program.symbols(),
     )
     .to_string()
@@ -71,7 +71,7 @@ pub(super) fn top(source: &str, name: &str) -> String {
 /// The lexical variable at `level` named `name`, bounded by `bound`.
 pub(super) fn lexical(program: &Program<'_>, level: usize, name: &str, bound: KType) -> Parametric {
     let name = TypeSymbol::declared(name, program.symbols()).expect("a Type token");
-    reading(program.root(), &Bump::new()).lexical(level, name, bound)
+    reading(program.tiers(), &Bump::new()).lexical(level, name, bound)
 }
 
 /// The upper end of the static type of the binder `name` in `shape`.
@@ -454,7 +454,7 @@ fn a_surfaced_quantified_head_returns_exactly_its_solved_return() {
             assert_eq!(typed.lower, typed.upper, "`{name}` is exactly its return");
             display_name(
                 typed.upper,
-                &reading(program.root(), &Bump::new()),
+                &reading(program.tiers(), &Bump::new()),
                 program.symbols(),
             )
             .to_string()
@@ -479,7 +479,7 @@ fn a_surfaced_head_reads_the_ascription_s_pins() {
         assert_eq!(
             display_name(
                 typed.upper,
-                &reading(program.root(), &Bump::new()),
+                &reading(program.tiers(), &Bump::new()),
                 program.symbols()
             )
             .to_string(),
@@ -497,7 +497,7 @@ fn a_surfaced_head_reads_the_ascription_s_pins() {
         assert_eq!(
             display_name(
                 typed.upper,
-                &reading(program.root(), &Bump::new()),
+                &reading(program.tiers(), &Bump::new()),
                 program.symbols()
             )
             .to_string(),
@@ -564,7 +564,7 @@ fn a_signature_with_more_members_is_always_at_one_with_fewer_and_outranks_it() {
                         Static::Closed(registered) => {
                             let rendered = display_name(
                                 registered.shape,
-                                &reading(program.root(), &Bump::new()),
+                                &reading(program.tiers(), &Bump::new()),
                                 program.symbols(),
                             )
                             .to_string();
@@ -580,7 +580,7 @@ fn a_signature_with_more_members_is_always_at_one_with_fewer_and_outranks_it() {
         let scratch = Bump::new();
         let (crates, boxes) = (crates.into(), boxes.into());
         assert!(outranks(
-            &reading(program.root(), &Bump::new()),
+            &reading(program.tiers(), &Bump::new()),
             &scratch,
             crates,
             boxes,
@@ -621,7 +621,7 @@ fn a_fellow_s_callable_body_reads_the_fellow_s_own_type() {
         let read = f.statement_type(0).expect("the load typed the body");
         let rendered = display_name(
             read.upper,
-            &reading(program.root(), &Bump::new()),
+            &reading(program.tiers(), &Bump::new()),
             program.symbols(),
         )
         .to_string();

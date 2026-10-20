@@ -1861,7 +1861,7 @@ proptest! {
 
 /// A fresh branch chain over the world's root, in `region`.
 fn beside<'r>(world: &World, region: &'r Bump) -> TypeChain<'r, BumpHalf<'r>> {
-    TypeChain::new(world.root, BumpHalf::new(region))
+    TypeChain::new(world.frozen, BumpHalf::new(region))
 }
 
 /// Whether `kt` reads in `there` exactly as in the world: one digest recomputed off its content,
@@ -1924,7 +1924,7 @@ proptest! {
             there.link(branch);
         }
         prop_assert!(reads_alike(&world, &there, kt));
-        let rooted = world.root.find(kt.raw().digest()).is_some();
+        let rooted = world.frozen.find(kt.raw().digest()).is_some();
         let read = there.own_len();
         prop_assert!(read >= usize::from(!rooted));
         let before = read;
@@ -1965,7 +1965,7 @@ proptest! {
             handles.push(child.handle());
         });
         for handle in handles {
-            prop_assert_eq!(handle.in_root(), world.root.find(handle.digest()).is_some());
+            prop_assert_eq!(handle.in_root(), world.frozen.find(handle.digest()).is_some());
             prop_assert_eq!(handle.is_concrete(), world.types.enter(handle).is_concrete());
         }
     }

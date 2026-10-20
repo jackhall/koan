@@ -37,8 +37,8 @@ use crate::scheduler::seek::{Lending, Seek};
 #[cfg(test)]
 use crate::scope::HalfHeader;
 use crate::scope::RegionHeader;
-use crate::type_lattice::{Branch, Halves, Root};
-use crate::values::{Decision, Half, SpecBinding, SpecHome, Types};
+use crate::type_lattice::{Branch, Halves};
+use crate::values::{Decision, Half, SpecBinding, SpecHome, TypeTiers};
 
 /// The graph of cells a drain runs over: `cellgraph`'s graph closed over the continuation family,
 /// the bundle's scratch family and the delivery bundle.
@@ -47,11 +47,11 @@ use crate::values::{Decision, Half, SpecBinding, SpecHome, Types};
 /// makes one, takes its roots from it, keeps it across calls and asks what is left in it, and
 /// reaches every other cell only through a [`Scheduler`] over it.
 ///
-/// It holds the frozen type root every step's chain reads first, so a step and a crossing take it
+/// It holds the type tiers every step's chain reads first, so a step and a crossing take it
 /// from the graph they run over rather than from a program or a static.
 pub struct Graph<'graph, B: StepBundle<'graph>> {
     cells: CellGraph<'graph, ContinuationFamily<B>, B::Scratch, KDelivery, RegionHeader>,
-    type_root: &'graph Root<'graph>,
+    tiers: TypeTiers<'graph>,
     /// The build tree's core cell, whose region holds the root-level specialization table: `Some`
     /// for a graph the [load door](Graph::load) stood up, `None` for one [`new`](Graph::new) made,
     /// whose every frame is born cold.
@@ -60,20 +60,20 @@ pub struct Graph<'graph, B: StepBundle<'graph>> {
 
 impl<'graph, B: StepBundle<'graph>> Graph<'graph, B> {
     /// A graph over a slab of `cap` cells, under koan's own crossing verdict, its steps' types read
-    /// over `type_root`.
-    pub fn new(cap: u32, type_root: &'graph Root<'graph>) -> Self {
-        Graph::assemble(CellGraph::new(cap, crate::values::verdict), type_root, None)
+    /// over `tiers`.
+    pub fn new(cap: u32, tiers: TypeTiers<'graph>) -> Self {
+        Graph::assemble(CellGraph::new(cap, crate::values::verdict), tiers, None)
     }
 
-    /// A graph over `cells`, its steps' types read over `type_root`, its build root `build_root`.
+    /// A graph over `cells`, its steps' types read over `tiers`, its build root `build_root`.
     pub(super) fn assemble(
         cells: CellGraph<'graph, ContinuationFamily<B>, B::Scratch, KDelivery, RegionHeader>,
-        type_root: &'graph Root<'graph>,
+        tiers: TypeTiers<'graph>,
         build_root: Option<SlabHandle>,
     ) -> Self {
         Graph {
             cells,
-            type_root,
+            tiers,
             build_root,
         }
     }
@@ -621,14 +621,14 @@ where
     /// children before parents, so a found handle's children are there too.
     #[cfg(debug_assertions)]
     fn holds_binding(&self, spec: TreeHandle, binding: &SpecBinding) -> bool {
-        let root = self.graph.type_root;
+        let frozen = self.graph.tiers.frozen;
         let held = |branch: Option<&Branch<'_>>, digest| {
             let mut found = false;
             if let Some(branch) = branch {
                 branch.each_digest(|at| found |= at == digest);
             }
             if !found {
-                root.each_digest(|at| found |= at == digest);
+                frozen.each_digest(|at| found |= at == digest);
             }
             found
         };
@@ -736,11 +736,9 @@ where
         // `enter` borrows the graph exclusively and the step borrows the buffer, so the two are
         // taken as separate fields rather than through `self`.
         let Scheduler { graph, spawns, .. } = self;
-        let type_root = graph.type_root;
+        let tiers = graph.tiers;
         (graph.cells)
-            .enter(cell, |context| {
-                run_step::<B>(context, type_root, spawns, None)
-            })
+            .enter(cell, |context| run_step::<B>(context, tiers, spawns, None))
             .map_err(|_| DrainStalled::Unenterable)
     }
 
@@ -761,11 +759,11 @@ where
         }
         self.spawns.clear();
         let Scheduler { graph, spawns, .. } = self;
-        let type_root = graph.type_root;
+        let tiers = graph.tiers;
         (graph.cells)
             .enter_beside(spec, asker, |context, read, _| {
                 let source = read.and_then(|header| header.into_value().branch());
-                run_step::<B>(context, type_root, spawns, Some((source, binding)))
+                run_step::<B>(context, tiers, spawns, Some((source, binding)))
             })
             .map_err(|_| DrainStalled::Unenterable)
     }
@@ -841,7 +839,7 @@ where
 /// nodes it lays), run the step function, and tally.
 fn run_step<'graph, 'step, 'here, 'scratch, 'lent, B: StepBundle<'graph>>(
     context: &mut Context<'graph, 'step, 'here, 'scratch, 'lent, B>,
-    type_root: &'graph Root<'graph>,
+    tiers: TypeTiers<'graph>,
     spawns: &mut Spawns<'graph, B>,
     seed: Option<(Option<&Branch<'_>>, &SpecBinding)>,
 ) -> (Action<'graph, B>, Provenance)
@@ -865,7 +863,7 @@ where
     let scratch = context.scratch_state();
     let state = match state {
         Rested::Awake(state) => state,
-        Rested::Dormant(dormant, born) => match wake::<B>(context, type_root, dormant, born) {
+        Rested::Dormant(dormant, born) => match wake::<B>(context, tiers, dormant, born) {
             Ok(state) => state,
             Err(_) => {
                 return (Action::refused(StepError::Unredeemable), provenance);
@@ -874,10 +872,7 @@ where
     };
     // A specialization's state is awake, so nothing above precedes its seeding.
     if let Some((source, binding)) = seed {
-        let types = Types::new(
-            type_root,
-            Halves::alone(Half::of(context.writer(), context.header())),
-        );
+        let types = tiers.chain(Halves::alone(Half::of(context.writer(), context.header())));
         for kt in binding.handles() {
             types.adopt(source, kt);
         }
@@ -901,7 +896,7 @@ where
     };
     let step = step(Step::new(
         context,
-        type_root,
+        tiers,
         &provenance,
         spawns,
         state,
@@ -953,7 +948,7 @@ where
 /// and for a tenant, which crosses nothing; copied for a tail hop's sibling, which is `Apart`.
 fn wake<'graph, 'step, 'here, 'scratch, 'lent, B: StepBundle<'graph>>(
     context: &mut Context<'graph, 'step, 'here, 'scratch, 'lent, B>,
-    type_root: &'graph Root<'graph>,
+    tiers: TypeTiers<'graph>,
     dormant: Dormant<'graph, B::Birth>,
     born: Born,
 ) -> Result<StateAt<'graph, 'here, B>, RedeemError>
@@ -970,7 +965,7 @@ where
             carrier: &carrier,
             copy_bytes,
         }],
-        |writer, header, views| B::cross(writer, header, &views[0], born, type_root),
+        |writer, header, views| B::cross(writer, header, &views[0], born, tiers),
     );
     Ok(B::born(birth))
 }

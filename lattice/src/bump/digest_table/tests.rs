@@ -186,3 +186,25 @@ fn growth_reads_no_entry() {
         assert_eq!(reads.get(), n, "presized: {presized}");
     }
 }
+
+#[test]
+fn a_frozen_copy_finds_every_entry_and_misses_the_rest() {
+    let bump = Bump::new();
+    let reads = Cell::new(0);
+    let laid = entries(&bump, &SplitMix(6).keys(1000), &reads);
+    let table = DigestTable::new(&bump);
+    for &entry in &laid {
+        table.insert_unique(&bump, entry);
+    }
+    let frozen = table.frozen(&bump);
+    assert_eq!(frozen.len(), table.len());
+    for &entry in &laid {
+        assert!(std::ptr::eq(frozen.get(entry.key).expect("found"), entry));
+    }
+    for key in SplitMix(7).keys(1000) {
+        assert!(frozen.get(key).is_none());
+    }
+    let mut seen = 0;
+    frozen.each(|_| seen += 1);
+    assert_eq!(seen, 1000);
+}

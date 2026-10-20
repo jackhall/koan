@@ -99,7 +99,7 @@ fn typing_a_quote_s_code_a_second_time_interns_no_type() {
                  PRINT y\n  \
                  x\n\
                  ))))";
-    let count = |source: &str| loaded(source, |program| program.root().len());
+    let count = |source: &str| loaded(source, |program| program.tiers().frozen.len());
     assert_eq!(
         count(&format!("LET q = {quote}")),
         count(&format!("LET q = {quote}\nLET r = {quote}"))
@@ -115,7 +115,7 @@ fn an_overload_over_an_enclosing_name_is_rigid_and_selected_without_a_solve() {
             _ => panic!("`INNER` is rigid over `Elt`"),
         };
         let bump = Bump::new();
-        let types = &reading(program.root(), &bump);
+        let types = &reading(program.tiers(), &bump);
         let DeclaredType::Type(registered) = registered else {
             panic!("an overload over an enclosing name binds no group of its own")
         };

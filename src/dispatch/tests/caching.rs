@@ -62,12 +62,12 @@ pub(super) fn ran_under(depth: u32, source: &str, bounds: SpecBounds) -> Ran {
     WRITTEN.with(|written| written.borrow_mut().clear());
     let mut substrate = CellSubstrate::load::<Koan>(&program, "<test>", 2, bounds, output())
         .unwrap_or_else(|error| panic!("the program loads: {error}"));
-    let before = substrate.with(|running| running.program().root().len());
+    let before = substrate.with(|running| running.program().tiers().frozen.len());
     TIERS.with(|tiers| tiers.set(Tiers::default()));
     substrate
         .with(|running| running.run())
         .expect("the program runs");
-    let after = substrate.with(|running| running.program().root().len());
+    let after = substrate.with(|running| running.program().tiers().frozen.len());
     let live = substrate.with(|running| running.scheduler().graph().live_specializations());
     Ran {
         tiers: TIERS.with(Cell::get),

@@ -664,7 +664,7 @@ mod laws {
         substrate.with(|running| {
             let program = running.program();
             let bump = Bump::new();
-            let types = reading(program.root(), &bump);
+            let types = reading(program.tiers(), &bump);
             let mut out = Vec::new();
             render(
                 subject(program.shape()),
@@ -1031,7 +1031,7 @@ fn resuming_at_its_brand<'graph>(
     let KState::Born(birth @ KBirth::Inspect { program, .. }) = state else {
         return step.failed(crate::scheduler::StepError::Refused);
     };
-    let before = program.root().len();
+    let before = program.tiers().frozen.len();
     let (types, work) = (step.types(), step.scratch_types());
     let scratch = crate::memory::Bump::new();
     let bound = types.list(types.list(KType::BOOL));
@@ -1059,7 +1059,7 @@ fn resuming_at_its_brand<'graph>(
             refused: true,
             binder_is_bound: false,
             record_adopted: false,
-            root_unchanged: program.root().len() == before,
+            root_unchanged: program.tiers().frozen.len() == before,
         },
         Ok(settled) => {
             let p = slot(symbols, f, "p");
@@ -1078,7 +1078,7 @@ fn resuming_at_its_brand<'graph>(
                 refused: false,
                 binder_is_bound,
                 record_adopted,
-                root_unchanged: program.root().len() == before,
+                root_unchanged: program.tiers().frozen.len() == before,
             }
         }
     };

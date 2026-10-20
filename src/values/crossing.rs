@@ -29,9 +29,9 @@ use crate::memory::{
     CrossedOperand, Delivery, HomeHeader, Operand, Prices, Projects, Reattachable,
     ReattachableOverBoth, Stale, StepContext, Verdict, Writer, bump_set, bump_table, collect,
 };
-use crate::type_lattice::{Branch, DeclaredType, Halves, KType, Parametric, Root};
+use crate::type_lattice::{Branch, DeclaredType, Halves, KType, Parametric};
 
-use super::habitat::{BranchCell, Chain, Half, Types};
+use super::habitat::{BranchCell, Chain, Half, TypeTiers, Types};
 use super::settled::stamp_knot;
 use super::surface::Parts;
 use super::{
@@ -54,7 +54,7 @@ pub fn verdict(prices: Prices) -> Verdict {
 }
 
 /// Build `carrier`'s value into `dest`'s region and hand back the carrier resting there: the value
-/// as it is under a pin, rebuilt deep under a copy, its types made to resolve there over `root`.
+/// as it is under a pin, rebuilt deep under a copy, its types made to resolve there over `tiers`.
 pub fn cross<
     'graph,
     'step,
@@ -67,7 +67,7 @@ pub fn cross<
     context: &mut StepContext<'graph, 'step, '_, '_, '_, C, S, D, H>,
     dest: impl Into<CellHandle>,
     carrier: &ValueCarrier<'graph, 'step, XF>,
-    root: &'graph Root<'graph>,
+    tiers: TypeTiers<'graph>,
 ) -> Result<ValueCarrier<'graph, 'step, XF>, Stale<CellHandle>>
 where
     ValueFamily<XF>: Covariant<'graph>,
@@ -80,7 +80,7 @@ where
             copy_bytes: weight.bytes(),
         }],
         |writer, header, views| {
-            let types = Types::new(root, Halves::alone(Half::of(writer, header)));
+            let types = tiers.chain(Halves::alone(Half::of(writer, header)));
             Active::new(cross_view(writer, &types, &views[0]))
         },
     )
@@ -88,7 +88,7 @@ where
 
 /// The own-cell crossing: `carrier`'s value made reachable at the executing cell's `'here`, where it
 /// may be embedded in what the step builds or captured by its continuation, its types made to
-/// resolve there over `root`.
+/// resolve there over `tiers`.
 pub fn cross_here<
     'graph,
     'step,
@@ -101,7 +101,7 @@ pub fn cross_here<
 >(
     context: &mut StepContext<'graph, 'step, 'here, '_, '_, C, S, D, H>,
     carrier: &ValueCarrier<'graph, 'step, XF>,
-    root: &'graph Root<'graph>,
+    tiers: TypeTiers<'graph>,
     check: Option<&Chain<'_, '_, '_, '_>>,
 ) -> Value<'here, XF::Closed<'here>>
 where
@@ -114,7 +114,7 @@ where
             copy_bytes: weight.bytes(),
         }],
         |writer, header, views| {
-            let types = Types::new(root, Halves::alone(Half::of(writer, header)));
+            let types = tiers.chain(Halves::alone(Half::of(writer, header)));
             cross_view_against(writer, &types, &views[0], check)
         },
     )

@@ -19,7 +19,7 @@ pub(super) fn ends(program: &Program<'_>, shape: &BodyShape<'_>, name: &str) -> 
     let render = |handle| {
         display_name(
             handle,
-            &reading(program.root(), &Bump::new()),
+            &reading(program.tiers(), &Bump::new()),
             program.symbols(),
         )
         .to_string()
@@ -385,7 +385,7 @@ fn a_call_in_tail_position_is_typed_as_any_call() {
         let render = |handle| {
             display_name(
                 handle,
-                &reading(program.root(), &Bump::new()),
+                &reading(program.tiers(), &Bump::new()),
                 program.symbols(),
             )
             .to_string()

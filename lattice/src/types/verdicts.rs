@@ -5,20 +5,19 @@
 //! are never load-bearing: a forgotten one costs a re-walk of the relation, never a wrong answer.
 //! That leaves each tier free to choose what it keeps.
 //!
-//! - The **root** keeps a fixed run of two-slot buckets ([`FixedVerdicts`]), laid once and never
-//!   resized, since the root never frees. A full bucket evicts the slot not touched last. While
-//!   the load builds the root, its builder lays the run at the first verdict ([`VerdictTable`]),
-//!   and the freeze hands the run over.
-//! - A **branch** keeps every verdict it is given, in a [`DigestTable`](crate::bump::DigestTable)
-//!   of [`VerdictEntry`]s laid in its half at its first verdict and released with it.
+//! Every table keeps every verdict it is given, as [`VerdictEntry`]s:
+//!
+//! - The **load's** is read-only and complete for what the load asked: its builder records into a
+//!   [`DigestTable`](crate::bump::DigestTable) laid at the first verdict, which evicts nothing, and
+//!   the freeze lays it into a [`FrozenTable`](crate::bump::FrozenTable). No run writes it.
+//! - A **branch's** is insert-only: a digest table laid in its half at its first verdict and
+//!   released with it.
 //!
 //! The chain decides which tier records a verdict ([chain.rs](super::chain)); the relations that
 //! read and record verdicts live in [`order`](super::order), [`ranking`](super::ranking) and
 //! [`unify`](super::unify).
 
-use std::cell::Cell;
-
-use crate::bump::{BumpAllocator, Keyed};
+use crate::bump::Keyed;
 
 use super::digest::TypeDigest;
 
@@ -67,154 +66,7 @@ impl VerdictKey {
     }
 }
 
-/// Slots in the root's verdict table. A power of two, two slots to a bucket.
-pub(super) const VERDICT_SLOTS: usize = 1024;
-
-/// One slot of a fixed table: a whole key, its verdict, and the bucket's recency bit.
-#[derive(Clone, Copy)]
-pub(super) struct VerdictSlot {
-    key: VerdictKey,
-    verdict: bool,
-    occupied: bool,
-    /// Set on the slot of its bucket touched last; the other slot is the one an insert evicts.
-    recent: bool,
-}
-
-impl VerdictSlot {
-    const EMPTY: Self = Self {
-        key: VerdictKey {
-            subject: TypeDigest(0),
-            candidate: TypeDigest(0),
-            relation: Relation::Subtype,
-        },
-        verdict: false,
-        occupied: false,
-        recent: false,
-    };
-
-    fn holds(self, key: VerdictKey) -> bool {
-        self.occupied && self.key == key
-    }
-}
-
-/// The root's table: a fixed run of two-slot buckets, each slot copied in and out whole, so it
-/// records through a shared borrow of a frozen root. Covariant in `'r`.
-pub(super) struct FixedVerdicts<'r> {
-    slots: &'r [Cell<VerdictSlot>],
-    tally: Tally,
-}
-
-impl FixedVerdicts<'_> {
-    /// The recorded verdict for `key`, if any. A hit marks its slot the one touched last.
-    pub(super) fn get(&self, key: VerdictKey) -> Option<bool> {
-        get(self.slots, key)
-    }
-
-    /// Record `verdict` for `key`.
-    pub(super) fn record(&self, key: VerdictKey, verdict: bool) {
-        record(self.slots, &self.tally, key, verdict);
-    }
-
-    /// `test`-only: how many verdicts were recorded, and how many of those evicted another.
-    #[cfg(test)]
-    pub(super) fn tally(&self) -> (u64, u64) {
-        self.tally.read()
-    }
-}
-
-/// The root builder's table: empty until the first verdict is recorded, then `len` slots long for
-/// good, and handed to the frozen root whole.
-pub(super) struct VerdictTable<'r> {
-    slots: Cell<&'r [Cell<VerdictSlot>]>,
-    len: usize,
-    tally: Tally,
-}
-
-impl<'r> VerdictTable<'r> {
-    /// A table that will hold `len` slots once laid.
-    pub(super) fn with_slots(len: usize) -> Self {
-        assert!(len.is_power_of_two() && len >= 2);
-        Self {
-            slots: Cell::new(&[]),
-            len,
-            tally: Tally::default(),
-        }
-    }
-
-    /// The recorded verdict for `key`, if any.
-    pub(super) fn get(&self, key: VerdictKey) -> Option<bool> {
-        let slots = self.slots.get();
-        if slots.is_empty() {
-            return None;
-        }
-        get(slots, key)
-    }
-
-    /// Record `verdict` for `key`, laying the run in `bump` on the first record.
-    pub(super) fn record(&self, bump: BumpAllocator<'r>, key: VerdictKey, verdict: bool) {
-        record(self.laid(bump), &self.tally, key, verdict);
-    }
-
-    /// The table as the frozen root keeps it, its run laid if no verdict was ever recorded.
-    pub(super) fn freeze(&self, bump: BumpAllocator<'r>) -> FixedVerdicts<'r> {
-        FixedVerdicts {
-            slots: self.laid(bump),
-            tally: self.tally.clone(),
-        }
-    }
-
-    /// The run, laid in `bump` if it is not yet.
-    fn laid(&self, bump: BumpAllocator<'r>) -> &'r [Cell<VerdictSlot>] {
-        let mut slots = self.slots.get();
-        if slots.is_empty() {
-            slots = bump.alloc_slice_fill_with(self.len, |_| Cell::new(VerdictSlot::EMPTY));
-            self.slots.set(slots);
-        }
-        slots
-    }
-
-    /// `test`-only: how many verdicts were recorded, and how many of those evicted another.
-    #[cfg(test)]
-    pub(super) fn tally(&self) -> (u64, u64) {
-        self.tally.read()
-    }
-}
-
-/// The two slots of `slots` that `key` lands in.
-fn bucket(slots: &[Cell<VerdictSlot>], key: VerdictKey) -> &[Cell<VerdictSlot>] {
-    let first = 2 * ((key.fold() as usize) & (slots.len() / 2 - 1));
-    &slots[first..first + 2]
-}
-
-/// The verdict recorded for `key` in a fixed run, if any. A hit marks its slot the one touched
-/// last.
-fn get(slots: &[Cell<VerdictSlot>], key: VerdictKey) -> Option<bool> {
-    let pair = bucket(slots, key);
-    let hit = pair.iter().position(|slot| slot.get().holds(key))?;
-    Some(touch(pair, hit))
-}
-
-/// Record `verdict` for `key` in a fixed run. Negative verdicts are recorded exactly as positive
-/// ones; a full bucket evicts the slot not touched last.
-fn record(slots: &[Cell<VerdictSlot>], tally: &Tally, key: VerdictKey, verdict: bool) {
-    let pair = bucket(slots, key);
-    let held = pair.iter().position(|slot| slot.get().holds(key));
-    let free = || pair.iter().position(|slot| !slot.get().occupied);
-    let slot = held.or_else(free).unwrap_or_else(|| {
-        tally.evicted();
-        usize::from(pair[0].get().recent)
-    });
-    tally.inserted();
-    pair[slot].set(VerdictSlot {
-        key,
-        verdict,
-        occupied: true,
-        recent: false,
-    });
-    touch(pair, slot);
-}
-
-/// One verdict a branch keeps: its key beside its answer. Laid in the branch's half.
+/// One verdict a tier keeps: its key beside its answer. Laid in the tier's storage.
 #[derive(Clone, Copy)]
 pub(super) struct VerdictEntry {
     key: VerdictKey,
@@ -240,41 +92,5 @@ impl Keyed for VerdictEntry {
 
     fn word(key: VerdictKey) -> u64 {
         key.fold()
-    }
-}
-
-/// Mark slot `hit` of a bucket the one touched last, and return its verdict.
-fn touch(pair: &[Cell<VerdictSlot>], hit: usize) -> bool {
-    let (mut this, mut other) = (pair[hit].get(), pair[1 - hit].get());
-    this.recent = true;
-    other.recent = false;
-    pair[hit].set(this);
-    pair[1 - hit].set(other);
-    this.verdict
-}
-
-/// `test`-only counts of a fixed table's inserts and evictions; nothing outside the test build.
-#[derive(Default, Clone)]
-struct Tally {
-    #[cfg(test)]
-    inserts: Cell<u64>,
-    #[cfg(test)]
-    evictions: Cell<u64>,
-}
-
-impl Tally {
-    fn inserted(&self) {
-        #[cfg(test)]
-        self.inserts.set(self.inserts.get() + 1);
-    }
-
-    fn evicted(&self) {
-        #[cfg(test)]
-        self.evictions.set(self.evictions.get() + 1);
-    }
-
-    #[cfg(test)]
-    fn read(&self) -> (u64, u64) {
-        (self.inserts.get(), self.evictions.get())
     }
 }

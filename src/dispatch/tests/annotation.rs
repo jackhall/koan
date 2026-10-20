@@ -72,7 +72,7 @@ fn a_using_over_an_annotated_binder_surfaces_its_annotation_s_names() {
     using_block(source, |program, block| {
         let typed = interval(program, block, "a");
         let bump = Bump::new();
-        let types = reading(program.root(), &bump);
+        let types = reading(program.tiers(), &bump);
         let rendered = display_name(typed.upper, &types, program.symbols());
         assert_eq!(rendered.to_string(), ":(LIST OF Number)");
     });
