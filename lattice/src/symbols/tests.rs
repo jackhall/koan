@@ -136,6 +136,40 @@ proptest! {
         }
     }
 
+    /// After the freeze a text the load's table holds adds nothing to the overlay, a text it lacks
+    /// lands there and renders, and `compare_texts` is still render order across both tiers.
+    #[test]
+    fn a_name_recorded_after_the_freeze_lands_in_the_overlay((loaded, later) in split_texts()) {
+        let interner = SymbolInterner::new();
+        for text in &loaded {
+            interner.intern(text);
+        }
+        interner.freeze();
+        for text in &loaded {
+            interner.intern(text);
+        }
+        prop_assert_eq!(interner.overlay_len(), 0);
+        for text in &later {
+            interner.intern(text);
+        }
+        prop_assert_eq!(interner.overlay_len(), later.len());
+        prop_assert_eq!(interner.len(), loaded.len() + later.len());
+        let symbols: Vec<Symbol> = loaded.iter().chain(&later).map(|t| Symbol::of(t)).collect();
+        for (symbol, text) in symbols.iter().zip(loaded.iter().chain(&later)) {
+            let resolved = interner.resolve(*symbol);
+            prop_assert_eq!(resolved.as_deref(), Some(text.as_str()));
+            prop_assert_eq!(interner.display(*symbol).to_string(), text.as_str());
+        }
+        for left in &symbols {
+            for right in &symbols {
+                prop_assert_eq!(
+                    interner.compare_texts(*left, *right),
+                    interner.render(*left).cmp(&interner.render(*right)),
+                );
+            }
+        }
+    }
+
     /// The three classes partition token text: every spelling lands in exactly one, a classified
     /// symbol is the bare digest of its own text, and `BinderSymbol` is the union of the two
     /// binding classes tagged with the channel each binds in. A `static_name!` memo is what its

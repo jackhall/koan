@@ -10,13 +10,14 @@
 //!
 //! The interner is therefore *not* a lookup authority. Comparisons and probes go straight through
 //! symbol bits; the table is written only where a syntactic name is constructed and read only
-//! where one is rendered. Its growth is bounded by the run's source text.
+//! where one is rendered. Its growth is bounded by the run's source text. The load's table freezes
+//! at the load's end, and a name recorded after it lands in the agent's overlay.
 //!
 //! See [README.md](symbols/README.md): identity is a content digest, the interner is not an
 //! authority.
 
 use std::borrow::Borrow;
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::hash::{BuildHasherDefault, Hasher};
 
@@ -46,16 +47,24 @@ impl Symbol {
 /// so a miss is this placeholder rather than a panic.
 const MISSING_SYMBOL: &str = "<symbol>";
 
-/// The run's digest → text side table for symbols.
+/// The program's digest → text side table for symbols, in two tiers: the load's table, frozen at
+/// the load's end ([`freeze`](Self::freeze)), and the agent's overlay, which holds each text first
+/// recorded after it — a name `EVAL` parses at the run. A render reads the overlay, then the load's
+/// table; a symbol is its text's digest, so the two never disagree.
 ///
 /// Interior mutability by `RefCell`, matching the type lattice's tiers beside it: construction
 /// sites hold a shared `&RunRegistries` and still need to record text. Never borrowed across a call
 /// that can re-enter — [`intern`](Self::intern) and [`resolve`](Self::resolve) each take and
-/// release the borrow within one statement.
+/// release the borrows within one statement.
 #[derive(Default)]
 pub struct SymbolInterner {
-    texts: RefCell<HashMap<Symbol, Box<str>, IdentityBuildHasher>>,
+    texts: RefCell<TextMap>,
+    overlay: RefCell<TextMap>,
+    frozen: Cell<bool>,
 }
+
+/// One tier of a [`SymbolInterner`]: each recorded text under its symbol.
+type TextMap = HashMap<Symbol, Box<str>, IdentityBuildHasher>;
 
 impl SymbolInterner {
     pub fn new() -> Self {
@@ -73,18 +82,39 @@ impl SymbolInterner {
     /// Record `text` under `symbol`, the digest the caller already holds. The one write door the
     /// public ones funnel through: a caller that classified the text has minted its digest
     /// already, so the recording costs a map lookup and no second hash.
+    /// After the freeze, a text the load's table lacks goes into the overlay.
     fn record_text(&self, symbol: Symbol, text: &str) {
-        let mut texts = self.texts.borrow_mut();
-        texts.entry(symbol).or_insert_with(|| text.into());
+        if !self.frozen.get() {
+            let mut texts = self.texts.borrow_mut();
+            texts.entry(symbol).or_insert_with(|| text.into());
+        } else if !self.texts.borrow().contains_key(&symbol) {
+            let mut overlay = self.overlay.borrow_mut();
+            overlay.entry(symbol).or_insert_with(|| text.into());
+        }
+    }
+
+    /// Freeze the load's table: every text recorded from now on that it lacks goes into the
+    /// overlay. Called once, at the load's end.
+    pub fn freeze(&self) {
+        assert!(!self.frozen.replace(true), "a symbol table freezes once");
+    }
+
+    /// `read` over the text recorded for `symbol` — the overlay's, then the load's — under both
+    /// borrows, released as it returns.
+    fn with_text<R>(&self, symbol: Symbol, read: impl FnOnce(Option<&str>) -> R) -> R {
+        let (overlay, texts) = (self.overlay.borrow(), self.texts.borrow());
+        read(
+            overlay
+                .get(&symbol)
+                .or_else(|| texts.get(&symbol))
+                .map(|text| &**text),
+        )
     }
 
     /// The text recorded for `symbol`, or `None` if nothing interned it in this run. Render paths
     /// only — a miss is a rendering placeholder, never an error.
     pub fn resolve(&self, symbol: Symbol) -> Option<String> {
-        self.texts
-            .borrow()
-            .get(&symbol)
-            .map(|text| text.to_string())
+        self.with_text(symbol, |text| text.map(str::to_string))
     }
 
     /// The text for `symbol`, or the standard placeholder when this run never interned it — the
@@ -113,15 +143,22 @@ impl SymbolInterner {
     /// placeholder [`display`](Self::display) writes for it, so an unrecorded name keeps a fixed
     /// position rather than a hash-dependent one.
     pub fn compare_texts(&self, a: Symbol, b: Symbol) -> std::cmp::Ordering {
-        let texts = self.texts.borrow();
-        let left = texts.get(&a).map_or(MISSING_SYMBOL, |text| text);
-        let right = texts.get(&b).map_or(MISSING_SYMBOL, |text| text);
-        left.cmp(right)
+        self.with_text(a, |left| {
+            self.with_text(b, |right| {
+                left.unwrap_or(MISSING_SYMBOL)
+                    .cmp(right.unwrap_or(MISSING_SYMBOL))
+            })
+        })
     }
 
-    /// How many distinct symbols this run has recorded.
+    /// How many distinct symbols this run has recorded, in both tiers.
     pub fn len(&self) -> usize {
-        self.texts.borrow().len()
+        self.texts.borrow().len() + self.overlay_len()
+    }
+
+    /// How many distinct symbols the overlay holds: texts first recorded after the freeze.
+    pub fn overlay_len(&self) -> usize {
+        self.overlay.borrow().len()
     }
 
     /// Record a [`StaticName`]'s spelling under its memoized symbol and hand the classified symbol
@@ -135,7 +172,7 @@ impl SymbolInterner {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.texts.borrow().is_empty()
+        self.len() == 0
     }
 }
 
@@ -150,10 +187,9 @@ pub struct SymbolDisplay<'a> {
 
 impl std::fmt::Display for SymbolDisplay<'_> {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.symbols.texts.borrow().get(&self.symbol) {
-            Some(text) => formatter.write_str(text),
-            None => formatter.write_str(MISSING_SYMBOL),
-        }
+        (self.symbols).with_text(self.symbol, |text| {
+            formatter.write_str(text.unwrap_or(MISSING_SYMBOL))
+        })
     }
 }
 

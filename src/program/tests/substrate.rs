@@ -104,3 +104,24 @@ fn a_stalled_substrate_still_runs_a_later_root_work() {
     });
     assert_eq!(run_and_read(&mut substrate, &["a"]), ["1"]);
 }
+
+#[test]
+fn a_name_interned_after_the_load_lands_in_the_overlay() {
+    let mut substrate = loaded("LET alpha = 1", 2);
+    substrate.with(|running| {
+        let symbols = running.program().symbols();
+        let alpha = crate::symbols::Symbol::of("alpha");
+        assert_eq!(symbols.overlay_len(), 0, "the load's names are the load's");
+        assert_eq!(symbols.render(alpha), "alpha");
+        symbols.intern("alpha");
+        assert_eq!(
+            symbols.overlay_len(),
+            0,
+            "a name the load holds adds nothing"
+        );
+        let fresh = symbols.intern("never_in_the_source");
+        assert_eq!(symbols.overlay_len(), 1);
+        assert_eq!(symbols.render(fresh), "never_in_the_source");
+        assert_eq!(symbols.render(alpha), "alpha");
+    });
+}

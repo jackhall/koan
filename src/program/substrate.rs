@@ -147,8 +147,9 @@ impl CellSubstrate {
     /// `bounds` sets how many live children the build root's specialization table and every
     /// specialization's own table hold.
     ///
-    /// The load builds the types' root through one chain over a root builder, and freezes it when
-    /// the load ends, so no step can intern into it. A refused shape is rendered into its
+    /// The load builds its types through one chain over a root builder, and freezes it when the
+    /// load ends, so no step can intern into it: a step's types rest in the agent tier laid beside
+    /// it, and a name recorded after the load in the symbol table's overlay. A refused shape is rendered into its
     /// [`LoadError`] on the way out, while the interner and the chain its names and types render
     /// through still stand; a load that succeeds renders nothing.
     pub fn load<L: Language>(
@@ -225,6 +226,7 @@ impl CellSubstrate {
                     frozen: builder.freeze(),
                     agent: Agent::in_region(&owner.agent),
                 };
+                owner.symbols.freeze();
                 let writer = brand.writer();
                 let program = resident(
                     writer,
