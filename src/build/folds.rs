@@ -200,8 +200,10 @@ fn keyed_names<'x>(
         if *unit == UnitIndex::ENTRY && shapes.shape_at(*segment).kind() == ShapeKind::Callable {
             continue;
         }
+        // A unit's own binders are what it fixes, not what it waits on.
         let Some(seam) = (frontier.unknowns().iter())
             .map(|unknown| shapes.bind_site(*unknown))
+            .filter(|site| (site.segment, site.unit) != (*segment, *unit))
             .max()
         else {
             continue;

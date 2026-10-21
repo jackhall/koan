@@ -604,11 +604,16 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     }
 
     /// Gather the unknown the binder at `slot` of the shape at `level`, of static type `bound`,
-    /// is itself, where it is one: a type name the chain numbers, or a module binder.
+    /// is itself, where it is one: a type name the chain numbers and no closed declaration fixes,
+    /// or a module binder.
     pub(super) fn note_own(&self, level: usize, slot: Slot, bound: Bound) {
         let shape = self.chain[level].shape;
         let homed = (self.homes(shape).iter()).any(|(_, target)| *target == Target::Local(slot));
-        let own = match homed {
+        let closed = matches!(
+            self.chain[level].declared[slot.index()],
+            Some((Static::Closed(_), _))
+        );
+        let own = match homed && !closed {
             true => Some(self.unknown_at(level, slot)),
             false => self.module_unknown(level, slot, bound),
         };

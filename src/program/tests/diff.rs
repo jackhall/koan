@@ -52,6 +52,11 @@ pub(crate) fn diff(
     out.lines
 }
 
+/// Whether every element of `inner` is one of `outer`'s.
+fn within<T: PartialEq>(inner: &[T], outer: &[T]) -> bool {
+    inner.iter().all(|each| outer.contains(each))
+}
+
 struct Differ<'graph> {
     lines: Vec<String>,
     moves: BTreeMap<&'static str, usize>,
@@ -62,6 +67,8 @@ struct Differ<'graph> {
 const QUOTE: &str = "a quote reads its `$` names at their static types";
 const CLOSED_PATH: &str = "a type over a closed path is closed";
 const MIXED_SEAM: &str = "a unit mixing an entry seam with a later one keys nothing through it";
+const KEY_GROWTH: &str = "a callable keys on each keyable name a unit beneath it reads";
+const LAYOUT: &str = "a closure carries every enclosing type name bound at its birth";
 
 impl Differ<'_> {
     /// Count a divergence `kind` explains.
@@ -184,18 +191,27 @@ fn body(
     for index in 0..shape.slots() {
         let slot = Slot(index as u32);
         let at = format!("slot {index}");
-        if shape.declarations(slot).is_some() {
+        // A type binder over a path the walk resolves closed declares closed where the old
+        // channel left it unknown.
+        let mut over_path = false;
+        if let Some(declaration) = shape.declarations(slot) {
+            each_part(declaration, |part| {
+                over_path |= (shape.spelled().iter()).any(|path| std::ptr::eq(path.part, part));
+            });
             let (old, new) = (
                 cells.declared_type(shape, slot),
                 records.declared_type(shape, slot),
             );
-            out.check(
-                shape,
-                &at,
-                "declared",
-                render.static_type(old),
-                render.static_type(new),
-            );
+            match (old, new) {
+                (Static::Unknown, Static::Closed(_)) if over_path => out.moved(CLOSED_PATH),
+                _ => out.check(
+                    shape,
+                    &at,
+                    "declared",
+                    render.static_type(old),
+                    render.static_type(new),
+                ),
+            }
         }
         if shape.registration(slot).is_some() {
             let (old, new) = (
@@ -214,13 +230,14 @@ fn body(
             cells.binder_type(shape, slot),
             records.binder_type(shape, slot),
         );
-        out.check(
-            shape,
-            &at,
-            "binder",
+        let (old, new) = (
             format!("{:?}", old.map(|bound| render.bound(bound))),
             format!("{:?}", new.map(|bound| render.bound(bound))),
         );
+        match over_path && old == r#"Some("[Never, Type]")"# {
+            true if old != new => out.moved(CLOSED_PATH),
+            _ => out.check(shape, &at, "binder", old, new),
+        }
     }
     for index in 0..shape.body().len() {
         let (old, new) = (
@@ -324,14 +341,24 @@ fn body(
             format!("{:?}", new.map(|tree| tree.print())),
         );
     }
+    // The layout holds every enclosing type name bound at the birth; what the content composes of
+    // it is what the old passes captured.
     let (old, new) = (cells.type_captures(shape), records.type_captures(shape));
-    out.check(
-        shape,
-        "body",
-        "type captures",
-        format!("{old:?}"),
-        format!("{new:?}"),
-    );
+    let composed: Vec<_> = (new.iter().zip(records.contract(shape)))
+        .filter(|(_, composes)| **composes)
+        .map(|(capture, _)| *capture)
+        .collect();
+    match old == new || (within(&composed, old) && within(old, &composed)) {
+        true if old != new => out.moved(LAYOUT),
+        true => {}
+        false => out.check(
+            shape,
+            "body",
+            "type captures",
+            format!("{old:?}"),
+            format!("{composed:?} of {new:?}"),
+        ),
+    }
     let (old, new) = (cells.digested_count(shape), records.digested_count(shape));
     out.check(shape, "body", "digested", old.to_string(), new.to_string());
     for index in 0..shape.slots() {
@@ -441,14 +468,12 @@ fn body(
             cells.specialization_keys(shape),
             records.specialization_keys(shape),
         );
-        let fewer = old != new
-            && new
-                .unwrap_or(&[])
-                .iter()
-                .all(|slot| old.unwrap_or(&[]).contains(slot));
-        match fewer {
-            true => out.moved(MIXED_SEAM),
-            false => {
+        let (some, held) = (old.unwrap_or(&[]), new.unwrap_or(&[]));
+        match (old == new, within(held, some), within(some, held)) {
+            (true, ..) => {}
+            (false, true, _) => out.moved(MIXED_SEAM),
+            (false, _, true) => out.moved(KEY_GROWTH),
+            _ => {
                 let (old, new) = (format!("{:?}", named(old)), format!("{:?}", named(new)));
                 out.check(shape, "body", "keys", old, new);
             }
