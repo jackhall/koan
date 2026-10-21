@@ -20,6 +20,8 @@
 //! - [`check`] refuses a registration that overlaps a builtin overload.
 //! - [`statics`] types every value expression and binder where the program loads, and narrows and
 //!   selects each keyworded use's candidates by those types.
+//! - [`walk`] is the one walk that replaces it and the type channel's load pass: every fact the
+//!   load decides, unit by unit, into a store.
 //! - [`errors`] renders the messages of the error values dispatch raises.
 //!
 //! This file holds the vocabulary they share: what one evaluation is born over, and what one of
@@ -39,6 +41,7 @@ mod evaluate;
 mod rules;
 mod select;
 mod statics;
+mod walk;
 
 #[cfg(test)]
 mod tests;
@@ -48,7 +51,7 @@ use crate::memory::{BumpAllocator, Writer};
 use crate::parse::{ExpressionPart, KExpression};
 use crate::program::{Contract, KBirth, KBundle, Language, Program, Within};
 use crate::scheduler::NativeStep;
-use crate::scope::{BodyShape, ChainRelay, Resumption, Settled, ShapeError};
+use crate::scope::{BodyShape, ChainRelay, Resumption, Settled, ShapeError, Shapes, Store};
 use crate::symbols::{BinderSymbol, SymbolInterner};
 use crate::type_lattice::KType;
 use crate::values::Chain;
@@ -91,6 +94,16 @@ impl Language for Koan {
         channel: Settled<'out>,
     ) -> Result<&'out Settled<'out>, ShapeError<'out>> {
         statics::resume_statics(shape, builtins, output, scratch, over, channel)
+    }
+
+    fn facts<'graph: 'o, 'o, S: Store<'o>>(
+        shapes: &'graph Shapes<'graph>,
+        builtins: &'graph KBuiltins<'graph, 'graph>,
+        store: &S,
+        types: &Chain<'_, '_, '_, '_>,
+        scratch: BumpAllocator<'_>,
+    ) -> Result<(), ShapeError<'o>> {
+        walk::walk(shapes, builtins, store, types, scratch)
     }
 }
 

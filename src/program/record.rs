@@ -15,7 +15,7 @@ use crate::memory::{Bump, BumpAllocator, Writer};
 use crate::parse::{ExpressionPart, KExpression, ParseError};
 use crate::scheduler::{NativeStep, Work};
 use crate::scope::{
-    BodyShape, ChainRelay, LoadFacts, Resumption, Settled, ShapeError, Shapes, Slot,
+    BodyShape, ChainRelay, LoadFacts, Resumption, Settled, ShapeError, Shapes, Slot, Store,
 };
 use crate::symbols::{BinderSymbol, SymbolInterner};
 use crate::type_lattice::{
@@ -73,6 +73,21 @@ pub trait Language {
     ) -> Result<&'out Settled<'out>, ShapeError<'out>> {
         let _ = (shape, builtins, scratch, over);
         Ok(crate::memory::resident(output.writer(), channel))
+    }
+
+    /// Run the language's one walk over `shapes`, keeping every record it computes in `store` and
+    /// interning through `types`: what the load decides, and what a resumption re-decides under
+    /// the store's binding. Runs nothing by default, so the run elaborates where it reads, as it
+    /// does wherever the load leaves a fact unknown.
+    fn facts<'graph: 'o, 'o, S: Store<'o>>(
+        shapes: &'graph Shapes<'graph>,
+        builtins: &'graph KBuiltins<'graph, 'graph>,
+        store: &S,
+        types: &Chain<'_, '_, '_, '_>,
+        scratch: BumpAllocator<'_>,
+    ) -> Result<(), ShapeError<'o>> {
+        let _ = (shapes, builtins, store, types, scratch);
+        Ok(())
     }
 }
 

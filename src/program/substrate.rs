@@ -5,7 +5,7 @@ use std::cell::Cell;
 
 use self_cell::self_cell;
 
-use crate::elaborate::{builtin_error, resume_channel, type_channel};
+use crate::elaborate::{builtin_error, resume_channel};
 use crate::knot::KBuiltins;
 use crate::memory::{
     Bump, BumpAllocator, BumpVec, ProgramBrand, ProgramStorage, SlabHandle, Writer,
@@ -139,6 +139,23 @@ self_cell!(
 /// kept. `'graph` is invariant, so the running state is reached only through [`with`](Self::with).
 pub struct CellSubstrate(Joined);
 
+/// The load's one walk over `shapes`: every record the language's walk computes, laid in program
+/// storage through `writer`, beside the folds the load lays over them.
+#[cfg(feature = "one-walk")]
+fn walked<'graph, L: Language>(
+    shapes: &'graph crate::scope::Shapes<'graph>,
+    builtins: &'graph KBuiltins<'graph, 'graph>,
+    types: &Chain<'graph, 'graph, 'graph, '_>,
+    writer: crate::memory::Writer<'graph, 'graph>,
+    scratch: BumpAllocator<'_>,
+) -> Result<&'graph crate::scope::LoadFacts<'graph>, crate::scope::ShapeError<'graph>> {
+    let store = crate::build::LoadStore::new(writer, scratch, shapes, crate::scope::Binding::EMPTY);
+    L::facts(shapes, builtins, &store, types, scratch)?;
+    let unfolded = resident(writer, store.facts(scratch, &[]));
+    let folds = crate::build::fold(unfolded, writer, scratch)?;
+    Ok(resident(writer, unfolded.folded(writer, folds)))
+}
+
 impl CellSubstrate {
     /// Parse `source` into fresh program storage and stand the program up beside it, over a slab of
     /// `cap` cells, two of which are its build root and its run root: `language`'s builtin table at
@@ -209,10 +226,23 @@ impl CellSubstrate {
                 )
                 .map_err(refused)?;
                 let shape = shapes.root();
-                type_channel(shape, builtins, types, brand.writer(), &scratch).map_err(refused)?;
-                L::check(shape, builtins, types, brand.writer(), &scratch).map_err(refused)?;
-                crate::build::list_seams(shape, brand.writer(), &scratch);
-                crate::build::lay_keys(shape, brand.writer(), &scratch);
+                #[cfg(not(feature = "one-walk"))]
+                {
+                    crate::elaborate::type_channel(
+                        shape,
+                        builtins,
+                        types,
+                        brand.writer(),
+                        &scratch,
+                    )
+                    .map_err(refused)?;
+                    L::check(shape, builtins, types, brand.writer(), &scratch).map_err(refused)?;
+                    crate::build::list_seams(shape, brand.writer(), &scratch);
+                    crate::build::lay_keys(shape, brand.writer(), &scratch);
+                }
+                #[cfg(feature = "one-walk")]
+                let walked = walked::<L>(shapes, builtins, types, brand.writer(), &scratch)
+                    .map_err(refused)?;
                 inspected = Some(inspect(Loaded {
                     shape,
                     builtins,
@@ -229,7 +259,10 @@ impl CellSubstrate {
                 };
                 owner.symbols.freeze();
                 let writer = brand.writer();
+                #[cfg(not(feature = "one-walk"))]
                 let facts = resident(writer, crate::scope::LoadFacts::of_cells(writer, shapes));
+                #[cfg(feature = "one-walk")]
+                let facts = walked;
                 let program = resident(
                     writer,
                     Program::new(

@@ -14,6 +14,7 @@
 //!
 //! See [build/README.md](build/README.md).
 
+mod folds;
 mod key;
 mod load;
 mod seams;
@@ -21,6 +22,7 @@ mod seams;
 #[cfg(test)]
 mod tests;
 
+pub use folds::fold;
 pub use key::{key_of, lay_keys};
 pub use load::LoadStore;
 pub use seams::list_seams;
