@@ -100,6 +100,7 @@ impl Knotted for Probe {
             identity: self.0 as usize,
             instance: &[],
             closure: &[],
+            composes: &[],
         }
     }
 }

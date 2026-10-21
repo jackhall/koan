@@ -304,13 +304,29 @@ pub struct LoadFacts<'graph> {
     backend: Backend<'graph>,
 }
 
-/// A body as a value born of it holds it: its shape, beside which of its type captures its content
-/// composes, parallel to [`LoadFacts::type_captures`]. One pointer, so a value holds it in place of
-/// its shape's.
+/// A body as a value born of it holds it: its shape, beside which of its closure slots its content
+/// composes — its builder captures but those reading the program's top level, then the type
+/// captures its contract names. A value's digest and its equality read those alone. One pointer,
+/// so a value holds it in place of its shape's.
 #[derive(Clone, Copy)]
 pub struct Body<'graph> {
     pub shape: &'graph BodyShape<'graph>,
-    pub contract: &'graph [bool],
+    pub composes: &'graph [bool],
+}
+
+/// Which closure slots of `shape` its content composes: each builder capture reading no top-level
+/// slot, then each type capture as `contract` says.
+fn composes<'graph>(
+    lay: impl Lays<'graph>,
+    shape: &BodyShape<'_>,
+    contract: impl Fn(usize) -> bool,
+    types: usize,
+) -> &'graph [bool] {
+    let builder = shape.captures().len();
+    lay.fill(builder + types, |at| match at.checked_sub(builder) {
+        None => shape.composes(super::shape::CaptureSlot(at as u32)),
+        Some(index) => contract(index),
+    })
 }
 
 /// Where a [`LoadFacts`] keeps what it answers.
@@ -364,15 +380,15 @@ enum Held {
 impl<'graph> LoadFacts<'graph> {
     /// The facts the load's passes fixed into the cells of `shapes`, laid in `writer`'s region.
     pub fn of_cells(writer: Writer<'graph, '_>, shapes: &'graph Shapes<'graph>) -> Self {
-        let widest = (shapes.bodies().iter())
-            .map(|shape| shape.type_captures().len())
-            .max()
-            .unwrap_or(0);
-        let composes: &[bool] = writer.fill(widest, |_| true);
         let bodies = shapes.bodies();
         let bodies = writer.fill(bodies.len(), |at| Body {
             shape: bodies[at],
-            contract: &composes[..bodies[at].type_captures().len()],
+            composes: composes(
+                writer,
+                bodies[at],
+                |_| true,
+                bodies[at].type_captures().len(),
+            ),
         });
         LoadFacts {
             shapes,
@@ -429,22 +445,15 @@ impl<'graph> LoadFacts<'graph> {
         let shapes = self.shapes;
         debug_assert!(folds.is_empty() || folds.len() == shapes.bodies().len());
         let bodies = shapes.bodies();
-        let all: &[bool] = lay.fill(
-            (bodies
-                .iter()
-                .map(|shape| shapes.layout(shape.segment()).len()))
-            .max()
-            .unwrap_or(0),
-            |_| true,
-        );
         let bodies = lay.fill(bodies.len(), |at| {
             let shape = bodies[at];
             let layout = shapes.layout(shape.segment());
             let folds = folds.get(at).copied();
+            let contract = |index: usize| folds.is_none_or(|folds| folds.contract[index]);
             Laid {
                 body: Body {
                     shape,
-                    contract: folds.map_or(&all[..layout.len()], |folds| folds.contract),
+                    composes: composes(lay, shape, contract, layout.len()),
                 },
                 captures: collect(lay, layout.iter().map(|(_, coordinate)| *coordinate)),
                 folds,
@@ -622,7 +631,7 @@ impl<'graph> LoadFacts<'graph> {
     /// Which of `shape`'s type captures its content composes, parallel to
     /// [`type_captures`](Self::type_captures).
     pub fn contract(&self, shape: &BodyShape<'_>) -> &'graph [bool] {
-        self.body(shape).contract
+        &self.body(shape).composes[shape.captures().len()..]
     }
 
     /// The path spelling `shape`'s type expressions read at `site`, where they read one.
@@ -684,7 +693,10 @@ impl<'graph> LoadFacts<'graph> {
     pub fn typing_refusal(&self, shape: &BodyShape<'_>) -> Option<&'graph ShapeError<'graph>> {
         match self.backend {
             Backend::Cells { .. } => self.at(shape).refusal(),
-            Backend::Records(records) => records.closing(shape.segment())?.0.refusal,
+            // A code shape the builder could not build holds its refusal itself.
+            Backend::Records(records) => (records.closing(shape.segment()))
+                .and_then(|(closing, _)| closing.refusal)
+                .or_else(|| self.at(shape).refusal()),
         }
     }
 

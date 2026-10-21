@@ -554,7 +554,9 @@ fn evaluated<'graph, 'here>(
         }
     };
     let shape = code.code().expect("a quote's code").shape();
-    if let Err(error) = check::overlaps(shape, program.builtins(), types, &scratch) {
+    if let Err(error) =
+        check::overlaps_through(program.facts(), shape, program.builtins(), types, &scratch)
+    {
         return finish(
             step,
             at,

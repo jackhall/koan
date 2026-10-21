@@ -475,6 +475,7 @@ impl Knotted for Stand<'_> {
                 identity,
                 instance: &[],
                 closure: &[],
+                composes: &[],
             },
             Stand::Barrier => Resolved::Barrier,
             Stand::Code(node) => Resolved::Code(CodeView {

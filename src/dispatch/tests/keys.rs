@@ -1,10 +1,14 @@
 //! Specialization keys over frontiers: which names a callable's key lists, read off the seams the
 //! load laid, and what a call of it seeks at run.
 
+// The tests reading the old passes' cells are gated off under `one-walk` until Phase 6.
+#![cfg_attr(feature = "one-walk", allow(unused_imports))]
+
 use crate::program::Program;
 use crate::scope::{BodyShape, Mint, SeamAt, ShapeKind, Slot};
 
 use super::caching::{PRELUDE, Ran, bounds, every_shape, minted, ran_under};
+#[cfg(not(feature = "one-walk"))]
 use super::frontiers::{quantified, seams, unknown};
 use super::statics::{body, loaded};
 use crate::values::SpecBounds;
@@ -64,6 +68,7 @@ fn some(names: &[&str]) -> Option<Vec<String>> {
     Some(names.iter().map(|name| name.to_string()).collect())
 }
 
+#[cfg(not(feature = "one-walk"))]
 #[test]
 fn a_body_keys_on_a_for_all_name_a_frontier_at_its_entry_waits_on() {
     let source =
@@ -96,6 +101,7 @@ fn a_body_keys_on_a_module_parameter_a_path_through_it_waits_on() {
     });
 }
 
+#[cfg(not(feature = "one-walk"))]
 #[test]
 fn a_body_keys_on_its_own_names_a_nested_body_s_entry_frontier_waits_on() {
     // `PAIRED`'s fact waits on `OUTER`'s `m` and its own `Inner`, so it sits at `PAIRED`'s entry:
@@ -132,6 +138,7 @@ fn a_body_keys_on_its_own_names_a_nested_body_s_entry_frontier_waits_on() {
     assert_eq!(keyed(&alone, &["m"]), None);
 }
 
+#[cfg(not(feature = "one-walk"))]
 #[test]
 fn a_capture_keys_the_body_that_binds_it_never_the_one_reading_it() {
     let source = format!(
@@ -148,6 +155,7 @@ fn a_capture_keys_the_body_that_binds_it_never_the_one_reading_it() {
     });
 }
 
+#[cfg(not(feature = "one-walk"))]
 #[test]
 fn a_frontier_name_whose_parameter_does_not_key_keys_nothing() {
     // `m`'s declared type is open, so its digest is no constant cost.

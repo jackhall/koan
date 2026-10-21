@@ -141,7 +141,7 @@ pub struct CellSubstrate(Joined);
 
 /// The load's one walk over `shapes`: every record the language's walk computes, laid in program
 /// storage through `writer`, beside the folds the load lays over them.
-#[cfg(feature = "one-walk")]
+#[cfg(any(feature = "one-walk", all(test, feature = "walk-diff")))]
 fn walked<'graph, L: Language>(
     shapes: &'graph crate::scope::Shapes<'graph>,
     builtins: &'graph KBuiltins<'graph, 'graph>,
@@ -226,6 +226,9 @@ impl CellSubstrate {
                 )
                 .map_err(refused)?;
                 let shape = shapes.root();
+                // The diff runs the one walk first, so it reads no cell the old passes fill.
+                #[cfg(all(test, feature = "walk-diff", not(feature = "one-walk")))]
+                let diffed = walked::<L>(shapes, builtins, types, brand.writer(), &scratch);
                 #[cfg(not(feature = "one-walk"))]
                 {
                     crate::elaborate::type_channel(
@@ -243,6 +246,16 @@ impl CellSubstrate {
                 #[cfg(feature = "one-walk")]
                 let walked = walked::<L>(shapes, builtins, types, brand.writer(), &scratch)
                     .map_err(refused)?;
+                #[cfg(all(test, feature = "walk-diff", not(feature = "one-walk")))]
+                {
+                    let records = diffed.map_err(refused)?;
+                    let cells = crate::scope::LoadFacts::of_cells(brand.writer(), shapes);
+                    if !records.own_units().is_empty() {
+                        let lines =
+                            super::tests::diff::diff(&cells, records, types, &owner.symbols);
+                        assert!(lines.is_empty(), "walk diff:\n{}", lines.join("\n"));
+                    }
+                }
                 inspected = Some(inspect(Loaded {
                     shape,
                     builtins,

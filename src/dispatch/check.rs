@@ -12,12 +12,34 @@
 
 use crate::knot::KBuiltins;
 use crate::memory::BumpAllocator;
-use crate::scope::{BodyShape, Registration, ShapeError, ShapeKind, Static, StaticRegistered};
+use crate::scope::{
+    BodyShape, LoadFacts, Registration, ShapeError, ShapeKind, Static, StaticRegistered,
+};
 use crate::type_lattice::{DeclaredType, KType, meet, shape_slots};
 use crate::values::Chain;
 
 /// Refuse the first registration in `shape`, or in a body nested in it short of a quote's code,
-/// that overlaps a builtin overload at its key.
+/// that overlaps a builtin overload at its key, each typed as `facts` holds it.
+pub(super) fn overlaps_through<'graph>(
+    facts: &LoadFacts<'graph>,
+    shape: &'graph BodyShape<'graph>,
+    builtins: &KBuiltins<'_, '_>,
+    types: &Chain<'_, '_, '_, '_>,
+    scratch: BumpAllocator<'_>,
+) -> Result<(), ShapeError<'graph>> {
+    for registration in shape.registrations() {
+        let typed = facts.registered_type(shape, registration.slot);
+        overlap(shape, registration, typed, builtins, types, scratch)?;
+    }
+    for (_, nested) in shape.nested_shapes() {
+        if nested.kind() != ShapeKind::Code {
+            overlaps_through(facts, nested, builtins, types, scratch)?;
+        }
+    }
+    Ok(())
+}
+
+/// [`overlaps_through`] over the cells the old passes fill: the load's check before the one walk.
 pub(super) fn overlaps<'graph>(
     shape: &'graph BodyShape<'graph>,
     builtins: &KBuiltins<'_, '_>,

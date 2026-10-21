@@ -8,6 +8,8 @@ mod caching;
 mod classes;
 mod contributions;
 mod digests;
+// Both read the old passes' residuals, seams and `Loaded`: ported in the one walk's Phase 6.
+#[cfg(not(feature = "one-walk"))]
 mod frontiers;
 mod functions;
 mod generate;
@@ -21,6 +23,7 @@ mod paths;
 mod programs;
 mod quotes;
 mod rankings;
+#[cfg(not(feature = "one-walk"))]
 mod resumption;
 mod retypes;
 mod rules;

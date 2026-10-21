@@ -95,11 +95,13 @@ fn pair_equal<'left, 'right, X: Knotted, Y: Knotted>(
                     identity,
                     instance,
                     closure,
+                    composes,
                 },
                 Resolved::Function {
                     identity: other,
                     instance: solved,
                     closure: others,
+                    ..
                 },
             ) => {
                 if !seen.insert(entered) {
@@ -108,9 +110,15 @@ fn pair_equal<'left, 'right, X: Knotted, Y: Knotted>(
                 if identity != other || instance != solved || closure.len() != others.len() {
                     return Ok(false);
                 }
-                pending.extend(closure.iter().zip(others).map(|(this, that)| {
-                    (Seen::of(this.resolve(left)), Seen::of(that.resolve(right)))
-                }));
+                // One identity is one body, so both sides compose the same slots.
+                let composed = |at: usize| composes.get(at).copied().unwrap_or(true);
+                pending.extend(
+                    (closure.iter().zip(others).enumerate())
+                        .filter(|(at, _)| composed(*at))
+                        .map(|(_, (this, that))| {
+                            (Seen::of(this.resolve(left)), Seen::of(that.resolve(right)))
+                        }),
+                );
                 return Ok(true);
             }
             (Resolved::Code(code), Resolved::Code(other)) => {

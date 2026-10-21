@@ -300,7 +300,15 @@ fn check_parts<'graph, 'cell, XF: KnottedFamily<'graph>>(
         &mut |kt| {
             assert!(
                 types.resolves(kt),
-                "a crossed value carries a type its habitat cannot resolve: {kt:?}"
+                "a crossed value carries a type its habitat cannot resolve: {kt:?} in {}",
+                match value {
+                    Value::Knotted(_) => "knotted",
+                    Value::Record(_) => "record",
+                    Value::List(_) => "list",
+                    Value::Type(_) => "type",
+                    Value::Retyped(_) => "retyped",
+                    _ => "other",
+                }
             );
         },
         &mut |_| {},

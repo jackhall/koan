@@ -66,7 +66,7 @@ use std::fmt;
 use crate::memory::{BumpAllocator, DropFree, Edge, Knot, Member, Writer, covariant, reattachable};
 use crate::parse::ExpressionPart;
 use crate::scope::Elaboration;
-use crate::scope::{Activation, ActivationView, Body, Builtins, CaptureSlot, Site};
+use crate::scope::{Activation, ActivationView, Body, Builtins, Site};
 use crate::symbols::{BinderSymbol, SymbolInterner};
 use crate::type_lattice::{DeclaredType, KType, display_name};
 use crate::values::digest::{DigestHasher, Tag};
@@ -116,14 +116,11 @@ fn stamped<'graph, 'cell>(
 /// — and each type capture the body's contract names. What a closure's or a module's content
 /// composes over its code.
 fn composed<'l, L>(body: &Body<'_>, links: &'l [L]) -> impl Iterator<Item = (usize, &'l L)> {
-    let builder = body.shape.captures().len();
+    let composes = body.composes;
     links
         .iter()
         .enumerate()
-        .filter(move |(index, _)| match index.checked_sub(builder) {
-            None => body.shape.composes(CaptureSlot(*index as u32)),
-            Some(at) => body.contract[at],
-        })
+        .filter(move |(index, _)| composes.get(*index).copied().unwrap_or(true))
 }
 
 /// A knot member: one node of a knot — a function, a data node, a module or a barrier over a
@@ -371,12 +368,14 @@ impl values::Knotted for Knotted<'_, '_> {
                 identity: std::ptr::from_ref(function.shape()).addr(),
                 instance: function.instance().unwrap_or(&[]),
                 closure: function.closure().links(),
+                composes: function.body().composes,
             },
             // One record per overload, so its address is the builtin's identity.
             Node::Builtin(builtin) => Resolved::Function {
                 identity: std::ptr::from_ref(*builtin).addr(),
                 instance: &[],
                 closure: &[],
+                composes: &[],
             },
             Node::Data { circular, .. } => Resolved::Circular(*circular),
             Node::Module(_) => Resolved::Module,

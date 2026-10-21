@@ -127,6 +127,11 @@ impl<'graph, 'cell, X> Function<'graph, 'cell, X> {
         self.body.shape
     }
 
+    /// The body as the function holds it: its shape, and the closure slots its content composes.
+    pub fn body(&self) -> &'graph Body<'graph> {
+        self.body
+    }
+
     /// The closure bindings a call's activation reads its captures through.
     pub fn closure(&self) -> &'cell ClosureBindings<'cell, X> {
         self.closure

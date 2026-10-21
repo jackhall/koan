@@ -153,7 +153,7 @@ use crate::parse::BuiltinShapeId;
 use crate::parse::{ExpressionPart, KExpression, KLiteral};
 use crate::scope::{
     Address, BodyClass, BodyShape, Born, BuiltinIndex, Candidate, CandidateList, CaptureSlot,
-    CaptureSource, Closing, Coordinate, Frontier, InstanceRead, Keyed, Leaf, NamedVariable,
+    CaptureSource, Closing, Coordinate, Frontier, InstanceRead, Keyed, Leaf, Listed, NamedVariable,
     Narrowing, PathEntry, PathRead, Position, Print, Resolution, Segment, ShapeError, ShapeKind,
     Shapes, Site, SiteDeps, Slot, Source, Static, StaticRegistered, StaticSolution, StaticType,
     Store, SurfacedHead, Target, Tree, Typed, UnitFacts, UnitId, UnitIndex, UnitWork, Unknown,
@@ -229,6 +229,8 @@ pub(super) fn walk<'graph: 'o, 'tier: 'o, 'o, S: Store<'o>>(
         paths: BumpVec::new_in(scratch),
         composites: bump_table(scratch),
         module_mints: bump_table(scratch),
+        unlisted: None,
+        open_path: None,
         heading: false,
         components: BumpVec::new_in(scratch),
     };
@@ -397,8 +399,8 @@ struct Demand<'p, 'o> {
     /// Each callable entered and not yet in a finished component, innermost last.
     stack: BumpVec<'p, Segment>,
     next: u32,
-    /// Each closing computed whose component is not finished yet, beside its gathering.
-    pending: BumpVec<'p, (Segment, Closing<'o>, Tag)>,
+    /// Each closing computed whose component is not finished yet, beside its frontier.
+    pending: BumpVec<'p, (Segment, Closing<'o>, Frontier<'o>)>,
 }
 
 /// One callable's place in [`Demand`].
@@ -460,6 +462,12 @@ struct Pass<'p, 'o, 'x, 'graph, 'tier, 'pair, 'reg, S: Store<'o>> {
     /// Each `MODULE` or `GROUP` body the walk typed, by address: whether it, or a block or module
     /// body it runs, holds a minting site.
     module_mints: BumpBackedMap<'p, usize, bool>,
+    /// The first `MODULE` body found composing a type its `OVER` list does not name, beside the
+    /// refusal it gives where it is typed.
+    unlisted: Option<(Segment, ShapeError<'o>)>,
+    /// Where the root of the path the walk last resolved is written, where it is written in place
+    /// and the path resolved to a class.
+    open_path: Option<SourceRef>,
     /// Whether the name the walk is about to read sits at a call's head.
     heading: bool,
     /// Each component being typed, outermost first, by its shape's level and its members: a
@@ -645,39 +653,42 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             true => Err(*shape
                 .refusal()
                 .expect("a refused code shape holds its refusal")),
-            false => self
-                .units_of(level)
-                .and_then(|_| self.closing(level, parent)),
+            false => self.units_of(level).and_then(|_| self.closing(level)),
         };
-        let closing = match walked {
-            Ok(closing) => closing,
+        if roots_chain {
+            self.close_paths(shape);
+        }
+        self.chain.truncate(depth);
+        let (closing, frontier) = match walked {
+            Ok((mut closing, tag)) => {
+                // A quote's code is typed a second time as a traced `EVAL` runs it, past its first.
+                if let (true, Some(parent)) = (code, parent) {
+                    closing.ran = self.ran(parent, shape);
+                }
+                (closing, self.end(tag))
+            }
             Err(error) if code => {
                 // A refused quote's rules closed nothing.
                 self.unwind(open);
-                Closing {
+                let refused = Closing {
                     class: None,
                     exits: false,
                     summary: None,
                     recursive: false,
                     ran: None,
                     refusal: Some(resident(self.lay, error)),
-                }
+                };
+                (refused, Frontier::EMPTY)
             }
             Err(error) => {
                 self.unwind(open);
-                self.chain.truncate(depth);
                 return Err(error);
             }
         };
-        if roots_chain {
-            self.close_paths(shape);
-        }
-        self.chain.truncate(depth);
         self.leave(shape);
-        let tag = self.closing_tag(segment);
         match callable {
-            true => self.finish(segment, closing, tag),
-            false => self.write_closing(segment, closing, tag),
+            true => self.finish(segment, closing, frontier),
+            false => self.write_closing(segment, closing, frontier),
         }
         Ok(())
     }
@@ -1075,6 +1086,10 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             if let Some((_, tag)) = surfaced {
                 self.gather(tag);
             }
+            // A block's surfaced key is a registration bound at its entry.
+            if let Some(registration) = shape.registration(slot) {
+                self.register(level, registration)?;
+            }
             self.seed_slot(level, slot, surfaced.map(|(typed, _)| typed));
         }
         Ok(())
@@ -1156,6 +1171,23 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             }
             UnitWork::Component(index) => self.component(level, index.index())?,
         }
+        // A block its value statics did not reach — an arm a builtin's rule reads no further than
+        // its value — is typed on its own, inside the unit.
+        for at in statements.iter() {
+            for (_, nested) in shape.nested_in(*at) {
+                if nested.kind() == ShapeKind::Block
+                    && !self.walked[nested.segment().index() as usize]
+                {
+                    self.block(level, nested, None)?;
+                }
+            }
+        }
+        // A statement no rule typed is at most `Any`.
+        for index in statements.iter() {
+            if self.chain[level].statements[*index].is_none() {
+                self.set_statement(level, *index, unknown());
+            }
+        }
         if !self.unfilled {
             self.throughs(level, &statements);
         }
@@ -1179,13 +1211,11 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         let last = self.last_statement(at);
         if walked.is_ok() && !self.unfilled {
             let typed = self.typed(at, None);
-            let tag = self.innermost();
-            self.units[tag.0 as usize]
-                .typed
-                .push((nested.segment(), typed));
+            self.keep_inline(nested.segment(), typed);
         }
         let popped = self.chain.pop().expect("the body was pushed");
         self.leave(nested);
+        self.walked[nested.segment().index() as usize] = true;
         walked.map(|_| (last, popped))
     }
 
@@ -1221,6 +1251,15 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         Ok(())
     }
 
+    /// Keep `typed`, the facts of the inline body `segment` just typed, in the unit running it: the
+    /// newest typing of a body the unit types twice stands.
+    fn keep_inline(&mut self, segment: Segment, typed: Typed<'o>) {
+        let tag = self.innermost();
+        let held = &mut self.units[tag.0 as usize].typed;
+        held.retain(|(each, _)| *each != segment);
+        held.push((segment, typed));
+    }
+
     /// The tag of the innermost unit running.
     fn innermost(&self) -> Tag {
         *self.open.last().expect("a unit is running")
@@ -1250,7 +1289,14 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         self.push(body, false);
         let at = level + 1;
         let walked = self.inline_units(at, None);
-        let signed = match walked {
+        let unlisted = match self.unlisted {
+            Some((segment, error)) if segment == body.segment() => {
+                self.unlisted = None;
+                Err(error)
+            }
+            _ => Ok(()),
+        };
+        let signed = match walked.and(unlisted) {
             Ok(()) => self.signed(at, body),
             Err(error) => Err(error),
         };
@@ -1261,13 +1307,11 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         }
         if signed.is_ok() && !self.unfilled {
             let typed = self.typed(at, None);
-            let tag = self.innermost();
-            self.units[tag.0 as usize]
-                .typed
-                .push((body.segment(), typed));
+            self.keep_inline(body.segment(), typed);
         }
         let popped = self.chain.pop().expect("the body was pushed");
         self.leave(body);
+        self.walked[body.segment().index() as usize] = true;
         self.fold(level, &popped);
         let mints = !popped.minting.is_empty() || popped.minted_within;
         self.module_mints.insert(address(body), mints);
@@ -1432,15 +1476,10 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         }
     }
 
-    /// The closing record of the owning body at `level`, nested in the shape at `parent`, in a
-    /// gathering of its own: its return check and exits, its class, a callable's summary, and a
-    /// quote's code's last statement's type as a traced `EVAL` runs it unfilled. A module body's
-    /// `OVER` check runs as its contract is folded.
-    fn closing(
-        &mut self,
-        level: usize,
-        parent: Option<usize>,
-    ) -> Result<Closing<'o>, ShapeError<'o>> {
+    /// The closing record of the owning body at `level`, its gathering left open for what reads
+    /// the body once it leaves the chain: its return check and exits, its class, and a callable's
+    /// summary. A module body's `OVER` check runs as its contract is folded.
+    fn closing(&mut self, level: usize) -> Result<(Closing<'o>, Tag), ShapeError<'o>> {
         let shape = self.chain[level].shape;
         let tag = self.open_unit(
             UnitId {
@@ -1455,28 +1494,15 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             ShapeKind::Callable => Some(self.summarize(level)?),
             _ => None,
         };
-        let ran = match (shape.kind(), parent) {
-            (ShapeKind::Code, Some(parent)) => self.ran(parent, shape),
-            _ => None,
-        };
         let closing = Closing {
             class: self.class(level),
             exits: self.chain[level].exits,
             summary,
             recursive: false,
-            ran,
+            ran: None,
             refusal: None,
         };
-        self.end(tag);
-        Ok(closing)
-    }
-
-    /// The tag of the closing gathering of `segment` the walk just ended.
-    fn closing_tag(&self, segment: Segment) -> Tag {
-        let at = (self.units.iter())
-            .rposition(|state| state.closing && state.id.segment == segment)
-            .unwrap_or(self.units.len() - 1);
-        Tag(at as u32)
+        Ok((closing, tag))
     }
 
     /// The quote's code `code`'s last statement's static type as a traced `EVAL` runs it: typed a
@@ -1499,10 +1525,8 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         walked.ok().and(last)
     }
 
-    /// Write the closing record `closing` of `segment`, beside the frontier its gathering `tag`
-    /// read.
-    fn write_closing(&mut self, segment: Segment, closing: Closing<'o>, tag: Tag) {
-        let frontier = (self.units[tag.0 as usize].frontier).unwrap_or(Frontier::EMPTY);
+    /// Write the closing record `closing` of `segment`, beside the frontier its gathering read.
+    fn write_closing(&mut self, segment: Segment, closing: Closing<'o>, frontier: Frontier<'o>) {
         self.store
             .write_close(segment, resident(self.lay, closing), frontier);
     }
@@ -1523,8 +1547,8 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     /// Finish the callable `segment`, its closing computed: written at once where it heads its
     /// component, else kept until its component is finished. A component of more than one body,
     /// or of one that calls itself, is recursive: none of its bodies keeps a summary.
-    fn finish(&mut self, segment: Segment, closing: Closing<'o>, tag: Tag) {
-        self.demand.pending.push((segment, closing, tag));
+    fn finish(&mut self, segment: Segment, closing: Closing<'o>, frontier: Frontier<'o>) {
+        self.demand.pending.push((segment, closing, frontier));
         let mark = self.demand.marks[segment.index() as usize].expect("a callable entered");
         if mark.low != mark.index {
             return;
@@ -1542,12 +1566,12 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             let held = (self.demand.pending.iter())
                 .position(|(pending, _, _)| pending == member)
                 .expect("a component's members are closed before it finishes");
-            let (_, mut closing, tag) = self.demand.pending.remove(held);
+            let (_, mut closing, frontier) = self.demand.pending.remove(held);
             closing.recursive = recursive;
             if recursive {
                 closing.summary = Some(None);
             }
-            self.write_closing(*member, closing, tag);
+            self.write_closing(*member, closing, frontier);
         }
     }
 
@@ -1629,14 +1653,16 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                     name,
                     at: used,
                 });
-            self.compose(level, variable);
+            self.compose(level, variable, (name, used));
         }
         coordinate
     }
 
-    /// Mark the lexical variable at `variable`'s level composed by each callable or module body
-    /// between the shape at chain level `level` and its home.
-    fn compose(&mut self, level: usize, variable: usize) {
+    /// Mark the lexical variable at `variable`'s level, named `name` and read for the use at
+    /// `used`, composed by each callable or module body between the shape at chain level `level`
+    /// and its home. A module body reads a type its enclosing callable binds only where its `OVER`
+    /// list names it: it refuses where it is typed.
+    fn compose(&mut self, level: usize, variable: usize, (name, used): (TypeSymbol, SourceRef)) {
         let mut at = level;
         loop {
             let shape = self.chain[at].shape;
@@ -1648,6 +1674,13 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 if !composed.contains(&variable) {
                     composed.push(variable);
                 }
+            }
+            let name = BinderSymbol::Type(name);
+            if shape.kind() == ShapeKind::Module
+                && !shape.over().unwrap_or(&[]).contains(&Listed::Name(name))
+                && self.unlisted.is_none()
+            {
+                self.unlisted = Some((shape.segment(), ShapeError::Unlisted { name, at: used }));
             }
             if self.chain[at].roots_chain || at == 0 {
                 return;

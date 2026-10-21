@@ -112,12 +112,23 @@ impl<'p, 'o: 'p, 'x, 'graph: 'o + 'p, 'tier: 'o, 'pair, 'reg, S: Store<'o>>
         );
         written.sort_unstable_by_key(|expression| expression.order);
         for expression in written.iter() {
-            let typed = elaborate::expression(&*self, self.tools(), self.lay, shape, expression)?;
-            self.set_expression(level, expression.site, typed);
+            self.type_expression(level, expression)?;
         }
         elaborate::guards(shape, &written, |expression| {
             self.type_cell(shape, expression.site)
         })
+    }
+
+    /// Type `expression`, one of the shape at `level`'s.
+    pub(super) fn type_expression(
+        &mut self,
+        level: usize,
+        expression: &TypeExpression<'graph>,
+    ) -> Result<(), ShapeError<'o>> {
+        let shape = self.chain[level].shape;
+        let typed = elaborate::expression(&*self, self.tools(), self.lay, shape, expression)?;
+        self.set_expression(level, expression.site, typed);
+        Ok(())
     }
 
     /// Step three's registration: the entry of `registration`, one the shape at `level` binds, and

@@ -154,15 +154,19 @@ pub fn run<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'g
     let (step, state) = step.state();
     let (mut step, scratch) = step.scratch();
     let shape = match &state {
-        KState::Born(KBirth::Call { callee, .. }) => called_shape(*callee),
-        KState::Born(KBirth::Eval { code, .. }) => (code.as_code())
+        KState::Born(KBirth::Call {
+            callee, program, ..
+        }) => called_shape(*callee).map(|shape| (shape, program.facts())),
+        KState::Born(KBirth::Eval { code, program, .. }) => (code.as_code())
             .and_then(|member| member.code())
-            .map(|node| node.shape()),
-        KState::Born(KBirth::Block { shape, .. }) => Some(*shape),
-        KState::Runner(runner) => Some(runner.shape()),
+            .map(|node| (node.shape(), program.facts())),
+        KState::Born(KBirth::Block { shape, program, .. }) => Some((*shape, program.facts())),
+        KState::Runner(runner) => Some((runner.shape(), runner.load())),
         KState::Born(_) | KState::Evaluating { .. } => None,
     };
-    let caches = shape.is_some_and(BodyShape::caches);
+    let caches = shape.is_some_and(|(shape, facts)| facts.caches(shape));
+    #[cfg(test)]
+    let shape = shape.map(|(shape, _)| shape);
     let routes = match &state {
         // A tree cell holds its scratch whatever it borrows; a tenant routes where it borrows a
         // specialization, writing its host's scratch.

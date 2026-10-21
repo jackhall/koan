@@ -2,6 +2,8 @@
 //! later root work that reads top-level bindings — or compares two — after the drain.
 
 mod boundary;
+#[cfg(feature = "walk-diff")]
+pub(crate) mod diff;
 mod evaluator;
 mod programs;
 pub(crate) mod stores;

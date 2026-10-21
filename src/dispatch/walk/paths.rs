@@ -30,8 +30,8 @@ use crate::parse::ExpressionPart;
 use crate::scope::{
     Binder, BodyShape, Callable, CaptureSlot, CaptureSource, Coordinate, Frontier, Leaf, PathEntry,
     PathIndex, PathRead, Position, Print, Registered, Resolution, Resolved, Root, Segment,
-    ShapeError, ShapeKind, Site, Source, SpelledRoot, Static, StaticCallable, StaticRegistered,
-    StaticType, Store, Target, Tree, Variable as Located, part_of, path_spelling,
+    ShapeError, ShapeKind, Site, Slot, Source, SpelledRoot, Static, StaticCallable,
+    StaticRegistered, StaticType, Store, Target, Tree, Variable as Located, part_of, path_spelling,
 };
 use crate::symbols::{BinderSymbol, TypeSymbol, ValueSymbol};
 use crate::type_lattice::{
@@ -356,13 +356,28 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         else {
             unreachable!("the builder records a path's node");
         };
-        let root = match path_spelling(node.reference(), self.scratch).map(|spelling| spelling.root)
-        {
+        let spelling = path_spelling(node.reference(), self.scratch).map(|spelling| spelling.root);
+        let root = match spelling {
             Some(SpelledRoot::Name(leaf)) => shape
                 .mention(Site::of(leaf))
                 .map(|mention| mention.coordinate),
             _ => None,
         };
+        // A root written in place is typed where its path resolves, its own types first.
+        if let Some(SpelledRoot::Inline(written)) = spelling {
+            let holds = |site: Site| match written {
+                ExpressionPart::Expression(node) => part_of(node.reference(), site).is_some(),
+                _ => false,
+            };
+            let mut inside = BumpVec::new_in(self.scratch);
+            inside.extend(
+                (shape.type_expressions().iter()).filter(|expression| holds(expression.site)),
+            );
+            inside.sort_unstable_by_key(|expression| expression.order);
+            for expression in inside.iter() {
+                self.type_expression(level, expression)?;
+            }
+        }
         let read = PathRead {
             at: root,
             root: self.chain_root_segment(level),
@@ -374,8 +389,20 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 .reads
                 .push((Site::of(spelled.part), read, tag));
         }
-        self.resolve_path(level, entry)?;
-        Ok(())
+        self.open_path = None;
+        let resolved = self.resolve_path(level, entry)?;
+        // A path a type reads through a module built in place that does not resolve closed refuses
+        // the load, since the run builds no module there; a type binder reads it as unknown.
+        let declaring = (0..shape.slots()).any(|slot| {
+            (shape.declarations(Slot(slot as u32)))
+                .is_some_and(|node| std::ptr::eq(node, &shape.body()[spelled.statement as usize]))
+        });
+        match (entry.root, resolved, self.open_path.take()) {
+            (Root::Inline(_), Resolved::Class(_), Some(at)) if !declaring => {
+                Err(ShapeError::OpenPathInType { at })
+            }
+            _ => Ok(()),
+        }
     }
 
     /// What `entry`, a path of the chain the shape at `level` sits on, resolves to, resolving it
@@ -399,12 +426,10 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         self.paths[table].resolving.pop();
         let (resolution, at) = resolution?;
         let index = entry.level - self.paths[table].base;
-        let spelled = index
-            < self.shapes.path_base(self.paths[table].root.segment()) - self.paths[table].base;
-        if let (Root::Inline(_), Resolved::Class(_), true, Some(at)) =
-            (entry.root, resolution.resolved, spelled, at)
+        if let (Root::Inline(_), Resolved::Class(_), Some(at)) =
+            (entry.root, resolution.resolved, at)
         {
-            return Err(ShapeError::OpenPathInType { at });
+            self.open_path = Some(at);
         }
         let tag = self.innermost();
         let root = self.paths[table].root.segment();

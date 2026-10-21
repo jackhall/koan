@@ -13,6 +13,9 @@
 //! programs, a site naming a quantified variable, with and without the contexts drawn around it;
 //! [`retypes`](super::retypes) retypes a value drawn under a [`retyped_type`] at each retype site.
 
+// What the resumption laws draw goes unread while they are gated off under `one-walk`.
+#![cfg_attr(feature = "one-walk", allow(dead_code))]
+
 use proptest::prelude::*;
 
 /// What the load's refusal of a registration whose union ties says.

@@ -488,6 +488,7 @@ fn a_loop_passing_a_record_on_bare_digests_it_once_per_loop() {
     );
 }
 
+#[cfg(not(feature = "one-walk"))]
 #[test]
 fn only_a_use_that_may_call_a_function_hands_a_memo_on() {
     // `RUN`'s `cfg` keeps a memo; `ATTR` can select only a builtin, which runs no frame to keep it,

@@ -29,11 +29,13 @@ use super::{
 pub enum Resolved<'a, X> {
     /// A function, rendered as its type's name. It compares by `identity` — one per `FN`, `EXPR` or
     /// `OP` written, so a copy keeps it — by the solution an instance of a quantified function was
-    /// made at, empty for anything else, and by its closure bindings, read through the member.
+    /// made at, empty for anything else, and by the closure bindings its content composes, read
+    /// through the member: each slot `composes` marks, every one past its end.
     Function {
         identity: usize,
         instance: &'a [KType],
         closure: &'a [Link<'a, X>],
+        composes: &'a [bool],
     },
     /// A module: opaque to `values`, incomparable, rendered as its type's name.
     Module,
