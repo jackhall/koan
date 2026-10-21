@@ -39,6 +39,7 @@ use crate::type_lattice::{
     substitute_levels,
 };
 
+use super::reads::Part;
 use super::trees::Scope;
 use super::{Bound, Pass, Tag, under, unknown};
 
@@ -322,12 +323,10 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         if shape.kind() == ShapeKind::Callable
             && shape.position_of(binder.slot) == Position::PARAMETER
         {
-            return match self.types.node(self.body_type(shape)?) {
-                TypeNode::KFunction { params, .. } => {
-                    params.get(shape.slot_name(binder.slot).symbol())
-                }
-                _ => None,
-            };
+            return self.body_type(
+                shape,
+                Part::Parameter(shape.slot_name(binder.slot).symbol()),
+            );
         }
         let annotation = shape.annotation(binder.slot)?;
         match self.type_cell(shape, Site::of(annotation)) {

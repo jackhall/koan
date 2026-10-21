@@ -15,9 +15,10 @@ use crate::scope::{
     Unknown,
 };
 use crate::symbols::BinderSymbol;
-use crate::type_lattice::{KType, Parametric, TypeNode, is_subtype_of};
+use crate::type_lattice::{KType, Parametric, is_subtype_of};
 
 use super::super::check::overlap;
+use super::reads::Part;
 use super::{Pass, Tag};
 
 impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>> TypeContext<'graph, 'o>
@@ -203,11 +204,7 @@ impl<'p, 'o: 'p, 'x, 'graph: 'o + 'p, 'tier: 'o, 'pair, 'reg, S: Store<'o>>
             return true;
         }
         let (types, scratch) = (self.types, self.scratch);
-        let declared = (self.body_type(frame))
-            .and_then(|ktype| match types.node(ktype) {
-                TypeNode::KFunction { params, .. } => params.get(name.symbol()),
-                _ => None,
-            })
+        let declared = (self.body_type(frame, Part::Parameter(name.symbol())))
             .and_then(|declared| types.concrete(declared));
         declared.is_some_and(|declared| {
             is_subtype_of(types, scratch, declared, KType::EMPTY_SIGNATURE)

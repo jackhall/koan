@@ -16,11 +16,19 @@ use crate::scope::{
     Site, Slot, Static, StaticCallable, StaticRegistered, StaticSolution, StaticType, Store,
     Target, Tree, Typed, UnitFacts, UnitId, Unknown, UseStatics, in_body_of,
 };
-use crate::symbols::BinderSymbol;
+use crate::symbols::{BinderSymbol, Symbol};
 use crate::type_lattice::{DeclaredType, Interval, KType, Parametric, Side, TypeNode, Variable};
 use crate::type_lattice::{bound_above, read_through};
 
 use super::{Bound, Pass, Tag};
+
+/// Which part of a callable's function type a read takes: what the read gathers is the names
+/// that part names.
+#[derive(Clone, Copy)]
+pub(super) enum Part {
+    Return,
+    Parameter(Symbol),
+}
 
 impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     Pass<'p, 'o, '_, 'graph, 'tier, '_, '_, S>
@@ -475,10 +483,10 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         }
     }
 
-    /// The function type of the callable body `body` as its body reads it, its own group at its
-    /// group levels — each a lexical variable of one of its own `FOR ALL` names, which the read
-    /// gathers where the type names it: `None` where the walk did not type the callable.
-    pub(super) fn body_type(&self, body: &BodyShape<'graph>) -> Option<Parametric> {
+    /// The `part` of the function type of the callable body `body` as its body reads it, its own
+    /// group at its group levels — each a lexical variable of one of its own `FOR ALL` names, which
+    /// the read gathers where the part names it: `None` where the walk did not type the callable.
+    pub(super) fn body_type(&self, body: &BodyShape<'graph>, part: Part) -> Option<Parametric> {
         let born = self.born(body.segment())?;
         let map = match born.callable {
             Static::Closed(callable) => callable.quantifier_map,
@@ -487,8 +495,15 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         };
         let (types, scratch) = (self.types, self.scratch);
         let ktype = in_body_of(born.callable, born.levels, types, scratch)?;
+        let TypeNode::KFunction { params, ret, .. } = types.node(ktype) else {
+            return None;
+        };
+        let read = match part {
+            Part::Return => ret,
+            Part::Parameter(name) => params.get(name)?,
+        };
         let mut named = BumpVec::new_in(scratch);
-        read_through(types, scratch, ktype, Side::Above, &mut |variable| {
+        read_through(types, scratch, read, Side::Above, &mut |variable| {
             if let Variable::Lexical { level, .. } = variable {
                 named.push(level);
             }
@@ -508,18 +523,18 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 }]);
             }
         }
-        Some(ktype)
+        Some(read)
     }
 
-    /// The function type of the callable body at `level` as its body reads it: its own group
-    /// instantiated at its group levels, its paths read through their resolutions. `None` where
-    /// the walk did not type the callable, or a path it reads is not resolved.
-    pub(super) fn in_body(&self, level: usize) -> Option<Parametric> {
+    /// The `part` of the function type of the callable body at `level` as its body reads it: its
+    /// own group instantiated at its group levels, its paths read through their resolutions.
+    /// `None` where the walk did not type the callable, or a path it reads is not resolved.
+    pub(super) fn in_body(&self, level: usize, part: Part) -> Option<Parametric> {
         let shape = self.chain[level].shape;
-        let ktype = self.body_type(shape)?;
+        let read = self.body_type(shape, part)?;
         match self.callable_cell(shape).over_paths() {
-            true => self.through_paths(level, ktype),
-            false => Some(ktype),
+            true => self.through_paths(level, read),
+            false => Some(read),
         }
     }
 

@@ -176,6 +176,7 @@ use crate::values::{
 mod caching;
 mod paths;
 mod reads;
+use reads::Part;
 mod trees;
 mod types;
 mod views;
@@ -1401,10 +1402,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     /// A callable body's declared return, read off the function type its body runs at, where the
     /// load typed the callable.
     fn declared_return(&self, level: usize) -> Option<Parametric> {
-        match self.types.node(self.in_body(level)?) {
-            TypeNode::KFunction { ret, .. } => Some(ret),
-            _ => None,
-        }
+        self.in_body(level, Part::Return)
     }
 
     /// Mark the shape at `level` porous where its return carries a porous value out: a callable
@@ -1842,12 +1840,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         if shape.kind() != ShapeKind::Callable || !is_parameter {
             return DeclaredType::Type(unknown());
         }
-        let declared = self
-            .in_body(level)
-            .and_then(|ktype| match self.types.node(ktype) {
-                TypeNode::KFunction { params, .. } => params.get(name.symbol()),
-                _ => None,
-            });
+        let declared = self.in_body(level, Part::Parameter(name.symbol()));
         // Declared where the callable is written, a path there may not be reachable here.
         let typed = retyped_to(self.types, declared.unwrap_or_else(|| KType::ANY.into()));
         DeclaredType::Type(self.sourced(level, typed))
@@ -2054,10 +2047,8 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         if shape.kind() != ShapeKind::Callable || index + 1 != shape.body().len() {
             return None;
         }
-        match self.in_body(level).map(|ktype| self.types.node(ktype)) {
-            Some(TypeNode::KFunction { ret, .. }) => Some(self.sourced(level, under(ret)).upper),
-            _ => None,
-        }
+        let ret = self.in_body(level, Part::Return)?;
+        Some(self.sourced(level, under(ret)).upper)
     }
 
     /// The static type of `member`, a binder of the shape at `level` whose statement births the
@@ -2617,9 +2608,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         if shape.kind() != ShapeKind::Callable || shape.body().is_empty() {
             return Ok(());
         }
-        let Some(TypeNode::KFunction { ret, .. }) =
-            self.in_body(level).map(|ktype| self.types.node(ktype))
-        else {
+        let Some(ret) = self.in_body(level, Part::Return) else {
             return Ok(());
         };
         let last = shape.body().len() - 1;

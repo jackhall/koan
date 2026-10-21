@@ -34,6 +34,8 @@ mod statics;
 mod surface;
 mod tail;
 mod trees;
+#[cfg(feature = "one-walk")]
+mod types;
 mod views;
 
 use std::cell::RefCell;
