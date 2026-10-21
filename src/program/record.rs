@@ -14,7 +14,7 @@ use crate::knot::{KActivationView, KBuiltins, KValue};
 use crate::memory::{Bump, BumpAllocator, Writer};
 use crate::parse::{ExpressionPart, KExpression, ParseError};
 use crate::scheduler::{NativeStep, Work};
-use crate::scope::{BodyShape, ChainRelay, Resumption, Settled, ShapeError, Slot};
+use crate::scope::{BodyShape, ChainRelay, Resumption, Settled, ShapeError, Shapes, Slot};
 use crate::symbols::{BinderSymbol, SymbolInterner};
 use crate::type_lattice::{
     DeclaredType, KType, TypeNode, display_name, satisfied_by, substitute_quantified,
@@ -158,7 +158,7 @@ pub enum Evaluated<'graph> {
 /// `Copy` and without drop glue, so it rests in program storage beside the table it names.
 #[derive(Clone, Copy)]
 pub struct Program<'graph> {
-    shape: &'graph BodyShape<'graph>,
+    shapes: &'graph Shapes<'graph>,
     builtins: &'graph KBuiltins<'graph, 'graph>,
     tiers: TypeTiers<'graph>,
     symbols: &'graph SymbolInterner,
@@ -173,7 +173,7 @@ pub struct Program<'graph> {
 impl<'graph> Program<'graph> {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn new(
-        shape: &'graph BodyShape<'graph>,
+        shapes: &'graph Shapes<'graph>,
         builtins: &'graph KBuiltins<'graph, 'graph>,
         tiers: TypeTiers<'graph>,
         error: KType,
@@ -183,7 +183,7 @@ impl<'graph> Program<'graph> {
         uncaught: &'graph Cell<bool>,
     ) -> Self {
         Program {
-            shape,
+            shapes,
             builtins,
             tiers,
             symbols,
@@ -196,7 +196,12 @@ impl<'graph> Program<'graph> {
 
     /// The top level's shape.
     pub fn shape(&self) -> &'graph BodyShape<'graph> {
-        self.shape
+        self.shapes.root()
+    }
+
+    /// Every shape the load built, by segment.
+    pub fn shapes(&self) -> &'graph Shapes<'graph> {
+        self.shapes
     }
 
     pub fn builtins(&self) -> &'graph KBuiltins<'graph, 'graph> {
@@ -363,7 +368,7 @@ impl<'graph> Program<'graph> {
     /// The top-level slot `name` binds, if the program declares it.
     pub fn binding(&self, name: &str) -> Option<Slot> {
         let name = BinderSymbol::declared(name, self.symbols)?;
-        self.shape.slot(name).map(|(slot, _)| slot)
+        self.shape().slot(name).map(|(slot, _)| slot)
     }
 }
 

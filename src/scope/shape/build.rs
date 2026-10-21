@@ -662,6 +662,8 @@ struct DraftMention {
     read: Option<(u32, bool)>,
     /// Whether it lands on its own chain: no quote's code lies between.
     rooted: bool,
+    /// Whether it is a call's head.
+    head: bool,
 }
 
 /// Where a coordinate lands, by the level on the chain of the draft holding the binder or the open
@@ -2817,6 +2819,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             landing,
             read,
             rooted,
+            head,
         });
         Ok(())
     }
@@ -3534,6 +3537,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 coordinate: mention.coordinate,
                 lands,
                 fellow,
+                head: mention.head,
             }
         }));
         let spelled = self.spelled_paths(&draft, &chain);

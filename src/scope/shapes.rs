@@ -13,10 +13,17 @@ use crate::values::{Chain, Knotted};
 use super::builtins::Builtins;
 use super::shape::facts::{Address, Unknown};
 use super::shape::{
-    BodyShape, CaptureSlot, Coordinate, PathId, Position, Segment, ShapeError, ShapeKind, Slot,
-    Target, UnitIndex,
+    BodyShape, CaptureSlot, CaptureSource, Coordinate, Lands, PathId, Position, Segment,
+    ShapeError, ShapeKind, Site, Slot, Target, UnitIndex,
 };
 use super::signature::declare_quantifiers;
+use super::typed::{Handoff, ViewSlots};
+
+mod memos;
+mod tails;
+
+use memos::Memos;
+use tails::Tails;
 
 /// Every shape one load built, by segment, and each one's place in its encloser.
 #[derive(Clone, Copy)]
@@ -28,6 +35,10 @@ pub struct Shapes<'graph> {
     parents: &'graph [Option<(Segment, u32)>],
     /// Each shape's levels, at its segment.
     levels: &'graph [Levels<'graph>],
+    /// Each shape's tail-call facts, at its segment.
+    tails: &'graph [Tails<'graph>],
+    /// Each shape's digest memo facts, at its segment.
+    memos: &'graph [Memos<'graph>],
 }
 
 /// The levels one shape numbers along its chain.
@@ -102,11 +113,18 @@ impl<'graph> Shapes<'graph> {
                 levels[body.segment().index() as usize].layout = layout;
             }
         }
-        Shapes {
+        let mut shapes = Shapes {
             bodies,
             parents,
             levels: collect(writer, levels.iter().copied()),
-        }
+            tails: &[],
+            memos: &[],
+        };
+        let tails = tails::tails(writer, scratch, &shapes);
+        shapes.tails = collect(writer, tails.iter().copied());
+        let memos = memos::memos(writer, scratch, &shapes);
+        shapes.memos = collect(writer, memos.iter().copied());
+        shapes
     }
 
     /// The program's own shape.
@@ -143,6 +161,14 @@ impl<'graph> Shapes<'graph> {
                 }
             }
         }
+    }
+
+    /// The body `hops` enclosers out from `segment`: `None` past the root.
+    pub fn up(&self, mut segment: Segment, hops: u32) -> Option<Segment> {
+        for _ in 0..hops {
+            segment = self.parent(segment)?.0;
+        }
+        Some(segment)
     }
 
     /// How many bodies enclose `segment`: `0` for the root.
@@ -442,5 +468,89 @@ impl<'graph> Table<'_, 'graph> {
                 ShapeKind::Program | ShapeKind::Code => return None,
             }
         }
+    }
+}
+
+impl Shapes<'_> {
+    /// Where `coordinate`, read in `segment`, lands once each capture is followed to its source;
+    /// `None` past the chain.
+    pub fn follow(&self, mut segment: Segment, mut coordinate: Coordinate) -> Option<Lands> {
+        loop {
+            let (hops, target) = match coordinate {
+                Coordinate::Builtin(index) => return Some(Lands::Builtin(index)),
+                Coordinate::Activation { hops, target } => (hops, target),
+            };
+            for _ in 0..hops {
+                segment = self.parent(segment)?.0;
+            }
+            let capture = match target {
+                Target::Local(slot) => return Some(Lands::Binder { segment, slot }),
+                Target::Capture(capture) => capture,
+            };
+            let shape = self.shape_at(segment);
+            let source = shape.captures().get(capture.index())?.source;
+            match source {
+                CaptureSource::Read(inner) => {
+                    (segment, coordinate) = (self.parent(segment)?.0, inner);
+                }
+                CaptureSource::Member { component, index } => {
+                    let outer = self.parent(segment)?.0;
+                    let members = self.shape_at(outer).components()[component.index()].members;
+                    return Some(Lands::Binder {
+                        segment: outer,
+                        slot: members[index as usize],
+                    });
+                }
+                CaptureSource::Hole => return Some(Lands::Hole { segment, capture }),
+                CaptureSource::Offered => return Some(Lands::Offered { segment, capture }),
+            }
+        }
+    }
+
+    /// Whether a frame of the callable `segment` may be born from anywhere: it is written in place,
+    /// born in a `MODULE` or `GROUP` body, or named as a value anywhere but a call's head.
+    pub fn escapes(&self, segment: Segment) -> bool {
+        self.tails[segment.index() as usize].escapes
+    }
+
+    /// The parameters of the callable `segment` a tail edge from it into itself passes anything but
+    /// that same parameter at, sorted.
+    pub fn rebound(&self, segment: Segment) -> &[Slot] {
+        self.tails[segment.index() as usize].rebound
+    }
+
+    /// The parameters of the callable `segment` every tail edge into it passes on bare, sorted:
+    /// empty where it escapes.
+    pub fn invariant(&self, segment: Segment) -> &[Slot] {
+        self.tails[segment.index() as usize].invariant
+    }
+}
+
+impl<'graph> Shapes<'graph> {
+    /// How many of `segment`'s slots keep a digest memo.
+    pub fn digested_count(&self, segment: Segment) -> usize {
+        self.memos[segment.index() as usize].digested.len()
+    }
+
+    /// Where `slot`'s digest memo sits among `segment`'s, if it keeps one.
+    pub fn digested_index(&self, segment: Segment, slot: Slot) -> Option<usize> {
+        (self.memos[segment.index() as usize].digested)
+            .binary_search(&slot)
+            .ok()
+    }
+
+    /// Where the captures of the module the `:|` at `site` of `segment` views keep their digest
+    /// memos, where it views a module binder read bare.
+    pub fn view_slots(&self, segment: Segment, site: Site) -> Option<ViewSlots<'graph>> {
+        (self.memos[segment.index() as usize].views)
+            .get(site)
+            .map(|(_, slots)| *slots)
+    }
+
+    /// The digested slots the call of `segment` keyed by `site` passes bare: empty where none.
+    pub fn handoffs(&self, segment: Segment, site: Site) -> &'graph [Handoff] {
+        (self.memos[segment.index() as usize].handoffs)
+            .get(site)
+            .map_or(&[], |(_, handed)| *handed)
     }
 }

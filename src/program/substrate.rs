@@ -232,7 +232,7 @@ impl CellSubstrate {
                 let program = resident(
                     writer,
                     Program::new(
-                        shape,
+                        shapes,
                         builtins,
                         tiers,
                         error,

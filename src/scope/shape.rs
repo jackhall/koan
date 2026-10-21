@@ -245,6 +245,8 @@ pub struct Mention {
     /// Whether the mention reads a fellow member of the component its own statement binds, with no
     /// callable between: a read the cyclic rule answers from the member's annotation alone.
     pub fellow: bool,
+    /// Whether the mention is a call's head: a callable it names is called there, not passed.
+    pub head: bool,
 }
 
 /// Where a mention's coordinate lands: a builtin, a binder of some body by its slot there, or an

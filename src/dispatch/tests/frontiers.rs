@@ -282,3 +282,62 @@ fn a_dollar_name_in_a_quote_waits_on_the_outer_binder_s_type() {
         assert!(seams_on(f, |at| at == SeamAt::Entry, elt));
     });
 }
+
+/// Whether every residual frontier of `program` seams where the shape table's bind sites say: the
+/// latest bind site among its unknowns declared around it is a seam of that body listing them all.
+fn seams_agree_with_bind_sites(program: &Program<'_>) -> Result<(), String> {
+    let shapes = program.shapes();
+    for shape in shapes.bodies() {
+        let around = |unknown: &Unknown| {
+            let mut at = Some(shape.segment());
+            while let Some(segment) = at {
+                if segment == unknown.segment {
+                    return true;
+                }
+                at = shapes.parent(segment).map(|(parent, _)| parent);
+            }
+            false
+        };
+        let residual = shape.channel_residual().entries().iter();
+        for (key, frontier) in residual.chain(shape.statics_residual().entries()) {
+            let Some(site) = (frontier.unknowns().iter())
+                .filter(|unknown| around(unknown))
+                .map(|unknown| shapes.bind_site(*unknown))
+                .max()
+            else {
+                continue;
+            };
+            let at = match site.unit.run_index() {
+                None => SeamAt::Entry,
+                Some(index) => SeamAt::Unit(index as u32),
+            };
+            let seamed = (shapes.shape_at(site.segment).seams().iter()).any(|seam| {
+                seam.at == at
+                    && (frontier.unknowns().iter()).all(|unknown| seam.waits_on.contains(*unknown))
+            });
+            if !seamed {
+                return Err(format!(
+                    "{key:?} of body {} seams at {site:?}, which lists no seam over {:?}",
+                    shape.segment().index(),
+                    frontier.unknowns()
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+proptest::proptest! {
+    #![proptest_config(proptest::prelude::ProptestConfig {
+        cases: crate::tests::case_share(1, 4),
+        ..proptest::prelude::ProptestConfig::default()
+    })]
+
+    /// While the passes' seams stand: every frontier's seam, folded from the shape table's bind
+    /// sites, is a seam the load lists.
+    #[test]
+    fn bind_site_agrees_with_seams(case in super::generate::resumable()) {
+        let agreed = loaded(&case.render(), seams_agree_with_bind_sites);
+        proptest::prop_assert!(agreed.is_ok(), "{:?} in\n{}", agreed, case.render());
+    }
+}
