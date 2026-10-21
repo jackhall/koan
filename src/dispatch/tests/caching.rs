@@ -820,6 +820,7 @@ fn two_loops_a_frame_asks_for_in_turn_leave_what_the_larger_leaves() {
         assert_eq!(both.printed, "0");
         assert_eq!(
             (both.tiers.agent, both.tiers.scratch),
+            // Each loop's binding rests once and outlives it; the two bindings share no node.
             (
                 one.tiers.agent + other.tiers.agent,
                 one.tiers.scratch.max(other.tiers.scratch)

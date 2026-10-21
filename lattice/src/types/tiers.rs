@@ -128,12 +128,6 @@ impl<'g> Grown<'g> {
     fn verdict_count(&self) -> usize {
         self.verdicts.get().map_or(0, DigestTable::len)
     }
-
-    fn each_digest(&self, mut each: impl FnMut(TypeDigest)) {
-        for node in self.nodes.borrow().iter() {
-            each(node.digest());
-        }
-    }
 }
 
 /// Record `verdict` in `verdicts` unless it holds one for `key`, laying the table through `lay` on
@@ -361,11 +355,6 @@ impl<'a> Agent<'a> {
     /// Whether the tier holds no node.
     pub fn is_empty(&self) -> bool {
         self.len() == 0
-    }
-
-    /// Every digest the tier holds, in no particular order. Tests read it — koan's among them.
-    pub fn each_digest(&self, each: impl FnMut(TypeDigest)) {
-        self.grown.each_digest(each);
     }
 
     /// How many verdicts the tier holds. Tests read it — koan's among them, through the `counters`
