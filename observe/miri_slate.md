@@ -105,20 +105,23 @@ buffers live in a scratch region the caller hands it.
 - `a_record_is_order_blind_in_identity_and_ordered_in_presentation`
   a registry whose own region
   doubles as its scratch: the relation's buffer and the nodes it reads share one bump.
-- `the_table_is_laid_once_and_never_grows`
-  the verdict table laid in the registry's bump on its first record, and a hundred keys through
-  one two-slot bucket, every slot written back in place.
-- `a_late_link_reads_through_to_its_home`
-  a branch laid and holding a node, then linked to a home in another region: both nodes resolved
-  by handle, one of them through a link set after its branch's table was laid.
+- `the_loads_verdict_table_keeps_every_verdict`
+  the load's verdict table grown in the registry's bump past four thousand keys, laid into a
+  frozen slot run at the freeze, and every key read back through a run chain.
+- `an_agent_tier_hands_out_nodes_that_never_move`
+  a node laid alone in the agent tier's bump, then a thousand more through the same chain, which
+  grow the tier's index; the first node's reference still reads where it was laid.
 
 **Tied component** ([lattice/src/types/component.rs](../lattice/src/types/component.rs)) — a
 sealed component laid in the registry's region over its relative member table, repointed once at
-the absolute table its seal rewrote, and read through a lifetime-erased slice pointer.
+the absolute table its seal rewrote, and read through a lifetime-erased atomic pointer beside a fixed length.
 
 - `a_seal_keys_each_component_as_it_would_alone`
   two components sealed in one group, each re-sealed alone onto its existing nodes, and every
   member's absolute schema read back through its component's table, the cyclic edge included.
+- `a_frozen_load_reads_alike_from_two_threads`
+  a load holding a record, a union, a function type and a sealed two-member group, frozen, then
+  read from two scoped threads at once: every member table read through its atomic pointer.
 
 **Program-region AST** ([src/parse/ast/program.rs](../src/parse/ast/program.rs)) — every name
 and every parts run the parser produces is written into program storage through the doors here, and
@@ -309,7 +312,7 @@ through `peek` between steps.
   header, read by two frames through their lent region and by none that borrows no region.
 - `a_missed_specialization_holds_its_bindings_nodes_and_a_frame_reads_them_after_the_asker_is_gone`
   a new specialization's entry, opened beside its asker, laying the binding's nodes from the
-  asker's region into its own branch, read by a frame after the asker's region is gone.
+  asker's region into the agent tier, read by a frame after the asker's region is gone.
 - `a_parent_past_its_bound_releases_its_least_recently_born_child`
   the drain writing a parent's books through `peek` between steps — a hit's stamp, a new child's
   entry and home — under the root's table and a specialization's own, its victims released and an
@@ -319,22 +322,23 @@ through `peek` between steps.
   the dead parent, and a test's eviction releasing a subtree.
 - `an_evicted_specialization_a_shares_frame_borrowed_waits_on_its_hosts_scratch`
   a tenant lent a specialization's region parks, the specialization is evicted under it, and the
-  tenant wakes and reads what it laid there; the region goes only once the host's scratch resets.
+  tenant wakes and reads what it laid in the agent tier; the region goes only once the host's
+  scratch resets.
 - `a_shares_loop_seeks_its_specialization_once_and_a_second_park_finds_it_warm`
-  a keyed `Shares` body interning into its lent branch over its host's scratch at two parks, the
-  second reading the types and verdicts the first laid.
-- `a_keyed_shares_call_links_a_host_scratch_laid_before_it`
-  a host's scratch branch laid unlinked, then linked late to the host's region by a keyed tenant's
-  reading chain, and read through that link.
+  a keyed `Shares` body adopting its invariant sites into the agent tier over its host's scratch at
+  two parks, the second reading the types and verdicts the first laid.
+- `a_keyed_shares_call_runs_beside_a_host_scratch_laid_before_it`
+  a host's scratch branch laid by an unkeyed tenant's caching chain, then read by a keyed tenant's
+  caching chain over the host's region and the agent tier.
 
 ## Recent full-slate run durations
 
 Prepended by `python3 tools/miri.py --log` on a clean run, trimmed to five.
 
 <!-- slate-durations:start -->
+- 2026-10-20: 1123s — 46 tests, 0 leaks, 0 UB
 - 2026-10-18: 1028s — 45 tests, 0 leaks, 0 UB
 - 2026-10-18: 643s — 44 tests, 0 leaks, 0 UB
 - 2026-10-18: 872s — 42 tests, 0 leaks, 0 UB
 - 2026-10-17: 596s — 42 tests, 0 leaks, 0 UB
-- 2026-10-17: 671s — 42 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->
