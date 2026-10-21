@@ -1,6 +1,7 @@
-//! The build module's tests: a specialization's key, and the import boundary.
+//! The build module's tests: a specialization's key, the load's store, and the import boundary.
 
 mod boundary;
+mod load;
 
 use crate::scope::Segment;
 use crate::values::ContentDigest;

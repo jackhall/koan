@@ -48,6 +48,11 @@ impl<T> Deref for Keyed<'_, T> {
     }
 }
 
+impl<T> Keyed<'_, T> {
+    /// The table with no entry.
+    pub const EMPTY: Self = Keyed(&[]);
+}
+
 impl<'a, T: KeyedEntry> Keyed<'a, T> {
     /// `entries`, already sorted by key.
     pub(crate) fn from_sorted(entries: &'a [T]) -> Self {

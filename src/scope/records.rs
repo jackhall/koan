@@ -21,7 +21,7 @@ use crate::symbols::TypeSymbol;
 use crate::type_lattice::{DeclaredType, Interval, KType, Parametric};
 use crate::values::Chain;
 
-use super::facts::{Frontier, UnitId};
+use super::facts::{Binding, Frontier, UnitId};
 use super::keyed::Keyed;
 use super::shape::{BodyShape, Coordinate, Segment, ShapeError, Site, Slot, Target, in_body_of};
 use super::shapes::Shapes;
@@ -88,6 +88,42 @@ pub struct Typed<'a> {
     /// Whether an inline body has a porous exit, and how many sites it mints at run.
     pub exits: bool,
     pub mints: u32,
+}
+
+impl Typed<'_> {
+    /// A body's facts where a unit fixed none.
+    pub const EMPTY: Self = Typed {
+        declared: Keyed::EMPTY,
+        registered: Keyed::EMPTY,
+        expressions: Keyed::EMPTY,
+        reads: Keyed::EMPTY,
+        parts: Keyed::EMPTY,
+        statements: Keyed::EMPTY,
+        binders: Keyed::EMPTY,
+        settled: Keyed::EMPTY,
+        instances: Keyed::EMPTY,
+        uses: Keyed::EMPTY,
+        selections: Keyed::EMPTY,
+        by_name: Keyed::EMPTY,
+        trees: Keyed::EMPTY,
+        contents: Keyed::EMPTY,
+        minting: Keyed::EMPTY,
+        throughs: Keyed::EMPTY,
+        signature: None,
+        exits: false,
+        mints: 0,
+    };
+}
+
+impl UnitFacts<'_> {
+    /// A unit's record where it fixed nothing.
+    pub const EMPTY: Self = UnitFacts {
+        typed: Keyed::EMPTY,
+        born: Keyed::EMPTY,
+        paths: Keyed::EMPTY,
+        sites: &[],
+        named_variables: &[],
+    };
 }
 
 /// A callable or a quote's code, as the unit that births it typed it. Its registration is its
@@ -190,8 +226,11 @@ enum Backend<'graph> {
 }
 
 /// One walk's records, over its base's where it has one.
+#[derive(Clone, Copy)]
 struct Records<'graph> {
     base: Option<&'graph LoadFacts<'graph>>,
+    /// What the walk bound: the base's binding and more.
+    binding: Binding<'graph>,
     /// Each unit the walk ran, beside its record and the frontier it gathered.
     units: Keyed<'graph, (UnitId, (&'graph UnitFacts<'graph>, Frontier<'graph>))>,
     /// Each owning body the walk closed.
@@ -243,17 +282,20 @@ impl<'graph> LoadFacts<'graph> {
     }
 
     /// One walk's records over `shapes`, laid through `lay`, over `base` where the walk resumed
-    /// one. `folds`, by segment, is empty where the load has not folded the records yet.
+    /// one under `binding`. `folds`, by segment, is empty where the load has not folded the records
+    /// yet.
+    #[allow(clippy::too_many_arguments)]
     pub fn of_records(
         lay: impl Lays<'graph>,
         scratch: BumpAllocator<'_>,
         shapes: &'graph Shapes<'graph>,
         base: Option<&'graph LoadFacts<'graph>>,
+        binding: Binding<'graph>,
         units: &mut [(UnitId, (&'graph UnitFacts<'graph>, Frontier<'graph>))],
         closings: &mut [(Segment, (&'graph Closing<'graph>, Frontier<'graph>))],
         folds: &[Folds<'graph>],
     ) -> Self {
-        debug_assert!(folds.is_empty() || folds.len() == shapes.bodies().len());
+        debug_assert!(base.is_none_or(|base| binding.extends(base.binding())));
         let units = Keyed::sorted(lay, units);
         let mut held = BumpVec::new_in(scratch);
         for (at, (_, (facts, _))) in units.iter().enumerate() {
@@ -265,6 +307,28 @@ impl<'graph> LoadFacts<'graph> {
             held.windows(2).all(|pair| pair[0].0 != pair[1].0),
             "each fact lies in one unit's record"
         );
+        let records = Records {
+            base,
+            binding,
+            units,
+            closings: Keyed::sorted(lay, closings),
+            index: Keyed::from_sorted(collect(lay, held.iter().copied())),
+            bodies: &[],
+        };
+        LoadFacts {
+            shapes,
+            backend: Backend::Records(resident(lay, records)),
+        }
+        .folded(lay, folds)
+    }
+
+    /// These records beside `folds`, by segment: none where it is empty.
+    pub fn folded(&self, lay: impl Lays<'graph>, folds: &[Folds<'graph>]) -> Self {
+        let Backend::Records(records) = self.backend else {
+            panic!("only a walk's records fold");
+        };
+        let shapes = self.shapes;
+        debug_assert!(folds.is_empty() || folds.len() == shapes.bodies().len());
         let bodies = shapes.bodies();
         let all: &[bool] = lay.fill(
             (bodies
@@ -287,16 +351,17 @@ impl<'graph> LoadFacts<'graph> {
                 folds,
             }
         });
-        let records = Records {
-            base,
-            units,
-            closings: Keyed::sorted(lay, closings),
-            index: Keyed::from_sorted(collect(lay, held.iter().copied())),
-            bodies,
-        };
         LoadFacts {
             shapes,
-            backend: Backend::Records(resident(lay, records)),
+            backend: Backend::Records(resident(lay, Records { bodies, ..*records })),
+        }
+    }
+
+    /// What the load's walk bound: nothing under `Cells`, or at the load.
+    pub fn binding(&self) -> Binding<'graph> {
+        match self.backend {
+            Backend::Cells { .. } => Binding::EMPTY,
+            Backend::Records(records) => records.binding,
         }
     }
 
@@ -751,7 +816,11 @@ impl<'graph> Records<'graph> {
 
     /// The folds of `body`: this load's, else its base's.
     fn folds(&self, body: Segment) -> Option<Folds<'graph>> {
-        match self.bodies[body.index() as usize].folds {
+        match self
+            .bodies
+            .get(body.index() as usize)
+            .and_then(|laid| laid.folds)
+        {
             Some(folds) => Some(folds),
             None => match self.base?.backend {
                 Backend::Records(base) => base.folds(body),

@@ -204,6 +204,41 @@ pub(super) fn with_fixture<R>(test: impl for<'f, 'graph> FnOnce(&Fixture<'f, 'gr
     })
 }
 
+/// The shape table of `source` over the suites' builtin table, handed to `test` beside a writer
+/// into program storage, a scratch and the load's chain: for a suite outside `scope` that needs
+/// shapes and names no parser.
+pub(crate) fn with_shapes<R>(
+    source: &str,
+    test: impl for<'graph> FnOnce(
+        &'graph Shapes<'graph>,
+        Writer<'graph, 'graph>,
+        BumpAllocator<'_>,
+        &Types<'graph, '_>,
+    ) -> R,
+) -> R {
+    with_fixture(|fixture| {
+        let lines = fixture.parse(source);
+        fixture.in_cell(|writer, _| {
+            let table: &Builtins = builtins(fixture, writer);
+            let shapes = Shapes::of_program(
+                fixture.program,
+                &lines,
+                table,
+                fixture.types,
+                fixture.symbols,
+                fixture.scratch(),
+            )
+            .unwrap_or_else(|error| panic!("`{source}` shapes: {error:?}"));
+            test(
+                shapes,
+                fixture.program.writer(),
+                fixture.scratch(),
+                fixture.types,
+            )
+        })
+    })
+}
+
 /// The value builtins every suite's table holds.
 pub(super) const BUILTIN_VALUES: &[&str] = &["origin"];
 

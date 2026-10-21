@@ -43,6 +43,7 @@ mod signature;
 mod spelling;
 mod tree;
 mod typed;
+mod writes;
 
 #[cfg(test)]
 pub(crate) mod tests;
@@ -83,3 +84,4 @@ pub use typed::{
     StaticCallable, StaticRegistered, StaticSolution, StaticType, Statics, UseStatics, Variable,
     ViewSlots, solutions,
 };
+pub use writes::Writes;

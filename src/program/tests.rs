@@ -4,6 +4,7 @@
 mod boundary;
 mod evaluator;
 mod programs;
+pub(crate) mod stores;
 mod substrate;
 
 use std::cell::RefCell;
