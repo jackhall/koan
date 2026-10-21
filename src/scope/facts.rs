@@ -1,12 +1,18 @@
 //! The vocabulary of the solver's type facts: what a load-time fact waits on, and the binding
-//! that wakes it ([the build module's design](../../build/README.md#type-facts-and-the-solver)).
+//! that wakes it ([the build module's design](../build/README.md#type-facts-and-the-solver)).
 //!
 //! A **fact** is one write-once load-time cell — a type channel cell or a value channel entry —
 //! and the rule that computes it runs at one [`FactKey`] of one shape. Every fact a rule run
 //! writes at its key shares one [`Frontier`]: the [`Unknown`]s that could change it, read
 //! transitively. A fact with an empty frontier is **fixed**; the others, each beside its frontier,
-//! are the shape's [`Residual`]. A [`Binding`] gives some unknowns closed types, and **wakes**
+//! are the shape's [`Residual`]. A [`OldBinding`] gives some unknowns closed types, and **wakes**
 //! every fact whose frontier meets it.
+//!
+//! The one-walk build keys its facts by unit instead ([`UnitId`]): one record per unit, beside
+//! the frontier the unit gathered, kept in a [`Store`]. Its [`Binding`] gives each unknown a
+//! [`Bound`]: a closed type, or for a module binder a closed content tree. [`OldBinding`] and the
+//! per-fact vocabulary go with the passes that use them
+//! ([the one-walk build](../../roadmap/gradual-build/one-walk-build.md)).
 //!
 //! An unknown is named by its **lexical address** — the segment of the body that declares it and
 //! the slot or capture its activation holds it at — never by its symbol or its lattice node, since
@@ -17,8 +23,10 @@
 use crate::memory::{BumpVec, Lays, collect};
 use crate::type_lattice::KType;
 
-use super::super::keyed::Keyed;
-use super::{CaptureSlot, Segment, Site, Slot};
+use super::keyed::Keyed;
+use super::records::{Closing, UnitFacts};
+use super::shape::{CaptureSlot, Segment, ShapeError, Site, Slot, UnitIndex};
+use super::tree::Tree;
 
 /// Where a body's activation holds an unknown: a slot, or — for a name a quote's code is run
 /// with — a capture.
@@ -71,9 +79,19 @@ impl<'a> Frontier<'a> {
     }
 
     /// Whether `binding` gives a type to some unknown here: whether it wakes the fact.
-    pub fn meets(self, binding: Binding<'_>) -> bool {
-        let (mut mine, mut bound) = (self.0.iter().peekable(), binding.0.iter().peekable());
-        while let (Some(unknown), Some((other, _))) = (mine.peek(), bound.peek()) {
+    pub fn meets(self, binding: OldBinding<'_>) -> bool {
+        self.meets_sorted(binding.0.iter().map(|(unknown, _)| *unknown))
+    }
+
+    /// Whether `binding` binds some unknown here: whether it wakes the unit's record.
+    pub fn meets_binding(self, binding: Binding<'_>) -> bool {
+        self.meets_sorted(binding.0.iter().map(|(unknown, _)| *unknown))
+    }
+
+    /// Whether some unknown of the sorted run `bound` is here.
+    fn meets_sorted(self, bound: impl Iterator<Item = Unknown>) -> bool {
+        let (mut mine, mut bound) = (self.0.iter().peekable(), bound.peekable());
+        while let (Some(unknown), Some(other)) = (mine.peek(), bound.peek()) {
             match (*unknown).cmp(other) {
                 std::cmp::Ordering::Less => _ = mine.next(),
                 std::cmp::Ordering::Greater => _ = bound.next(),
@@ -164,11 +182,11 @@ pub fn frontier_at<'a>(residual: Residual<'a>, key: FactKey) -> Frontier<'a> {
 /// Some unknowns, each beside the closed type a binding gives it, sorted by unknown: a type for a
 /// type name, and the exact type a module binder carries for a module unknown.
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
-pub struct Binding<'a>(&'a [(Unknown, KType)]);
+pub struct OldBinding<'a>(&'a [(Unknown, KType)]);
 
-impl<'a> Binding<'a> {
+impl<'a> OldBinding<'a> {
     /// The binding that binds nothing.
-    pub const EMPTY: Binding<'static> = Binding(&[]);
+    pub const EMPTY: OldBinding<'static> = OldBinding(&[]);
 
     /// `staged`, sorted and laid down through `lay`. Each unknown is bound once.
     pub fn laid(lay: impl Lays<'a>, staged: &mut BumpVec<'_, (Unknown, KType)>) -> Self {
@@ -177,7 +195,7 @@ impl<'a> Binding<'a> {
             staged.windows(2).all(|pair| pair[0].0 != pair[1].0),
             "a binding binds each unknown once"
         );
-        Binding(collect(lay, staged.iter().copied()))
+        OldBinding(collect(lay, staged.iter().copied()))
     }
 
     /// The type `unknown` is bound to, where it is bound.
@@ -198,9 +216,116 @@ impl<'a> Binding<'a> {
     }
 
     /// Whether this binding binds every unknown `other` binds, each to the same type.
-    pub fn extends(self, other: Binding<'_>) -> bool {
+    pub fn extends(self, other: OldBinding<'_>) -> bool {
         (other.0.iter()).all(|(unknown, bound)| self.bound(*unknown) == Some(*bound))
     }
+}
+
+/// One unit of one owning body: what the one-walk build keeps one record for.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub struct UnitId {
+    pub segment: Segment,
+    pub unit: UnitIndex,
+}
+
+/// What a [`Binding`] gives an unknown.
+#[derive(Clone, Copy, Debug)]
+pub enum Bound<'a> {
+    /// A type-ish name: a `FOR ALL` name, a `:Type` parameter, a surfaced name, a type binder.
+    Type(KType),
+    /// A module binder: the closed content tree the load computes, and the exact type it carries.
+    Module { carried: KType, tree: &'a Tree<'a> },
+}
+
+impl<'a> Bound<'a> {
+    /// Whether the two give one meaning: one type, or one carried type over one content.
+    pub fn same_as(&self, other: &Bound<'a>) -> bool {
+        match (self, other) {
+            (Bound::Type(mine), Bound::Type(theirs)) => mine == theirs,
+            (
+                Bound::Module { carried, tree },
+                Bound::Module {
+                    carried: other,
+                    tree: theirs,
+                },
+            ) => carried == other && tree.same_as(theirs),
+            _ => false,
+        }
+    }
+}
+
+/// Some unknowns, each beside what a binding gives it, sorted by unknown and each bound once.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Binding<'a>(&'a [(Unknown, Bound<'a>)]);
+
+impl<'a> Binding<'a> {
+    /// The binding that binds nothing.
+    pub const EMPTY: Binding<'static> = Binding(&[]);
+
+    /// `staged`, sorted and laid down through `lay`. Each unknown is bound once.
+    pub fn laid(lay: impl Lays<'a>, staged: &mut BumpVec<'_, (Unknown, Bound<'a>)>) -> Self {
+        staged.sort_unstable_by_key(|(unknown, _)| *unknown);
+        debug_assert!(
+            staged.windows(2).all(|pair| pair[0].0 != pair[1].0),
+            "a binding binds each unknown once"
+        );
+        Binding(collect(lay, staged.iter().copied()))
+    }
+
+    /// What `unknown` is bound to, where it is bound.
+    pub fn bound(self, unknown: Unknown) -> Option<Bound<'a>> {
+        let at = self
+            .0
+            .binary_search_by_key(&unknown, |(held, _)| *held)
+            .ok()?;
+        Some(self.0[at].1)
+    }
+
+    pub fn entries(self) -> &'a [(Unknown, Bound<'a>)] {
+        self.0
+    }
+
+    pub fn is_empty(self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// Whether this binding binds every unknown `other` binds, each to the same meaning.
+    pub fn extends(self, other: Binding<'_>) -> bool {
+        (other.0.iter()).all(|(unknown, theirs)| {
+            self.bound(*unknown)
+                .is_some_and(|mine| mine.same_as(theirs))
+        })
+    }
+}
+
+/// Where the one-walk build keeps one walk's records, and what it binds: the walk reads and writes
+/// every unit's record through it, and never names where they rest
+/// ([the store](../../roadmap/gradual-build/one-walk-build.md)). The load's store keeps the load's
+/// records; a test's store layers a resumption's over them.
+pub trait Store<'o> {
+    /// Where every record a unit keeps is laid.
+    type Lay: Lays<'o> + Copy;
+
+    fn lay(&self) -> Self::Lay;
+
+    /// What the binding gives `unknown`, where it binds it.
+    fn binding(&self, unknown: Unknown) -> Option<Bound<'o>>;
+
+    /// The newest record of `unit` beside its frontier: this walk's write, else a base layer's.
+    fn fact(&self, unit: UnitId) -> Option<(&'o UnitFacts<'o>, Frontier<'o>)>;
+
+    /// The newest closing record of the owning body `body`, beside its frontier.
+    fn close(&self, body: Segment) -> Option<(&'o Closing<'o>, Frontier<'o>)>;
+
+    /// Whether a record whose frontier is `frontier` re-runs under this store's binding.
+    fn wakes(&self, frontier: Frontier<'_>) -> bool;
+
+    fn write(&self, unit: UnitId, facts: &'o UnitFacts<'o>, frontier: Frontier<'o>);
+
+    fn write_close(&self, body: Segment, closing: &'o Closing<'o>, frontier: Frontier<'o>);
+
+    /// A refusal the walk reached: the store's chance to word it, before the walk returns it.
+    fn refuse(&self, error: ShapeError<'o>) -> ShapeError<'o>;
 }
 
 /// Where in a body a seam lies: at its entry, or at a unit, by index into the body's units — the

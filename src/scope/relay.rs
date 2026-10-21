@@ -22,9 +22,9 @@ use crate::memory::{BumpAllocator, BumpBackedMap, BumpVec, Writer, bump_table, c
 use crate::type_lattice::{DeclaredType, Habitat, Halves, Interval, Parametric, TypeChain};
 use crate::values::{Half, Types};
 
+use super::facts::{Frontier, OldBinding, Residual};
 use super::keyed::Keyed;
 use super::settled::{ChannelSettled, Settled, StaticsSettled};
-use super::shape::facts::{Binding, Frontier, Residual};
 use super::shape::{Coordinate, ShapeError, Site, Slot, Target};
 use super::tree::{KnotNode, Leaf, NodeCapture, Tree, Unfolded, Within};
 use super::typed::{
@@ -160,12 +160,12 @@ impl<'out, 'w, 'from, H: Habitat<'from>> Relay<'out, 'w, 'from, H> {
         self.keyed(residual, |frontier| self.frontier(*frontier))
     }
 
-    pub fn binding(&self, binding: Binding<'_>) -> Binding<'out> {
+    pub fn binding(&self, binding: OldBinding<'_>) -> OldBinding<'out> {
         let mut staged = BumpVec::with_capacity_in(binding.entries().len(), self.scratch);
         staged.extend(
             (binding.entries().iter()).map(|(unknown, bound)| (*unknown, self.handle(*bound))),
         );
-        Binding::laid(self.writer, &mut staged)
+        OldBinding::laid(self.writer, &mut staged)
     }
 
     fn statically<'a, C, R, C2, R2>(

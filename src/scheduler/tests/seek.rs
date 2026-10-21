@@ -16,7 +16,7 @@ use crate::scheduler::{
     Action, EVICT_BEFORE_STEP, Placement, Scheduler, Seek, Step, StepError, TIERS, Tiers, Use,
     WATCH_LOG, WATCHED, Watched, Work,
 };
-use crate::scope::{Binding, Settled};
+use crate::scope::{OldBinding, Settled};
 use crate::type_lattice::{KType, TypeNode};
 use crate::values::digest::{DigestHasher, Tag};
 use crate::values::{BuildRef, KeyedTypes, SpecBinding, SpecBounds, SpecKey};
@@ -180,7 +180,7 @@ fn a_missed_specialization_is_built_once_and_found_warm_by_the_next_birth() {
 /// A specialization's step that settles facts: lay an empty record in its region, and enlist
 /// with it.
 fn settling<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
-    let settled = &step.writer().fill(1, |_| Settled::empty(Binding::EMPTY))[0];
+    let settled = &step.writer().fill(1, |_| Settled::empty(OldBinding::EMPTY))[0];
     SETTLED.with(|laid| laid.borrow_mut().push(Some(ptr::from_ref(settled).addr())));
     step.enlist(Some(settled))
 }

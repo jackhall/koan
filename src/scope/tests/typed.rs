@@ -5,8 +5,8 @@
 
 use crate::parse::ExpressionPart;
 use crate::scope::{
-    Builtins, PathEntry, Resolution, Settled, ShapeFacts, Site, Static, StaticType, Statics, Tree,
-    source_of,
+    Binding, Born, Bound, Builtins, Closing, Folds, PathEntry, Resolution, Settled, ShapeFacts,
+    Site, SiteDeps, Static, StaticType, Statics, Tree, Typed, UnitFacts, source_of,
 };
 
 use super::{builtins, with_fixture};
@@ -47,6 +47,46 @@ fn a_tree_shortens<'short, 'long: 'short>(x: Tree<'long>) -> Tree<'short> {
 
 #[allow(dead_code)]
 fn a_path_entry_shortens<'short, 'long: 'short>(x: PathEntry<'long>) -> PathEntry<'short> {
+    x
+}
+
+#[allow(dead_code)]
+fn unit_facts_shorten<'short, 'long: 'short>(x: UnitFacts<'long>) -> UnitFacts<'short> {
+    x
+}
+
+#[allow(dead_code)]
+fn typed_shortens<'short, 'long: 'short>(x: Typed<'long>) -> Typed<'short> {
+    x
+}
+
+#[allow(dead_code)]
+fn born_shortens<'short, 'long: 'short>(x: Born<'long>) -> Born<'short> {
+    x
+}
+
+#[allow(dead_code)]
+fn a_closing_shortens<'short, 'long: 'short>(x: Closing<'long>) -> Closing<'short> {
+    x
+}
+
+#[allow(dead_code)]
+fn folds_shorten<'short, 'long: 'short>(x: Folds<'long>) -> Folds<'short> {
+    x
+}
+
+#[allow(dead_code)]
+fn site_deps_shorten<'short, 'long: 'short>(x: SiteDeps<'long>) -> SiteDeps<'short> {
+    x
+}
+
+#[allow(dead_code)]
+fn bound_shortens<'short, 'long: 'short>(x: Bound<'long>) -> Bound<'short> {
+    x
+}
+
+#[allow(dead_code)]
+fn a_binding_shortens<'short, 'long: 'short>(x: Binding<'long>) -> Binding<'short> {
     x
 }
 

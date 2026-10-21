@@ -4,12 +4,12 @@
 //!
 //! A resumption writes beside the load's write-once cells, never into them, so a fact reads as
 //! the newest resumption that re-ran it, else as the load left it. The vocabulary these records
-//! name — unknowns, frontiers, residuals, bindings — is [`facts`](super::shape::facts)'s.
+//! name — unknowns, frontiers, residuals, bindings — is [`facts`](super::facts)'s.
 
 use crate::type_lattice::{KType, Parametric};
 
+use super::facts::{Frontier, OldBinding, Residual, Unknown};
 use super::keyed::Keyed;
-use super::shape::facts::{Binding, Frontier, Residual, Unknown};
 use super::shape::{Segment, ShapeError, Site, Slot};
 use super::typed::{
     Resolution, ShapeFacts, StaticCallable, StaticRegistered, StaticSolution, StaticType, Statics,
@@ -43,7 +43,7 @@ pub struct StaticsSettled<'a> {
 /// resumption it extends left it, and as the load left it below them all.
 #[derive(Clone, Copy)]
 pub struct Settled<'a> {
-    pub binding: Binding<'a>,
+    pub binding: OldBinding<'a>,
     pub channel: Keyed<'a, (Segment, ChannelSettled<'a>)>,
     pub statics: Keyed<'a, (Segment, StaticsSettled<'a>)>,
     /// Each body's own facts as a whole, where one of them re-ran.
@@ -60,7 +60,7 @@ pub struct Settled<'a> {
 
 impl<'a> Settled<'a> {
     /// A resumption under `binding` that settled nothing yet.
-    pub fn empty(binding: Binding<'a>) -> Self {
+    pub fn empty(binding: OldBinding<'a>) -> Self {
         Settled {
             binding,
             channel: Keyed::from_sorted(&[]),
@@ -79,7 +79,7 @@ impl<'a> Settled<'a> {
 /// law that quiescence is exact compares it with.
 #[derive(Clone, Copy)]
 pub struct Resumption<'held, 'a> {
-    pub binding: Binding<'a>,
+    pub binding: OldBinding<'a>,
     pub base: &'held [&'a Settled<'a>],
     pub everything: bool,
 }
@@ -96,7 +96,7 @@ impl<'held, 'a> Resumption<'held, 'a> {
         let prior = self
             .base
             .first()
-            .map_or(Binding::EMPTY, |base| base.binding);
+            .map_or(OldBinding::EMPTY, |base| base.binding);
         self.everything
             || (frontier.unknowns().iter())
                 .any(|unknown| self.bound(*unknown).is_some() && prior.bound(*unknown).is_none())

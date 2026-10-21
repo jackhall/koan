@@ -5,7 +5,7 @@
 //! An unknown binds where its declaring body binds it: a callable's parameter, `FOR ALL` name or
 //! `:Type` parameter and a quote's code's hole, mark or `$` name at that body's entry; a type
 //! binder or a local at the unit that binds it; and a `USING … SCOPE` block's surfaced name at
-//! the unit holding the `USING`. Binding order follows the lexical chain — an outer body before
+//! the unit holding the `USING`. OldBinding order follows the lexical chain — an outer body before
 //! an inner one, and in a body its entry before its units in order — so a frontier's seam is the
 //! latest of its members' sites. Each body's **reach**, every unknown a fact of it or of a body nested in it waits on —
 //! its own facts as a whole among them — is laid beside its seams.

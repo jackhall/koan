@@ -11,7 +11,7 @@ use crate::symbols::{BinderSymbol, SymbolInterner};
 use crate::values::{Chain, Knotted};
 
 use super::builtins::Builtins;
-use super::shape::facts::{Address, Unknown};
+use super::facts::{Address, Unknown};
 use super::shape::{
     BodyShape, CaptureSlot, CaptureSource, Coordinate, Lands, PathId, Position, Segment,
     ShapeError, ShapeKind, Site, Slot, Target, UnitIndex,

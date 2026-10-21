@@ -3,7 +3,7 @@
 use crate::memory::{Bump, BumpVec, program_storage};
 use crate::type_lattice::KType;
 
-use super::super::{Address, Binding, Frontier, Segment, Slot, Unknown, merge_into};
+use super::super::{Address, Frontier, OldBinding, Segment, Slot, Unknown, merge_into};
 
 fn unknown(segment: u32, slot: u32) -> Unknown {
     Unknown {
@@ -50,14 +50,14 @@ fn a_binding_wakes_exactly_the_frontiers_naming_what_it_binds() {
     let frontier = Frontier::laid(writer, &mut staged);
     let mut bound = BumpVec::new_in(&scratch);
     bound.extend([(unknown(2, 0), KType::NUMBER), (unknown(0, 0), KType::STR)]);
-    let binding = Binding::laid(writer, &mut bound);
+    let binding = OldBinding::laid(writer, &mut bound);
     assert!(frontier.meets(binding));
     assert!(!Frontier::EMPTY.meets(binding));
     let mut apart = BumpVec::new_in(&scratch);
     apart.extend([(unknown(1, 2), KType::NUMBER)]);
-    assert!(!frontier.meets(Binding::laid(writer, &mut apart)));
+    assert!(!frontier.meets(OldBinding::laid(writer, &mut apart)));
     assert_eq!(binding.bound(unknown(0, 0)), Some(KType::STR));
     assert_eq!(binding.bound(unknown(1, 3)), None);
-    assert!(!binding.extends(Binding::laid(writer, &mut apart)));
-    assert!(binding.extends(Binding::EMPTY));
+    assert!(!binding.extends(OldBinding::laid(writer, &mut apart)));
+    assert!(binding.extends(OldBinding::EMPTY));
 }

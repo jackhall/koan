@@ -15,7 +15,7 @@ use crate::parse::parse_with_path;
 use crate::scheduler::{
     DrainStalled, Graph, NativeStep, Placement, Resting, Roots, Scheduler, Work,
 };
-use crate::scope::{Binding, BodyShape, Relay, Resumption, Settled, ShapeError, Unknown};
+use crate::scope::{BodyShape, OldBinding, Relay, Resumption, Settled, ShapeError, Unknown};
 use crate::symbols::SymbolInterner;
 use crate::type_lattice::{Agent, Halves, KType, RootBuilder};
 use crate::values::{Chain, Half, SpecBounds, TypeTiers, Types};
@@ -296,10 +296,10 @@ impl<'graph, 'l, 'door, L: Language> Loaded<'graph, 'l, 'door, L> {
     }
 
     /// `staged`, laid down as a binding.
-    pub fn binding(&self, staged: &[(Unknown, KType)]) -> Binding<'graph> {
+    pub fn binding(&self, staged: &[(Unknown, KType)]) -> OldBinding<'graph> {
         let mut held = BumpVec::with_capacity_in(staged.len(), self.scratch);
         held.extend_from_slice(staged);
-        Binding::laid(self.writer, &mut held)
+        OldBinding::laid(self.writer, &mut held)
     }
 
     /// Resume the load under `binding`, extending `base`, the resumptions before it, newest
@@ -308,7 +308,7 @@ impl<'graph, 'l, 'door, L: Language> Loaded<'graph, 'l, 'door, L> {
     pub fn resume(
         &self,
         base: &[&'graph Settled<'graph>],
-        binding: Binding<'graph>,
+        binding: OldBinding<'graph>,
         everything: bool,
     ) -> Result<&'graph Settled<'graph>, ShapeError<'graph>> {
         if let Some(newest) = base.first() {

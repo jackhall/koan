@@ -23,8 +23,8 @@ use crate::type_lattice::{DeclaredType, Interval, KType, Parametric, Verdict, di
 use crate::values::{Chain, KnottedFamily, Value};
 
 use super::activation::ActivationView;
+use super::facts::Frontier;
 use super::keyed::Keyed;
-use super::shape::facts::Frontier;
 use super::shape::{Candidate, Coordinate, Segment, Site, Slot};
 use super::tree::{Binder, Tree};
 

@@ -433,7 +433,7 @@ mod laws {
     use crate::parse::{ExpressionPart, KExpression};
     use crate::program::{CellSubstrate, LoadError, Loaded};
     use crate::scope::{
-        Address, Binding, BodyShape, CandidateList, Narrowing, Settled, ShapeKind, Site, Slot,
+        Address, BodyShape, CandidateList, Narrowing, OldBinding, Settled, ShapeKind, Site, Slot,
         Static, Statics, Target, Unknown, each_part,
     };
     use crate::symbols::{BinderSymbol, SymbolInterner};
@@ -467,7 +467,7 @@ mod laws {
 
     /// The binding `bound` gives, read off the load: each unknown at its slot of `SUBJECT`, each
     /// type off the alias the program declares it under.
-    fn binding<'g>(loaded: &Loaded<'g, '_, '_, Koan>, bound: &Bound) -> Binding<'g> {
+    fn binding<'g>(loaded: &Loaded<'g, '_, '_, Koan>, bound: &Bound) -> OldBinding<'g> {
         let (symbols, root) = (loaded.symbols(), loaded.shape());
         let body = subject(root);
         let mut staged = Vec::new();
@@ -824,7 +824,7 @@ mod laws {
 
     /// How many facts of `shape` and the shapes nested in it `binding` wakes: the type channel's
     /// and the value channel's.
-    fn woken(shape: &BodyShape<'_>, binding: Binding<'_>) -> (u32, u32) {
+    fn woken(shape: &BodyShape<'_>, binding: OldBinding<'_>) -> (u32, u32) {
         let mut counted = (0, 0);
         for (_, frontier) in shape.channel_residual().iter() {
             counted.0 += frontier.meets(binding) as u32;
@@ -1026,7 +1026,7 @@ fn resuming_at_its_brand<'graph>(
     step: crate::scheduler::Step<'_, 'graph, '_, '_, '_, '_, crate::program::KBundle>,
 ) -> crate::scheduler::Action<'graph, crate::program::KBundle> {
     use crate::program::{KBirth, KState, Language};
-    use crate::scope::{Binding, Relay, Resumption};
+    use crate::scope::{OldBinding, Relay, Resumption};
     let (step, state) = step.state();
     let KState::Born(birth @ KBirth::Inspect { program, .. }) = state else {
         return step.failed(crate::scheduler::StepError::Refused);
@@ -1041,7 +1041,7 @@ fn resuming_at_its_brand<'graph>(
     let symbols = program.symbols();
     let mut staged = crate::memory::BumpVec::new_in(&scratch);
     staged.push((unknown(symbols, f, "Elt"), bound));
-    let binding = Binding::laid(step.writer(), &mut staged);
+    let binding = OldBinding::laid(step.writer(), &mut staged);
     let relay = Relay::new(step.writer(), &types, &work, &scratch);
     let over = Resumption {
         binding,

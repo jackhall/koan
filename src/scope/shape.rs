@@ -64,6 +64,7 @@ use crate::type_lattice::{
 use crate::values::{Chain, ContentDigest};
 
 use super::channels::Channels;
+use super::facts::{Frontier, Residual, Seam};
 use super::groups::GroupFrame;
 use super::keyed::{Keyed, KeyedEntry};
 use super::tree::Tree;
@@ -72,10 +73,8 @@ use super::typed::{
     Resolved, Root, ShapeFacts, Static, StaticCallable, StaticRegistered, StaticSolution,
     StaticType, Statics, UseStatics, Variable, ViewSlots,
 };
-use facts::{Frontier, Residual, Seam};
 
 mod build;
-pub(super) mod facts;
 
 pub(crate) use build::IMPLICIT;
 pub(super) use build::program as build_program;

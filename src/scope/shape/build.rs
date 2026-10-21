@@ -70,6 +70,7 @@ use crate::type_lattice::{DeclaredGroup, KType, ReductionMode, dense_classes};
 
 use super::super::builtins::{BuiltinNames, Builtins};
 use super::super::channels::Channels;
+use super::super::facts::Frontier;
 use super::super::groups::{self, Claim, Claims, GroupFrame};
 use super::super::keyed::Keyed;
 use super::super::shapes::Shapes;
@@ -80,7 +81,6 @@ use super::super::signature::{
 use super::super::spelling::{SpelledRoot, path_spelling};
 use super::super::tree::Binder as TreeBinder;
 use super::super::typed::{Root, ShapeFacts, Static};
-use super::facts::Frontier;
 use super::{
     Arm, Binder, BodyShape, BuiltinIndex, Candidate, CandidateList, CaptureSlot, CaptureSource,
     CaptureSpec, Component, ComponentIndex, Coordinate, Lands, Listed, Mention, MentionClass,

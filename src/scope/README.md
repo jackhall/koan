@@ -632,7 +632,7 @@ a further cell (`ShapeFacts`) keeps what the pass fixes about the body as a
 whole — a callable's summary and whether it recurses, a `MODULE` or `GROUP`
 body's exact signature, a quote's code's type as it runs unfilled.
 
-**What a fact waits on.** [`shape::facts`](shape/facts.rs) holds the solver's
+**What a fact waits on.** [`facts`](facts.rs) holds the solver's
 vocabulary, beside the shape whose sites, slots and segments it keys on
 ([type facts and the solver](../build/README.md#type-facts-and-the-solver)):
 an `Unknown`, a name a binding may remove, by its lexical address — the

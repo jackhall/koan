@@ -30,6 +30,7 @@ mod activation;
 mod builtins;
 mod channels;
 mod closure;
+mod facts;
 mod groups;
 mod header;
 mod keyed;
@@ -53,15 +54,18 @@ pub(crate) use spelling::{PathSpelling, SpelledRoot, path_spelling};
 pub use activation::{Activation, ActivationView};
 pub use builtins::Builtins;
 pub use closure::ClosureBindings;
+pub use facts::{
+    Address, Binding, Bound, FactKey, Frontier, OldBinding, Residual, Seam, SeamAt, Store, UnitId,
+    Unknown, frontier_at, merge_into,
+};
 pub use groups::{BuiltinGroup, GroupFrame, is_equal, is_equality, is_unequal};
 pub use header::{HalfHeader, RegionHeader};
 pub use keyed::{Keyed, KeyedEntry};
-pub use records::{Body, LoadFacts};
+pub use records::{
+    Body, Born, Closing, Deps, Folds, LoadFacts, NamedVariable, SiteDeps, Typed, UnitFacts,
+};
 pub use relay::{ChainRelay, Relay};
 pub use settled::{ChannelSettled, Resumption, Settled, StaticsSettled};
-pub use shape::facts::{
-    Address, Binding, FactKey, Frontier, Residual, Seam, SeamAt, Unknown, frontier_at, merge_into,
-};
 pub use shape::{
     Arm, BodyShape, BuiltinIndex, Candidate, CandidateList, CaptureSlot, CaptureSource,
     CaptureSpec, Component, ComponentIndex, Coordinate, Lands, Listed, Mention, MentionClass,

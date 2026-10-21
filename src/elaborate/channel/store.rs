@@ -211,7 +211,7 @@ impl<'p> Resume<'p> {
     /// re-ran, by segment — relayed out through `relay`.
     pub(super) fn settled<'out, 'w, 'from, H: Habitat<'from>>(
         &self,
-        binding: crate::scope::Binding<'out>,
+        binding: crate::scope::OldBinding<'out>,
         relay: &Relay<'out, 'w, 'from, H>,
     ) -> Settled<'out> {
         let scratch = self.scratch;
@@ -273,7 +273,7 @@ impl<'p> Resume<'p> {
             (binding.entries().iter()).all(|(_, bound)| relay.types().resolves(*bound)),
             "a settled binding's handles resolve through the output chain"
         );
-        let mut laid = Settled::empty(crate::scope::Binding::EMPTY);
+        let mut laid = Settled::empty(crate::scope::OldBinding::EMPTY);
         laid.channel = Keyed::from_sorted(scratch.alloc_slice_copy(&settled));
         laid.reran.0 = self.reran.replace(bump_set(scratch)).len() as u32;
         Settled {
