@@ -49,27 +49,28 @@
 use std::cell::Cell;
 use std::fmt;
 
-use crate::memory::{BumpAllocator, ProgramBrand};
+use crate::memory::BumpAllocator;
 use crate::parse::BuiltinShapeId;
 use crate::parse::{DefinitionKind, Heads, Role};
 use crate::parse::{ExpressionPart, KExpression, KeyElement, Mark};
 use crate::source::SourceRef;
-use crate::symbols::{BinderSymbol, KeySymbol, KeywordSymbol, SymbolInterner, TypeSymbol};
+use crate::symbols::{
+    BinderSymbol, KeySymbol, KeywordSymbol, SymbolInterner, TypeSymbol, ValueSymbol,
+};
 use crate::type_lattice::{
     DeclaredGroup, DeclaredType, Interval, KType, Parametric, Scheme, display_name,
     instantiate_quantified,
 };
-use crate::values::{Chain, ContentDigest, Knotted};
+use crate::values::{Chain, ContentDigest};
 
-use super::builtins::Builtins;
 use super::channels::Channels;
 use super::groups::GroupFrame;
 use super::keyed::{Keyed, KeyedEntry};
 use super::tree::Tree;
 use super::typed::{
     BodyClass, Caching, Elaboration, Handoff, InstanceRead, Mint, PathEntry, PathRead, Resolution,
-    Resolved, ShapeFacts, Static, StaticCallable, StaticRegistered, StaticSolution, StaticType,
-    Statics, UseStatics, Variable, ViewSlots,
+    Resolved, Root, ShapeFacts, Static, StaticCallable, StaticRegistered, StaticSolution,
+    StaticType, Statics, UseStatics, Variable, ViewSlots,
 };
 use facts::{Frontier, Residual, Seam};
 
@@ -77,6 +78,7 @@ mod build;
 pub(super) mod facts;
 
 pub(crate) use build::IMPLICIT;
+pub(super) use build::program as build_program;
 
 /// An index into an activation's slot run: value slots first, type slots after, registration slots
 /// last.
@@ -238,6 +240,30 @@ pub struct Mention {
     pub at: Position,
     pub class: MentionClass,
     pub coordinate: Coordinate,
+    /// Where the coordinate lands once each capture is followed to its source.
+    pub lands: Lands,
+    /// Whether the mention reads a fellow member of the component its own statement binds, with no
+    /// callable between: a read the cyclic rule answers from the member's annotation alone.
+    pub fellow: bool,
+}
+
+/// Where a mention's coordinate lands: a builtin, a binder of some body by its slot there, or an
+/// open capture of a quote's code — a hole its filling binds, or a `\` name its `EVAL` offers.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Lands {
+    Builtin(BuiltinIndex),
+    Binder {
+        segment: Segment,
+        slot: Slot,
+    },
+    Hole {
+        segment: Segment,
+        capture: CaptureSlot,
+    },
+    Offered {
+        segment: Segment,
+        capture: CaptureSlot,
+    },
 }
 
 impl KeyedEntry for Mention {
@@ -246,6 +272,25 @@ impl KeyedEntry for Mention {
     fn key(&self) -> Site {
         self.site
     }
+}
+
+/// A path's identity on its chain: where its root lands — a binder of a body on the chain, or the
+/// expression written in place — the value members read from it, and its label. Two spellings with
+/// one identity on one chain are one path, and share its level.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct PathId<'graph> {
+    pub root: Root,
+    pub chain: &'graph [ValueSymbol],
+    pub label: TypeSymbol,
+}
+
+/// One path a body's types spell: the part holding it, its statement, and its identity — `None`
+/// where its root lands past the chain, which no level names.
+#[derive(Clone, Copy, Debug)]
+pub struct SpelledPath<'graph> {
+    pub part: &'graph ExpressionPart<'graph>,
+    pub statement: u32,
+    pub id: Option<PathId<'graph>>,
 }
 
 /// Which of a definition's bucket keys a registration is under: its only one, or for a `UNARY OP`,
@@ -428,6 +473,32 @@ pub enum UnitWork {
     Statement(u32),
 }
 
+/// A unit of a body by its place in the order the body binds in: the **entry** first — the
+/// parameters, the body's own `FOR ALL` names, its `:Type` parameters, a block's surfaced names and
+/// a code shape's captures, all bound before any statement runs — then each of
+/// [`BodyShape::units`] in order, `UnitIndex(i + 1)` for `units()[i]`.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub struct UnitIndex(pub(crate) u32);
+
+impl UnitIndex {
+    /// The body's entry.
+    pub const ENTRY: UnitIndex = UnitIndex(0);
+
+    /// The unit `units()[index]` is.
+    pub fn of_run(index: usize) -> UnitIndex {
+        UnitIndex(index as u32 + 1)
+    }
+
+    /// The index into [`BodyShape::units`] of this unit; `None` for the entry.
+    pub fn run_index(self) -> Option<usize> {
+        (self.0 as usize).checked_sub(1)
+    }
+
+    pub fn index(self) -> u32 {
+        self.0
+    }
+}
+
 /// One unit of a body, in the order its body runs them.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Unit {
@@ -541,6 +612,12 @@ pub struct BodyShape<'graph> {
     binders: &'graph [Binder<'graph>],
     /// The body's units in the order they are performed.
     units: &'graph [Unit],
+    /// The unit binding each slot, by slot: the entry for a parameter.
+    unit_of_slot: &'graph [UnitIndex],
+    /// The unit running each statement, by statement.
+    unit_of_statement: &'graph [UnitIndex],
+    /// Where each statement's nested shapes start in `nested_order`, by statement, then the end.
+    nested_starts: &'graph [u32],
     /// The slots a callable's or a code body's last statement reads, and every type slot, sorted.
     last_reads: &'graph [Slot],
     /// What this body is to the `MATCH` or `TRY` holding it, when it is an arm.
@@ -567,6 +644,8 @@ pub struct BodyShape<'graph> {
     type_expressions: Keyed<'graph, TypeExpression<'graph>>,
     /// Each part holding a path one of this body's types spells, as the builder met them.
     path_spellings: &'graph [&'graph ExpressionPart<'graph>],
+    /// The same paths, each beside its statement and its identity.
+    spelled: &'graph [SpelledPath<'graph>],
     /// A callable body's load-time type; `Unknown` for every other kind.
     callable: &'graph Cell<StaticCallable<'graph>>,
     /// A callable body's own `FOR ALL` group as its body reads it; empty for every other kind.
@@ -652,18 +731,6 @@ const _: () = assert!(!std::mem::needs_drop::<BodyShape<'static>>());
 const _: () = assert!(!std::mem::needs_drop::<Binder<'static>>());
 
 impl<'graph> BodyShape<'graph> {
-    /// The shape of a program's top-level statements.
-    pub fn of_program<X: Knotted>(
-        brand: ProgramBrand<'graph>,
-        statements: &[KExpression<'graph>],
-        builtins: &Builtins<'_, X>,
-        types: &Chain<'graph, 'graph, 'graph, '_>,
-        symbols: &SymbolInterner,
-        scratch: BumpAllocator<'_>,
-    ) -> Result<&'graph BodyShape<'graph>, ShapeError<'graph>> {
-        build::program(brand, statements, builtins, types, symbols, scratch)
-    }
-
     pub fn kind(&self) -> ShapeKind {
         self.kind
     }
@@ -799,6 +866,23 @@ impl<'graph> BodyShape<'graph> {
         self.units
     }
 
+    /// The unit that binds `slot`: the [entry](UnitIndex::ENTRY) for a parameter.
+    pub fn unit_of_slot(&self, slot: Slot) -> UnitIndex {
+        self.unit_of_slot[slot.index()]
+    }
+
+    /// The unit that runs statement `index` of [`body`](Self::body).
+    pub fn unit_of_statement(&self, index: usize) -> UnitIndex {
+        self.unit_of_statement[index]
+    }
+
+    /// The shapes nested in statement `index`, beside their sites, in program order: what the
+    /// statement births or runs inline.
+    pub fn nested_in(&self, index: usize) -> &'graph [(Site, &'graph BodyShape<'graph>)] {
+        let (start, end) = (self.nested_starts[index], self.nested_starts[index + 1]);
+        &self.nested_order[start as usize..end as usize]
+    }
+
     /// The slots a callable's or a code body's last statement reads — directly, through a nested
     /// block or through a nested body's captures — and every type slot, sorted; empty for any
     /// other kind. A caching frame that hands its last statement on adopts these slots' values
@@ -898,6 +982,12 @@ impl<'graph> BodyShape<'graph> {
     /// [`path_spelling`]: super::path_spelling
     pub fn path_spellings(&self) -> &'graph [&'graph ExpressionPart<'graph>] {
         self.path_spellings
+    }
+
+    /// Each path this body's types spell, in the order the builder met them, beside its statement
+    /// and its identity.
+    pub fn spelled(&self) -> &'graph [SpelledPath<'graph>] {
+        self.spelled
     }
 
     /// What the load pass fixed for the type expression at `site`: `Unknown` where this body

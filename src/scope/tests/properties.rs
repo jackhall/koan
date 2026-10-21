@@ -483,7 +483,7 @@ fn shaped_plan(program: &plan::Scope, test: impl for<'g, 'c> FnOnce(ShapedPlan<'
         let lines = fixture.parse(&rendering.source);
         fixture.in_cell(|writer, _| {
             let table = builtins(fixture, writer);
-            let shape = BodyShape::of_program(
+            let shape = crate::scope::Shapes::of_program(
                 fixture.program,
                 &lines,
                 table,
@@ -491,6 +491,7 @@ fn shaped_plan(program: &plan::Scope, test: impl for<'g, 'c> FnOnce(ShapedPlan<'
                 fixture.symbols,
                 fixture.scratch(),
             )
+            .map(|shapes| shapes.root())
             .unwrap_or_else(|error| {
                 panic!(
                     "`{}` shapes: {}",
@@ -757,7 +758,8 @@ proptest! {
             fixture.in_cell(|writer, _| {
                 let table: &Builtins = builtins(fixture, writer);
                 let source = &rendering.source;
-                let error = BodyShape::of_program(fixture.program, &lines, table, fixture.types, fixture.symbols, fixture.scratch())
+                let error = crate::scope::Shapes::of_program(fixture.program, &lines, table, fixture.types, fixture.symbols, fixture.scratch())
+.map(|shapes| shapes.root())
                     .err()
                     .unwrap_or_else(|| panic!("`{source}` is refused with {refusal:?}"));
                 let symbols = fixture.symbols;

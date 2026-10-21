@@ -312,7 +312,7 @@ pub enum Resolved {
 }
 
 /// A path's root: the binder a name lands at, or an expression written in place, by its site.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Root {
     Binder(Binder),
     Inline(Site),

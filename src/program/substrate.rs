@@ -199,7 +199,7 @@ impl CellSubstrate {
                 let refused = |error: crate::scope::ShapeError<'_>| LoadError::Shape {
                     rendered: error.display(&owner.symbols, types).to_string(),
                 };
-                let shape = BodyShape::of_program(
+                let shapes = crate::scope::Shapes::of_program(
                     brand,
                     &parsed,
                     builtins,
@@ -208,6 +208,7 @@ impl CellSubstrate {
                     &scratch,
                 )
                 .map_err(refused)?;
+                let shape = shapes.root();
                 type_channel(shape, builtins, types, brand.writer(), &scratch).map_err(refused)?;
                 L::check(shape, builtins, types, brand.writer(), &scratch).map_err(refused)?;
                 crate::build::list_seams(shape, brand.writer(), &scratch);

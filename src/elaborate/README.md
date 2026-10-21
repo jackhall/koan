@@ -681,9 +681,9 @@ cell through its store, and its rules to naming no writer and no resumption.
 - [Families as parameters](../../roadmap/rewrite/families-as-parameters.md) —
   higher-kinded head parameters, and a constructor application leaving a
   parameter unpinned.
-- [Activation typing](../../roadmap/gradual-build/activation-typing.md) — a
-  resumption entered from a specialization's step, over the content a frame's
-  binding brings.
+- [The one-walk build](../../roadmap/gradual-build/one-walk-build.md) — the
+  type channel as the type phase of one fact function per unit, resumable
+  under a binding.
 - [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — a family's
   variance, which no declaration states, a nominal over a run-bound type
   declared per call, and a pin read through its bounds.

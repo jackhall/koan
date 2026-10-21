@@ -5,8 +5,8 @@
 
 use crate::parse::ExpressionPart;
 use crate::scope::{
-    BodyShape, Builtins, PathEntry, Resolution, Settled, ShapeFacts, Site, Static, StaticType,
-    Statics, Tree, source_of,
+    Builtins, PathEntry, Resolution, Settled, ShapeFacts, Site, Static, StaticType, Statics, Tree,
+    source_of,
 };
 
 use super::{builtins, with_fixture};
@@ -61,7 +61,7 @@ fn the_builder_records_each_type_expression_once() {
         let lines = fixture.parse(source);
         fixture.in_cell(|writer, _| {
             let table: &Builtins = builtins(fixture, writer);
-            let shape = BodyShape::of_program(
+            let shape = crate::scope::Shapes::of_program(
                 fixture.program,
                 &lines,
                 table,
@@ -69,6 +69,7 @@ fn the_builder_records_each_type_expression_once() {
                 fixture.symbols,
                 fixture.scratch(),
             )
+            .map(|shapes| shapes.root())
             .expect("the program shapes");
             let recorded = shape.type_expressions();
             let per_statement: Vec<usize> = (0..5)
@@ -121,7 +122,7 @@ fn the_builder_records_each_path_a_type_spells() {
         let lines = fixture.parse(source);
         fixture.in_cell(|writer, _| {
             let table: &Builtins = builtins(fixture, writer);
-            let shape = BodyShape::of_program(
+            let shape = crate::scope::Shapes::of_program(
                 fixture.program,
                 &lines,
                 table,
@@ -129,6 +130,7 @@ fn the_builder_records_each_path_a_type_spells() {
                 fixture.symbols,
                 fixture.scratch(),
             )
+            .map(|shapes| shapes.root())
             .expect("the program shapes");
             let statements: Vec<usize> = (shape.path_spellings().iter())
                 .map(|part| {

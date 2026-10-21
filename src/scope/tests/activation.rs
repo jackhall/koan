@@ -1,7 +1,7 @@
 //! Fixed activation facts: the layout, the empty-slot invariant, and the builtin table.
 
 use crate::memory::SlotConflict;
-use crate::scope::{Activation, ActivationView, BodyShape, Builtins};
+use crate::scope::{Activation, ActivationView, Builtins};
 use crate::symbols::BinderSymbol;
 use crate::values::Value;
 
@@ -21,7 +21,7 @@ fn an_activation_is_a_copy_of_its_bytes_and_starts_empty() {
         let lines = fixture.parse("LET a = 1\nLET b = a");
         fixture.in_cell(|writer, _| {
             let table: &Builtins = builtins(fixture, writer);
-            let shape = BodyShape::of_program(
+            let shape = crate::scope::Shapes::of_program(
                 fixture.program,
                 &lines,
                 table,
@@ -29,6 +29,7 @@ fn an_activation_is_a_copy_of_its_bytes_and_starts_empty() {
                 fixture.symbols,
                 fixture.scratch(),
             )
+            .map(|shapes| shapes.root())
             .unwrap();
             let activation: Activation = Activation::of_program(writer, shape, table);
             let view = activation.view();
@@ -55,7 +56,7 @@ fn reading_an_empty_slot_breaks_the_scheduler_invariant() {
         let lines = fixture.parse("LET a = 1\nLET b = a");
         fixture.in_cell(|writer, _| {
             let table: &Builtins = Builtins::empty();
-            let shape = BodyShape::of_program(
+            let shape = crate::scope::Shapes::of_program(
                 fixture.program,
                 &lines,
                 table,
@@ -63,6 +64,7 @@ fn reading_an_empty_slot_breaks_the_scheduler_invariant() {
                 fixture.symbols,
                 fixture.scratch(),
             )
+            .map(|shapes| shapes.root())
             .unwrap();
             let activation: Activation = Activation::of_program(writer, shape, table);
             activation.read(shape.mentions()[0].coordinate);

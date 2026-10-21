@@ -552,5 +552,6 @@ observes it records in `tests/native.rs` for the test around it to read back.
 
 ## Open work
 
-- [Activation typing](../../roadmap/gradual-build/activation-typing.md) — a
-  specialization's step runs the resumption under its binding.
+- [The build arena](../../roadmap/gradual-build/build-arena.md) — the drain's
+  books over build cells outside the cell graph, and frames reading what the
+  build decided.

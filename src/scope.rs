@@ -36,6 +36,7 @@ mod keyed;
 mod relay;
 mod settled;
 mod shape;
+mod shapes;
 mod signature;
 mod spelling;
 mod tree;
@@ -61,11 +62,13 @@ pub use shape::facts::{
 };
 pub use shape::{
     Arm, BodyShape, BuiltinIndex, Candidate, CandidateList, CaptureSlot, CaptureSource,
-    CaptureSpec, Component, ComponentIndex, Coordinate, Listed, Mention, MentionClass, Offer,
-    Position, QuotedPart, Ranking, Registration, Segment, ShapeError, ShapeKind, Site, Slot,
-    SurfacedHead, Target, TopLevel, TypeExpression, Unit, UnitWork, ViewRefused, Which, each_part,
-    in_body_of, part_of, selection_refused, source_of, spelled, view_refused,
+    CaptureSpec, Component, ComponentIndex, Coordinate, Lands, Listed, Mention, MentionClass,
+    Offer, PathId, Position, QuotedPart, Ranking, Registration, Segment, ShapeError, ShapeKind,
+    Site, Slot, SpelledPath, SurfacedHead, Target, TopLevel, TypeExpression, Unit, UnitIndex,
+    UnitWork, ViewRefused, Which, each_part, in_body_of, part_of, selection_refused, source_of,
+    spelled, view_refused,
 };
+pub use shapes::{BindSite, Shapes};
 pub use tree::{Binder, KnotNode, Leaf, NodeCapture, Print, Tree, Unfolded, Within};
 pub use typed::{
     BodyClass, Caching, Callable, Elaboration, ElaborationDisplay, FunctionGroupMap, HandedTo,

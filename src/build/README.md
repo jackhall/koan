@@ -500,10 +500,10 @@ through a projection it defines.
 
 ## Open work
 
-- [Setting the specialization bounds](../../roadmap/gradual-build/bound-settings.md)
-  — the bounds as a setting a user names.
-- [Activation typing](../../roadmap/gradual-build/activation-typing.md) — a
-  frame's facts settled at its seams over the content its bindings bring.
-- [The build as the second embedder](../../roadmap/gradual-build/build-rewrite.md)
-  — the build rewritten in this module on cellgraph's ordinary step protocol,
-  deciding everything the run executes.
+- [Setting the build budget](../../roadmap/gradual-build/bound-settings.md)
+  — the budget as a setting a user names.
+- [The one-walk build](../../roadmap/gradual-build/one-walk-build.md) — the
+  three load walks as one fact function per unit, resumable under a binding.
+- [The build arena](../../roadmap/gradual-build/build-arena.md) — build cells
+  outside the cell graph, keyed on load content, with the evaluator reading
+  what the build decided.

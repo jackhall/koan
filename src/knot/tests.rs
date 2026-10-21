@@ -112,7 +112,7 @@ impl<'graph> Fixture<'_, 'graph> {
     pub fn parse(&self, source: &str) -> Parsed<'graph> {
         let lines = parse(self.program, self.symbols, source)
             .unwrap_or_else(|error| panic!("`{source}` parses: {error:?}"));
-        let shape = BodyShape::of_program(
+        let shape = crate::scope::Shapes::of_program(
             self.program,
             &lines,
             self.loaded,
@@ -120,6 +120,7 @@ impl<'graph> Fixture<'_, 'graph> {
             self.symbols,
             self.scratch,
         )
+        .map(|shapes| shapes.root())
         .unwrap_or_else(|error| {
             panic!(
                 "the program shapes: {}",

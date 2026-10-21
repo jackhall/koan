@@ -24,14 +24,15 @@ fn shaped<R>(
         let lines = fixture.parse(source);
         fixture.in_cell(|writer, _| {
             let table: &Builtins = builtins(fixture, writer);
-            let shape = BodyShape::of_program(
+            let shape = crate::scope::Shapes::of_program(
                 fixture.program,
                 &lines,
                 table,
                 fixture.types,
                 fixture.symbols,
                 fixture.scratch(),
-            );
+            )
+            .map(|shapes| shapes.root());
             check(fixture, &lines, shape)
         })
     })

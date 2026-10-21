@@ -1286,9 +1286,9 @@ tutorial snippet is checked against its shown output by
   and `Result`.
 - [Invariance around a tail cycle](../../roadmap/gradual-build/cycle-invariance.md)
   — an argument built over invariant leaves classed invariant.
-- [Activation typing](../../roadmap/gradual-build/activation-typing.md) — a
-  frame's facts settled at its seams, and selection reading the verdicts a
-  specialization holds, per [the build module](../build/README.md).
+- [The one-walk build](../../roadmap/gradual-build/one-walk-build.md) — the
+  static pass as the value phase of one fact function per unit, resumable
+  under a binding, per [the build module](../build/README.md).
 - [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — the
   overlap check skipping a quantified registration, a warning for an overload
   never selected, a pin read through its bounds, a member read exact through a
