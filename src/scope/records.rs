@@ -23,9 +23,11 @@ use crate::values::Chain;
 
 use super::facts::{Binding, Frontier, UnitId};
 use super::keyed::Keyed;
-use super::shape::{BodyShape, Coordinate, Segment, ShapeError, Site, Slot, Target, in_body_of};
+use super::shape::{
+    BodyShape, Coordinate, Position, Segment, ShapeError, Site, Slot, Target, in_body_of,
+};
 use super::shapes::Shapes;
-use super::tree::Tree;
+use super::tree::{Leaf, NodeCapture, Tree};
 use super::typed::{
     BodyClass, Caching, Handoff, InstanceRead, Mint, PathEntry, PathRead, Resolution, Resolved,
     Static, StaticCallable, StaticRegistered, StaticSolution, StaticType, UseStatics, Variable,
@@ -173,6 +175,103 @@ pub enum Deps<'a> {
     Closed,
     On(&'a [Slot]),
     Varying,
+}
+
+impl<'a> Deps<'a> {
+    /// The dependencies of content built over both, laid through `lay` where they grow.
+    pub fn union(
+        self,
+        other: Deps<'_>,
+        lay: impl Lays<'a>,
+        scratch: BumpAllocator<'_>,
+    ) -> Deps<'a> {
+        match (self, other) {
+            (Deps::Varying, _) | (_, Deps::Varying) => Deps::Varying,
+            (Deps::Closed, Deps::Closed) => Deps::Closed,
+            (Deps::Closed, Deps::On(slots)) => Deps::On(collect(lay, slots.iter().copied())),
+            (deps, Deps::Closed) => deps,
+            (Deps::On(mine), Deps::On(theirs)) => {
+                let mut slots = BumpVec::with_capacity_in(mine.len() + theirs.len(), scratch);
+                slots.extend_from_slice(mine);
+                slots.extend_from_slice(theirs);
+                slots.sort_unstable();
+                slots.dedup();
+                Deps::On(collect(lay, slots.iter().copied()))
+            }
+        }
+    }
+}
+
+/// What the content `tree`, read at `holder` whose frame body is `frame`, depends on: each leaf
+/// bound to a parameter of the frame body, no parameter for a leaf captured from a body enclosing
+/// the frame, and anything for a leaf no binder names, one bound per run of a body, or one bound by
+/// a non-parameter of the frame or of a block or module body it runs.
+pub fn tree_deps<'a>(
+    shapes: &Shapes<'_>,
+    (holder, frame): (Segment, Segment),
+    tree: &Tree<'_>,
+    lay: impl Lays<'a>,
+    scratch: BumpAllocator<'_>,
+) -> Deps<'a> {
+    let mut deps = Deps::Closed;
+    let mut stack = BumpVec::new_in(scratch);
+    stack.push(*tree);
+    while let Some(tree) = stack.pop() {
+        match tree {
+            Tree::Digest(_) => {}
+            Tree::Body { captures, .. } => stack.extend(captures.iter().map(|(_, at)| *at)),
+            Tree::Knot { members, .. } => {
+                for member in members {
+                    stack.extend(
+                        member
+                            .captures
+                            .iter()
+                            .filter_map(|(_, capture)| match capture {
+                                NodeCapture::Tree(tree) => Some(*tree),
+                                NodeCapture::Fellow(_) => None,
+                            }),
+                    );
+                }
+            }
+            Tree::View { source, .. } | Tree::Retyped { source, .. } => stack.push(*source),
+            Tree::Leaf(Leaf::Unnamed(_)) => return Deps::Varying,
+            Tree::Leaf(Leaf::Bound {
+                within: Some(_), ..
+            }) => return Deps::Varying,
+            Tree::Leaf(Leaf::Bound { binder, .. }) => {
+                let each = binder_deps(shapes, (holder, frame), (binder.body, binder.slot), lay);
+                deps = deps.union(each, lay, scratch);
+            }
+        }
+    }
+    deps
+}
+
+/// What the binder at `slot` of `body`, read at `holder` whose frame body is `frame`, depends on:
+/// a parameter of the frame body is itself; a capture from a body enclosing the frame is no
+/// parameter — open, but the same at every frame of one closure; anything else varies.
+fn binder_deps<'a>(
+    shapes: &Shapes<'_>,
+    (holder, frame): (Segment, Segment),
+    (body, slot): (Segment, Slot),
+    lay: impl Lays<'a>,
+) -> Deps<'a> {
+    // The chain from the holder up: the bodies the frame runs, the frame, then those around it.
+    let mut at = Some(holder);
+    let mut past_frame = false;
+    while let Some(segment) = at {
+        if segment == body {
+            let parameter = shapes.shape_at(body).position_of(slot) == Position::PARAMETER;
+            return match (past_frame, segment == frame) {
+                (true, _) => Deps::On(&[]),
+                (false, true) if parameter => Deps::On(collect(lay, std::iter::once(slot))),
+                _ => Deps::Varying,
+            };
+        }
+        past_frame |= segment == frame;
+        at = shapes.parent(segment).map(|(parent, _)| parent);
+    }
+    Deps::Varying
 }
 
 /// One minting or composite site the caching fold classes: where it sits, the frame body its

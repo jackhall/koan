@@ -12,7 +12,7 @@
 
 use crate::knot::KBuiltins;
 use crate::memory::BumpAllocator;
-use crate::scope::{BodyShape, ShapeError, ShapeKind, Static};
+use crate::scope::{BodyShape, Registration, ShapeError, ShapeKind, Static, StaticRegistered};
 use crate::type_lattice::{DeclaredType, KType, meet, shape_slots};
 use crate::values::Chain;
 
@@ -25,46 +25,64 @@ pub(super) fn overlaps<'graph>(
     scratch: BumpAllocator<'_>,
 ) -> Result<(), ShapeError<'graph>> {
     for registration in shape.registrations() {
-        if builtins.overloads(registration.key).next().is_none() {
-            continue;
-        }
-        let Some(form) = shape.births(registration.slot).and_then(BodyShape::form) else {
-            continue;
-        };
-        let Static::Closed(registered) = shape.registered_type(registration.slot) else {
-            continue;
-        };
-        // A quantified registration's slots read its own group, which the meet does not relate.
-        let DeclaredType::Type(registered) = registered.shape else {
-            continue;
-        };
-        for index in builtins.overloads(registration.key) {
-            let Some(builtin) = builtins
-                .get(index)
-                .as_callable()
-                .and_then(|member| member.builtin())
-            else {
-                continue;
-            };
-            let builtin = builtin.ktype();
-            if shape_slots(builtin, types).all(|slot| slot == KType::ANY) {
-                continue;
-            }
-            let met = shape_slots(registered, types)
-                .zip(shape_slots(builtin, types))
-                .all(|(own, theirs)| meet(types, scratch, own, theirs) != KType::NEVER);
-            if met {
-                return Err(ShapeError::Overlaps {
-                    key: registration.elements,
-                    builtin,
-                    at: form.source,
-                });
-            }
-        }
+        let typed = shape.registered_type(registration.slot);
+        overlap(shape, registration, typed, builtins, types, scratch)?;
     }
     for (_, nested) in shape.nested_shapes() {
         if nested.kind() != ShapeKind::Code {
             overlaps(nested, builtins, types, scratch)?;
+        }
+    }
+    Ok(())
+}
+
+/// Refuse `registration`, one of `shape`'s typed `typed`, where it overlaps a builtin overload at
+/// its key: checked where it is closed and unquantified and births a callable.
+pub(super) fn overlap<'graph, 'o>(
+    shape: &'graph BodyShape<'graph>,
+    registration: &Registration<'graph>,
+    typed: StaticRegistered<'_>,
+    builtins: &KBuiltins<'_, '_>,
+    types: &Chain<'_, '_, '_, '_>,
+    scratch: BumpAllocator<'_>,
+) -> Result<(), ShapeError<'o>>
+where
+    'graph: 'o,
+{
+    if builtins.overloads(registration.key).next().is_none() {
+        return Ok(());
+    }
+    let Some(form) = shape.births(registration.slot).and_then(BodyShape::form) else {
+        return Ok(());
+    };
+    let Static::Closed(registered) = typed else {
+        return Ok(());
+    };
+    // A quantified registration's slots read its own group, which the meet does not relate.
+    let DeclaredType::Type(registered) = registered.shape else {
+        return Ok(());
+    };
+    for index in builtins.overloads(registration.key) {
+        let Some(builtin) = builtins
+            .get(index)
+            .as_callable()
+            .and_then(|member| member.builtin())
+        else {
+            continue;
+        };
+        let builtin = builtin.ktype();
+        if shape_slots(builtin, types).all(|slot| slot == KType::ANY) {
+            continue;
+        }
+        let met = shape_slots(registered, types)
+            .zip(shape_slots(builtin, types))
+            .all(|(own, theirs)| meet(types, scratch, own, theirs) != KType::NEVER);
+        if met {
+            return Err(ShapeError::Overlaps {
+                key: registration.elements,
+                builtin,
+                at: form.source,
+            });
         }
     }
     Ok(())

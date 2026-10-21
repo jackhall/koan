@@ -79,11 +79,11 @@ pub trait Language {
     /// interning through `types`: what the load decides, and what a resumption re-decides under
     /// the store's binding. Runs nothing by default, so the run elaborates where it reads, as it
     /// does wherever the load leaves a fact unknown.
-    fn facts<'graph: 'o, 'o, S: Store<'o>>(
+    fn facts<'graph: 'o, 'tier: 'o, 'o, S: Store<'o>>(
         shapes: &'graph Shapes<'graph>,
         builtins: &'graph KBuiltins<'graph, 'graph>,
         store: &S,
-        types: &Chain<'_, '_, '_, '_>,
+        types: &Chain<'tier, '_, '_, '_>,
         scratch: BumpAllocator<'_>,
     ) -> Result<(), ShapeError<'o>> {
         let _ = (shapes, builtins, store, types, scratch);

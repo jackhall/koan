@@ -223,6 +223,14 @@ pub(super) fn unnarrowed<R>(load: impl FnOnce() -> R) -> R {
     load()
 }
 
+/// Whether loads leave every keyworded use whole now: what the one walk reads its switch from.
+pub(super) fn unnarrowed_now() -> bool {
+    #[cfg(test)]
+    return UNNARROWED.with(std::cell::Cell::get);
+    #[cfg(not(test))]
+    false
+}
+
 /// A binder's static type: a type's interval, or a quantified callable's scheme.
 type Bound = DeclaredType<Interval>;
 

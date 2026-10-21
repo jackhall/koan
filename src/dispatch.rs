@@ -96,11 +96,11 @@ impl Language for Koan {
         statics::resume_statics(shape, builtins, output, scratch, over, channel)
     }
 
-    fn facts<'graph: 'o, 'o, S: Store<'o>>(
+    fn facts<'graph: 'o, 'tier: 'o, 'o, S: Store<'o>>(
         shapes: &'graph Shapes<'graph>,
         builtins: &'graph KBuiltins<'graph, 'graph>,
         store: &S,
-        types: &Chain<'_, '_, '_, '_>,
+        types: &Chain<'tier, '_, '_, '_>,
         scratch: BumpAllocator<'_>,
     ) -> Result<(), ShapeError<'o>> {
         walk::walk(shapes, builtins, store, types, scratch)

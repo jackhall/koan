@@ -64,6 +64,7 @@ pub use header::{HalfHeader, RegionHeader};
 pub use keyed::{Keyed, KeyedEntry};
 pub use records::{
     Body, Born, Closing, Deps, Folds, LoadFacts, NamedVariable, SiteDeps, Typed, UnitFacts,
+    tree_deps,
 };
 pub use relay::{ChainRelay, Relay};
 pub use settled::{ChannelSettled, Resumption, Settled, StaticsSettled};

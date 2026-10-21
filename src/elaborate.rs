@@ -47,6 +47,7 @@ mod module;
 mod paths;
 mod reads;
 mod signature;
+mod unit;
 
 #[cfg(test)]
 mod tests;
@@ -63,3 +64,7 @@ pub use module::{module_signature, self_signature};
 pub use paths::{bound_path, declared_through, path_binding};
 pub use reads::{Reads, TypeAt, denoted};
 pub use signature::callable_type;
+pub use unit::{
+    Mode, Reader, Signatures, Tools, TypeContext, callable, declarations, expression, guards,
+    own_levels, registration,
+};
