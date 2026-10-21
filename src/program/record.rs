@@ -14,7 +14,9 @@ use crate::knot::{KActivationView, KBuiltins, KValue};
 use crate::memory::{Bump, BumpAllocator, Writer};
 use crate::parse::{ExpressionPart, KExpression, ParseError};
 use crate::scheduler::{NativeStep, Work};
-use crate::scope::{BodyShape, ChainRelay, Resumption, Settled, ShapeError, Shapes, Slot};
+use crate::scope::{
+    BodyShape, ChainRelay, LoadFacts, Resumption, Settled, ShapeError, Shapes, Slot,
+};
 use crate::symbols::{BinderSymbol, SymbolInterner};
 use crate::type_lattice::{
     DeclaredType, KType, TypeNode, display_name, satisfied_by, substitute_quantified,
@@ -158,7 +160,7 @@ pub enum Evaluated<'graph> {
 /// `Copy` and without drop glue, so it rests in program storage beside the table it names.
 #[derive(Clone, Copy)]
 pub struct Program<'graph> {
-    shapes: &'graph Shapes<'graph>,
+    facts: &'graph LoadFacts<'graph>,
     builtins: &'graph KBuiltins<'graph, 'graph>,
     tiers: TypeTiers<'graph>,
     symbols: &'graph SymbolInterner,
@@ -173,7 +175,7 @@ pub struct Program<'graph> {
 impl<'graph> Program<'graph> {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn new(
-        shapes: &'graph Shapes<'graph>,
+        facts: &'graph LoadFacts<'graph>,
         builtins: &'graph KBuiltins<'graph, 'graph>,
         tiers: TypeTiers<'graph>,
         error: KType,
@@ -183,7 +185,7 @@ impl<'graph> Program<'graph> {
         uncaught: &'graph Cell<bool>,
     ) -> Self {
         Program {
-            shapes,
+            facts,
             builtins,
             tiers,
             symbols,
@@ -196,12 +198,17 @@ impl<'graph> Program<'graph> {
 
     /// The top level's shape.
     pub fn shape(&self) -> &'graph BodyShape<'graph> {
-        self.shapes.root()
+        self.facts.shapes().root()
     }
 
     /// Every shape the load built, by segment.
     pub fn shapes(&self) -> &'graph Shapes<'graph> {
-        self.shapes
+        self.facts.shapes()
+    }
+
+    /// What the load decided about every body.
+    pub fn facts(&self) -> &'graph LoadFacts<'graph> {
+        self.facts
     }
 
     pub fn builtins(&self) -> &'graph KBuiltins<'graph, 'graph> {

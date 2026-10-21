@@ -212,7 +212,7 @@ pub fn tie<'graph, 'cell, 'x>(
             (Some((staged, (closure, typing))), _) => Node::Function(Function::new(
                 staged.ktype,
                 typing,
-                staged.shape,
+                staged.body,
                 closure,
                 knot_weight,
             )),

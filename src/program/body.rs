@@ -49,7 +49,7 @@ use crate::scheduler::{
     Action, Placement, Received, Request, Slot as Asked, Step, StepError, Taken, Use,
 };
 use crate::scope::{BodyShape, Component, Mint, Position, ShapeKind, Site, Slot, Unit, UnitWork};
-use crate::scope::{CaptureSource, ClosureBindings, ShapeError};
+use crate::scope::{CaptureSource, ClosureBindings, LoadFacts, ShapeError};
 use crate::scope::{Coordinate, ParameterBinding, Static, Target};
 use crate::symbols::{BinderSymbol, Symbol, SymbolInterner, TypeSymbol};
 use crate::type_lattice::{
@@ -212,7 +212,12 @@ fn ran<'graph, 'here, 'scratch>(
             let writer = step.writer();
             let activation = resident(
                 writer,
-                KActivation::of_program(writer, program.shape(), program.builtins()),
+                KActivation::of_program(
+                    writer,
+                    program.shape(),
+                    program.facts(),
+                    program.builtins(),
+                ),
             );
             Runner::at(program, activation, Level::Top, None)
         }
@@ -439,7 +444,7 @@ pub fn eval<'graph, 'here>(
 ) -> Result<Request<'graph, 'here, KBundle>, CodeRefused<'graph>> {
     let node = code.code().expect("an `EVAL` is handed a quote's code");
     let shape = node.shape();
-    if let Some(error) = shape.refusal() {
+    if let Some(error) = program.facts().typing_refusal(shape) {
         return Err(CodeRefused::Shape(error));
     }
     let scratch = Bump::new();
@@ -520,6 +525,10 @@ impl<'graph, 'cell> Runner<'graph, 'cell> {
 
     fn shape(&self) -> &'graph BodyShape<'graph> {
         self.activation.shape()
+    }
+
+    fn load(&self) -> &'graph LoadFacts<'graph> {
+        self.activation.load()
     }
 
     fn current(&self) -> Unit {
@@ -786,6 +795,7 @@ fn frame<'graph, 'here>(
         KActivation::of_callable(
             writer,
             shape,
+            program.facts(),
             member,
             function.closure(),
             program.builtins(),
@@ -1169,7 +1179,7 @@ fn code_frame<'graph, 'here>(
     let closure = ClosureBindings::of(writer, &links, BuildRef::ROOT);
     Some(resident(
         writer,
-        KActivation::of_code(writer, shape, closure, program.builtins()),
+        KActivation::of_code(writer, shape, program.facts(), closure, program.builtins()),
     ))
 }
 
@@ -1183,7 +1193,7 @@ fn woken<'graph, 'here, 'scratch, 'lent>(
     types: &Chain<'_, 'here, '_, '_>,
 ) -> Result<(), Stopped<'scratch>> {
     let unit = runner.current();
-    let caches = runner.shape().caches();
+    let caches = runner.load().caches(runner.shape());
     match runner.stage {
         Stage::Next => unreachable!("a runner parks only with an evaluation in flight"),
         Stage::Evaluation => {
@@ -1358,7 +1368,7 @@ fn held_at<'graph, 'here>(
     annotation: KType,
     value: KValue<'graph, 'here>,
 ) -> Result<KValue<'graph, 'here>, Stopped<'here>> {
-    let settled = runner.shape().settled(Site::of(written));
+    let settled = runner.load().settled(runner.shape(), Site::of(written));
     let held = (runner.program).annotated(step.writer(), types, value, annotation, settled);
     runner.check(&held, types)?;
     Ok(held)
@@ -1414,7 +1424,7 @@ fn perform<'graph, 'here>(
                 }
                 // A caching body keeps its value, so it leaves only where the frame adopts it.
                 let use_ = match runner.yields(unit) {
-                    true if shape.caches() => Use::Keeps,
+                    true if runner.load().caches(shape) => Use::Keeps,
                     true => Use::Forwards,
                     false => Use::Reads,
                 };
@@ -1546,7 +1556,7 @@ fn declared<'graph, 'here>(
     let shape = runner.activation.shape();
     let mut loaded = BumpVec::with_capacity_in(component.members.len(), &scratch);
     for slot in component.members {
-        match shape.declared_type(*slot) {
+        match runner.load().declared_type(shape, *slot) {
             Static::Closed(handle) => loaded.push(handle),
             _ => break,
         }
@@ -1562,11 +1572,14 @@ fn declared<'graph, 'here>(
         debug_assert!(
             !(component.members.iter())
                 .any(|member| shape.declarations(*member).is_some_and(declares_nominal))
-                || shape.mints_at(Site::of_node(
-                    shape
-                        .declarations(component.members[0])
-                        .expect("a type binder records its declaration node"),
-                )),
+                || runner.load().mints_at(
+                    shape,
+                    Site::of_node(
+                        shape
+                            .declarations(component.members[0])
+                            .expect("a type binder records its declaration node"),
+                    )
+                ),
             "the load recorded a nominal component declared where it runs as a minting site",
         );
         let declared =
@@ -1577,7 +1590,7 @@ fn declared<'graph, 'here>(
         // hop finds them there.
         let site = (shape.declarations(component.members[0])).map(Site::of_node);
         if runner.within.routes
-            && site.and_then(|site| shape.mint_at(site)) == Some(Mint::Invariant)
+            && site.and_then(|site| runner.load().mint_at(shape, site)) == Some(Mint::Invariant)
             && let Some(warm) = step.agent_types()
         {
             for handle in declared.iter() {
@@ -1680,7 +1693,7 @@ fn ended<'graph, 'here>(
             view: runner.activation.view(),
         }),
         // A block's value stays in the body it runs in, whose chain reads its types.
-        (Level::Frame | Level::Block, None) if runner.shape().caches() => {
+        (Level::Frame | Level::Block, None) if runner.load().caches(runner.shape()) => {
             step.finish_with(value, types)
         }
         (Level::Frame | Level::Block, None) => step.finish(value),
@@ -1707,7 +1720,7 @@ fn ended<'graph, 'here>(
                 }
                 None => value,
             };
-            if runner.shape().caches() {
+            if runner.load().caches(runner.shape()) {
                 Exit::new(step.types(), types, &scratch).value(&value);
             }
             step.finish(value)

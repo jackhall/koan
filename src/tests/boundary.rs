@@ -205,19 +205,9 @@ pub(crate) fn store_bypasses(code: &str, accessors: &[&str], fields: &[&str]) ->
         let number = line_of(at);
         found.push(format!("{}: {what}: {}", number + 1, lines[number].trim()));
     };
-    for accessor in accessors {
-        let call = format!(".{accessor}(");
-        for (at, _) in code.match_indices(&call) {
-            // The receiver, across a line break a method chain is wrapped at.
-            let receiver: String = code[..at]
-                .trim_end()
-                .chars()
-                .rev()
-                .take_while(|ch| ch.is_alphanumeric() || *ch == '_')
-                .collect();
-            if receiver != "fles" {
-                flag(at, accessor);
-            }
+    for (at, accessor) in calls(code, accessors) {
+        if receiver(&code[..at]) != "self" {
+            flag(at, accessor);
         }
     }
     for field in fields {
@@ -243,4 +233,62 @@ pub(crate) fn store_bypasses(code: &str, accessors: &[&str], fields: &[&str]) ->
         }
     }
     found
+}
+
+/// Each call in `code` of a method in `accessors`, beside where its `.` sits.
+fn calls<'a>(code: &str, accessors: &[&'a str]) -> Vec<(usize, &'a str)> {
+    let mut found = Vec::new();
+    for accessor in accessors {
+        let call = format!(".{accessor}(");
+        found.extend(code.match_indices(&call).map(|(at, _)| (at, *accessor)));
+    }
+    found.sort_unstable();
+    found
+}
+
+/// The receiver a method call whose `.` ends `before` is made on: the identifier before the `.`,
+/// across a line break a method chain is wrapped at, or — after a call or a parenthesized
+/// receiver — the receiver of what the parentheses close, with `()` appended for a call.
+fn receiver(before: &str) -> String {
+    let before = before.trim_end();
+    let Some(inner) = before.strip_suffix(')') else {
+        let start = before.trim_end_matches(|ch: char| ch.is_alphanumeric() || ch == '_');
+        return before[start.len()..].to_string();
+    };
+    let mut depth = 1;
+    let open = inner
+        .char_indices()
+        .rev()
+        .find(|(_, ch)| {
+            depth += match ch {
+                ')' => 1,
+                '(' => -1,
+                _ => 0,
+            };
+            depth == 0
+        })
+        .map_or(0, |(open, _)| open);
+    let head = &inner[..open];
+    let name = head.trim_end_matches(|ch: char| ch.is_alphanumeric() || ch == '_');
+    if name.len() == head.len() {
+        receiver(&inner[open + 1..])
+    } else {
+        format!("{}()", &head[name.len()..])
+    }
+}
+
+/// Every call in `code` of a cell accessor in `accessors` made anywhere but on the load's facts —
+/// a receiver named `load` or `facts`, or a call of either — each as `line: accessor: text`.
+pub(crate) fn cell_reads(code: &str, accessors: &[&str]) -> Vec<String> {
+    let lines: Vec<&str> = code.lines().collect();
+    calls(code, accessors)
+        .into_iter()
+        .filter(|(at, _)| {
+            !["load", "facts", "load()", "facts()", "shapes()"].contains(&&*receiver(&code[..*at]))
+        })
+        .map(|(at, accessor)| {
+            let number = code[..at].matches('\n').count();
+            format!("{}: {accessor}: {}", number + 1, lines[number].trim())
+        })
+        .collect()
 }

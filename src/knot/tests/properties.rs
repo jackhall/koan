@@ -354,6 +354,7 @@ fn run<'graph, 'cell>(
                 KActivation::of_callable(
                     writer,
                     nested,
+                    activation.load(),
                     *callable,
                     function.closure(),
                     activation.builtins(),
@@ -422,7 +423,7 @@ proptest! {
                     let writer = context.writer();
                     let activation = resident(
                         writer,
-                        KActivation::of_program(writer, lines.shape, fixture.builtins()),
+                        KActivation::of_program(writer, lines.shape, lines.load, fixture.builtins()),
                     );
                     let mut tied = Vec::new();
                     run(fixture, writer, types, activation, &mut 0.0, &mut tied);

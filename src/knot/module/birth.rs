@@ -38,7 +38,13 @@ pub fn body_activation<'graph, 'cell>(
     // A module is never called, so its closure seeks no specialization. The module keeps it, to
     // compute its content from where a demand first reaches it.
     let closure = ClosureBindings::of(writer, &captures, BuildRef::ROOT);
-    Activation::of_module(writer, body, closure, enclosing.builtins())
+    Activation::of_module(
+        writer,
+        body,
+        enclosing.load(),
+        closure,
+        enclosing.builtins(),
+    )
 }
 
 /// Tie the lone module member of `component`: the caller's supplied body, each slot placed where
@@ -110,7 +116,7 @@ pub fn tie_member<'graph, 'cell, 'x>(
     // A body-born module is its code over what it captures, digested where a demand first
     // reaches it: the module keeps its body's closure until then.
     let born = Born::Body {
-        shape: body.shape(),
+        body: body.load().body(body.shape()),
         closure: body.closure(),
     };
     Ok(Module::tie(writer, ktype, &members, born, types))

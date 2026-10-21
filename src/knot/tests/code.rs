@@ -148,14 +148,14 @@ fn using_fills_the_holes_a_record_names_and_ignores_the_rest() {
             };
             let (x, y) = (fixture.name("x"), fixture.name("y"));
 
-            let filled =
-                using(writer, q, record("first"), types, scratch).expect("the fill agrees");
+            let filled = using(writer, lines.load, q, record("first"), types, scratch)
+                .expect("the fill agrees");
             assert_eq!(supplied(filled), [(x, 1.0)], "`z` names no hole");
             assert!(supplied(q).is_empty(), "the source code is unchanged");
             assert_eq!(filled.ktype(), q.ktype());
 
-            let both =
-                using(writer, filled, record("second"), types, scratch).expect("the fill agrees");
+            let both = using(writer, lines.load, filled, record("second"), types, scratch)
+                .expect("the fill agrees");
             let mut expected = [(x, 1.0), (y, 2.0)];
             expected.sort_by_key(|(name, _)| *name);
             assert_eq!(
@@ -167,9 +167,11 @@ fn using_fills_the_holes_a_record_names_and_ignores_the_rest() {
             let equal = |left: Knotted<'_, '_>, right: Knotted<'_, '_>| {
                 Value::Knotted(left).equals(&Value::Knotted(right), types, scratch)
             };
-            let twice = using(writer, q, record("first"), types, scratch).expect("the fill agrees");
+            let twice = using(writer, lines.load, q, record("first"), types, scratch)
+                .expect("the fill agrees");
             assert_eq!(equal(filled, twice), Ok(true));
-            let nine = using(writer, q, record("other"), types, scratch).expect("the fill agrees");
+            let nine = using(writer, lines.load, q, record("other"), types, scratch)
+                .expect("the fill agrees");
             assert_eq!(equal(filled, nine), Ok(false));
             assert_eq!(equal(filled, q), Ok(false), "a filled hole is a binding");
         });
@@ -190,8 +192,15 @@ fn using_reads_a_module_by_member_name_and_keeps_refused_code_unchanged() {
             let writer = context.writer();
             let activation = fixture.run(writer, types, &lines, &[]);
             let m = bound(fixture, activation, "m");
-            let q = using(writer, code(fixture, activation, "q"), m, types, scratch)
-                .expect("the fill agrees");
+            let q = using(
+                writer,
+                lines.load,
+                code(fixture, activation, "q"),
+                m,
+                types,
+                scratch,
+            )
+            .expect("the fill agrees");
             assert!(matches!(
                 q.code().expect("a quote's node").supplied(),
                 [(_, Link::Value(Value::Number(4.0)))]
@@ -204,7 +213,7 @@ fn using_reads_a_module_by_member_name_and_keeps_refused_code_unchanged() {
                     .refusal()
                     .is_some()
             );
-            let kept = using(writer, bad, m, types, scratch).expect("the fill agrees");
+            let kept = using(writer, lines.load, bad, m, types, scratch).expect("the fill agrees");
             assert!(
                 ptr::eq(kept.node(), bad.node()),
                 "a refused code's holes are unknown"
@@ -229,7 +238,7 @@ fn using_fills_a_keyworded_hole_with_a_module_s_registrations_at_its_key() {
             let q = code(fixture, activation, "q");
             let m = bound(fixture, activation, "m");
             let greet = BinderSymbol::Key(fixture.symbols.key("GREET _").expect("a key"));
-            let filled = using(writer, q, m, types, scratch).expect("the fill agrees");
+            let filled = using(writer, lines.load, q, m, types, scratch).expect("the fill agrees");
             let [(name, Link::Value(Value::List(list)))] =
                 filled.code().expect("a quote's node").supplied()
             else {
@@ -247,7 +256,8 @@ fn using_fills_a_keyworded_hole_with_a_module_s_registrations_at_its_key() {
                 ":(EXPR #(GREET _ :Str) -> Str)"
             );
             let none = bound(fixture, activation, "none");
-            let open = using(writer, q, none, types, scratch).expect("nothing to disagree with");
+            let open = using(writer, lines.load, q, none, types, scratch)
+                .expect("nothing to disagree with");
             assert!(
                 ptr::eq(open.node(), q.node()),
                 "a module with no registration at the key leaves the hole open"
@@ -271,7 +281,7 @@ fn using_refuses_registrations_ranked_other_than_the_code_s_own() {
             let q = code(fixture, activation, "q");
             let m = bound(fixture, activation, "m");
             assert_eq!(
-                using(writer, q, m, types, scratch),
+                using(writer, lines.load, q, m, types, scratch),
                 Err(UsingRefused::Ranking {
                     key: fixture.symbols.key("MOVE _ TO _").expect("a key")
                 })

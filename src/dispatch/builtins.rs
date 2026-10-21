@@ -358,7 +358,11 @@ pub(super) fn run<'graph, 'here>(
             };
             // A quantified member is read at the instance the load solved at this site, or as it
             // is at a call's head.
-            match at.view.shape().instance_at(Site::of_node(node)) {
+            match at
+                .view
+                .load()
+                .instance_at(at.view.shape(), Site::of_node(node))
+            {
                 Some(InstanceRead::AsIs) => member,
                 // Through a header at a scheme: a header at its instance over the same member.
                 Some(InstanceRead::Solved(solution))
@@ -445,7 +449,7 @@ pub(super) fn run<'graph, 'here>(
         }
         Native::Using => {
             let code = value(0).as_code().expect("a `Code` slot admits code alone");
-            match using(writer, code, value(1), types, scratch) {
+            match using(writer, at.view.load(), code, value(1), types, scratch) {
                 Ok(filled) => Value::Knotted(filled),
                 Err(UsingRefused::Ranking { key }) => raise(Raised::RankedTwice { key }),
             }

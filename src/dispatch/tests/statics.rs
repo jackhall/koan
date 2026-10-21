@@ -39,8 +39,8 @@ pub(super) fn slot(program: &Program<'_>, shape: &BodyShape<'_>, name: &str) -> 
 /// The static type of the binder `name` in `shape`, rendered: its upper end, or a quantified
 /// callable's scheme.
 pub(super) fn binder(program: &Program<'_>, shape: &BodyShape<'_>, name: &str) -> String {
-    let typed = shape
-        .binder_type(slot(program, shape, name))
+    let typed = (program.facts())
+        .binder_type(shape, slot(program, shape, name))
         .expect("the load typed the shape");
     let rendered = match typed {
         DeclaredType::Type(interval) => DeclaredType::Type(interval.upper),
@@ -56,8 +56,8 @@ pub(super) fn binder(program: &Program<'_>, shape: &BodyShape<'_>, name: &str) -
 
 /// The static type of the binder `name` in `shape`, which binds no quantified callable.
 pub(super) fn interval(program: &Program<'_>, shape: &BodyShape<'_>, name: &str) -> Interval {
-    shape
-        .binder_type(slot(program, shape, name))
+    (program.facts())
+        .binder_type(shape, slot(program, shape, name))
         .expect("the load typed the shape")
         .as_type()
         .expect("the binder binds no quantified callable")
@@ -110,7 +110,11 @@ pub(super) fn let_narrowing(program: &Program<'_>, shape: &BodyShape<'_>, name: 
     let Some(ExpressionPart::Expression(node)) = shape.rhs(slot(program, shape, name)) else {
         panic!("`{name}` is bound to a node");
     };
-    rendered(shape.use_statics(Site::of_node(node.reference())).narrowing)
+    rendered(
+        (program.facts())
+            .use_statics(shape, Site::of_node(node.reference()))
+            .narrowing,
+    )
 }
 
 /// A narrowing, rendered: `full`, `selected`, or `kept` followed by each kept candidate's verdict.
@@ -559,8 +563,8 @@ fn a_signature_with_more_members_is_always_at_one_with_fewer_and_outranks_it() {
             shape
                 .registrations()
                 .iter()
-                .find_map(
-                    |registration| match shape.registered_type(registration.slot) {
+                .find_map(|registration| {
+                    match program.facts().registered_type(shape, registration.slot) {
                         Static::Closed(registered) => {
                             let rendered = display_name(
                                 registered.shape,
@@ -572,8 +576,8 @@ fn a_signature_with_more_members_is_always_at_one_with_fewer_and_outranks_it() {
                                 .then_some(registered.shape)
                         }
                         _ => None,
-                    },
-                )
+                    }
+                })
                 .expect("both overloads are typed at load")
         };
         let (crates, boxes) = (pick(true), pick(false));
@@ -618,7 +622,7 @@ fn a_fellow_s_callable_body_reads_the_fellow_s_own_type() {
         let (_, f) = (program.shape().nested_shapes().iter())
             .find(|(_, nested)| nested.kind() == ShapeKind::Callable)
             .expect("the function's body is nested in the program");
-        let read = f.statement_type(0).expect("the load typed the body");
+        let read = (program.facts().statement_type(f, 0)).expect("the load typed the body");
         let rendered = display_name(
             read.upper,
             &reading(program.tiers(), &Bump::new()),

@@ -20,7 +20,7 @@ mod units;
 
 use crate::memory::{
     Bump, BumpAllocator, CellGraph, Edge, KnotPlan, ProgramBrand, ReleaseAbsorption, Verdict,
-    Writer, covariant, program_storage, reattachable,
+    Writer, covariant, program_storage, reattachable, resident,
 };
 use crate::parse::{KExpression, parse};
 use crate::source::{FileId, SourceRef, Span};
@@ -33,7 +33,7 @@ use crate::values::{
     DeepCopy, Knotted, KnottedFamily, MemoBits, Resolved, TypeValue, Value, ValueFamily, Weight,
 };
 
-use super::{Builtins, ShapeError};
+use super::{Builtins, LoadFacts, ShapeError, Shapes};
 
 /// A continuation family for a graph whose cells only store.
 struct Step;
@@ -152,6 +152,12 @@ pub(super) struct Fixture<'f, 'graph> {
 impl<'graph> Fixture<'_, 'graph> {
     pub fn scratch(&self) -> BumpAllocator<'_> {
         self.scratch
+    }
+
+    /// The facts the cells of `shapes` hold, laid in program storage as a load lays them.
+    pub fn load(&self, shapes: &'graph Shapes<'graph>) -> &'graph LoadFacts<'graph> {
+        let writer = self.program.writer();
+        resident(writer, LoadFacts::of_cells(writer, shapes))
     }
 
     /// Every top-level line of `source`, parsed into program storage.

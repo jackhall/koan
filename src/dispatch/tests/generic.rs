@@ -37,10 +37,10 @@ pub(super) fn expressed<'graph>(
 }
 
 /// The narrowing of the keyworded use written as the statement `index` of `shape`.
-fn statement(shape: &BodyShape<'_>, index: usize) -> String {
+fn statement(program: &Program<'_>, shape: &BodyShape<'_>, index: usize) -> String {
     rendered(
-        shape
-            .use_statics(Site::of_node(&shape.body()[index]))
+        (program.facts())
+            .use_statics(shape, Site::of_node(&shape.body()[index]))
             .narrowing,
     )
 }
@@ -50,7 +50,7 @@ fn statement(shape: &BodyShape<'_>, index: usize) -> String {
 pub(super) fn last_in(source: &str, lead: &str) -> String {
     loaded(source, |program| {
         let body = expressed(program, program.shape(), lead);
-        statement(body, body.body().len() - 1)
+        statement(program, body, body.body().len() - 1)
     })
 }
 
@@ -110,10 +110,11 @@ fn typing_a_quote_s_code_a_second_time_interns_no_type() {
 fn an_overload_over_an_enclosing_name_is_rigid_and_selected_without_a_solve() {
     loaded(OUTER, |program| {
         let outer = expressed(program, program.shape(), "OUTER");
-        let registered = match outer.registered_type(outer.registrations()[0].slot) {
-            Static::Rigid { value, .. } => value.shape,
-            _ => panic!("`INNER` is rigid over `Elt`"),
-        };
+        let registered =
+            match (program.facts()).registered_type(outer, outer.registrations()[0].slot) {
+                Static::Rigid { value, .. } => value.shape,
+                _ => panic!("`INNER` is rigid over `Elt`"),
+            };
         let bump = Bump::new();
         let types = &reading(program.tiers(), &bump);
         let DeclaredType::Type(registered) = registered else {
@@ -123,7 +124,10 @@ fn an_overload_over_an_enclosing_name_is_rigid_and_selected_without_a_solve() {
             shape_slots(registered, types).collect::<Vec<_>>(),
             [lexical(program, 0, "Elt", KType::ANY)]
         );
-        assert_eq!(statement(outer, outer.body().len() - 1), "selected");
+        assert_eq!(
+            statement(program, outer, outer.body().len() - 1),
+            "selected"
+        );
     });
 }
 
@@ -263,7 +267,12 @@ fn a_candidate_over_a_variable_outside_code_is_unknown_in_it() {
             let code = code(wrapped);
             let greet = use_leading(program, &code.body()[0], "GREET").expect("a `GREET` use");
             assert_eq!(
-                rendered(code.use_statics(Site::of_node(greet)).narrowing),
+                rendered(
+                    program
+                        .facts()
+                        .use_statics(code, Site::of_node(greet))
+                        .narrowing
+                ),
                 "full",
                 "`{source}`"
             );
@@ -278,8 +287,8 @@ fn eval_is_its_declared_type() {
     loaded(named, |program| {
         assert_eq!(let_narrowing(program, program.shape(), "m"), "selected");
         assert_eq!(
-            code(program.shape())
-                .statement_type(0)
+            (program.facts())
+                .statement_type(code(program.shape()), 0)
                 .map(|typed| typed.upper),
             Some(Parametric::from(KType::ANY)),
             "the code's own cell keeps the hole a `USING` may fill"

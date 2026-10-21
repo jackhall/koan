@@ -39,7 +39,7 @@ fn an_annotation_the_load_settles_is_not_checked_at_run() {
         let annotation = shape
             .annotation(slot(program, shape, "n"))
             .expect("`n` is annotated");
-        assert!(shape.settled(Site::of(annotation)));
+        assert!(program.facts().settled(shape, Site::of(annotation)));
     });
 }
 

@@ -5,7 +5,7 @@ use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::num::NonZeroUsize;
 
-use crate::program::CellSubstrate;
+use crate::program::{CellSubstrate, Program};
 use crate::scheduler::{LAID, TIERS, Tiers};
 use crate::scope::{BodyShape, Mint, ShapeKind, Slot};
 
@@ -80,17 +80,17 @@ pub(super) fn ran_under(depth: u32, source: &str, bounds: SpecBounds) -> Ran {
 /// How many frame bodies [`PRELUDE`] and `source` write cache: what a test reads to see it runs
 /// the bodies it means to.
 fn caching(source: &str) -> usize {
-    fn count(shape: &BodyShape<'_>) -> usize {
+    fn count(program: &Program<'_>, shape: &BodyShape<'_>) -> usize {
         (shape.nested_shapes().iter())
             .map(|(_, nested)| {
                 let frame = matches!(nested.kind(), ShapeKind::Callable | ShapeKind::Code);
-                usize::from(frame && nested.caches()) + count(nested)
+                usize::from(frame && program.facts().caches(nested)) + count(program, nested)
             })
             .sum()
     }
     loaded(
         &format!("{PRELUDE}LET chain = (Link {{next = null}})\n{source}"),
-        |program| count(program.shape()),
+        |program| count(program, program.shape()),
     )
 }
 
@@ -1017,7 +1017,8 @@ fn keyed(source: &str) -> Vec<(ShapeKind, Vec<String>, Option<Vec<String>>)> {
                 let names = (0..shape.slots())
                     .map(|index| name(shape, Slot(index as u32)))
                     .collect();
-                let invariant = (shape.caching().and_then(|caching| caching.invariant))
+                let invariant = (program.facts().caching(shape))
+                    .and_then(|caching| caching.invariant)
                     .map(|slots| slots.iter().map(|slot| name(shape, *slot)).collect());
                 (shape.kind(), names, invariant)
             })
@@ -1081,7 +1082,7 @@ pub(super) fn minted(source: &str) -> Vec<(Vec<String>, Vec<Mint>)> {
                         program.symbols().display(symbol).to_string()
                     })
                     .collect();
-                let mints = (shape.caching().into_iter())
+                let mints = (program.facts().caching(shape).into_iter())
                     .flat_map(|caching| caching.mints.iter().map(|(_, mint)| *mint))
                     .collect();
                 (names, mints)

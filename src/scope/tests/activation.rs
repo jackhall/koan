@@ -15,13 +15,13 @@ fn assert_copy<T: Copy>() {}
 fn an_activation_is_a_copy_of_its_bytes_and_starts_empty() {
     assert_copy::<Activation<'static, 'static>>();
     assert_copy::<ActivationView<'static, 'static>>();
-    assert_eq!(size_of::<Activation<'static, 'static>>(), 80);
-    assert_eq!(size_of::<ActivationView<'static, 'static>>(), 64);
+    assert_eq!(size_of::<Activation<'static, 'static>>(), 88);
+    assert_eq!(size_of::<ActivationView<'static, 'static>>(), 72);
     with_fixture(|fixture| {
         let lines = fixture.parse("LET a = 1\nLET b = a");
         fixture.in_cell(|writer, _| {
             let table: &Builtins = builtins(fixture, writer);
-            let shape = crate::scope::Shapes::of_program(
+            let shapes = crate::scope::Shapes::of_program(
                 fixture.program,
                 &lines,
                 table,
@@ -29,9 +29,10 @@ fn an_activation_is_a_copy_of_its_bytes_and_starts_empty() {
                 fixture.symbols,
                 fixture.scratch(),
             )
-            .map(|shapes| shapes.root())
             .unwrap();
-            let activation: Activation = Activation::of_program(writer, shape, table);
+            let shape = shapes.root();
+            let activation: Activation =
+                Activation::of_program(writer, shape, fixture.load(shapes), table);
             let view = activation.view();
             let b_reads_a = shape.mentions()[0];
             let (a, _) = shape
@@ -56,7 +57,7 @@ fn reading_an_empty_slot_breaks_the_scheduler_invariant() {
         let lines = fixture.parse("LET a = 1\nLET b = a");
         fixture.in_cell(|writer, _| {
             let table: &Builtins = Builtins::empty();
-            let shape = crate::scope::Shapes::of_program(
+            let shapes = crate::scope::Shapes::of_program(
                 fixture.program,
                 &lines,
                 table,
@@ -64,9 +65,10 @@ fn reading_an_empty_slot_breaks_the_scheduler_invariant() {
                 fixture.symbols,
                 fixture.scratch(),
             )
-            .map(|shapes| shapes.root())
             .unwrap();
-            let activation: Activation = Activation::of_program(writer, shape, table);
+            let shape = shapes.root();
+            let activation: Activation =
+                Activation::of_program(writer, shape, fixture.load(shapes), table);
             activation.read(shape.mentions()[0].coordinate);
         });
     });

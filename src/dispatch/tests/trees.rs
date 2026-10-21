@@ -16,10 +16,14 @@ const COUNTER: &str = "SIG Counter FOR ALL #[Carrier] = \
                        (LET succ = (FN :{x :Number} -> Number = #(x + 1))))\n";
 
 /// The content tree of the operand of the `:|` ascription that is statement `index` of `shape`.
-fn statement_tree<'graph>(shape: &BodyShape<'graph>, index: usize) -> Tree<'graph> {
+fn statement_tree<'graph>(
+    program: &Program<'graph>,
+    shape: &BodyShape<'_>,
+    index: usize,
+) -> Tree<'graph> {
     operand(
-        shape
-            .view_tree(Site::of_node(&shape.body()[index]))
+        (program.facts())
+            .view_tree(shape, Site::of_node(&shape.body()[index]))
             .expect("the statement is an opaque ascription"),
     )
 }
@@ -45,8 +49,8 @@ fn let_tree<'graph>(
         panic!("`{name}` is bound to a node");
     };
     operand(
-        shape
-            .view_tree(Site::of_node(node.reference()))
+        (program.facts())
+            .view_tree(shape, Site::of_node(node.reference()))
             .expect("the right-hand side is an opaque ascription"),
     )
 }
@@ -61,7 +65,7 @@ fn leaf_binder<'graph>(
         panic!("a leaf keyed on a binder: {tree:?}");
     };
     assert!(chain.is_empty());
-    let declaring = shape.shape_at(binder.body);
+    let declaring = program.shapes().shape_at(binder.body);
     let name = program
         .symbols()
         .display(declaring.slot_name(binder.slot).symbol())
@@ -74,7 +78,7 @@ fn a_view_over_a_parameter_reads_back_a_leaf_on_the_parameter() {
     let source = format!("{COUNTER}LET seal = (FN :{{m :Counter}} -> Any = #(m :| Counter))");
     loaded(&source, |program| {
         let seal = body(program, program.shape(), "seal");
-        let tree = statement_tree(seal, 0);
+        let tree = statement_tree(program, seal, 0);
         assert_eq!(leaf_binder(program, tree, seal), ("m".to_string(), true));
     });
 }
@@ -88,7 +92,7 @@ fn a_view_over_a_capture_reads_back_the_leaf_its_source_is() {
     loaded(&source, |program| {
         let outer = body(program, program.shape(), "outer");
         let inner = body(program, outer, "inner");
-        let tree = statement_tree(inner, 0);
+        let tree = statement_tree(program, inner, 0);
         assert_eq!(leaf_binder(program, tree, outer), ("m".to_string(), true));
     });
 }
@@ -101,7 +105,7 @@ fn a_view_over_a_local_reads_back_a_leaf_on_its_let() {
     );
     loaded(&source, |program| {
         let f = body(program, program.shape(), "f");
-        let tree = statement_tree(f, 1);
+        let tree = statement_tree(program, f, 1);
         assert_eq!(leaf_binder(program, tree, f), ("local".to_string(), true));
     });
 }
@@ -112,7 +116,7 @@ fn a_view_over_an_expression_no_binder_names_reads_back_unnamed() {
         format!("{COUNTER}LET f = (FN :{{g :(FN :{{}} -> Any)}} -> Any = #((g {{}}) :| Counter))");
     loaded(&source, |program| {
         let f = body(program, program.shape(), "f");
-        let tree = statement_tree(f, 0);
+        let tree = statement_tree(program, f, 0);
         assert!(matches!(tree, Tree::Leaf(Leaf::Unnamed(_))), "{tree:?}");
         assert!(!tree.same_as(&tree), "an unnamed leaf is unlike itself");
     });
@@ -181,8 +185,8 @@ fn ran<R>(
 /// The digest the load computes for the opaque view `LET name = (<operand> :| <Sig>)` builds.
 fn view_digest(program: &Program<'_>, name: &str) -> String {
     let shape = program.shape();
-    let tree = shape
-        .view_tree(Site::of_node(let_node(program, shape, name)))
+    let tree = (program.facts())
+        .view_tree(shape, Site::of_node(let_node(program, shape, name)))
         .expect("the right-hand side is an opaque ascription");
     let digest = tree.digest().unwrap_or_else(|| panic!("closed: {tree:?}"));
     format!("{digest:?}")

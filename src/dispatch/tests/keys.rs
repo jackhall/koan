@@ -31,7 +31,7 @@ fn name(program: &Program<'_>, shape: &BodyShape<'_>, slot: Slot) -> String {
 
 /// The names `shape`'s key lists, in slot order: `None` where a call of it seeks nothing.
 fn listed(program: &Program<'_>, shape: &BodyShape<'_>) -> Option<Vec<String>> {
-    (shape.specialization_keys()).map(|slots| {
+    (program.facts().specialization_keys(shape)).map(|slots| {
         slots
             .iter()
             .map(|slot| name(program, shape, *slot))
@@ -72,7 +72,7 @@ fn a_body_keys_on_a_for_all_name_a_frontier_at_its_entry_waits_on() {
         let wrap = quantified(program);
         assert_eq!(listed(program, wrap), some(&["Elt"]));
         assert!(
-            (wrap.caching()).is_some_and(|caching| caching.invariant.is_none()),
+            (program.facts().caching(wrap)).is_some_and(|caching| caching.invariant.is_none()),
             "`WRAP` keys through its frontier alone"
         );
     });

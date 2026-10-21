@@ -99,16 +99,16 @@ pub fn fill_at_view<'graph, 'cell>(
     let Some(module) = source.knot_member().and_then(Knotted::module) else {
         return;
     };
-    let Some((shape, closure)) = module.pending() else {
+    let Some((body, closure)) = module.pending() else {
         return;
     };
     // The memos are placed for the captures of the body the load read; any other module's
     // content is left to the view's own walk.
-    if shape.segment() != slots.body {
+    if body.shape.segment() != slots.body {
         return;
     }
     let mut memo = None;
-    let captures = composed(shape, closure.links()).map(|(index, link)| {
+    let captures = composed(body, closure.links()).map(|(index, link)| {
         let cell = (slots.captures.iter())
             .find(|(each, _)| *each as usize == index)
             .and_then(|(_, at)| view.digest_memo(*at));
@@ -121,15 +121,15 @@ pub fn fill_at_view<'graph, 'cell>(
         }
         (index, digest)
     });
-    let content = ModuleContent::body(shape.code_digest(), captures);
+    let content = ModuleContent::body(body.shape.code_digest(), captures);
     #[cfg(test)]
     if CHECK_SLOT_MEMOS.get() {
         let mut fresh = Digests::new(types, scratch);
         let walked =
-            composed(shape, closure.links()).map(|(index, link)| (index, link.digest(&mut fresh)));
+            composed(body, closure.links()).map(|(index, link)| (index, link.digest(&mut fresh)));
         assert_eq!(
             content,
-            ModuleContent::body(shape.code_digest(), walked),
+            ModuleContent::body(body.shape.code_digest(), walked),
             "a slot's memo holds the digest of the value its capture holds"
         );
     }

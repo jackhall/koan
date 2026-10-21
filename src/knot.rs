@@ -66,7 +66,7 @@ use std::fmt;
 use crate::memory::{BumpAllocator, DropFree, Edge, Knot, Member, Writer, covariant, reattachable};
 use crate::parse::ExpressionPart;
 use crate::scope::Elaboration;
-use crate::scope::{Activation, ActivationView, BodyShape, Builtins, CaptureSlot, Site};
+use crate::scope::{Activation, ActivationView, Body, Builtins, CaptureSlot, Site};
 use crate::symbols::{BinderSymbol, SymbolInterner};
 use crate::type_lattice::{DeclaredType, KType, display_name};
 use crate::values::digest::{DigestHasher, Tag};
@@ -111,14 +111,19 @@ fn stamped<'graph, 'cell>(
     knot
 }
 
-/// Every capture of `links`, a closure of `shape`, that its code digest does not name — every one
-/// but a read of the program's top level, and every type capture — beside its slot: what a
-/// closure's or a module's content composes over its code.
-fn composed<'l, L>(shape: &BodyShape<'_>, links: &'l [L]) -> impl Iterator<Item = (usize, &'l L)> {
+/// Every capture of `links`, a closure of `body`, that its content composes, beside its slot: each
+/// builder capture its code digest does not name — every one but a read of the program's top level
+/// — and each type capture the body's contract names. What a closure's or a module's content
+/// composes over its code.
+fn composed<'l, L>(body: &Body<'_>, links: &'l [L]) -> impl Iterator<Item = (usize, &'l L)> {
+    let builder = body.shape.captures().len();
     links
         .iter()
         .enumerate()
-        .filter(move |(index, _)| shape.composes(CaptureSlot(*index as u32)))
+        .filter(move |(index, _)| match index.checked_sub(builder) {
+            None => body.shape.composes(CaptureSlot(*index as u32)),
+            Some(at) => body.contract[at],
+        })
 }
 
 /// A knot member: one node of a knot — a function, a data node, a module or a barrier over a
@@ -128,7 +133,7 @@ pub struct Knotted<'graph, 'cell>(Member<'cell, Node<'graph, 'cell>>);
 
 const _: () = assert!(size_of::<Knotted<'static, 'static>>() == 16);
 const _: () = assert!(size_of::<KValue<'static, 'static>>() == 24);
-const _: () = assert!(size_of::<KActivation<'static, 'static>>() == 96);
+const _: () = assert!(size_of::<KActivation<'static, 'static>>() == 104);
 /// The module arm sets the node's width; a barrier's six fields would widen every node in the
 /// program, so [`Node::Coerced`] points at them instead.
 const _: () = assert!(size_of::<Node<'static, 'static>>() == 64);

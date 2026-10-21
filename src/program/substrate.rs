@@ -229,10 +229,11 @@ impl CellSubstrate {
                 };
                 owner.symbols.freeze();
                 let writer = brand.writer();
+                let facts = resident(writer, crate::scope::LoadFacts::of_cells(writer, shapes));
                 let program = resident(
                     writer,
                     Program::new(
-                        shapes,
+                        facts,
                         builtins,
                         tiers,
                         error,

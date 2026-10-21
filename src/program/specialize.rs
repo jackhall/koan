@@ -1,7 +1,7 @@
 //! What a call seeks, and what a specialization runs.
 //!
 //! A call whose callee's body keys a specialization — the load laid it a key list
-//! (`BodyShape::specialization_keys`) — hands the drain a [`Seek`], whatever its frame's placement:
+//! (`LoadFacts::specialization_keys`) — hands the drain a [`Seek`], whatever its frame's placement:
 //! the build cell the callee was born under, the key of its segment under the content at each
 //! keyed name, the types that content carries, and [`specialize`], the work a missed specialization
 //! runs. A parameter's content is its argument; a `FOR ALL` name's is the call's solution at it,
@@ -45,6 +45,7 @@ pub fn seek<'graph>(
     region: &Chain<'_, '_, '_, '_>,
 ) -> Option<Seek<'graph, KBundle>> {
     let KBirth::Call {
+        program,
         callee,
         arguments,
         kind,
@@ -57,7 +58,7 @@ pub fn seek<'graph>(
     let (callee, arguments) = (*callee, *arguments);
     let function = called_function(callee)?;
     let shape = function.shape();
-    let keyed = shape.specialization_keys()?;
+    let keyed = program.facts().specialization_keys(shape)?;
     let scratch = Bump::new();
     // The call's solution of its group, solved at most once and only for a keyed `FOR ALL` name:
     // `None` past a header or a barrier, whose frame solves after retyping or crossing.

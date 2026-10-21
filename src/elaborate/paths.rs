@@ -97,7 +97,7 @@ pub fn bound_path<'graph, XF: KnottedFamily<'graph>>(
         Some(through) => Some(match types.concrete(through) {
             Some(closed) => closed,
             None => {
-                let located = view.shape().through_at(entry.level)?;
+                let located = view.load().through_at(view.shape(), entry.level)?;
                 let bindings = solutions(located, view, &scratch, &|_, _| None)?;
                 types.concrete(substitute_levels(types, &scratch, through, &bindings))?
             }

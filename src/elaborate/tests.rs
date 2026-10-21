@@ -15,7 +15,8 @@ mod projections;
 use crate::memory::{Bump, BumpAllocator, ProgramBrand, Writer, program_storage, resident};
 use crate::parse::{KExpression, parse};
 use crate::scope::{
-    Activation, BodyShape, Builtins, ClosureBindings, Coordinate, Registration, Slot, Target, Which,
+    Activation, BodyShape, Builtins, ClosureBindings, Coordinate, LoadFacts, Registration, Slot,
+    Target, Which,
 };
 use crate::symbols::{BinderSymbol, SymbolInterner, TypeSymbol};
 use crate::type_lattice::KType;
@@ -122,6 +123,7 @@ impl<'p, 'graph, 'cell> Program<'p, 'graph, 'cell> {
             Activation::of_module(
                 self.writer,
                 body,
+                self.activation.load(),
                 ClosureBindings::empty(),
                 self.activation.builtins(),
             ),
@@ -226,13 +228,17 @@ pub(super) fn with_program<R>(
         })
         .collect();
     let builtins: &Builtins = Builtins::new(writer, &scratch, &[], &table, &[]);
-    let shape =
+    let shapes =
         crate::scope::Shapes::of_program(program, &lines, builtins, &types, &symbols, &scratch)
-            .map(|shapes| shapes.root())
             .unwrap_or_else(|error| {
                 panic!("`{source}` shapes: {}", error.display(&symbols, &types))
             });
-    let activation: &Activation = resident(writer, Activation::of_program(writer, shape, builtins));
+    let shape = shapes.root();
+    let load = resident(writer, LoadFacts::of_cells(writer, shapes));
+    let activation: &Activation = resident(
+        writer,
+        Activation::of_program(writer, shape, load, builtins),
+    );
     for slot in 0..shape.slots() {
         let slot = Slot(slot as u32);
         let name = symbols.display(shape.slot_name(slot).symbol()).to_string();

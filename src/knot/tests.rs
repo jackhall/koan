@@ -30,7 +30,7 @@ use crate::memory::{
 };
 use crate::parse::{BodyKind, Role};
 use crate::parse::{ExpressionPart, KExpression, parse};
-use crate::scope::{BodyShape, Builtins, Component, Slot};
+use crate::scope::{BodyShape, Builtins, Component, LoadFacts, Slot};
 use crate::symbols::{BinderSymbol, SymbolInterner, TypeSymbol, ValueSymbol};
 use crate::type_lattice::KType;
 use crate::values::tests::TestHeader;
@@ -65,10 +65,11 @@ pub(crate) struct Fixture<'f, 'graph> {
 }
 
 /// A program the load shaped: its parsed lines, and the shape [`Fixture::parse`] built over them
-/// before any cell ran. Reads as its lines.
+/// before any cell ran, beside the facts its activations read. Reads as its lines.
 pub(crate) struct Parsed<'graph> {
     lines: Vec<KExpression<'graph>>,
     pub shape: &'graph BodyShape<'graph>,
+    pub load: &'graph LoadFacts<'graph>,
 }
 
 impl<'graph> std::ops::Deref for Parsed<'graph> {
@@ -112,7 +113,7 @@ impl<'graph> Fixture<'_, 'graph> {
     pub fn parse(&self, source: &str) -> Parsed<'graph> {
         let lines = parse(self.program, self.symbols, source)
             .unwrap_or_else(|error| panic!("`{source}` parses: {error:?}"));
-        let shape = crate::scope::Shapes::of_program(
+        let shapes = crate::scope::Shapes::of_program(
             self.program,
             &lines,
             self.loaded,
@@ -120,14 +121,19 @@ impl<'graph> Fixture<'_, 'graph> {
             self.symbols,
             self.scratch,
         )
-        .map(|shapes| shapes.root())
         .unwrap_or_else(|error| {
             panic!(
                 "the program shapes: {}",
                 error.display(self.symbols, self.types)
             )
         });
-        Parsed { lines, shape }
+        let writer = self.program.writer();
+        let load = resident(writer, LoadFacts::of_cells(writer, shapes));
+        Parsed {
+            lines,
+            shape: shapes.root(),
+            load,
+        }
     }
 
     /// Run `step` in one cell of a graph built under `verdict`.
@@ -166,7 +172,7 @@ impl<'graph> Fixture<'_, 'graph> {
         parsed: &Parsed<'graph>,
         leave: &[&str],
     ) -> &'cell KActivation<'graph, 'cell> {
-        self.activated(writer, types, parsed.shape, self.loaded, leave)
+        self.activated(writer, types, parsed, self.loaded, leave)
     }
 
     /// `shape` activated in `writer`'s region over `builtins`, every component brought in through
@@ -175,11 +181,15 @@ impl<'graph> Fixture<'_, 'graph> {
         &self,
         writer: Writer<'cell, '_>,
         types: &Chain<'cell, 'cell, '_, '_>,
-        shape: &'graph BodyShape<'graph>,
+        parsed: &Parsed<'graph>,
         builtins: &'cell Builtins<'cell, Knotted<'graph, 'cell>>,
         leave: &[&str],
     ) -> &'cell KActivation<'graph, 'cell> {
-        let activation = resident(writer, KActivation::of_program(writer, shape, builtins));
+        let shape = parsed.shape;
+        let activation = resident(
+            writer,
+            KActivation::of_program(writer, shape, parsed.load, builtins),
+        );
         let left: Vec<BinderSymbol> = leave.iter().map(|name| self.name(name)).collect();
         // A reader takes a body's statements from its shape, never from the parse: the shape owns
         // them rewritten, and every site it records is an address inside them.

@@ -148,11 +148,11 @@ pub(super) fn evaluate<'graph>(
         return step.failed(StepError::Refused);
     };
     #[cfg(test)]
-    if within.routes || view.shape().caches() {
+    if within.routes || view.load().caches(view.shape()) {
         let address = std::ptr::from_ref(view.shape()).addr();
         crate::scheduler::CACHING.set(Some(address));
     }
-    if within.routes || view.shape().caches() {
+    if within.routes || view.load().caches(view.shape()) {
         let types = step.caching_types();
         evaluate_on(step, birth, stage, types)
     } else {
@@ -234,7 +234,7 @@ fn evaluate_on<'graph, 'here, 'tier, 'reg>(
 /// How an evaluation asks for a block whose value is its own: kept in a caching body, so a value
 /// leaves the body only where it adopts, and forwarded elsewhere.
 fn inside(at: &Evaluation<'_, '_, '_, '_, '_>) -> Use {
-    match at.view.shape().caches() {
+    match at.view.load().caches(at.view.shape()) {
         true => Use::Keeps,
         false => Use::Forwards,
     }
@@ -393,7 +393,9 @@ fn ascribe<'graph, 'here>(
     // `:|` views its operand; `:!` retypes it.
     if mode == Ascription::Opaque {
         debug_assert!(
-            at.view.shape().mints_at(Site::of_node(node)),
+            at.view
+                .load()
+                .mints_at(at.view.shape(), Site::of_node(node)),
             "the load recorded the opaque view at {:?} as a minting site",
             node.source,
         );
@@ -405,7 +407,8 @@ fn ascribe<'graph, 'here>(
         }
         // Under `routes` an invariant site's operand and view are adopted into the warm tier, so
         // the next hop finds both there and the verdicts over them stay warm.
-        let invariant = at.view.shape().mint_at(Site::of_node(node)) == Some(Mint::Invariant);
+        let invariant =
+            at.view.load().mint_at(at.view.shape(), Site::of_node(node)) == Some(Mint::Invariant);
         let warm = (at.within.routes && invariant)
             .then(|| step.agent_types())
             .flatten();
@@ -417,7 +420,11 @@ fn ascribe<'graph, 'here>(
         if let Some(warm) = &warm {
             adopt_value::<KnottedFamily>(into(warm), types, &value, &scratch);
         }
-        if let Some(slots) = at.view.shape().view_slots(Site::of_node(node)) {
+        if let Some(slots) = at
+            .view
+            .load()
+            .view_slots(at.view.shape(), Site::of_node(node))
+        {
             view::fill_at_view(value, slots, &at.view, types, &scratch);
         }
         let raised = match view::ascribe(writer, value, ascribed, types, &scratch) {
@@ -434,8 +441,8 @@ fn ascribe<'graph, 'here>(
                 // content.
                 debug_assert!(
                     at.view
-                        .shape()
-                        .view_tree(Site::of_node(node))
+                        .load()
+                        .view_tree(at.view.shape(), Site::of_node(node))
                         .and_then(|tree| tree.digest())
                         .is_none_or(|digest| digest
                             == Value::Knotted(view).digest(types, &scratch)),
@@ -457,7 +464,7 @@ fn ascribe<'graph, 'here>(
         };
         return finish(step, at, raised.raise(program, writer, &at.types));
     }
-    if at.view.shape().settled(Site::of_node(node)) {
+    if at.view.load().settled(at.view.shape(), Site::of_node(node)) {
         debug_assert!(
             satisfies(ascribed, &value, types, &scratch),
             "a settled ascription's operand satisfies it"
@@ -697,7 +704,7 @@ fn warmed<'graph, 'here>(
     value: &KValue<'graph, 'here>,
 ) {
     if at.within.routes
-        && at.view.shape().warm_at(site)
+        && at.view.load().warm_at(at.view.shape(), site)
         && let Some(warm) = step.agent_types()
     {
         warm.adopt_from(&at.types, value.ktype());
@@ -724,8 +731,7 @@ fn call<'graph, 'here>(
     let writer = step.writer();
     let mut arguments = BumpVec::with_capacity_in(operands.len(), &scratch);
     arguments.extend(operands.iter().map(Operand::ktype));
-    let shape = at.view.shape();
-    let fixed = shape.use_statics(Site::of_node(node));
+    let fixed = (at.view.load()).use_statics(at.view.shape(), Site::of_node(node));
     let contributed = contributed(at, fixed.contributions, &scratch);
     let selection = match fixed.narrowing {
         Narrowing::Full => {
@@ -817,7 +823,7 @@ fn handed<'here>(
     name_of: impl Fn(HandedTo) -> Option<Symbol>,
 ) -> &'here [Handed] {
     let mut handed = BumpVec::new_in(scratch);
-    for handoff in at.view.shape().handoffs(site) {
+    for handoff in at.view.load().handoffs(at.view.shape(), site) {
         let Some(digest) = (at.view.digest_memo(handoff.from)).and_then(|memo| memo.get()) else {
             continue;
         };
@@ -909,7 +915,10 @@ fn apply<'graph, 'here>(
         other => return unready(step, at, other),
     };
     let argument_site = Site::of(argument);
-    let recorded = at.view.shape().named_contributions(argument_site);
+    let recorded = at
+        .view
+        .load()
+        .named_contributions(at.view.shape(), argument_site);
     let [Operand::Value(head), Operand::Value(argument)] = operands[..] else {
         unreachable!("both parts of an application are evaluated")
     };
@@ -981,9 +990,9 @@ fn called<'graph, 'here>(
     let same = callee.as_callable().is_some() && callee.as_callable() == at.view.callable();
     let keyed = || {
         called_function(callee).is_some_and(|function| {
-            let shape = function.shape();
-            shape.specialization_keys().is_some()
-                && !shape.caching().is_some_and(|caching| caching.escapes)
+            let (load, shape) = (at.view.load(), function.shape());
+            load.specialization_keys(shape).is_some()
+                && !load.caching(shape).is_some_and(|caching| caching.escapes)
                 && at.within.build != function.closure().build()
         })
     };
@@ -1021,11 +1030,13 @@ fn carried_under_static<'graph, 'here>(
         return;
     };
     let expected = match node {
-        Evaluated::Part(part) => shape.value_type(Site::of(part)),
+        Evaluated::Part(part) => at.view.load().value_type(shape, Site::of(part)),
         // A statement lies in its shape's body run, so its index is its offset there.
         Evaluated::Statement(statement) => (std::ptr::from_ref(statement) as usize)
             .checked_sub(shape.body().as_ptr() as usize)
-            .and_then(|offset| shape.statement_type(offset / std::mem::size_of_val(statement))),
+            .and_then(|offset| {
+                (at.view.load()).statement_type(shape, offset / std::mem::size_of_val(statement))
+            }),
     };
     let Some(expected) = expected else {
         return;
@@ -1073,7 +1084,9 @@ fn in_place<'graph, 'here>(
             let shape = at.view.shape();
             let mention = shape.mention(Site::of(part))?;
             let read = at.view.read(mention.coordinate);
-            let Some(InstanceRead::Solved(solution)) = shape.instance_at(Site::of(part)) else {
+            let Some(InstanceRead::Solved(solution)) =
+                at.view.load().instance_at(shape, Site::of(part))
+            else {
                 return Some(read);
             };
             let Value::Knotted(member) = read else {
@@ -1225,7 +1238,7 @@ fn delivered<'graph, 'here>(
     at: &Evaluation<'graph, 'here, '_, '_, '_>,
     value: KValue<'graph, 'here>,
 ) -> Action<'graph, KBundle> {
-    match (at.view.shape().caches(), at.contract) {
+    match (at.view.load().caches(at.view.shape()), at.contract) {
         (true, Some(_)) => {
             // No step function's scratch reaches a delivery.
             let scratch = Bump::new();
@@ -1246,7 +1259,7 @@ fn exits<'graph, 'here>(
     scratch: BumpAllocator<'_>,
     adopt: impl FnOnce(&Exit<'_, '_, 'here, '_>),
 ) {
-    if at.view.shape().caches() {
+    if at.view.load().caches(at.view.shape()) {
         adopt(&Exit::new(step.types(), &at.types, scratch));
     }
 }

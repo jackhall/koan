@@ -601,10 +601,11 @@ pub fn solutions<'graph, 'x, XF: KnottedFamily<'graph>>(
                 _ => return None,
             },
             Source::Path { at, root, level } => {
-                let root = view.shape().shape_at(root);
-                match root.path_closed(level) {
+                let load = view.load();
+                let root = load.shapes().shape_at(root);
+                match load.path_closed(root, level) {
                     Some(closed) => closed,
-                    None => paths(at?, root.path_entry(level)?)?,
+                    None => paths(at?, load.path_entry(root, level)?)?,
                 }
             }
         };

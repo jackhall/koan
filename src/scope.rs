@@ -33,6 +33,7 @@ mod closure;
 mod groups;
 mod header;
 mod keyed;
+mod records;
 mod relay;
 mod settled;
 mod shape;
@@ -55,6 +56,7 @@ pub use closure::ClosureBindings;
 pub use groups::{BuiltinGroup, GroupFrame, is_equal, is_equality, is_unequal};
 pub use header::{HalfHeader, RegionHeader};
 pub use keyed::{Keyed, KeyedEntry};
+pub use records::{Body, LoadFacts};
 pub use relay::{ChainRelay, Relay};
 pub use settled::{ChannelSettled, Resumption, Settled, StaticsSettled};
 pub use shape::facts::{

@@ -106,6 +106,77 @@ fn the_static_pass_reaches_every_fact_through_its_store() {
     );
 }
 
+/// The run's readers of the load's facts: each reads them through `LoadFacts` alone.
+const READERS: &[&str] = &[
+    "src/dispatch/evaluate.rs",
+    "src/dispatch/builtins.rs",
+    "src/program/body.rs",
+    "src/program/specialize.rs",
+    "src/knot.rs",
+    "src/knot/function.rs",
+    "src/knot/code.rs",
+    "src/knot/tie.rs",
+    "src/knot/module.rs",
+    "src/knot/module/birth.rs",
+    "src/knot/module/view.rs",
+    "src/elaborate/reads.rs",
+    "src/elaborate/paths.rs",
+    "src/scope/typed.rs",
+    "src/scope/activation.rs",
+    "src/scope/closure.rs",
+    "src/scope/tree.rs",
+];
+
+/// The cell accessors a run's reader might call on a shape, past the static pass's own: what
+/// `LoadFacts` answers in their place, and `shape_at`, which the shape table answers.
+const READ_ACCESSORS: &[&str] = &[
+    "caches",
+    "caching",
+    "capture_count",
+    "class",
+    "digested_count",
+    "digested_index",
+    "handoffs",
+    "instance_at",
+    "mint_at",
+    "mints_at",
+    "named_contributions",
+    "settled",
+    "shape_at",
+    "specialization_keys",
+    "statement_type",
+    "use_statics",
+    "view_slots",
+    "view_tree",
+    "warm_at",
+];
+
+#[test]
+fn the_run_reads_every_load_fact_through_the_read_door() {
+    use crate::tests::boundary::{cell_reads, strip_comments_and_strings};
+    let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let accessors: Vec<&str> = ACCESSORS.iter().chain(READ_ACCESSORS).copied().collect();
+    // The walk tells a read through the door from one on a shape.
+    let door =
+        "at.view.load().caches(shape)\n(program.facts())\n    .caches(shape)\nfacts.caches(a)";
+    assert!(cell_reads(door, &accessors).is_empty());
+    assert_eq!(cell_reads("view.shape().caches()", &accessors).len(), 1);
+    assert_eq!(cell_reads("(f(shape)).caches()", &accessors).len(), 1);
+    let mut offenders = Vec::new();
+    for reader in READERS {
+        let source = manifest.join(reader);
+        let code = strip_comments_and_strings(&std::fs::read_to_string(&source).unwrap());
+        for found in cell_reads(&code, &accessors) {
+            offenders.push(format!("{reader}:{found}"));
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "read a cell past `LoadFacts`:\n{}",
+        offenders.join("\n")
+    );
+}
+
 #[test]
 fn the_static_pass_s_rules_never_ask_which_half_they_run_over() {
     use crate::tests::boundary::{collect_sources, mode_branches, strip_comments_and_strings};

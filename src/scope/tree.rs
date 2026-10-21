@@ -153,9 +153,13 @@ impl<'graph> Tree<'graph> {
         }
     }
 
-    /// Member `index` of the knot `members` tie; `shapes` is any shape of their load, which finds
-    /// each member's body.
-    pub fn knot(shapes: &BodyShape<'_>, members: &'graph [KnotNode<'graph>], index: u32) -> Self {
+    /// Member `index` of the knot `members` tie; `code` is the code digest of each member's body,
+    /// by its segment.
+    pub fn knot(
+        code: &dyn Fn(Segment) -> ContentDigest,
+        members: &'graph [KnotNode<'graph>],
+        index: u32,
+    ) -> Self {
         let captured = members.iter().flat_map(|node| {
             node.captures
                 .iter()
@@ -173,11 +177,7 @@ impl<'graph> Tree<'graph> {
                     };
                     (*slot as usize, digest)
                 });
-                function_content(
-                    shapes.shape_at(node.body).code_digest(),
-                    node.instance,
-                    captures,
-                )
+                function_content(code(node.body), node.instance, captures)
             });
             member_digest(knot_digest(members.len(), contents), index as usize)
         });

@@ -38,13 +38,14 @@ impl<'graph, 'cell, X: Knotted> ClosureBindings<'cell, X> {
     /// caller minted for member `index` of the component the callable is born in. Each type capture
     /// follows, read from `enclosing` at its coordinate. Nothing is written to a region.
     pub fn read_captures<'x, XF: KnottedFamily<'graph, Closed<'cell> = X>>(
-        shape: &BodyShape<'_>,
+        shape: &BodyShape<'graph>,
         enclosing: &ActivationView<'graph, 'cell, XF>,
         scratch: BumpAllocator<'x>,
         mut edge: impl FnMut(u32) -> Edge,
     ) -> BumpVec<'x, Link<'cell, X>> {
         let captures = shape.captures();
-        let mut read = BumpVec::with_capacity_in(shape.capture_count(), scratch);
+        let load = enclosing.load();
+        let mut read = BumpVec::with_capacity_in(load.capture_count(shape), scratch);
         read.extend(captures.iter().map(|capture| match capture.source {
             CaptureSource::Read(coordinate) => Link::Value(enclosing.read(coordinate)),
             CaptureSource::Member { index, .. } => Link::Edge(edge(index)),
@@ -54,12 +55,7 @@ impl<'graph, 'cell, X: Knotted> ClosureBindings<'cell, X> {
                 )
             }
         }));
-        read.extend(
-            shape
-                .type_captures()
-                .iter()
-                .map(|at| Link::Value(enclosing.read(*at))),
-        );
+        read.extend((load.type_captures(shape).iter()).map(|at| Link::Value(enclosing.read(*at))));
         read
     }
 

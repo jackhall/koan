@@ -12,8 +12,8 @@ use crate::memory::{BumpAllocator, KnotPlan, Writer, resident};
 use crate::parse::{ExpressionPart, KExpression};
 use crate::scope::{
     Activation, Address, Binder, BodyShape, Builtins, Candidate, CaptureSlot, CaptureSource,
-    ClosureBindings, Coordinate, Lands as ScopeLands, MentionClass, PathId, Position, Root,
-    Segment, ShapeError, ShapeKind, Shapes, Site, Slot, Target, UnitWork, Unknown, each_part,
+    ClosureBindings, Coordinate, Lands as ScopeLands, LoadFacts, MentionClass, PathId, Position,
+    Root, Segment, ShapeError, ShapeKind, Shapes, Site, Slot, Target, UnitWork, Unknown, each_part,
     part_of,
 };
 use crate::source::SourceRef;
@@ -485,7 +485,7 @@ fn shaped_plan(program: &plan::Scope, test: impl for<'g, 'c> FnOnce(ShapedPlan<'
         let lines = fixture.parse(&rendering.source);
         fixture.in_cell(|writer, _| {
             let table = builtins(fixture, writer);
-            let shape = crate::scope::Shapes::of_program(
+            let shapes = crate::scope::Shapes::of_program(
                 fixture.program,
                 &lines,
                 table,
@@ -493,7 +493,6 @@ fn shaped_plan(program: &plan::Scope, test: impl for<'g, 'c> FnOnce(ShapedPlan<'
                 fixture.symbols,
                 fixture.scratch(),
             )
-            .map(|shapes| shapes.root())
             .unwrap_or_else(|error| {
                 panic!(
                     "`{}` shapes: {}",
@@ -501,6 +500,8 @@ fn shaped_plan(program: &plan::Scope, test: impl for<'g, 'c> FnOnce(ShapedPlan<'
                     error.display(fixture.symbols, fixture.types)
                 )
             });
+            let shape = shapes.root();
+            let load = fixture.load(shapes);
             let nodes: Vec<_> = lines.iter().collect();
             let located = locate(&rendering, Some(shape), &nodes);
             test(ShapedPlan {
@@ -509,6 +510,7 @@ fn shaped_plan(program: &plan::Scope, test: impl for<'g, 'c> FnOnce(ShapedPlan<'
                 rendering: &rendering,
                 located,
                 shape,
+                load,
                 writer,
                 table,
             });
@@ -547,6 +549,7 @@ where
     rendering: &'p Rendering<'p>,
     located: Located<'g>,
     shape: &'g BodyShape<'g>,
+    load: &'g LoadFacts<'g>,
     writer: Writer<'c, 'p>,
     table: &'c Builtins<'c, Probe>,
 }
@@ -715,7 +718,14 @@ fn activate<'g, 'c>(
                     writer,
                     scratch,
                     table,
-                    Activation::of_callable(writer, nested, Probe(u32::MAX), bindings, table),
+                    Activation::of_callable(
+                        writer,
+                        nested,
+                        activation.load(),
+                        Probe(u32::MAX),
+                        bindings,
+                        table,
+                    ),
                     chain,
                     next,
                 );
@@ -856,7 +866,7 @@ proptest! {
         let program = Generator::new(&choices).program();
         shaped_plan(&program, |shaped| {
             let activation: Activation<'_, '_, ProbeFamily> =
-                Activation::of_program(shaped.writer, shaped.shape, shaped.table);
+                Activation::of_program(shaped.writer, shaped.shape, shaped.load, shaped.table);
             let mut chain = Vec::new();
             activate(shaped.writer, shaped.scratch, shaped.table, activation, &mut chain, &mut 1.0);
         });

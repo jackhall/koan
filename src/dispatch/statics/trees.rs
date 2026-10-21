@@ -649,7 +649,7 @@ impl<'p, 'graph: 'p, 'tier: 'p> Pass<'p, '_, 'graph, 'tier, '_, '_> {
             });
         }
         Ok(Some(Tree::knot(
-            self.chain[0].shape,
+            &|segment| self.chain[0].shape.shape_at(segment).code_digest(),
             collect(self.scratch, members.iter().copied()),
             index,
         )))
@@ -916,7 +916,7 @@ impl<'p, 'graph: 'p, 'tier: 'p> Pass<'p, '_, 'graph, 'tier, '_, '_> {
                     });
                 }
                 Tree::knot(
-                    self.chain[0].shape,
+                    &|segment| self.chain[0].shape.shape_at(segment).code_digest(),
                     collect(self.scratch, nodes.iter().copied()),
                     index,
                 )
