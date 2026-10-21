@@ -136,7 +136,7 @@ fn a_closure_captures_a_type_only_where_a_call_in_it_contributes_it() {
 /// A closure's layout carries every enclosing type name bound when its birth runs — `Elt` and
 /// `Key`, bound at `OUTER`'s entry, though `f` reads only `x` — and not `Later`, bound after it
 /// (ruling 37). Its content composes none of them: no call in it contributes one.
-#[cfg(feature = "one-walk")]
+#[cfg(not(feature = "old-walk"))]
 #[test]
 fn a_closure_carries_every_enclosing_type_name_bound_at_its_birth() {
     use crate::scope::{Coordinate, Target};

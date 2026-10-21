@@ -230,7 +230,7 @@ fn a_capture_keeps_its_type_along_the_chain() {
     );
 }
 
-#[cfg(not(feature = "one-walk"))]
+#[cfg(feature = "old-walk")]
 #[test]
 fn a_cyclic_binding_and_a_quote_s_hole_are_typed() {
     loaded("LET f = (FN :{} -> Any = #(a))\nLET a = [f]", |program| {

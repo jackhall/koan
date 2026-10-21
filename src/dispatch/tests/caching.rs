@@ -488,7 +488,7 @@ fn a_loop_passing_a_record_on_bare_digests_it_once_per_loop() {
     );
 }
 
-#[cfg(not(feature = "one-walk"))]
+#[cfg(feature = "old-walk")]
 #[test]
 fn only_a_use_that_may_call_a_function_hands_a_memo_on() {
     // `RUN`'s `cfg` keeps a memo; `ATTR` can select only a builtin, which runs no frame to keep it,
@@ -988,7 +988,7 @@ fn laid_through_caching_chains() {
 /// A tail edge into a registration the load types `Unknown` pairs by its written slots (D1.9):
 /// `SPIN`'s parameter `e` reads a meet over `Elt`, so its registration is untyped, and its tail
 /// call passes `Item` on bare, so the nominal it declares over it is invariant.
-#[cfg(feature = "one-walk")]
+#[cfg(not(feature = "old-walk"))]
 #[test]
 fn a_tail_edge_into_an_untyped_registration_pairs_by_its_written_slots() {
     let source = program(

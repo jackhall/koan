@@ -2,8 +2,8 @@
 //! ranking at load, an `EVAL`'s declared type, returns read through a group's intervals, and a
 //! union in a group's parameter: its members tried most specific first, and a tie refused.
 
-// The tests reading the old passes' cells are gated off under `one-walk` until Phase 6.
-#![cfg_attr(feature = "one-walk", allow(unused_imports))]
+// The tests reading the old passes' cells run under `old-walk` alone.
+#![cfg_attr(not(feature = "old-walk"), allow(unused_imports))]
 
 use crate::memory::Bump;
 use crate::parse::{ExpressionPart, KExpression};
@@ -200,7 +200,7 @@ fn a_static_type_is_exact_where_the_load_knows_the_carried_type() {
     );
 }
 
-#[cfg(not(feature = "one-walk"))]
+#[cfg(feature = "old-walk")]
 #[test]
 fn a_crossing_into_code_or_out_of_it_is_read_through_bounds() {
     loaded(

@@ -224,7 +224,7 @@ fn a_built_use_selects_among_the_codes_registrations_and_the_offered_ones() {
 /// A quote's `$` names read their static types where the quote is written (ruling 33): a use in
 /// its code over one is admitted at the load, and an annotation it can never satisfy refuses the
 /// code, which the `EVAL` running it reports.
-#[cfg(feature = "one-walk")]
+#[cfg(not(feature = "old-walk"))]
 #[test]
 fn a_quote_reads_its_dollar_names_at_their_static_types() {
     use crate::scope::{BodyShape, Candidate, Narrowing, ShapeKind};

@@ -141,7 +141,7 @@ pub struct CellSubstrate(Joined);
 
 /// The load's one walk over `shapes`: every record the language's walk computes, laid in program
 /// storage through `writer`, beside the folds the load lays over them.
-#[cfg(any(feature = "one-walk", all(test, feature = "walk-diff")))]
+#[cfg(any(not(feature = "old-walk"), all(test, feature = "walk-diff")))]
 fn walked<'graph, L: Language>(
     shapes: &'graph crate::scope::Shapes<'graph>,
     builtins: &'graph KBuiltins<'graph, 'graph>,
@@ -227,9 +227,9 @@ impl CellSubstrate {
                 .map_err(refused)?;
                 let shape = shapes.root();
                 // The diff runs the one walk first, so it reads no cell the old passes fill.
-                #[cfg(all(test, feature = "walk-diff", not(feature = "one-walk")))]
+                #[cfg(all(test, feature = "walk-diff"))]
                 let diffed = walked::<L>(shapes, builtins, types, brand.writer(), &scratch);
-                #[cfg(not(feature = "one-walk"))]
+                #[cfg(feature = "old-walk")]
                 {
                     crate::elaborate::type_channel(
                         shape,
@@ -243,10 +243,10 @@ impl CellSubstrate {
                     crate::build::list_seams(shape, brand.writer(), &scratch);
                     crate::build::lay_keys(shape, brand.writer(), &scratch);
                 }
-                #[cfg(feature = "one-walk")]
+                #[cfg(not(feature = "old-walk"))]
                 let walked = walked::<L>(shapes, builtins, types, brand.writer(), &scratch)
                     .map_err(refused)?;
-                #[cfg(all(test, feature = "walk-diff", not(feature = "one-walk")))]
+                #[cfg(all(test, feature = "walk-diff"))]
                 {
                     let records = diffed.map_err(refused)?;
                     let cells = crate::scope::LoadFacts::of_cells(brand.writer(), shapes);
@@ -272,9 +272,9 @@ impl CellSubstrate {
                 };
                 owner.symbols.freeze();
                 let writer = brand.writer();
-                #[cfg(not(feature = "one-walk"))]
+                #[cfg(feature = "old-walk")]
                 let facts = resident(writer, crate::scope::LoadFacts::of_cells(writer, shapes));
-                #[cfg(feature = "one-walk")]
+                #[cfg(not(feature = "old-walk"))]
                 let facts = walked;
                 let program = resident(
                     writer,

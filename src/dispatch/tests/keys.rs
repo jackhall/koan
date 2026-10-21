@@ -1,14 +1,14 @@
 //! Specialization keys over frontiers: which names a callable's key lists, read off the seams the
 //! load laid, and what a call of it seeks at run.
 
-// The tests reading the old passes' cells are gated off under `one-walk` until Phase 6.
-#![cfg_attr(feature = "one-walk", allow(unused_imports))]
+// The tests reading the old passes' cells run under `old-walk` alone.
+#![cfg_attr(not(feature = "old-walk"), allow(unused_imports))]
 
 use crate::program::Program;
 use crate::scope::{BodyShape, Mint, SeamAt, ShapeKind, Slot};
 
 use super::caching::{PRELUDE, Ran, bounds, every_shape, minted, ran_under};
-#[cfg(not(feature = "one-walk"))]
+#[cfg(feature = "old-walk")]
 use super::frontiers::{quantified, seams, unknown};
 use super::statics::{body, loaded};
 use crate::values::SpecBounds;
@@ -68,7 +68,7 @@ fn some(names: &[&str]) -> Option<Vec<String>> {
     Some(names.iter().map(|name| name.to_string()).collect())
 }
 
-#[cfg(not(feature = "one-walk"))]
+#[cfg(feature = "old-walk")]
 #[test]
 fn a_body_keys_on_a_for_all_name_a_frontier_at_its_entry_waits_on() {
     let source =
@@ -101,7 +101,7 @@ fn a_body_keys_on_a_module_parameter_a_path_through_it_waits_on() {
     });
 }
 
-#[cfg(not(feature = "one-walk"))]
+#[cfg(feature = "old-walk")]
 #[test]
 fn a_body_keys_on_its_own_names_a_nested_body_s_entry_frontier_waits_on() {
     // `PAIRED`'s fact waits on `OUTER`'s `m` and its own `Inner`, so it sits at `PAIRED`'s entry:
@@ -138,7 +138,7 @@ fn a_body_keys_on_its_own_names_a_nested_body_s_entry_frontier_waits_on() {
     assert_eq!(keyed(&alone, &["m"]), None);
 }
 
-#[cfg(not(feature = "one-walk"))]
+#[cfg(feature = "old-walk")]
 #[test]
 fn a_capture_keys_the_body_that_binds_it_never_the_one_reading_it() {
     let source = format!(
@@ -155,7 +155,7 @@ fn a_capture_keys_the_body_that_binds_it_never_the_one_reading_it() {
     });
 }
 
-#[cfg(not(feature = "one-walk"))]
+#[cfg(feature = "old-walk")]
 #[test]
 fn a_frontier_name_whose_parameter_does_not_key_keys_nothing() {
     // `m`'s declared type is open, so its digest is no constant cost.
@@ -365,7 +365,7 @@ fn an_escaping_body_s_hop_seeks_with_its_own_content() {
 /// A unit that reads an entry-bound name beside a later-bound one seams at the later one, so its
 /// callable keys nothing through it (F4): `s` reads `x`, bound at the entry, and `n`, bound at its
 /// own unit. `n` comes from a top-level maker, so no other unit seams at the entry.
-#[cfg(feature = "one-walk")]
+#[cfg(not(feature = "old-walk"))]
 #[test]
 fn a_unit_mixing_seams_keys_nothing_at_the_entry() {
     let source = format!(
@@ -378,7 +378,7 @@ fn a_unit_mixing_seams_keys_nothing_at_the_entry() {
 
 /// A unit that reads a parameter waits on every name its entry's frontier holds, so its callable
 /// keys on each keyable one: `p` reads `x` alone, and `SUBJECT` keys `Key` beside `Elt`.
-#[cfg(feature = "one-walk")]
+#[cfg(not(feature = "old-walk"))]
 #[test]
 fn a_callable_keys_on_each_keyable_name_its_entry_holds_that_a_unit_reads_through() {
     let source = format!(
@@ -394,7 +394,7 @@ fn a_callable_keys_on_each_keyable_name_its_entry_holds_that_a_unit_reads_throug
 
 /// A module parameter is an unknown wherever a fact reads its content, so a callable reading a
 /// member of one its signature pins keys on it.
-#[cfg(feature = "one-walk")]
+#[cfg(not(feature = "old-walk"))]
 #[test]
 fn a_callable_keys_on_a_module_parameter_its_units_read() {
     let source = format!(

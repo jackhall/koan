@@ -2,8 +2,8 @@
 //! content tree, against what the run binds, and the law that a load verdict over drawn functor
 //! programs holds at every run.
 
-// The tests reading the old passes' cells are gated off under `one-walk` until Phase 6.
-#![cfg_attr(feature = "one-walk", allow(unused_imports))]
+// The tests reading the old passes' cells run under `old-walk` alone.
+#![cfg_attr(not(feature = "old-walk"), allow(unused_imports))]
 
 use proptest::prelude::*;
 
@@ -294,7 +294,7 @@ fn a_quantified_member_through_a_module_is_instanced_where_the_load_names_its_pa
     );
 }
 
-#[cfg(not(feature = "one-walk"))]
+#[cfg(feature = "old-walk")]
 #[test]
 fn each_open_path_reads_back_its_tree() {
     let source = format!(
