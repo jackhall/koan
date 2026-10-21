@@ -1,10 +1,10 @@
 # Type tiers
 
-A type the load builds lives in program storage for the life of the program. A
-type the run builds lives in one of three shorter tiers, chosen by what can
-still reach it, and is released with that tier: a specialization's branch
-with the specialization, a region's branch with the region, a scratch branch
-with its habitat's reset.
+A type the load builds lives in the frozen load for the life of the program,
+and every agent reads it. A type the build rests lives in the agent tier for
+the life of the agent. A type the run builds lives in one of two shorter
+tiers, chosen by what can still reach it, and is released with that tier: a
+region's branch with the region, a scratch branch with its habitat's reset.
 
 This doc tells that story across the modules that carry it.
 [The type lattice](../lattice/src/types/identity.md#storage-a-root-and-its-branches)
@@ -13,30 +13,35 @@ types every site and classifies every body, [values](../src/values/README.md#cro
 re-intern at a crossing and [knots](../src/knot/README.md#a-lambda) at a
 closure's birth, and [cellgraph](../cellgraph/README.md#the-contract-four-embedder-types)
 brands each tier's door and owns the scratch habitat's reset.
-[The build module](../src/build/README.md) owns the specializations.
+[Build storage](build-storage.md) says what the load and the build decide and
+where each rests it.
 
-## Four tiers
+## The tiers
 
 | tier | lives from | to | holds |
 |---|---|---|---|
-| root | the load | the program's end | every type the load builds |
-| specialization branch | the first miss on its binding | its own or an ancestor's eviction, then its last borrower's disposal | the binding's nodes, and the types its resumption's settled facts name, among them what the invariant sites of a caching frame keyed on that binding mint and copy |
+| frozen load | the load | the program's end | every type the load builds, shared by every agent |
+| agent tier | the agent's birth | its death | every type the agent's build cells rest: a binding's nodes and the types the cell's settled facts name, among them what the invariant sites of a caching frame keyed on that binding mint |
 | region branch | the region's birth | its death | a porous body's run-built types, and what a caching body's exits carry |
 | scratch branch | the habitat's reset | its next reset | a step's scratch types, and every type a caching body builds |
 
 A handle's identity is its content's digest, so it names one type in every
 tier, and a reset moves where a type resolves, never what it is. Every branch's table is a
 [`DigestTable`](../lattice/src/bump/digest_table.rs) differing only in what
-lays its runs; the root's is a hashbrown table the load grows and freezes. An
-intern probes the tiers a step reads longest-lived first, the root before any
-branch. A read by handle is routed by the handle's in-root bit
+lays its runs; the frozen load's is a run of slots laid once at the freeze and
+never written, and the agent tier's grows in the agent's bump. An intern
+probes the tiers a step reads longest-lived first, the frozen load, then the
+agent tier, then any branch. A read by handle is routed by the handle's
+in-root bit
 ([identity](../lattice/src/types/identity.md#identity-a-handle-is-a-content-digest-under-two-flags)):
-a root handle probes the root alone, and any other probes the branches
-longest-lived first, then follows a branch's link to its spawner's, caching
-the hit. A verdict over two root types is read from the root's table alone,
-and any other from the branches' tables, shortest-lived first.
-The root is closed after the load, so every type the run builds lives in a
-branch, a composite over root types alone included.
+a load handle probes the frozen load alone, and any other probes the agent
+tier, then the branches longest-lived first, then follows a branch's link to
+its spawner's, caching the hit. A verdict over two load types is read from
+the load's table, one over load and agent types from the agent's, and any
+other from the branches' tables, shortest-lived first. The frozen load is
+closed after the load and the agent tier is written only by a build cell at
+its rest, so every type the run builds lives in a branch, a composite over
+load types alone included.
 
 A crossing carries a value's types to where it lands
 ([storage](../lattice/src/types/identity.md#storage-a-root-and-its-branches)).
@@ -51,21 +56,15 @@ value it carries.
 ## A node lives in a tier its children outlive
 
 A node names its children by reference, so a node's tier is a lifetime
-question per node: it lives in a tier that every child's tier outlives. Region
-and root are ordered, and a scratch branch is under the region of the cell
-that writes it. So a region node references region and root nodes alone, and
-content crosses from scratch into region by copy: a node relaid in the
-destination tier, its children relaid before it, insert-if-absent, so a
-content relaid twice is one node. A branch lent to a frame in another cell —
-a specialization's ([below](#the-specialization-as-the-warm-tier)), or a
-scratch branch its asker's park holds ([below](#the-scratch-branch-as-a-cache))
-— and that frame's region are unordered: the region retires at the frame's
-disposal, before the lent branch goes, unless a pin splices it into an
-ancestor, which may outlive it. So neither holds a node over the other. The
-lent branch is written through a chain over the root and itself alone, at a brand of its own that
-outlives the frame's scratch and is unrelated to its region, and a node over a
-child in the frame's region misses at the lay. The frame's scratch is under
-both, so its nodes reference either.
+question per node: it lives in a tier that every child's tier outlives. The
+tiers are ordered — the frozen load, the agent tier, the region, and a
+scratch branch under the region of the cell that writes it — so a node
+references nodes of its own tier or a longer-lived one, by covariance alone:
+a region node references region, agent and load nodes, and content crosses
+from scratch into region by copy: a node relaid in the destination tier, its
+children relaid before it, insert-if-absent, so a content relaid twice is one
+node. No chain reads a scratch branch of another cell, so every tier a chain
+reads outlives the one it writes.
 
 ## Porosity
 
@@ -109,7 +108,7 @@ but a knot's copy, which the exit walk closes too. An open capture, typed
 `[Never, Any]`, is porous by definition.
 
 Porosity promises only that a value at a non-porous site reaches no minted
-content, never that its handles are the root's (§ Four tiers).
+content, never that its handles are the load's (§ The tiers).
 
 ## Two classes of body
 
@@ -182,14 +181,15 @@ declared per call is classed alike by the type binders its declaration reads:
   would intern anything and finds itself there after the first.
 - **invariant**: a tree whose every leaf is a capture or a parameter the
   body's tail loop passes through unchanged, so the site mints the same
-  content each hop, and whose every parameter leaf keys a specialization — a
-  type binder, or one declared closed under `Module` or as a type value
-  ([keys](../src/build/README.md#keys-which-bindings-make-a-specialization)).
-  Its type is a fact the specialization's resumption settles under the
-  binding, so it lies in the **warm tier**: the branch of the specialization
-  the frame borrows, whatever its placement
-  ([below](#the-specialization-as-the-warm-tier)), laid by the build and read
-  by the frame; a frame born with none mints it into its scratch.
+  content each hop, and whose every parameter leaf keys a build cell — a
+  type binder, or one declared closed under `Module` or as a type value,
+  bound to content the load names
+  ([build storage](build-storage.md#a-build-cell)). Its type is a fact the
+  build cell settles under the binding, so it lies in the **warm tier**: the
+  agent tier, where the cell rests it
+  ([below](#the-agent-tier-as-the-warm-tier)), laid by the build and read by
+  every frame under the binding, whatever its placement; a frame whose
+  binding names run content mints it into its scratch.
 - **varying**: any other tree — one with a leaf keyed on a binder inside the
   body, an action's result or an inline `MATCH`, on a parameter the loop
   rebinds, or on a parameter of any other declared type, whose digest costs
@@ -202,31 +202,18 @@ A composite site follows its children: warm where its static type reaches
 invariant carriers alone, cold otherwise, a type that reaches a carrier the
 load cannot name included.
 
-For a `Shares` body that borrows no specialization, since it keys nothing or
-was born cold, the warm and cold tiers are one branch, the host's scratch,
-under the host's region. So such a body runs every step on
-one chain over the root, the host's region and that scratch, writing the
-scratch, and its classes route nothing; a keyed `Shares` body borrows its
-specialization through a lend of its own and runs on a reading chain over the
-lent branch and the host's scratch, as a `Fresh` body's below runs over its
-own. A scratch chain holds the tier it reads between
-the root and its own by value, so building one per step lays nothing; no
-branch holds that tier, since a habitat's door lives one step and a branch
-lives as long as its half. Under `Fresh` the two are the lent branch, the
-specialization's, and the frame's scratch, and the frame's scratch is under
-both it and the frame's region (§ A node lives in a tier its children outlive). So a caching body
-that borrows a lent branch reads through a chain whose own tier is a
-scratch, its own under `Fresh` and its host's under `Shares`, whose read tier
-is the lent branch, and whose scratch branch links the region it writes,
-linked by the first reading chain over it: laid linked where no branch is
-laid yet, linked late where one is. A type it builds stays in its scratch; an
-invariant site's type is settled in the lent branch by the specialization's
-resumption before any frame is born, so every frame under the binding reads
-it there and lays nothing into it. Verdicts the resumption reaches over the
-lent branch's types are recorded there and stay warm across hops and callers. Under `Shares` the host's scratch may hold a node
-over the lent branch's after the frame is gone, so the frame's lend is held
-until that scratch resets
-([tree cells](../cellgraph/src/tree/README.md#death)).
+A caching body runs every step on one chain over the frozen load, the agent
+tier, the region its writer lays into and the scratch it writes — its own
+under `Fresh`, its host's under `Shares`. A scratch chain holds the region
+tier it reads between the agent tier and its own by value, so building one
+per step lays nothing; no branch holds that tier, since a habitat's door
+lives one step and a branch lives as long as its half. A type the body builds
+stays in its scratch; an invariant site's type is rested in the agent tier by
+the build cell before any frame is born under the binding, so every frame
+reads it there and lays nothing into it, and the verdicts the build reaches
+over those types are recorded there and stay warm across hops and callers. A
+body whose binding names run content runs on the same chain and mints into
+its scratch, where its warm and cold tiers are one branch.
 
 A chain carries a pairing brand naming the writer it serves, beside the brand
 its tiers sit at, and a value door takes a writer and a chain paired to it.
@@ -249,34 +236,27 @@ yet counts as varying. A wrong class is never unsound — a site classed
 invariant whose content the key does not fix stays unsettled and mints into
 the scratch each hop, and one classed varying is settled all the same where
 its leaves key through a frontier — since the class decides the key, and
-soundness rests on the sealed class and the lend alone.
+soundness rests on the sealed class alone.
 
-## The specialization as the warm tier
+## The agent tier as the warm tier
 
-A caching frame whose body keys a specialization — its caching record lists
-the parameters its invariant sites read, or a fact seamed at an entry in its
-subtree, other than a parameter's own type, waits on one of its names
-([keys](../src/build/README.md#keys-which-bindings-make-a-specialization)) —
-is born borrowing a **specialization** of its body under the content at those
-names: a build cell the drain finds in, or builds into, the table of the build
-cell the callee was born under, before the frame is born. A new one's branch
-holds its binding's nodes by value, copied in from the asker's region as it
-is entered, so a frame finds them whatever became of the asker. A `Fresh` frame
-takes it as its lend, and a `Shares` tenant through a lend of its own beside
-its host's. The specialization's region branch is the frame's warm tier, and
-every frame of that body under that binding borrows the same one, whatever
-park asked for it and whatever its placement: every caller finds the types
-and verdicts the resumption laid, and a hop of a tail loop of one callee
-whose name does not escape borrows the specialization its frame ran under, with
-no lookup.
-A specialization lives until its parent evicts it and its last borrower
-disposes, so its warm tier outlives the parks that filled it. A parent keeps
-its specializations as a small least-recently-born cache, a fixed table as
-long as its bound, and a miss on a full table evicts the least recently born
-child with its subtree, whatever borrows it
-([the build module](../src/build/README.md#references-between-the-trees)). A
-frame whose specialization's parent is already evicted is born with none,
-and mints into the scratch its asker's park holds, as below.
+A caching frame whose body keys a build cell — its caching record lists the
+parameters its invariant sites read, or a fact seamed at an entry in its
+subtree, other than a parameter's own type, waits on one of its names, and
+each name is bound to content the load names
+([build storage](build-storage.md#a-build-cell)) — is born under a build cell
+of its body under the content at those names: one the drain finds in, or
+builds into, the arena before the frame is born. The cell lays the binding's
+nodes and the types its facts name in the agent tier, so a frame finds them
+whatever became of the asker, and every frame of that body under that
+binding, whatever park asked for it and whatever its placement, reads the
+same nodes and verdicts; a hop of a tail loop of one callee whose name does
+not escape reads under the cell its frame ran under, with no lookup. The
+cell's facts are evicted under the arena's budget, least recently used and
+leaf first, while the types it rested stay for the agent's life, so no frame
+loses the warm tier under it. A frame whose binding names run content is born
+under no build cell and settles its facts in its own activation, minting into
+the scratch it writes, as below.
 
 ## The scratch branch as a cache
 
@@ -286,27 +266,25 @@ holds that habitat's reset off until the registration that replaces it or the
 cell's death ([the cell](../cellgraph/README.md#the-cell)). So the host's
 scratch lives from the ask to the delivery, whatever the callee does in
 between, and resets at the first quiet step end after the evaluation wakes.
-Every frame born under that park with no specialization has the same scratch
-branch as its warm tier: a `Shares` callee is a tenant of the host, whose
-scratch is its own; a `Fresh` callee is **lent** the branch its asker's park
-holds by a cellgraph door, and names that scratch until it departs; a hop's
-successor born with no specialization keeps its predecessor's warm tier,
-lent or own, whatever either's placement. A tail
-loop of any placement, a chain across bodies of mixed placement included, is
-therefore warm at its invariant sites, where the same carrier or per-call
-nominal minted each hop probes and hits, and the scratch grows by those
-sites' content once per park however long the loop runs. Two calls asked at
-one park — the operands of one operator run, the parts of one tie — are warm
-to each other, and so are the statements of a `Shares` callee, since the
-asker's park holds across them; two calls from the host's own body in
-separate statements are cold, since that body replaces its own receipt
-between them, save a keyed callee's, warm through its
-specialization. A `Fresh` caching frame also holds its own scratch, its cold
-tier, for its life, and drops it with the frame. A loop that parks once a hop
-lays no receipt run per hop: the scratch habitat keeps the runs its cells
-released, drained, on a free list a registration searches first fit, cleared
-at the reset. The cache needs no count of its own and no `unsafe`: a wrong
-lend is a miss at the lay, never a dangling read.
+Every `Shares` callee born under that park with no build cell is a tenant of
+the host, whose scratch is its own, so that scratch is its warm tier and its
+cold tier at once. A tail loop of `Shares` callees is therefore warm at its
+invariant sites, where the same carrier or per-call nominal minted each hop
+probes and hits, and the scratch grows by those sites' content once per park
+however long the loop runs. Two `Shares` calls asked at one park — the
+operands of one operator run, the parts of one tie — are warm to each other,
+and so are the statements of a `Shares` callee, since the asker's park holds
+across them; two calls from the host's own body in separate statements are
+cold, since that body replaces its own receipt between them, save a keyed
+callee's, warm through the agent tier. A `Fresh` caching frame holds its own
+scratch for its life, its warm and cold tier at once, and drops it with the
+frame. It reads no other cell's scratch, so a `Fresh` frame with no build
+cell is warm across its own statements alone, and each hop of a `Fresh` tail
+loop under such a binding mints its invariant sites afresh. A loop that parks
+once a hop lays no receipt run per hop: the scratch habitat keeps the runs
+its cells released, drained, on a free list a registration searches first
+fit, cleared at the reset. The cache needs no count of its own and no
+`unsafe`.
 
 **A memo may be shorter-lived than its value.** A caching body's values are
 laid in the region its writer lays into, and their memos in a scratch tier.
@@ -331,7 +309,7 @@ caching frame that hands its last statement to the evaluator departs while
 that statement runs, and its scratch with it, so the binders that statement
 reads, which the load lists, and the frame's contract are adopted at the
 hand-off. The adopt reads the whole chain the body ran on, since a `Fresh`
-type's children may lie both in the lent branch and in the frame's scratch.
+type's children may lie both in the agent tier and in the frame's scratch.
 A sealed exit carries no minted content, but it may carry a
 composite over root types the body built in a scratch tier. What lingers is
 bounded by what the body hands out, never by what it minted.
@@ -357,7 +335,7 @@ everywhere, and a settled type in the region every chain over a value there
 links — so the walk does not enter it, at an exit and at an invariant site
 alike. At an exit it hands over nothing for that part, its own memo included,
 since the region's chain reaches both the root and the home branch; an
-invariant site adopts into the lent branch, where the value does not lie, so
+invariant site adopts into the warm tier, where the value does not lie, so
 there the part's own memo is still handed over. The debug check walks with the
 same cutoff. The walk reads the top value's bits before it lays anything, so an
 exit of a value that meets the contract allocates nothing, and it lays its
@@ -377,15 +355,18 @@ the chain per hop.
 
 ## Verdicts
 
-A verdict is never load-bearing, so its placement is retention alone: it is
-recorded in the table of the shortest-lived tier holding one of its two
-types, and released with that tier.
+A verdict is never load-bearing, so its placement is retention alone. A
+verdict over two load types is in the load's table, which the load fills
+losslessly and no run writes, or in the agent's where the load never asked
+it; one over load and agent types is in the agent's; any other is recorded in
+the table of the shortest-lived branch holding one of its two types, and
+released with that branch.
 
 ## Open work
 
-- [Activation typing](../roadmap/gradual-build/activation-typing.md) — the
-  warm tier laid by a specialization's resumption and read by every frame
-  under the binding.
+- [Activation typing](../roadmap/gradual-build/activation-typing.md) — a
+  frame's facts settled in its own activation where its binding names run
+  content.
 - [Invariance around a tail cycle](../roadmap/gradual-build/cycle-invariance.md)
   — an argument built over invariant leaves classed invariant.
 - [Presizing a branch](../roadmap/gradual-build/branch-presizing.md) — a branch

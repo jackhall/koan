@@ -277,7 +277,7 @@ pub type Types<'cell, 'door> = Chain<'cell, 'cell, 'cell, 'door>;
 /// differs from the region writer they are paired to. A scratch chain reads a region at `'reg`
 /// between the load's tiers and its own, holding the region's half by value ([`Halves`]), so building
 /// one lays nothing; the region's half takes the chain's pairing brand, which it lays no value
-/// under. A chain over a half alone holds none, and its `'reg` names nothing. The chain holds its
+/// under. A chain over a half alone holds none, and its `'reg` is its `'tier`. The chain holds its
 /// halves' doors, so it is branded `'door` to the step that built it.
 pub type Chain<'tier, 'pair, 'reg, 'door> =
     TypeChain<'tier, Halves<'reg, 'tier, Half<'tier, 'pair, 'door>, Half<'reg, 'pair, 'door>>>;

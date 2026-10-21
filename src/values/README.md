@@ -337,7 +337,7 @@ own arrives under a header at that type, which the copy adopts into the
 destination first. The crossing doors therefore take the
 destination's type chain, which the copy reads its types in, and the
 scheduler's step doors that cross a value build that chain inside the build,
-over the graph's frozen type root and the build's writer and header.
+over the graph's type tiers and the build's writer and header.
 
 **A crossing carries types with the value.** A type the run builds lives in the
 branch of the habitat its value is laid down in
@@ -388,7 +388,7 @@ body ran on. A part whose [memo bits](#weight) meet the contract is not
 entered and hands over nothing, its own memo included, and the exit marks every
 value it did enter settled after, so a value handed on through a loop is walked
 once. An invariant site adopts its operand and the view built over it into the
-lent branch through the same door, which there still hands over a meeting
+warm tier — the agent tier, under a specialization — through the same door, which there still hands over a meeting
 part's own memo and marks nothing; a header, whose bits are its member's, hands
 over its own memo at both. The walk reads the top value's bits before it lays
 anything and lays its stack, knot set and settled list in its caller's step
@@ -707,9 +707,10 @@ a name the rest of the stack retired.
 
 The unit suite ([tests.rs](tests.rs)) runs every door, crossing and relation
 over a fixture that owns program storage, a root builder the test's load-time
-work interns into, frozen into the program's one root when the first cell's
-chain is built, and a cell graph over that storage to run steps in; each
-cell's chain reads the root, then the cell's own branch, so a type a value door
+work interns into, frozen into the program's one load when the first cell's
+chain is built beside an empty agent tier, and a cell graph over that storage
+to run steps in; each cell's chain reads the load and the agent tier, then the
+cell's own branch, so a type a value door
 builds in a cell lands in that cell's branch. A test finishes its load-time
 interning before its first cell, as a program's load ends before its run
 starts. Circular values are exercised

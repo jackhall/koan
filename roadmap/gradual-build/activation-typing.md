@@ -60,10 +60,10 @@ and the run binds a path variable per read (`elaborate::bound_path`).
   result — which is varying content and keys nothing, so its facts stay
   unsettled. Cellgraph's lend stays fixed at creation.
   A `Shares` frame reaches its specialization through
-  [a lend of its own](../../design/type-tiers.md#the-specialization-as-the-warm-tier). A child specialization
-  whose facts name a type its parent minted relays it into its own branch,
-  insert-if-absent, so no branch links its parent's and a run cell's chain
-  probes one specialization.
+  [a lend of its own](../../src/build/README.md#references-between-the-trees).
+  A child specialization whose facts name a type its parent minted relays it
+  into the agent tier, insert-if-absent, so no branch links its parent's and
+  a run cell's chain probes no specialization.
 - *A specialization that resumes* — decided, on the working assumption that
   no binding wakes a quiesced build cell: a specialization is one seam under
   one binding, what its resumption leaves parked waits on a binding its key

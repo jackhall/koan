@@ -14,8 +14,9 @@
 //!
 //! The table sits behind [`Tied`], an atomic pointer beside a fixed length that erases its slice's
 //! lifetime, so a node stays covariant in `'run`, as a `Cell<&'run [T]>` would not, and a sealed
-//! component a frozen load holds can be read from any thread. Its read is the crate's one `unsafe`; its soundness
-//! rests on writes this module alone makes. See [identity.md](identity.md) § Recursive groups.
+//! component a frozen load holds can be read from any thread. Its read is the crate's one
+//! `unsafe`; its soundness rests on writes this module alone makes. See [identity.md](identity.md)
+//! § Recursive groups.
 
 #![allow(unsafe_code)]
 

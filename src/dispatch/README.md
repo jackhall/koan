@@ -1255,8 +1255,8 @@ composites, a keyworded tail loop pairing its
 arguments by slot, and the tutorial's classes (an ignored measurement);
 [caching](tests/caching.rs) — caching bodies at run: `Shares`, `Fresh`, helper
 and mixed-placement loops holding their tiers flat across hops, warm verdicts,
-a parking loop's scratch bytes flat, the scratch and the lent branch reset
-after a delivery, the parameters each frame keys on and each shape's segment,
+a parking loop's scratch bytes flat, the scratch reset after a delivery
+while the agent tier keeps each loop's binding, the parameters each frame keys on and each shape's segment,
 a loop seeking its specialization once and a second caller finding it warm, a
 callable born in a frame or its block keying beneath the frame's
 specialization and a `Shares` callee's under its own chain, an evicted

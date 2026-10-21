@@ -247,10 +247,10 @@ src/
 │   └── copy.rs           the knot-member family's copy: a whole knot re-tied at the destination, edges verbatim
 ├── scheduler.rs      pub mod scheduler — the deferred-work drain over cellgraph's cells and liveness matrix: a unit of work is a cell, and this module adds the ready stack, the drain protocol and delivery, over one step bundle the layer above supplies
 ├── scheduler/
-│   ├── drain.rs          Graph — the CellGraph closed over the scheduler's families beside the frozen type root it hands every step and crossing and its build root, with the storage-only slab roots it hands out and takes back; Scheduler — a per-call view over a borrowed Graph: the depth-first ready stack of live cells and unborn requests, run over one root work, the wake of a rested birth at the verdict's price, the deferred release a tail hand-off needs, a root work resumed from what an earlier one left (Resting), the specialization a frame borrows resolved before its birth, and DrainStalled; every birth and every death is the drain's
+│   ├── drain.rs          Graph — the CellGraph closed over the scheduler's families beside the type tiers (the frozen load and the agent tier) it hands every step and crossing and its build root, with the storage-only slab roots it hands out and takes back; Scheduler — a per-call view over a borrowed Graph: the depth-first ready stack of live cells and unborn requests, run over one root work, the wake of a rested birth at the verdict's price, the deferred release a tail hand-off needs, a root work resumed from what an earlier one left (Resting), the specialization a frame borrows resolved before its birth, and DrainStalled; every birth and every death is the drain's
 │   ├── load.rs           Graph::load — the load door: two slab roots, the build root entered once by the load, then its header and specialization table laid at the root bound, and Roots
 │   ├── seek.rs           Seek — what an asker hands the drain to find a frame's specialization — and the Lending a request's cell is born with
-│   ├── action.rs         Step — the only thing a step is handed: its writers, its state and scratch state, spawn and spawn_seeking, results, build_ref, and the caching chains (shares_types / reading_types / warm_types), the park / tail / tail_seeking / tail_under / finish_fresh / finish_in_home / finish / done / leave / enlist / failed ends that alone build an Action (opaque, over the drain-only Kind); Placement, Use, Request, Received, Slot, the drain's Spawns buffer, StepError
+│   ├── action.rs         Step — the only thing a step is handed: its writers, its state and scratch state, spawn and spawn_seeking, results, build_ref, and the caching chains (caching_types, and agent_types — the agent tier, the warm tier of a frame borrowing a specialization), the park / tail / tail_seeking / tail_under / finish_fresh / finish_in_home / finish / done / leave / enlist / failed ends that alone build an Action (opaque, over the drain-only Kind); Placement, Use, Request, Received, Slot, the drain's Spawns buffer, StepError
 │   ├── continuation.rs   StepBundle — the covariant birth family and its crossing, the parked state family, the scratch family and born, which the layer above supplies; BirthAt / StateAt, NativeStep, Work, and the ContinuationFamily a cell parks: Continuation, Rested, Provenance
 │   └── delivery.rs       KDelivery — koan's delivery bundle: a scratch fill and a carrier fill, both the value family
 ├── program.rs        pub mod program — a loaded program as one owning value and the body runner that performs it, over build, elaborate, knot, memory, parse, scheduler, scope, symbols, type_lattice and values
@@ -260,7 +260,7 @@ src/
 │   ├── exit.rs           Exit — a caching body's exit: what leaves it adopted into the region, up to a settled part
 │   ├── body.rs           run — the body runner, the one step that performs a body's units at the top level, in every frame and in a block, ending a frame under its contract or tailing its last statement; call and placement_of, the derived placement bit; block; eval and CodeRefused, the door that runs a quote's code
 │   ├── specialize.rs     seek — what a call into a keyed frame hands the drain — and specialize, a specialization's step
-│   └── substrate.rs      CellSubstrate — program storage, the types' root bump and the interner as self_cell's owner, and Running — the graph, its two roots and the Program record at 'graph, with run and inspect, reached through a closure per call; the load runs as the build root's step, builds the types' root and freezes it
+│   └── substrate.rs      CellSubstrate — program storage, the types' load and agent-tier bumps and the interner as self_cell's owner, and Running — the graph, its two roots and the Program record at 'graph, with run and inspect, reached through a closure per call; the load runs as the build root's step, builds the types' load and freezes it and the symbol table, and lays the agent tier
 ├── dispatch.rs       pub mod dispatch — Koan, the Language programs run under, and the vocabulary its submodules share
 └── dispatch/
     ├── builtins.rs       the builtin table — the lattice's types, Error and every overload as a builtin node — and the natives the overloads run
@@ -280,13 +280,14 @@ The [lattice](lattice/README.md) crate's tree:
 
 ```
 lattice/src/
-├── lib.rs               the crate root — the import rule and `forbid(unsafe_code)` outside the test build
+├── lib.rs               the crate root — the import rule and `deny(unsafe_code)` outside the test build, which a sealed component's member-table read alone allows
 ├── tests.rs             `#[cfg(test)]` crate-wide test scaffolding — installs audit/'s counting global allocator for this crate's test binary, the tally the heap-contract tests bracket, and the property-case share
 ├── bump.rs              pub mod bump — the bump tier: Bump, BumpAllocator (= &Bump), BumpVec, BumpBackedMap / BumpHashTable / BumpBackedSet and bump_table / bump_hash_table / bump_set; the crate's only import of bumpalo / hashbrown / allocator_api2
 ├── bump/
 │   ├── digest_table.rs     DigestTable — the insert-only table of references to entries keyed by a uniformly distributed word, grown through LaysRuns with no allocator, so a cell's region can host it
+│   ├── frozen_table.rs     FrozenTable — a DigestTable's read-only copy, its slots laid once and never written, so it holds no cell
 │   └── components.rs       strongly_connected_components — Tarjan over an index graph, staged in a bump; the walk the type lattice's recursive groups and koan's scope bindings both condense by
-├── symbols.rs           pub mod symbols — Symbol, a name's 128-bit content digest, plus SymbolInterner (the run's digest→text side table, read only when rendering), the four classified wrappers, BindKind, the token classifiers and the identity hasher every symbol-keyed table uses; a leaf, so koan's parse and the type lattice rest on it rather than on each other
+├── symbols.rs           pub mod symbols — Symbol, a name's 128-bit content digest, plus SymbolInterner (the program's digest→text side table, read only when rendering: the load's table, frozen at its end, and an overlay for names recorded after), the four classified wrappers, BindKind, the token classifiers and the identity hasher every symbol-keyed table uses; a leaf, so koan's parse and the type lattice rest on it rather than on each other
 ├── symbols/
 │   └── tests.rs            interning laws, including how a static_name! records
 ├── types.rs             pub mod types — the closed algebra over interned type nodes: the vocabulary, the tiers and the chain over them, the identity recipe, the relations and the unifier, over symbols and the bump tier and nothing else
@@ -297,10 +298,10 @@ lattice/src/
     ├── run.rs            Run / Elements — typed views over a node's raw child runs
     ├── typed.rs          the typed relations the rest of koan calls: the order, join and meet over KType; fits, ranking, solving and substitution over parametric types and schemes
     ├── digest.rs         TypeDigest and the one identity recipe: the hand-written tag table, one layer deep, plus the schema and component digests
-    ├── tiers.rs          the tiers a type lives in — RootBuilder, grown by the load and frozen at its end into Root, which has no intern door; Branch, a habitat half's DigestTable of nodes, its verdicts and its one link; Own, the Habitat a chain writes through, Halves, a scratch chain's own half beside the region it reads held by value, and the object-safe Tier a chain reads at another brand
-    ├── chain.rs          TypeChain — the root, a scratch habitat's region tier and the half it writes, probed longest-lived first, a read by handle following links and caching the hit; the composite doors, generic over the handle, canonical `union_of` reducing its concrete members, the scheme doors `shape_scheme` and `function_scheme`, which bind a group over a plain body and keep every variable, the checked conversion `concrete`, and the signature doors `signature`, `signature_apply` and `signature_meet`
+    ├── tiers.rs          the tiers a type lives in — RootBuilder, grown by the load and frozen at its end into Frozen, which has no intern or record door and holds no cell, so it is Sync; Agent, one agent's insert-only tier above it; Branch, a habitat half's DigestTable of nodes, its verdicts and its one link; Own, the Habitat a chain writes through, Halves, a scratch chain's own half beside the region it reads held by value, and the object-safe Tier a chain reads at another brand
+    ├── chain.rs          TypeChain — the frozen load, the agent tier, a scratch habitat's region tier and the half it writes, probed longest-lived first, a read by handle following links and caching the hit; the composite doors, generic over the handle, canonical `union_of` reducing its concrete members, the scheme doors `shape_scheme` and `function_scheme`, which bind a group over a plain body and keep every variable, the checked conversion `concrete`, and the signature doors `signature`, `signature_apply` and `signature_meet`
     ├── transfer.rs       how a crossing makes another half's handles resolve in a chain: link at a spawned child's birth, merge at every other pin, adopt in a copy, and adopt_from reading a whole chain
-    ├── verdicts.rs       FixedVerdicts, the root's fixed two-way cache of relation verdicts, and VerdictEntry, a branch's growable table's entry; a verdict placed in the shortest-lived tier holding one of its types
+    ├── verdicts.rs       VerdictEntry, a verdict table's entry, and VerdictKey; every table lossless, the load's read-only, a verdict placed by where its types lie
     ├── kind.rs           KKind — the shallow kind a type-accepting slot admits
     ├── record.rs         Record — a Copy view over a region slice of BinderSymbol-keyed fields, backing record types and lambda parameter identity
     ├── shape.rs          DispatchTokenElement / DeferredReturnSurface / Specificity, the readers of a shape's parts (`Shape`), and the element and record rebuild helpers
@@ -382,8 +383,9 @@ A design no single module owns sits in [design/](design/gradual-typing.md):
 through the load, to a call, [quantified types](design/quantified-types.md)
 says where a `FOR ALL` may be written and what stands in for a higher-ranked
 type, [modules](design/modules.md) says what a module's types are and when
-two are one, and [type tiers](design/type-tiers.md) says where a type the run
-builds lives and when it is released.
+two are one, [type tiers](design/type-tiers.md) says where a type the run
+builds lives and when it is released, and [build storage](design/build-storage.md)
+says what the load and the build decide and where each rests it.
 
 Future work lives in [roadmap/](roadmap/) — one file per work item, with `Requires:` /
 `Unblocks:` cross-links. Its [README](roadmap/README.md) groups work into project

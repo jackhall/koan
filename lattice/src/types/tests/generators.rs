@@ -62,8 +62,8 @@ pub fn with_scratch<R>(build: impl FnOnce(BumpAllocator<'_>) -> R) -> R {
     build(&Bump::new())
 }
 
-/// The half a [`World`]'s chain writes: the root builder while the world seeds its root, then a
-/// branch over the frozen root.
+/// The half a [`World`]'s chain writes: the root builder while the world seeds its load, then a
+/// branch over the frozen load and an agent tier.
 #[derive(Clone, Copy)]
 pub enum WorldHalf {
     Building(&'static RootBuilder<'static>),

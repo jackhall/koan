@@ -26,9 +26,10 @@
 //!
 //! # Storage
 //!
-//! Types live in tiers ([`tiers`]): the frozen [`Root`] the load builds, and a [`Branch`] per
-//! habitat half the run builds in, laid in that half and released with it. A [`TypeChain`] reads
-//! the root, a scratch habitat's region tier and its own half's tier, and interns into its own;
+//! Types live in tiers ([`tiers`]): the [`Frozen`] load the load builds, the [`Agent`] tier one
+//! agent rests above it, and a [`Branch`] per habitat half the run builds in, laid in that half
+//! and released with it. A [`TypeChain`] reads the frozen load, the agent tier, a scratch
+//! habitat's region tier and its own half's tier, and interns into its own;
 //! every node it lays — with every slice a node holds — lives in that half, as do its verdicts.
 //! Nothing the lattice owns carries drop glue, so a half releases its tier whole. A crossing makes
 //! another half's handles resolve in a chain by a link, a merge or an adoption ([`transfer`]).

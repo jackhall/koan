@@ -29,10 +29,11 @@ Four things it does not keep, because a neighbour already does:
 
 The graph a drain runs over is `Graph`: a `CellGraph` closed over the
 continuation family, the scratch-state family and the delivery bundle, so the
-families stay the scheduler's own, beside the frozen type root every step's
-chain reads first. What owns a graph makes one with `Graph::new` over that
-root — a loaded program over the root its load froze, a test over one it seeds
-in a local bump — takes a storage-only slab cell from `Graph::root` — a region that
+families stay the scheduler's own, beside the type tiers every step's chain
+reads first (`TypeTiers`: the frozen load and the agent tier). What owns a
+graph makes one with `Graph::new` over those tiers — a loaded program over the
+load it froze and the agent tier laid beside it, a test over ones it seeds in
+a local bump — takes a storage-only slab cell from `Graph::root` — a region that
 outlives every drain over it and is never entered — gives it back with
 `Graph::release_root`, and asks `is_empty` and `is_live`. Every other cell is
 the drain's.
@@ -41,7 +42,7 @@ A loaded program's graph is stood up instead by the **load door**,
 `Graph::load` ([load.rs](load.rs)): it takes two slab roots, the **build
 root** and the **run root**, and enters the build root once with the
 caller's load closure, before any root work. The closure is handed nothing,
-and returns the frozen type root every later step reads; a refusal it returns
+and returns the type tiers every later step reads; a refusal it returns
 drops the graph with it. Once it returns, the entry lays the build root's
 region header and its specialization table, as long as the root bound and
 recording the nested bound ([the build module](../build/README.md)); the run root
@@ -141,19 +142,19 @@ previous step parked, and exposes:
 
 - its cell's two writers, `writer` at `'here` and `scratch_writer` at
   `'scratch`, the `header` door of its write home, and the type chain beside
-  each writer — `types` and `scratch_types`, built over the graph's type root
+  each writer — `types` and `scratch_types`, built over the graph's type tiers
   once per step and never parked — so a type the step builds lands in the
   branch of the habitat it lays its value in;
 - the chains a [caching body](../program/README.md#caching-bodies) runs on,
-  paired to the region writer while their tiers sit in scratch:
-  `shares_types`, over the write home's region and scratch; `reading_types`,
-  over the lent branch and the write home's scratch, whose branch it links to
-  the write home's region, laid linked or linked late where another chain laid
-  it first; and `warm_types`, the lent branch alone. A frame routes onto
-  `reading_types` once `hold_scratch` has held its scratch for the cell's life,
-  or, as a tenant, where `borrows_specialization` says it borrows one. The
-  lent branch is the lent half's, a specialization's region or a parent's
-  scratch, and the last two are `None` where the cell borrows nothing. `results_with` and
+  paired to the region writer: `caching_types`, over the write home's region
+  and scratch, its own tier in scratch, which a tree cell holds as its own and
+  a tenant shares with its host; and `agent_types`, the chain that writes the
+  agent tier, the warm tier of a cell borrowing a specialization, `None` for a
+  cell that borrows none. A frame routes once `hold_scratch` has held its
+  scratch for the cell's life, or, as a tenant, where
+  `borrows_specialization` says it borrows one. No chain reads a lent half:
+  a specialization's region holds its facts and its table, and its types
+  rest in the agent tier. `results_with` and
   `finish_with` run a pinned value's debug check against such a chain;
 - `state` and `scratch`, which take the cell's state and its parked scratch
   state, each once. A state is a projection of the step bundle, which a
@@ -198,7 +199,7 @@ perform, from the provenance the drain filled:
   carrier fill redeemed and crossed to `'here`.
 - **A crossing carries types.** `results`, `finish`, `finish_in_home` and the
   wake of a rested birth build the destination's chain inside the build, over
-  the graph's type root and the build's writer and header, since a
+  the graph's type tiers and the build's writer and header, since a
   [crossing](../values/README.md#crossing) makes every type the value carries
   resolve there and a deep copy lays each part down at the type it is seen at.
 - **A result goes where the drain said.** The three `finish` ends below build
@@ -411,11 +412,11 @@ resolves at its creation from how it was asked for ([seek.rs](seek.rs)):
   holds the request's birth, a hop's predecessor or else the cell that asked.
   Before the step function runs, the entry adopts each binding handle's node
   from the region branch of the asker's write home, with its links, into the
-  specialization's branch, insert-if-absent. That header is read at a brand
-  of its own, so the branch keeps no reference into the run tree, and the
-  asker is between steps. A hit lays nothing; a debug build checks through
-  `peek` that the specialization's branch, with the root, holds every
-  handle. Its step lays its region header and its
+  agent tier, insert-if-absent, so every frame under the specialization reads
+  it there. That header is read at a brand of its own, so the agent tier
+  keeps no reference into the run tree, and the asker is between steps. A hit
+  lays nothing; a debug build checks that the frozen load or the agent tier
+  holds every handle. Its step lays its region header and its
   own table, as long as the nested bound its parent's table records, runs
   the resumption under its binding to quiescence, and
   ends `enlist`, which rests the facts the resumption settled in the header,
@@ -469,8 +470,8 @@ Outside doc comments this module names `crate::knot`, `crate::memory`,
 `crate::scope`, `crate::type_lattice` and `crate::values`, and nothing else in
 the crate — its tests included, which may name the crate's test scaffolding
 besides. It does not name `parse`, `elaborate`, `symbols` or `program`. It
-names the lattice for the frozen root and a branch alone, the root a graph
-holds and hands every step and crossing; `scope` for the header a graph keeps
+names the lattice for the frozen load, the agent tier and a branch alone, the
+tiers a graph holds and hands every step and crossing; `scope` for the header a graph keeps
 per habitat half (`RegionHeader`), whose table and home the drain keeps the
 books of, and the facts a specialization's step rests there and a frame reads
 back through its lend (`Settled`); and `values` for the type chain those doors
@@ -507,13 +508,13 @@ no layer of koan's above present. They hold, each with a workload of its own:
   way a deep cell hands a value on — a hop at each placement from a tree cell
   and a tenant, and a kept result — leaves the landing cell's branch the same
   at depth four and sixteen; and the caching chains: a `Shares` chain laying
-  in its host's scratch and leaving its region, a held `Fresh` child reading
-  its region and its lender's scratch, and a lent branch refusing a node over
-  a region child ([tests/branches.rs](tests/branches.rs));
+  in its host's scratch and leaving its region, and a held `Fresh` child
+  reading its region and its own scratch, with no agent chain
+  ([tests/branches.rs](tests/branches.rs));
 - a root work that leaves a birth a later root work resumes from, at each
   placement, and a cell that reports to somebody refused on `leave`;
 - two schedulers beside each other sharing nothing — each test seeds its own
-  type root in a local bump, released with the test — two views over one graph in
+  type tiers in a local bump, released with the test — two views over one graph in
   turn, and a view dropped mid-work leaving a graph its root's release does not
   empty;
 - the round trip a continuation makes between `'graph` and a step's `'here`,
@@ -535,7 +536,8 @@ no layer of koan's above present. They hold, each with a workload of its own:
   at `Shares`, two tenants seeking one key borrowing one specialization that
   their plain children copy, a call seeking nothing borrowing nothing under a
   frame that borrows one, a hop keeping its lend, and a tenant whose
-  specialization is evicted under it waking to read what it laid there, the
+  specialization is evicted under it waking to read what it laid in the agent
+  tier, the
   specialization disposing only once the tenant's host's scratch resets
   ([tests/seek.rs](tests/seek.rs)).
 

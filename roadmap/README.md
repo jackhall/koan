@@ -36,6 +36,7 @@ subdirectory's README carries its own slice.
 
 - [Faults and call traces](conditionals/faults.md)
 - [Matching](conditionals/matching.md)
+- [The build as the second embedder](gradual-build/build-rewrite.md)
 - [Every pinned path minted at the load](gradual-build/pins-minted-at-load.md)
 - [A container literal's element type](gradual-typing/container-literal-types.md)
 - [Dependent signatures](gradual-typing/dependent-signatures.md)

@@ -131,8 +131,8 @@ pub struct GroupIntern<'s> {
     pub quantifier_map: &'s [usize],
 }
 
-/// The tiers one habitat half reads and writes types through: the frozen root, a scratch
-/// habitat's region tier, and the half's own tier, reached through `half`. Interior mutability
+/// The tiers one habitat half reads and writes types through: the frozen load, the agent tier, a
+/// scratch habitat's region tier, and the half's own tier, reached through `half`. Interior mutability
 /// lives in the tiers: a read takes a reference to its node and releases any table borrow before
 /// the reader runs, so reads nest freely and a reader may intern.
 ///
@@ -152,7 +152,7 @@ pub struct TypeChain<'t, H> {
     /// `test`-only: how many handles have been entered, so a test can count a walk's lookups.
     #[cfg(test)]
     lookups: Cell<usize>,
-    /// `test`-only: how many probes the frozen root's node or verdict table has taken.
+    /// `test`-only: how many probes the frozen load's node or verdict table has taken.
     #[cfg(test)]
     load_probes: Cell<usize>,
     /// `test`-only: how many probes the own or region tier's verdict table has taken.
@@ -268,7 +268,7 @@ impl<'t, H: Habitat<'t>> TypeChain<'t, H> {
         self.lookups.get()
     }
 
-    /// `test`-only: how many probes the frozen root's node or verdict table has taken.
+    /// `test`-only: how many probes the frozen load's node or verdict table has taken.
     #[cfg(test)]
     pub(super) fn load_probes(&self) -> usize {
         self.load_probes.get()
@@ -280,7 +280,7 @@ impl<'t, H: Habitat<'t>> TypeChain<'t, H> {
         self.branch_verdict_probes.get()
     }
 
-    /// `test`-only: count one probe of the frozen root's tables.
+    /// `test`-only: count one probe of the frozen load's tables.
     fn count_load_probe(&self) {
         #[cfg(test)]
         self.load_probes.set(self.load_probes.get() + 1);
@@ -493,8 +493,8 @@ impl<'t, H: Habitat<'t>> TypeChain<'t, H> {
             || (!handle.in_root() && self.linked_reach(handle.digest()).is_some())
     }
 
-    /// Whether `kt`'s node lies in the frozen root, or, on the load's chain, in the root builder:
-    /// a type every chain over the root resolves. Reads the handle's in-root bit: looks nothing
+    /// Whether `kt`'s node lies in the frozen load, or, on the load's chain, in the root builder:
+    /// a type every chain over the load resolves. Reads the handle's in-root bit: looks nothing
     /// up.
     pub fn in_root(&self, kt: impl Into<DeclaredType<Parametric>>) -> bool {
         kt.into().raw().in_root()

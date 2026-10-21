@@ -7,8 +7,9 @@ A koan program is two trees of [cellgraph](../../cellgraph/README.md) cells.
 The **run tree** is the call tree: the program's run root with every frame a
 tree cell or a tenant under it. The **build tree** is where the program's
 text is decided: the build root's step writes the written program's shapes,
-its type facts and the root type tier, and a specialization holds what a
-binding settles, the verdicts over it and the types it mints. Its cells are
+its type facts and the frozen load's types, and a specialization holds what
+a binding settles, the types and verdicts it reaches resting in the agent
+tier. Its cells are
 **build cells**; the run tree's are **run cells**. The
 [scheduler](../scheduler/README.md) drains both, so type solving interleaves
 with value computation as steps, and a run cell reads what a binding settled
@@ -39,14 +40,15 @@ door and the lookup before a birth, and nothing else.
   the graph holds, and the build tree's one **core** cell: it lives as long as
   the program. Its step writes the written program's shapes, every type fact,
   the value channel, the caching records, the solver's fixed facts and its
-  residual, which rest in program storage, and the **root type tier**, the
-  frozen root in the owner's registry, read by everything after and written
-  by nothing else. Its region holds the root-level specialization table.
+  residual, which rest in program storage, and the **frozen load**'s types,
+  laid in the owner's registry, read by everything after and written by
+  nothing else; the agent tier is laid beside it at the load's end. Its region
+  holds the root-level specialization table.
 - **A specialization** is a tree cell under the build root or under another
   specialization: one **seam** under one observed **binding** (below). It
-  holds every type fact the binding settled, in every body under the seam,
-  the verdicts those settlements produced, and a type branch holding what the
-  settling interned. Nesting follows binding order along the lexical chain: a
+  holds every type fact the binding settled, in every body under the seam;
+  the types and verdicts those settlements reach rest in the agent tier,
+  which outlives it. Nesting follows binding order along the lexical chain: a
   binding of callable `inner`'s rigids, taken in a frame running under the
   specialization of its encloser `outer` at `Elt := Number`, is a child of
   that specialization, so a specialization's ancestors are every enclosing
@@ -59,8 +61,8 @@ door and the lookup before a birth, and nothing else.
   value's home run cell counts it, and it is released when that count reaches
   zero.
 - **One core, not one per segment.** Every written segment is program-long, a
-  specialization's key already names its segment by its index, and the root
-  type tier wants one table. Written code has
+  specialization's key already names its segment by its index, and the
+  frozen load wants one table. Written code has
   one core; composed code adds a build cell per code value.
 - A specialization never rebuilds shapes: written code's shapes live in
   program storage, composed code's in its cell. The raw parse stays in program
@@ -268,12 +270,12 @@ whose frontier the chain's keys do not cover stays unsettled.
   of composed code borrows the composed-code cell; a tail successor of the
   same callee, whose name does not escape, borrows the specialization its
   frame ran under, with no lookup;
-  a run cell born under no binding borrows its parent's scratch, since the
-  shapes and the root tier rest at `'graph` and nothing of the build root is
-  read from a step; a `Shares` tenant of a keyed body borrows its
-  specialization through a lend of its own, counted on the specialization
-  until its host's scratch next resets after the tenant's release, since its
-  host's scratch may hold nodes over the specialization's; a `Shares` call of
+  a run cell born under no binding borrows its parent's scratch, which no
+  chain reads, since the shapes and the type tiers rest at `'graph` and
+  nothing of the build root is read from a step; a `Shares` tenant of a keyed
+  body borrows its specialization through a lend of its own, counted on the
+  specialization until its host's scratch next resets after the tenant's
+  release; a `Shares` call of
   a body that keys nothing, or born cold, borrows nothing; an evaluation or
   block tenant copies its asker's lend, so it reads what its frame reads; and
   a hand-off tenant copies the lend of its frame's parent, whose region it
@@ -295,7 +297,7 @@ whose frontier the chain's keys do not cover stays unsettled.
   cell that asked. Before the step function runs, the entry adopts each
   handle's node, children first, from the region branch of the asker's write
   home, where the birth rests and every type its arguments carry resolves,
-  into the new branch, insert-if-absent; a root handle costs a bit test. The
+  into the agent tier, insert-if-absent; a load handle costs a bit test. The
   asker's header is read at a brand of its own, so the copy is by value by
   construction, made while the asker is between steps, and leaves no
   reference behind. A hit lays nothing: the key digests the content the
@@ -310,7 +312,7 @@ whose frontier the chain's keys do not cover stays unsettled.
   nesting follows the lexical chain with no chain stored, and no step can
   hand the drain a build cell the scheduler did not name to it.
 - **Build parent to build child: bare handles.** A table in the parent's
-  region header, beside its type branch and its settled facts — the header is
+  region header, beside its settled facts — the header is
   `scope`'s, holding branch, table, home and facts, and `values` reads the
   branch through a projection it defines: a fixed run of entries, each a
   binding's digest, a bare handle and a stamp, laid with the cell and never
@@ -337,34 +339,35 @@ whose frontier the chain's keys do not cover stays unsettled.
 
 ## Types across the trees
 
-- **The tiers, longest-lived first:** the root tier, the frozen root the
-  load builds; the specialization the run cell borrows; its region branch;
-  its scratch branch. A run cell's chain reads them in that order and probes
-  one specialization however deep seams nest. A `Shares` run cell's scratch
-  is its host's, and it reaches its host's region through that branch's link,
-  which the first reading chain over the branch lays.
-  [Type tiers](../../design/type-tiers.md) tells the story across modules.
-- **A node lives in a tier its children outlive.** A specialization lays
-  type nodes over the root tier and itself alone: a fact of a child that
-  names a type its parent minted relays that type into the child's branch,
-  insert-if-absent, so no branch links its parent's. A specialization's branch
-  holds the nodes the drain laid from its binding and the types its settled
-  facts name, and nothing a frame lays: a frame lays into its region and
-  scratch alone. The resumption interns into its step's scratch branch, and
-  only what its `Settled` keeps is adopted into the specialization's. A run cell's scratch tier
-  may reference its specialization's nodes, as a scratch tier references the
-  lent branch's today; its region reaches them only by adopt at an exit, as
-  it reaches the lent branch's; and the reverse never holds. A composite a
+- **The tiers, longest-lived first:** the frozen load the build root's step
+  builds; the agent tier, where every specialization's types rest; a run
+  cell's region branch; its scratch branch. A run cell's chain reads them in
+  that order however deep seams nest. A `Shares` run cell's scratch is its
+  host's, and its caching chain reads its host's region between the agent
+  tier and that scratch. [Type tiers](../../design/type-tiers.md) tells the
+  story across modules, and [build storage](../../design/build-storage.md)
+  what each tier holds.
+- **A node lives in a tier its children outlive.** The agent tier lays nodes
+  over the frozen load and itself alone, through the resting chain, so none
+  references a branch's node: the drain relays a binding's nodes into it from
+  the asker's region branch, insert-if-absent, and a frame under a
+  specialization adopts its invariant sites' types into it. A specialization's
+  region holds its settled facts and its table, and lays no type branch. The
+  resumption interns into its step's scratch branch, and only what its
+  `Settled` keeps is adopted into the agent tier. The agent tier outlives
+  every cell, so a run cell's region and scratch reference its nodes by
+  covariance alone, and the reverse never holds. It grows by each distinct
+  binding the program keys and is released with the program. A composite a
   run cell builds over a specialization's carrier lies in the run cell's
   scratch tier.
 - **A per-call type reaches a run cell's region only by adopt at an exit**,
   as a caching body's exits adopt. While the borrow stands it is read through
   the chain and copied nowhere.
 - **A verdict** is recorded in the shortest-lived tier holding one of its two
-  types: a verdict between root types and a specialization's types lives in
-  the specialization and is evicted with it. A verdict is never load-bearing.
-- **Porosity.** Sealed or porous, a body's specialization holds what its
-  binding and its resumption name; a porous value leaving the body carries its
+  types: one whose types are load or agent types lives in the agent tier, and
+  one over a branch's type with that branch. A verdict is never load-bearing.
+- **Porosity.** Sealed or porous, the agent tier holds what a body's binding
+  and its resumption name; a porous value leaving the body carries its
   per-call types into the region by adopt at its exit.
 
 ## Steps and the drain

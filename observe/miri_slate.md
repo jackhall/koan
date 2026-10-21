@@ -232,9 +232,9 @@ cell's region; what this pins is the ordering between two.
   under Miri.
 
 **Self-contained substrate** ([src/program/substrate.rs](../src/program/substrate.rs)) — program
-storage, the types' root bump and the interner in `self_cell`'s owner, and in its dependent at
-`'graph` the graph, and the builtin table and the program record laid down in program storage, the
-record borrowing the frozen root.
+storage, the types' load and agent-tier bumps and the interner in `self_cell`'s owner, and in its
+dependent at `'graph` the graph, and the builtin table and the program record laid down in program
+storage, the record borrowing the type tiers.
 
 - `two_programs_run_and_are_read_back_in_a_separate_call`
   two substrates returned from a helper, moved through a `Vec` into a `Box`, each running its
