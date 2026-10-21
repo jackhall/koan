@@ -11,8 +11,8 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
 use crate::scope::{
-    BodyShape, InstanceRead, LoadFacts, Narrowing, Resolved, Site, Slot, Static, StaticCallable,
-    StaticRegistered, StaticSolution, StaticType, UseStatics, each_part,
+    BodyShape, InstanceRead, LoadFacts, Mint, Narrowing, Resolved, Site, Slot, Static,
+    StaticCallable, StaticRegistered, StaticSolution, StaticType, UseStatics, each_part,
 };
 use crate::symbols::SymbolInterner;
 use crate::type_lattice::{DeclaredType, Interval, Parametric, display_name};
@@ -69,6 +69,7 @@ const CLOSED_PATH: &str = "a type over a closed path is closed";
 const MIXED_SEAM: &str = "a unit mixing an entry seam with a later one keys nothing through it";
 const KEY_GROWTH: &str = "a callable keys on each keyable name a unit beneath it reads";
 const LAYOUT: &str = "a closure carries every enclosing type name bound at its birth";
+const TAIL_EDGE: &str = "a tail edge into an untyped registration pairs by its written slots";
 
 impl Differ<'_> {
     /// Count a divergence `kind` explains.
@@ -180,6 +181,24 @@ impl Render<'_, '_, '_, '_, '_> {
     }
 }
 
+/// Whether `shape` is born of a registration the old passes typed `Unknown`.
+fn untyped_registration(cells: &LoadFacts<'_>, shape: &BodyShape<'_>) -> bool {
+    let shapes = cells.shapes();
+    let Some((parent, _)) = shapes.parent(shape.segment()) else {
+        return false;
+    };
+    let parent = shapes.shape_at(parent);
+    (parent.registrations().iter()).any(|registration| {
+        parent
+            .births(registration.slot)
+            .is_some_and(|born| born.segment() == shape.segment())
+            && matches!(
+                cells.registered_type(parent, registration.slot),
+                Static::Unknown
+            )
+    })
+}
+
 /// Compare every fact of `shape` the two backends hold.
 fn body(
     out: &mut Differ<'_>,
@@ -188,6 +207,7 @@ fn body(
     records: &LoadFacts<'_>,
     shape: &BodyShape<'_>,
 ) {
+    let untyped = untyped_registration(cells, shape);
     for index in 0..shape.slots() {
         let slot = Slot(index as u32);
         let at = format!("slot {index}");
@@ -326,7 +346,10 @@ fn body(
         let (old, new) = (cells.mints_at(shape, *site), records.mints_at(shape, *site));
         out.check(shape, &at, "mints", old.to_string(), new.to_string());
         let (old, new) = (cells.mint_at(shape, *site), records.mint_at(shape, *site));
-        out.check(shape, &at, "mint", format!("{old:?}"), format!("{new:?}"));
+        match (old, new) {
+            (Some(Mint::Varying), Some(Mint::Invariant)) if untyped => out.moved(TAIL_EDGE),
+            _ => out.check(shape, &at, "mint", format!("{old:?}"), format!("{new:?}")),
+        }
         let (old, new) = (cells.warm_at(shape, *site), records.warm_at(shape, *site));
         out.check(shape, &at, "warm", old.to_string(), new.to_string());
         let (old, new) = (
@@ -406,33 +429,39 @@ fn body(
     );
     let (old, new) = (cells.caches(shape), records.caches(shape));
     out.check(shape, "body", "caches", old.to_string(), new.to_string());
-    let caching = |caching: Option<&crate::scope::Caching<'_>>| {
+    // The old passes gave up on such a body's tail edges: its parameters varied and keyed nothing.
+    let caching = |caching: Option<&crate::scope::Caching<'_>>, moved: bool| {
         caching.map(|caching| {
             format!(
                 "invariant {:?} keyable {:?} escapes {} mints {:?} warm {:?}",
                 caching.invariant,
-                caching.keyable,
+                match moved {
+                    true => &[],
+                    false => caching.keyable,
+                },
                 caching.escapes,
-                caching
-                    .mints
-                    .iter()
-                    .map(|(_, mint)| *mint)
+                (caching.mints.iter())
+                    .map(|(_, mint)| match (moved, *mint) {
+                        (true, Mint::Varying) => Mint::Invariant,
+                        (_, mint) => mint,
+                    })
                     .collect::<Vec<_>>(),
                 caching.warm.len(),
             )
         })
     };
     let (old, new) = (
-        caching(cells.caching(shape)),
-        caching(records.caching(shape)),
+        format!("{:?}", caching(cells.caching(shape), false)),
+        format!("{:?}", caching(records.caching(shape), false)),
     );
-    out.check(
-        shape,
-        "body",
-        "caching",
-        format!("{old:?}"),
-        format!("{new:?}"),
+    let moved = (
+        format!("{:?}", caching(cells.caching(shape), true)),
+        format!("{:?}", caching(records.caching(shape), true)),
     );
+    match untyped && old != new && moved.0 == moved.1 {
+        true => out.moved(TAIL_EDGE),
+        false => out.check(shape, "body", "caching", old, new),
+    }
     if shape.kind() == crate::scope::ShapeKind::Callable {
         let (old, new) = (cells.callable_type(shape), records.callable_type(shape));
         out.check(

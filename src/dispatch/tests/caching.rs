@@ -985,6 +985,51 @@ fn laid_through_caching_chains() {
     }
 }
 
+/// A tail edge into a registration the load types `Unknown` pairs by its written slots (D1.9):
+/// `SPIN`'s parameter `e` reads a meet over `Elt`, so its registration is untyped, and its tail
+/// call passes `Item` on bare, so the nominal it declares over it is invariant.
+#[cfg(feature = "one-walk")]
+#[test]
+fn a_tail_edge_into_an_untyped_registration_pairs_by_its_written_slots() {
+    let source = program(
+        1,
+        "EXPR FOR ALL #[Elt] #(DRIVE x :Elt AND m :Counter) -> Any = #(\n  \
+         EXPR #(SPIN e :(Elt & Number) Item :Type link :Link) -> Number = \
+         #((NEWTYPE Boxed = :{v :Item}) (SPIN e Item (ATTR link next)))\n  \
+         EXPR #(SPIN e :(Elt & Number) Item :Type end :Null) -> Number = #(7)\n  \
+         x\n)\n",
+    );
+    loaded(&source, |program| {
+        let facts = program.facts();
+        let mut shapes = Vec::new();
+        every_shape(program.shape(), &mut shapes);
+        let drive = (shapes.iter())
+            .find(|shape| {
+                shape.kind() == ShapeKind::Callable
+                    && (shape.nested_shapes().iter())
+                        .any(|(_, nested)| nested.kind() == ShapeKind::Callable)
+            })
+            .expect("`DRIVE`'s body");
+        let registration = (drive.registrations().iter())
+            .map(|registration| registration.slot)
+            .find(|slot| {
+                drive
+                    .births(*slot)
+                    .is_some_and(|body| body.body().len() == 2)
+            })
+            .expect("the looping `SPIN`");
+        assert!(matches!(
+            facts.registered_type(drive, registration),
+            crate::scope::Static::Unknown
+        ));
+        let spin = drive.births(registration).expect("`SPIN`'s body");
+        let caching = facts.caching(spin).expect("`SPIN` is folded");
+        let mints = caching.mints.entries();
+        assert!(!mints.is_empty(), "`SPIN`'s nominal mints");
+        assert!(mints.iter().all(|(_, mint)| *mint == Mint::Invariant));
+    });
+}
+
 /// Every shape under `shape`, itself included, depth first.
 pub(super) fn every_shape<'graph>(
     shape: &'graph BodyShape<'graph>,

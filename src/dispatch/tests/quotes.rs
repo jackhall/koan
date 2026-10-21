@@ -220,3 +220,45 @@ fn a_built_use_selects_among_the_codes_registrations_and_the_offered_ones() {
     );
     assert_eq!(run(source), "own\noffered");
 }
+
+/// A quote's `$` names read their static types where the quote is written (ruling 33): a use in
+/// its code over one is admitted at the load, and an annotation it can never satisfy refuses the
+/// code, which the `EVAL` running it reports.
+#[cfg(feature = "one-walk")]
+#[test]
+fn a_quote_reads_its_dollar_names_at_their_static_types() {
+    use crate::scope::{BodyShape, Candidate, Narrowing, ShapeKind};
+    use crate::type_lattice::Verdict;
+    fn code<'graph>(program: &crate::program::Program<'graph>) -> &'graph BodyShape<'graph> {
+        let (_, code) = (program.shape().nested_shapes().iter())
+            .find(|(_, nested)| nested.kind() == ShapeKind::Code)
+            .expect("the program quotes code");
+        code
+    }
+    let selected = "LET n = 1\nLET q = #(PRINT ($n + 2))\nEVAL q -> Any";
+    super::statics::loaded(selected, |program| {
+        let (facts, code) = (program.facts(), code(program));
+        // The code may be offered registrations at `_ + _`, so the builtin is kept beside them,
+        // and admitted *always* where `$n`'s static type is `Number`.
+        let always = (code.candidate_lists().iter()).any(|(site, _)| {
+            let Narrowing::Kept(kept) = facts.use_statics(code, *site).narrowing else {
+                return false;
+            };
+            (kept.iter()).any(|(candidate, verdict)| {
+                matches!(candidate, Candidate::One(_)) && *verdict == Verdict::Always
+            })
+        });
+        assert!(always, "`$n + 2`'s builtin is admitted at the load");
+        assert!(facts.typing_refusal(code).is_none());
+    });
+    let refused = "LET n = 1\nLET q = #(LET a :Str = $n)\nPRINT \"loaded\"\nEVAL q -> Any";
+    super::statics::loaded(refused, |program| {
+        let refusal = program.facts().typing_refusal(code(program));
+        assert!(refusal.is_some(), "`a :Str = $n` refuses the code");
+    });
+    assert_eq!(
+        run(refused),
+        "loaded\nerror: <test>:2:10: this value is Number, which can never satisfy its annotation Str",
+        "the `EVAL` reports the code's refusal"
+    );
+}

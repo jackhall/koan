@@ -361,3 +361,45 @@ fn an_escaping_body_s_hop_seeks_with_its_own_content() {
     assert_eq!(ran.printed, "7");
     assert_eq!((ran.tiers.sought, ran.tiers.specialized), (6, 4));
 }
+
+/// A unit that reads an entry-bound name beside a later-bound one seams at the later one, so its
+/// callable keys nothing through it (F4): `s` reads `x`, bound at the entry, and `n`, bound at its
+/// own unit. `n` comes from a top-level maker, so no other unit seams at the entry.
+#[cfg(feature = "one-walk")]
+#[test]
+fn a_unit_mixing_seams_keys_nothing_at_the_entry() {
+    let source = format!(
+        "{PRELUDE}{PICK}LET maker = (FN :{{}} -> Counter = #(ints))\n\
+         EXPR FOR ALL #[Elt] #(SUBJECT x :Elt) -> Any = #(\n  \
+         LET n = (maker {{}})\n  LET s = [(PICK x), n.zero]\n  s\n)\n"
+    );
+    assert_eq!(keyed(&source, &["n", "x", "s", "Elt"]), None);
+}
+
+/// A unit that reads a parameter waits on every name its entry's frontier holds, so its callable
+/// keys on each keyable one: `p` reads `x` alone, and `SUBJECT` keys `Key` beside `Elt`.
+#[cfg(feature = "one-walk")]
+#[test]
+fn a_callable_keys_on_each_keyable_name_its_entry_holds_that_a_unit_reads_through() {
+    let source = format!(
+        "{PICK}EXPR FOR ALL #[Elt Key] #(SUBJECT x :Elt AND k :Key) -> Any = #(\n  \
+         LET p = (PICK x)\n  p\n)\n"
+    );
+    let found = keys(&source);
+    let (_, listed) = (found.iter())
+        .find(|(names, _)| names.iter().any(|name| name == "k"))
+        .expect("`SUBJECT` is a callable");
+    assert_eq!(*listed, some(&["Elt", "Key"]));
+}
+
+/// A module parameter is an unknown wherever a fact reads its content, so a callable reading a
+/// member of one its signature pins keys on it.
+#[cfg(feature = "one-walk")]
+#[test]
+fn a_callable_keys_on_a_module_parameter_its_units_read() {
+    let source = format!(
+        "{PRELUDE}EXPR #(TOUCH m :(Counter WITH {{Carrier = Number}})) -> Any = #(\n  \
+         LET z = m.zero\n  z\n)\n"
+    );
+    assert_eq!(keyed(&source, &["z", "m"]), some(&["m"]));
+}
