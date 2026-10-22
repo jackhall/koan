@@ -26,3 +26,5 @@ pub use folds::fold;
 pub use key::{key_of, lay_keys};
 pub use load::LoadStore;
 pub use seams::list_seams;
+#[cfg(all(test, feature = "walk-diff"))]
+pub use seams::old_site;

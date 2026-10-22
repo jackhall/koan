@@ -756,6 +756,17 @@ mod laws {
                 prop_assert!(channel <= woken.0 && statics <= woken.1, "{:?} > {:?} in\n{}", (channel, statics), woken, case.render());
             }
         }
+
+        /// The keys fold agrees with the lists `lay_keys` lays, but where the transition law (F4)
+        /// names the move. Every load under `walk-diff` diffs the two, so loading a program and
+        /// its restart holds both to it, refused or not.
+        #[cfg(feature = "walk-diff")]
+        #[test]
+        fn the_folds_agree_with_the_lists_laid_today(case in resumable()) {
+            for source in [case.render(), case.restart(&case.bound)] {
+                let _ = CellSubstrate::load::<Koan>(&source, "<test>", 8, SpecBounds::default(), output());
+            }
+        }
     }
 
     /// Whether the refusal met reaching `case`'s binding by `first` and then the rest lies in a

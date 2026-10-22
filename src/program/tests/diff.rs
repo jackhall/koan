@@ -12,8 +12,8 @@ use std::fmt::Write as _;
 
 use crate::scope::{
     Address, BindSite, BodyShape, Frontier, InstanceRead, LoadFacts, Mint, Narrowing, Resolved,
-    ShapeKind, Site, Slot, Static, StaticCallable, StaticRegistered, StaticSolution, StaticType,
-    UnitId, UnitIndex, Unknown, UseStatics, each_part,
+    SeamAt, ShapeKind, Site, Slot, Static, StaticCallable, StaticRegistered, StaticSolution,
+    StaticType, UnitId, UnitIndex, Unknown, UseStatics, each_part,
 };
 use crate::symbols::SymbolInterner;
 use crate::type_lattice::{DeclaredType, Interval, Parametric, display_name};
@@ -46,11 +46,42 @@ pub(crate) fn diff(
             continue;
         }
         body(&mut out, &render, cells, records, shape);
+        bind_sites(&mut out, cells, shape);
     }
     for (kind, count) in out.moves.iter() {
         eprintln!("walk diff: {count} × {kind} (a named move)");
     }
     out.lines
+}
+
+/// The transition law `bind_site_agrees_with_seams`: every unknown an old residual of `shape`
+/// holds binds where the old seams found it.
+fn bind_sites(out: &mut Differ<'_>, cells: &LoadFacts<'_>, shape: &BodyShape<'_>) {
+    let shapes = cells.shapes();
+    let mut chain = vec![shape.segment()];
+    while let Some((parent, _)) = shapes.parent(chain[chain.len() - 1]) {
+        chain.push(parent);
+    }
+    let chain: Vec<_> = (chain.iter().rev())
+        .map(|segment| shapes.shape_at(*segment))
+        .collect();
+    let residuals = [shape.channel_residual(), shape.statics_residual()];
+    for (_, frontier) in residuals.iter().flat_map(|residual| residual.entries()) {
+        for unknown in frontier.unknowns() {
+            let site = shapes.bind_site(*unknown);
+            let new = match site.unit {
+                UnitIndex::ENTRY => (site.segment, SeamAt::Entry),
+                unit => (site.segment, SeamAt::Unit(unit.0 - 1)),
+            };
+            if let Some(old) = crate::build::old_site(*unknown, &chain).filter(|old| *old != new) {
+                // No move explains a bind site, so none is filtered.
+                out.lines.push(format!(
+                    "segment {} {unknown:?} binds at: seams {old:?} / bind_site {new:?}",
+                    shape.segment().index()
+                ));
+            }
+        }
+    }
 }
 
 /// Whether every element of `inner` is one of `outer`'s.

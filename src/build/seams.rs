@@ -131,6 +131,16 @@ pub(super) fn seam_of<'graph>(
     Some((body, at))
 }
 
+/// Where `unknown` binds, as [`site`] finds it on `chain`: the body and where in it. The walk diff
+/// holds `bind_site` to it.
+#[cfg(all(test, feature = "walk-diff"))]
+pub fn old_site<'graph>(
+    unknown: Unknown,
+    chain: &[&'graph BodyShape<'graph>],
+) -> Option<(crate::scope::Segment, SeamAt)> {
+    site(unknown, chain).map(|(_, body, at)| (body.segment(), at))
+}
+
 /// Where `unknown` binds, read from the bodies `chain` holds, outermost first: `None` where no
 /// body on it declares it.
 fn site<'graph>(unknown: Unknown, chain: &[&'graph BodyShape<'graph>]) -> Option<Found<'graph>> {
