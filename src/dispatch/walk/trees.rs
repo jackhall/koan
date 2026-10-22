@@ -303,6 +303,14 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         site: Site,
     ) -> Read<'o, Tree<'o>> {
         let shape = self.scope_shape(scope);
+        // A module binder the binding binds holds the closed content tree it binds.
+        let unknown = crate::scope::Unknown {
+            segment: shape.segment(),
+            at: crate::scope::Address::Slot(slot),
+        };
+        if let Some(crate::scope::Bound::Module { tree, .. }) = self.bound_to(unknown) {
+            return Ok(*tree);
+        }
         if let BinderSymbol::Type(_) = shape.slot_name(slot) {
             return match self.declared_cell(shape, slot) {
                 Static::Closed(handle) if shape.declarations(slot).is_some() => {

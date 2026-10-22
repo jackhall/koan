@@ -20,6 +20,7 @@ mod paths;
 mod programs;
 mod quotes;
 mod rankings;
+mod resumption;
 mod retypes;
 mod rules;
 mod selection;

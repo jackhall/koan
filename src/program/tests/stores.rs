@@ -3,10 +3,17 @@
 //! Each re-runs only the units its binding wakes, and reads every other record from its base. They
 //! live in `program` because it is the one module that names both the build's store vocabulary and
 //! the values a frame binds ([the store](../../../roadmap/gradual-build/one-walk-build.md)).
+//!
+//! The **test door** resumes a loaded program after its types' root freezes, through
+//! [`Running::resume`], [`Running::reload`] and [`Running::in_frame`]: each walks the program again
+//! under its store, interning what the binding closes through the chain it is handed — one over the
+//! frozen root, so successive resumptions share what they intern — and laying its records in the
+//! bump it is handed. It folds what it wrote, so a test reads a resumption's facts through the same
+//! accessors the run uses.
 
 use crate::build::LoadStore;
 use crate::memory::{Bump, BumpAllocator, BumpVec, Lays, Writer, resident};
-use crate::program::{CellSubstrate, KBirth, KBundle, KState};
+use crate::program::{CellSubstrate, KBirth, KBundle, KState, Language, Running};
 use crate::scheduler::{Action, Step, StepError};
 use crate::scope::tests::with_shapes;
 use crate::scope::{
@@ -188,6 +195,86 @@ impl<'o, L: Lays<'o>> Store<'o> for Frame<'o, '_, L> {
     }
 }
 
+impl<'graph> Running<'graph> {
+    /// Resume the load under `binding`, extending `base` — a resumption over the load, or the load's
+    /// own facts where `None`: the units it wakes re-run, or every unit under `everything`.
+    pub fn resume<'l, L: Language>(
+        &self,
+        types: &Chain<'l, '_, '_, '_>,
+        base: Option<&'l LoadFacts<'l>>,
+        binding: Binding<'l>,
+        everything: bool,
+        bump: &'l Bump,
+    ) -> Result<&'l LoadFacts<'l>, ShapeError<'l>>
+    where
+        'graph: 'l,
+    {
+        let scratch = Bump::new();
+        let base = base.unwrap_or(self.program().facts());
+        let layer = Layer::new(bump, &scratch, base, binding, everything);
+        self.walked::<L, _>(&layer, types, &scratch)?;
+        folded(layer.facts(&scratch, &[]), bump, &scratch)
+    }
+
+    /// Walk the whole program again under `binding`, through a [`LoadStore`].
+    pub fn reload<'l, L: Language>(
+        &self,
+        types: &Chain<'l, '_, '_, '_>,
+        binding: Binding<'l>,
+        bump: &'l Bump,
+    ) -> Result<&'l LoadFacts<'l>, ShapeError<'l>>
+    where
+        'graph: 'l,
+    {
+        let scratch = Bump::new();
+        let store = LoadStore::new(bump, &scratch, self.program().shapes(), binding);
+        self.walked::<L, _>(&store, types, &scratch)?;
+        folded(store.facts(&scratch, &[]), bump, &scratch)
+    }
+
+    /// Resume the load in a [`Frame`] whose slots hold `slots`.
+    pub fn in_frame<'l, L: Language, X: Knotted>(
+        &self,
+        types: &Chain<'l, '_, '_, '_>,
+        slots: &[(Unknown, Value<'_, X>)],
+        bump: &'l Bump,
+    ) -> Result<&'l LoadFacts<'l>, ShapeError<'l>>
+    where
+        'graph: 'l,
+    {
+        let scratch = Bump::new();
+        let load: &'l LoadFacts<'l> = self.program().facts();
+        let frame = Frame::new(bump, &scratch, load, slots, types);
+        self.walked::<L, _>(&frame, types, &scratch)?;
+        folded(frame.0.facts(&scratch, &[]), bump, &scratch)
+    }
+
+    /// Run `L`'s walk over the program into `store`, interning through `types`.
+    fn walked<'l, L: Language, S: Store<'l>>(
+        &self,
+        store: &S,
+        types: &Chain<'l, '_, '_, '_>,
+        scratch: &Bump,
+    ) -> Result<(), ShapeError<'l>>
+    where
+        'graph: 'l,
+    {
+        let program = self.program();
+        L::facts(program.shapes(), program.builtins(), store, types, scratch)
+    }
+}
+
+/// `unfolded` laid in `bump` beside its folds, as the load lays its own.
+fn folded<'l>(
+    unfolded: LoadFacts<'l>,
+    bump: &'l Bump,
+    scratch: &Bump,
+) -> Result<&'l LoadFacts<'l>, ShapeError<'l>> {
+    let unfolded = resident(bump, unfolded);
+    let folds = crate::build::fold(unfolded, bump, scratch)?;
+    Ok(resident(bump, unfolded.folded(bump, folds)))
+}
+
 /// What a [`Frame`] binds the top-level binding `name` to, read off the resting top level once the
 /// program has run: `type <name>`, or `module <carried type> <digest>`.
 pub(crate) fn frame_bound_back(substrate: &mut CellSubstrate, name: &str) -> String {
@@ -221,6 +308,54 @@ fn framing<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'g
         }
     };
     super::evaluator::record(rendered);
+    step.leave(birth)
+}
+
+thread_local! {
+    /// What [`module_back`] read inside its step: the module's carried type and content digest.
+    static MODULE_BACK: std::cell::RefCell<Option<(KType, crate::values::ContentDigest)>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// What a [`Frame`] binds the top-level module `name` to, read off the resting top level once the
+/// program has run: its carried type, which the frozen root holds, and its content digest.
+pub(crate) fn module_back(
+    running: &mut Running<'_>,
+    name: &str,
+) -> (KType, crate::values::ContentDigest) {
+    WANTED.with(|wanted| *wanted.borrow_mut() = vec![name.to_string()]);
+    running
+        .inspect(module_framing)
+        .expect("the inspection runs to completion");
+    MODULE_BACK
+        .with(|held| held.borrow_mut().take())
+        .expect("the step read the module")
+}
+
+/// [`module_back`]'s root work.
+fn module_framing<'graph>(
+    step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>,
+) -> Action<'graph, KBundle> {
+    let (step, state) = step.state();
+    let KState::Born(birth @ KBirth::Inspect { program, view }) = state else {
+        return step.failed(StepError::Refused);
+    };
+    let name = WANTED.with(|wanted| wanted.borrow()[0].clone());
+    let scratch = Bump::new();
+    let types = &step.types();
+    let Bound::Module { carried, tree } =
+        bound_of(&scratch, wanted(program, &view, &name), types, &scratch)
+    else {
+        panic!("`{name}` is a module");
+    };
+    assert!(
+        types.in_root(carried),
+        "a module's carried type rests in the frozen root"
+    );
+    let digest = tree
+        .digest()
+        .expect("a frame binds a module to a closed tree");
+    MODULE_BACK.with(|held| *held.borrow_mut() = Some((carried, digest)));
     step.leave(birth)
 }
 

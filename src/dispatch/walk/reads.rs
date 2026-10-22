@@ -514,6 +514,8 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             }
             None
         });
+        // A name the binding binds reads as the closed type it binds; any other is gathered.
+        let mut closed = BumpVec::new_in(scratch);
         for (name, index) in map.iter() {
             let level = born.levels.get(index).map(|at| types.node(*at));
             let Some(TypeNode::Lexical { level, .. }) = level else {
@@ -522,13 +524,32 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             if named.contains(&level)
                 && let Some((slot, _)) = body.slot(BinderSymbol::Type(name))
             {
-                self.note(&[Unknown {
+                let unknown = Unknown {
                     segment: body.segment(),
                     at: Address::Slot(slot),
-                }]);
+                };
+                match self.binds(unknown) {
+                    Some(bound) => closed.push((level, bound)),
+                    None => self.note(&[unknown]),
+                }
             }
         }
-        Some(read)
+        if closed.is_empty() {
+            return Some(read);
+        }
+        Some(read_through(
+            types,
+            scratch,
+            read,
+            Side::Above,
+            &mut |variable| {
+                let Variable::Lexical { level, .. } = variable else {
+                    return None;
+                };
+                let (_, bound) = closed.iter().find(|(held, _)| *held == level)?;
+                Some(Interval::point((*bound).into()))
+            },
+        ))
     }
 
     /// The `part` of the function type of the callable body at `level` as its body reads it: its
@@ -595,10 +616,15 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         self.closed(code.segment())?.ran
     }
 
-    /// Whether the walk has written the closing record of `body`: a test of progress, which gathers
+    /// Whether the closing record of `body` stands for this walk: one it wrote, or its base's where
+    /// the binding wakes nothing that record waits on — a body that re-runs is walked before its
+    /// record is read, so a cycle a binding closes is found (F3). A test of progress, which gathers
     /// nothing.
     pub(super) fn has_closed(&self, body: &BodyShape<'graph>) -> bool {
-        self.store.close(body.segment()).is_some()
+        let segment = body.segment();
+        self.store.close(segment).is_some_and(|(_, frontier)| {
+            self.walked[segment.index() as usize] || !self.store.wakes(frontier)
+        })
     }
 
     /// Whether the walk has walked `nested`, or need not: a quote's code the shape refused is left.
