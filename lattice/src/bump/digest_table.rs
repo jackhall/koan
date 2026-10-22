@@ -14,14 +14,12 @@
 //! and has no allocator, so a table that grows only by laying runs is one a cell's region can
 //! host. The bump tier implements [`LaysRuns`] for a bump (`bump.rs`).
 //!
-//! [`DigestTable::frozen`] copies a table into a [`FrozenTable`], which holds the same slots and is
-//! never written. The type lattice's root builder keeps a hashbrown table, which it freezes into a
-//! frozen table, and a branch keeps a digest table; see
+//! A [`FrozenTable`](super::FrozenTable) holds the same slots, placed the same way into a run laid
+//! once in a bump and never written after. The type lattice's root builder keeps a hashbrown
+//! table, which it freezes into a frozen table, and a branch keeps a digest table; see
 //! [identity.md § Storage](../types/identity.md#storage-a-root-and-its-branches).
 
 use std::cell::Cell;
-
-use super::FrozenTable;
 
 /// What lays a fixed run of drop-free values and hands back its borrow for `'r`: the one
 /// capability a [`DigestTable`] grows by, and the one a type branch lays its nodes through. A bump
@@ -65,19 +63,41 @@ impl<N> Clone for Slot<'_, N> {
 impl<N> Copy for Slot<'_, N> {}
 
 impl<'r, N> Slot<'r, N> {
-    const EMPTY: Self = Slot {
+    pub(super) const EMPTY: Self = Slot {
         word: 0,
         entry: None,
     };
+
+    /// The slot holding `entry`, whose key the caller has read as `key`.
+    pub(super) fn of(key: N::Key, entry: &'r N) -> Self
+    where
+        N: Keyed,
+    {
+        Slot {
+            word: N::word(key),
+            entry: Some(entry),
+        }
+    }
 
     /// The entry the slot holds, or `None` where it is empty.
     pub(super) fn entry(self) -> Option<&'r N> {
         self.entry
     }
+
+    /// The key's low word the slot stores; its home.
+    pub(super) fn word(self) -> u64 {
+        self.word
+    }
 }
 
 /// The smallest run: one 64 B line of slots.
 const SMALLEST: usize = 4;
+
+/// The run that holds `entries` at a load of at most one half: a power of two, so a word's masked
+/// low bits are a home.
+pub(super) fn slots_for(entries: usize) -> usize {
+    (entries * 2).next_power_of_two().max(SMALLEST)
+}
 
 /// An insert-only table of references to [`Keyed`] entries, laid and grown through [`LaysRuns`].
 /// Its run holds at most half as many entries as slots.
@@ -97,7 +117,7 @@ impl<'r, N: Keyed> DigestTable<'r, N> {
 
     /// An empty table on a run that holds `entries` inserts without growing.
     pub fn with_capacity(lay: impl LaysRuns<'r>, entries: usize) -> Self {
-        Self::on_run(lay, (entries * 2).next_power_of_two().max(SMALLEST))
+        Self::on_run(lay, slots_for(entries))
     }
 
     fn on_run(lay: impl LaysRuns<'r>, slots: usize) -> Self {
@@ -121,13 +141,7 @@ impl<'r, N: Keyed> DigestTable<'r, N> {
         if (self.len.get() + 1) * 2 > self.run.get().len() {
             self.grow(lay);
         }
-        place(
-            self.run.get(),
-            Slot {
-                word: N::word(key),
-                entry: Some(entry),
-            },
-        );
+        place(self.run.get(), Slot::of(key, entry));
         self.len.set(self.len.get() + 1);
     }
 
@@ -146,20 +160,14 @@ impl<'r, N: Keyed> DigestTable<'r, N> {
         self.run.get().len()
     }
 
-    /// Visit every entry, in slot order.
-    pub fn each(&self, mut visit: impl FnMut(&'r N)) {
-        for slot in self.run.get() {
-            if let Some(entry) = slot.get().entry {
-                visit(entry);
-            }
-        }
+    /// Every entry, in slot order.
+    pub fn entries(&self) -> impl Iterator<Item = &'r N> {
+        self.run.get().iter().filter_map(|slot| slot.get().entry)
     }
 
-    /// A read-only copy of the table, its run laid through `lay` slot by slot, so every entry
-    /// keeps the slot it holds here.
-    pub fn frozen(&self, lay: impl LaysRuns<'r>) -> FrozenTable<'r, N> {
-        let run = self.run.get();
-        FrozenTable::over(lay.lay(run.len(), |index| run[index].get()), self.len.get())
+    /// Visit every entry, in slot order.
+    pub fn each(&self, visit: impl FnMut(&'r N)) {
+        self.entries().for_each(visit);
     }
 
     /// Lay a run twice the length and re-place every occupied slot by its stored word.
@@ -197,14 +205,21 @@ pub(super) fn probe<'r, N: Keyed>(
     }
 }
 
-/// Set `slot` in the first empty slot from its word's home, probing linearly.
-fn place<'r, N>(run: &[Cell<Slot<'r, N>>], slot: Slot<'r, N>) {
-    let mask = run.len() - 1;
-    let mut index = slot.word as usize & mask;
-    while run[index].get().entry.is_some() {
+/// The first empty slot from `word`'s home in a run of `len` slots, each read through `slot`,
+/// probing linearly: where a [`DigestTable`] and a [`FrozenTable`](super::FrozenTable) each place
+/// an entry.
+pub(super) fn home<'r, N: 'r>(len: usize, slot: impl Fn(usize) -> Slot<'r, N>, word: u64) -> usize {
+    let mask = len - 1;
+    let mut index = word as usize & mask;
+    while slot(index).entry.is_some() {
         index = (index + 1) & mask;
     }
-    run[index].set(slot);
+    index
+}
+
+/// Set `slot` in the first empty slot from its word's home.
+fn place<'r, N>(run: &[Cell<Slot<'r, N>>], slot: Slot<'r, N>) {
+    run[home(run.len(), |index| run[index].get(), slot.word)].set(slot);
 }
 
 #[cfg(test)]

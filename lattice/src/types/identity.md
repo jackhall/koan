@@ -238,10 +238,10 @@ most one half. A region's writer lays fixed runs and has no allocator, so the
 table grows by laying a run of twice the length and re-placing each slot by
 its stored word, reading no node. The root builder's is a hashbrown table in
 the load's bump, where its grown build and its stranded bucket arrays are paid
-once. The freeze places its nodes in a digest table there and copies that run,
-slot by slot, into a [`FrozenTable`](../bump/frozen_table.rs): the same slots
-in the same places, probed the same way, but a plain slice never written, so
-the frozen load holds no cell; the staging table is stranded in the bump. The
+once. The freeze lays one run for its nodes and places each into it as a
+digest table would, a [`FrozenTable`](../bump/frozen_table.rs): the same slots,
+probed the same way, but a plain slice filled while it is exclusively held and
+never written after, so the frozen load holds no cell. The
 agent tier's is a hashbrown table over the agent's bump, whose miss is one
 group probe of control bytes, since every intern that misses the frozen load
 probes it next. An intern, which has a digest and no flags, probes the frozen

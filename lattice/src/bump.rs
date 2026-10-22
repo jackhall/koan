@@ -12,7 +12,8 @@
 //!
 //! [`DigestTable`] is the one structure here that grows without an allocator: it lays fixed runs
 //! through [`LaysRuns`], which a bump implements here and a region's writer implements in koan, so
-//! a cell's region can host it. [`FrozenTable`] is its read-only copy, which holds no cell.
+//! a cell's region can host it. [`FrozenTable`] is its read-only twin, laid once in a bump, which
+//! holds no cell.
 //!
 //! This is the crate's only import of `bumpalo`, `allocator_api2` and `hashbrown`.
 //!

@@ -4,9 +4,9 @@
 //!
 //! - The **frozen load** holds the load's types and outlives every run. While the load runs, its
 //!   [`RootBuilder`] grows a hashbrown table and a lossless verdict table in the bump it is laid in;
-//!   the load's end ([`RootBuilder::freeze`]) lays both into [`FrozenTable`]s, runs of slots that
-//!   are never written. The frozen load has no intern door and no record door, holds no cell, and
-//!   so is `Sync`; it is covariant, so a chain holds it at its own lifetime.
+//!   the load's end ([`RootBuilder::freeze`]) lays both into [`FrozenTable`]s, runs laid once and
+//!   never written. The frozen load has no intern door and no record door, holds no cell, and so
+//!   is `Sync`; it is covariant, so a chain holds it at its own lifetime.
 //! - The **agent tier** holds what one agent rests above the load: insert-only nodes laid alone in
 //!   its bump, which never move, indexed by a hashbrown table there, and a lossless verdict table.
 //!   It is released whole at the agent's death.
@@ -189,21 +189,18 @@ impl<'g> RootBuilder<'g> {
     }
 
     /// End the load: lay its nodes and its verdicts into the [`Frozen`] load's read-only tables,
-    /// each slot placed as a digest table places it, and lay the load in the bump. The staging
-    /// table the nodes pass through is stranded there. An insert after the freeze panics.
+    /// each a run laid once with every slot placed as a digest table places it, and lay the load
+    /// in the bump. An insert after the freeze panics.
     pub fn freeze(&self) -> &'g Frozen<'g> {
         assert!(!self.frozen.replace(true), "a load freezes once");
         let bump = self.grown.bump;
-        let staging = DigestTable::with_capacity(bump, self.grown.len());
-        for &node in self.grown.nodes.borrow().iter() {
-            staging.insert_unique(bump, node);
-        }
+        let nodes = self.grown.nodes.borrow();
         let verdicts = match self.grown.verdicts.get() {
-            Some(table) => table.frozen(bump),
-            None => DigestTable::new(bump).frozen(bump),
+            Some(table) => FrozenTable::placed(bump, table.len(), table.entries()),
+            None => FrozenTable::placed(bump, 0, []),
         };
         bump.alloc(Frozen {
-            nodes: staging.frozen(bump),
+            nodes: FrozenTable::placed(bump, nodes.len(), nodes.iter().copied()),
             verdicts,
             never: self.never,
             any: self.any,

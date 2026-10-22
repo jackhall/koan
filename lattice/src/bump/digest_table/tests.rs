@@ -1,7 +1,7 @@
 use std::cell::{Cell, RefCell};
 
 use super::{DigestTable, Keyed, LaysRuns};
-use crate::bump::Bump;
+use crate::bump::{Bump, FrozenTable};
 
 /// A test entry that counts its key reads.
 struct Entry<'c> {
@@ -188,7 +188,7 @@ fn growth_reads_no_entry() {
 }
 
 #[test]
-fn a_frozen_copy_finds_every_entry_and_misses_the_rest() {
+fn a_frozen_table_finds_every_entry_and_misses_the_rest() {
     let bump = Bump::new();
     let reads = Cell::new(0);
     let laid = entries(&bump, &SplitMix(6).keys(1000), &reads);
@@ -196,7 +196,7 @@ fn a_frozen_copy_finds_every_entry_and_misses_the_rest() {
     for &entry in &laid {
         table.insert_unique(&bump, entry);
     }
-    let frozen = table.frozen(&bump);
+    let frozen = FrozenTable::placed(&bump, table.len(), table.entries());
     assert_eq!(frozen.len(), table.len());
     for &entry in &laid {
         assert!(std::ptr::eq(frozen.get(entry.key).expect("found"), entry));

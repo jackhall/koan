@@ -9,7 +9,8 @@ lends of [`lend.rs`](../src/lend.rs), counted tenant lends with their
 `Projects`/`Projected`, and the `'lent` brand that gives `StepContext` ten
 parameters ([`graph.rs`](../src/graph.rs)). `peek` is documented as a read for
 a drain, yet koan writes header cells through it; `peek` refuses a tenant
-while `enter_beside` maps one to its host; a `Fresh` koan frame still takes a
+while `enter_beside` maps one to its host, resolving the entered cell's write
+home once itself and again in `begin`; a `Fresh` koan frame still takes a
 counted lend of its parent's scratch that no chain reads
 ([the drain](../../src/scheduler/drain.rs)). Koan's header family carries a
 table, a home and settled facts on every run cell for a build cell that

@@ -128,3 +128,5 @@ the end state. A cell and an activation run
   build-tree doors go once no build cell is a cell.
 - [Agents](../rewrite/agents.md) — the per-agent build arena.
 - [Setting the build budget](bound-settings.md) — the budget as a setting.
+- [A birth solved once](birth-solved-once.md) — the frame request carries the
+  call's solution.
