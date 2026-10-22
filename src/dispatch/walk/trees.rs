@@ -31,7 +31,7 @@ use crate::parse::{ExpressionPart, KExpression};
 use crate::scope::{
     Binder, BodyShape, CaptureSlot, CaptureSource, Coordinate, KnotNode, Leaf, Narrowing,
     NodeCapture, ParameterBinding, Position, Print, Segment, ShapeError, ShapeKind, Site, Slot,
-    Static, StaticSolution, Store, Target, Tree, Unfolded, Within,
+    Static, StaticCallable, StaticSolution, Store, Target, Tree, Unfolded, Within,
 };
 use crate::symbols::{BinderSymbol, ValueSymbol};
 use crate::type_lattice::{KType, TypeNode};
@@ -94,13 +94,27 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         }
     }
 
-    /// A chain level whose chain `scope` reads in: a body read through its tree sits on the chain
-    /// being typed.
+    /// A chain level whose chain `scope` reads its paths in.
     fn scope_level(&self, scope: Scope<'o, 'graph>) -> usize {
         match scope {
             Scope::Chain(level) => level,
-            Scope::Body { .. } => self.chain.len() - 1,
+            Scope::Body { shape, .. } => self.body_level(shape),
         }
+    }
+
+    /// A chain level whose chain the body `shape` reads its paths in: its own chain's root where
+    /// that chain is being typed — the program's always is; a quote's code's while a tree read
+    /// inside it names a body the code captured — else the chain being typed.
+    pub(super) fn body_level(&self, shape: &BodyShape<'graph>) -> usize {
+        let root = self.shape_at(self.shapes.chain_root(shape.segment()));
+        (self.chain.iter())
+            .rposition(|level| level.roots_chain && std::ptr::eq(level.shape, root))
+            .unwrap_or(self.chain.len() - 1)
+    }
+
+    /// The callable cell of the body `body`, read through its own chain's path resolutions.
+    pub(super) fn callable_of(&self, body: &'graph BodyShape<'graph>) -> StaticCallable<'o> {
+        self.resolved_callable(self.body_level(body), self.callable_cell(body))
     }
 
     /// The tree of `part`, read in the shape at chain level `level`.
@@ -206,8 +220,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                             Ascription::Opaque => self.view_tree(application, source, site)?,
                             // `:!` is a retype.
                             Ascription::Transparent => {
-                                let level = self.scope_level(scope);
-                                self.retyped_tree(level, source, application.into(), site)?
+                                self.retyped_tree(source, application.into(), site)?
                             }
                         }
                     }
@@ -361,7 +374,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         let level = self.scope_level(scope);
         match shape.annotation(slot) {
             Some(annotation) => match self.declared(level, annotation) {
-                Some(declared) => self.retyped_tree(level, tree, declared, site),
+                Some(declared) => self.retyped_tree(tree, declared, site),
                 None => self.leaf_on(scope, slot),
             },
             None => Ok(tree),
@@ -476,8 +489,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                         .and_then(|read| read.declared.as_type());
                 match (self.read_member(*source, label, site)?, declared) {
                     (Some(member), Some(declared)) => {
-                        let level = self.chain.len() - 1;
-                        Some(self.retyped_tree(level, member, declared, site)?)
+                        Some(self.retyped_tree(member, declared, site)?)
                     }
                     _ => None,
                 }
@@ -496,7 +508,6 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     /// re-stamp: its tree is then such a leaf.
     pub(super) fn retyped_tree(
         &mut self,
-        level: usize,
         tree: Tree<'o>,
         declared: crate::type_lattice::Parametric,
         site: Site,
@@ -523,9 +534,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             } => (*source, tree.closed().then_some(carried)),
             Tree::Knot { members, index, .. } => {
                 let node = members[index as usize];
-                let own = match self
-                    .resolved_callable(level, self.callable_cell(self.shape_at(node.body)))
-                {
+                let own = match self.callable_of(self.shape_at(node.body)) {
                     Static::Closed(callable) if node.instance.is_empty() => {
                         callable.ktype.as_type()
                     }
@@ -633,7 +642,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             if !self.typed_on_demand(body)? {
                 return Ok(None);
             }
-            let Some(instance) = self.born_at(self.scope_level(scope), body, keeps_scheme) else {
+            let Some(instance) = self.born_at(body, keeps_scheme) else {
                 return Ok(None);
             };
             let mut captures = BumpVec::with_capacity_in(self.capture_count(body), self.scratch);
@@ -666,19 +675,14 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         )))
     }
 
-    /// The solution the closure `body`, born in the chain `level` sits on, is born at: its born
-    /// instance where the load fixed one closed, and nothing where it is born unquantified or, its
-    /// binder keeping its scheme, quantified. `None` where the load cannot say.
-    fn born_at(
-        &self,
-        level: usize,
-        body: &'graph BodyShape<'graph>,
-        keeps_scheme: bool,
-    ) -> Option<&'o [KType]> {
+    /// The solution the closure `body` is born at: its born instance where the load fixed one
+    /// closed, and nothing where it is born unquantified or, its binder keeping its scheme,
+    /// quantified. `None` where the load cannot say.
+    fn born_at(&self, body: &'graph BodyShape<'graph>, keeps_scheme: bool) -> Option<&'o [KType]> {
         match self.born_instance(body) {
             Some(StaticSolution::Closed(solution)) => Some(solution),
             Some(StaticSolution::Rigid { .. }) => None,
-            None => match self.resolved_callable(level, self.callable_cell(body)) {
+            None => match self.callable_of(body) {
                 Static::Closed(callable) if callable.ktype.as_type().is_some() => Some(&[]),
                 Static::Rigid { value, .. } if value.ktype.as_type().is_some() => Some(&[]),
                 Static::Closed(_) | Static::Rigid { .. } if keeps_scheme => Some(&[]),
@@ -770,7 +774,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             return Ok(None);
         };
         let callee = self.shape_at(members[index as usize].body);
-        let typed = self.resolved_callable(level, self.callable_cell(callee));
+        let typed = self.callable_of(callee);
         if !matches!(typed, Static::Closed(callable) if callable.ktype.as_type().is_some()) {
             return Ok(None);
         }
@@ -807,8 +811,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         let mut done = bump_table(self.scratch);
         let substituted = self.substituted(summary, &call, site, &mut done)?;
         // The frame retypes its value to its declared return.
-        let level = self.chain.len() - 1;
-        let returns = match self.resolved_callable(level, self.callable_cell(callee)) {
+        let returns = match self.callable_of(callee) {
             Static::Closed(callable) => match callable.ktype.view(self.types).body {
                 TypeNode::KFunction { ret, .. } => Some(ret),
                 _ => None,
@@ -816,7 +819,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             _ => None,
         };
         Ok(Some(match returns {
-            Some(returns) => self.retyped_tree(level, substituted, returns, site)?,
+            Some(returns) => self.retyped_tree(substituted, returns, site)?,
             None => substituted,
         }))
     }
@@ -933,8 +936,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 carried, source, ..
             } => {
                 let source = self.substituted(*source, call, site, done)?;
-                let level = self.chain.len() - 1;
-                self.retyped_tree(level, source, carried.into(), site)?
+                self.retyped_tree(source, carried.into(), site)?
             }
             Tree::Leaf(Leaf::Bound {
                 binder,
@@ -966,8 +968,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 (call.arguments.iter()).find(|(slot, _)| *slot == binder.slot)
             {
                 // The frame binds the argument retyped to the parameter's declared type.
-                let level = self.chain.len() - 1;
-                let declared = match self.resolved_callable(level, self.callable_cell(callee)) {
+                let declared = match self.callable_of(callee) {
                     Static::Closed(callable) => match callable.ktype.view(self.types).body {
                         TypeNode::KFunction { params, .. } => {
                             params.get(callee.slot_name(binder.slot).symbol())
@@ -977,7 +978,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                     _ => None,
                 };
                 let argument = match declared {
-                    Some(declared) => self.retyped_tree(level, *argument, declared, site)?,
+                    Some(declared) => self.retyped_tree(*argument, declared, site)?,
                     None => *argument,
                 };
                 let mut read = Some(argument);

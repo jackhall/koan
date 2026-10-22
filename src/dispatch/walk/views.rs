@@ -429,8 +429,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                     Some(Carried::Tree(
                         inner @ (Tree::Body { .. } | Tree::View { .. } | Tree::Retyped { .. }),
                     )) => {
-                        let level = self.chain.len() - 1;
-                        let retyped = self.retyped_tree(level, inner, declared.into(), site)?;
+                        let retyped = self.retyped_tree(inner, declared.into(), site)?;
                         Some(Carried::Tree(retyped))
                     }
                     _ => retyped_to(types, declared.into())

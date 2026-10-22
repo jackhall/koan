@@ -733,8 +733,8 @@ each beside the frontier of every record the unit read. A name a
 resumption runs the same rules under a binding: a bound type name seeds as a
 closed type binder does, a bound `FOR ALL` name closes the body's type, and a
 bound module binder is exactly the type it carries, its tree the bound one.
-A unit its binding does not wake is absorbed as its base holds it, and every
-other re-runs once, refusing where a load with the binding declared would. A
+A unit its binding does not wake is absorbed as its base holds it, what its
+facts gave the body's class included, and every other re-runs once, refusing where a load with the binding declared would. A
 rule holds no writer and never asks which store it runs over:
 [`tests::boundary`](tests/boundary.rs) holds every file of the walk but the
 façade to reaching no store door.

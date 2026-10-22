@@ -6,7 +6,8 @@ use crate::memory::{Bump, BumpVec, resident};
 use crate::parse::ExpressionPart;
 use crate::program::{CellSubstrate, Running};
 use crate::scope::{
-    Address, Binding, BodyShape, Bound, LoadFacts, Mint, ShapeKind, Site, Slot, Static, Unknown,
+    Address, Binding, BodyClass, BodyShape, Bound, LoadFacts, Mint, ShapeKind, Site, Slot, Static,
+    Unknown,
 };
 use crate::symbols::{BinderSymbol, SymbolInterner};
 use crate::type_lattice::{DeclaredType, KType, display_name};
@@ -321,6 +322,30 @@ fn binding_a_name_no_fact_reads_re_runs_only_its_own() {
     });
     assert_eq!(reran, waiting, "exactly the units waiting on `Key` re-run");
     assert!(!outside, "no unit outside `WRAP`'s body waits on `Key`");
+}
+
+/// A unit a resumption absorbs keeps what its facts gave the body's class: a porous exit a unit
+/// the binding does not wake set at the load leaves the body porous in the resumption.
+#[test]
+fn an_absorbed_unit_keeps_the_body_s_porous_exit() {
+    let source = format!(
+        "{PICK}EXPR FOR ALL #[Elt] #(WRAP x :Elt) -> Any = #(\n  \
+         LET e = (EVAL #(1) -> Any)\n  LET p = (PICK x)\n  p\n)"
+    );
+    let (loaded, resumed) = resumed(&source, |door| {
+        let f = quantified(door.load(), door.root());
+        let binding = door.binding(&[(unknown(door.symbols(), f, "Elt"), KType::NUMBER)]);
+        let resumed = (door.resume(None, binding, false)).expect("the resumption refuses nothing");
+        let porous =
+            |facts: &LoadFacts<'_>| matches!(facts.class(f), Some(BodyClass::Porous { .. }));
+        assert!(
+            (resumed.own_units().iter()).all(|(unit, _)| unit.unit.run_index() != Some(0)),
+            "the `EVAL`'s unit is absorbed, not re-run"
+        );
+        (porous(door.load()), porous(resumed))
+    });
+    assert!(loaded, "the `EVAL` leaves `WRAP` porous at the load");
+    assert!(resumed, "and in the resumption");
 }
 
 #[test]

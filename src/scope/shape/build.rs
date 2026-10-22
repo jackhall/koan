@@ -3434,6 +3434,9 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         nested_starts.resize(draft.statements as usize + 1, nested.len() as u32);
         let nested_order = collect(writer, nested.iter().copied());
         let nested = Keyed::sorted(writer, &mut nested);
+        // The walk pushes mentions in program order, which ascends by site as the parser lays a
+        // body's parts in that order; the sort is what `spelled_paths`'s search over them rests on.
+        draft.mentions.sort_unstable_by_key(|mention| mention.site);
         let mut mentions = BumpVec::with_capacity_in(draft.mentions.len(), self.scratch);
         mentions.extend(draft.mentions.iter().map(|mention| {
             let lands = mention.landing.map(|level| chain[level].segment);
@@ -3456,7 +3459,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         }));
         let spelled = self.spelled_paths(&draft, &chain);
         drop(chain);
-        let mentions = Keyed::sorted(writer, &mut mentions);
+        let mentions = Keyed::from_sorted(collect(writer, mentions.iter().copied()));
         let mut offers = draft.offers;
         let offers = Keyed::sorted(writer, &mut offers);
         let channels = Channels::new(&draft.values, &draft.types, &draft.registrations);

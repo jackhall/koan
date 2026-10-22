@@ -328,6 +328,12 @@ struct UnitState<'p, 'o> {
     named_variables: BumpVec<'p, NamedVariable>,
     /// Where it wrote into its owning body's level: what its record lays.
     wrote: BumpVec<'p, Wrote>,
+    /// What its facts give its owning body's class, which a resumption absorbing it folds back
+    /// in: a porous exit, how many of its minting sites are views over closed trees, and the run
+    /// mints of the blocks and module bodies it ran.
+    exits: bool,
+    closed: u32,
+    folded: u32,
 }
 
 /// Where a unit wrote a fact into its owning body's [`Level`]: a slot, a statement or a use of the
@@ -860,6 +866,9 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             sites: BumpVec::new_in(scratch),
             named_variables: BumpVec::new_in(scratch),
             wrote: BumpVec::new_in(scratch),
+            exits: false,
+            closed: 0,
+            folded: 0,
         });
         self.open.push(tag);
         let mut scopes = self.scopes.replace(BumpVec::new_in(scratch));
@@ -925,6 +934,16 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 wrote
             }
             None => self.chain[level].everything(scratch),
+        };
+        let (exits, closed, folded) = match tag {
+            Some(tag) => {
+                let unit = &self.units[tag.0 as usize];
+                (unit.exits, unit.closed, unit.folded)
+            }
+            None => {
+                let at = &self.chain[level];
+                (at.exits, at.closed, at.folded)
+            }
         };
         let at = &self.chain[level];
         let ours = |held: Tag| tag.is_none_or(|tag| tag == held);
@@ -1074,8 +1093,9 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             minting,
             throughs: Keyed::sorted(lay, &mut throughs),
             signature: at.signature,
-            exits: at.exits,
-            mints: at.run_mints(),
+            exits,
+            closed,
+            folded,
         }
     }
 
@@ -1102,6 +1122,9 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             sites: BumpVec::new_in(scratch),
             named_variables: BumpVec::new_in(scratch),
             wrote: BumpVec::new_in(scratch),
+            exits: false,
+            closed: 0,
+            folded: 0,
         });
         let segment = self.chain[level].shape.segment();
         if let Some((_, typed)) = facts.typed.get(segment) {
@@ -1165,6 +1188,27 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             .extend(typed.trees.iter().map(|(site, tree)| (*site, *tree, tag)));
         for (level, located) in typed.throughs.iter() {
             at.throughs.entry(*level).or_insert((*located, tag));
+        }
+        at.exits |= typed.exits;
+        at.closed += typed.closed;
+        at.folded += typed.folded;
+    }
+
+    /// The unit running, whose record keeps what the walk fixes now: none while an unfilled
+    /// typing fixes nothing.
+    fn fixing(&mut self) -> Option<&mut UnitState<'p, 'o>> {
+        if self.unfilled {
+            return None;
+        }
+        let tag = *self.open.last()?;
+        Some(&mut self.units[tag.0 as usize])
+    }
+
+    /// Mark the shape at `level` with a porous exit: a porous value leaves it.
+    fn exit(&mut self, level: usize) {
+        self.chain[level].exits = true;
+        if let Some(unit) = self.fixing() {
+            unit.exits = true;
         }
     }
 
@@ -1493,6 +1537,12 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         at.exits |= inner.exits;
         at.folded += inner.run_mints();
         at.minted_within |= inner.minted_within || !inner.minting.is_empty();
+        // Folded into an owning body, the mints are the running unit's; into another inline body,
+        // they fold on with it.
+        let owning = !matches!(at.shape.kind(), ShapeKind::Block | ShapeKind::Module);
+        if owning && let Some(unit) = self.fixing() {
+            unit.folded += inner.run_mints();
+        }
     }
 
     /// The class of the shape at `level` where it is a frame body: porous where a porous value
@@ -1547,7 +1597,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             && porous_slot(types, slot)
             && !self.returns_nothing_minted(level, last)?
         {
-            self.chain[level].exits = true;
+            self.exit(level);
         }
         Ok(())
     }
@@ -2985,6 +3035,9 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             let site = Site::of_node(node);
             if tree.closed() {
                 self.chain[level].closed += 1;
+                if let Some(unit) = self.fixing() {
+                    unit.closed += 1;
+                }
             }
             self.record_view(level, site, tree);
             let signature = declared.and_then(|declared| types.concrete(declared));
@@ -3202,7 +3255,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             return Ok(Interval::point(KType::NEVER.into()));
         }
         // Every `EVAL` enters a frame whose code the load may not see.
-        self.chain[level].exits = true;
+        self.exit(level);
         let (types, scratch) = (self.types, self.scratch);
         if let Some((value, _)) =
             never_satisfies(types, scratch, typed.upper, KType::ANY_CODE.into())
@@ -3490,7 +3543,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 if porous_site(self.types, typed)
                     && !self.holds_nothing_minted_part(level, argument, typed)?
                 {
-                    self.chain[level].exits = true;
+                    self.exit(level);
                 }
                 Ok(unknown())
             }
@@ -3619,7 +3672,9 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                     return match callee.exact {
                         true => Err(self.never(callee, payload.upper, node)),
                         false => {
-                            self.chain[level].exits |= inexact;
+                            if inexact {
+                                self.exit(level);
+                            }
                             at_most(self)
                         }
                     };
@@ -3631,7 +3686,9 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                     return Ok(never);
                 }
                 if !callee.exact {
-                    self.chain[level].exits |= inexact;
+                    if inexact {
+                        self.exit(level);
+                    }
                     return at_most(self);
                 }
                 let contributions =
@@ -3647,7 +3704,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         let (types, scratch) = (self.types, self.scratch);
         let minted_free = self.minted_free_fields(level, callee.names, argument, whole)?;
         if self.slot_exits(callee.shape, arguments, minted_free) {
-            self.chain[level].exits = true;
+            self.exit(level);
         }
         let read = self.solved_from(callee.shape, arguments, contributions);
         let judged = judge_by_class(types, scratch, callee.shape, read);
@@ -4241,7 +4298,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             }
         });
         if exits {
-            self.chain[level].exits = true;
+            self.exit(level);
         }
     }
 

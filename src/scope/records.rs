@@ -81,9 +81,12 @@ pub struct Typed<'a> {
     pub throughs: Keyed<'a, (usize, &'a [Variable])>,
     /// A `MODULE` or `GROUP` body's exact signature, where the walk typed one.
     pub signature: Option<KType>,
-    /// Whether an inline body has a porous exit, and how many sites it mints at run.
+    /// What the unit's facts give the body's class, folded back in where a resumption absorbs
+    /// the unit: a porous exit, how many of its minting sites are views over closed trees, and
+    /// the run mints of the blocks and module bodies it ran.
     pub exits: bool,
-    pub mints: u32,
+    pub closed: u32,
+    pub folded: u32,
 }
 
 impl Typed<'_> {
@@ -106,7 +109,8 @@ impl Typed<'_> {
         throughs: Keyed::EMPTY,
         signature: None,
         exits: false,
-        mints: 0,
+        closed: 0,
+        folded: 0,
     };
 }
 
