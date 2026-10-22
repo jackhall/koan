@@ -311,51 +311,89 @@ fn framing<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'g
     step.leave(birth)
 }
 
+/// What renders a frame's facts for [`framed`]: the facts, the step's chain they render through,
+/// the program's names, and the names a render leaves out.
+pub(crate) type Framer = fn(
+    &LoadFacts<'_>,
+    &Chain<'_, '_, '_, '_>,
+    &crate::symbols::SymbolInterner,
+    &[String],
+) -> Vec<String>;
+
+/// What [`framed`] hands its step, and what the step hands back.
+struct Framing {
+    slots: Vec<(Unknown, String)>,
+    render: Framer,
+    leave: Vec<String>,
+    rendered: Option<Result<Vec<String>, String>>,
+}
+
 thread_local! {
-    /// What [`module_back`] read inside its step: the module's carried type and content digest.
-    static MODULE_BACK: std::cell::RefCell<Option<(KType, crate::values::ContentDigest)>> =
-        const { std::cell::RefCell::new(None) };
+    static FRAMING: std::cell::RefCell<Option<Framing>> = const { std::cell::RefCell::new(None) };
 }
 
-/// What a [`Frame`] binds the top-level module `name` to, read off the resting top level once the
-/// program has run: its carried type, which the frozen root holds, and its content digest.
-pub(crate) fn module_back(
+/// Resume the load of a program that has run in a [`Frame`] whose slots hold what the top-level
+/// bindings `slots` name, each beside the unknown it binds, inside a step at its own brand, and
+/// render what it settles through `render`, `leave` left out: or its refusal.
+pub(crate) fn framed<L: Language>(
     running: &mut Running<'_>,
-    name: &str,
-) -> (KType, crate::values::ContentDigest) {
-    WANTED.with(|wanted| *wanted.borrow_mut() = vec![name.to_string()]);
+    slots: Vec<(Unknown, String)>,
+    render: Framer,
+    leave: Vec<String>,
+) -> Result<Vec<String>, String> {
+    FRAMING.with(|held| {
+        *held.borrow_mut() = Some(Framing {
+            slots,
+            render,
+            leave,
+            rendered: None,
+        })
+    });
     running
-        .inspect(module_framing)
+        .inspect(framing_facts::<L>)
         .expect("the inspection runs to completion");
-    MODULE_BACK
-        .with(|held| held.borrow_mut().take())
-        .expect("the step read the module")
+    (FRAMING.with(|held| held.borrow_mut().take()))
+        .and_then(|framing| framing.rendered)
+        .expect("the step framed the load")
 }
 
-/// [`module_back`]'s root work.
-fn module_framing<'graph>(
+/// [`framed`]'s root work.
+fn framing_facts<'graph, L: Language>(
     step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>,
 ) -> Action<'graph, KBundle> {
     let (step, state) = step.state();
     let KState::Born(birth @ KBirth::Inspect { program, view }) = state else {
         return step.failed(StepError::Refused);
     };
-    let name = WANTED.with(|wanted| wanted.borrow()[0].clone());
-    let scratch = Bump::new();
+    let (slots, render, leave) = FRAMING.with(|held| {
+        let held = held.borrow();
+        let framing = held.as_ref().expect("framed hands its slots");
+        (framing.slots.clone(), framing.render, framing.leave.clone())
+    });
+    let (bump, scratch) = (Bump::new(), Bump::new());
     let types = &step.types();
-    let Bound::Module { carried, tree } =
-        bound_of(&scratch, wanted(program, &view, &name), types, &scratch)
-    else {
-        panic!("`{name}` is a module");
+    let values: Vec<_> = (slots.iter())
+        .map(|(unknown, name)| (*unknown, wanted(program, &view, name)))
+        .collect();
+    let load: &LoadFacts<'_> = program.facts();
+    let frame = Frame::new(&bump, &scratch, load, &values, types);
+    let walked = L::facts(
+        program.shapes(),
+        program.builtins(),
+        &frame,
+        types,
+        &scratch,
+    )
+    .and_then(|()| folded(frame.0.facts(&scratch, &[]), &bump, &scratch));
+    let rendered = match walked {
+        Ok(facts) => Ok(render(facts, types, program.symbols(), &leave)),
+        Err(error) => Err(error.display(program.symbols(), types).to_string()),
     };
-    assert!(
-        types.in_root(carried),
-        "a module's carried type rests in the frozen root"
-    );
-    let digest = tree
-        .digest()
-        .expect("a frame binds a module to a closed tree");
-    MODULE_BACK.with(|held| *held.borrow_mut() = Some((carried, digest)));
+    FRAMING.with(|held| {
+        if let Some(framing) = held.borrow_mut().as_mut() {
+            framing.rendered = Some(rendered);
+        }
+    });
     step.leave(birth)
 }
 

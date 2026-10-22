@@ -726,6 +726,25 @@ impl<'graph> LoadFacts<'graph> {
         .map(|(_, read)| *read)
     }
 
+    /// The closed point each variable of the group of the candidate the keyworded use at `site` of
+    /// `shape` selects solves to, by group index, where the load selected one.
+    pub fn selection(&self, shape: &BodyShape<'_>, site: Site) -> Option<&'graph [Option<KType>]> {
+        (self
+            .records
+            .typed(shape.segment(), Held::Site(shape.segment(), site)))
+        .and_then(|typed| typed.selections.get(site))
+        .map(|(_, points)| *points)
+    }
+
+    /// The content tree of what the binder at `slot` of `shape` holds, where the load read one.
+    pub fn content(&self, shape: &BodyShape<'_>, slot: Slot) -> Option<Tree<'graph>> {
+        (self
+            .records
+            .typed(shape.segment(), Held::Slot(shape.segment(), slot)))
+        .and_then(|typed| typed.contents.get(slot))
+        .map(|(_, tree)| *tree)
+    }
+
     /// What each parameter of the call by name whose argument sits at `site` of `shape` is solved
     /// from.
     pub fn named_contributions(

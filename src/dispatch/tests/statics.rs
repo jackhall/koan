@@ -639,3 +639,95 @@ fn a_fellow_s_callable_body_reads_the_fellow_s_own_type() {
         assert_eq!(rendered, ":{next :Any v :Number}");
     });
 }
+
+/// Every fact of `program`'s top level and the bodies it births, keyed by the names binding them
+/// and sorted: an independent declaration's facts are the same lines wherever it is written.
+fn by_names(program: &Program<'_>) -> Vec<String> {
+    let bump = Bump::new();
+    let types = reading(program.tiers(), &bump);
+    let (facts, symbols) = (program.facts(), program.symbols());
+    let named = |typed: DeclaredType<Parametric>| display_name(typed, &types, symbols).to_string();
+    let statically = |typed: crate::scope::StaticType<'_>| match typed {
+        Static::Unknown => "unknown".to_string(),
+        Static::Closed(closed) => format!("closed {}", named(closed.into())),
+        Static::Rigid { value, .. } => format!("rigid {}", named(value.into())),
+    };
+    fn render(
+        program: &Program<'_>,
+        shape: &BodyShape<'_>,
+        path: &str,
+        out: &mut Vec<String>,
+        line: &dyn Fn(&BodyShape<'_>, Slot) -> Option<String>,
+        typed: &dyn Fn(&BodyShape<'_>, usize) -> String,
+    ) {
+        for at in (0..shape.slots()).map(|at| Slot(at as u32)) {
+            let name = program
+                .symbols()
+                .display(shape.slot_name(at).symbol())
+                .to_string();
+            if let Some(fact) = line(shape, at) {
+                out.push(format!("{path} {name} {fact}"));
+            }
+            if let Some(born) = shape.births(at) {
+                render(program, born, &format!("{path}/{name}"), out, line, typed);
+            }
+        }
+        if !path.is_empty() {
+            for index in 0..shape.body().len() {
+                out.push(format!("{path} #{index} = {}", typed(shape, index)));
+            }
+            if let Some((closing, _)) = program.facts().closing(shape.segment()) {
+                let summary = closing.summary.map(|summary| summary.is_some());
+                out.push(format!(
+                    "{path} recursive {} summary {summary:?}",
+                    closing.recursive
+                ));
+            }
+        }
+    }
+    let line = |shape: &BodyShape<'_>, at: Slot| -> Option<String> {
+        Some(match shape.slot_name(at) {
+            crate::symbols::BinderSymbol::Value(_) => match facts.binder_type(shape, at)? {
+                DeclaredType::Type(typed) => format!("= {}", named(typed.upper.into())),
+                DeclaredType::Scheme(scheme) => format!("= {}", named(scheme.into())),
+            },
+            crate::symbols::BinderSymbol::Type(_) => {
+                format!("declares {}", statically(facts.declared_type(shape, at)))
+            }
+            crate::symbols::BinderSymbol::Registration(_) => match facts.registered_type(shape, at)
+            {
+                Static::Unknown => "registers unknown".to_string(),
+                Static::Closed(registered) => {
+                    format!("registers closed {}", named(registered.shape.into()))
+                }
+                Static::Rigid { value, .. } => format!("registers rigid {}", named(value.shape)),
+            },
+            crate::symbols::BinderSymbol::Key(_) => return None,
+        })
+    };
+    let typed = |shape: &BodyShape<'_>, index: usize| {
+        (facts.statement_type(shape, index))
+            .map_or("untyped".to_string(), |typed| named(typed.upper.into()))
+    };
+    let mut out = Vec::new();
+    render(program, program.shape(), "", &mut out, &line, &typed);
+    out.sort();
+    out
+}
+
+proptest::proptest! {
+    #![proptest_config(proptest::prelude::ProptestConfig {
+        cases: crate::tests::case_share(1, 4),
+        ..proptest::prelude::ProptestConfig::default()
+    })]
+
+    /// 10. Reordering independent declarations changes no fact: two top-level declarations whose
+    /// units read nothing of each other, swapped, leave every fact each fixes as it was — a call
+    /// unfolds into its callee wherever either is written.
+    #[test]
+    fn reordering_independent_declarations_changes_no_fact(case in super::generate::independent()) {
+        let (written, swapped) = (case.render(false), case.render(true));
+        let facts = |source: &str| loaded(source, by_names);
+        proptest::prop_assert_eq!(facts(&written), facts(&swapped), "in\n{}\nswapped as\n{}", written, swapped);
+    }
+}

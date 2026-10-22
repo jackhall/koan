@@ -349,6 +349,12 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         self.chain[level].trees.push((site, tree, tag));
     }
 
+    /// Record the content tree of the module binder at `slot` of the shape at `level`.
+    pub(super) fn record_content(&mut self, level: usize, slot: Slot, tree: Tree<'o>) {
+        let tag = self.innermost();
+        self.chain[level].contents.push((slot, tree, tag));
+    }
+
     /// Record that the ascription or annotated binder's type part at `site` is settled.
     pub(super) fn record_settled(&mut self, level: usize, site: Site) {
         let tag = self.innermost();

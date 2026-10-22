@@ -368,6 +368,8 @@ struct Level<'p, 'o, 'graph> {
     minted_within: bool,
     /// Each `:|` ascription's site, beside its operand's content tree.
     trees: BumpVec<'p, (Site, &'o Tree<'o>, Tag)>,
+    /// Each module binder's content tree, by slot: what a binding of it is read against.
+    contents: BumpVec<'p, (Slot, Tree<'o>, Tag)>,
     /// Each path the shape spells whose declared application names a lexical variable, by its
     /// level, beside where the shape reads each variable.
     throughs: BumpVec<'p, (usize, &'o [Located], Tag)>,
@@ -612,6 +614,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             folded: 0,
             minted_within: false,
             trees: BumpVec::new_in(scratch),
+            contents: BumpVec::new_in(scratch),
             throughs: BumpVec::new_in(scratch),
             signature: None,
             rhs,
@@ -942,6 +945,12 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 .filter(|(_, (_, held))| ours(*held))
                 .map(|(site, (points, _))| (*site, *points)),
         );
+        let mut contents = BumpVec::new_in(scratch);
+        contents.extend(
+            (at.contents.iter())
+                .filter(|(_, _, held)| ours(*held))
+                .map(|(slot, tree, _)| (*slot, *tree)),
+        );
         let mut throughs = BumpVec::new_in(scratch);
         throughs.extend(
             (at.throughs.iter())
@@ -964,7 +973,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             selections: Keyed::sorted(lay, &mut selections),
             by_name: Keyed::sorted(lay, &mut named),
             trees: Keyed::sorted(lay, &mut trees),
-            contents: Keyed::EMPTY,
+            contents: Keyed::sorted(lay, &mut contents),
             minting,
             throughs: Keyed::sorted(lay, &mut throughs),
             signature: at.signature,
@@ -1185,6 +1194,31 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         }
         if !self.unfilled {
             self.throughs(level, &statements);
+            self.contents(level, index)?;
+        }
+        Ok(())
+    }
+
+    /// 5. Each module binder the unit `index` of the shape at `level` binds: its content tree, which
+    ///    a binding of it is read against.
+    fn contents(&mut self, level: usize, index: UnitIndex) -> Result<(), ShapeError<'o>> {
+        let shape = self.chain[level].shape;
+        for slot in (0..shape.slots() as u32).map(Slot) {
+            if shape.unit_of_slot(slot) != index
+                || shape.position_of(slot) == Position::PARAMETER
+                || self
+                    .module_unknown(level, slot, self.binder_fact(level, slot))
+                    .is_none()
+            {
+                continue;
+            }
+            let site = match (shape.rhs(slot), shape.birth_site(slot)) {
+                (Some(rhs), _) => Site::of(rhs),
+                (None, Some(born)) => born,
+                (None, None) => continue,
+            };
+            let tree = self.slot_tree(trees::Scope::Chain(level), slot, site)?;
+            self.record_content(level, slot, tree);
         }
         Ok(())
     }
