@@ -80,8 +80,8 @@ pub struct ActivationView<
     /// its component, so it runs no member of its own.
     callable: Option<X>,
     slots: SlotView<'graph, 'cell, ValueFamily<XF>>,
-    /// One memo per slot the load marked digested, in the order of its
-    /// [`digested`](super::Statics::digested) slots.
+    /// One memo per slot the shape marks digested, in the order of its
+    /// digested slots ([`Shapes::digested_index`](super::Shapes::digested_index)).
     digests: &'cell [Cell<Option<ContentDigest>>],
 }
 

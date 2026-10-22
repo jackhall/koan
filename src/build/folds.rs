@@ -1,5 +1,5 @@
 //! The load's **folds**: what the load decides per body once its walk has run, read off the
-//! shapes and the walk's records alone ([the folds](../../roadmap/gradual-build/one-walk-build.md)).
+//! shapes and the walk's records alone ([the folds](README.md#the-folds)).
 //! A resumption reads them and never recomputes them.
 //!
 //! - **Caching.** Each minting and composite site a body that may cache records is classed by what

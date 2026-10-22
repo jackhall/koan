@@ -111,7 +111,7 @@ names: a type whose in-root bit is set, a type value naming such a type, or a
 module whose content tree is closed, which the load computes. A binding to
 anything else births no build cell; the site it reaches is decided in the
 frame's own activation, over the carried types, in the frame's own tiers
-([activation typing](../roadmap/gradual-build/activation-typing.md)).
+([the build arena](../roadmap/gradual-build/build-arena.md)).
 
 | the key names | decided in | lives |
 |---|---|---|
@@ -141,8 +141,6 @@ agent, its budget and its stack
 
 ## Open work
 
-- [The build as the second embedder](../roadmap/gradual-build/build-rewrite.md)
-  — the build arena, its keys and its budget.
-- [Activation typing](../roadmap/gradual-build/activation-typing.md) — the
-  frame's activation as a decision's other home.
+- [The build arena](../roadmap/gradual-build/build-arena.md) — the arena,
+  its keys and its budget, and the activation as a decision's other home.
 - [Agents](../roadmap/rewrite/agents.md) — threads sharing the frozen load.

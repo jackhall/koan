@@ -217,9 +217,9 @@ impl<'a> Binding<'a> {
     }
 }
 
-/// Where the one-walk build keeps one walk's records, and what it binds: the walk reads and writes
+/// Where one walk keeps its records, and what it binds: the walk reads and writes
 /// every unit's record through it, and never names where they rest
-/// ([the store](../../roadmap/gradual-build/one-walk-build.md)). The load's store keeps the load's
+/// ([the store](../build/README.md#the-store)). The load's store keeps the load's
 /// records; a test's store layers a resumption's over them.
 pub trait Store<'o> {
     /// Where every record a unit keeps is laid.

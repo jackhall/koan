@@ -46,8 +46,8 @@ digest. A body-born module holds its body's closure for life, as a function
 does, and its copy and the exit walk carry it, so a copy computes the content
 its source would. A `:|` over a module binder read bare, in the activation
 the module was born in or a block inside it, fills the content from the
-digests the captured slots keep, which the load reads off the view
-([memos](../../dispatch/statics/memos.rs), `view::fill_at_view`).
+digests the captured slots keep, which the shape reads off the view
+([memos](../../scope/shapes/memos.rs), `view::fill_at_view`).
 
 ## Layout order
 

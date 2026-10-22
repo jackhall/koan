@@ -141,7 +141,7 @@ The [dispatch](src/dispatch/README.md#testing) laws draw types, values and whole
 [`src/dispatch/tests/generate.rs`](src/dispatch/tests/generate.rs), every program valid by
 construction save a registration holding a union whose members tie, which the load refuses where
 it is declared and the narrowing law discards. The narrowing law runs each program as loaded and
-again under the test-only `unnarrowed` switch in [`statics.rs`](src/dispatch/statics.rs), which
+again under the test-only `unnarrowed` switch in [`walk.rs`](src/dispatch/walk.rs), which
 leaves every keyworded use whole and refuses none: a program the load accepts runs as it does
 unnarrowed, and a use the load refuses faults when run unnarrowed.
 The spelling laws ([`spellings.rs`](src/dispatch/tests/spellings.rs)) call one registration over

@@ -37,7 +37,7 @@ exists only at run time to live.
   storage is what this asks of `scope`: a shape generic over its storage
   brand.
 - Code composed at run time has its shape typed by
-  [the load pass](../../src/elaborate/README.md#the-type-channel-at-load) before
+  [the load's walk](../../src/build/README.md#the-one-walk) before
   an `EVAL` runs it, so the overlap check reads every closed registration in it,
   and classified as a written quote's code shape is.
 - Composing code whose syntax would nest deeper than the parser's

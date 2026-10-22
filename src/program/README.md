@@ -73,10 +73,11 @@ and leave with them.
 `self_cell`'s builder closure, which sees the same `'graph` every later call
 does: it parses the source into program storage, lays a root builder in the
 owner's bump and builds every load-time type through one chain over it, has
-`L` lay the builtin table down, builds the program's shape over that table, types
-its type channel through
-[the elaborator's load pass](../elaborate/README.md#the-type-channel-at-load),
-has `L` check it and record what it types, freezes the types' load so no step
+`L` lay the builtin table down, builds the program's shapes over that table,
+has `L` run [its walk](../build/README.md#the-one-walk) over them into the
+load's store — the [type half](../elaborate/README.md#the-type-channel-at-load)
+and the value half unit by unit — and folds the records, lays the
+`LoadFacts` the program and every activation read them through, freezes the types' load so no step
 can intern into it and the interner's load table so a later name lands in its
 overlay, lays the agent tier in its own bump, and lays the record down beside the
 [output sinks](#faults-and-output) the embedder hands `load`. All of that runs
@@ -121,11 +122,15 @@ dispatch's, and everything in this module below it free of expression forms.
 
 **`Language` is a trait**, with three methods generic over `'graph`: `builtins`,
 which lays the table down through program storage's writer, `evaluator`, the
-step an evaluation runs, and `check`, which may refuse the program's shape once
-it is built and its types can be read, as dispatch's
-[overlap check](../dispatch/README.md#the-overlap-check) does, and may record
-what it learns on the shape through program storage's writer, as dispatch's
-[static types](../dispatch/README.md#static-types) do. A record of function pointers ranked over `'graph`
+step an evaluation runs, and `facts`, the language's
+[walk](../build/README.md#the-one-walk) over the program's shapes into any
+store it is handed — the load's, or a test's over the load's records — which
+may refuse the program, as dispatch's
+[overlap check](../dispatch/README.md#the-overlap-check) does, and records
+what it decides in the store, as dispatch's
+[static types](../dispatch/README.md#static-types) are. Its default walks
+nothing, so a language without one loads with no facts and its run reads
+every type where it runs. A record of function pointers ranked over `'graph`
 cannot name the bundle's projections (rustc #100013); a method generic over
 `'graph` is handed the one the program loads at. Dispatch implements it; the
 tests implement a [miniature](tests/evaluator.rs).
@@ -308,7 +313,7 @@ statements have effects and no data dependency takes source order without
 interleaving. Per unit:
 
 - **A component of type binders** is bound to the handles the
-  [load pass](../elaborate/README.md#the-type-channel-at-load) fixed for it when
+  [load's walk](../elaborate/README.md#the-type-channel-at-load) fixed for it when
   they are closed, and otherwise declared through
   [the elaborator's door](../elaborate/README.md#declarations), over the
   activation, and bound in the same step.
@@ -430,7 +435,9 @@ it names, whose nodes the drain lays in the agent tier for a missed
 specialization
 ([references between the trees](../build/README.md#references-between-the-trees));
 and the work a missed specialization runs, [`specialize`](specialize.rs),
-which enlists the new cell in its parent's table. The frame is born borrowing
+which enlists the new cell in its parent's table and settles nothing until
+[the build arena](../../roadmap/gradual-build/build-arena.md) runs the walk
+there. The frame is born borrowing
 the specialization, and its warm tier is the agent tier, so every frame of
 that body under that binding finds its invariant types warm.
 A frame borrowing one routes whatever its placement: a `Fresh` frame holds its
@@ -550,7 +557,14 @@ and one whole program with all of them.
 [`tests/substrate.rs`](tests/substrate.rs) loads two programs through a helper,
 moves them into a `Vec`, runs each, and reads a binding back in a separate call
 through a resumed root work; it also checks both load errors, an inspection
-before the program ran, and a stalled substrate. The two-program test,
+before the program ran, and a stalled substrate.
+[`tests/stores.rs`](tests/stores.rs) holds the test door the dispatch suite
+resumes a load through — a resumption over a **layer** of the load's records,
+a **reload** under a binding from the start, and a **frame** whose binding is
+read off the values its slots hold — beside the test stores themselves: a
+layer reads its base where it wrote nothing, wakes exactly where a frontier
+meets a newly bound unknown, and a frame binds a type value as a type and a
+module value by its digest tree. The two-program test,
 `a_whole_program`, `an_eager_part_is_supplied_by_site_in_one_wake`,
 `a_call_binds_each_type_parameter_to_its_solution`,
 `a_lambda_returned_from_a_frame_keeps_its_captures` and

@@ -48,7 +48,7 @@ are the drain's, and every region is one thread's.
 
 **Requires:**
 
-- [The build as the second embedder](../gradual-build/build-rewrite.md) —
-  the per-agent build arena.
+- [The build arena](../gradual-build/build-arena.md) — the per-agent build
+  arena.
 
 **Unblocks:** none — a leaf.

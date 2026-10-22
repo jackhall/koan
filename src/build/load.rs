@@ -2,7 +2,7 @@
 //! so every unit the walk reaches runs, and it lays every record through the writer it is given,
 //! into program storage at the load. It keeps no base, so a test may run it after the freeze over a
 //! binding of its own and compare its facts with a resumption's
-//! ([the store](../../roadmap/gradual-build/one-walk-build.md)).
+//! ([the store](README.md#the-store)).
 
 use crate::memory::{BumpAllocator, Lays};
 use crate::scope::{

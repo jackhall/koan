@@ -34,11 +34,11 @@ computed where a view or a key first reaches the module and kept on the
 module, which holds what it captures, as a closure does, so a module only
 surfaced, read or passed on digests nothing. A slot a module captures keeps
 its value's digest beside it where a view reaches the module in the slot's
-own activation or a block inside it — the load reads which slots off the view
-at each `:|` — and a call passing that slot bare hands the digest to the
+own activation or a block inside it — the shape reads which slots off the
+view at each `:|` — and a call passing that slot bare hands the digest to the
 parameter it binds, so two views over modules capturing one value, or the hops
 of a loop passing it on bare, digest it once
-([memos](../src/dispatch/statics/memos.rs)). The
+([memos](../src/scope/shapes/memos.rs)). The
 digest covers what a value's type shows of it, as a copy of the value lays it
 down, so a copy keeps its digest. A module, a function or a quote
 retyped to a type other than its own digests as its own content beside that

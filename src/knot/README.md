@@ -361,7 +361,7 @@ A function's captured environment is the scope layer's
 [closure bindings](../scope/README.md#three-tiers): one run, in capture-slot
 order, of [links](../values/README.md#what-a-value-is) — value words and knot
 edges, the same cell type a data node holds — the builder's captures first,
-then the type captures the static pass added. A value word is the enclosing
+then the type captures of its [layout](../scope/README.md#load-time-types). A value word is the enclosing
 binding's word, shallow, so capturing a string shares its bytes. An edge names
 a fellow node by index.
 
@@ -425,9 +425,10 @@ are equal when they hold the same shape handle — one per written `FN`, `EXPR` 
 instance, and their closure bindings compare equal as a bisimulation,
 under the pair set circular data uses. Bindings are immutable and no shape
 retains a defining scope ([quotes](../scope/README.md#quotes)), so a function's
-shape and captures fix what it does. A closure holds a
+shape and captures fix what it does. A closure's equality reads a
 [type capture](../scope/README.md#resolution) — an enclosing call's binding of
-a type name — only where a call in its body reads it for a solve, or an
+a type name — only where its contract composes it: where a call in its body
+reads it for a solve, or an
 instance site in it is made at it: at a slot that solves in one of the call's
 candidates, including one the load judged *never* and dropped, since the call
 runs what selection over the full list would. So a function born under two
@@ -463,7 +464,7 @@ call per knot. A node's content is what it is:
 - a **function**: its body's [code digest](../scope/README.md#resolution), the
   solution it is an instance at, and the digest of each capture the code digest
   does not name — every one but a read of the program's top level, and every
-  type capture;
+  type capture its contract composes;
 - a **module**: the content it keeps ([birth](module/README.md#birth)) — a
   view's operator and application over its source's bare member and what
   *fits* solved, computed where the view is built, and a body-born module's

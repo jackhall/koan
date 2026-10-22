@@ -15,17 +15,19 @@ tier. Its cells are
 with value computation as steps, and a run cell reads what a binding settled
 through one counted borrow.
 
-This module owns the build tree and the seams the solver's frontiers decide:
-the build cells, the seams that decide where a resumption lands, the
-specialization tables and what they cost, and the borrow a run cell takes.
-The solver's driver is the two load passes themselves, made re-entrant, so
-each rule stays the code it is. Its neighbours keep what they own:
-[elaborate](../elaborate/README.md) the per-expression typing rules, the type
-channel's vocabulary and its walk, called from a build cell's step;
+This module owns the build tree and what the solver's frontiers decide: the
+build cells, the load's store, the folds that lay keys, caching records and
+contracts over the walk's records, the specialization tables and what they
+cost, and the borrow a run cell takes. The solver's driver is
+[the one walk](#the-one-walk): one fact function per unit over a shape built
+from text alone. Its neighbours keep what they own:
+[elaborate](../elaborate/README.md) the per-expression typing rules and the
+walk's [type half](../elaborate/README.md#the-type-channel-at-load);
 [scope](../scope/README.md) the shapes and name resolution, built by the build
-root's step and stored in program storage, and the type facts' vocabulary —
-unknowns, frontiers, the residual and a binding; [dispatch](../dispatch/README.md)
-selection and the static pass's walk, reading verdicts through the borrow;
+root's step and stored in program storage, and the facts' vocabulary —
+unknowns, frontiers, a binding, the records, the `Store` trait and the read
+door `LoadFacts`; [dispatch](../dispatch/README.md) selection and the walk's
+driver and value half, the run reading verdicts through the borrow;
 [memory](../memory/README.md) program storage, which holds the parse, the
 builtin table and what the build root's step writes for the written program;
 the scheduler the drain, which gains build cells as enterable work, the load
@@ -38,9 +40,9 @@ door and the lookup before a birth, and nothing else.
   price as the [tree pool](../../cellgraph/src/tree/README.md) states.
 - **The build root** is a slab cell beside the run root, the two slab slots
   the graph holds, and the build tree's one **core** cell: it lives as long as
-  the program. Its step writes the written program's shapes, every type fact,
-  the value channel, the caching records, the solver's fixed facts and its
-  residual, which rest in program storage, and the **frozen load**'s types,
+  the program. Its step writes the written program's shapes, every unit's
+  record and every body's closing record, and the folds over them, which rest
+  in program storage, and the **frozen load**'s types,
   laid in the owner's registry, read by everything after and written by
   nothing else; the agent tier is laid beside it at the load's end. Its region
   holds the root-level specialization table.
@@ -68,9 +70,10 @@ door and the lookup before a birth, and nothing else.
   program storage, composed code's in its cell. The raw parse stays in program
   storage.
 
-**Lingo.** The solver's unit is a **type fact**, the shape's
-[load-time type](../scope/README.md#load-time-types) carrying its edges: data
-the build writes, in program storage for the written program and in a
+**Lingo.** A **type fact** is a
+[load-time type](../scope/README.md#load-time-types) or verdict, and the
+solver's grain is the **unit** that computes it: data the build writes in the
+unit's record, in program storage for the written program and in a
 specialization's region for what a binding settles, never a cell of the
 graph. "Build cell" and "run cell" are the graph's, and a "node" in this doc
 is the type lattice's. An unqualified "cell" is avoided.
@@ -83,42 +86,124 @@ makes every rule map both ends, so a fact only narrows and a verdict moves
 only from *maybe* to *always* or *never*. A fact is asserted only where it
 holds under every refinement of the unknowns it reads.
 
-The driver is a **worklist over the facts**, in the manner of Kildall. A rule
-that reads an unknown **parks** its fact on that unknown and records the
-**edge**. The load runs the worklist to **quiescence**. Its output is the fixed
-facts and the **residual**: the parked facts and their edges. A **binding**
-at a keyed name unparks the facts on its edge; their rules re-run, can only
-narrow, and what they produce goes to the specialization the binding names. A
-binding no key fixes — a statement's, a parameter's that does not key —
-unparks nothing: its facts stay parked and are read per read.
+### The one walk
 
-The worklist's schedule is the evaluation order of the two load passes, the
-type channel's walk and then the static pass's. The facts form no cycle, so
-that order is a topological one: each fact is popped once, after every fact
-it reads. Every read a rule makes of a load-time fact goes through a fact
-store, which adds the read fact's frontier, and the read unknown where the
-fact is one, to the frontier of the fact being computed; a memo the walk
-keeps carries the frontier it was computed under. A fact a rule records
-beside its own — a settled check, an instance read, a call by name's
-contributions, a view's tree — waits on what that rule had read when it
-recorded it. A resumption re-walks the
-program under its binding, skipping every shape, unit and part whose
-frontier the binding misses and re-running the rest, so each woken fact
-re-runs once. What it re-runs is written beside the load's cells, never into
-them; resumptions stack newest first, each binding extending the one before
-it, and a fact one skips reads as the newest resumption below it left it, or
-as the load did. A bound unknown enters at the readers alone: the type
-channel's reader answers a bound name closed, a callable's own bound
-`FOR ALL` name takes its binding as its group level, a bound type name seeds
-as a closed type binder does, and a bound module binder's static type is
-exactly its binding. Everything else follows by the rules as they are: a path
-through a root whose static type is exact resolves closed.
+A [shape](../scope/README.md#units) is a function of the text, the builtin
+table and the operator claims, and lays each body out in **units**: its
+**entry unit**, which binds every slot the body holds before a statement
+runs — its parameters, its own `FOR ALL` group, its `:Type` parameters, a
+block's surfaced names, a code shape's captures — then one unit per statement
+or component, in the order the run takes them. One **fact function** computes
+every fact of a unit, in five steps:
+
+1. **paths** — each path the unit's statements spell that its chain has not
+   resolved yet, an inline root typed there;
+2. **declarations** — a component of type binders, through the declaration
+   door;
+3. **type expressions and registrations** — each type expression and guard,
+   each registration the unit binds with its overlap check, and the type of
+   each callable the unit births;
+4. **value statics** — each statement's node, a component of value binders
+   seeded first; a quote's code the unit births is walked before them, so an
+   `EVAL` reads it typed;
+5. **binder facts** — each binder's static type, and each module binder's
+   content tree.
+
+A path's root lies in an earlier unit, in the unit's own component as a
+fellow read at its seed, or is written in place, so every read in the five
+steps is positional. An **inline body** — an arm, a block, a `USING … SCOPE`
+body, a `MODULE` or `GROUP` body — runs its entry and units through the same
+steps inside the unit that runs it, its facts in that unit's record. A
+callable is a unit sequence of its own, walked right after the unit that
+births it; a quote's code is one too, walked inside its birth unit. Each
+**owning body** — the program, a callable, a quote's code — ends in a
+**closing record**: its return check, exits, class, summary and recursion
+flag, and for a quote's code the type a traced `EVAL` runs it at and its
+typing refusal. Written code's refusal stops the walk; a quote's code that
+does not type keeps its refusal in its closing record, and the `EVAL` running
+it reports it.
+
+The type half's rules are [elaborate's](../elaborate/README.md#the-type-channel-at-load),
+the value half's and the driver [dispatch's](../dispatch/README.md#static-types).
+A unit's facts rest in its **record**, off the shape, which the run and the
+suites read through [`LoadFacts`](../scope/README.md#load-time-types). A
+unit's steps walk only its own entries, which the shape lists
+([`holds`](../scope/README.md#units)), and the walk logs where each unit
+writes into its owning body's facts, so the unit's record lays exactly those;
+an inline body's facts are laid whole as it ends. So the load is linear in a
+body's size, never a scan of the whole body per unit, with two exceptions: a
+path whose root is written in place (`(ID b).Carrier`) and a read of a
+quantified function's name each find their site by searching the body's
+statements, so a body of many such reads loads in time quadratic in its size.
+
+### Recursion
+
+A call **unfolds** into its callee's summary only where the callee's strongly
+connected component, over the calls selection keeps, has closed and is
+trivial. The walk computes the components by Tarjan's bookkeeping on its
+demand stack: a callable enters it as its body is walked, a kept call into a
+callable on the stack lowers the caller's link and unfolds nothing, a kept
+call into one not yet walked walks it there, and a body whose link is its own
+index closes its component, marking every member recursive where it has more
+than one or calls itself. So the one record read on demand is a closing, and
+whether a call unfolds never turns on declaration order. Each walk records the
+recursion set of the bodies it runs: a resumption computes the components of
+the bodies it re-runs, and a body it reads unchanged keeps its base's flag.
+Kept calls only grow under a binding, so a cycle a binding closes passes
+through re-run bodies alone, and a binding that closes a cycle unfolds no call
+on it.
+
+### The store
+
+The walk runs over one trait, [`Store`](../scope/facts.rs): what the binding
+gives an unknown, the newest record of a unit and the newest closing of a
+body, each beside its frontier, whether a frontier **wakes** under the
+binding, the writes of a record and a closing, and the wording of a refusal.
+It interns through a chain its caller hands it. The store records no edge:
+the walk reaches it only through its façade, which keeps the gathering of each
+open unit. A binding miss adds the unknown to the innermost gathering, a read
+of a record or a closing adds that record's frontier, and a binding hit adds
+nothing; only an unknown declared on the reader's chain is gathered. A unit's
+**frontier** is its gathering when it ends: the unknowns it depends on,
+transitively. Every value a record keeps is laid where it rests, through the
+store's `lay`, so nothing is relayed; transient work stays in the walk's
+scratch.
+
+[`LoadStore`](load.rs) is the load's: it binds nothing, so every unit runs,
+and lays every record in program storage. The tests stand two more over the
+load's records ([stores](../program/tests/stores.rs)): a **layer**, whose
+reads try its own writes and then its base's, interning through the resting
+chain, and a **frame**, whose binding is read off its slots' values — a type
+value as a type, a module by its digest tree. Their production twins are
+[the build arena](../../roadmap/gradual-build/build-arena.md)'s.
+
+### Resumption
+
+A resumption is the walk under a binding. It visits every unit in unit order:
+a unit whose stored record's frontier the binding does not wake is
+**absorbed**, read as the newest layer below holds it, and every other re-runs
+once, its record written beside the base's, never into it. A bound unknown
+enters at the readers alone. A type-ish name — a `FOR ALL` name, a `:Type`
+parameter, a surfaced name, a type binder — binds to a type, read closed in
+either mode, so a type binder over it declares closed and a callable's own
+bound `FOR ALL` name closes its body's type. A module binder binds to a closed
+content tree beside the exact type it carries, so a view over it is settled
+and a path through it resolves closed. A binding may land at a body's entry
+or at a statement inside it. A refusal a resumption reaches is worded as a
+load with the binding declared words it.
+
+Nothing in production reads a resumed fact: the run reads the load's records,
+and a specialization's step settles nothing until
+[the build arena](../../roadmap/gradual-build/build-arena.md) runs the fact
+function in a build cell.
+
+### Unknowns
 
 Every lexical variable is an unknown, a `USING … SCOPE` block's surfaced names
-and a quote's holes, `\` marks and `$` names among them, and so is a type binder
-the type channel leaves unknown and a module binder whose declared signature
-leaves a head parameter unpinned, so that a path through it is a class. A
-binding removes a parameter's content, which is its path class
+and a quote's holes, `\` marks and `$` names among them, and so is a type
+binder the walk leaves unknown and a module binder: every fact reading a
+module binder's content tree — a view, a path resolution, an unfold over it —
+waits on it. A binding removes a parameter's content, which is its path class
 ([paths](../dispatch/README.md#paths)), a `FOR ALL` group's solution and a
 `:Type` argument at frame entry; a lexical variable's type at the statement
 that binds it; and a path variable's hop at the statement that binds its
@@ -131,29 +216,33 @@ type that reads no unknown is final at the load, however wide.
 
 An unknown is named by its **lexical address**, the segment and the
 coordinate the shape binds it at, never by its lattice node, which every body
-numbering its chain alike shares. A mention of a fellow member of its own
+numbering its chain alike shares. A unit's own binders are what it fixes, not
+unknowns it waits on. A mention of a fellow member of its own
 component, itself included, in the component's own statements or in a block
 or `MODULE` or `GROUP` body they run inline, is no unknown: it reads the
 fellow's annotation, the type its birth declares — at most `Module` for a
 `MODULE` or `GROUP` body — or `[Never, Any]`, records no edge, and so reads
 the same whatever order the members are typed in. A callable body nested in a
-member is typed after the component and reads the fellow's fact. The facts
-form no cycle.
+member is walked after the component and reads the fellow's fact. The facts
+form no cycle outside a component.
 
 The lattice is untouched: `substitute`, *fits*, `judge_by_class` and the
 unifier are what the rules call, and this module lives downstream of them.
 
 ## Frontiers and seams
 
-- **A frontier.** At quiescence of the load, every parked fact waits on a
-  definite set of unknowns after transitive propagation. The residual's edges
-  are exactly that set; the driver computes it and nothing more is needed.
-- **A seam.** A binding site at which some frontier's last member binds:
-  frame entry when a rigid's binding completes a frontier, a statement when a
-  binding there completes one. A statement that binds nothing any frontier
-  waits on is no seam, and costs its run cell nothing. The load lists the
-  seams per segment. An **entry seam** keys a specialization on the names its
-  facts wait on, a parameter's own type aside
+- **A frontier.** Each unit's record carries its frontier: the unknowns its
+  facts read, and the frontier of every record they read. A unit whose
+  frontier is empty is final at the load.
+- **A seam.** A unit's seam is the latest **bind site** among its frontier's
+  unknowns ([`Shapes::bind_site`](../scope/shapes.rs)), sites ordering as the
+  binding does: an outer body before an inner one, and in one body its entry
+  before its units in order. A parameter, `FOR ALL` name, `:Type` parameter or
+  a quote's code's capture binds at its body's entry; a local or a type binder
+  at its unit; a block's parameter at the unit holding the block. No list of
+  seams is stored: [the folds](#the-folds) read them off the frontiers. An
+  **entry seam** keys a specialization on the names its facts wait on, a
+  parameter's own type aside
   ([below](#keys-which-bindings-make-a-specialization)). A **statement
   seam** settles nothing: its binding is content the run produces, an
   `EVAL`'s or an action's result, which keys nothing, so the facts waiting on
@@ -163,7 +252,9 @@ unifier are what the rules call, and this module lives downstream of them.
   hop rooted at one — is settled at the entry seam, since a load with that
   content declared would type it closed. A `USING … SCOPE` block's surfaced
   names are not among them: the load cannot type what a `USING` binds from
-  content, so they wait at the `USING` statement and stay unsettled.
+  content, so they wait at the `USING` statement and stay unsettled. A unit
+  that reads an entry-bound unknown and a later-bound one seams at the later
+  site, and keys nothing through it.
 - **One build cell per seam per observed binding.** Facts that wake together,
   settle together and mint types under the same binding are one build cell
   with one type branch, never several. The build cell holds every fact any
@@ -193,6 +284,26 @@ unifier are what the rules call, and this module lives downstream of them.
   the chain, so the redundancy is accepted as cache the eviction policy
   prices.
 
+## The folds
+
+Once the walk ends, the load folds its records ([`fold`](folds.rs)), a pure
+function of the shapes and the records that a resumption reads and never
+recomputes. Every input a fold needs from the lattice the walk records, so
+`build` reads no type:
+
+- **Caching.** Each minting and composite site a body records is classed by
+  what its content depends on — closed; invariant where it reads only
+  parameters every tail edge into its frame passes on bare and that digest at
+  a constant cost; else varying — over the text's invariance and escape
+  ([the shape](../scope/README.md#load-time-types)) and each site's pending
+  paths read through the records' resolutions. Each body's record says
+  whether its frame caches, beside its classed sites.
+- **Keys**, below.
+- **Contract.** Each lexical variable a contribution or a solution names is
+  composed by every callable or `MODULE` body between the body reading it and
+  its home, marked in that body's
+  [layout](../scope/README.md#load-time-types).
+
 ## Keys: which bindings make a specialization
 
 The variance class ([where each body interns](../../design/type-tiers.md#where-each-body-interns))
@@ -217,16 +328,18 @@ the one shape builder gives every body it seals, in seal order, so it is the
 same in every load of one text and tells apart two bodies of one text whose
 captures differ in type; then the content at each **keyed name**, in slot
 order: each of the body's own parameters, `FOR ALL` names and `:Type`
-arguments that a fact seamed at the entry of the body, or of a callable
-nested in it, waits on, beside the parameters its caching record's invariant
-sites read, the frame's blocks included ([`key_of`](key.rs)). A parameter's
-own type fact keys nothing: it waits on the names its declared type reads,
-and whatever reads the parameter waits on them too, so a parameter no fact
-reads keys nothing and its type stays unsettled. Every callable keys on its
+arguments that lies in the frontier of a unit beneath the body, its entry
+aside, whose seam is the entry of the body or of a callable nested in it,
+beside the parameters its caching record's invariant sites read, the frame's
+blocks included ([`key_of`](key.rs)). A parameter's own type, which its entry
+unit fixes, keys nothing: it waits on the names its declared type reads, and
+whatever reads the parameter waits on them too, so a name read only at the
+entry keys nothing and the parameter's type stays unsettled. A module
+parameter a unit reads the content of keys like any other. Every callable keys on its
 frontier names, whether or not it caches; only a caching body's invariant
 sites name a warm tier, and a frame that does not cache borrows its
 specialization without reading a type tier through it. A frontier
-whose seam is a unit keys nothing, nor does one at a quote's code entry: an
+whose seam is a statement's unit keys nothing, nor does one at a quote's code entry: an
 `EVAL` frame seeks nothing. So a fact of `inner` waiting on `outer`'s `m` and
 its own `Elt` sits at `inner`'s entry, `outer` keys on `m` and `inner` on
 `Elt`, and `inner`'s specialization, a child of `outer`'s, lies under a chain
@@ -235,9 +348,10 @@ closed and lies under `Module`, or it holds a type value: a module's digest
 hashes the content it keeps and a type value's its handle, where a list's or a
 record's costs its size, so a parameter of any other type keys nothing and the
 site over it routes cold. A key's digests therefore cost a few hashes each,
-and the frame it births keeps none of them
-([`Pass::keys`](../dispatch/statics/caching.rs)). The load lays each
-callable's list once its seams are listed.
+and the frame it births keeps none of them. The walk records which of a
+callable's parameters digest so in the callable's birth record, since `build`
+reads no type, and [the folds](#the-folds) lay each callable's list once the
+walk ends.
 
 A `FOR ALL` name's content is the call's solution at it, digested as the type
 value the frame binds for it: a keyworded call carries the solution, an
@@ -312,8 +426,8 @@ whose frontier the chain's keys do not cover stays unsettled.
   nesting follows the lexical chain with no chain stored, and no step can
   hand the drain a build cell the scheduler did not name to it.
 - **Build parent to build child: bare handles.** A table in the parent's
-  region header, beside its settled facts — the header is
-  `scope`'s, holding branch, table, home and facts, and `values` reads the
+  region header — the header is
+  `scope`'s, holding branch, table and home, and `values` reads the
   branch through a projection it defines: a fixed run of entries, each a
   binding's digest, a bare handle and a stamp, laid with the cell and never
   grown. A bare handle holds nothing alive, and a stale one is a miss. The
@@ -354,7 +468,7 @@ whose frontier the chain's keys do not cover stays unsettled.
   specialization adopts its invariant sites' types into it. A specialization's
   region holds its settled facts and its table, and lays no type branch. The
   resumption interns into its step's scratch branch, and only what its
-  `Settled` keeps is adopted into the agent tier. The agent tier outlives
+  records keep is adopted into the agent tier. The agent tier outlives
   every cell, so a run cell's region and scratch reference its nodes by
   covariance alone, and the reverse never holds. It grows by each distinct
   binding the program keys and is released with the program. A composite a
@@ -374,17 +488,17 @@ whose frontier the chain's keys do not cover stays unsettled.
 
 - **Build cells are enterable.** The build root is entered once, through the
   scheduler's load door rather than the ready stack: its step runs the load,
-  shape building, the type channel and the solver to quiescence. A
+  shape building, the one walk and the folds. A
   specialization is a tree cell the drain creates and runs as it does a run
   cell: its one step lays its region header and its own table, runs the
   resumption under its binding — whose nodes the drain laid in its branch
   before the step — to quiescence over the step's scratch chain, lays the
-  `Settled` it reaches in its region, and quiesces, staying alive with no
+  records it reaches in its region, and quiesces, staying alive with no
   continuation and reporting to nobody. The drain then enters it in its
   parent's table and records the parent in its header, so the drain keeps
   every table's books and no step writes another cell's region. What the
-  resumption leaves parked
-  is the cell's **residual**, data in its region beside the settled facts: a
+  resumption leaves open
+  is the cell's **residual**, the frontiers of its records beside the settled facts: a
   child specialization reads it through the parent region it borrows, and
   nothing else resumes it, so no binding wakes a quiesced build cell. A
   resumption that refuses ends the step failed, and the drain hands
@@ -439,7 +553,7 @@ time.
 
 | cell | lives from | to | holds |
 |---|---|---|---|
-| build root | the load | the program's end | the root-level table; it writes the shapes, facts, residual and root tier into the owner's storage |
+| build root | the load | the program's end | the root-level table; it writes the shapes, records, folds and root tier into the owner's storage |
 | specialization | first miss on its binding | its own or an ancestor's eviction, then its last borrower's disposal | settled facts and the warm types they name, its residual, verdicts, its children's table |
 | composed-code cell | the code value's birth | the value's home's death | the code's shape and facts |
 | run root | the load | the program's end | top-level bindings |
@@ -447,27 +561,43 @@ time.
 
 ## Properties
 
-Each is a law in the dispatch suite's property tests, generated over programs
-and bindings; the closed one-shot load is the oracle.
+Each is a law in the dispatch suite's property tests
+([resumption](../dispatch/tests/resumption.rs)), generated over programs and
+bindings; the closed one-shot load is the oracle.
 
 - **Monotone.** More bindings give pointwise narrower facts; no verdict
   reverts from *always* or *never*.
 - **Confluent.** Binding in any order, or all at once, reaches one fixpoint:
   law 5, no answer depends on slot order, generalized to resumptions.
 - **Resume equals restart.** Resuming on a set of bindings equals a fresh load
-  of the program with those bindings declared from the start: a parameter's
-  content written as a declared pin, a `FOR ALL` name as an alias.
-- **Quiescence is exact.** A fact parks only on an unknown its rule reads;
-  nothing closed is left to the run.
+  of the program with those bindings declared from the start, over type and
+  value facts alike: a parameter's content written as a declared pin, a
+  `FOR ALL` name as an alias, a module as a `LET` of a module the load built.
+- **Quiescence is exact.** A resumption re-running every unit renders as one
+  waking only what its binding meets, and a frontier holds only unknowns
+  declared on its unit's chain.
+- **A resumption re-runs only what it wakes.** The units it re-runs are
+  exactly those whose frontier at the load meets the binding, each once.
+- **The rigid rule commutes with binding.** A type fact the load fixes rigid,
+  substituted by the binding, is the restart's closed fact.
+- **A sealed body stays sealed.** A body sealed at the load is sealed in every
+  restart: a binding only closes what the load left open.
+- **Three stores agree.** The load's store binding from the start, a layer
+  over the load and a frame whose slots hold the binding's content give equal
+  facts, a module bound by its digest.
+- **Levels and path identities are the shape's.** No record changes a level a
+  shape numbers, and two builds of one text agree on every text fact.
+- **Order does not matter.** Reordering independent declarations changes no
+  fact.
 - **Termination.** One resumption's facts range over the types of bounded
   depth over the root's types and the binding's content, a finite set: join,
   meet and the solve never deepen a type, substitution deepens by at most
   the binding's depth at each variable position, and the facts form no
   cycle, since a parameter's and a return's static type come from the
   declaration, a local's from an earlier unit, and a mention inside a cyclic
-  component is a leaf. A re-run never widens its fact, and each fact re-runs
+  component is a leaf. A re-run never widens its fact, and each unit re-runs
   at most once per resumption, so one resumption's re-runs total at most its
-  facts, and a varying binding never makes a
+  units, and a varying binding never makes a
   specialization. The specializations themselves are not bounded by the
   program text: a key over invariant content the run builds, a list passed
   bare to a keyed callee, takes a new value per distinct content, so a loop
@@ -477,33 +607,32 @@ and bindings; the closed one-shot load is the oracle.
 
 ## In the literature
 
-The driver is a monotone data-flow framework run by worklist (Kildall, *A
-unified approach to global program optimization*, 1973; Kam and Ullman,
-*Monotone data flow analysis frameworks*, 1977), and the residual is the
-solver's answer as a constraint it could not discharge (Pottier and Rémy, *The
-essence of ML type inference*, 2005). The interval reading of a static type and
-the sources behind it are in [gradual typing](../../design/gradual-typing.md#in-the-literature).
+The facts are a monotone data-flow framework (Kildall, *A unified approach to
+global program optimization*, 1973; Kam and Ullman, *Monotone data flow
+analysis frameworks*, 1977), solved in one pass in unit order rather than by
+worklist, since outside a component every fact a unit reads lies in an
+earlier unit; the components are Tarjan's (*Depth-first search and linear
+graph algorithms*, 1972). A unit's frontier is the solver's answer as a
+constraint it could not discharge (Pottier and Rémy, *The essence of ML type
+inference*, 2005). The interval reading of a static type and the sources
+behind it are in [gradual typing](../../design/gradual-typing.md#in-the-literature).
 
 ## The import rule
 
-`build` names `memory`, `scope`, `elaborate`, the scheduler's step, `values`
-for a digest and `symbols`, and the type lattice. `program` and `dispatch`
-name `build`: the program lists the seams once the load's passes quiesce, its
-bundle carries the build births and its steps fill a specialization, and
-dispatch reads facts and verdicts through a run cell's borrow. Nothing in
-`scope`, `elaborate` or the scheduler names `build`; a rule reads facts
-through its pass's fact store over `scope`'s vocabulary, never through the
-tree, and the scheduler hands a step its borrow's doors and no more. The
+Outside doc comments and `#[cfg(test)]`, `build` names `memory`, `scope` and
+`values` and nothing else in the crate ([`tests::boundary`](tests/boundary.rs)).
+`program` names `build`: its load runs the language's walk into a
+[`LoadStore`](load.rs) and folds the records, and a specialization's key is
+`build`'s. Nothing in `scope`, `elaborate`, `dispatch` or the scheduler names
+`build`; the walk reads facts through `scope`'s `Store` trait, never through
+the tree, and the scheduler hands a step its borrow's doors and no more. The
 region header family is `scope`'s: a half's branch, a build cell's table and
-home, and a specialization's settled facts, with `values` reading the branch
-through a projection it defines.
+home, with `values` reading the branch through a projection it defines.
 
 ## Open work
 
 - [Setting the build budget](../../roadmap/gradual-build/bound-settings.md)
   — the budget as a setting a user names.
-- [The one-walk build](../../roadmap/gradual-build/one-walk-build.md) — the
-  three load walks as one fact function per unit, resumable under a binding.
 - [The build arena](../../roadmap/gradual-build/build-arena.md) — build cells
   outside the cell graph, keyed on load content, with the evaluator reading
   what the build decided.

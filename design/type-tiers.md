@@ -8,7 +8,7 @@ region's branch with the region, a scratch branch with its habitat's reset.
 
 This doc tells that story across the modules that carry it.
 [The type lattice](../lattice/src/types/identity.md#storage-a-root-and-its-branches)
-holds each tier's table and the node layout, [the static pass](../src/dispatch/README.md#static-types)
+holds each tier's table and the node layout, [the load's walk](../src/dispatch/README.md#static-types)
 types every site and classifies every body, [values](../src/values/README.md#crossing)
 re-intern at a crossing and [knots](../src/knot/README.md#a-lambda) at a
 closure's birth, and [cellgraph](../cellgraph/README.md#the-contract-four-embedder-types)
@@ -123,8 +123,9 @@ cannot read — and only where a porous value meets a porous slot there; and
 through every `EVAL`, which offers values to the code's open `\` marks at
 slots the body does not type. A value that holds nothing the body minted is
 no exit, at a call and at the return alike. A value the body received — a
-parameter or a capture named bare, or a member of one read through the builtin
-`ATTR` — holds nothing it minted; so does a record literal written in place
+parameter, a capture or a `LET` bound bare to one, named bare, or a member of
+one read through the builtin `ATTR` — holds nothing it minted, since a `LET`
+bound bare to a received value holds that very value; so does a record literal written in place
 whose every field is non-porous or holds nothing minted, and a module whose
 [content tree](modules.md#the-load-and-the-run) reaches no minted content: no
 view, open or closed, no closure, no module body holding a minting site in
@@ -288,7 +289,7 @@ fit, cleared at the reset. The cache needs no count of its own and no
 
 **A memo may be shorter-lived than its value.** A caching body's values are
 laid in the region its writer lays into, and their memos in a scratch tier.
-The static pass is what guarantees no reader of that memo outlives the
+The load's walk is what guarantees no reader of that memo outlives the
 scratch: nothing the body minted is reachable after it returns, and every
 exit adopts what it carries into the region first, walking the value and
 every value and handle its knots hold up to a settled part (below), since a
@@ -314,8 +315,9 @@ A sealed exit carries no minted content, but it may carry a
 composite over root types the body built in a scratch tier. What lingers is
 bounded by what the body hands out, never by what it minted.
 
-**An adoption stops at a settled part.** Exits and invariant sites adopt
-through one door ([`adopt_value`](../src/values/crossing.rs)), whose contract
+## An adoption stops at a settled part
+
+Exits and invariant sites adopt through one door ([`adopt_value`](../src/values/crossing.rs)), whose contract
 is that every memo a value reaches resolves where the value's readers read. A
 value carries two bits in its weight's top, memoized as its weight is, on every
 composite header and on a knot's root node: **root-closed**, every memo it
@@ -364,9 +366,8 @@ released with that branch.
 
 ## Open work
 
-- [Activation typing](../roadmap/gradual-build/activation-typing.md) — a
-  frame's facts settled in its own activation where its binding names run
-  content.
+- [The build arena](../roadmap/gradual-build/build-arena.md) — a frame's
+  facts settled in its own activation where its binding names run content.
 - [Invariance around a tail cycle](../roadmap/gradual-build/cycle-invariance.md)
   — an argument built over invariant leaves classed invariant.
 - [Presizing a branch](../roadmap/gradual-build/branch-presizing.md) — a branch

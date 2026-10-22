@@ -91,7 +91,7 @@ as surprises, not scheduled.
   exhaustively and reads the other inside each arm. It is a
   [type lattice](../../lattice/src/types/README.md) change.
 - **A flag or an overloaded field where a sum type belongs.** `Static::Unknown`
-  in [statics](../../src/dispatch/statics.rs) also means "read at a call's
+  in [the walk](../../src/dispatch/walk.rs) also means "read at a call's
   head"; `across(inwards: bool)` in [the coercion](../../src/knot/module/coerce.rs)
   selects by flag, so `from` and `to` invert meaning after the swap;
   `KBirth::Block.module` is an `Option<KValue>`, so the `USING` path asks "is
@@ -100,17 +100,12 @@ as surprises, not scheduled.
   six signatures, and `surfacing: Option<Interval>` rides through
   `visit`/`nested` with every caller but one passing `None`. Each wants a
   variant per meaning, or an orientation fixed once rather than passed.
-- **Write-once cells are guarded by `debug_assert` alone.**
-  [`BodyShape`](../../src/scope/shape.rs)'s eight `fix_*` setters,
-  `refuse_typing` and `TypeExpression::fix` each check for a prior write only
-  in debug builds; `refuse_typing` has two writers (the elaborator's channel
-  and dispatch's statics) kept apart by `done()`; the `unfilled` guard is
-  repeated at eight write sites in statics while `fix_born_instance` bypasses
-  `Level` and `fix`; `solved_from` falls back to carried types on a length
-  mismatch rather than refusing. A crate-private `WriteOnce<T>` that refuses a
-  second write, setters reachable from the load passes alone, and a `Level`
-  that collects born instances with `fix` as the one gate would let the types
-  carry what the asserts carry.
+- **The unfilled typing is a flag every write consults.** A quote's code is
+  typed a second time with its unmarked holes empty, and the walk
+  ([`walk.rs`](../../src/dispatch/walk.rs)) checks `unfilled` wherever that
+  typing would keep a fact; `solved_from` falls back to carried types on a
+  length mismatch rather than refusing. A typing whose writes have nowhere to
+  land would let the types carry what the flag carries.
 - **Refusals are re-listed layer to layer.**
   [`errors.rs`](../../src/dispatch/errors.rs) re-lists `view::Unascribable` one
   to one and hand-maps it with an `unreachable!` arm;

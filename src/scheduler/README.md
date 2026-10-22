@@ -417,12 +417,11 @@ resolves at its creation from how it was asked for ([seek.rs](seek.rs)):
   keeps no reference into the run tree, and the asker is between steps. A hit
   lays nothing; a debug build checks that the frozen load or the agent tier
   holds every handle. Its step lays its region header and its
-  own table, as long as the nested bound its parent's table records, runs
-  the resumption under its binding to quiescence, and
-  ends `enlist`, which rests the facts the resumption settled in the header,
-  refuses a cell that asked for children and returns `Quiesced`: the cell
-  stays alive with no continuation, reporting to nobody, and is never on the
-  stack, so its settled facts are set at most once. The drain then fills the entry with the key,
+  own table, as long as the nested bound its parent's table records, and
+  ends `enlist`, which refuses a cell that asked for children and returns
+  `Quiesced`: the cell stays alive with no continuation, reporting to nobody,
+  and is never on the stack. It settles nothing yet: running the walk there is
+  [the build arena](../../roadmap/gradual-build/build-arena.md)'s. The drain then fills the entry with the key,
   the handle and a fresh stamp, and records in the specialization's header
   its own handle and its parent. The frame is then born borrowing the
   specialization's region, a `Fresh` cell as its lend and a `Shares` tenant
@@ -440,8 +439,6 @@ So a warm birth costs one peek, a cold birth one synchronous step, and no cell
 parks for either. `build_ref` reads the specialization a cell borrows off
 its region header, where the drain recorded the specialization's own
 handle, and answers the fallback it is handed for any cell borrowing none.
-`settled` reads the facts that specialization's step rested in the same
-header, through the lent region alone, so a frame never copies them.
 The two bounds, the build root's and every specialization's, are parameters
 of the [load door](load.rs), which lays the build root's table. A
 specialization lives until its parent evicts it at a miss, or an ancestor's
@@ -473,8 +470,7 @@ besides. It does not name `parse`, `elaborate`, `symbols` or `program`. It
 names the lattice for the frozen load, the agent tier and a branch alone, the
 tiers a graph holds and hands every step and crossing; `scope` for the header a graph keeps
 per habitat half (`RegionHeader`), whose table and home the drain keeps the
-books of, and the facts a specialization's step rests there and a frame reads
-back through its lend (`Settled`); and `values` for the type chain those doors
+books of; and `values` for the type chain those doors
 build and the specialization's key and token (`SpecKey`, `BuildRef`). `scope`
 names `values` and is named by `knot`, so the edge forms no cycle, and neither
 names this module. `cellgraph` is reached

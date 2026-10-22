@@ -2,7 +2,7 @@
 //! more than its base, and a [`Frame`], whose binding is read off the values a frame's slots hold.
 //! Each re-runs only the units its binding wakes, and reads every other record from its base. They
 //! live in `program` because it is the one module that names both the build's store vocabulary and
-//! the values a frame binds ([the store](../../../roadmap/gradual-build/one-walk-build.md)).
+//! the values a frame binds ([the store](../../build/README.md#the-store)).
 //!
 //! The **test door** resumes a loaded program after its types' root freezes, through
 //! [`Running::resume`], [`Running::reload`] and [`Running::in_frame`]: each walks the program again
