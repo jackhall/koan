@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 31f33bbf8f8ad314079fecae143d229ead3757239ece6fff97903a721d66c48b # shrinks to case = Resumable { key: false, list: false, item: false, module: false, maker: false, local: false, pair: None, both: false, statements: [Call(X)], bound: Bound { elt: None, key: None, item: None, pair: None, module: None, local: None } }
+cc d5fa56b2458b7cb616149e8b12af287174d3b76fec1701eadba722cb0f71c5fb # shrinks to case = Resumable { key: false, list: false, item: false, module: false, maker: false, local: false, pair: None, both: false, statements: [Call(X)], bound: Bound { elt: None, key: None, item: None, pair: None, module: None, local: None } }
