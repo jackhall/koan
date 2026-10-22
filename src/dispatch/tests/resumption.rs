@@ -1152,6 +1152,7 @@ mod laws {
         fn the_rigid_rule_commutes_with_binding(case in resumable()) {
             let substituted = resumed(&case.render(), |door| substituted(door, &case.bound));
             let restart = case.restart(&case.bound);
+            // A restart that refuses fixes no closed fact to compare: law 1 holds its refusal.
             if let Ok(restarted) = loaded_rendered(&restart, &case.bound) {
                 for line in substituted {
                     prop_assert!(restarted.contains(&line), "{} not in the restart\n{}\nrestarted as\n{}", line, case.render(), restart);
@@ -1166,15 +1167,21 @@ mod laws {
         #[test]
         fn three_stores_give_equal_facts(case in resumable()) {
             let unlocate = |error: ShapeError<'_>, door: &Door<'_, '_>| unlocated(&error.display(door.symbols(), door.types).to_string());
-            let (reloaded, layered) = resumed(&case.render(), |door| {
-                let binding = bind(door, &case.bound, true);
-                let reloaded = (door.running).reload::<Koan>(door.types, binding, door.bump);
-                let reloaded = reloaded.map(|facts| rendered(door, facts, &case.bound)).map_err(|error| unlocate(error, door));
-                let layered = (door.running).resume::<Koan>(door.types, None, binding, false, door.bump);
-                let layered = layered.map(|facts| rendered(door, facts, &case.bound)).map_err(|error| unlocate(error, door));
-                (reloaded, layered)
+            let stores = resumed(&case.render(), |door| {
+                // The load's store and a layer agree under a structural binding too.
+                [true, false].map(|by_digest| {
+                    let binding = bind(door, &case.bound, by_digest);
+                    let reloaded = (door.running).reload::<Koan>(door.types, binding, door.bump);
+                    let reloaded = reloaded.map(|facts| rendered(door, facts, &case.bound)).map_err(|error| unlocate(error, door));
+                    let layered = (door.running).resume::<Koan>(door.types, None, binding, false, door.bump);
+                    let layered = layered.map(|facts| rendered(door, facts, &case.bound)).map_err(|error| unlocate(error, door));
+                    (reloaded, layered)
+                })
             });
-            prop_assert_eq!(&reloaded, &layered, "in\n{}", case.render());
+            for (reloaded, layered) in &stores {
+                prop_assert_eq!(reloaded, layered, "in\n{}", case.render());
+            }
+            let [(_, layered), _] = stores;
             let mut substrate = CellSubstrate::load::<Koan>(&case.render(), "<test>", 8, SpecBounds::default(), output())
                 .expect("the program loads");
             let framed = substrate.with(|running| {
@@ -1203,6 +1210,7 @@ mod laws {
             let broken = resumed(&case.render(), |door| {
                 let shapes = door.running.program().shapes();
                 let mut facts = vec![door.load()];
+                // A resumption that refuses holds no records; the load's are still checked.
                 if let Ok(resumed) = resume_all(door, std::slice::from_ref(&case.bound), false) {
                     facts.push(resumed);
                 }
@@ -1350,6 +1358,7 @@ mod laws {
             {
                 out.push(format!("{path} callable closed {read}"));
             }
+            // A type binder's declared type is closed or unknown, never rigid: none to substitute.
             for at in (0..shape.slots()).map(|at| Slot(at as u32)) {
                 if let BinderSymbol::Registration(name) = shape.slot_name(at)
                     && let Static::Rigid { value, .. } = facts.registered_type(shape, at)

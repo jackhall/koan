@@ -274,8 +274,8 @@ fn a_fact_over_a_local_module_seams_at_the_unit_binding_it() {
 }
 
 /// A name a `USING` surfaces from a module parameter is read through the parameter: the unit
-/// holding the `USING` waits on `m`, a module unknown wherever its content is read, and so seams
-/// at the callable's entry.
+/// holding the `USING` binds the surfaced name itself and waits on `m`, a module unknown wherever
+/// its content is read, and so seams at the callable's entry.
 #[test]
 fn a_name_using_surfaces_from_a_parameter_waits_on_the_parameter() {
     let source = format!(
@@ -334,5 +334,30 @@ fn a_dollar_name_in_a_quote_waits_on_the_outer_binder_s_type() {
             ),
             "the code's unit seams at the later of the two entries"
         );
+    });
+}
+
+/// A name a `USING` surfaces binds at the unit holding its block, so a callable born in the block
+/// waits on it and seams there.
+#[test]
+fn a_callable_in_a_using_block_waits_on_the_name_it_surfaces() {
+    let source = format!(
+        "{COUNTER}{PICK}LET step = (FN :{{m :Counter}} -> Any = #(\n  \
+         LET s = (USING (m :! Counter) SCOPE (\n    \
+         LET g = (FN :{{y :Carrier}} -> Any = #(y))\n    g\n  ))\n  s\n))"
+    );
+    loaded(&source, |program| {
+        let step = body(program, program.shape(), "step");
+        let block = nested_of(step, ShapeKind::Block);
+        let carrier = unknown(program, block, "Carrier");
+        let s = unit_of(program, step, "s");
+        assert!(!frontier(program, s).contains(&carrier));
+        let g = nested_of(block, ShapeKind::Callable);
+        assert!(seams_on(
+            program,
+            g,
+            |site| (site.segment, site.unit) == (s.segment, s.unit),
+            carrier
+        ));
     });
 }

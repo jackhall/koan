@@ -495,26 +495,39 @@ fn only_a_use_that_may_call_a_function_hands_a_memo_on() {
     let source = "EXPR #(RUN cfg :{items :(LIST OF Number)} link :Link) -> Number = \
                   #((MODULE ops OVER #[cfg] = (LET held = cfg)) (LET v = (ops :| Holder)) \
                   (LET n = (ATTR cfg items)) (RUN cfg (ATTR link next)))\n";
-    let handed = loaded(&format!("{PRELUDE}{source}"), |program| {
-        let mut shapes = Vec::new();
-        every_shape(program.shape(), &mut shapes);
-        let mut handed = 0;
-        for shape in shapes {
-            for statement in shape.body() {
-                let mut sites = vec![crate::scope::Site::of_node(statement)];
-                crate::scope::each_part(statement, |part| {
-                    if let crate::parse::ExpressionPart::Expression(node) = part {
-                        sites.push(crate::scope::Site::of_node(node.reference()));
-                    }
-                });
-                handed += (sites.into_iter())
-                    .filter(|site| !program.facts().handoffs(shape, *site).is_empty())
-                    .count();
-            }
-        }
-        handed
-    });
+    let handed = loaded(&format!("{PRELUDE}{source}"), handoffs);
     assert_eq!(handed, 1, "the tail call alone hands `cfg`'s memo on");
+}
+
+#[test]
+fn a_call_before_its_view_hands_its_memo_on() {
+    // The call to `RUN` is written before the `:|` that reads `cfg`'s memo: a hand-off is text.
+    let source = "EXPR #(RUN cfg :{items :(LIST OF Number)} link :Link) -> Number = \
+                  #((LET r = (RUN cfg (ATTR link next))) \
+                  (MODULE ops OVER #[cfg] = (LET held = cfg)) (LET v = (ops :| Holder)) (r))\n";
+    let handed = loaded(&format!("{PRELUDE}{source}"), handoffs);
+    assert_eq!(handed, 1, "the call hands `cfg`'s memo on");
+}
+
+/// How many statements and expressions of `program` hand a digest memo on.
+fn handoffs(program: &Program<'_>) -> usize {
+    let mut shapes = Vec::new();
+    every_shape(program.shape(), &mut shapes);
+    let mut handed = 0;
+    for shape in shapes {
+        for statement in shape.body() {
+            let mut sites = vec![crate::scope::Site::of_node(statement)];
+            crate::scope::each_part(statement, |part| {
+                if let crate::parse::ExpressionPart::Expression(node) = part {
+                    sites.push(crate::scope::Site::of_node(node.reference()));
+                }
+            });
+            handed += (sites.into_iter())
+                .filter(|site| !program.facts().handoffs(shape, *site).is_empty())
+                .count();
+        }
+    }
+    handed
 }
 
 #[test]

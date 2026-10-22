@@ -73,7 +73,7 @@ pub struct Typed<'a> {
     pub by_name: Keyed<'a, (Site, &'a [StaticType<'a>])>,
     /// Each `:|` at a closed signature, beside its view's content tree.
     pub trees: Keyed<'a, (Site, &'a Tree<'a>)>,
-    /// Each binder's content tree, by slot.
+    /// Each module binder's content tree, by slot, where the load read one.
     pub contents: Keyed<'a, (Slot, Tree<'a>)>,
     /// The body's own minting sites.
     pub minting: Keyed<'a, Site>,
@@ -731,7 +731,7 @@ impl<'graph> LoadFacts<'graph> {
         .map(|(_, points)| *points)
     }
 
-    /// The content tree of what the binder at `slot` of `shape` holds, where the load read one.
+    /// The content tree of the module the binder at `slot` of `shape` holds, if the load read it.
     pub fn content(&self, shape: &BodyShape<'_>, slot: Slot) -> Option<Tree<'graph>> {
         (self
             .records
