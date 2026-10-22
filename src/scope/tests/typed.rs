@@ -5,8 +5,8 @@
 
 use crate::parse::ExpressionPart;
 use crate::scope::{
-    Binding, BodyShape, Born, Bound, Builtins, Closing, Folds, PathEntry, Resolution, Settled,
-    ShapeFacts, Site, SiteDeps, StaticType, Statics, Tree, Typed, UnitFacts, source_of,
+    Binding, BodyShape, Born, Bound, Builtins, Closing, Folds, PathEntry, Resolution, Site,
+    SiteDeps, StaticType, Tree, Typed, UnitFacts, source_of,
 };
 
 use super::{builtins, with_fixture};
@@ -21,22 +21,7 @@ fn a_static_type_shortens<'short, 'long: 'short>(x: StaticType<'long>) -> Static
 }
 
 #[allow(dead_code)]
-fn statics_shorten<'short, 'long: 'short>(x: Statics<'long>) -> Statics<'short> {
-    x
-}
-
-#[allow(dead_code)]
-fn shape_facts_shorten<'short, 'long: 'short>(x: ShapeFacts<'long>) -> ShapeFacts<'short> {
-    x
-}
-
-#[allow(dead_code)]
 fn a_resolution_shortens<'short, 'long: 'short>(x: Resolution<'long>) -> Resolution<'short> {
-    x
-}
-
-#[allow(dead_code)]
-fn settled_shortens<'short, 'long: 'short>(x: Settled<'long>) -> Settled<'short> {
     x
 }
 

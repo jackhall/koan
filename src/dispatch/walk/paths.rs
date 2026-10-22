@@ -1,4 +1,4 @@
-//! The static pass's paths ([design/modules.md § Comparing two paths](../../../design/modules.md#comparing-two-paths)):
+//! The walk's paths ([design/modules.md § Comparing two paths](../../../design/modules.md#comparing-two-paths)):
 //! each path entry of a chain resolved to the type it is at load, every cell the type channel fixed
 //! read through those resolutions, and a module's static type pinned through its paths.
 //!
@@ -29,9 +29,9 @@ use crate::memory::{BumpBackedMap, BumpVec, bump_hash_table, bump_table, collect
 use crate::parse::ExpressionPart;
 use crate::scope::{
     Binder, BodyShape, Callable, CaptureSlot, CaptureSource, Coordinate, Frontier, Leaf, PathEntry,
-    PathIndex, PathRead, Position, Print, Registered, Resolution, Resolved, Root, Segment,
-    ShapeError, ShapeKind, Site, Slot, Source, SpelledRoot, Static, StaticCallable,
-    StaticRegistered, StaticType, Store, Target, Tree, Variable as Located, part_of, path_spelling,
+    Position, Print, Registered, Resolution, Resolved, Root, Segment, ShapeError, ShapeKind, Site,
+    Slot, Source, SpelledRoot, Static, StaticCallable, StaticRegistered, StaticType, Store, Target,
+    Tree, Variable as Located, part_of, path_spelling,
 };
 use crate::symbols::{BinderSymbol, TypeSymbol, ValueSymbol};
 use crate::type_lattice::{
@@ -44,6 +44,10 @@ use super::trees::Scope;
 use super::{Bound, Pass, Tag, under, unknown};
 
 type Read<'o, T> = Result<T, ShapeError<'o>>;
+
+/// The path entries the walk holds for one chain, found by root, member chain and label: each
+/// entry's index among them, hashed by [`PathEntry::hash_of`].
+type Found<'p> = crate::memory::BumpHashTable<'p, usize>;
 
 /// An application's pins, by parameter.
 type Pins<'p> = BumpVec<'p, (BinderSymbol, Parametric)>;
@@ -58,7 +62,7 @@ pub(super) struct ChainPaths<'p, 'o, 'graph> {
     /// Every entry, by its level less `base`.
     entries: BumpVec<'p, Option<Entry<'o>>>,
     /// Each entry's index in `entries`, by root, chain and label.
-    found: PathIndex<'p>,
+    found: Found<'p>,
     /// Each class's representative's level, by the label, application and tree print its paths
     /// share.
     classes: BumpBackedMap<'p, (TypeSymbol, Option<Parametric>, Print), usize>,
@@ -98,7 +102,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         let mut entries: BumpVec<'p, Option<Entry<'o>>> =
             BumpVec::with_capacity_in(shapes.path_base(segment) - base, scratch);
         entries.resize(shapes.path_base(segment) - base, None);
-        let mut found: PathIndex<'p> = bump_hash_table(scratch);
+        let mut found: Found<'p> = bump_hash_table(scratch);
         for shape in shapes.bodies() {
             if shapes.chain_root(shape.segment()) != segment {
                 continue;
@@ -356,12 +360,6 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             unreachable!("the builder records a path's node");
         };
         let spelling = path_spelling(node.reference(), self.scratch).map(|spelling| spelling.root);
-        let root = match spelling {
-            Some(SpelledRoot::Name(leaf)) => shape
-                .mention(Site::of(leaf))
-                .map(|mention| mention.coordinate),
-            _ => None,
-        };
         // A root written in place is typed where its path resolves, its own types first.
         if let Some(SpelledRoot::Inline(written)) = spelling {
             let holds = |site: Site| match written {
@@ -376,17 +374,6 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             for expression in inside.iter() {
                 self.type_expression(level, expression)?;
             }
-        }
-        let read = PathRead {
-            at: root,
-            root: self.chain_root_segment(level),
-            level: path_level,
-        };
-        if !self.unfilled {
-            let tag = self.innermost();
-            self.chain[level]
-                .reads
-                .push((Site::of(spelled.part), read, tag));
         }
         self.open_path = None;
         let resolved = self.resolve_path(level, entry)?;

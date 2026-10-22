@@ -77,10 +77,10 @@ silence the stale-anchor check; delete a redundant test instead.
   keep and redeem doors and its reattach seam.
 - `src/scope/header.rs` — a habitat half's region header is laid once, through its header door
   or the door `values` holds projected to its branch slot, and holds `Cell`s written after it is
-  laid: the branch, a build cell's specialization table, renewed in place, a specialization's own
-  handle and its settled facts. A specialization writes its parent's table through its lent
-  region's writer, a frame reads its specialization's settled facts through its lent region, and
-  the drain reads the table through `peek` between steps. No `unsafe` of its own; the backing
+  laid: the branch, a build cell's specialization table, renewed in place, and a specialization's
+  own handle. A specialization writes its parent's table through its lent region's writer, a frame
+  reads its specialization's handle through its lent region, and the drain reads the table through
+  `peek` between steps. No `unsafe` of its own; the backing
   `unsafe` is `cellgraph`'s header reattach, its projected door and `peek`.
 <!-- slate-audit-whitelist:end -->
 
@@ -283,10 +283,11 @@ in a tenant's storage and crossed into the callee's birth.
   writer with the edge rehomed to the sibling's value, handed back across the frame's crossing, and
   called after, every captured byte read back.
 - `a_closure_captures_a_type_only_where_a_call_in_it_contributes_it`
-  a closure born as a frame's last statement holding a type capture past its builder's captures —
-  the enclosing call's binding of a type name its body never writes, read from the frame's
-  activation into the closure run — handed back across the frame's crossing and compared where it
-  lands with one born under another binding.
+  a closure born as a frame's last statement holding a type capture in its layout past its
+  builder's captures — the enclosing call's binding of a type name its body never writes, read
+  from the frame's activation into the closure run, and composed where its contract names it —
+  handed back across the frame's crossing and compared where it lands with one born under another
+  binding.
 - `a_call_by_name_through_a_barrier_rebuilds_its_value_both_ways`
   an opaque view's function member called by name through its barrier, twice nested: a list
   re-tagged inwards into the callee's frame, and a list built there from a captured string
@@ -307,9 +308,9 @@ through `peek` between steps.
 - `a_table_decides_hits_free_entries_and_its_least_recently_born_victim`
   a fixed table laid in a slab cell's region, entries filled, stamped and rekeyed in place through
   `Cell` writes.
-- `a_frame_reads_its_specializations_settled_facts_through_its_lend`
-  a specialization's own step laying its settled facts in its region and setting them in its
-  header, read by two frames through their lent region and by none that borrows no region.
+- `two_frames_under_one_key_borrow_one_specialization_through_their_lend`
+  a specialization's own step laying its header and table in its region, its handle read by two
+  frames through their lent region and by none that borrows no region.
 - `a_missed_specialization_holds_its_bindings_nodes_and_a_frame_reads_them_after_the_asker_is_gone`
   a new specialization's entry, opened beside its asker, laying the binding's nodes from the
   asker's region into the agent tier, read by a frame after the asker's region is gone.

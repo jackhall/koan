@@ -35,8 +35,6 @@ mod groups;
 mod header;
 mod keyed;
 mod records;
-mod relay;
-mod settled;
 mod shape;
 mod shapes;
 mod signature;
@@ -55,10 +53,7 @@ pub(crate) use spelling::{PathSpelling, SpelledRoot, path_spelling};
 pub use activation::{Activation, ActivationView};
 pub use builtins::Builtins;
 pub use closure::ClosureBindings;
-pub use facts::{
-    Address, Binding, Bound, FactKey, Frontier, OldBinding, Residual, Seam, SeamAt, Store, UnitId,
-    Unknown, frontier_at, merge_into,
-};
+pub use facts::{Address, Binding, Bound, Frontier, Store, UnitId, Unknown, merge_into};
 pub use groups::{BuiltinGroup, GroupFrame, is_equal, is_equality, is_unequal};
 pub use header::{HalfHeader, RegionHeader};
 pub use keyed::{Keyed, KeyedEntry};
@@ -66,8 +61,6 @@ pub use records::{
     Body, Born, Closing, Deps, Folds, LoadFacts, NamedVariable, SiteDeps, Typed, UnitFacts,
     tree_deps,
 };
-pub use relay::{ChainRelay, Relay};
-pub use settled::{ChannelSettled, Resumption, Settled, StaticsSettled};
 pub use shape::{
     Arm, BodyShape, BuiltinIndex, Candidate, CandidateList, CaptureSlot, CaptureSource,
     CaptureSpec, Component, ComponentIndex, Coordinate, Lands, Listed, Mention, MentionClass,
@@ -80,9 +73,8 @@ pub use shapes::{BindSite, Shapes};
 pub use tree::{Binder, KnotNode, Leaf, NodeCapture, Print, Tree, Unfolded, Within};
 pub use typed::{
     BodyClass, Caching, Callable, Elaboration, ElaborationDisplay, FunctionGroupMap, HandedTo,
-    Handoff, InstanceRead, Mint, Narrowing, ParameterBinding, PathEntry, PathIndex, PathRead,
-    Paths, Registered, Resolution, Resolved, Root, ShapeFacts, ShapeGroupMap, Source, Static,
-    StaticCallable, StaticRegistered, StaticSolution, StaticType, Statics, UseStatics, Variable,
-    ViewSlots, solutions,
+    Handoff, InstanceRead, Mint, Narrowing, ParameterBinding, PathEntry, Paths, Registered,
+    Resolution, Resolved, Root, ShapeGroupMap, Source, Static, StaticCallable, StaticRegistered,
+    StaticSolution, StaticType, UseStatics, Variable, ViewSlots, solutions,
 };
 pub use writes::Writes;

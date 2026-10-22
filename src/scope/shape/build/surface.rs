@@ -23,8 +23,8 @@
 //! walked as an ordinary eager argument by the mention pass.
 //!
 //! It also answers how a value name is bound to a quantified function ([`Quantified`]): a module
-//! body's member, read unmarked anywhere the static pass instantiates it; a keyworded form's name
-//! or a surfaced member, read only at a call's head; or any other binding, the static pass's to
+//! body's member, read unmarked anywhere the load's walk instantiates it; a keyworded form's name
+//! or a surfaced member, read only at a call's head; or any other binding, the load's walk's to
 //! instantiate or refuse.
 //!
 //! See [README.md § Names that arrive at run time](../../README.md#names-that-arrive-at-run-time).
@@ -515,11 +515,11 @@ fn push_keys<'graph>(
 /// How a value name is bound to a quantified function, which decides where it may be read.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum Quantified {
-    /// Not quantified, or a plain `LET` of a quantified `FN` outside a module body: the static pass
+    /// Not quantified, or a plain `LET` of a quantified `FN` outside a module body: the load's walk
     /// instantiates that binding or refuses it.
     No,
     /// A module body's plain `LET` of a quantified `FN`: read at the head of a call, or unmarked
-    /// where the static pass instantiates it.
+    /// where the load's walk instantiates it.
     Member,
     /// A keyworded form's name, or a quantified member a `USING … SCOPE` body surfaces: read only at
     /// the head of a call.

@@ -359,7 +359,7 @@ enum Argument {
 /// A top-level binding of a drawn functor program, each `MODULE` picked by index modulo their
 /// count.
 #[derive(Clone, Copy, Debug)]
-enum OldBinding {
+enum Binding {
     /// The module itself.
     Module(usize),
     /// `(m :| Counter)`.
@@ -384,7 +384,7 @@ enum OldBinding {
 struct Functors {
     /// Per `MODULE`, its `zero` and its `succ`'s step: few enough that two often share content.
     modules: Vec<(u8, u8)>,
-    bindings: Vec<OldBinding>,
+    bindings: Vec<Binding>,
     pair: (usize, usize),
 }
 
@@ -394,14 +394,14 @@ fn functors() -> impl Strategy<Value = Functors> {
         (0..4usize).prop_map(Argument::Earlier),
     ];
     let binding = prop_oneof![
-        (0..3usize).prop_map(OldBinding::Module),
-        (0..3usize).prop_map(OldBinding::Opaque),
-        (0..3usize).prop_map(OldBinding::Retyped),
-        (0..3usize).prop_map(OldBinding::Reviewed),
-        argument.clone().prop_map(OldBinding::Hold),
-        argument.clone().prop_map(OldBinding::Wrap),
-        argument.prop_map(OldBinding::Build),
-        Just(OldBinding::Lift),
+        (0..3usize).prop_map(Binding::Module),
+        (0..3usize).prop_map(Binding::Opaque),
+        (0..3usize).prop_map(Binding::Retyped),
+        (0..3usize).prop_map(Binding::Reviewed),
+        argument.clone().prop_map(Binding::Hold),
+        argument.clone().prop_map(Binding::Wrap),
+        argument.prop_map(Binding::Build),
+        Just(Binding::Lift),
     ];
     (
         prop::collection::vec((0..2u8, 1..3u8), 2..=3),
@@ -432,7 +432,7 @@ impl Functors {
                 Argument::Module(of) => module(of),
                 Argument::Earlier(of) => {
                     let counters: Vec<usize> = (0..at)
-                        .filter(|earlier| !matches!(self.bindings[*earlier], OldBinding::Build(_)))
+                        .filter(|earlier| !matches!(self.bindings[*earlier], Binding::Build(_)))
                         .collect();
                     match counters.len() {
                         0 => module(of),
@@ -441,14 +441,14 @@ impl Functors {
                 }
             };
             let value = match *binding {
-                OldBinding::Module(of) => module(of),
-                OldBinding::Opaque(of) => format!("({} :| Counter)", module(of)),
-                OldBinding::Retyped(of) => format!("({} :! Counter)", module(of)),
-                OldBinding::Reviewed(of) => format!("(({} :! Counter) :| Counter)", module(of)),
-                OldBinding::Hold(of) => format!("(HOLD {})", argument(of)),
-                OldBinding::Wrap(of) => format!("(WRAP {})", argument(of)),
-                OldBinding::Build(of) => format!("(BUILD {})", argument(of)),
-                OldBinding::Lift => "(LIFT step)".to_string(),
+                Binding::Module(of) => module(of),
+                Binding::Opaque(of) => format!("({} :| Counter)", module(of)),
+                Binding::Retyped(of) => format!("({} :! Counter)", module(of)),
+                Binding::Reviewed(of) => format!("(({} :! Counter) :| Counter)", module(of)),
+                Binding::Hold(of) => format!("(HOLD {})", argument(of)),
+                Binding::Wrap(of) => format!("(WRAP {})", argument(of)),
+                Binding::Build(of) => format!("(BUILD {})", argument(of)),
+                Binding::Lift => "(LIFT step)".to_string(),
             };
             source.push_str(&format!("LET b{at} = {value}\n"));
         }

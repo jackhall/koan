@@ -3,10 +3,9 @@
 //!
 //! A half's branch of the type lattice rests here, laid by the first door that interns into the
 //! half. A build cell's region also keeps the fixed table of its specializations, laid with the
-//! cell, and a specialization's region its home, which the drain sets once the cell has enlisted,
-//! and the facts its resumption settled, which its own step sets as it enlists. A frame reads
-//! them through the region it borrows, so what it reads of the program's shape stays shared in
-//! program storage.
+//! cell, and a specialization's region its home, which the drain sets once the cell has enlisted.
+//! A frame reads them through the region it borrows, so what it reads of the program's shape stays
+//! shared in program storage.
 //!
 //! The record is `scope`'s, so it can hold what `scope` names; `values` reads the branch alone,
 //! through the projection [`RegionHeader`] implements ([`Projects`]), and names no other member.
@@ -17,8 +16,6 @@ use std::num::NonZeroUsize;
 use crate::memory::{LaysRuns, Projects, Writer, reattachable};
 use crate::type_lattice::Branch;
 use crate::values::{BranchCell, BranchSlot, SpecHome, SpecTable};
-
-use super::settled::Settled;
 
 /// The header family a koan graph keeps per habitat half: a [`HalfHeader`].
 pub struct RegionHeader;
@@ -36,7 +33,6 @@ impl<'graph> Projects<'graph> for RegionHeader {
             branch: Cell::new(None),
             table: Cell::new(None),
             home: Cell::new(None),
-            settled: Cell::new(None),
         })[0]
     }
 
@@ -49,13 +45,11 @@ impl<'graph> Projects<'graph> for RegionHeader {
 }
 
 /// What a habitat half keeps in its header: its branch of the type lattice; for a build cell's
-/// region, the table of its specializations; and for a specialization's region, its home and the
-/// facts its resumption settled.
+/// region, the table of its specializations; and for a specialization's region, its home.
 pub struct HalfHeader<'cell> {
     branch: Cell<Option<&'cell Branch<'cell>>>,
     table: Cell<Option<&'cell SpecTable<'cell>>>,
     home: Cell<Option<SpecHome>>,
-    settled: Cell<Option<&'cell Settled<'cell>>>,
 }
 
 impl<'cell> HalfHeader<'cell> {
@@ -93,18 +87,5 @@ impl<'cell> HalfHeader<'cell> {
     /// Record that this header's region is the specialization `home` names.
     pub fn set_home(&self, home: SpecHome) {
         self.home.set(Some(home));
-    }
-
-    /// The facts the specialization whose region this header is settled, once its step enlisted
-    /// with them.
-    pub fn settled(&self) -> Option<&'cell Settled<'cell>> {
-        self.settled.get()
-    }
-
-    /// Record the facts this header's specialization settled. Only `Step::enlist` calls it: a
-    /// specialization's own step, which ends there and never runs again, so the slot is set at
-    /// most once.
-    pub(crate) fn settle(&self, settled: &'cell Settled<'cell>) {
-        self.settled.set(Some(settled));
     }
 }

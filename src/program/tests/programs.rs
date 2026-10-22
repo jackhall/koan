@@ -422,7 +422,7 @@ fn a_quantified_return_shares_its_frame() {
 
 #[test]
 fn an_annotated_binder_is_held_to_its_annotation() {
-    // Mini runs no static pass, so nothing is settled and every annotation is checked here.
+    // Mini runs no walk, so nothing is settled and every annotation is checked here.
     let mut substrate = loaded("LET n :Number = 1\nLET xs :(LIST OF Any) = [1]", 2);
     assert_eq!(run_and_read(&mut substrate, &["n"]), ["1"]);
     let mut substrate = loaded("LET s :Number = \"a\"", 2);

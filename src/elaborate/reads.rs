@@ -124,19 +124,19 @@ impl<'graph, XF: KnottedFamily<'graph>> Reads<'graph> for ActivationView<'graph,
         let held = self.read(at);
         held.as_module()?;
         let signature = held.concrete_ktype();
-        // The load records every path its type expressions spell; one it read through a declared
-        // application binds as the run's path variable does.
+        // The shape numbers every path its type expressions spell; one the load read through a
+        // declared application binds as the run's path variable does.
         let load = self.load();
-        if let Some(read) = load.path_read(self.shape(), site) {
-            let root = load.shapes().shape_at(read.root);
-            let entry = load.path_entry(root, read.level)?;
-            if entry.through.is_some() {
-                let bound = match load.path_closed(root, read.level) {
-                    Some(closed) => Some(closed),
-                    None => bound_path(self, types, at, entry),
-                };
-                return Some((bound.map_or(TypeAt::NotAType, TypeAt::Type), signature));
-            }
+        if let Some((root, level)) = load.path_read(self.shape(), site)
+            && let root = load.shapes().shape_at(root)
+            && let Some(entry) = load.path_entry(root, level)
+            && entry.through.is_some()
+        {
+            let bound = match load.path_closed(root, level) {
+                Some(closed) => Some(closed),
+                None => bound_path(self, types, at, entry),
+            };
+            return Some((bound.map_or(TypeAt::NotAType, TypeAt::Type), signature));
         }
         let scratch = Bump::new();
         Some((
@@ -156,8 +156,7 @@ impl<'graph, XF: KnottedFamily<'graph>> Reads<'graph> for ActivationView<'graph,
     ) -> TypeAt {
         let load = self.load();
         let read = load.path_read(self.shape(), site);
-        match read.and_then(|read| load.path_closed(load.shapes().shape_at(read.root), read.level))
-        {
+        match read.and_then(|(root, level)| load.path_closed(load.shapes().shape_at(root), level)) {
             Some(closed) => TypeAt::Type(closed),
             None => TypeAt::Unknown,
         }

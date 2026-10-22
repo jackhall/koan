@@ -13,7 +13,6 @@ pub(crate) mod plan;
 mod properties;
 mod quoted_uses;
 mod quotes;
-mod relay;
 mod rewrite;
 mod typed;
 mod units;

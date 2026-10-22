@@ -148,10 +148,10 @@ use crate::parse::{ExpressionPart, KExpression, KLiteral};
 use crate::scope::{
     Address, BodyClass, BodyShape, Born, BuiltinIndex, Candidate, CandidateList, CaptureSlot,
     CaptureSource, Closing, Coordinate, Frontier, InstanceRead, Keyed, Leaf, Listed, NamedVariable,
-    Narrowing, PathEntry, PathRead, Position, Print, Resolution, Segment, ShapeError, ShapeKind,
-    Shapes, Site, SiteDeps, Slot, Source, Static, StaticRegistered, StaticSolution, StaticType,
-    Store, SurfacedHead, Target, Tree, Typed, UnitFacts, UnitId, UnitIndex, UnitWork, Unknown,
-    UseStatics, Variable as Located, Within, source_of,
+    Narrowing, PathEntry, Position, Print, Resolution, Segment, ShapeError, ShapeKind, Shapes,
+    Site, SiteDeps, Slot, Source, Static, StaticRegistered, StaticSolution, StaticType, Store,
+    SurfacedHead, Target, Tree, Typed, UnitFacts, UnitId, UnitIndex, UnitWork, Unknown, UseStatics,
+    Variable as Located, Within, source_of,
 };
 use crate::source::SourceRef;
 use crate::symbols::{BinderSymbol, TypeSymbol};
@@ -333,11 +333,10 @@ struct Level<'p, 'o, 'graph> {
     /// Whether the shape roots a chain: the program or a quote's code.
     roots_chain: bool,
     /// The type half's facts: each type binder's declaration and each registration's entry, by
-    /// slot, each recorded type expression's type and each path spelling a type reads, by site.
+    /// slot, and each recorded type expression's type, by site.
     declared: BumpVec<'p, Option<(StaticType<'o>, Tag)>>,
     registered: BumpVec<'p, Option<(StaticRegistered<'o>, Tag)>>,
     expressions: BumpVec<'p, (Site, StaticType<'o>, Tag)>,
-    reads: BumpVec<'p, (Site, PathRead, Tag)>,
     parts: BumpVec<'p, (Site, Interval, Tag)>,
     statements: BumpVec<'p, Option<(Interval, Tag)>>,
     binders: BumpVec<'p, (Bound, Option<Tag>)>,
@@ -599,7 +598,6 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             declared,
             registered,
             expressions: BumpVec::new_in(scratch),
-            reads: BumpVec::new_in(scratch),
             parts: BumpVec::new_in(scratch),
             statements,
             binders,
@@ -911,13 +909,6 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 .map(|(site, typed, _)| (*site, *typed)),
         );
         newest(&mut expressions);
-        let mut reads = BumpVec::new_in(scratch);
-        reads.extend(
-            (at.reads.iter())
-                .filter(|(_, _, held)| ours(*held))
-                .map(|(site, read, _)| (*site, *read)),
-        );
-        newest(&mut reads);
         let mut instances = BumpVec::new_in(scratch);
         instances.extend(
             (at.instances.iter())
@@ -963,7 +954,6 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             declared: Keyed::sorted(lay, &mut declared),
             registered: Keyed::sorted(lay, &mut registered),
             expressions: Keyed::sorted(lay, &mut expressions),
-            reads: Keyed::sorted(lay, &mut reads),
             parts: Keyed::sorted(lay, &mut parts),
             statements: Keyed::sorted(lay, &mut statements),
             binders: Keyed::sorted(lay, &mut binders),
@@ -1031,8 +1021,6 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 .iter()
                 .map(|(site, typed)| (*site, *typed, tag)),
         );
-        at.reads
-            .extend(typed.reads.iter().map(|(site, read)| (*site, *read, tag)));
         at.parts
             .extend(typed.parts.iter().map(|(site, typed)| (*site, *typed, tag)));
         for (index, typed) in typed.statements.iter() {

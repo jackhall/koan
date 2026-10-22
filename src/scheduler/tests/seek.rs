@@ -6,7 +6,6 @@
 
 use std::cell::RefCell;
 use std::num::NonZeroUsize;
-use std::ptr;
 
 use crate::knot::KValue;
 use crate::memory::{Active, Bump};
@@ -16,7 +15,6 @@ use crate::scheduler::{
     Action, EVICT_BEFORE_STEP, Placement, Scheduler, Seek, Step, StepError, TIERS, Tiers, Use,
     WATCH_LOG, WATCHED, Watched, Work,
 };
-use crate::scope::{OldBinding, Settled};
 use crate::type_lattice::{KType, TypeNode};
 use crate::values::digest::{DigestHasher, Tag};
 use crate::values::{BuildRef, KeyedTypes, SpecBinding, SpecBounds, SpecKey};
@@ -31,9 +29,8 @@ thread_local! {
     static SEQUENCE: RefCell<Vec<(usize, bool)>> = const { RefCell::new(Vec::new()) };
     /// What [`specialized`] read as a [`sequence`] woke from each of its seeks.
     static COUNTS: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
-    /// Where [`settling`] laid its settled facts, and where each [`read_settled`] frame found
-    /// them, as addresses: `None` for a frame that found none.
-    static SETTLED: RefCell<Vec<Option<usize>>> = const { RefCell::new(Vec::new()) };
+    /// The build cell each [`read_lent`] frame found through its lend, in the order they ran.
+    static LENT: RefCell<Vec<BuildRef>> = const { RefCell::new(Vec::new()) };
     /// The type a [`minting`] asker laid in its own region, which its seek's binding carries.
     static BOUND: std::cell::Cell<KType> = const { std::cell::Cell::new(KType::NUMBER) };
 }
@@ -96,7 +93,7 @@ fn key(at: usize) -> SpecKey {
 
 /// A specialization's step: enlist.
 fn specialize<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
-    step.enlist(None)
+    step.enlist()
 }
 
 /// A seek for the specialization keyed `at` under `parent`.
@@ -177,69 +174,47 @@ fn a_missed_specialization_is_built_once_and_found_warm_by_the_next_birth() {
     assert_eq!(scheduler.graph().table_len(roots.build), Ok(Some(1)));
 }
 
-/// A specialization's step that settles facts: lay an empty record in its region, and enlist
-/// with it.
-fn settling<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
-    let settled = &step.writer().fill(1, |_| Settled::empty(OldBinding::EMPTY))[0];
-    SETTLED.with(|laid| laid.borrow_mut().push(Some(ptr::from_ref(settled).addr())));
-    step.enlist(Some(settled))
-}
-
-/// Record where this frame finds its specialization's settled facts, and finish.
-fn read_settled<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
-    let found = step.settled().map(|settled| ptr::from_ref(settled).addr());
-    SETTLED.with(|read| read.borrow_mut().push(found));
+/// Record the build cell this frame runs under, read through its lend, and finish.
+fn read_lent<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
+    LENT.with(|lent| lent.borrow_mut().push(step.build_ref(BuildRef::ROOT)));
     step.finish_fresh(|_, _, _| Active::new(KValue::Null))
 }
 
-/// Ask for two frames under one key, whose specialization settles facts, and a third that seeks
-/// none.
-fn seek_settled<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
+/// Ask for two frames under one key and a third that seeks none.
+fn seek_lent<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
     let (mut step, _) = step.state();
     for _ in 0..2 {
         let seek = Seek {
             parent: BuildRef::ROOT,
             key: key(1),
             binding: SpecBinding::default(),
-            work: work(settling, KValue::Null),
+            work: work(specialize, KValue::Null),
         };
-        step.spawn_seeking(fresh(read_settled, Use::Reads, KValue::Null), Some(seek));
+        step.spawn_seeking(fresh(read_lent, Use::Reads, KValue::Null), Some(seek));
     }
-    let asked = step.spawn_seeking(fresh(read_settled, Use::Reads, KValue::Null), None);
+    let asked = step.spawn_seeking(fresh(read_lent, Use::Reads, KValue::Null), None);
     step.park(asked, finished, KValue::Null, None)
 }
 
 #[test]
-fn a_frame_reads_its_specializations_settled_facts_through_its_lend() {
+fn two_frames_under_one_key_borrow_one_specialization_through_their_lend() {
     reset();
-    SETTLED.with(|settled| settled.borrow_mut().clear());
+    LENT.with(|lent| lent.borrow_mut().clear());
     let type_region = Bump::new();
     let (mut graph, roots) = loaded(&type_region, SpecBounds::default());
     Scheduler::over(&mut graph)
-        .run(
-            work(seek_settled, KValue::Null),
-            roots.run,
-            Placement::Fresh,
-        )
+        .run(work(seek_lent, KValue::Null), roots.run, Placement::Fresh)
         .expect("the root work ends");
-    let seen = SETTLED.with(|settled| settled.borrow().clone());
-    let [Some(laid), first, second, none] = seen[..] else {
-        panic!("one specialization settled, then three frames read: {seen:?}")
+    let seen = LENT.with(|lent| lent.borrow().clone());
+    let [first, second, none] = seen[..] else {
+        panic!("three frames read: {seen:?}")
     };
+    assert_ne!(first, BuildRef::ROOT, "a frame borrows its specialization");
     assert_eq!(
-        first,
-        Some(laid),
-        "a frame reads the facts its specialization laid"
+        second, first,
+        "a second frame under the key borrows the same one"
     );
-    assert_eq!(
-        second,
-        Some(laid),
-        "a second frame under the binding reads the same facts"
-    );
-    assert_eq!(
-        none, None,
-        "a frame that borrows no specialization reads none"
-    );
+    assert_eq!(none, BuildRef::ROOT, "a frame that seeks none borrows none");
 }
 
 /// How many nodes the drains on this thread have laid into the agent tier for new specializations
@@ -286,7 +261,7 @@ fn holding<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'gr
             "the specialization's region lays no branch"
         );
     }
-    step.enlist(None)
+    step.enlist()
 }
 
 /// A specialization's step over a binding of root types: its branch holds nothing.
@@ -296,7 +271,7 @@ fn holding_root<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Actio
         assert!(types.resolves(KType::NUMBER));
         assert_eq!(types.own_len(), 0, "a root handle lays nothing");
     }
-    step.enlist(None)
+    step.enlist()
 }
 
 /// A frame that reads its binding's type, a list of a list of `Bool`, through the agent chain, and

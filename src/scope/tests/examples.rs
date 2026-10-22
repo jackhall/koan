@@ -958,8 +958,8 @@ fn a_lambdas_body_is_found_by_its_forms_body_site() {
 const PICK: &str = "LET pick = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(x))";
 
 /// A keyworded form's name and a surfaced quantified member are read only at the head of a call; a
-/// module body's quantified member is read unmarked anywhere, the static pass instantiating it, and
-/// any other quantified binding is the static pass's to instantiate or refuse.
+/// module body's quantified member is read unmarked anywhere, the load's walk instantiating it, and
+/// any other quantified binding is the load's walk's to instantiate or refuse.
 #[test]
 fn a_call_only_quantified_function_is_read_only_at_the_head_of_a_call() {
     let module = "MODULE m = (LET pick = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(x)))";
@@ -1030,7 +1030,7 @@ fn a_call_only_quantified_function_is_read_only_at_the_head_of_a_call() {
 
 /// A body whose value is read takes its last statement's, so one binding a quantified function by a
 /// keyworded form there would hand on a value read only at a call's head; a plain `LET` there is
-/// the static pass's to instantiate at the body's return.
+/// the load's walk's to instantiate at the body's return.
 #[test]
 fn a_body_s_value_binds_no_keyworded_quantified_function() {
     let expression = "EXPR FOR ALL #[Elt] #(ID x :Elt) -> Elt = #(x)";

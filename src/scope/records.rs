@@ -26,9 +26,8 @@ use super::shape::{
 use super::shapes::Shapes;
 use super::tree::{Leaf, NodeCapture, Tree};
 use super::typed::{
-    BodyClass, Caching, Handoff, InstanceRead, Mint, PathEntry, PathRead, Resolution, Resolved,
-    Static, StaticCallable, StaticRegistered, StaticSolution, StaticType, UseStatics, Variable,
-    ViewSlots,
+    BodyClass, Caching, Handoff, InstanceRead, Mint, PathEntry, Resolution, Resolved, Static,
+    StaticCallable, StaticRegistered, StaticSolution, StaticType, UseStatics, Variable, ViewSlots,
 };
 
 /// One unit's facts: everything the walk computed running it, the inline bodies it ran included.
@@ -58,8 +57,6 @@ pub struct Typed<'a> {
     pub registered: Keyed<'a, (Slot, StaticRegistered<'a>)>,
     /// Each recorded type expression's type, by site.
     pub expressions: Keyed<'a, (Site, StaticType<'a>)>,
-    /// Each path spelling a type expression reads, by site.
-    pub reads: Keyed<'a, (Site, PathRead)>,
     /// Each part's static type, by site.
     pub parts: Keyed<'a, (Site, Interval<Parametric>)>,
     /// Each statement's static type, by index into the body.
@@ -95,7 +92,6 @@ impl Typed<'_> {
         declared: Keyed::EMPTY,
         registered: Keyed::EMPTY,
         expressions: Keyed::EMPTY,
-        reads: Keyed::EMPTY,
         parts: Keyed::EMPTY,
         statements: Keyed::EMPTY,
         binders: Keyed::EMPTY,
@@ -578,13 +574,12 @@ impl<'graph> LoadFacts<'graph> {
         &self.body(shape).composes[shape.captures().len()..]
     }
 
-    /// The path spelling `shape`'s type expressions read at `site`, where they read one.
-    pub fn path_read(&self, shape: &BodyShape<'_>, site: Site) -> Option<PathRead> {
-        (self
-            .records
-            .typed(shape.segment(), Held::Site(shape.segment(), site)))
-        .and_then(|typed| typed.reads.get(site))
-        .map(|(_, read)| *read)
+    /// The path `shape` spells at `site`, where it spells one its chain numbers: the segment of
+    /// the body rooting its chain, beside its level there. A text fact, read off the shape table.
+    pub fn path_read(&self, shape: &BodyShape<'_>, site: Site) -> Option<(Segment, usize)> {
+        let index = (shape.spelled().iter()).position(|spelled| Site::of(spelled.part) == site)?;
+        let level = self.shapes.path_level(shape.segment(), index)?;
+        Some((self.shapes.chain_root(shape.segment()), level))
     }
 
     /// The path entry at `level` of the chain the body `root` roots.
@@ -861,7 +856,6 @@ impl Typed<'_> {
     /// Each fact of `segment` these tables hold, by what it is found by.
     fn held(&self, segment: Segment, each: &mut impl FnMut(Held)) {
         let sites = (self.expressions.iter().map(|(site, _)| *site))
-            .chain(self.reads.iter().map(|(site, _)| *site))
             .chain(self.parts.iter().map(|(site, _)| *site))
             .chain(self.settled.iter().copied())
             .chain(self.instances.iter().map(|(site, _)| *site))

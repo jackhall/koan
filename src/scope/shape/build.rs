@@ -1585,7 +1585,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                     }
                 }
                 // A path's root other than a name, `(MAKESET ints).Set`, is a value expression
-                // even in a type: its uses resolve, and the static pass types it.
+                // even in a type: its uses resolve, and the load's walk types it.
                 Role::Argument
                     if form.id == BuiltinShapeId::Attribute
                         && self.in_type > 0
@@ -3435,7 +3435,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
     /// The slots a callable's or a code body's last statement reads — directly, through a nested
     /// block, or through a nested body's captures — beside every type slot, sorted: what a frame
     /// that hands its last statement on keeps alive across the hand-off. A type slot is listed
-    /// whole, since a type capture the static pass adds later reads one at a birth no read here
+    /// whole, since a type capture the load's walk adds later reads one at a birth no read here
     /// records. Empty for any other kind, and for a body with no statements.
     fn last_reads(&self, draft: &Draft<'graph, 'x>) -> &'graph [Slot] {
         let Some(last) = draft.statements.checked_sub(1) else {

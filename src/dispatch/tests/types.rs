@@ -590,8 +590,8 @@ fn path<'graph>(
     (value, path_entry(facts, variables))
 }
 
-/// Each path read `shape`'s spellings record.
-fn path_reads(facts: &LoadFacts<'_>, shape: &BodyShape<'_>) -> Vec<crate::scope::PathRead> {
+/// Each path `shape`'s spellings read: its chain root and level.
+fn path_reads(facts: &LoadFacts<'_>, shape: &BodyShape<'_>) -> Vec<(crate::scope::Segment, usize)> {
     (shape.spelled().iter())
         .filter_map(|spelled| facts.path_read(shape, Site::of(spelled.part)))
         .collect()
@@ -619,12 +619,8 @@ fn a_path_through_a_module_name_is_one_variable_past_every_name_level() {
         let [x, y, z] = path_reads(facts, shape)[..] else {
             panic!("three path reads")
         };
-        assert_eq!(
-            (x.level, y.level),
-            (1, 1),
-            "two spellings of one path share it"
-        );
-        assert_eq!(z.level, 2, "another label is another path");
+        assert_eq!((x.1, y.1), (1, 1), "two spellings of one path share it");
+        assert_eq!(z.1, 2, "another label is another path");
         let [expression] = written_in(shape, 3)[..] else {
             panic!("one type expression in statement 3")
         };
@@ -673,11 +669,11 @@ fn a_path_through_an_annotated_binder_reads_after_the_binders() {
     loaded(source, |program| {
         let facts = program.facts();
         let body = nested(program.shape(), ShapeKind::Callable);
-        let [read] = path_reads(facts, body)[..] else {
+        let [(root, level)] = path_reads(facts, body)[..] else {
             panic!("one path read")
         };
-        let root = facts.shapes().shape_at(read.root);
-        let entry = (facts.path_entry(root, read.level)).expect("a minted entry");
+        let root = facts.shapes().shape_at(root);
+        let entry = (facts.path_entry(root, level)).expect("a minted entry");
         assert!(
             entry.through.is_some(),
             "the annotation's application names `Carrier` a head parameter"

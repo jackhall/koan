@@ -1,4 +1,4 @@
-//! The static pass's [content trees](crate::scope::Tree): what the load knows of each
+//! The walk's [content trees](crate::scope::Tree): what the load knows of each
 //! module-valued expression's content, read off the program's text as the
 //! [module design](../../../design/modules.md#the-load-and-the-run) tables it.
 //!

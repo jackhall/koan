@@ -4,7 +4,7 @@
 //!
 //! One builder, [`module_signature`], serves both ends. The run reads it off the activation its
 //! body ran in ([`self_signature`]), each value slot at the memo its value already carries; the
-//! load's static pass hands it each binder's exact static type, where the load
+//! load's walk hands it each binder's exact static type, where the load
 //! knows every one. So the load's exact signature is the very handle the run computes. A
 //! registration's shape is the one its function was born with, which only the function layer
 //! reads, so the caller hands those in. A module's signature declares no head parameter: a body

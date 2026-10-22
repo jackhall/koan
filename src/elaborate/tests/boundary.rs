@@ -32,16 +32,6 @@ const ACCESSORS: &[&str] = &[
     "typed_expression",
     "type_expressions",
     "in_body",
-    "channel_residual",
-    "fix_declared",
-    "fix_registered",
-    "fix_callable",
-    "fix_group_levels",
-    "fix_path_reads",
-    "fix_channel_paths",
-    "fix_declared_variables",
-    "fix_channel_residual",
-    "refuse_typing",
 ];
 
 #[test]

@@ -8,8 +8,8 @@
 //! every run — or rigid over [`Variable`]s — a parametric value over the lexical variables the run
 //! supplies, by level — which [`solutions`] reads through an activation for one substitution.
 //!
-//! The value channel's records live here too: the [`Statics`] the load's walk fixes for a body, the
-//! [`UseStatics`] of each keyworded use: its candidates' [`Narrowing`] and its
+//! The value channel's records live here too: the [`UseStatics`] the load's walk fixes for each
+//! keyworded use: its candidates' [`Narrowing`] and its
 //! arguments' contributions, and a frame body's [`BodyClass`].
 //!
 //! See [README.md § Load-time types](README.md#load-time-types).
@@ -17,9 +17,9 @@
 use std::fmt;
 use std::hash::{Hash, Hasher};
 
-use crate::memory::{BumpAllocator, BumpHashTable, BumpVec};
+use crate::memory::{BumpAllocator, BumpVec};
 use crate::symbols::{BinderSymbol, Symbol, SymbolInterner, TypeSymbol, ValueSymbol};
-use crate::type_lattice::{DeclaredType, Interval, KType, Parametric, Verdict, display_name};
+use crate::type_lattice::{DeclaredType, KType, Parametric, Verdict, display_name};
 use crate::values::{Chain, KnottedFamily, Value};
 
 use super::activation::ActivationView;
@@ -238,10 +238,9 @@ pub enum Source {
 /// One path of a chain — a type member `label` read through a module-valued expression — typed as
 /// a lexical variable of its own, its **path variable**, at a level past every name level of the
 /// chain ([design/modules.md § Carriers and paths](../../design/modules.md#carriers-and-paths)).
-/// The type channel mints one per distinct root, member chain and label its type expressions
-/// spell, and the static pass one more per path it pins a module's type through; the chain's root
-/// holds them all. The static pass resolves each one, into a table on the chain root's shape
-/// ([`BodyShape::resolution`]).
+/// The shape numbers one per distinct root, member chain and label its type expressions spell,
+/// and the load's walk one more per path it pins a module's type through, past them. The walk
+/// resolves each one in the unit that reads it first ([`LoadFacts::resolution`](super::LoadFacts::resolution)).
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct PathEntry<'graph> {
     pub root: Root,
@@ -252,17 +251,13 @@ pub struct PathEntry<'graph> {
     pub level: usize,
     /// The application the path is read through: the module `chain` reaches is fitted to it, and
     /// the path is what it fits `label` at. Over the chain's lexical variables; a shape reading the
-    /// path locates them in its own [`Statics::throughs`]. `None` where the path reads the module's
+    /// path locates them in its record's `throughs`. `None` where the path reads the module's
     /// own type member.
     pub through: Option<Parametric>,
 }
 
-/// The path entries a pass mints for one chain, found by root, member chain and label: each
-/// entry's index in the pass's own run of them, hashed by [`PathEntry::hash_of`].
-pub type PathIndex<'p> = BumpHashTable<'p, usize>;
-
 impl<'graph> PathEntry<'graph> {
-    /// The hash a [`PathIndex`] finds the entries for `root`, `chain` and `label` by.
+    /// The hash the walk finds the entries for `root`, `chain` and `label` by.
     pub fn hash_of(root: Root, chain: &[ValueSymbol], label: TypeSymbol) -> u64 {
         let mut hasher = std::hash::DefaultHasher::new();
         match root {
@@ -289,7 +284,7 @@ impl fmt::Debug for PathEntry<'_> {
     }
 }
 
-/// What the static pass resolved a path to: the content tree of the module it reads its member
+/// What the load's walk resolved a path to: the content tree of the module it reads its member
 /// off, and the type that tree gives it.
 #[derive(Clone, Copy)]
 pub struct Resolution<'graph> {
@@ -316,15 +311,6 @@ pub enum Resolved {
 pub enum Root {
     Binder(Binder),
     Inline(Site),
-}
-
-/// A path spelling one shape's type expressions read: where that shape reads its root, and its
-/// entry, by the segment of the body rooting its chain and its level there.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct PathRead {
-    pub at: Option<Coordinate>,
-    pub root: Segment,
-    pub level: usize,
 }
 
 /// What the load pass fixed for a type, a callable or a registration: a concrete `C` where it is
@@ -467,87 +453,6 @@ pub struct Caching<'graph> {
     /// Whether a frame of this body may be tail-called from a site the load cannot read: its name
     /// escapes as a value, or no call by name reaches its binder. A hop of such a body seeks.
     pub escapes: bool,
-}
-
-/// The value channel's load-time facts for one body: a static type for every value expression and
-/// statement — under which every type the run carries there lies — and each keyworded use's
-/// narrowing and contributions.
-#[derive(Clone, Copy, Debug)]
-pub struct Statics<'graph> {
-    /// Each part the evaluator reads as a value, by site, sorted by site, beside its static type:
-    /// an interval.
-    pub parts: Keyed<'graph, (Site, Interval<Parametric>)>,
-    /// Each statement's static type, an interval, by index into the shape's body; at most `Any`
-    /// for one that binds nothing typed.
-    pub statements: &'graph [Interval<Parametric>],
-    /// Each slot's static type, an interval, by index: a value binder's, a registration's function
-    /// type, and for a type name the type of the type value it holds. A quantified callable's binder
-    /// is its scheme.
-    pub binders: &'graph [DeclaredType<Interval<Parametric>>],
-    /// Each `:!` whose operand's static upper end lies under its type, and each annotated binder's
-    /// type part whose value's does, sorted by site: the run checks nothing there.
-    pub settled: Keyed<'graph, Site>,
-    /// Each site where the load read a quantified function, sorted by site, beside what it fixed
-    /// there: the solution it instantiated it at, closed or over the run's variables, or that the
-    /// run reads it as it is.
-    pub instances: Keyed<'graph, (Site, InstanceRead<'graph>)>,
-    /// Each keyworded use the load fixed something about, by its node's site, sorted by site: its
-    /// narrowing and its contributions. A use absent here is [`UseStatics::UNFIXED`].
-    pub uses: Keyed<'graph, (Site, UseStatics<'graph>)>,
-    /// Each keyworded use the load selected a candidate at, by its node's site, sorted by site,
-    /// beside the closed point each variable of the candidate's group solves to there, by group
-    /// index.
-    pub selections: Keyed<'graph, (Site, &'graph [Option<KType>])>,
-    /// Each call by name's contributions, by its argument part's site, sorted by site: per
-    /// parameter of its callee in symbol order, the static type that parameter is solved from —
-    /// `Unknown` where the frame reads the carried type.
-    pub named: Keyed<'graph, (Site, &'graph [StaticType<'graph>])>,
-    /// A frame body's class; `None` for a block or a module body, which count toward the frame
-    /// body enclosing them.
-    pub class: Option<BodyClass>,
-    /// This shape's own minting sites, sorted: each `:|` ascription, and each component of nominal
-    /// declarations the load leaves unknown, by its first member's declaration node.
-    pub minting: Keyed<'graph, Site>,
-    /// Each `:|` ascription's site at a closed signature, sorted, beside its view's content tree.
-    pub trees: Keyed<'graph, (Site, &'graph Tree<'graph>)>,
-    /// Each path this shape's type expressions read whose [`through`](PathEntry::through) names a
-    /// lexical variable, by the path's level, beside where this shape reads each of them.
-    pub throughs: Keyed<'graph, (usize, &'graph [Variable])>,
-    /// Each slot that keeps a digest memo beside its value, sorted: the source of a capture of a
-    /// module a `:|` in this activation, or a block inside it, views by its binder's name.
-    pub digested: &'graph [Slot],
-    /// Each `:|` over a module binder read bare, by its site, sorted: where its captures' memos
-    /// sit.
-    pub view_slots: Keyed<'graph, (Site, ViewSlots<'graph>)>,
-    /// Each call that passes a digested slot bare, by the site its contributions are keyed by,
-    /// sorted: which argument each such slot is.
-    pub handoffs: Keyed<'graph, (Site, &'graph [Handoff])>,
-    /// What each keyworded use's narrowing, contributions and selection wait on, by index into
-    /// the shape's candidate lists.
-    pub use_frontiers: &'graph [Frontier<'graph>],
-}
-
-/// What the static pass fixes about a body as a whole, each where it computes it: a callable's
-/// summary and whether it is recursive, a `MODULE` or `GROUP` body's exact signature, and a quote's
-/// code's last statement's static type as it runs unfilled.
-#[derive(Clone, Copy, Default)]
-pub struct ShapeFacts<'graph> {
-    /// A typed callable body's summary, the tree of its last statement: `Some(None)` where it has
-    /// none, a recursive one among them, and `None` before the pass typed it.
-    pub summary: Option<Option<Tree<'graph>>>,
-    /// Whether the callable body was met while it was typed, or typed since one was: it never
-    /// unfolds.
-    pub recursive: bool,
-    /// The signature every run of a `MODULE` or `GROUP` body ties, where the pass typed it exactly.
-    pub signature: Option<KType>,
-    /// A quote's code's last statement's static type as a traced `EVAL` runs it unfilled.
-    pub ran: Option<Interval<Parametric>>,
-    /// What the summary, the signature, the unfilled code's type and the callable's born instance
-    /// each wait on.
-    pub summary_frontier: Frontier<'graph>,
-    pub signature_frontier: Frontier<'graph>,
-    pub ran_frontier: Frontier<'graph>,
-    pub born_frontier: Frontier<'graph>,
 }
 
 /// At a `:|` over a module binder read bare: the module's body, and per capture its content
