@@ -202,6 +202,41 @@ fn a_value_the_body_received_passed_on_is_no_exit() {
     });
 }
 
+#[test]
+fn a_let_bound_bare_to_a_received_value_passed_on_is_no_exit() {
+    let keep = "EXPR #(KEEP x :Any) -> Number = #(1)\n";
+    let view = "(LET v = (m :| Counter))";
+    let passing = |call: &str| {
+        class(
+            &format!(
+                "{keep}MODULE top = ((LET zero = [{{x = 1}}, 1]))\n\
+                 LET f = (FN :{{m :Counter, c :Number}} -> Number = #({view} {call} (c)))"
+            ),
+            "f",
+        )
+    };
+    assert_eq!(
+        passing("(LET a = m) (KEEP a)"),
+        "sealed 1 caches",
+        "a parameter"
+    );
+    assert_eq!(
+        passing("(LET a = m) (LET b = a) (KEEP b.zero)"),
+        "sealed 1 caches",
+        "a member of a `LET` bound to one"
+    );
+    assert_eq!(
+        passing("(LET a = top) (KEEP a.zero)"),
+        "sealed 1 caches",
+        "a capture"
+    );
+    assert_eq!(
+        passing("(LET a = v) (KEEP a)"),
+        "porous 1",
+        "what the body minted still leaves"
+    );
+}
+
 /// `SIG Holder`, `PEEK` and `KEEP`, registrations at a signature-typed and an `Any` slot, and `g`
 /// and `r`, functions at the same.
 const PASSERS: &str = "SIG Holder FOR ALL #[Elt] = #[(VAL held :Elt)]\n\

@@ -110,8 +110,8 @@
 //! called by name, a surfaced head, a candidate the load cannot read, or any `EVAL`. A value that
 //! holds nothing the body minted is no exit, at a call or at the return
 //! ([`holds_nothing_minted`](Pass::holds_nothing_minted)): one at a site that is not porous; one
-//! the body received — a parameter or a capture named bare, or a member of one read through the
-//! builtin `ATTR`; a record literal written in place whose every field holds nothing minted; or a
+//! the body received — a parameter, a capture or a `LET` bound bare to one, named bare, or a member
+//! of one read through the builtin `ATTR`; a record literal written in place whose every field holds nothing minted; or a
 //! module whose content tree reaches no view, no closure, no module body holding a minting site
 //! and no leaf but a value the body received. A builtin's
 //! native runs in the caller's step and enters no frame. Any other body is sealed, and caches
@@ -4210,8 +4210,9 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     }
 
     /// Whether `part` is a value the frame body at `level` received — a parameter of that body, a
-    /// capture, a hole or a name offered, named bare, or a member read of one through the builtin
-    /// `ATTR` alone — which cannot hold what the body mints, so passing it on is no exit
+    /// capture, a hole or a name offered, or a `LET` bound bare to one, named bare, or a member read
+    /// of one through the builtin `ATTR` alone — which cannot hold what the body mints, so passing
+    /// it on is no exit
     /// ([type tiers](../../design/type-tiers.md#two-classes-of-body)).
     fn received(&self, level: usize, part: &'graph ExpressionPart<'graph>) -> bool {
         self.received_form(level, of_part(self.chain[level].shape, part))
@@ -4234,13 +4235,27 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         };
         let frame = self.frame_level(level);
         match self.follow(level, mention.coordinate).landing {
-            Landing::Slot { level: at, slot } => {
-                at < frame
-                    || (at == frame
-                        && self.chain[at].shape.position_of(slot) == Position::PARAMETER)
-            }
+            Landing::Slot { level: at, slot } => self.received_binder(at, slot, frame),
             Landing::Open { .. } | Landing::Builtin(_) => true,
         }
+    }
+
+    /// Whether the binder at `slot` of the shape at `at` holds a value the frame body at `frame`
+    /// received: a binder of a body around the frame body, a parameter of the frame body, or a
+    /// `LET` bound bare to such a value, which holds that very value. A fellow read is the cyclic
+    /// rule's, and is no such value.
+    fn received_binder(&self, at: usize, slot: Slot, frame: usize) -> bool {
+        let shape = self.chain[at].shape;
+        if at < frame || (at == frame && shape.position_of(slot) == Position::PARAMETER) {
+            return true;
+        }
+        shape.rhs(slot).is_some_and(|rhs| {
+            rhs.is_name()
+                && shape
+                    .mention(Site::of(rhs))
+                    .is_some_and(|mention| !mention.fellow)
+                && self.received(at, rhs)
+        })
     }
 
     /// The static type the pass recorded for `part` of the shape at `level`, where it typed it.
@@ -4337,13 +4352,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                     let at = (0..=level)
                         .rev()
                         .find(|at| self.chain[*at].shape.segment() == binder.body);
-                    let received = at.is_some_and(|at| {
-                        at < frame
-                            || (at == frame
-                                && self.chain[at].shape.position_of(binder.slot)
-                                    == Position::PARAMETER)
-                    });
-                    if !received {
+                    if !at.is_some_and(|at| self.received_binder(at, binder.slot, frame)) {
                         return true;
                     }
                 }

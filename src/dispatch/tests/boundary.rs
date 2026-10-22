@@ -105,7 +105,7 @@ const READERS: &[&str] = &[
     "src/scope/tree.rs",
 ];
 
-/// The cell accessors a run's reader might call on a shape: what `LoadFacts` answers in their
+/// The fact accessors a run's reader might call on a shape: what `LoadFacts` answers in their
 /// place, and `shape_at`, which the shape table answers.
 const READ_ACCESSORS: &[&str] = &[
     "declared_type",
@@ -151,20 +151,20 @@ const READ_ACCESSORS: &[&str] = &[
 
 #[test]
 fn the_run_reads_every_load_fact_through_the_read_door() {
-    use crate::tests::boundary::{cell_reads, strip_comments_and_strings};
+    use crate::tests::boundary::{fact_reads, strip_comments_and_strings};
     let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let accessors = READ_ACCESSORS;
     // The walk tells a read through the door from one on a shape.
     let door =
         "at.view.load().caches(shape)\n(program.facts())\n    .caches(shape)\nfacts.caches(a)";
-    assert!(cell_reads(door, accessors).is_empty());
-    assert_eq!(cell_reads("view.shape().caches()", accessors).len(), 1);
-    assert_eq!(cell_reads("(f(shape)).caches()", accessors).len(), 1);
+    assert!(fact_reads(door, accessors).is_empty());
+    assert_eq!(fact_reads("view.shape().caches()", accessors).len(), 1);
+    assert_eq!(fact_reads("(f(shape)).caches()", accessors).len(), 1);
     let mut offenders = Vec::new();
     for reader in READERS {
         let source = manifest.join(reader);
         let code = strip_comments_and_strings(&std::fs::read_to_string(&source).unwrap());
-        for found in cell_reads(&code, accessors) {
+        for found in fact_reads(&code, accessors) {
             offenders.push(format!("{reader}:{found}"));
         }
     }

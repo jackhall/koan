@@ -23,7 +23,7 @@ fn elaborate_names_only_the_layers_below_it_holds_no_heap_and_spells_the_stack_l
     crate::tests::boundary::holds("elaborate", PREFIXES, &[]);
 }
 
-/// The cell accessors and write doors on a shape that the type half never calls: every fact it
+/// The fact accessors and write doors on a shape that the type half never calls: every fact it
 /// reads comes through the [`TypeContext`](crate::elaborate::TypeContext) the walk hands it.
 const ACCESSORS: &[&str] = &[
     "declared_type",
@@ -40,7 +40,7 @@ fn the_type_half_reads_every_fact_through_its_context() {
     let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
     let source = manifest.join("src/elaborate/unit.rs");
     let code = strip_comments_and_strings(&std::fs::read_to_string(&source).unwrap());
-    // The scan bites on a cell read, and passes a read through the context.
+    // The scan bites on a read off the shape, and passes a read through the context.
     let reads = "shape.declared_type(slot)\ncontext.declared(binder)";
     assert_eq!(store_bypasses(reads, ACCESSORS, &[]).len(), 1);
     let mut offenders = store_bypasses(&code, ACCESSORS, &[]);

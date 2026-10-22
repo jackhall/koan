@@ -277,9 +277,9 @@ fn receiver(before: &str) -> String {
     }
 }
 
-/// Every call in `code` of a cell accessor in `accessors` made anywhere but on the load's facts —
+/// Every call in `code` of a fact accessor in `accessors` made anywhere but on the load's facts —
 /// a receiver named `load` or `facts`, or a call of either — each as `line: accessor: text`.
-pub(crate) fn cell_reads(code: &str, accessors: &[&str]) -> Vec<String> {
+pub(crate) fn fact_reads(code: &str, accessors: &[&str]) -> Vec<String> {
     let lines: Vec<&str> = code.lines().collect();
     calls(code, accessors)
         .into_iter()
