@@ -730,8 +730,8 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         let (closing, frontier) = match walked {
             Ok((mut closing, tag)) => {
                 // A quote's code is typed a second time as a traced `EVAL` runs it, past its first.
-                if let (true, Some(parent)) = (code, parent) {
-                    closing.ran = self.ran(parent, shape);
+                if code && parent.is_some() {
+                    closing.ran = self.ran(shape);
                 }
                 (closing, self.end(tag))
             }
@@ -1621,9 +1621,9 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     }
 
     /// The quote's code `code`'s last statement's static type as a traced `EVAL` runs it: typed a
-    /// second time, nested in the shape at `parent`, with every unmarked hole empty. It fixes
-    /// nothing, and a use it can never run refuses nothing: its `EVAL` faults.
-    fn ran(&mut self, parent: usize, code: &'graph BodyShape<'graph>) -> Option<Interval> {
+    /// second time, on the chain around it, with every unmarked hole empty. It fixes nothing, and
+    /// a use it can never run refuses nothing: its `EVAL` faults.
+    fn ran(&mut self, code: &'graph BodyShape<'graph>) -> Option<Interval> {
         let unfilled = std::mem::replace(&mut self.unfilled, true);
         let (depth, open) = (self.chain.len(), self.open.len());
         self.push(code, true);
@@ -1636,7 +1636,6 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         self.chain.truncate(depth);
         self.leave(code);
         self.unfilled = unfilled;
-        let _ = parent;
         walked.ok().and(last)
     }
 
