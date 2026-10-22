@@ -45,3 +45,9 @@ as surprises, not scheduled.
   specialization: it copies its asker's lend, and a quote's chain of build
   cells is not placed. [Code splicing](../metaprogramming/code-splicing.md)
   places composed code's; written code's has no owner.
+- **A site the load finds by searching its body.** A type path whose root is
+  written in place (`:((ID b).Carrier)`) and a read of a name bound to a
+  `FOR ALL` function find their part's statement by searching every statement
+  of the body (`dispatch/walk.rs` `source`, `walk/paths.rs` `resolve_entry`),
+  so a body of n such reads loads in O(n²). The base the one walk replaced
+  searched alike. A site-to-statement index on the shape would answer both.
