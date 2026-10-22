@@ -163,7 +163,7 @@ fn births_callable<'graph>(
     shapes: &Shapes<'graph>,
     lands: Lands,
 ) -> Option<&'graph BodyShape<'graph>> {
-    let Lands::Binder { segment, slot } = lands else {
+    let Lands::Binder { at: segment, slot } = lands else {
         return None;
     };
     (shapes.shape_at(segment).births(slot)).filter(|body| body.kind() == ShapeKind::Callable)
@@ -256,7 +256,7 @@ fn bare_parameter<'graph>(
 ) -> Option<Slot> {
     let mention = shape.mention(Site::of(name_of(shape, value)?))?;
     match mention.lands {
-        Lands::Binder { segment, slot }
+        Lands::Binder { at: segment, slot }
             if segment == shape.segment() && shape.position_of(slot) == Position::PARAMETER =>
         {
             Some(slot)
@@ -373,7 +373,7 @@ fn tail_edges<'x, 'graph>(
                 let Candidate::One(coordinate) = candidate else {
                     continue;
                 };
-                let Some(Lands::Binder { segment, slot }) =
+                let Some(Lands::Binder { at: segment, slot }) =
                     shapes.follow(shape.segment(), *coordinate)
                 else {
                     continue;

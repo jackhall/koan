@@ -62,12 +62,12 @@ pub use records::{
     tree_deps,
 };
 pub use shape::{
-    Arm, BodyShape, BuiltinIndex, Candidate, CandidateList, CaptureSlot, CaptureSource,
-    CaptureSpec, Component, ComponentIndex, Coordinate, Lands, Listed, Mention, MentionClass,
-    Offer, PathId, Position, QuotedPart, Ranking, Registration, Segment, ShapeError, ShapeKind,
-    Site, Slot, SpelledPath, SurfacedHead, Target, TopLevel, TypeExpression, Unit, UnitHolds,
-    UnitIndex, UnitWork, ViewRefused, Which, each_part, in_body_of, part_of, selection_refused,
-    source_of, spelled, view_refused,
+    Arm, BodyShape, BuiltinIndex, Candidate, CandidateList, CaptureChain, CaptureSlot,
+    CaptureSource, CaptureSpec, Component, ComponentIndex, Coordinate, Lands, Listed, Mention,
+    MentionClass, Offer, PathId, Position, QuotedPart, Ranking, Registration, Segment, ShapeError,
+    ShapeKind, Site, Slot, SpelledPath, SurfacedHead, Target, TopLevel, TypeExpression, Unit,
+    UnitHolds, UnitIndex, UnitWork, ViewRefused, Which, each_part, follow, in_body_of, part_of,
+    selection_refused, source_of, spelled, view_refused,
 };
 pub use shapes::{BindSite, Shapes};
 pub use tree::{Binder, KnotNode, Leaf, NodeCapture, Print, Tree, Unfolded, Within};

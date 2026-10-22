@@ -81,11 +81,11 @@ use super::super::spelling::{SpelledRoot, path_spelling};
 use super::super::tree::Binder as TreeBinder;
 use super::super::typed::Root;
 use super::{
-    Arm, Binder, BodyShape, BuiltinIndex, Candidate, CandidateList, CaptureSlot, CaptureSource,
-    CaptureSpec, Component, ComponentIndex, Coordinate, Lands, Listed, Mention, MentionClass,
-    Offer, PathId, Position, QuotedPart, Ranking, Registration, Segment, ShapeError, ShapeKind,
-    Site, Slot, SpelledPath, SurfacedHead, Target, TopLevel, TypeExpression, Unit, UnitHolds,
-    UnitIndex, UnitWork, Which, resolve_here,
+    Arm, Binder, BodyShape, BuiltinIndex, Candidate, CandidateList, CaptureChain, CaptureSlot,
+    CaptureSource, CaptureSpec, Component, ComponentIndex, Coordinate, Lands, Listed, Mention,
+    MentionClass, Offer, PathId, Position, QuotedPart, Ranking, Registration, Segment, ShapeError,
+    ShapeKind, Site, Slot, SpelledPath, SurfacedHead, Target, TopLevel, TypeExpression, Unit,
+    UnitHolds, UnitIndex, UnitWork, Which, follow, resolve_here,
 };
 use crate::parse::{BodyKind, DefinitionKind, Heads, Opens, Reading, Role};
 use std::cell::Cell;
@@ -654,7 +654,8 @@ struct DraftMention {
     at: Position,
     class: MentionClass,
     coordinate: Coordinate,
-    landing: Landing,
+    /// Where it lands, by the level on the chain of the draft holding the binder or the capture.
+    landing: Lands<usize>,
     /// Where it reads a binder: the statement of the landing level's draft it sits in, and whether
     /// a callable lies between that draft and the mention's own.
     read: Option<(u32, bool)>,
@@ -662,16 +663,6 @@ struct DraftMention {
     rooted: bool,
     /// Whether it is a call's head.
     head: bool,
-}
-
-/// Where a coordinate lands, by the level on the chain of the draft holding the binder or the open
-/// capture.
-#[derive(Clone, Copy)]
-enum Landing {
-    Builtin(BuiltinIndex),
-    Binder { level: usize, slot: Slot },
-    Hole { level: usize, capture: CaptureSlot },
-    Offered { level: usize, capture: CaptureSlot },
 }
 
 /// What [`Builder::seal`] reads of a draft around the one it seals: its segment, decided before its
@@ -2800,7 +2791,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         };
         let (landing, read) = self.lands(level, coordinate, reader);
         let rooted = match landing {
-            Landing::Binder { level: landed, .. } => {
+            Lands::Binder { at: landed, .. } => {
                 !(self.chain[landed + 1..=level].iter()).any(|draft| draft.kind == ShapeKind::Code)
             }
             _ => false,
@@ -2824,35 +2815,22 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
     /// a callable lies between.
     fn lands(
         &self,
-        mut level: usize,
-        mut coordinate: Coordinate,
+        level: usize,
+        coordinate: Coordinate,
         reader: Reader,
-    ) -> (Landing, Option<(u32, bool)>) {
-        loop {
-            let (hops, target) = match coordinate {
-                Coordinate::Builtin(index) => return (Landing::Builtin(index), None),
-                Coordinate::Activation { hops, target } => (hops, target),
-            };
-            level -= hops as usize;
-            let capture = match target {
-                Target::Local(slot) => {
-                    let statement = match level == reader.level {
-                        true => reader.statement,
-                        false => self.chain[level].current.0,
-                    };
-                    let crossed = (self.chain[level + 1..=reader.level].iter())
-                        .any(|draft| draft.kind == ShapeKind::Callable);
-                    return (Landing::Binder { level, slot }, Some((statement, crossed)));
-                }
-                Target::Capture(capture) => capture,
-            };
-            match self.chain[level].captures[capture.index()].source {
-                CaptureSource::Read(inner) => (level, coordinate) = (level - 1, inner),
-                CaptureSource::Hole => return (Landing::Hole { level, capture }, None),
-                CaptureSource::Offered => return (Landing::Offered { level, capture }, None),
-                CaptureSource::Member { .. } => unreachable!("a member edge is set at the seal"),
-            }
-        }
+    ) -> (Lands<usize>, Option<(u32, bool)>) {
+        let landing =
+            follow(self, level, coordinate, |_, _| ()).expect("a resolved read lands on the chain");
+        let Lands::Binder { at, .. } = landing else {
+            return (landing, None);
+        };
+        let statement = match at == reader.level {
+            true => reader.statement,
+            false => self.chain[at].current.0,
+        };
+        let crossed = (self.chain[at + 1..=reader.level].iter())
+            .any(|draft| draft.kind == ShapeKind::Callable);
+        (landing, Some((statement, crossed)))
     }
 
     /// `name` read through `mark` at `at` in the draft at `level`: a visible local, else outward —
@@ -2956,13 +2934,13 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
     /// quote's code it sits in, which the code's own filling binds before it runs, as a builtin
     /// fills a keyworded hole; or one its `OVER` list names.
     fn unlisted(&self, level: usize, name: BinderSymbol, read: Coordinate) -> Option<BinderSymbol> {
-        let landed = self.landing(level - 1, read);
-        if landed.is_some_and(|(level, _)| self.is_top_level(level)) {
-            return None;
-        }
-        if self.opens(level - 1, read) {
-            return None;
-        }
+        let landed = follow(self, level - 1, read, |_, _| ());
+        let landed = match landed {
+            Some(Lands::Binder { at, .. }) if self.is_top_level(at) => return None,
+            Some(Lands::Hole { .. } | Lands::Offered { .. }) => return None,
+            Some(Lands::Binder { at, .. }) => Some(at),
+            Some(Lands::Builtin(_)) | None => None,
+        };
         let listed = self.chain[level]
             .over
             .and_then(|over| over.listed)
@@ -2974,7 +2952,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         };
         match name {
             BinderSymbol::Registration(symbol) => {
-                let entry = landed.and_then(|(at, _)| {
+                let entry = landed.and_then(|at| {
                     (self.chain[at].registered.iter()).find(|entry| entry.symbol == symbol)
                 });
                 match entry {
@@ -2993,51 +2971,6 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
     /// per program.
     fn is_top_level(&self, level: usize) -> bool {
         level == 0 && self.chain[0].kind == ShapeKind::Program
-    }
-
-    /// The draft and target a coordinate read in the draft at `level` lands at, each capture
-    /// followed to its source; `None` for a builtin, a hole, a name offered, or a read past the
-    /// chain's first draft.
-    fn landing(&self, mut level: usize, mut coordinate: Coordinate) -> Option<(usize, Target)> {
-        loop {
-            let Coordinate::Activation { hops, target } = coordinate else {
-                return None;
-            };
-            level = level.checked_sub(hops as usize)?;
-            let Target::Capture(capture) = target else {
-                return Some((level, target));
-            };
-            let CaptureSource::Read(inner) = self.chain[level].captures[capture.index()].source
-            else {
-                return None;
-            };
-            level = level.checked_sub(1)?;
-            coordinate = inner;
-        }
-    }
-
-    /// Whether `coordinate`, read in the draft at `level`, reaches an open hole or `\` mark of a
-    /// quote's code: a capture chain ending at one the code leaves for its filling.
-    fn opens(&self, mut level: usize, mut coordinate: Coordinate) -> bool {
-        loop {
-            let Coordinate::Activation { hops, target } = coordinate else {
-                return false;
-            };
-            let Some(at) = level.checked_sub(hops as usize) else {
-                return false;
-            };
-            let Target::Capture(capture) = target else {
-                return false;
-            };
-            match self.chain[at].captures[capture.index()].source {
-                CaptureSource::Hole | CaptureSource::Offered => return true,
-                CaptureSource::Read(inner) => match at.checked_sub(1) {
-                    Some(parent) => (level, coordinate) = (parent, inner),
-                    None => return false,
-                },
-                CaptureSource::Member { .. } => return false,
-            }
-        }
     }
 
     /// The draft and slot `name` is bound at, read from the module body at `level` as its first
@@ -3503,24 +3436,10 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         let nested = Keyed::sorted(writer, &mut nested);
         let mut mentions = BumpVec::with_capacity_in(draft.mentions.len(), self.scratch);
         mentions.extend(draft.mentions.iter().map(|mention| {
-            let lands = match mention.landing {
-                Landing::Builtin(index) => Lands::Builtin(index),
-                Landing::Binder { level, slot } => Lands::Binder {
-                    segment: chain[level].segment,
-                    slot,
-                },
-                Landing::Hole { level, capture } => Lands::Hole {
-                    segment: chain[level].segment,
-                    capture,
-                },
-                Landing::Offered { level, capture } => Lands::Offered {
-                    segment: chain[level].segment,
-                    capture,
-                },
-            };
+            let lands = mention.landing.map(|level| chain[level].segment);
             let fellow = match (mention.landing, mention.read) {
-                (Landing::Binder { level, slot }, Some((statement, false))) => {
-                    chain[level].fellows(statement, slot)
+                (Lands::Binder { at, slot }, Some((statement, false))) => {
+                    chain[at].fellows(statement, slot)
                 }
                 _ => false,
             };
@@ -3734,9 +3653,9 @@ impl<'graph> Builder<'graph, '_, '_> {
                         .ok())
                     .map(|at| draft.mentions[at])
                     .and_then(|mention| match mention.landing {
-                        Landing::Binder { level, slot } if mention.rooted => {
+                        Lands::Binder { at, slot } if mention.rooted => {
                             Some(Root::Binder(TreeBinder {
-                                body: chain[level].segment,
+                                body: chain[at].segment,
                                 slot,
                             }))
                         }
@@ -3804,6 +3723,24 @@ fn annotation_of<'graph>(node: &KExpression<'graph>) -> Option<&'graph Expressio
         .zip(spine.parts)
         .find(|(role, _)| *role == Role::TypeExpression)
         .map(|(_, part)| &part.value)
+}
+
+// The drafts on the chain, by level. A member edge is set as a draft's components are found, once
+// it has left the chain, so no draft on it holds one.
+impl CaptureChain for Builder<'_, '_, '_> {
+    type At = usize;
+
+    fn outward(&self, level: usize, hops: u32) -> Option<usize> {
+        level.checked_sub(hops as usize)
+    }
+
+    fn source(&self, level: usize, capture: CaptureSlot) -> CaptureSource {
+        self.chain[level].captures[capture.index()].source
+    }
+
+    fn member(&self, _: usize, _: ComponentIndex, _: u32) -> Slot {
+        unreachable!("a member edge is set once its draft leaves the chain")
+    }
 }
 
 /// Items laid grouped by the unit each belongs to, each group in the order the items came.

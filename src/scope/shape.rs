@@ -233,23 +233,84 @@ pub struct Mention {
     pub head: bool,
 }
 
-/// Where a mention's coordinate lands: a builtin, a binder of some body by its slot there, or an
-/// open capture of a quote's code — a hole its filling binds, or a `\` name its `EVAL` offers.
+/// Where a coordinate lands: a builtin, a binder of some body by its slot there, or an open
+/// capture of a quote's code — a hole its filling binds, or a `\` name its `EVAL` offers. A body is
+/// named by `At`: its segment once the shapes are sealed, its level on a chain while one is walked.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Lands {
+pub enum Lands<At = Segment> {
     Builtin(BuiltinIndex),
-    Binder {
-        segment: Segment,
-        slot: Slot,
-    },
-    Hole {
-        segment: Segment,
-        capture: CaptureSlot,
-    },
-    Offered {
-        segment: Segment,
-        capture: CaptureSlot,
-    },
+    Binder { at: At, slot: Slot },
+    Hole { at: At, capture: CaptureSlot },
+    Offered { at: At, capture: CaptureSlot },
+}
+
+impl<At> Lands<At> {
+    /// This landing with its body renamed by `rename`.
+    pub fn map<To>(self, rename: impl FnOnce(At) -> To) -> Lands<To> {
+        match self {
+            Lands::Builtin(index) => Lands::Builtin(index),
+            Lands::Binder { at, slot } => Lands::Binder {
+                at: rename(at),
+                slot,
+            },
+            Lands::Hole { at, capture } => Lands::Hole {
+                at: rename(at),
+                capture,
+            },
+            Lands::Offered { at, capture } => Lands::Offered {
+                at: rename(at),
+                capture,
+            },
+        }
+    }
+}
+
+/// Bodies a coordinate is followed out through, each named by `At`: the builder's drafts, the
+/// sealed shapes, the walk's chain. [`follow`] is the one rule each follows a capture by.
+pub trait CaptureChain {
+    type At: Copy;
+
+    /// The body `hops` activations out from `at`; `None` past the chain.
+    fn outward(&self, at: Self::At, hops: u32) -> Option<Self::At>;
+
+    /// The source of capture `capture` of the body at `at`.
+    fn source(&self, at: Self::At, capture: CaptureSlot) -> CaptureSource;
+
+    /// Member `index` of `component` of the body at `at`.
+    fn member(&self, at: Self::At, component: ComponentIndex, index: u32) -> Slot;
+}
+
+/// Where `coordinate`, read in the body at `at`, lands once each capture is followed to its
+/// source, handing `taken` each capture it takes, the one it ends at included; `None` past the
+/// chain.
+pub fn follow<C: CaptureChain>(
+    chain: &C,
+    mut at: C::At,
+    mut coordinate: Coordinate,
+    mut taken: impl FnMut(C::At, CaptureSlot),
+) -> Option<Lands<C::At>> {
+    loop {
+        let (hops, target) = match coordinate {
+            Coordinate::Builtin(index) => return Some(Lands::Builtin(index)),
+            Coordinate::Activation { hops, target } => (hops, target),
+        };
+        at = chain.outward(at, hops)?;
+        let capture = match target {
+            Target::Local(slot) => return Some(Lands::Binder { at, slot }),
+            Target::Capture(capture) => capture,
+        };
+        taken(at, capture);
+        match chain.source(at, capture) {
+            CaptureSource::Read(inner) => (at, coordinate) = (chain.outward(at, 1)?, inner),
+            CaptureSource::Member { component, index } => {
+                let outer = chain.outward(at, 1)?;
+                let slot = chain.member(outer, component, index);
+                return Some(Lands::Binder { at: outer, slot });
+            }
+            CaptureSource::Hole => return Some(Lands::Hole { at, capture }),
+            CaptureSource::Offered => return Some(Lands::Offered { at, capture }),
+        }
+    }
 }
 
 impl KeyedEntry for Mention {

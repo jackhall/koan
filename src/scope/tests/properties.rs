@@ -1112,11 +1112,7 @@ fn binder_reads<'g>(
     for shape in shapes.bodies() {
         let segment = shape.segment();
         for mention in shape.mentions() {
-            let ScopeLands::Binder {
-                segment: home,
-                slot,
-            } = mention.lands
-            else {
+            let ScopeLands::Binder { at: home, slot } = mention.lands else {
                 continue;
             };
             let statement = match home == segment {

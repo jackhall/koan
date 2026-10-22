@@ -10,11 +10,11 @@
 //! gathered, and one the binding binds is closed.
 
 use crate::elaborate::schema_of;
-use crate::memory::{BumpVec, collect};
+use crate::memory::BumpVec;
 use crate::scope::{
-    Address, BodyShape, Born, Coordinate, Frontier, InstanceRead, Narrowing, Segment, ShapeKind,
-    Site, Slot, Static, StaticCallable, StaticRegistered, StaticSolution, StaticType, Store,
-    Target, Tree, Typed, UnitFacts, UnitId, Unknown, UseStatics, in_body_of,
+    Address, BodyShape, Born, Frontier, InstanceRead, Narrowing, Segment, ShapeKind, Site, Slot,
+    Static, StaticCallable, StaticRegistered, StaticSolution, StaticType, Store, Target, Tree,
+    Typed, UnitFacts, UnitId, Unknown, UseStatics, in_body_of,
 };
 use crate::symbols::{BinderSymbol, Symbol};
 use crate::type_lattice::{DeclaredType, Interval, KType, Parametric, Side, TypeNode, Variable};
@@ -713,16 +713,6 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         if let Some(own) = own {
             self.note(&[own]);
         }
-    }
-
-    /// The coordinates of the type captures of `body`, a callable's or a `MODULE` body's, past its
-    /// builder captures: its layout.
-    pub(super) fn laid_captures(&self, body: &BodyShape<'graph>) -> &'p [Coordinate] {
-        let layout = self.shapes.layout(body.segment());
-        collect(
-            self.scratch,
-            layout.iter().map(|(_, coordinate)| *coordinate),
-        )
     }
 
     /// How many closure slots a birth of `body` fills: its builder captures, then its layout.

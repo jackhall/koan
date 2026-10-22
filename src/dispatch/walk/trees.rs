@@ -17,9 +17,10 @@
 //! closure, of an unquantified callee or one whose every `FOR ALL` variable solves to a closed
 //! point. Its tree is the callee's **summary** — the tree of its body's last statement, its
 //! parameters leaves — with each parameter's argument tree and each variable's point substituted,
-//! and every other leaf of the callee's keyed on the call. The pass types a callee before the
-//! first call it unfolds, on demand where the walk has not reached it yet; a callee met while it
-//! is being typed is recursive, as is every callee typed since, and never unfolds.
+//! and every other leaf of the callee's keyed on the call. The walk types a callee before the
+//! first call it unfolds, on demand where it has not reached it yet; a call unfolds only into a
+//! callee whose strongly connected component has closed and is trivial
+//! ([recursion](../../build/README.md#recursion)).
 //!
 //! Trees on the chain are memoized per shape and site; a binder already being read reads as a leaf,
 //! so no tree is built through itself.
@@ -607,7 +608,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             if !self.composes(body, capture) {
                 continue;
             }
-            let tree = match source_of_capture(body, self.laid_captures(body), capture) {
+            let tree = match self.shapes.source(body.segment(), capture) {
                 CaptureSource::Read(coordinate) => self.resolve(scope, coordinate, site)?,
                 _ => Tree::Leaf(Leaf::Unnamed(site)),
             };
@@ -641,7 +642,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 if !self.composes(body, capture) {
                     continue;
                 }
-                let held = match source_of_capture(body, self.laid_captures(body), capture) {
+                let held = match self.shapes.source(body.segment(), capture) {
                     CaptureSource::Member { index, .. } => NodeCapture::Fellow(index),
                     CaptureSource::Read(coordinate) => {
                         NodeCapture::Tree(self.resolve(scope, coordinate, site)?)
@@ -1045,20 +1046,6 @@ fn inside(body: Segment, callee: &BodyShape<'_>) -> bool {
     // Every body a binder births is a nested shape too.
     body == callee.segment()
         || (callee.nested_shapes().iter()).any(|(_, nested)| inside(body, nested))
-}
-
-/// Where capture `capture` of `body`, whose type captures are `laid`, is read from at birth: a
-/// builder capture's source, or a type capture's coordinate.
-fn source_of_capture(
-    body: &BodyShape<'_>,
-    laid: &[Coordinate],
-    capture: CaptureSlot,
-) -> CaptureSource {
-    let builder = body.captures();
-    match builder.get(capture.index()) {
-        Some(spec) => spec.source,
-        None => CaptureSource::Read(laid[capture.index() - builder.len()]),
-    }
 }
 
 /// Whether the binder at `slot` of `shape` keeps the scheme of the quantified callable it births,

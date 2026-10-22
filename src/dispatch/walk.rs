@@ -11,9 +11,10 @@
 //! otherwise. What the load cannot bound is `[Never, Any]`. A static type may hold the lexical
 //! variables of its **chain** — the shapes from the program or a quote's code down, at the levels
 //! the shape numbers them at — and a crossing into code, or an `EVAL` leaving it, is read through
-//! [`bound_above`], so no variable leaks across. A capture is followed to its source through one
-//! walk, which reports a crossing into code; a candidate it reaches across a code root whose
-//! registered shape names a variable of the chain outside is unknown.
+//! [`bound_above`], so no variable leaks across. A capture is followed to its source along the
+//! chain by the rule the shape builder and the shape table follow it by ([`follow`]), which
+//! reports a crossing into code; a candidate it reaches across a code root whose registered shape
+//! names a variable of the chain outside is unknown.
 //!
 //! Each keyworded use **judges** each candidate class by class ([`judge_by_class`]): *never*
 //! drops it, *always* means it admits whatever the run carries, and a *maybe* one the call admits.
@@ -147,12 +148,12 @@ use crate::memory::{BumpAllocator, BumpBackedMap, BumpVec, bump_table, collect, 
 use crate::parse::BuiltinShapeId;
 use crate::parse::{ExpressionPart, KExpression, KLiteral};
 use crate::scope::{
-    Address, BodyClass, BodyShape, Born, BuiltinIndex, Candidate, CandidateList, CaptureSlot,
-    CaptureSource, Closing, Coordinate, Frontier, InstanceRead, Keyed, Leaf, Listed, NamedVariable,
-    Narrowing, PathEntry, Position, Print, Resolution, Segment, ShapeError, ShapeKind, Shapes,
-    Site, SiteDeps, Slot, Source, Static, StaticRegistered, StaticSolution, StaticType, Store,
-    SurfacedHead, Target, Tree, Typed, UnitFacts, UnitId, UnitIndex, UnitWork, Unknown, UseStatics,
-    Variable as Located, Within, source_of,
+    Address, BodyClass, BodyShape, Born, BuiltinIndex, Candidate, CandidateList, CaptureChain,
+    CaptureSlot, CaptureSource, Closing, ComponentIndex, Coordinate, Frontier, InstanceRead, Keyed,
+    Lands, Leaf, Listed, NamedVariable, Narrowing, PathEntry, Position, Print, Resolution, Segment,
+    ShapeError, ShapeKind, Shapes, Site, SiteDeps, Slot, Source, Static, StaticRegistered,
+    StaticSolution, StaticType, Store, SurfacedHead, Tree, Typed, UnitFacts, UnitId, UnitIndex,
+    UnitWork, Unknown, UseStatics, Variable as Located, Within, follow, source_of,
 };
 use crate::source::SourceRef;
 use crate::symbols::{BinderSymbol, TypeSymbol};
@@ -617,6 +618,24 @@ struct Callee<'p> {
     /// function type. Only an exact callee is judged and records contributions: one known at most
     /// may bind a function admitting more, or naming other parameters.
     exact: bool,
+}
+
+// The walk's chain, by level: a capture past its first shape is one the chain's root is run with.
+impl<'o, 'graph: 'o, S: Store<'o>> CaptureChain for Pass<'_, 'o, '_, 'graph, '_, '_, '_, S> {
+    type At = usize;
+
+    fn outward(&self, level: usize, hops: u32) -> Option<usize> {
+        level.checked_sub(hops as usize)
+    }
+
+    fn source(&self, level: usize, capture: CaptureSlot) -> CaptureSource {
+        self.shapes
+            .source(self.chain[level].shape.segment(), capture)
+    }
+
+    fn member(&self, level: usize, component: ComponentIndex, index: u32) -> Slot {
+        self.chain[level].shape.components()[component.index()].members[index as usize]
+    }
 }
 
 impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
@@ -3393,77 +3412,35 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         }
     }
 
-    /// Follow `coordinate`, read in the shape at `level`, to where it lands: a hop per block, and
-    /// each capture to its source in the shape outside. The one walk every reader of a capture
-    /// takes.
-    fn follow(&self, mut level: usize, mut coordinate: Coordinate) -> Followed {
-        let mut crossed = false;
+    /// Follow `coordinate`, read in the shape at `level`, to where it lands on the chain, by the
+    /// shapes' one rule: whether it crossed into a quote's code is whether it took a capture of a
+    /// shape rooting a chain through to a shape outside it.
+    fn follow(&self, level: usize, coordinate: Coordinate) -> Followed {
         let mut entered = None;
-        let open = |hole, crossed, entered| Followed {
-            landing: Landing::Open { hole },
-            crossed,
-            entered,
+        let landed = follow(self, level, coordinate, |at, capture| {
+            if self.chain[at].roots_chain && entered.is_none() {
+                let segment = self.chain[at].shape.segment();
+                entered = Some((
+                    at,
+                    Unknown {
+                        segment,
+                        at: Address::Capture(capture),
+                    },
+                ));
+            }
+        });
+        // The level a landing ends at a capture of; every capture taken before it was passed.
+        let (landing, ends) = match landed {
+            Some(Lands::Builtin(index)) => (Landing::Builtin(index), None),
+            Some(Lands::Binder { at, slot }) => (Landing::Slot { level: at, slot }, None),
+            Some(Lands::Hole { at, .. }) => (Landing::Open { hole: true }, Some(at)),
+            Some(Lands::Offered { at, .. }) => (Landing::Open { hole: false }, Some(at)),
+            None => (Landing::Open { hole: false }, None),
         };
-        loop {
-            let (hops, target) = match coordinate {
-                Coordinate::Builtin(index) => {
-                    return Followed {
-                        landing: Landing::Builtin(index),
-                        crossed,
-                        entered,
-                    };
-                }
-                Coordinate::Activation { hops, target } => (hops, target),
-            };
-            let Some(at) = level.checked_sub(hops as usize) else {
-                return open(false, crossed, entered);
-            };
-            let capture = match target {
-                Target::Local(slot) => {
-                    return Followed {
-                        landing: Landing::Slot { level: at, slot },
-                        crossed,
-                        entered,
-                    };
-                }
-                Target::Capture(capture) => capture,
-            };
-            let holder = &self.chain[at];
-            if holder.roots_chain && entered.is_none() {
-                entered = Some(Unknown {
-                    segment: holder.shape.segment(),
-                    at: Address::Capture(capture),
-                });
-            }
-            let outer = at.checked_sub(1);
-            // A type capture of the layout reads its source as a builder capture does.
-            let builder = holder.shape.captures();
-            let source = match builder.get(capture.index()) {
-                Some(spec) => spec.source,
-                None => {
-                    let layout = self.shapes.layout(holder.shape.segment());
-                    CaptureSource::Read(layout[capture.index() - builder.len()].1)
-                }
-            };
-            match (source, outer) {
-                (CaptureSource::Hole, _) => return open(true, crossed, entered),
-                (CaptureSource::Offered, _) | (_, None) => return open(false, crossed, entered),
-                (CaptureSource::Read(inner), Some(outer)) => {
-                    crossed |= holder.roots_chain;
-                    (level, coordinate) = (outer, inner);
-                }
-                (CaptureSource::Member { component, index }, Some(outer)) => {
-                    let members = self.chain[outer].shape.components()[component.index()].members;
-                    return Followed {
-                        landing: Landing::Slot {
-                            level: outer,
-                            slot: members[index as usize],
-                        },
-                        crossed: crossed || holder.roots_chain,
-                        entered,
-                    };
-                }
-            }
+        Followed {
+            landing,
+            crossed: entered.is_some_and(|(rooted, _)| ends.is_none_or(|ends| rooted > ends)),
+            entered: entered.map(|(_, unknown)| unknown),
         }
     }
 

@@ -13,8 +13,8 @@ use crate::values::{Chain, Knotted};
 use super::builtins::Builtins;
 use super::facts::{Address, Unknown};
 use super::shape::{
-    BodyShape, CaptureSlot, CaptureSource, Coordinate, Lands, PathId, Position, Segment,
-    ShapeError, ShapeKind, Site, Slot, Target, UnitIndex,
+    BodyShape, CaptureChain, CaptureSlot, CaptureSource, ComponentIndex, Coordinate, Lands, PathId,
+    Position, Segment, ShapeError, ShapeKind, Site, Slot, Target, UnitIndex, follow,
 };
 use super::signature::declare_quantifiers;
 use super::typed::{Handoff, ViewSlots};
@@ -471,39 +471,39 @@ impl<'graph> Table<'_, 'graph> {
     }
 }
 
+impl CaptureChain for Shapes<'_> {
+    type At = Segment;
+
+    fn outward(&self, mut segment: Segment, hops: u32) -> Option<Segment> {
+        for _ in 0..hops {
+            segment = self.parent(segment)?.0;
+        }
+        Some(segment)
+    }
+
+    fn source(&self, segment: Segment, capture: CaptureSlot) -> CaptureSource {
+        Shapes::source(self, segment, capture)
+    }
+
+    fn member(&self, segment: Segment, component: ComponentIndex, index: u32) -> Slot {
+        self.shape_at(segment).components()[component.index()].members[index as usize]
+    }
+}
+
 impl Shapes<'_> {
     /// Where `coordinate`, read in `segment`, lands once each capture is followed to its source;
     /// `None` past the chain.
-    pub fn follow(&self, mut segment: Segment, mut coordinate: Coordinate) -> Option<Lands> {
-        loop {
-            let (hops, target) = match coordinate {
-                Coordinate::Builtin(index) => return Some(Lands::Builtin(index)),
-                Coordinate::Activation { hops, target } => (hops, target),
-            };
-            for _ in 0..hops {
-                segment = self.parent(segment)?.0;
-            }
-            let capture = match target {
-                Target::Local(slot) => return Some(Lands::Binder { segment, slot }),
-                Target::Capture(capture) => capture,
-            };
-            let shape = self.shape_at(segment);
-            let source = shape.captures().get(capture.index())?.source;
-            match source {
-                CaptureSource::Read(inner) => {
-                    (segment, coordinate) = (self.parent(segment)?.0, inner);
-                }
-                CaptureSource::Member { component, index } => {
-                    let outer = self.parent(segment)?.0;
-                    let members = self.shape_at(outer).components()[component.index()].members;
-                    return Some(Lands::Binder {
-                        segment: outer,
-                        slot: members[index as usize],
-                    });
-                }
-                CaptureSource::Hole => return Some(Lands::Hole { segment, capture }),
-                CaptureSource::Offered => return Some(Lands::Offered { segment, capture }),
-            }
+    pub fn follow(&self, segment: Segment, coordinate: Coordinate) -> Option<Lands> {
+        follow(self, segment, coordinate, |_, _| ())
+    }
+
+    /// The source of capture `capture` of `segment`: a builder capture's own, or a type capture
+    /// of its layout, which reads its coordinate outside.
+    pub fn source(&self, segment: Segment, capture: CaptureSlot) -> CaptureSource {
+        let builder = self.shape_at(segment).captures();
+        match builder.get(capture.index()) {
+            Some(spec) => spec.source,
+            None => CaptureSource::Read(self.layout(segment)[capture.index() - builder.len()].1),
         }
     }
 

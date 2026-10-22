@@ -33,7 +33,8 @@ use crate::parse::{ExpressionPart, KExpression, KLiteral, Mark};
 use crate::values::digest::{DigestHasher, Tag};
 
 use super::super::{
-    Candidate, CaptureSource, Coordinate, Position, ShapeKind, Site, Slot, Target, TopLevel,
+    Candidate, CaptureSource, Coordinate, Lands, Position, ShapeKind, Site, Slot, Target, TopLevel,
+    follow,
 };
 use super::Builder;
 
@@ -51,10 +52,10 @@ impl<'graph> Builder<'graph, '_, '_> {
             let landed = match capture.source {
                 CaptureSource::Read(read) => level
                     .checked_sub(1)
-                    .and_then(|outer| self.landing(outer, read)),
+                    .and_then(|outer| self.top_slot(outer, read)),
                 _ => None,
             };
-            top.push(self.top_slot(landed));
+            top.push(landed);
         }
         let draft = &self.chain[level];
         // A site is an address, so the children are looked up through an index sorted by it and
@@ -101,10 +102,11 @@ impl<'graph> Builder<'graph, '_, '_> {
         draft.top_captures = top;
     }
 
-    /// The top-level slot a landing is, where it lands at the program's own draft.
-    fn top_slot(&self, landed: Option<(usize, Target)>) -> Option<Slot> {
-        match landed {
-            Some((level, Target::Local(slot))) if self.is_top_level(level) => Some(slot),
+    /// The top-level slot `coordinate`, read in the draft at `level`, lands at, where it lands at
+    /// the program's own draft.
+    fn top_slot(&self, level: usize, coordinate: Coordinate) -> Option<Slot> {
+        match follow(self, level, coordinate, |_, _| ()) {
+            Some(Lands::Binder { at, slot }) if self.is_top_level(at) => Some(slot),
             _ => None,
         }
     }
@@ -247,8 +249,7 @@ impl<'graph> Walk<'_, 'graph, '_, '_> {
             self.named.push(TopLevel::Builtin(index));
             return;
         };
-        let landed = self.builder.landing(self.level, coordinate);
-        if let Some(slot) = self.builder.top_slot(landed) {
+        if let Some(slot) = self.builder.top_slot(self.level, coordinate) {
             hasher.tag(Tag::Top).feed(slot.0);
             self.named.push(TopLevel::Root(slot));
             return;
