@@ -9,8 +9,8 @@
 //! parameter or an ascription is exactly its type where the retype makes it so — a list, dict or
 //! record type or a nominal one — since the run retypes the value to it, and at most its type
 //! otherwise. What the load cannot bound is `[Never, Any]`. A static type may hold the lexical
-//! variables of its **chain** — the shapes from the program or a quote's code down, numbered as the
-//! type channel numbers them — and a crossing into code, or an `EVAL` leaving it, is read through
+//! variables of its **chain** — the shapes from the program or a quote's code down, at the levels
+//! the shape numbers them at — and a crossing into code, or an `EVAL` leaving it, is read through
 //! [`bound_above`], so no variable leaks across. A capture is followed to its source through one
 //! walk, which reports a crossing into code; a candidate it reaches across a code root whose
 //! registered shape names a variable of the chain outside is unknown.
@@ -62,7 +62,8 @@
 //! typed before its statements, so an `EVAL` finds it typed. It is typed twice: once for its records,
 //! where an unmarked key's hole is a candidate the load cannot read, since a `USING` may fill it;
 //! and once as a traced `EVAL` runs it, unfilled, the hole holding nothing — which fixes nothing.
-//! Inside a quote's code a refusal is kept on the code shape, and the `EVAL` running it reports it.
+//! Inside a quote's code a refusal is kept in the code's closing record, and the `EVAL` running it
+//! reports it.
 //!
 //! A `MODULE` or `GROUP` binder's body is typed where its binder is, since it runs inline, and the
 //! binder is exactly the signature the run ties where every member is exact ([`module_signature`]),
@@ -324,6 +325,30 @@ struct UnitState<'p, 'o> {
     paths: BumpVec<'p, ((Segment, usize), (PathEntry<'o>, Resolution<'o>))>,
     sites: BumpVec<'p, SiteDeps<'o>>,
     named_variables: BumpVec<'p, NamedVariable>,
+    /// Where it wrote into its owning body's level: what its record lays.
+    wrote: BumpVec<'p, Wrote>,
+}
+
+/// Where a unit wrote a fact into its owning body's [`Level`]: a slot, a statement or a use of the
+/// dense tables, a site or a level of the keyed ones, or an index into a list. A unit's record lays
+/// what it wrote, never a scan of the whole body.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+enum Wrote {
+    Declared(Slot),
+    Registered(Slot),
+    Binder(Slot),
+    Statement(usize),
+    Use(usize),
+    Part(Site),
+    Expression(Site),
+    Selection(Site),
+    Through(usize),
+    Settled(usize),
+    Minting(usize),
+    Instance(usize),
+    Named(usize),
+    Tree(usize),
+    Content(usize),
 }
 
 /// One shape on the chain, innermost last, with what the walk has fixed of it so far, each fact
@@ -336,8 +361,9 @@ struct Level<'p, 'o, 'graph> {
     /// slot, and each recorded type expression's type, by site.
     declared: BumpVec<'p, Option<(StaticType<'o>, Tag)>>,
     registered: BumpVec<'p, Option<(StaticRegistered<'o>, Tag)>>,
-    expressions: BumpVec<'p, (Site, StaticType<'o>, Tag)>,
-    parts: BumpVec<'p, (Site, Interval, Tag)>,
+    expressions: BumpBackedMap<'p, Site, (StaticType<'o>, Tag)>,
+    /// Each part's static type, by site: its latest where the walk typed it twice.
+    parts: BumpBackedMap<'p, Site, (Interval, Tag)>,
     statements: BumpVec<'p, Option<(Interval, Tag)>>,
     binders: BumpVec<'p, (Bound, Option<Tag>)>,
     /// What the walk fixed about each keyworded use, by index into the shape's candidate lists.
@@ -371,7 +397,7 @@ struct Level<'p, 'o, 'graph> {
     contents: BumpVec<'p, (Slot, Tree<'o>, Tag)>,
     /// Each path the shape spells whose declared application names a lexical variable, by its
     /// level, beside where the shape reads each variable.
-    throughs: BumpVec<'p, (usize, &'o [Located], Tag)>,
+    throughs: BumpBackedMap<'p, usize, (&'o [Located], Tag)>,
     /// A `MODULE` or `GROUP` body's exact signature, where the walk typed one.
     signature: Option<KType>,
     /// Each `LET` binder, by its right-hand side's site.
@@ -379,6 +405,33 @@ struct Level<'p, 'o, 'graph> {
 }
 
 impl Level<'_, '_, '_> {
+    /// Where every fact this level holds sits, whichever unit wrote it: what an inline body lays
+    /// whole as it leaves the chain.
+    fn everything<'x>(&self, scratch: BumpAllocator<'x>) -> BumpVec<'x, Wrote> {
+        let mut wrote = BumpVec::new_in(scratch);
+        for index in 0..self.shape.slots() {
+            let slot = Slot(index as u32);
+            wrote.extend([
+                Wrote::Declared(slot),
+                Wrote::Registered(slot),
+                Wrote::Binder(slot),
+            ]);
+        }
+        wrote.extend((0..self.statements.len()).map(Wrote::Statement));
+        wrote.extend((0..self.uses.len()).map(Wrote::Use));
+        wrote.extend(self.parts.keys().map(|site| Wrote::Part(*site)));
+        wrote.extend(self.expressions.keys().map(|site| Wrote::Expression(*site)));
+        wrote.extend(self.selections.keys().map(|site| Wrote::Selection(*site)));
+        wrote.extend(self.throughs.keys().map(|level| Wrote::Through(*level)));
+        wrote.extend((0..self.settled.len()).map(Wrote::Settled));
+        wrote.extend((0..self.minting.len()).map(Wrote::Minting));
+        wrote.extend((0..self.instances.len()).map(Wrote::Instance));
+        wrote.extend((0..self.named.len()).map(Wrote::Named));
+        wrote.extend((0..self.trees.len()).map(Wrote::Tree));
+        wrote.extend((0..self.contents.len()).map(Wrote::Content));
+        wrote
+    }
+
     /// The sites this shape and the blocks and module bodies it runs mint at at run: every minting
     /// site but a view over a closed content tree.
     fn run_mints(&self) -> u32 {
@@ -597,8 +650,8 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             roots_chain,
             declared,
             registered,
-            expressions: BumpVec::new_in(scratch),
-            parts: BumpVec::new_in(scratch),
+            expressions: bump_table(scratch),
+            parts: bump_table(scratch),
             statements,
             binders,
             uses,
@@ -613,7 +666,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             minted_within: false,
             trees: BumpVec::new_in(scratch),
             contents: BumpVec::new_in(scratch),
-            throughs: BumpVec::new_in(scratch),
+            throughs: bump_table(scratch),
             signature: None,
             rhs,
         });
@@ -787,6 +840,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             paths: BumpVec::new_in(scratch),
             sites: BumpVec::new_in(scratch),
             named_variables: BumpVec::new_in(scratch),
+            wrote: BumpVec::new_in(scratch),
         });
         self.open.push(tag);
         let mut scopes = self.scopes.replace(BumpVec::new_in(scratch));
@@ -837,119 +891,153 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         resident(lay, facts)
     }
 
-    /// The facts of the shape at `level` the unit `tag` fixed, laid down: every fact it holds where
-    /// `tag` is `None`.
+    /// The facts of the shape at `level` the unit `tag` fixed, laid down, from where it wrote them:
+    /// every fact the level holds where `tag` is `None`.
     fn typed(&mut self, level: usize, tag: Option<Tag>) -> Typed<'o> {
         let (lay, scratch) = (self.lay, self.scratch);
+        let wrote = match tag {
+            Some(tag) => {
+                let mut wrote = std::mem::replace(
+                    &mut self.units[tag.0 as usize].wrote,
+                    BumpVec::new_in(scratch),
+                );
+                wrote.sort_unstable();
+                wrote.dedup();
+                wrote
+            }
+            None => self.chain[level].everything(scratch),
+        };
         let at = &self.chain[level];
         let ours = |held: Tag| tag.is_none_or(|tag| tag == held);
+        let lists = at.shape.candidate_lists();
         let mut declared = BumpVec::new_in(scratch);
         let mut registered = BumpVec::new_in(scratch);
         let mut binders = BumpVec::new_in(scratch);
-        for index in 0..at.shape.slots() {
-            let slot = Slot(index as u32);
-            if let Some((typed, held)) = at.declared[index]
-                && ours(held)
-            {
-                declared.push((slot, typed));
-            }
-            if let Some((typed, held)) = at.registered[index]
-                && ours(held)
-            {
-                registered.push((slot, typed));
-            }
-            if let (typed, Some(held)) = at.binders[index]
-                && ours(held)
-            {
-                binders.push((slot, typed));
-            }
-        }
         let mut statements = BumpVec::new_in(scratch);
-        for (index, held) in at.statements.iter().enumerate() {
-            if let Some((typed, held)) = held
-                && ours(*held)
-            {
-                statements.push((index as u32, *typed));
-            }
-        }
         let mut uses = BumpVec::new_in(scratch);
-        for ((site, _), (fixed, held)) in (at.shape.candidate_lists().iter()).zip(at.uses.iter()) {
-            if let Some(held) = held
-                && ours(*held)
-                && !fixed.is_unfixed()
-            {
-                uses.push((*site, *fixed));
-            }
-        }
-        // A part typed twice keeps its latest type.
         let mut parts = BumpVec::new_in(scratch);
-        for (site, typed, held) in at.parts.iter().rev() {
-            if ours(*held) && !parts.iter().any(|(at, _)| at == site) {
-                parts.push((*site, *typed));
+        let mut expressions = BumpVec::new_in(scratch);
+        let mut selections = BumpVec::new_in(scratch);
+        let mut throughs = BumpVec::new_in(scratch);
+        let mut settled = BumpVec::new_in(scratch);
+        let mut minting = BumpVec::new_in(scratch);
+        let mut instances = BumpVec::new_in(scratch);
+        let mut named = BumpVec::new_in(scratch);
+        let mut trees = BumpVec::new_in(scratch);
+        let mut contents = BumpVec::new_in(scratch);
+        for wrote in wrote.iter().copied() {
+            match wrote {
+                Wrote::Declared(slot) => {
+                    if let Some((typed, held)) = at.declared[slot.index()]
+                        && ours(held)
+                    {
+                        declared.push((slot, typed));
+                    }
+                }
+                Wrote::Registered(slot) => {
+                    if let Some((typed, held)) = at.registered[slot.index()]
+                        && ours(held)
+                    {
+                        registered.push((slot, typed));
+                    }
+                }
+                Wrote::Binder(slot) => {
+                    if let (typed, Some(held)) = at.binders[slot.index()]
+                        && ours(held)
+                    {
+                        binders.push((slot, typed));
+                    }
+                }
+                Wrote::Statement(index) => {
+                    if let Some((typed, held)) = at.statements[index]
+                        && ours(held)
+                    {
+                        statements.push((index as u32, typed));
+                    }
+                }
+                Wrote::Use(index) => {
+                    if let (fixed, Some(held)) = at.uses[index]
+                        && ours(held)
+                        && !fixed.is_unfixed()
+                    {
+                        uses.push((lists[index].0, fixed));
+                    }
+                }
+                Wrote::Part(site) => {
+                    if let Some((typed, held)) = at.parts.get(&site)
+                        && ours(*held)
+                    {
+                        parts.push((site, *typed));
+                    }
+                }
+                Wrote::Expression(site) => {
+                    if let Some((typed, held)) = at.expressions.get(&site)
+                        && ours(*held)
+                    {
+                        expressions.push((site, *typed));
+                    }
+                }
+                Wrote::Selection(site) => {
+                    if let Some((points, held)) = at.selections.get(&site)
+                        && ours(*held)
+                    {
+                        selections.push((site, *points));
+                    }
+                }
+                Wrote::Through(path_level) => {
+                    if let Some((located, held)) = at.throughs.get(&path_level)
+                        && ours(*held)
+                    {
+                        throughs.push((path_level, *located));
+                    }
+                }
+                Wrote::Settled(index) => {
+                    let (site, held) = at.settled[index];
+                    if ours(held) {
+                        settled.push(site);
+                    }
+                }
+                Wrote::Minting(index) => {
+                    let (site, held) = at.minting[index];
+                    if ours(held) {
+                        minting.push(site);
+                    }
+                }
+                Wrote::Instance(index) => {
+                    let (site, read, held) = at.instances[index];
+                    if ours(held) {
+                        instances.push((site, read));
+                    }
+                }
+                Wrote::Named(index) => {
+                    let (site, read, held) = at.named[index];
+                    if ours(held) {
+                        named.push((site, read));
+                    }
+                }
+                Wrote::Tree(index) => {
+                    let (site, tree, held) = at.trees[index];
+                    if ours(held) {
+                        trees.push((site, tree));
+                    }
+                }
+                Wrote::Content(index) => {
+                    let (slot, tree, held) = at.contents[index];
+                    if ours(held) {
+                        contents.push((slot, tree));
+                    }
+                }
             }
         }
-        let keyed = |each: &mut BumpVec<'_, (Site, Tag)>| {
-            let mut sites = BumpVec::new_in(scratch);
-            sites.extend(
-                each.iter()
-                    .filter(|(_, held)| ours(*held))
-                    .map(|(site, _)| *site),
-            );
+        let sites = |sites: &mut BumpVec<'_, Site>| {
             sites.sort_unstable();
             sites.dedup();
             Keyed::from_sorted(collect(lay, sites.iter().copied()))
         };
-        let at = &mut self.chain[level];
-        let settled = keyed(&mut at.settled);
-        let minting = keyed(&mut at.minting);
-        let mut expressions = BumpVec::new_in(scratch);
-        expressions.extend(
-            (at.expressions.iter())
-                .filter(|(_, _, held)| ours(*held))
-                .map(|(site, typed, _)| (*site, *typed)),
-        );
-        newest(&mut expressions);
-        let mut instances = BumpVec::new_in(scratch);
-        instances.extend(
-            (at.instances.iter())
-                .filter(|(_, _, held)| ours(*held))
-                .map(|(site, read, _)| (*site, *read)),
-        );
+        let (settled, minting) = (sites(&mut settled), sites(&mut minting));
         newest(&mut instances);
-        let mut named = BumpVec::new_in(scratch);
-        named.extend(
-            (at.named.iter())
-                .filter(|(_, _, held)| ours(*held))
-                .map(|(site, read, _)| (*site, *read)),
-        );
         newest(&mut named);
-        let mut trees = BumpVec::new_in(scratch);
-        trees.extend(
-            (at.trees.iter())
-                .filter(|(_, _, held)| ours(*held))
-                .map(|(site, tree, _)| (*site, *tree)),
-        );
         newest(&mut trees);
-        let mut selections = BumpVec::new_in(scratch);
-        selections.extend(
-            (at.selections.iter())
-                .filter(|(_, (_, held))| ours(*held))
-                .map(|(site, (points, _))| (*site, *points)),
-        );
-        let mut contents = BumpVec::new_in(scratch);
-        contents.extend(
-            (at.contents.iter())
-                .filter(|(_, _, held)| ours(*held))
-                .map(|(slot, tree, _)| (*slot, *tree)),
-        );
-        let mut throughs = BumpVec::new_in(scratch);
-        throughs.extend(
-            (at.throughs.iter())
-                .filter(|(_, _, held)| ours(*held))
-                .map(|(level, located, _)| (*level, *located)),
-        );
-        throughs.sort_by_key(|(level, _)| *level);
-        throughs.dedup_by_key(|(level, _)| *level);
         Typed {
             declared: Keyed::sorted(lay, &mut declared),
             registered: Keyed::sorted(lay, &mut registered),
@@ -994,6 +1082,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             paths: BumpVec::new_in(scratch),
             sites: BumpVec::new_in(scratch),
             named_variables: BumpVec::new_in(scratch),
+            wrote: BumpVec::new_in(scratch),
         });
         let segment = self.chain[level].shape.segment();
         if let Some((_, typed)) = facts.typed.get(segment) {
@@ -1019,10 +1108,14 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             typed
                 .expressions
                 .iter()
-                .map(|(site, typed)| (*site, *typed, tag)),
+                .map(|(site, typed)| (*site, (*typed, tag))),
         );
-        at.parts
-            .extend(typed.parts.iter().map(|(site, typed)| (*site, *typed, tag)));
+        at.parts.extend(
+            typed
+                .parts
+                .iter()
+                .map(|(site, typed)| (*site, (*typed, tag))),
+        );
         for (index, typed) in typed.statements.iter() {
             at.statements[*index as usize] = Some((*typed, tag));
         }
@@ -1051,12 +1144,9 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             .extend(typed.minting.iter().map(|site| (*site, tag)));
         at.trees
             .extend(typed.trees.iter().map(|(site, tree)| (*site, *tree, tag)));
-        at.throughs.extend(
-            typed
-                .throughs
-                .iter()
-                .map(|(level, located)| (*level, *located, tag)),
-        );
+        for (level, located) in typed.throughs.iter() {
+            at.throughs.entry(*level).or_insert((*located, tag));
+        }
     }
 
     /// The entry of the owning body or inline body at `level`: each slot it binds before any
@@ -1069,10 +1159,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         surfacing: Option<(Interval, Tag)>,
     ) -> Result<(), ShapeError<'o>> {
         let shape = self.chain[level].shape;
-        for slot in (0..shape.slots() as u32).map(Slot) {
-            if shape.unit_of_slot(slot) != UnitIndex::ENTRY {
-                continue;
-            }
+        for slot in shape.holds(UnitIndex::ENTRY).slots.iter().copied() {
             // A surfaced name reads the module's static type, which its `USING` read.
             let surfaced = surfacing.filter(|_| shape.position_of(slot) == Position::PARAMETER);
             if let Some((_, tag)) = surfaced {
@@ -1105,19 +1192,15 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     ) -> Result<(), ShapeError<'o>> {
         let shape = self.chain[level].shape;
         let statements = self.statements(shape, work);
-        for slot in (0..shape.slots() as u32).map(Slot) {
-            if shape.unit_of_slot(slot) == index
-                && !self.component_types(shape, slot)
-                && shape.declarations(slot).is_none()
-            {
+        let holds = shape.holds(index);
+        for slot in holds.slots.iter().copied() {
+            if !self.component_types(shape, slot) && shape.declarations(slot).is_none() {
                 self.seed_slot(level, slot, None);
             }
         }
         // 1. Each path its statements spell, before anything reads it.
-        for (at, spelled) in shape.spelled().iter().enumerate() {
-            if statements.contains(&(spelled.statement as usize)) {
-                self.resolve_spelled(level, at)?;
-            }
+        for at in holds.spelled.iter() {
+            self.resolve_spelled(level, *at as usize)?;
         }
         // 2. A component of type binders, declared.
         if let UnitWork::Component(component) = work {
@@ -1131,11 +1214,11 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         }
         // 3. Each type expression, in program order, then the guards; each registration it binds;
         //    each callable it births.
-        self.type_expressions(level, &statements)?;
-        for registration in shape.registrations() {
-            if shape.unit_of_slot(registration.slot) == index {
+        self.type_expressions(level, holds.expressions)?;
+        for slot in holds.slots.iter().copied() {
+            if let Some(registration) = shape.registration(slot) {
                 self.register(level, registration)?;
-                self.seed_slot(level, registration.slot, None);
+                self.seed_slot(level, slot, None);
             }
         }
         for at in statements.iter() {
@@ -1181,7 +1264,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             }
         }
         if !self.unfilled {
-            self.throughs(level, &statements);
+            self.throughs(level, holds.spelled);
             self.contents(level, index)?;
         }
         Ok(())
@@ -1191,9 +1274,8 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     ///    a binding of it is read against.
     fn contents(&mut self, level: usize, index: UnitIndex) -> Result<(), ShapeError<'o>> {
         let shape = self.chain[level].shape;
-        for slot in (0..shape.slots() as u32).map(Slot) {
-            if shape.unit_of_slot(slot) != index
-                || shape.position_of(slot) == Position::PARAMETER
+        for slot in shape.holds(index).slots.iter().copied() {
+            if shape.position_of(slot) == Position::PARAMETER
                 || self
                     .module_unknown(level, slot, self.binder_fact(level, slot))
                     .is_none()
@@ -1866,12 +1948,9 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     /// spell whose declared application names any: where the run reads them to bind the path's
     /// variable. A path whose application names another path is left unlocated, and its type is
     /// read where it runs.
-    fn throughs(&mut self, level: usize, statements: &[usize]) {
+    fn throughs(&mut self, level: usize, spelled: &[u32]) {
         let shape = self.chain[level].shape;
-        for (index, spelled) in shape.spelled().iter().enumerate() {
-            if !statements.contains(&(spelled.statement as usize)) {
-                continue;
-            }
+        for index in spelled.iter().map(|at| *at as usize) {
             let Some(path_level) = self.shapes.path_level(shape.segment(), index) else {
                 continue;
             };
@@ -1900,10 +1979,10 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             if paths {
                 continue;
             }
+            let spelled = &shape.spelled()[index];
             let site = Site::of(spelled.part);
-            let used = (shape.body().iter())
-                .find_map(|statement| source_of(statement, site))
-                .expect("a path is spelled in one of its shape's statements");
+            let used = source_of(&shape.body()[spelled.statement as usize], site)
+                .expect("a path is spelled in its statement");
             let located = self.located(level, &[through], used);
             self.record_through(level, entry.level, located);
         }

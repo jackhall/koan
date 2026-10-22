@@ -29,8 +29,8 @@
 //!
 //! A keyworded node inside a type expression is a type the elaborator reads, not a use, so the walk
 //! counts the type expressions it is inside and resolves no candidates there. It records each path
-//! a type spells by its tokens ([`path_spelling`]), so the type channel mints every path's entry
-//! however far it reads the type holding it.
+//! a type spells by its tokens ([`path_spelling`]), so every path has its identity and level
+//! however far the elaborator reads the type holding it.
 //!
 //! A callable body records the form node holding it. Each binder's facts land in a per-slot draft
 //! record as the walk finds them — the body a binder whose right-hand side is a callable form at
@@ -84,8 +84,8 @@ use super::{
     Arm, Binder, BodyShape, BuiltinIndex, Candidate, CandidateList, CaptureSlot, CaptureSource,
     CaptureSpec, Component, ComponentIndex, Coordinate, Lands, Listed, Mention, MentionClass,
     Offer, PathId, Position, QuotedPart, Ranking, Registration, Segment, ShapeError, ShapeKind,
-    Site, Slot, SpelledPath, SurfacedHead, Target, TopLevel, TypeExpression, Unit, UnitIndex,
-    UnitWork, Which, resolve_here,
+    Site, Slot, SpelledPath, SurfacedHead, Target, TopLevel, TypeExpression, Unit, UnitHolds,
+    UnitIndex, UnitWork, Which, resolve_here,
 };
 use crate::parse::{BodyKind, DefinitionKind, Heads, Opens, Reading, Role};
 use std::cell::Cell;
@@ -1636,8 +1636,8 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         } else {
             std::mem::take(&mut self.admits)
         };
-        // A path a type spells is recorded by its tokens, so the type channel mints its entry
-        // however far the elaborator reads the type holding it.
+        // A path a type spells is recorded by its tokens, so it has its identity and level however
+        // far the elaborator reads the type holding it.
         if let ExpressionPart::Expression(node) | ExpressionPart::SigiledTypeExpr(node) = part
             && (self.in_type > 0 || matches!(part, ExpressionPart::SigiledTypeExpr(_)))
             && path_spelling(node.reference(), self.scratch).is_some()
@@ -3592,6 +3592,12 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 guard: recorded.guard,
             }
         }));
+        let holds = self.unit_holds(
+            (&draft.unit_of_slot, &draft.unit_of_statement),
+            draft.units.len(),
+            spelled,
+            &type_expressions,
+        );
         let members = collect(writer, draft.members.iter().copied());
         let mut components = BumpVec::with_capacity_in(draft.components.len(), self.scratch);
         components.extend(draft.components.iter().map(|component| Component {
@@ -3630,6 +3636,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 units: collect(writer, draft.units.iter().copied()),
                 unit_of_slot: collect(writer, draft.unit_of_slot.iter().copied()),
                 unit_of_statement: collect(writer, draft.unit_of_statement.iter().copied()),
+                holds,
                 nested_starts: collect(writer, nested_starts.iter().copied()),
                 last_reads,
                 arm: draft.arm,
@@ -3660,6 +3667,46 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
 }
 
 impl<'graph> Builder<'graph, '_, '_> {
+    /// What each unit holds, the entry's first, from the unit binding each slot and running each
+    /// statement among `runs` units past the entry: the slots it binds, and the paths and type
+    /// expressions of the statements it runs.
+    fn unit_holds(
+        &self,
+        (of_slot, of_statement): (&[UnitIndex], &[UnitIndex]),
+        runs: usize,
+        spelled: &[SpelledPath<'graph>],
+        expressions: &Keyed<'graph, TypeExpression<'graph>>,
+    ) -> &'graph [UnitHolds<'graph>] {
+        let (brand, scratch) = (self.brand, self.scratch);
+        let units = runs + 1;
+        let running = |statement: u32| {
+            (of_statement.get(statement as usize)).map(|unit| unit.index() as usize)
+        };
+        let slots = Grouped::lay(brand, scratch, units, {
+            (of_slot.iter().zip(0u32..))
+                .map(|(unit, slot)| (Some(unit.index() as usize), Slot(slot)))
+        });
+        let paths = Grouped::lay(brand, scratch, units, {
+            (spelled.iter().zip(0u32..)).map(|(path, at)| (running(path.statement), at))
+        });
+        let mut written = BumpVec::with_capacity_in(expressions.len(), scratch);
+        written.extend(
+            (expressions.iter().zip(0u32..)).map(|(each, at)| (each.order, each.statement, at)),
+        );
+        written.sort_unstable_by_key(|(order, ..)| *order);
+        let typed = Grouped::lay(brand, scratch, units, {
+            (written.iter()).map(|(_, statement, at)| (running(*statement), *at))
+        });
+        collect(
+            brand.writer(),
+            (0..units).map(|unit| UnitHolds {
+                slots: slots.of(unit),
+                spelled: paths.of(unit),
+                expressions: typed.of(unit),
+            }),
+        )
+    }
+
     /// Each path `draft`'s types spell, beside its statement and its identity: its root's landing on
     /// the chain, or the expression written in place, its member chain and its label. A root
     /// landing anywhere else — past a quote's code, at a hole — names no identity.
@@ -3757,4 +3804,39 @@ fn annotation_of<'graph>(node: &KExpression<'graph>) -> Option<&'graph Expressio
         .zip(spine.parts)
         .find(|(role, _)| *role == Role::TypeExpression)
         .map(|(_, part)| &part.value)
+}
+
+/// Items laid grouped by the unit each belongs to, each group in the order the items came.
+struct Grouped<'graph, 'x, T> {
+    items: &'graph [T],
+    /// Where each unit's group starts, then the end.
+    starts: BumpVec<'x, usize>,
+}
+
+impl<'graph, 'x, T: Copy> Grouped<'graph, 'x, T> {
+    /// Lay `items`, each beside its unit among `units`; an item of no unit is dropped.
+    fn lay(
+        brand: ProgramBrand<'graph>,
+        scratch: BumpAllocator<'x>,
+        units: usize,
+        items: impl Iterator<Item = (Option<usize>, T)>,
+    ) -> Self {
+        let mut keyed = BumpVec::new_in(scratch);
+        keyed.extend(items.filter_map(|(unit, item)| Some((unit?, item))));
+        // Stable, so a group keeps the items' order.
+        keyed.sort_by_key(|(unit, _)| *unit);
+        let mut starts = BumpVec::with_capacity_in(units + 1, scratch);
+        for unit in 0..=units {
+            starts.push(keyed.partition_point(|(held, _)| *held < unit));
+        }
+        Grouped {
+            items: collect(brand.writer(), keyed.iter().map(|(_, item)| *item)),
+            starts,
+        }
+    }
+
+    /// The group of `unit`.
+    fn of(&self, unit: usize) -> &'graph [T] {
+        &self.items[self.starts[unit]..self.starts[unit + 1]]
+    }
 }

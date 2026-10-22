@@ -1,5 +1,5 @@
 //! The walk's **façade**: the one door every read and write of a fact goes through, so a rule
-//! never names where a fact rests ([the one-walk build](../../../roadmap/gradual-build/one-walk-build.md)).
+//! never names where a fact rests ([the store](../../build/README.md#the-store)).
 //!
 //! A fact the walk fixed rests in its shape's level while the shape is on the chain, beside the
 //! unit that fixed it; an inline body's facts rest in the record of the unit that ran it once the
@@ -20,7 +20,7 @@ use crate::symbols::{BinderSymbol, Symbol};
 use crate::type_lattice::{DeclaredType, Interval, KType, Parametric, Side, TypeNode, Variable};
 use crate::type_lattice::{bound_above, read_through};
 
-use super::{Bound, Pass, Tag};
+use super::{Bound, Pass, Tag, Wrote};
 
 /// Which part of a callable's function type a read takes: what the read gathers is the names
 /// that part names.
@@ -223,6 +223,16 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         bound
     }
 
+    /// Log that the unit `tag` wrote at `wrote` in the shape at `level`, where that shape is the
+    /// unit's own owning body: its record lays what it wrote. An inline body lays itself whole.
+    fn wrote(&mut self, level: usize, tag: Tag, wrote: Wrote) {
+        let segment = self.chain[level].shape.segment();
+        let state = &mut self.units[tag.0 as usize];
+        if state.id.segment == segment {
+            state.wrote.push(wrote);
+        }
+    }
+
     /// The static type of the binder at `slot` of the shape at `level`, read without gathering it.
     pub(super) fn binder_fact(&self, level: usize, slot: Slot) -> Bound {
         self.chain[level].binders[slot.index()].0
@@ -232,6 +242,9 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     pub(super) fn set_binder(&mut self, level: usize, slot: Slot, bound: Bound) {
         let tag = self.open.last().copied();
         self.chain[level].binders[slot.index()] = (bound, tag);
+        if let Some(tag) = tag {
+            self.wrote(level, tag, Wrote::Binder(slot));
+        }
     }
 
     /// The static type of statement `index` of the shape at `level`, as the walk has it now.
@@ -255,13 +268,13 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     pub(super) fn set_statement(&mut self, level: usize, index: usize, typed: Interval) {
         let tag = self.innermost();
         self.chain[level].statements[index] = Some((typed, tag));
+        self.wrote(level, tag, Wrote::Statement(index));
     }
 
     /// The static type the walk recorded for the part at `site` of the shape at `level`, its
     /// latest where it recorded more than one.
     pub(super) fn part_type(&self, level: usize, site: Site) -> Option<Interval> {
-        let (_, typed, tag) =
-            (self.chain[level].parts.iter().rev()).find(|(held, ..)| *held == site)?;
+        let (typed, tag) = self.chain[level].parts.get(&site)?;
         self.gather(*tag);
         Some(*typed)
     }
@@ -269,7 +282,8 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     /// Record the static type of the part at `site` of the shape at `level`.
     pub(super) fn record_part(&mut self, level: usize, site: Site, typed: Interval) {
         let tag = self.innermost();
-        self.chain[level].parts.push((site, typed, tag));
+        self.chain[level].parts.insert(site, (typed, tag));
+        self.wrote(level, tag, Wrote::Part(site));
     }
 
     /// What the walk fixed about the keyworded use at `index` of the shape at `level`.
@@ -287,6 +301,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         let at = &mut self.chain[level].uses[index];
         at.0.narrowing = narrowing;
         at.1 = Some(tag);
+        self.wrote(level, tag, Wrote::Use(index));
     }
 
     /// Fix the contributions of the keyworded use at `index` of the shape at `level`.
@@ -300,6 +315,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         let at = &mut self.chain[level].uses[index];
         at.0.contributions = contributions;
         at.1 = Some(tag);
+        self.wrote(level, tag, Wrote::Use(index));
     }
 
     /// The closed point each variable of the candidate selected at the use at `site` of the shape
@@ -323,12 +339,13 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     ) {
         let tag = self.innermost();
         self.chain[level].selections.insert(site, (points, tag));
+        self.wrote(level, tag, Wrote::Selection(site));
     }
 
     /// Whether the shape at `level` locates the lexical variables of the path at `path_level`'s
     /// application already.
     pub(super) fn has_through(&self, level: usize, path_level: usize) -> bool {
-        (self.chain[level].throughs.iter()).any(|(held, ..)| *held == path_level)
+        self.chain[level].throughs.contains_key(&path_level)
     }
 
     /// Record where the shape at `level` reads each lexical variable of the path at
@@ -340,31 +357,43 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         located: &'o [crate::scope::Variable],
     ) {
         let tag = self.innermost();
-        self.chain[level].throughs.push((path_level, located, tag));
+        self.chain[level]
+            .throughs
+            .entry(path_level)
+            .or_insert((located, tag));
+        self.wrote(level, tag, Wrote::Through(path_level));
     }
 
     /// Record the content tree of the view the `:|` at `site` builds.
     pub(super) fn record_view_tree(&mut self, level: usize, site: Site, tree: &'o Tree<'o>) {
         let tag = self.innermost();
+        let index = self.chain[level].trees.len();
         self.chain[level].trees.push((site, tree, tag));
+        self.wrote(level, tag, Wrote::Tree(index));
     }
 
     /// Record the content tree of the module binder at `slot` of the shape at `level`.
     pub(super) fn record_content(&mut self, level: usize, slot: Slot, tree: Tree<'o>) {
         let tag = self.innermost();
+        let index = self.chain[level].contents.len();
         self.chain[level].contents.push((slot, tree, tag));
+        self.wrote(level, tag, Wrote::Content(index));
     }
 
     /// Record that the ascription or annotated binder's type part at `site` is settled.
     pub(super) fn record_settled(&mut self, level: usize, site: Site) {
         let tag = self.innermost();
+        let index = self.chain[level].settled.len();
         self.chain[level].settled.push((site, tag));
+        self.wrote(level, tag, Wrote::Settled(index));
     }
 
     /// Record a minting site of the shape at `level`.
     pub(super) fn record_minting(&mut self, level: usize, site: Site) {
         let tag = self.innermost();
+        let index = self.chain[level].minting.len();
         self.chain[level].minting.push((site, tag));
+        self.wrote(level, tag, Wrote::Minting(index));
     }
 
     /// Record what the walk fixed where a quantified function is read at `site`.
@@ -375,7 +404,9 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         read: InstanceRead<'o>,
     ) {
         let tag = self.innermost();
+        let index = self.chain[level].instances.len();
         self.chain[level].instances.push((site, read, tag));
+        self.wrote(level, tag, Wrote::Instance(index));
     }
 
     /// Record a call by name's contributions by its argument part's site.
@@ -386,16 +417,17 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         contributions: &'o [StaticType<'o>],
     ) {
         let tag = self.innermost();
+        let index = self.chain[level].named.len();
         self.chain[level].named.push((site, contributions, tag));
+        self.wrote(level, tag, Wrote::Named(index));
     }
 
     /// The type the walk fixed for the type expression at `site` of `shape`.
     pub(super) fn type_cell(&self, shape: &BodyShape<'graph>, site: Site) -> StaticType<'o> {
         let segment = shape.segment();
         if let Some(level) = self.level_of(segment) {
-            let held = (self.chain[level].expressions.iter().rev()).find(|(at, ..)| *at == site);
-            return match held {
-                Some((_, typed, tag)) => {
+            return match self.chain[level].expressions.get(&site) {
+                Some((typed, tag)) => {
                     self.gather(*tag);
                     *typed
                 }
@@ -417,7 +449,8 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     /// Fix the type of the type expression at `site` of the shape at `level`.
     pub(super) fn set_expression(&mut self, level: usize, site: Site, typed: StaticType<'o>) {
         let tag = self.innermost();
-        self.chain[level].expressions.push((site, typed, tag));
+        self.chain[level].expressions.insert(site, (typed, tag));
+        self.wrote(level, tag, Wrote::Expression(site));
     }
 
     /// The declaration the walk fixed for the type binder at `slot` of `shape`, and the binder
@@ -449,6 +482,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     pub(super) fn set_declared(&mut self, level: usize, slot: Slot, typed: StaticType<'o>) {
         let tag = self.innermost();
         self.chain[level].declared[slot.index()] = Some((typed, tag));
+        self.wrote(level, tag, Wrote::Declared(slot));
     }
 
     /// The entry the walk fixed for the registration at `slot` of `shape`.
@@ -476,6 +510,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     pub(super) fn set_registered(&mut self, level: usize, slot: Slot, typed: StaticRegistered<'o>) {
         let tag = self.innermost();
         self.chain[level].registered[slot.index()] = Some((typed, tag));
+        self.wrote(level, tag, Wrote::Registered(slot));
     }
 
     /// The type the walk fixed for the callable body `body`.

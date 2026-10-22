@@ -98,20 +98,18 @@ impl<'p, 'o: 'p, 'x, 'graph: 'o + 'p, 'tier: 'o, 'pair, 'reg, S: Store<'o>>
         Ok(())
     }
 
-    /// Step three's types: each type expression of the shape at `level` its `statements` hold, in
-    /// program order, then each `MATCH … WITH` guard against the others of its arm set.
+    /// Step three's types: the type expressions of the shape at `level` at `expressions`, indices
+    /// into its own in program order, then each `MATCH … WITH` guard against the others of its arm
+    /// set.
     pub(super) fn type_expressions(
         &mut self,
         level: usize,
-        statements: &[usize],
+        expressions: &[u32],
     ) -> Result<(), ShapeError<'o>> {
         let shape = self.chain[level].shape;
+        let all = shape.type_expressions();
         let mut written: BumpVec<'_, &TypeExpression<'graph>> = BumpVec::new_in(self.scratch);
-        written.extend(
-            (shape.type_expressions().iter())
-                .filter(|expression| statements.contains(&(expression.statement as usize))),
-        );
-        written.sort_unstable_by_key(|expression| expression.order);
+        written.extend(expressions.iter().map(|at| &all[*at as usize]));
         for expression in written.iter() {
             self.type_expression(level, expression)?;
         }

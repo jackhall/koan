@@ -493,6 +493,18 @@ pub struct Unit {
     pub last: bool,
 }
 
+/// What one unit of a body holds: the slots it binds, the paths its statements spell and the type
+/// expressions they hold, so a unit's steps walk its own entries and never the whole body.
+#[derive(Clone, Copy, Debug)]
+pub struct UnitHolds<'graph> {
+    /// In slot order.
+    pub slots: &'graph [Slot],
+    /// Indices into [`BodyShape::spelled`], in its order.
+    pub spelled: &'graph [u32],
+    /// Indices into [`BodyShape::type_expressions`], in program order.
+    pub expressions: &'graph [u32],
+}
+
 /// A type expression the shape records, which the load pass types on its own: a `:(…)` or `:{…}`
 /// in value position, a type part of an expression shape that births no callable, or a
 /// `MATCH … WITH` guard. A type nested in a recorded one is part of it, and a callable's signature
@@ -582,6 +594,8 @@ pub struct BodyShape<'graph> {
     unit_of_slot: &'graph [UnitIndex],
     /// The unit running each statement, by statement.
     unit_of_statement: &'graph [UnitIndex],
+    /// What each unit holds, by unit: the entry's first.
+    holds: &'graph [UnitHolds<'graph>],
     /// Where each statement's nested shapes start in `nested_order`, by statement, then the end.
     nested_starts: &'graph [u32],
     /// The slots a callable's or a code body's last statement reads, and every type slot, sorted.
@@ -789,6 +803,11 @@ impl<'graph> BodyShape<'graph> {
         self.unit_of_slot[slot.index()]
     }
 
+    /// The slots, spelled paths and type expressions of the unit `unit`.
+    pub fn holds(&self, unit: UnitIndex) -> UnitHolds<'graph> {
+        self.holds[unit.index() as usize]
+    }
+
     /// The unit that runs statement `index` of [`body`](Self::body).
     pub fn unit_of_statement(&self, index: usize) -> UnitIndex {
         self.unit_of_statement[index]
@@ -893,8 +912,8 @@ impl<'graph> BodyShape<'graph> {
     }
 
     /// Each part holding a path one of this body's types spells ([`path_spelling`]), in the order
-    /// the builder met them: what the type channel mints each path's entry from, however far it
-    /// reads the type holding it.
+    /// the builder met them: what the shape table numbers each path identity from, however far the
+    /// elaborator reads the type holding it.
     ///
     /// [`path_spelling`]: super::path_spelling
     pub fn path_spellings(&self) -> &'graph [&'graph ExpressionPart<'graph>] {

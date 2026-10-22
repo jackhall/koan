@@ -13,8 +13,8 @@ use crate::parse::{ExpressionPart, KExpression};
 use crate::scope::{
     Activation, Address, Binder, BodyShape, Builtins, Candidate, CaptureSlot, CaptureSource,
     ClosureBindings, Coordinate, Lands as ScopeLands, LoadFacts, MentionClass, PathId, Position,
-    Root, Segment, ShapeError, ShapeKind, Shapes, Site, Slot, Target, UnitWork, Unknown, each_part,
-    part_of,
+    Root, Segment, ShapeError, ShapeKind, Shapes, Site, Slot, Target, UnitIndex, UnitWork, Unknown,
+    each_part, part_of,
 };
 use crate::source::SourceRef;
 use crate::symbols::{BinderSymbol, SymbolInterner, TypeSymbol, ValueSymbol};
@@ -981,6 +981,21 @@ fn agree(a: &Shapes<'_>, b: &Shapes<'_>) {
         assert_eq!(left.slots(), right.slots());
         assert_eq!(left.statements(), right.statements());
         assert_eq!(left.units(), right.units());
+        for unit in all_units(left) {
+            let (mine, theirs) = (left.holds(unit), right.holds(unit));
+            assert_eq!(mine.slots, theirs.slots);
+            assert_eq!(mine.spelled, theirs.spelled);
+            // The expressions index a table keyed by site, an address: compare program order.
+            let order = |shape: &BodyShape<'_>, held: &[u32]| -> Vec<u32> {
+                (held.iter())
+                    .map(|at| shape.type_expressions()[*at as usize].order)
+                    .collect()
+            };
+            assert_eq!(
+                order(left, mine.expressions),
+                order(right, theirs.expressions)
+            );
+        }
         for slot in (0..left.slots()).map(|slot| Slot(slot as u32)) {
             assert_eq!(left.unit_of_slot(slot), right.unit_of_slot(slot));
             assert_eq!(
@@ -1054,6 +1069,11 @@ fn agree(a: &Shapes<'_>, b: &Shapes<'_>) {
     }
 }
 
+/// The units of `shape`: its entry, then each unit it runs.
+fn all_units(shape: &BodyShape<'_>) -> impl Iterator<Item = UnitIndex> {
+    std::iter::once(UnitIndex::ENTRY).chain((0..shape.units().len()).map(UnitIndex::of_run))
+}
+
 /// The statement of `ancestor` the body `segment` sits in, where `ancestor` encloses it.
 fn statement_around(shapes: &Shapes<'_>, mut segment: Segment, ancestor: Segment) -> Option<u32> {
     loop {
@@ -1121,6 +1141,40 @@ proptest! {
     fn two_builds_of_one_text_agree(choices in plan::choices()) {
         let program = Generator::new(&choices).program();
         shaped_twice(&program, |_, a, b| agree(a, b));
+    }
+
+    /// Each unit holds exactly the slots, spelled paths and type expressions the unit tables give it,
+    /// each in its table's order: a unit's steps walk its own entries and miss none.
+    #[test]
+    fn a_unit_holds_what_its_tables_assign(choices in plan::choices()) {
+        let program = Generator::new(&choices).program();
+        shaped_twice(&program, |_, shapes, _| {
+            for shape in shapes.bodies() {
+                let units = all_units(shape);
+                let running = |statement: u32| {
+                    (statement < shape.statements()).then(|| shape.unit_of_statement(statement as usize))
+                };
+                let mut expressions: Vec<u32> = (0..shape.type_expressions().len() as u32).collect();
+                expressions.sort_by_key(|at| shape.type_expressions()[*at as usize].order);
+                for unit in units {
+                    let holds = shape.holds(unit);
+                    let slots: Vec<Slot> = (0..shape.slots() as u32)
+                        .map(Slot)
+                        .filter(|slot| shape.unit_of_slot(*slot) == unit)
+                        .collect();
+                    prop_assert_eq!(holds.slots, &slots[..]);
+                    let spelled: Vec<u32> = (0..shape.spelled().len() as u32)
+                        .filter(|at| running(shape.spelled()[*at as usize].statement) == Some(unit))
+                        .collect();
+                    prop_assert_eq!(holds.spelled, &spelled[..]);
+                    let typed: Vec<u32> = (expressions.iter().copied())
+                        .filter(|at| running(shape.type_expressions()[*at as usize].statement) == Some(unit))
+                        .collect();
+                    prop_assert_eq!(holds.expressions, &typed[..]);
+                }
+            }
+            Ok(())
+        })?;
     }
 
     /// Every mention's landing is its coordinate followed through the shape table.
