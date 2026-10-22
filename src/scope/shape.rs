@@ -27,17 +27,10 @@
 //! from alone, carries its type and, when its code is malformed, the error an `EVAL` of it reports.
 //! See [README.md § Quotes](README.md#quotes).
 //!
-//! A shape also carries a write-once cell for each type fact the elaborator's load pass fixes
-//! before the program runs — each [`TypeExpression`] it records, each type binder, each
-//! registration, a callable body's own type — laid down empty by the builder, since `scope` sits
-//! below `elaborate`. A code shape's one refusal cell holds the builder's refusal, else the load
-//! pass's, written where the code does not type. One more cell holds the value channel's
-//! [`Statics`] — a static type per value expression and binder, and each keyworded use's
-//! [`UseStatics`] — which the language's load pass fixes. Two more record where a run reads a
-//! lexical variable: each one the body declares, beside its slot or capture, and each **type
-//! capture** the static pass adds past the builder's captures, so a callable can read a type name
-//! its body never writes but a call in it solves from. See [README.md § Load-time
-//! types](README.md#load-time-types).
+//! A shape holds no cell: it is a function of the text, the builtin table and the operator claims,
+//! so it is covariant in its lifetime and shared across threads. Every type fact the load fixes
+//! rests in the load's records, read through [`LoadFacts`](super::LoadFacts). See
+//! [README.md § Load-time types](README.md#load-time-types).
 //!
 //! **Visibility** is one comparison, [`Position::sees`]: a binding is visible to a reader whose
 //! position is strictly greater than the binding's own. A parameter writes at `0`, statement `i` at
@@ -46,7 +39,6 @@
 //!
 //! See [README.md § Resolution](README.md#resolution).
 
-use std::cell::Cell;
 use std::fmt;
 
 use crate::memory::BumpAllocator;
@@ -58,21 +50,14 @@ use crate::symbols::{
     BinderSymbol, KeySymbol, KeywordSymbol, SymbolInterner, TypeSymbol, ValueSymbol,
 };
 use crate::type_lattice::{
-    DeclaredGroup, DeclaredType, Interval, KType, Parametric, Scheme, display_name,
-    instantiate_quantified,
+    DeclaredGroup, DeclaredType, KType, Parametric, Scheme, display_name, instantiate_quantified,
 };
 use crate::values::{Chain, ContentDigest};
 
 use super::channels::Channels;
-use super::facts::{Frontier, Residual, Seam};
 use super::groups::GroupFrame;
 use super::keyed::{Keyed, KeyedEntry};
-use super::tree::Tree;
-use super::typed::{
-    BodyClass, Caching, Elaboration, Handoff, InstanceRead, Mint, PathEntry, PathRead, Resolution,
-    Resolved, Root, ShapeFacts, Static, StaticCallable, StaticRegistered, StaticSolution,
-    StaticType, Statics, UseStatics, Variable, ViewSlots,
-};
+use super::typed::{Elaboration, Root, Static, StaticCallable};
 
 mod build;
 
@@ -524,20 +509,6 @@ pub struct TypeExpression<'graph> {
     pub order: u32,
     /// For a guard: the site of its arm set, and its place among the arms in written order.
     pub guard: Option<(Site, u32)>,
-    typed: Cell<StaticType<'graph>>,
-}
-
-impl<'graph> TypeExpression<'graph> {
-    /// What the load pass fixed for this expression; `Unknown` before it runs.
-    pub fn typed(&self) -> StaticType<'graph> {
-        self.typed.get()
-    }
-
-    /// Written once, by the load pass.
-    pub fn fix(&self, typed: StaticType<'graph>) {
-        debug_assert!(matches!(self.typed.get(), Static::Unknown));
-        self.typed.set(typed);
-    }
 }
 
 impl KeyedEntry for TypeExpression<'_> {
@@ -549,7 +520,7 @@ impl KeyedEntry for TypeExpression<'_> {
 }
 
 /// What a body knows about one of its binders, at the binder's slot: each fact the builder found
-/// where the binder is written, and the load pass's write-once cells for it.
+/// where the binder is written.
 struct Binder<'graph> {
     /// The body the binder's right-hand side births, beside where that body sits in this shape.
     birth: Option<(Site, &'graph BodyShape<'graph>)>,
@@ -561,10 +532,6 @@ struct Binder<'graph> {
     declaration: Option<&'graph KExpression<'graph>>,
     /// The registration bound here, in [`BodyShape::registrations`].
     registration: Option<&'graph Registration<'graph>>,
-    /// A type binder's load-time type.
-    declared: Cell<StaticType<'graph>>,
-    /// A registration's load-time bucket entry.
-    registered: Cell<StaticRegistered<'graph>>,
 }
 
 /// One body's resolved lexical structure. See the module documentation.
@@ -573,8 +540,6 @@ pub struct BodyShape<'graph> {
     kind: ShapeKind,
     /// This body's index among the shapes its load built.
     segment: Segment,
-    /// Every shape its load built, by segment: the load's one table, filled once the root seals.
-    bodies: &'graph Cell<&'graph [&'graph BodyShape<'graph>]>,
     /// Each declared name at its slot, beside the position it writes at.
     names: Channels<'graph, Position>,
     /// This body's own statements, rewritten — the run every reader takes them from, and the one
@@ -626,10 +591,9 @@ pub struct BodyShape<'graph> {
     /// A code shape's carried type: its code kind needing its open `\` marks. `Code` for every
     /// other kind.
     code_type: KType,
-    /// Why a code shape's code cannot be built, or — once built — does not type: the builder's
-    /// refusal, else the load pass's. Reported when an `EVAL` runs it. A code shape the builder
-    /// refuses holds its `$` captures and nothing else.
-    refusal: &'graph Cell<Option<&'graph ShapeError<'graph>>>,
+    /// Why a code shape's code cannot be built, reported when an `EVAL` runs it. A code shape the
+    /// builder refuses holds its `$` captures and nothing else.
+    refusal: Option<&'graph ShapeError<'graph>>,
     /// Each `EVAL` of a code parameter whose type needs names, by its operand's site, beside each
     /// needed name or key and what the `EVAL` offers for it.
     offers: Keyed<'graph, (Site, &'graph [(BinderSymbol, Offer<'graph>)])>,
@@ -647,48 +611,6 @@ pub struct BodyShape<'graph> {
     path_spellings: &'graph [&'graph ExpressionPart<'graph>],
     /// The same paths, each beside its statement and its identity.
     spelled: &'graph [SpelledPath<'graph>],
-    /// A callable body's load-time type; `Unknown` for every other kind.
-    callable: &'graph Cell<StaticCallable<'graph>>,
-    /// A callable body's own `FOR ALL` group as its body reads it; empty for every other kind.
-    group_levels: &'graph Cell<&'graph [Parametric]>,
-    /// The solution a callable body's `FOR ALL` is born instantiated at, wherever it is born;
-    /// `None` where it is born quantified, and for every other kind.
-    born_instance: &'graph Cell<Option<StaticSolution<'graph>>>,
-    /// Each lexical variable this body declares, by level, beside where its activation holds the
-    /// type a run binds it to. Written once, by the type channel.
-    declared_variables: &'graph Cell<&'graph [(usize, Target)]>,
-    /// Each type capture the static pass added past `captures`, as the coordinate of the enclosing
-    /// activation its birth reads: closure slot `captures.len() + i`. Empty for every kind but a
-    /// callable and a module.
-    type_captures: &'graph Cell<&'graph [Coordinate]>,
-    /// Each path spelling this body's type expressions read, by site: where the body reads its
-    /// root, and its entry. Written once, by the type channel.
-    path_reads: &'graph Cell<Keyed<'graph, (Site, PathRead)>>,
-    /// Every path entry of the chain this body roots, by level: empty for a body rooting none.
-    /// Written by the type channel, then by the static pass, which adds its own: beside how many
-    /// the type channel minted.
-    paths: &'graph Cell<(&'graph [PathEntry<'graph>], usize)>,
-    /// What the static pass resolved each path of the chain this body roots to, by level. Written
-    /// once, by the static pass.
-    resolutions: &'graph Cell<Keyed<'graph, (usize, Resolution<'graph>)>>,
-    /// The value channel's static types and each keyworded use's statics, fixed by the language's
-    /// load pass.
-    statics: &'graph Cell<Option<Statics<'graph>>>,
-    /// Where the body's types intern at run, fixed once the whole static pass has run.
-    caching: &'graph Cell<Option<&'graph Caching<'graph>>>,
-    /// Each type channel fact of this body that waits on an unknown, beside its frontier.
-    channel_residual: &'graph Cell<Residual<'graph>>,
-    /// Each value channel fact of this body that waits on an unknown, beside its frontier.
-    statics_residual: &'graph Cell<Residual<'graph>>,
-    /// The static pass's facts about the body as a whole.
-    shape_facts: &'graph Cell<ShapeFacts<'graph>>,
-    /// Each seam of this body, in binding order.
-    seams: &'graph Cell<&'graph [Seam<'graph>]>,
-    /// Every unknown a fact of this body, or of a body nested in it, waits on.
-    reach: &'graph Cell<Frontier<'graph>>,
-    /// The parameter slots this callable's specialization keys on, sorted, once the seams are
-    /// listed: `None` where a call of it seeks nothing.
-    specialization_keys: &'graph Cell<Option<&'graph [Slot]>>,
 }
 
 /// One entry of a `MODULE` or `GROUP` body's `OVER` list: a name, or a registration's key written
@@ -730,6 +652,11 @@ pub struct Arm<'graph> {
 
 const _: () = assert!(!std::mem::needs_drop::<BodyShape<'static>>());
 const _: () = assert!(!std::mem::needs_drop::<Binder<'static>>());
+// A shape holds no cell, so one load's table is shared across threads.
+const _: fn() = || {
+    fn sync<Shared: Sync>() {}
+    sync::<BodyShape<'static>>();
+};
 
 impl<'graph> BodyShape<'graph> {
     pub fn kind(&self) -> ShapeKind {
@@ -739,16 +666,6 @@ impl<'graph> BodyShape<'graph> {
     /// This body's index among the shapes its load built.
     pub fn segment(&self) -> Segment {
         self.segment
-    }
-
-    /// The shape its load built at `segment`: any shape finds any other by name.
-    pub fn shape_at(&self, segment: Segment) -> &'graph BodyShape<'graph> {
-        let bodies = self.bodies.get();
-        debug_assert!(
-            !bodies.is_empty(),
-            "the shape table fills once the root seals"
-        );
-        bodies[segment.index() as usize]
     }
 
     /// How many slots an activation of this shape holds.
@@ -965,10 +882,9 @@ impl<'graph> BodyShape<'graph> {
         self.code_type
     }
 
-    /// Why this code shape's code cannot be built, or — once it is built — does not type, reported
-    /// when an `EVAL` runs it.
+    /// Why this code shape's code cannot be built, reported when an `EVAL` runs it.
     pub fn refusal(&self) -> Option<&'graph ShapeError<'graph>> {
-        self.refusal.get()
+        self.refusal
     }
 
     /// Every type expression this body records, sorted by site.
@@ -989,419 +905,6 @@ impl<'graph> BodyShape<'graph> {
     /// and its identity.
     pub fn spelled(&self) -> &'graph [SpelledPath<'graph>] {
         self.spelled
-    }
-
-    /// What the load pass fixed for the type expression at `site`: `Unknown` where this body
-    /// records none there.
-    pub fn typed_expression(&self, site: Site) -> StaticType<'graph> {
-        self.type_expressions
-            .get(site)
-            .map_or(Static::Unknown, TypeExpression::typed)
-    }
-
-    /// What the load pass fixed for the type binder at `slot`.
-    pub fn declared_type(&self, slot: Slot) -> StaticType<'graph> {
-        self.binder(slot).declared.get()
-    }
-
-    /// What the load pass fixed for the registration at `slot`.
-    pub fn registered_type(&self, slot: Slot) -> StaticRegistered<'graph> {
-        self.binder(slot).registered.get()
-    }
-
-    /// What the load pass fixed for this callable body's type.
-    pub fn callable_type(&self) -> StaticCallable<'graph> {
-        self.callable.get()
-    }
-
-    /// Written once, by the load pass.
-    pub fn fix_declared(&self, slot: Slot, typed: StaticType<'graph>) {
-        let binder = self.binder(slot);
-        assert!(
-            binder.declaration.is_some(),
-            "a type binder records its declaration node"
-        );
-        debug_assert!(matches!(binder.declared.get(), Static::Unknown));
-        binder.declared.set(typed);
-    }
-
-    /// Written once, by the load pass.
-    pub fn fix_registered(&self, slot: Slot, typed: StaticRegistered<'graph>) {
-        let binder = self.binder(slot);
-        assert!(
-            binder.registration.is_some(),
-            "a registration's slot is one this body declares"
-        );
-        debug_assert!(matches!(binder.registered.get(), Static::Unknown));
-        binder.registered.set(typed);
-    }
-
-    /// A callable body's function type as its body reads it: its own group instantiated at its
-    /// group levels. `None` where the load did not type the callable.
-    pub fn in_body(
-        &self,
-        types: &Chain<'_, '_, '_, '_>,
-        scratch: BumpAllocator<'_>,
-    ) -> Option<Parametric> {
-        in_body_of(self.callable_type(), self.group_levels(), types, scratch)
-    }
-
-    /// Written once, by the load pass.
-    pub fn fix_callable(&self, typed: StaticCallable<'graph>) {
-        debug_assert_eq!(self.kind, ShapeKind::Callable);
-        debug_assert!(matches!(self.callable.get(), Static::Unknown));
-        self.callable.set(typed);
-    }
-
-    /// A callable body's own `FOR ALL` group as its body reads it: the lexical variable each
-    /// variable of the group is, in group order. Empty for every other shape, and where the load
-    /// did not type the callable.
-    pub fn group_levels(&self) -> &'graph [Parametric] {
-        self.group_levels.get()
-    }
-
-    /// Written once, by the load pass.
-    pub fn fix_group_levels(&self, levels: &'graph [Parametric]) {
-        debug_assert_eq!(self.kind, ShapeKind::Callable);
-        debug_assert!(self.group_levels.get().is_empty());
-        self.group_levels.set(levels);
-    }
-
-    /// The solution this callable body's `FOR ALL` is born instantiated at, where the load solved
-    /// its group at the type its value is wanted at: a literal written where a type fixes it, or
-    /// the right-hand side of a binder whose declared type does.
-    pub fn born_instance(&self) -> Option<StaticSolution<'graph>> {
-        self.born_instance.get()
-    }
-
-    /// Written once, by the load pass.
-    pub fn fix_born_instance(&self, solution: StaticSolution<'graph>) {
-        debug_assert_eq!(self.kind, ShapeKind::Callable);
-        debug_assert!(self.born_instance.get().is_none());
-        self.born_instance.set(Some(solution));
-    }
-
-    /// Each lexical variable this body declares, by level, beside where its activation holds the
-    /// type a run binds it to: a `FOR ALL` name's slot, a type binder's slot, or the capture a
-    /// surfaced type name is read through.
-    pub fn declared_variables(&self) -> &'graph [(usize, Target)] {
-        self.declared_variables.get()
-    }
-
-    /// Written once, by the type channel.
-    pub fn fix_declared_variables(&self, variables: &'graph [(usize, Target)]) {
-        debug_assert!(self.declared_variables.get().is_empty());
-        self.declared_variables.set(variables);
-    }
-
-    /// Each type capture the static pass added past [`captures`](Self::captures): a type name the
-    /// body never writes but a call in it contributes, read at birth from this coordinate of the
-    /// enclosing activation into closure slot `captures().len() + i`.
-    pub fn type_captures(&self) -> &'graph [Coordinate] {
-        self.type_captures.get()
-    }
-
-    /// Written once, by the load pass.
-    pub fn fix_type_captures(&self, captures: &'graph [Coordinate]) {
-        debug_assert!(matches!(self.kind, ShapeKind::Callable | ShapeKind::Module));
-        debug_assert!(self.type_captures.get().is_empty());
-        self.type_captures.set(captures);
-    }
-
-    /// How many closure slots a birth fills: the builder's captures, then the type captures.
-    pub fn capture_count(&self) -> usize {
-        self.captures.len() + self.type_captures.get().len()
-    }
-
-    /// Written once, by the load pass, on a code shape whose code does not type.
-    pub fn refuse_typing(&self, refusal: &'graph ShapeError<'graph>) {
-        debug_assert_eq!(self.kind, ShapeKind::Code);
-        debug_assert!(self.refusal.get().is_none());
-        self.refusal.set(Some(refusal));
-    }
-
-    /// Every path spelling this body's type expressions read, sorted by site.
-    pub fn path_reads(&self) -> &'graph [(Site, PathRead)] {
-        self.path_reads.get().entries()
-    }
-
-    /// The path spelling this body's type expressions read at `site`, where they read one.
-    pub fn path_read(&self, site: Site) -> Option<PathRead> {
-        self.path_reads.get().get(site).map(|(_, read)| *read)
-    }
-
-    /// Written once, by the type channel.
-    pub fn fix_path_reads(&self, reads: Keyed<'graph, (Site, PathRead)>) {
-        debug_assert!(self.path_reads.get().is_empty());
-        self.path_reads.set(reads);
-    }
-
-    /// The path entry at `level` of the chain this body roots.
-    pub fn path_entry(&self, level: usize) -> Option<PathEntry<'graph>> {
-        let paths = self.paths();
-        let first = paths.first()?.level;
-        paths.get(level.checked_sub(first)?).copied()
-    }
-
-    /// Every path entry of the chain this body roots, in level order.
-    pub fn paths(&self) -> &'graph [PathEntry<'graph>] {
-        self.paths.get().0
-    }
-
-    /// The path entries of the chain this body roots that the type channel minted, the first of
-    /// [`paths`](Self::paths).
-    pub fn channel_paths(&self) -> &'graph [PathEntry<'graph>] {
-        let (paths, channel) = self.paths.get();
-        &paths[..channel]
-    }
-
-    /// Written once, by the type channel, on a chain's root.
-    pub fn fix_channel_paths(&self, paths: &'graph [PathEntry<'graph>]) {
-        debug_assert!(matches!(self.kind, ShapeKind::Program | ShapeKind::Code));
-        debug_assert!(self.paths().is_empty());
-        self.paths.set((paths, paths.len()));
-    }
-
-    /// Written once, by the static pass, on a chain's root: every entry, the type channel's first.
-    pub fn fix_paths(&self, paths: &'graph [PathEntry<'graph>]) {
-        debug_assert!(matches!(self.kind, ShapeKind::Program | ShapeKind::Code));
-        debug_assert!(
-            (self.paths().iter())
-                .zip(paths)
-                .all(|(channel, all)| channel == all)
-        );
-        self.paths.set((paths, self.paths.get().1));
-    }
-
-    /// What the static pass resolved the path at `level` of the chain this body roots to, once it
-    /// has.
-    pub fn resolution(&self, level: usize) -> Option<Resolution<'graph>> {
-        (self.resolutions.get().get(level)).map(|(_, resolution)| *resolution)
-    }
-
-    /// The type the path at `level` of the chain this body roots is at every run, where the static
-    /// pass resolved it to one.
-    pub fn path_closed(&self, level: usize) -> Option<KType> {
-        match self.resolution(level)?.resolved {
-            Resolved::Closed(closed) => Some(closed),
-            Resolved::Class(_) => None,
-        }
-    }
-
-    /// Written once, by the static pass, on a chain's root.
-    pub fn fix_resolutions(&self, resolutions: Keyed<'graph, (usize, Resolution<'graph>)>) {
-        debug_assert!(matches!(self.kind, ShapeKind::Program | ShapeKind::Code));
-        debug_assert!(self.resolutions.get().is_empty());
-        self.resolutions.set(resolutions);
-    }
-
-    /// Where this body reads each lexical variable of the path at `level`'s
-    /// [`through`](PathEntry::through), where it names any.
-    pub fn through_at(&self, level: usize) -> Option<&'graph [Variable]> {
-        let statics = self.statics.get()?;
-        statics.throughs.get(level).map(|(_, located)| *located)
-    }
-
-    /// The value channel's load-time facts, once the language's load pass has fixed them.
-    pub fn statics(&self) -> Option<Statics<'graph>> {
-        self.statics.get()
-    }
-
-    /// The static type of the part at `site`, where the load pass typed one.
-    pub fn value_type(&self, site: Site) -> Option<Interval> {
-        self.statics.get()?.parts.get(site).map(|(_, typed)| *typed)
-    }
-
-    /// The static type of statement `index` of [`body`](Self::body).
-    pub fn statement_type(&self, index: usize) -> Option<Interval> {
-        self.statics.get()?.statements.get(index).copied()
-    }
-
-    /// The static type of the binder at `slot` — a quantified callable's binder its scheme.
-    pub fn binder_type(&self, slot: Slot) -> Option<DeclaredType<Interval>> {
-        self.statics.get()?.binders.get(slot.index()).copied()
-    }
-
-    /// What the load fixed about the keyworded use whose node sits at `site`: unfixed where it fixed
-    /// nothing, or has not run.
-    pub fn use_statics(&self, site: Site) -> UseStatics<'graph> {
-        self.statics
-            .get()
-            .and_then(|statics| statics.uses.get(site))
-            .map_or(UseStatics::UNFIXED, |(_, fixed)| *fixed)
-    }
-
-    /// The class the load fixed for this frame body; `None` for a block or a module body, or where
-    /// the load fixed nothing.
-    pub fn class(&self) -> Option<BodyClass> {
-        self.statics.get()?.class
-    }
-
-    /// Whether the frame body this shape runs in caches: interns on its write home's scratch, and
-    /// adopts into its region what leaves it. `false` before the load has run.
-    pub fn caches(&self) -> bool {
-        self.caching.get().is_some_and(|caching| caching.caches)
-    }
-
-    /// How the load classed the minting site at `site`, one of this shape's own; `None` for a site
-    /// it recorded none at, and before it has run.
-    pub fn mint_at(&self, site: Site) -> Option<Mint> {
-        let caching = self.caching.get()?;
-        caching.mints.get(site).map(|(_, mint)| *mint)
-    }
-
-    /// Whether the composite site at `site` builds a value whose own type is warm.
-    pub fn warm_at(&self, site: Site) -> bool {
-        (self.caching.get()).is_some_and(|caching| caching.warm.get(site).is_some())
-    }
-
-    /// Where the body's types intern at run, once the static pass has run.
-    pub fn caching(&self) -> Option<&'graph Caching<'graph>> {
-        self.caching.get()
-    }
-
-    /// Written once, by the static pass, after it has typed every shape.
-    pub fn fix_caching(&self, caching: &'graph Caching<'graph>) {
-        debug_assert!(self.caching.get().is_none());
-        self.caching.set(Some(caching));
-    }
-
-    /// Each type channel fact of this body that waits on an unknown, beside its frontier.
-    pub fn channel_residual(&self) -> Residual<'graph> {
-        self.channel_residual.get()
-    }
-
-    /// Written once, by the type channel.
-    pub fn fix_channel_residual(&self, residual: Residual<'graph>) {
-        debug_assert!(self.channel_residual.get().is_empty());
-        self.channel_residual.set(residual);
-    }
-
-    /// Each value channel fact of this body that waits on an unknown, beside its frontier.
-    pub fn statics_residual(&self) -> Residual<'graph> {
-        self.statics_residual.get()
-    }
-
-    /// Written once, by the language's load pass.
-    pub fn fix_statics_residual(&self, residual: Residual<'graph>) {
-        debug_assert!(self.statics_residual.get().is_empty());
-        self.statics_residual.set(residual);
-    }
-
-    /// Each seam of this body, in binding order: entry first, then unit by unit.
-    pub fn seams(&self) -> &'graph [Seam<'graph>] {
-        self.seams.get()
-    }
-
-    /// Every unknown a fact of this body, or of a body nested in it, waits on.
-    pub fn reach(&self) -> Frontier<'graph> {
-        self.reach.get()
-    }
-
-    /// Written once, once the load's passes quiesce.
-    pub fn fix_seams(&self, seams: &'graph [Seam<'graph>], reach: Frontier<'graph>) {
-        debug_assert!(self.seams.get().is_empty() && self.reach.get().is_empty());
-        self.seams.set(seams);
-        self.reach.set(reach);
-    }
-
-    /// The parameter slots this callable's specialization keys on, sorted: `None` where a call of
-    /// it seeks nothing.
-    pub fn specialization_keys(&self) -> Option<&'graph [Slot]> {
-        self.specialization_keys.get()
-    }
-
-    /// Written once, once the seams are listed.
-    pub fn fix_specialization_keys(&self, keys: Option<&'graph [Slot]>) {
-        debug_assert!(self.specialization_keys.get().is_none());
-        self.specialization_keys.set(keys);
-    }
-
-    /// The static pass's facts about this body as a whole.
-    pub fn shape_facts(&self) -> ShapeFacts<'graph> {
-        self.shape_facts.get()
-    }
-
-    /// Written by the static pass, each fact once, where it fixes it; the pass checks each is unset.
-    pub fn fix_shape_facts(&self, edit: impl FnOnce(&mut ShapeFacts<'graph>)) {
-        let mut facts = self.shape_facts.get();
-        edit(&mut facts);
-        self.shape_facts.set(facts);
-    }
-
-    /// Whether the load recorded `site` as one of this shape's own minting sites.
-    pub fn mints_at(&self, site: Site) -> bool {
-        self.statics
-            .get()
-            .is_some_and(|statics| statics.minting.get(site).is_some())
-    }
-
-    /// The content tree of the view the `:|` ascription whose node sits at `site` builds, where its
-    /// signature is closed, once the load has run.
-    pub fn view_tree(&self, site: Site) -> Option<&'graph Tree<'graph>> {
-        self.statics.get()?.trees.get(site).map(|(_, tree)| *tree)
-    }
-
-    /// Whether the load settled the ascription at `site`: its operand's static upper end lies under
-    /// its type, so the run checks nothing. `false` where the load fixed nothing.
-    pub fn settled(&self, site: Site) -> bool {
-        self.statics
-            .get()
-            .is_some_and(|statics| statics.settled.get(site).is_some())
-    }
-
-    /// What the load fixed where it read a quantified function at `site`, where it read one there.
-    pub fn instance_at(&self, site: Site) -> Option<InstanceRead<'graph>> {
-        self.statics
-            .get()?
-            .instances
-            .get(site)
-            .map(|(_, read)| *read)
-    }
-
-    /// What each parameter of the call by name whose argument part sits at `site` is solved from,
-    /// per parameter in symbol order: empty where every parameter reads its carried type.
-    pub fn named_contributions(&self, site: Site) -> &'graph [StaticType<'graph>] {
-        self.statics
-            .get()
-            .and_then(|statics| statics.named.get(site))
-            .map_or(&[], |(_, recorded)| *recorded)
-    }
-
-    /// How many of this shape's slots keep a digest memo.
-    pub fn digested_count(&self) -> usize {
-        self.statics
-            .get()
-            .map_or(0, |statics| statics.digested.len())
-    }
-
-    /// Where `slot`'s digest memo sits among this shape's, if it keeps one.
-    pub fn digested_index(&self, slot: Slot) -> Option<usize> {
-        self.statics.get()?.digested.binary_search(&slot).ok()
-    }
-
-    /// Where the captures of the module the `:|` at `site` views keep their digest memos, where
-    /// the load recorded any.
-    pub fn view_slots(&self, site: Site) -> Option<ViewSlots<'graph>> {
-        self.statics
-            .get()?
-            .view_slots
-            .get(site)
-            .map(|(_, slots)| *slots)
-    }
-
-    /// The digested slots the call keyed by `site` passes bare: empty where none.
-    pub fn handoffs(&self, site: Site) -> &'graph [Handoff] {
-        self.statics
-            .get()
-            .and_then(|statics| statics.handoffs.get(site))
-            .map_or(&[], |(_, handed)| *handed)
-    }
-
-    /// Written once, by the language's load pass.
-    pub fn fix_statics(&self, statics: Statics<'graph>) {
-        debug_assert!(self.statics.get().is_none());
-        self.statics.set(Some(statics));
     }
 
     /// The names and keys the `EVAL` whose operand sits at `site` offers the code it runs, each

@@ -3,13 +3,13 @@
 //!
 //! `scope` sits below `elaborate`, so the records the elaborator hands back for a callable — its
 //! [`Callable`] type, the [`Registered`] shape its bucket holds, where each `FOR ALL` name landed
-//! in its group — and its refusal ([`Elaboration`]) live here, beside the shape whose write-once
-//! cells hold them. A cell holds a [`Static`]: unknown, closed — a concrete value, the same at
+//! in its group — and its refusal ([`Elaboration`]) live here, beside the shape whose facts the
+//! load's records hold. A fact is a [`Static`]: unknown, closed — a concrete value, the same at
 //! every run — or rigid over [`Variable`]s — a parametric value over the lexical variables the run
 //! supplies, by level — which [`solutions`] reads through an activation for one substitution.
 //!
-//! The value channel's records live here too: the [`Statics`] the language's load pass fixes for a
-//! body, the [`UseStatics`] of each keyworded use: its candidates' [`Narrowing`] and its
+//! The value channel's records live here too: the [`Statics`] the load's walk fixes for a body, the
+//! [`UseStatics`] of each keyworded use: its candidates' [`Narrowing`] and its
 //! arguments' contributions, and a frame body's [`BodyClass`].
 //!
 //! See [README.md § Load-time types](README.md#load-time-types).

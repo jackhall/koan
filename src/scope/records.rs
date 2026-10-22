@@ -3,19 +3,16 @@
 //! no reader names where a fact is kept. A shape names its body by its segment alone, so a reader
 //! may hand in a shape borrowed for any lifetime.
 //!
-//! Two backends answer. `Cells` forwards each accessor to the shape's write-once cell the load's
-//! passes fixed. `Records` reads the one-walk build's records: one [`UnitFacts`] per unit the walk
-//! ran, each beside the frontier it gathered, one [`Closing`] per owning body, and the [`Folds`] the
-//! load lays per body after the walk. Every record is `Copy`, names bodies by segment and holds no
-//! cell, so each is covariant. A `Records` load may sit over a base: every read tries its own
-//! records, then its base's, and a unit it re-ran replaces the base's record of it whole. `Cells`
-//! goes once the walk replaces the passes
-//! ([the one-walk build](../../roadmap/gradual-build/one-walk-build.md)).
+//! It reads the one walk's records: one [`UnitFacts`] per unit the walk ran, each beside the
+//! frontier it gathered, one [`Closing`] per owning body, and the [`Folds`] the load lays per body
+//! after the walk. Every record is `Copy`, names bodies by segment and holds no cell, so each is
+//! covariant. A load may sit over a base: every read tries its own records, then its base's, and a
+//! unit it re-ran replaces the base's record of it whole.
 //!
 //! A `LoadFacts` is laid in program storage before the program is, and an activation carries it, so
 //! every reader holding a view reads through [`ActivationView::load`](super::ActivationView::load).
 
-use crate::memory::{BumpAllocator, BumpVec, Lays, Writer, collect, resident};
+use crate::memory::{BumpAllocator, BumpVec, Lays, collect, resident};
 use crate::source::SourceRef;
 use crate::symbols::TypeSymbol;
 use crate::type_lattice::{DeclaredType, Interval, KType, Parametric};
@@ -301,7 +298,7 @@ pub struct NamedVariable {
 #[derive(Clone, Copy)]
 pub struct LoadFacts<'graph> {
     shapes: &'graph Shapes<'graph>,
-    backend: Backend<'graph>,
+    records: &'graph Records<'graph>,
 }
 
 /// A body as a value born of it holds it: its shape, beside which of its closure slots its content
@@ -327,17 +324,6 @@ fn composes<'graph>(
         None => shape.composes(super::shape::CaptureSlot(at as u32)),
         Some(index) => contract(index),
     })
-}
-
-/// Where a [`LoadFacts`] keeps what it answers.
-#[derive(Clone, Copy)]
-enum Backend<'graph> {
-    /// The shapes' own cells, fixed by the load's passes, beside each body by segment. Every type
-    /// capture composes, so each body's contract is all `true`.
-    Cells {
-        bodies: &'graph [Body<'graph>],
-    },
-    Records(&'graph Records<'graph>),
 }
 
 /// One walk's records, over its base's where it has one.
@@ -378,22 +364,23 @@ enum Held {
 }
 
 impl<'graph> LoadFacts<'graph> {
-    /// The facts the load's passes fixed into the cells of `shapes`, laid in `writer`'s region.
-    pub fn of_cells(writer: Writer<'graph, '_>, shapes: &'graph Shapes<'graph>) -> Self {
-        let bodies = shapes.bodies();
-        let bodies = writer.fill(bodies.len(), |at| Body {
-            shape: bodies[at],
-            composes: composes(
-                writer,
-                bodies[at],
-                |_| true,
-                bodies[at].type_captures().len(),
-            ),
-        });
+    /// The facts of a load whose walk ran nothing over `shapes`: every fact unknown, and every
+    /// capture composing.
+    #[cfg(test)]
+    pub fn unwalked(lay: impl Lays<'graph>, shapes: &'graph Shapes<'graph>) -> Self {
+        let records = Records {
+            base: None,
+            binding: Binding::EMPTY,
+            units: Keyed::from_sorted(&[]),
+            closings: Keyed::from_sorted(&[]),
+            index: Keyed::from_sorted(&[]),
+            bodies: &[],
+        };
         LoadFacts {
             shapes,
-            backend: Backend::Cells { bodies },
+            records: resident(lay, records),
         }
+        .folded(lay, &[])
     }
 
     /// One walk's records over `shapes`, laid through `lay`, over `base` where the walk resumed
@@ -432,16 +419,14 @@ impl<'graph> LoadFacts<'graph> {
         };
         LoadFacts {
             shapes,
-            backend: Backend::Records(resident(lay, records)),
+            records: resident(lay, records),
         }
         .folded(lay, folds)
     }
 
     /// These records beside `folds`, by segment: none where it is empty.
     pub fn folded(&self, lay: impl Lays<'graph>, folds: &[Folds<'graph>]) -> Self {
-        let Backend::Records(records) = self.backend else {
-            panic!("only a walk's records fold");
-        };
+        let records = self.records;
         let shapes = self.shapes;
         debug_assert!(folds.is_empty() || folds.len() == shapes.bodies().len());
         let bodies = shapes.bodies();
@@ -461,49 +446,34 @@ impl<'graph> LoadFacts<'graph> {
         });
         LoadFacts {
             shapes,
-            backend: Backend::Records(resident(lay, Records { bodies, ..*records })),
+            records: resident(lay, Records { bodies, ..*records }),
         }
     }
 
-    /// What the load's walk bound: nothing under `Cells`, or at the load.
+    /// What the load's walk bound: nothing, at the load.
     pub fn binding(&self) -> Binding<'graph> {
-        match self.backend {
-            Backend::Cells { .. } => Binding::EMPTY,
-            Backend::Records(records) => records.binding,
-        }
+        self.records.binding
     }
 
     /// The load this one resumed, where it resumed one.
     pub fn base(&self) -> Option<&'graph LoadFacts<'graph>> {
-        match self.backend {
-            Backend::Cells { .. } => None,
-            Backend::Records(records) => records.base,
-        }
+        self.records.base
     }
 
     /// The newest record of `unit` beside its frontier, its base's where this load did not re-run
-    /// it: `None` under `Cells`, which keeps none.
+    /// it.
     pub fn unit(&self, unit: UnitId) -> Option<(&'graph UnitFacts<'graph>, Frontier<'graph>)> {
-        match self.backend {
-            Backend::Cells { .. } => None,
-            Backend::Records(records) => records.unit(unit),
-        }
+        self.records.unit(unit)
     }
 
     /// The newest closing record of the owning body `body`, beside its frontier.
     pub fn closing(&self, body: Segment) -> Option<(&'graph Closing<'graph>, Frontier<'graph>)> {
-        match self.backend {
-            Backend::Cells { .. } => None,
-            Backend::Records(records) => records.closing(body),
-        }
+        self.records.closing(body)
     }
 
     /// The units this load ran itself, each beside its record and frontier, sorted.
     pub fn own_units(&self) -> &'graph [(UnitId, (&'graph UnitFacts<'graph>, Frontier<'graph>))] {
-        match self.backend {
-            Backend::Cells { .. } => &[],
-            Backend::Records(records) => records.units.entries(),
-        }
+        self.records.units.entries()
     }
 
     /// The shape table these are facts of.
@@ -522,55 +492,41 @@ impl<'graph> LoadFacts<'graph> {
     /// What the load fixed for the type expression at `site` of `shape`: `Unknown` where it records
     /// none there.
     pub fn typed_expression(&self, shape: &BodyShape<'_>, site: Site) -> StaticType<'graph> {
-        match self.backend {
-            Backend::Cells { .. } => self.at(shape).typed_expression(site),
-            Backend::Records(records) => (records
-                .typed(shape.segment(), Held::Site(shape.segment(), site)))
-            .and_then(|typed| typed.expressions.get(site))
-            .map_or(Static::Unknown, |(_, typed)| *typed),
-        }
+        (self
+            .records
+            .typed(shape.segment(), Held::Site(shape.segment(), site)))
+        .and_then(|typed| typed.expressions.get(site))
+        .map_or(Static::Unknown, |(_, typed)| *typed)
     }
 
     /// What the load fixed for the type binder at `slot` of `shape`.
     pub fn declared_type(&self, shape: &BodyShape<'_>, slot: Slot) -> StaticType<'graph> {
-        match self.backend {
-            Backend::Cells { .. } => self.at(shape).declared_type(slot),
-            Backend::Records(records) => (records
-                .typed(shape.segment(), Held::Slot(shape.segment(), slot)))
-            .and_then(|typed| typed.declared.get(slot))
-            .map_or(Static::Unknown, |(_, declared)| *declared),
-        }
+        (self
+            .records
+            .typed(shape.segment(), Held::Slot(shape.segment(), slot)))
+        .and_then(|typed| typed.declared.get(slot))
+        .map_or(Static::Unknown, |(_, declared)| *declared)
     }
 
     /// What the load fixed for the registration at `slot` of `shape`.
     pub fn registered_type(&self, shape: &BodyShape<'_>, slot: Slot) -> StaticRegistered<'graph> {
-        match self.backend {
-            Backend::Cells { .. } => self.at(shape).registered_type(slot),
-            Backend::Records(records) => (records
-                .typed(shape.segment(), Held::Slot(shape.segment(), slot)))
-            .and_then(|typed| typed.registered.get(slot))
-            .map_or(Static::Unknown, |(_, registered)| *registered),
-        }
+        (self
+            .records
+            .typed(shape.segment(), Held::Slot(shape.segment(), slot)))
+        .and_then(|typed| typed.registered.get(slot))
+        .map_or(Static::Unknown, |(_, registered)| *registered)
     }
 
     /// What the load fixed for the callable body `shape`'s type.
     pub fn callable_type(&self, shape: &BodyShape<'_>) -> StaticCallable<'graph> {
-        match self.backend {
-            Backend::Cells { .. } => self.at(shape).callable_type(),
-            Backend::Records(records) => {
-                (records.born(shape.segment())).map_or(Static::Unknown, |born| born.callable)
-            }
-        }
+        (self.records.born(shape.segment())).map_or(Static::Unknown, |born| born.callable)
     }
 
     /// The callable body `shape`'s own `FOR ALL` group as its body reads it, by group order.
     pub fn group_levels(&self, shape: &BodyShape<'_>) -> &'graph [Parametric] {
-        match self.backend {
-            Backend::Cells { .. } => self.at(shape).group_levels(),
-            Backend::Records(records) => records
-                .born(shape.segment())
-                .map_or(&[], |born| born.levels),
-        }
+        self.records
+            .born(shape.segment())
+            .map_or(&[], |born| born.levels)
     }
 
     /// The callable body `shape`'s function type as its body reads it: `None` where the load did
@@ -592,26 +548,17 @@ impl<'graph> LoadFacts<'graph> {
     /// The solution the callable body `shape`'s `FOR ALL` is born instantiated at, where the load
     /// solved one.
     pub fn born_instance(&self, shape: &BodyShape<'_>) -> Option<StaticSolution<'graph>> {
-        match self.backend {
-            Backend::Cells { .. } => self.at(shape).born_instance(),
-            Backend::Records(records) => records.born(shape.segment())?.instance,
-        }
+        self.records.born(shape.segment())?.instance
     }
 
     /// Each lexical variable `shape` declares, by level, beside where its activation holds it.
     pub fn homes(&self, shape: &BodyShape<'_>) -> &'graph [(usize, Target)] {
-        match self.backend {
-            Backend::Cells { .. } => self.at(shape).declared_variables(),
-            Backend::Records(_) => self.shapes.homes(shape.segment()),
-        }
+        self.shapes.homes(shape.segment())
     }
 
     /// Each type capture of `shape` past its builder captures, as the coordinate its birth reads.
     pub fn type_captures(&self, shape: &BodyShape<'_>) -> &'graph [Coordinate] {
-        match self.backend {
-            Backend::Cells { .. } => self.at(shape).type_captures(),
-            Backend::Records(records) => records.bodies[shape.segment().index() as usize].captures,
-        }
+        self.records.bodies[shape.segment().index() as usize].captures
     }
 
     /// How many closure slots a birth of `shape` fills: its builder captures, then its type
@@ -622,10 +569,7 @@ impl<'graph> LoadFacts<'graph> {
 
     /// `shape` as a value born of it holds it.
     pub fn body(&self, shape: &BodyShape<'_>) -> &'graph Body<'graph> {
-        match self.backend {
-            Backend::Cells { bodies } => &bodies[shape.segment().index() as usize],
-            Backend::Records(records) => &records.bodies[shape.segment().index() as usize].body,
-        }
+        &self.records.bodies[shape.segment().index() as usize].body
     }
 
     /// Which of `shape`'s type captures its content composes, parallel to
@@ -636,122 +580,94 @@ impl<'graph> LoadFacts<'graph> {
 
     /// The path spelling `shape`'s type expressions read at `site`, where they read one.
     pub fn path_read(&self, shape: &BodyShape<'_>, site: Site) -> Option<PathRead> {
-        match self.backend {
-            Backend::Cells { .. } => self.at(shape).path_read(site),
-            Backend::Records(records) => (records
-                .typed(shape.segment(), Held::Site(shape.segment(), site)))
-            .and_then(|typed| typed.reads.get(site))
-            .map(|(_, read)| *read),
-        }
+        (self
+            .records
+            .typed(shape.segment(), Held::Site(shape.segment(), site)))
+        .and_then(|typed| typed.reads.get(site))
+        .map(|(_, read)| *read)
     }
 
     /// The path entry at `level` of the chain the body `root` roots.
     pub fn path_entry(&self, root: &BodyShape<'_>, level: usize) -> Option<PathEntry<'graph>> {
-        match self.backend {
-            Backend::Cells { .. } => self.at(root).path_entry(level),
-            Backend::Records(records) => {
-                records.path(root.segment(), level).map(|(entry, _)| entry)
-            }
-        }
+        self.records
+            .path(root.segment(), level)
+            .map(|(entry, _)| entry)
     }
 
     /// What the load resolved the path at `level` of the chain `root` roots to.
     pub fn resolution(&self, root: &BodyShape<'_>, level: usize) -> Option<Resolution<'graph>> {
-        match self.backend {
-            Backend::Cells { .. } => self.at(root).resolution(level),
-            Backend::Records(records) => records
-                .path(root.segment(), level)
-                .map(|(_, resolution)| resolution),
-        }
+        self.records
+            .path(root.segment(), level)
+            .map(|(_, resolution)| resolution)
     }
 
     /// The type the path at `level` of the chain `root` roots is at every run, where the load
     /// resolved it to one.
     pub fn path_closed(&self, root: &BodyShape<'_>, level: usize) -> Option<KType> {
-        match self.backend {
-            Backend::Cells { .. } => self.at(root).path_closed(level),
-            Backend::Records(_) => match self.resolution(root, level)?.resolved {
-                Resolved::Closed(closed) => Some(closed),
-                Resolved::Class(_) => None,
-            },
+        match self.resolution(root, level)?.resolved {
+            Resolved::Closed(closed) => Some(closed),
+            Resolved::Class(_) => None,
         }
     }
 
     /// Where `shape` reads each lexical variable of the path at `level`'s `through`.
     pub fn through_at(&self, shape: &BodyShape<'_>, level: usize) -> Option<&'graph [Variable]> {
-        match self.backend {
-            Backend::Cells { .. } => self.at(shape).through_at(level),
-            Backend::Records(records) => (records
-                .typed(shape.segment(), Held::Through(shape.segment(), level)))
-            .and_then(|typed| typed.throughs.get(level))
-            .map(|(_, located)| *located),
-        }
+        (self
+            .records
+            .typed(shape.segment(), Held::Through(shape.segment(), level)))
+        .and_then(|typed| typed.throughs.get(level))
+        .map(|(_, located)| *located)
     }
 
     /// Why the code shape `shape`'s code cannot be built or does not type, reported when an `EVAL`
     /// runs it.
     pub fn typing_refusal(&self, shape: &BodyShape<'_>) -> Option<&'graph ShapeError<'graph>> {
-        match self.backend {
-            Backend::Cells { .. } => self.at(shape).refusal(),
-            // A code shape the builder could not build holds its refusal itself.
-            Backend::Records(records) => (records.closing(shape.segment()))
-                .and_then(|(closing, _)| closing.refusal)
-                .or_else(|| self.at(shape).refusal()),
-        }
+        // A code shape the builder could not build holds its refusal itself.
+        (self.records.closing(shape.segment()))
+            .and_then(|(closing, _)| closing.refusal)
+            .or_else(|| self.at(shape).refusal())
     }
 
     /// The static type of the part at `site` of `shape`, where the load typed one.
     pub fn value_type(&self, shape: &BodyShape<'_>, site: Site) -> Option<Interval> {
-        match self.backend {
-            Backend::Cells { .. } => self.at(shape).value_type(site),
-            Backend::Records(records) => (records
-                .typed(shape.segment(), Held::Site(shape.segment(), site)))
-            .and_then(|typed| typed.parts.get(site))
-            .map(|(_, typed)| *typed),
-        }
+        (self
+            .records
+            .typed(shape.segment(), Held::Site(shape.segment(), site)))
+        .and_then(|typed| typed.parts.get(site))
+        .map(|(_, typed)| *typed)
     }
 
     /// The static type of statement `index` of `shape`'s body.
     pub fn statement_type(&self, shape: &BodyShape<'_>, index: usize) -> Option<Interval> {
-        match self.backend {
-            Backend::Cells { .. } => self.at(shape).statement_type(index),
-            Backend::Records(records) => {
-                let index = index as u32;
-                (records.typed(shape.segment(), Held::Statement(shape.segment(), index)))
-                    .and_then(|typed| typed.statements.get(index))
-                    .map(|(_, typed)| *typed)
-            }
-        }
+        let index = index as u32;
+        (self
+            .records
+            .typed(shape.segment(), Held::Statement(shape.segment(), index)))
+        .and_then(|typed| typed.statements.get(index))
+        .map(|(_, typed)| *typed)
     }
 
     /// The static type of the binder at `slot` of `shape`.
     pub fn binder_type(&self, shape: &BodyShape<'_>, slot: Slot) -> Option<DeclaredType<Interval>> {
-        match self.backend {
-            Backend::Cells { .. } => self.at(shape).binder_type(slot),
-            Backend::Records(records) => (records
-                .typed(shape.segment(), Held::Slot(shape.segment(), slot)))
-            .and_then(|typed| typed.binders.get(slot))
-            .map(|(_, typed)| *typed),
-        }
+        (self
+            .records
+            .typed(shape.segment(), Held::Slot(shape.segment(), slot)))
+        .and_then(|typed| typed.binders.get(slot))
+        .map(|(_, typed)| *typed)
     }
 
     /// What the load fixed about the keyworded use whose node sits at `site` of `shape`.
     pub fn use_statics(&self, shape: &BodyShape<'_>, site: Site) -> UseStatics<'graph> {
-        match self.backend {
-            Backend::Cells { .. } => self.at(shape).use_statics(site),
-            Backend::Records(records) => (records
-                .typed(shape.segment(), Held::Site(shape.segment(), site)))
-            .and_then(|typed| typed.uses.get(site))
-            .map_or(UseStatics::UNFIXED, |(_, fixed)| *fixed),
-        }
+        (self
+            .records
+            .typed(shape.segment(), Held::Site(shape.segment(), site)))
+        .and_then(|typed| typed.uses.get(site))
+        .map_or(UseStatics::UNFIXED, |(_, fixed)| *fixed)
     }
 
     /// The class the load fixed for the frame body `shape`.
     pub fn class(&self, shape: &BodyShape<'_>) -> Option<BodyClass> {
-        match self.backend {
-            Backend::Cells { .. } => self.at(shape).class(),
-            Backend::Records(records) => records.closing(shape.segment())?.0.class,
-        }
+        self.records.closing(shape.segment())?.0.class
     }
 
     /// Whether the frame body `shape` caches.
@@ -761,10 +677,7 @@ impl<'graph> LoadFacts<'graph> {
 
     /// Where `shape`'s types intern at run.
     pub fn caching(&self, shape: &BodyShape<'_>) -> Option<&'graph Caching<'graph>> {
-        match self.backend {
-            Backend::Cells { .. } => self.at(shape).caching(),
-            Backend::Records(records) => records.folds(shape.segment())?.caching,
-        }
+        self.records.folds(shape.segment())?.caching
     }
 
     /// How the load classed the minting site at `site`, one of `shape`'s own.
@@ -775,12 +688,10 @@ impl<'graph> LoadFacts<'graph> {
 
     /// Whether the load recorded `site` as one of `shape`'s own minting sites.
     pub fn mints_at(&self, shape: &BodyShape<'_>, site: Site) -> bool {
-        match self.backend {
-            Backend::Cells { .. } => self.at(shape).mints_at(site),
-            Backend::Records(records) => (records
-                .typed(shape.segment(), Held::Site(shape.segment(), site)))
-            .is_some_and(|typed| typed.minting.get(site).is_some()),
-        }
+        (self
+            .records
+            .typed(shape.segment(), Held::Site(shape.segment(), site)))
+        .is_some_and(|typed| typed.minting.get(site).is_some())
     }
 
     /// Whether the composite site at `site` of `shape` builds a value whose own type is warm.
@@ -791,34 +702,28 @@ impl<'graph> LoadFacts<'graph> {
     /// The content tree of the view the `:|` at `site` of `shape` builds, where its signature is
     /// closed.
     pub fn view_tree(&self, shape: &BodyShape<'_>, site: Site) -> Option<&'graph Tree<'graph>> {
-        match self.backend {
-            Backend::Cells { .. } => self.at(shape).view_tree(site),
-            Backend::Records(records) => (records
-                .typed(shape.segment(), Held::Site(shape.segment(), site)))
-            .and_then(|typed| typed.trees.get(site))
-            .map(|(_, tree)| *tree),
-        }
+        (self
+            .records
+            .typed(shape.segment(), Held::Site(shape.segment(), site)))
+        .and_then(|typed| typed.trees.get(site))
+        .map(|(_, tree)| *tree)
     }
 
     /// Whether the load settled the ascription at `site` of `shape`.
     pub fn settled(&self, shape: &BodyShape<'_>, site: Site) -> bool {
-        match self.backend {
-            Backend::Cells { .. } => self.at(shape).settled(site),
-            Backend::Records(records) => (records
-                .typed(shape.segment(), Held::Site(shape.segment(), site)))
-            .is_some_and(|typed| typed.settled.get(site).is_some()),
-        }
+        (self
+            .records
+            .typed(shape.segment(), Held::Site(shape.segment(), site)))
+        .is_some_and(|typed| typed.settled.get(site).is_some())
     }
 
     /// What the load fixed where `shape` reads a quantified function at `site`.
     pub fn instance_at(&self, shape: &BodyShape<'_>, site: Site) -> Option<InstanceRead<'graph>> {
-        match self.backend {
-            Backend::Cells { .. } => self.at(shape).instance_at(site),
-            Backend::Records(records) => (records
-                .typed(shape.segment(), Held::Site(shape.segment(), site)))
-            .and_then(|typed| typed.instances.get(site))
-            .map(|(_, read)| *read),
-        }
+        (self
+            .records
+            .typed(shape.segment(), Held::Site(shape.segment(), site)))
+        .and_then(|typed| typed.instances.get(site))
+        .map(|(_, read)| *read)
     }
 
     /// What each parameter of the call by name whose argument sits at `site` of `shape` is solved
@@ -828,54 +733,37 @@ impl<'graph> LoadFacts<'graph> {
         shape: &BodyShape<'_>,
         site: Site,
     ) -> &'graph [StaticType<'graph>] {
-        match self.backend {
-            Backend::Cells { .. } => self.at(shape).named_contributions(site),
-            Backend::Records(records) => (records
-                .typed(shape.segment(), Held::Site(shape.segment(), site)))
-            .and_then(|typed| typed.by_name.get(site))
-            .map_or(&[], |(_, recorded)| *recorded),
-        }
+        (self
+            .records
+            .typed(shape.segment(), Held::Site(shape.segment(), site)))
+        .and_then(|typed| typed.by_name.get(site))
+        .map_or(&[], |(_, recorded)| *recorded)
     }
 
     /// The parameter slots the callable `shape`'s specialization keys on: `None` where a call of
     /// it seeks nothing.
     pub fn specialization_keys(&self, shape: &BodyShape<'_>) -> Option<&'graph [Slot]> {
-        match self.backend {
-            Backend::Cells { .. } => self.at(shape).specialization_keys(),
-            Backend::Records(records) => records.folds(shape.segment())?.keys,
-        }
+        self.records.folds(shape.segment())?.keys
     }
 
     /// How many of `shape`'s slots keep a digest memo.
     pub fn digested_count(&self, shape: &BodyShape<'_>) -> usize {
-        match self.backend {
-            Backend::Cells { .. } => self.at(shape).digested_count(),
-            Backend::Records(_) => self.shapes.digested_count(shape.segment()),
-        }
+        self.shapes.digested_count(shape.segment())
     }
 
     /// Where `slot`'s digest memo sits among `shape`'s, if it keeps one.
     pub fn digested_index(&self, shape: &BodyShape<'_>, slot: Slot) -> Option<usize> {
-        match self.backend {
-            Backend::Cells { .. } => self.at(shape).digested_index(slot),
-            Backend::Records(_) => self.shapes.digested_index(shape.segment(), slot),
-        }
+        self.shapes.digested_index(shape.segment(), slot)
     }
 
     /// Where the captures of the module the `:|` at `site` of `shape` views keep their memos.
     pub fn view_slots(&self, shape: &BodyShape<'_>, site: Site) -> Option<ViewSlots<'graph>> {
-        match self.backend {
-            Backend::Cells { .. } => self.at(shape).view_slots(site),
-            Backend::Records(_) => self.shapes.view_slots(shape.segment(), site),
-        }
+        self.shapes.view_slots(shape.segment(), site)
     }
 
     /// The digested slots the call keyed by `site` of `shape` passes bare.
     pub fn handoffs(&self, shape: &BodyShape<'_>, site: Site) -> &'graph [Handoff] {
-        match self.backend {
-            Backend::Cells { .. } => self.at(shape).handoffs(site),
-            Backend::Records(_) => self.shapes.handoffs(shape.segment(), site),
-        }
+        self.shapes.handoffs(shape.segment(), site)
     }
 }
 
@@ -901,10 +789,7 @@ impl<'graph> Records<'graph> {
             let (unit, (facts, _)) = self.units[*at as usize];
             return Some((unit, facts));
         }
-        let Backend::Records(base) = self.base?.backend else {
-            return None;
-        };
-        let (unit, facts) = base.holding(held)?;
+        let (unit, facts) = self.base?.records.holding(held)?;
         self.units.get(unit).is_none().then_some((unit, facts))
     }
 
@@ -933,10 +818,7 @@ impl<'graph> Records<'graph> {
             .and_then(|laid| laid.folds)
         {
             Some(folds) => Some(folds),
-            None => match self.base?.backend {
-                Backend::Records(base) => base.folds(body),
-                Backend::Cells { .. } => None,
-            },
+            None => self.base?.records.folds(body),
         }
     }
 }

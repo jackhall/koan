@@ -228,7 +228,7 @@ pub(super) fn with_program<R>(
                 panic!("`{source}` shapes: {}", error.display(&symbols, &types))
             });
     let shape = shapes.root();
-    let load = resident(writer, LoadFacts::of_cells(writer, shapes));
+    let load = resident(writer, LoadFacts::unwalked(writer, shapes));
     let activation: &Activation = resident(
         writer,
         Activation::of_program(writer, shape, load, builtins),

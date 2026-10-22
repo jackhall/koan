@@ -155,10 +155,10 @@ impl<'graph> Fixture<'_, 'graph> {
         self.scratch
     }
 
-    /// The facts the cells of `shapes` hold, laid in program storage as a load lays them.
+    /// The facts of `shapes` before any walk, laid in program storage as a load lays them.
     pub fn load(&self, shapes: &'graph Shapes<'graph>) -> &'graph LoadFacts<'graph> {
         let writer = self.program.writer();
-        resident(writer, LoadFacts::of_cells(writer, shapes))
+        resident(writer, LoadFacts::unwalked(writer, shapes))
     }
 
     /// Every top-level line of `source`, parsed into program storage.

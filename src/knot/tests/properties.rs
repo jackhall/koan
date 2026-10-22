@@ -136,14 +136,17 @@ fn planned_items<'graph>(
 }
 
 /// Whether `function`'s closure follows `body`'s capture layout: an edge for each fellow member,
-/// the word `activation` reads for any other capture.
+/// the word `activation` reads for any other builder capture, then the load's type captures.
 fn follows_layout<'graph, 'cell>(
     function: &crate::knot::Function<'graph, 'cell, Knotted<'graph, 'cell>>,
     body: &BodyShape<'graph>,
     activation: &KActivation<'graph, 'cell>,
 ) {
     assert!(ptr::eq(function.shape(), body));
-    assert_eq!(function.closure().len(), body.captures().len());
+    assert_eq!(
+        function.closure().len(),
+        activation.load().capture_count(body)
+    );
     for (at, spec) in body.captures().iter().enumerate() {
         match (spec.source, function.closure().get(CaptureSlot(at as u32))) {
             (CaptureSource::Member { index, .. }, Link::Edge(edge)) => {
@@ -206,7 +209,7 @@ fn run<'graph, 'cell>(
     let mut born: Vec<(Slot, Knotted<'graph, 'cell>)> = Vec::new();
     // The function nodes past a knot's members: lambdas a data member holds.
     let mut lambdas_born: Vec<Knotted<'graph, 'cell>> = Vec::new();
-    for component in shape.components() {
+    for component in super::in_unit_order(shape) {
         let values = component
             .members
             .iter()

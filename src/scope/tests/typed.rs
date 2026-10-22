@@ -5,8 +5,8 @@
 
 use crate::parse::ExpressionPart;
 use crate::scope::{
-    Binding, Born, Bound, Builtins, Closing, Folds, PathEntry, Resolution, Settled, ShapeFacts,
-    Site, SiteDeps, Static, StaticType, Statics, Tree, Typed, UnitFacts, source_of,
+    Binding, BodyShape, Born, Bound, Builtins, Closing, Folds, PathEntry, Resolution, Settled,
+    ShapeFacts, Site, SiteDeps, StaticType, Statics, Tree, Typed, UnitFacts, source_of,
 };
 
 use super::{builtins, with_fixture};
@@ -37,6 +37,13 @@ fn a_resolution_shortens<'short, 'long: 'short>(x: Resolution<'long>) -> Resolut
 
 #[allow(dead_code)]
 fn settled_shortens<'short, 'long: 'short>(x: Settled<'long>) -> Settled<'short> {
+    x
+}
+
+#[allow(dead_code)]
+fn a_shape_shortens<'short, 'long: 'short>(
+    x: &'short BodyShape<'long>,
+) -> &'short BodyShape<'short> {
     x
 }
 
@@ -121,11 +128,6 @@ fn the_builder_records_each_type_expression_once() {
                 })
                 .collect();
             assert_eq!(per_statement, [1, 0, 0, 0, 3]);
-            assert!(
-                recorded
-                    .iter()
-                    .all(|expression| { matches!(expression.typed(), Static::Unknown) })
-            );
             let mut guards: Vec<_> = recorded
                 .iter()
                 .filter_map(|expression| Some((expression.guard?, expression.part)))

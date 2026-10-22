@@ -1196,29 +1196,42 @@ fn every_shape_a_load_builds_is_found_by_its_segment() {
 LET f = (FN :{x :Number} -> Number = #((LET g = (FN :{} -> Number = #(x))) (g)))
 MODULE m = (LET h = (FN :{} -> Number = #(1)))
 LET q = #(PRINT $f)";
-    shaped(source, |_, _, shape| {
-        let shape = shape.expect("the program shapes");
-        fn visit<'graph>(
-            root: &BodyShape<'graph>,
-            shape: &'graph BodyShape<'graph>,
-            seen: &mut usize,
-        ) {
-            *seen += 1;
-            assert!(std::ptr::eq(shape, root.shape_at(shape.segment())));
-            for (_, nested) in shape.nested_shapes() {
-                visit(root, nested, seen);
+    with_fixture(|fixture| {
+        let lines = fixture.parse(source);
+        fixture.in_cell(|writer, _| {
+            let table: &Builtins = builtins(fixture, writer);
+            let shapes = crate::scope::Shapes::of_program(
+                fixture.program,
+                &lines,
+                table,
+                fixture.types,
+                fixture.symbols,
+                fixture.scratch(),
+            )
+            .expect("the program shapes");
+            let shape = shapes.root();
+            fn visit<'graph>(
+                shapes: &crate::scope::Shapes<'graph>,
+                shape: &'graph BodyShape<'graph>,
+                seen: &mut usize,
+            ) {
+                *seen += 1;
+                assert!(std::ptr::eq(shape, shapes.shape_at(shape.segment())));
+                for (_, nested) in shape.nested_shapes() {
+                    visit(shapes, nested, seen);
+                }
             }
-        }
-        let mut seen = 0;
-        visit(shape, shape, &mut seen);
-        assert!(
-            seen >= 6,
-            "the program nests its callables, module and quote"
-        );
-        assert_eq!(
-            shape.segment().index() as usize,
-            seen - 1,
-            "the root seals last"
-        );
+            let mut seen = 0;
+            visit(shapes, shape, &mut seen);
+            assert!(
+                seen >= 6,
+                "the program nests its callables, module and quote"
+            );
+            assert_eq!(
+                shape.segment().index() as usize,
+                seen - 1,
+                "the root seals last"
+            );
+        })
     })
 }

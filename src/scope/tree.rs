@@ -17,9 +17,10 @@
 //! leaf's key. Two trees are compared by [`Tree::same_as`] alone, by print, so a comparison and a
 //! digest cost the same however deep the tree or however often a subtree is shared.
 //!
-//! The load's walk (`dispatch/walk/trees.rs`) builds the trees, through the constructors here. Everything here is `Copy` and names a body by its [`Segment`], never by a
-//! reference into program storage, so a tree is covariant in its lifetime: laid in program storage
-//! for a shape's cell, or in a shorter-lived region for a resumption's settled facts.
+//! The load's walk (`dispatch/walk/trees.rs`) builds the trees, through the constructors here.
+//! Everything here is `Copy` and names a body by its [`Segment`], never by a reference into program
+//! storage, so a tree is covariant in its lifetime: laid in program storage for the load's records,
+//! or in a shorter-lived region for a resumption's.
 
 use std::fmt;
 

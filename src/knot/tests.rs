@@ -30,7 +30,7 @@ use crate::memory::{
 };
 use crate::parse::{BodyKind, Role};
 use crate::parse::{ExpressionPart, KExpression, parse};
-use crate::scope::{BodyShape, Builtins, Component, LoadFacts, Slot};
+use crate::scope::{BodyShape, Builtins, Component, LoadFacts, Position, Slot};
 use crate::symbols::{BinderSymbol, SymbolInterner, TypeSymbol, ValueSymbol};
 use crate::type_lattice::KType;
 use crate::values::tests::TestHeader;
@@ -128,7 +128,7 @@ impl<'graph> Fixture<'_, 'graph> {
             )
         });
         let writer = self.program.writer();
-        let load = resident(writer, LoadFacts::of_cells(writer, shapes));
+        let load = resident(writer, LoadFacts::unwalked(writer, shapes));
         Parsed {
             lines,
             shape: shapes.root(),
@@ -194,7 +194,7 @@ impl<'graph> Fixture<'_, 'graph> {
         // A reader takes a body's statements from its shape, never from the parse: the shape owns
         // them rewritten, and every site it records is an address inside them.
         let statements: Vec<&KExpression<'graph>> = shape.body().iter().collect();
-        for component in shape.components() {
+        for component in in_unit_order(shape) {
             let names = component.members.iter().map(|slot| shape.slot_name(*slot));
             if names.clone().any(|name| left.contains(&name)) {
                 continue;
@@ -307,7 +307,7 @@ impl<'graph> Fixture<'_, 'graph> {
             writer,
             body_activation(writer, activation, slot, self.scratch),
         );
-        for inner_component in body.shape().components() {
+        for inner_component in in_unit_order(body.shape()) {
             self.bring_in(writer, types, body, &inner, inner_component);
         }
         let knot = tie(
@@ -504,4 +504,19 @@ pub(crate) fn follow<'graph, 'cell>(
         Link::Edge(edge) => holder.sibling(edge),
         Link::Value(_) => panic!("an edge"),
     }
+}
+
+/// `shape`'s components in the order the run binds them: the entry's, all parameters, then each
+/// unit's in order — so a birth reads every type name bound before it.
+fn in_unit_order<'graph>(
+    shape: &'graph BodyShape<'graph>,
+) -> impl Iterator<Item = &'graph Component<'graph>> {
+    let entry = (shape.components().iter()).filter(move |component| {
+        (component.members.iter()).all(|slot| shape.position_of(*slot) == Position::PARAMETER)
+    });
+    let units = (shape.units().iter()).filter_map(|unit| match unit.work {
+        crate::scope::UnitWork::Component(index) => Some(&shape.components()[index.index()]),
+        crate::scope::UnitWork::Statement(_) => None,
+    });
+    entry.chain(units)
 }

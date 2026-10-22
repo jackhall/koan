@@ -70,7 +70,6 @@ use crate::type_lattice::{DeclaredGroup, KType, ReductionMode, dense_classes};
 
 use super::super::builtins::{BuiltinNames, Builtins};
 use super::super::channels::Channels;
-use super::super::facts::Frontier;
 use super::super::groups::{self, Claim, Claims, GroupFrame};
 use super::super::keyed::Keyed;
 use super::super::shapes::Shapes;
@@ -80,7 +79,7 @@ use super::super::signature::{
 };
 use super::super::spelling::{SpelledRoot, path_spelling};
 use super::super::tree::Binder as TreeBinder;
-use super::super::typed::{Root, ShapeFacts, Static};
+use super::super::typed::Root;
 use super::{
     Arm, Binder, BodyShape, BuiltinIndex, Candidate, CandidateList, CaptureSlot, CaptureSource,
     CaptureSpec, Component, ComponentIndex, Coordinate, Lands, Listed, Mention, MentionClass,
@@ -147,7 +146,6 @@ pub(in crate::scope) fn program<'graph, X: Knotted>(
     builder.seal(draft, None, &[]);
     let writer = brand.writer();
     let bodies = collect(writer, builder.sealed.iter().copied());
-    builder.bodies.set(bodies);
     let parents = collect(writer, builder.parents.iter().copied());
     Ok(resident(
         writer,
@@ -806,8 +804,6 @@ struct Builder<'graph, 'x, 'e> {
     admits: Admits,
     /// The segment index the next sealed shape takes, so every shape one load builds has its own.
     next_segment: Cell<u32>,
-    /// Every shape this load builds, by segment: filled once the root seals, and shared by each.
-    bodies: &'graph Cell<&'graph [&'graph BodyShape<'graph>]>,
     /// Each shape sealed so far, at its segment.
     sealed: BumpVec<'x, &'graph BodyShape<'graph>>,
     /// Each sealed shape's encloser and statement there, at its segment, once the encloser seals.
@@ -842,7 +838,6 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             in_type: 0,
             admits: Admits::Nothing,
             next_segment: Cell::new(0),
-            bodies: resident_cell(brand.writer(), &[][..]),
             sealed: BumpVec::new_in(scratch),
             parents: BumpVec::new_in(scratch),
         }
@@ -3578,8 +3573,6 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 annotation: found.annotation,
                 declaration: found.declaration,
                 registration: index.checked_sub(base).map(|at| &registrations[at]),
-                declared: Cell::new(Static::Unknown),
-                registered: Cell::new(Static::Unknown),
             }
         });
         let mut candidates = draft.candidates;
@@ -3597,7 +3590,6 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 statement: recorded.statement,
                 order,
                 guard: recorded.guard,
-                typed: Cell::new(Static::Unknown),
             }
         }));
         let members = collect(writer, draft.members.iter().copied());
@@ -3614,7 +3606,6 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             BodyShape {
                 kind: draft.kind,
                 segment,
-                bodies: self.bodies,
                 names: Channels::new(
                     collect(writer, draft.values.iter().copied()),
                     collect(writer, draft.types.iter().copied()),
@@ -3643,7 +3634,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 last_reads,
                 arm: draft.arm,
                 code_type: draft.code_type,
-                refusal: resident_cell(writer, draft.refusal),
+                refusal: draft.refusal,
                 offers,
                 registrations,
                 rankings: collect(writer, draft.rankings.iter().copied()),
@@ -3652,22 +3643,6 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 type_expressions,
                 path_spellings: collect(writer, draft.path_spellings.iter().map(|(part, _)| *part)),
                 spelled,
-                callable: resident_cell(writer, Static::Unknown),
-                group_levels: resident_cell(writer, &[][..]),
-                born_instance: resident_cell(writer, None),
-                declared_variables: resident_cell(writer, &[][..]),
-                type_captures: resident_cell(writer, &[][..]),
-                path_reads: resident_cell(writer, Keyed::from_sorted(&[])),
-                paths: resident_cell(writer, (&[][..], 0)),
-                resolutions: resident_cell(writer, Keyed::from_sorted(&[])),
-                statics: resident_cell(writer, None),
-                caching: resident_cell(writer, None),
-                channel_residual: resident_cell(writer, Keyed::from_sorted(&[])),
-                statics_residual: resident_cell(writer, Keyed::from_sorted(&[])),
-                shape_facts: resident_cell(writer, ShapeFacts::default()),
-                seams: resident_cell(writer, &[][..]),
-                reach: resident_cell(writer, Frontier::EMPTY),
-                specialization_keys: resident_cell(writer, None),
             },
         );
         debug_assert_eq!(
@@ -3782,10 +3757,4 @@ fn annotation_of<'graph>(node: &KExpression<'graph>) -> Option<&'graph Expressio
         .zip(spine.parts)
         .find(|(role, _)| *role == Role::TypeExpression)
         .map(|(_, part)| &part.value)
-}
-
-/// One write-once cell laid down in program storage.
-fn resident_cell<'cell, T>(writer: crate::memory::Writer<'cell, '_>, value: T) -> &'cell Cell<T> {
-    let mut value = Some(value);
-    &writer.fill(1, |_| Cell::new(value.take().expect("filled once")))[0]
 }

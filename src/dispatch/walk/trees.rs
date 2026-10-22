@@ -648,7 +648,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             });
         }
         Ok(Some(Tree::knot(
-            &|segment| self.chain[0].shape.shape_at(segment).code_digest(),
+            &|segment| self.shapes.shape_at(segment).code_digest(),
             collect(self.lay, members.iter().copied()),
             index,
         )))
@@ -904,7 +904,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                     });
                 }
                 Tree::knot(
-                    &|segment| self.chain[0].shape.shape_at(segment).code_digest(),
+                    &|segment| self.shapes.shape_at(segment).code_digest(),
                     collect(self.lay, nodes.iter().copied()),
                     index,
                 )
