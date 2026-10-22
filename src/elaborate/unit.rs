@@ -1,5 +1,5 @@
 //! The type half of the one walk: the type channel's rules, run unit by unit over a
-//! [`TypeContext`] the walk implements ([the one-walk build](../../roadmap/gradual-build/one-walk-build.md)).
+//! [`TypeContext`] the walk implements ([the one walk](../build/README.md#the-one-walk)).
 //!
 //! Each entry point types one fact — a component of type binders, a recorded type expression, a
 //! registration, a callable's type, a callable body's own group — through the one load-time
@@ -318,9 +318,8 @@ where
     fn path(&self, site: Site, at: Option<Coordinate>, label: TypeSymbol) -> TypeAt {
         let shapes = self.shapes();
         let segment = self.shape.segment();
-        let index = (self.shape.spelled().iter())
-            .position(|spelled| Site::of(spelled.part) == site)
-            .expect("the builder records every path a type spells");
+        let index =
+            (self.shape.spelled_at(site)).expect("the builder records every path a type spells");
         let Some(level) = shapes.path_level(segment, index) else {
             return TypeAt::Unknown;
         };

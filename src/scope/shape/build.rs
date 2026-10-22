@@ -3517,6 +3517,9 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             spelled,
             &type_expressions,
         );
+        let mut spelled_at = BumpVec::with_capacity_in(spelled.len(), self.scratch);
+        spelled_at.extend((spelled.iter().zip(0u32..)).map(|(path, at)| (Site::of(path.part), at)));
+        let spelled_at = Keyed::sorted(writer, &mut spelled_at);
         let members = collect(writer, draft.members.iter().copied());
         let mut components = BumpVec::with_capacity_in(draft.components.len(), self.scratch);
         components.extend(draft.components.iter().map(|component| Component {
@@ -3569,6 +3572,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 type_expressions,
                 path_spellings: collect(writer, draft.path_spellings.iter().map(|(part, _)| *part)),
                 spelled,
+                spelled_at,
             },
         );
         debug_assert_eq!(
@@ -3734,7 +3738,7 @@ impl CaptureChain for Builder<'_, '_, '_> {
         level.checked_sub(hops as usize)
     }
 
-    fn source(&self, level: usize, capture: CaptureSlot) -> CaptureSource {
+    fn capture_source(&self, level: usize, capture: CaptureSlot) -> CaptureSource {
         self.chain[level].captures[capture.index()].source
     }
 

@@ -481,8 +481,8 @@ impl CaptureChain for Shapes<'_> {
         Some(segment)
     }
 
-    fn source(&self, segment: Segment, capture: CaptureSlot) -> CaptureSource {
-        Shapes::source(self, segment, capture)
+    fn capture_source(&self, segment: Segment, capture: CaptureSlot) -> CaptureSource {
+        Shapes::capture_source(self, segment, capture)
     }
 
     fn member(&self, segment: Segment, component: ComponentIndex, index: u32) -> Slot {
@@ -499,7 +499,7 @@ impl Shapes<'_> {
 
     /// The source of capture `capture` of `segment`: a builder capture's own, or a type capture
     /// of its layout, which reads its coordinate outside.
-    pub fn source(&self, segment: Segment, capture: CaptureSlot) -> CaptureSource {
+    pub fn capture_source(&self, segment: Segment, capture: CaptureSlot) -> CaptureSource {
         let builder = self.shape_at(segment).captures();
         match builder.get(capture.index()) {
             Some(spec) => spec.source,

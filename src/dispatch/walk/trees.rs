@@ -608,7 +608,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             if !self.composes(body, capture) {
                 continue;
             }
-            let tree = match self.shapes.source(body.segment(), capture) {
+            let tree = match self.shapes.capture_source(body.segment(), capture) {
                 CaptureSource::Read(coordinate) => self.resolve(scope, coordinate, site)?,
                 _ => Tree::Leaf(Leaf::Unnamed(site)),
             };
@@ -642,7 +642,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 if !self.composes(body, capture) {
                     continue;
                 }
-                let held = match self.shapes.source(body.segment(), capture) {
+                let held = match self.shapes.capture_source(body.segment(), capture) {
                     CaptureSource::Member { index, .. } => NodeCapture::Fellow(index),
                     CaptureSource::Read(coordinate) => {
                         NodeCapture::Tree(self.resolve(scope, coordinate, site)?)

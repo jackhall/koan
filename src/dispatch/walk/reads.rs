@@ -116,9 +116,12 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     pub(super) fn component_types(&self, shape: &BodyShape<'graph>, slot: Slot) -> bool {
         let index = shape.component_index(slot);
         let component = &shape.components()[index.index()];
+        // A component's unit, where it has one, is the unit its members bind at.
+        let unit = shape.unit_of_slot(component.members[0]).run_index();
         shape.declarations(component.members[0]).is_none()
-            && (shape.units().iter())
-                .any(|unit| unit.work == crate::scope::UnitWork::Component(index))
+            && unit.is_some_and(|unit| {
+                shape.units()[unit].work == crate::scope::UnitWork::Component(index)
+            })
     }
 
     /// The chain level `segment` sits at, where it is on the chain.

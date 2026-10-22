@@ -1,5 +1,5 @@
 //! The walk's paths ([design/modules.md § Comparing two paths](../../../design/modules.md#comparing-two-paths)):
-//! each path entry of a chain resolved to the type it is at load, every cell the type channel fixed
+//! each path entry of a chain resolved to the type it is at load, every fact the type half fixes
 //! read through those resolutions, and a module's static type pinned through its paths.
 //!
 //! A path **resolves** off the content tree of the module its root names, walked through its member
@@ -12,9 +12,8 @@
 //! module built in place that does not resolve closed refuses the load, since the run builds no
 //! module there to read it from.
 //!
-//! The pass resolves the paths a shape's type expressions spell just before it types the unit
-//! spelling them, in program order, an inline root typed there; a cell over a path variable not yet
-//! resolved reads as unknown. A module's static type whose upper end leaves a head parameter
+//! The walk resolves the paths a unit's statements spell in the unit's first step, before its
+//! declarations, an inline root typed there. A module's static type whose upper end leaves a head parameter
 //! unpinned is pinned to the path through it, a path read through that application, so two member
 //! reads through one module share a type.
 //!
@@ -30,8 +29,8 @@ use crate::parse::ExpressionPart;
 use crate::scope::{
     Binder, BodyShape, Callable, CaptureSlot, CaptureSource, Coordinate, Frontier, Leaf, PathEntry,
     Position, Print, Registered, Resolution, Resolved, Root, Segment, ShapeError, ShapeKind, Site,
-    Slot, Source, SpelledRoot, Static, StaticCallable, StaticRegistered, StaticType, Store, Target,
-    Tree, Variable as Located, part_of, path_spelling,
+    Source, SpelledRoot, Static, StaticCallable, StaticRegistered, StaticType, Store, Target, Tree,
+    Variable as Located, part_of, path_spelling,
 };
 use crate::symbols::{BinderSymbol, TypeSymbol, ValueSymbol};
 use crate::type_lattice::{
@@ -366,23 +365,26 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 ExpressionPart::Expression(node) => part_of(node.reference(), site).is_some(),
                 _ => false,
             };
-            let mut inside = BumpVec::new_in(self.scratch);
-            inside.extend(
-                (shape.type_expressions().iter()).filter(|expression| holds(expression.site)),
-            );
-            inside.sort_unstable_by_key(|expression| expression.order);
-            for expression in inside.iter() {
-                self.type_expression(level, expression)?;
+            // Its own types sit in its statement, so among its unit's, in program order.
+            let unit = shape.holds(shape.unit_of_statement(spelled.statement as usize));
+            for at in unit.expressions.iter() {
+                let expression = &shape.type_expressions()[*at as usize];
+                if holds(expression.site) {
+                    self.type_expression(level, expression)?;
+                }
             }
         }
         self.open_path = None;
         let resolved = self.resolve_path(level, entry)?;
         // A path a type reads through a module built in place that does not resolve closed refuses
         // the load, since the run builds no module there; a type binder reads it as unknown.
-        let declaring = (0..shape.slots()).any(|slot| {
-            (shape.declarations(Slot(slot as u32)))
-                .is_some_and(|node| std::ptr::eq(node, &shape.body()[spelled.statement as usize]))
-        });
+        // A type binder binds at its statement's unit, so only that unit's slots may declare.
+        let statement = spelled.statement as usize;
+        let declaring =
+            (shape.holds(shape.unit_of_statement(statement)).slots.iter()).any(|slot| {
+                (shape.declarations(*slot))
+                    .is_some_and(|node| std::ptr::eq(node, &shape.body()[statement]))
+            });
         match (entry.root, resolved, self.open_path.take()) {
             (Root::Inline(_), Resolved::Class(_), Some(at)) if !declaring => {
                 Err(ShapeError::OpenPathInType { at })

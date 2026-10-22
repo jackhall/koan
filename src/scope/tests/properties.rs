@@ -1029,6 +1029,7 @@ fn agree(a: &Shapes<'_>, b: &Shapes<'_>) {
         assert_eq!(left.spelled().len(), right.spelled().len());
         for (index, (mine, theirs)) in left.spelled().iter().zip(right.spelled()).enumerate() {
             assert_eq!(mine.statement, theirs.statement);
+            assert_eq!(left.spelled_at(Site::of(mine.part)), Some(index));
             assert_eq!(identity(mine.id), identity(theirs.id));
             assert_eq!(a.path_level(segment, index), b.path_level(segment, index));
         }

@@ -628,9 +628,9 @@ impl<'o, 'graph: 'o, S: Store<'o>> CaptureChain for Pass<'_, 'o, '_, 'graph, '_,
         level.checked_sub(hops as usize)
     }
 
-    fn source(&self, level: usize, capture: CaptureSlot) -> CaptureSource {
+    fn capture_source(&self, level: usize, capture: CaptureSlot) -> CaptureSource {
         self.shapes
-            .source(self.chain[level].shape.segment(), capture)
+            .capture_source(self.chain[level].shape.segment(), capture)
     }
 
     fn member(&self, level: usize, component: ComponentIndex, index: u32) -> Slot {

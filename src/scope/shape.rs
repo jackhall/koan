@@ -274,7 +274,7 @@ pub trait CaptureChain {
     fn outward(&self, at: Self::At, hops: u32) -> Option<Self::At>;
 
     /// The source of capture `capture` of the body at `at`.
-    fn source(&self, at: Self::At, capture: CaptureSlot) -> CaptureSource;
+    fn capture_source(&self, at: Self::At, capture: CaptureSlot) -> CaptureSource;
 
     /// Member `index` of `component` of the body at `at`.
     fn member(&self, at: Self::At, component: ComponentIndex, index: u32) -> Slot;
@@ -300,7 +300,7 @@ pub fn follow<C: CaptureChain>(
             Target::Capture(capture) => capture,
         };
         taken(at, capture);
-        match chain.source(at, capture) {
+        match chain.capture_source(at, capture) {
             CaptureSource::Read(inner) => (at, coordinate) = (chain.outward(at, 1)?, inner),
             CaptureSource::Member { component, index } => {
                 let outer = chain.outward(at, 1)?;
@@ -686,6 +686,8 @@ pub struct BodyShape<'graph> {
     path_spellings: &'graph [&'graph ExpressionPart<'graph>],
     /// The same paths, each beside its statement and its identity.
     spelled: &'graph [SpelledPath<'graph>],
+    /// Each of those paths' index, by its part's site.
+    spelled_at: Keyed<'graph, (Site, u32)>,
 }
 
 /// One entry of a `MODULE` or `GROUP` body's `OVER` list: a name, or a registration's key written
@@ -985,6 +987,11 @@ impl<'graph> BodyShape<'graph> {
     /// and its identity.
     pub fn spelled(&self) -> &'graph [SpelledPath<'graph>] {
         self.spelled
+    }
+
+    /// The index into [`spelled`](Self::spelled) of the path whose part sits at `site`.
+    pub fn spelled_at(&self, site: Site) -> Option<usize> {
+        self.spelled_at.get(site).map(|(_, index)| *index as usize)
     }
 
     /// The names and keys the `EVAL` whose operand sits at `site` offers the code it runs, each
