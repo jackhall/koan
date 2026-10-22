@@ -6,7 +6,7 @@
 
 use crate::memory::{BumpAllocator, Lays};
 use crate::scope::{
-    Binding, Bound, Closing, Folds, Frontier, LoadFacts, Segment, Shapes, Store, UnitFacts, UnitId,
+    Binding, Bound, Closing, Frontier, LoadFacts, Segment, Shapes, Store, UnitFacts, UnitId,
     Unknown, Writes,
 };
 
@@ -32,10 +32,9 @@ impl<'o, 'p, L: Lays<'o>> LoadStore<'o, 'p, L> {
         }
     }
 
-    /// Every record the walk wrote, beside `folds` by segment: none where it is empty.
-    pub fn facts(&self, scratch: BumpAllocator<'_>, folds: &[Folds<'o>]) -> LoadFacts<'o> {
-        self.writes
-            .laid(self.lay, scratch, None, self.binding, folds)
+    /// Every record the walk wrote, not yet folded.
+    pub fn facts(&self, scratch: BumpAllocator<'_>) -> LoadFacts<'o> {
+        self.writes.laid(self.lay, scratch, None, self.binding)
     }
 }
 

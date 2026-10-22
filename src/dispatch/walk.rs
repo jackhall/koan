@@ -144,7 +144,7 @@
 use crate::elaborate::{SignatureMember, declares_nominal, module_signature, signature_member};
 use crate::knot::module::view::{self, Ascription, ViewTypes, opaque_view_types};
 use crate::knot::{BuiltinFunction, KBuiltins};
-use crate::memory::{BumpAllocator, BumpBackedMap, BumpVec, bump_table, collect, resident};
+use crate::memory::{BumpAllocator, BumpBackedMap, BumpVec, Lays, bump_table, collect, resident};
 use crate::parse::BuiltinShapeId;
 use crate::parse::{ExpressionPart, KExpression, KLiteral};
 use crate::scope::{
@@ -153,7 +153,8 @@ use crate::scope::{
     Lands, Leaf, Listed, NamedVariable, Narrowing, PathEntry, Position, Print, Resolution, Segment,
     ShapeError, ShapeKind, Shapes, Site, SiteDeps, Slot, Source, Static, StaticRegistered,
     StaticSolution, StaticType, Store, SurfacedHead, Tree, Typed, UnitFacts, UnitId, UnitIndex,
-    UnitWork, Unknown, UseStatics, Variable as Located, Within, follow, source_of,
+    UnitTable, UnitWork, Unknown, UseStatics, Variable as Located, Within, follow, part_of,
+    source_of,
 };
 use crate::source::SourceRef;
 use crate::symbols::{BinderSymbol, TypeSymbol};
@@ -206,6 +207,7 @@ pub(super) fn walk<'graph: 'o, 'tier: 'o, 'o, S: Store<'o>>(
         lay: store.lay(),
         chain: BumpVec::new_in(scratch),
         units: BumpVec::new_in(scratch),
+        started: UnitTable::new(shapes, scratch),
         open: BumpVec::new_in(scratch),
         scopes: std::cell::Cell::new(BumpVec::new_in(scratch)),
         walked: scratch.alloc_slice_fill_with(count, |_| false),
@@ -236,6 +238,11 @@ pub(super) fn walk<'graph: 'o, 'tier: 'o, 'o, S: Store<'o>>(
 
 /// A binder's static type: a type's interval, or a quantified callable's scheme.
 type Bound = DeclaredType<Interval>;
+
+/// `entries`, written in key order, laid through `lay` as a keyed table.
+fn keyed<'o, K: Ord + Copy, V: Copy>(lay: impl Lays<'o>, entries: &[(K, V)]) -> Keyed<'o, (K, V)> {
+    Keyed::from_sorted(collect(lay, entries.iter().copied()))
+}
 
 /// Keep the newest of `held`'s records at each site: the latest written last.
 fn newest<T>(held: &mut BumpVec<'_, (Site, T)>) {
@@ -312,8 +319,6 @@ struct Tag(u32);
 /// One unit the walk ran or absorbed, or one owning body's closing.
 struct UnitState<'p, 'o> {
     id: UnitId,
-    /// Whether it is a body's closing, written beside the body's units.
-    closing: bool,
     /// Once it ends: its record's frontier. While it runs, its gathering is the walk's.
     frontier: Option<Frontier<'o>>,
     /// What its record keeps beside its owner's own facts: each inline body it ran, laid as the
@@ -335,17 +340,11 @@ struct UnitState<'p, 'o> {
 }
 
 impl<'p, 'o> UnitState<'p, 'o> {
-    /// The state of `id` as it opens — a unit or, `closing`, a body's closing — with `frontier`
-    /// where it is absorbed as a record holds it.
-    fn new(
-        id: UnitId,
-        closing: bool,
-        frontier: Option<Frontier<'o>>,
-        scratch: BumpAllocator<'p>,
-    ) -> Self {
+    /// The state of `id` as it opens — a unit or a body's closing — with `frontier` where it is
+    /// absorbed as a record holds it.
+    fn new(id: UnitId, frontier: Option<Frontier<'o>>, scratch: BumpAllocator<'p>) -> Self {
         UnitState {
             id,
-            closing,
             frontier,
             typed: BumpVec::new_in(scratch),
             born: BumpVec::new_in(scratch),
@@ -431,8 +430,11 @@ struct Level<'p, 'o, 'graph> {
     throughs: BumpBackedMap<'p, usize, (&'o [Located], Tag)>,
     /// A `MODULE` or `GROUP` body's exact signature, where the walk typed one.
     signature: Option<KType>,
-    /// Each `LET` binder, by its right-hand side's site.
-    rhs: BumpBackedMap<'p, Site, Slot>,
+    /// The statement the walk is typing: where it looks for a part first.
+    statement: usize,
+    /// A `MODULE` body's builder captures' trees, resolved once a leaf on one of its binders is
+    /// keyed on them.
+    captures: Option<&'o [(u32, Tree<'o>)]>,
 }
 
 impl Level<'_, '_, '_> {
@@ -505,6 +507,8 @@ struct Pass<'p, 'o, 'x, 'graph, 'tier, 'pair, 'reg, S: Store<'o>> {
     chain: BumpVec<'p, Level<'p, 'o, 'graph>>,
     /// Every unit the walk ran or absorbed, and every closing, by tag.
     units: BumpVec<'p, UnitState<'p, 'o>>,
+    /// The tag of each unit the walk ran or absorbed, by id: the newest where it has two.
+    started: UnitTable<'p, Tag>,
     /// The units running, innermost last, beside each one's gathering: every unknown its facts
     /// read so far, sorted.
     open: BumpVec<'p, Tag>,
@@ -686,12 +690,6 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         registered.resize(shape.slots(), None);
         let mut uses = BumpVec::with_capacity_in(shape.candidate_lists().len(), scratch);
         uses.resize(shape.candidate_lists().len(), (UseStatics::UNFIXED, None));
-        let mut rhs = bump_table(scratch);
-        for slot in (0..shape.slots() as u32).map(Slot) {
-            if let Some(part) = shape.rhs(slot) {
-                rhs.entry(Site::of(part)).or_insert(slot);
-            }
-        }
         self.chain.push(Level {
             shape,
             roots_chain,
@@ -715,7 +713,8 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             contents: BumpVec::new_in(scratch),
             throughs: bump_table(scratch),
             signature: None,
-            rhs,
+            statement: 0,
+            captures: None,
         });
     }
 
@@ -877,7 +876,10 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     fn open_unit(&mut self, id: UnitId, closing: bool) -> Tag {
         let scratch = self.scratch;
         let tag = Tag(self.units.len() as u32);
-        self.units.push(UnitState::new(id, closing, None, scratch));
+        self.units.push(UnitState::new(id, None, scratch));
+        if !closing {
+            self.started.set(id, tag);
+        }
         self.open.push(tag);
         let mut scopes = self.scopes.replace(BumpVec::new_in(scratch));
         scopes.push(BumpVec::new_in(scratch));
@@ -928,21 +930,19 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     }
 
     /// The facts of the shape at `level` the unit `tag` fixed, laid down, from where it wrote them:
-    /// every fact the level holds where `tag` is `None`.
+    /// every fact the level holds where `tag` is `None`. The writes sort by kind, then by key, so
+    /// each table keyed as its writes are comes out sorted.
     fn typed(&mut self, level: usize, tag: Option<Tag>) -> Typed<'o> {
         let (lay, scratch) = (self.lay, self.scratch);
-        let wrote = match tag {
-            Some(tag) => {
-                let mut wrote = std::mem::replace(
-                    &mut self.units[tag.0 as usize].wrote,
-                    BumpVec::new_in(scratch),
-                );
-                wrote.sort_unstable();
-                wrote.dedup();
-                wrote
-            }
+        let mut wrote = match tag {
+            Some(tag) => std::mem::replace(
+                &mut self.units[tag.0 as usize].wrote,
+                BumpVec::new_in(scratch),
+            ),
             None => self.chain[level].everything(scratch),
         };
+        wrote.sort_unstable();
+        wrote.dedup();
         let (exits, closed, folded) = match tag {
             Some(tag) => {
                 let unit = &self.units[tag.0 as usize];
@@ -1085,21 +1085,21 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         newest(&mut named);
         newest(&mut trees);
         Typed {
-            declared: Keyed::sorted(lay, &mut declared),
-            registered: Keyed::sorted(lay, &mut registered),
-            expressions: Keyed::sorted(lay, &mut expressions),
-            parts: Keyed::sorted(lay, &mut parts),
-            statements: Keyed::sorted(lay, &mut statements),
-            binders: Keyed::sorted(lay, &mut binders),
+            declared: keyed(lay, &declared),
+            registered: keyed(lay, &registered),
+            expressions: keyed(lay, &expressions),
+            parts: keyed(lay, &parts),
+            statements: keyed(lay, &statements),
+            binders: keyed(lay, &binders),
             settled,
             instances: Keyed::sorted(lay, &mut instances),
             uses: Keyed::sorted(lay, &mut uses),
-            selections: Keyed::sorted(lay, &mut selections),
+            selections: keyed(lay, &selections),
             by_name: Keyed::sorted(lay, &mut named),
             trees: Keyed::sorted(lay, &mut trees),
             contents: Keyed::sorted(lay, &mut contents),
             minting,
-            throughs: Keyed::sorted(lay, &mut throughs),
+            throughs: keyed(lay, &throughs),
             signature: at.signature,
             exits,
             closed,
@@ -1120,7 +1120,8 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     ) {
         let tag = Tag(self.units.len() as u32);
         self.units
-            .push(UnitState::new(id, false, Some(frontier), self.scratch));
+            .push(UnitState::new(id, Some(frontier), self.scratch));
+        self.started.set(id, tag);
         let segment = self.chain[level].shape.segment();
         if let Some((_, typed)) = facts.typed.get(segment) {
             self.restore(level, typed, tag);
@@ -1298,6 +1299,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         match work {
             UnitWork::Statement(index) => {
                 let index = index as usize;
+                self.chain[level].statement = index;
                 let wanted = self.tail(level, index);
                 let typed = self.node(level, &shape.body()[index], wanted)?;
                 self.set_statement(level, index, typed);
@@ -2264,11 +2266,23 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
 
     /// Where the part at `site` of the shape at `level` is written.
     fn source(&self, level: usize, site: Site) -> SourceRef {
-        let shape = self.chain[level].shape;
-        shape
-            .body()
-            .iter()
-            .find_map(|node| source_of(node, site))
+        let statement = self.statement_holding(level, site);
+        source_of(&self.chain[level].shape.body()[statement], site)
+            .expect("a part lies in its shape's statements")
+    }
+
+    /// The statement of the shape at `level` holding the part at `site`: the one the walk is
+    /// typing, where it holds the part, else the one a scan of the body finds.
+    pub(super) fn statement_holding(&self, level: usize, site: Site) -> usize {
+        let at = &self.chain[level];
+        let body = at.shape.body();
+        if body
+            .get(at.statement)
+            .is_some_and(|node| part_of(node, site).is_some())
+        {
+            return at.statement;
+        }
+        (body.iter().position(|node| part_of(node, site).is_some()))
             .expect("a part lies in its shape's statements")
     }
 
@@ -2824,8 +2838,11 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             return Ok(typed);
         }
         // The binder whose whole right-hand side the part is keys a leaf its tree falls back to.
+        let shape = self.chain[level].shape;
         let named = match written {
-            Written::Part(site) => self.chain[level].rhs.get(&site).copied(),
+            Written::Part(site) => (0..shape.slots() as u32)
+                .map(Slot)
+                .find(|slot| (shape.rhs(*slot)).is_some_and(|part| Site::of(part) == site)),
             Written::Node(_) => None,
         };
         let tree = self.tree_form(trees::Scope::Chain(level), form, written, named)?;

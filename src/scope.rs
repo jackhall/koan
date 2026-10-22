@@ -58,8 +58,8 @@ pub use groups::{BuiltinGroup, GroupFrame, is_equal, is_equality, is_unequal};
 pub use header::{HalfHeader, RegionHeader};
 pub use keyed::{Keyed, KeyedEntry};
 pub use records::{
-    Body, Born, Closing, Deps, Folds, LoadFacts, NamedVariable, SiteDeps, Typed, UnitFacts,
-    tree_deps,
+    Body, Born, Closing, Deps, DepsGathering, Folds, LoadFacts, NamedVariable, SiteDeps, Typed,
+    UnitFacts, tree_deps,
 };
 pub use shape::{
     Arm, BodyShape, BuiltinIndex, Candidate, CandidateList, CaptureChain, CaptureSlot,
@@ -77,4 +77,4 @@ pub use typed::{
     Resolution, Resolved, Root, ShapeGroupMap, Source, Static, StaticCallable, StaticRegistered,
     StaticSolution, StaticType, UseStatics, Variable, ViewSlots, solutions,
 };
-pub use writes::Writes;
+pub use writes::{UnitTable, Writes};

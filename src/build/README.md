@@ -131,10 +131,10 @@ unit's steps walk only its own entries, which the shape lists
 ([`holds`](../scope/README.md#units)), and the walk logs where each unit
 writes into its owning body's facts, so the unit's record lays exactly those;
 an inline body's facts are laid whole as it ends. So the load is linear in a
-body's size, never a scan of the whole body per unit, with two exceptions: a
-path whose root is written in place (`(ID b).Carrier`) and a read of a
-quantified function's name each find their site by searching the body's
-statements, so a body of many such reads loads in time quadratic in its size.
+body's size, never a scan of the whole body per unit: a path whose root is
+written in place (`(ID b).Carrier`) names its statement, and a part's source
+is looked for in the statement the walk is typing first, the whole body only
+where a lazy read lands elsewhere.
 
 ### Recursion
 

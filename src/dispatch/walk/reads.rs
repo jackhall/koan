@@ -161,8 +161,8 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
 
     /// The state of `unit` in this walk, where it ran or absorbed it.
     fn state_of(&self, unit: UnitId) -> Option<(Tag, &super::UnitState<'p, 'o>)> {
-        let at = (self.units.iter()).rposition(|state| !state.closing && state.id == unit)?;
-        Some((Tag(at as u32), &self.units[at]))
+        let tag = self.started.get(unit)?;
+        Some((tag, &self.units[tag.0 as usize]))
     }
 
     /// The birth facts of `body`, a callable or a quote's code, its unit's frontier gathered.
@@ -437,9 +437,10 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 None => Static::Unknown,
             };
         }
-        let statement = (shape.type_expressions().iter())
-            .find(|expression| expression.site == site)
-            .map(|expression| expression.statement);
+        let expressions = shape.type_expressions();
+        let statement = (expressions.binary_search_by_key(&site, |expression| expression.site))
+            .ok()
+            .map(|at| expressions[at].statement);
         let facts = match shape.kind() {
             ShapeKind::Block | ShapeKind::Module => self.inline_facts(segment),
             _ => statement

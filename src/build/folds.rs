@@ -17,8 +17,8 @@
 
 use crate::memory::{BumpAllocator, BumpVec, Lays, collect, resident};
 use crate::scope::{
-    Address, BodyClass, Caching, Deps, Folds, Frontier, Keyed, LoadFacts, Mint, Position,
-    Resolution, Segment, ShapeKind, Shapes, SiteDeps, Slot, UnitIndex, tree_deps,
+    Address, BodyClass, Caching, Deps, DepsGathering, Folds, Frontier, Keyed, LoadFacts, Mint,
+    Position, Resolution, Segment, ShapeKind, Shapes, SiteDeps, Slot, UnitIndex, tree_deps,
 };
 
 /// The folds of every body `load` holds records for, by segment, laid through `lay`.
@@ -65,21 +65,21 @@ pub fn fold<'o>(
     };
     // A site's class, beside the frame parameters an invariant one reads.
     let class_of = |site: &SiteDeps<'o>| -> (Mint, &'o [Slot]) {
-        let mut deps = site.deps;
+        let mut deps = DepsGathering::new(scratch);
+        deps.add(site.deps);
         for (root, level) in site.pending {
-            let each = match resolutions.binary_search_by_key(&(*root, *level), |(at, _)| *at) {
+            match resolutions.binary_search_by_key(&(*root, *level), |(at, _)| *at) {
                 Ok(at) => tree_deps(
                     shapes,
                     (site.holder, site.frame),
                     &resolutions[at].1.tree,
-                    lay,
+                    &mut deps,
                     scratch,
                 ),
-                Err(_) => Deps::Varying,
-            };
-            deps = deps.union(each, lay, scratch);
+                Err(_) => deps.add(Deps::Varying),
+            }
         }
-        match deps {
+        match deps.laid(lay) {
             Deps::Closed => (Mint::Closed, &[]),
             Deps::Varying => (Mint::Varying, &[]),
             Deps::On(slots) => {
@@ -139,15 +139,15 @@ pub fn fold<'o>(
             }
         }
         let own = segment == frame;
-        let frame_keyed = keyed.binary_search(&(frame, None)).is_ok();
+        // The frame's run of `keyed`: its marker, then the parameters its invariant sites read.
+        let start = keyed.partition_point(|(each, _)| *each < frame);
+        let end = keyed.partition_point(|(each, _)| *each <= frame);
+        let frame_keyed = keyed.get(start) == Some(&(frame, None));
         let invariant = (caches && own && frame_keyed).then(|| {
-            let mut slots = BumpVec::new_in(scratch);
-            slots.extend(
-                (keyed.iter())
-                    .filter(|(each, slot)| *each == frame && slot.is_some())
-                    .filter_map(|(_, slot)| *slot),
-            );
-            collect(lay, slots.iter().copied())
+            let slots = keyed[start + 1..end]
+                .iter()
+                .map(|(_, slot)| slot.expect("sorted after the marker"));
+            collect(lay, slots)
         });
         let callable = own && shape.kind() == ShapeKind::Callable;
         let caching = Caching {

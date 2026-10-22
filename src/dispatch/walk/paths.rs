@@ -30,7 +30,7 @@ use crate::scope::{
     Binder, BodyShape, Callable, CaptureSlot, CaptureSource, Coordinate, Leaf, PathEntry, Position,
     Print, Registered, Resolution, Resolved, Root, Segment, ShapeError, ShapeKind, Site, Source,
     SpelledRoot, Static, StaticCallable, StaticRegistered, StaticType, Store, Target, Tree,
-    Variable as Located, part_of, path_spelling,
+    Variable as Located, part_of, path_spelling, source_of,
 };
 use crate::symbols::{BinderSymbol, TypeSymbol, ValueSymbol};
 use crate::type_lattice::{
@@ -306,7 +306,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         let entry = held.entry;
         let declared = match entry.root {
             Root::Binder(binder) => self.declared_root(binder),
-            Root::Inline(_) => None,
+            Root::Inline { .. } => None,
         };
         let through = declared.and_then(|declared| {
             crate::elaborate::declared_through(
@@ -391,7 +391,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                     .is_some_and(|node| std::ptr::eq(node, &shape.body()[statement]))
             });
         match (entry.root, resolved, self.open_path.take()) {
-            (Root::Inline(_), Resolved::Class(_), Some(at)) if !declaring => {
+            (Root::Inline { .. }, Resolved::Class(_), Some(at)) if !declaring => {
                 Err(ShapeError::OpenPathInType { at })
             }
             _ => Ok(()),
@@ -419,7 +419,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         self.paths[table].resolving.pop();
         let (resolution, at) = resolution?;
         let index = entry.level - self.paths[table].base;
-        if let (Root::Inline(_), Resolved::Class(_), Some(at)) =
+        if let (Root::Inline { .. }, Resolved::Class(_), Some(at)) =
             (entry.root, resolution.resolved, at)
         {
             self.open_path = Some(at);
@@ -468,22 +468,21 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                     ));
                 }
             },
-            Root::Inline(site) => {
+            Root::Inline { site, statement } => {
                 let shape = self.chain[level].shape;
-                let part = shape.body().iter().find_map(|node| part_of(node, site));
-                match part {
+                let statement = statement as usize;
+                let node = &shape.body()[statement];
+                match part_of(node, site) {
                     Some(part) => {
+                        let was = std::mem::replace(&mut self.chain[level].statement, statement);
                         let typed = match self.part_type(level, site) {
                             Some(typed) => typed,
                             None => self.part(level, part)?,
                         };
                         let tree = self.tree(level, part)?;
-                        (
-                            tree,
-                            exact(types, typed),
-                            site,
-                            Some(self.source(level, site)),
-                        )
+                        self.chain[level].statement = was;
+                        let at = source_of(node, site).expect("the part lies in its statement");
+                        (tree, exact(types, typed), site, Some(at))
                     }
                     None => (Tree::Leaf(Leaf::Unnamed(site)), None, site, None),
                 }
@@ -984,10 +983,14 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         // An operand no name chain reaches roots its paths where it is written.
         let (root, chain) = match self.name_chain(level, operand) {
             Some((binder, chain)) => (Root::Binder(binder), chain),
-            None => (
-                Root::Inline(Site::of(operand)),
-                BumpVec::new_in(self.scratch),
-            ),
+            None => {
+                let site = Site::of(operand);
+                let statement = self.statement_holding(level, site) as u32;
+                (
+                    Root::Inline { site, statement },
+                    BumpVec::new_in(self.scratch),
+                )
+            }
         };
         Ok(match self.pinned(level, root, &chain, upper)? {
             Some((signature, pins)) => applied_member(types, scratch, signature, &pins, name),

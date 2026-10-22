@@ -125,6 +125,7 @@ impl<'p, 'o: 'p, 'x, 'graph: 'o + 'p, 'tier: 'o, 'pair, 'reg, S: Store<'o>>
         expression: &TypeExpression<'graph>,
     ) -> Result<(), ShapeError<'o>> {
         let shape = self.chain[level].shape;
+        self.chain[level].statement = expression.statement as usize;
         let typed = elaborate::expression(&*self, self.tools(), self.lay, shape, expression)?;
         self.set_expression(level, expression.site, typed);
         Ok(())

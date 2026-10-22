@@ -3650,7 +3650,10 @@ impl<'graph> Builder<'graph, '_, '_> {
             let spelling =
                 path_spelling(node.reference(), self.scratch).expect("a recorded path spells one");
             let root = match spelling.root {
-                SpelledRoot::Inline(root) => Some(Root::Inline(Site::of(root))),
+                SpelledRoot::Inline(root) => Some(Root::Inline {
+                    site: Site::of(root),
+                    statement,
+                }),
                 SpelledRoot::Name(root) => {
                     let site = Site::of(root);
                     (draft

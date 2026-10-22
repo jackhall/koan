@@ -963,7 +963,7 @@ fn identity(id: Option<PathId<'_>>) -> Option<(Option<Binder>, Vec<ValueSymbol>,
     id.map(|id| {
         let root = match id.root {
             Root::Binder(binder) => Some(binder),
-            Root::Inline(_) => None,
+            Root::Inline { .. } => None,
         };
         (root, id.chain.to_vec(), id.label)
     })

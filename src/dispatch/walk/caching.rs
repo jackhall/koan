@@ -12,7 +12,8 @@
 use crate::memory::{BumpVec, collect};
 use crate::parse::ExpressionPart;
 use crate::scope::{
-    Binder, Coordinate, Deps, Segment, ShapeKind, Site, SiteDeps, Slot, Store, Tree, tree_deps,
+    Binder, Coordinate, Deps, DepsGathering, Segment, ShapeKind, Site, SiteDeps, Slot, Store, Tree,
+    tree_deps,
 };
 use crate::type_lattice::{Interval, KType, Side, Variable, read_through};
 
@@ -40,24 +41,6 @@ impl<'o> Reads<'o> {
 impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     Pass<'p, 'o, '_, 'graph, 'tier, '_, '_, S>
 {
-    /// The union of two sites' reads.
-    fn union(&self, mine: Reads<'o>, theirs: Reads<'o>) -> Reads<'o> {
-        let pending = match (mine.pending, theirs.pending) {
-            ([], theirs) => theirs,
-            (mine, []) => mine,
-            (mine, theirs) => {
-                let mut both = BumpVec::with_capacity_in(mine.len() + theirs.len(), self.scratch);
-                both.extend_from_slice(mine);
-                both.extend_from_slice(theirs);
-                collect(self.lay, both.iter().copied())
-            }
-        };
-        Reads {
-            deps: mine.deps.union(theirs.deps, self.lay, self.scratch),
-            pending,
-        }
-    }
-
     /// The chain level of the frame body the shape at `level` runs in: the nearest at or below it
     /// that is the program, a callable or a quote's code.
     pub(super) fn frame_level(&self, level: usize) -> usize {
@@ -108,16 +91,17 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         if !self.records(level) {
             return;
         }
-        let deps = match tree.closed() {
-            true => Deps::Closed,
-            false => tree_deps(
+        let mut deps = DepsGathering::new(self.scratch);
+        if !tree.closed() {
+            tree_deps(
                 self.shapes,
                 self.holding(level),
                 tree,
-                self.lay,
+                &mut deps,
                 self.scratch,
-            ),
-        };
+            );
+        }
+        let deps = deps.laid(self.lay);
         self.record_site(level, site, true, Reads::known(deps));
     }
 
@@ -129,7 +113,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             return;
         }
         let (shape, scratch) = (self.chain[level].shape, self.scratch);
-        let mut deps = Deps::Closed;
+        let mut deps = DepsGathering::new(scratch);
         let mut parts: BumpVec<'_, &'graph ExpressionPart<'graph>> = BumpVec::new_in(scratch);
         for member in members {
             if let Some(declaration) = shape.declarations(*member) {
@@ -159,31 +143,25 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                     if landed.is_some_and(|(at, slot)| at == level && members.contains(&slot)) {
                         continue;
                     }
-                    let each = self.type_binder(level, mention.coordinate);
-                    deps = deps.union(each, self.lay, scratch);
+                    self.type_binder(level, mention.coordinate, &mut deps);
                 }
             }
         }
+        let deps = deps.laid(self.lay);
         self.record_site(level, site, true, Reads::known(deps));
     }
 
-    /// What the type binder `coordinate` names, read in the shape at `level`, depends on.
-    fn type_binder(&self, level: usize, coordinate: Coordinate) -> Deps<'o> {
+    /// Gather what the type binder `coordinate` names, read in the shape at `level`, depends on.
+    fn type_binder(&self, level: usize, coordinate: Coordinate, into: &mut DepsGathering<'_>) {
         let Some((at, slot)) = self.landed_slot(level, coordinate) else {
-            return Deps::Varying;
+            return into.add(Deps::Varying);
         };
         let binder = Binder {
             body: self.chain[at].shape.segment(),
             slot,
         };
         let leaf = Tree::bound(binder, &[], None);
-        tree_deps(
-            self.shapes,
-            self.holding(level),
-            &leaf,
-            self.lay,
-            self.scratch,
-        )
+        tree_deps(self.shapes, self.holding(level), &leaf, into, self.scratch);
     }
 
     /// Record the composite site at `site` in the shape at `level`, built over `parts`, each beside
@@ -197,11 +175,30 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         if !self.records(level) {
             return;
         }
-        let mut reads = Reads::CLOSED;
+        let scratch = self.scratch;
+        let mut deps = DepsGathering::new(scratch);
+        let mut pending: BumpVec<'_, &'o [(Segment, usize)]> = BumpVec::new_in(scratch);
         for (part, typed) in parts {
             let each = self.part_reads(level, part, typed);
-            reads = self.union(reads, each);
+            deps.add(each.deps);
+            if !each.pending.is_empty() {
+                pending.push(each.pending);
+            }
         }
+        // One part's pending entries are its slice; several parts' are laid together.
+        let pending = match pending.as_slice() {
+            [] => &[][..],
+            [only] => *only,
+            several => {
+                let mut all = BumpVec::new_in(scratch);
+                several.iter().for_each(|each| all.extend_from_slice(each));
+                collect(self.lay, all.iter().copied())
+            }
+        };
+        let reads = Reads {
+            deps: deps.laid(self.lay),
+            pending,
+        };
         self.composites.insert(site, reads);
         self.record_site(level, site, false, reads);
     }

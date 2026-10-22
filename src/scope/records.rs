@@ -167,43 +167,62 @@ pub enum Deps<'a> {
     Varying,
 }
 
-impl<'a> Deps<'a> {
-    /// The dependencies of content built over both, laid through `lay` where they grow.
-    pub fn union(
-        self,
-        other: Deps<'_>,
-        lay: impl Lays<'a>,
-        scratch: BumpAllocator<'_>,
-    ) -> Deps<'a> {
-        match (self, other) {
-            (Deps::Varying, _) | (_, Deps::Varying) => Deps::Varying,
-            (Deps::Closed, Deps::Closed) => Deps::Closed,
-            (Deps::Closed, Deps::On(slots)) => Deps::On(collect(lay, slots.iter().copied())),
-            (deps, Deps::Closed) => deps,
-            (Deps::On(mine), Deps::On(theirs)) => {
-                let mut slots = BumpVec::with_capacity_in(mine.len() + theirs.len(), scratch);
-                slots.extend_from_slice(mine);
-                slots.extend_from_slice(theirs);
-                slots.sort_unstable();
-                slots.dedup();
-                Deps::On(collect(lay, slots.iter().copied()))
+/// The dependencies of content as they gather in scratch while it is walked, laid once at the end:
+/// the union of every [`Deps`] added.
+pub struct DepsGathering<'x> {
+    varying: bool,
+    /// Whether the content reads anything open: a capture or a parameter.
+    open: bool,
+    slots: BumpVec<'x, Slot>,
+}
+
+impl<'x> DepsGathering<'x> {
+    /// Nothing gathered: closed.
+    pub fn new(scratch: BumpAllocator<'x>) -> Self {
+        DepsGathering {
+            varying: false,
+            open: false,
+            slots: BumpVec::new_in(scratch),
+        }
+    }
+
+    /// Gather `deps`.
+    pub fn add(&mut self, deps: Deps<'_>) {
+        match deps {
+            Deps::Varying => self.varying = true,
+            Deps::Closed => {}
+            Deps::On(slots) => {
+                self.open = true;
+                self.slots.extend_from_slice(slots);
             }
         }
     }
+
+    /// What is gathered, laid through `lay`: the slots sorted and deduplicated.
+    pub fn laid<'a>(&mut self, lay: impl Lays<'a>) -> Deps<'a> {
+        if self.varying {
+            return Deps::Varying;
+        }
+        if !self.open {
+            return Deps::Closed;
+        }
+        self.slots.sort_unstable();
+        self.slots.dedup();
+        Deps::On(collect(lay, self.slots.iter().copied()))
+    }
 }
 
-/// What the content `tree`, read at `holder` whose frame body is `frame`, depends on: each leaf
-/// bound to a parameter of the frame body, no parameter for a leaf captured from a body enclosing
-/// the frame, and anything for a leaf no binder names, one bound per run of a body, or one bound by
-/// a non-parameter of the frame or of a block or module body it runs.
-pub fn tree_deps<'a>(
+/// Gather what the content `tree`, read at `holder` whose frame body is `frame`, depends on: each
+/// leaf bound to a parameter of the frame body, no parameter for a leaf captured from a body
+/// enclosing the frame, and anything for a leaf no binder names, one bound per run of a body, or
+/// one bound by a non-parameter of the frame or of a block or module body it runs.
+pub fn tree_deps(
     shapes: &Shapes<'_>,
     (holder, frame): (Segment, Segment),
     tree: &Tree<'_>,
-    lay: impl Lays<'a>,
+    into: &mut DepsGathering<'_>,
     scratch: BumpAllocator<'_>,
-) -> Deps<'a> {
-    let mut deps = Deps::Closed;
+) {
     let mut stack = BumpVec::new_in(scratch);
     stack.push(*tree);
     while let Some(tree) = stack.pop() {
@@ -224,44 +243,43 @@ pub fn tree_deps<'a>(
                 }
             }
             Tree::View { source, .. } | Tree::Retyped { source, .. } => stack.push(*source),
-            Tree::Leaf(Leaf::Unnamed(_)) => return Deps::Varying,
-            Tree::Leaf(Leaf::Bound {
+            Tree::Leaf(Leaf::Unnamed(_))
+            | Tree::Leaf(Leaf::Bound {
                 within: Some(_), ..
-            }) => return Deps::Varying,
+            }) => return into.add(Deps::Varying),
             Tree::Leaf(Leaf::Bound { binder, .. }) => {
-                let each = binder_deps(shapes, (holder, frame), (binder.body, binder.slot), lay);
-                deps = deps.union(each, lay, scratch);
+                binder_deps(shapes, (holder, frame), (binder.body, binder.slot), into);
             }
         }
     }
-    deps
 }
 
-/// What the binder at `slot` of `body`, read at `holder` whose frame body is `frame`, depends on:
-/// a parameter of the frame body is itself; a capture from a body enclosing the frame is no
-/// parameter — open, but the same at every frame of one closure; anything else varies.
-fn binder_deps<'a>(
+/// Gather what the binder at `slot` of `body`, read at `holder` whose frame body is `frame`,
+/// depends on: a parameter of the frame body is itself; a capture from a body enclosing the frame
+/// is no parameter — open, but the same at every frame of one closure; anything else varies.
+fn binder_deps(
     shapes: &Shapes<'_>,
     (holder, frame): (Segment, Segment),
     (body, slot): (Segment, Slot),
-    lay: impl Lays<'a>,
-) -> Deps<'a> {
+    into: &mut DepsGathering<'_>,
+) {
     // The chain from the holder up: the bodies the frame runs, the frame, then those around it.
     let mut at = Some(holder);
     let mut past_frame = false;
     while let Some(segment) = at {
         if segment == body {
             let parameter = shapes.shape_at(body).position_of(slot) == Position::PARAMETER;
-            return match (past_frame, segment == frame) {
+            let own = [slot];
+            return into.add(match (past_frame, segment == frame) {
                 (true, _) => Deps::On(&[]),
-                (false, true) if parameter => Deps::On(collect(lay, std::iter::once(slot))),
+                (false, true) if parameter => Deps::On(&own),
                 _ => Deps::Varying,
-            };
+            });
         }
         past_frame |= segment == frame;
         at = shapes.parent(segment).map(|(parent, _)| parent);
     }
-    Deps::Varying
+    into.add(Deps::Varying)
 }
 
 /// One minting or composite site the caching fold classes: where it sits, the frame body its
@@ -336,8 +354,8 @@ struct Records<'graph> {
     closings: Keyed<'graph, (Segment, (&'graph Closing<'graph>, Frontier<'graph>))>,
     /// Which of `units` holds each fact.
     index: Keyed<'graph, (Held, u32)>,
-    /// Each body, by segment, beside its type captures as its birth reads them and its folds:
-    /// `None` before the load folds, when a read falls to the base, and every capture composes.
+    /// Each body, by segment, beside its type captures as its birth reads them and its folds: none
+    /// before the load folds, when a read falls to the base.
     bodies: &'graph [Laid<'graph>],
 }
 
@@ -382,21 +400,18 @@ impl<'graph> LoadFacts<'graph> {
     }
 
     /// One walk's records over `shapes`, laid through `lay`, over `base` where the walk resumed
-    /// one under `binding`. `folds`, by segment, is empty where the load has not folded the records
-    /// yet.
-    #[allow(clippy::too_many_arguments)]
+    /// one under `binding`: `units` and `closings` sorted by id, not yet folded.
     pub fn of_records(
         lay: impl Lays<'graph>,
         scratch: BumpAllocator<'_>,
         shapes: &'graph Shapes<'graph>,
         base: Option<&'graph LoadFacts<'graph>>,
         binding: Binding<'graph>,
-        units: &mut [(UnitId, (&'graph UnitFacts<'graph>, Frontier<'graph>))],
-        closings: &mut [(Segment, (&'graph Closing<'graph>, Frontier<'graph>))],
-        folds: &[Folds<'graph>],
+        units: &[(UnitId, (&'graph UnitFacts<'graph>, Frontier<'graph>))],
+        closings: &[(Segment, (&'graph Closing<'graph>, Frontier<'graph>))],
     ) -> Self {
         debug_assert!(base.is_none_or(|base| binding.extends(base.binding())));
-        let units = Keyed::sorted(lay, units);
+        let units = Keyed::from_sorted(collect(lay, units.iter().copied()));
         let mut held = BumpVec::new_in(scratch);
         for (at, (_, (facts, _))) in units.iter().enumerate() {
             facts.held(&mut |key| held.push((key, at as u32)));
@@ -411,7 +426,7 @@ impl<'graph> LoadFacts<'graph> {
             base,
             binding,
             units,
-            closings: Keyed::sorted(lay, closings),
+            closings: Keyed::from_sorted(collect(lay, closings.iter().copied())),
             index: Keyed::from_sorted(collect(lay, held.iter().copied())),
             bodies: &[],
         };
@@ -419,10 +434,9 @@ impl<'graph> LoadFacts<'graph> {
             shapes,
             records: resident(lay, records),
         }
-        .folded(lay, folds)
     }
 
-    /// These records beside `folds`, by segment: none where it is empty.
+    /// These records beside `folds`, by segment: every capture composing where it is empty.
     pub fn folded(&self, lay: impl Lays<'graph>, folds: &[Folds<'graph>]) -> Self {
         let records = self.records;
         let shapes = self.shapes;
@@ -568,7 +582,7 @@ impl<'graph> LoadFacts<'graph> {
 
     /// Each type capture of `shape` past its builder captures, as the coordinate its birth reads.
     pub fn type_captures(&self, shape: &BodyShape<'_>) -> &'graph [Coordinate] {
-        self.records.bodies[shape.segment().index() as usize].captures
+        self.records.laid(shape.segment()).captures
     }
 
     /// How many closure slots a birth of `shape` fills: its builder captures, then its type
@@ -579,7 +593,7 @@ impl<'graph> LoadFacts<'graph> {
 
     /// `shape` as a value born of it holds it.
     pub fn body(&self, shape: &BodyShape<'_>) -> &'graph Body<'graph> {
-        &self.records.bodies[shape.segment().index() as usize].body
+        &self.records.laid(shape.segment()).body
     }
 
     /// Which of `shape`'s type captures its content composes, parallel to
@@ -792,6 +806,18 @@ impl<'graph> Records<'graph> {
     fn path(&self, root: Segment, level: usize) -> Option<(PathEntry<'graph>, Resolution<'graph>)> {
         let (_, facts) = self.holding(Held::Path(root, level))?;
         facts.paths.get((root, level)).map(|(_, path)| *path)
+    }
+
+    /// `body` as this load laid it, or its base where this load has not folded yet.
+    fn laid(&self, body: Segment) -> &'graph Laid<'graph> {
+        match self.bodies.get(body.index() as usize) {
+            Some(laid) => laid,
+            None => (self
+                .base
+                .expect("a load folds its records before a body is read"))
+            .records
+            .laid(body),
+        }
     }
 
     /// The folds of `body`: this load's, else its base's.

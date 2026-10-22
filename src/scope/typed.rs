@@ -261,7 +261,7 @@ impl<'graph> PathEntry<'graph> {
         let mut hasher = std::hash::DefaultHasher::new();
         match root {
             Root::Binder(binder) => (0u8, binder).hash(&mut hasher),
-            Root::Inline(site) => (1u8, site).hash(&mut hasher),
+            Root::Inline { site, .. } => (1u8, site).hash(&mut hasher),
         }
         (chain, label).hash(&mut hasher);
         hasher.finish()
@@ -302,11 +302,12 @@ pub enum Resolved {
     Class(usize),
 }
 
-/// A path's root: the binder a name lands at, or an expression written in place, by its site.
+/// A path's root: the binder a name lands at, or an expression written in place, by its site and
+/// the statement of its shape's body it is written in.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub enum Root {
     Binder(Binder),
-    Inline(Site),
+    Inline { site: Site, statement: u32 },
 }
 
 /// What the load pass fixed for a type, a callable or a registration: a concrete `C` where it is

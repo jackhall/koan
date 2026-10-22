@@ -417,23 +417,27 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         let shape = self.scope_shape(scope);
         let key = match scope {
             _ if shape.kind() != ShapeKind::Module => &[][..],
+            // A tree's captures sit by slot, the builder captures first.
             Scope::Body { captures, .. } => {
                 let builder = shape.captures().len();
-                let mut key = BumpVec::with_capacity_in(captures.len(), self.scratch);
-                key.extend(
-                    captures
-                        .iter()
-                        .filter(|(at, _)| (*at as usize) < builder)
-                        .copied(),
-                );
-                collect(self.lay, key.iter().copied())
+                debug_assert!(captures.is_sorted_by_key(|(at, _)| *at));
+                &captures[..captures.partition_point(|(at, _)| (*at as usize) < builder)]
             }
-            // A body with no statement reads nothing, so captures nothing.
-            Scope::Chain(level) => match shape.body().first() {
-                Some(first) => {
-                    self.builder_captures(Scope::Chain(level - 1), shape, Site::of_node(first))?
+            Scope::Chain(level) => match self.chain[level].captures {
+                Some(captures) => captures,
+                None => {
+                    // A body with no statement reads nothing, so captures nothing.
+                    let captures = match shape.body().first() {
+                        Some(first) => self.builder_captures(
+                            Scope::Chain(level - 1),
+                            shape,
+                            Site::of_node(first),
+                        )?,
+                        None => &[][..],
+                    };
+                    self.chain[level].captures = Some(captures);
+                    captures
                 }
-                None => &[][..],
             },
         };
         let within = (!key.is_empty()).then(|| resident(self.lay, Within::Body(key)));

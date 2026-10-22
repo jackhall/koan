@@ -66,7 +66,7 @@ fn a_write_reads_back_and_the_laid_facts_find_every_site_it_keys() {
                 .is_none(),
             "a unit the walk did not run has no record"
         );
-        let facts = store.facts(scratch, &[]);
+        let facts = store.facts(scratch);
         for (index, sites) in written {
             for site in sites.iter() {
                 assert_eq!(facts.settled(root, *site), index % 2 == 0);

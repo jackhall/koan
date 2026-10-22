@@ -17,8 +17,8 @@ use crate::program::{CellSubstrate, KBirth, KBundle, KState, Language, Running};
 use crate::scheduler::{Action, Step, StepError};
 use crate::scope::tests::with_shapes;
 use crate::scope::{
-    Address, Binding, Bound, Closing, Folds, Frontier, Keyed, LoadFacts, Segment, ShapeError,
-    Shapes, Site, Slot, Store, Tree, Typed, UnitFacts, UnitId, Unknown, Writes, each_part,
+    Address, Binding, Bound, Closing, Frontier, Keyed, LoadFacts, Segment, ShapeError, Shapes,
+    Site, Slot, Store, Tree, Typed, UnitFacts, UnitId, Unknown, Writes, each_part,
 };
 use crate::type_lattice::{KType, display_name};
 use crate::values::{Chain, Knotted, Nothing, TypeValue, Value};
@@ -66,10 +66,9 @@ impl<'o, 'p, L: Lays<'o>> Layer<'o, 'p, L> {
         }
     }
 
-    /// Every record this layer wrote, over its base's, beside `folds` by segment: its base's where
-    /// it is empty.
-    pub fn facts(&self, scratch: BumpAllocator<'_>, folds: &[Folds<'o>]) -> LoadFacts<'o> {
-        (self.writes).laid(self.lay, scratch, Some(self.base), self.binding, folds)
+    /// Every record this layer wrote, over its base's, not yet folded.
+    pub fn facts(&self, scratch: BumpAllocator<'_>) -> LoadFacts<'o> {
+        (self.writes).laid(self.lay, scratch, Some(self.base), self.binding)
     }
 }
 
@@ -205,7 +204,7 @@ impl<'graph> Running<'graph> {
         let base = base.unwrap_or(self.program().facts());
         let layer = Layer::new(bump, &scratch, base, binding, everything);
         self.walked::<L, _>(&layer, types, &scratch)?;
-        Ok(folded(layer.facts(&scratch, &[]), bump, &scratch))
+        Ok(folded(layer.facts(&scratch), bump, &scratch))
     }
 
     /// Walk the whole program again under `binding`, through a [`LoadStore`].
@@ -221,7 +220,7 @@ impl<'graph> Running<'graph> {
         let scratch = Bump::new();
         let store = LoadStore::new(bump, &scratch, self.program().shapes(), binding);
         self.walked::<L, _>(&store, types, &scratch)?;
-        Ok(folded(store.facts(&scratch, &[]), bump, &scratch))
+        Ok(folded(store.facts(&scratch), bump, &scratch))
     }
 
     /// Resume the load in a [`Frame`] whose slots hold `slots`.
@@ -238,7 +237,7 @@ impl<'graph> Running<'graph> {
         let load: &'l LoadFacts<'l> = self.program().facts();
         let frame = Frame::new(bump, &scratch, load, slots, types);
         self.walked::<L, _>(&frame, types, &scratch)?;
-        Ok(folded(frame.0.facts(&scratch, &[]), bump, &scratch))
+        Ok(folded(frame.0.facts(&scratch), bump, &scratch))
     }
 
     /// Run `L`'s walk over the program into `store`, interning through `types`.
@@ -372,7 +371,7 @@ fn framing_facts<'graph, L: Language>(
         types,
         &scratch,
     )
-    .map(|()| folded(frame.0.facts(&scratch, &[]), &bump, &scratch));
+    .map(|()| folded(frame.0.facts(&scratch), &bump, &scratch));
     let rendered = match walked {
         Ok(facts) => Ok(render(facts, types, program.symbols(), &leave)),
         Err(error) => Err(error.display(program.symbols(), types).to_string()),
@@ -455,14 +454,14 @@ fn a_layer_reads_its_base_where_it_did_not_write() {
         for (index, unit) in units.iter().enumerate() {
             load.write(*unit, record(writer, shapes, index, true), Frontier::EMPTY);
         }
-        let base = resident(writer, load.facts(scratch, &[]));
+        let base = resident(writer, load.facts(scratch));
         let layer = Layer::new(writer, scratch, base, Binding::EMPTY, false);
         let rerun = record(writer, shapes, 1, false);
         layer.write(units[1], rerun, Frontier::EMPTY);
         let read = |unit| layer.fact(unit).expect("a record").0;
         assert!(std::ptr::eq(read(units[0]), base.unit(units[0]).unwrap().0));
         assert!(std::ptr::eq(read(units[1]), rerun));
-        let laid = layer.facts(scratch, &[]);
+        let laid = layer.facts(scratch);
         let root = shapes.root();
         for index in 0..units.len() {
             for site in sites_of(shapes, index) {
@@ -488,7 +487,7 @@ fn a_layer_wakes_exactly_where_a_frontier_meets_an_unknown_its_base_left_unbound
             Binding::laid(writer, &mut staged)
         };
         let load = LoadStore::new(writer, scratch, shapes, binding(&[(a, KType::NUMBER)]));
-        let base = resident(writer, load.facts(scratch, &[]));
+        let base = resident(writer, load.facts(scratch));
         let both = binding(&[(a, KType::NUMBER), (b, KType::STR)]);
         let frontier = |unknowns: &[Unknown]| {
             Frontier::from_sorted(writer.fill(unknowns.len(), |at| unknowns[at]))
@@ -516,7 +515,7 @@ fn a_frame_binds_what_its_slots_hold_and_wakes_where_that_meets_a_frontier() {
     with_shapes(SOURCE, |shapes, writer, scratch, types| {
         let [a, b] = [0, 1].map(|slot| unknown(shapes, slot));
         let load = LoadStore::new(writer, scratch, shapes, Binding::EMPTY);
-        let base = resident(writer, load.facts(scratch, &[]));
+        let base = resident(writer, load.facts(scratch));
         let named = TypeValue::new(writer, KType::NUMBER, types);
         let slots: [(Unknown, Value<'_, Nothing>); 1] = [(a, Value::Type(named))];
         let frame = Frame::new(writer, scratch, base, &slots, types);
