@@ -90,10 +90,15 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         self.scopes.set(scopes);
     }
 
+    /// What the binding binds `unknown` to, where it binds it.
+    pub(super) fn bound_to(&self, unknown: Unknown) -> Option<crate::scope::Bound<'o>> {
+        self.store.binding(unknown)
+    }
+
     /// The closed type the binding gives `unknown`: a type name's type, or a module binder's
     /// carried type.
     pub(super) fn binds(&self, unknown: Unknown) -> Option<KType> {
-        match self.store.binding(unknown)? {
+        match self.bound_to(unknown)? {
             crate::scope::Bound::Type(bound) => Some(bound),
             crate::scope::Bound::Module { carried, .. } => Some(carried),
         }
@@ -588,6 +593,12 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     /// The last statement's static type of the quote's code `code` as it runs unfilled.
     pub(super) fn ran_of(&self, code: &BodyShape<'graph>) -> Option<Interval> {
         self.closed(code.segment())?.ran
+    }
+
+    /// Whether the walk has written the closing record of `body`: a test of progress, which gathers
+    /// nothing.
+    pub(super) fn has_closed(&self, body: &BodyShape<'graph>) -> bool {
+        self.store.close(body.segment()).is_some()
     }
 
     /// Whether the walk has walked `nested`, or need not: a quote's code the shape refused is left.

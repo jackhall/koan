@@ -21,12 +21,6 @@ path = "src/main.rs"
 # The dhat attribution profiler: owns the binary's global allocator and writes `dhat-heap.json`
 # (`tools/dhat_diff.py`).
 dhat = ["dep:dhat"]
-# The old load: the type channel and the static pass fill the shape's cells, read through the cells
-# backend of `LoadFacts`, in place of the one walk's records. Kept for the transition laws alone.
-old-walk = []
-# Run both walks at each load and diff the records against the cells, site for site; the program
-# runs over the cells.
-walk-diff = ["old-walk"]
 
 [dependencies]
 # The cell tier's substrate: cells, their regions, the carrier states and the liveness matrix.

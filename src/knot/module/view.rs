@@ -35,7 +35,7 @@
 //! either side and the view's signature. The load calls it at a `:|` site over a content tree it
 //! sees all of, so the root holds each type the run's view would otherwise intern;
 //! [`nested_types`] is the same half of a nested re-view, which the load lays wherever it knows
-//! what a nested module carries (`dispatch/statics/views.rs`).
+//! what a nested module carries (`dispatch/walk/views.rs`).
 
 use crate::knot::{KActivationView, KValue, Knotted, composed};
 use crate::memory::{BumpAllocator, BumpVec, Writer};

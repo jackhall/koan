@@ -23,18 +23,16 @@ fn elaborate_names_only_the_layers_below_it_holds_no_heap_and_spells_the_stack_l
     crate::tests::boundary::holds("elaborate", PREFIXES, &[]);
 }
 
-/// The cell accessors and write doors the type channel's walk reaches only through its store.
+/// The cell accessors and write doors on a shape that the type half never calls: every fact it
+/// reads comes through the [`TypeContext`](crate::elaborate::TypeContext) the walk hands it.
 const ACCESSORS: &[&str] = &[
     "declared_type",
     "registered_type",
+    "callable_type",
     "typed_expression",
     "type_expressions",
-    "path_spellings",
-    "typed",
     "in_body",
-    "refusal",
     "channel_residual",
-    "fix",
     "fix_declared",
     "fix_registered",
     "fix_callable",
@@ -47,33 +45,19 @@ const ACCESSORS: &[&str] = &[
 ];
 
 #[test]
-fn the_type_channel_reaches_every_cell_through_its_store() {
-    use crate::tests::boundary::{store_bypasses, strip_comments_and_strings};
+fn the_type_half_reads_every_fact_through_its_context() {
+    use crate::tests::boundary::{mode_branches, store_bypasses, strip_comments_and_strings};
     let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let source = manifest.join("src/elaborate/channel.rs");
+    let source = manifest.join("src/elaborate/unit.rs");
     let code = strip_comments_and_strings(&std::fs::read_to_string(&source).unwrap());
-    let offenders = store_bypasses(&code, ACCESSORS, &[]);
+    // The scan bites on a cell read, and passes a read through the context.
+    let reads = "shape.declared_type(slot)\ncontext.declared(binder)";
+    assert_eq!(store_bypasses(reads, ACCESSORS, &[]).len(), 1);
+    let mut offenders = store_bypasses(&code, ACCESSORS, &[]);
+    offenders.extend(mode_branches(&code));
     assert!(
         offenders.is_empty(),
-        "read past the store:\n{}",
-        offenders.join("\n")
-    );
-}
-
-#[test]
-fn the_type_channel_s_rules_never_ask_which_half_they_run_over() {
-    use crate::tests::boundary::{mode_branches, strip_comments_and_strings};
-    let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let source = manifest.join("src/elaborate/channel.rs");
-    let code = strip_comments_and_strings(&std::fs::read_to_string(&source).unwrap());
-    // The scan bites on each spelling of a mode branch, and passes a call named for a resumption.
-    let branches = "if self.over.is_some() {}\nlet writer = self.writer;\nself.resume\n\
-                    self.pass.over\nself.channel\nresume_channel()\nself.channel_entries()";
-    assert_eq!(mode_branches(branches).len(), 6);
-    let offenders = mode_branches(&code);
-    assert!(
-        offenders.is_empty(),
-        "a rule asks which half it runs over:\n{}",
+        "read past the context:\n{}",
         offenders.join("\n")
     );
 }

@@ -2,14 +2,9 @@
 //! content tree, against what the run binds, and the law that a load verdict over drawn functor
 //! programs holds at every run.
 
-// The tests reading the old passes' cells run under `old-walk` alone.
-#![cfg_attr(not(feature = "old-walk"), allow(unused_imports))]
-
 use proptest::prelude::*;
 
-use crate::scope::{Leaf, Resolved, Tree};
-
-use super::super::statics::unnarrowed;
+use super::super::walk::unnarrowed;
 use super::run;
 use super::statics::{body, interval, let_narrowing, loaded, narrowing};
 
@@ -292,42 +287,6 @@ fn a_quantified_member_through_a_module_is_instanced_where_the_load_names_its_pa
         )),
         "s\nt"
     );
-}
-
-#[cfg(feature = "old-walk")]
-#[test]
-fn each_open_path_reads_back_its_tree() {
-    let source = format!(
-        "{ORDERED}EXPR #(USE p :Ordered) -> Any = #(LET x :(p.Carrier) = 1)\n\
-         LET one = (asc :| Ordered)\nLET a = (BUILD one)\nLET z = a.zero"
-    );
-    loaded(&source, |program| {
-        let root = program.shape();
-        let mut trees = root.paths().iter().filter_map(|entry| {
-            let resolution = (program.facts().resolution(root, entry.level))
-                .expect("the load resolves every path");
-            match resolution.resolved {
-                Resolved::Class(_) => Some((entry.label, resolution.tree)),
-                Resolved::Closed(_) => None,
-            }
-        });
-        let label = |entry| program.symbols().display(entry).to_string();
-        let (carrier, tree) = trees.next().expect("`p.Carrier` is open");
-        assert_eq!(label(carrier.symbol()), "Carrier");
-        let Tree::Leaf(Leaf::Bound { binder, chain, .. }) = tree else {
-            panic!("a leaf on `p`: {tree:?}");
-        };
-        assert!(chain.is_empty());
-        let declaring = program.shapes().shape_at(binder.body);
-        assert_eq!(label(declaring.slot_name(binder.slot).symbol()), "p");
-        let (carrier, tree) = trees.next().expect("`a`'s `Carrier` is open");
-        assert_eq!(label(carrier.symbol()), "Carrier");
-        let Tree::View { source, .. } = tree else {
-            panic!("the view `BUILD` builds: {tree:?}");
-        };
-        assert!(!source.closed());
-        assert!(trees.next().is_none());
-    });
 }
 
 /// `SIG Counter`, `SIG Zeroed`, `SAME`, two functors over a `Counter` — `WRAP` views a body

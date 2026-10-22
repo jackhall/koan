@@ -3,7 +3,7 @@
 //!
 //! A static type is an [`Interval`]: every type the run carries at that expression lies within it.
 //! An exact one is a point. The pass is local and bidirectional over what the
-//! [type channel's load pass](crate::elaborate::type_channel) fixed — a parameter's declared type
+//! type half ([`unit`](crate::elaborate::TypeContext)) fixed — a parameter's declared type
 //! is its reads', an ascription's type its own, a callee's declared return its calls', and a
 //! literal's, a container's, a construction's and a selected candidate's own type flow up. A
 //! parameter or an ascription is exactly its type where the retype makes it so — a list, dict or
@@ -27,7 +27,7 @@
 //! the shape reads each one the same way, so the run can fit the module to it.
 //!
 //! The pass resolves each path variable off its module's content tree ([`paths`]) and reads every
-//! cell the type channel fixed through those resolutions. A member read through a name chain reads
+//! fact the type half fixed through those resolutions. A member read through a name chain reads
 //! each head parameter its module's signature leaves unpinned as the path through it, so two reads
 //! through one module share a type; a path variable a use records is read off a root the reading
 //! shape reaches. A module-valued call, ascription or member read whose tree is a view is at most
@@ -55,11 +55,11 @@
 //! onto them end by end. It contributes, records its contributions by its argument's site for the
 //! frame — one per parameter, as a keyworded use records one per argument — and is refused where
 //! the judge finds it *never*, or where its argument can never name the parameters exactly. What
-//! the pass fixes rests in each shape's write-once [`Statics`] cell, which
-//! [`evaluate`](super::evaluate) reads.
+//! the pass fixes rests in the records of the units that fixed it, which
+//! [`evaluate`](super::evaluate) reads through [`LoadFacts`](crate::scope::LoadFacts).
 //!
 //! A node is read here exactly as the evaluator reads it, through its [`Form`]. A shape's code is
-//! typed before its statements, so an `EVAL` finds it typed. It is typed twice: once for its cell,
+//! typed before its statements, so an `EVAL` finds it typed. It is typed twice: once for its records,
 //! where an unmarked key's hole is a candidate the load cannot read, since a `USING` may fill it;
 //! and once as a traced `EVAL` runs it, unfilled, the hole holding nothing — which fixes nothing.
 //! Inside a quote's code a refusal is kept on the code shape, and the `EVAL` running it reports it.
@@ -101,7 +101,7 @@
 //! static type is never a scheme.
 //!
 //! The pass classifies every **frame body** — the program, a callable, a quote's code — as it
-//! fixes the body's cell, the arms and module bodies it runs counted with it
+//! closes the body, the arms and module bodies it runs counted with it
 //! ([type tiers](../../design/type-tiers.md#two-classes-of-body)). A value is porous where its
 //! static type's upper end is porous or exposing, and, where that type is exact and closed, where it
 //! is exposing ([`porous_site`]). A body is [porous](BodyClass::Porous) where a porous value leaves
@@ -115,29 +115,23 @@
 //! module whose content tree reaches no view, no closure, no module body holding a minting site
 //! and no leaf but a value the body received. A builtin's
 //! native runs in the caller's step and enters no frame. Any other body is sealed, and caches
-//! where it is a callable or a quote's code that mints at run ([`caching`]). The cell records each
+//! where it is a callable or a quote's code that mints at run ([`caching`]). The walk records each
 //! `:|` ascription and each component of nominal declarations the load leaves unknown as a
 //! **minting site**, which the run's doors check in debug builds.
 //!
 //! The pass reads each `:|` ascription's operand as a [content tree](crate::scope::Tree) —
-//! [`trees`] — and the cell records the view's tree by the ascription's site. Over a closed tree it
+//! [`trees`] — and records the view's tree by the ascription's site. Over a closed tree it
 //! lays every type the view door computes from types alone
 //! ([`opaque_view_types`](view::opaque_view_types)) in the root, each nested module's re-view among
 //! them, read off what the tree shows each member carries ([`views`]); at an exact `:!`, the types
 //! a member read through the header reads. The run's door checks in debug builds that the tree
 //! reads the view's digest.
 //!
-//! Every load-time fact the pass reads — a type channel cell, a binder's or a part's static type,
-//! another shape's cell — and every one it writes goes through its fact [`store`]. The files here
-//! but the store's and [`resume`] hold the pass's **rules**: they lay every value they compute in
-//! the walk's scratch, intern every type through the chain they are handed for work, and hand each
-//! fact they fix to the store's write half, so they never ask whether they run at the load or in a
-//! resumption; `tests::boundary` holds them to that. The two entries ([`entry`]) build the write
-//! half and run the one walk.
-//!
-//! [`resume_statics`] runs the pass again under a binding, once the load has quiesced, at any
-//! step's brand ([`resume`]): a bound type name or module binder is the closed type it binds, and
-//! only the facts the binding wakes re-run.
+//! This file is the walk's driver: it enters and leaves each body and unit, and lays each unit's
+//! record in the store as the unit ends. Every fact a rule reads or writes goes through the façade,
+//! [`reads`]; the files here but the façade hold the walk's **rules**, which lay every value they
+//! compute in the walk's scratch and never ask which store they run over — a load's or a
+//! resumption's. `tests::boundary` holds them to that.
 //!
 //! Under test, `unnarrowed` loads a program with every keyworded use left whole and none refused,
 //! each contribution still recorded: the narrowing law compares a run so loaded with the narrowed
@@ -220,7 +214,7 @@ pub(super) fn walk<'graph: 'o, 'tier: 'o, 'o, S: Store<'o>>(
         },
         composed: scratch.alloc_slice_fill_with(count, |_| BumpVec::new_in(scratch)),
         unfilled: false,
-        unnarrowed: super::statics::unnarrowed_now(),
+        unnarrowed: unnarrowed_now(),
         trees: bump_table(scratch),
         reading: BumpVec::new_in(scratch),
         views: bump_table(scratch),
@@ -4614,4 +4608,35 @@ fn typed_of<'p>(given: &[Given<'_>], scratch: BumpAllocator<'p>) -> &'p [Interva
 /// A shape's address, which keys the pass's tables of what it read off each shape.
 fn address(shape: &BodyShape<'_>) -> usize {
     std::ptr::from_ref(shape).addr()
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Whether the walk leaves every keyworded use whole and refuses none: what the narrowing law
+    /// loads a program under to see the call a narrowing or a refusal stands for.
+    static UNNARROWED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Run `load` with every keyworded use left whole — no narrowing, no refusal — and each argument's
+/// contribution still recorded.
+#[cfg(test)]
+pub(super) fn unnarrowed<R>(load: impl FnOnce() -> R) -> R {
+    /// Clears the switch however `load` ends, so a panicking case leaves it off for the next.
+    struct Cleared;
+    impl Drop for Cleared {
+        fn drop(&mut self) {
+            UNNARROWED.with(|switch| switch.set(false));
+        }
+    }
+    UNNARROWED.with(|switch| switch.set(true));
+    let _cleared = Cleared;
+    load()
+}
+
+/// Whether loads leave every keyworded use whole now.
+fn unnarrowed_now() -> bool {
+    #[cfg(test)]
+    return UNNARROWED.with(std::cell::Cell::get);
+    #[cfg(not(test))]
+    false
 }

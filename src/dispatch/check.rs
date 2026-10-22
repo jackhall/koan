@@ -1,10 +1,10 @@
 //! The overlap check: a user overload may not take operands a builtin overload at its key already
 //! takes.
 //!
-//! It runs where a shape is built and its types can be read — over a loaded program's shape and
-//! every body nested in it, and over a quote's code where an `EVAL` runs it — and reads each
-//! registration's expression shape off the cell [the load pass](crate::elaborate::type_channel)
-//! filled: every closed, unquantified one is checked, whatever declared types its signature names.
+//! It runs where a registration is typed — in the load's walk, as the unit holding it ends, and
+//! over a quote's code where an `EVAL` runs it — and reads the registration's expression shape as
+//! the load typed it: every closed, unquantified one is checked, whatever declared types its
+//! signature names.
 //! A `USING … SCOPE` block's surfaced head births no callable and is not checked here: the
 //! definition answering it is the module's own, checked where the module is built.
 //! A builtin overload whose operands are all `Any` is shadowable and overlaps nothing; any other
@@ -34,25 +34,6 @@ pub(super) fn overlaps_through<'graph>(
     for (_, nested) in shape.nested_shapes() {
         if nested.kind() != ShapeKind::Code {
             overlaps_through(facts, nested, builtins, types, scratch)?;
-        }
-    }
-    Ok(())
-}
-
-/// [`overlaps_through`] over the cells the old passes fill: the load's check before the one walk.
-pub(super) fn overlaps<'graph>(
-    shape: &'graph BodyShape<'graph>,
-    builtins: &KBuiltins<'_, '_>,
-    types: &Chain<'_, '_, '_, '_>,
-    scratch: BumpAllocator<'_>,
-) -> Result<(), ShapeError<'graph>> {
-    for registration in shape.registrations() {
-        let typed = shape.registered_type(registration.slot);
-        overlap(shape, registration, typed, builtins, types, scratch)?;
-    }
-    for (_, nested) in shape.nested_shapes() {
-        if nested.kind() != ShapeKind::Code {
-            overlaps(nested, builtins, types, scratch)?;
         }
     }
     Ok(())

@@ -22,8 +22,8 @@
 use std::cell::Cell;
 
 use crate::memory::{BumpAllocator, BumpVec, Lays, collect};
-use crate::parse::KExpression;
 use crate::parse::quoted_body;
+use crate::parse::{KExpression, Role};
 use crate::scope::{
     Address, Binder, BodyShape, Bound, Builtins, Callable, CaptureSlot, CaptureSource, Component,
     Coordinate, Elaboration, FunctionGroupMap, ParameterBinding, Registered, Registration,
@@ -38,7 +38,6 @@ use crate::type_lattice::{
 };
 use crate::values::{Chain, Knotted, Value};
 
-use super::channel::writes_for_all;
 use super::declaration::{HeadShape, signature_heads, type_declarations};
 use super::expression::{Elaborator, Groups, type_expression};
 use super::reads::{Reads, TypeAt};
@@ -952,4 +951,13 @@ fn located(statement: &KExpression<'_>, error: Elaboration, site: Site) -> Sourc
     source_of(statement, error.site())
         .or_else(|| source_of(statement, site))
         .unwrap_or(statement.source)
+}
+
+/// Whether a callable's declaration writes a `FOR ALL` group — whose names its body reads as
+/// lexical variables of its own.
+fn writes_for_all(declaration: &KExpression<'_>) -> bool {
+    declaration
+        .cache()
+        .builtin_shape()
+        .is_some_and(|shape| shape.roles().any(|role| role == Role::Quantifiers))
 }

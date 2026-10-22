@@ -1,15 +1,10 @@
-//! Specialization keys over frontiers: which names a callable's key lists, read off the seams the
-//! load laid, and what a call of it seeks at run.
-
-// The tests reading the old passes' cells run under `old-walk` alone.
-#![cfg_attr(not(feature = "old-walk"), allow(unused_imports))]
+//! Specialization keys over frontiers: which names a callable's key lists, folded from the
+//! frontiers of the units beneath it, and what a call of it seeks at run.
 
 use crate::program::Program;
-use crate::scope::{BodyShape, Mint, SeamAt, ShapeKind, Slot};
+use crate::scope::{BodyShape, Mint, ShapeKind, Slot};
 
 use super::caching::{PRELUDE, Ran, bounds, every_shape, minted, ran_under};
-#[cfg(feature = "old-walk")]
-use super::frontiers::{quantified, seams, unknown};
 use super::statics::{body, loaded};
 use crate::values::SpecBounds;
 
@@ -68,27 +63,6 @@ fn some(names: &[&str]) -> Option<Vec<String>> {
     Some(names.iter().map(|name| name.to_string()).collect())
 }
 
-#[cfg(feature = "old-walk")]
-#[test]
-fn a_body_keys_on_a_for_all_name_a_frontier_at_its_entry_waits_on() {
-    let source =
-        format!("{PICK}EXPR FOR ALL #[Elt] #(WRAP x :Elt) -> Any = #(\n  LET p = (PICK x)\n  p\n)");
-    loaded(&source, |program| {
-        let wrap = quantified(program);
-        assert_eq!(listed(program, wrap), some(&["Elt"]));
-        assert!(
-            (program.facts().caching(wrap)).is_some_and(|caching| caching.invariant.is_none()),
-            "`WRAP` keys through its frontier alone"
-        );
-    });
-    let closed =
-        format!("{PICK}LET f = (FN :{{x :Number}} -> Any = #(\n  LET p = (PICK x)\n  p\n))");
-    loaded(&closed, |program| {
-        let f = body(program, program.shape(), "f");
-        assert_eq!(listed(program, f), None, "a closed body keys nothing");
-    });
-}
-
 #[test]
 fn a_body_keys_on_a_module_parameter_a_path_through_it_waits_on() {
     let source = format!(
@@ -98,83 +72,6 @@ fn a_body_keys_on_a_module_parameter_a_path_through_it_waits_on() {
     loaded(&source, |program| {
         let step = body(program, program.shape(), "step");
         assert_eq!(listed(program, step), some(&["m"]));
-    });
-}
-
-#[cfg(feature = "old-walk")]
-#[test]
-fn a_body_keys_on_its_own_names_a_nested_body_s_entry_frontier_waits_on() {
-    // `PAIRED`'s fact waits on `OUTER`'s `m` and its own `Inner`, so it sits at `PAIRED`'s entry:
-    // `OUTER` keys `m`, and `PAIRED`, whose specialization lies beneath `OUTER`'s, `Inner`.
-    let source = format!(
-        "{PRELUDE}{SAME}EXPR #(OUTER m :Counter) -> Any = #((EXPR FOR ALL #[Inner] \
-         #(PAIRED x :Inner) -> Any = #(SAME m.zero AND x)) (PAIRED 1))\n"
-    );
-    loaded(&source, |program| {
-        let mut shapes = Vec::new();
-        every_shape(program.shape(), &mut shapes);
-        let find = |slots: &[&str]| {
-            *(shapes.iter())
-                .find(|shape| names(program, shape) == slots)
-                .unwrap_or_else(|| panic!("a callable binds {slots:?}"))
-        };
-        let outer = find(&["m", "<symbol>"]);
-        let paired = find(&["x", "Inner"]);
-        let (m, inner) = (
-            unknown(program, outer, "m"),
-            unknown(program, paired, "Inner"),
-        );
-        assert!(
-            (seams(paired).iter()).any(|(at, waits)| *at == SeamAt::Entry
-                && waits.contains(&m)
-                && waits.contains(&inner)),
-            "`PAIRED`'s entry seam waits on `m` and `Inner`"
-        );
-        assert_eq!(listed(program, outer), some(&["m"]));
-        assert_eq!(listed(program, paired), some(&["Inner"]));
-    });
-    // Without `PAIRED`, only `m`'s own type waits on `m`, which keys nothing.
-    let alone = format!("{PRELUDE}EXPR #(OUTER m :Counter) -> Any = #(1)\n");
-    assert_eq!(keyed(&alone, &["m"]), None);
-}
-
-#[cfg(feature = "old-walk")]
-#[test]
-fn a_capture_keys_the_body_that_binds_it_never_the_one_reading_it() {
-    let source = format!(
-        "{PICK}EXPR FOR ALL #[Elt] #(WRAP x :Elt) -> Any = #(\n  \
-         LET g = (FN :{{}} -> Any = #(\n    LET p = (PICK x)\n    p\n  ))\n  g\n)"
-    );
-    loaded(&source, |program| {
-        let wrap = quantified(program);
-        let (_, g) = (wrap.nested_shapes().iter())
-            .find(|(_, nested)| nested.kind() == ShapeKind::Callable)
-            .expect("`g` is nested in `WRAP`");
-        assert_eq!(listed(program, wrap), some(&["Elt"]));
-        assert_eq!(listed(program, g), None);
-    });
-}
-
-#[cfg(feature = "old-walk")]
-#[test]
-fn a_frontier_name_whose_parameter_does_not_key_keys_nothing() {
-    // `m`'s declared type is open, so its digest is no constant cost.
-    let source = format!(
-        "{PICK}SIG Pair FOR ALL #[Left Right] = #[(VAL l :Left) (VAL r :Right)]\n\
-         EXPR FOR ALL #[Elt] #(USE m :(Pair WITH {{Left = Elt}})) -> Any = #(LET p = (PICK m.r))\n"
-    );
-    loaded(&source, |program| {
-        let using = quantified(program);
-        let m = unknown(program, using, "m");
-        assert!(
-            (seams(using).iter()).any(|(at, waits)| *at == SeamAt::Entry && waits.contains(&m)),
-            "`USE`'s entry seam waits on `m`"
-        );
-        let listed = listed(program, using).unwrap_or_default();
-        assert!(
-            !listed.contains(&"m".to_string()),
-            "`m` keys nothing: {listed:?}"
-        );
     });
 }
 
@@ -365,7 +262,6 @@ fn an_escaping_body_s_hop_seeks_with_its_own_content() {
 /// A unit that reads an entry-bound name beside a later-bound one seams at the later one, so its
 /// callable keys nothing through it (F4): `s` reads `x`, bound at the entry, and `n`, bound at its
 /// own unit. `n` comes from a top-level maker, so no other unit seams at the entry.
-#[cfg(not(feature = "old-walk"))]
 #[test]
 fn a_unit_mixing_seams_keys_nothing_at_the_entry() {
     let source = format!(
@@ -378,7 +274,6 @@ fn a_unit_mixing_seams_keys_nothing_at_the_entry() {
 
 /// A unit that reads a parameter waits on every name its entry's frontier holds, so its callable
 /// keys on each keyable one: `p` reads `x` alone, and `SUBJECT` keys `Key` beside `Elt`.
-#[cfg(not(feature = "old-walk"))]
 #[test]
 fn a_callable_keys_on_each_keyable_name_its_entry_holds_that_a_unit_reads_through() {
     let source = format!(
@@ -394,7 +289,6 @@ fn a_callable_keys_on_each_keyable_name_its_entry_holds_that_a_unit_reads_throug
 
 /// A module parameter is an unknown wherever a fact reads its content, so a callable reading a
 /// member of one its signature pins keys on it.
-#[cfg(not(feature = "old-walk"))]
 #[test]
 fn a_callable_keys_on_a_module_parameter_its_units_read() {
     let source = format!(
@@ -406,7 +300,6 @@ fn a_callable_keys_on_a_module_parameter_its_units_read() {
 
 /// The keys fold reads every unit but a callable's entry, so a name only the parameters' own
 /// declared types read keys nothing: `PAIR`'s body reads neither `First` nor `Second`.
-#[cfg(not(feature = "old-walk"))]
 #[test]
 fn a_name_read_only_at_its_callable_s_entry_keys_nothing() {
     let source =

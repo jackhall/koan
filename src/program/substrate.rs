@@ -1,23 +1,20 @@
-//! The substrate: an owner that borrows nothing, and the running state that borrows it — and,
-//! for the tests that resume a load, the [`Loaded`] door its passes' resumption goes through.
+//! The substrate: an owner that borrows nothing, and the running state that borrows it.
 
 use std::cell::Cell;
 
 use self_cell::self_cell;
 
-use crate::elaborate::{builtin_error, resume_channel};
+use crate::elaborate::builtin_error;
 use crate::knot::KBuiltins;
 use crate::memory::{
-    Bump, BumpAllocator, BumpVec, ProgramBrand, ProgramStorage, SlabHandle, Writer,
-    program_storage, resident,
+    Bump, BumpAllocator, ProgramBrand, ProgramStorage, SlabHandle, program_storage, resident,
 };
 use crate::parse::parse_with_path;
 use crate::scheduler::{
     DrainStalled, Graph, NativeStep, Placement, Resting, Roots, Scheduler, Work,
 };
-use crate::scope::{BodyShape, OldBinding, Relay, Resumption, Settled, ShapeError, Unknown};
 use crate::symbols::SymbolInterner;
-use crate::type_lattice::{Agent, Halves, KType, RootBuilder};
+use crate::type_lattice::{Agent, Halves, RootBuilder};
 use crate::values::{Chain, Half, SpecBounds, TypeTiers, Types};
 
 use super::body;
@@ -141,7 +138,6 @@ pub struct CellSubstrate(Joined);
 
 /// The load's one walk over `shapes`: every record the language's walk computes, laid in program
 /// storage through `writer`, beside the folds the load lays over them.
-#[cfg(any(not(feature = "old-walk"), all(test, feature = "walk-diff")))]
 fn walked<'graph, L: Language>(
     shapes: &'graph crate::scope::Shapes<'graph>,
     builtins: &'graph KBuiltins<'graph, 'graph>,
@@ -176,22 +172,6 @@ impl CellSubstrate {
         bounds: SpecBounds,
         output: Output,
     ) -> Result<Self, LoadError> {
-        Self::load_with::<L, ()>(source, path, cap, bounds, output, |_| ())
-            .map(|(loaded, _)| loaded)
-    }
-
-    /// [`load`](Self::load), handing `inspect` the load once its passes quiesce and before its
-    /// types' root freezes: what [`Loaded::resume`] resumes. What `inspect` returns rides beside
-    /// the substrate, and names nothing of the load.
-    pub fn load_with<L: Language, R: 'static>(
-        source: &str,
-        path: &str,
-        cap: u32,
-        bounds: SpecBounds,
-        output: Output,
-        inspect: impl for<'g, 'l, 'door> FnOnce(Loaded<'g, 'l, 'door, L>) -> R,
-    ) -> Result<(Self, R), LoadError> {
-        let mut inspected = None;
         let owner = Owner {
             storage: program_storage(),
             registry: Bump::new(),
@@ -225,46 +205,8 @@ impl CellSubstrate {
                     &scratch,
                 )
                 .map_err(refused)?;
-                let shape = shapes.root();
-                // The diff runs the one walk first, so it reads no cell the old passes fill.
-                #[cfg(all(test, feature = "walk-diff"))]
-                let diffed = walked::<L>(shapes, builtins, types, brand.writer(), &scratch);
-                #[cfg(feature = "old-walk")]
-                {
-                    crate::elaborate::type_channel(
-                        shape,
-                        builtins,
-                        types,
-                        brand.writer(),
-                        &scratch,
-                    )
-                    .map_err(refused)?;
-                    L::check(shape, builtins, types, brand.writer(), &scratch).map_err(refused)?;
-                    crate::build::list_seams(shape, brand.writer(), &scratch);
-                    crate::build::lay_keys(shape, brand.writer(), &scratch);
-                }
-                #[cfg(not(feature = "old-walk"))]
                 let walked = walked::<L>(shapes, builtins, types, brand.writer(), &scratch)
                     .map_err(refused)?;
-                #[cfg(all(test, feature = "walk-diff"))]
-                {
-                    let records = diffed.map_err(refused)?;
-                    let cells = crate::scope::LoadFacts::of_cells(brand.writer(), shapes);
-                    if !records.own_units().is_empty() {
-                        let lines =
-                            super::tests::diff::diff(&cells, records, types, &owner.symbols);
-                        assert!(lines.is_empty(), "walk diff:\n{}", lines.join("\n"));
-                    }
-                }
-                inspected = Some(inspect(Loaded {
-                    shape,
-                    builtins,
-                    types,
-                    writer: brand.writer(),
-                    scratch: &scratch,
-                    symbols: &owner.symbols,
-                    language: std::marker::PhantomData,
-                }));
                 let error = builtin_error(types, &owner.symbols, &scratch);
                 let tiers = TypeTiers {
                     frozen: builder.freeze(),
@@ -272,14 +214,10 @@ impl CellSubstrate {
                 };
                 owner.symbols.freeze();
                 let writer = brand.writer();
-                #[cfg(feature = "old-walk")]
-                let facts = resident(writer, crate::scope::LoadFacts::of_cells(writer, shapes));
-                #[cfg(not(feature = "old-walk"))]
-                let facts = walked;
                 let program = resident(
                     writer,
                     Program::new(
-                        facts,
+                        walked,
                         builtins,
                         tiers,
                         error,
@@ -300,83 +238,12 @@ impl CellSubstrate {
                 resting: None,
             })
         })
-        .map(|joined| {
-            (
-                CellSubstrate(joined),
-                inspected.expect("a load that succeeds is inspected"),
-            )
-        })
+        .map(CellSubstrate)
     }
 
     /// Reach the running state. `'graph` is fresh per call and names the same storage every time,
     /// so what one call leaves in the graph or the types' root the next call finds.
     pub fn with<R>(&mut self, f: impl for<'graph> FnOnce(&mut Running<'graph>) -> R) -> R {
         self.0.with_dependent_mut(|_, running| f(running))
-    }
-}
-
-/// A load whose passes have quiesced, before its types' root freezes: its root shape, and the
-/// door a resumption of it goes through. Only tests resume a load.
-pub struct Loaded<'graph, 'l, 'door, L> {
-    shape: &'graph BodyShape<'graph>,
-    builtins: &'graph KBuiltins<'graph, 'graph>,
-    types: &'l Chain<'graph, 'graph, 'graph, 'door>,
-    writer: Writer<'graph, 'graph>,
-    scratch: BumpAllocator<'l>,
-    symbols: &'graph SymbolInterner,
-    language: std::marker::PhantomData<L>,
-}
-
-impl<'graph, 'l, 'door, L: Language> Loaded<'graph, 'l, 'door, L> {
-    pub fn shape(&self) -> &'graph BodyShape<'graph> {
-        self.shape
-    }
-
-    pub fn symbols(&self) -> &'graph SymbolInterner {
-        self.symbols
-    }
-
-    /// The load's chain: what a resumption interns its types through.
-    pub fn types(&self) -> &'l Chain<'graph, 'graph, 'graph, 'door> {
-        self.types
-    }
-
-    /// `staged`, laid down as a binding.
-    pub fn binding(&self, staged: &[(Unknown, KType)]) -> OldBinding<'graph> {
-        let mut held = BumpVec::with_capacity_in(staged.len(), self.scratch);
-        held.extend_from_slice(staged);
-        OldBinding::laid(self.writer, &mut held)
-    }
-
-    /// Resume the load under `binding`, extending `base`, the resumptions before it, newest
-    /// first: the type channel, then the language's pass. `everything` re-runs every fact, not
-    /// only those the binding wakes. A binding extends its base's.
-    pub fn resume(
-        &self,
-        base: &[&'graph Settled<'graph>],
-        binding: OldBinding<'graph>,
-        everything: bool,
-    ) -> Result<&'graph Settled<'graph>, ShapeError<'graph>> {
-        if let Some(newest) = base.first() {
-            assert!(
-                binding.extends(newest.binding),
-                "a resumption's binding extends its base's"
-            );
-        }
-        let over = Resumption {
-            binding,
-            base,
-            everything,
-        };
-        let relay = Relay::new(self.writer, self.types, self.types, self.scratch);
-        let channel = resume_channel(self.shape, over, self.builtins, &relay, self.scratch)?;
-        L::resume(
-            self.shape,
-            self.builtins,
-            &relay,
-            self.scratch,
-            over,
-            channel,
-        )
     }
 }

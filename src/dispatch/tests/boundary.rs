@@ -28,8 +28,86 @@ fn dispatch_names_only_the_layers_below_it() {
     crate::tests::boundary::holds("dispatch", PREFIXES, &[]);
 }
 
-/// The cell accessors and write doors the static pass reaches only through its store.
-const ACCESSORS: &[&str] = &[
+/// The store's doors, which the walk's rules reach only through its façade, `walk/reads.rs`.
+const ACCESSORS: &[&str] = &["binding", "fact", "close", "wakes", "write", "write_close"];
+
+/// The fields of a level holding the facts the walk fixed, which its rules read and write only
+/// through the façade.
+const FIELDS: &[&str] = &[
+    "declared",
+    "registered",
+    "expressions",
+    "reads",
+    "parts",
+    "statements",
+    "binders",
+    "uses",
+    "selections",
+    "settled",
+    "instances",
+    "named",
+    "trees",
+    "throughs",
+    "minting",
+    "signature",
+];
+
+/// The walk's rule files: every file of `walk/` but the façade. `walk.rs` itself is the driver,
+/// which enters and leaves the units and lays their records.
+fn rules() -> Vec<std::path::PathBuf> {
+    let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let mut sources = Vec::new();
+    crate::tests::boundary::collect_sources(&manifest.join("src/dispatch/walk"), &mut sources);
+    sources.retain(|source| !source.ends_with("reads.rs"));
+    sources
+}
+
+#[test]
+fn the_walk_s_rules_reach_every_fact_through_its_facade() {
+    use crate::tests::boundary::{store_bypasses, strip_comments_and_strings};
+    // The scan bites on a store door and on a level's field.
+    let bypasses = "self.store.close(segment)
+self.chain[level].binders
+self.closed(segment)";
+    assert_eq!(store_bypasses(bypasses, ACCESSORS, FIELDS).len(), 2);
+    let mut offenders = Vec::new();
+    for source in rules() {
+        let code = strip_comments_and_strings(&std::fs::read_to_string(&source).unwrap());
+        for found in store_bypasses(&code, ACCESSORS, FIELDS) {
+            offenders.push(format!("{}:{found}", source.display()));
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "read past the façade:\n{}",
+        offenders.join("\n")
+    );
+}
+
+/// The run's readers of the load's facts: each reads them through `LoadFacts` alone.
+const READERS: &[&str] = &[
+    "src/dispatch/evaluate.rs",
+    "src/dispatch/builtins.rs",
+    "src/program/body.rs",
+    "src/program/specialize.rs",
+    "src/knot.rs",
+    "src/knot/function.rs",
+    "src/knot/code.rs",
+    "src/knot/tie.rs",
+    "src/knot/module.rs",
+    "src/knot/module/birth.rs",
+    "src/knot/module/view.rs",
+    "src/elaborate/reads.rs",
+    "src/elaborate/paths.rs",
+    "src/scope/typed.rs",
+    "src/scope/activation.rs",
+    "src/scope/closure.rs",
+    "src/scope/tree.rs",
+];
+
+/// The cell accessors a run's reader might call on a shape: what `LoadFacts` answers in their
+/// place, and `shape_at`, which the shape table answers.
+const READ_ACCESSORS: &[&str] = &[
     "declared_type",
     "registered_type",
     "callable_type",
@@ -63,73 +141,6 @@ const ACCESSORS: &[&str] = &[
     "fix_caching",
     "fix_statics_residual",
     "refuse_typing",
-];
-
-/// The fields of a level the static pass reads and writes only through its store.
-const FIELDS: &[&str] = &[
-    "binders",
-    "statements",
-    "parts",
-    "uses",
-    "selections",
-    "settled",
-    "instances",
-    "named",
-    "throughs",
-    "trees",
-];
-
-#[test]
-fn the_static_pass_reaches_every_fact_through_its_store() {
-    use crate::tests::boundary::{collect_sources, store_bypasses, strip_comments_and_strings};
-    let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let pass = manifest.join("src/dispatch/statics");
-    let mut sources = vec![manifest.join("src/dispatch/statics.rs")];
-    collect_sources(&pass, &mut sources);
-    let mut offenders = Vec::new();
-    // The store's two halves and the entries that build them; every other file holds rules.
-    let rules = |source: &&std::path::PathBuf| {
-        !["store.rs", "resume.rs", "entry.rs"]
-            .iter()
-            .any(|half| source.ends_with(half))
-    };
-    for source in sources.iter().filter(rules) {
-        let code = strip_comments_and_strings(&std::fs::read_to_string(source).unwrap());
-        for found in store_bypasses(&code, ACCESSORS, FIELDS) {
-            offenders.push(format!("{}:{found}", source.display()));
-        }
-    }
-    assert!(
-        offenders.is_empty(),
-        "read past the store:\n{}",
-        offenders.join("\n")
-    );
-}
-
-/// The run's readers of the load's facts: each reads them through `LoadFacts` alone.
-const READERS: &[&str] = &[
-    "src/dispatch/evaluate.rs",
-    "src/dispatch/builtins.rs",
-    "src/program/body.rs",
-    "src/program/specialize.rs",
-    "src/knot.rs",
-    "src/knot/function.rs",
-    "src/knot/code.rs",
-    "src/knot/tie.rs",
-    "src/knot/module.rs",
-    "src/knot/module/birth.rs",
-    "src/knot/module/view.rs",
-    "src/elaborate/reads.rs",
-    "src/elaborate/paths.rs",
-    "src/scope/typed.rs",
-    "src/scope/activation.rs",
-    "src/scope/closure.rs",
-    "src/scope/tree.rs",
-];
-
-/// The cell accessors a run's reader might call on a shape, past the static pass's own: what
-/// `LoadFacts` answers in their place, and `shape_at`, which the shape table answers.
-const READ_ACCESSORS: &[&str] = &[
     "caches",
     "caching",
     "capture_count",
@@ -155,18 +166,18 @@ const READ_ACCESSORS: &[&str] = &[
 fn the_run_reads_every_load_fact_through_the_read_door() {
     use crate::tests::boundary::{cell_reads, strip_comments_and_strings};
     let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let accessors: Vec<&str> = ACCESSORS.iter().chain(READ_ACCESSORS).copied().collect();
+    let accessors = READ_ACCESSORS;
     // The walk tells a read through the door from one on a shape.
     let door =
         "at.view.load().caches(shape)\n(program.facts())\n    .caches(shape)\nfacts.caches(a)";
-    assert!(cell_reads(door, &accessors).is_empty());
-    assert_eq!(cell_reads("view.shape().caches()", &accessors).len(), 1);
-    assert_eq!(cell_reads("(f(shape)).caches()", &accessors).len(), 1);
+    assert!(cell_reads(door, accessors).is_empty());
+    assert_eq!(cell_reads("view.shape().caches()", accessors).len(), 1);
+    assert_eq!(cell_reads("(f(shape)).caches()", accessors).len(), 1);
     let mut offenders = Vec::new();
     for reader in READERS {
         let source = manifest.join(reader);
         let code = strip_comments_and_strings(&std::fs::read_to_string(&source).unwrap());
-        for found in cell_reads(&code, &accessors) {
+        for found in cell_reads(&code, accessors) {
             offenders.push(format!("{reader}:{found}"));
         }
     }
@@ -178,18 +189,11 @@ fn the_run_reads_every_load_fact_through_the_read_door() {
 }
 
 #[test]
-fn the_static_pass_s_rules_never_ask_which_half_they_run_over() {
-    use crate::tests::boundary::{collect_sources, mode_branches, strip_comments_and_strings};
-    let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    let mut sources = vec![manifest.join("src/dispatch/statics.rs")];
-    collect_sources(&manifest.join("src/dispatch/statics"), &mut sources);
+fn the_walk_s_rules_never_ask_which_half_they_run_over() {
+    use crate::tests::boundary::{mode_branches, strip_comments_and_strings};
     let mut offenders = Vec::new();
-    for source in sources.iter().filter(|source| {
-        !["store.rs", "resume.rs", "entry.rs"]
-            .iter()
-            .any(|half| source.ends_with(half))
-    }) {
-        let code = strip_comments_and_strings(&std::fs::read_to_string(source).unwrap());
+    for source in rules() {
+        let code = strip_comments_and_strings(&std::fs::read_to_string(&source).unwrap());
         for found in mode_branches(&code) {
             offenders.push(format!("{}:{found}", source.display()));
         }

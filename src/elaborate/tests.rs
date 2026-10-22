@@ -5,7 +5,6 @@
 
 mod boundary;
 mod builtin;
-mod channel;
 mod declarations;
 mod examples;
 mod families;
@@ -21,7 +20,7 @@ use crate::scope::{
 use crate::symbols::{BinderSymbol, SymbolInterner, TypeSymbol};
 use crate::type_lattice::KType;
 use crate::values::tests::TestTypes;
-use crate::values::{Chain, TypeValue, Types, Value};
+use crate::values::{Chain, TypeValue, Value};
 
 use super::{callable_type, type_declarations};
 use crate::scope::{Callable, Elaboration};
@@ -46,16 +45,11 @@ pub(super) enum Held<'cell> {
 pub(super) struct Program<'p, 'graph, 'cell> {
     /// The load's chain, at the activation's brand.
     pub types: &'p Chain<'cell, 'cell, 'graph, 'p>,
-    /// The same chain, at the brand a load pass takes.
-    pub load: &'p Types<'graph, 'p>,
     pub symbols: &'p SymbolInterner,
     pub scratch: BumpAllocator<'p>,
     pub lines: &'p [KExpression<'graph>],
     pub activation: &'cell Activation<'graph, 'cell>,
     pub writer: Writer<'cell, 'p>,
-    /// Program storage's writer, which the load pass lays its records down through: `writer`, at
-    /// the brand a load pass takes.
-    pub storage: Writer<'graph, 'graph>,
 }
 
 impl<'p, 'graph, 'cell> Program<'p, 'graph, 'cell> {
@@ -248,7 +242,6 @@ pub(super) fn with_program<R>(
     }
     check(Program {
         types: &types,
-        load: &types,
         symbols: &symbols,
         scratch: &scratch,
         // A reader takes a body's statements from its shape, never from the parse: the shape owns
@@ -256,7 +249,6 @@ pub(super) fn with_program<R>(
         lines: shape.body(),
         activation,
         writer,
-        storage: writer,
     })
 }
 

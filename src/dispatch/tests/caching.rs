@@ -488,25 +488,6 @@ fn a_loop_passing_a_record_on_bare_digests_it_once_per_loop() {
     );
 }
 
-#[cfg(feature = "old-walk")]
-#[test]
-fn only_a_use_that_may_call_a_function_hands_a_memo_on() {
-    // `RUN`'s `cfg` keeps a memo; `ATTR` can select only a builtin, which runs no frame to keep it,
-    // while the tail call may select `RUN`.
-    let source = "EXPR #(RUN cfg :{items :(LIST OF Number)} link :Link) -> Number = \
-                  #((MODULE ops OVER #[cfg] = (LET held = cfg)) (LET v = (ops :| Holder)) \
-                  (LET n = (ATTR cfg items)) (RUN cfg (ATTR link next)))\n";
-    let handed = loaded(&format!("{PRELUDE}{source}"), |program| {
-        let mut shapes = Vec::new();
-        every_shape(program.shape(), &mut shapes);
-        (shapes.into_iter())
-            .filter_map(|shape| shape.statics())
-            .map(|statics| statics.handoffs.len())
-            .sum::<usize>()
-    });
-    assert_eq!(handed, 1, "the tail call alone hands `cfg`'s memo on");
-}
-
 #[test]
 fn a_memo_holds_the_digest_of_the_value_its_slot_holds() {
     use crate::knot::module::view::CHECK_SLOT_MEMOS;
@@ -988,7 +969,6 @@ fn laid_through_caching_chains() {
 /// A tail edge into a registration the load types `Unknown` pairs by its written slots (D1.9):
 /// `SPIN`'s parameter `e` reads a meet over `Elt`, so its registration is untyped, and its tail
 /// call passes `Item` on bare, so the nominal it declares over it is invariant.
-#[cfg(not(feature = "old-walk"))]
 #[test]
 fn a_tail_edge_into_an_untyped_registration_pairs_by_its_written_slots() {
     let source = program(

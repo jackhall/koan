@@ -638,7 +638,6 @@ fn a_signature_prints_its_head_parameters_and_a_meet_its_applications() {
 
 /// The walk reports the first refusal in walk order: a value statement's ahead of a later
 /// declaration's (D4), and the other way round where the declaration comes first.
-#[cfg(not(feature = "old-walk"))]
 #[test]
 fn the_first_refusal_in_walk_order_is_reported() {
     assert_eq!(

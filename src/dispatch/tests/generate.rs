@@ -13,9 +13,6 @@
 //! programs, a site naming a quantified variable, with and without the contexts drawn around it;
 //! [`retypes`](super::retypes) retypes a value drawn under a [`retyped_type`] at each retype site.
 
-// What the resumption laws draw goes unread while they run under `old-walk` alone.
-#![cfg_attr(not(feature = "old-walk"), allow(dead_code))]
-
 use proptest::prelude::*;
 
 /// What the load's refusal of a registration whose union ties says.
@@ -1022,6 +1019,10 @@ impl Bound {
     }
 
     /// This binding with only the unknowns `keep` names.
+    #[expect(
+        dead_code,
+        reason = "the resumption laws read it once Phase 6 ports them"
+    )]
     pub(super) fn only(&self, keep: &[&str]) -> Bound {
         let kept =
             |name: &str, bound: &Option<Desc>| bound.clone().filter(|_| keep.contains(&name));
@@ -1233,6 +1234,10 @@ impl Resumable {
     /// and the `:Type` parameter from the shape, each declared at the top level as an alias of the
     /// type it binds; a bound module parameter or local annotated at its pin, and a bound `Pair`
     /// declared as its type.
+    #[expect(
+        dead_code,
+        reason = "the resumption laws read it once Phase 6 ports them"
+    )]
     pub(super) fn restart(&self, bound: &Bound) -> String {
         self.source(bound)
     }

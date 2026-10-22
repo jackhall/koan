@@ -29,7 +29,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>> TypeContext<'graph, '
     }
 
     fn binding(&self, unknown: Unknown) -> Option<crate::scope::Bound<'o>> {
-        self.store.binding(unknown)
+        self.bound_to(unknown)
     }
 
     fn declared(&self, binder: Binder) -> StaticType<'o> {

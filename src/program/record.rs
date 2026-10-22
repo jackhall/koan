@@ -14,9 +14,7 @@ use crate::knot::{KActivationView, KBuiltins, KValue};
 use crate::memory::{Bump, BumpAllocator, Writer};
 use crate::parse::{ExpressionPart, KExpression, ParseError};
 use crate::scheduler::{NativeStep, Work};
-use crate::scope::{
-    BodyShape, ChainRelay, LoadFacts, Resumption, Settled, ShapeError, Shapes, Slot, Store,
-};
+use crate::scope::{BodyShape, LoadFacts, ShapeError, Shapes, Slot, Store};
 use crate::symbols::{BinderSymbol, SymbolInterner};
 use crate::type_lattice::{
     DeclaredType, KType, TypeNode, display_name, satisfied_by, substitute_quantified,
@@ -44,36 +42,6 @@ pub trait Language {
     /// The step an evaluation runs: born holding [`KBirth::Evaluate`], it turns the node into a
     /// value delivered where the drain says.
     fn evaluator<'graph>() -> NativeStep<'graph, KBundle>;
-
-    /// What the language refuses of a shape once it is built, and what it records on it through
-    /// `writer`, before anything runs — the checks that need types. None by default.
-    fn check<'graph>(
-        shape: &'graph BodyShape<'graph>,
-        builtins: &'graph KBuiltins<'graph, 'graph>,
-        types: &Chain<'graph, 'graph, 'graph, '_>,
-        writer: Writer<'graph, 'graph>,
-        scratch: BumpAllocator<'_>,
-    ) -> Result<(), ShapeError<'graph>> {
-        let _ = (shape, builtins, types, writer, scratch);
-        Ok(())
-    }
-
-    /// Resume what [`check`](Self::check) fixed under `over`'s binding, beside `channel`, what the
-    /// type channel's resumption under it settled, at any step's brand: the walk lays in `scratch`
-    /// and interns through `output`'s source chain, and what it settles is relayed out through
-    /// `output` and laid there with `channel` as one `Settled`. The language's resumption settles
-    /// nothing by default.
-    fn resume<'graph, 'out, 'w>(
-        shape: &'graph BodyShape<'graph>,
-        builtins: &'graph KBuiltins<'graph, 'graph>,
-        output: &ChainRelay<'out, 'w, '_, '_, '_, '_>,
-        scratch: BumpAllocator<'_>,
-        over: Resumption<'_, 'out>,
-        channel: Settled<'out>,
-    ) -> Result<&'out Settled<'out>, ShapeError<'out>> {
-        let _ = (shape, builtins, scratch, over);
-        Ok(crate::memory::resident(output.writer(), channel))
-    }
 
     /// Run the language's one walk over `shapes`, keeping every record it computes in `store` and
     /// interning through `types`: what the load decides, and what a resumption re-decides under

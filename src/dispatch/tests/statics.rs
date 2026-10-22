@@ -230,31 +230,6 @@ fn a_capture_keeps_its_type_along_the_chain() {
     );
 }
 
-#[cfg(feature = "old-walk")]
-#[test]
-fn a_cyclic_binding_and_a_quote_s_hole_are_typed() {
-    loaded("LET f = (FN :{} -> Any = #(a))\nLET a = [f]", |program| {
-        let shape = program.shape();
-        assert_eq!(binder(program, shape, "f"), ":(FN :{} -> Any)");
-        assert_eq!(binder(program, shape, "a"), ":(LIST OF :(FN :{} -> Any))");
-    });
-    loaded("LET q = #(PRINT y)", |program| {
-        let (_, code) = program.shape().nested_shapes()[0];
-        let statics = code.statics().expect("the load typed the code");
-        assert_eq!(statics.parts.len(), 1);
-        assert_eq!(
-            statics.parts[0].1.upper,
-            KType::ANY.into(),
-            "a hole is `Any`"
-        );
-        assert_eq!(
-            statics.statements,
-            [Interval::within(KType::ANY)],
-            "a hole a `USING` may fill is a candidate the load cannot read"
-        );
-    });
-}
-
 /// Two overloads of `AREA`, one over each shape, and a callee that returns either.
 const AREAS: &str = "NEWTYPE Circle = :{r :Number}\n\
                      NEWTYPE Square = :{s :Number}\n\

@@ -823,7 +823,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     /// it: `false` where it is being typed, where the chain does not hold the shape it is nested
     /// in, and where it is a fellow of a component being typed.
     pub(super) fn typed_on_demand(&mut self, body: &'graph BodyShape<'graph>) -> Read<'o, bool> {
-        if self.store.close(body.segment()).is_some() {
+        if self.has_closed(body) {
             return Ok(true);
         }
         if self.unfilled || self.done(body) {
@@ -854,7 +854,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         let walked = self.body(Some(parent), body);
         self.chain.extend(stash);
         walked?;
-        Ok(self.store.close(body.segment()).is_some())
+        Ok(self.has_closed(body))
     }
 
     /// `tree`, a summary of `call`'s callee, with the call substituted: each parameter's leaf by

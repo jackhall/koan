@@ -14,10 +14,9 @@
 //! and [`builtin_result`] and [`builtin_error`] seal the builtin nominals. [`self_signature`] reads a
 //! module's own signature off the activation its body ran in.
 //!
-//! [`type_channel`] is the load pass: it runs each of those doors over a loaded program's shapes
-//! through a reader that reads no activation, and writes what it fixes into the shapes' write-once
-//! cells — closed, rigid over the names a run binds, or unknown. [`resume_channel`] runs it again
-//! under a binding, writing what it re-runs beside those cells. Everything else reads through an
+//! The load's walk runs each of those doors unit by unit through the type half ([`unit`]): a
+//! reader that reads no activation, over a [`TypeContext`] the walk implements, which fixes each
+//! fact closed, rigid over the names a run binds, or unknown. Everything else reads through an
 //! activation, where a type binding holds a [`TypeValue`](crate::values::TypeValue).
 //!
 //! Elaborated: a bare type name, `LIST OF Elem`, `MAP Key -> Val`, `FN :{…} -> Ret`,
@@ -39,7 +38,6 @@
 //! [`Unsupported`]: crate::scope::Elaboration::Unsupported
 
 mod builtin;
-mod channel;
 mod declaration;
 mod expression;
 mod members;
@@ -53,7 +51,6 @@ mod unit;
 mod tests;
 
 pub use builtin::{builtin_error, builtin_result, builtin_shape_types};
-pub use channel::{path_base, resume_channel, type_channel, writes_for_all};
 pub use declaration::{declares_nominal, type_declarations};
 pub use expression::{declared_field, type_expression};
 pub use members::{
