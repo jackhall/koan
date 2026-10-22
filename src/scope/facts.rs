@@ -16,7 +16,7 @@ use crate::memory::{BumpVec, Lays, collect};
 use crate::type_lattice::KType;
 
 use super::records::{Closing, UnitFacts};
-use super::shape::{CaptureSlot, Segment, ShapeError, Slot, UnitIndex};
+use super::shape::{CaptureSlot, Segment, Slot, UnitIndex};
 use super::tree::Tree;
 
 /// Where a body's activation holds an unknown: a slot, or — for a name a quote's code is run
@@ -65,10 +65,6 @@ impl<'a> Frontier<'a> {
         self.0.is_empty()
     }
 
-    pub fn contains(self, unknown: Unknown) -> bool {
-        self.0.binary_search(&unknown).is_ok()
-    }
-
     /// Whether `binding` binds some unknown here: whether it wakes the unit's record.
     pub fn meets_binding(self, binding: Binding<'_>) -> bool {
         self.meets_sorted(binding.0.iter().map(|(unknown, _)| *unknown))
@@ -85,58 +81,6 @@ impl<'a> Frontier<'a> {
             }
         }
         false
-    }
-
-    /// This frontier with `other`'s unknowns, laid down through `lay` where it grows.
-    pub fn union<'w>(self, other: Frontier<'_>, lay: impl Lays<'w>) -> Frontier<'w>
-    where
-        'a: 'w,
-    {
-        if other.0.iter().all(|unknown| self.contains(*unknown)) {
-            return self;
-        }
-        let merged = || Merged {
-            mine: self.0,
-            theirs: other.0,
-        };
-        let count = merged().count();
-        let mut each = merged();
-        Frontier(lay.fill(count, |_| each.next().expect("the merge yields its count")))
-    }
-}
-
-/// Two sorted, deduplicated runs of unknowns merged, each unknown once.
-struct Merged<'a, 'other> {
-    mine: &'a [Unknown],
-    theirs: &'other [Unknown],
-}
-
-impl Iterator for Merged<'_, '_> {
-    type Item = Unknown;
-
-    fn next(&mut self) -> Option<Unknown> {
-        let next = match (self.mine.first(), self.theirs.first()) {
-            (None, None) => return None,
-            (Some(mine), None) => *mine,
-            (None, Some(theirs)) => *theirs,
-            (Some(mine), Some(theirs)) => *mine.min(theirs),
-        };
-        if self.mine.first() == Some(&next) {
-            self.mine = &self.mine[1..];
-        }
-        if self.theirs.first() == Some(&next) {
-            self.theirs = &self.theirs[1..];
-        }
-        Some(next)
-    }
-}
-
-/// Add `unknowns` to the sorted, deduplicated run `into`.
-pub fn merge_into(into: &mut BumpVec<'_, Unknown>, unknowns: &[Unknown]) {
-    for unknown in unknowns {
-        if let Err(at) = into.binary_search(unknown) {
-            into.insert(at, *unknown);
-        }
     }
 }
 
@@ -242,7 +186,4 @@ pub trait Store<'o> {
     fn write(&self, unit: UnitId, facts: &'o UnitFacts<'o>, frontier: Frontier<'o>);
 
     fn write_close(&self, body: Segment, closing: &'o Closing<'o>, frontier: Frontier<'o>);
-
-    /// A refusal the walk reached: the store's chance to word it, before the walk returns it.
-    fn refuse(&self, error: ShapeError<'o>) -> ShapeError<'o>;
 }

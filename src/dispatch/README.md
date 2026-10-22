@@ -894,10 +894,8 @@ blocks' and module bodies' included, which key its
 beside the names the units beneath it seamed at an entry wait on, a
 parameter's own type aside:
 none where they read captures alone, and no list at all where it has no
-invariant site, since such a frame reads no warm tier. Every callable's own
-record, whether or not it caches, also lists the parameters that may key its
-specialization — each one that keys, which no tail edge from the body into
-itself rebinds — and says whether the body escapes. A leaf is
+invariant site, since such a frame reads no warm tier. Whether a body escapes
+is a text fact of its shape, read off the shape table. A leaf is
 invariant where it is a capture, or a parameter every tail edge into its body
 passes on bare from an invariant parameter of the caller, and every edge from
 the body into itself passes on as itself: a greatest fixpoint

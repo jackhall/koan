@@ -229,11 +229,9 @@ pub(super) fn walk<'graph: 'o, 'tier: 'o, 'o, S: Store<'o>>(
         module_mints: bump_table(scratch),
         unlisted: None,
         open_path: None,
-        heading: false,
         components: BumpVec::new_in(scratch),
     };
     pass.body(None, shapes.root())
-        .map_err(|error| store.refuse(error))
 }
 
 /// A binder's static type: a type's interval, or a quantified callable's scheme.
@@ -550,8 +548,6 @@ struct Pass<'p, 'o, 'x, 'graph, 'tier, 'pair, 'reg, S: Store<'o>> {
     /// Where the root of the path the walk last resolved is written, where it is written in place
     /// and the path resolved to a class.
     open_path: Option<SourceRef>,
-    /// Whether the name the walk is about to read sits at a call's head.
-    heading: bool,
     /// Each component being typed, outermost first, by its shape's level and its members: a
     /// fellow's callable is not typed on demand while its component is, since its body reads the
     /// fellows' facts, not their seeds.
@@ -772,7 +768,6 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 self.unwind(open);
                 let refused = Closing {
                     class: None,
-                    exits: false,
                     summary: None,
                     recursive: false,
                     ran: None,
@@ -1643,7 +1638,6 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         };
         let closing = Closing {
             class: self.class(level),
-            exits: self.chain[level].exits,
             summary,
             recursive: false,
             ran: None,
@@ -1796,8 +1790,6 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 .push(NamedVariable {
                     reading,
                     level: variable,
-                    name,
-                    at: used,
                 });
             self.compose(level, variable, (name, used));
         }
@@ -2872,7 +2864,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             Form::Name(part) => self.name(level, part, wanted)?,
             Form::Block(nested) => self.block(level, nested, None)?.unwrap_or_else(unknown),
             Form::Lambda(node) => match Site::of_body(node).and_then(|site| shape.nested(site)) {
-                Some(body) => match self.in_place(level, body) {
+                Some(body) => match self.callable(level, body) {
                     DeclaredType::Type(typed) => typed,
                     DeclaredType::Scheme(scheme) => {
                         let (typed, solution) = self.instantiate(scheme, wanted, node.source)?;
@@ -2924,12 +2916,6 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             Form::Apply(node) => self.apply(level, node)?,
             Form::Unevaluable(_) => unknown(),
         })
-    }
-
-    /// The callable body `body`, written in place, typed: born where no call by name reaches it,
-    /// so it escapes.
-    fn in_place(&mut self, level: usize, body: &'graph BodyShape<'graph>) -> Bound {
-        self.callable(level, body)
     }
 
     /// The static type of a call's head `head`: a quantified callable's scheme where it reads one —
@@ -2985,13 +2971,8 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         };
         match read {
             Some(DeclaredType::Scheme(scheme)) => Ok(DeclaredType::Scheme(scheme)),
-            _ => {
-                // A name read at a call's head is called, not passed: it escapes nothing.
-                let heading = std::mem::replace(&mut self.heading, true);
-                let typed = self.part(level, head);
-                self.heading = heading;
-                typed.map(DeclaredType::Type)
-            }
+            // A name read at a call's head is called, not passed: escape is the text's.
+            _ => self.part(level, head).map(DeclaredType::Type),
         }
     }
 
@@ -3378,8 +3359,6 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         let Some(mention) = self.chain[level].shape.mention(site) else {
             return Ok(unknown());
         };
-        // Whether the name sits at a call's head escapes nothing here: escape is the text's.
-        self.heading = false;
         Ok(match self.read_declared(level, mention.coordinate) {
             DeclaredType::Type(typed) => typed,
             DeclaredType::Scheme(scheme) => {

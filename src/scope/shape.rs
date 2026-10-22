@@ -682,9 +682,8 @@ pub struct BodyShape<'graph> {
     required: &'graph [KeySymbol],
     /// Each type expression this body records, by site.
     type_expressions: Keyed<'graph, TypeExpression<'graph>>,
-    /// Each part holding a path one of this body's types spells, as the builder met them.
-    path_spellings: &'graph [&'graph ExpressionPart<'graph>],
-    /// The same paths, each beside its statement and its identity.
+    /// Each path one of this body's types spells, as the builder met them, beside its statement
+    /// and its identity.
     spelled: &'graph [SpelledPath<'graph>],
     /// Each of those paths' index, by its part's site.
     spelled_at: Keyed<'graph, (Site, u32)>,
@@ -979,10 +978,6 @@ impl<'graph> BodyShape<'graph> {
     /// elaborator reads the type holding it.
     ///
     /// [`path_spelling`]: super::path_spelling
-    pub fn path_spellings(&self) -> &'graph [&'graph ExpressionPart<'graph>] {
-        self.path_spellings
-    }
-
     /// Each path this body's types spell, in the order the builder met them, beside its statement
     /// and its identity.
     pub fn spelled(&self) -> &'graph [SpelledPath<'graph>] {

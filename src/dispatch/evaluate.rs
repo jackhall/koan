@@ -994,7 +994,7 @@ fn called<'graph, 'here>(
         called_function(callee).is_some_and(|function| {
             let (load, shape) = (at.view.load(), function.shape());
             load.specialization_keys(shape).is_some()
-                && !load.caching(shape).is_some_and(|caching| caching.escapes)
+                && !load.shapes().escapes(shape.segment())
                 && at.within.build != function.closure().build()
         })
     };

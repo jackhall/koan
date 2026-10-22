@@ -145,6 +145,8 @@ pub enum Evaluated<'graph> {
 pub struct Program<'graph> {
     facts: &'graph LoadFacts<'graph>,
     builtins: &'graph KBuiltins<'graph, 'graph>,
+    /// What tests read types over; the run reads the graph's own.
+    #[cfg(test)]
     tiers: TypeTiers<'graph>,
     symbols: &'graph SymbolInterner,
     evaluator: NativeStep<'graph, KBundle>,
@@ -167,9 +169,12 @@ impl<'graph> Program<'graph> {
         output: Output,
         uncaught: &'graph Cell<bool>,
     ) -> Self {
+        #[cfg(not(test))]
+        let _ = tiers;
         Program {
             facts,
             builtins,
+            #[cfg(test)]
             tiers,
             symbols,
             evaluator,
@@ -185,6 +190,7 @@ impl<'graph> Program<'graph> {
     }
 
     /// Every shape the load built, by segment.
+    #[cfg(test)]
     pub fn shapes(&self) -> &'graph Shapes<'graph> {
         self.facts.shapes()
     }
@@ -200,6 +206,7 @@ impl<'graph> Program<'graph> {
 
     /// The tiers of the types the load built: what the program's graph hands every step's chain to
     /// read first, and what a reader outside a step reads over.
+    #[cfg(test)]
     pub fn tiers(&self) -> TypeTiers<'graph> {
         self.tiers
     }

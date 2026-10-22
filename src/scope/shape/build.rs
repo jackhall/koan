@@ -3573,7 +3573,6 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 candidates,
                 required: collect(writer, required.iter().copied()),
                 type_expressions,
-                path_spellings: collect(writer, draft.path_spellings.iter().map(|(part, _)| *part)),
                 spelled,
                 spelled_at,
             },

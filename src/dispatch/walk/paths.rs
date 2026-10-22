@@ -27,9 +27,9 @@ use crate::elaborate::{SignatureMember, applied_member, path_binding, signature_
 use crate::memory::{BumpBackedMap, BumpVec, bump_hash_table, bump_table, collect};
 use crate::parse::ExpressionPart;
 use crate::scope::{
-    Binder, BodyShape, Callable, CaptureSlot, CaptureSource, Coordinate, Frontier, Leaf, PathEntry,
-    Position, Print, Registered, Resolution, Resolved, Root, Segment, ShapeError, ShapeKind, Site,
-    Source, SpelledRoot, Static, StaticCallable, StaticRegistered, StaticType, Store, Target, Tree,
+    Binder, BodyShape, Callable, CaptureSlot, CaptureSource, Coordinate, Leaf, PathEntry, Position,
+    Print, Registered, Resolution, Resolved, Root, Segment, ShapeError, ShapeKind, Site, Source,
+    SpelledRoot, Static, StaticCallable, StaticRegistered, StaticType, Store, Target, Tree,
     Variable as Located, part_of, path_spelling,
 };
 use crate::symbols::{BinderSymbol, TypeSymbol, ValueSymbol};
@@ -463,7 +463,6 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                         Resolution {
                             tree: leaf,
                             resolved,
-                            frontier: Frontier::EMPTY,
                         },
                         None,
                     ));
@@ -538,15 +537,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             Some(closed) => Resolved::Closed(closed),
             None => Resolved::Class(self.class_of(level, entry, tree)),
         };
-        let frontier = Frontier::EMPTY;
-        Ok((
-            Resolution {
-                tree,
-                resolved,
-                frontier,
-            },
-            at,
-        ))
+        Ok((Resolution { tree, resolved }, at))
     }
 
     /// The tree, exact signature and a site of the binder `binder` a path's root names, read from

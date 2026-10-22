@@ -18,7 +18,7 @@
 use crate::memory::{BumpAllocator, BumpVec, Lays, collect, resident};
 use crate::scope::{
     Address, BodyClass, Caching, Deps, Folds, Frontier, Keyed, LoadFacts, Mint, Position,
-    Resolution, Segment, ShapeError, ShapeKind, Shapes, SiteDeps, Slot, UnitIndex, tree_deps,
+    Resolution, Segment, ShapeKind, Shapes, SiteDeps, Slot, UnitIndex, tree_deps,
 };
 
 /// The folds of every body `load` holds records for, by segment, laid through `lay`.
@@ -26,7 +26,7 @@ pub fn fold<'o>(
     load: &LoadFacts<'o>,
     lay: impl Lays<'o>,
     scratch: BumpAllocator<'_>,
-) -> Result<&'o [Folds<'o>], ShapeError<'o>> {
+) -> &'o [Folds<'o>] {
     let shapes = load.shapes();
     let count = shapes.bodies().len();
     // What the walk recorded, gathered from every unit's record.
@@ -150,21 +150,11 @@ pub fn fold<'o>(
             collect(lay, slots.iter().copied())
         });
         let callable = own && shape.kind() == ShapeKind::Callable;
-        let mut keyable_slots = BumpVec::new_in(scratch);
-        if callable {
-            keyable_slots.extend(
-                (0..shape.slots() as u32)
-                    .map(Slot)
-                    .filter(|slot| keyable(segment, *slot)),
-            );
-        }
         let caching = Caching {
             caches,
             mints: Keyed::sorted(lay, &mut mints),
             warm: Keyed::sorted(lay, &mut warm),
             invariant,
-            keyable: collect(lay, keyable_slots.iter().copied()),
-            escapes: !callable || !invariant_body(frame),
         };
         let keys = callable.then(|| {
             let from = named.partition_point(|(each, _)| *each < segment);
@@ -182,7 +172,7 @@ pub fn fold<'o>(
             contract,
         });
     }
-    Ok(collect(lay, folds.iter().copied()))
+    collect(lay, folds.iter().copied())
 }
 
 /// Each `(callable, slot)` a callable keys on through its frontiers: a keyable name of it in the

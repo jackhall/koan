@@ -13,16 +13,11 @@
 //! every reader holding a view reads through [`ActivationView::load`](super::ActivationView::load).
 
 use crate::memory::{BumpAllocator, BumpVec, Lays, collect, resident};
-use crate::source::SourceRef;
-use crate::symbols::TypeSymbol;
 use crate::type_lattice::{DeclaredType, Interval, KType, Parametric};
-use crate::values::Chain;
 
 use super::facts::{Binding, Frontier, UnitId};
 use super::keyed::Keyed;
-use super::shape::{
-    BodyShape, Coordinate, Position, Segment, ShapeError, Site, Slot, Target, in_body_of,
-};
+use super::shape::{BodyShape, Coordinate, Position, Segment, ShapeError, Site, Slot, Target};
 use super::shapes::Shapes;
 use super::tree::{Leaf, NodeCapture, Tree};
 use super::typed::{
@@ -143,8 +138,6 @@ pub struct Born<'a> {
 #[derive(Clone, Copy, Debug)]
 pub struct Closing<'a> {
     pub class: Option<BodyClass>,
-    /// Whether it has a porous exit, its inline bodies' folded in.
-    pub exits: bool,
     /// A callable's summary: `Some(None)` where it has none, a recursive one among them.
     pub summary: Option<Option<Tree<'a>>>,
     /// Whether the callable lies in a recursive component: it never unfolds.
@@ -290,8 +283,6 @@ pub struct SiteDeps<'a> {
 pub struct NamedVariable {
     pub reading: Segment,
     pub level: usize,
-    pub name: TypeSymbol,
-    pub at: SourceRef,
 }
 
 /// Every fact one load decided, by body, beside the shape table they are facts of.
@@ -462,11 +453,6 @@ impl<'graph> LoadFacts<'graph> {
         self.records.binding
     }
 
-    /// The load this one resumed, where it resumed one.
-    pub fn base(&self) -> Option<&'graph LoadFacts<'graph>> {
-        self.records.base
-    }
-
     /// The newest record of `unit` beside its frontier, its base's where this load did not re-run
     /// it.
     pub fn unit(&self, unit: UnitId) -> Option<(&'graph UnitFacts<'graph>, Frontier<'graph>)> {
@@ -567,22 +553,6 @@ impl<'graph> LoadFacts<'graph> {
         self.records
             .born(shape.segment())
             .map_or(&[], |born| born.levels)
-    }
-
-    /// The callable body `shape`'s function type as its body reads it: `None` where the load did
-    /// not type it.
-    pub fn in_body(
-        &self,
-        shape: &BodyShape<'_>,
-        types: &Chain<'_, '_, '_, '_>,
-        scratch: BumpAllocator<'_>,
-    ) -> Option<Parametric> {
-        in_body_of(
-            self.callable_type(shape),
-            self.group_levels(shape),
-            types,
-            scratch,
-        )
     }
 
     /// The solution the callable body `shape`'s `FOR ALL` is born instantiated at, where the load

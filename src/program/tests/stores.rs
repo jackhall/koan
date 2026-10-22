@@ -103,10 +103,6 @@ impl<'o, L: Lays<'o>> Store<'o> for Layer<'o, '_, L> {
     fn write_close(&self, body: Segment, closing: &'o Closing<'o>, frontier: Frontier<'o>) {
         self.writes.write_close(body, closing, frontier);
     }
-
-    fn refuse(&self, error: ShapeError<'o>) -> ShapeError<'o> {
-        error
-    }
 }
 
 /// A resumption's store inside a frame: a [`Layer`] over the load's facts whose binding is what
@@ -189,10 +185,6 @@ impl<'o, L: Lays<'o>> Store<'o> for Frame<'o, '_, L> {
     fn write_close(&self, body: Segment, closing: &'o Closing<'o>, frontier: Frontier<'o>) {
         self.0.write_close(body, closing, frontier);
     }
-
-    fn refuse(&self, error: ShapeError<'o>) -> ShapeError<'o> {
-        self.0.refuse(error)
-    }
 }
 
 impl<'graph> Running<'graph> {
@@ -213,7 +205,7 @@ impl<'graph> Running<'graph> {
         let base = base.unwrap_or(self.program().facts());
         let layer = Layer::new(bump, &scratch, base, binding, everything);
         self.walked::<L, _>(&layer, types, &scratch)?;
-        folded(layer.facts(&scratch, &[]), bump, &scratch)
+        Ok(folded(layer.facts(&scratch, &[]), bump, &scratch))
     }
 
     /// Walk the whole program again under `binding`, through a [`LoadStore`].
@@ -229,7 +221,7 @@ impl<'graph> Running<'graph> {
         let scratch = Bump::new();
         let store = LoadStore::new(bump, &scratch, self.program().shapes(), binding);
         self.walked::<L, _>(&store, types, &scratch)?;
-        folded(store.facts(&scratch, &[]), bump, &scratch)
+        Ok(folded(store.facts(&scratch, &[]), bump, &scratch))
     }
 
     /// Resume the load in a [`Frame`] whose slots hold `slots`.
@@ -246,7 +238,7 @@ impl<'graph> Running<'graph> {
         let load: &'l LoadFacts<'l> = self.program().facts();
         let frame = Frame::new(bump, &scratch, load, slots, types);
         self.walked::<L, _>(&frame, types, &scratch)?;
-        folded(frame.0.facts(&scratch, &[]), bump, &scratch)
+        Ok(folded(frame.0.facts(&scratch, &[]), bump, &scratch))
     }
 
     /// Run `L`'s walk over the program into `store`, interning through `types`.
@@ -265,14 +257,10 @@ impl<'graph> Running<'graph> {
 }
 
 /// `unfolded` laid in `bump` beside its folds, as the load lays its own.
-fn folded<'l>(
-    unfolded: LoadFacts<'l>,
-    bump: &'l Bump,
-    scratch: &Bump,
-) -> Result<&'l LoadFacts<'l>, ShapeError<'l>> {
+fn folded<'l>(unfolded: LoadFacts<'l>, bump: &'l Bump, scratch: &Bump) -> &'l LoadFacts<'l> {
     let unfolded = resident(bump, unfolded);
-    let folds = crate::build::fold(unfolded, bump, scratch)?;
-    Ok(resident(bump, unfolded.folded(bump, folds)))
+    let folds = crate::build::fold(unfolded, bump, scratch);
+    resident(bump, unfolded.folded(bump, folds))
 }
 
 /// What a [`Frame`] binds the top-level binding `name` to, read off the resting top level once the
@@ -384,7 +372,7 @@ fn framing_facts<'graph, L: Language>(
         types,
         &scratch,
     )
-    .and_then(|()| folded(frame.0.facts(&scratch, &[]), &bump, &scratch));
+    .map(|()| folded(frame.0.facts(&scratch, &[]), &bump, &scratch));
     let rendered = match walked {
         Ok(facts) => Ok(render(facts, types, program.symbols(), &leave)),
         Err(error) => Err(error.display(program.symbols(), types).to_string()),

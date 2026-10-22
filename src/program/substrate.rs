@@ -148,7 +148,7 @@ fn walked<'graph, L: Language>(
     let store = crate::build::LoadStore::new(writer, scratch, shapes, crate::scope::Binding::EMPTY);
     L::facts(shapes, builtins, &store, types, scratch)?;
     let unfolded = resident(writer, store.facts(scratch, &[]));
-    let folds = crate::build::fold(unfolded, writer, scratch)?;
+    let folds = crate::build::fold(unfolded, writer, scratch);
     Ok(resident(writer, unfolded.folded(writer, folds)))
 }
 

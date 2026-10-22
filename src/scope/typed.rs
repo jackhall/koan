@@ -23,7 +23,6 @@ use crate::type_lattice::{DeclaredType, KType, Parametric, Verdict, display_name
 use crate::values::{Chain, KnottedFamily, Value};
 
 use super::activation::ActivationView;
-use super::facts::Frontier;
 use super::keyed::Keyed;
 use super::shape::{Candidate, Coordinate, Segment, Site, Slot};
 use super::tree::{Binder, Tree};
@@ -290,9 +289,6 @@ impl fmt::Debug for PathEntry<'_> {
 pub struct Resolution<'graph> {
     pub tree: Tree<'graph>,
     pub resolved: Resolved,
-    /// Every unknown the resolution read: a path through a module binder whose type a binding
-    /// may pin resolves otherwise under it.
-    pub frontier: Frontier<'graph>,
 }
 
 /// The type a path is at load.
@@ -446,13 +442,6 @@ pub struct Caching<'graph> {
     /// the frame seeks the specialization these slots' arguments key. `None` on every other
     /// record.
     pub invariant: Option<&'graph [Slot]>,
-    /// On a callable's own record: its parameter slots that may key a specialization, sorted: each
-    /// one `Pass::keys` admits and that no tail edge from the body into itself rebinds. Empty on
-    /// every other record.
-    pub keyable: &'graph [Slot],
-    /// Whether a frame of this body may be tail-called from a site the load cannot read: its name
-    /// escapes as a value, or no call by name reaches its binder. A hop of such a body seeks.
-    pub escapes: bool,
 }
 
 /// At a `:|` over a module binder read bare: the module's body, and per capture its content

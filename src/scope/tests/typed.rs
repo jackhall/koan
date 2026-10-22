@@ -159,10 +159,12 @@ fn the_builder_records_each_path_a_type_spells() {
             )
             .map(|shapes| shapes.root())
             .expect("the program shapes");
-            let statements: Vec<usize> = (shape.path_spellings().iter())
-                .map(|part| {
+            let statements: Vec<usize> = (shape.spelled().iter())
+                .map(|spelled| {
                     (shape.body().iter())
-                        .position(|statement| source_of(statement, Site::of(part)).is_some())
+                        .position(|statement| {
+                            source_of(statement, Site::of(spelled.part)).is_some()
+                        })
                         .expect("a spelling sits in a statement")
                 })
                 .collect();
@@ -176,7 +178,7 @@ fn the_builder_records_each_path_a_type_spells() {
                 .iter()
                 .find(|(_, nested)| nested.form().is_some())
                 .expect("the lambda's body");
-            assert!(callable.1.path_spellings().is_empty());
+            assert!(callable.1.spelled().is_empty());
         })
     });
 }

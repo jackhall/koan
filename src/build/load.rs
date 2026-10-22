@@ -6,8 +6,8 @@
 
 use crate::memory::{BumpAllocator, Lays};
 use crate::scope::{
-    Binding, Bound, Closing, Folds, Frontier, LoadFacts, Segment, ShapeError, Shapes, Store,
-    UnitFacts, UnitId, Unknown, Writes,
+    Binding, Bound, Closing, Folds, Frontier, LoadFacts, Segment, Shapes, Store, UnitFacts, UnitId,
+    Unknown, Writes,
 };
 
 /// The load's store over `shapes`, laying through `L`.
@@ -69,9 +69,5 @@ impl<'o, L: Lays<'o>> Store<'o> for LoadStore<'o, '_, L> {
 
     fn write_close(&self, body: Segment, closing: &'o Closing<'o>, frontier: Frontier<'o>) {
         self.writes.write_close(body, closing, frontier);
-    }
-
-    fn refuse(&self, error: ShapeError<'o>) -> ShapeError<'o> {
-        error
     }
 }
