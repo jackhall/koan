@@ -102,10 +102,15 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             BumpVec::with_capacity_in(shapes.path_base(segment) - base, scratch);
         entries.resize(shapes.path_base(segment) - base, None);
         let mut found: Found<'p> = bump_hash_table(scratch);
-        for shape in shapes.bodies() {
-            if shapes.chain_root(shape.segment()) != segment {
-                continue;
-            }
+        // The chain's bodies are the root's subtree, short of a quote's code: it roots its own.
+        let mut pending = BumpVec::new_in(scratch);
+        pending.push(root);
+        while let Some(shape) = pending.pop() {
+            pending.extend(
+                (shape.nested_shapes().iter())
+                    .map(|(_, nested)| *nested)
+                    .filter(|nested| nested.kind() != ShapeKind::Code),
+            );
             for (index, spelled) in shape.spelled().iter().enumerate() {
                 let (Some(id), Some(level)) =
                     (spelled.id, shapes.path_level(shape.segment(), index))
