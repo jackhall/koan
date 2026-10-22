@@ -1141,6 +1141,7 @@ mod laws {
                     .collect();
                 Some((reran, woken))
             });
+            // A resumption that refuses re-runs nothing to compare: law 1 holds its refusal.
             if let Some((reran, woken)) = compared {
                 prop_assert_eq!(reran, woken, "in\n{}", case.render());
             }
@@ -1250,6 +1251,9 @@ mod laws {
                 let door = Door { running, types: &types, bump: &bump };
                 classes(&door, door.load())
             });
+            // The restart's own `LET`s birth no body, so both hold one frame body at each path.
+            let paths = |classes: &[(String, bool)]| classes.iter().map(|(path, _)| path.clone()).collect::<Vec<_>>();
+            prop_assert_eq!(paths(&sealed), paths(&restarted), "in\n{}\nrestarted as\n{}", case.render(), restart);
             for ((path, was), (_, is)) in sealed.iter().zip(restarted.iter()) {
                 if *was {
                     prop_assert!(*is, "{} is porous in the restart\n{}\nrestarted as\n{}", path, case.render(), restart);
@@ -1258,7 +1262,8 @@ mod laws {
         }
     }
 
-    /// Whether each frame body of `SUBJECT`'s subtree is sealed, by path.
+    /// Whether each frame body of `SUBJECT`'s subtree is sealed, by path: each step a nested
+    /// body's place in program order, never its site, an address.
     fn classes(door: &Door<'_, '_>, facts: &LoadFacts<'_>) -> Vec<(String, bool)> {
         fn walk(
             facts: &LoadFacts<'_>,
@@ -1269,7 +1274,9 @@ mod laws {
             if let Some(class) = facts.class(shape) {
                 out.push((path.clone(), matches!(class, BodyClass::Sealed { .. })));
             }
-            for (index, (_, nested)) in shape.nested_shapes().iter().enumerate() {
+            let nested =
+                (0..shape.statements() as usize).flat_map(|statement| shape.nested_in(statement));
+            for (index, (_, nested)) in nested.enumerate() {
                 walk(facts, nested, format!("{path}/{index}"), out);
             }
         }
