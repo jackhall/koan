@@ -434,16 +434,7 @@ where
 {
     let reader = Reader::new(context, tools, shape, Mode::Declaring);
     let typed = type_declarations(component, &reader, tools.types, tools.scratch);
-    let bound = |slot: Slot| {
-        let unknown = Unknown {
-            segment: shape.segment(),
-            at: Address::Slot(slot),
-        };
-        match context.binding(unknown) {
-            Some(Bound::Type(bound)) => Some(bound),
-            _ => None,
-        }
-    };
+    let bound = |slot: Slot| reader.bound(shape.segment(), Address::Slot(slot));
     match typed {
         Ok(handles) => {
             for (slot, handle) in component.members.iter().zip(handles) {

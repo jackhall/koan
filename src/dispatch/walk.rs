@@ -172,6 +172,7 @@ use crate::values::{
 mod caching;
 mod paths;
 mod reads;
+use paths::exact;
 use reads::Part;
 mod trees;
 mod types;
@@ -266,10 +267,9 @@ fn never_satisfies(
 /// is porous or exposing, and, where that is exact and closed, where it is exposing — an exact
 /// closed site carries that very type, and the surface door hides what the type does not name.
 fn porous_site(types: &Chain<'_, '_, '_, '_>, typed: Interval) -> bool {
-    if typed.is_exact() && types.concrete(typed.upper).is_some() {
-        types.exposing(typed.upper)
-    } else {
-        types.porous(typed.upper) || types.exposing(typed.upper)
+    match exact(types, typed) {
+        Some(_) => types.exposing(typed.upper),
+        None => porous_slot(types, typed.upper),
     }
 }
 
@@ -334,6 +334,32 @@ struct UnitState<'p, 'o> {
     exits: bool,
     closed: u32,
     folded: u32,
+}
+
+impl<'p, 'o> UnitState<'p, 'o> {
+    /// The state of `id` as it opens — a unit or, `closing`, a body's closing — with `frontier`
+    /// where it is absorbed as a record holds it.
+    fn new(
+        id: UnitId,
+        closing: bool,
+        frontier: Option<Frontier<'o>>,
+        scratch: BumpAllocator<'p>,
+    ) -> Self {
+        UnitState {
+            id,
+            closing,
+            frontier,
+            typed: BumpVec::new_in(scratch),
+            born: BumpVec::new_in(scratch),
+            paths: BumpVec::new_in(scratch),
+            sites: BumpVec::new_in(scratch),
+            named_variables: BumpVec::new_in(scratch),
+            wrote: BumpVec::new_in(scratch),
+            exits: false,
+            closed: 0,
+            folded: 0,
+        }
+    }
 }
 
 /// Where a unit wrote a fact into its owning body's [`Level`]: a slot, a statement or a use of the
@@ -856,20 +882,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     fn open_unit(&mut self, id: UnitId, closing: bool) -> Tag {
         let scratch = self.scratch;
         let tag = Tag(self.units.len() as u32);
-        self.units.push(UnitState {
-            id,
-            closing,
-            frontier: None,
-            typed: BumpVec::new_in(scratch),
-            born: BumpVec::new_in(scratch),
-            paths: BumpVec::new_in(scratch),
-            sites: BumpVec::new_in(scratch),
-            named_variables: BumpVec::new_in(scratch),
-            wrote: BumpVec::new_in(scratch),
-            exits: false,
-            closed: 0,
-            folded: 0,
-        });
+        self.units.push(UnitState::new(id, closing, None, scratch));
         self.open.push(tag);
         let mut scopes = self.scopes.replace(BumpVec::new_in(scratch));
         scopes.push(BumpVec::new_in(scratch));
@@ -1111,21 +1124,8 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         frontier: Frontier<'o>,
     ) {
         let tag = Tag(self.units.len() as u32);
-        let scratch = self.scratch;
-        self.units.push(UnitState {
-            id,
-            closing: false,
-            frontier: Some(frontier),
-            typed: BumpVec::new_in(scratch),
-            born: BumpVec::new_in(scratch),
-            paths: BumpVec::new_in(scratch),
-            sites: BumpVec::new_in(scratch),
-            named_variables: BumpVec::new_in(scratch),
-            wrote: BumpVec::new_in(scratch),
-            exits: false,
-            closed: 0,
-            folded: 0,
-        });
+        self.units
+            .push(UnitState::new(id, false, Some(frontier), self.scratch));
         let segment = self.chain[level].shape.segment();
         if let Some((_, typed)) = facts.typed.get(segment) {
             self.restore(level, typed, tag);
@@ -1361,24 +1361,27 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     /// `level`: its entry and its units through the same steps, each callable a sub-unit births
     /// walked right after it. Its facts land in the running unit's record. Its last statement's
     /// static type.
-    fn inline(
+    fn inline<T>(
         &mut self,
         level: usize,
         nested: &'graph BodyShape<'graph>,
         surfacing: Option<(Interval, Tag)>,
-    ) -> Result<(Option<Interval>, Level<'p, 'o, 'graph>), ShapeError<'o>> {
+        finish: impl FnOnce(&mut Self, usize) -> Result<T, ShapeError<'o>>,
+    ) -> Result<(T, Level<'p, 'o, 'graph>), ShapeError<'o>> {
         self.push(nested, false);
         let at = level + 1;
-        let walked = self.inline_units(at, surfacing);
-        let last = self.last_statement(at);
-        if walked.is_ok() && !self.unfilled {
+        let finished = match self.inline_units(at, surfacing) {
+            Ok(()) => finish(self, at),
+            Err(error) => Err(error),
+        };
+        if finished.is_ok() && !self.unfilled {
             let typed = self.typed(at, None);
             self.keep_inline(nested.segment(), typed);
         }
         let popped = self.chain.pop().expect("the body was pushed");
         self.leave(nested);
         self.walked[nested.segment().index() as usize] = true;
-        walked.map(|_| (last, popped))
+        finished.map(|finished| (finished, popped))
     }
 
     /// Type the block `nested` — an arm, or a `USING … SCOPE` body over what it is `surfacing` —
@@ -1389,7 +1392,8 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         nested: &'graph BodyShape<'graph>,
         surfacing: Option<(Interval, Tag)>,
     ) -> Result<Option<Interval>, ShapeError<'o>> {
-        let (last, popped) = self.inline(level, nested, surfacing)?;
+        let last = |pass: &mut Self, at: usize| Ok(pass.last_statement(at));
+        let (last, popped) = self.inline(level, nested, surfacing, last)?;
         self.fold(level, &popped);
         Ok(last)
     }
@@ -1437,48 +1441,26 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         level: usize,
         body: &'graph BodyShape<'graph>,
     ) -> Result<Interval, ShapeError<'o>> {
-        let (typed, _) = self.module_signed(level, body)?;
-        Ok(typed)
-    }
-
-    /// [`module`](Self::module)'s static type, beside the exact signature where it is one.
-    fn module_signed(
-        &mut self,
-        level: usize,
-        body: &'graph BodyShape<'graph>,
-    ) -> Result<(Interval, Option<KType>), ShapeError<'o>> {
-        let (types, scratch) = (self.types, self.scratch);
-        self.push(body, false);
-        let at = level + 1;
-        let walked = self.inline_units(at, None);
-        let unlisted = match self.unlisted {
-            Some((segment, error)) if segment == body.segment() => {
-                self.unlisted = None;
-                Err(error)
+        let signed = |pass: &mut Self, at: usize| {
+            if let Some((segment, error)) = pass.unlisted
+                && segment == body.segment()
+            {
+                pass.unlisted = None;
+                return Err(error);
             }
-            _ => Ok(()),
+            let (typed, signature) = pass.signed(at, body)?;
+            if let Some(signature) = signature
+                && !pass.unfilled
+            {
+                pass.chain[at].signature = Some(signature);
+            }
+            Ok(typed)
         };
-        let signed = match walked.and(unlisted) {
-            Ok(()) => self.signed(at, body),
-            Err(error) => Err(error),
-        };
-        if let Ok((_, Some(signature))) = signed
-            && !self.unfilled
-        {
-            self.chain[at].signature = Some(signature);
-        }
-        if signed.is_ok() && !self.unfilled {
-            let typed = self.typed(at, None);
-            self.keep_inline(body.segment(), typed);
-        }
-        let popped = self.chain.pop().expect("the body was pushed");
-        self.leave(body);
-        self.walked[body.segment().index() as usize] = true;
+        let (typed, popped) = self.inline(level, body, None, signed)?;
         self.fold(level, &popped);
         let mints = !popped.minting.is_empty() || popped.minted_within;
         self.module_mints.insert(address(body), mints);
-        let _ = (types, scratch);
-        signed
+        Ok(typed)
     }
 
     /// The exact signature of the `MODULE` or `GROUP` body at `level`, beside its static type.
@@ -3048,10 +3030,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             // Over a closed tree the load lays every type the view door computes from types
             // alone, so the run's view interns none of its own.
             if let (Some(bare), Some(signature)) = (tree.bare().digest(), signature) {
-                let exact = typed
-                    .is_exact()
-                    .then(|| types.concrete(typed.upper))
-                    .flatten();
+                let exact = exact(types, typed);
                 // What the operand carries, read off its tree, else by its exact type.
                 let seen = self.carried_type(views::Carried::Tree(*tree), site)?;
                 debug_assert!(
@@ -3129,11 +3108,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         if fits(types, scratch, typed.upper, declared) {
             self.record_settled(level, Site::of_node(node));
         }
-        let exact = typed
-            .is_exact()
-            .then(|| types.concrete(typed.upper))
-            .flatten();
-        if let Some(exact) = exact
+        if let Some(exact) = exact(types, typed)
             && !fits(types, scratch, exact, declared)
         {
             return Err(ShapeError::AscriptionNeverSatisfied {
@@ -3192,11 +3167,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         if fits(types, scratch, typed.upper, declared) {
             self.record_settled(level, site);
         }
-        let exact = typed
-            .is_exact()
-            .then(|| types.concrete(typed.upper))
-            .flatten()
-            .filter(|exact| exact.kind_of(types) == KKind::Signature);
+        let exact = exact(types, typed).filter(|exact| exact.kind_of(types) == KKind::Signature);
         if let (Some(exact), Some(closed)) = (exact, types.concrete(declared)) {
             // Signatures meet to a set, never to `Never`, so only an exact module can be refused.
             let signature = matches!(
@@ -4219,12 +4190,10 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 self.made(level, node, list, &sites, &[chosen])?;
                 if !self.unfilled {
                     let mut points = BumpVec::new_in(scratch);
-                    points.extend(chosen.intervals.unwrap_or(&[]).iter().map(|interval| {
-                        interval
-                            .is_exact()
-                            .then(|| types.concrete(interval.upper))
-                            .flatten()
-                    }));
+                    points.extend(
+                        (chosen.intervals.unwrap_or(&[]).iter())
+                            .map(|interval| exact(types, *interval)),
+                    );
                     let points = collect(self.lay, points.iter().copied());
                     self.record_selection(level, Site::of_node(node), points);
                 }

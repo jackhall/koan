@@ -1080,7 +1080,10 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
 }
 
 /// `typed`'s type where it is exact and closed.
-fn exact(types: &crate::values::Chain<'_, '_, '_, '_>, typed: Interval) -> Option<KType> {
+pub(super) fn exact(
+    types: &crate::values::Chain<'_, '_, '_, '_>,
+    typed: Interval,
+) -> Option<KType> {
     typed
         .is_exact()
         .then(|| types.concrete(typed.upper))

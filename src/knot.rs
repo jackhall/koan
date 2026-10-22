@@ -116,11 +116,11 @@ fn stamped<'graph, 'cell>(
 /// — and each type capture the body's contract names. What a closure's or a module's content
 /// composes over its code.
 fn composed<'l, L>(body: &Body<'_>, links: &'l [L]) -> impl Iterator<Item = (usize, &'l L)> {
-    let composes = body.composes;
+    let body = *body;
     links
         .iter()
         .enumerate()
-        .filter(move |(index, _)| composes.get(*index).copied().unwrap_or(true))
+        .filter(move |(index, _)| body.composed(*index))
 }
 
 /// A knot member: one node of a knot — a function, a data node, a module or a barrier over a

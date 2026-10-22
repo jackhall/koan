@@ -11,7 +11,7 @@
 //! one to a callee that keeps no memo there is dropped where the call runs.
 
 use crate::memory::{BumpAllocator, BumpVec, Writer, collect};
-use crate::parse::{BuiltinShapeId, ExpressionPart, KExpression, Role};
+use crate::parse::{BuiltinShapeId, ExpressionPart, KExpression};
 
 use super::super::keyed::Keyed;
 use super::super::shape::{
@@ -19,7 +19,7 @@ use super::super::shape::{
 };
 use super::super::typed::{HandedTo, Handoff, ViewSlots};
 use super::Shapes;
-use super::tails::name_of;
+use super::tails::{by_name_parts, evaluated, name_of};
 
 /// What the memo facts give one body.
 #[derive(Clone, Copy)]
@@ -190,43 +190,21 @@ fn handed<'x>(
             return;
         }
         Some(_) => {
-            let mut position = 0;
-            let mut each = |part: &ExpressionPart<'_>, label: bool| {
+            for (position, (part, label)) in evaluated(node, scratch).iter().enumerate() {
                 if !label && let Some(from) = read(part) {
                     handed.push(Handoff {
-                        to: HandedTo::Position(position),
+                        to: HandedTo::Position(position as u32),
                         from,
                     });
-                }
-                position += 1;
-            };
-            match node.cache().builtin_shape() {
-                Some(builtin) => {
-                    for (role, part) in builtin.roles().zip(node.parts) {
-                        if role != Role::Keyword {
-                            each(&part.value, role.label_reads(&part.value).is_some());
-                        }
-                    }
-                }
-                None => {
-                    for part in node.parts {
-                        if !matches!(part.value, ExpressionPart::Keyword(_)) {
-                            each(&part.value, false);
-                        }
-                    }
                 }
             }
             Site::of_node(node)
         }
         None => {
-            let keyword = |part: &ExpressionPart<'_>| matches!(part, ExpressionPart::Keyword(_));
-            let (None, [head, argument]) = (node.cache().builtin_shape(), node.parts) else {
+            let Some((_, argument)) = by_name_parts(node) else {
                 return;
             };
-            if keyword(&head.value) || keyword(&argument.value) {
-                return;
-            }
-            let ExpressionPart::RecordLiteral(fields) = &argument.value else {
+            let ExpressionPart::RecordLiteral(fields) = argument else {
                 return;
             };
             for (field, value) in fields.iter() {
@@ -237,7 +215,7 @@ fn handed<'x>(
                     });
                 }
             }
-            Site::of(&argument.value)
+            Site::of(argument)
         }
     };
     if !handed.is_empty() {

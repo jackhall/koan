@@ -474,11 +474,8 @@ impl<'graph> Table<'_, 'graph> {
 impl CaptureChain for Shapes<'_> {
     type At = Segment;
 
-    fn outward(&self, mut segment: Segment, hops: u32) -> Option<Segment> {
-        for _ in 0..hops {
-            segment = self.parent(segment)?.0;
-        }
-        Some(segment)
+    fn outward(&self, segment: Segment, hops: u32) -> Option<Segment> {
+        self.up(segment, hops)
     }
 
     fn capture_source(&self, segment: Segment, capture: CaptureSlot) -> CaptureSource {

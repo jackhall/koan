@@ -27,7 +27,8 @@ use crate::memory::{BumpAllocator, BumpVec, collect, resident};
 use crate::scope::{Print, ShapeError, Site, Store, Tree};
 use crate::symbols::{BinderSymbol, Symbol, TypeSymbol, ValueSymbol};
 use crate::type_lattice::{
-    DeclaredType, KType, Members, Parametric, SigSchema, TypeNode, substitute_parameters,
+    DeclaredType, KType, Members, Parametric, SigSchema, TypeHandle, TypeNode,
+    substitute_parameters,
 };
 use crate::values::digest::Operator;
 use crate::values::{Chain, applications, retyped_to};
@@ -481,7 +482,8 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             Carried::Typed(held) => held_inside(types.node(held), inside).map(Carried::Typed),
             Carried::Tree(_) => None,
             Carried::Across(across) => {
-                let declared = declared_inside(across.declared.view(types).body, inside);
+                let declared =
+                    held_inside(across.declared.view(types).body, inside).map(DeclaredType::from);
                 match (declared, self.inside(across.source, inside, site)?) {
                     (Some(declared), Some(inner)) => {
                         Some(self.across(declared, across.from, across.to, inner, site)?)
@@ -546,25 +548,12 @@ fn sides(
     }
 }
 
-/// What a container type holds `inside`.
-fn held_inside(node: TypeNode<'_, KType>, inside: Inside) -> Option<KType> {
+/// What a container type — held, or declared — holds `inside`.
+fn held_inside<T: TypeHandle>(node: TypeNode<'_, T>, inside: Inside) -> Option<T> {
     match (node, inside) {
         (TypeNode::List { element }, Inside::Element) => Some(element),
         (TypeNode::Dict { value, .. }, Inside::Value) => Some(value),
         (TypeNode::Record { fields }, Inside::Field(field)) => fields.get(field),
-        _ => None,
-    }
-}
-
-/// What a declared container type declares `inside`.
-fn declared_inside(
-    node: TypeNode<'_, Parametric>,
-    inside: Inside,
-) -> Option<DeclaredType<Parametric>> {
-    match (node, inside) {
-        (TypeNode::List { element }, Inside::Element) => Some(element.into()),
-        (TypeNode::Dict { value, .. }, Inside::Value) => Some(value.into()),
-        (TypeNode::Record { fields }, Inside::Field(field)) => fields.get(field).map(Into::into),
         _ => None,
     }
 }

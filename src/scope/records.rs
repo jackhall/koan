@@ -311,6 +311,13 @@ pub struct Body<'graph> {
     pub composes: &'graph [bool],
 }
 
+impl Body<'_> {
+    /// Whether the closure slot `at` composes: one past the slots recorded does.
+    pub fn composed(&self, at: usize) -> bool {
+        self.composes.get(at).copied().unwrap_or(true)
+    }
+}
+
 /// Which closure slots of `shape` its content composes: each builder capture reading no top-level
 /// slot, then each type capture as `contract` says.
 fn composes<'graph>(
@@ -489,32 +496,65 @@ impl<'graph> LoadFacts<'graph> {
         at
     }
 
-    /// What the load fixed for the type expression at `site` of `shape`: `Unknown` where it records
-    /// none there.
-    pub fn typed_expression(&self, shape: &BodyShape<'_>, site: Site) -> StaticType<'graph> {
+    /// The entry at `key` of the `table` of the facts the unit holding `held` fixed for `shape`.
+    fn fact<K: Ord + Copy + 'graph, V: Copy + 'graph>(
+        &self,
+        shape: &BodyShape<'_>,
+        held: Held,
+        table: impl FnOnce(&Typed<'graph>) -> Keyed<'graph, (K, V)>,
+        key: K,
+    ) -> Option<V> {
+        let typed = self.records.typed(shape.segment(), held)?;
+        table(typed).get(key).map(|(_, value)| *value)
+    }
+
+    /// The entry at `site` of the site-keyed `table` of `shape`'s facts.
+    fn at_site<V: Copy + 'graph>(
+        &self,
+        shape: &BodyShape<'_>,
+        site: Site,
+        table: impl FnOnce(&Typed<'graph>) -> Keyed<'graph, (Site, V)>,
+    ) -> Option<V> {
+        self.fact(shape, Held::Site(shape.segment(), site), table, site)
+    }
+
+    /// The entry at `slot` of the slot-keyed `table` of `shape`'s facts.
+    fn at_slot<V: Copy + 'graph>(
+        &self,
+        shape: &BodyShape<'_>,
+        slot: Slot,
+        table: impl FnOnce(&Typed<'graph>) -> Keyed<'graph, (Slot, V)>,
+    ) -> Option<V> {
+        self.fact(shape, Held::Slot(shape.segment(), slot), table, slot)
+    }
+
+    /// Whether the site-listing `table` of `shape`'s facts lists `site`.
+    fn lists_site(
+        &self,
+        shape: &BodyShape<'_>,
+        site: Site,
+        table: impl FnOnce(&Typed<'graph>) -> Keyed<'graph, Site>,
+    ) -> bool {
         (self
             .records
             .typed(shape.segment(), Held::Site(shape.segment(), site)))
-        .and_then(|typed| typed.expressions.get(site))
-        .map_or(Static::Unknown, |(_, typed)| *typed)
+        .is_some_and(|typed| table(typed).get(site).is_some())
+    }
+
+    /// What the load fixed for the type expression at `site` of `shape`: `Unknown` where it records
+    /// none there.
+    pub fn typed_expression(&self, shape: &BodyShape<'_>, site: Site) -> StaticType<'graph> {
+        (self.at_site(shape, site, |typed| typed.expressions)).unwrap_or(Static::Unknown)
     }
 
     /// What the load fixed for the type binder at `slot` of `shape`.
     pub fn declared_type(&self, shape: &BodyShape<'_>, slot: Slot) -> StaticType<'graph> {
-        (self
-            .records
-            .typed(shape.segment(), Held::Slot(shape.segment(), slot)))
-        .and_then(|typed| typed.declared.get(slot))
-        .map_or(Static::Unknown, |(_, declared)| *declared)
+        (self.at_slot(shape, slot, |typed| typed.declared)).unwrap_or(Static::Unknown)
     }
 
     /// What the load fixed for the registration at `slot` of `shape`.
     pub fn registered_type(&self, shape: &BodyShape<'_>, slot: Slot) -> StaticRegistered<'graph> {
-        (self
-            .records
-            .typed(shape.segment(), Held::Slot(shape.segment(), slot)))
-        .and_then(|typed| typed.registered.get(slot))
-        .map_or(Static::Unknown, |(_, registered)| *registered)
+        (self.at_slot(shape, slot, |typed| typed.registered)).unwrap_or(Static::Unknown)
     }
 
     /// What the load fixed for the callable body `shape`'s type.
@@ -581,7 +621,7 @@ impl<'graph> LoadFacts<'graph> {
     /// The path `shape` spells at `site`, where it spells one its chain numbers: the segment of
     /// the body rooting its chain, beside its level there. A text fact, read off the shape table.
     pub fn path_read(&self, shape: &BodyShape<'_>, site: Site) -> Option<(Segment, usize)> {
-        let index = (shape.spelled().iter()).position(|spelled| Site::of(spelled.part) == site)?;
+        let index = shape.spelled_at(site)?;
         let level = self.shapes.path_level(shape.segment(), index)?;
         Some((self.shapes.chain_root(shape.segment()), level))
     }
@@ -611,11 +651,8 @@ impl<'graph> LoadFacts<'graph> {
 
     /// Where `shape` reads each lexical variable of the path at `level`'s `through`.
     pub fn through_at(&self, shape: &BodyShape<'_>, level: usize) -> Option<&'graph [Variable]> {
-        (self
-            .records
-            .typed(shape.segment(), Held::Through(shape.segment(), level)))
-        .and_then(|typed| typed.throughs.get(level))
-        .map(|(_, located)| *located)
+        let held = Held::Through(shape.segment(), level);
+        self.fact(shape, held, |typed| typed.throughs, level)
     }
 
     /// Why the code shape `shape`'s code cannot be built or does not type, reported when an `EVAL`
@@ -629,39 +666,24 @@ impl<'graph> LoadFacts<'graph> {
 
     /// The static type of the part at `site` of `shape`, where the load typed one.
     pub fn value_type(&self, shape: &BodyShape<'_>, site: Site) -> Option<Interval> {
-        (self
-            .records
-            .typed(shape.segment(), Held::Site(shape.segment(), site)))
-        .and_then(|typed| typed.parts.get(site))
-        .map(|(_, typed)| *typed)
+        self.at_site(shape, site, |typed| typed.parts)
     }
 
     /// The static type of statement `index` of `shape`'s body.
     pub fn statement_type(&self, shape: &BodyShape<'_>, index: usize) -> Option<Interval> {
         let index = index as u32;
-        (self
-            .records
-            .typed(shape.segment(), Held::Statement(shape.segment(), index)))
-        .and_then(|typed| typed.statements.get(index))
-        .map(|(_, typed)| *typed)
+        let held = Held::Statement(shape.segment(), index);
+        self.fact(shape, held, |typed| typed.statements, index)
     }
 
     /// The static type of the binder at `slot` of `shape`.
     pub fn binder_type(&self, shape: &BodyShape<'_>, slot: Slot) -> Option<DeclaredType<Interval>> {
-        (self
-            .records
-            .typed(shape.segment(), Held::Slot(shape.segment(), slot)))
-        .and_then(|typed| typed.binders.get(slot))
-        .map(|(_, typed)| *typed)
+        self.at_slot(shape, slot, |typed| typed.binders)
     }
 
     /// What the load fixed about the keyworded use whose node sits at `site` of `shape`.
     pub fn use_statics(&self, shape: &BodyShape<'_>, site: Site) -> UseStatics<'graph> {
-        (self
-            .records
-            .typed(shape.segment(), Held::Site(shape.segment(), site)))
-        .and_then(|typed| typed.uses.get(site))
-        .map_or(UseStatics::UNFIXED, |(_, fixed)| *fixed)
+        (self.at_site(shape, site, |typed| typed.uses)).unwrap_or(UseStatics::UNFIXED)
     }
 
     /// The class the load fixed for the frame body `shape`.
@@ -687,10 +709,7 @@ impl<'graph> LoadFacts<'graph> {
 
     /// Whether the load recorded `site` as one of `shape`'s own minting sites.
     pub fn mints_at(&self, shape: &BodyShape<'_>, site: Site) -> bool {
-        (self
-            .records
-            .typed(shape.segment(), Held::Site(shape.segment(), site)))
-        .is_some_and(|typed| typed.minting.get(site).is_some())
+        self.lists_site(shape, site, |typed| typed.minting)
     }
 
     /// Whether the composite site at `site` of `shape` builds a value whose own type is warm.
@@ -701,47 +720,28 @@ impl<'graph> LoadFacts<'graph> {
     /// The content tree of the view the `:|` at `site` of `shape` builds, where its signature is
     /// closed.
     pub fn view_tree(&self, shape: &BodyShape<'_>, site: Site) -> Option<&'graph Tree<'graph>> {
-        (self
-            .records
-            .typed(shape.segment(), Held::Site(shape.segment(), site)))
-        .and_then(|typed| typed.trees.get(site))
-        .map(|(_, tree)| *tree)
+        self.at_site(shape, site, |typed| typed.trees)
     }
 
     /// Whether the load settled the ascription at `site` of `shape`.
     pub fn settled(&self, shape: &BodyShape<'_>, site: Site) -> bool {
-        (self
-            .records
-            .typed(shape.segment(), Held::Site(shape.segment(), site)))
-        .is_some_and(|typed| typed.settled.get(site).is_some())
+        self.lists_site(shape, site, |typed| typed.settled)
     }
 
     /// What the load fixed where `shape` reads a quantified function at `site`.
     pub fn instance_at(&self, shape: &BodyShape<'_>, site: Site) -> Option<InstanceRead<'graph>> {
-        (self
-            .records
-            .typed(shape.segment(), Held::Site(shape.segment(), site)))
-        .and_then(|typed| typed.instances.get(site))
-        .map(|(_, read)| *read)
+        self.at_site(shape, site, |typed| typed.instances)
     }
 
     /// The closed point each variable of the group of the candidate the keyworded use at `site` of
     /// `shape` selects solves to, by group index, where the load selected one.
     pub fn selection(&self, shape: &BodyShape<'_>, site: Site) -> Option<&'graph [Option<KType>]> {
-        (self
-            .records
-            .typed(shape.segment(), Held::Site(shape.segment(), site)))
-        .and_then(|typed| typed.selections.get(site))
-        .map(|(_, points)| *points)
+        self.at_site(shape, site, |typed| typed.selections)
     }
 
     /// The content tree of the module the binder at `slot` of `shape` holds, if the load read it.
     pub fn content(&self, shape: &BodyShape<'_>, slot: Slot) -> Option<Tree<'graph>> {
-        (self
-            .records
-            .typed(shape.segment(), Held::Slot(shape.segment(), slot)))
-        .and_then(|typed| typed.contents.get(slot))
-        .map(|(_, tree)| *tree)
+        self.at_slot(shape, slot, |typed| typed.contents)
     }
 
     /// What each parameter of the call by name whose argument sits at `site` of `shape` is solved
@@ -751,11 +751,7 @@ impl<'graph> LoadFacts<'graph> {
         shape: &BodyShape<'_>,
         site: Site,
     ) -> &'graph [StaticType<'graph>] {
-        (self
-            .records
-            .typed(shape.segment(), Held::Site(shape.segment(), site)))
-        .and_then(|typed| typed.by_name.get(site))
-        .map_or(&[], |(_, recorded)| *recorded)
+        (self.at_site(shape, site, |typed| typed.by_name)).unwrap_or(&[])
     }
 
     /// The parameter slots the callable `shape`'s specialization keys on: `None` where a call of

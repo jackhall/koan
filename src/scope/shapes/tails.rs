@@ -213,7 +213,9 @@ fn tail_of<'graph>(shape: &BodyShape<'graph>, node: &'graph KExpression<'graph>)
     if builtin.is_some() {
         return Tail::Other;
     }
-    let keyword = |part: &ExpressionPart<'_>| matches!(part, ExpressionPart::Keyword(_));
+    if let Some((head, argument)) = by_name_parts(node) {
+        return Tail::Apply(head, argument);
+    }
     match node.parts {
         [only] => match &only.value {
             ExpressionPart::Expression(inner) if shape.nested(Site::of(&only.value)).is_none() => {
@@ -222,9 +224,6 @@ fn tail_of<'graph>(shape: &BodyShape<'graph>, node: &'graph KExpression<'graph>)
             ExpressionPart::MarkedUse(_, inner) => tail_of(shape, inner.reference()),
             _ => Tail::Other,
         },
-        [head, argument] if !keyword(&head.value) && !keyword(&argument.value) => {
-            Tail::Apply(&head.value, &argument.value)
-        }
         _ => Tail::Other,
     }
 }
@@ -265,29 +264,39 @@ fn bare_parameter<'graph>(
     }
 }
 
-/// The parts of a keyworded node its call evaluates, in slot order: `None` for an `ATTR` label
-/// written bare, which is read as written.
-fn evaluated<'x, 'graph>(
+/// The head and argument of a call by name: a builtin-less node of two parts, neither a keyword.
+pub(super) fn by_name_parts<'graph>(
+    node: &'graph KExpression<'graph>,
+) -> Option<(
+    &'graph ExpressionPart<'graph>,
+    &'graph ExpressionPart<'graph>,
+)> {
+    let keyword = |part: &ExpressionPart<'_>| matches!(part, ExpressionPart::Keyword(_));
+    let (None, [head, argument]) = (node.cache().builtin_shape(), node.parts) else {
+        return None;
+    };
+    (!keyword(&head.value) && !keyword(&argument.value)).then_some((&head.value, &argument.value))
+}
+
+/// The parts of a keyworded node its call evaluates, in slot order, each beside whether it is an
+/// `ATTR` label written bare, which is read as written.
+pub(super) fn evaluated<'x, 'graph>(
     node: &'graph KExpression<'graph>,
     scratch: BumpAllocator<'x>,
-) -> BumpVec<'x, Option<&'graph ExpressionPart<'graph>>> {
+) -> BumpVec<'x, (&'graph ExpressionPart<'graph>, bool)> {
     let mut wanted = BumpVec::with_capacity_in(node.parts.len(), scratch);
     match node.cache().builtin_shape() {
         Some(shape) => {
             for (role, part) in shape.roles().zip(node.parts) {
                 if role != Role::Keyword {
-                    wanted.push(
-                        role.label_reads(&part.value)
-                            .is_none()
-                            .then_some(&part.value),
-                    );
+                    wanted.push((&part.value, role.label_reads(&part.value).is_some()));
                 }
             }
         }
         None => wanted.extend(
             (node.parts.iter())
                 .filter(|part| !matches!(part.value, ExpressionPart::Keyword(_)))
-                .map(|part| Some(&part.value)),
+                .map(|part| (&part.value, false)),
         ),
     }
     wanted
@@ -388,10 +397,8 @@ fn tail_edges<'x, 'graph>(
                 let names = written_slots(holder, slot, callee, scratch)
                     .unwrap_or_else(|| BumpVec::new_in(scratch));
                 let mut bare = BumpVec::new_in(scratch);
-                for (name, wanted) in names.iter().zip(wanted.iter()) {
-                    if let Some(part) = wanted
-                        && let Some(from) = bare_parameter(shape, part)
-                    {
+                for (name, (part, label)) in names.iter().zip(wanted.iter()) {
+                    if !label && let Some(from) = bare_parameter(shape, part) {
                         bare.push((*name, from));
                     }
                 }

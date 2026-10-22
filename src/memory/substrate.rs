@@ -65,11 +65,11 @@ impl<'a> Lays<'a> for Writer<'a, '_> {
     }
 }
 
+// A writer is a foreign type and `LaysRuns` a foreign trait, so the two traits cannot be one
+// without an upstream impl; a bump serves this one through that one.
 impl<'a> Lays<'a> for crate::memory::BumpAllocator<'a> {
     fn fill<T>(self, len: usize, fill: impl FnMut(usize) -> T) -> &'a [T] {
-        // The same drop-glue assert as a writer's: a fact laid here may be copied into a region.
-        const { assert!(!std::mem::needs_drop::<T>()) };
-        self.alloc_slice_fill_with(len, fill)
+        crate::memory::LaysRuns::lay(self, len, fill)
     }
 }
 
