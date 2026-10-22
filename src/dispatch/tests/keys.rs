@@ -403,3 +403,13 @@ fn a_callable_keys_on_a_module_parameter_its_units_read() {
     );
     assert_eq!(keyed(&source, &["z", "m"]), some(&["m"]));
 }
+
+/// The keys fold reads every unit but a callable's entry, so a name only the parameters' own
+/// declared types read keys nothing: `PAIR`'s body reads neither `First` nor `Second`.
+#[cfg(not(feature = "old-walk"))]
+#[test]
+fn a_name_read_only_at_its_callable_s_entry_keys_nothing() {
+    let source =
+        "EXPR FOR ALL #[First Second] #(PAIR x :First WITH y :Second) -> Str = #(\"apart\")\n";
+    assert_eq!(keyed(source, &["y", "x", "Second", "First"]), None);
+}

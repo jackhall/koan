@@ -11,8 +11,9 @@ use std::collections::BTreeMap;
 use std::fmt::Write as _;
 
 use crate::scope::{
-    BodyShape, InstanceRead, LoadFacts, Mint, Narrowing, Resolved, Site, Slot, Static,
-    StaticCallable, StaticRegistered, StaticSolution, StaticType, UseStatics, each_part,
+    Address, BindSite, BodyShape, Frontier, InstanceRead, LoadFacts, Mint, Narrowing, Resolved,
+    ShapeKind, Site, Slot, Static, StaticCallable, StaticRegistered, StaticSolution, StaticType,
+    UnitId, UnitIndex, Unknown, UseStatics, each_part,
 };
 use crate::symbols::SymbolInterner;
 use crate::type_lattice::{DeclaredType, Interval, Parametric, display_name};
@@ -67,6 +68,7 @@ struct Differ<'graph> {
 const QUOTE: &str = "a quote reads its `$` names at their static types";
 const CLOSED_PATH: &str = "a type over a closed path is closed";
 const MIXED_SEAM: &str = "a unit mixing an entry seam with a later one keys nothing through it";
+const ENTRY_ONLY: &str = "a name read only at its callable's entry keys nothing";
 const KEY_GROWTH: &str = "a callable keys on each keyable name a unit beneath it reads";
 const LAYOUT: &str = "a closure carries every enclosing type name bound at its birth";
 const TAIL_EDGE: &str = "a tail edge into an untyped registration pairs by its written slots";
@@ -178,6 +180,56 @@ impl Render<'_, '_, '_, '_, '_> {
             let _ = write!(out, " / {}", self.static_type(*each));
         }
         out
+    }
+}
+
+/// The move explaining why the walk keys the callable `callable` on its parameter `slot` no longer:
+/// every unit beneath reading it either mixes an entry seam with a later one (its latest bind site,
+/// its own binders aside, is no callable's entry, beside an unknown bound at one), or is the entry.
+fn dropped_key(
+    records: &LoadFacts<'_>,
+    callable: &BodyShape<'_>,
+    slot: Slot,
+) -> Option<&'static str> {
+    let shapes = records.shapes();
+    let wanted = Unknown {
+        segment: callable.segment(),
+        at: Address::Slot(slot),
+    };
+    let entry = |site: BindSite| {
+        site.unit == UnitIndex::ENTRY && shapes.shape_at(site.segment).kind() == ShapeKind::Callable
+    };
+    let beneath = |mut inside| loop {
+        match inside == callable.segment() {
+            true => return true,
+            false => match shapes.parent(inside) {
+                Some((parent, _)) => inside = parent,
+                None => return false,
+            },
+        }
+    };
+    let readers: Vec<_> = (records.own_units().iter())
+        .map(|(unit, (_, frontier))| (*unit, frontier))
+        .filter(|(unit, frontier)| beneath(unit.segment) && frontier.unknowns().contains(&wanted))
+        .collect();
+    let mixed = |(unit, frontier): &(UnitId, &Frontier<'_>)| {
+        let sites: Vec<BindSite> = (frontier.unknowns().iter())
+            .map(|unknown| shapes.bind_site(*unknown))
+            .filter(|site| (site.segment, site.unit) != (unit.segment, unit.unit))
+            .collect();
+        sites.iter().max().is_some_and(|seam| !entry(*seam))
+            && sites.iter().any(|site| entry(*site))
+    };
+    let at_entry = |(unit, _): &(UnitId, &Frontier<'_>)| {
+        unit.segment == callable.segment() && unit.unit == UnitIndex::ENTRY
+    };
+    let explained = readers
+        .iter()
+        .all(|reader| mixed(reader) || at_entry(reader));
+    match (explained, readers.iter().any(mixed)) {
+        (false, _) => None,
+        (true, true) => Some(MIXED_SEAM),
+        (true, false) => Some(ENTRY_ONLY),
     }
 }
 
@@ -497,12 +549,25 @@ fn body(
             cells.specialization_keys(shape),
             records.specialization_keys(shape),
         );
+        // The transition law (F4): a name the walk drops is read only at the entry or in units
+        // mixing an entry seam with a later one (K3); a name it adds is one a unit beneath reads.
         let (some, held) = (old.unwrap_or(&[]), new.unwrap_or(&[]));
-        match (old == new, within(held, some), within(some, held)) {
-            (true, ..) => {}
-            (false, true, _) => out.moved(MIXED_SEAM),
-            (false, _, true) => out.moved(KEY_GROWTH),
-            _ => {
+        let dropped: Vec<_> = (some.iter())
+            .filter(|slot| !held.contains(slot))
+            .map(|slot| dropped_key(records, shape, *slot))
+            .collect();
+        match (old == new, dropped.iter().all(Option::is_some)) {
+            (true, _) => {}
+            (false, true) => {
+                dropped
+                    .into_iter()
+                    .flatten()
+                    .for_each(|kind| out.moved(kind));
+                if !within(held, some) {
+                    out.moved(KEY_GROWTH);
+                }
+            }
+            (false, false) => {
                 let (old, new) = (format!("{:?}", named(old)), format!("{:?}", named(new)));
                 out.check(shape, "body", "keys", old, new);
             }
