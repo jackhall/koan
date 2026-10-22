@@ -6,12 +6,13 @@ use crate::memory::Bump;
 use crate::parse::{ExpressionPart, KExpression};
 use crate::program::Program;
 use crate::scope::{BodyShape, ShapeKind, Site, Static};
-use crate::type_lattice::{DeclaredType, KType, Parametric, shape_slots};
+use crate::type_lattice::{DeclaredType, Interval, KType, Parametric, shape_slots};
 use crate::values::tests::reading;
 
 use super::run;
 use super::statics::{
-    binder, body, interval, let_narrowing, lexical, loaded, module_body, rendered, top, upper,
+    binder, body, interval, let_narrowing, lexical, loaded, module_body, rendered, top,
+    typed_parts, upper,
 };
 
 /// The body the registration of `shape` whose key leads with the keyword `lead` births.
@@ -194,6 +195,28 @@ fn a_static_type_is_exact_where_the_load_knows_the_carried_type() {
             "l"
         ),
         "a call running a frame is exact at its return"
+    );
+}
+
+#[test]
+fn a_crossing_into_code_or_out_of_it_is_read_through_bounds() {
+    loaded(
+        "MODULE lib = (LET f = (FN FOR ALL #{Elt: Number} :{x :Elt} -> Elt = #(\n  \
+         LET q = #(PRINT $x)\n  \
+         x\n\
+         )))",
+        |program| {
+            let f = body(program, module_body(program, "lib"), "f");
+            assert_eq!(
+                typed_parts(program, code(f)),
+                [Interval::point(KType::NUMBER.into())]
+            );
+        },
+    );
+    assert_eq!(
+        run("LET q = #(FN :{t :Tee} -> Tee = #(t))\nLET f = (EVAL q -> Number)"),
+        "load: <test>:2:9: this `EVAL`'s code returns :(FN :{t :Never} -> Any), which can never \
+         satisfy its declared return Number"
     );
 }
 

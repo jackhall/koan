@@ -2,9 +2,10 @@
 //! frontiers of the units beneath it, and what a call of it seeks at run.
 
 use crate::program::Program;
-use crate::scope::{BodyShape, Mint, ShapeKind, Slot};
+use crate::scope::{BodyShape, Mint, ShapeKind, Slot, UnitIndex, Unknown};
 
 use super::caching::{PRELUDE, Ran, bounds, every_shape, minted, ran_under};
+use super::frontiers::{quantified, seam, unknown};
 use super::statics::{body, loaded};
 use crate::values::SpecBounds;
 
@@ -63,6 +64,42 @@ fn some(names: &[&str]) -> Option<Vec<String>> {
     Some(names.iter().map(|name| name.to_string()).collect())
 }
 
+/// Whether some unit of `shape` waits on every one of `unknowns` and seams at `shape`'s entry.
+fn seams_at_entry_over(program: &Program<'_>, shape: &BodyShape<'_>, unknowns: &[Unknown]) -> bool {
+    (program.facts().own_units().iter())
+        .filter(|(unit, (_, frontier))| {
+            unit.segment == shape.segment()
+                && unknowns
+                    .iter()
+                    .all(|unknown| frontier.unknowns().contains(unknown))
+        })
+        .any(|(unit, _)| {
+            seam(program, *unit).is_some_and(|site| {
+                (site.segment, site.unit) == (shape.segment(), UnitIndex::ENTRY)
+            })
+        })
+}
+
+#[test]
+fn a_body_keys_on_a_for_all_name_a_frontier_at_its_entry_waits_on() {
+    let source =
+        format!("{PICK}EXPR FOR ALL #[Elt] #(WRAP x :Elt) -> Any = #(\n  LET p = (PICK x)\n  p\n)");
+    loaded(&source, |program| {
+        let wrap = quantified(program);
+        assert_eq!(listed(program, wrap), some(&["Elt"]));
+        assert!(
+            (program.facts().caching(wrap)).is_some_and(|caching| caching.invariant.is_none()),
+            "`WRAP` keys through its frontier alone"
+        );
+    });
+    let closed =
+        format!("{PICK}LET f = (FN :{{x :Number}} -> Any = #(\n  LET p = (PICK x)\n  p\n))");
+    loaded(&closed, |program| {
+        let f = body(program, program.shape(), "f");
+        assert_eq!(listed(program, f), None, "a closed body keys nothing");
+    });
+}
+
 #[test]
 fn a_body_keys_on_a_module_parameter_a_path_through_it_waits_on() {
     let source = format!(
@@ -72,6 +109,78 @@ fn a_body_keys_on_a_module_parameter_a_path_through_it_waits_on() {
     loaded(&source, |program| {
         let step = body(program, program.shape(), "step");
         assert_eq!(listed(program, step), some(&["m"]));
+    });
+}
+
+#[test]
+fn a_body_keys_on_its_own_names_a_nested_body_s_entry_frontier_waits_on() {
+    // `PAIRED`'s unit waits on `OUTER`'s `m` and its own `Inner`, so it seams at `PAIRED`'s entry:
+    // `OUTER` keys `m`, and `PAIRED`, whose specialization lies beneath `OUTER`'s, `Inner`.
+    let source = format!(
+        "{PRELUDE}{SAME}EXPR #(OUTER m :Counter) -> Any = #((EXPR FOR ALL #[Inner] \
+         #(PAIRED x :Inner) -> Any = #(SAME m.zero AND x)) (PAIRED 1))\n"
+    );
+    loaded(&source, |program| {
+        let mut shapes = Vec::new();
+        every_shape(program.shape(), &mut shapes);
+        let find = |slots: &[&str]| {
+            *(shapes.iter())
+                .find(|shape| names(program, shape) == slots)
+                .unwrap_or_else(|| panic!("a callable binds {slots:?}"))
+        };
+        let outer = find(&["m", "<symbol>"]);
+        let paired = find(&["x", "Inner"]);
+        let (m, inner) = (
+            unknown(program, outer, "m"),
+            unknown(program, paired, "Inner"),
+        );
+        assert!(
+            seams_at_entry_over(program, paired, &[m, inner]),
+            "a unit of `PAIRED` waits on `m` and `Inner` and seams at its entry"
+        );
+        assert_eq!(listed(program, outer), some(&["m"]));
+        assert_eq!(listed(program, paired), some(&["Inner"]));
+    });
+    // Without `PAIRED`, only `m`'s own type reads `m`, at the entry, which keys nothing.
+    let alone = format!("{PRELUDE}EXPR #(OUTER m :Counter) -> Any = #(1)\n");
+    assert_eq!(keyed(&alone, &["m"]), None);
+}
+
+#[test]
+fn a_capture_keys_the_body_that_binds_it_never_the_one_reading_it() {
+    let source = format!(
+        "{PICK}EXPR FOR ALL #[Elt] #(WRAP x :Elt) -> Any = #(\n  \
+         LET g = (FN :{{}} -> Any = #(\n    LET p = (PICK x)\n    p\n  ))\n  g\n)"
+    );
+    loaded(&source, |program| {
+        let wrap = quantified(program);
+        let (_, g) = (wrap.nested_shapes().iter())
+            .find(|(_, nested)| nested.kind() == ShapeKind::Callable)
+            .expect("`g` is nested in `WRAP`");
+        assert_eq!(listed(program, wrap), some(&["Elt"]));
+        assert_eq!(listed(program, g), None);
+    });
+}
+
+#[test]
+fn a_frontier_name_whose_parameter_does_not_key_keys_nothing() {
+    // `m`'s declared type is open, so its digest is no constant cost.
+    let source = format!(
+        "{PICK}SIG Pair FOR ALL #[Left Right] = #[(VAL l :Left) (VAL r :Right)]\n\
+         EXPR FOR ALL #[Elt] #(USE m :(Pair WITH {{Left = Elt}})) -> Any = #(LET p = (PICK m.r))\n"
+    );
+    loaded(&source, |program| {
+        let using = quantified(program);
+        let m = unknown(program, using, "m");
+        assert!(
+            seams_at_entry_over(program, using, &[m]),
+            "a unit of `USE` waits on `m` and seams at its entry"
+        );
+        let listed = listed(program, using).unwrap_or_default();
+        assert!(
+            !listed.contains(&"m".to_string()),
+            "`m` keys nothing: {listed:?}"
+        );
     });
 }
 

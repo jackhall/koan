@@ -237,6 +237,37 @@ const AREAS: &str = "NEWTYPE Circle = :{r :Number}\n\
                      EXPR #(AREA s :Square) -> Str = #(\"square\")\n\
                      EXPR #(EITHER) -> (Circle | Square) = #(Circle {r = 1})\n";
 
+/// The static type of each value part of `shape`'s statements the load typed, in program order.
+pub(super) fn typed_parts(program: &Program<'_>, shape: &BodyShape<'_>) -> Vec<Interval> {
+    let mut typed = Vec::new();
+    for statement in shape.body() {
+        crate::scope::each_part(statement, |part| {
+            typed.extend(program.facts().value_type(shape, Site::of(part)));
+        });
+    }
+    typed
+}
+
+#[test]
+fn a_cyclic_binding_and_a_quote_s_hole_are_typed() {
+    loaded("LET f = (FN :{} -> Any = #(a))\nLET a = [f]", |program| {
+        let shape = program.shape();
+        assert_eq!(binder(program, shape, "f"), ":(FN :{} -> Any)");
+        assert_eq!(binder(program, shape, "a"), ":(LIST OF :(FN :{} -> Any))");
+    });
+    loaded("LET q = #(PRINT y)", |program| {
+        let (_, code) = program.shape().nested_shapes()[0];
+        let parts = typed_parts(program, code);
+        assert_eq!(parts.len(), 1);
+        assert_eq!(parts[0].upper, KType::ANY.into(), "a hole is `Any`");
+        assert_eq!(
+            program.facts().statement_type(code, 0),
+            Some(Interval::within(KType::ANY)),
+            "a hole a `USING` may fill is a candidate the load cannot read"
+        );
+    });
+}
+
 #[test]
 fn a_use_with_one_admitting_candidate_selects_it() {
     let source = format!("{AREAS}LET a = (AREA (Circle {{r = 1}}))");

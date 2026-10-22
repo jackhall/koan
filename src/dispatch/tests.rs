@@ -8,6 +8,7 @@ mod caching;
 mod classes;
 mod contributions;
 mod digests;
+mod frontiers;
 mod functions;
 mod generate;
 mod generic;
