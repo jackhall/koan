@@ -14,6 +14,7 @@ mod properties;
 mod quoted_uses;
 mod quotes;
 mod rewrite;
+mod shapes;
 mod typed;
 mod units;
 

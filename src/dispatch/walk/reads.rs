@@ -6,8 +6,8 @@
 //! body leaves the chain; a callable's or a quote's code's birth facts in its birth unit's; a
 //! body's closing facts in its closing record. A read gathers what the fact waits on, at unit
 //! grain: nothing for a fact of the unit running, the gathering so far of a unit still running
-//! around it, and the frontier of one that ended. Only an unknown of a shape on the chain is
-//! gathered, and one the binding binds is closed.
+//! around it, and a read of the frontier of one that ended, cut to the chain. Only an unknown of a
+//! shape on the chain is gathered, and one the binding binds is closed.
 
 use crate::elaborate::schema_of;
 use crate::memory::BumpVec;
@@ -60,16 +60,9 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         );
         // A read kept what lies at or above its cut; of that, what is still on the chain lies at
         // or above the innermost body on the chain enclosing the cut.
-        inner.reads.extend(outer.reads.iter().map(|cut| {
-            let from = self.meet(cut.from);
-            debug_assert!(
-                self.shapes.encloses(from, cut.from),
-                "a re-cut only narrows"
-            );
-            Cut {
-                frontier: cut.frontier,
-                from,
-            }
+        inner.reads.extend(outer.reads.iter().map(|cut| Cut {
+            frontier: cut.frontier,
+            from: self.meet(cut.from),
         }));
         #[cfg(test)]
         super::count(|counts| counts.noted += inner.unknowns.len() + inner.reads.len() - before);
@@ -82,9 +75,10 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             && self.store.binding(unknown).is_none()
     }
 
-    /// The innermost body on the chain that is `segment` or encloses it. The chain is a root path:
-    /// level 0 is the program, which encloses every body, and each level the body enclosing the
-    /// next, the levels above a callee's parent set aside while it is walked on demand.
+    /// The innermost body on the chain that is `segment` or encloses it, so a cut there lies on the
+    /// chain of `segment`'s record. The chain is a root path: level 0 is the program, which
+    /// encloses every body, and each level the body enclosing the next, the levels above a callee's
+    /// parent set aside while it is walked on demand.
     fn meet(&self, mut segment: Segment) -> Segment {
         while self.level_of(segment).is_none() {
             segment = (self.shapes.parent(segment))
@@ -125,10 +119,6 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             return;
         }
         let from = self.meet(segment);
-        debug_assert!(
-            self.shapes.encloses(from, segment),
-            "a cut lies on the record's chain"
-        );
         let mut scopes = self.scopes.replace(BumpVec::new_in(self.scratch));
         if let Some(open) = scopes.last_mut() {
             open.reads.push(Cut { frontier, from });

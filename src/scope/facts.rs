@@ -1,8 +1,9 @@
 //! The vocabulary of the load's facts: what a unit waits on, and the binding that wakes it
 //! ([the build module's design](../build/README.md#type-facts-and-the-solver)).
 //!
-//! The load keys its facts by unit ([`UnitId`]): one record per unit, beside its **frontier**, the
-//! [`Unknown`]s that could change it, read transitively, kept in a [`Store`]. A unit with an empty
+//! The load keys its facts by unit ([`UnitId`]): one record per unit, beside its **frontier** — the
+//! [`Unknown`]s it read itself and the frontiers it read, together every unknown that could change
+//! it, transitively — kept in a [`Store`]. A unit with an empty
 //! frontier is fixed. A [`Binding`] gives each unknown a [`Bound`] — a closed type, or for a module
 //! binder a closed content tree — and **wakes** every unit whose frontier meets it.
 //!

@@ -531,8 +531,8 @@ struct Pass<'p, 'o, 'x, 'graph, 'tier, 'pair, 'reg, S: Store<'o>> {
     units: BumpVec<'p, UnitState<'p, 'o>>,
     /// The tag of each unit the walk ran or absorbed, by id: the newest where it has two.
     started: UnitTable<'p, Tag>,
-    /// The units running, innermost last, beside each one's gathering: every unknown its facts
-    /// read so far, unsorted until its frontier lays it.
+    /// The units running, innermost last, beside each one's gathering: every unknown and ended
+    /// frontier its facts read so far, unsorted until its frontier lays it.
     open: BumpVec<'p, Tag>,
     scopes: std::cell::Cell<BumpVec<'p, Gathering<'p, 'o>>>,
     /// Each owning body the walk has entered, by segment.

@@ -395,3 +395,53 @@ fn a_chain_of_reads_lays_and_notes_frontiers_linear_in_its_length() {
         });
     }
 }
+
+/// A call reads its callee's closing as one cut, at the innermost body on the caller's chain
+/// enclosing the callee: the callee's own names, off the caller's chain, are past the cut.
+#[test]
+fn a_call_reads_its_callee_s_closing_cut_to_the_caller_s_chain() {
+    let source = "LET pair = FN EXPR FOR ALL #[Elt] #(PAIR x :Elt WITH y :Elt) -> Type = #(Elt)\n\
+                  EXPR FOR ALL #[Outer] #(BOTH a :Outer AND b :Outer) -> Type = \
+                  #(pair {x = a, y = b})\n\
+                  EXPR #(WIDE p :(Number | Str) AND q :(Number | Str)) -> Type = #(BOTH p AND q)";
+    loaded(source, |program| {
+        let root = program.shape();
+        let declaring = |name: &str| {
+            (root.nested_shapes().iter())
+                .map(|(_, nested)| *nested)
+                .find(|nested| {
+                    (0..nested.slots()).any(|at| {
+                        let named = program
+                            .symbols()
+                            .display(nested.slot_name(Slot(at as u32)).symbol());
+                        named.to_string() == name
+                    })
+                })
+                .expect("a callable declares the name")
+        };
+        let (both, wide) = (declaring("Outer"), declaring("p"));
+        let outer = unknown(program, both, "Outer");
+        let facts = program.facts();
+        let closing = facts.closing(wide.segment()).map(|(_, waits)| waits);
+        let units = (facts.own_units().iter())
+            .filter(|(unit, _)| unit.segment == wide.segment())
+            .map(|(_, (_, waits))| *waits);
+        let reading: Vec<_> = (units.chain(closing))
+            .filter(|waits| {
+                (waits.reads().iter()).any(|cut| {
+                    cut.from == root.segment() && cut.frontier.unknowns().contains(&outer)
+                })
+            })
+            .collect();
+        assert!(
+            !reading.is_empty(),
+            "`WIDE` reads `BOTH`'s closing, which names `Outer`, cut at the program"
+        );
+        for waits in reading {
+            assert!(
+                !waits.unknowns().contains(&outer),
+                "`Outer` is past the cut"
+            );
+        }
+    });
+}

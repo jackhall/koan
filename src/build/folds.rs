@@ -195,9 +195,6 @@ fn keyed_names<'x>(
         if *unit == UnitIndex::ENTRY && shapes.shape_at(*segment).kind() == ShapeKind::Callable {
             continue;
         }
-        if frontier.is_empty() {
-            continue;
-        }
         let summary = summarize(shapes, *frontier, scratch, keyable, &mut summaries);
         // A unit's own binders are what it fixes, not what it waits on: of each segment's two
         // latest distinct sites, at most one is the unit's.
