@@ -536,8 +536,9 @@ struct Pass<'p, 'o, 'x, 'graph, 'tier, 'pair, 'reg, S: Store<'o>> {
     /// Each binder whose tree is being read, by its shape's address: a binder read through itself
     /// reads as a leaf.
     reading: BumpVec<'p, (usize, Slot)>,
-    /// Each binder's tree on the chain, by its shape's address and slot: built once per binding.
-    binders: BumpBackedMap<'p, (usize, Slot), (Tree<'o>, Tag)>,
+    /// Each binder's tree, by its shape's address, its slot and, read through a body's tree, the
+    /// address of that tree's captures: built once per binding.
+    binders: BumpBackedMap<'p, (usize, Slot, Option<usize>), (Tree<'o>, Tag)>,
     /// What shaped the binder tree being built besides the program's text.
     shaped: trees::Shaped,
     /// What each view over a closed tree binds, by its print: a chain of views reads each once.

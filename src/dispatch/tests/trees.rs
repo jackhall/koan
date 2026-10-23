@@ -472,3 +472,22 @@ fn views_of_two_bodies_alike_are_each_over_their_own() {
         assert_ne!(a, b, "each view is over its own body");
     });
 }
+
+/// A module binder read through its enclosing module's tree from `n` sites has its tree built
+/// once: its body's captures are laid once, however many sites read it.
+#[test]
+fn a_module_read_through_a_module_from_many_sites_lays_its_captures_once() {
+    let program = |n: usize| {
+        let mut source = String::from(
+            "SIG Plain = #[(VAL zero :Number)]\n\
+             LET base = 1\n\
+             MODULE m = ((LET zero = 0) (MODULE inner = ((LET zero = base) (LET one = 1))))\n",
+        );
+        for at in 0..n {
+            source += &format!("LET v{at} = (m.inner :| Plain)\n");
+        }
+        source
+    };
+    let slices = |n: usize| load_counts(&program(n)).capture_slices;
+    assert_eq!(slices(8), slices(16), "capture slices laid");
+}

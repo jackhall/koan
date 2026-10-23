@@ -22,10 +22,10 @@
 //! callee whose strongly connected component has closed and is trivial
 //! ([recursion](../../build/README.md#recursion)).
 //!
-//! Trees on the chain are memoized per shape and site, and each binder's tree on the chain once,
-//! except where a cycle cut on an outer binder, a fallback the walk's progress could still sharpen,
-//! or a leaf keyed on the read site shaped it. A binder already being read reads as a leaf, so no
-//! tree is built through itself.
+//! Trees on the chain are memoized per shape and site, and each binder's tree once on the chain and
+//! once through each body's tree, except where a cycle cut on an outer binder, a fallback the
+//! walk's progress could still sharpen, or a leaf keyed on the read site shaped it. A binder
+//! already being read reads as a leaf, so no tree is built through itself.
 
 use crate::elaborate::signature_member;
 use crate::memory::{BumpBackedMap, BumpVec, bump_table, collect, resident};
@@ -57,8 +57,9 @@ pub(super) enum Scope<'o, 'graph> {
 }
 
 /// What shaped the binder tree being built besides the program's text: the lowest index on the
-/// pass's `reading` stack a cycle cut reached, and whether a fallback the walk's progress could
-/// sharpen stands in it. A tree is memoized only where neither reaches outside its own build.
+/// pass's `reading` stack a cycle cut reached, and whether an inner binder's tree standing in it
+/// was [provisional](Built::Provisional). A tree is memoized only where neither reaches outside
+/// its own build.
 #[derive(Clone, Copy)]
 pub(super) struct Shaped {
     cut: usize,
@@ -205,7 +206,14 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             self.gather(tag);
             return Ok(tree);
         }
-        let tree = self.tree_read(scope, form, written, named)?;
+        let tree = match self.tree_read(scope, form, written, named)? {
+            Built::Settled(tree) => tree,
+            // The binder tree it stands in is then not memoized.
+            Built::Provisional(tree) => {
+                self.shaped.provisional = true;
+                tree
+            }
+        };
         if let Scope::Chain(_) = scope {
             let tag = self.innermost();
             self.trees.insert((address(shape), written), (tree, tag));
@@ -213,21 +221,24 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         Ok(tree)
     }
 
-    /// [`tree_form`](Self::tree_form) unmemoized.
+    /// [`tree_form`](Self::tree_form) unmemoized: provisional where it falls back on what the
+    /// walk's progress could sharpen — a type not closed yet, a closure not typed, a call not
+    /// unfolded.
     fn tree_read(
         &mut self,
         scope: Scope<'o, 'graph>,
         form: Form<'graph>,
         written: Written,
         named: Option<Slot>,
-    ) -> Read<'o, Tree<'o>> {
+    ) -> Read<'o, Built<'o>> {
+        use Built::{Provisional, Settled};
         let shape = self.scope_shape(scope);
         let site = written.site();
-        let tree = match form {
-            Form::Name(name) => match shape.mention(Site::of(name)) {
+        Ok(match form {
+            Form::Name(name) => Settled(match shape.mention(Site::of(name)) {
                 Some(mention) => self.resolve(scope, mention.coordinate, site)?,
                 None => self.fallback(scope, named, site)?,
-            },
+            }),
             Form::Member {
                 operand,
                 label: BinderSymbol::Value(label),
@@ -235,7 +246,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             } => {
                 let through = self.tree_in(scope, operand, None)?;
                 let read = self.read_member(through, label, site)?;
-                self.or_fallback(read, scope, named, site)?
+                Settled(self.or_fallback(read, scope, named, site)?)
             }
             Form::Ascribe(node, mode) => {
                 let [operand, _, ascribed] = node.parts else {
@@ -245,48 +256,49 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 match self.resolved_type(self.scope_level(scope), typed) {
                     Static::Closed(application) => {
                         let source = self.tree_in(scope, &operand.value, None)?;
-                        match mode {
+                        Settled(match mode {
                             Ascription::Opaque => self.view_tree(application, source, site)?,
                             // `:!` is a retype.
                             Ascription::Transparent => {
                                 self.retyped_tree(source, application.into(), site)?
                             }
-                        }
+                        })
                     }
-                    _ => self.fallback(scope, named, site)?,
+                    _ => Provisional(self.fallback(scope, named, site)?),
                 }
             }
-            Form::Leaf(ExpressionPart::Literal(literal)) => Tree::Digest(literal_digest(literal)),
+            Form::Leaf(ExpressionPart::Literal(literal)) => {
+                Settled(Tree::Digest(literal_digest(literal)))
+            }
             Form::Leaf(ExpressionPart::SigiledTypeExpr(_) | ExpressionPart::RecordType(_)) => {
                 match self.resolved_type(self.scope_level(scope), self.type_cell(shape, site)) {
-                    Static::Closed(handle) => named_type(self.types, handle),
-                    _ => self.fallback(scope, named, site)?,
+                    Static::Closed(handle) => Settled(named_type(self.types, handle)),
+                    _ => Provisional(self.fallback(scope, named, site)?),
                 }
             }
             Form::Lambda(node) => match Site::of_body(node).and_then(|body| shape.nested(body)) {
-                Some(body) => {
-                    let knot = self.knot(scope, &[(body, false)], 0, site)?;
-                    self.or_fallback(knot, scope, named, site)?
-                }
-                None => self.fallback(scope, named, site)?,
+                Some(body) => match self.knot(scope, &[(body, false)], 0, site)? {
+                    Some(knot) => Settled(knot),
+                    None => Provisional(self.fallback(scope, named, site)?),
+                },
+                None => Settled(self.fallback(scope, named, site)?),
             },
             Form::Call(node, _) => match scope {
-                Scope::Chain(level) => {
-                    let unfolded = self.keyworded(level, node)?;
-                    self.or_fallback(unfolded, scope, named, site)?
-                }
-                Scope::Body { .. } => self.fallback(scope, named, site)?,
+                Scope::Chain(level) => match self.keyworded(level, node)? {
+                    Some(unfolded) => Settled(unfolded),
+                    None => Provisional(self.fallback(scope, named, site)?),
+                },
+                Scope::Body { .. } => Settled(self.fallback(scope, named, site)?),
             },
             Form::Apply(node) => match scope {
-                Scope::Chain(level) => {
-                    let unfolded = self.by_name(level, node)?;
-                    self.or_fallback(unfolded, scope, named, site)?
-                }
-                Scope::Body { .. } => self.fallback(scope, named, site)?,
+                Scope::Chain(level) => match self.by_name(level, node)? {
+                    Some(unfolded) => Settled(unfolded),
+                    None => Provisional(self.fallback(scope, named, site)?),
+                },
+                Scope::Body { .. } => Settled(self.fallback(scope, named, site)?),
             },
-            _ => self.fallback(scope, named, site)?,
-        };
-        Ok(tree)
+            _ => Settled(self.fallback(scope, named, site)?),
+        })
     }
 
     /// The tree of what `coordinate` holds, read in `scope` at the part at `site`.
@@ -322,8 +334,9 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     }
 
     /// The tree of what the binder at `slot` of `scope`'s shape holds, read at the part at `site`.
-    /// On the chain it is built once, except where a cycle cut on an outer binder, a fallback the
-    /// walk's progress could sharpen, or a leaf keyed on the read site shaped it ([`Shaped`]).
+    /// It is built once on the chain, and once through each body's tree, except where a cycle cut
+    /// on an outer binder, a fallback the walk's progress could sharpen, or a leaf keyed on the
+    /// read site shaped it ([`Shaped`]).
     pub(super) fn slot_tree(
         &mut self,
         scope: Scope<'o, 'graph>,
@@ -331,8 +344,12 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         site: Site,
     ) -> Read<'o, Tree<'o>> {
         let key = (address(self.scope_shape(scope)), slot);
-        let chain = matches!(scope, Scope::Chain(_));
-        if chain && let Some((tree, tag)) = self.binders.get(&key).copied() {
+        // A body read through its tree is read under the tree's captures, by their address.
+        let under = match scope {
+            Scope::Chain(_) => None,
+            Scope::Body { captures, .. } => Some(captures.as_ptr().addr()),
+        };
+        if let Some((tree, tag)) = self.binders.get(&(key.0, slot, under)).copied() {
             self.gather(tag);
             return Ok(tree);
         }
@@ -355,14 +372,13 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         };
         self.reading.pop();
         // A cut on this binder itself reads alike wherever the binder is read from.
-        if chain
-            && let Ok(tree) = tree
+        if let Ok(tree) = tree
             && !provisional
             && cut >= depth
             && tree.print() != Print::Unnamed
         {
             let tag = self.innermost();
-            self.binders.insert(key, (tree, tag));
+            self.binders.insert((key.0, slot, under), (tree, tag));
         }
         tree
     }
