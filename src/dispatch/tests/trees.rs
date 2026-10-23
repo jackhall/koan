@@ -391,7 +391,7 @@ fn a_closure_retyped_at_a_parameter_is_closed_at_the_run_s_digest() {
 
 /// Signatures nested `n` deep: `Sig0` innermost, declaring a type member, and each other's `a` the
 /// next one in.
-fn nested_signatures(n: usize) -> String {
+pub(super) fn nested_signatures(n: usize) -> String {
     let mut source = String::from("SIG Sig0 FOR ALL #[Elem] = #[(VAL zero :Elem)]\n");
     for at in 1..=n {
         source += &format!("SIG Sig{at} = #[(VAL a :Sig{})]\n", at - 1);

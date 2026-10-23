@@ -512,6 +512,18 @@ fn a_refusal_in_a_quote_s_code_is_kept_for_its_eval() {
     });
 }
 
+/// The arm set's first guard in program order that repeats an earlier one is refused, named
+/// against the first guard of its type, whatever order the handles sort in.
+#[test]
+fn the_first_repeat_in_program_order_is_refused() {
+    let error =
+        refused("MATCH 1 -> :Number WITH #{Str: (1), Number: (2), :(Number): (3), :(Str): (4)}");
+    assert_eq!(
+        error,
+        "<test>:1:25: `Number` guards two arms; first at <test>:1:25"
+    );
+}
+
 #[test]
 fn a_guard_written_twice_refuses_the_arm_set() {
     for source in [

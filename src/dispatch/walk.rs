@@ -416,6 +416,9 @@ struct Level<'p, 'o, 'graph> {
     expressions: BumpBackedMap<'p, Site, (StaticType<'o>, Tag)>,
     /// Each part's static type, by site: its latest where the walk typed it twice.
     parts: BumpBackedMap<'p, Site, (Interval, Tag)>,
+    /// Each part's [peek](Pass::peeked), by site, made once: a part is peeked only while its
+    /// statement's unit runs, so the level outlives every read of it.
+    peeks: BumpBackedMap<'p, Site, Option<Interval>>,
     statements: BumpVec<'p, Option<(Interval, Tag)>>,
     binders: BumpVec<'p, (Bound, Option<Tag>)>,
     /// What the walk fixed about each keyworded use, by index into the shape's candidate lists.
@@ -620,12 +623,25 @@ struct Judgement<'x> {
     /// Whether the candidate is a `USING … SCOPE` block's surfaced head whose return is at most:
     /// any but a closed signature head at a type.
     surfaced: bool,
+    /// Whether the candidate is a surfaced key's closed signature head, whose frame retypes its
+    /// value to the head's return.
+    retyped: bool,
     verdict: Verdict,
     intervals: Option<&'x [Interval]>,
     ruled: Option<Interval>,
     /// The instance each of the use's instance arguments takes at this candidate, in argument
     /// order.
     instances: &'x [Made<'x>],
+}
+
+/// What a keyworded use reads of one candidate, read once per use: what the load knows of its
+/// registered shape, the heads it holds where it is a `USING … SCOPE` block's surfaced key, and the
+/// slots its shape's solve reads, empty where the load does not know the shape.
+#[derive(Clone, Copy)]
+struct CandidateRead<'p, 'graph> {
+    known: Known,
+    surfaced: Option<&'graph [SurfacedHead<'graph>]>,
+    solving: &'p [bool],
 }
 
 /// An instance: its exact static type beside the solution it is made at, scratch-lived until its
@@ -682,6 +698,8 @@ struct Callee<'p> {
     /// function type. Only an exact callee is judged and records contributions: one known at most
     /// may bind a function admitting more, or naming other parameters.
     exact: bool,
+    /// The slots `shape`'s solve reads.
+    solving: &'p [bool],
 }
 
 // The walk's chain, by level: a capture past its first shape is one the chain's root is run with.
@@ -746,6 +764,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             registered,
             expressions: bump_table(scratch),
             parts: bump_table(scratch),
+            peeks: bump_table(scratch),
             statements,
             binders,
             uses,
@@ -2377,23 +2396,27 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 operand,
                 label,
                 ..
-            } => match self.peeked_member_scheme(level, operand, label)? {
-                Some((scheme, None)) => Some((Instanced::Member(node), scheme, node.source)),
-                _ => None,
-            },
+            } => {
+                let peeked = self.peek(level, operand);
+                match self.peeked_member_scheme(level, operand, peeked, label)? {
+                    Some((scheme, None)) => Some((Instanced::Member(node), scheme, node.source)),
+                    _ => None,
+                }
+            }
             _ => None,
         })
     }
 
-    /// [`member_scheme`](Self::member_scheme) where the operand is [peeked](Self::peeked):
-    /// `None` for any other.
+    /// [`member_scheme`](Self::member_scheme) where the operand is [peeked](Self::peeked) as
+    /// `peeked`: `None` for any other.
     fn peeked_member_scheme(
         &mut self,
         level: usize,
         operand: &'graph ExpressionPart<'graph>,
+        peeked: Option<Interval>,
         name: BinderSymbol,
     ) -> Result<Option<(Scheme, Option<BinderSymbol>)>, ShapeError<'o>> {
-        match self.peeked(level, operand) {
+        match peeked {
             Some(peeked) => self.member_scheme(level, operand, peeked.upper, name),
             None => Ok(None),
         }
@@ -2446,10 +2469,23 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         Ok(typed)
     }
 
+    /// [`peeked`](Self::peeked) through the level's memo: each part is peeked once.
+    fn peek(&mut self, level: usize, part: &'graph ExpressionPart<'graph>) -> Option<Interval> {
+        let site = Site::of(part);
+        if let Some(peeked) = self.chain[level].peeks.get(&site) {
+            return *peeked;
+        }
+        let peeked = self.peeked(level, part);
+        self.chain[level].peeks.insert(site, peeked);
+        peeked
+    }
+
     /// The static type of `part`, a name or a chain of member reads rooted at one, read without
     /// typing it: a name's binder's, and a member read's as its rule gives it. `None` for any other
-    /// part.
-    fn peeked(&self, level: usize, part: &'graph ExpressionPart<'graph>) -> Option<Interval> {
+    /// part. Read through [`peek`](Self::peek), which memoizes it.
+    fn peeked(&mut self, level: usize, part: &'graph ExpressionPart<'graph>) -> Option<Interval> {
+        #[cfg(test)]
+        count(|counts| counts.peeks += 1);
         let shape = self.chain[level].shape;
         match of_part(shape, part) {
             Form::Name(leaf) => {
@@ -2457,7 +2493,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 self.read_declared(level, mention.coordinate).as_type()
             }
             Form::Member { operand, label, .. } => {
-                let operand = self.peeked(level, operand)?;
+                let operand = self.peek(level, operand)?;
                 match signature_member(self.types, self.scratch, operand.upper, label)? {
                     SignatureMember {
                         declared: DeclaredType::Type(declared),
@@ -2585,7 +2621,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
 
     /// The variables of the slot at `position` of the candidate `shape` that a class before that
     /// slot's solves, each solved as the call solves it: class by class, from each earlier class's
-    /// solving slots at their contributions the load knows among `contributions`, pinned to what
+    /// solving slots, `solving`, at their contributions the load knows among `contributions`, pinned to what
     /// the classes before it solved. A variable is fixed only where that solve is reproducible
     /// ([`Collector::reproducible`]): the call binds each lexical variable as the load did. `None`
     /// for every other variable, and empty where there is none. `Misfit` where those contributions
@@ -2595,6 +2631,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     fn solved_earlier(
         &self,
         shape: DeclaredType<Parametric>,
+        solving: &[bool],
         position: usize,
         contributions: &[StaticType<'o>],
     ) -> Result<&'p [Option<Parametric>], Unsolved<'p>> {
@@ -2610,7 +2647,6 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             unreachable!("a candidate's shape is an expression shape")
         };
         let class = |slot: usize| classes.get(slot);
-        let solving = solving_slots(types, scratch, shape);
         let names = |slot: usize, variable: usize| {
             types.references_quantifier(scratch, slots[slot], variable)
         };
@@ -2703,16 +2739,24 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         Ok(scratch.alloc_slice_fill_iter(fixed.iter().copied()))
     }
 
-    /// What `shape`'s solve reads at each slot: a slot that solves, whose argument contributes,
-    /// exactly that argument's upper end — the call solves from that type — and every other slot
-    /// its argument's static type. `contributions` past its end are `Unknown`.
+    /// The slots `shape`'s solve reads: [`solving_slots`], which every walk read of them goes
+    /// through.
+    fn solving(&self, shape: DeclaredType<Parametric>) -> &'p [bool] {
+        #[cfg(test)]
+        count(|counts| counts.solving_reads += 1);
+        solving_slots(self.types, self.scratch, shape)
+    }
+
+    /// What a shape's solve reads at each slot, where `solving` is the slots it solves from
+    /// ([`solving`](Self::solving)): a slot that solves, whose argument contributes, exactly that
+    /// argument's upper end — the call solves from that type — and every other slot its argument's
+    /// static type. `contributions` past its end are `Unknown`.
     fn solved_from(
         &self,
-        shape: DeclaredType<Parametric>,
+        solving: &[bool],
         arguments: &[Interval],
         contributions: &[StaticType<'o>],
     ) -> &'p [Interval] {
-        let solving = solving_slots(self.types, self.scratch, shape);
         let mut read = BumpVec::with_capacity_in(arguments.len(), self.scratch);
         read.extend(arguments.iter().enumerate().map(|(position, argument)| {
             let contributed = solving.get(position) == Some(&true)
@@ -2729,15 +2773,16 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
 
     /// The instance each of `sites`, the instance arguments of a use whose arguments' static types
     /// are `arguments` and whose contributions are `contributions`, takes at a candidate whose
-    /// registered shape is `shape`: wanted at its slot's type, read through the candidate's group
-    /// solved from its other arguments where it has one, each as the solve reads it
-    /// ([`solved_from`](Self::solved_from)) — a variable a class before the slot's solves taken
-    /// from that class's solving slots at their contributions, as the call solves it, class by
-    /// class. Refused where the load does not know the shape or makes no instance; `None` where the
+    /// registered shape is `shape`, solving from `solving`: wanted at its slot's type, read through
+    /// the candidate's group solved from its other arguments where it has one, each as the solve
+    /// reads it ([`solved_from`](Self::solved_from)) — a variable a class before the slot's solves
+    /// taken from that class's solving slots at their contributions, as the call solves it, class
+    /// by class. Refused where the load does not know the shape or makes no instance; `None` where the
     /// other arguments do not fit their slots, which the judge refuses.
     fn instances(
         &self,
         shape: Option<DeclaredType<Parametric>>,
+        solving: &[bool],
         sites: &[InstanceArgument<'graph>],
         arguments: &[Interval],
         contributions: &[StaticType<'o>],
@@ -2758,7 +2803,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 (group.bounds, group.names)
             }
         };
-        let read = self.solved_from(shape, arguments, contributions);
+        let read = self.solved_from(solving, arguments, contributions);
         let mut others = BumpVec::with_capacity_in(slots.len(), scratch);
         for (position, slot) in slots.iter().enumerate() {
             if !sites.iter().any(|site| site.position == position) {
@@ -2771,7 +2816,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             let wanted = if bounds.is_empty() {
                 slot
             } else {
-                let fixed = self.solved_earlier(shape, site.position, contributions);
+                let fixed = self.solved_earlier(shape, solving, site.position, contributions);
                 match fixed.and_then(|fixed| self.slot_wanted(bounds, slot, &others, fixed)) {
                     Ok(wanted) => wanted,
                     Err(Unsolved::Misfit) => return Err(None),
@@ -2955,8 +3000,8 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 operand,
                 label,
             } => {
-                let peeked = self.peeked(level, operand);
-                let scheme = self.peeked_member_scheme(level, operand, label)?;
+                let peeked = self.peek(level, operand);
+                let scheme = self.peeked_member_scheme(level, operand, peeked, label)?;
                 match scheme {
                     Some(scheme) => self.member_instance(level, node, label, scheme, wanted)?,
                     None => {
@@ -3013,7 +3058,8 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 if !self.unfilled {
                     self.record_instance_read(level, Site::of_node(node), InstanceRead::AsIs);
                 }
-                match self.peeked_member_scheme(level, operand, label)? {
+                let peeked = self.peek(level, operand);
+                match self.peeked_member_scheme(level, operand, peeked, label)? {
                     Some((scheme, None)) => Some(DeclaredType::Scheme(scheme)),
                     // A scheme over a parameter the load cannot name: the run solves the call.
                     Some((_, Some(_))) => {
@@ -3023,7 +3069,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                     }
                     // An operand read only by typing it: the head is read as it is, as `part`
                     // reads a member short of its instance.
-                    None if self.peeked(level, operand).is_none() => {
+                    None if peeked.is_none() => {
                         let typed = self.narrow(level, node, list)?;
                         let typed = self.read_through_paths(level, operand, label, typed)?;
                         let form = of_part(self.chain[level].shape, head);
@@ -3620,6 +3666,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             names: scratch.alloc_slice_fill_iter(sorted.iter().map(|(name, _)| *name)),
             wanted,
             exact,
+            solving: self.solving(shape.handle),
         })
     }
 
@@ -3730,7 +3777,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         if self.slot_exits(callee.shape, arguments, minted_free) {
             self.exit(level);
         }
-        let read = self.solved_from(callee.shape, arguments, contributions);
+        let read = self.solved_from(callee.solving, arguments, contributions);
         let judged = judge_by_class(types, scratch, callee.shape, read);
         if judged.verdict == Verdict::Never {
             return Err(self.never(callee, payload, node));
@@ -3749,7 +3796,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         at: SourceRef,
         typed: impl Fn(usize) -> bool,
     ) -> &'o [StaticType<'o>] {
-        let solving = solving_slots(self.types, self.scratch, callee.shape);
+        let solving = callee.solving;
         let mut contributions = BumpVec::with_capacity_in(arguments.len(), self.scratch);
         for (slot, argument) in arguments.iter().enumerate() {
             contributions.push(match solving.get(slot) == Some(&true) && typed(slot) {
@@ -3834,7 +3881,13 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             !instanced(slot)
         });
         if !sites.is_empty() {
-            let made = match self.instances(Some(callee.shape), &sites, &arguments, contributions) {
+            let made = match self.instances(
+                Some(callee.shape),
+                callee.solving,
+                &sites,
+                &arguments,
+                contributions,
+            ) {
                 Ok(made) => made,
                 Err(None) => return Err(self.never(callee, uppers(&typed), node)),
                 Err(Some(error)) => return Err(error),
@@ -4033,12 +4086,14 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         // is added only where a solve reads it.
         let mut solved = BumpVec::with_capacity_in(wanted.len(), scratch);
         solved.resize(wanted.len(), false);
-        for candidate in list.candidates {
-            if let Some(registered) = self.candidate(level, *candidate).shape() {
-                let solving = solving_slots(types, scratch, registered);
-                for (each, solves) in solved.iter_mut().zip(solving) {
-                    *each |= *solves;
-                }
+        let mut reads = BumpVec::with_capacity_in(list.candidates.len(), scratch);
+        reads.extend(
+            (list.candidates.iter()).map(|candidate| self.read_candidate(level, *candidate)),
+        );
+        let reads = reads.leak();
+        for read in reads.iter() {
+            for (each, solves) in solved.iter_mut().zip(read.solving) {
+                *each |= *solves;
             }
         }
         let mut contributions = BumpVec::with_capacity_in(wanted.len(), scratch);
@@ -4074,17 +4129,23 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         let mut dropped = None;
         // The last refusal of an instance argument a candidate was dropped over.
         let mut refused = None;
-        for candidate in list.candidates {
+        for (candidate, read) in list.candidates.iter().zip(reads.iter()) {
             // Unfilled code holds no function at an unmarked key's hole.
             if self.unfilled && self.hole(level, *candidate) {
                 continue;
             }
-            let known = self.candidate(level, *candidate);
+            let known = read.known;
             // At this candidate, each instance argument is exactly the instance its slot makes.
             let (mut here, mut given_here) = (arguments, &given[..]);
             let mut instances: &[Made<'_>] = &[];
             if !sites.is_empty() {
-                match self.instances(known.shape(), &sites, arguments, &contributions) {
+                match self.instances(
+                    known.shape(),
+                    read.solving,
+                    &sites,
+                    arguments,
+                    &contributions,
+                ) {
                     Ok(made) => instances = made,
                     Err(error) => {
                         refused = error.or(refused);
@@ -4102,7 +4163,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             let (mut verdict, intervals) = match known.shape() {
                 Some(registered) => {
                     if contributes {
-                        here = self.solved_from(registered, here, &contributions);
+                        here = self.solved_from(read.solving, here, &contributions);
                     }
                     let judged = judge_by_class(types, scratch, registered, here);
                     (judged.verdict, judged.intervals)
@@ -4124,7 +4185,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             // body definition, or a closed signature head, which every function a header or view
             // offers there is retyped to. Otherwise it may hold functions admitting more than the
             // head it is typed by, so it is at most *maybe*.
-            let surfaced = self.surfaced(level, *candidate);
+            let surfaced = read.surfaced;
             let exact = surfaced.is_some_and(|heads| match heads {
                 [SurfacedHead::Body { .. }] => true,
                 [SurfacedHead::Signature { .. }] => matches!(known, Known::Closed(_)),
@@ -4145,6 +4206,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                     candidate: *candidate,
                     known,
                     surfaced: surfaced.is_some() && !retyped,
+                    retyped,
                     verdict,
                     intervals,
                     ruled,
@@ -4273,8 +4335,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         // every function in it returns retyped to the head's return.
         if let [only] = judged[..]
             && !self.unfilled
-            && !only.surfaced
-            && self.surfaced(level, only.candidate).is_some()
+            && only.retyped
         {
             return Ok(self.candidate_return(only));
         }
@@ -4303,12 +4364,13 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         sites: &[InstanceArgument<'graph>],
         kept: &[Judgement<'_>],
     ) {
-        let scratch = self.scratch;
+        // One scratch copy of the arguments, patched per candidate with its instances.
+        let mut here = BumpVec::with_capacity_in(arguments.len(), self.scratch);
         let exits = kept.iter().any(|judgement| {
             if self.builtin(judgement.candidate).is_some() {
                 return false;
             }
-            let mut here = BumpVec::with_capacity_in(arguments.len(), scratch);
+            here.clear();
             here.extend(arguments.iter().copied());
             for (site, (instance, _)) in sites.iter().zip(judgement.instances) {
                 here[site.position] = *instance;
@@ -4333,14 +4395,15 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         minted_free: &[bool],
     ) -> bool {
         let types = self.types;
-        let mut slots = BumpVec::new_in(self.scratch);
+        let exits = |slots: &mut dyn Iterator<Item = Parametric>| {
+            (slots.zip(arguments).zip(minted_free)).any(|((slot, typed), free)| {
+                !free && porous_site(types, *typed) && porous_slot(types, slot)
+            })
+        };
         match shape {
-            DeclaredType::Type(shape) => slots.extend(shape_slots(shape, types)),
-            DeclaredType::Scheme(scheme) => slots.extend(scheme_slots(scheme, types)),
+            DeclaredType::Type(shape) => exits(&mut shape_slots(shape, types)),
+            DeclaredType::Scheme(scheme) => exits(&mut scheme_slots(scheme, types)),
         }
-        (slots.iter().zip(arguments).zip(minted_free)).any(|((slot, typed), free)| {
-            !free && porous_site(types, *typed) && porous_slot(types, *slot)
-        })
     }
 
     /// Whether `part` is a value the frame body at `level` received — a parameter of that body, a
@@ -4692,15 +4755,21 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         self.chain[at].shape.registration(slot)?.surfaced
     }
 
-    /// What the load knows of `candidate`'s registered shape, read from the shape at `level`. A
-    /// candidate reached across a quote's code root whose registered shape names a variable of the
-    /// chain outside is unknown: the code roots a chain of its own.
-    fn candidate(&self, level: usize, candidate: Candidate) -> Known {
+    /// What the load knows of `candidate`'s registered shape, read from the shape at `level`, where
+    /// `surfaced` is the heads `candidate` holds where it is a surfaced key. A candidate reached
+    /// across a quote's code root whose registered shape names a variable of the chain outside is
+    /// unknown: the code roots a chain of its own.
+    fn candidate(
+        &self,
+        level: usize,
+        candidate: Candidate,
+        surfaced: Option<&'graph [SurfacedHead<'graph>]>,
+    ) -> Known {
+        #[cfg(test)]
+        count(|counts| counts.candidate_reads += 1);
         let coordinate = match candidate {
             // A surfaced key's list is typed by its head; any other spread is unknown.
-            Candidate::Spread(coordinate) if self.surfaced(level, candidate).is_some() => {
-                coordinate
-            }
+            Candidate::Spread(coordinate) if surfaced.is_some() => coordinate,
             Candidate::Spread(_) => return Known::Unknown,
             Candidate::One(Coordinate::Builtin(_)) => {
                 return match self.builtin(candidate) {
@@ -4737,6 +4806,21 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             Static::Closed(registered) => Known::Closed(registered.shape),
             Static::Rigid { value, .. } if !crossed => Known::Rigid(value.shape),
             Static::Rigid { .. } | Static::Unknown => Known::Unknown,
+        }
+    }
+
+    /// What a keyworded use at the shape at `level` reads of `candidate`.
+    fn read_candidate(&self, level: usize, candidate: Candidate) -> CandidateRead<'p, 'graph> {
+        let surfaced = self.surfaced(level, candidate);
+        let known = self.candidate(level, candidate, surfaced);
+        let solving = match known.shape() {
+            Some(shape) => self.solving(shape),
+            None => &[],
+        };
+        CandidateRead {
+            known,
+            surfaced,
+            solving,
         }
     }
 }
@@ -4817,6 +4901,13 @@ pub(super) struct LoadCounts {
     pub frontier_entries: usize,
     /// Entries the walk's gatherings took: an unknown, or a read of an ended frontier.
     pub noted: usize,
+    /// Reads of what the load knows of a candidate's registered shape
+    /// ([`candidate`](Pass::candidate)).
+    pub candidate_reads: usize,
+    /// Reads of the slots a shape's solve reads ([`solving`](Pass::solving)).
+    pub solving_reads: usize,
+    /// Peeks computed at a part ([`peeked`](Pass::peeked)), past the level's memo.
+    pub peeks: usize,
 }
 
 #[cfg(test)]
