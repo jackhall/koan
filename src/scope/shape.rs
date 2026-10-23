@@ -149,7 +149,7 @@ impl Position {
 }
 
 /// Where a resolved read lands in the activation its hops reach.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub enum Target {
     Local(Slot),
     Capture(CaptureSlot),

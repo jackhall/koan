@@ -1198,6 +1198,9 @@ its code's entry; [keys](tests/keys.rs) — the names a callable keys on through
 its units' frontiers, a unit mixing an entry seam with a later one keying
 nothing, a name read only at its callable's entry keying nothing, and what
 the keys cost and share at run;
+[repeats](tests/repeats.rs) — the load reading each candidate of a keyworded
+use once, its registered shape and its solving slots alike, and peeking each
+member read's operand of a chain once;
 [resumption](tests/resumption.rs) — a load resumed under a binding through
 the test door ([stores](../program/tests/stores.rs)): an
 overload selected at a bound `FOR ALL` name, a module parameter's paths closed

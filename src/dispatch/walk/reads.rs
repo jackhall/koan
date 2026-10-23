@@ -13,8 +13,8 @@ use crate::elaborate::schema_of;
 use crate::memory::BumpVec;
 use crate::scope::{
     Address, BodyShape, Born, Cut, Frontier, InstanceRead, Narrowing, Segment, ShapeKind, Site,
-    Slot, Static, StaticCallable, StaticRegistered, StaticSolution, StaticType, Store, Target,
-    Tree, Typed, UnitFacts, UnitId, Unknown, UseStatics, in_body_of,
+    Slot, Static, StaticCallable, StaticRegistered, StaticSolution, StaticType, Store, Tree, Typed,
+    UnitFacts, UnitId, Unknown, UseStatics, in_body_of,
 };
 use crate::symbols::{BinderSymbol, Symbol};
 use crate::type_lattice::{DeclaredType, Interval, KType, Parametric, Side, TypeNode, Variable};
@@ -663,11 +663,6 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         }
     }
 
-    /// Each lexical variable `shape` declares, by level, beside where its activation holds it.
-    pub(super) fn homes(&self, shape: &BodyShape<'graph>) -> &'graph [(usize, Target)] {
-        self.shapes.homes(shape.segment())
-    }
-
     /// The solution the callable body `body` is born instantiated at, where the walk fixed one.
     pub(super) fn born_instance(&self, body: &BodyShape<'graph>) -> Option<StaticSolution<'o>> {
         self.born(body.segment())?.instance
@@ -759,7 +754,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     /// or a module binder.
     pub(super) fn note_own(&self, level: usize, slot: Slot, bound: Bound) {
         let shape = self.chain[level].shape;
-        let homed = (self.homes(shape).iter()).any(|(_, target)| *target == Target::Local(slot));
+        let homed = (self.shapes.level(shape.segment(), Address::Slot(slot))).is_some();
         let closed = matches!(
             self.chain[level].declared[slot.index()],
             Some((Static::Closed(_), _))

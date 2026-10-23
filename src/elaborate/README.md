@@ -528,7 +528,8 @@ steps, after the paths the unit spells are resolved:
 **Guards.** Two guards of one `MATCH … WITH` arm set that type to one handle —
 `Number` and `:(Number)`, an alias and what it names, `:(Number | Str)` and
 `:(Str | Number)`, a `FOR ALL` name spelled twice — refuse the shape as
-`RepeatedGuard`, naming both.
+`RepeatedGuard`, naming both. Of several repeats, the refusal names the first
+in program order, against the first guard written of its type.
 
 **Refusals.** A closed type that does not elaborate refuses the load as
 `ShapeError::Type`, located at the part the refusal is about, else at the type

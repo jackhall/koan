@@ -317,7 +317,7 @@ fn compose(
 ) {
     let mut at = reading;
     loop {
-        if shapes.homes(at).iter().any(|(held, _)| *held == level) {
+        if shapes.home(at, level).is_some() {
             return;
         }
         let shape = shapes.shape_at(at);

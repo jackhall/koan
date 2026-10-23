@@ -37,7 +37,6 @@ subdirectory's README carries its own slice.
 - [Faults and call traces](conditionals/faults.md)
 - [Matching](conditionals/matching.md)
 - [The build arena](gradual-build/build-arena.md)
-- [The load walk's repeated work](gradual-build/load-walk-repeats.md)
 - [Placing a verdict without probing](gradual-build/verdict-placement.md)
 - [A container literal's element type](gradual-typing/container-literal-types.md)
 - [Dependent signatures](gradual-typing/dependent-signatures.md)

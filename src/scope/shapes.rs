@@ -50,6 +50,8 @@ struct Levels<'graph> {
     /// it: its own `FOR ALL` names in written order, its other type names in slot order, then — at
     /// a chain root — its captures naming a type.
     homes: &'graph [(usize, Target)],
+    /// [`homes`](Self::homes) by where the activation holds each name, sorted.
+    levels_by_home: &'graph [(Target, usize)],
     /// The level of each of [`BodyShape::spelled`]'s paths, parallel to it: `None` for one that
     /// names no identity.
     paths: &'graph [Option<usize>],
@@ -60,6 +62,16 @@ struct Levels<'graph> {
     /// type name of the bodies around it on its chain that is bound when its birth runs, by level,
     /// beside where the birth reads it in the activation around it.
     layout: &'graph [(usize, Coordinate)],
+}
+
+impl Levels<'_> {
+    /// Where the activation holds the name at `level`, where the shape declares it: its homes'
+    /// levels run on from the first.
+    fn home(&self, level: usize) -> Option<Target> {
+        let (base, _) = self.homes.first()?;
+        let (_, home) = self.homes.get(level.checked_sub(*base)?)?;
+        Some(*home)
+    }
 }
 
 impl<'graph> Shapes<'graph> {
@@ -92,6 +104,7 @@ impl<'graph> Shapes<'graph> {
             bodies.len(),
             Levels {
                 homes: &[],
+                levels_by_home: &[],
                 paths: &[],
                 root: None,
                 layout: &[],
@@ -283,15 +296,22 @@ impl Shapes<'_> {
         self.levels[segment.index() as usize].homes
     }
 
+    /// Where `segment`'s activation holds the run-bound type name at `level`, where it declares it.
+    pub fn home(&self, segment: Segment, level: usize) -> Option<Target> {
+        self.levels[segment.index() as usize].home(level)
+    }
+
     /// The level of the run-bound type name `address` of `segment`; `None` for any other address.
     pub fn level(&self, segment: Segment, address: Address) -> Option<usize> {
         let target = match address {
             Address::Slot(slot) => Target::Local(slot),
             Address::Capture(capture) => Target::Capture(capture),
         };
-        (self.homes(segment).iter())
-            .find(|(_, home)| *home == target)
-            .map(|(level, _)| *level)
+        let by_home = self.levels[segment.index() as usize].levels_by_home;
+        let at = by_home
+            .binary_search_by_key(&target, |(home, _)| *home)
+            .ok()?;
+        Some(by_home[at].1)
     }
 
     /// The level of the path `segment`'s types spell at index `index` of [`BodyShape::spelled`];
@@ -393,7 +413,12 @@ fn number_names<'graph>(
     }
     let next = base + homes.len();
     let laid = writer.fill(homes.len(), |index| (base + index, homes[index]));
-    levels[shape.segment().index() as usize].homes = laid;
+    let mut by_home = BumpVec::with_capacity_in(homes.len(), scratch);
+    by_home.extend(laid.iter().map(|(level, home)| (*home, *level)));
+    by_home.sort_unstable();
+    let shape_levels = &mut levels[shape.segment().index() as usize];
+    shape_levels.homes = laid;
+    shape_levels.levels_by_home = collect(writer, by_home.iter().copied());
     let mut deepest = next;
     for (_, nested) in shape.nested_shapes() {
         if nested.kind() != ShapeKind::Code {
@@ -492,11 +517,8 @@ impl<'graph> Table<'_, 'graph> {
         let mut hops = 0;
         loop {
             let levels = &self.levels[at.index() as usize];
-            if let Some((_, home)) = levels.homes.iter().find(|(held, _)| *held == level) {
-                return Some(Coordinate::Activation {
-                    hops,
-                    target: *home,
-                });
+            if let Some(home) = levels.home(level) {
+                return Some(Coordinate::Activation { hops, target: home });
             }
             let shape = self.shape_at(at);
             match shape.kind() {
@@ -505,7 +527,9 @@ impl<'graph> Table<'_, 'graph> {
                     hops += 1;
                 }
                 ShapeKind::Callable | ShapeKind::Module => {
-                    let index = levels.layout.iter().position(|(held, _)| *held == level)?;
+                    let index = (levels.layout)
+                        .binary_search_by_key(&level, |(held, _)| *held)
+                        .ok()?;
                     return Some(Coordinate::Activation {
                         hops,
                         target: Target::Capture(CaptureSlot(

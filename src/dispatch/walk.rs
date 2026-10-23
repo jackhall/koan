@@ -416,9 +416,13 @@ struct Level<'p, 'o, 'graph> {
     expressions: BumpBackedMap<'p, Site, (StaticType<'o>, Tag)>,
     /// Each part's static type, by site: its latest where the walk typed it twice.
     parts: BumpBackedMap<'p, Site, (Interval, Tag)>,
-    /// Each part's [peek](Pass::peeked), by site, made once: a part is peeked only while its
-    /// statement's unit runs, so the level outlives every read of it.
-    peeks: BumpBackedMap<'p, Site, Option<Interval>>,
+    /// Each part's [peek](Pass::peeked), by site, made once, beside the gathering it noted into: a
+    /// part is peeked only while its statement's unit runs, so the miss already noted what it read
+    /// into the gathering a hit would note into.
+    peeks: BumpBackedMap<'p, Site, (Option<Interval>, Option<Tag>)>,
+    /// Whether each part is a value the frame body [received](Pass::received), by site, read once:
+    /// it reads only the chain's shapes and the builtins, which stay put while the level stands.
+    received: BumpBackedMap<'p, Site, bool>,
     statements: BumpVec<'p, Option<(Interval, Tag)>>,
     binders: BumpVec<'p, (Bound, Option<Tag>)>,
     /// What the walk fixed about each keyworded use, by index into the shape's candidate lists.
@@ -775,6 +779,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             expressions: bump_table(scratch),
             parts: bump_table(scratch),
             peeks: bump_table(scratch),
+            received: bump_table(scratch),
             statements,
             binders,
             uses,
@@ -1880,7 +1885,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         let mut at = level;
         loop {
             let shape = self.chain[at].shape;
-            if self.homes(shape).iter().any(|(held, _)| *held == variable) {
+            if self.shapes.home(shape.segment(), variable).is_some() {
                 return;
             }
             if matches!(shape.kind(), ShapeKind::Callable | ShapeKind::Module) {
@@ -2475,12 +2480,16 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
 
     /// [`peeked`](Self::peeked) through the level's memo: each part is peeked once.
     fn peek(&mut self, level: usize, part: &'graph ExpressionPart<'graph>) -> Option<Interval> {
-        let site = Site::of(part);
-        if let Some(peeked) = self.chain[level].peeks.get(&site) {
+        let (site, gathering) = (Site::of(part), self.open.last().copied());
+        if let Some((peeked, noted)) = self.chain[level].peeks.get(&site) {
+            debug_assert_eq!(
+                *noted, gathering,
+                "a hit notes into the gathering its miss did"
+            );
             return *peeked;
         }
         let peeked = self.peeked(level, part);
-        self.chain[level].peeks.insert(site, peeked);
+        self.chain[level].peeks.insert(site, (peeked, gathering));
         peeked
     }
 
@@ -2625,13 +2634,13 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
 
     /// The variables of the slot at `position` of the candidate `shape` that a class before that
     /// slot's solves, each solved as the call solves it: class by class, from each earlier class's
-    /// solving slots, `solving`, at their contributions the load knows among `contributions`, pinned to what
-    /// the classes before it solved. A variable is fixed only where that solve is reproducible
-    /// ([`Collector::reproducible`]): the call binds each lexical variable as the load did. `None`
-    /// for every other variable, and empty where there is none. `Misfit` where those contributions
-    /// never admit at any binding, since the call then never runs; `Open` naming a variable a slot
-    /// that solves it reads no contribution at — an instance argument's, or unknown — or one a run
-    /// may solve otherwise.
+    /// solving slots, `solving`, at their contributions the load knows among `contributions`,
+    /// pinned to what the classes before it solved. A variable is fixed only where that solve is
+    /// reproducible ([`Collector::reproducible`]): the call binds each lexical variable as the load
+    /// did. `None` for every other variable, and empty where there is none. `Misfit` where those
+    /// contributions never admit at any binding, since the call then never runs; `Open` naming a
+    /// variable a slot that solves it reads no contribution at — an instance argument's, or
+    /// unknown — or one a run may solve otherwise.
     fn solved_earlier(
         &self,
         shape: DeclaredType<Parametric>,
@@ -2781,8 +2790,8 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     /// the candidate's group solved from its other arguments where it has one, each as the solve
     /// reads it ([`solved_from`](Self::solved_from)) — a variable a class before the slot's solves
     /// taken from that class's solving slots at their contributions, as the call solves it, class
-    /// by class. Refused where the load does not know the shape or makes no instance; `None` where the
-    /// other arguments do not fit their slots, which the judge refuses.
+    /// by class. Refused where the load does not know the shape or makes no instance; `None` where
+    /// the other arguments do not fit their slots, which the judge refuses.
     fn instances(
         &self,
         shape: Option<DeclaredType<Parametric>>,
@@ -4414,13 +4423,22 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     /// capture, a hole or a name offered, or a `LET` bound bare to one, named bare, or a member read
     /// of one through the builtin `ATTR` alone — which cannot hold what the body mints, so passing
     /// it on is no exit
-    /// ([type tiers](../../design/type-tiers.md#two-classes-of-body)).
-    fn received(&self, level: usize, part: &'graph ExpressionPart<'graph>) -> bool {
-        self.received_form(level, of_part(self.chain[level].shape, part))
+    /// ([type tiers](../../design/type-tiers.md#two-classes-of-body)). Read once per part, through
+    /// the level's memo.
+    fn received(&mut self, level: usize, part: &'graph ExpressionPart<'graph>) -> bool {
+        let site = Site::of(part);
+        if let Some(received) = self.chain[level].received.get(&site) {
+            return *received;
+        }
+        #[cfg(test)]
+        count(|counts| counts.receipts += 1);
+        let received = self.received_form(level, of_part(self.chain[level].shape, part));
+        self.chain[level].received.insert(site, received);
+        received
     }
 
     /// [`received`](Self::received) over what the evaluator reads as `form`.
-    fn received_form(&self, level: usize, form: Form<'graph>) -> bool {
+    fn received_form(&mut self, level: usize, form: Form<'graph>) -> bool {
         let shape = self.chain[level].shape;
         let name = match form {
             Form::Name(name) => name,
@@ -4445,7 +4463,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     /// received: a binder of a body around the frame body, a parameter of the frame body, or a
     /// `LET` bound bare to such a value, which holds that very value. A fellow read is the cyclic
     /// rule's, and is no such value.
-    fn received_binder(&self, at: usize, slot: Slot, frame: usize) -> bool {
+    fn received_binder(&mut self, at: usize, slot: Slot, frame: usize) -> bool {
         let shape = self.chain[at].shape;
         if at < frame || (at == frame && shape.position_of(slot) == Position::PARAMETER) {
             return true;
@@ -4517,7 +4535,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     /// site, in itself or in a block or module body it runs, or capturing what reaches it; or a
     /// leaf on anything but a value the frame body received. A leaf reading a member, or keyed on
     /// an unfolded call, reaches it too: the tree does not say the member read was the builtin's.
-    fn reaches_minted(&self, level: usize, tree: &Tree<'o>) -> bool {
+    fn reaches_minted(&mut self, level: usize, tree: &Tree<'o>) -> bool {
         let frame = self.frame_level(level);
         let mut stack = BumpVec::new_in(self.scratch);
         stack.push(*tree);
@@ -4912,6 +4930,9 @@ pub(super) struct LoadCounts {
     pub solving_reads: usize,
     /// Peeks computed at a part ([`peeked`](Pass::peeked)), past the level's memo.
     pub peeks: usize,
+    /// Reads of whether a part is a value its frame body received
+    /// ([`received`](Pass::received)), past the level's memo.
+    pub receipts: usize,
 }
 
 #[cfg(test)]

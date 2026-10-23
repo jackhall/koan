@@ -1,5 +1,5 @@
 //! The load reads each fact of a keyworded use's candidates once per use, and peeks each member
-//! read's operand once.
+//! read's operand, and reads whether it was received, once.
 
 use super::load_counts;
 use super::trees::nested_signatures;
@@ -45,4 +45,20 @@ fn a_member_chain_peeks_each_operand_once() {
     };
     let peeks = |reads| load_counts(&chain(reads)).peeks;
     assert_eq!(peeks(n) - peeks(0), n, "one per read");
+}
+
+/// A chain of `n` member reads asks once of each read's operand whether the body received it,
+/// however many reads past it ask again.
+#[test]
+fn a_member_chain_reads_each_receipt_once() {
+    let n = 12;
+    let chain = |reads: usize| {
+        format!(
+            "{}LET g = (FN :{{p :Sig{n}}} -> Any = #(p{}))\n",
+            nested_signatures(n),
+            ".a".repeat(reads)
+        )
+    };
+    let receipts = |reads| load_counts(&chain(reads)).receipts;
+    assert_eq!(receipts(n) - receipts(0), n, "one per read");
 }
