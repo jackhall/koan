@@ -156,31 +156,46 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         facts.born.get(body).map(|(_, born)| *born)
     }
 
-    /// The facts of `segment`, an inline body off the chain, as the unit that ran it keeps them,
-    /// its frontier gathered.
-    pub(super) fn inline_facts(&self, segment: Segment) -> Option<Typed<'o>> {
+    /// Read `read` off the facts of `segment`, an inline body off the chain, as the unit that ran
+    /// it keeps them, its frontier gathered.
+    pub(super) fn inline_facts<R>(
+        &self,
+        segment: Segment,
+        read: impl FnOnce(&Typed<'o>) -> R,
+    ) -> Option<R> {
         let unit = self.shapes.birth_unit(segment)?;
         if let Some((tag, state)) = self.state_of(unit)
             && let Some((_, typed)) = state.typed.iter().rev().find(|(held, _)| *held == segment)
         {
             self.gather(tag);
-            return Some(*typed);
+            return Some(read(typed));
         }
         let facts = self.record_of(unit)?;
-        facts.typed.get(segment).map(|(_, typed)| *typed)
+        facts.typed.get(segment).map(|(_, typed)| read(typed))
     }
 
-    /// The facts of `segment`, an owning body off the chain, that `unit` of it fixed.
-    fn owner_facts(&self, segment: Segment, unit: UnitId) -> Option<Typed<'o>> {
+    /// Read `read` off the facts of `segment`, an owning body off the chain, that `unit` of it
+    /// fixed.
+    fn owner_facts<R>(
+        &self,
+        segment: Segment,
+        unit: UnitId,
+        read: impl FnOnce(&Typed<'o>) -> R,
+    ) -> Option<R> {
         let facts = self.record_of(unit)?;
-        facts.typed.get(segment).map(|(_, typed)| *typed)
+        facts.typed.get(segment).map(|(_, typed)| read(typed))
     }
 
-    /// The facts of `segment` off the chain that hold a fact at `slot`.
-    fn off_chain_slot(&self, segment: Segment, slot: Slot) -> Option<Typed<'o>> {
+    /// Read `read` off the facts of `segment` off the chain that hold a fact at `slot`.
+    fn off_chain_slot<R>(
+        &self,
+        segment: Segment,
+        slot: Slot,
+        read: impl FnOnce(&Typed<'o>) -> R,
+    ) -> Option<R> {
         match self.shape_at(segment).kind() {
-            ShapeKind::Block | ShapeKind::Module => self.inline_facts(segment),
-            _ => self.owner_facts(segment, self.shapes.slot_unit(segment, slot)),
+            ShapeKind::Block | ShapeKind::Module => self.inline_facts(segment, read),
+            _ => self.owner_facts(segment, self.shapes.slot_unit(segment, slot), read),
         }
     }
 
@@ -412,14 +427,14 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         let statement = (expressions.binary_search_by_key(&site, |expression| expression.site))
             .ok()
             .map(|at| expressions[at].statement);
-        let facts = match shape.kind() {
-            ShapeKind::Block | ShapeKind::Module => self.inline_facts(segment),
+        let read = |facts: &Typed<'o>| facts.expressions.get(site).map(|(_, typed)| *typed);
+        let typed = match shape.kind() {
+            ShapeKind::Block | ShapeKind::Module => self.inline_facts(segment, read),
             _ => statement.and_then(|statement| {
-                self.owner_facts(segment, self.shapes.running(segment, statement))
+                self.owner_facts(segment, self.shapes.running(segment, statement), read)
             }),
         };
-        (facts.and_then(|facts| facts.expressions.get(site).map(|(_, typed)| *typed)))
-            .unwrap_or(Static::Unknown)
+        typed.flatten().unwrap_or(Static::Unknown)
     }
 
     /// Fix the type of the type expression at `site` of the shape at `level`.
@@ -441,9 +456,11 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 }
                 None => Static::Unknown,
             },
-            None => (self.off_chain_slot(segment, slot))
-                .and_then(|facts| facts.declared.get(slot).map(|(_, typed)| *typed))
-                .unwrap_or(Static::Unknown),
+            None => (self.off_chain_slot(segment, slot, |facts| {
+                facts.declared.get(slot).map(|(_, typed)| *typed)
+            }))
+            .flatten()
+            .unwrap_or(Static::Unknown),
         };
         if shape.declarations(slot).is_some() && !matches!(typed, Static::Closed(_)) {
             self.note(&[Unknown {
@@ -476,9 +493,11 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 }
                 None => Static::Unknown,
             },
-            None => (self.off_chain_slot(segment, slot))
-                .and_then(|facts| facts.registered.get(slot).map(|(_, typed)| *typed))
-                .unwrap_or(Static::Unknown),
+            None => (self.off_chain_slot(segment, slot, |facts| {
+                facts.registered.get(slot).map(|(_, typed)| *typed)
+            }))
+            .flatten()
+            .unwrap_or(Static::Unknown),
         }
     }
 
@@ -624,7 +643,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     pub(super) fn signature_of(&self, body: &BodyShape<'graph>) -> Option<KType> {
         match self.level_of(body.segment()) {
             Some(level) => self.chain[level].signature,
-            None => self.inline_facts(body.segment())?.signature,
+            None => self.inline_facts(body.segment(), |facts| facts.signature)?,
         }
     }
 
