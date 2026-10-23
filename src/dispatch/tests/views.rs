@@ -296,3 +296,18 @@ fn a_chain_of_open_views_reads_each_once() {
     };
     assert_linear("view reads", |n| load_counts(&program(n)).view_reads);
 }
+
+/// A `:|` over a closed tree fits its source, and reads the type its source carries, once: for
+/// its view's tree, for the types the load lays and for every later read of the view.
+#[test]
+fn a_view_over_a_closed_tree_fits_once() {
+    let counts = load_counts(
+        "SIG Counter FOR ALL #[Carrier] = \
+         #[(VAL zero :Carrier) (VAL succ :(FN :{x :Carrier} -> Carrier))]\n\
+         MODULE ints = ((LET zero = 0) \
+         (LET succ = (FN :{x :Number} -> Number = #(x + 1))))\n\
+         LET v = (ints :| Counter)\n\
+         PRINT v.zero\n",
+    );
+    assert_eq!((counts.fits, counts.source_reads), (1, 1));
+}

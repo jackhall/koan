@@ -223,6 +223,7 @@ pub(super) fn walk<'graph: 'o, 'tier: 'o, 'o, S: Store<'o>>(
         trees: bump_table(scratch),
         reading: BumpVec::new_in(scratch),
         views: bump_table(scratch),
+        view_trees: bump_table(scratch),
         steps: bump_table(scratch),
         rebuilds: bump_table(scratch),
         modules: bump_table(scratch),
@@ -534,6 +535,9 @@ struct Pass<'p, 'o, 'x, 'graph, 'tier, 'pair, 'reg, S: Store<'o>> {
     reading: BumpVec<'p, (usize, Slot)>,
     /// What each view over a closed tree binds, by its print: a chain of views reads each once.
     views: BumpBackedMap<'p, Print, (Option<ViewTypes<'o>>, Tag)>,
+    /// Each opaque view's tree the walk built, by its application and its source's print, beside
+    /// the type its source carries: a `:|` fits its source, and reads that type, once.
+    view_trees: BumpBackedMap<'p, (KType, Print), (Tree<'o>, Option<KType>, Tag)>,
     /// What each read of a value a lay may reach twice yields, so a chain of views reads each
     /// member once.
     steps: BumpBackedMap<'p, (views::Identity, views::Step), Option<views::Carried<'o>>>,
@@ -3034,31 +3038,32 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             self.record_view(level, site, tree);
             let signature = declared.and_then(|declared| types.concrete(declared));
             if let Some(signature) = signature {
-                let viewed = self.view_tree(signature, *tree, site)?;
+                // What the operand carries, read off its tree, beside the view's tree.
+                let (viewed, seen) = self.view_tree_held(signature, *tree, site)?;
                 self.record_view_tree(level, site, resident(self.lay, viewed));
-            }
-            // Over a closed tree the load lays every type the view door computes from types
-            // alone, so the run's view interns none of its own.
-            if let (Some(bare), Some(signature)) = (tree.bare().digest(), signature) {
-                let exact = exact(types, typed);
-                // What the operand carries, read off its tree, else by its exact type.
-                #[cfg(test)]
-                count(|counts| {
-                    counts.source_reads += 1;
-                    counts.fits += 1;
-                });
-                let seen = self.carried_type(views::Carried::Tree(*tree), site)?;
-                debug_assert!(
-                    exact.is_none() || seen.is_none() || exact == seen,
-                    "a tree reads the type its operand carries"
-                );
-                let carried = match (seen, exact) {
-                    (None, Some(exact)) => views::Carried::Typed(exact),
-                    _ => views::Carried::Tree(*tree),
-                };
-                let held = seen.or(exact);
-                if let Some(viewed) = opaque_view_types(held, signature, bare, types, scratch) {
-                    self.lay(&viewed, carried, site)?;
+                // Over a closed tree the load lays every type the view door computes from types
+                // alone, so the run's view interns none of its own.
+                if let Some(bare) = tree.bare().digest() {
+                    let exact = exact(types, typed);
+                    debug_assert!(
+                        exact.is_none() || seen.is_none() || exact == seen,
+                        "a tree reads the type its operand carries"
+                    );
+                    // The view's tree fit the source at what its tree shows; else by its exact
+                    // type.
+                    let (carried, types_of) = match (seen, exact) {
+                        (None, Some(exact)) => {
+                            #[cfg(test)]
+                            count(|counts| counts.fits += 1);
+                            let fit =
+                                opaque_view_types(Some(exact), signature, bare, types, scratch);
+                            (views::Carried::Typed(exact), fit)
+                        }
+                        _ => (views::Carried::Tree(*tree), self.view_of(viewed, site)?),
+                    };
+                    if let Some(types_of) = types_of {
+                        self.lay(&types_of, carried, site)?;
+                    }
                 }
             }
             return self.viewed(level, node, typed, declared);

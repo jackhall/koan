@@ -580,15 +580,48 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         source: Tree<'o>,
         site: Site,
     ) -> Read<'o, Tree<'o>> {
+        Ok(self.view_tree_held(application, source, site)?.0)
+    }
+
+    /// [`view_tree`](Self::view_tree) beside the type `source` carries, where the load knows it:
+    /// memoized by `application` and the source's print, and a closed view's
+    /// [`view_of`](Self::view_of) seeded from the same fit.
+    pub(super) fn view_tree_held(
+        &mut self,
+        application: KType,
+        source: Tree<'o>,
+        site: Site,
+    ) -> Read<'o, (Tree<'o>, Option<KType>)> {
+        let key = (application, source.print());
+        if let Some((tree, held, tag)) = self.view_trees.get(&key).copied() {
+            self.gather(tag);
+            return Ok((tree, held));
+        }
         #[cfg(test)]
         super::count(|counts| {
             counts.source_reads += 1;
             counts.fits += 1;
         });
+        let (types, scratch) = (self.types, self.scratch);
         let held = self.carried_type(super::views::Carried::Tree(source), site)?;
-        let from = view::fit_of(held, application, self.types, self.scratch);
-        let source = resident(self.lay, source);
-        Ok(Tree::view(Operator::Opaque, application, source, from))
+        let fit = view::opaque_view(held, application, source.bare().digest(), types, scratch);
+        let from = fit.map(|(from, _)| from);
+        let tree = Tree::view(
+            Operator::Opaque,
+            application,
+            resident(self.lay, source),
+            from,
+        );
+        let tag = self.innermost();
+        // A closed view's source is closed, so its fit read what the view binds too.
+        if let (print @ Print::Closed(_), Some((_, viewed))) = (tree.print(), fit) {
+            self.views.entry(print).or_insert((viewed, tag));
+        }
+        // A leaf no binder names is keyed on its site, which the print does not tell apart.
+        if key.1 != Print::Unnamed {
+            self.view_trees.insert(key, (tree, held, tag));
+        }
+        Ok((tree, held))
     }
 
     /// The trees of what `body`, born in `scope` at the part at `site`, composes: each capture its

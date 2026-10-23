@@ -162,10 +162,11 @@ pub fn ascribe<'graph, 'tier: 'x, 'cell, 'x>(
     // has computed it yet, none after.
     let bare = Value::Knotted(member).digest(types, scratch);
     let (sig, from, pins) = fitted(held, signature, types, scratch)?;
+    let interned = Substitution::interned(from, types, scratch);
     let (viewed, content) = opaque(
         Some(held),
         sig,
-        from,
+        (from, interned),
         &pins,
         signature,
         bare,
@@ -249,21 +250,36 @@ pub fn opaque_view_types<'run>(
     types: &Chain<'run, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
 ) -> Option<ViewTypes<'run>> {
-    let (sig, from, pins) = known_fit(held, signature, types, scratch)?;
-    Some(opaque(held, sig, from, &pins, signature, source, types, scratch).0)
+    opaque_view(held, signature, Some(source), types, scratch)?.1
 }
 
 /// What a view at `signature` of a module whose signature is `held`, where known, keys its content
-/// on: what *fits* solves, interned. `None` where the view door would refuse, or the load cannot
-/// tell what the fit solves.
-pub fn fit_of(
+/// on — what *fits* solves, interned — beside, where its source's bare member's digest is known,
+/// what it binds ([`opaque_view_types`]): one fit for both. `None` where the view door would
+/// refuse, or the load cannot tell what the fit solves.
+pub fn opaque_view<'run>(
     held: Option<KType>,
     signature: KType,
-    types: &Chain<'_, '_, '_, '_>,
+    source: Option<ContentDigest>,
+    types: &Chain<'run, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
-) -> Option<KType> {
-    let (_, from, _) = known_fit(held, signature, types, scratch)?;
-    Some(Substitution::interned(from, types, scratch).handle)
+) -> Option<(KType, Option<ViewTypes<'run>>)> {
+    let (sig, from, pins) = known_fit(held, signature, types, scratch)?;
+    let interned = Substitution::interned(from, types, scratch);
+    let viewed = source.map(|source| {
+        opaque(
+            held,
+            sig,
+            (from, interned),
+            &pins,
+            signature,
+            source,
+            types,
+            scratch,
+        )
+        .0
+    });
+    Some((interned.handle, viewed))
 }
 
 /// [`fitted`] where `held` is known; without it, a signature pinning every parameter, whose fit
@@ -298,19 +314,19 @@ fn known_fit<'run: 'x, 'x>(
 }
 
 /// The opaque view at `signature`, whose schema is `sig` and pins `pins`, of a module whose fit
-/// solved `from` over a bare member whose digest is `source`, beside its content.
+/// solved `from`, beside it interned, over a bare member whose digest is `source`, beside its
+/// content.
 #[allow(clippy::too_many_arguments)]
 fn opaque<'run>(
     held: Option<KType>,
     sig: SigSchema<'run>,
-    from: Members<'_, TypeSymbol, KType>,
+    (from, interned): (Members<'_, TypeSymbol, KType>, Substitution<'run>),
     pins: &[(BinderSymbol, KType)],
     signature: KType,
     source: ContentDigest,
     types: &Chain<'run, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
 ) -> (ViewTypes<'run>, ModuleContent) {
-    let interned = Substitution::interned(from, types, scratch);
     let content = ModuleContent::view(Operator::Opaque, signature, source, interned.handle);
     // A carrier is keyed on the view's content. Two views of equal content share one, and the
     // parameter's name keeps two of one view apart.
