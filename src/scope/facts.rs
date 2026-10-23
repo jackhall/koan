@@ -35,52 +35,91 @@ pub struct Unknown {
     pub at: Address,
 }
 
-/// Every unknown that could change a fact, transitively: sorted and deduplicated. Empty for a
-/// fixed fact.
+/// What a fact waits on: the unknowns its unit gathered itself, beside each ended frontier it
+/// read, cut to the reader's chain. Its unknowns — every unknown that could change the fact,
+/// transitively — are its own and each read's past its cut; they are never laid flat, so a read
+/// costs one entry however many unknowns it holds. Its unknowns, flattened, are declared by its
+/// record's body or a body enclosing it: the walk gathers only what its chain declares, and cuts
+/// each read to it. Empty for a fixed fact. Only the tests lay its unknowns flat
+/// (`Frontier::unknowns`).
 #[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
-pub struct Frontier<'a>(&'a [Unknown]);
+pub struct Frontier<'a> {
+    own: &'a [Unknown],
+    reads: &'a [Cut<'a>],
+}
+
+/// An ended frontier a unit read, cut to the reader's chain: of its unknowns, only those declared
+/// in `from` or a body enclosing it count. That set is exactly the unknowns whose segment is at
+/// least `from`, since three things hold: a frontier's unknowns lie on its record's chain
+/// ([`Frontier`]), `from` lies on that chain too, and segments fall along a chain ([`Segment`]).
+/// Segments compare within one shape table alone, and no frontier spans two.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Cut<'a> {
+    pub frontier: Frontier<'a>,
+    pub from: Segment,
+}
 
 impl<'a> Frontier<'a> {
     /// The frontier of a fixed fact.
-    pub const EMPTY: Frontier<'static> = Frontier(&[]);
+    pub const EMPTY: Frontier<'static> = Frontier {
+        own: &[],
+        reads: &[],
+    };
 
-    /// `unknowns`, already sorted and deduplicated.
+    /// `unknowns`, already sorted and deduplicated, read from no other frontier.
     pub fn from_sorted(unknowns: &'a [Unknown]) -> Self {
         debug_assert!(unknowns.is_sorted() && unknowns.windows(2).all(|pair| pair[0] != pair[1]));
-        Frontier(unknowns)
-    }
-
-    /// `staged`, sorted, deduplicated and laid down through `lay`.
-    pub fn laid(lay: impl Lays<'a>, staged: &mut BumpVec<'_, Unknown>) -> Self {
-        staged.sort_unstable();
-        staged.dedup();
-        Frontier(collect(lay, staged.iter().copied()))
-    }
-
-    pub fn unknowns(self) -> &'a [Unknown] {
-        self.0
-    }
-
-    pub fn is_empty(self) -> bool {
-        self.0.is_empty()
-    }
-
-    /// Whether `binding` binds some unknown here: whether it wakes the unit's record.
-    pub fn meets_binding(self, binding: Binding<'_>) -> bool {
-        self.meets_sorted(binding.0.iter().map(|(unknown, _)| *unknown))
-    }
-
-    /// Whether some unknown of the sorted run `bound` is here.
-    fn meets_sorted(self, bound: impl Iterator<Item = Unknown>) -> bool {
-        let (mut mine, mut bound) = (self.0.iter().peekable(), bound.peekable());
-        while let (Some(unknown), Some(other)) = (mine.peek(), bound.peek()) {
-            match (*unknown).cmp(other) {
-                std::cmp::Ordering::Less => _ = mine.next(),
-                std::cmp::Ordering::Greater => _ = bound.next(),
-                std::cmp::Ordering::Equal => return true,
-            }
+        Frontier {
+            own: unknowns,
+            reads: &[],
         }
-        false
+    }
+
+    /// `own` sorted and deduplicated, beside `reads` each read once at its widest cut, laid down
+    /// through `lay`. A read of an empty frontier is dropped.
+    pub fn laid(
+        lay: impl Lays<'a>,
+        own: &mut BumpVec<'_, Unknown>,
+        reads: &mut BumpVec<'_, Cut<'a>>,
+    ) -> Self {
+        own.sort_unstable();
+        own.dedup();
+        reads.retain(|cut| !cut.frontier.is_empty());
+        // Sorted by cut within one frontier, the first of each run is its widest.
+        reads.sort_unstable_by_key(|cut| (cut.frontier.identity(), cut.from));
+        reads.dedup_by_key(|cut| cut.frontier.identity());
+        // An empty slice is never laid, so it shares no address with a frontier's laid one.
+        Frontier {
+            own: match own.is_empty() {
+                true => &[],
+                false => collect(lay, own.iter().copied()),
+            },
+            reads: match reads.is_empty() {
+                true => &[],
+                false => collect(lay, reads.iter().copied()),
+            },
+        }
+    }
+
+    /// The unknowns its unit gathered itself, sorted and deduplicated.
+    pub fn own(self) -> &'a [Unknown] {
+        self.own
+    }
+
+    /// Each ended frontier its unit read, at the cut it read it.
+    pub fn reads(self) -> &'a [Cut<'a>] {
+        self.reads
+    }
+
+    /// Whether it holds nothing: its unit gathered no unknown and read no frontier.
+    pub fn is_empty(self) -> bool {
+        self.own.is_empty() && self.reads.is_empty()
+    }
+
+    /// Which frontier this is, by where it is laid: a laid frontier lays each slice that holds
+    /// something afresh, so two distinct frontiers that hold something never share both.
+    pub(crate) fn identity(self) -> (usize, usize) {
+        (self.own.as_ptr().addr(), self.reads.as_ptr().addr())
     }
 }
 

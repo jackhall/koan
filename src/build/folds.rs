@@ -10,15 +10,18 @@
 //!   beside its classed sites and, on a callable's own, the parameters that may key it.
 //! - **Keys.** A callable keys on each of its own keyable names that lies in the frontier of some
 //!   unit beneath it, its entry aside, whose seam — the latest bind site among its frontier's
-//!   unknowns — is a callable's entry, and on the parameters its invariant sites read.
+//!   unknowns — is a callable's entry, and on the parameters its invariant sites read. Each
+//!   frontier's sites and keyable names are read once, through a memo shared by every frontier that
+//!   reads it.
 //! - **Contract.** Each lexical variable a contribution or a solution names is composed by every
 //!   callable or `MODULE` body between the body reading it and its home. The walk refuses a
 //!   `MODULE` body composing a type its `OVER` list does not name.
 
-use crate::memory::{BumpAllocator, BumpVec, Lays, collect, resident};
+use crate::memory::{BumpAllocator, BumpBackedMap, BumpVec, Lays, bump_table, collect, resident};
 use crate::scope::{
-    Address, BodyClass, Caching, Deps, DepsGathering, Folds, Frontier, Keyed, LoadFacts, Mint,
-    Position, Resolution, Segment, ShapeKind, Shapes, SiteDeps, Slot, UnitIndex, tree_deps,
+    Address, BindSite, BodyClass, Caching, Cut, Deps, DepsGathering, Folds, Frontier, Keyed,
+    LoadFacts, Mint, Position, Resolution, Segment, ShapeKind, Shapes, SiteDeps, Slot, UnitIndex,
+    tree_deps,
 };
 
 /// The folds of every body `load` holds records for, by segment, laid through `lay`.
@@ -176,13 +179,15 @@ pub fn fold<'o>(
 }
 
 /// Each `(callable, slot)` a callable keys on through its frontiers: a keyable name of it in the
-/// frontier of a unit beneath it, its entry aside, whose seam is a callable's entry. Sorted.
+/// frontier of a unit beneath it, its entry aside, whose seam is a callable's entry. Sorted. Each
+/// frontier's sites and names are read once, through a memo every frontier reading it shares.
 fn keyed_names<'x>(
     shapes: &Shapes<'_>,
     frontiers: &[(Segment, UnitIndex, Frontier<'_>)],
     scratch: BumpAllocator<'x>,
     keyable: &dyn Fn(Segment, Slot) -> bool,
 ) -> BumpVec<'x, (Segment, Slot)> {
+    let mut summaries = bump_table(scratch);
     let mut named = BumpVec::new_in(scratch);
     for (segment, unit, frontier) in frontiers {
         // A callable's entry holds its parameters' own types, which key nothing: whatever reads a
@@ -190,10 +195,18 @@ fn keyed_names<'x>(
         if *unit == UnitIndex::ENTRY && shapes.shape_at(*segment).kind() == ShapeKind::Callable {
             continue;
         }
-        // A unit's own binders are what it fixes, not what it waits on.
-        let Some(seam) = (frontier.unknowns().iter())
-            .map(|unknown| shapes.bind_site(*unknown))
-            .filter(|site| (site.segment, site.unit) != (*segment, *unit))
+        if frontier.is_empty() {
+            continue;
+        }
+        let summary = summarize(shapes, *frontier, scratch, keyable, &mut summaries);
+        // A unit's own binders are what it fixes, not what it waits on: of each segment's two
+        // latest distinct sites, at most one is the unit's.
+        let Some(seam) = (summary.sites.iter())
+            .filter_map(|(_, top)| {
+                (top.iter().flatten())
+                    .find(|site| (site.segment, site.unit) != (*segment, *unit))
+                    .copied()
+            })
             .max()
         else {
             continue;
@@ -203,37 +216,98 @@ fn keyed_names<'x>(
         {
             continue;
         }
-        for unknown in frontier.unknowns() {
-            let Address::Slot(slot) = unknown.at else {
-                continue;
-            };
-            let declaring = shapes.shape_at(unknown.segment);
-            // Only an unknown a body around the unit declares: one off its chain is bound in a
-            // frame of its own.
-            if declaring.kind() == ShapeKind::Callable
-                && encloses(shapes, unknown.segment, *segment)
-                && keyable(unknown.segment, slot)
-            {
-                named.push((unknown.segment, slot));
-            }
-        }
+        // Only an unknown a body around the unit declares: one off its chain is bound in a frame
+        // of its own.
+        named.extend(
+            (summary.keyable.iter())
+                .copied()
+                .filter(|(declaring, _)| shapes.encloses(*declaring, *segment)),
+        );
     }
     named.sort_unstable();
     named.dedup();
     named
 }
 
-/// Whether `outer` is `inner` or a body around it.
-fn encloses(shapes: &Shapes<'_>, outer: Segment, mut inner: Segment) -> bool {
-    loop {
-        if inner == outer {
-            return true;
+/// What the keys fold reads off one frontier's unknowns: per body declaring some of them, by
+/// segment ascending, the two latest distinct bind sites among them; and the keyable parameters of
+/// callables among them, sorted. A cut at `from` keeps the entries at segments `>= from`, a suffix
+/// of each, since every list here is sorted by segment first.
+#[derive(Clone, Copy)]
+struct Summary<'x> {
+    sites: &'x [(Segment, [Option<BindSite>; 2])],
+    keyable: &'x [(Segment, Slot)],
+}
+
+/// The summary of `frontier`, and of every frontier it reads, memoized in `summaries` by
+/// identity. Frontiers read only ended ones, so they form a DAG; a chain of k reads is k deep, so
+/// the post-order keeps its own stack.
+fn summarize<'x>(
+    shapes: &Shapes<'_>,
+    frontier: Frontier<'_>,
+    scratch: BumpAllocator<'x>,
+    keyable: &dyn Fn(Segment, Slot) -> bool,
+    summaries: &mut BumpBackedMap<'x, (usize, usize), Summary<'x>>,
+) -> Summary<'x> {
+    let mut stack = BumpVec::new_in(scratch);
+    stack.push((frontier, false));
+    while let Some((at, expanded)) = stack.pop() {
+        if summaries.contains_key(&at.identity()) {
+            continue;
         }
-        match shapes.parent(inner) {
-            Some((parent, _)) => inner = parent,
-            None => return false,
+        if !expanded {
+            stack.push((at, true));
+            stack.extend((at.reads().iter()).map(|cut| (cut.frontier, false)));
+            continue;
         }
+        let read = |cut: &Cut<'_>| summaries[&cut.frontier.identity()];
+        let mut sites = BumpVec::new_in(scratch);
+        sites
+            .extend((at.own().iter()).map(|unknown| (unknown.segment, shapes.bind_site(*unknown))));
+        for cut in at.reads() {
+            let held = read(cut).sites;
+            let past = held.partition_point(|(segment, _)| *segment < cut.from);
+            sites.extend((held[past..].iter()).flat_map(|(segment, top)| {
+                top.iter().flatten().map(move |site| (*segment, *site))
+            }));
+        }
+        sites.sort_unstable_by(|(mine, me), (theirs, them)| mine.cmp(theirs).then(them.cmp(me)));
+        sites.dedup();
+        let mut tops: BumpVec<'_, (Segment, [Option<BindSite>; 2])> = BumpVec::new_in(scratch);
+        for (segment, site) in sites {
+            match tops.last_mut() {
+                Some((held, top)) if *held == segment => {
+                    if top[1].is_none() {
+                        top[1] = Some(site);
+                    }
+                }
+                _ => tops.push((segment, [Some(site), None])),
+            }
+        }
+        let mut keys = BumpVec::new_in(scratch);
+        keys.extend((at.own().iter()).filter_map(|unknown| match unknown.at {
+            Address::Slot(slot)
+                if shapes.shape_at(unknown.segment).kind() == ShapeKind::Callable
+                    && keyable(unknown.segment, slot) =>
+            {
+                Some((unknown.segment, slot))
+            }
+            _ => None,
+        }));
+        for cut in at.reads() {
+            let held = read(cut).keyable;
+            let past = held.partition_point(|(segment, _)| *segment < cut.from);
+            keys.extend_from_slice(&held[past..]);
+        }
+        keys.sort_unstable();
+        keys.dedup();
+        let summary = Summary {
+            sites: collect(scratch, tops.iter().copied()),
+            keyable: collect(scratch, keys.iter().copied()),
+        };
+        summaries.insert(at.identity(), summary);
     }
+    summaries[&frontier.identity()]
 }
 
 /// Mark the lexical variable at `level`, read from `reading`, composed by each callable or

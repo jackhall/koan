@@ -12,9 +12,9 @@
 use crate::elaborate::schema_of;
 use crate::memory::BumpVec;
 use crate::scope::{
-    Address, BodyShape, Born, Frontier, InstanceRead, Narrowing, Segment, ShapeKind, Site, Slot,
-    Static, StaticCallable, StaticRegistered, StaticSolution, StaticType, Store, Target, Tree,
-    Typed, UnitFacts, UnitId, Unknown, UseStatics, in_body_of,
+    Address, BodyShape, Born, Cut, Frontier, InstanceRead, Narrowing, Segment, ShapeKind, Site,
+    Slot, Static, StaticCallable, StaticRegistered, StaticSolution, StaticType, Store, Target,
+    Tree, Typed, UnitFacts, UnitId, Unknown, UseStatics, in_body_of,
 };
 use crate::symbols::{BinderSymbol, Symbol};
 use crate::type_lattice::{DeclaredType, Interval, KType, Parametric, Side, TypeNode, Variable};
@@ -34,13 +34,14 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     Pass<'p, 'o, '_, 'graph, 'tier, '_, '_, S>
 {
     /// Gather what a fact the unit `tag` fixed waits on: nothing where `tag` is the unit running,
-    /// a running unit's gathering so far, an ended one's frontier.
+    /// a running unit's gathering so far, a read of an ended one's frontier.
     pub(super) fn gather(&self, tag: Tag) {
         if self.open.last() == Some(&tag) {
             return;
         }
-        if let Some(frontier) = self.units[tag.0 as usize].frontier {
-            return self.note(frontier.unknowns());
+        let state = &self.units[tag.0 as usize];
+        if let Some(frontier) = state.frontier {
+            return self.note_frontier(frontier, state.id.segment);
         }
         let Some(at) = self.open.iter().position(|held| *held == tag) else {
             return;
@@ -49,12 +50,29 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         let innermost = scopes.len() - 1;
         debug_assert!(at < innermost, "the innermost gathers nothing of itself");
         let (outer, inner) = scopes.split_at_mut(innermost);
-        inner[0].extend(
-            outer[at]
-                .iter()
+        let (outer, inner) = (&outer[at], &mut inner[0]);
+        #[cfg(test)]
+        let before = inner.unknowns.len() + inner.reads.len();
+        (inner.unknowns).extend(
+            (outer.unknowns.iter())
                 .copied()
                 .filter(|unknown| self.gathers(*unknown)),
         );
+        // A read kept what lies at or above its cut; of that, what is still on the chain lies at
+        // or above the innermost body on the chain enclosing the cut.
+        inner.reads.extend(outer.reads.iter().map(|cut| {
+            let from = self.meet(cut.from);
+            debug_assert!(
+                self.shapes.encloses(from, cut.from),
+                "a re-cut only narrows"
+            );
+            Cut {
+                frontier: cut.frontier,
+                from,
+            }
+        }));
+        #[cfg(test)]
+        super::count(|counts| counts.noted += inner.unknowns.len() + inner.reads.len() - before);
         self.scopes.set(scopes);
     }
 
@@ -62,6 +80,18 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     fn gathers(&self, unknown: Unknown) -> bool {
         (self.chain.iter()).any(|level| level.shape.segment() == unknown.segment)
             && self.store.binding(unknown).is_none()
+    }
+
+    /// The innermost body on the chain that is `segment` or encloses it. The chain is a root path:
+    /// level 0 is the program, which encloses every body, and each level the body enclosing the
+    /// next, the levels above a callee's parent set aside while it is walked on demand.
+    fn meet(&self, mut segment: Segment) -> Segment {
+        while self.level_of(segment).is_none() {
+            segment = (self.shapes.parent(segment))
+                .expect("the program encloses every body")
+                .0;
+        }
+        segment
     }
 
     /// Add `unknowns` to the innermost gathering, unsorted: its frontier sorts and dedups it once,
@@ -72,28 +102,57 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         }
         let mut scopes = self.scopes.replace(BumpVec::new_in(self.scratch));
         if let Some(open) = scopes.last_mut() {
-            open.extend(
-                unknowns
-                    .iter()
-                    .copied()
-                    .filter(|unknown| self.gathers(*unknown)),
-            );
+            let gathered = unknowns
+                .iter()
+                .copied()
+                .filter(|unknown| self.gathers(*unknown));
+            #[cfg(test)]
+            let before = open.unknowns.len();
+            open.unknowns.extend(gathered);
+            #[cfg(test)]
+            super::count(|counts| counts.noted += open.unknowns.len() - before);
         }
         self.scopes.set(scopes);
     }
 
-    /// [`note`](Self::note) a frontier.
-    pub(super) fn note_frontier(&self, frontier: Frontier<'_>) {
-        self.note(frontier.unknowns());
+    /// Add a read of `frontier`, the ended record of a unit or the closing of `segment`, to the
+    /// innermost gathering, cut to the chain: one entry however many unknowns it holds. The read
+    /// keeps any of its unknowns the binding binds — a base record read before the walk re-runs it
+    /// names them — since a frontier is read under the reader's binding, which extends the binding
+    /// of the layer that laid it: a layered store wakes only on what its base leaves unbound.
+    pub(super) fn note_frontier(&self, frontier: Frontier<'o>, segment: Segment) {
+        if frontier.is_empty() {
+            return;
+        }
+        let from = self.meet(segment);
+        debug_assert!(
+            self.shapes.encloses(from, segment),
+            "a cut lies on the record's chain"
+        );
+        let mut scopes = self.scopes.replace(BumpVec::new_in(self.scratch));
+        if let Some(open) = scopes.last_mut() {
+            open.reads.push(Cut { frontier, from });
+            #[cfg(test)]
+            super::count(|counts| counts.noted += 1);
+        }
+        self.scopes.set(scopes);
     }
 
     /// Drop each unknown `shape` declares from the innermost gathering, as `shape` leaves the
-    /// chain.
+    /// chain: a read cut at or inside `shape` is cut at its encloser instead.
     pub(super) fn leave(&self, shape: &BodyShape<'graph>) {
         let segment = shape.segment();
+        let parent = self.shapes.parent(segment).map(|(parent, _)| parent);
         let mut scopes = self.scopes.replace(BumpVec::new_in(self.scratch));
         if let Some(open) = scopes.last_mut() {
-            open.retain(|unknown| unknown.segment != segment);
+            open.unknowns.retain(|unknown| unknown.segment != segment);
+            // Only a cut inside `shape`: one at a body set aside beside it, while a callee is
+            // walked on demand, may hold a lower segment without lying inside it.
+            open.reads
+                .retain_mut(|cut| match self.shapes.encloses(segment, cut.from) {
+                    false => true,
+                    true => parent.inspect(|parent| cut.from = *parent).is_some(),
+                });
         }
         self.scopes.set(scopes);
     }
@@ -141,7 +200,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     /// written.
     fn record_of(&self, unit: UnitId) -> Option<&'o UnitFacts<'o>> {
         let (facts, frontier) = self.store.fact(unit)?;
-        self.note_frontier(frontier);
+        self.note_frontier(frontier, unit.segment);
         Some(facts)
     }
 

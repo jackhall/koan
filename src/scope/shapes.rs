@@ -210,6 +210,18 @@ impl<'graph> Shapes<'graph> {
         Some(segment)
     }
 
+    /// Whether `outer` is `inner` or a body around it. A body's segment exceeds every body's it
+    /// encloses ([`Segment`]), so the walk up stops once it reaches `outer`'s segment.
+    pub fn encloses(&self, outer: Segment, mut inner: Segment) -> bool {
+        while inner < outer {
+            match self.parent(inner) {
+                Some((parent, _)) => inner = parent,
+                None => return false,
+            }
+        }
+        inner == outer
+    }
+
     /// How many bodies enclose `segment`: `0` for the root.
     pub fn depth(&self, mut segment: Segment) -> usize {
         let mut depth = 0;

@@ -698,11 +698,7 @@ fn a_type_binder_over_a_closed_path_declares_closed() {
 }
 
 /// The frontier of the unit of `shape` that holds `statement`.
-fn unit_frontier<'graph>(
-    facts: &LoadFacts<'graph>,
-    shape: &BodyShape<'_>,
-    statement: u32,
-) -> &'graph [Unknown] {
+fn unit_frontier(facts: &LoadFacts<'_>, shape: &BodyShape<'_>, statement: u32) -> Vec<Unknown> {
     let unit = UnitId {
         segment: shape.segment(),
         unit: shape.unit_of_statement(statement as usize),
@@ -712,13 +708,13 @@ fn unit_frontier<'graph>(
 }
 
 /// The frontier of the unit holding the one type expression `shape` records.
-fn only_frontier<'graph>(facts: &LoadFacts<'graph>, shape: &BodyShape<'_>) -> &'graph [Unknown] {
+fn only_frontier(facts: &LoadFacts<'_>, shape: &BodyShape<'_>) -> Vec<Unknown> {
     let shape = facts.shapes().shape_at(shape.segment());
     unit_frontier(facts, shape, the_expression(shape).statement)
 }
 
 /// The frontier of the unit `body` is born in, which fixes its callable type.
-fn birth_frontier<'graph>(facts: &LoadFacts<'graph>, body: &BodyShape<'_>) -> &'graph [Unknown] {
+fn birth_frontier(facts: &LoadFacts<'_>, body: &BodyShape<'_>) -> Vec<Unknown> {
     let shapes = facts.shapes();
     let (parent, statement) = shapes.parent(body.segment()).expect("a nested body");
     unit_frontier(facts, shapes.shape_at(parent), statement)

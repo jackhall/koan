@@ -3401,7 +3401,8 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
     ) -> &'graph BodyShape<'graph> {
         let writer = self.brand.writer();
         let last_reads = self.last_reads(&draft);
-        // The nested drafts take the segments before this one's, in program order.
+        // The nested drafts take the segments before this one's, in program order: a frontier's
+        // cut (`Cut`) rests on segments falling from the root inward along a chain.
         let segment = Segment(self.next_segment.get() + descendants(&draft));
         let children = std::mem::replace(&mut draft.children, BumpVec::new_in(self.scratch));
         let mut chain = BumpVec::with_capacity_in(around.len() + 1, self.scratch);
@@ -3431,6 +3432,10 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             nested_parents.push((sealed.segment, statement));
             nested.push((site, sealed));
         }
+        debug_assert!(
+            nested.iter().all(|(_, sealed)| sealed.segment < segment),
+            "a body's nested bodies take the segments before its own"
+        );
         nested_starts.resize(draft.statements as usize + 1, nested.len() as u32);
         let nested_order = collect(writer, nested.iter().copied());
         let nested = Keyed::sorted(writer, &mut nested);

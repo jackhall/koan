@@ -149,9 +149,9 @@ use crate::parse::BuiltinShapeId;
 use crate::parse::{ExpressionPart, KExpression, KLiteral};
 use crate::scope::{
     Address, BodyClass, BodyShape, Born, BuiltinIndex, Candidate, CandidateList, CaptureChain,
-    CaptureSlot, CaptureSource, Closing, ComponentIndex, Coordinate, Frontier, InstanceRead, Keyed,
-    Lands, Leaf, Listed, NamedVariable, Narrowing, PathEntry, Position, Print, Resolution, Segment,
-    ShapeError, ShapeKind, Shapes, Site, SiteDeps, Slot, Source, Static, StaticRegistered,
+    CaptureSlot, CaptureSource, Closing, ComponentIndex, Coordinate, Cut, Frontier, InstanceRead,
+    Keyed, Lands, Leaf, Listed, NamedVariable, Narrowing, PathEntry, Position, Print, Resolution,
+    Segment, ShapeError, ShapeKind, Shapes, Site, SiteDeps, Slot, Source, Static, StaticRegistered,
     StaticSolution, StaticType, Store, SurfacedHead, Tree, Typed, UnitFacts, UnitId, UnitIndex,
     UnitTable, UnitWork, Unknown, UseStatics, Variable as Located, Within, follow, part_of,
     source_of,
@@ -319,6 +319,22 @@ struct Followed {
 /// in, which a read of the fact gathers the frontier of.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 struct Tag(u32);
+
+/// One running unit's gathering: each unknown it read itself, and each ended frontier it read,
+/// cut to the chain as it read it. Unsorted until its frontier lays it.
+struct Gathering<'p, 'o> {
+    unknowns: BumpVec<'p, Unknown>,
+    reads: BumpVec<'p, Cut<'o>>,
+}
+
+impl<'p> Gathering<'p, '_> {
+    fn new(scratch: BumpAllocator<'p>) -> Self {
+        Gathering {
+            unknowns: BumpVec::new_in(scratch),
+            reads: BumpVec::new_in(scratch),
+        }
+    }
+}
 
 /// One unit the walk ran or absorbed, or one owning body's closing.
 struct UnitState<'p, 'o> {
@@ -518,7 +534,7 @@ struct Pass<'p, 'o, 'x, 'graph, 'tier, 'pair, 'reg, S: Store<'o>> {
     /// The units running, innermost last, beside each one's gathering: every unknown its facts
     /// read so far, unsorted until its frontier lays it.
     open: BumpVec<'p, Tag>,
-    scopes: std::cell::Cell<BumpVec<'p, BumpVec<'p, Unknown>>>,
+    scopes: std::cell::Cell<BumpVec<'p, Gathering<'p, 'o>>>,
     /// Each owning body the walk has entered, by segment.
     walked: &'p mut [bool],
     demand: Demand<'p, 'o>,
@@ -695,6 +711,13 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     }
 
     fn push(&mut self, shape: &'graph BodyShape<'graph>, roots_chain: bool) {
+        debug_assert_eq!(
+            self.shapes
+                .parent(shape.segment())
+                .map(|(parent, _)| parent),
+            self.chain.last().map(|level| level.shape.segment()),
+            "the chain is a root path: each level the body enclosing the next"
+        );
         let scratch = self.scratch;
         let mut statements = BumpVec::with_capacity_in(shape.body().len(), scratch);
         statements.resize(shape.body().len(), None);
@@ -908,7 +931,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         }
         self.open.push(tag);
         let mut scopes = self.scopes.replace(BumpVec::new_in(scratch));
-        scopes.push(BumpVec::new_in(scratch));
+        scopes.push(Gathering::new(scratch));
         self.scopes.set(scopes);
         tag
     }
@@ -920,7 +943,9 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         let mut scopes = self.scopes.replace(BumpVec::new_in(self.scratch));
         let mut gathered = scopes.pop().expect("a running unit has its gathering");
         self.scopes.set(scopes);
-        let frontier = Frontier::laid(self.lay, &mut gathered);
+        let frontier = Frontier::laid(self.lay, &mut gathered.unknowns, &mut gathered.reads);
+        #[cfg(test)]
+        count(|counts| counts.frontier_entries += frontier.own().len() + frontier.reads().len());
         self.units[tag.0 as usize].frontier = Some(frontier);
         frontier
     }
@@ -1794,7 +1819,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     /// is not written yet.
     fn closed(&self, segment: Segment) -> Option<&'o Closing<'o>> {
         let (closing, frontier) = self.store.close(segment)?;
-        self.note(frontier.unknowns());
+        self.note_frontier(frontier, segment);
         Some(closing)
     }
 
@@ -4788,6 +4813,10 @@ pub(super) struct LoadCounts {
     pub chain_labels: usize,
     /// Slices laid in program storage for bodies' captures.
     pub capture_slices: usize,
+    /// Entries laid in frontiers: each unknown a unit gathered itself, and each frontier it read.
+    pub frontier_entries: usize,
+    /// Entries the walk's gatherings took: an unknown, or a read of an ended frontier.
+    pub noted: usize,
 }
 
 #[cfg(test)]

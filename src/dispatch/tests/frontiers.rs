@@ -7,6 +7,7 @@ use crate::scope::{Address, BindSite, BodyShape, ShapeKind, Slot, UnitId, UnitIn
 use crate::symbols::BinderSymbol;
 
 use super::statics::{body, loaded, slot};
+use super::{assert_linear, load_counts};
 
 /// Two overloads of `PICK`, one at `Number` and one at `Str`.
 const PICK: &str = "EXPR #(PICK x :Number) -> Str = #(\"n\")\n\
@@ -360,4 +361,37 @@ fn a_callable_in_a_using_block_waits_on_the_name_it_surfaces() {
             carrier
         ));
     });
+}
+
+/// A chain of views, each over the one before, lays and notes frontier entries linear in its
+/// length: each unit reads the frontier before it as one entry, however many unknowns it holds.
+#[test]
+fn a_chain_of_reads_lays_and_notes_frontiers_linear_in_its_length() {
+    let closed = |n: usize| {
+        let mut source = format!(
+            "{COUNTER}MODULE ints = ((LET zero = 0) \
+             (LET succ = (FN :{{x :Number}} -> Number = #(x + 1))))\n\
+             LET v0 = ints\n"
+        );
+        for at in 1..=n {
+            source += &format!("LET v{at} = (v{} :| Counter)\n", at - 1);
+        }
+        source
+    };
+    let open = |n: usize| {
+        let mut body = String::from("(LET v0 = m)");
+        for at in 1..=n {
+            body += &format!(" (LET v{at} = (v{} :| Counter))", at - 1);
+        }
+        format!("{COUNTER}LET f = (FN :{{m :Counter}} -> Any = #({body} (v{n}.zero)))\n")
+    };
+    let chains: [(&str, &dyn Fn(usize) -> String); 2] = [("closed", &closed), ("open", &open)];
+    for (what, program) in chains {
+        assert_linear(&format!("{what} frontier entries"), |n| {
+            load_counts(&program(n)).frontier_entries
+        });
+        assert_linear(&format!("{what} unknowns noted"), |n| {
+            load_counts(&program(n)).noted
+        });
+    }
 }

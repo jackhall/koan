@@ -1135,7 +1135,7 @@ mod laws {
             let foreign = resumed(&case.render(), |door| {
                 (door.load().own_units().iter())
                     .flat_map(|(unit, (_, frontier))| {
-                        frontier.unknowns().iter().filter(|unknown| !on_chain(door, unit.segment, unknown.segment))
+                        frontier.unknowns().into_iter().filter(|unknown| !on_chain(door, unit.segment, unknown.segment))
                             .map(move |unknown| format!("{unit:?} waits on {unknown:?}"))
                     })
                     .collect::<Vec<_>>()
