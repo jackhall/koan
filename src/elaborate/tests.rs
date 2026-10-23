@@ -184,11 +184,7 @@ pub(super) fn with_program<R>(
         BumpAllocator<'_>,
         &SymbolInterner,
     ) -> Vec<(&'static str, KType)>,
-    hold: impl for<'graph, 'cell> Fn(
-        &str,
-        Writer<'cell, '_>,
-        &Chain<'cell, 'cell, '_, '_>,
-    ) -> Held<'cell>,
+    hold: impl for<'cell> Fn(&str, Writer<'cell, '_>, &Chain<'cell, 'cell, '_, '_>) -> Held<'cell>,
     check: impl for<'p, 'graph, 'cell> FnOnce(Program<'p, 'graph, 'cell>) -> R,
 ) -> R {
     let storage = program_storage();
