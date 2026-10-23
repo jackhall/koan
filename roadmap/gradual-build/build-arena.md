@@ -95,6 +95,13 @@ the nested bound to the nesting depth.
 - *The layers — decided.* The load decides every unit with an empty frontier,
   records each unit's binder split and narrows each use's candidate list; all
   three are the fact function's frontier bookkeeping.
+- *A wake over a shared frontier — decided.* No frontier is laid flat
+  ([the store](../../src/build/README.md#the-store)), so a store's wake
+  memoizes, per binding, whether each frontier it reaches meets the binding,
+  as the keys fold memoizes seams. A frontier is empty exactly where it holds
+  no unknown, so the load reads emptiness off the frontier itself. A cell
+  reads a frontier's emptiness and seam relative to its binding, since a
+  resumption's frontier may name unknowns its parent's binding already binds.
 - *A module bound by its digest — open.* A frame's activation binds a
   module by its digest tree alone, so the fact function run there reads a
   member or a view over it as unknown (`Tree::Digest`), weaker than the

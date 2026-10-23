@@ -161,13 +161,26 @@ body, each beside its frontier, whether a frontier **wakes** under the
 binding, the writes of a record and a closing, and the wording of a refusal.
 It interns through a chain its caller hands it. The store records no edge:
 the walk reaches it only through its façade, which keeps the gathering of each
-open unit. A binding miss adds the unknown to the innermost gathering, a read
-of a record or a closing adds that record's frontier, and a binding hit adds
-nothing; only an unknown declared on the reader's chain is gathered. A unit's
-**frontier** is its gathering when it ends, sorted and deduplicated once
-there: the unknowns it depends on, transitively. Every value a record keeps is laid where it rests, through the
-store's `lay`, so nothing is relayed; transient work stays in the walk's
-scratch.
+open unit. A binding miss adds the unknown to the innermost gathering, a
+binding hit adds nothing, and a read of an ended record or closing adds one
+read of that record's frontier, cut to the reader's chain
+([the cut](#frontiers-and-seams)); only an unknown declared on the reader's
+chain is gathered. A unit's **frontier** is its gathering when it ends: its
+own unknowns, sorted and deduplicated, beside each frontier it read, once at
+its widest cut and in the order first read ([`Frontier`](../scope/facts.rs)).
+The unknowns it depends on, transitively, are its own and each read's past its
+cut. A read whose cut keeps none of its frontier's unknowns is dropped, so a
+frontier is empty exactly where it holds no unknown. Nothing lays them flat,
+so a read costs one entry however many unknowns its frontier holds.
+
+A read carries no binding filter: a frontier is read under the reader's
+binding, which extends the binding of the layer that laid it. So a
+resumption's frontier may name an unknown its own layer binds, and a store
+wakes a record only on what its base leaves unbound, which an unknown already
+bound never is.
+
+Every value a record keeps is laid where it rests, through the store's `lay`,
+so nothing is relayed; transient work stays in the walk's scratch.
 
 [`LoadStore`](load.rs) is the load's: it binds nothing, so every unit runs,
 and lays every record in program storage. The tests stand two more over the
@@ -232,16 +245,30 @@ unifier are what the rules call, and this module lives downstream of them.
 ## Frontiers and seams
 
 - **A frontier.** Each unit's record carries its frontier: the unknowns its
-  facts read, and the frontier of every record they read. A unit whose
-  frontier is empty is final at the load.
+  facts read, and a read of the frontier of every record they read, cut to
+  its chain. Frontiers share structure, a DAG at unit grain: a chain of k
+  units, each reading the one before, lays O(k) entries in all. A unit whose
+  frontier is empty, holding no unknown, is final at the load.
+- **The cut.** A read keeps the unknowns of its frontier whose segment is at
+  least the cut's: those declared in the cut's body or a body around it. It
+  rests on three facts. A body's nested bodies take the segments before its
+  own ([`Segment`](../scope/shape.rs)), so along one chain segments fall from
+  the root inward. A frontier's unknowns lie on its record's chain. And the
+  cut lies on that chain too: it is the innermost body on the reader's chain
+  enclosing the record's body, and as a body leaves the chain, a read cut
+  inside it is cut at its encloser instead. Segments compare within one shape
+  table, and no frontier spans two.
 - **A seam.** A unit's seam is the latest **bind site** among its frontier's
   unknowns ([`Shapes::bind_site`](../scope/shapes.rs)), sites ordering as the
   binding does: an outer body before an inner one, and in one body its entry
   before its units in order. A parameter, `FOR ALL` name, `:Type` parameter or
   a quote's code's capture binds at its body's entry; a local or a type binder
   at its unit; a block's parameter at the unit holding the block. No list of
-  seams is stored: [the folds](#the-folds) read them off the frontiers. An
-  **entry seam** keys a specialization on the names its facts wait on, a
+  seams is stored: [the folds](#the-folds) read them off the frontiers, each
+  frontier's latest bind sites and keyable names read once, through a memo
+  shared by every frontier that reads it; a property law holds the memo to a
+  fold over each frontier's flattened unknowns
+  ([the keys fold's tests](tests/folds.rs)). An **entry seam** keys a specialization on the names its facts wait on, a
   parameter's own type aside
   ([below](#keys-which-bindings-make-a-specialization)). A **statement
   seam** settles nothing: its binding is content the run produces, an

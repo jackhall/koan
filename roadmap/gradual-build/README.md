@@ -29,7 +29,6 @@ hand.
 
 - [The build arena](build-arena.md)
 - [The load walk's repeated work](load-walk-repeats.md)
-- [Shared frontiers](shared-frontiers.md)
 - [Placing a verdict without probing](verdict-placement.md)
 
 ## Unplanned work

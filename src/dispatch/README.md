@@ -728,7 +728,8 @@ through its façade ([`reads`](walk/reads.rs)), which gathers what each unit
 reads ([the store](../build/README.md#the-store)): a lexical variable's home,
 a type binder the type half left unknown, and a module binder whose content
 tree a fact reads — through a view, a path rooted at it or an unfold over it —
-each beside the frontier of every record the unit read. A name a
+each beside a read of the frontier of every record the unit read, cut to its
+chain. A name a
 `USING … SCOPE` surfaces waits on what its module's static type waits on. A
 resumption runs the same rules under a binding: a bound type name seeds as a
 closed type binder does, a bound `FOR ALL` name closes the body's type, and a

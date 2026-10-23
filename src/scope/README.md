@@ -566,6 +566,10 @@ body:
 
 - `bind_site`, where an unknown binds — its body's entry, or the unit binding
   it ([seams](../build/README.md#frontiers-and-seams));
+- `encloses`, whether one body is another or encloses it, read off the
+  segments: a body's nested bodies take the segments before its own, so a
+  body's segment exceeds every body's it encloses, the order a frontier's
+  [cut](../build/README.md#frontiers-and-seams) reads;
 - which unit's record holds a fact the shape places: a slot's (`slot_unit`), a
   statement's (`running`) and a callable's or a quote's code's birth
   (`birth_unit`), an inline body's facts resting in the unit running the
@@ -684,9 +688,11 @@ code it refused — has no static types, every candidate of every use in it is
 vocabulary, beside the shape whose sites, slots and segments it keys on
 ([the store](../build/README.md#the-store)): an `Unknown`, a name a binding
 may remove, by its lexical address — the declaring body's segment and the slot
-or capture its activation holds the name at; a `Frontier`, the sorted unknowns
-a unit waits on; a `UnitId`, a body's segment and a unit's index in it; a
-`Bound`, what a binding gives an unknown — a type, or a module's closed
+or capture its activation holds the name at; a `Frontier`, what a unit waits
+on — the unknowns it gathered itself beside a `Cut` read of each ended
+frontier it read whose cut keeps one of its unknowns, never laid flat and
+compared only by identity; a `UnitId`, a body's segment and a unit's index in
+it; a `Bound`, what a binding gives an unknown — a type, or a module's closed
 content tree beside the exact type it carries; a `Binding`, unknowns sorted
 beside their bounds; and the `Store` trait the walk runs over.
 [`writes`](writes.rs) is the table a store keeps its writes in, one per unit,

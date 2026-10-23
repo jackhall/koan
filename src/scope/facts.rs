@@ -44,7 +44,9 @@ pub struct Unknown {
 /// each read to it. Empty for a fixed fact. Only the tests lay its unknowns flat
 /// (`Frontier::unknowns`).
 ///
-/// It compares by nothing and prints each read by its cut alone: a chain of k reads is k deep.
+/// It has no equality: a shared frontier is the same one only by `identity`, and comparing
+/// content would recurse through its reads. It prints each read by its cut and identity alone,
+/// since a chain of k reads is k deep.
 #[derive(Clone, Copy)]
 pub struct Frontier<'a> {
     own: &'a [Unknown],
