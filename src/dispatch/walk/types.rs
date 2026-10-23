@@ -113,7 +113,7 @@ impl<'p, 'o: 'p, 'x, 'graph: 'o + 'p, 'tier: 'o, 'pair, 'reg, S: Store<'o>>
         for expression in written.iter() {
             self.type_expression(level, expression)?;
         }
-        elaborate::guards(shape, &written, |expression| {
+        elaborate::guards(shape, &written, self.scratch, |expression| {
             self.type_cell(shape, expression.site)
         })
     }

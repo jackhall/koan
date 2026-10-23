@@ -634,6 +634,16 @@ struct Judgement<'x> {
     instances: &'x [Made<'x>],
 }
 
+/// A unit's statements in program order, beside the callables, quotes' code and blocks they nest,
+/// each in program order: collected once per unit.
+#[derive(Clone, Copy)]
+struct UnitStatements<'p, 'graph> {
+    statements: &'p [usize],
+    callables: &'p [&'graph BodyShape<'graph>],
+    codes: &'p [&'graph BodyShape<'graph>],
+    blocks: &'p [&'graph BodyShape<'graph>],
+}
+
 /// What a keyworded use reads of one candidate, read once per use: what the load knows of its
 /// registered shape, the heads it holds where it is a `USING … SCOPE` block's surfaced key, and the
 /// slots its shape's solve reads, empty where the load does not know the shape.
@@ -862,39 +872,25 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         self.unit(level, UnitIndex::ENTRY, |pass| pass.entry(level, None))?;
         for (index, unit) in shape.units().iter().enumerate() {
             let at = UnitIndex::of_run(index);
-            self.unit(level, at, |pass| pass.steps(level, at, unit.work))?;
-            for born in self.births(shape, unit.work) {
-                if born.kind() == ShapeKind::Callable {
-                    self.body(Some(level), born)?;
-                }
+            // Collected outside the unit: one the store absorbs runs no steps but births its
+            // callables.
+            let nests = self.unit_statements(shape, unit.work);
+            self.unit(level, at, |pass| pass.steps(level, at, unit.work, nests))?;
+            for born in nests.callables {
+                self.body(Some(level), born)?;
             }
         }
         Ok(())
     }
 
-    /// Each callable and quote's code the statements of `work` of `shape` birth directly, in
-    /// program order.
-    fn births(
+    /// The statements of `shape` the unit doing `work` runs, and what they nest.
+    fn unit_statements(
         &self,
-        shape: &'graph BodyShape<'graph>,
+        shape: &BodyShape<'graph>,
         work: UnitWork,
-    ) -> BumpVec<'p, &'graph BodyShape<'graph>> {
-        let mut born = BumpVec::new_in(self.scratch);
-        for index in self.statements(shape, work) {
-            born.extend(
-                (shape.nested_in(index).iter())
-                    .map(|(_, nested)| *nested)
-                    .filter(|nested| {
-                        matches!(nested.kind(), ShapeKind::Callable | ShapeKind::Code)
-                    }),
-            );
-        }
-        born
-    }
-
-    /// The statements of `shape` the unit doing `work` runs, in program order.
-    fn statements(&self, shape: &BodyShape<'graph>, work: UnitWork) -> BumpVec<'p, usize> {
-        let mut statements = BumpVec::new_in(self.scratch);
+    ) -> UnitStatements<'p, 'graph> {
+        let scratch = self.scratch;
+        let mut statements = BumpVec::new_in(scratch);
         match work {
             UnitWork::Statement(index) => statements.push(index as usize),
             UnitWork::Component(index) => {
@@ -906,7 +902,27 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 statements.dedup();
             }
         }
-        statements
+        let (mut callables, mut codes, mut blocks) = (
+            BumpVec::new_in(scratch),
+            BumpVec::new_in(scratch),
+            BumpVec::new_in(scratch),
+        );
+        for index in statements.iter() {
+            for (_, nested) in shape.nested_in(*index) {
+                match nested.kind() {
+                    ShapeKind::Callable => callables.push(*nested),
+                    ShapeKind::Code => codes.push(*nested),
+                    ShapeKind::Block => blocks.push(*nested),
+                    _ => {}
+                }
+            }
+        }
+        UnitStatements {
+            statements: statements.leak(),
+            callables: callables.leak(),
+            codes: codes.leak(),
+            blocks: blocks.leak(),
+        }
     }
 
     /// Run `run` as the unit `index` of the owning body at `level`, inside a gathering of its own,
@@ -1312,15 +1328,16 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
 
     /// Run the unit `index` of the shape at `level`, doing `work`, in its five steps: the paths
     /// its statements spell, its declarations, its type expressions and registrations and the
-    /// callables it births, its value statics, and its binder facts beside them.
+    /// callables it births, its value statics, and its binder facts beside them. `nests` is its
+    /// statements and what they nest.
     fn steps(
         &mut self,
         level: usize,
         index: UnitIndex,
         work: UnitWork,
+        nests: UnitStatements<'p, 'graph>,
     ) -> Result<(), ShapeError<'o>> {
         let shape = self.chain[level].shape;
-        let statements = self.statements(shape, work);
         let holds = shape.holds(index);
         for slot in holds.slots.iter().copied() {
             if !self.component_types(shape, slot) && shape.declarations(slot).is_none() {
@@ -1350,21 +1367,13 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 self.seed_slot(level, slot, None);
             }
         }
-        for at in statements.iter() {
-            for (_, nested) in shape.nested_in(*at) {
-                if nested.kind() == ShapeKind::Callable {
-                    self.birth(level, nested)?;
-                }
-            }
+        for nested in nests.callables {
+            self.birth(level, nested)?;
         }
         // 4 and 5. Each quote's code it births, walked first so an `EVAL` reads it typed; then its
         //    value statics, each binder's fact beside them.
-        for at in statements.iter() {
-            for (_, nested) in shape.nested_in(*at) {
-                if nested.kind() == ShapeKind::Code {
-                    self.body(Some(level), nested)?;
-                }
-            }
+        for nested in nests.codes {
+            self.body(Some(level), nested)?;
         }
         match work {
             UnitWork::Statement(index) => {
@@ -1378,17 +1387,13 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         }
         // A block its value statics did not reach — an arm a builtin's rule reads no further than
         // its value — is typed on its own, inside the unit.
-        for at in statements.iter() {
-            for (_, nested) in shape.nested_in(*at) {
-                if nested.kind() == ShapeKind::Block
-                    && !self.walked[nested.segment().index() as usize]
-                {
-                    self.block(level, nested, None)?;
-                }
+        for nested in nests.blocks {
+            if !self.walked[nested.segment().index() as usize] {
+                self.block(level, nested, None)?;
             }
         }
         // A statement no rule typed is at most `Any`.
-        for index in statements.iter() {
+        for index in nests.statements {
             if self.chain[level].statements[*index].is_none() {
                 self.set_statement(level, *index, unknown());
             }
@@ -1474,11 +1479,10 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         let shape = self.chain[level].shape;
         self.entry(level, surfacing)?;
         for (index, unit) in shape.units().iter().enumerate() {
-            self.steps(level, UnitIndex::of_run(index), unit.work)?;
-            for born in self.births(shape, unit.work) {
-                if born.kind() == ShapeKind::Callable {
-                    self.body(Some(level), born)?;
-                }
+            let nests = self.unit_statements(shape, unit.work);
+            self.steps(level, UnitIndex::of_run(index), unit.work, nests)?;
+            for born in nests.callables {
+                self.body(Some(level), born)?;
             }
         }
         Ok(())

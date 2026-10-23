@@ -507,10 +507,11 @@ where
 }
 
 /// Refuse the first `MATCH … WITH` guard among `shape`'s `expressions`, in program order, that
-/// `typed` gives the handle an earlier guard of its arm set has.
+/// `typed` gives the handle an earlier guard of its arm set has: each guard typed once.
 pub fn guards<'graph, 'o>(
     shape: &'graph BodyShape<'graph>,
     expressions: &[&TypeExpression<'graph>],
+    scratch: BumpAllocator<'_>,
     typed: impl Fn(&TypeExpression<'graph>) -> StaticType<'o>,
 ) -> Result<(), ShapeError<'o>> {
     let handle = |typed: StaticType<'_>| match typed {
@@ -518,17 +519,25 @@ pub fn guards<'graph, 'o>(
         Static::Rigid { value: handle, .. } => Some(handle),
         Static::Unknown => None,
     };
-    let guards =
-        || (expressions.iter()).filter_map(|expression| Some((*expression, expression.guard?)));
-    let repeat = guards()
-        .filter_map(|(expression, (arms, index))| {
-            let guard = handle(typed(expression))?;
-            let (first, _) = guards().find(|(earlier, (held, written))| {
-                *held == arms && *written < index && handle(typed(earlier)) == Some(guard)
-            })?;
-            Some((expression, first, guard))
-        })
-        .min_by_key(|(expression, ..)| expression.order);
+    // Each guard the load types, sorted so the guards of one arm set and handle run in written
+    // order. A guard the load cannot type never matched an earlier one.
+    let mut known = BumpVec::new_in(scratch);
+    for expression in expressions.iter() {
+        if let Some((arms, written)) = expression.guard
+            && let Some(guard) = handle(typed(expression))
+        {
+            known.push((arms, guard, written, *expression));
+        }
+    }
+    known.sort_unstable_by_key(|(arms, guard, written, _)| (*arms, *guard, *written));
+    // Every guard of a run but its first repeats that first.
+    let repeat = (known
+        .chunk_by(|(held, one, ..), (arms, other, ..)| (held, one) == (arms, other)))
+    .flat_map(|run| {
+        let (.., first) = run[0];
+        (run[1..].iter()).map(move |(_, guard, _, expression)| (*expression, first, *guard))
+    })
+    .min_by_key(|(expression, ..)| expression.order);
     let Some((expression, first, guard)) = repeat else {
         return Ok(());
     };
@@ -855,12 +864,17 @@ where
         // An empty group binds nothing.
         DeclaredType::Type(_) => &[],
     };
+    // Each group variable's name, by group index.
+    let mut names = BumpVec::with_capacity_in(bounds.len(), tools.scratch);
+    names.resize(bounds.len(), None);
+    for (name, at) in map.iter() {
+        if let Some(each) = names.get_mut(at) {
+            *each = Some(name);
+        }
+    }
     let mut levels = BumpVec::with_capacity_in(bounds.len(), tools.scratch);
-    levels.extend(bounds.iter().enumerate().map(|(index, bound)| {
-        let (name, _) = map
-            .iter()
-            .find(|(_, at)| *at == index)
-            .expect("each variable of the group is a name the declaration wrote");
+    levels.extend(bounds.iter().zip(names.iter()).map(|(bound, name)| {
+        let name = name.expect("each variable of the group is a name the declaration wrote");
         let (slot, _) = body
             .slot(BinderSymbol::Type(name))
             .expect("a `FOR ALL` name has its slot");
