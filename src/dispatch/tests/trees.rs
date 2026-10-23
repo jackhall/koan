@@ -430,3 +430,22 @@ fn a_substituted_leaf_lays_its_chain_once() {
         load_counts(&call).chain_labels - load_counts(&callee(n)).chain_labels
     });
 }
+
+/// A module binder read from `n` sites has its tree built once: its body's captures are laid once,
+/// however many sites read it.
+#[test]
+fn a_module_binder_read_from_many_sites_lays_its_captures_once() {
+    let program = |n: usize| {
+        let mut source = String::from(
+            "SIG Plain = #[(VAL zero :Number)]\n\
+             LET base = 1\n\
+             MODULE m = ((LET zero = base) (LET one = 1))\n",
+        );
+        for at in 0..n {
+            source += &format!("LET v{at} = (m :| Plain)\n");
+        }
+        source
+    };
+    let slices = |n: usize| load_counts(&program(n)).capture_slices;
+    assert_eq!(slices(8), slices(16), "capture slices laid");
+}

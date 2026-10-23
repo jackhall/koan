@@ -22,8 +22,10 @@
 //! callee whose strongly connected component has closed and is trivial
 //! ([recursion](../../build/README.md#recursion)).
 //!
-//! Trees on the chain are memoized per shape and site; a binder already being read reads as a leaf,
-//! so no tree is built through itself.
+//! Trees on the chain are memoized per shape and site, and each binder's tree on the chain once,
+//! except where a cycle cut on an outer binder, a fallback the walk's progress could still sharpen,
+//! or a leaf keyed on the read site shaped it. A binder already being read reads as a leaf, so no
+//! tree is built through itself.
 
 use crate::elaborate::signature_member;
 use crate::memory::{BumpBackedMap, BumpVec, bump_table, collect, resident};
@@ -52,6 +54,23 @@ pub(super) enum Scope<'o, 'graph> {
         shape: &'graph BodyShape<'graph>,
         captures: &'o [(u32, Tree<'o>)],
     },
+}
+
+/// What shaped the binder tree being built besides the program's text: the lowest index on the
+/// pass's `reading` stack a cycle cut reached, and whether a fallback the walk's progress could
+/// sharpen stands in it. A tree is memoized only where neither reaches outside its own build.
+#[derive(Clone, Copy)]
+pub(super) struct Shaped {
+    cut: usize,
+    provisional: bool,
+}
+
+impl Shaped {
+    /// A build no cut or fallback shaped.
+    pub(super) const NONE: Shaped = Shaped {
+        cut: usize::MAX,
+        provisional: false,
+    };
 }
 
 /// The value slot `shape`'s last statement binds, where it binds one: a binding statement's value
@@ -293,20 +312,44 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     }
 
     /// The tree of what the binder at `slot` of `scope`'s shape holds, read at the part at `site`.
+    /// On the chain it is built once, except where a cycle cut on an outer binder, a fallback the
+    /// walk's progress could sharpen, or a leaf keyed on the read site shaped it ([`Shaped`]).
     pub(super) fn slot_tree(
         &mut self,
         scope: Scope<'o, 'graph>,
         slot: Slot,
         site: Site,
     ) -> Read<'o, Tree<'o>> {
-        let shape = self.scope_shape(scope);
-        let key = (std::ptr::from_ref(shape).addr(), slot);
-        if self.reading.contains(&key) {
+        let key = (address(self.scope_shape(scope)), slot);
+        let chain = matches!(scope, Scope::Chain(_));
+        if chain && let Some((tree, tag)) = self.binders.get(&key).copied() {
+            self.gather(tag);
+            return Ok(tree);
+        }
+        if let Some(at) = self.reading.iter().position(|reading| *reading == key) {
+            self.shaped.cut = self.shaped.cut.min(at);
             return self.leaf_on(scope, slot);
         }
+        let depth = self.reading.len();
         self.reading.push(key);
+        let outer = std::mem::replace(&mut self.shaped, Shaped::NONE);
         let tree = self.binder_tree(scope, slot, site);
+        let shaped = self.shaped;
+        self.shaped = Shaped {
+            cut: outer.cut.min(shaped.cut),
+            provisional: outer.provisional || shaped.provisional,
+        };
         self.reading.pop();
+        // A cut on this binder itself reads alike wherever the binder is read from.
+        if chain
+            && let Ok(tree) = tree
+            && !shaped.provisional
+            && shaped.cut >= depth
+            && tree.print() != Print::Unnamed
+        {
+            let tag = self.innermost();
+            self.binders.insert(key, (tree, tag));
+        }
         tree
     }
 
@@ -333,14 +376,15 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 Static::Closed(handle) if shape.declarations(slot).is_some() => {
                     Ok(named_type(self.types, handle))
                 }
-                _ => self.leaf_on(scope, slot),
+                Static::Closed(_) => self.leaf_on(scope, slot),
+                _ => self.provisional_leaf(scope, slot),
             };
         }
         if let Some(body) = shape.births(slot) {
             if body.kind() == ShapeKind::Module {
                 // A body not yet typed has not laid its type captures down.
                 if !self.done(body) {
-                    return self.leaf_on(scope, slot);
+                    return self.provisional_leaf(scope, slot);
                 }
                 let captures = self.captures_of(scope, body, site)?;
                 return Ok(Tree::body(body, captures));
@@ -360,7 +404,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 .expect("a binder is a member of its component");
             return match self.knot(scope, &bodies, index as u32, site)? {
                 Some(knot) => Ok(knot),
-                None => self.leaf_on(scope, slot),
+                None => self.provisional_leaf(scope, slot),
             };
         }
         if shape.position_of(slot) == Position::PARAMETER {
@@ -375,10 +419,17 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         match shape.annotation(slot) {
             Some(annotation) => match self.declared(level, annotation) {
                 Some(declared) => self.retyped_tree(tree, declared, site),
-                None => self.leaf_on(scope, slot),
+                None => self.provisional_leaf(scope, slot),
             },
             None => Ok(tree),
         }
+    }
+
+    /// A [leaf](Self::leaf_on) standing for a binder's tree the walk's progress could sharpen: the
+    /// binder's tree is then not memoized.
+    fn provisional_leaf(&mut self, scope: Scope<'o, 'graph>, slot: Slot) -> Read<'o, Tree<'o>> {
+        self.shaped.provisional = true;
+        self.leaf_on(scope, slot)
     }
 
     /// The tree an expression the load cannot see reads as: a leaf on the `LET` binder `named`

@@ -222,6 +222,8 @@ pub(super) fn walk<'graph: 'o, 'tier: 'o, 'o, S: Store<'o>>(
         unnarrowed: unnarrowed_now(),
         trees: bump_table(scratch),
         reading: BumpVec::new_in(scratch),
+        binders: bump_table(scratch),
+        shaped: trees::Shaped::NONE,
         views: bump_table(scratch),
         view_trees: bump_table(scratch),
         steps: bump_table(scratch),
@@ -533,6 +535,10 @@ struct Pass<'p, 'o, 'x, 'graph, 'tier, 'pair, 'reg, S: Store<'o>> {
     /// Each binder whose tree is being read, by its shape's address: a binder read through itself
     /// reads as a leaf.
     reading: BumpVec<'p, (usize, Slot)>,
+    /// Each binder's tree on the chain, by its shape's address and slot: built once per binding.
+    binders: BumpBackedMap<'p, (usize, Slot), (Tree<'o>, Tag)>,
+    /// What shaped the binder tree being built besides the program's text.
+    shaped: trees::Shaped,
     /// What each view over a closed tree binds, by its print: a chain of views reads each once.
     views: BumpBackedMap<'p, Print, (Option<ViewTypes<'o>>, Tag)>,
     /// Each opaque view's tree the walk built, by its application and its source's print, beside
