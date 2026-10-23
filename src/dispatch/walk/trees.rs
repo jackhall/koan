@@ -208,9 +208,12 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         }
         let tree = match self.tree_read(scope, form, written, named)? {
             Built::Settled(tree) => tree,
-            // The binder tree it stands in is then not memoized.
+            // Through a body's tree, the binder tree it stands in is then not memoized; on the
+            // chain, `trees` freezes it per site already.
             Built::Provisional(tree) => {
-                self.shaped.provisional = true;
+                if let Scope::Body { .. } = scope {
+                    self.shaped.provisional = true;
+                }
                 tree
             }
         };
