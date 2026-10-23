@@ -45,31 +45,39 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         let Some(at) = self.open.iter().position(|held| *held == tag) else {
             return;
         };
-        let scopes = self.scopes.replace(BumpVec::new_in(self.scratch));
-        let mut gathered = BumpVec::with_capacity_in(scopes[at].len(), self.scratch);
-        gathered.extend_from_slice(&scopes[at]);
+        let mut scopes = self.scopes.replace(BumpVec::new_in(self.scratch));
+        let innermost = scopes.len() - 1;
+        debug_assert!(at < innermost, "the innermost gathers nothing of itself");
+        let (outer, inner) = scopes.split_at_mut(innermost);
+        inner[0].extend(
+            outer[at]
+                .iter()
+                .copied()
+                .filter(|unknown| self.gathers(*unknown)),
+        );
         self.scopes.set(scopes);
-        self.note(&gathered);
     }
 
-    /// Add `unknowns` to the innermost gathering, each of a shape on the chain the binding leaves
-    /// unbound.
+    /// Whether `unknown` is gathered: of a shape on the chain, and left unbound by the binding.
+    fn gathers(&self, unknown: Unknown) -> bool {
+        (self.chain.iter()).any(|level| level.shape.segment() == unknown.segment)
+            && self.store.binding(unknown).is_none()
+    }
+
+    /// Add `unknowns` to the innermost gathering, unsorted: its frontier sorts and dedups it once,
+    /// at `end`.
     pub(super) fn note(&self, unknowns: &[Unknown]) {
         if unknowns.is_empty() {
             return;
         }
-        let on_chain =
-            |segment: Segment| (self.chain.iter()).any(|level| level.shape.segment() == segment);
         let mut scopes = self.scopes.replace(BumpVec::new_in(self.scratch));
         if let Some(open) = scopes.last_mut() {
-            for unknown in unknowns {
-                if on_chain(unknown.segment)
-                    && self.store.binding(*unknown).is_none()
-                    && let Err(at) = open.binary_search(unknown)
-                {
-                    open.insert(at, *unknown);
-                }
-            }
+            open.extend(
+                unknowns
+                    .iter()
+                    .copied()
+                    .filter(|unknown| self.gathers(*unknown)),
+            );
         }
         self.scopes.set(scopes);
     }
