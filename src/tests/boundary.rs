@@ -172,3 +172,123 @@ pub(crate) fn collect_sources(directory: &Path, out: &mut Vec<PathBuf>) {
         }
     }
 }
+
+/// Every place `code`, a pass's rule file, asks which half of its store it runs over: a writer
+/// named, or the pass's resumption or its type channel's settlement read — what the store's read
+/// half alone reads. A rule lays
+/// in the walk's scratch and hands what it fixes to the store, which knows.
+pub(crate) fn mode_branches(code: &str) -> Vec<String> {
+    let lines: Vec<&str> = code.lines().collect();
+    let mut found = Vec::new();
+    let mut at = 0;
+    for token in code.split(|ch: char| !(ch.is_alphanumeric() || ch == '_')) {
+        let start = code[at..].find(token).map_or(at, |offset| at + offset);
+        at = start + token.len();
+        let read = ["over", "resume", "channel"].contains(&token)
+            && (code[..start].ends_with("self.") || code[..start].ends_with("pass."));
+        if read || ["writer", "Writer"].contains(&token) {
+            let number = code[..start].matches('\n').count();
+            found.push(format!("{}: {token}: {}", number + 1, lines[number].trim()));
+        }
+    }
+    found
+}
+
+/// Each place `code` reaches a fact past its pass's store, as `line: text`: a call of one of
+/// `accessors` on any receiver but `self` — the store's own methods share their names — and a read
+/// of one of `fields` through an index into `chain` or a level named `at`, `popped` or `inner`.
+pub(crate) fn store_bypasses(code: &str, accessors: &[&str], fields: &[&str]) -> Vec<String> {
+    let mut found = Vec::new();
+    let lines: Vec<&str> = code.lines().collect();
+    let line_of = |at: usize| code[..at].matches('\n').count();
+    let mut flag = |at: usize, what: &str| {
+        let number = line_of(at);
+        found.push(format!("{}: {what}: {}", number + 1, lines[number].trim()));
+    };
+    for (at, accessor) in calls(code, accessors) {
+        if receiver(&code[..at]) != "self" {
+            flag(at, accessor);
+        }
+    }
+    for field in fields {
+        let read = format!(".{field}");
+        for (at, _) in code.match_indices(&read) {
+            let after = code[at + read.len()..].chars().next();
+            if after.is_some_and(|ch| ch.is_alphanumeric() || ch == '_' || ch == '(') {
+                continue;
+            }
+            let before = &code[..at];
+            let indexed = before.ends_with(']')
+                && before
+                    .rfind('[')
+                    .is_some_and(|open| before[..open].ends_with("chain"));
+            let named = ["at", "popped", "inner"].iter().any(|name| {
+                before.ends_with(name)
+                    && !before[..before.len() - name.len()]
+                        .ends_with(|ch: char| ch.is_alphanumeric() || ch == '_')
+            });
+            if indexed || named {
+                flag(at, field);
+            }
+        }
+    }
+    found
+}
+
+/// Each call in `code` of a method in `accessors`, beside where its `.` sits.
+fn calls<'a>(code: &str, accessors: &[&'a str]) -> Vec<(usize, &'a str)> {
+    let mut found = Vec::new();
+    for accessor in accessors {
+        let call = format!(".{accessor}(");
+        found.extend(code.match_indices(&call).map(|(at, _)| (at, *accessor)));
+    }
+    found.sort_unstable();
+    found
+}
+
+/// The receiver a method call whose `.` ends `before` is made on: the identifier before the `.`,
+/// across a line break a method chain is wrapped at, or — after a call or a parenthesized
+/// receiver — the receiver of what the parentheses close, with `()` appended for a call.
+fn receiver(before: &str) -> String {
+    let before = before.trim_end();
+    let Some(inner) = before.strip_suffix(')') else {
+        let start = before.trim_end_matches(|ch: char| ch.is_alphanumeric() || ch == '_');
+        return before[start.len()..].to_string();
+    };
+    let mut depth = 1;
+    let open = inner
+        .char_indices()
+        .rev()
+        .find(|(_, ch)| {
+            depth += match ch {
+                ')' => 1,
+                '(' => -1,
+                _ => 0,
+            };
+            depth == 0
+        })
+        .map_or(0, |(open, _)| open);
+    let head = &inner[..open];
+    let name = head.trim_end_matches(|ch: char| ch.is_alphanumeric() || ch == '_');
+    if name.len() == head.len() {
+        receiver(&inner[open + 1..])
+    } else {
+        format!("{}()", &head[name.len()..])
+    }
+}
+
+/// Every call in `code` of a fact accessor in `accessors` made anywhere but on the load's facts —
+/// a receiver named `load` or `facts`, or a call of either — each as `line: accessor: text`.
+pub(crate) fn fact_reads(code: &str, accessors: &[&str]) -> Vec<String> {
+    let lines: Vec<&str> = code.lines().collect();
+    calls(code, accessors)
+        .into_iter()
+        .filter(|(at, _)| {
+            !["load", "facts", "load()", "facts()", "shapes()"].contains(&&*receiver(&code[..*at]))
+        })
+        .map(|(at, accessor)| {
+            let number = code[..at].matches('\n').count();
+            format!("{}: {accessor}: {}", number + 1, lines[number].trim())
+        })
+        .collect()
+}

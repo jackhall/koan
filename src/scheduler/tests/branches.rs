@@ -16,7 +16,6 @@ use crate::scheduler::tests::bundle::{AnyStep, Native, TestGraph, TestStep};
 use crate::scheduler::tests::native::{fresh, record, recorded, reset, shares, work};
 use crate::scheduler::{Action, Placement, Scheduler, Step, Use, Work};
 use crate::type_lattice::KType;
-use crate::type_lattice::Root;
 
 thread_local! {
     /// How many types the spawner mints before it spawns.
@@ -72,14 +71,16 @@ fn mint_list(step: &Step<'_, '_, '_, '_, '_, '_, Native>) {
 fn reach_steps(step: &Step<'_, '_, '_, '_, '_, '_, Native>) -> usize {
     step.header()
         .get()
-        .map_or(0, |header| header.branch().reach_steps())
+        .and_then(|header| header.branch())
+        .map_or(0, |branch| branch.reach_steps())
 }
 
 /// The length of `step`'s write home's branch, or 0 where it has none.
 fn branch_length(step: &Step<'_, '_, '_, '_, '_, '_, Native>) -> usize {
     step.header()
         .get()
-        .map_or(0, |header| header.branch().len())
+        .and_then(|header| header.branch())
+        .map_or(0, |branch| branch.len())
 }
 
 /// Run `start` as a root work over a slab of `cells`, starting from `Number`, and hand back what
@@ -88,7 +89,8 @@ fn run(cells: u32, start: AnyStep) -> Vec<String> {
     reset();
     HANDED.with(|handed| handed.set(KType::NUMBER));
     let type_region = Bump::new();
-    let mut graph: TestGraph<'_> = TestGraph::new(cells, Root::seeded(&type_region));
+    let mut graph: TestGraph<'_> =
+        TestGraph::new(cells, crate::values::tests::seeded_tiers(&type_region));
     let root = graph.root().expect("a fresh slab admits a root");
     Scheduler::over(&mut graph)
         .run(work(start, KValue::Null), root, Placement::Fresh)
@@ -425,7 +427,7 @@ fn shares_minting<'graph>(
     step: Step<'_, 'graph, '_, '_, '_, '_, Native>,
 ) -> Action<'graph, Native> {
     let before = branch_length(&step);
-    let chain = step.shares_types();
+    let chain = step.caching_types();
     let _ = chain.list(chain.list(chain.list(KType::NUMBER)));
     record(format!(
         "{before} {} {}",
@@ -452,86 +454,39 @@ fn a_shares_chain_lays_in_the_hosts_scratch_and_leaves_its_region() {
     assert!(scratch > 0, "the lists were laid in the scratch branch");
 }
 
-/// A `Fresh` child holding its scratch and reading through its reading chain: a type in its region
-/// and one in its lender's scratch both resolve, and a list of each lays in its own scratch while
-/// neither the region nor the lent branch grows.
+/// A `Fresh` child holding its scratch and running on its caching chain: it borrows no
+/// specialization, so it has no agent chain, and a type in its region and one in its own scratch
+/// both resolve, a list of each laid in its scratch while the region does not grow.
 fn reading<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
     assert!(step.hold_scratch(), "a tree cell holds its own scratch");
+    assert!(
+        step.agent_types().is_none(),
+        "a frame with no specialization has no agent chain"
+    );
     let in_region = step.types().list(step.types().list(KType::NUMBER));
-    let warm = step.warm_types().expect("a tree cell has a lender");
-    let in_lent = warm.list(warm.list(KType::BOOL));
-    let (region, lent) = (branch_length(&step), warm.own_len());
-    let chain = step.reading_types().expect("a tree cell has a lender");
+    let in_scratch = step.scratch_types().list(KType::BOOL);
+    let region = branch_length(&step);
+    let chain = step.caching_types();
+    let before = chain.own_len();
     let _ = chain.list(in_region);
-    let _ = chain.list(in_lent);
+    let _ = chain.list(in_scratch);
     assert_eq!(
         branch_length(&step),
         region,
         "the region branch is untouched"
     );
-    assert_eq!(warm.own_len(), lent, "the lent branch is untouched");
-    record(chain.own_len().to_string());
+    record((chain.own_len() - before).to_string());
     step.finish_fresh(|_, _, _| Active::new(KValue::Null))
 }
 
 #[test]
-fn a_held_fresh_child_reads_its_region_and_its_lenders_scratch() {
+fn a_held_fresh_child_reads_its_region_and_its_own_scratch() {
     fn start<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
         asking(step, reading, true)
     }
     let laid: usize = run(2, start)[0].parse().unwrap();
-    // Both lists, the region type cached through the link, and the link's own tier node.
-    assert!(
-        laid >= 2,
-        "the reading chain laid {laid} nodes in its own scratch"
+    assert_eq!(
+        laid, 2,
+        "the caching chain laid both lists in its own scratch"
     );
-}
-
-/// A held `Fresh` child whose scratch branch another chain laid, unlinked, before its reading
-/// chain: the reading chain links it late, and a type in the region resolves through it beside the
-/// one the scratch already held.
-fn reading_after_scratch<'graph>(
-    mut step: Step<'_, 'graph, '_, '_, '_, '_, Native>,
-) -> Action<'graph, Native> {
-    assert!(step.hold_scratch(), "a tree cell holds its own scratch");
-    let in_scratch = step.scratch_types().list(KType::BOOL);
-    let in_region = step.types().list(step.types().list(KType::NUMBER));
-    let chain = step.reading_types().expect("a tree cell has a lender");
-    let _ = chain.list(in_region);
-    let _ = chain.list(in_scratch);
-    let again = step
-        .reading_types()
-        .expect("a second reading chain finds the link");
-    let _ = again.list(in_region);
-    record(chain.own_len().to_string());
-    step.finish_fresh(|_, _, _| Active::new(KValue::Null))
-}
-
-#[test]
-fn a_reading_chain_links_a_scratch_branch_laid_before_it() {
-    fn start<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
-        asking(step, reading_after_scratch, true)
-    }
-    let laid: usize = run(2, start)[0].parse().unwrap();
-    assert!(laid >= 3, "the scratch branch holds {laid} nodes");
-}
-
-/// A `Fresh` child interning through the warm chain alone over a type in its region: the lent
-/// branch is laid through the root and itself, so the region's child misses.
-fn warm_over_region<'graph>(
-    step: Step<'_, 'graph, '_, '_, '_, '_, Native>,
-) -> Action<'graph, Native> {
-    let in_region = step.types().list(step.types().list(KType::NUMBER));
-    let warm = step.warm_types().expect("a tree cell has a lender");
-    let _ = warm.list(in_region);
-    step.finish_fresh(|_, _, _| Active::new(KValue::Null))
-}
-
-#[test]
-#[should_panic(expected = "names no interned node")]
-fn a_lent_branch_lays_through_the_root_and_itself_alone() {
-    fn start<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
-        asking(step, warm_over_region, true)
-    }
-    run(2, start);
 }

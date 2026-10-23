@@ -18,8 +18,9 @@
 //! - [`select`] admits and ranks a call's candidates.
 //! - [`rules`] gives each native's type rule: what its call's arguments need and what it returns.
 //! - [`check`] refuses a registration that overlaps a builtin overload.
-//! - [`statics`] types every value expression and binder where the program loads, and narrows and
-//!   selects each keyworded use's candidates by those types.
+//! - [`walk`] is the load's one walk: every fact the load decides, unit by unit, into a store. It
+//!   types every value expression and binder, and narrows and selects each keyworded use's
+//!   candidates by those types.
 //! - [`errors`] renders the messages of the error values dispatch raises.
 //!
 //! This file holds the vocabulary they share: what one evaluation is born over, and what one of
@@ -38,7 +39,7 @@ mod errors;
 mod evaluate;
 mod rules;
 mod select;
-mod statics;
+mod walk;
 
 #[cfg(test)]
 mod tests;
@@ -48,7 +49,7 @@ use crate::memory::{BumpAllocator, Writer};
 use crate::parse::{ExpressionPart, KExpression};
 use crate::program::{Contract, KBirth, KBundle, Language, Program, Within};
 use crate::scheduler::NativeStep;
-use crate::scope::{BodyShape, ShapeError};
+use crate::scope::{ShapeError, Shapes, Store};
 use crate::symbols::{BinderSymbol, SymbolInterner};
 use crate::type_lattice::KType;
 use crate::values::Chain;
@@ -61,7 +62,7 @@ impl Language for Koan {
     fn builtins<'graph>(
         writer: Writer<'graph, '_>,
         symbols: &'graph SymbolInterner,
-        types: &Chain<'graph, 'graph, 'graph, '_, '_>,
+        types: &Chain<'graph, 'graph, 'graph, '_>,
         scratch: BumpAllocator<'_>,
     ) -> &'graph KBuiltins<'graph, 'graph> {
         builtins::table(writer, symbols, types, scratch)
@@ -71,15 +72,14 @@ impl Language for Koan {
         evaluate::evaluate
     }
 
-    fn check<'graph>(
-        shape: &'graph BodyShape<'graph>,
+    fn facts<'graph: 'o, 'tier: 'o, 'o, S: Store<'o>>(
+        shapes: &'graph Shapes<'graph>,
         builtins: &'graph KBuiltins<'graph, 'graph>,
-        types: &Chain<'graph, 'graph, 'graph, '_, '_>,
-        writer: Writer<'graph, 'graph>,
+        store: &S,
+        types: &Chain<'tier, '_, '_, '_>,
         scratch: BumpAllocator<'_>,
-    ) -> Result<(), ShapeError<'graph>> {
-        check::overlaps(shape, builtins, types, scratch)?;
-        statics::statics(shape, builtins, types, writer, scratch)
+    ) -> Result<(), ShapeError<'o>> {
+        walk::walk(shapes, builtins, store, types, scratch)
     }
 }
 
@@ -93,7 +93,7 @@ struct Evaluation<'graph, 'here, 'tier, 'reg, 'door> {
     contract: Option<Contract>,
     within: Within,
     birth: KBirth<'graph, 'here>,
-    types: Chain<'graph, 'tier, 'here, 'reg, 'door>,
+    types: Chain<'tier, 'here, 'reg, 'door>,
 }
 
 /// What one of a call's operands came to: a value, or — an `ATTR` label written bare — the name

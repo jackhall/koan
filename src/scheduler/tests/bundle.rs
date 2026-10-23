@@ -10,8 +10,9 @@
 use crate::knot::{KValue, KValueFamily};
 use crate::memory::{CrossedOperand, Header, Writer, reattachable};
 use crate::scheduler::{Action, Born, Graph, NativeStep, Step, StepBundle};
-use crate::type_lattice::{Halves, Root};
-use crate::values::{Half, TypeHeader, Types};
+use crate::scope::RegionHeader;
+use crate::type_lattice::Halves;
+use crate::values::Half;
 
 /// The bundle the scheduler's tests run over.
 pub struct Native;
@@ -33,20 +34,25 @@ impl<'graph> StepBundle<'graph> for Native {
     /// the value crossing.
     fn cross<'cell>(
         writer: Writer<'cell, '_>,
-        header: Header<'graph, 'cell, '_, TypeHeader>,
-        view: &CrossedOperand<'graph, 'cell, '_, KValueFamily, TypeHeader>,
+        header: Header<'graph, 'cell, '_, RegionHeader>,
+        view: &CrossedOperand<'graph, 'cell, '_, KValueFamily, RegionHeader>,
         born: Born,
-        type_root: &'graph Root<'graph>,
+        tiers: crate::values::TypeTiers<'graph>,
     ) -> KValue<'graph, 'cell>
     where
         'graph: 'cell,
     {
-        let types = Types::new(type_root, Halves::alone(Half::of(writer, header)));
+        let types = tiers.chain(Halves::alone(Half::of(writer, header)));
         match view {
             CrossedOperand::Pinned { view, home, .. } => {
-                home.read(|header, _| match born {
-                    Born::Child => types.link(header.into_value().branch()),
-                    Born::Hop | Born::Left => types.link_or_merge(header.into_value().branch()),
+                home.read(|header, _| {
+                    let Some(branch) = header.into_value().branch() else {
+                        return;
+                    };
+                    match born {
+                        Born::Child => types.link(branch),
+                        Born::Hop | Born::Left => types.link_or_merge(branch),
+                    }
                 });
                 #[cfg(debug_assertions)]
                 crate::values::check_pinned_habitat::<crate::knot::KnottedFamily>(&types, view);

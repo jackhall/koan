@@ -337,19 +337,25 @@ own arrives under a header at that type, which the copy adopts into the
 destination first. The crossing doors therefore take the
 destination's type chain, which the copy reads its types in, and the
 scheduler's step doors that cross a value build that chain inside the build,
-over the graph's frozen type root and the build's writer and header.
+over the graph's type tiers and the build's writer and header.
 
 **A crossing carries types with the value.** A type the run builds lives in the
 branch of the habitat its value is laid down in
 ([storage](../../lattice/src/types/identity.md#storage-a-root-and-its-branches)).
-The branch is kept in the habitat half's header, [`TypeHeader`](habitat.rs),
-whose form is a `HalfHeader`: the branch, laid with the header; for a build
-cell's region, the table of its specializations, a fixed run of entries laid
-with the cell, each a key, a handle and the stamp of its child's last birth,
-rekeyed in place when a miss reuses it; and for a specialization's region,
-its own handle and its parent's, which the scheduler reads to name the build
-cell a frame runs under and to stamp a hop's entry
-([specialization.rs](specialization.rs), [the build module](../build/README.md#references-between-the-trees)).
+The branch is kept in the habitat half's header, whose record is `scope`'s
+([`RegionHeader`](../scope/header.rs)): beside the branch it holds a build
+cell's table of specializations, a fixed run of entries laid with the cell,
+each a key, a handle and the stamp of its child's last birth, rekeyed in place
+when a miss reuses it ([specialization.rs](specialization.rs)); and a
+specialization's home, its own handle and its parent's, which the scheduler
+reads to name the build cell a frame runs under and to stamp a hop's entry,
+beside the facts its resumption settled
+([the build module](../build/README.md#references-between-the-trees)).
+`values` cannot name that record, so a [`Half`](habitat.rs) holds its header
+door projected to the branch's slot ([`BranchSlot`](habitat.rs)): any header
+family that projects to it serves, and `values` reads and lays the header
+through that slot alone. Projecting lays nothing, so a half that never interns
+lays no header; its first intern lays the record and the branch.
 A `BuildRef`, the opaque token naming a build cell above the scheduler, lives
 there too, opened only by `values` and the scheduler. A
 [`Chain`](habitat.rs) carries a pairing brand naming the writer it serves
@@ -382,7 +388,7 @@ body ran on. A part whose [memo bits](#weight) meet the contract is not
 entered and hands over nothing, its own memo included, and the exit marks every
 value it did enter settled after, so a value handed on through a loop is walked
 once. An invariant site adopts its operand and the view built over it into the
-lent branch through the same door, which there still hands over a meeting
+warm tier — the agent tier, under a specialization — through the same door, which there still hands over a meeting
 part's own memo and marks nothing; a header, whose bits are its member's, hands
 over its own memo at both. The walk reads the top value's bits before it lays
 anything and lays its stack, knot set and settled list in its caller's step
@@ -701,9 +707,10 @@ a name the rest of the stack retired.
 
 The unit suite ([tests.rs](tests.rs)) runs every door, crossing and relation
 over a fixture that owns program storage, a root builder the test's load-time
-work interns into, frozen into the program's one root when the first cell's
-chain is built, and a cell graph over that storage to run steps in; each
-cell's chain reads the root, then the cell's own branch, so a type a value door
+work interns into, frozen into the program's one load when the first cell's
+chain is built beside an empty agent tier, and a cell graph over that storage
+to run steps in; each cell's chain reads the load and the agent tier, then the
+cell's own branch, so a type a value door
 builds in a cell lands in that cell's branch. A test finishes its load-time
 interning before its first cell, as a program's load ends before its run
 starts. Circular values are exercised

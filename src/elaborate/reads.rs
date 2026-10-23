@@ -56,7 +56,7 @@ pub trait Reads<'graph> {
         _site: Site,
         _chain: &[ValueSymbol],
         _name: TypeSymbol,
-        _types: &Chain<'_, '_, '_, '_, '_>,
+        _types: &Chain<'_, '_, '_, '_>,
     ) -> Option<(TypeAt, KType)> {
         Some((TypeAt::Unknown, KType::EMPTY_SIGNATURE))
     }
@@ -82,7 +82,7 @@ pub trait Reads<'graph> {
 /// type, the last names no type member, or a member names a head parameter its application leaves
 /// unpinned.
 fn member_through(
-    types: &Chain<'_, '_, '_, '_, '_>,
+    types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
     signature: KType,
     chain: &[ValueSymbol],
@@ -119,17 +119,23 @@ impl<'graph, XF: KnottedFamily<'graph>> Reads<'graph> for ActivationView<'graph,
         site: Site,
         chain: &[ValueSymbol],
         name: TypeSymbol,
-        types: &Chain<'_, '_, '_, '_, '_>,
+        types: &Chain<'_, '_, '_, '_>,
     ) -> Option<(TypeAt, KType)> {
         let held = self.read(at);
         held.as_module()?;
         let signature = held.concrete_ktype();
-        // The load records every path its type expressions spell; one it read through a declared
-        // application binds as the run's path variable does.
-        if let Some(read) = self.shape().path_read(site)
-            && read.entry.through.is_some()
+        // The shape numbers every path its type expressions spell; one the load read through a
+        // declared application binds as the run's path variable does.
+        let load = self.load();
+        if let Some((root, level)) = load.path_read(self.shape(), site)
+            && let root = load.shapes().shape_at(root)
+            && let Some((entry, resolution)) = load.path(root, level)
+            && entry.through.is_some()
         {
-            let bound = bound_path(self, types, at, read.entry);
+            let bound = match resolution.closed() {
+                Some(closed) => Some(closed),
+                None => bound_path(self, types, at, entry),
+            };
             return Some((bound.map_or(TypeAt::NotAType, TypeAt::Type), signature));
         }
         let scratch = Bump::new();
@@ -148,8 +154,10 @@ impl<'graph, XF: KnottedFamily<'graph>> Reads<'graph> for ActivationView<'graph,
         _chain: &[ValueSymbol],
         _name: TypeSymbol,
     ) -> TypeAt {
-        let read = self.shape().path_read(site);
-        match read.and_then(|read| read.entry.closed()) {
+        let load = self.load();
+        let read = load.path_read(self.shape(), site);
+        let path = read.and_then(|(root, level)| load.path(load.shapes().shape_at(root), level));
+        match path.and_then(|(_, resolution)| resolution.closed()) {
             Some(closed) => TypeAt::Type(closed),
             None => TypeAt::Unknown,
         }
@@ -171,7 +179,7 @@ impl<'graph, XF: KnottedFamily<'graph>> Reads<'graph> for Activation<'graph, '_,
         site: Site,
         chain: &[ValueSymbol],
         name: TypeSymbol,
-        types: &Chain<'_, '_, '_, '_, '_>,
+        types: &Chain<'_, '_, '_, '_>,
     ) -> Option<(TypeAt, KType)> {
         ActivationView::member_type(self, at, site, chain, name, types)
     }
@@ -192,7 +200,7 @@ impl<'graph, XF: KnottedFamily<'graph>> Reads<'graph> for Activation<'graph, '_,
 pub fn denoted<'graph, XF: KnottedFamily<'graph>>(
     part: &'graph ExpressionPart<'graph>,
     view: &ActivationView<'graph, '_, XF>,
-    types: &Chain<'_, '_, '_, '_, '_>,
+    types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
 ) -> Result<KType, Elaboration> {
     // Where it runs, every name a type reads is bound to a concrete type.
@@ -202,12 +210,14 @@ pub fn denoted<'graph, XF: KnottedFamily<'graph>>(
             .expect("a type read where it runs holds no variable")
     };
     let elaborated = || type_expression(part, view, types, scratch).map(concrete);
-    let loaded = view.shape().typed_expression(Site::of(part)).solved(
-        view,
-        scratch,
-        &|at, entry| bound_path(view, types, at, entry),
-        |value, bindings| Some(concrete(substitute_levels(types, scratch, value, bindings))),
-    );
+    let loaded = (view.load())
+        .typed_expression(view.shape(), Site::of(part))
+        .solved(
+            view,
+            scratch,
+            &|at, entry| bound_path(view, types, at, entry),
+            |value, bindings| Some(concrete(substitute_levels(types, scratch, value, bindings))),
+        );
     debug_assert!(
         loaded.is_none() || loaded == elaborated().ok(),
         "the load-time type agrees with elaborating where it runs"

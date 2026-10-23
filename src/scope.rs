@@ -30,36 +30,51 @@ mod activation;
 mod builtins;
 mod channels;
 mod closure;
+mod facts;
 mod groups;
+mod header;
 mod keyed;
+mod records;
 mod shape;
+mod shapes;
 mod signature;
+mod spelling;
 mod tree;
 mod typed;
+mod writes;
 
 #[cfg(test)]
 pub(crate) mod tests;
 
 pub(crate) use shape::IMPLICIT;
 pub(crate) use signature::pair_label;
+pub(crate) use spelling::{PathSpelling, SpelledRoot, path_spelling};
 
 pub use activation::{Activation, ActivationView};
 pub use builtins::Builtins;
 pub use closure::ClosureBindings;
+pub use facts::{Address, Binding, Bound, Cut, Frontier, Store, UnitId, Unknown};
 pub use groups::{BuiltinGroup, GroupFrame, is_equal, is_equality, is_unequal};
+pub use header::{HalfHeader, RegionHeader};
 pub use keyed::{Keyed, KeyedEntry};
-pub use shape::{
-    Arm, BodyShape, BuiltinIndex, Candidate, CandidateList, CaptureSlot, CaptureSource,
-    CaptureSpec, Component, ComponentIndex, Coordinate, Listed, Mention, MentionClass, Offer,
-    Position, QuotedPart, Ranking, Registration, Segment, ShapeError, ShapeKind, Site, Slot,
-    SurfacedHead, Target, TopLevel, TypeExpression, Unit, UnitWork, ViewRefused, Which, each_part,
-    part_of, selection_refused, source_of, spelled, view_refused,
+pub use records::{
+    Body, Born, Closing, Deps, DepsGathering, Folds, LoadFacts, NamedVariable, SiteDeps, Typed,
+    UnitFacts, tree_deps,
 };
+pub use shape::{
+    Arm, BodyShape, BuiltinIndex, Candidate, CandidateList, CaptureChain, CaptureSlot,
+    CaptureSource, CaptureSpec, Component, ComponentIndex, Coordinate, Lands, Listed, Mention,
+    MentionClass, Offer, PathId, Position, QuotedPart, Ranking, Registration, Segment, ShapeError,
+    ShapeKind, Site, Slot, SpelledPath, SurfacedHead, Target, TopLevel, TypeExpression, Unit,
+    UnitHolds, UnitIndex, UnitWork, ViewRefused, Which, each_part, follow, in_body_of, part_of,
+    selection_refused, source_of, spelled, view_refused,
+};
+pub use shapes::{BindSite, Shapes};
 pub use tree::{Binder, KnotNode, Leaf, NodeCapture, Print, Tree, Unfolded, Within};
 pub use typed::{
     BodyClass, Caching, Callable, Elaboration, ElaborationDisplay, FunctionGroupMap, HandedTo,
-    Handoff, InstanceRead, Mint, Narrowing, ParameterBinding, PathEntry, PathIndex, PathRead,
-    Paths, Registered, Resolution, Resolved, Root, ShapeGroupMap, Source, Static, StaticCallable,
-    StaticRegistered, StaticSolution, StaticType, Statics, UseStatics, Variable, ViewSlots,
-    solutions,
+    Handoff, InstanceRead, Mint, Narrowing, ParameterBinding, PathEntry, Paths, Registered,
+    Resolution, Resolved, Root, ShapeGroupMap, Source, Static, StaticCallable, StaticRegistered,
+    StaticSolution, StaticType, UseStatics, Variable, ViewSlots, solutions,
 };
+pub use writes::{UnitTable, Writes};

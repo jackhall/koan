@@ -36,7 +36,8 @@ subdirectory's README carries its own slice.
 
 - [Faults and call traces](conditionals/faults.md)
 - [Matching](conditionals/matching.md)
-- [Monotone elaboration](gradual-build/monotone-elaboration.md)
+- [The build arena](gradual-build/build-arena.md)
+- [Placing a verdict without probing](gradual-build/verdict-placement.md)
 - [A container literal's element type](gradual-typing/container-literal-types.md)
 - [Dependent signatures](gradual-typing/dependent-signatures.md)
 - [Slicing and splicing](metaprogramming/slicing-and-splicing.md)

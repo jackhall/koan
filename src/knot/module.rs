@@ -53,7 +53,7 @@ pub use birth::{body_activation, tie_member};
 use std::cell::Cell;
 
 use crate::memory::{Knot, KnotPlan, Writer, collect, resident};
-use crate::scope::{BodyShape, ClosureBindings};
+use crate::scope::{Body, ClosureBindings};
 use crate::type_lattice::{ContentKey, DeclaredType, KType, Parametric};
 pub use crate::values::digest::Operator;
 use crate::values::digest::{DigestHasher, Tag, body_content, view_content};
@@ -80,7 +80,7 @@ pub struct Module<'graph, 'cell> {
 pub enum Born<'graph, 'cell> {
     View(ModuleContent),
     Body {
-        shape: &'graph BodyShape<'graph>,
+        body: &'graph Body<'graph>,
         closure: &'cell ClosureBindings<'cell, Knotted<'graph, 'cell>>,
     },
 }
@@ -90,7 +90,7 @@ pub enum Born<'graph, 'cell> {
 struct Content<'graph, 'cell> {
     known: Cell<Option<ModuleContent>>,
     body: Option<(
-        &'graph BodyShape<'graph>,
+        &'graph Body<'graph>,
         &'cell ClosureBindings<'cell, Knotted<'graph, 'cell>>,
     )>,
 }
@@ -110,11 +110,11 @@ impl<'graph, 'cell> Module<'graph, 'cell> {
         ktype: KType,
         members: &[KValue<'graph, 'cell>],
         born: Born<'graph, 'cell>,
-        types: &Chain<'_, '_, '_, '_, '_>,
+        types: &Chain<'_, '_, '_, '_>,
     ) -> Knot<'cell, Node<'graph, 'cell>> {
         let (known, body) = match born {
             Born::View(content) => (Some(content), None),
-            Born::Body { shape, closure } => (None, Some((shape, closure))),
+            Born::Body { body, closure } => (None, Some((body, closure))),
         };
         let flat = Weight::flat::<usize>()
             .plus(Weight::flat::<Node<'graph, 'cell>>())
@@ -175,7 +175,7 @@ impl<'graph, 'cell> Module<'graph, 'cell> {
     pub fn pending(
         &self,
     ) -> Option<(
-        &'graph BodyShape<'graph>,
+        &'graph Body<'graph>,
         &'cell ClosureBindings<'cell, Knotted<'graph, 'cell>>,
     )> {
         self.content
@@ -202,8 +202,8 @@ impl<'graph, 'cell> Module<'graph, 'cell> {
     where
         'cell: 'a,
     {
-        if let Some((shape, closure)) = self.pending() {
-            for (_, link) in composed(shape, closure.links()) {
+        if let Some((body, closure)) = self.pending() {
+            for (_, link) in composed(body, closure.links()) {
                 if let Link::Value(value) = link {
                     out(Seen::of(*value));
                 }
@@ -217,10 +217,10 @@ impl<'graph, 'cell> Module<'graph, 'cell> {
         if let Some(known) = self.content.known.get() {
             return known.digest();
         }
-        let (shape, closure) = self.content.body.expect("a view's content is known");
+        let (body, closure) = self.content.body.expect("a view's content is known");
         let captures =
-            composed(shape, closure.links()).map(|(index, link)| (index, link.digest_from(parts)));
-        let content = ModuleContent::body(shape.code_digest(), captures);
+            composed(body, closure.links()).map(|(index, link)| (index, link.digest_from(parts)));
+        let content = ModuleContent::body(body.shape.code_digest(), captures);
         self.fill(content);
         content.digest()
     }
@@ -234,7 +234,7 @@ impl<'graph, 'cell> Module<'graph, 'cell> {
         members: &'to [KValue<'graph, 'to>],
         closure: Option<&'to ClosureBindings<'to, Knotted<'graph, 'to>>>,
     ) -> Module<'graph, 'to> {
-        let body = (self.content.body.map(|(shape, _)| shape)).zip(closure);
+        let body = (self.content.body.map(|(body, _)| body)).zip(closure);
         Module {
             ktype: self.ktype,
             members,
@@ -318,7 +318,7 @@ impl<'graph, 'cell> Coerced<'graph, 'cell> {
         declared: DeclaredType<Parametric>,
         from: KType,
         to: KType,
-        types: &Chain<'_, '_, '_, '_, '_>,
+        types: &Chain<'_, '_, '_, '_>,
     ) -> Knot<'cell, Node<'graph, 'cell>> {
         debug_assert!(
             underlying.function().is_some() || underlying.coerced().is_some(),

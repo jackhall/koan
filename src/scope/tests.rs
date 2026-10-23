@@ -6,18 +6,21 @@ mod boundary;
 mod code;
 mod dispatch;
 mod examples;
+mod facts;
 mod groups;
+mod header;
 pub(crate) mod plan;
 mod properties;
 mod quoted_uses;
 mod quotes;
 mod rewrite;
+mod shapes;
 mod typed;
 mod units;
 
 use crate::memory::{
     Bump, BumpAllocator, CellGraph, Edge, KnotPlan, ProgramBrand, ReleaseAbsorption, Verdict,
-    Writer, covariant, program_storage, reattachable,
+    Writer, covariant, program_storage, reattachable, resident,
 };
 use crate::parse::{KExpression, parse};
 use crate::source::{FileId, SourceRef, Span};
@@ -30,7 +33,7 @@ use crate::values::{
     DeepCopy, Knotted, KnottedFamily, MemoBits, Resolved, TypeValue, Value, ValueFamily, Weight,
 };
 
-use super::{Builtins, ShapeError};
+use super::{Builtins, LoadFacts, ShapeError, Shapes};
 
 /// A continuation family for a graph whose cells only store.
 struct Step;
@@ -60,7 +63,7 @@ impl Knotted for Probe {
     /// A probe holds no value: every probe is a member of one empty knot, told apart by its index.
     fn held<'a>(
         &self,
-        _: &Chain<'_, '_, '_, '_, '_>,
+        _: &Chain<'_, '_, '_, '_>,
         _: BumpAllocator<'_>,
         _: &mut dyn FnMut(Seen<'a, Self>),
     ) where
@@ -70,7 +73,7 @@ impl Knotted for Probe {
 
     fn digest_held(
         &self,
-        _: &Chain<'_, '_, '_, '_, '_>,
+        _: &Chain<'_, '_, '_, '_>,
         _: BumpAllocator<'_>,
         _: &mut dyn FnMut() -> ContentDigest,
     ) -> ContentDigest {
@@ -97,6 +100,7 @@ impl Knotted for Probe {
             identity: self.0 as usize,
             instance: &[],
             closure: &[],
+            composes: &[],
         }
     }
 }
@@ -141,7 +145,7 @@ covariant!(ValueFamily<ProbeFamily>);
 pub(super) struct Fixture<'f, 'graph> {
     pub program: ProgramBrand<'graph>,
     /// The load's chain, which every shape a test builds goes through.
-    pub types: &'f Types<'graph, 'graph, 'f>,
+    pub types: &'f Types<'graph, 'f>,
     pub symbols: &'f SymbolInterner,
     scratch: &'f Bump,
 }
@@ -149,6 +153,12 @@ pub(super) struct Fixture<'f, 'graph> {
 impl<'graph> Fixture<'_, 'graph> {
     pub fn scratch(&self) -> BumpAllocator<'_> {
         self.scratch
+    }
+
+    /// The facts of `shapes` before any walk, laid in program storage as a load lays them.
+    pub fn load(&self, shapes: &'graph Shapes<'graph>) -> &'graph LoadFacts<'graph> {
+        let writer = self.program.writer();
+        resident(writer, LoadFacts::unwalked(writer, shapes))
     }
 
     /// Every top-level line of `source`, parsed into program storage.
@@ -192,6 +202,41 @@ pub(super) fn with_fixture<R>(test: impl for<'f, 'graph> FnOnce(&Fixture<'f, 'gr
         types: &types,
         symbols: &symbols,
         scratch: &scratch,
+    })
+}
+
+/// The shape table of `source` over the suites' builtin table, handed to `test` beside a writer
+/// into program storage, a scratch and the load's chain: for a suite outside `scope` that needs
+/// shapes and names no parser.
+pub(crate) fn with_shapes<R>(
+    source: &str,
+    test: impl for<'graph> FnOnce(
+        &'graph Shapes<'graph>,
+        Writer<'graph, 'graph>,
+        BumpAllocator<'_>,
+        &Types<'graph, '_>,
+    ) -> R,
+) -> R {
+    with_fixture(|fixture| {
+        let lines = fixture.parse(source);
+        fixture.in_cell(|writer, _| {
+            let table: &Builtins = builtins(fixture, writer);
+            let shapes = Shapes::of_program(
+                fixture.program,
+                &lines,
+                table,
+                fixture.types,
+                fixture.symbols,
+                fixture.scratch(),
+            )
+            .unwrap_or_else(|error| panic!("`{source}` shapes: {error:?}"));
+            test(
+                shapes,
+                fixture.program.writer(),
+                fixture.scratch(),
+                fixture.types,
+            )
+        })
     })
 }
 

@@ -1,7 +1,8 @@
 # The type lattice
 
 A closed algebra over interned type nodes. The node vocabulary, the interning
-registry — a frozen root and a branch per habitat half, read through a chain —
+registry — a frozen load, an agent tier and a branch per habitat half, read
+through a chain —
 the identity recipe, the structural relations between types, and the
 unifier that solves a quantified position. Nothing else.
 
@@ -50,7 +51,7 @@ breaks without it.
 | Doc | Holds |
 |---|---|
 | [The laws](laws.md) | each law, what rests on it, what breaks without it, and what enforces it |
-| [Identity and storage](identity.md) | the content digest, typed handles, the root and its branches, records and schemas, recursive groups |
+| [Identity and storage](identity.md) | the content digest, typed handles, the frozen load, the agent tier and the branches, records and schemas, recursive groups |
 | [The node vocabulary](vocabulary.md) | every node variant, the kind order, the three families, the code family |
 | [The relations](relations.md) | the order, *fits*, `join` and `meet`, signature types, quantified binders |
 | [Solving](solving.md) | substitution, the unifier, and priority classes: admission, ranking and judging |

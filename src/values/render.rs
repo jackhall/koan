@@ -35,7 +35,7 @@ impl<'a, X: Knotted> Value<'a, X> {
     pub fn render(
         &self,
         out: &mut impl fmt::Write,
-        types: &Chain<'_, '_, '_, '_, '_>,
+        types: &Chain<'_, '_, '_, '_>,
         symbols: &SymbolInterner,
         scratch: BumpAllocator<'_>,
     ) -> fmt::Result {
@@ -80,9 +80,9 @@ struct Marks<'x, X> {
 }
 
 /// The write's state.
-struct Render<'o, 'env, 'g, 'run, 'p, 'x, 'reg, O, X> {
+struct Render<'o, 'env, 'run, 'p, 'x, 'reg, O, X> {
     out: &'o mut O,
-    types: &'env Chain<'g, 'run, 'p, 'reg, 'env>,
+    types: &'env Chain<'run, 'p, 'reg, 'env>,
     symbols: &'env SymbolInterner,
     scratch: BumpAllocator<'x>,
     marks: Marks<'x, X>,
@@ -90,7 +90,7 @@ struct Render<'o, 'env, 'g, 'run, 'p, 'x, 'reg, O, X> {
     labelled: BumpBackedMap<'x, Node<X>, usize>,
 }
 
-impl<'x, O: fmt::Write, X: Knotted> Render<'_, '_, '_, '_, '_, 'x, '_, O, X> {
+impl<'x, O: fmt::Write, X: Knotted> Render<'_, '_, '_, '_, 'x, '_, O, X> {
     fn value<'a>(&mut self, root: Seen<'a, X>) -> fmt::Result {
         let mut pieces = BumpVec::new_in(self.scratch);
         pieces.push(Piece::Value(root));

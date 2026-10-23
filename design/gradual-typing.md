@@ -66,15 +66,16 @@ at each call.
 
 ### Where the program loads
 
-Two passes run before anything else does.
+[One walk](../src/build/README.md#the-one-walk) runs before anything else
+does, unit by unit, each unit's type facts before its value facts.
 
-[The type channel](../src/elaborate/README.md#the-type-channel-at-load) types
+[Its type half](../src/elaborate/README.md#the-type-channel-at-load) types
 every written type. Each comes out **closed** (the same at every run),
 **rigid** (it names a type a run binds, held as a lexical variable), or
 **unknown** (left to the run).
 
-[The static-type pass](../src/dispatch/README.md#static-types) then gives
-every value expression a **static type**: an *interval* of types within which
+[Its value half](../src/dispatch/README.md#static-types) gives every value
+expression a **static type**: an *interval* of types within which
 whatever a run carries there must lie. A literal is exact — its two ends meet.
 A parameter declared `:(Number | Str)` is at most that. An expression nothing
 ascribes is at most `Any`. A generic call is solved over its arguments'
@@ -224,8 +225,6 @@ changes what a reader sees and which overload runs.
   items.
 - [A container literal's element type](../roadmap/gradual-typing/container-literal-types.md)
 - [A nested projection](../roadmap/gradual-typing/nested-projection.md)
-- [Monotone elaboration](../roadmap/gradual-build/monotone-elaboration.md)
-  — the load's pass as a solver that parks on an unknown and resumes when a
-  binding removes it, per [the build module](../src/build/README.md).
-- [Activation typing](../roadmap/gradual-build/activation-typing.md) — a
-  frame's facts settled at its seams over the content its bindings bring.
+- [The build arena](../roadmap/gradual-build/build-arena.md) — a frame's
+  facts settled in a build cell or in its own activation, over the content
+  its bindings bring.

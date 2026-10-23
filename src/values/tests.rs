@@ -18,22 +18,22 @@ mod surface;
 mod working;
 
 use super::digest::{ContentDigest, DigestHasher, Tag};
-use super::{Chain, Half, TypeHeader, Types};
+use super::{BranchCell, BranchSlot, Chain, Half, Types};
 use crate::memory::{
     Active, Bump, BumpAllocator, CellGraph, CellHandle, Covariant, Delivery, Edge, Header,
-    KnotPlan, Member, NoDelivery, NoScratch, Operand, Prices, ProgramBrand, Reattachable,
+    KnotPlan, Member, NoDelivery, NoScratch, Operand, Prices, ProgramBrand, Projects, Reattachable,
     ReattachableOverBoth, ReleaseAbsorption, Stale, StepContext, Verdict, Writer, covariant,
     program_storage, reattachable,
 };
 use crate::parse::{ExpressionPart, KExpression, ProgramNode, parse};
 use crate::symbols::{SymbolInterner, TypeSymbol};
 use crate::type_lattice::{
-    DeclaredType, Halves, KType, Parametric, RecursiveGroupWindow, RelativeSchema, Root,
+    Agent, DeclaredType, Halves, KType, Parametric, RecursiveGroupWindow, RelativeSchema,
     RootBuilder,
 };
 use crate::values::{
-    Circular, CodeView, DeepCopy, Knotted, KnottedFamily, MemoBits, Resolved, Seen, ValueCarrier,
-    ValueFamily, Weight, cross_view,
+    Circular, CodeView, DeepCopy, Knotted, KnottedFamily, MemoBits, Resolved, Seen, TypeTiers,
+    ValueCarrier, ValueFamily, Weight, cross_view,
 };
 
 /// A value holding no callable — what every suite here builds, spelled once so a literal arm
@@ -56,7 +56,7 @@ pub(super) fn text<'cell>(writer: crate::memory::Writer<'cell, '_>, text: &str) 
 /// value's payload. Empty for a value that does not open.
 pub(crate) fn parts<'cell, X: Knotted + 'cell>(
     value: crate::values::Value<'cell, X>,
-    types: &Chain<'_, '_, '_, '_, '_>,
+    types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
 ) -> Vec<crate::values::Value<'cell, X>> {
     let Some(surface) = value.surface(types, scratch) else {
@@ -93,7 +93,8 @@ pub(super) fn held<'cell, X: Copy>(
 /// so a cell reads no live builder: the load ends before the run starts, as a program's does.
 pub(crate) struct TestTypes<'graph> {
     builder: &'graph RootBuilder<'graph>,
-    root: std::cell::Cell<Option<&'graph Root<'graph>>>,
+    agent: &'graph Agent<'graph>,
+    tiers: std::cell::Cell<Option<TypeTiers<'graph>>>,
 }
 
 impl<'graph> TestTypes<'graph> {
@@ -101,23 +102,27 @@ impl<'graph> TestTypes<'graph> {
     pub fn new(bump: &'graph Bump) -> Self {
         TestTypes {
             builder: RootBuilder::in_region(bump),
-            root: std::cell::Cell::new(None),
+            agent: Agent::in_region(bump),
+            tiers: std::cell::Cell::new(None),
         }
     }
 
-    /// The program's root: the builder, frozen at the first call. The load's chain interns nothing
-    /// new after it.
-    pub fn root(&self) -> &'graph Root<'graph> {
-        if let Some(root) = self.root.get() {
-            return root;
+    /// The program's tiers: the builder, frozen at the first call. The load's chain interns
+    /// nothing new after it.
+    pub fn tiers(&self) -> TypeTiers<'graph> {
+        if let Some(tiers) = self.tiers.get() {
+            return tiers;
         }
-        let root = self.builder.freeze();
-        self.root.set(Some(root));
-        root
+        let tiers = TypeTiers {
+            frozen: self.builder.freeze(),
+            agent: self.agent,
+        };
+        self.tiers.set(Some(tiers));
+        tiers
     }
 
     /// The chain a test's load-time work goes through: the builder, as the load's chain.
-    pub fn load(&self) -> Types<'graph, 'graph, 'graph> {
+    pub fn load(&self) -> Types<'graph, 'graph> {
         Types::building(Halves::alone(Half::load(self.builder)))
     }
 
@@ -127,16 +132,16 @@ impl<'graph> TestTypes<'graph> {
     pub fn half<'here, 'door>(
         &self,
         writer: Writer<'here, 'door>,
-        header: Header<'graph, 'here, 'door, TypeHeader>,
-    ) -> Types<'graph, 'here, 'door> {
-        Types::new(self.root(), Halves::alone(Half::of(writer, header)))
+        header: Header<'graph, 'here, 'door, TestHeader>,
+    ) -> Types<'here, 'door> {
+        self.tiers().chain(Halves::alone(Half::of(writer, header)))
     }
 
     /// The chain for what `context`'s step lays in its cell.
     pub fn of<'step, 'here, C, S, D>(
         &self,
-        context: &StepContext<'graph, 'step, 'here, '_, '_, C, S, D, TypeHeader>,
-    ) -> Types<'graph, 'here, 'step>
+        context: &StepContext<'graph, 'step, 'here, '_, '_, C, S, D, TestHeader>,
+    ) -> Types<'here, 'step>
     where
         C: Reattachable<'graph>,
         S: ReattachableOverBoth<'graph>,
@@ -150,32 +155,31 @@ impl<'graph> TestTypes<'graph> {
     /// where it lays.
     pub fn paired<'step, 'here, C, S, D>(
         &self,
-        context: &StepContext<'graph, 'step, 'here, '_, '_, C, S, D, TypeHeader>,
-    ) -> Types<'graph, 'here, 'step>
+        context: &StepContext<'graph, 'step, 'here, '_, '_, C, S, D, TestHeader>,
+    ) -> Types<'here, 'step>
     where
         C: Reattachable<'graph>,
         S: ReattachableOverBoth<'graph>,
         D: Delivery<'graph>,
     {
-        Types::new(
-            self.root(),
-            Halves::alone(Half::paired(context.writer(), context.header())),
-        )
+        self.tiers().chain(Halves::alone(Half::paired(
+            context.writer(),
+            context.header(),
+        )))
     }
 
-    /// The chain a `Shares` caching body runs on, as a step's `shares_types` builds it: the cell's
+    /// The chain a `Shares` caching body runs on, as a step's `caching_types` builds it: the cell's
     /// branch, then its scratch's, paired to the cell's writer.
     pub fn shares<'step, 'here, 'scratch, C, S, D>(
         &self,
-        context: &StepContext<'graph, 'step, 'here, 'scratch, '_, C, S, D, TypeHeader>,
-    ) -> Chain<'graph, 'scratch, 'here, 'here, 'step>
+        context: &StepContext<'graph, 'step, 'here, 'scratch, '_, C, S, D, TestHeader>,
+    ) -> Chain<'scratch, 'here, 'here, 'step>
     where
         C: Reattachable<'graph>,
         S: ReattachableOverBoth<'graph>,
         D: Delivery<'graph>,
     {
-        Chain::scratch(
-            self.root(),
+        self.tiers().scratch(
             Half::of(context.writer(), context.header()),
             Half::paired(context.scratch_writer(), context.scratch_header()),
         )
@@ -184,7 +188,7 @@ impl<'graph> TestTypes<'graph> {
     /// [`values::cross`](crate::values::cross) over this test's chains.
     pub fn cross<'step, C, S, D, XF>(
         &self,
-        context: &mut StepContext<'graph, 'step, '_, '_, '_, C, S, D, TypeHeader>,
+        context: &mut StepContext<'graph, 'step, '_, '_, '_, C, S, D, TestHeader>,
         dest: impl Into<CellHandle>,
         carrier: &ValueCarrier<'graph, 'step, XF>,
     ) -> Result<ValueCarrier<'graph, 'step, XF>, Stale<CellHandle>>
@@ -211,7 +215,7 @@ impl<'graph> TestTypes<'graph> {
     /// [`values::cross_here`](crate::values::cross_here) over this test's chains.
     pub fn cross_here<'step, 'here, C, S, D, XF>(
         &self,
-        context: &mut StepContext<'graph, 'step, 'here, '_, '_, C, S, D, TypeHeader>,
+        context: &mut StepContext<'graph, 'step, 'here, '_, '_, C, S, D, TestHeader>,
         carrier: &ValueCarrier<'graph, 'step, XF>,
     ) -> crate::values::Value<'here, XF::Closed<'here>>
     where
@@ -232,31 +236,60 @@ impl<'graph> TestTypes<'graph> {
     }
 }
 
-/// A chain that reads `root` and interns anything a test asks of it into a builder of its own in
+/// Tiers over `bump` holding the fixed handles and nothing else: what a test that needs no load
+/// builds its graph over.
+pub(crate) fn seeded_tiers(bump: &Bump) -> TypeTiers<'_> {
+    TypeTiers {
+        frozen: RootBuilder::in_region(bump).freeze(),
+        agent: Agent::in_region(bump),
+    }
+}
+
+/// A chain that reads `tiers` and interns anything a test asks of it into a builder of its own in
 /// `bump`: how a test reads the types a load built, outside any step.
-pub(crate) fn reading<'tier>(
-    root: &'tier Root<'tier>,
+pub(crate) fn reading<'graph: 'tier, 'tier>(
+    tiers: TypeTiers<'graph>,
     bump: &'tier Bump,
-) -> Types<'tier, 'tier, 'tier> {
-    Types::new(
-        root,
-        Halves::alone(Half::load(RootBuilder::in_region(bump))),
-    )
+) -> Types<'tier, 'tier> {
+    tiers.chain(Halves::alone(Half::load(RootBuilder::in_region(bump))))
 }
 
 /// A continuation family for a graph whose cells only store.
 pub(super) struct Step;
 reattachable!(Step => ());
 
+/// A header family that keeps a half's branch and nothing else: all `values` reads of a header,
+/// so a suite here or in `knot` runs with no other layer's header record.
+pub(crate) struct TestHeader;
+reattachable!(TestHeader => BranchSlot<'cell>);
+
+impl<'graph> Projects<'graph> for TestHeader {
+    type Projection = BranchCell;
+
+    fn lay<'cell>(writer: Writer<'cell, '_>) -> BranchSlot<'cell>
+    where
+        'graph: 'cell,
+    {
+        &writer.fill(1, |_| std::cell::Cell::new(None))[0]
+    }
+
+    fn project<'cell>(header: BranchSlot<'cell>) -> BranchSlot<'cell>
+    where
+        'graph: 'cell,
+    {
+        header
+    }
+}
+
 /// A graph whose cells only store, keeping a type branch per habitat half.
-pub(super) type TestGraph<'graph> = CellGraph<'graph, Step, NoScratch, NoDelivery, TypeHeader>;
+pub(super) type TestGraph<'graph> = CellGraph<'graph, Step, NoScratch, NoDelivery, TestHeader>;
 
 /// What a test reads and writes outside the graph. `'graph` is the program storage the parsed AST
 /// and the types live in, which a graph built over it borrows.
 pub(super) struct Fixture<'f, 'graph> {
     pub program: ProgramBrand<'graph>,
     /// The load's chain, which a test interns through before its first cell freezes the root.
-    pub types: &'f Types<'graph, 'graph, 'f>,
+    pub types: &'f Types<'graph, 'f>,
     /// The tiers every cell's chain is built over.
     pub tiers: &'f TestTypes<'graph>,
     pub symbols: &'f SymbolInterner,
@@ -299,7 +332,7 @@ impl<'graph> Fixture<'_, 'graph> {
                 Step,
                 NoScratch,
                 NoDelivery,
-                TypeHeader,
+                TestHeader,
             >,
         ) -> R,
     ) -> R {
@@ -401,7 +434,7 @@ impl Knotted for Stand<'_> {
     /// A stand-in holds no value: its knot is its identity.
     fn held<'a>(
         &self,
-        _: &Chain<'_, '_, '_, '_, '_>,
+        _: &Chain<'_, '_, '_, '_>,
         _: BumpAllocator<'_>,
         _: &mut dyn FnMut(Seen<'a, Self>),
     ) where
@@ -411,7 +444,7 @@ impl Knotted for Stand<'_> {
 
     fn digest_held(
         &self,
-        _: &Chain<'_, '_, '_, '_, '_>,
+        _: &Chain<'_, '_, '_, '_>,
         _: BumpAllocator<'_>,
         _: &mut dyn FnMut() -> ContentDigest,
     ) -> ContentDigest {
@@ -442,6 +475,7 @@ impl Knotted for Stand<'_> {
                 identity,
                 instance: &[],
                 closure: &[],
+                composes: &[],
             },
             Stand::Barrier => Resolved::Barrier,
             Stand::Code(node) => Resolved::Code(CodeView {
@@ -485,7 +519,7 @@ impl Knotted for Node<'_> {
     /// a data node's.
     fn held<'a>(
         &self,
-        types: &Chain<'_, '_, '_, '_, '_>,
+        types: &Chain<'_, '_, '_, '_>,
         scratch: BumpAllocator<'_>,
         out: &mut dyn FnMut(Seen<'a, Self>),
     ) where
@@ -500,7 +534,7 @@ impl Knotted for Node<'_> {
     /// knot.
     fn digest_held(
         &self,
-        types: &Chain<'_, '_, '_, '_, '_>,
+        types: &Chain<'_, '_, '_, '_>,
         scratch: BumpAllocator<'_>,
         parts: &mut dyn FnMut() -> ContentDigest,
     ) -> ContentDigest {
@@ -667,7 +701,7 @@ impl<'graph> Fixture<'_, 'graph> {
 pub(super) fn ring<'graph, 'cell>(
     fixture: &Fixture<'_, 'graph>,
     writer: Writer<'cell, '_>,
-    types: &Chain<'_, '_, '_, '_, '_>,
+    types: &Chain<'_, '_, '_, '_>,
     identity: KType,
     values: &[Option<Holding<'cell>>],
 ) -> Vec<Node<'cell>> {

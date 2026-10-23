@@ -305,11 +305,25 @@ beside the writer rather than inside it because a slot inside `Writer` would put
 hold no slot at all: its `'graph` would be a borrow of itself. A borrower's step
 is handed its lent half's header at `'lent` the same way, and between steps
 `peek` reads a live cell's region header through a closure as `read` below
-does, handing out no door. A door copies the
+does, handing out no door. A step entered by `enter_beside` is handed a
+second live cell's region header the same way, at a brand of its own with no
+relation to the step's, so what it reads of that cell reaches its own region
+only as a copy by value; only a step writes a region, and only its own write
+home's. A door copies the
 erased value in and out and never lends a reference into the slot, which is why
 the slot is a `Cell` and not a `OnceCell`: a reference from
 `OnceCell::get_or_init` descends from a unique borrow, and a later interior
 write through `get` is undefined behaviour under tree borrows.
+
+A family that implements **`Projects`** lays its own empty header and names one
+part of it, as a reattachable family of its own; `Header::project` narrows a
+door to a **`Projected`** one over that part. The projected door keeps the same
+slot at the same brands and is invariant in the half's brand like its source,
+but names no header family, so a layer that cannot name the record reads and
+lays the header through that part alone. Projecting lays nothing: the record is
+laid by the first `get_or_lay` through either door, so a half that never needs
+its header stays [untouched](#recycled-regions). Each read goes through a
+`Header` door over the same slot, so the projection adds no `unsafe`.
 
 A crossing operand carries its home's header as a **`HomeHeader`**, read-only,
 at the operand's brand ([The crossing verdict](#the-crossing-verdict)). Its one
@@ -460,6 +474,15 @@ on the read out, which re-anchors at the same `'cell`.
   The continuation read *is* the sealed tier's accessor — a capture whose region
   sealed since it was stored comes back reading storage that sealed cell still
   retains — so there is no second door out of sealed storage.
+
+- **`enter_beside(handle, beside, step)`** is `enter` with a read of a second
+  live cell's region header: `step` is handed, beside its context, `beside`'s
+  laid header at a brand quantified per call, as `peek` hands it, and `None`
+  where none is laid. That brand bears no relation to the step's, so nothing
+  read of `beside` can be laid through any door the step holds. A tenant
+  `beside` reads its host's region. It refuses what `enter` refuses, a dead or
+  stale `beside`, and two cells whose write homes are one region
+  (`EnterBesideError`), each before anything changes.
 
 - **`redeem`** is the one door out of the at-rest state, and it **refuses rather
   than panics**. The executing cell must be entitled to the storage the value
@@ -746,8 +769,8 @@ exactly one decision.
   doors every verb's transients go through.
 - [src/header.rs](src/header.rs) — the habitat header: the `HabitatHeader`
   bound and its `NoHeader` default, the slot type, the `Header` door onto one
-  of a step's own halves, and the read-only `HomeHeader` an operand crosses
-  with.
+  of a step's own halves, the `Projects` family bound and the `Projected` door
+  it narrows to, and the read-only `HomeHeader` an operand crosses with.
 - [src/carrier.rs](src/carrier.rs) — `Ready` and `Active`, the two carrier
   states that carry a lifetime beside `'graph`.
 - [src/dormant.rs](src/dormant.rs) — `Dormant`, the private key naming its

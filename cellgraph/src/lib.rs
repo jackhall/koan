@@ -35,12 +35,13 @@ mod tree;
 pub use carrier::{Active, Ready};
 pub use dormant::Dormant;
 pub use graph::{
-    CellGraph, Config, CreateError, CreateLentError, CrossedOperand, DeliverError, EnterError,
-    Operand, PeekError, Prices, Receipt, ReceiptError, RedeemError, RegisterError,
-    ReleaseAbsorption, ReleaseError, ReleaseTenantError, ReleaseTreeError, StepContext, Verdict,
+    CellGraph, Config, CreateError, CreateLentError, CrossedOperand, DeliverError,
+    EnterBesideError, EnterError, Operand, PeekError, Prices, Receipt, ReceiptError, RedeemError,
+    RegisterError, ReleaseAbsorption, ReleaseError, ReleaseTenantError, ReleaseTreeError,
+    StepContext, Verdict,
 };
 pub use handle::{CellHandle, SlabHandle, Stale, TenantHandle, TreeHandle};
-pub use header::{HabitatHeader, Header, HomeHeader, NoHeader};
+pub use header::{HabitatHeader, Header, HomeHeader, NoHeader, Projected, ProjectionAt, Projects};
 pub use lend::Lend;
 pub use once::{OnceRun, OnceView, Written};
 pub use reattach::{Covariant, DropFree, Erased, NoScratch, Reattachable, ReattachableOverBoth};

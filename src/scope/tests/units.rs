@@ -16,7 +16,7 @@ fn shaped<R>(
         let lines: Vec<KExpression<'_>> = fixture.parse(source);
         fixture.in_cell(|writer, _| {
             let table: &Builtins = builtins(fixture, writer);
-            let shape = BodyShape::of_program(
+            let shape = crate::scope::Shapes::of_program(
                 fixture.program,
                 &lines,
                 table,
@@ -24,6 +24,7 @@ fn shaped<R>(
                 fixture.symbols,
                 fixture.scratch(),
             )
+            .map(|shapes| shapes.root())
             .unwrap_or_else(|error| panic!("`{source}` shapes: {error:?}"));
             check(fixture, shape)
         })

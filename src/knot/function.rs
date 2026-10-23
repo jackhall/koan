@@ -20,7 +20,7 @@ use std::cell::Cell;
 
 use crate::elaborate::{bound_path, callable_type};
 use crate::memory::{BumpAllocator, BumpVec, Edge, KnotPlan, Writer, resident};
-use crate::scope::{BodyShape, ClosureBindings, Registration, ShapeKind, Site};
+use crate::scope::{Body, BodyShape, ClosureBindings, Registration, ShapeKind, Site};
 use crate::scope::{Callable, FunctionGroupMap, ParameterBinding, Registered, ShapeGroupMap};
 use crate::scope::{StaticSolution, solutions};
 use crate::symbols::{BinderSymbol, TypeSymbol};
@@ -45,7 +45,8 @@ pub struct Function<'graph, 'cell, X> {
     ///
     /// [`Node::Coerced`]: super::Node::Coerced
     typing: Option<&'cell Typing<'cell>>,
-    shape: &'graph BodyShape<'graph>,
+    /// The body it runs, beside which of its type captures its content composes.
+    body: &'graph Body<'graph>,
     closure: &'cell ClosureBindings<'cell, X>,
     /// What rebuilding the whole knot this node sits in writes, the same on every node; the root
     /// node's also carries the knot's memo bits.
@@ -53,19 +54,19 @@ pub struct Function<'graph, 'cell, X> {
 }
 
 impl<'graph, 'cell, X> Function<'graph, 'cell, X> {
-    /// The function `ktype` runs through `shape` over `closure`, inside a knot weighing
+    /// The function `ktype` runs through `body` over `closure`, inside a knot weighing
     /// `knot_weight`. The private-field constructor the tie uses.
     pub(super) fn new(
         ktype: DeclaredType<KType>,
         typing: Option<&'cell Typing<'cell>>,
-        shape: &'graph BodyShape<'graph>,
+        body: &'graph Body<'graph>,
         closure: &'cell ClosureBindings<'cell, X>,
         knot_weight: Weight,
     ) -> Self {
         Function {
             ktype,
             typing,
-            shape,
+            body,
             closure,
             knot_weight: Cell::new(knot_weight),
         }
@@ -123,7 +124,12 @@ impl<'graph, 'cell, X> Function<'graph, 'cell, X> {
 
     /// The body shape a call activates.
     pub fn shape(&self) -> &'graph BodyShape<'graph> {
-        self.shape
+        self.body.shape
+    }
+
+    /// The body as the function holds it: its shape, and the closure slots its content composes.
+    pub fn body(&self) -> &'graph Body<'graph> {
+        self.body
     }
 
     /// The closure bindings a call's activation reads its captures through.
@@ -157,7 +163,7 @@ impl<'graph, 'cell, X> Function<'graph, 'cell, X> {
                 self.instance().unwrap_or(&[]),
                 self.typing.and_then(|typing| typing.declared),
             ),
-            shape: self.shape,
+            body: self.body,
             closure,
             knot_weight: Cell::new(self.knot_weight.get().without_bits()),
         }
@@ -171,7 +177,7 @@ impl<'graph, 'cell> Function<'graph, 'cell, Knotted<'graph, 'cell>> {
     where
         'cell: 'a,
     {
-        for (_, link) in composed(self.shape, self.closure.links()) {
+        for (_, link) in composed(self.body, self.closure.links()) {
             if let Link::Value(value) = link {
                 out(Seen::of(*value));
             }
@@ -182,10 +188,10 @@ impl<'graph, 'cell> Function<'graph, 'cell, Knotted<'graph, 'cell>> {
     /// digest of each capture the code digest does not name — every one but a read of the
     /// program's top level, and every type capture — a value's answered by `parts`.
     pub(super) fn content(&self, parts: &mut dyn FnMut() -> ContentDigest) -> ContentDigest {
-        let captures = composed(self.shape, self.closure.links())
+        let captures = composed(self.body, self.closure.links())
             .map(|(index, link)| (index, link.digest_from(parts)));
         function_content(
-            self.shape.code_digest(),
+            self.body.shape.code_digest(),
             self.instance().unwrap_or(&[]),
             captures,
         )
@@ -277,7 +283,7 @@ impl<'cell> Typing<'cell> {
 
 /// A function node, read and not yet written.
 pub(super) struct Staged<'graph, 'cell, 'x> {
-    pub shape: &'graph BodyShape<'graph>,
+    pub body: &'graph Body<'graph>,
     pub ktype: DeclaredType<KType>,
     /// The name-keyed quantifier map the elaborator handed back, scratch-lived until the tie lays
     /// it into the region.
@@ -331,7 +337,7 @@ pub(super) fn staged<'graph, 'cell, 'x>(
     body: &'graph BodyShape<'graph>,
     registration: Option<&Registration<'graph>>,
     activation: &KActivationView<'graph, 'cell>,
-    types: &Chain<'_, '_, '_, '_, '_>,
+    types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'x>,
     edge: impl FnMut(u32) -> Edge,
 ) -> Result<Staged<'graph, 'cell, 'x>, Untieable<'x>> {
@@ -352,7 +358,7 @@ pub(super) fn staged<'graph, 'cell, 'x>(
         None => elaborated().map_err(Untieable::Type)?,
     };
     // A body whose group the load solved where it is wanted is born as that instance.
-    let (ktype, instance) = match (body.born_instance(), callable.ktype) {
+    let (ktype, instance) = match (activation.load().born_instance(body), callable.ktype) {
         (Some(solution), DeclaredType::Scheme(scheme)) => {
             debug_assert!(registration.is_none(), "a registration binds its scheme");
             let solution = solved(solution, activation, types, scratch);
@@ -365,7 +371,7 @@ pub(super) fn staged<'graph, 'cell, 'x>(
     };
     let captures = ClosureBindings::read_captures(body, activation, scratch, edge);
     Ok(Staged {
-        shape: body,
+        body: activation.load().body(body),
         ktype,
         quantifier_map: callable.quantifier_map,
         registered: callable.registered,
@@ -389,13 +395,13 @@ const BOUND: &str = "an instance's lexical variables are bound where it is read 
 fn solved<'graph, 'x>(
     solution: StaticSolution<'graph>,
     activation: &KActivationView<'graph, '_>,
-    types: &Chain<'_, '_, '_, '_, '_>,
+    types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'x>,
 ) -> &'x [KType] {
     match solution {
         StaticSolution::Closed(solution) => scratch.alloc_slice_copy(solution),
         StaticSolution::Rigid { value, variables } => {
-            let paths = |at, entry: &_| bound_path(activation, types, at, entry);
+            let paths = |at, entry| bound_path(activation, types, at, entry);
             let bindings = solutions(variables, activation, scratch, &paths).expect(BOUND);
             let mut solved = BumpVec::with_capacity_in(value.len(), scratch);
             solved.extend(value.iter().map(|each| {
@@ -413,7 +419,7 @@ const BORN: &str = "a callable's type holds no variable once its levels are boun
 
 /// `callable` as a function is born with it, every level its declaration read bound.
 fn born<'x>(
-    types: &Chain<'_, '_, '_, '_, '_>,
+    types: &Chain<'_, '_, '_, '_>,
     callable: Callable<'x, Parametric>,
 ) -> Callable<'x, KType> {
     Callable {
@@ -435,7 +441,7 @@ fn loaded<'graph, 'x>(
     body: &'graph BodyShape<'graph>,
     registration: Option<&Registration<'graph>>,
     activation: &KActivationView<'graph, '_>,
-    types: &Chain<'_, '_, '_, '_, '_>,
+    types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'x>,
 ) -> Option<Callable<'x, KType>> {
     let substitute = |value: DeclaredType<Parametric>, bindings: &[KType]| {
@@ -443,21 +449,24 @@ fn loaded<'graph, 'x>(
             .concrete_declared(substitute_levels(types, scratch, value, bindings))
             .expect(BORN)
     };
-    let paths = |at, entry: &_| bound_path(activation, types, at, entry);
-    let callable =
-        body.callable_type()
-            .solved(activation, scratch, &paths, |callable, bindings| {
-                Some(Callable {
-                    ktype: substitute(callable.ktype, bindings),
-                    quantifier_map: callable.quantifier_map,
-                    registered: None,
-                })
-            })?;
+    let paths = |at, entry| bound_path(activation, types, at, entry);
+    let callable = (activation.load().callable_type(body)).solved(
+        activation,
+        scratch,
+        &paths,
+        |callable, bindings| {
+            Some(Callable {
+                ktype: substitute(callable.ktype, bindings),
+                quantifier_map: callable.quantifier_map,
+                registered: None,
+            })
+        },
+    )?;
     let registered = match registration {
         Some(registration) => {
             let registered = activation
-                .shape()
-                .registered_type(registration.slot)
+                .load()
+                .registered_type(activation.shape(), registration.slot)
                 .solved(activation, scratch, &paths, |registered, bindings| {
                     Some(Registered {
                         shape: substitute(registered.shape, bindings),
@@ -500,7 +509,7 @@ pub(super) fn stage<'graph, 'cell, 'x>(
     plan: &KnotPlan,
     activation: &KActivationView<'graph, 'cell>,
     bodies: &[Option<Born<'graph>>],
-    types: &Chain<'_, '_, '_, '_, '_>,
+    types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'x>,
 ) -> Result<BumpVec<'x, Option<Staged<'graph, 'cell, 'x>>>, Untieable<'x>> {
     let mut staged = BumpVec::with_capacity_in(bodies.len(), scratch);
@@ -536,7 +545,7 @@ pub fn lambda<'graph, 'cell, 'x>(
     activation: &KActivationView<'graph, 'cell>,
     site: Site,
     build: BuildRef,
-    types: &Chain<'_, '_, 'cell, '_, '_>,
+    types: &Chain<'_, 'cell, '_, '_>,
     scratch: BumpAllocator<'x>,
 ) -> Result<Knotted<'graph, 'cell>, Untieable<'x>> {
     let body = activation
@@ -555,7 +564,7 @@ pub fn lambda<'graph, 'cell, 'x>(
         Node::Function(Function::new(
             staged.ktype,
             typing,
-            staged.shape,
+            staged.body,
             closure,
             knot_weight,
         ))
@@ -572,7 +581,7 @@ pub fn barrier_instance<'graph, 'cell>(
     member: Knotted<'graph, 'cell>,
     solution: StaticSolution<'graph>,
     activation: &KActivationView<'graph, '_>,
-    types: &Chain<'_, '_, 'cell, '_, '_>,
+    types: &Chain<'_, 'cell, '_, '_>,
     scratch: BumpAllocator<'_>,
 ) -> Knotted<'graph, 'cell> {
     let solution = solved(solution, activation, types, scratch);
@@ -609,7 +618,7 @@ pub fn header_instance<'graph, 'cell>(
     header: &Retyped<Knotted<'graph, 'cell>>,
     solution: StaticSolution<'graph>,
     activation: &KActivationView<'graph, '_>,
-    types: &Chain<'_, '_, 'cell, '_, '_>,
+    types: &Chain<'_, 'cell, '_, '_>,
     scratch: BumpAllocator<'_>,
 ) -> KValue<'graph, 'cell> {
     let solution = solved(solution, activation, types, scratch);
@@ -633,7 +642,7 @@ pub fn instance<'graph, 'cell>(
     member: Knotted<'graph, 'cell>,
     solution: StaticSolution<'graph>,
     activation: &KActivationView<'graph, '_>,
-    types: &Chain<'_, '_, 'cell, '_, '_>,
+    types: &Chain<'_, 'cell, '_, '_>,
     scratch: BumpAllocator<'_>,
 ) -> Knotted<'graph, 'cell> {
     let solution = solved(solution, activation, types, scratch);
@@ -662,7 +671,7 @@ pub fn instance<'graph, 'cell>(
         Node::Function(Function::new(
             ktype,
             typing,
-            function.shape(),
+            function.body,
             closure,
             knot_weight,
         ))

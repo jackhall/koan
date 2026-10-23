@@ -15,7 +15,7 @@ use std::cell::Cell;
 
 use crate::memory::{BumpAllocator, BumpVec, Edge, KnotPlan, Writer, collect, resident};
 use crate::parse::{ExpressionPart, ProgramNode};
-use crate::scope::{BodyShape, CaptureSource, ShapeKind, Site};
+use crate::scope::{BodyShape, CaptureSource, LoadFacts, ShapeKind, Site};
 use crate::symbols::{BinderSymbol, KeySymbol};
 use crate::type_lattice::{KType, TypeNode};
 use crate::values::digest::{DigestHasher, Tag};
@@ -244,7 +244,7 @@ fn one_node<'graph, 'cell>(
     shape: &'graph BodyShape<'graph>,
     bound: &[Binding<'graph, 'cell>],
     supplied: &[Binding<'graph, 'cell>],
-    types: &Chain<'_, '_, '_, '_, '_>,
+    types: &Chain<'_, '_, '_, '_>,
 ) -> Knotted<'graph, 'cell> {
     let bound = collect(writer, bound.iter().copied());
     let supplied = collect(writer, supplied.iter().copied());
@@ -280,7 +280,7 @@ pub fn quote<'graph, 'cell>(
     writer: Writer<'cell, '_>,
     activation: &KActivationView<'graph, 'cell>,
     part: &'graph ExpressionPart<'graph>,
-    types: &Chain<'_, '_, 'cell, '_, '_>,
+    types: &Chain<'_, 'cell, '_, '_>,
     scratch: BumpAllocator<'_>,
 ) -> Knotted<'graph, 'cell> {
     let (body, shape) = shape_of(activation.shape(), part)
@@ -304,7 +304,7 @@ pub enum UsingRefused {
 /// member — that it names; a keyworded hole takes the list of a module's registrations at its key,
 /// and stays open where the module has none. A field naming no hole is ignored, and a hole an
 /// earlier `USING` filled is no hole, so it is never rebound. Code whose shape carries a refusal
-/// comes back unchanged: its holes are unknown, and the `EVAL` that runs it reports the refusal.
+/// comes back unchanged — `facts` say which does: its holes are unknown, and the `EVAL` that runs it reports the refusal.
 /// Each binding of `code` that is an edge is resolved to the member it names, so the new knot's
 /// runs hold value words only.
 ///
@@ -312,16 +312,17 @@ pub enum UsingRefused {
 /// than the code's own candidates at the key do.
 pub fn using<'graph, 'cell>(
     writer: Writer<'cell, '_>,
+    facts: &LoadFacts<'graph>,
     code: Knotted<'graph, 'cell>,
     source: KValue<'graph, 'cell>,
-    types: &Chain<'_, '_, 'cell, '_, '_>,
+    types: &Chain<'_, 'cell, '_, '_>,
     scratch: BumpAllocator<'_>,
 ) -> Result<Knotted<'graph, 'cell>, UsingRefused> {
     let node = code
         .code()
         .expect("`USING` fills the holes of a quote's code");
     let shape = node.shape();
-    if shape.refusal().is_some() {
+    if facts.typing_refusal(shape).is_some() {
         return Ok(code);
     }
     let resolved = |(name, link): &Binding<'graph, 'cell>| (*name, Link::Value(link.resolve(code)));
@@ -375,7 +376,7 @@ fn keyed<'graph, 'cell>(
     shape: &BodyShape<'graph>,
     key: KeySymbol,
     source: KValue<'graph, 'cell>,
-    types: &Chain<'_, '_, 'cell, '_, '_>,
+    types: &Chain<'_, 'cell, '_, '_>,
     scratch: BumpAllocator<'_>,
     found: &mut BumpVec<'_, KValue<'graph, 'cell>>,
 ) -> Result<(), UsingRefused> {

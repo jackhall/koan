@@ -23,6 +23,16 @@ table on a digest of the same width and footing with no shared interner between
 them, and why both hash a digest by its own low word: a digest is already
 uniformly distributed, so re-hashing would only cost cycles.
 
+## The load's table and the overlay
+
+The interner keeps its texts in two maps. The load records every name it
+constructs in the load's table, which `freeze` closes at the load's end; a
+text first recorded after that — a name an `EVAL` parses at the run — lands
+in the overlay beside it, and a text the load's table already holds adds
+nothing there. A render and `compare_texts` read the overlay, then the load's
+table. A symbol is its text's digest, so the two maps never disagree: the
+split decides where a text is kept, never what a symbol names.
+
 ## A symbol carries its binding class
 
 `ValueSymbol`, `TypeSymbol`, `KeywordSymbol` and the `BinderSymbol` that unifies
@@ -56,4 +66,4 @@ lookup and no hash.
 ## Testing
 
 [tests.rs](tests.rs) states the interning laws, including how a `StaticName`
-records.
+records and where a name recorded after the freeze lands.

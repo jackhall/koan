@@ -24,7 +24,7 @@ use super::members::{SignatureMember, schema_of, signature_member};
 /// `label` a head parameter. `None` where it ends anywhere else, and the path reads the module's
 /// own type member.
 pub fn declared_through(
-    types: &Chain<'_, '_, '_, '_, '_>,
+    types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
     declared: Parametric,
     chain: &[ValueSymbol],
@@ -54,7 +54,7 @@ pub fn declared_through(
 /// `through`, and otherwise the module's own type member `label`. `None` where a step names no
 /// module member, or the module does not fit or names no such member.
 pub fn path_binding(
-    types: &Chain<'_, '_, '_, '_, '_>,
+    types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
     held: KType,
     chain: &[ValueSymbol],
@@ -81,17 +81,14 @@ pub fn path_binding(
 }
 
 /// The type a path entry binds to, read through the module at `at` of `view`: its `through`
-/// solved where `view`'s shape locates its variables, then [`path_binding`] — or, where the load
-/// resolved it closed, that type. What [`solutions`] is handed to bind a path variable.
+/// solved where `view`'s shape locates its variables, then [`path_binding`]. What [`solutions`] is
+/// handed to bind a path variable the load did not resolve closed.
 pub fn bound_path<'graph, XF: KnottedFamily<'graph>>(
     view: &ActivationView<'graph, '_, XF>,
-    types: &Chain<'_, '_, '_, '_, '_>,
+    types: &Chain<'_, '_, '_, '_>,
     at: Coordinate,
-    entry: &PathEntry<'graph>,
+    entry: PathEntry<'graph>,
 ) -> Option<KType> {
-    if let Some(closed) = entry.closed() {
-        return Some(closed);
-    }
     let held = view.read(at);
     held.as_module()?;
     let scratch = Bump::new();
@@ -100,7 +97,7 @@ pub fn bound_path<'graph, XF: KnottedFamily<'graph>>(
         Some(through) => Some(match types.concrete(through) {
             Some(closed) => closed,
             None => {
-                let located = view.shape().through_at(entry.level)?;
+                let located = view.load().through_at(view.shape(), entry.level)?;
                 let bindings = solutions(located, view, &scratch, &|_, _| None)?;
                 types.concrete(substitute_levels(types, &scratch, through, &bindings))?
             }
@@ -120,7 +117,7 @@ pub fn bound_path<'graph, XF: KnottedFamily<'graph>>(
 /// `chain` names, each step's read off the one before it. `None` where a step names no member at
 /// a type, or names a head parameter its application leaves unpinned.
 pub(super) fn member_module(
-    types: &Chain<'_, '_, '_, '_, '_>,
+    types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
     signature: KType,
     chain: &[ValueSymbol],
@@ -134,7 +131,7 @@ pub(super) fn member_module(
 
 /// The member `name` of `of` read at a type, every head parameter it names pinned.
 pub(super) fn member_type(
-    types: &Chain<'_, '_, '_, '_, '_>,
+    types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
     of: KType,
     name: BinderSymbol,

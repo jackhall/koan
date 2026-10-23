@@ -204,7 +204,7 @@ fn a_module_binder_is_exactly_the_signature_the_run_ties() {
         assert!(typed.is_exact(), "every member is exact");
         display_name(
             typed.upper,
-            &reading(program.root(), &Bump::new()),
+            &reading(program.tiers(), &Bump::new()),
             program.symbols(),
         )
         .to_string()
@@ -218,7 +218,7 @@ fn a_module_binder_is_exactly_the_signature_the_run_ties() {
         assert_eq!(
             display_name(
                 typed.upper,
-                &reading(program.root(), &Bump::new()),
+                &reading(program.tiers(), &Bump::new()),
                 program.symbols()
             )
             .to_string(),

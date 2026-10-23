@@ -122,8 +122,9 @@ statements and resolves its names through, closure bindings and activations — 
 [src/scope/README.md](src/scope/README.md)),
 [elaborate/](src/elaborate.rs) (type expressions elaborated into lattice handles
 where they are read — see [src/elaborate/README.md](src/elaborate/README.md)),
-[build/](src/build.rs) (the build tree: the build root the load runs in and
-the specializations a binding settles, beside the run tree — see
+[build/](src/build.rs) (the build tree: the build root the load runs in, the
+load's store and the folds over its walk's records, and the specializations a
+binding settles, beside the run tree — see
 [src/build/README.md](src/build/README.md)),
 [knot/](src/knot.rs) (functions, quotes, modules and circular data as values:
 the node each one is, the tie that births a component as one knot, the doors
@@ -178,18 +179,26 @@ src/
 │       └── layout.rs       SlotLayout — a body's value binders as a symbol-sorted run, computed where the shape is lexically fixed
 ├── scope.rs          pub mod scope — koan's lexical environments over values and types, in three tiers: the shape, closure bindings and the activation
 ├── scope/
-│   ├── shape.rs          BodyShape — one body's own statements rewritten, its segment index, its declared-name runs, classified mentions with their coordinates, capture layout, components, nested shapes, the group frame it was built under and the groups it holds, the expression shape a callable body sits in, one record per slot of what it knows of each binder (the body it births, a LET binder's right-hand side and annotation, a type binder's declaration node, the registration bound there), its registrations, bucket declarations and each keyworded use's candidate list, and for a quote's code shape its carried type, its one refusal cell, its required keyworded holes and the names and keys each EVAL offers, in program storage; the write-once load-time type cells — each recorded TypeExpression, type binder, registration and callable body, a callable body's group levels, the lexical variables a body declares and the type captures a callable reads them through, and its caching record — the load pass fills; the slots its last statement reads; Position / Coordinate / Site and ShapeError
+│   ├── shape.rs          BodyShape — one body's own statements rewritten, its segment index, its declared-name runs, classified mentions with their coordinates, capture layout, components, nested shapes, the group frame it was built under and the groups it holds, the expression shape a callable body sits in, one record per slot of what it knows of each binder (the body it births, a LET binder's right-hand side and annotation, a type binder's declaration node, the registration bound there), its registrations, bucket declarations, each keyworded use's candidate list and each path its types spell, and for a quote's code shape its carried type, the builder's refusal, its required keyworded holes and the names and keys each EVAL offers, in program storage, holding no cell and so covariant and Sync; its entry unit and units, the unit of each slot and statement, what each unit holds and the bodies each statement births or runs; each mention's landing and fellow flag, follow — the one rule a capture is followed by, over any CaptureChain — and each spelled path's identity; the slots its last statement reads; Position / Coordinate / Site and ShapeError
 │   ├── shape/build.rs    the one shape builder: the claims pre-scan and group frames, the rewrite pre-pass, the binders pass, the mention walk with its eager/deferred state (a nominal construction's payload a constructor slot), nested bodies, arms and quote values' code shapes, the components pass, and the units pass that orders a body's units
 │   ├── shape/build/rewrite.rs  the operator-run rewrite — fold left, fold right, unary and pairwise, the pairwise hoist into a synthesized block, and a != b as NOT (a == b), every node built through parse's own constructor and spanned at the source it was built from
 │   ├── shape/build/locate.rs   where an error found in a statement points — the part it is about, else the nearest spanned part or node — searched for on the error path only
 │   ├── shape/build/digest.rs   a body's code digest, its code as resolved: a top-level read named by its binding, a keyworded use by its candidates, nested bodies by their own digests
 │   ├── shape/build/surface.rs  what a USING … SCOPE operand surfaces: its names, its operator groups, and each keyworded head it declares under every key
-│   ├── keyed.rs          Keyed — a table sorted by the key each entry carries and the one search over it, how a shape and its Statics hold every table sparse over its site
+│   ├── shapes.rs         Shapes — the shape table: every shape one load builds by segment beside its encloser, and the text facts that span bodies: bind sites, the levels a chain numbers its type names and path identities at, closure layouts and each capture's source
+│   ├── shapes/tails.rs   which callables escape, every tail edge a body's last statement makes, the parameters a body's own tail rebinds and the invariance fixpoint over the edges
+│   ├── shapes/memos.rs   where a content digest's memos sit: the slots a `:|` reads a module's captures from, and each call handing one on bare
+│   ├── facts.rs          the solver's vocabulary — Unknown, Frontier, UnitId, Bound, Binding — and the Store trait the load's walk runs over
+│   ├── records.rs        the walk's records — UnitFacts, Typed, Born, Closing, Folds — and LoadFacts, the one read door the run and the suites read every load fact through
+│   ├── writes.rs         Writes — the dense table of one walk's records a store keeps until it lays them into a LoadFacts
+│   ├── keyed.rs          Keyed — a table sorted by the key each entry carries and the one search over it, how a shape and a record hold every table sparse over its site
 │   ├── groups.rs         operator groups — the four builtin groups, the position-blind claims pre-scan over all the code being built, the GroupFrame chain deciding where a declared group is visible, and the cover one symbol chains under
 │   ├── signature.rs      what a callable's signature and FOR ALL group declare for its body
+│   ├── spelling.rs       path_spelling — a member read decided a path by its tokens alone: its root (a value name or an expression written in place), its value-member chain and its type label, which the shape builder records and the elaborator reads
 │   ├── tree.rs           content trees — Tree, Leaf, Binder, Within: what the load sees of a module-valued expression, each node printed once as the run's digest or as an open key over its leaves
-│   ├── typed.rs          the load-time type vocabulary — Static (unknown, closed, or rigid over Variables a run supplies) and solutions, and the callable-typing records Callable / Registered / ParameterBinding and Elaboration, and the value channel's Statics and each keyworded use's UseStatics (its Narrowing and contributions); a frame body's BodyClass and the caching record — Caching, each mint site's Mint class and the warm composite sites
+│   ├── typed.rs          the load-time type vocabulary — Static (unknown, closed, or rigid over Variables a run supplies) and solutions, and the callable-typing records Callable / Registered / ParameterBinding and Elaboration, and each keyworded use's UseStatics (its Narrowing and contributions); a frame body's BodyClass and the caching record — Caching, each mint site's Mint class and the warm composite sites
 │   ├── builtins.rs       Builtins — the sorted builtin table every activation reads through its header, values then types, then the overloads grouped by bucket key
+│   ├── header.rs         RegionHeader / HalfHeader — what a koan graph keeps per habitat half: its branch, a build cell's specialization table and a specialization's home; the projection to the branch's slot that values reads
 │   ├── closure.rs        ClosureBindings — a callable's captures, read from the enclosing activation into scratch then laid down: a Link, a value word or a knot edge, each, beside the build cell the callable was born under; the run's copy and weight
 │   └── activation.rs     ActivationView — one call's or block's Copy, Drop-free read half, covariant in its brand: its header, the knot member it runs and a view of its slots, read by coordinate (an edge capture as its sibling member); Activation — the view beside the slot array that binds, invariant, with one constructor per body kind
 ├── values.rs         pub mod values — Value, the 24-byte Copy sum over scalars, a region string, a borrow of each per-kind resident struct, a knot-member parameter and a header over one; the Knotted / KnottedFamily trait pair and its vacuous Nothing / NoKnot default; ValueFamily / ValueCarrier; the text helper and the ascription retype
@@ -206,7 +215,7 @@ src/
 │   ├── circular.rs       Circular / Resolved / CodeView — a knot's data node over link cells, what a member holds as `values` reads it, and a data node's run listing and rebuild for its knot's copy
 │   ├── admission.rs      satisfies over a value's memoized type, admits_part / part_ktype over a raw AST part, admits over a working part, and construction, the one newtype-construction rule, and representation, the type a tagged payload is read at
 │   ├── surface.rs        Seen / Surface — the one door every read of a container or tagged value goes through: a value beside the type a read sees it at, opened to show only what that type names; Value::retyped, and the load's static type of a retyped value
-│   ├── habitat.rs        TypeHeader / HalfHeader — what a graph keeps per habitat half: its branch, and a build cell's specialization table and a specialization's own handle and parent; Half, a half's writer beside its header door (or the root builder at the load) under a pairing brand; Chain, a chain paired to the writer it serves, and Types, the chain a step, a build or the load reads and interns through
+│   ├── habitat.rs        BranchSlot / BranchCell — the part of a habitat half's header values reads, its branch's slot; Half, a half's writer beside its header door projected to that slot (or the root builder at the load) under a pairing brand; Chain, a chain paired to the writer it serves, and Types, the chain a step, a build or the load reads and interns through
 │   ├── specialization.rs SpecKey / SpecEntry / SpecTable / SpecBounds — a build cell's fixed-length, least-recently-born table of its specializations and the bounds that size it; BuildRef, the opaque token naming a build cell above the scheduler
 │   ├── crossing.rs       cross / cross_here over the placement doors, cross_view and copy_severed — the doors a copy comes through, the second for a value inside a copied operand of another family — the deep copy adopting each part's memo, a pin's merge, the debug habitat check, adopt_value and Destination — the one adoption walk at a caching body's exit and an invariant site, stopping at a part whose memo bits meet the contract and marking what an exit walked settled — and the crossing verdict
 │   ├── working.rs        WorkingExpression / WorkingPart — the scheduler's per-dispatch node in the executing cell's region, carrying the parse's node cache
@@ -218,13 +227,15 @@ src/
 ├── elaborate/
 │   ├── expression.rs     type_expression — bare names, LIST OF, MAP ->, unions, record types, FN and EXPR types with their FOR ALL groups (refused outside a signature member), a signature's WITH application, a code kind NEEDING names, Union.Tag
 │   ├── signature.rs      callable_type — a FN's, EXPR's or OP's type read off the expression shape its body sits in, with a registration's ranked shape and parameter binding
-│   ├── channel.rs        type_channel — the load pass: every type binder, type expression, callable and registration — a USING block's surfaced key included — typed where the program loads, closed, rigid or unknown, into the shape's write-once cells
+│   ├── unit.rs           the type half of the load's walk: a unit's type binders, type expressions, guards, registrations — a USING block's surfaced key included — and callables typed closed, rigid or unknown through the one load-time Reader over a TypeContext the walk implements
 │   ├── paths.rs          what a path through a module reads where it runs — declared_through, path_binding, bound_path — the one reader the load and the run share
 │   ├── members.rs        a signature's members: layout order, and the one lookup of where a member sits and what it is declared at, shared by the type reader, dispatch and the module layout
-│   └── reads.rs          Reads / TypeAt — what elaboration reads names through: an activation, its view, or the load pass's reader
+│   └── reads.rs          Reads / TypeAt — what elaboration reads names through: an activation, its view, or the walk's load-time reader
 ├── build.rs          pub mod build — the build tree: the build root the load runs in and the specializations a binding settles; what decides a specialization's identity
 ├── build/
-│   └── key.rs            key_of — a specialization's key: its callee's segment and the argument digests at the parameters its invariant sites read
+│   ├── key.rs            key_of — a specialization's key: its callee's segment and the content digests at its keyed names
+│   ├── load.rs           LoadStore — the load's store: the walk's records laid in program storage, binding nothing
+│   └── folds.rs          fold — what the load folds over the walk's records: each body's caching record, each callable's keyed names, and each closure's contract
 ├── knot.rs           pub mod knot — functions, modules and circular data as values: the 16-byte Knotted member that closes Value's parameter, the Node it holds, the KValue / KActivation aliases, Supplied and Untieable, and the field a USING source names
 ├── knot/
 │   ├── function.rs       Function — a function node: its memoized type, body shape, closure bindings and knot weight; the staging a tie does for a function member
@@ -242,32 +253,33 @@ src/
 │   └── copy.rs           the knot-member family's copy: a whole knot re-tied at the destination, edges verbatim
 ├── scheduler.rs      pub mod scheduler — the deferred-work drain over cellgraph's cells and liveness matrix: a unit of work is a cell, and this module adds the ready stack, the drain protocol and delivery, over one step bundle the layer above supplies
 ├── scheduler/
-│   ├── drain.rs          Graph — the CellGraph closed over the scheduler's families beside the frozen type root it hands every step and crossing and its build root, with the storage-only slab roots it hands out and takes back; Scheduler — a per-call view over a borrowed Graph: the depth-first ready stack of live cells and unborn requests, run over one root work, the wake of a rested birth at the verdict's price, the deferred release a tail hand-off needs, a root work resumed from what an earlier one left (Resting), the specialization a frame borrows resolved before its birth, and DrainStalled; every birth and every death is the drain's
+│   ├── drain.rs          Graph — the CellGraph closed over the scheduler's families beside the type tiers (the frozen load and the agent tier) it hands every step and crossing and its build root, with the storage-only slab roots it hands out and takes back; Scheduler — a per-call view over a borrowed Graph: the depth-first ready stack of live cells and unborn requests, run over one root work, the wake of a rested birth at the verdict's price, the deferred release a tail hand-off needs, a root work resumed from what an earlier one left (Resting), the specialization a frame borrows resolved before its birth, and DrainStalled; every birth and every death is the drain's
 │   ├── load.rs           Graph::load — the load door: two slab roots, the build root entered once by the load, then its header and specialization table laid at the root bound, and Roots
 │   ├── seek.rs           Seek — what an asker hands the drain to find a frame's specialization — and the Lending a request's cell is born with
-│   ├── action.rs         Step — the only thing a step is handed: its writers, its state and scratch state, spawn and spawn_seeking, results, build_ref, and the caching chains (shares_types / reading_types / warm_types), the park / tail / tail_seeking / tail_under / finish_fresh / finish_in_home / finish / done / leave / enlist / failed ends that alone build an Action (opaque, over the drain-only Kind); Placement, Use, Request, Received, Slot, the drain's Spawns buffer, StepError
+│   ├── action.rs         Step — the only thing a step is handed: its writers, its state and scratch state, spawn and spawn_seeking, results, build_ref, and the caching chains (caching_types, and agent_types — the agent tier, the warm tier of a frame borrowing a specialization), the park / tail / tail_seeking / tail_under / finish_fresh / finish_in_home / finish / done / leave / enlist / failed ends that alone build an Action (opaque, over the drain-only Kind); Placement, Use, Request, Received, Slot, the drain's Spawns buffer, StepError
 │   ├── continuation.rs   StepBundle — the covariant birth family and its crossing, the parked state family, the scratch family and born, which the layer above supplies; BirthAt / StateAt, NativeStep, Work, and the ContinuationFamily a cell parks: Continuation, Rested, Provenance
 │   └── delivery.rs       KDelivery — koan's delivery bundle: a scratch fill and a carrier fill, both the value family
 ├── program.rs        pub mod program — a loaded program as one owning value and the body runner that performs it, over build, elaborate, knot, memory, parse, scheduler, scope, symbols, type_lattice and values
 ├── program/
-│   ├── record.rs         Program — the record a loaded program's steps read at 'graph, and evaluate, the one door every evaluation is asked through; Language — the builtin table, evaluator and shape check the layer above supplies; Output, Outcome, Contract and whether a callee's return keeps it, error values; Evaluated, LoadError
+│   ├── record.rs         Program — the record a loaded program's steps read at 'graph, and evaluate, the one door every evaluation is asked through; Language — the builtin table, evaluator and walk the layer above supplies; Output, Outcome, Contract and whether a callee's return keeps it, error values; Evaluated, LoadError
 │   ├── bundle.rs         KBundle — koan's step bundle: the covariant KBirth (Program / Call / Eval / Evaluate / Block / Inspect / Specialize), Within — what an evaluation or block runs within — the parked KState, and the sites a parked runner keeps in scratch
 │   ├── exit.rs           Exit — a caching body's exit: what leaves it adopted into the region, up to a settled part
 │   ├── body.rs           run — the body runner, the one step that performs a body's units at the top level, in every frame and in a block, ending a frame under its contract or tailing its last statement; call and placement_of, the derived placement bit; block; eval and CodeRefused, the door that runs a quote's code
 │   ├── specialize.rs     seek — what a call into a keyed frame hands the drain — and specialize, a specialization's step
-│   └── substrate.rs      CellSubstrate — program storage, the types' root bump and the interner as self_cell's owner, and Running — the graph, its two roots and the Program record at 'graph, with run and inspect, reached through a closure per call; the load runs as the build root's step, builds the types' root and freezes it
+│   └── substrate.rs      CellSubstrate — program storage, the types' load and agent-tier bumps and the interner as self_cell's owner, and Running — the graph, its two roots and the Program record at 'graph, with run and inspect, reached through a closure per call; the load runs as the build root's step, builds the types' load and freezes it and the symbol table, and lays the agent tier
 ├── dispatch.rs       pub mod dispatch — Koan, the Language programs run under, and the vocabulary its submodules share
 └── dispatch/
     ├── builtins.rs       the builtin table — the lattice's types, Error and every overload as a builtin node — and the natives the overloads run
     ├── evaluate.rs       the evaluator step: what a node is, gathering its parts, an ascription, an EVAL, a keyworded call, an application, and finishing under a contract
     ├── select.rs         admission and selection over a candidate list — the one tie rule and first-class elimination the load reads too — and a keyworded call's argument record
     ├── check.rs          the overlap check: a user overload taking operands a builtin overload at its key already takes
-    ├── statics.rs        static selection: a static type for every value expression and binder where the program loads, each keyworded use's candidates narrowed and chosen by them, and the return, ascription, view and EVAL checks
-    ├── statics/trees.rs  a module-valued expression read as its content tree, a call unfolded into its callee's summary
-    ├── statics/paths.rs  each path resolved at load, closed or to its class; the crossing rule; member reads under transient pins
-    ├── statics/caching.rs where a caching body's types intern: each mint and composite site classed by what it reads, the tail edges and escapes, and the invariance fixpoint
-    ├── statics/views.rs  the load's half of a view: what each nested module carries, read off the operand's tree, and the types the run's view would intern laid in the root
-    ├── statics/memos.rs  where a content digest's memos sit: the slots a `:|` reads a module's captures from, and each call handing one on bare
+    ├── walk.rs           the load's one walk: its driver over bodies and units, the demand stack's components, and its value half — a static type for every value expression and binder, each keyworded use's candidates narrowed and chosen by them, and the return, ascription, view and EVAL checks
+    ├── walk/reads.rs     the walk's façade: every read and write of a fact through the store, each unit's frontier gathered
+    ├── walk/types.rs     the walk as the type half's TypeContext, and a unit's declarations, type expressions, registrations and births
+    ├── walk/trees.rs     a module-valued expression read as its content tree, a call unfolded into its callee's summary
+    ├── walk/paths.rs     each path resolved at load, closed or to its class; the crossing rule; member reads under transient pins
+    ├── walk/caching.rs   what the caching fold reads of each minting and composite site
+    ├── walk/views.rs     the load's half of a view: what each nested module carries, read off the operand's tree, and the types the run's view would intern laid in the root
     └── errors.rs         the messages of the error values dispatch raises
 ```
 
@@ -275,13 +287,14 @@ The [lattice](lattice/README.md) crate's tree:
 
 ```
 lattice/src/
-├── lib.rs               the crate root — the import rule and `forbid(unsafe_code)` outside the test build
+├── lib.rs               the crate root — the import rule and `deny(unsafe_code)` outside the test build, which a sealed component's member-table read alone allows
 ├── tests.rs             `#[cfg(test)]` crate-wide test scaffolding — installs audit/'s counting global allocator for this crate's test binary, the tally the heap-contract tests bracket, and the property-case share
 ├── bump.rs              pub mod bump — the bump tier: Bump, BumpAllocator (= &Bump), BumpVec, BumpBackedMap / BumpHashTable / BumpBackedSet and bump_table / bump_hash_table / bump_set; the crate's only import of bumpalo / hashbrown / allocator_api2
 ├── bump/
 │   ├── digest_table.rs     DigestTable — the insert-only table of references to entries keyed by a uniformly distributed word, grown through LaysRuns with no allocator, so a cell's region can host it
+│   ├── frozen_table.rs     FrozenTable — a DigestTable's read-only copy, its slots laid once and never written, so it holds no cell
 │   └── components.rs       strongly_connected_components — Tarjan over an index graph, staged in a bump; the walk the type lattice's recursive groups and koan's scope bindings both condense by
-├── symbols.rs           pub mod symbols — Symbol, a name's 128-bit content digest, plus SymbolInterner (the run's digest→text side table, read only when rendering), the four classified wrappers, BindKind, the token classifiers and the identity hasher every symbol-keyed table uses; a leaf, so koan's parse and the type lattice rest on it rather than on each other
+├── symbols.rs           pub mod symbols — Symbol, a name's 128-bit content digest, plus SymbolInterner (the program's digest→text side table, read only when rendering: the load's table, frozen at its end, and an overlay for names recorded after), the four classified wrappers, BindKind, the token classifiers and the identity hasher every symbol-keyed table uses; a leaf, so koan's parse and the type lattice rest on it rather than on each other
 ├── symbols/
 │   └── tests.rs            interning laws, including how a static_name! records
 ├── types.rs             pub mod types — the closed algebra over interned type nodes: the vocabulary, the tiers and the chain over them, the identity recipe, the relations and the unifier, over symbols and the bump tier and nothing else
@@ -292,10 +305,10 @@ lattice/src/
     ├── run.rs            Run / Elements — typed views over a node's raw child runs
     ├── typed.rs          the typed relations the rest of koan calls: the order, join and meet over KType; fits, ranking, solving and substitution over parametric types and schemes
     ├── digest.rs         TypeDigest and the one identity recipe: the hand-written tag table, one layer deep, plus the schema and component digests
-    ├── tiers.rs          the tiers a type lives in — RootBuilder, grown by the load and frozen at its end into Root, which has no intern door; Branch, a habitat half's DigestTable of nodes, its verdicts and its one link; Own, the Habitat a chain writes through, Halves, a scratch chain's own half beside the region it reads held by value, and the object-safe Tier a chain reads at another brand
-    ├── chain.rs          TypeChain — the root, a scratch habitat's region tier and the half it writes, probed longest-lived first, a read by handle following links and caching the hit; the composite doors, generic over the handle, canonical `union_of` reducing its concrete members, the scheme doors `shape_scheme` and `function_scheme`, which bind a group over a plain body and keep every variable, the checked conversion `concrete`, and the signature doors `signature`, `signature_apply` and `signature_meet`
+    ├── tiers.rs          the tiers a type lives in — RootBuilder, grown by the load and frozen at its end into Frozen, which has no intern or record door and holds no cell, so it is Sync; Agent, one agent's insert-only tier above it; Branch, a habitat half's DigestTable of nodes, its verdicts and its one link; Own, the Habitat a chain writes through, Halves, a scratch chain's own half beside the region it reads held by value, and the object-safe Tier a chain reads at another brand
+    ├── chain.rs          TypeChain — the frozen load, the agent tier, a scratch habitat's region tier and the half it writes, probed longest-lived first, a read by handle following links and caching the hit; the composite doors, generic over the handle, canonical `union_of` reducing its concrete members, the scheme doors `shape_scheme` and `function_scheme`, which bind a group over a plain body and keep every variable, the checked conversion `concrete`, and the signature doors `signature`, `signature_apply` and `signature_meet`
     ├── transfer.rs       how a crossing makes another half's handles resolve in a chain: link at a spawned child's birth, merge at every other pin, adopt in a copy, and adopt_from reading a whole chain
-    ├── verdicts.rs       FixedVerdicts, the root's fixed two-way cache of relation verdicts, and VerdictEntry, a branch's growable table's entry; a verdict placed in the shortest-lived tier holding one of its types
+    ├── verdicts.rs       VerdictEntry, a verdict table's entry, and VerdictKey; every table lossless, the load's read-only, a verdict placed by where its types lie
     ├── kind.rs           KKind — the shallow kind a type-accepting slot admits
     ├── record.rs         Record — a Copy view over a region slice of BinderSymbol-keyed fields, backing record types and lambda parameter identity
     ├── shape.rs          DispatchTokenElement / DeferredReturnSurface / Specificity, the readers of a shape's parts (`Shape`), and the element and record rebuild helpers
@@ -377,8 +390,9 @@ A design no single module owns sits in [design/](design/gradual-typing.md):
 through the load, to a call, [quantified types](design/quantified-types.md)
 says where a `FOR ALL` may be written and what stands in for a higher-ranked
 type, [modules](design/modules.md) says what a module's types are and when
-two are one, and [type tiers](design/type-tiers.md) says where a type the run
-builds lives and when it is released.
+two are one, [type tiers](design/type-tiers.md) says where a type the run
+builds lives and when it is released, and [build storage](design/build-storage.md)
+says what the load and the build decide and where each rests it.
 
 Future work lives in [roadmap/](roadmap/) — one file per work item, with `Requires:` /
 `Unblocks:` cross-links. Its [README](roadmap/README.md) groups work into project

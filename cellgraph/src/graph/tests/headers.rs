@@ -17,6 +17,7 @@ use std::cell::Cell;
 
 use super::super::*;
 use super::{Number, Owned, one, operand, operand_at, pin};
+use crate::header::Projects;
 
 /// A header: a table in the half's own bytes, or a label borrowing storage outside the graph.
 #[derive(Clone, Copy)]
@@ -145,6 +146,59 @@ fn a_header_laid_in_a_step_comes_back_at_the_next_step() {
         })
         .unwrap();
     let read = graph.enter(cell, |context| header_value(context)).unwrap();
+    assert_eq!(read, Some(7));
+}
+
+/// A [`Marks`] header's table, where it is one.
+pub(super) struct Tables;
+crate::reattachable!(Tables => Option<&'cell Cell<&'cell u32>>);
+
+/// A table header projects to its `Cell`; a label projects to nothing.
+impl<'graph> Projects<'graph> for Marks {
+    type Projection = Tables;
+
+    fn lay<'cell>(writer: Writer<'cell, '_>) -> Mark<'graph, 'cell>
+    where
+        'graph: 'cell,
+    {
+        let number = one(writer, 0);
+        Mark::Table(one(writer, Cell::new(number)))
+    }
+
+    fn project<'cell>(header: Mark<'graph, 'cell>) -> Option<&'cell Cell<&'cell u32>>
+    where
+        'graph: 'cell,
+    {
+        match header {
+            Mark::Table(table) => Some(table),
+            Mark::Label(_) => None,
+        }
+    }
+}
+
+#[test]
+fn a_projected_header_laid_in_a_step_comes_back_at_the_next_step() {
+    let mut graph = new_graph(1);
+    let cell = graph.create(None).unwrap();
+    graph
+        .enter(cell, |context| {
+            let door = context.header().project();
+            assert!(door.get().is_none(), "projecting lays nothing");
+            let table = door.get_or_lay(context.writer()).expect("a laid table");
+            table.set(one(context.writer(), 7));
+            // Grow the region past its first chunk, so the read below crosses a new one.
+            for _ in 0..4096 {
+                one(context.writer(), 0u64);
+            }
+            assert_eq!(door.get().flatten().map(|table| *table.get()), Some(7));
+        })
+        .unwrap();
+    let read = graph
+        .enter(cell, |context| {
+            let door = context.header().project();
+            door.get().flatten().map(|table| *table.get())
+        })
+        .unwrap();
     assert_eq!(read, Some(7));
 }
 

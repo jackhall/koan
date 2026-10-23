@@ -60,7 +60,7 @@ fn slot() -> impl Strategy<Value = Slot> {
 /// What the test interns into.
 struct World<'x, 'graph> {
     program: &'x Program<'graph>,
-    types: &'x Types<'x, 'x, 'x>,
+    types: &'x Types<'x, 'x>,
     scratch: &'x Bump,
 }
 
@@ -194,7 +194,7 @@ fn every_rule_obeys_the_law() {
             let bump = Bump::new();
             let slots = prop::collection::vec(
                 slot(),
-                shape_slots(declared, &reading(program.root(), &bump)).count(),
+                shape_slots(declared, &reading(program.tiers(), &bump)).count(),
             );
             TestRunner::new(config)
                 .run(&slots, |slots| law(program, native, declared, &slots))
@@ -211,7 +211,7 @@ fn law(
     slots: &[Slot],
 ) -> Result<(), TestCaseError> {
     let (scratch, tier) = (Bump::new(), Bump::new());
-    let types = reading(program.root(), &tier);
+    let types = reading(program.tiers(), &tier);
     let world = World {
         program,
         types: &types,

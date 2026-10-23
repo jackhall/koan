@@ -259,6 +259,8 @@ every birth finds no header in a slot whose previous occupant laid one; and a re
 borrows its own plain bytes, outside any `Cell`, retired from a tree disposal and a slab release.
 
 - `graph::tests::headers::a_header_laid_in_a_step_comes_back_at_the_next_step`
+- `graph::tests::headers::a_projected_header_laid_in_a_step_comes_back_at_the_next_step`
+  — the same reattach reached through a `Projected` door's erased slot.
 - `graph::tests::headers::a_tenant_reads_its_hosts_header`
 - `graph::tests::headers::a_placement_reads_and_lays_its_destinations_header`
 - `graph::tests::headers::a_scratch_header_lasts_while_its_bump_does`
@@ -277,14 +279,18 @@ borrows its own plain bytes, outside any `Cell`, retired from a tree disposal an
 **The named lend and the peek** ([src/graph.rs](../src/graph.rs),
 [src/lend.rs](../src/lend.rs)) — the `retype` primitive at the doors a borrowed half adds. `enter`
 re-anchors a parked scratch state naming the lent half; `Header::get` reattaches a lender's region
-header at `'lent`; and `peek` anchors a region header through `Active` at a brand quantified per
-call, outside any step. What Miri checks: a borrower reads and lays in a named cell's region across
-the region table moving and the lender's release; a peeked header read across its region growing;
+header at `'lent`; `peek` anchors a region header through `Active` at a brand quantified per
+call, outside any step; and `enter_beside` anchors a second region's header inside a step, at a
+brand quantified apart from the step's. What Miri checks: a borrower reads and lays in a named
+cell's region across the region table moving and the lender's release; a peeked header read across
+its region growing; a value read beside a step, copied into its region and read back after the cell
+it was read from is freed;
 and a dead borrower's scratch, naming its own lender's scratch, read by that borrower's child after
 the lender stepped — the count that drops at disposal, not release, is what keeps those bytes.
 
 - `graph::tests::lend::a_named_lend_reads_and_lays_in_its_lenders_region_at_lent`
 - `graph::tests::lend::peek_reads_a_header_laid_in_a_live_region`
+- `graph::tests::lend::enter_beside_lays_into_one_region_what_it_reads_of_another`
 - `graph::tests::lend::a_dead_borrowers_scratch_holds_its_lenders_scratch_until_its_disposal`
 
 A tenant's own lend reattaches the same way: a tenant reads and lays in the region it was lent

@@ -7,6 +7,10 @@
 //! asker's [`Seek`] finds or builds with one synchronous step, or, born cold, its parent's scratch
 //! for a `Fresh` frame and nothing for a `Shares` one. Any other cell borrows what its parent reads.
 //!
+//! A miss enters the new specialization beside its asker, and the entry lays the binding's nodes
+//! from the asker's region into the specialization's branch before its step runs, so the branch
+//! holds them by value.
+//!
 //! The drain keeps every build cell's books: it stamps a hit's entry and a hop's, fills a new
 //! child's entry and sets its home. A miss on a full table releases the least recently born child
 //! with its subtree, leaf first, before the new child is created; nothing else releases a
@@ -30,10 +34,11 @@ use crate::scheduler::continuation::{
 };
 use crate::scheduler::delivery::KDelivery;
 use crate::scheduler::seek::{Lending, Seek};
-use crate::type_lattice::Root;
 #[cfg(test)]
-use crate::values::HalfHeader;
-use crate::values::{Decision, SpecHome, TypeHeader};
+use crate::scope::HalfHeader;
+use crate::scope::RegionHeader;
+use crate::type_lattice::Branch;
+use crate::values::{Chain, Decision, SpecBinding, SpecHome, TypeTiers};
 
 /// The graph of cells a drain runs over: `cellgraph`'s graph closed over the continuation family,
 /// the bundle's scratch family and the delivery bundle.
@@ -42,11 +47,11 @@ use crate::values::{Decision, SpecHome, TypeHeader};
 /// makes one, takes its roots from it, keeps it across calls and asks what is left in it, and
 /// reaches every other cell only through a [`Scheduler`] over it.
 ///
-/// It holds the frozen type root every step's chain reads first, so a step and a crossing take it
+/// It holds the type tiers every step's chain reads first, so a step and a crossing take it
 /// from the graph they run over rather than from a program or a static.
 pub struct Graph<'graph, B: StepBundle<'graph>> {
-    cells: CellGraph<'graph, ContinuationFamily<B>, B::Scratch, KDelivery, TypeHeader>,
-    type_root: &'graph Root<'graph>,
+    cells: CellGraph<'graph, ContinuationFamily<B>, B::Scratch, KDelivery, RegionHeader>,
+    tiers: TypeTiers<'graph>,
     /// The build tree's core cell, whose region holds the root-level specialization table: `Some`
     /// for a graph the [load door](Graph::load) stood up, `None` for one [`new`](Graph::new) made,
     /// whose every frame is born cold.
@@ -55,20 +60,20 @@ pub struct Graph<'graph, B: StepBundle<'graph>> {
 
 impl<'graph, B: StepBundle<'graph>> Graph<'graph, B> {
     /// A graph over a slab of `cap` cells, under koan's own crossing verdict, its steps' types read
-    /// over `type_root`.
-    pub fn new(cap: u32, type_root: &'graph Root<'graph>) -> Self {
-        Graph::assemble(CellGraph::new(cap, crate::values::verdict), type_root, None)
+    /// over `tiers`.
+    pub fn new(cap: u32, tiers: TypeTiers<'graph>) -> Self {
+        Graph::assemble(CellGraph::new(cap, crate::values::verdict), tiers, None)
     }
 
-    /// A graph over `cells`, its steps' types read over `type_root`, its build root `build_root`.
+    /// A graph over `cells`, its steps' types read over `tiers`, its build root `build_root`.
     pub(super) fn assemble(
-        cells: CellGraph<'graph, ContinuationFamily<B>, B::Scratch, KDelivery, TypeHeader>,
-        type_root: &'graph Root<'graph>,
+        cells: CellGraph<'graph, ContinuationFamily<B>, B::Scratch, KDelivery, RegionHeader>,
+        tiers: TypeTiers<'graph>,
         build_root: Option<SlabHandle>,
     ) -> Self {
         Graph {
             cells,
-            type_root,
+            tiers,
             build_root,
         }
     }
@@ -156,7 +161,7 @@ impl<'graph, B: StepBundle<'graph>> Graph<'graph, B> {
     #[cfg(test)]
     pub(super) fn cells(
         &mut self,
-    ) -> &mut CellGraph<'graph, ContinuationFamily<B>, B::Scratch, KDelivery, TypeHeader> {
+    ) -> &mut CellGraph<'graph, ContinuationFamily<B>, B::Scratch, KDelivery, RegionHeader> {
         &mut self.cells
     }
 }
@@ -171,10 +176,10 @@ pub(crate) struct Tiers {
     pub region: usize,
     /// Nodes in the scratch branch.
     pub scratch: usize,
-    /// Nodes in the lent branch.
-    pub lent: usize,
-    /// Verdicts recorded in the lent branch.
-    pub lent_verdicts: usize,
+    /// Nodes in the agent tier.
+    pub agent: usize,
+    /// Verdicts recorded in the agent tier.
+    pub agent_verdicts: usize,
     /// Bytes the scratch bump has handed out.
     pub scratch_bytes: usize,
     /// How many frames sought a specialization: a count, not a high-water mark.
@@ -186,6 +191,8 @@ pub(crate) struct Tiers {
     /// How many frames were born cold because the build cell their seek or hop named is dead: a
     /// count.
     pub cold_births: usize,
+    /// Nodes the drain laid into the agent tier from new specializations' askers' branches: a count.
+    pub relayed: usize,
 }
 
 /// Add to one of the counts in [`TIERS`].
@@ -205,13 +212,14 @@ thread_local! {
         std::cell::Cell::new(Tiers {
             region: 0,
             scratch: 0,
-            lent: 0,
-            lent_verdicts: 0,
+            agent: 0,
+            agent_verdicts: 0,
             scratch_bytes: 0,
             sought: 0,
             specialized: 0,
             evicted: 0,
             cold_births: 0,
+            relayed: 0,
         })
     };
 }
@@ -228,7 +236,7 @@ thread_local! {
     pub(crate) static CACHING: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
 
     /// Per caching body, by its shape's address: the nodes its steps laid in the scratch branch,
-    /// and in the lent branch. Tests reset it.
+    /// and in the agent tier. Tests reset it.
     pub(crate) static LAID: std::cell::RefCell<std::collections::BTreeMap<usize, (usize, usize)>> =
         const { std::cell::RefCell::new(std::collections::BTreeMap::new()) };
 
@@ -386,7 +394,10 @@ where
                     } else {
                         Born::Child
                     };
-                    (self.create(provenance, asked, born)?, release_after)
+                    // The cell whose region holds the request's birth: a hop's predecessor, else
+                    // the cell that asked.
+                    let asker = release_after.unwrap_or(provenance.parent);
+                    (self.create(provenance, asked, born, asker)?, release_after)
                 }
             };
             #[cfg(test)]
@@ -470,17 +481,19 @@ where
     }
 
     /// Give a request its cell, under the parent its provenance names, its birth crossing as
-    /// `born` says, borrowing what its lending resolves to.
+    /// `born` says, borrowing what its lending resolves to. `asker` is the cell whose region holds
+    /// the birth, which a missed specialization reads its binding's nodes from.
     fn create(
         &mut self,
         provenance: Provenance,
         asked: Asked<'graph, B>,
         born: Born,
+        asker: CellHandle,
     ) -> Result<CellHandle, DrainStalled> {
         let borrows = match asked.lending {
             Lending::Parent => Borrows::Parent,
             Lending::Call(None) => Borrows::Call(None),
-            Lending::Call(Some(seek)) => Borrows::Call(self.seek(seek)?),
+            Lending::Call(Some(seek)) => Borrows::Call(self.seek(seek, asker)?),
             Lending::Under(build) => Borrows::Call(match build.opened() {
                 None => None,
                 Some(spec) if self.graph.cells.is_live(spec) => {
@@ -508,13 +521,24 @@ where
 
     /// The specialization a frame `seek` asks for borrows: the one the parent's table names under
     /// the key, if it is live, its entry stamped; or else one created under the parent and stepped
-    /// at once, before anything else runs, and entered in the table. A full table first releases
-    /// its least recently born child with its subtree, and the new child takes its entry. `None`
-    /// for a parent that is not live, or a graph with no build root, whose frame is born cold.
-    fn seek(&mut self, seek: Seek<'graph, B>) -> Result<Option<CellHandle>, DrainStalled> {
+    /// at once beside `asker`, laying the binding's nodes first, before anything else runs, and
+    /// entered in the table. A full table first releases its least recently born child with its
+    /// subtree, and the new child takes its entry. `None` for a parent that is not live, or a
+    /// graph with no build root, whose frame is born cold.
+    fn seek(
+        &mut self,
+        seek: Seek<'graph, B>,
+        asker: CellHandle,
+    ) -> Result<Option<CellHandle>, DrainStalled> {
         #[cfg(test)]
         tally(|tiers| tiers.sought += 1);
-        let parent: CellHandle = match (seek.parent.opened(), self.graph.build_root) {
+        let Seek {
+            parent,
+            key,
+            binding,
+            work,
+        } = seek;
+        let parent: CellHandle = match (parent.opened(), self.graph.build_root) {
             (Some(spec), _) => spec.into(),
             (None, Some(root)) => root.into(),
             (None, None) => return Ok(None),
@@ -522,7 +546,7 @@ where
         let cells = &self.graph.cells;
         let decided = cells.peek(parent, |header, _| {
             let table = header.into_value().table()?;
-            Some(table.decide(seek.key, |spec| cells.is_live(spec)))
+            Some(table.decide(key, |spec| cells.is_live(spec)))
         });
         let decision = match decided {
             Ok(decision) => decision.flatten(),
@@ -537,7 +561,15 @@ where
         debug_assert!(decision.is_some(), "a live build cell holds a table");
         let index = match decision {
             None => return Ok(None),
-            Some(Decision::Hit(spec)) => return Ok(Some(spec.into())),
+            Some(Decision::Hit(spec)) => {
+                #[cfg(debug_assertions)]
+                assert!(
+                    self.holds_binding(&binding),
+                    "a hit's specialization holds its binding's nodes: its key digests the \
+                     content they are read from"
+                );
+                return Ok(Some(spec.into()));
+            }
             Some(Decision::Fill(index)) => index,
             Some(Decision::Evict(index, victim)) => {
                 self.release_subtree(victim)?;
@@ -548,26 +580,26 @@ where
         // step seeks nothing (`enlist` refuses a cell that asked for children), so the entry
         // `decide` chose is still free when the step returns.
         let continuation = Continuation {
-            step: seek.work.step,
+            step: work.step,
             provenance: Provenance {
                 parent,
                 report: None,
                 home: parent,
             },
-            state: Rested::Awake(B::born(seek.work.state)),
+            state: Rested::Awake(B::born(work.state)),
         };
         let spec = (self.graph.cells)
             .create_tree_lent(parent, Lend::Named(parent), Some(continuation))
             .map_err(|_| DrainStalled::Unspawnable)?;
         #[cfg(test)]
         tally(|tiers| tiers.specialized += 1);
-        let (action, _) = self.step(spec.into())?;
+        let (action, _) = self.step_beside(spec.into(), asker, &binding)?;
         match action.kind() {
             Kind::Quiesced => {
                 let cells = &self.graph.cells;
                 let entered = cells.peek(parent, |header, _| {
                     let table = header.into_value().table()?;
-                    table.fill(index, seek.key, spec);
+                    table.fill(index, key, spec);
                     Some(())
                 });
                 let homed = cells.peek(spec, |header, _| {
@@ -582,6 +614,16 @@ where
             Kind::Failed(error) => Err(DrainStalled::Step(error)),
             _ => Err(DrainStalled::Step(StepError::Refused)),
         }
+    }
+
+    /// Whether the frozen load or the agent tier holds the node of every handle `binding` carries,
+    /// as a specialization's seed laid them. Lays nothing. `adopt` lays children before parents,
+    /// so a found handle's children are there too.
+    #[cfg(debug_assertions)]
+    fn holds_binding(&self, binding: &SpecBinding) -> bool {
+        let tiers = self.graph.tiers;
+        let resting = crate::type_lattice::TypeChain::resting(tiers.frozen, tiers.agent);
+        binding.handles().all(|kt| resting.resolves(kt))
     }
 
     /// Stamp the entry of the live specialization `spec` in its parent's table: a hop of the same
@@ -681,96 +723,34 @@ where
         // `enter` borrows the graph exclusively and the step borrows the buffer, so the two are
         // taken as separate fields rather than through `self`.
         let Scheduler { graph, spawns, .. } = self;
-        let type_root = graph.type_root;
-        graph
-            .cells
-            .enter(cell, |context| {
-                let Continuation {
-                    step,
-                    provenance,
-                    state,
-                } = context
-                    .continuation()
-                    .expect("a ready cell carries a continuation");
-                // Both slots come off here, so the step is handed what it parked in each and
-                // reaches neither door itself. Only a park stores them back, so a step that
-                // finishes, hops or fails leaves the scratch slot empty and its bump goes back at
-                // this step's end.
-                let scratch = context.scratch_state();
-                let state = match state {
-                    Rested::Awake(state) => state,
-                    Rested::Dormant(dormant, born) => {
-                        match wake::<B>(context, type_root, dormant, born) {
-                            Ok(state) => state,
-                            Err(_) => {
-                                return (Action::refused(StepError::Unredeemable), provenance);
-                            }
-                        }
-                    }
-                };
-                #[cfg(test)]
-                let before = {
-                    let len = |branch: Option<&crate::type_lattice::Branch<'_>>| {
-                        branch.map_or(0, crate::type_lattice::Branch::len)
-                    };
-                    // The half a step's warm chain reads: a specialization's region, or a scratch.
-                    let lent = (context.lent_region())
-                        .or_else(|| context.lent_scratch())
-                        .and_then(|(_, header)| header.get())
-                        .map(HalfHeader::branch);
-                    (
-                        len(context.scratch_header().get().map(HalfHeader::branch)),
-                        len(lent),
-                    )
-                };
-                let step = step(Step::new(
-                    context,
-                    type_root,
-                    &provenance,
-                    spawns,
-                    state,
-                    scratch,
-                ));
-                #[cfg(test)]
-                {
-                    let len = |branch: Option<&crate::type_lattice::Branch<'_>>| {
-                        branch.map_or(0, crate::type_lattice::Branch::len)
-                    };
-                    // The half a step's warm chain reads: a specialization's region, or a scratch.
-                    let lent = (context.lent_region())
-                        .or_else(|| context.lent_scratch())
-                        .and_then(|(_, header)| header.get())
-                        .map(HalfHeader::branch);
-                    if let Some(shape) = CACHING.take() {
-                        let scratch = len(context.scratch_header().get().map(HalfHeader::branch))
-                            .saturating_sub(before.0);
-                        let warm = len(lent).saturating_sub(before.1);
-                        LAID.with(|laid| {
-                            let mut laid = laid.borrow_mut();
-                            let entry = laid.entry(shape).or_default();
-                            *entry = (entry.0 + scratch, entry.1 + warm);
-                        });
-                    }
-                    TIERS.with(|tiers| {
-                        let most = tiers.get();
-                        tiers.set(Tiers {
-                            region: most
-                                .region
-                                .max(len(context.header().get().map(HalfHeader::branch))),
-                            scratch: most
-                                .scratch
-                                .max(len(context.scratch_header().get().map(HalfHeader::branch))),
-                            lent: most.lent.max(len(lent)),
-                            lent_verdicts: (most.lent_verdicts)
-                                .max(lent.map_or(0, crate::type_lattice::Branch::verdict_count)),
-                            scratch_bytes: most
-                                .scratch_bytes
-                                .max(context.scratch_writer().in_use()),
-                            ..most
-                        });
-                    });
-                }
-                (step, provenance)
+        let tiers = graph.tiers;
+        (graph.cells)
+            .enter(cell, |context| run_step::<B>(context, tiers, spawns, None))
+            .map_err(|_| DrainStalled::Unenterable)
+    }
+
+    /// Enter the new specialization `spec` beside `asker` and run its one step, laying the node of
+    /// every handle `binding` carries into the agent tier first: read from the region branch of the
+    /// asker's write home, where the request's birth rests and so where every type its arguments
+    /// carry resolves; insert-if-absent, a load handle at a bit test. The read sits at a brand of
+    /// its own, so the agent tier keeps no reference into the run tree: a copy by value, made while
+    /// the asker is between steps. An empty binding opens no read.
+    fn step_beside(
+        &mut self,
+        spec: CellHandle,
+        asker: CellHandle,
+        binding: &SpecBinding,
+    ) -> Result<(Action<'graph, B>, Provenance), DrainStalled> {
+        if binding.is_empty() {
+            return self.step(spec);
+        }
+        self.spawns.clear();
+        let Scheduler { graph, spawns, .. } = self;
+        let tiers = graph.tiers;
+        (graph.cells)
+            .enter_beside(spec, asker, |context, read, _| {
+                let source = read.and_then(|header| header.into_value().branch());
+                run_step::<B>(context, tiers, spawns, Some((source, binding)))
             })
             .map_err(|_| DrainStalled::Unenterable)
     }
@@ -841,12 +821,109 @@ where
     }
 }
 
+/// One step of `cell`'s continuation, inside its entry: wake its state, seed its branch where
+/// the entry was opened beside an asker (`seed`: the asker's region branch and the binding whose
+/// nodes it lays), run the step function, and tally.
+fn run_step<'graph, 'step, 'here, 'scratch, 'lent, B: StepBundle<'graph>>(
+    context: &mut Context<'graph, 'step, 'here, 'scratch, 'lent, B>,
+    tiers: TypeTiers<'graph>,
+    spawns: &mut Spawns<'graph, B>,
+    seed: Option<(Option<&Branch<'_>>, &SpecBinding)>,
+) -> (Action<'graph, B>, Provenance)
+where
+    'graph: 'step + 'here + 'lent,
+    'here: 'scratch,
+    'lent: 'scratch,
+    Erased<'graph, B::Birth>: Copy,
+{
+    let Continuation {
+        step,
+        provenance,
+        state,
+    } = context
+        .continuation()
+        .expect("a ready cell carries a continuation");
+    // Both slots come off here, so the step is handed what it parked in each and
+    // reaches neither door itself. Only a park stores them back, so a step that
+    // finishes, hops or fails leaves the scratch slot empty and its bump goes back at
+    // this step's end.
+    let scratch = context.scratch_state();
+    let state = match state {
+        Rested::Awake(state) => state,
+        Rested::Dormant(dormant, born) => match wake::<B>(context, tiers, dormant, born) {
+            Ok(state) => state,
+            Err(_) => {
+                return (Action::refused(StepError::Unredeemable), provenance);
+            }
+        },
+    };
+    // A specialization's state is awake, so nothing above precedes its seeding. Its binding rests
+    // in the agent tier, which every frame under the specialization reads.
+    if let Some((source, binding)) = seed {
+        let types: Chain<'graph, 'here, 'graph, 'step> = tiers.resting();
+        #[cfg(test)]
+        let before = types.own_len();
+        for kt in binding.handles() {
+            types.adopt(source, kt);
+        }
+        #[cfg(test)]
+        tally(|tiers| tiers.relayed += types.own_len() - before);
+    }
+    #[cfg(test)]
+    let before = (
+        (context.scratch_header().get())
+            .and_then(HalfHeader::branch)
+            .map_or(0, Branch::len),
+        tiers.agent.len(),
+    );
+    let step = step(Step::new(
+        context,
+        tiers,
+        &provenance,
+        spawns,
+        state,
+        scratch,
+    ));
+    #[cfg(test)]
+    {
+        let len = |branch: Option<&Branch<'_>>| branch.map_or(0, Branch::len);
+        let agent = tiers.agent;
+        if let Some(shape) = CACHING.take() {
+            let scratch = len(context.scratch_header().get().and_then(HalfHeader::branch))
+                .saturating_sub(before.0);
+            let warm = agent.len().saturating_sub(before.1);
+            LAID.with(|laid| {
+                let mut laid = laid.borrow_mut();
+                let entry = laid.entry(shape).or_default();
+                *entry = (entry.0 + scratch, entry.1 + warm);
+            });
+        }
+        TIERS.with(|tiers| {
+            let most = tiers.get();
+            tiers.set(Tiers {
+                region: most
+                    .region
+                    .max(len(context.header().get().and_then(HalfHeader::branch))),
+                scratch: most.scratch.max(len(context
+                    .scratch_header()
+                    .get()
+                    .and_then(HalfHeader::branch))),
+                agent: most.agent.max(agent.len()),
+                agent_verdicts: most.agent_verdicts.max(agent.verdict_count()),
+                scratch_bytes: most.scratch_bytes.max(context.scratch_writer().in_use()),
+                ..most
+            });
+        });
+    }
+    (step, provenance)
+}
+
 /// Wake a birth a spawn, a hop or a root work's `leave` put to rest: redeem it into this step and
 /// cross it to the executing cell's `'here` at the verdict's price — free for a child, whose spawner is above it,
 /// and for a tenant, which crosses nothing; copied for a tail hop's sibling, which is `Apart`.
 fn wake<'graph, 'step, 'here, 'scratch, 'lent, B: StepBundle<'graph>>(
     context: &mut Context<'graph, 'step, 'here, 'scratch, 'lent, B>,
-    type_root: &'graph Root<'graph>,
+    tiers: TypeTiers<'graph>,
     dormant: Dormant<'graph, B::Birth>,
     born: Born,
 ) -> Result<StateAt<'graph, 'here, B>, RedeemError>
@@ -863,7 +940,7 @@ where
             carrier: &carrier,
             copy_bytes,
         }],
-        |writer, header, views| B::cross(writer, header, &views[0], born, type_root),
+        |writer, header, views| B::cross(writer, header, &views[0], born, tiers),
     );
     Ok(B::born(birth))
 }

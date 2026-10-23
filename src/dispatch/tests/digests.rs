@@ -3,12 +3,13 @@
 //! one knot they are tied into.
 
 use crate::program::tests::digest_back;
+use crate::program::tests::stores::frame_bound_back;
 use std::cell::RefCell;
 
 use crate::program::{CellSubstrate, KBirth, KBundle, KState, Outcome};
 use crate::scheduler::{Action, Step, StepError};
+use crate::scope::HalfHeader;
 use crate::type_lattice::TypeDigest;
-use crate::values::HalfHeader;
 
 thread_local! {
     /// What [`interned_digests`] read: every digest the root and the root cell's branch hold.
@@ -26,8 +27,11 @@ fn interned_digests<'graph>(
         return step.failed(StepError::Refused);
     };
     let mut digests = Vec::new();
-    program.root().each_digest(|digest| digests.push(digest));
-    if let Some(branch) = step.header().get().map(HalfHeader::branch) {
+    program
+        .tiers()
+        .frozen
+        .each_digest(|digest| digests.push(digest));
+    if let Some(branch) = step.header().get().and_then(HalfHeader::branch) {
         branch.each_digest(|digest| digests.push(digest));
     }
     INTERNED.with(|interned| *interned.borrow_mut() = digests);
@@ -245,4 +249,29 @@ fn headers_over_modules_branded_apart_digest_apart() {
     assert_ne!(m, f, "a header keeps the brand its signature hides");
     assert_ne!(m, bare, "a retype changes the digest");
     assert_eq!(m, again, "one retype of one member digests alike");
+}
+
+/// A frame binds a type value's unknown to the type it names, and a module value's to its carried
+/// type over its content, whose digest is the module's own.
+#[test]
+fn a_frame_binds_a_type_value_and_a_module_value_by_its_content() {
+    let mut substrate = CellSubstrate::load::<Koan>(
+        "LET e = Number\nMODULE m = (LET v = 1)",
+        "<test>",
+        8,
+        SpecBounds::default(),
+        output(),
+    )
+    .unwrap_or_else(|error| panic!("the program loads: {error}"));
+    assert_eq!(
+        substrate.with(|running| running.run()),
+        Ok(Outcome::Completed)
+    );
+    assert_eq!(frame_bound_back(&mut substrate, "e"), "type Number");
+    let digest = digest_back(&mut substrate, "m");
+    let bound = frame_bound_back(&mut substrate, "m");
+    assert!(
+        bound.starts_with("module ") && bound.ends_with(&format!(" {digest}")),
+        "{bound} binds the module's digest {digest}"
+    );
 }

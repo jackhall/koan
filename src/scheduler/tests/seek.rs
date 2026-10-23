@@ -1,32 +1,38 @@
 //! Seeking a specialization: the drain finds a frame's specialization in its parent's table before
 //! the frame is born, or builds it first with one synchronous step, and the frame borrows it,
 //! whatever its placement: a `Fresh` frame as its tree cell's lend, a `Shares` one as its tenant's.
+//! A missed specialization's branch holds its binding's nodes, copied from the asker's region, so a
+//! frame finds them after the asker is gone.
 
 use std::cell::RefCell;
 use std::num::NonZeroUsize;
 
 use crate::knot::KValue;
 use crate::memory::{Active, Bump};
-use crate::scheduler::tests::bundle::{Native, TestGraph};
+use crate::scheduler::tests::bundle::{Native, TestGraph, TestStep};
 use crate::scheduler::tests::native::{fresh, shares, work};
 use crate::scheduler::{
     Action, EVICT_BEFORE_STEP, Placement, Scheduler, Seek, Step, StepError, TIERS, Tiers, Use,
     WATCH_LOG, WATCHED, Watched, Work,
 };
-use crate::type_lattice::{KType, Root};
+use crate::type_lattice::{KType, TypeNode};
 use crate::values::digest::{DigestHasher, Tag};
-use crate::values::{BuildRef, SpecBounds, SpecKey};
+use crate::values::{BuildRef, KeyedTypes, SpecBinding, SpecBounds, SpecKey};
 
 thread_local! {
     /// The build cell each observing step ran under, in the order they ran.
     static BUILDS: RefCell<Vec<BuildRef>> = const { RefCell::new(Vec::new()) };
-    /// A type a frame laid in its lent region before it parked, to read again once it wakes.
+    /// A type a frame laid in the agent tier before it parked, to read again once it wakes.
     static LAID: std::cell::Cell<KType> = const { std::cell::Cell::new(KType::NUMBER) };
     /// The keys a [`sequence`] seeks, in order: each under the sequence's own build cell where
     /// the flag is set, else under the root.
     static SEQUENCE: RefCell<Vec<(usize, bool)>> = const { RefCell::new(Vec::new()) };
     /// What [`specialized`] read as a [`sequence`] woke from each of its seeks.
     static COUNTS: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
+    /// The build cell each [`read_lent`] frame found through its lend, in the order they ran.
+    static LENT: RefCell<Vec<BuildRef>> = const { RefCell::new(Vec::new()) };
+    /// The type a [`minting`] asker laid in its own region, which its seek's binding carries.
+    static BOUND: std::cell::Cell<KType> = const { std::cell::Cell::new(KType::NUMBER) };
 }
 
 fn builds() -> Vec<BuildRef> {
@@ -95,6 +101,7 @@ fn seek<'graph>(at: usize, parent: BuildRef) -> Seek<'graph, Native> {
     Seek {
         parent,
         key: key(at),
+        binding: SpecBinding::default(),
         work: work(specialize, KValue::Null),
     }
 }
@@ -125,9 +132,10 @@ fn seek_two<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'g
 
 /// A graph stood up by the load door under `bounds`, its build root's header and table laid.
 fn loaded(type_region: &Bump, bounds: SpecBounds) -> (TestGraph<'_>, crate::scheduler::Roots) {
-    let (graph, roots, ()) =
-        TestGraph::load(2, bounds, || Ok::<_, ()>((Root::seeded(type_region), ())))
-            .expect("the load succeeds");
+    let (graph, roots, ()) = TestGraph::load(2, bounds, || {
+        Ok::<_, ()>((crate::values::tests::seeded_tiers(type_region), ()))
+    })
+    .expect("the load succeeds");
     (graph, roots)
 }
 
@@ -166,6 +174,242 @@ fn a_missed_specialization_is_built_once_and_found_warm_by_the_next_birth() {
     assert_eq!(scheduler.graph().table_len(roots.build), Ok(Some(1)));
 }
 
+/// Record the build cell this frame runs under, read through its lend, and finish.
+fn read_lent<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
+    LENT.with(|lent| lent.borrow_mut().push(step.build_ref(BuildRef::ROOT)));
+    step.finish_fresh(|_, _, _| Active::new(KValue::Null))
+}
+
+/// Ask for two frames under one key and a third that seeks none.
+fn seek_lent<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
+    let (mut step, _) = step.state();
+    for _ in 0..2 {
+        let seek = Seek {
+            parent: BuildRef::ROOT,
+            key: key(1),
+            binding: SpecBinding::default(),
+            work: work(specialize, KValue::Null),
+        };
+        step.spawn_seeking(fresh(read_lent, Use::Reads, KValue::Null), Some(seek));
+    }
+    let asked = step.spawn_seeking(fresh(read_lent, Use::Reads, KValue::Null), None);
+    step.park(asked, finished, KValue::Null, None)
+}
+
+#[test]
+fn two_frames_under_one_key_borrow_one_specialization_through_their_lend() {
+    reset();
+    LENT.with(|lent| lent.borrow_mut().clear());
+    let type_region = Bump::new();
+    let (mut graph, roots) = loaded(&type_region, SpecBounds::default());
+    Scheduler::over(&mut graph)
+        .run(work(seek_lent, KValue::Null), roots.run, Placement::Fresh)
+        .expect("the root work ends");
+    let seen = LENT.with(|lent| lent.borrow().clone());
+    let [first, second, none] = seen[..] else {
+        panic!("three frames read: {seen:?}")
+    };
+    assert_ne!(first, BuildRef::ROOT, "a frame borrows its specialization");
+    assert_eq!(
+        second, first,
+        "a second frame under the key borrows the same one"
+    );
+    assert_eq!(none, BuildRef::ROOT, "a frame that seeks none borrows none");
+}
+
+/// How many nodes the drains on this thread have laid into the agent tier for new specializations
+/// since the last [`fresh_tally`].
+fn relayed() -> usize {
+    TIERS.with(|tiers| tiers.get().relayed)
+}
+
+/// A seek for the specialization keyed `at` under the build root, its binding carrying `bound`,
+/// built by `specialize`.
+fn seek_bound<'graph>(
+    at: usize,
+    bound: KType,
+    specialize: TestStep<'graph>,
+) -> Seek<'graph, Native> {
+    let mut binding = SpecBinding::default();
+    binding.push(KeyedTypes {
+        carried: bound.into(),
+        named: None,
+    });
+    Seek {
+        parent: BuildRef::ROOT,
+        key: key(at),
+        binding,
+        work: work(specialize, KValue::Null),
+    }
+}
+
+/// A specialization's step over a binding the asker minted: its own chain resolves the binding's
+/// type through the agent tier before it lays anything, and its region lays no branch; then it
+/// enlists.
+fn holding<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
+    {
+        let types = step.types();
+        let bound = BOUND.get();
+        assert!(!types.in_root(bound));
+        assert!(
+            types.resolves(bound),
+            "the drain laid the binding's node before the step"
+        );
+        assert_eq!(
+            types.own_len(),
+            0,
+            "the specialization's region lays no branch"
+        );
+    }
+    step.enlist()
+}
+
+/// A specialization's step over a binding of root types: its branch holds nothing.
+fn holding_root<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
+    {
+        let types = step.types();
+        assert!(types.resolves(KType::NUMBER));
+        assert_eq!(types.own_len(), 0, "a root handle lays nothing");
+    }
+    step.enlist()
+}
+
+/// A frame that reads its binding's type, a list of a list of `Bool`, through the agent chain, and
+/// finishes.
+fn reading<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
+    {
+        let warm = step
+            .agent_types()
+            .expect("the frame borrows its specialization");
+        let bound = BOUND.get();
+        assert!(
+            warm.resolves(bound),
+            "the agent tier holds the frame's binding"
+        );
+        let TypeNode::List { element } = warm.node(bound) else {
+            panic!("the binding is a list")
+        };
+        assert!(matches!(
+            warm.node(element),
+            TypeNode::List { element } if element == KType::BOOL
+        ));
+    }
+    step.finish_fresh(|_, _, _| Active::new(KValue::Null))
+}
+
+/// Finish with nothing, so the asker wakes.
+fn report<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
+    step.finish_fresh(|_, _, _| Active::new(KValue::Null))
+}
+
+/// An asker that mints a type in its own region and seeks a specialization over it, for a
+/// `Fresh` frame.
+fn minting<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
+    let (mut step, _) = step.state();
+    let bound = {
+        let types = step.types();
+        let bound = types.list(types.list(KType::BOOL));
+        assert!(
+            !types.in_root(bound),
+            "the asker minted it in its own region"
+        );
+        bound
+    };
+    BOUND.set(bound);
+    let seek = seek_bound(7, bound, holding);
+    let asked = step.spawn_seeking(fresh(reading, Use::Reads, KValue::Null), Some(seek));
+    step.park(asked, report, KValue::Null, None)
+}
+
+/// An asker that mints nothing and seeks the same specialization, for a `Shares` frame: a hit.
+fn rehitting<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
+    let (mut step, _) = step.state();
+    let seek = seek_bound(7, BOUND.get(), holding);
+    let asked = step.spawn_seeking(shares(reading, Use::Reads, KValue::Null), Some(seek));
+    step.park(asked, report, KValue::Null, None)
+}
+
+/// Ask for a minting asker, and once it is gone, where the state is `2`, a rehitting one.
+fn mint_then_rehit<'graph>(
+    step: Step<'_, 'graph, '_, '_, '_, '_, Native>,
+) -> Action<'graph, Native> {
+    let (mut step, state) = step.state();
+    let asked = step.spawn(fresh(minting, Use::Reads, KValue::Null));
+    let next = if matches!(state, KValue::Number(2.0)) {
+        rehit_after
+    } else {
+        finished
+    };
+    step.park(asked, next, KValue::Null, None)
+}
+
+/// The second half of [`mint_then_rehit`]: the minting asker has finished and been retired.
+fn rehit_after<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
+    let (mut step, _) = step.state();
+    step.results().for_each(drop);
+    let asked = step.spawn(fresh(rehitting, Use::Reads, KValue::Null));
+    step.park(asked, finished, KValue::Null, None)
+}
+
+/// Run [`mint_then_rehit`] over a fresh graph from `state`, and read the specializations built
+/// and the nodes relayed.
+fn run_minting(state: f64) -> (usize, usize) {
+    reset();
+    fresh_tally();
+    let type_region = Bump::new();
+    let (mut graph, roots) = loaded(&type_region, SpecBounds::default());
+    Scheduler::over(&mut graph)
+        .run(
+            work(mint_then_rehit, KValue::Number(state)),
+            roots.run,
+            Placement::Fresh,
+        )
+        .expect("the root work ends");
+    (specialized(), relayed())
+}
+
+#[test]
+fn a_missed_specialization_holds_its_bindings_nodes_and_a_frame_reads_them_after_the_asker_is_gone()
+{
+    let once = run_minting(1.0);
+    assert_eq!(
+        once,
+        (1, 2),
+        "one miss, laying the list and its element's list"
+    );
+    assert_eq!(
+        run_minting(2.0),
+        once,
+        "the second seek hits, and a hit relays nothing"
+    );
+}
+
+/// Seek a specialization over a binding of `Number` alone.
+fn seek_root_bound<'graph>(
+    step: Step<'_, 'graph, '_, '_, '_, '_, Native>,
+) -> Action<'graph, Native> {
+    let (mut step, _) = step.state();
+    let seek = seek_bound(8, KType::NUMBER, holding_root);
+    let asked = step.spawn_seeking(fresh(observe, Use::Reads, KValue::Null), Some(seek));
+    step.park(asked, finished, KValue::Null, None)
+}
+
+#[test]
+fn a_binding_of_root_types_lays_nothing_in_its_specialization() {
+    reset();
+    fresh_tally();
+    let type_region = Bump::new();
+    let (mut graph, roots) = loaded(&type_region, SpecBounds::default());
+    Scheduler::over(&mut graph)
+        .run(
+            work(seek_root_bound, KValue::Null),
+            roots.run,
+            Placement::Fresh,
+        )
+        .expect("the root work ends");
+    assert_eq!((specialized(), relayed()), (1, 0));
+}
+
 #[test]
 fn two_bindings_give_two_specializations_under_one_parent() {
     reset();
@@ -193,7 +437,7 @@ fn a_graph_with_no_build_root_births_every_seeking_frame_cold() {
     reset();
     fresh_tally();
     let type_region = Bump::new();
-    let mut graph = TestGraph::new(1, Root::seeded(&type_region));
+    let mut graph = TestGraph::new(1, crate::values::tests::seeded_tiers(&type_region));
     let root = graph.root().expect("a fresh slab admits a root");
     let mut scheduler = Scheduler::over(&mut graph);
     scheduler
@@ -653,13 +897,13 @@ fn a_shares_hop_of_the_same_callee_keeps_its_lend() {
     assert_eq!(specialized(), 1, "a hop looks nothing up");
 }
 
-/// A keyed frame: lay a type in its lent region, ask for its specialization's eviction
-/// before the next step, and park on a child.
+/// A keyed frame: lay a type in the agent tier, ask for its specialization's eviction before the
+/// next step, and park on a child.
 fn evicted<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
     log("frame");
     let (mut step, _) = step.state();
     let warm = step
-        .warm_types()
+        .agent_types()
         .expect("the frame borrows its specialization");
     let laid = warm.list(warm.list(KType::BOOL));
     LAID.with(|slot| slot.set(laid));
@@ -670,23 +914,21 @@ fn evicted<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'gr
     step.park(asked, woken, KValue::Null, None)
 }
 
-/// Wake after the eviction and read the type laid before it, through both chains over the lent
-/// region, then finish.
+/// Wake after the eviction and read the type laid before it, through the agent chain and the
+/// caching chain, then finish.
 fn woken<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
     log("frame woken");
     let laid = LAID.with(std::cell::Cell::get);
     let warm = step
-        .warm_types()
+        .agent_types()
         .expect("the frame still borrows its specialization");
     let before = warm.own_len();
     assert_eq!(
         warm.list(laid),
         warm.list(laid),
-        "the lent region still reads"
+        "the agent tier still reads"
     );
-    let chain = step
-        .reading_types()
-        .expect("the frame still borrows its specialization");
+    let chain = step.caching_types();
     let _ = chain.list(laid);
     assert_eq!(
         warm.own_len(),

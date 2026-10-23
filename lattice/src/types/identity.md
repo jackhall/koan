@@ -22,7 +22,8 @@ node holds its handle, flags set as it is laid — in-root where it is laid into
 the root builder — and the builtin constants bake both in, so a reader asks
 either question of the handle alone, with no lookup: a chain skips the root
 for a handle whose in-root bit is clear, adopts a root handle with a bit test,
-and answers a verdict over two root handles from the root's table alone. A
+and reads a verdict over two root handles from the root's table and the agent
+tier's alone. A
 handle therefore resolves against the root of the program that minted it: a
 root handle read through a chain over another root that lacks it is a miss,
 and a miss on a handle panics.
@@ -100,11 +101,16 @@ where it wraps a result, why the result keeps its handle's promise.
 
 ## Storage: a root and its branches
 
-The registry is a root and its branches ([tiers.rs](tiers.rs)). The **root**
-holds every type the load builds, in program storage for the life of the
-program. While the load runs, a `RootBuilder` grows it in a bump its owner
-keeps for it; the load's end freezes it into a `Root`, which has no intern
-door, so the run reads it and never writes it. A **branch** holds the types the
+The registry is a root and its branches ([tiers.rs](tiers.rs)), in three
+kinds of tier. The **frozen load**, the root, holds every type the load
+builds, for the life of the program. While the load runs, a `RootBuilder`
+grows it in a bump its owner keeps for it; the load's end freezes it into a
+`Frozen`, laid in that bump, which has no intern door and no record door, so
+the run reads it and never writes it. It holds no cell, so it is `Sync` and
+every agent may read one load from its own thread. The **agent tier**
+(`Agent`) holds what one agent rests above the load: insert-only, each node
+laid alone in the agent's bump, where it never moves, and released whole at
+the agent's death. A **branch** holds the types the
 run builds in one habitat half — a cell's region or a scratch habitat: a small
 table in that half's bytes, laid by the first door that writes into the half,
 whoever runs it, and released with the half. Every node a tier holds — with
@@ -114,7 +120,8 @@ it whole. A type the
 run builds lives in the habitat of the value it is laid down with, so a
 run-built type lives exactly as long as the values that carry it, and every
 handle a value carries resolves from the value's own habitat — in its branch,
-in its region's branch for a scratch value, or in the root. An embedder may
+in its region's branch for a scratch value, or in the agent tier or the frozen
+load. An embedder may
 lay a value's memo in a shorter tier than the value's — a region value's in
 its scratch — where it proves no reader outlives that tier
 ([type tiers](../../../design/type-tiers.md#the-scratch-branch-as-a-cache));
@@ -123,18 +130,27 @@ Each door interns
 into the branch of the habitat its writer allocates into: a `Shares` tenant into
 its host's, a result built into a home into the home's. A door reads and
 interns through a [`TypeChain`](chain.rs) over the half it writes, a
-`Habitat`: the root, the branch it writes, and for a scratch habitat a
-longer-lived branch between the two — its region's, or a branch lent to it —
-read through an object-safe `Tier` that re-reads that half's slot on every
+`Habitat`. It reads its tiers longest-lived first, under
+`'load: 'agent: 'here: 'scratch`: the frozen load, the agent tier, for a
+scratch habitat its region's branch, then the tier it writes. A node
+references nodes of its own tier or a longer-lived one by covariance alone, so
+no tier is read at a brand unrelated to the chain's own. The agent tier is
+read through the object-safe `AgentTier` at the chain's brand, since a tier
+written through shared borrows is invariant in its lifetime; the region's
+branch through an object-safe `Tier` that re-reads that half's slot on every
 probe, so a branch laid there during the step is seen and the lattice needs no
-`unsafe` for the one tier a chain reads at another brand. The chain holds that
+`unsafe` for it. The chain holds that
 half by value beside the one it writes (`Halves`, which `Habitat::region`
 hands the chain), so building one lays nothing; no branch holds it, since a
 half's door is valid for one step. A chain is built per step and never
-stored. Two read-only doors let an embedder see where a type lands:
+stored. Two chains read fewer tiers: the load's, which writes the root builder
+and reads nothing above it, and the **resting chain**
+(`TypeChain::resting`), which writes the agent tier and reads the frozen load
+alone above it, so a node laid there never references a branch's. Two
+read-only doors let an embedder see where a type lands:
 `TypeChain::half`, the half the chain writes, and `TypeChain::in_root`, whether
-a type's node lies in the root — on the load's chain, in the root builder —
-which reads the handle's in-root bit.
+a type's node lies in the frozen load — on the load's chain, in the root
+builder — which reads the handle's in-root bit.
 
 How a value's types reach another habitat is the crossing's
 ([crossing](../../../src/values/README.md#crossing)), over three doors
@@ -148,17 +164,14 @@ outliving its destination.
   at a pinned birth whatever the home holds. A spawned child links its
   spawner's; a hop's successor or what a root work leaves links its home's
   where the destination has laid no branch yet, as a new cell has not. A read
-  by handle that misses the root and the chain's own tiers walks the links and
+  by handle that misses every tier the chain reads walks the links and
   caches the hit in its own branch, so the walk is paid once per handle per
   cell; an intern probes no link, laying a duplicate of content an ancestor
   holds, which identity by digest allows. A home with no branch needs no link:
-  its values carry root handles alone. A link follows a pin rather than the
-  call tree, and a branch links once, to a branch already laid that does not
-  reach it, so links never cycle. A birth links as it lays. A branch nothing
-  links may also take its link late, where it links nothing yet: its depth and
-  bottom change then, and only a branch linking it would have recorded them.
-  An embedder links a scratch branch to its region so, since no branch links
-  a scratch.
+  its values carry load and agent handles alone. A link follows a pin rather
+  than the call tree, and a branch links once, as it is laid, to a branch
+  already laid, so links never cycle and a branch's depth never changes once
+  another links it.
 - A **merge** enters every node of the home's branch into the destination's by
   reference: at a pinned result or view, and at a pinned birth into a half
   that has already laid a branch — a tenant's, whose branch is its host's. A
@@ -207,10 +220,10 @@ a node by comparing against the digest the node holds: the digest is stored
 once, in the node. A handle is looked up once, where it enters the lattice — at
 a typed door or a public reader, or where it is read out of a quantifier
 group's bounds or a schema, which keep handles because koan reads them — and a
-lookup is routed by the handle's in-root bit: a root handle's is one probe of
-the root, and any other's one probe per branch the chain reads — one in a
-region, two in a scratch habitat — and, for a handle those branches lack, one
-per link walked, once per cell. The registry holds `Never` and
+lookup is routed by the handle's in-root bit: a load handle's is one probe of
+the frozen load, and any other's one probe of the agent tier and one per
+branch the chain reads — one in a region, two in a scratch habitat — and, for
+a handle those tiers lack, one per link walked, once per cell. The registry holds `Never` and
 `Any` by reference, so producing either costs no lookup. Interning is
 insert-if-absent along the chain, so building the same content twice in a half
 yields one node and two equal handles. Identity is by digest, so two branches
@@ -218,19 +231,24 @@ holding one content hold one handle and two copies: two nodes compare, order
 and hash by their digests, and a reference is an identity only within one
 table.
 
-The two tiers keep different tables. The root's is a hashbrown table in
-program storage, built during the load, where its grown build and its
-stranded bucket arrays are paid once. A miss there is one group probe of
-control bytes, and a branch handle's in-root bit spares it even that. A
-branch's is a [`DigestTable`](../bump/digest_table.rs) in
-its region: 16 B slots, each the digest's low word beside the node's
-reference, probed linearly at a load of at most one half. A region's writer
-lays fixed runs and has no allocator, so the table grows by laying a run of
-twice the length and re-placing each slot by its stored word, reading no node.
-An intern, which has a digest and no flags, probes the root first, then the
-region's branch, then a scratch branch, and skips a branch that holds nothing;
-a read by handle probes the root alone for a root handle, and for any other
-the region's branch, then a scratch branch, then the links.
+The tiers keep different tables. A branch's is a
+[`DigestTable`](../bump/digest_table.rs) in its region: 16 B slots, each the
+digest's low word beside the node's reference, probed linearly at a load of at
+most one half. A region's writer lays fixed runs and has no allocator, so the
+table grows by laying a run of twice the length and re-placing each slot by
+its stored word, reading no node. The root builder's is a hashbrown table in
+the load's bump, where its grown build and its stranded bucket arrays are paid
+once. The freeze lays one run for its nodes and places each into it as a
+digest table would, a [`FrozenTable`](../bump/frozen_table.rs): the same slots,
+probed the same way, but a plain slice filled while it is exclusively held and
+never written after, so the frozen load holds no cell. The
+agent tier's is a hashbrown table over the agent's bump, whose miss is one
+group probe of control bytes, since every intern that misses the frozen load
+probes it next. An intern, which has a digest and no flags, probes the frozen
+load first, then the agent tier, the region's branch and a scratch branch,
+and skips a branch that holds nothing; a read by handle probes the frozen load
+alone for a load handle, and for any other the agent tier, the region's
+branch, then a scratch branch, then the links.
 
 The lattice's [node-table benchmark](../../benches/node_table.rs) times both
 tables over 48 B linked stand-in nodes, from 1,000 to 60,000 entries, each
@@ -250,10 +268,13 @@ Warm, the two hit alike, since hashbrown's control bytes stay cached; cold, a
 digest-table hit reads a slot line and the node, where hashbrown reads a
 control group, a bucket and the node. Hashbrown's miss is one well-predicted
 group probe, where linear probing takes a branch per occupied slot, which is
-why the root keeps hashbrown. With a hashbrown root of 16,000 and a
-digest-table branch of 256, root first costs a lookup stream drawing a tenth
-of its keys from the branch 23.2 ns per lookup against 27.0 ns branch first,
-and a stream drawn wholly from the branch 6.5 ns against 6.1 ns.
+why the root builder and the agent tier keep hashbrown. The frozen load
+probes as the digest table does, so an intern of a type the load lacks pays
+the digest table's miss there before it reaches the agent tier. With a
+hashbrown table of 16,000 ahead of a digest-table branch of 256, the long
+table first costs a lookup stream drawing a tenth of its keys from the branch
+23.2 ns per lookup against 27.0 ns branch first, and a stream drawn wholly
+from the branch 6.5 ns against 6.1 ns.
 
 Each node whose children decide them carries six flags computed off those
 children at intern — whether a free quantifier, whether any rigid variable,
@@ -266,26 +287,28 @@ the rest of koan reads quantified-ness off a `DeclaredType`'s arm and
 concreteness through `concrete` or `concrete_declared`.
 
 The **verdict tables** ([verdicts.rs](verdicts.rs)), one per tier, are keyed
-by `(subject, candidate, relation)`. A verdict is recorded in the table of the
-shortest-lived tier holding one of its two types — a root handle's tier being
-the root, and any other's the branch a lookup finds it in — so a verdict over a
-branch's type is released with the branch, and the run's verdicts never evict
-the load's. A verdict over two root types is therefore read from the root's
-table alone, and any other from each branch table that exists, shortest-lived
-first.
-The root's table is a fixed run of two-slot buckets, laid in the root's bump
-at the load's first verdict or at the freeze, and never resized, so it strands nothing in a bump that releases nothing before the
-run ends; a full bucket evicts the slot not touched last. A branch's is a
-[`DigestTable`](../bump/digest_table.rs) of verdict entries, laid at the
-branch's first verdict, which grows and drops nothing. Either way a key's two
-digests fold into its word or bucket and a slot compares the whole key, so a
-collision costs a probe and never a wrong answer. A verdict over a digest pair
-is a pure function — once computed it never changes — so **verdicts are never
-load-bearing**: the root's table is lossy by design, and a forgotten verdict
-costs a re-walk, never a wrong answer. The registry therefore owns nothing on
-the global heap: the root rests in a bump its owner keeps for it — in a loaded
-program, the [substrate's own](../../../src/program/README.md), released whole
-with the rest — and each branch in its half.
+by `(subject, candidate, relation)`, and each keeps every verdict it is given.
+A verdict over two load types is recorded at the load in the root builder's
+table, which the freeze copies into a read-only `FrozenTable`, complete for
+everything the load asked; the run writes no load table, so one the run
+reaches is recorded in the agent tier's, as is one whose types are load or
+agent types. Any other is recorded in the table of the shortest-lived branch
+holding one of its two types — the branch a lookup finds it in — so a verdict
+over a branch's type is released with the branch. A verdict over two load
+types is therefore read from the frozen load's table, then the agent tier's,
+and any other from the own branch's, the region's, then the agent tier's.
+The root builder's and the agent tier's tables are
+[`DigestTable`](../bump/digest_table.rs)s of verdict entries laid in their
+bump at the first verdict, and a branch's laid in its half, each growing and
+dropping nothing. A key's two digests fold into its word and a slot compares
+the whole key, so a collision costs a probe and never a wrong answer. A
+verdict over a digest pair is a pure function — once computed it never
+changes — so **verdicts are never load-bearing**: where one is kept is
+retention alone, and a verdict a table lacks costs a re-walk, never a wrong
+answer. The registry therefore owns nothing on the global heap: the frozen
+load and the agent tier rest in bumps their owner keeps for them — in a
+loaded program, the [substrate's own](../../../src/program/README.md),
+released whole with the rest — and each branch in its half.
 
 Every door that sorts, flattens or canonicalizes takes a **scratch allocator**
 from its caller and builds its transient buffers there, and every door computes

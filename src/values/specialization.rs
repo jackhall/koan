@@ -1,9 +1,12 @@
 //! What a habitat half's header keeps for the build tree: the table of a build cell's
 //! specializations by key, and the opaque token naming the build cell a function was born under.
 //!
-//! A [`SpecTable`] rests in a build cell's region beside its type branch, in its
-//! [`HalfHeader`](super::HalfHeader): a fixed run of entries laid with the cell and never grown,
-//! as long as the cell's bound ([`SpecBounds`]). Each entry is a key, a bare handle and the
+//! A [`SpecBinding`] is the types a seek's keyed arguments carry, which the drain lays in a missed
+//! specialization's branch before its step runs.
+//!
+//! A [`SpecTable`] rests in a build cell's region beside its type branch, in the region header
+//! `scope` declares: a fixed run of entries laid with the cell and never grown, as long as the
+//! cell's bound ([`SpecBounds`]). Each entry is a key, a bare handle and the
 //! parent's birth count at the child's last birth. A bare handle holds nothing alive, so a stale
 //! one is a miss the drain rebuilds in place. A miss with no empty or stale entry takes the entry
 //! of the least recently born child, whose subtree the drain releases first. The table counts
@@ -14,14 +17,62 @@
 use std::cell::Cell;
 use std::num::NonZeroUsize;
 
+use smallvec::SmallVec;
+
 use crate::memory::{CellHandle, LaysRuns, TreeHandle};
+use crate::type_lattice::{DeclaredType, KType, Parametric};
 
-use super::ContentDigest;
+use super::{ContentDigest, Knotted, Value};
 
-/// What a parent's table finds a specialization by: the callee's segment and the argument digests
-/// its invariant sites read, hashed into one digest.
+/// What a parent's table finds a specialization by: the callee's segment and the content digests
+/// at the names its key lists, hashed into one digest.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct SpecKey(pub ContentDigest);
+
+/// The types a specialization's binding carries, one entry per keyed name in the order its
+/// key digests them: what the drain lays in a missed specialization's branch before its step
+/// ([build/README.md](../build/README.md#references-between-the-trees)). A handle is a content
+/// digest and holds nothing alive, so a binding outlives the values it was read from. One entry
+/// sits inline, so a call keyed on one parameter allocates nothing, and a seek waiting on the
+/// drain's ready stack keeps its entries small.
+#[derive(Clone, Debug, Default)]
+pub struct SpecBinding(SmallVec<[KeyedTypes; 1]>);
+
+impl SpecBinding {
+    pub fn push(&mut self, keyed: KeyedTypes) {
+        self.0.push(keyed);
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+
+    /// Every handle the binding carries: each entry's own type, then the type it names, if any.
+    pub fn handles(&self) -> impl Iterator<Item = DeclaredType<Parametric>> + '_ {
+        (self.0.iter()).flat_map(|keyed| {
+            std::iter::once(keyed.carried.into()).chain(keyed.named.map(Into::into))
+        })
+    }
+}
+
+/// What one keyed argument carries: its own type and, for a type value, the type it names.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct KeyedTypes {
+    pub carried: DeclaredType<KType>,
+    pub named: Option<KType>,
+}
+
+impl KeyedTypes {
+    pub fn of<X: Knotted>(argument: &Value<'_, X>) -> Self {
+        KeyedTypes {
+            carried: argument.ktype(),
+            named: match argument {
+                Value::Type(type_value) => Some(type_value.handle()),
+                _ => None,
+            },
+        }
+    }
+}
 
 /// The two bounds a load sets: how many live children the build root's table holds, and how many
 /// every specialization's table holds. The root's table is shared by every top-level keyed

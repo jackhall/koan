@@ -139,7 +139,7 @@ fn a_knot_copy_is_stamped_at_its_destination() {
                 // Cleared, so a copy that carried the bits over would arrive with none.
                 f.set_bits(MemoBits::NONE);
                 let source = context.lift::<KValueFamily>(Value::Knotted(f));
-                let crossed = cross(context, dest, &source, fixture.tiers.root()).unwrap();
+                let crossed = cross(context, dest, &source, fixture.tiers.tiers()).unwrap();
                 let Value::Knotted(copied) = context.read(&crossed).value() else {
                     panic!("a callable crosses as a callable");
                 };

@@ -3,7 +3,7 @@
 Type expressions and type declarations turned into
 [type lattice](../../lattice/src/types/README.md) handles, where the program loads.
 `elaborate` sits above [`scope`](../scope/README.md) and below
-[`knot`](../knot/README.md): [the type channel's load pass](#the-type-channel-at-load)
+[`knot`](../knot/README.md): [the type half of the load's walk](#the-type-channel-at-load)
 types every type expression, callable signature and component of type binders in
 a loaded program, a component through [one door](#declarations), and leaves to
 the run only what names a type a run binds. Nothing below `scope` can read a
@@ -95,7 +95,9 @@ registry's own doors:
   fits it: `p.Carrier` under `p :Mapper` is the type a plain module's members
   realize, whatever type member of that name it binds, and under
   `p :(Mapper WITH {Carrier = Number})` it is `Number`, the pin. Any other path
-  reads the module's own member. At load a path is a
+  reads the module's own member. A member read is a path by its tokens
+  ([`path_spelling`](../scope/spelling.rs)) and its root name's mention, never
+  by what the root holds. At load a path is a
   [path variable](#the-type-channel-at-load). A path that reads no type is
   `NoSuchMember`;
 - `Pair {Key = Number}` is a declared type constructor applied to its arguments
@@ -180,9 +182,10 @@ interned type's `quantifiers` cannot stand in for the declaration's names,
 because alpha-variants intern to one node and it carries whichever spelling
 interned first.
 
-The load pass types every callable where the program loads and rests the result
-on its body's shape, and each registration's expression shape beside the
-registration ([below](#the-type-channel-at-load)). A birth reads that type rather
+The load's walk types every callable where the program loads and rests the
+result in the record of the unit that births it, and each registration's
+expression shape in the record of the unit that binds it
+([below](#the-type-channel-at-load)). A birth reads that type rather
 than elaborating its signature: as it is when it is closed, with its variables
 substituted when it is rigid, and through the activation it is born in only where
 the load left it unknown. [Dispatch's overlap check](../dispatch/README.md#the-overlap-check)
@@ -404,11 +407,14 @@ shape and the untyped bucket a node probes with cannot drift apart.
 
 ## The type channel at load
 
-`type_channel` (`channel.rs`) runs once, where the program loads, right after the
-[shape is built](../scope/README.md#load-time-types) and before anything runs. It
-walks the shape tree from the root, **a quote's code included**, and writes each
-result into the write-once cell the builder laid beside it. A load-time type is
-one of three:
+[`unit`](unit.rs) holds the type half of [the load's one walk](../build/README.md#the-one-walk):
+the rules that type a unit's type channel — a component of type binders, each
+recorded type expression and guard, each registration, each callable's type
+and its own group — run unit by unit, where the program loads and before
+anything runs, **a quote's code included**. Each entry point types one fact
+through the one load-time reader, `Reader`, over a `TypeContext` the walk
+implements, and leaves every unknown it read in the context's gathering. The
+fact rests in the unit's record. A load-time type is one of three:
 
 - **closed** — it names only builtins and closed type binders, so it is the same
   at every run, and the run reads it as it is;
@@ -428,15 +434,18 @@ quote's hole, `\` mark or `$` name whose source is not closed, and a type binder
 the load left unknown. The load-time reader answers each with a **lexical
 variable**, a [rigid node](../../lattice/src/types/vocabulary.md#the-node-vocabulary) of its
 own: positional by its **level**, named as the name is, and lying between
-`Never` and its bound where it is a `FOR ALL` name and `Any` otherwise. A name takes its level where
-it is declared, along the lexical chain of bodies: the names of every enclosing
-body first, then the body's own — a callable's own `FOR ALL` group first, in its
-group order, then its other names in slot order. So a name has one level in
+`Never` and its bound where it is a `FOR ALL` name and `Any` otherwise. A
+level is a text fact: the shape numbers every type-name slot of every body
+along the lexical chain ([`Shapes::level`](../scope/README.md#load-time-types)),
+a closed type binder included, which keeps a level it never uses — the names
+of every enclosing body first, then the body's own — a callable's own
+`FOR ALL` group first, in its written order, then its other names in slot
+order, and at a chain root its type-named captures. So a name has one level in
 every body that reads it — the body that declares it, a body nested in that one,
 under a group a nested signature opens — and no binder captures it. The body
-that declares a name records its level beside the slot or capture its
-activation holds the bound type at ([declared variables](../scope/README.md#load-time-types)),
-so a use nested deeper can find where a run reads the variable.
+that declares a name lists its level beside the slot or capture its
+activation holds the bound type at (its **homes**), so a use nested deeper can
+find where a run reads the variable.
 
 A level is no identity beyond its chain. Two bodies neither of which encloses
 the other number their names alike, and equal content is one node, so typing a
@@ -449,33 +458,37 @@ chain of its own, and a type leaving it is read through
 that reaches a reader from outside its chain reaches it unknown.
 
 A callable's function type binds its own group by position. Its body reads
-each of those names as its lexical variable, which the pass records in the
-body's [group-levels cell](../scope/README.md#load-time-types), so a
-parameter's type and the declared return are, in the body, the function type's
-instantiated at those variables, and a written result compares with the declared
-return like with like. Every `FOR ALL` name is such a variable, a name only the
-return reads included: under `EXPR FOR ALL #[Elt] #(KIND x :Elt) -> Type = #(Elt)`
-the body reads `Elt` as rigid, and each call binds it.
+each of those names as its lexical variable at the level the shape gives it,
+so a parameter's type and the declared return are, in the body, the function
+type's instantiated at those variables, and a written result compares with the
+declared return like with like. Every `FOR ALL` name is such a variable, a name
+only the return reads included: under
+`EXPR FOR ALL #[Elt] #(KIND x :Elt) -> Type = #(Elt)` the body reads `Elt` as
+rigid, and each call binds it.
 
-**Paths.** A [path](#what-a-type-expression-is) is typed in the channel's
-own order as a **path variable**: a lexical variable at a level past every
-name level of its chain, one per root, member chain, label and declared
-application, so two spellings of one path share it. Its root is the binder the
-owner's name lands at, or the owner's own site where it is written in place,
-and where the root's declared type names the label a head parameter the entry
-records that application, read off a parameter's type or an
-annotated binder's. The channel lays the chain's entries on its root shape and
-records which entry each spelled path reads, and dispatch's
-[static pass](../dispatch/README.md#paths) resolves each to a closed type or a
-class off the module's content tree. Where it runs, a path variable binds as
-the path reads (`bound_path`). A type binder over a path stays unknown, as
-below.
+**Paths.** A [path](#what-a-type-expression-is) is typed as a **path
+variable**: a lexical variable at a level past every name level of its chain.
+Its identity is a text fact — its root, the binder the owner's name lands at
+or the owner's own site where it is written in place, its member chain and its
+label — so two spellings of one path share it, and the shape numbers each
+spelled identity in first-spelling order
+([path spellings](../scope/README.md#load-time-types)). Where the root's
+declared type names the label a head parameter, the entry records that
+application, read off a parameter's type or an annotated binder's. Dispatch's
+[walk](../dispatch/README.md#paths) resolves every path a unit spells, before
+the unit's declarations, to a closed type or a class off the module's content
+tree, and the reader reads each through that resolution: closed as it is, and
+in `Typing` mode a class as its representative's path variable. Where it runs,
+a path variable binds as the path reads (`bound_path`). A **type binder over a
+path** reads through the path's resolution in `Declaring` mode: closed where
+the resolution is closed, and unknown otherwise.
 
 **A surfaced key.** A `USING … SCOPE` block's
 [surfaced key](../scope/README.md#names-that-arrive-at-run-time) is typed by the
 one head its operand declares there, and left unknown where it declares
 several. A signature's head is typed by the shape its `SIG` declares for it:
-the load reads the ascription's already-typed type, takes it only where it is a
+the load reads the ascription's type through the walk, so the head waits on
+whatever the ascription waits on, takes it only where it is a
 closed signature or application, re-reads the `SIG` where it is declared, and
 substitutes each head parameter by its pin or, unpinned, by the block's own
 type name for it — a lexical variable, so the registration is rigid. The shape
@@ -498,30 +511,46 @@ type each call ([unplanned work](../../roadmap/rewrite/README.md#unplanned-work)
 The declaration door therefore reads through the load-time reader in a mode that
 answers every run-bound name *unknown*.
 
-**Order.** Per shape, the pass types:
+**Order.** Within a unit the type half runs in the walk's second and third
+steps, after the paths the unit spells are resolved:
 
-1. each component of type binders, in [unit](../scope/README.md#units) order,
-   through [the declaration door](#declarations), so a component reads the
-   binders before it;
-2. each type expression the shape records — a sigiled type in value position, a
+1. a component of type binders, through [the declaration door](#declarations),
+   so a component reads the binders of the units before it;
+2. each type expression the unit records — a sigiled type in value position, a
    type part of an expression shape that births no callable, a `MATCH … WITH`
-   guard;
-3. each registration's expression shape, through [`callable_type`](signature.rs),
+   guard — then the guards' check;
+3. each registration the unit binds, through [`callable_type`](signature.rs)
    or through its signature for a surfaced head;
-4. each nested shape: a callable's signature first, through the enclosing shape's
-   reader, then its body, with every binder of every enclosing shape already
-   typed.
+4. the type of each callable the unit births, through the enclosing shape's
+   reader, and its own group's levels; its body is walked after the unit, with
+   every binder of every enclosing shape it reads already typed.
 
 **Guards.** Two guards of one `MATCH … WITH` arm set that type to one handle —
 `Number` and `:(Number)`, an alias and what it names, `:(Number | Str)` and
 `:(Str | Number)`, a `FOR ALL` name spelled twice — refuse the shape as
-`RepeatedGuard`, naming both.
+`RepeatedGuard`, naming both. Of several repeats, the refusal names the first
+in program order, against the first guard written of its type.
 
 **Refusals.** A closed type that does not elaborate refuses the load as
 `ShapeError::Type`, located at the part the refusal is about, else at the type
 expression or declaration holding it. Inside a quote's code the refusal is kept
-on the code shape instead, and the `EVAL` that runs the code reports it, since a
-quote is checked where its code runs ([quotes](../scope/README.md#building-code)).
+in the code's closing record instead, and the `EVAL` that runs the code
+reports it, since a quote is checked where its code runs
+([quotes](../scope/README.md#building-code)).
+
+**Frontiers and resumption.** The reader reads every fact through its
+`TypeContext`, which gathers each unknown it reads
+([what a fact waits on](../build/README.md#the-store)): every name in
+[what a run binds](#the-type-channel-at-load) — a `FOR ALL` name, a `:Type`
+parameter, a surfaced type name, a quote's hole, mark or `$` name, and a type
+binder left unknown beside what that binder waits on — in either mode, so a
+type binder declared unknown over a run-bound name waits on it. Under a
+binding a bound name reads as the closed type it binds, in either mode, so a
+type binder over it declares closed, and a callable body's own bound
+`FOR ALL` name is that type at its level. The rules never ask whether they run
+at the load or in a resumption: they hold no writer, lay every fact through
+the walk's `lay` and every other value in the scratch they are handed, which
+[`tests::boundary`](tests/boundary.rs) holds them to.
 
 ## Refusals
 
@@ -558,7 +587,7 @@ never a guess:
   `Unsupported` for the same reason a group head that would chain a symbol twice
   is: [`!=` is rewritten, never declared](../scope/README.md#operator-groups).
 
-A reader's *unknown* comes back as `Unknown`, the load pass's cue to leave the
+A reader's *unknown* comes back as `Unknown`, the walk's cue to leave the
 type to the run; it is never reported.
 
 Elaboration writes nothing to a region: its transient runs live in the scratch
@@ -612,30 +641,29 @@ each family refusal, a payload union whose members tie included.
 overload erases to the entry it came from, a bucket interns one handle per
 overload and a reserved bucket none, and the one union a builtin slot names
 interns as the union of its three members.
-[`tests/channel.rs`](tests/channel.rs) runs the load pass over shaped programs
-and reads the cells it filled: a closed binder, ring and callable equal to what
-elaborating through an activation gives; a `FOR ALL` name at one level, in its
-callable's body and in a callable nested in it; sibling bodies numbering their
-own names alike; a nested `FOR ALL` callable rigid over its enclosing names,
-and one whose bound names a run-bound name left unknown; a `:Type` parameter,
-an outer quantifier inside an inner group, a quote's hole and a `$` name
-crossing into code each as a lexical variable; a path through a module name
-one variable past every name level, two spellings sharing it, and one through a
-parameter reading through its declared application; each spelling left
-unknown, a type binder over a path among them; a
-nominal over a
-run-bound type left unknown and a reader of it rigid; each repeated guard; and a
-refusal refusing the load, or kept on its quote's code shape.
+The type half runs only inside the walk, which `dispatch` drives, so its suite
+is dispatch's [`tests/types.rs`](../dispatch/tests/types.rs): it loads whole
+programs and reads back each type the walk fixed — a closed binder, ring and
+callable equal to what elaborating through an activation gives; a `FOR ALL`
+name at one level, in its callable's body and in a callable nested in it;
+sibling bodies numbering their own names alike; a nested `FOR ALL` callable
+rigid over its enclosing names, and one whose bound names a run-bound name
+left unknown; a `:Type` parameter, an outer quantifier inside an inner group,
+a quote's hole and a `$` name crossing into code each as a lexical variable; a
+path through a module name one variable past every name level, two spellings
+sharing it, and one through a parameter reading through its declared
+application; each spelling left unknown; a type binder over a closed path
+declared closed; a nominal over a run-bound type left unknown and a reader of
+it rigid; each repeated guard; a refusal refusing the load, or kept in its
+quote's code's closing record; and the frontier of the unit holding each fact.
+[`tests::boundary`](tests/boundary.rs) also holds the type half to reading
+every fact through its `TypeContext`.
 
 ## Open work
 
 - [Families as parameters](../../roadmap/rewrite/families-as-parameters.md) —
   higher-kinded head parameters, and a constructor application leaving a
   parameter unpinned.
-- [Monotone elaboration](../../roadmap/gradual-build/monotone-elaboration.md)
-  — the load pass as a worklist its own walk schedules, each read recording
-  the unknown it reads and a resumption re-running the cells a binding wakes,
-  entered from a build cell's step, per [the build module](../build/README.md).
 - [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — a family's
   variance, which no declaration states, a nominal over a run-bound type
   declared per call, and a pin read through its bounds.

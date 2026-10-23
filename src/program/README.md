@@ -2,7 +2,8 @@
 
 A loaded program as one owning value, and the body runner that performs it.
 [`CellSubstrate`](substrate.rs) holds program storage, the symbol interner, the
-root of the types the load builds, the program's record and the
+frozen load of the types the load builds and the agent tier above it, the
+program's record and the
 [cell graph](../scheduler/README.md) that runs it, and it can be returned from a
 function, moved, kept in a struct and dropped like any other value. An embedder
 that keeps a program across calls — a language server, a REPL — keeps one of
@@ -18,7 +19,7 @@ and nothing here names an expression form.
 ## Owner and dependent
 
 The graph's cells and the AST borrow program storage at `'graph`, and the
-types' root borrows the bump beside it, so a value holding both owners beside them
+type tiers borrow the bumps beside it, so a value holding both owners beside them
 is self-referential.
 [`self_cell`](https://docs.rs/self_cell) carries the `unsafe` that takes;
 koan's production code writes none. Its dependent is one lifetime and no type
@@ -26,7 +27,8 @@ parameters, so the substrate is a concrete type over koan's own families rather
 than a generic `cellgraph` type.
 
 - **The owner** is the permanent tier and nothing else: program storage, the
-  bump the types' root is built over, and the interner. It borrows nothing,
+  bump the types' load is built over, the bump the agent tier grows in, and
+  the interner. It borrows nothing,
   and `self_cell` boxes it and only ever lends it shared.
 - **The dependent**, `Running<'graph>`, is everything that names `'graph`:
   - the **graph**, by value. Reclaiming one of its recycling regions needs
@@ -34,15 +36,17 @@ than a generic `cellgraph` type.
   - the graph's two **roots**: the build root the load ran in, and the run
     root, [below](#the-top-level).
   - the **program record**, [below](#the-program-record), in program storage,
-    which holds the **types' root**: laid down in the owner's bump rather than
-    held by value, so the record and the graph can both borrow it at `'graph`.
-    The graph hands it to every step and crossing; the record keeps it for a
-    reader outside a step. It takes a bump of its own rather than program
-    storage's `Writer` because the load grows it as a
+    which holds the **type tiers** (`TypeTiers`): the frozen load and the
+    agent tier, each laid down in an owner's bump rather than held by value,
+    so the record and the graph can both borrow them at `'graph`. The graph
+    hands them to every step and crossing; the record keeps them for a reader
+    outside a step. They take bumps of their own rather than program
+    storage's `Writer` because each grows as a
     [collections arena](../../lattice/README.md#the-bump-tier) client. Resting
-    there is sound because the root owns nothing on the global heap — its
-    [verdict table](../../lattice/src/types/identity.md#storage-a-root-and-its-branches) is a fixed
-    cache in the same bump — so its destructor never needs to run.
+    there is sound because neither owns anything on the global heap — their
+    node indexes and
+    [verdict tables](../../lattice/src/types/identity.md#storage-a-root-and-its-branches)
+    lie in the same bumps — so no destructor needs to run.
   - what the top level **left at rest** when it last ran, for a later root work
     to resume from.
   - the program brand and a borrow of the interner, so a call reaches every
@@ -59,7 +63,9 @@ only through `CellSubstrate::with`, whose closure is quantified over a fresh
 lifetime: nothing borrowed at `'graph` escapes a call, and two substrates'
 states can never be mixed. Each call's `'graph` names the same storage, so what
 one call leaves in the graph the next call finds. No call interns into the
-root: the run's types live in the branches of the habitats that carry them
+frozen load, and no call records a name in the load's symbol table: a name
+recorded after the load lands in the interner's overlay, and the run's types
+live in the agent tier or in the branches of the habitats that carry them
 ([storage](../../lattice/src/types/identity.md#storage-a-root-and-its-branches)),
 and leave with them.
 
@@ -67,11 +73,13 @@ and leave with them.
 `self_cell`'s builder closure, which sees the same `'graph` every later call
 does: it parses the source into program storage, lays a root builder in the
 owner's bump and builds every load-time type through one chain over it, has
-`L` lay the builtin table down, builds the program's shape over that table, types
-its type channel through
-[the elaborator's load pass](../elaborate/README.md#the-type-channel-at-load),
-has `L` check it and record what it types, freezes the types' root so no step
-can intern into it, and lays the record down beside the
+`L` lay the builtin table down, builds the program's shapes over that table,
+has `L` run [its walk](../build/README.md#the-one-walk) over them into the
+load's store — the [type half](../elaborate/README.md#the-type-channel-at-load)
+and the value half unit by unit — and folds the records, lays the
+`LoadFacts` the program and every activation read them through, freezes the types' load so no step
+can intern into it and the interner's load table so a later name lands in its
+overlay, lays the agent tier in its own bump, and lays the record down beside the
 [output sinks](#faults-and-output) the embedder hands `load`. All of that runs
 as the **build root's** one step: the scheduler's
 [load door](../scheduler/README.md#the-drain) stands the graph up over two slab
@@ -95,7 +103,7 @@ index into it.
 ## The program record
 
 [`Program`](record.rs) is what a loaded program's steps read, at `'graph`: the
-top level's shape, the builtin table, the types' frozen root and the interner, the
+top level's shape, the builtin table, the type tiers and the interner, the
 evaluator's step, the output sinks and the sealed `Error` type. It rests in program storage beside the table, written through
 `cellgraph`'s [`Storage`](../memory/README.md#two-tiers-and-why-the-boundary-falls-where-it-does)
 writer, so every step names it by a `'graph` borrow that crosses at no price.
@@ -114,11 +122,15 @@ dispatch's, and everything in this module below it free of expression forms.
 
 **`Language` is a trait**, with three methods generic over `'graph`: `builtins`,
 which lays the table down through program storage's writer, `evaluator`, the
-step an evaluation runs, and `check`, which may refuse the program's shape once
-it is built and its types can be read, as dispatch's
-[overlap check](../dispatch/README.md#the-overlap-check) does, and may record
-what it learns on the shape through program storage's writer, as dispatch's
-[static types](../dispatch/README.md#static-types) do. A record of function pointers ranked over `'graph`
+step an evaluation runs, and `facts`, the language's
+[walk](../build/README.md#the-one-walk) over the program's shapes into any
+store it is handed — the load's, or a test's over the load's records — which
+may refuse the program, as dispatch's
+[overlap check](../dispatch/README.md#the-overlap-check) does, and records
+what it decides in the store, as dispatch's
+[static types](../dispatch/README.md#static-types) are. Its default walks
+nothing, so a language without one loads with no facts and its run reads
+every type where it runs. A record of function pointers ranked over `'graph`
 cannot name the bundle's projections (rustc #100013); a method generic over
 `'graph` is handed the one the program loads at. Dispatch implements it; the
 tests implement a [miniature](tests/evaluator.rs).
@@ -301,7 +313,7 @@ statements have effects and no data dependency takes source order without
 interleaving. Per unit:
 
 - **A component of type binders** is bound to the handles the
-  [load pass](../elaborate/README.md#the-type-channel-at-load) fixed for it when
+  [load's walk](../elaborate/README.md#the-type-channel-at-load) fixed for it when
   they are closed, and otherwise declared through
   [the elaborator's door](../elaborate/README.md#declarations), over the
   activation, and bound in the same step.
@@ -383,23 +395,20 @@ values in the region its writer lays into and its types in a scratch tier
 Each step picks one chain at its entry ([`run`](body.rs), and the evaluator's
 `evaluate`):
 
-- the **reading chain** in the own body of a caching frame that routes: a
-  `Fresh` one, which holds its scratch for its life at its first step, or a
-  `Shares` one borrowing a specialization, which writes its host's scratch.
-  The chain links that scratch's branch to the region it writes, laid linked,
-  or linked late where another chain laid it first. It reads the root, the
-  lent branch — its specialization's region, or where a `Fresh` frame was
-  born with none the scratch its asker parked in — and the scratch, and the
-  region through the link. The `routes` bit of the `Within` on each
-  evaluation and block the frame asks for ([`KBirth`](bundle.rs)) carries the
-  pick down, and the hand-off of the last statement clears it;
-- the **`Shares` chain** anywhere else in a caching body, over the root, the
-  write home's region and its scratch;
+- the **caching chain** in a caching body, and in the own body of a caching
+  frame that routes — a `Fresh` one, which holds its scratch for its life at
+  its first step, or a `Shares` one borrowing a specialization, which writes
+  its host's scratch. It reads the frozen load, the agent tier, the write
+  home's region and the scratch, and writes the scratch;
 - the region chain in every other body.
 
-Under `routes`, an invariant view's operand and view, an invariant nominal's
-types and a warm composite's own memo are adopted into the lent branch, so the
-next hop hits them there.
+The `routes` bit of the `Within` on each evaluation and block the frame asks
+for ([`KBirth`](bundle.rs)) carries the frame's routing down, and the hand-off
+of the last statement clears it. Under `routes`, in a frame that borrows a
+specialization, an invariant view's operand and view, an invariant nominal's
+types and a warm composite's own memo are adopted into the agent tier, so the
+next hop hits them there. A `Fresh` frame that borrows none mints them into
+its own scratch, its warm tier and its cold tier at once.
 
 A caching body asks for its blocks and its yielding statement with `Keeps`
 rather than `Forwards`, so a value leaves it only through an **exit**
@@ -421,10 +430,16 @@ A call into a keyed frame, whatever its placement, hands the drain a `Seek`
 its closure bindings; the key, the callee's segment and the content digest of
 each argument at its keyed names, read by name
 ([the build module](../build/README.md#keys-which-bindings-make-a-specialization));
+the binding, each keyed argument's carried type and, for a type value, the type
+it names, whose nodes the drain lays in the agent tier for a missed
+specialization
+([references between the trees](../build/README.md#references-between-the-trees));
 and the work a missed specialization runs, [`specialize`](specialize.rs),
-which enlists the new cell in its parent's table. The frame is born borrowing
-the specialization, and its lent branch is the specialization's region, so
-every frame of that body under that binding finds its invariant types warm.
+which enlists the new cell in its parent's table and settles nothing until
+[the build arena](../../roadmap/gradual-build/build-arena.md) runs the walk
+there. The frame is born borrowing
+the specialization, and its warm tier is the agent tier, so every frame of
+that body under that binding finds its invariant types warm.
 A frame borrowing one routes whatever its placement: a `Fresh` frame holds its
 scratch, and a `Shares` frame writes its host's. Dispatch picks the door where
 it calls: a hop of the frame's own callee, from a frame that borrows a
@@ -542,7 +557,14 @@ and one whole program with all of them.
 [`tests/substrate.rs`](tests/substrate.rs) loads two programs through a helper,
 moves them into a `Vec`, runs each, and reads a binding back in a separate call
 through a resumed root work; it also checks both load errors, an inspection
-before the program ran, and a stalled substrate. The two-program test,
+before the program ran, and a stalled substrate.
+[`tests/stores.rs`](tests/stores.rs) holds the test door the dispatch suite
+resumes a load through — a resumption over a **layer** of the load's records,
+a **reload** under a binding from the start, and a **frame** whose binding is
+read off the values its slots hold — beside the test stores themselves: a
+layer reads its base where it wrote nothing, wakes exactly where a frontier
+meets a newly bound unknown, and a frame binds a type value as a type and a
+module value by its digest tree. The two-program test,
 `a_whole_program`, `an_eager_part_is_supplied_by_site_in_one_wake`,
 `a_call_binds_each_type_parameter_to_its_solution`,
 `a_lambda_returned_from_a_frame_keeps_its_captures` and

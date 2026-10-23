@@ -1,22 +1,25 @@
 //! The type chain: the tiers one habitat half reads and writes types through, and every door that
 //! interns or reads a type.
 //!
-//! A [`TypeChain`] holds the frozen [`Root`] the load built and the [`Habitat`] it writes into: a
-//! cell region's or a scratch habitat's branch at the run, the
-//! [`RootBuilder`](super::tiers::RootBuilder) during the load, which is the one chain with no root.
-//! A scratch habitat's chain is built over [`Halves`], which holds the region the chain reads
-//! between the root and its own tier beside the half it writes. See [tiers.rs](super::tiers) for
-//! the tiers themselves.
+//! A [`TypeChain`] reads its tiers longest-lived first, under `'load: 'agent: 'here: 'scratch`: the
+//! [`Frozen`] load, the [`Agent`] tier, a scratch chain's region branch, then the tier it writes,
+//! reached through the [`Habitat`] it is built over — a cell region's or a scratch habitat's branch
+//! at the run, the [`RootBuilder`](super::tiers::RootBuilder) during the load, the one chain with
+//! no frozen load and no agent tier, or the agent tier itself on the resting chain
+//! ([`TypeChain::resting`]), which reads no agent tier above its own. A scratch habitat's chain is
+//! built over [`Halves`], which holds the region beside the half it writes. A node references
+//! nodes of its own tier or a longer-lived one, by covariance alone. See [tiers.rs](super::tiers)
+//! for the tiers themselves.
 //!
 //! Each node is a [`StoredNode`](super::stored::StoredNode) laid alone in the half the chain
 //! writes, holding its own handle beside its content and a reference to each child's node. A
 //! [`Handle`] is the digest of its node under two flags, and the digest is already a uniformly
 //! distributed hash, so each tier's table finds a node by its digest's low word and compares
 //! against the digest the node holds — it stores no second copy. Interning is insert-if-absent:
-//! [`find`](TypeChain::find), which has a digest and no flags, probes the root, the region tier,
-//! then the own tier, longest-lived first, and a miss lays the node in the own tier. A lookup by
-//! handle ([`locate`](TypeChain::locate)) is routed by the handle's in-root bit: a root handle
-//! probes the root alone, and any other skips it. Building the same content twice in a chain
+//! [`find`](TypeChain::find), which has a digest and no flags, probes the load, the agent tier, the
+//! region tier, then the own tier, and a miss lays the node in the own tier. A lookup by handle
+//! ([`locate`](TypeChain::locate)) is routed by the handle's in-root bit: a load handle probes the
+//! load alone, and any other skips it. Building the same content twice in a chain
 //! yields one node and two equal handles. Nothing ever leaves a tier and nothing in one carries
 //! drop glue, so a half releases its branch and every node in it whole.
 //!
@@ -32,9 +35,10 @@
 //! outside sealed content, whether an opaque carrier outside sealed content is reachable, and
 //! whether the type is porous or exposing — so each probe is one read of the node.
 //!
-//! A verdict over two root types is read from the root's table alone, and any other from the own
-//! tier's and the region tier's; it is recorded in the shortest-lived tier holding one of its two
-//! types ([`verdicts`](super::verdicts)).
+//! A verdict over two load types is read from the load's table, then the agent's, and recorded in
+//! the agent's, since no run writes the load's; one whose types are load or agent types is the
+//! agent's; any other is read from the own tier's, the region tier's, then the agent's, and
+//! recorded in the shortest-lived tier holding one of its two types ([`verdicts`](super::verdicts)).
 //!
 //! [`adopt`](TypeChain::adopt), [`merge`](TypeChain::merge) and [`link`](TypeChain::link) are how a
 //! crossing makes another half's handles resolve here ([transfer.rs](super::transfer)).
@@ -67,7 +71,7 @@ use super::shape::{
 use super::signatures::canonical_applications;
 use super::stored::{Content, Flags, Linked, StoredNode, copied, mapped_fields};
 use super::substitute::{rewrite_siblings, substitute_quantified};
-use super::tiers::{ChainPosition, Habitat, Halves, Own, Root, lay_one};
+use super::tiers::{Agent, AgentTier, ChainPosition, Frozen, Habitat, Halves, Own, lay_one};
 use super::verdicts::{Relation, VerdictKey};
 use super::walk::Variance;
 use super::walk::unary::{Visit, children, visit, visit_free_quantified};
@@ -127,16 +131,19 @@ pub struct GroupIntern<'s> {
     pub quantifier_map: &'s [usize],
 }
 
-/// The tiers one habitat half reads and writes types through: the frozen root, a scratch
-/// habitat's region tier, and the half's own tier, reached through `half`. Interior mutability
+/// The tiers one habitat half reads and writes types through: the frozen load, the agent tier, a
+/// scratch habitat's region tier, and the half's own tier, reached through `half`. Interior mutability
 /// lives in the tiers: a read takes a reference to its node and releases any table borrow before
 /// the reader runs, so reads nest freely and a reader may intern.
 ///
 /// Invariant in `'t`, as the half's writer is: a value door pairs a writer with a chain at one
 /// brand, so a type is interned into the branch of the habitat its value is laid in.
 pub struct TypeChain<'t, H> {
-    /// The frozen root; `None` only on the load's chain, whose own tier is the root builder.
-    root: Option<&'t Root<'t>>,
+    /// The frozen load; `None` only on the load's chain, whose own tier is the root builder.
+    frozen: Option<&'t Frozen<'t>>,
+    /// The agent tier, read between the load and the region tier; `None` on the load's chain and
+    /// on the chain whose own tier it is.
+    agent: Option<&'t dyn AgentTier<'t>>,
     /// The bottom and the top, held so producing either costs no lookup.
     never: Linked<'t>,
     any: Linked<'t>,
@@ -145,32 +152,39 @@ pub struct TypeChain<'t, H> {
     /// `test`-only: how many handles have been entered, so a test can count a walk's lookups.
     #[cfg(test)]
     lookups: Cell<usize>,
-    /// `test`-only: how many probes the frozen root's node or verdict table has taken.
+    /// `test`-only: how many probes the frozen load's node or verdict table has taken.
     #[cfg(test)]
-    root_probes: Cell<usize>,
+    load_probes: Cell<usize>,
     /// `test`-only: how many probes the own or region tier's verdict table has taken.
     #[cfg(test)]
     branch_verdict_probes: Cell<usize>,
 }
 
 impl<'r: 't, 't, H: Habitat<'t>, R: Habitat<'r>> TypeChain<'t, Halves<'r, 't, H, R>> {
-    /// A scratch habitat's chain over `half`, reading `region`'s tier between the root and its
-    /// own. The region is held by value, so building the chain lays nothing, and it is re-read on
-    /// every probe, so a branch the region lays during the step is seen.
-    pub fn scratch(root: &'t Root<'t>, region: R, half: H) -> Self {
+    /// A scratch habitat's chain over `half`, reading the frozen load, the agent tier, then
+    /// `region`'s tier before its own. The region is held by value, so building the chain lays
+    /// nothing, and it is re-read on every probe, so a branch the region lays during the step is
+    /// seen.
+    pub fn scratch<'a: 't>(
+        frozen: &'t Frozen<'t>,
+        agent: &'t Agent<'a>,
+        region: R,
+        half: H,
+    ) -> Self {
         debug_assert!(
-            !matches!(region.own(), Some(Own::Builder(_))),
-            "a root builder is no region tier: its nodes are the root's, and a lookup by handle \
-             reads them in the root alone"
+            matches!(region.own(), None | Some(Own::Branch(_))),
+            "a region tier is a branch: the builder's nodes are the load's, and the agent tier is \
+             read above it"
         );
-        Self::new(root, Halves::over(half, region))
+        Self::new(frozen, agent, Halves::over(half, region))
     }
 }
 
 /// Which tier holds a type, longest-lived first: where a verdict over it is placed.
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 enum Placed {
-    Root,
+    Load,
+    Agent,
     Region,
     Own,
 }
@@ -181,24 +195,46 @@ impl<'t, H: Habitat<'t>> TypeChain<'t, H> {
         let Some(Own::Builder(builder)) = half.own() else {
             panic!("the load's chain is built over the root builder");
         };
-        Self::over(None, builder.never(), builder.any(), half)
+        Self::over(None, None, builder.never(), builder.any(), half)
     }
 
-    /// A chain over `half`, reading `root` first.
-    pub fn new(root: &'t Root<'t>, half: H) -> Self {
-        Self::over(Some(root), root.never(), root.any(), half)
+    /// A chain over `half`, reading `frozen`, then `agent`, before its own tier.
+    pub fn new<'a: 't>(frozen: &'t Frozen<'t>, agent: &'t Agent<'a>, half: H) -> Self {
+        Self::over(
+            Some(frozen),
+            Some(agent),
+            frozen.never(),
+            frozen.any(),
+            half,
+        )
     }
 
-    fn over(root: Option<&'t Root<'t>>, never: Linked<'t>, any: Linked<'t>, half: H) -> Self {
+    /// The chain that lays into the agent tier `half` writes, reading `frozen` first.
+    pub fn resting(frozen: &'t Frozen<'t>, half: H) -> Self {
+        debug_assert!(
+            matches!(half.own(), Some(Own::Agent(_))),
+            "a resting chain writes the agent tier"
+        );
+        Self::over(Some(frozen), None, frozen.never(), frozen.any(), half)
+    }
+
+    fn over(
+        frozen: Option<&'t Frozen<'t>>,
+        agent: Option<&'t dyn AgentTier<'t>>,
+        never: Linked<'t>,
+        any: Linked<'t>,
+        half: H,
+    ) -> Self {
         TypeChain {
-            root,
+            frozen,
+            agent,
             never,
             any,
             half,
             #[cfg(test)]
             lookups: Cell::new(0),
             #[cfg(test)]
-            root_probes: Cell::new(0),
+            load_probes: Cell::new(0),
             #[cfg(test)]
             branch_verdict_probes: Cell::new(0),
         }
@@ -232,10 +268,10 @@ impl<'t, H: Habitat<'t>> TypeChain<'t, H> {
         self.lookups.get()
     }
 
-    /// `test`-only: how many probes the frozen root's node or verdict table has taken.
+    /// `test`-only: how many probes the frozen load's node or verdict table has taken.
     #[cfg(test)]
-    pub(super) fn root_probes(&self) -> usize {
-        self.root_probes.get()
+    pub(super) fn load_probes(&self) -> usize {
+        self.load_probes.get()
     }
 
     /// `test`-only: how many probes the own or region tier's verdict table has taken.
@@ -244,10 +280,10 @@ impl<'t, H: Habitat<'t>> TypeChain<'t, H> {
         self.branch_verdict_probes.get()
     }
 
-    /// `test`-only: count one probe of the frozen root's tables.
-    fn count_root_probe(&self) {
+    /// `test`-only: count one probe of the frozen load's tables.
+    fn count_load_probe(&self) {
         #[cfg(test)]
-        self.root_probes.set(self.root_probes.get() + 1);
+        self.load_probes.set(self.load_probes.get() + 1);
     }
 
     /// `test`-only: count one probe of a branch tier's verdict table.
@@ -374,7 +410,7 @@ impl<'t, H: Habitat<'t>> TypeChain<'t, H> {
         // The load's chain, the one with no root, lays into the root builder.
         let node: Linked<'t> = lay_one(
             self.half,
-            StoredNode::new(digest, content, self.root.is_none()),
+            StoredNode::new(digest, content, self.frozen.is_none()),
         );
         self.half.own_or_lay().insert(self.half, node);
         node
@@ -457,64 +493,72 @@ impl<'t, H: Habitat<'t>> TypeChain<'t, H> {
             || (!handle.in_root() && self.linked_reach(handle.digest()).is_some())
     }
 
-    /// Whether `kt`'s node lies in the frozen root, or, on the load's chain, in the root builder:
-    /// a type every chain over the root resolves. Reads the handle's in-root bit: looks nothing
+    /// Whether `kt`'s node lies in the frozen load, or, on the load's chain, in the root builder:
+    /// a type every chain over the load resolves. Reads the handle's in-root bit: looks nothing
     /// up.
     pub fn in_root(&self, kt: impl Into<DeclaredType<Parametric>>) -> bool {
         kt.into().raw().in_root()
     }
 
-    /// The node under `digest` in the root, the region tier or the own tier, longest-lived first —
-    /// the intern's probe, which knows no bits and reads no link.
+    /// The node under `digest` in the frozen load, the agent tier, the region tier or the own
+    /// tier, longest-lived first — the intern's probe, which knows no bits and reads no link.
     pub(super) fn find(&self, digest: TypeDigest) -> Option<Linked<'t>> {
-        if let Some(root) = self.root {
-            self.count_root_probe();
-            if let Some(found) = root.find(digest) {
+        if let Some(frozen) = self.frozen {
+            self.count_load_probe();
+            if let Some(found) = frozen.find(digest) {
                 return Some(found);
             }
         }
-        self.half
-            .region()
-            .and_then(|region| region.tier().find(digest))
+        self.find_past_load(digest)
+    }
+
+    /// The node under `digest` in the agent tier, the region tier or the own tier, longest-lived
+    /// first: where a handle not the load's lies.
+    fn find_past_load(&self, digest: TypeDigest) -> Option<Linked<'t>> {
+        self.agent
+            .and_then(|agent| agent.find(digest))
+            .or_else(|| {
+                self.half
+                    .region()
+                    .and_then(|region| region.tier().find(digest))
+            })
             .or_else(|| self.half.own()?.find(digest))
     }
 
-    /// The node under `handle` in a tier the chain probes, routed by its in-root bit: a root
-    /// handle's in the root alone — on the load's chain, the builder, its own tier — and any
-    /// other's in the region tier, then the own tier, never the root. Reads no link.
+    /// The node under `handle` in a tier the chain probes, routed by its in-root bit: a load
+    /// handle's in the frozen load alone — on the load's chain, the builder, its own tier — and
+    /// any other's in the agent tier, the region tier, then the own tier, never the load. Reads no
+    /// link.
     pub(super) fn locate(&self, handle: Handle) -> Option<Linked<'t>> {
         let digest = handle.digest();
         if handle.in_root() {
-            return match self.root {
-                Some(root) => {
-                    self.count_root_probe();
-                    root.find(digest)
+            return match self.frozen {
+                Some(frozen) => {
+                    self.count_load_probe();
+                    frozen.find(digest)
                 }
                 None => self.half.own()?.find(digest),
             };
         }
-        self.half
-            .region()
-            .and_then(|region| region.tier().find(digest))
-            .or_else(|| self.half.own()?.find(digest))
+        self.find_past_load(digest)
     }
 
-    /// The tier holding `handle`, longest-lived first, without probing the root: a root handle's
-    /// is the root (the own tier on the load's chain); any other's is the region tier or the own
-    /// tier, and the own tier where neither finds it — a child of a node read through a link.
+    /// The tier holding `handle`, longest-lived first, without probing the load: a load handle's
+    /// is the load (the own tier on the load's chain); any other's is the agent tier, the region
+    /// tier or the own tier, and the own tier where none finds it — a child of a node read through
+    /// a link.
     fn tier_of(&self, handle: Handle) -> Placed {
         if handle.in_root() {
-            return if self.root.is_some() {
-                Placed::Root
+            return if self.frozen.is_some() {
+                Placed::Load
             } else {
                 Placed::Own
             };
         }
-        let in_region = self
-            .half
-            .region()
-            .is_some_and(|region| region.tier().find(handle.digest()).is_some());
-        if in_region {
+        let digest = handle.digest();
+        if self.agent.is_some_and(|agent| agent.find(digest).is_some()) {
+            Placed::Agent
+        } else if (self.half.region()).is_some_and(|region| region.tier().find(digest).is_some()) {
             Placed::Region
         } else {
             Placed::Own
@@ -1499,9 +1543,9 @@ impl<'t, H: Habitat<'t>> TypeChain<'t, H> {
 
     // --- Verdicts ---
 
-    /// The verdict recorded for the pair: over two root types, in the root's table alone — on the
-    /// load's chain, the builder's — and over any other pair in the own tier's, then the region
-    /// tier's. A pair over a branch type is recorded in a branch, never in the root.
+    /// The verdict recorded for the pair: over two load types, in the frozen load's table, then
+    /// the agent's — on the load's chain, the builder's alone — and over any other pair in the own
+    /// tier's, the region tier's, then the agent's.
     pub(super) fn verdict(
         &self,
         subject: Handle,
@@ -1514,13 +1558,11 @@ impl<'t, H: Habitat<'t>> TypeChain<'t, H> {
             relation,
         };
         if subject.in_root() && candidate.in_root() {
-            return match self.root {
-                Some(root) => {
-                    self.count_root_probe();
-                    root.verdict(key)
-                }
-                None => self.half.own()?.verdict(key),
+            let Some(frozen) = self.frozen else {
+                return self.half.own()?.verdict(key);
             };
+            self.count_load_probe();
+            return frozen.verdict(key).or_else(|| self.agent_verdict(key));
         }
         self.half
             .own()
@@ -1534,11 +1576,21 @@ impl<'t, H: Habitat<'t>> TypeChain<'t, H> {
                     region.tier().verdict(key)
                 })
             })
+            .or_else(|| self.agent?.verdict(key))
+    }
+
+    /// The agent's verdict for `key`: its tier's, or the own tier's on the chain that writes it.
+    fn agent_verdict(&self, key: VerdictKey) -> Option<bool> {
+        match self.agent {
+            Some(agent) => agent.verdict(key),
+            None => self.half.own()?.verdict(key),
+        }
     }
 
     /// Record `verdict` for the pair in the shortest-lived tier holding one of its two types, as
     /// [`tier_of`](Self::tier_of) places each. A type it finds in no tier — a child of a node read
-    /// through a link — counts as the own tier's: the shortest-lived the chain writes.
+    /// through a link — counts as the own tier's: the shortest-lived the chain writes. A pair over
+    /// two load types at the run is the agent's, since no run writes the load's table.
     pub(super) fn record_verdict(
         &self,
         subject: Handle,
@@ -1552,11 +1604,11 @@ impl<'t, H: Habitat<'t>> TypeChain<'t, H> {
             relation,
         };
         match self.tier_of(subject).max(self.tier_of(candidate)) {
-            Placed::Root => {
-                if let Some(root) = self.root {
-                    root.record(key, verdict);
-                }
-            }
+            Placed::Load | Placed::Agent => match self.agent {
+                Some(agent) => agent.record(key, verdict),
+                // The resting chain, whose own tier is the agent's.
+                None => self.half.own_or_lay().record(self.half, key, verdict),
+            },
             Placed::Region => {
                 if let Some(region) = self.half.region() {
                     region.tier().record(key, verdict);
@@ -1566,14 +1618,13 @@ impl<'t, H: Habitat<'t>> TypeChain<'t, H> {
         }
     }
 
-    /// `test`-only: how many verdicts the root, or the root builder, recorded, and how many of
-    /// those evicted another.
+    /// `test`-only: how many verdicts the frozen load, or the root builder, holds.
     #[cfg(test)]
-    pub(super) fn verdict_tally(&self) -> (u64, u64) {
-        match (self.root, self.half.own()) {
-            (Some(root), _) => root.verdict_tally(),
-            (None, Some(Own::Builder(builder))) => builder.verdict_tally(),
-            (None, _) => unreachable!("a chain with no root writes the root builder"),
+    pub(super) fn load_verdict_count(&self) -> usize {
+        match (self.frozen, self.half.own()) {
+            (Some(frozen), _) => frozen.verdict_count(),
+            (None, Some(Own::Builder(builder))) => builder.verdict_count(),
+            (None, _) => unreachable!("a chain with no frozen load writes the root builder"),
         }
     }
 }

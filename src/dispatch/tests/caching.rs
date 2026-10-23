@@ -5,7 +5,7 @@ use std::cell::Cell;
 use std::collections::BTreeMap;
 use std::num::NonZeroUsize;
 
-use crate::program::CellSubstrate;
+use crate::program::{CellSubstrate, Program};
 use crate::scheduler::{LAID, TIERS, Tiers};
 use crate::scope::{BodyShape, Mint, ShapeKind, Slot};
 
@@ -18,7 +18,7 @@ use crate::values::SpecBounds;
 /// `SIG Counter`, whose head parameter an opaque view hides, `MODULE ints` and `MODULE words`,
 /// which fit it at different carriers, `Link`, a chain a loop walks to the `null` at its end, and
 /// `MODULE empty`, which a `USING … SCOPE` enters to run a block.
-const PRELUDE: &str = "SIG Counter FOR ALL #[Carrier] = \
+pub(super) const PRELUDE: &str = "SIG Counter FOR ALL #[Carrier] = \
                        #[(VAL zero :Carrier) (VAL succ :(FN :{x :Carrier} -> Carrier))]\n\
                        MODULE ints = ((LET zero = 0) \
                        (LET succ = (FN :{x :Number} -> Number = #(x + 1))))\n\
@@ -31,15 +31,15 @@ const PRELUDE: &str = "SIG Counter FOR ALL #[Carrier] = \
 /// What one run left: the most any step left in each tier, how many nodes the run added to the
 /// root, what it printed, and how many specializations were live at its end.
 #[derive(Debug, PartialEq, Eq)]
-struct Ran {
-    tiers: Tiers,
+pub(super) struct Ran {
+    pub(super) tiers: Tiers,
     root: usize,
-    printed: String,
-    live: usize,
+    pub(super) printed: String,
+    pub(super) live: usize,
 }
 
 /// [`PRELUDE`], a chain of `depth` links bound to `chain`, and `source`.
-fn program(depth: u32, source: &str) -> String {
+pub(super) fn program(depth: u32, source: &str) -> String {
     let mut program = format!("{PRELUDE}LET link0 = null\n");
     for at in 1..=depth {
         program.push_str(&format!(
@@ -57,17 +57,17 @@ fn ran(depth: u32, source: &str) -> Ran {
 }
 
 /// Run [`program`] at `depth` over `source`, its specialization tables `bounds` long.
-fn ran_under(depth: u32, source: &str, bounds: SpecBounds) -> Ran {
+pub(super) fn ran_under(depth: u32, source: &str, bounds: SpecBounds) -> Ran {
     let program = program(depth, source);
     WRITTEN.with(|written| written.borrow_mut().clear());
     let mut substrate = CellSubstrate::load::<Koan>(&program, "<test>", 2, bounds, output())
         .unwrap_or_else(|error| panic!("the program loads: {error}"));
-    let before = substrate.with(|running| running.program().root().len());
+    let before = substrate.with(|running| running.program().tiers().frozen.len());
     TIERS.with(|tiers| tiers.set(Tiers::default()));
     substrate
         .with(|running| running.run())
         .expect("the program runs");
-    let after = substrate.with(|running| running.program().root().len());
+    let after = substrate.with(|running| running.program().tiers().frozen.len());
     let live = substrate.with(|running| running.scheduler().graph().live_specializations());
     Ran {
         tiers: TIERS.with(Cell::get),
@@ -80,17 +80,17 @@ fn ran_under(depth: u32, source: &str, bounds: SpecBounds) -> Ran {
 /// How many frame bodies [`PRELUDE`] and `source` write cache: what a test reads to see it runs
 /// the bodies it means to.
 fn caching(source: &str) -> usize {
-    fn count(shape: &BodyShape<'_>) -> usize {
+    fn count(program: &Program<'_>, shape: &BodyShape<'_>) -> usize {
         (shape.nested_shapes().iter())
             .map(|(_, nested)| {
                 let frame = matches!(nested.kind(), ShapeKind::Callable | ShapeKind::Code);
-                usize::from(frame && nested.caches()) + count(nested)
+                usize::from(frame && program.facts().caches(nested)) + count(program, nested)
             })
             .sum()
     }
     loaded(
         &format!("{PRELUDE}LET chain = (Link {{next = null}})\n{source}"),
-        |program| count(program.shape()),
+        |program| count(program, program.shape()),
     )
 }
 
@@ -495,15 +495,39 @@ fn only_a_use_that_may_call_a_function_hands_a_memo_on() {
     let source = "EXPR #(RUN cfg :{items :(LIST OF Number)} link :Link) -> Number = \
                   #((MODULE ops OVER #[cfg] = (LET held = cfg)) (LET v = (ops :| Holder)) \
                   (LET n = (ATTR cfg items)) (RUN cfg (ATTR link next)))\n";
-    let handed = loaded(&format!("{PRELUDE}{source}"), |program| {
-        let mut shapes = Vec::new();
-        every_shape(program.shape(), &mut shapes);
-        (shapes.into_iter())
-            .filter_map(|shape| shape.statics())
-            .map(|statics| statics.handoffs.len())
-            .sum::<usize>()
-    });
+    let handed = loaded(&format!("{PRELUDE}{source}"), handoffs);
     assert_eq!(handed, 1, "the tail call alone hands `cfg`'s memo on");
+}
+
+#[test]
+fn a_call_before_its_view_hands_its_memo_on() {
+    // The call to `RUN` is written before the `:|` that reads `cfg`'s memo: a hand-off is text.
+    let source = "EXPR #(RUN cfg :{items :(LIST OF Number)} link :Link) -> Number = \
+                  #((LET r = (RUN cfg (ATTR link next))) \
+                  (MODULE ops OVER #[cfg] = (LET held = cfg)) (LET v = (ops :| Holder)) (r))\n";
+    let handed = loaded(&format!("{PRELUDE}{source}"), handoffs);
+    assert_eq!(handed, 1, "the call hands `cfg`'s memo on");
+}
+
+/// How many statements and expressions of `program` hand a digest memo on.
+fn handoffs(program: &Program<'_>) -> usize {
+    let mut shapes = Vec::new();
+    every_shape(program.shape(), &mut shapes);
+    let mut handed = 0;
+    for shape in shapes {
+        for statement in shape.body() {
+            let mut sites = vec![crate::scope::Site::of_node(statement)];
+            crate::scope::each_part(statement, |part| {
+                if let crate::parse::ExpressionPart::Expression(node) = part {
+                    sites.push(crate::scope::Site::of_node(node.reference()));
+                }
+            });
+            handed += (sites.into_iter())
+                .filter(|site| !program.facts().handoffs(shape, *site).is_empty())
+                .count();
+        }
+    }
+    handed
 }
 
 #[test]
@@ -647,21 +671,20 @@ fn a_shares_loop_handing_a_keyed_shares_helper_a_module_over_its_link_holds_adop
     let [(few, few_adopted), _, (many, _)] = &runs;
     assert_eq!((few.printed.as_str(), few.root), ("done", 0));
     // `PEEK` keys on the module it is handed, so it borrows a specialization of its own each hop,
-    // and `WRAP` one across the loop; the region and each lent branch hold flat.
+    // and `WRAP` one across the loop; the region holds flat. The agent tier grows by each `PEEK`
+    // binding, run content, until the build rewrite keys a build cell on load content alone
+    // (roadmap/gradual-build/build-rewrite.md).
     for ((ran, _), depth) in runs.iter().zip(DEPTHS) {
         assert_eq!(ran.tiers.specialized, depth as usize + 1);
     }
-    assert_eq!(
-        (few.tiers.region, few.tiers.lent),
-        (many.tiers.region, many.tiers.lent)
-    );
+    assert_eq!(few.tiers.region, many.tiers.region);
     assert!(*few_adopted > 0, "the loop's exits adopt");
     assert_flat("adoptions", runs.each_ref().map(|(_, adopted)| *adopted));
 }
 
 #[test]
 fn a_fresh_loop_handing_a_fresh_helper_a_module_over_its_link_holds_adoptions_flat() {
-    // `PEEK` adopts the module it views into the lent branch at an invariant site, which stops at
+    // `PEEK` adopts the module it views into the warm tier at an invariant site, which stops at
     // the link the module holds, settled by the exit that handed it on.
     let source = FRESH_WRAPPED;
     assert_eq!(caching(source), 2, "`WRAP` and `PEEK` cache");
@@ -692,14 +715,14 @@ fn a_member_reached_through_a_call_is_not_entered() {
 }
 
 #[test]
-fn a_fresh_loop_over_an_invariant_module_holds_its_lent_branch_flat() {
+fn a_fresh_loop_over_an_invariant_module_holds_its_agent_tier_flat() {
     let source = invariant_loop();
     assert_eq!(caching(&source), 1);
     let [few, many] = at_ends(&source);
     assert_eq!(few.printed, "7");
-    assert!(few.tiers.lent > 0, "the view's types are adopted warm");
+    assert!(few.tiers.agent > 0, "the view's types are adopted warm");
     assert!(
-        few.tiers.lent_verdicts > 0,
+        few.tiers.agent_verdicts > 0,
         "the view's verdicts are recorded warm, once across hops"
     );
     assert_eq!(few, many);
@@ -780,8 +803,8 @@ fn a_loops_scratch_resets_once_its_value_is_delivered() {
 #[test]
 fn two_loops_a_frame_asks_for_in_turn_leave_what_the_larger_leaves() {
     // A `Fresh` frame asks for two loops in turn, over content of different types: the second
-    // starts on the branch the first's delivery reset or, where it keys a specialization, on a
-    // specialization of its own binding, so the two leave what the larger leaves.
+    // starts on the scratch the first's delivery reset, so the two leave in it what the larger
+    // leaves; where each keys a specialization of its own binding, the agent tier keeps both.
     let cases = [
         (
             INVARIANT.to_string(),
@@ -820,9 +843,10 @@ fn two_loops_a_frame_asks_for_in_turn_leave_what_the_larger_leaves() {
         );
         assert_eq!(both.printed, "0");
         assert_eq!(
-            (both.tiers.lent, both.tiers.scratch),
+            (both.tiers.agent, both.tiers.scratch),
+            // Each loop's binding rests once and outlives it; the two bindings share no node.
             (
-                one.tiers.lent.max(other.tiers.lent),
+                one.tiers.agent + other.tiers.agent,
                 one.tiers.scratch.max(other.tiers.scratch)
             ),
             "{first}, then {second}"
@@ -916,7 +940,7 @@ fn a_barrier_called_caching_frame_keeps_its_blocks_value() {
 }
 
 /// The nodes each caching body's steps laid through its chains over one run of `program`, by the
-/// body's kind: in the scratch branch, then in the lent branch. Empty where `program` refuses at
+/// body's kind: in the scratch branch, then in the agent tier. Empty where `program` refuses at
 /// load.
 fn laid(program: &str) -> Vec<(&'static str, usize, usize)> {
     let Ok(mut substrate) =
@@ -984,8 +1008,55 @@ fn laid_through_caching_chains() {
     }
 }
 
+/// A tail edge into a registration the load types `Unknown` pairs by its written slots (D1.9):
+/// `SPIN`'s parameter `e` reads a meet over `Elt`, so its registration is untyped, and its tail
+/// call passes `Item` on bare, so the nominal it declares over it is invariant.
+#[test]
+fn a_tail_edge_into_an_untyped_registration_pairs_by_its_written_slots() {
+    let source = program(
+        1,
+        "EXPR FOR ALL #[Elt] #(DRIVE x :Elt AND m :Counter) -> Any = #(\n  \
+         EXPR #(SPIN e :(Elt & Number) Item :Type link :Link) -> Number = \
+         #((NEWTYPE Boxed = :{v :Item}) (SPIN e Item (ATTR link next)))\n  \
+         EXPR #(SPIN e :(Elt & Number) Item :Type end :Null) -> Number = #(7)\n  \
+         x\n)\n",
+    );
+    loaded(&source, |program| {
+        let facts = program.facts();
+        let mut shapes = Vec::new();
+        every_shape(program.shape(), &mut shapes);
+        let drive = (shapes.iter())
+            .find(|shape| {
+                shape.kind() == ShapeKind::Callable
+                    && (shape.nested_shapes().iter())
+                        .any(|(_, nested)| nested.kind() == ShapeKind::Callable)
+            })
+            .expect("`DRIVE`'s body");
+        let registration = (drive.registrations().iter())
+            .map(|registration| registration.slot)
+            .find(|slot| {
+                drive
+                    .births(*slot)
+                    .is_some_and(|body| body.body().len() == 2)
+            })
+            .expect("the looping `SPIN`");
+        assert!(matches!(
+            facts.registered_type(drive, registration),
+            crate::scope::Static::Unknown
+        ));
+        let spin = drive.births(registration).expect("`SPIN`'s body");
+        let caching = facts.caching(spin).expect("`SPIN` is folded");
+        let mints = caching.mints.entries();
+        assert!(!mints.is_empty(), "`SPIN`'s nominal mints");
+        assert!(mints.iter().all(|(_, mint)| *mint == Mint::Invariant));
+    });
+}
+
 /// Every shape under `shape`, itself included, depth first.
-fn every_shape<'graph>(shape: &'graph BodyShape<'graph>, out: &mut Vec<&'graph BodyShape<'graph>>) {
+pub(super) fn every_shape<'graph>(
+    shape: &'graph BodyShape<'graph>,
+    out: &mut Vec<&'graph BodyShape<'graph>>,
+) {
     out.push(shape);
     for (_, nested) in shape.nested_shapes() {
         every_shape(nested, out);
@@ -1014,7 +1085,8 @@ fn keyed(source: &str) -> Vec<(ShapeKind, Vec<String>, Option<Vec<String>>)> {
                 let names = (0..shape.slots())
                     .map(|index| name(shape, Slot(index as u32)))
                     .collect();
-                let invariant = (shape.caching().and_then(|caching| caching.invariant))
+                let invariant = (program.facts().caching(shape))
+                    .and_then(|caching| caching.invariant)
                     .map(|slots| slots.iter().map(|slot| name(shape, *slot)).collect());
                 (shape.kind(), names, invariant)
             })
@@ -1066,7 +1138,7 @@ fn a_caching_frame_keys_on_the_parameters_its_invariant_sites_read() {
 }
 
 /// Each shape's slot names, beside the classes of its own minting sites in site order.
-fn minted(source: &str) -> Vec<(Vec<String>, Vec<Mint>)> {
+pub(super) fn minted(source: &str) -> Vec<(Vec<String>, Vec<Mint>)> {
     loaded(source, |program| {
         let mut shapes = Vec::new();
         every_shape(program.shape(), &mut shapes);
@@ -1078,7 +1150,7 @@ fn minted(source: &str) -> Vec<(Vec<String>, Vec<Mint>)> {
                         program.symbols().display(symbol).to_string()
                     })
                     .collect();
-                let mints = (shape.caching().into_iter())
+                let mints = (program.facts().caching(shape).into_iter())
                     .flat_map(|caching| caching.mints.iter().map(|(_, mint)| *mint))
                     .collect();
                 (names, mints)
@@ -1157,7 +1229,7 @@ fn every_shape_of_a_load_has_its_own_segment_and_every_load_the_same() {
 
 /// What one load of `source` at depth 1 leaves after each run: the tiers, what the build root's
 /// table holds, and what it printed; `between` runs on the loaded program between the runs.
-fn runs(
+pub(super) fn runs(
     source: &str,
     count: usize,
     between: impl Fn(&mut crate::program::Running<'_>),
@@ -1276,7 +1348,7 @@ fn an_evicted_specialization_is_rebuilt_on_the_next_miss_with_the_same_answer() 
 }
 
 /// Bounds of `root` and `nested`.
-fn bounds(root: usize, nested: usize) -> SpecBounds {
+pub(super) fn bounds(root: usize, nested: usize) -> SpecBounds {
     SpecBounds {
         root: NonZeroUsize::new(root).expect("a bound is not zero"),
         nested: NonZeroUsize::new(nested).expect("a bound is not zero"),
@@ -1303,10 +1375,9 @@ fn a_loop_handing_a_keyed_helper_a_new_module_each_hop_holds_its_specializations
         );
         assert_eq!(ran.live, 2);
     }
-    assert_eq!(
-        (few.tiers.region, few.tiers.lent),
-        (many.tiers.region, many.tiers.lent)
-    );
+    // The agent tier grows by each `PEEK` binding, run content, until the build rewrite keys a
+    // build cell on load content alone (roadmap/gradual-build/build-rewrite.md).
+    assert_eq!(few.tiers.region, many.tiers.region);
     // `ENDS` stops at the root's default bound, so an operator run past it shows the bound biting.
     let bound = SpecBounds::default().root.get();
     let depth = bound + 4;
@@ -1358,10 +1429,10 @@ fn a_loop_whose_keyed_frame_calls_a_keyed_callable_holds_its_specializations_fla
             (2 * depth, 2 * depth - 4, 4)
         );
     }
-    assert_eq!(
-        (few.tiers.region, few.tiers.lent),
-        (many.tiers.region, many.tiers.lent)
-    );
+    // `OUTER` keys on a module built over each hop's link, so the agent tier grows by each
+    // binding, run content, until the build rewrite keys a build cell on load content alone
+    // (roadmap/gradual-build/build-rewrite.md).
+    assert_eq!(few.tiers.region, many.tiers.region);
 }
 
 #[test]
@@ -1436,8 +1507,9 @@ fn a_call_over_a_list_keys_nothing_and_its_birth_costs_below_the_lists_length() 
 
 #[test]
 fn a_shares_callees_callable_keys_under_its_own_chain_not_its_hosts() {
-    // `SHARE` returns no scalar, so it is a tenant of `OUTER`'s frame; the callable it births
-    // was born under the root, as `SHARE` itself was, so its specialization is the root's child.
+    // `SHARE` returns no scalar, so it is a tenant of `OUTER`'s frame, and keys `m`, which `g`'s
+    // view waits on; the callable it births was born under `SHARE`'s specialization, a child of
+    // the root as `SHARE` itself was, so its specialization lies beneath `SHARE`'s, not `OUTER`'s.
     let source = "EXPR #(SHARE m :Counter) -> Any = \
                   #((LET g = (FN :{x :Number} -> Number = #((LET v = (m :| Counter)) (x)))) \
                   (g {x = 1}))\n\
@@ -1447,7 +1519,7 @@ fn a_shares_callees_callable_keys_under_its_own_chain_not_its_hosts() {
         unreachable!()
     };
     assert_eq!(printed, "2");
-    assert_eq!((tiers.specialized, table), (2, Some(2)));
+    assert_eq!((tiers.specialized, table), (3, Some(2)));
 }
 
 /// [`INVARIANT`] at `Shares`: the same loop, ending in a string.
@@ -1491,11 +1563,11 @@ fn a_shares_loop_seeks_its_specialization_once_and_a_second_park_finds_it_warm()
         "the second park finds every warm type laid"
     );
     assert!(
-        alone.lent_verdicts > 0,
+        alone.agent_verdicts > 0,
         "the view's verdicts are recorded warm"
     );
     assert_eq!(
-        both.lent_verdicts, alone.lent_verdicts,
+        both.agent_verdicts, alone.agent_verdicts,
         "the second park records no verdict anew"
     );
 }
@@ -1523,9 +1595,10 @@ fn a_callable_born_in_a_shares_frame_keys_its_own_beneath_it() {
 
 #[test]
 fn an_unkeyed_shares_callee_in_a_keyed_frame_keys_its_callables_under_its_own_birth() {
-    // `OUTER` is a keyed tenant; `SHARE`, keying nothing, borrows nothing, so the callable it
-    // births keys under the root `SHARE` was born under, not under `OUTER`'s specialization.
-    let source = "EXPR #(SHARE m :Counter) -> Any = \
+    // `OUTER` is a keyed tenant; `SHARE`, whose `m :Any` keys nothing, borrows nothing, so the
+    // callable it births keys under the root `SHARE` was born under, not under `OUTER`'s
+    // specialization.
+    let source = "EXPR #(SHARE m :Any) -> Any = \
                   #((LET g = (FN :{x :Number} -> Number = #((LET v = (m :| Counter)) (x)))) \
                   (g {x = 1}))\n\
                   EXPR #(OUTER m :Counter) -> Any = #((LET w = (m :| Counter)) (SHARE m) (2))\n\
@@ -1538,9 +1611,9 @@ fn an_unkeyed_shares_callee_in_a_keyed_frame_keys_its_callables_under_its_own_bi
 }
 
 #[test]
-fn a_keyed_shares_call_links_a_host_scratch_laid_before_it() {
-    // `VARY` caches but keys nothing, so it lays its host's scratch branch through the `Shares`
-    // chain, unlinked; the keyed loop asked for at the same park reads through it next.
+fn a_keyed_shares_call_runs_beside_a_host_scratch_laid_before_it() {
+    // `VARY` caches but keys nothing, so it lays its host's scratch branch through the caching
+    // chain; the keyed loop asked for at the same park runs on a caching chain over it next.
     let vary = "EXPR #(VARY link :Link) -> Str = \
                 #((MODULE m OVER #[link] = (LET held = link)) \
                 (LET seen = (m :| Holder)) (VARY (ATTR link next)))\n\
@@ -1563,5 +1636,54 @@ fn a_keyed_shares_call_links_a_host_scratch_laid_before_it() {
     assert_eq!(
         (printed("(VARY chain)"), printed("(COUNTDOWN ints chain)")),
         ("done".to_string(), "seven".to_string())
+    );
+}
+
+/// `BOXED`, keyed on a type it composes a nominal over. `ASK` composes a record type at run and
+/// hands it to `BOXED` by a child; `HOPPING` composes it and hands it by a child to `HOP`, which
+/// passes it on to `BOXED` by a tail hop. A hop keys only a type it passes through unchanged, so
+/// the type is composed one call up.
+const BOXED: &str = "EXPR #(BOXED Elt :Type) -> Number = #((NEWTYPE Box = :{v :Elt}) (1))\n\
+                     EXPR #(HOP Elt :Type) -> Number = #(BOXED Elt)\n\
+                     EXPR #(ASK Elt :Type) -> Number = \
+                     #((LET r = (BOXED :{a :Elt b :Elt})) (r))\n\
+                     EXPR #(HOPPING Elt :Type) -> Number = \
+                     #((LET r = (HOP :{a :Elt b :Elt})) (r))\n";
+
+#[test]
+fn a_type_composed_at_run_reaches_the_specialization_it_keys_by_value() {
+    // Each asker keys its own `Elt`, which its statement's call reads, and `HOP` keys the
+    // record it is handed: one specialization per keyed frame, and the record relayed into the
+    // agent tier once, where every specialization keyed on it reads it.
+    for (asker, keyed, relayed) in [("ASK", 2, 1), ("HOPPING", 3, 1)] {
+        let once = ran(DEPTHS[0], &format!("{BOXED}PRINT ({asker} Number)\n"));
+        let twice = ran(
+            DEPTHS[0],
+            &format!("{BOXED}LET first = ({asker} Number)\nPRINT ({asker} Number)\n"),
+        );
+        assert_eq!((once.printed.as_str(), twice.printed.as_str()), ("1", "1"));
+        assert_eq!(
+            (
+                once.tiers.sought,
+                once.tiers.specialized,
+                once.tiers.relayed
+            ),
+            (keyed, keyed, relayed),
+            "`{asker}`'s composed record is laid by value"
+        );
+        assert_eq!(
+            (
+                twice.tiers.sought,
+                twice.tiers.specialized,
+                twice.tiers.relayed
+            ),
+            (2 * keyed, keyed, relayed),
+            "`{asker}`'s second call hits, and a hit relays nothing"
+        );
+    }
+    assert_eq!(
+        ran(DEPTHS[0], &invariant_loop()).tiers.relayed,
+        0,
+        "a written module's types are the root's"
     );
 }

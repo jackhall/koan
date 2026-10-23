@@ -11,19 +11,16 @@ use std::num::NonZeroUsize;
 
 use crate::memory::{CellGraph, Header, ReleaseAbsorption};
 use crate::symbols::BinderSymbol;
-use crate::type_lattice::Habitat;
 use crate::type_lattice::{KType, TypeDigest, TypeNode};
 use crate::values::digest::{DigestHasher, Tag};
-use crate::values::{
-    Decision, Half, HalfHeader, Key, SpecHome, SpecKey, TypeHeader, TypeValue, ValueFamily,
-};
+use crate::values::{Decision, Half, Key, SpecKey, SpecTable, TypeValue, ValueFamily};
 
-use super::{Dict, List, Record, TestGraph, Value, copy, pin, text, with_fixture};
+use super::{Dict, List, Record, TestGraph, TestHeader, Value, copy, pin, text, with_fixture};
 
 /// The digests the branch behind `header` holds, or none where the half has no branch.
-fn branch_digests(header: Header<'_, '_, '_, TypeHeader>) -> HashSet<TypeDigest> {
+fn branch_digests(header: Header<'_, '_, '_, TestHeader>) -> HashSet<TypeDigest> {
     let mut digests = HashSet::new();
-    if let Some(branch) = header.get().map(HalfHeader::branch) {
+    if let Some(branch) = header.get().and_then(|slot| slot.get()) {
         branch.each_digest(|digest| {
             digests.insert(digest);
         });
@@ -181,7 +178,7 @@ fn a_handle_laid_without_a_crossing_fails_the_habitat_check() {
 }
 
 #[test]
-fn a_header_table_decides_hits_free_entries_and_its_least_recently_born_victim() {
+fn a_table_decides_hits_free_entries_and_its_least_recently_born_victim() {
     with_fixture(|_| {
         let mut graph: TestGraph<'_> = CellGraph::new(1, pin);
         let parent = graph.create(None).unwrap();
@@ -194,15 +191,7 @@ fn a_header_table_decides_hits_free_entries_and_its_least_recently_born_victim()
         let is_live = |handle| live.borrow().contains(&handle);
         graph
             .enter(parent, |context| {
-                let half = Half::of(context.writer(), context.header());
-                let _ = half.own_or_lay();
-                let header = context.header().get().expect("the header is laid");
-                assert!(header.table().is_none(), "no table until one is laid");
-                let table = header.lay_table(half, two, two);
-                assert!(
-                    std::ptr::eq(header.lay_table(half, two, two), table),
-                    "a laid table is kept"
-                );
+                let table = SpecTable::lay(Half::of(context.writer(), context.header()), two, two);
                 assert_eq!(table.nested(), two);
                 assert_eq!(table.decide(key(1), is_live), Decision::Fill(0));
                 table.fill(0, key(1), a);
@@ -225,13 +214,6 @@ fn a_header_table_decides_hits_free_entries_and_its_least_recently_born_victim()
                 );
                 assert_eq!(table.decide(key(3), is_live), Decision::Fill(1));
                 assert_eq!(table.len(), 2, "a stale entry is still occupied");
-                assert_eq!(header.home(), None);
-                let home = SpecHome {
-                    me: a,
-                    parent: parent.into(),
-                };
-                header.set_home(home);
-                assert_eq!(header.home(), Some(home));
             })
             .unwrap();
         for child in [a, b, c] {

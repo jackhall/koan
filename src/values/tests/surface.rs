@@ -129,7 +129,7 @@ fn a_payload_is_seen_at_its_identitys_representation() {
 pub(super) fn looped<'cell>(
     fixture: &super::Fixture<'_, '_>,
     writer: crate::memory::Writer<'cell, '_>,
-    types: &crate::values::Chain<'_, '_, 'cell, '_, '_>,
+    types: &crate::values::Chain<'_, 'cell, '_, '_>,
     value: f64,
 ) -> super::Node<'cell> {
     let (scratch, symbols) = (fixture.scratch(), fixture.symbols);

@@ -11,11 +11,13 @@ use proptest::prelude::*;
 use crate::memory::{BumpAllocator, KnotPlan, Writer, resident};
 use crate::parse::{ExpressionPart, KExpression};
 use crate::scope::{
-    Activation, BodyShape, Builtins, Candidate, CaptureSource, ClosureBindings, Coordinate,
-    MentionClass, Position, ShapeError, ShapeKind, Site, Slot, Target, UnitWork,
+    Activation, Address, Binder, BodyShape, Builtins, Candidate, CaptureSlot, CaptureSource,
+    ClosureBindings, Coordinate, Lands as ScopeLands, LoadFacts, MentionClass, PathId, Position,
+    Root, Segment, ShapeError, ShapeKind, Shapes, Site, Slot, Target, UnitIndex, UnitWork, Unknown,
+    each_part, part_of,
 };
 use crate::source::SourceRef;
-use crate::symbols::{BinderSymbol, SymbolInterner};
+use crate::symbols::{BinderSymbol, SymbolInterner, TypeSymbol, ValueSymbol};
 use crate::type_lattice::KType;
 use crate::values::{Link, Value};
 
@@ -483,7 +485,7 @@ fn shaped_plan(program: &plan::Scope, test: impl for<'g, 'c> FnOnce(ShapedPlan<'
         let lines = fixture.parse(&rendering.source);
         fixture.in_cell(|writer, _| {
             let table = builtins(fixture, writer);
-            let shape = BodyShape::of_program(
+            let shapes = crate::scope::Shapes::of_program(
                 fixture.program,
                 &lines,
                 table,
@@ -498,6 +500,8 @@ fn shaped_plan(program: &plan::Scope, test: impl for<'g, 'c> FnOnce(ShapedPlan<'
                     error.display(fixture.symbols, fixture.types)
                 )
             });
+            let shape = shapes.root();
+            let load = fixture.load(shapes);
             let nodes: Vec<_> = lines.iter().collect();
             let located = locate(&rendering, Some(shape), &nodes);
             test(ShapedPlan {
@@ -506,6 +510,7 @@ fn shaped_plan(program: &plan::Scope, test: impl for<'g, 'c> FnOnce(ShapedPlan<'
                 rendering: &rendering,
                 located,
                 shape,
+                load,
                 writer,
                 table,
             });
@@ -544,6 +549,7 @@ where
     rendering: &'p Rendering<'p>,
     located: Located<'g>,
     shape: &'g BodyShape<'g>,
+    load: &'g LoadFacts<'g>,
     writer: Writer<'c, 'p>,
     table: &'c Builtins<'c, Probe>,
 }
@@ -712,7 +718,14 @@ fn activate<'g, 'c>(
                     writer,
                     scratch,
                     table,
-                    Activation::of_callable(writer, nested, Probe(u32::MAX), bindings, table),
+                    Activation::of_callable(
+                        writer,
+                        nested,
+                        activation.load(),
+                        Probe(u32::MAX),
+                        bindings,
+                        table,
+                    ),
                     chain,
                     next,
                 );
@@ -757,7 +770,8 @@ proptest! {
             fixture.in_cell(|writer, _| {
                 let table: &Builtins = builtins(fixture, writer);
                 let source = &rendering.source;
-                let error = BodyShape::of_program(fixture.program, &lines, table, fixture.types, fixture.symbols, fixture.scratch())
+                let error = crate::scope::Shapes::of_program(fixture.program, &lines, table, fixture.types, fixture.symbols, fixture.scratch())
+.map(|shapes| shapes.root())
                     .err()
                     .unwrap_or_else(|| panic!("`{source}` is refused with {refusal:?}"));
                 let symbols = fixture.symbols;
@@ -852,9 +866,370 @@ proptest! {
         let program = Generator::new(&choices).program();
         shaped_plan(&program, |shaped| {
             let activation: Activation<'_, '_, ProbeFamily> =
-                Activation::of_program(shaped.writer, shaped.shape, shaped.table);
+                Activation::of_program(shaped.writer, shaped.shape, shaped.load, shaped.table);
             let mut chain = Vec::new();
             activate(shaped.writer, shaped.scratch, shaped.table, activation, &mut chain, &mut 1.0);
         });
+    }
+}
+
+// ---------- the shape table ----------
+
+/// Build `program`'s rendering twice, from two parses, and hand both shape tables to `test`.
+fn shaped_twice<R>(
+    program: &plan::Scope,
+    test: impl for<'g> FnOnce(&SymbolInterner, &Shapes<'g>, &Shapes<'g>) -> R,
+) -> R {
+    let rendering = plan::render_program(program);
+    with_fixture(|fixture| {
+        let (first, second) = (
+            fixture.parse(&rendering.source),
+            fixture.parse(&rendering.source),
+        );
+        fixture.in_cell(|writer, _| {
+            let table = builtins::<Probe>(fixture, writer);
+            let build = |lines| {
+                Shapes::of_program(
+                    fixture.program,
+                    lines,
+                    table,
+                    fixture.types,
+                    fixture.symbols,
+                    fixture.scratch(),
+                )
+                .unwrap_or_else(|error| {
+                    panic!(
+                        "`{}` shapes: {}",
+                        rendering.source,
+                        error.display(fixture.symbols, fixture.types)
+                    )
+                })
+            };
+            let (a, b) = (build(&first[..]), build(&second[..]));
+            test(fixture.symbols, a, b)
+        })
+    })
+}
+
+/// Every part `shape`'s statements hold, in written order, and each statement's root node.
+fn written_parts<'g>(shape: &BodyShape<'g>) -> Vec<Written<'g>> {
+    let mut parts = Vec::new();
+    for statement in shape.body() {
+        parts.push(Written::Node(statement));
+        each_part(statement, |part| {
+            parts.push(Written::Part(part));
+            if let ExpressionPart::Expression(node) = part {
+                parts.push(Written::Node(node.reference()));
+            }
+        });
+    }
+    parts
+}
+
+/// One part or node met walking a body's statements in written order.
+#[derive(Clone, Copy)]
+enum Written<'g> {
+    Part(&'g ExpressionPart<'g>),
+    Node(&'g KExpression<'g>),
+}
+
+impl Written<'_> {
+    fn site(self) -> Site {
+        match self {
+            Written::Part(part) => Site::of(part),
+            Written::Node(node) => Site::of_node(node),
+        }
+    }
+}
+
+/// Every unknown a body of `shapes` may declare: each slot, and each capture of a quote's code.
+fn unknowns_of(shapes: &Shapes<'_>, segment: Segment) -> Vec<Unknown> {
+    let shape = shapes.shape_at(segment);
+    let slots = (0..shape.slots()).map(|slot| Address::Slot(Slot(slot as u32)));
+    let captures = (shape.kind() == ShapeKind::Code)
+        .then(|| {
+            (0..shape.captures().len()).map(|capture| Address::Capture(CaptureSlot(capture as u32)))
+        })
+        .into_iter()
+        .flatten();
+    slots
+        .chain(captures)
+        .map(|at| Unknown { segment, at })
+        .collect()
+}
+
+/// A path identity with an in-place root's site, an address, erased.
+fn identity(id: Option<PathId<'_>>) -> Option<(Option<Binder>, Vec<ValueSymbol>, TypeSymbol)> {
+    id.map(|id| {
+        let root = match id.root {
+            Root::Binder(binder) => Some(binder),
+            Root::Inline { .. } => None,
+        };
+        (root, id.chain.to_vec(), id.label)
+    })
+}
+
+/// Whether two shape tables of one text agree on every text fact, each compared by segment and by
+/// its place in written order, never by address.
+fn agree(a: &Shapes<'_>, b: &Shapes<'_>) {
+    assert_eq!(a.bodies().len(), b.bodies().len(), "one count of bodies");
+    for (left, right) in a.bodies().iter().zip(b.bodies()) {
+        let segment = left.segment();
+        assert_eq!(segment, right.segment());
+        assert_eq!(left.kind(), right.kind());
+        assert_eq!(a.parent(segment), b.parent(segment));
+        assert_eq!(left.slots(), right.slots());
+        assert_eq!(left.statements(), right.statements());
+        assert_eq!(left.units(), right.units());
+        for unit in all_units(left) {
+            let (mine, theirs) = (left.holds(unit), right.holds(unit));
+            assert_eq!(mine.slots, theirs.slots);
+            assert_eq!(mine.spelled, theirs.spelled);
+            // The expressions index a table keyed by site, an address: compare program order.
+            let order = |shape: &BodyShape<'_>, held: &[u32]| -> Vec<u32> {
+                (held.iter())
+                    .map(|at| shape.type_expressions()[*at as usize].order)
+                    .collect()
+            };
+            assert_eq!(
+                order(left, mine.expressions),
+                order(right, theirs.expressions)
+            );
+        }
+        for slot in (0..left.slots()).map(|slot| Slot(slot as u32)) {
+            assert_eq!(left.unit_of_slot(slot), right.unit_of_slot(slot));
+            assert_eq!(
+                a.digested_index(segment, slot),
+                b.digested_index(segment, slot)
+            );
+        }
+        for statement in 0..left.statements() as usize {
+            assert_eq!(
+                left.unit_of_statement(statement),
+                right.unit_of_statement(statement)
+            );
+            let nested = |shapes: &BodyShape<'_>| -> Vec<Segment> {
+                (shapes.nested_in(statement).iter())
+                    .map(|(_, body)| body.segment())
+                    .collect()
+            };
+            assert_eq!(nested(left), nested(right));
+        }
+        assert_eq!(left.captures(), right.captures());
+        for unknown in unknowns_of(a, segment) {
+            assert_eq!(a.bind_site(unknown), b.bind_site(unknown));
+        }
+        assert_eq!(a.homes(segment), b.homes(segment));
+        assert_eq!(a.layout(segment), b.layout(segment));
+        if left.kind() == ShapeKind::Callable {
+            assert_eq!(a.escapes(segment), b.escapes(segment));
+            assert_eq!(a.rebound(segment), b.rebound(segment));
+            assert_eq!(a.invariant(segment), b.invariant(segment));
+        }
+        assert_eq!(left.spelled().len(), right.spelled().len());
+        for (index, (mine, theirs)) in left.spelled().iter().zip(right.spelled()).enumerate() {
+            assert_eq!(mine.statement, theirs.statement);
+            assert_eq!(left.spelled_at(Site::of(mine.part)), Some(index));
+            assert_eq!(identity(mine.id), identity(theirs.id));
+            assert_eq!(a.path_level(segment, index), b.path_level(segment, index));
+        }
+        if matches!(left.kind(), ShapeKind::Program | ShapeKind::Code) {
+            assert_eq!(a.path_base(segment), b.path_base(segment));
+        }
+        let (mine, theirs) = (written_parts(left), written_parts(right));
+        assert_eq!(mine.len(), theirs.len());
+        for (mine, theirs) in mine.iter().zip(theirs.iter()) {
+            let (here, there) = (mine.site(), theirs.site());
+            let mention = |shape: &BodyShape<'_>, site| {
+                shape.mention(site).map(|mention| {
+                    (
+                        mention.name,
+                        mention.at,
+                        mention.class,
+                        mention.coordinate,
+                        mention.lands,
+                        mention.fellow,
+                        mention.head,
+                    )
+                })
+            };
+            assert_eq!(mention(left, here), mention(right, there));
+            let view = |shapes: &Shapes<'_>, site| {
+                shapes
+                    .view_slots(segment, site)
+                    .map(|slots| (slots.body, slots.captures.to_vec()))
+            };
+            assert_eq!(view(a, here), view(b, there));
+            let handed = |shapes: &Shapes<'_>, site| -> Vec<_> {
+                (shapes.handoffs(segment, site).iter())
+                    .map(|handoff| (handoff.to, handoff.from))
+                    .collect()
+            };
+            assert_eq!(handed(a, here), handed(b, there));
+        }
+    }
+}
+
+/// The units of `shape`: its entry, then each unit it runs.
+fn all_units(shape: &BodyShape<'_>) -> impl Iterator<Item = UnitIndex> {
+    std::iter::once(UnitIndex::ENTRY).chain((0..shape.units().len()).map(UnitIndex::of_run))
+}
+
+/// The statement of `ancestor` the body `segment` sits in, where `ancestor` encloses it.
+fn statement_around(shapes: &Shapes<'_>, mut segment: Segment, ancestor: Segment) -> Option<u32> {
+    loop {
+        let (parent, statement) = shapes.parent(segment)?;
+        if parent == ancestor {
+            return Some(statement);
+        }
+        segment = parent;
+    }
+}
+
+/// Whether a callable lies on the way from `segment` out to `ancestor`, `segment` included.
+fn crosses_callable(shapes: &Shapes<'_>, mut segment: Segment, ancestor: Segment) -> bool {
+    while segment != ancestor {
+        if shapes.shape_at(segment).kind() == ShapeKind::Callable {
+            return true;
+        }
+        segment = shapes.parent(segment).expect("an ancestor encloses it").0;
+    }
+    false
+}
+
+/// The statement of `shape` holding the part at `site`.
+fn statement_holding(shape: &BodyShape<'_>, site: Site) -> u32 {
+    (shape.body().iter())
+        .position(|node| part_of(node, site).is_some() || Site::of_node(node) == site)
+        .expect("a mention sits in a statement") as u32
+}
+
+/// Each mention of `shapes` that lands at a binder, beside its body, the binder's body and the
+/// statement of that body the mention is read in.
+fn binder_reads<'g>(
+    shapes: &Shapes<'g>,
+) -> Vec<(Segment, &'g crate::scope::Mention, Segment, Slot, u32)> {
+    let mut reads = Vec::new();
+    for shape in shapes.bodies() {
+        let segment = shape.segment();
+        for mention in shape.mentions() {
+            let ScopeLands::Binder { at: home, slot } = mention.lands else {
+                continue;
+            };
+            let statement = match home == segment {
+                true => statement_holding(shape, mention.site),
+                false => {
+                    statement_around(shapes, segment, home).expect("a landing encloses its reader")
+                }
+            };
+            reads.push((segment, mention, home, slot, statement));
+        }
+    }
+    reads
+}
+
+proptest! {
+    #![proptest_config(ProptestConfig { cases: crate::tests::case_share(1, 1), ..ProptestConfig::default() })]
+
+    /// Two builds of one text, from two parses, agree on every text fact the shape table holds:
+    /// units, nested bodies, landings, bind sites, levels, path identities, layouts, escape,
+    /// invariance and digest memos.
+    #[test]
+    fn two_builds_of_one_text_agree(choices in plan::choices()) {
+        let program = Generator::new(&choices).program();
+        shaped_twice(&program, |_, a, b| agree(a, b));
+    }
+
+    /// Each unit holds exactly the slots, spelled paths and type expressions the unit tables give it,
+    /// each in its table's order: a unit's steps walk its own entries and miss none.
+    #[test]
+    fn a_unit_holds_what_its_tables_assign(choices in plan::choices()) {
+        let program = Generator::new(&choices).program();
+        shaped_twice(&program, |_, shapes, _| {
+            for shape in shapes.bodies() {
+                let units = all_units(shape);
+                let running = |statement: u32| {
+                    (statement < shape.statements()).then(|| shape.unit_of_statement(statement as usize))
+                };
+                let mut expressions: Vec<u32> = (0..shape.type_expressions().len() as u32).collect();
+                expressions.sort_by_key(|at| shape.type_expressions()[*at as usize].order);
+                for unit in units {
+                    let holds = shape.holds(unit);
+                    let slots: Vec<Slot> = (0..shape.slots() as u32)
+                        .map(Slot)
+                        .filter(|slot| shape.unit_of_slot(*slot) == unit)
+                        .collect();
+                    prop_assert_eq!(holds.slots, &slots[..]);
+                    let spelled: Vec<u32> = (0..shape.spelled().len() as u32)
+                        .filter(|at| running(shape.spelled()[*at as usize].statement) == Some(unit))
+                        .collect();
+                    prop_assert_eq!(holds.spelled, &spelled[..]);
+                    let typed: Vec<u32> = (expressions.iter().copied())
+                        .filter(|at| running(shape.type_expressions()[*at as usize].statement) == Some(unit))
+                        .collect();
+                    prop_assert_eq!(holds.expressions, &typed[..]);
+                }
+            }
+            Ok(())
+        })?;
+    }
+
+    /// Every mention's landing is its coordinate followed through the shape table.
+    #[test]
+    fn a_landing_is_its_coordinate_followed(choices in plan::choices()) {
+        let program = Generator::new(&choices).program();
+        shaped_twice(&program, |_, shapes, _| {
+            for shape in shapes.bodies() {
+                for mention in shape.mentions() {
+                    let followed = shapes.follow(shape.segment(), mention.coordinate);
+                    prop_assert_eq!(followed, Some(mention.lands));
+                }
+            }
+            Ok(())
+        })?;
+    }
+
+    /// A unit runs after every unit a nested body's captures read, at any depth: the statement a
+    /// nested body sits in reads what the body reads.
+    #[test]
+    fn a_unit_runs_after_every_unit_its_captures_read(choices in plan::choices()) {
+        let program = Generator::new(&choices).program();
+        shaped_twice(&program, |_, shapes, _| {
+            for (segment, _, home, slot, statement) in binder_reads(shapes) {
+                let holder = shapes.shape_at(home);
+                if segment != home {
+                    prop_assert!(holder.unit_of_slot(slot) <= holder.unit_of_statement(statement as usize));
+                }
+            }
+            Ok(())
+        })?;
+    }
+
+    /// A mention reads a fellow exactly where the binder it lands at shares a component with its
+    /// own statement's binder, with no callable between.
+    #[test]
+    fn a_fellow_mention_is_one_its_component_holds(choices in plan::choices()) {
+        let program = Generator::new(&choices).program();
+        shaped_twice(&program, |_, shapes, _| {
+            let reads = binder_reads(shapes);
+            for (segment, mention, home, slot, statement) in reads.iter().copied() {
+                let holder = shapes.shape_at(home);
+                let binder = (0..holder.slots())
+                    .map(|at| Slot(at as u32))
+                    .find(|at| holder.position_of(*at) == Position::statement(statement as usize));
+                let fellow = !crosses_callable(shapes, segment, home)
+                    && binder.is_some_and(|binder| {
+                        holder.component_index(binder) == holder.component_index(slot)
+                    });
+                prop_assert_eq!(mention.fellow, fellow);
+            }
+            let landed = reads.len();
+            let fellows = (shapes.bodies().iter())
+                .flat_map(|shape| shape.mentions())
+                .filter(|mention| mention.fellow)
+                .count();
+            prop_assert!(fellows <= landed, "only a binder is a fellow");
+            Ok(())
+        })?;
     }
 }

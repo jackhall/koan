@@ -4,14 +4,13 @@
 use crate::memory::Bump;
 use crate::scheduler::Graph;
 use crate::scheduler::tests::bundle::Native;
-use crate::type_lattice::Root;
 use crate::values::SpecBounds;
 
 #[test]
 fn the_load_stands_two_roots_and_lays_the_build_roots_header() {
     let type_region = Bump::new();
     let (mut graph, roots, out) = Graph::<'_, Native>::load(2, SpecBounds::default(), || {
-        Ok::<_, ()>((Root::seeded(&type_region), 7))
+        Ok::<_, ()>((crate::values::tests::seeded_tiers(&type_region), 7))
     })
     .expect("the load succeeds");
     assert_eq!(out, 7, "the load's own result comes back");
@@ -39,7 +38,7 @@ fn the_load_stands_two_roots_and_lays_the_build_roots_header() {
 #[test]
 fn a_refused_load_hands_its_refusal_back() {
     let refused = Graph::<'_, Native>::load(2, SpecBounds::default(), || {
-        Err::<(&Root<'_>, ()), _>("refused")
+        Err::<(crate::values::TypeTiers<'_>, ()), _>("refused")
     });
     assert_eq!(refused.err(), Some("refused"));
 }

@@ -58,7 +58,7 @@ pub fn tie<'graph, 'cell, 'x>(
     activation: &KActivationView<'graph, 'cell>,
     component: &Component<'graph>,
     build: BuildRef,
-    types: &Chain<'_, '_, 'cell, '_, '_>,
+    types: &Chain<'_, 'cell, '_, '_>,
     scratch: BumpAllocator<'x>,
     eager: &mut Eager<'_, 'graph, 'cell>,
 ) -> Result<Tied<'graph, 'cell, 'x>, Untieable<'x>> {
@@ -212,7 +212,7 @@ pub fn tie<'graph, 'cell, 'x>(
             (Some((staged, (closure, typing))), _) => Node::Function(Function::new(
                 staged.ktype,
                 typing,
-                staged.shape,
+                staged.body,
                 closure,
                 knot_weight,
             )),

@@ -25,7 +25,9 @@ A scope is built in three tiers, each at the moment its contents become known.
   one shape builder assigns in the order it seals shapes: distinct per shape,
   the same in every load of one text, and what a
   [specialization's key](../build/README.md#keys-which-bindings-make-a-specialization)
-  names the body by.
+  names the body by. Every shape of a load reaches the one table the builder
+  fills once the root seals, so any shape finds any other by its segment
+  (`BodyShape::shape_at`).
 
   **A reader takes a body's statements from `BodyShape::body()`, never from the
   parse.** Every site a shape records — a mention's part, a nested shape's
@@ -175,17 +177,16 @@ caller mints. That covers a callable a binder births and a `FN` a data binder's
 constructor slot holds alike.
 
 A callable or module also holds a **type capture** past the builder's captures
-for each lexical variable of an enclosing body that a call in it solves from or
-an instance site in it is made at: the static pass adds one where a
+for each run-bound type name of the bodies around it on its chain that is
+bound when its birth runs: its **layout** (`Shapes::layout`), each beside the
+coordinate of the enclosing activation its birth reads. So a body reads a type
+name it never writes. Births read the builder's captures, then the layout, so
+the closure is `capture_count()` slots long. The closure's digest and equality
+compose a type capture only where its **contract** names it: where a
 [contribution](../dispatch/README.md#static-types) or an instance's solution
-names such a variable, with
-the coordinate of the enclosing activation its birth reads
-(`BodyShape::type_captures`), and a callable between the two passes it on
-through a type capture of its own. So a body reads a type name it never writes,
-and a closure holds one only where a call or an instance site in it reads it. Births read the
-builder's captures, then the type captures, so the closure is `capture_count()`
-slots long. A type capture is never merged with a builder capture of the same
-name.
+in the body, or in a callable nested in it, names the variable
+([the folds](../build/README.md#the-folds)). A type capture is never merged
+with a builder capture of the same name.
 
 **A module body is held to its capture contract**
 ([build.rs](shape/build.rs)), per the
@@ -199,8 +200,8 @@ source; a top-level binding or a builtin is read where it lives and needs no
 listing. The first outer name the list leaves out refuses the body,
 `` `x` is read from outside this module; list it under its `OVER`, as
 `OVER #[x]` ``, a registration named by its key; a body with no list captures
-nothing from outside. A type capture the static pass adds must be listed too,
-which [dispatch](../dispatch/README.md#static-types) checks where it adds one.
+nothing from outside. A type capture the body's contract composes must be
+listed too, which the load's [walk](../dispatch/README.md#static-types) checks.
 An entry the body never reads is captured all the same, and a top-level entry
 is recorded by its binding (`BodyShape::listed_top`), since the run never reads
 one through a capture. An entry naming nothing visible is `Unbound`. Inside a
@@ -256,22 +257,22 @@ function resolves by how it is bound, read off the syntax of its declaration:
   anywhere else;
 - a **member** — a `MODULE` or `GROUP` body's `LET pick = (FN FOR ALL …)` — resolves at
   the head of a call, and unmarked anywhere else, where the
-  [static pass](../dispatch/README.md#static-types) instantiates it at the type
+  [load's walk](../dispatch/README.md#static-types) instantiates it at the type
   it is wanted at. Such a read is eager whatever its position, since making the
   instance needs the member's value. A `$pick` in a quote's code is refused
   `QuantifiedRead`, and a bare `$pick` refuses the program rather than the code;
   an `EVAL` refuses to offer either kind of name, since an offer passes the
   name's value in;
 - any other binding of a quantified `FN`, a `LET` outside a `MODULE` or `GROUP`
-  body included, resolves as an ordinary name: the static pass instantiates it where
+  body included, resolves as an ordinary name: the load's walk instantiates it where
   it is bound, or refuses the load.
 
 A quantified member read through its module, `m.pick`, is no name: the read is
-an `ATTR` call, and the static pass makes it an instance site where it sees the
+an `ATTR` call, and the load's walk makes it an instance site where it sees the
 member's scheme ([static types](../dispatch/README.md#static-types)).
 
 A quantified `FN` literal is written anywhere; outside a call's head, the
-static pass instantiates it where it is written. A body whose value is read — a
+load's walk instantiates it where it is written. A body whose value is read — a
 callable's, a block's, a quote's code — takes its last statement's, so that
 statement binds no call-only function: a `LET … = FN EXPR FOR ALL …` or a bare
 `EXPR FOR ALL …` definition there is refused `QuantifiedValue`. Inside a quote's
@@ -392,8 +393,8 @@ and the seal freezes:
   door reads which declaration it is and where its declared part sits, off the
   node's own builtin shape;
 - `BodyShape::registration`, the registration bound at the slot;
-- the load-time cells of a type binder and a registration
-  ([below](#load-time-types)).
+- the load-time facts of a type binder and a registration, which the load's
+  records keep ([below](#load-time-types)).
 
 The position a binder writes at is a read by slot too
 (`BodyShape::position_of`). Every other table a shape holds by site — mentions,
@@ -435,6 +436,17 @@ so independent units come out as they are written and a forward reference moves
 only the binder its reader needs. A read's wait is acyclic by construction,
 since a cycle among bindings is one component. Each unit records whether it
 holds the body's last statement, whose value a called body's is.
+
+Before them stands the body's **entry unit**, `UnitIndex::ENTRY`, which the
+run never runs: it holds every slot bound before a statement runs — the
+parameters, the body's own `FOR ALL` names, its `:Type` parameters, a block's
+surfaced names, a code shape's captures — and the load's walk types it first.
+`UnitIndex(i + 1)` is `units()[i]`, and two dense tables give the unit of each
+slot and of each statement (`unit_of_slot`, `unit_of_statement`); `nested_in`
+lists the bodies each statement births or runs inline, in program order; and
+`holds` gives each unit's own entries — the slots it binds, the paths its
+statements spell and their type expressions in program order — so a unit's
+work walks those and never the whole body.
 
 A statement containing `EVAL` is ordered like any other: the code an `EVAL`
 runs reads no name of the body around it by symbol ([quotes](#quotes)), so its
@@ -540,84 +552,151 @@ tied.
 
 ## Load-time types
 
-A shape carries a **write-once cell** for every type fact
-[the elaborator's load pass](../elaborate/README.md#the-type-channel-at-load)
-fixes before the program runs. The builder lays each cell down empty, save a
-code shape's refusal (below) — `scope`
-sits below `elaborate`, and a shape seals before anything in it can be
-elaborated — and the pass fills it, once, where the program loads:
+A shape holds no fact a type decides: it is a function of the text, the
+builtin table and the operator claims, built once per code value, and holds
+no cell, so `BodyShape` is covariant in its lifetime and `Sync`. What
+[the load's walk](../build/README.md#the-one-walk) decides rests in records
+off the shape, and the facts of the text that span bodies rest in the
+**shape table**.
 
-- each **type expression** the shape records (`BodyShape::type_expressions`, by
-  site): a `:(…)` or `:{…}` in value position, a type part of an expression
-  shape that births no callable — a `MATCH`'s result and union clause, a
-  `TRY`'s result, an ascription's type — and each `MATCH … WITH` guard,
-  with its arm set and written index. A callable's signature, a declaration's definition and a type
-  `LET`'s right-hand side are not recorded: they are typed with their callable or
-  binder, and a type nested in a recorded one is part of it;
-- each **type binder**, and each **registration**'s expression shape, in the
-  binder's own slot record;
-- a callable body's own **callable type**, the lexical variable each name of
-  its own `FOR ALL` group is in the body (`BodyShape::group_levels`), and the
-  solution a `FN FOR ALL` the load instantiated is born at, closed or rigid
-  (`BodyShape::born_instance`), written by dispatch's static pass;
-- each lexical variable a body declares, by level, beside the slot or capture
-  its activation holds the bound type at (`BodyShape::declared_variables`),
-  which the static pass reads to find where a use reads a variable, and the
-  type captures that pass adds (`BodyShape::type_captures`);
-- a quote's code shape's **refusal**: one cell, holding the builder's refusal
-  where its code cannot be built, else the load pass's where the built code
-  does not type, which `BodyShape::refusal` reports when an `EVAL` runs it;
-- at a chain's root, its **path entries** (`BodyShape::paths`, by level through
-  `path_entry`): one `PathEntry` per path the chain reads — its root, a binder
-  or a part written in place, its value-member chain, its label, its level and
-  the declared application it is read through, if any — each with a write-once
-  `Resolution`, the path's content tree beside what the
-  [static pass](../dispatch/README.md#paths) resolved it to, closed at a type
-  or the variable of its class; and, per shape, the entry each path its type
-  expressions spell reads (`BodyShape::path_read`, by site).
+**The shape table.** [`Shapes`](shapes.rs) holds every shape one load builds,
+by segment, beside the statement of its encloser it sits in, laid once where
+the root's shape is built. It answers every text fact that reads more than one
+body:
 
-A cell holds `Unknown`, a closed value, or a rigid value beside the
+- `bind_site`, where an unknown binds — its body's entry, or the unit binding
+  it ([seams](../build/README.md#frontiers-and-seams));
+- `encloses`, whether one body is another or encloses it, read off the
+  segments: a body's nested bodies take the segments before its own, so a
+  body's segment exceeds every body's it encloses, the order a frontier's
+  [cut](../build/README.md#frontiers-and-seams) reads;
+- which unit's record holds a fact the shape places: a slot's (`slot_unit`), a
+  statement's (`running`) and a callable's or a quote's code's birth
+  (`birth_unit`), an inline body's facts resting in the unit running the
+  statement of its encloser that holds it;
+- each mention's **landing**, its coordinate followed through every capture to
+  a builtin, a binder or a quote's open capture (`Mention::lands`), beside
+  whether it reads a fellow of its own component with no callable between
+  (`Mention::fellow`). A capture is followed by one rule, [`follow`](shape.rs)
+  over a `CaptureChain`: the builder follows it over its drafts by level, the
+  table over the sealed shapes by segment (`Shapes::follow`) and the load's
+  walk over its chain by level, so a `Lands` names its body by either. A
+  capture's source is a builder capture's own or, past those, its layout
+  entry's coordinate outside (`Shapes::capture_source`);
+- the **levels** of a chain: every run-bound type name of every body along it,
+  a closed type binder included, numbered as the
+  [type half](../elaborate/README.md#the-type-channel-at-load) reads them —
+  an encloser's names first, then a body's own `FOR ALL` names in written
+  order, its other type names in slot order, and at a chain root its
+  type-named captures, siblings numbering alike — each beside the slot or
+  capture its activation holds the bound type at (`homes`, `level`); then
+  every spelled **path identity** of the chain, its root, member chain and
+  label, in first-spelling order (`BodyShape::spelled`, `path_level`), each
+  part holding a path a type spells decided by its tokens
+  ([`path_spelling`](spelling.rs)); a path no type spells, which a member read
+  pins, takes its level past these (`path_base`) as a fact of the unit
+  pinning it;
+- a callable's or a `MODULE` body's **layout**: each run-bound type name of
+  the bodies around it on its chain that is bound when its birth runs, by
+  level, beside where the birth reads it in the activation around it, held in
+  the closure past its builder's captures (`layout`, `coordinate_of`);
+- the tail-call facts ([`tails`](shapes/tails.rs)): which callables
+  **escape**, the parameters a body's own tail rebinds, and the parameters
+  every tail edge into a body passes on bare, a greatest fixpoint;
+- the **digest memos** ([`memos`](shapes/memos.rs)): the slots that keep one,
+  each `:|` over a module binder read bare that reads them (`view_slots`), and
+  which digested slot each call passes bare (`handoffs`).
+
+**Records.** The walk keeps one record per unit ([`records`](records.rs)): a
+`UnitFacts`, which holds one `Typed` per body the unit typed — the unit's own
+body and each inline body it ran — what it births, the path entries it
+resolved first on its chain, and what the folds read; one `Closing` per owning
+body; and, once the walk ends, the `Folds` per body. A `Typed` holds, each
+table sorted by its key:
+
+- the type channel's facts: each type binder's declaration and each
+  registration's expression shape, by slot, and each recorded **type
+  expression**'s type, by site — a `:(…)` or `:{…}` in value position, a type
+  part of an expression shape that births no callable — a `MATCH`'s result and
+  union clause, a `TRY`'s result, an ascription's type — and each
+  `MATCH … WITH` guard. A callable's signature, a declaration's definition and
+  a type `LET`'s right-hand side are not recorded: they are typed with their
+  callable or binder, and a type nested in a recorded one is part of it;
+- the value channel's facts: a static type, an interval, for each part the
+  evaluator reads as a value (by site), each statement (by index) and each
+  binder (by slot); what the load fixed about each keyworded use, by the site
+  of its node (`UseStatics`) — its `Narrowing`, the one candidate selected or
+  each candidate kept beside its verdict, *always* or *maybe*, and its
+  **contributions**, a static type per argument the call solves from,
+  `Unknown` where it reads the carried type — with a use the load fixed
+  nothing about left out, every candidate kept and every argument read as
+  carried; each use's selection beside the closed point its group solves to;
+  the site of each **settled** `:!` or annotation, whose value's static type
+  lies under its type, so the run checks nothing there; what the load fixed at
+  each [instance site](../dispatch/README.md#static-types) — the solution it is
+  instantiated at, closed or rigid, or, for a member read at a call's head,
+  that the run reads it as it is (`InstanceRead`); each call by name's
+  contributions, by its argument's site, a static type per parameter of its
+  callee in symbol order; the **content tree** of the view each `:|`
+  ascription at a closed signature builds, by its site, and each module
+  binder's content tree, by slot; each minting site; and where the run reads
+  each lexical variable of a path's declared application, per path;
+- what an inline body folds into its owner's closing: its exits, its minting
+  sites and a `MODULE` or `GROUP` body's exact signature.
+
+A unit's birth record holds each callable's type, its own group's levels, the
+solution a `FN FOR ALL` the load instantiated is born at, and which of its
+parameters digest at a constant cost. A path entry is a plain `PathEntry` —
+its root, a binder or a part written in place, its value-member chain, its
+label, its level and the declared application it is read through, if any —
+beside its `Resolution`: the path's content tree and what
+[dispatch](../dispatch/README.md#paths) resolved it to, closed at a type or
+the variable of its class. A closing holds an owning body's class, exits,
+summary and recursion flag, and for a quote's code the type a traced `EVAL`
+runs it at and the code's typing refusal, which an `EVAL` reports beside the
+builder's own (`BodyShape::refusal`).
+
+A load-time type is `Unknown`, a closed value, or a rigid value beside the
 `Variable`s that the run substitutes: each a variable's level and its source —
-a name's coordinate (`Source::Type`), or a path's entry beside the coordinate
-of its root (`Source::Path`), which the run binds by reading the module there
-and the member through it. The born-instance cell holds a
-`StaticSolution`, closed or rigid, or nothing: it has no unknown arm. The
-vocabulary lives here, beside the shape that holds it: `Static`,
+a name's coordinate (`Source::Type`), or a path, by its chain root's segment and
+its level there, beside the coordinate of its root (`Source::Path`), which the
+run binds by reading the module there and the member through it. A born
+instance is a `StaticSolution`, closed or rigid, or nothing: it has no unknown
+arm. The vocabulary lives here, beside the shape its records key on: `Static`,
 `StaticSolution`, `Variable`, and the callable-typing records the
 elaborator fills, `Callable`, `Registered`, `ParameterBinding`, and
-`Elaboration`, so a shape error can carry an elaboration's refusal. A reader
-holding the shape reads its cell by site or slot: the evaluator, the body runner,
-a callable's birth and the overlap check.
+`Elaboration`, so a shape error can carry an elaboration's refusal.
 
-One more cell per shape holds the **value channel**: the `Statics` dispatch's
-[load pass](../dispatch/README.md#static-types) fixes once the type channel has —
-a static type, an interval, for each part the evaluator reads as a value (by
-site) and each statement (by index); what the load fixed about each keyworded
-use, by the site of its node (`UseStatics`) — its `Narrowing`, the one
-candidate selected or each candidate kept beside its verdict, *always* or
-*maybe*, and its **contributions**, a static type per argument the call solves
-from, `Unknown` where it reads the carried type — with a use the load fixed
-nothing about left out, every candidate kept and every argument read as
-carried; the site of each
-**settled** `:!` or annotation, whose value's static type lies under its type,
-so the run checks nothing there; what the load fixed at each
-[instance site](../dispatch/README.md#static-types) — the solution it is
-instantiated at, closed or rigid, or, for a member read at a call's head, that
-the run reads it as it is (`InstanceRead`); the **content tree** of the view
-each `:|` ascription at a closed signature builds, by the ascription's site
-(`view_tree`); where the run reads
-each lexical variable of a path's declared application, per path
-(`through_at`);
-each call by name's contributions, by its argument's site, a static type
-per parameter of its callee in symbol order, `Unknown` where the frame reads the
-carried type; and the **digested** slots that keep a digest memo, beside where
-each `:|` over a module binder reads its captures' memos (`view_slots`) and
-which digested slot each call passes bare (`handoffs`)
-([memos](../dispatch/statics/memos.rs)). It lives here for the same reason the type channel's
-cells do, and the shape reads it by site (`value_type`, `use_statics`,
-`settled`, `instance_at`, `named_contributions`) or statement index; a shape the
-pass has not fixed — a quote's code it refused — has no static types, every
-candidate of every use in it is *maybe*, and no ascription in it is settled.
+**The read door.** Every reader — the evaluator, the body runner, a callable's
+birth, the overlap check and the suites — reads the load's facts through
+[`LoadFacts`](records.rs), each accessor taking the body's shape first
+(`typed_expression`, `value_type`, `use_statics`, `settled`, `instance_at`,
+`named_contributions`, `view_tree`, `class`, `caching` and the rest), so no
+reader names where a fact is kept. A slot's, a statement's or a birth's fact
+lies in the record of the unit the shape table names for it, so it reads that
+record directly; it indexes only each site, through and path fact, whose unit
+the shape cannot name, to the record holding it, and forwards the text facts to
+the shape table. A path's entry and its resolution read in one lookup (`path`).
+A `LoadFacts` may sit over a base: every read tries its own records, then its
+base's, and a unit it re-ran replaces the base's record of it whole. The
+load's is laid in program storage before the program is, and an activation
+carries it (`ActivationView::load`). A body the walk has not typed — a quote's
+code it refused — has no static types, every candidate of every use in it is
+*maybe*, and no ascription in it is settled.
+
+**What a fact waits on.** [`facts`](facts.rs) holds the solver's
+vocabulary, beside the shape whose sites, slots and segments it keys on
+([the store](../build/README.md#the-store)): an `Unknown`, a name a binding
+may remove, by its lexical address — the declaring body's segment and the slot
+or capture its activation holds the name at; a `Frontier`, what a unit waits
+on — the unknowns it gathered itself beside a `Cut` read of each ended
+frontier it read whose cut keeps one of its unknowns, never laid flat and
+compared only by identity; a `UnitId`, a body's segment and a unit's index in
+it; a `Bound`, what a binding gives an unknown — a type, or a module's closed
+content tree beside the exact type it carries; a `Binding`, unknowns sorted
+beside their bounds; and the `Store` trait the walk runs over.
+[`writes`](writes.rs) is the table a store keeps its writes in, one per unit,
+before it lays them into a `LoadFacts`.
 
 **Content trees.** The value channel's trees are [`tree`](tree.rs)'s
 vocabulary: what the load knows of a module-valued expression's content
@@ -631,8 +710,16 @@ it — a body's builder captures, or a call the load unfolded — or an expressi
 no binder names (`Leaf::Unnamed`), unlike every tree, itself included. A tree
 with no leaf is closed, and its digest is the run's, computed through the run's
 own [recipes](../values/README.md#content-digests). `Tree::same_as` is the one
-equality: closed trees by digest, any other structurally. Trees are `Copy` and
-laid in program storage beside the cells that hold them.
+equality: closed trees by digest, any other structurally. Trees are `Copy`, and
+a tree names a body, and a binder its body, by segment.
+
+**Covariant facts.** Every record — static types, trees, path entries,
+resolutions, `UnitFacts`, `Closing`, `Folds` — names a body by its segment and
+a path by its chain root's segment and level, never by a reference into
+program storage, and holds no cell, so each is `Copy` and covariant in its one
+lifetime: a record laid in program storage reads as one laid in any
+shorter-lived region. The walk lays every value a record keeps where the
+record rests, through its store's `lay`, so nothing is copied out after it.
 
 ## Names that arrive at run time
 
@@ -1118,9 +1205,9 @@ return at `Never` — beside the refusals of its
 ascription or a call by name that can never be satisfied, a member read of a
 signature lacking the member (**no member**) or of a quantified member over an
 unpinned head parameter (**unpinned member**), a type capture a module's `OVER`
-list leaves out, and the static pass's other checks;
+list leaves out, and the load walk's other checks;
 
-two the [elaborator's load pass](../elaborate/README.md#the-type-channel-at-load)
+two the [walk's type half](../elaborate/README.md#the-type-channel-at-load)
 finds — a **type** that does not elaborate, carrying the elaborator's refusal,
 and a **repeated guard**, two guards of one `MATCH … WITH` arm set that type to
 one handle, naming both;
@@ -1163,9 +1250,9 @@ faults call too, so the load and the run say one thing.
 ## Memory
 
 An activation is `Drop`-free and laid down in its frame's region, so a frame's
-death releases it with the region. It is a header of four pointers — its shape,
-its closure bindings, the builtin table and, for a block, the enclosing
-activation — beside the callable it runs, if any, one slot array over the
+death releases it with the region. It is a header of five pointers — its
+shape, the load's facts, its closure bindings, the builtin table and, for a
+block, the enclosing activation — beside the callable it runs, if any, one slot array over the
 shape's slot count, and one digest memo, a `Cell` empty until a `:|` or a
 call's hand-off fills it, per slot the load marks digested. It holds no
 pointer into itself: its shape lives in program storage, its builtin table
@@ -1179,12 +1266,23 @@ closure bindings alone, a block's beside an enclosing activation whose builtin
 table and callable it shares — so no other combination can be built.
 
 A shape and everything it holds — declared-name runs, mentions, captures,
-components, nested shapes — rest in program storage and are `Copy`, save the
-[load-time type](#load-time-types) cells, which are written once, where the
-program loads, and never after. A cell holding a `'graph` record makes a shape
-invariant in `'graph`, which `'graph` already is everywhere it is named. A written
+components, nested shapes — rest in program storage and are `Copy`. A shape
+holds no cell, so it is covariant in `'graph` and `Sync`; the
+[load-time facts](#load-time-types) rest in records beside it. A written
 quote's code shape is built into program storage once, where the program
 loads.
+
+What a koan graph keeps per habitat half is `scope`'s record, the
+[region header](header.rs) (`RegionHeader`, whose form is a `HalfHeader`):
+the half's type branch; for a build cell's region, its specialization table;
+and for a specialization's region, its home, which its own step rests there as
+it enlists and never again. A frame reaches it through the specialization's
+region it borrows, so what it reads of the program's shape stays shared in
+program storage ([the build module](../build/README.md#references-between-the-trees)).
+`values` reads the branch alone, through the projection `RegionHeader`
+defines, and the record is laid by the first door that interns into the half
+or by the step that lays its table, so a half that needs neither stays
+untouched.
 
 ## The import rule
 
@@ -1193,7 +1291,8 @@ loads.
 operator-group vocabulary — `DeclaredGroup` and its `ReductionMode` — so a
 signature's operator channel and a body's held group are one record rather than
 two that must be kept in step. The scheduler reaches scopes through its
-embedder, and scopes never reach the scheduler. The compiler
+embedder, save the region header it names, and scopes never reach the
+scheduler. The compiler
 cannot hold a module to that, so [`tests::boundary`](tests/boundary.rs) reads
 the module's source and fails on any other `crate::` path, on an owning heap
 type outside the one error that lists names, and on a retired lifetime name.
@@ -1204,9 +1303,5 @@ type outside the one error that lists names, and on a retired lifetime name.
   default, which lifts the dict-default refusal.
 - [Code splicing](../../roadmap/metaprogramming/code-splicing.md) — how several parts
   are spliced into a quote at once, and a kind for built code.
-- [Monotone elaboration](../../roadmap/gradual-build/monotone-elaboration.md)
-  — the write-once cell as a monotone type fact, beside the vocabulary of
-  unknowns, frontiers, the residual and a binding, per
-  [the build module](../build/README.md).
 - [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — `CLOSE
   OVER`, and a warning for an unmarked keyworded use in a quote.

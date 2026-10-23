@@ -962,3 +962,671 @@ impl Over {
         }
     }
 }
+
+/// What the resumption laws draw ([`resumption`](super::resumption)): one keyworded registration
+/// `SUBJECT`, quantified over `Elt` and `Key`, never called — so the load types its body and no
+/// other fact reads it — beside the unknowns its body reads and a binding of some of them.
+#[derive(Clone, Debug)]
+pub(super) struct Resumable {
+    /// Whether `SUBJECT` takes each drawn parameter: `k :Key`, `xs :(LIST OF Elt)`, `Item :Type`,
+    /// `m :Counter`, `mk :(FN :{} -> Counter)` and `p :Picks`. `x :Elt` it always takes.
+    pub(super) key: bool,
+    pub(super) list: bool,
+    pub(super) item: bool,
+    pub(super) module: bool,
+    pub(super) maker: bool,
+    pub(super) picks: bool,
+    /// Whether the body binds the local module `n` and the type binder `Pair` over `Elt`, ahead
+    /// of its drawn statements.
+    pub(super) local: bool,
+    pub(super) pair: Option<Desc>,
+    /// Whether the body binds the type binder `Both = :{a :Elt b :(m.Carrier)}`, a path after a
+    /// run-bound name in a type binder; only when it takes `m`.
+    pub(super) both: bool,
+    pub(super) statements: Vec<Statement>,
+    /// What the binding gives each unknown it binds: `Elt`, `Key`, `Item` and `Pair` a closed type,
+    /// and `m` and `n` a module over a drawn `Carrier`.
+    pub(super) bound: Bound,
+}
+
+/// The unknowns a [`Resumable`] binding binds: each type name to a closed type, each module binder
+/// to a module whose `Carrier` is the type, beside the value its `zero` holds.
+#[derive(Clone, Debug, Default)]
+pub(super) struct Bound {
+    pub(super) elt: Option<Desc>,
+    pub(super) key: Option<Desc>,
+    pub(super) item: Option<Desc>,
+    pub(super) pair: Option<Desc>,
+    pub(super) module: Option<(Desc, String)>,
+    pub(super) local: Option<(Desc, String)>,
+}
+
+/// The unknowns a [`Bound`] may bind, by the names the program spells them with.
+pub(super) const UNKNOWNS: [&str; 6] = ["Elt", "Key", "Item", "Pair", "m", "n"];
+
+impl Bound {
+    /// Each unknown it binds, by name, beside the closed type it binds — a module's `Carrier`.
+    pub(super) fn entries(&self) -> Vec<(&'static str, &Desc)> {
+        let all = [
+            self.elt.as_ref(),
+            self.key.as_ref(),
+            self.item.as_ref(),
+            self.pair.as_ref(),
+            self.module.as_ref().map(|(carrier, _)| carrier),
+            self.local.as_ref().map(|(carrier, _)| carrier),
+        ];
+        (UNKNOWNS.iter().zip(all))
+            .filter_map(|(name, bound)| Some((*name, bound?)))
+            .collect()
+    }
+
+    /// This binding with only the unknowns `keep` names.
+    pub(super) fn only(&self, keep: &[&str]) -> Bound {
+        let kept = |name: &str| keep.contains(&name);
+        Bound {
+            elt: self.elt.clone().filter(|_| kept("Elt")),
+            key: self.key.clone().filter(|_| kept("Key")),
+            item: self.item.clone().filter(|_| kept("Item")),
+            pair: self.pair.clone().filter(|_| kept("Pair")),
+            module: self.module.clone().filter(|_| kept("m")),
+            local: self.local.clone().filter(|_| kept("n")),
+        }
+    }
+
+    /// The module `name`, `m` or `n`, is bound to, declared at the top level.
+    fn module_of(&self, name: &str) -> Option<&(Desc, String)> {
+        match name {
+            "m" => self.module.as_ref(),
+            "n" => self.local.as_ref(),
+            _ => None,
+        }
+    }
+}
+
+/// One drawn statement of `SUBJECT`'s body, each binding a fresh name.
+#[derive(Clone, Debug)]
+pub(super) enum Statement {
+    /// `LET s = (OP <argument>)`.
+    Call(Argument),
+    /// `LET s = m.zero`.
+    Member,
+    /// `LET s :(Elt & Number) = x`.
+    Meet,
+    /// `LET s :(Key & Number) = k`.
+    MeetKey,
+    /// `LET s :<type> = x`, the type over the body's type names.
+    Annotated(Typed),
+    /// `LET s = (x :! <type>)`.
+    Ascribed(Typed),
+    /// `LET g = (FN :{y :Elt} -> Any = #(LET p = (OP y) p))`: an inner callable over `Elt`.
+    Inner,
+    /// `LET l = x` and `LET g = (FN :{} -> Any = #(OP l))`: an inner callable over a local.
+    InnerLocal,
+    /// `LET s = (USING (m :! Counter) SCOPE (OP zero))`: a surfaced name.
+    Using,
+    /// `LET s = (USING (p :! (Picks WITH {Carrier = Elt})) SCOPE (PICK zero))`: a surfaced head,
+    /// its ascription rigid over `Elt`.
+    UsingHead,
+    /// `LET s :{a :(Elt & Number) b :(m.Carrier)} = {a = x, b = m.zero}`: a path after a spelling
+    /// the load leaves unknown over `Elt`.
+    PathAfterMeet,
+    /// `LET Mine = :(m.Carrier)`: a type binder over a path.
+    PathBinder,
+    /// A quote's code.
+    Quote(Quoted),
+    /// `LET v = (m :| Counter)`: a view over the module parameter.
+    ViewParameter,
+    /// A local `MODULE` body, and a view over it.
+    ViewLocal,
+    /// A local registration quantified over `Tee`, and a call selecting it at a closed solution.
+    Unfolding,
+    /// A local callable over `Elt`, and a call of it by name over a record literal.
+    ByName,
+    /// A local registration over `Elt`, and a call of it.
+    LocalRegistration,
+    /// A local `MODULE` body holding a callable over `Elt`.
+    ModuleBody,
+    /// Two local callables over `Elt`, each calling the other: one component.
+    Component,
+    /// A quantified callable a local `MODULE` holds, read where it is wanted at a type over `Elt`.
+    RigidInstance,
+}
+
+/// The quote's code a [`Statement::Quote`] writes.
+#[derive(Clone, Copy, Debug)]
+pub(super) enum Quoted {
+    /// `#(OP y)`: a hole a `USING` may fill.
+    Hole,
+    /// `#(OP \y)`: a mark the `EVAL` running it offers.
+    Mark,
+    /// `(EVAL #(OP $x) -> Any)`: a `$` name over `x`.
+    Dollar,
+    /// `(EVAL #(LET t :($Elt) = $x) -> Any)`: a `$` name over `Elt`.
+    DollarType,
+}
+
+/// What a drawn `OP` call is applied to.
+#[derive(Clone, Copy, Debug)]
+pub(super) enum Argument {
+    X,
+    Xs,
+    K,
+    MZero,
+    NZero,
+    Number,
+}
+
+/// A type a statement writes: one of the body's type names, or `Number`.
+#[derive(Clone, Copy, Debug)]
+pub(super) enum Typed {
+    Elt,
+    Item,
+    Pair,
+    Number,
+}
+
+/// A closed type a binding gives an unknown: any [`desc`] but `Declared`, kept small.
+fn closed() -> BoxedStrategy<Desc> {
+    let leaf = prop_oneof![
+        Just(Desc::Number),
+        Just(Desc::Str),
+        Just(Desc::Null),
+        Just(Desc::Never),
+        Just(Desc::Any),
+    ];
+    leaf.prop_recursive(2, 6, 2, |inner| {
+        prop_oneof![
+            inner.clone().prop_map(|each| Desc::List(Box::new(each))),
+            prop::collection::vec((0..3u8, inner.clone()), 1..3).prop_map(Desc::Record),
+            (inner.clone(), inner).prop_map(|(a, b)| Desc::Union(Box::new(a), Box::new(b))),
+        ]
+    })
+    .boxed()
+}
+
+/// A module's `Carrier`, a closed inhabited type, beside a value under it for its `zero`.
+fn carrier() -> BoxedStrategy<(Desc, String)> {
+    closed()
+        .prop_filter("a carrier some value inhabits", inhabited)
+        .prop_flat_map(|carrier| {
+            value_under(&carrier).prop_map(move |zero| (carrier.clone(), zero))
+        })
+        .boxed()
+}
+
+/// `desc` with `Elt`, its variable 0, read as `elt`.
+fn substituted(desc: &Desc, elt: &Desc) -> Desc {
+    match desc {
+        Desc::Variable(0) => elt.clone(),
+        Desc::List(each) => Desc::List(Box::new(substituted(each, elt))),
+        Desc::Union(a, b) => {
+            Desc::Union(Box::new(substituted(a, elt)), Box::new(substituted(b, elt)))
+        }
+        other => other.clone(),
+    }
+}
+
+/// A [`Resumable`] program and a binding of its unknowns.
+pub(super) fn resumable() -> impl Strategy<Value = Resumable> {
+    let parameters = (
+        any::<bool>(),
+        any::<bool>(),
+        any::<bool>(),
+        any::<bool>(),
+        any::<bool>(),
+        any::<bool>(),
+    );
+    let bodies = (
+        any::<bool>(),
+        prop::option::of(prop_oneof![
+            Just(Desc::Variable(0)),
+            Just(Desc::List(Box::new(Desc::Variable(0)))),
+            Just(Desc::Union(
+                Box::new(Desc::Variable(0)),
+                Box::new(Desc::Number)
+            )),
+        ]),
+        prop::collection::vec(statement(), 1..5),
+        any::<bool>(),
+    );
+    // `Pair` is read over `Elt`: a binding gives it what the solve that gives `Elt` its type does.
+    let bindings = (
+        closed(),
+        prop::option::weighted(0.6, Just(())),
+        prop::option::weighted(0.4, closed()),
+        prop::option::weighted(0.4, closed()),
+        prop::option::weighted(0.4, Just(())),
+        prop::option::weighted(0.5, carrier()),
+        prop::option::weighted(0.5, carrier()),
+    );
+    (parameters, bodies, bindings).prop_map(
+        |((key, list, item, module, maker, picks), (local, pair, statements, both), bindings)| {
+            let (solved, elt, bound_key, bound_item, bound_pair, bound_module, bound_local) =
+                bindings;
+            let bound_pair = bound_pair
+                .and(pair.as_ref())
+                .map(|pair| substituted(pair, &solved));
+            let elt = elt.map(|()| solved);
+            let local = local && maker;
+            let mut case = Resumable {
+                key,
+                list,
+                item,
+                module,
+                maker,
+                picks,
+                local,
+                pair: pair.clone(),
+                both: both && module,
+                statements,
+                bound: Bound {
+                    elt,
+                    key: bound_key.filter(|_| key),
+                    item: bound_item.filter(|_| item),
+                    pair: bound_pair,
+                    module: bound_module.filter(|_| module),
+                    local: bound_local.filter(|_| local),
+                },
+            };
+            // A statement reads only what the program binds.
+            let (module, local, pair, item) = (case.module, case.local, case.pair.is_some(), item);
+            case.statements.retain(|statement| match statement {
+                Statement::Call(Argument::Xs) => list,
+                Statement::Call(Argument::K) | Statement::MeetKey => key,
+                Statement::Call(Argument::MZero)
+                | Statement::Member
+                | Statement::Using
+                | Statement::PathAfterMeet
+                | Statement::PathBinder
+                | Statement::ViewParameter => module,
+                Statement::UsingHead => picks,
+                Statement::Call(Argument::NZero) => local,
+                Statement::Annotated(Typed::Item) | Statement::Ascribed(Typed::Item) => item,
+                Statement::Annotated(Typed::Pair) | Statement::Ascribed(Typed::Pair) => pair,
+                _ => true,
+            });
+            case
+        },
+    )
+}
+
+fn statement() -> impl Strategy<Value = Statement> {
+    let argument = prop_oneof![
+        Just(Argument::X),
+        Just(Argument::Xs),
+        Just(Argument::K),
+        Just(Argument::MZero),
+        Just(Argument::NZero),
+        Just(Argument::Number),
+    ];
+    let typed = prop_oneof![
+        Just(Typed::Elt),
+        Just(Typed::Item),
+        Just(Typed::Pair),
+        Just(Typed::Number),
+    ];
+    let quoted = prop_oneof![
+        Just(Quoted::Hole),
+        Just(Quoted::Mark),
+        Just(Quoted::Dollar),
+        Just(Quoted::DollarType),
+    ];
+    prop_oneof![
+        3 => argument.prop_map(Statement::Call),
+        1 => Just(Statement::Member),
+        1 => Just(Statement::Meet),
+        1 => Just(Statement::MeetKey),
+        1 => typed.clone().prop_map(Statement::Annotated),
+        1 => typed.prop_map(Statement::Ascribed),
+        1 => Just(Statement::Inner),
+        1 => Just(Statement::InnerLocal),
+        1 => Just(Statement::Using),
+        1 => Just(Statement::UsingHead),
+        1 => Just(Statement::PathAfterMeet),
+        1 => Just(Statement::PathBinder),
+        1 => quoted.prop_map(Statement::Quote),
+        1 => Just(Statement::ViewParameter),
+        1 => Just(Statement::ViewLocal),
+        1 => Just(Statement::Unfolding),
+        1 => Just(Statement::ByName),
+        1 => Just(Statement::LocalRegistration),
+        1 => Just(Statement::ModuleBody),
+        1 => Just(Statement::Component),
+        1 => Just(Statement::RigidInstance),
+    ]
+}
+
+/// The registrations and signatures every [`Resumable`] program declares ahead of `SUBJECT`.
+const RESUMABLE_PRELUDE: &str = "SIG Counter FOR ALL #[Carrier] = \
+     #[(VAL zero :Carrier) (VAL succ :(FN :{x :Carrier} -> Carrier))]\n\
+     SIG Picks FOR ALL #[Carrier] = #[(VAL zero :Carrier) (EXPR #(PICK x :Carrier) -> Str)]\n\
+     EXPR #(OP x :Number) -> Str = #(\"n\")\n\
+     EXPR #(OP x :Str) -> Number = #(1)\n\
+     EXPR FOR ALL #[Elt] #(OP x :(LIST OF Elt)) -> Elt = #(x)\n";
+
+impl Resumable {
+    /// The program, `SUBJECT` written over every unknown — and, beside it, each type the binding
+    /// gives an unknown declared as `Bound<name>`, and each module it binds as `bound<name>`, so the
+    /// binding reads its types and trees off the load.
+    pub(super) fn render(&self) -> String {
+        self.source(&Bound::default())
+    }
+
+    /// The program's **restart** under `bound`: each bound `FOR ALL` name dropped from the group
+    /// and the `:Type` parameter from the shape, each declared at the top level as an alias of the
+    /// type it binds; a bound module parameter dropped from the shape and a bound local rebound,
+    /// each to the module it binds, at the body's head; and a bound `Pair` declared as its type.
+    pub(super) fn restart(&self, bound: &Bound) -> String {
+        self.source(bound)
+    }
+
+    /// The name the type or module `bound` gives the unknown `name` is declared under.
+    pub(super) fn declared(name: &str) -> String {
+        match name {
+            "m" | "n" => format!("bound{name}"),
+            _ => format!("Bound{name}"),
+        }
+    }
+
+    fn source(&self, restart: &Bound) -> String {
+        let mut out = String::from(RESUMABLE_PRELUDE);
+        for (name, desc) in self.bound.entries() {
+            out += &match self.bound.module_of(name) {
+                Some((carrier, zero)) => format!(
+                    "MODULE {} = ((LET Carrier = {}) (LET zero = {zero}) \
+                     (LET succ = (FN :{{x :Carrier}} -> Carrier = #(x))))\n",
+                    Self::declared(name),
+                    ascribed(carrier, &[]),
+                ),
+                None => format!("LET {} = {}\n", Self::declared(name), ascribed(desc, &[])),
+            };
+        }
+        for (name, desc) in restart.entries() {
+            if matches!(name, "Elt" | "Key" | "Item") {
+                out += &format!("LET {name} = {}\n", ascribed(desc, &[]));
+            }
+        }
+        let group: Vec<&str> = ["Elt", "Key"]
+            .into_iter()
+            .filter(|name| restart.entries().iter().all(|(bound, _)| bound != name))
+            .collect();
+        let quantifier = match group.is_empty() {
+            true => String::new(),
+            false => format!("FOR ALL #[{}] ", group.join(" ")),
+        };
+        let mut parameters = vec!["x :Elt".to_string()];
+        if self.key {
+            parameters.push("k :Key".to_string());
+        }
+        if self.list {
+            parameters.push("xs :(LIST OF Elt)".to_string());
+        }
+        if self.item && restart.item.is_none() {
+            parameters.push("Item :Type".to_string());
+        }
+        if self.module && restart.module.is_none() {
+            parameters.push("m :Counter".to_string());
+        }
+        if self.maker {
+            parameters.push("mk :(FN :{} -> Counter)".to_string());
+        }
+        if self.picks {
+            parameters.push("p :Picks".to_string());
+        }
+        out += &format!(
+            "EXPR {quantifier}#(SUBJECT {}) -> Any = #(\n",
+            parameters.join(" AND ")
+        );
+        if self.module && restart.module.is_some() {
+            out += &format!("  LET m = {}\n", Self::declared("m"));
+        }
+        if self.local {
+            match &restart.local {
+                Some(_) => out += &format!("  LET n = {}\n", Self::declared("n")),
+                None => out += "  LET n = (mk {})\n",
+            }
+        }
+        if let Some(pair) = &self.pair {
+            let written = match &restart.pair {
+                Some(bound) => ascribed(bound, &[]),
+                None => ascribed(pair, &VARIABLES),
+            };
+            out += &format!("  LET Pair = {written}\n");
+        }
+        if self.both {
+            out += "  LET Both = :{a :Elt b :(m.Carrier)}\n";
+        }
+        for (index, statement) in self.statements.iter().enumerate() {
+            out += &format!("  {}\n", statement.render(index));
+        }
+        out += "  x\n)\n";
+        out
+    }
+}
+
+impl Statement {
+    /// The statement as `SUBJECT`'s body writes it, its binders named by `index`.
+    fn render(&self, index: usize) -> String {
+        let typed = |typed: &Typed| match typed {
+            Typed::Elt => "Elt",
+            Typed::Item => "Item",
+            Typed::Pair => "Pair",
+            Typed::Number => "Number",
+        };
+        // A keyword or type name the statement declares, unique among the body's statements.
+        let letter = ["A", "B", "C", "D", "E", "F"][index];
+        match self {
+            Statement::Call(argument) => {
+                let argument = match argument {
+                    Argument::X => "x",
+                    Argument::Xs => "xs",
+                    Argument::K => "k",
+                    Argument::MZero => "m.zero",
+                    Argument::NZero => "n.zero",
+                    Argument::Number => "1",
+                };
+                format!("LET s{index} = (OP {argument})")
+            }
+            Statement::Member => format!("LET s{index} = m.zero"),
+            Statement::Meet => format!("LET s{index} :(Elt & Number) = x"),
+            Statement::MeetKey => format!("LET s{index} :(Key & Number) = k"),
+            Statement::Annotated(written) => format!("LET s{index} :{} = x", typed(written)),
+            Statement::Ascribed(written) => format!("LET s{index} = (x :! {})", typed(written)),
+            Statement::Inner => {
+                format!(
+                    "LET g{index} = (FN :{{y :Elt}} -> Any = #(\n    LET p = (OP y)\n    p\n  ))"
+                )
+            }
+            Statement::InnerLocal => {
+                format!("LET l{index} = x\n  LET g{index} = (FN :{{}} -> Any = #(OP l{index}))")
+            }
+            Statement::Using => format!("LET s{index} = (USING (m :! Counter) SCOPE (OP zero))"),
+            Statement::UsingHead => format!(
+                "LET s{index} = (USING (p :! (Picks WITH {{Carrier = Elt}})) SCOPE (PICK zero))"
+            ),
+            Statement::PathAfterMeet => format!(
+                "LET s{index} :{{a :(Elt & Number) b :(m.Carrier)}} = {{a = x, b = m.zero}}"
+            ),
+            Statement::PathBinder => format!("LET Mine{letter} = :(m.Carrier)"),
+            Statement::Quote(Quoted::Hole) => format!("LET q{index} = #(OP y)"),
+            Statement::Quote(Quoted::Mark) => format!("LET q{index} = #(OP \\y)"),
+            Statement::Quote(Quoted::Dollar) => format!("LET s{index} = (EVAL #(OP $x) -> Any)"),
+            Statement::Quote(Quoted::DollarType) => {
+                format!("LET s{index} = (EVAL #(LET t :($Elt) = $x) -> Any)")
+            }
+            Statement::ViewParameter => format!("LET v{index} = (m :| Counter)"),
+            Statement::ViewLocal => format!(
+                "MODULE lm{index} = ((LET Carrier = Number) (LET zero = 0) \
+                 (LET succ = (FN :{{x :Number}} -> Number = #(x))))\n  \
+                 LET v{index} = (lm{index} :| Counter)"
+            ),
+            Statement::Unfolding => format!(
+                "EXPR FOR ALL #[Tee] #(UNF{letter} y :Tee) -> Tee = #(y)\n  \
+                 LET u{index} = (UNF{letter} 1)"
+            ),
+            Statement::ByName => format!(
+                "LET h{index} = (FN :{{y :Elt}} -> Elt = #(y))\n  LET c{index} = (h{index} {{y = x}})"
+            ),
+            Statement::LocalRegistration => format!(
+                "EXPR #(LOC{letter} y :Elt) -> Any = #(y)\n  LET r{index} = (LOC{letter} x)"
+            ),
+            Statement::ModuleBody => {
+                format!("MODULE md{index} OVER #[Elt] = (LET f = (FN :{{y :Elt}} -> Elt = #(y)))")
+            }
+            Statement::Component => format!(
+                "LET ev{index} = (FN :{{y :Elt}} -> Any = #(od{index} {{y = y}}))\n  \
+                 LET od{index} = (FN :{{y :Elt}} -> Any = #(ev{index} {{y = y}}))"
+            ),
+            Statement::RigidInstance => format!(
+                "MODULE ids{index} = (LET id = (FN FOR ALL #[Tee] :{{y :Tee}} -> Tee = #(y)))\n  \
+                 LET w{index} :(FN :{{y :Elt}} -> Elt) = ids{index}.id"
+            ),
+        }
+    }
+}
+
+/// One top-level declaration of an [`Independent`] program: it reads only the prelude's `OP`, or a
+/// registration another declares.
+#[derive(Clone, Copy, Debug)]
+pub(super) enum Declaration {
+    /// `LET v = [1, 2]`.
+    Value,
+    /// `LET u = (OP 1)`: a use of the prelude's registration.
+    Call,
+    /// `LET Tee = :(LIST OF Number)`.
+    Type,
+    /// `LET f = (FN :{y :Number} -> Number = #(y + 1))`.
+    Callable,
+    /// `EXPR #(REG y :Number) -> Number = #(y)`.
+    Registration,
+    /// `EXPR FOR ALL #[Elt] #(QUANT y :Elt) -> Elt = #(y)`.
+    Quantified,
+    /// `MODULE m = ((LET Carrier = Number) (LET zero = 0))`.
+    Module,
+    /// `LET c = (FN :{} -> Number = #(REG 1))`: a callable whose body calls the registration the
+    /// declaration at this index makes, which the load unfolds wherever either is written.
+    Caller(usize),
+}
+
+/// A program of [`Declaration`]s, beside two of them to swap whose units read nothing of each
+/// other.
+#[derive(Clone, Debug)]
+pub(super) struct Independent {
+    pub(super) declarations: Vec<Declaration>,
+    pub(super) swap: (usize, usize),
+}
+
+/// The prelude every [`Independent`] program declares ahead of its declarations.
+const INDEPENDENT_PRELUDE: &str = "EXPR #(OP x :Number) -> Str = #(\"n\")\n";
+
+/// An [`Independent`] program and a pair of its declarations to swap.
+pub(super) fn independent() -> impl Strategy<Value = Independent> {
+    let declaration = prop_oneof![
+        Just(Declaration::Value),
+        Just(Declaration::Call),
+        Just(Declaration::Type),
+        Just(Declaration::Callable),
+        Just(Declaration::Registration),
+        Just(Declaration::Quantified),
+        Just(Declaration::Module),
+    ];
+    let drawn = (
+        prop::collection::vec(declaration, 2..6),
+        prop::collection::vec(any::<u8>(), 6),
+    );
+    drawn.prop_flat_map(|(mut declarations, callers)| {
+        // A caller of some registration the drawing makes, in place of a value.
+        let registrations: Vec<usize> = (declarations.iter().enumerate())
+            .filter(|(_, declaration)| matches!(declaration, Declaration::Registration))
+            .map(|(index, _)| index)
+            .collect();
+        for (index, choice) in callers.iter().enumerate().take(declarations.len()) {
+            if matches!(declarations[index], Declaration::Value) && !registrations.is_empty() {
+                let target = registrations[*choice as usize % registrations.len()];
+                declarations[index] = Declaration::Caller(target);
+            }
+        }
+        let reads = |a: usize, b: usize, declarations: &[Declaration]| {
+            matches!(declarations[a], Declaration::Caller(target) if target == b)
+        };
+        let pairs = |declarations: &[Declaration]| -> Vec<(usize, usize)> {
+            let count = declarations.len();
+            (0..count)
+                .flat_map(|a| (a + 1..count).map(move |b| (a, b)))
+                .filter(|(a, b)| !reads(*a, *b, declarations) && !reads(*b, *a, declarations))
+                .collect()
+        };
+        // A type binder reads nothing, so it makes a pair with any declaration.
+        if pairs(&declarations).is_empty() {
+            declarations.push(Declaration::Type);
+        }
+        let swaps = pairs(&declarations);
+        (0..swaps.len()).prop_map(move |at| Independent {
+            declarations: declarations.clone(),
+            swap: swaps[at],
+        })
+    })
+}
+
+impl Independent {
+    /// The program, its two drawn declarations swapped where `swapped`. Each declaration's names
+    /// are its own, whatever its place.
+    pub(super) fn render(&self, swapped: bool) -> String {
+        let mut order: Vec<usize> = (0..self.declarations.len()).collect();
+        if swapped {
+            order.swap(self.swap.0, self.swap.1);
+        }
+        let mut out = String::from(INDEPENDENT_PRELUDE);
+        for index in order {
+            let letter = ["A", "B", "C", "D", "E", "F"][index];
+            out += &match self.declarations[index] {
+                Declaration::Value => format!("LET v{index} = [1, 2]"),
+                Declaration::Call => format!("LET u{index} = (OP 1)"),
+                Declaration::Type => format!("LET Tee{letter} = :(LIST OF Number)"),
+                Declaration::Callable => {
+                    format!("LET f{index} = (FN :{{y :Number}} -> Number = #(y + 1))")
+                }
+                Declaration::Registration => {
+                    format!("EXPR #(REG{letter} y :Number) -> Number = #(y)")
+                }
+                Declaration::Quantified => {
+                    format!("EXPR FOR ALL #[Elt] #(QUANT{letter} y :Elt) -> Elt = #(y)")
+                }
+                Declaration::Module => {
+                    format!("MODULE m{index} = ((LET Carrier = Number) (LET zero = 0))")
+                }
+                Declaration::Caller(target) => {
+                    let callee = ["A", "B", "C", "D", "E", "F"][target];
+                    format!("LET c{index} = (FN :{{}} -> Number = #(REG{callee} 1))")
+                }
+            };
+            out += "\n";
+        }
+        out
+    }
+}
+
+#[test]
+fn a_resumable_program_renders_as_source_that_loads() {
+    use proptest::strategy::ValueTree;
+    let mut runner = proptest::test_runner::TestRunner::deterministic();
+    for _ in 0..64 {
+        let case = resumable()
+            .new_tree(&mut runner)
+            .expect("a case draws")
+            .current();
+        let source = case.render();
+        let loaded = crate::program::CellSubstrate::load::<super::Koan>(
+            &source,
+            "<test>",
+            8,
+            crate::values::SpecBounds::default(),
+            super::output(),
+        );
+        assert!(
+            loaded.is_ok(),
+            "{source}\n{:?}",
+            loaded.err().map(|e| e.to_string())
+        );
+    }
+}

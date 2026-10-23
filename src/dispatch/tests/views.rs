@@ -8,7 +8,7 @@ use crate::program::{CellSubstrate, KBirth, KBundle, KState, Outcome};
 use crate::scheduler::{Action, Step, StepError};
 
 use super::super::Koan;
-use super::output;
+use super::{assert_linear, load_counts, output};
 use crate::values::SpecBounds;
 
 thread_local! {
@@ -28,7 +28,8 @@ fn branch_length<'graph>(
         branch.set(
             step.header()
                 .get()
-                .map_or(0, |header| header.branch().len()),
+                .and_then(|header| header.branch())
+                .map_or(0, |branch| branch.len()),
         )
     });
     step.leave(birth)
@@ -277,4 +278,36 @@ fn a_chain_of_views_over_a_module_typed_at_most_re_views_only_its_first_at_run()
          LET v = (w :| Outer)\n"
     );
     assert!(branch_after(&source) <= branch_after(&first));
+}
+
+/// A chain of views over a parameter is open at every step: the load reads each view once.
+#[test]
+fn a_chain_of_open_views_reads_each_once() {
+    let program = |n: usize| {
+        let mut body = String::from("(LET v0 = m)");
+        for at in 1..=n {
+            body += &format!(" (LET v{at} = (v{} :| Counter))", at - 1);
+        }
+        format!(
+            "SIG Counter FOR ALL #[Carrier] = \
+             #[(VAL zero :Carrier) (VAL succ :(FN :{{x :Carrier}} -> Carrier))]\n\
+             LET f = (FN :{{m :Counter}} -> Any = #({body} (v{n}.zero)))\n"
+        )
+    };
+    assert_linear("view reads", |n| load_counts(&program(n)).view_reads);
+}
+
+/// A `:|` over a closed tree fits its source, and reads the type its source carries, once: for
+/// its view's tree, for the types the load lays and for every later read of the view.
+#[test]
+fn a_view_over_a_closed_tree_fits_once() {
+    let counts = load_counts(
+        "SIG Counter FOR ALL #[Carrier] = \
+         #[(VAL zero :Carrier) (VAL succ :(FN :{x :Carrier} -> Carrier))]\n\
+         MODULE ints = ((LET zero = 0) \
+         (LET succ = (FN :{x :Number} -> Number = #(x + 1))))\n\
+         LET v = (ints :| Counter)\n\
+         PRINT v.zero\n",
+    );
+    assert_eq!((counts.fits, counts.source_reads), (1, 1));
 }

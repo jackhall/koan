@@ -13,7 +13,6 @@ use crate::memory::Bump;
 use crate::scheduler::tests::bundle::{Native, ScratchState, TestGraph};
 use crate::scheduler::tests::native::{record, recorded, reset, shares, where_text, work};
 use crate::scheduler::{Action, Hold, Placement, Received, Scheduler, Slot, Step, StepError, Use};
-use crate::type_lattice::Root;
 
 /// The three texts the producers write, one per spawn, in the order the consumer asks for them.
 const TEXTS: [&str; 3] = ["first", "second", "third"];
@@ -109,7 +108,8 @@ fn build<'graph, 'here>(
 fn a_cell_gathers_here_values_across_two_parks_and_builds_from_them_in_storage() {
     reset();
     let type_region = Bump::new();
-    let mut graph: TestGraph<'_> = TestGraph::new(8, Root::seeded(&type_region));
+    let mut graph: TestGraph<'_> =
+        TestGraph::new(8, crate::values::tests::seeded_tiers(&type_region));
     let root = graph.root().expect("a fresh slab admits a root");
     Scheduler::over(&mut graph)
         .run(work(ask_for_two, KValue::Null), root, Placement::Fresh)

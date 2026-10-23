@@ -4,8 +4,8 @@ What a program's text decides, written out once and read back by every run.
 
 **Problem.** Every run of a program starts from its text.
 [`CellSubstrate::load`](../../src/program/substrate.rs) parses, builds every
-shape, runs [the type channel](../../src/elaborate/README.md#the-type-channel-at-load)
-and the static pass, and stands the graph up, all inside one process, and
+shape, runs [the one walk](../../src/build/README.md#the-one-walk) and its
+folds, and stands the graph up, all inside one process, and
 nothing of that work outlives the process: program storage, the frozen type
 root and the specializations [the build tree](../../src/build/README.md)
 settled under each observed binding are released when it exits. A program
@@ -31,8 +31,8 @@ turns the things those keys name into an image, and nothing resumes from one.
   handle as its cell's ordinal. The image carries the source text's digest.
 - A run started from an image lays each region back as one chunk, relocates
   every serialized reference and handle, and steps the top-level run cell
-  without parsing, building a shape or running a load pass; a test observes
-  that the load passes do not run and that the program's output equals a cold
+  without parsing, building a shape or running the load's walk; a test
+  observes that the walk does not run and that the program's output equals a cold
   run's.
 - A specialization in the image is hit by the first call under its binding in
   a run started from it; a test observes that the binding's warm tier is not

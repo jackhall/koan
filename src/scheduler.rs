@@ -14,9 +14,11 @@
 //! build cell the drain finds or builds before the birth ([`Seek`]), so it never waits on one.
 //!
 //! **Imports.** Outside doc comments and `#[cfg(test)]` this module names `crate::knot`,
-//! `crate::memory`, `crate::type_lattice` and `crate::values`, and nothing else in the crate; [`tests::boundary`] reads
-//! the source to hold it there. Neither `values` nor `knot` names this module, and `cellgraph`
-//! names neither it nor koan.
+//! `crate::memory`, `crate::scope`, `crate::type_lattice` and `crate::values`, and nothing else in
+//! the crate; [`tests::boundary`] reads the source to hold it there. It names `scope` for the
+//! header a graph keeps per habitat half ([`RegionHeader`](crate::scope::RegionHeader)), whose
+//! table and home the drain keeps the books of. Neither `values`, `knot` nor `scope` names this
+//! module, and `cellgraph` names neither it nor koan.
 //!
 //! See [scheduler/README.md](scheduler/README.md).
 

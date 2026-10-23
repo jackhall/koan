@@ -5,7 +5,7 @@
 
 use proptest::prelude::*;
 
-use super::super::statics::unnarrowed;
+use super::super::walk::unnarrowed;
 use super::generate::{TIED, dispatched};
 use super::run;
 

@@ -22,7 +22,7 @@ use super::{
 pub(super) fn tie_with<'f, 'graph, 'cell>(
     fixture: &'f Fixture<'_, 'graph>,
     writer: Writer<'cell, '_>,
-    types: &Chain<'graph, 'cell, 'cell, '_, '_>,
+    types: &Chain<'cell, 'cell, '_, '_>,
     activation: &KActivation<'graph, 'cell>,
     name: &str,
     eager: &mut Eager<'_, 'graph, 'cell>,
@@ -45,7 +45,7 @@ pub(super) fn tie_with<'f, 'graph, 'cell>(
 pub(super) fn tie_of<'f, 'graph, 'cell>(
     fixture: &'f Fixture<'_, 'graph>,
     writer: Writer<'cell, '_>,
-    types: &Chain<'graph, 'cell, 'cell, '_, '_>,
+    types: &Chain<'cell, 'cell, '_, '_>,
     activation: &KActivation<'graph, 'cell>,
     name: &str,
 ) -> Result<Knot<'cell, Node<'graph, 'cell>>, Untieable<'f>> {
@@ -292,7 +292,7 @@ fn capture_read<'graph, 'cell>(
     fixture: &Fixture<'_, 'graph>,
     writer: crate::memory::Writer<'cell, '_>,
     callable: Knotted<'graph, 'cell>,
-    builtins: &'cell crate::scope::Builtins<'cell, Knotted<'graph, 'cell>>,
+    around: &KActivation<'graph, 'cell>,
     name: &str,
 ) -> KValue<'graph, 'cell> {
     let function = callable.function().expect("a function");
@@ -313,9 +313,10 @@ fn capture_read<'graph, 'cell>(
     let call = KActivation::of_callable(
         writer,
         function.shape(),
+        around.load(),
         callable,
         function.closure(),
-        builtins,
+        around.builtins(),
     );
     call.read(mention.coordinate)
 }
@@ -349,8 +350,7 @@ fn mutual_recursion_is_one_knot_whose_edges_read_as_siblings() {
             };
             assert_eq!(edge(f), g.member().index().index());
             assert_eq!(edge(g), f.member().index().index());
-            let builtins = activation.builtins();
-            let Value::Knotted(sibling) = capture_read(fixture, writer, f, builtins, "g") else {
+            let Value::Knotted(sibling) = capture_read(fixture, writer, f, activation, "g") else {
                 panic!("an edge capture reads as the sibling callable");
             };
             assert!(std::ptr::eq(sibling.node(), g.node()));
@@ -368,8 +368,7 @@ fn a_self_recursive_function_edges_itself() {
             let activation = fixture.run(writer, types, &lines, &[]);
             let looped = callable(fixture, activation, "loop");
             assert_eq!(looped.member().knot().len(), 1);
-            let Value::Knotted(itself) =
-                capture_read(fixture, writer, looped, activation.builtins(), "loop")
+            let Value::Knotted(itself) = capture_read(fixture, writer, looped, activation, "loop")
             else {
                 panic!("a self capture reads as the callable itself");
             };
@@ -395,6 +394,7 @@ fn a_nested_capture_of_an_enclosing_edge_reads_the_sibling_value() {
                 KActivation::of_callable(
                     writer,
                     function.shape(),
+                    activation.load(),
                     f,
                     function.closure(),
                     activation.builtins(),
@@ -520,7 +520,7 @@ fn a_container_and_the_function_that_captures_it_share_a_knot() {
                 panic!("`f` captures `a` as an edge");
             };
             assert_eq!(edge, a.member().index());
-            let read = capture_read(fixture, writer, f, activation.builtins(), "a");
+            let read = capture_read(fixture, writer, f, activation, "a");
             assert!(read.as_circular().is_some_and(|(read, _)| read == a));
         });
     });

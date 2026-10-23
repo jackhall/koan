@@ -19,7 +19,7 @@ impl TypeValue {
     pub fn new<'cell>(
         writer: Writer<'cell, '_>,
         handle: KType,
-        types: &Chain<'_, '_, '_, '_, '_>,
+        types: &Chain<'_, '_, '_, '_>,
     ) -> &'cell TypeValue {
         resident(
             writer,

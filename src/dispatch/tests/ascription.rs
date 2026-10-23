@@ -19,7 +19,7 @@ pub(super) fn ends(program: &Program<'_>, shape: &BodyShape<'_>, name: &str) -> 
     let render = |handle| {
         display_name(
             handle,
-            &reading(program.root(), &Bump::new()),
+            &reading(program.tiers(), &Bump::new()),
             program.symbols(),
         )
         .to_string()
@@ -33,7 +33,9 @@ fn settled(program: &Program<'_>, name: &str) -> bool {
     let Some(ExpressionPart::Expression(node)) = shape.rhs(slot(program, shape, name)) else {
         panic!("`{name}` is bound to a node");
     };
-    shape.settled(Site::of_node(node.reference()))
+    program
+        .facts()
+        .settled(shape, Site::of_node(node.reference()))
 }
 
 /// The `WHICH` overloads each test dispatches the retyped value through.
@@ -379,13 +381,13 @@ fn a_call_in_tail_position_is_typed_as_any_call() {
     );
     loaded(&source, |program| {
         let top = program.shape();
-        let tail = body(program, top, "outer")
-            .statement_type(0)
+        let tail = (program.facts())
+            .statement_type(body(program, top, "outer"), 0)
             .expect("the load typed the tail");
         let render = |handle| {
             display_name(
                 handle,
-                &reading(program.root(), &Bump::new()),
+                &reading(program.tiers(), &Bump::new()),
                 program.symbols(),
             )
             .to_string()

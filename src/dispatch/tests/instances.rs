@@ -246,7 +246,10 @@ fn a_nested_callable_reads_an_instance_s_variable_through_a_type_capture() {
     let source = module(&format!("{} (PRINT (WRAP 1))", wrap(returns, &go)));
     loaded(&source, |program| {
         let wrap = expressed(program, module_body(program, "lib"), "WRAP");
-        assert_eq!(body(program, wrap, "go").type_captures().len(), 1);
+        assert_eq!(
+            (program.facts().type_captures(body(program, wrap, "go"))).len(),
+            1
+        );
     });
     assert_eq!(run(&source), ":(FN :{x :Number} -> Number)");
     let inner = format!("(LET inner = (FN :{{}} -> {returns} = #(pick))) (inner {{}})");

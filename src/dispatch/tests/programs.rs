@@ -635,3 +635,46 @@ fn a_signature_prints_its_head_parameters_and_a_meet_its_applications() {
          (SIG FOR ALL #{Elt: Any} (top: Elt) WITH {Elt = Str})"
     );
 }
+
+/// The walk reports the first refusal in walk order: a value statement's ahead of a later
+/// declaration's (D4), and the other way round where the declaration comes first.
+#[test]
+fn the_first_refusal_in_walk_order_is_reported() {
+    assert_eq!(
+        run("LET a :Number = \"s\"\nNEWTYPE Bad = :(Number.z)"),
+        "load: <test>:1:1: this value is Str, which can never satisfy its annotation Number"
+    );
+    assert_eq!(
+        run("NEWTYPE Bad = :(Number.z)\nLET a :Number = \"s\""),
+        "load: <test>:1:15: Number has no member z"
+    );
+}
+
+/// A load over many units keys only the facts its shape cannot place, so its records index is no
+/// larger than the site, path and through facts it keys.
+#[test]
+fn the_records_index_is_no_larger_than_the_facts_it_keys() {
+    let mut source = String::from(
+        "SIG Counter FOR ALL #[Carrier] = \
+         #[(VAL zero :Carrier) (VAL succ :(FN :{x :Carrier} -> Carrier))]\n\
+         EXPR FOR ALL #[Elt] #(SAME a :Elt AND b :Elt) -> Elt = #(a)\n",
+    );
+    for at in 0..32 {
+        source.push_str(&format!("LET n{at} = {at}\n"));
+    }
+    for at in 0..16 {
+        source.push_str(&format!(
+            "LET step{at} = (FN :{{m :Counter}} -> Any = \
+             #(LET s = (SAME m.zero AND (m.succ {{x = m.zero}}))))\n"
+        ));
+    }
+    let (index, facts) = super::statics::loaded(&source, |program| {
+        (
+            program.facts().index_bytes(),
+            program.facts().keyed_fact_bytes(),
+        )
+    });
+    eprintln!("records index: {index} bytes; the facts it keys: {facts} bytes");
+    assert!(facts > 0);
+    assert!(index <= facts);
+}

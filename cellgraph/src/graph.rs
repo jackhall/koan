@@ -51,6 +51,17 @@ pub enum EnterError {
     AlreadyExecuting,
 }
 
+/// Refusals from [`CellGraph::enter_beside`].
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum EnterBesideError {
+    /// The entered cell refused as [`CellGraph::enter`] refuses it: stale, or already executing.
+    Enter(EnterError),
+    /// The cell read beside it is not a live cell of any kind.
+    Beside(Stale<CellHandle>),
+    /// The two cells' write homes are one region.
+    Same,
+}
+
 /// Refusals from [`CellGraph::release`].
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum ReleaseError {
@@ -997,7 +1008,107 @@ impl<
         cell: impl Into<CellHandle>,
         step: impl FnOnce(&mut StepContext<'graph, '_, '_, '_, '_, C, S, D, W, H>) -> R,
     ) -> Result<R, EnterError> {
+        self.enter_with(cell.into(), None, |context, _, _| step(context))
+    }
+
+    /// [`enter`](Self::enter), with a read of a second live cell's region header: `step` is
+    /// handed, beside its context, `beside`'s laid header as [`peek`](Self::peek) hands it, `None`
+    /// where none is laid, and the witness that `'graph` outlives its brand. That brand is
+    /// quantified by this call with no relation to the step's, so nothing read of `beside` can be
+    /// laid through any door the step holds: what crosses is copied by value. A tenant `beside`
+    /// reads its host's region. Refuses what `enter` refuses, a `beside` that is not live, and two
+    /// cells whose write homes are one region, each before anything changes.
+    ///
+    /// A reference read out of `beside` cannot be laid into the entered cell's region:
+    ///
+    /// ```compile_fail
+    /// # use std::cell::Cell;
+    /// # use cellgraph::{CellGraph, NoDelivery, NoScratch, Verdict, reattachable};
+    /// # struct Work;
+    /// # struct Table;
+    /// # reattachable!(Work => String, Table => &'cell Cell<&'cell u32>);
+    /// # let mut graph: CellGraph<'static, Work, NoScratch, NoDelivery, 1, Table> =
+    /// #     CellGraph::new(2, |_| Verdict::Pin);
+    /// # let from = graph.create(None).unwrap();
+    /// # let into = graph.create(None).unwrap();
+    /// graph
+    ///     .enter_beside(into, from, |context, read, _| {
+    ///         let theirs: &u32 = read.unwrap().into_value().get();
+    ///         context
+    ///             .header()
+    ///             .get_or_lay(|| &context.writer().fill(1, |_| Cell::new(theirs))[0]);
+    ///     })
+    ///     .unwrap();
+    /// ```
+    ///
+    /// What it reads is copied in by value:
+    ///
+    /// ```
+    /// # use std::cell::Cell;
+    /// # use cellgraph::{CellGraph, NoDelivery, NoScratch, Verdict, reattachable};
+    /// # struct Work;
+    /// # struct Table;
+    /// # reattachable!(Work => String, Table => &'cell Cell<&'cell u32>);
+    /// # let mut graph: CellGraph<'static, Work, NoScratch, NoDelivery, 1, Table> =
+    /// #     CellGraph::new(2, |_| Verdict::Pin);
+    /// # let from = graph.create(None).unwrap();
+    /// # let into = graph.create(None).unwrap();
+    /// graph
+    ///     .enter(from, |context| {
+    ///         let seven = &context.writer().fill(1, |_| 7u32)[0];
+    ///         context
+    ///             .header()
+    ///             .get_or_lay(|| &context.writer().fill(1, |_| Cell::new(seven))[0]);
+    ///     })
+    ///     .unwrap();
+    /// graph
+    ///     .enter_beside(into, from, |context, read, _| {
+    ///         let theirs: u32 = *read.unwrap().into_value().get();
+    ///         let ours = &context.writer().fill(1, |_| theirs)[0];
+    ///         context
+    ///             .header()
+    ///             .get_or_lay(|| &context.writer().fill(1, |_| Cell::new(ours))[0]);
+    ///     })
+    ///     .unwrap();
+    /// ```
+    pub fn enter_beside<R>(
+        &mut self,
+        cell: impl Into<CellHandle>,
+        beside: impl Into<CellHandle>,
+        step: impl for<'b> FnOnce(
+            &mut StepContext<'graph, '_, '_, '_, '_, C, S, D, W, H>,
+            Option<Active<'graph, 'b, H>>,
+            &'b &'graph (),
+        ) -> R,
+    ) -> Result<R, EnterBesideError> {
         let cell = cell.into();
+        let beside = self
+            .cells
+            .write_home(beside.into())
+            .map_err(EnterBesideError::Beside)?;
+        let home = self
+            .cells
+            .write_home(cell)
+            .map_err(|stale| EnterBesideError::Enter(EnterError::Stale(stale)))?;
+        if home == beside {
+            return Err(EnterBesideError::Same);
+        }
+        self.enter_with(cell, Some(beside), step)
+            .map_err(EnterBesideError::Enter)
+    }
+
+    /// The body of [`enter`](Self::enter) and [`enter_beside`](Self::enter_beside): `beside` is
+    /// the write home whose laid header the step reads, if any.
+    fn enter_with<R>(
+        &mut self,
+        cell: CellHandle,
+        beside: Option<CellHome>,
+        step: impl for<'b> FnOnce(
+            &mut StepContext<'graph, '_, '_, '_, '_, C, S, D, W, H>,
+            Option<Active<'graph, 'b, H>>,
+            &'b &'graph (),
+        ) -> R,
+    ) -> Result<R, EnterError> {
         let home = self.cells.begin(cell)?;
         // Read before the parked slots come off the cell, so the two readings the count moves
         // between are of one predicate on one state.
@@ -1106,7 +1217,13 @@ impl<
                 _scratch: PhantomData,
                 _lent: PhantomData,
             };
-            step(&mut context)
+            // The claim `anchored` asks for, as `peek` makes it under the step's borrow instead
+            // of `&self`: the region table is held shared for the step (that is `'here`), so
+            // `beside`'s region cannot move or drop under the read, and its header's referents
+            // are what any region header's are (`Header::get`).
+            let read =
+                beside.and_then(|home| regions.region(home).laid_header().map(Active::anchored));
+            step(&mut context, read, &&())
         };
         // The context is gone: both slots are back on the cell, the executing flag has fallen,
         // a tenant's count has moved, and no borrow of the region table survives — so the scratch

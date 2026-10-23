@@ -16,7 +16,7 @@ as a law over generated types, and the compiler, not a review, refuses one.
   ([src/symbols/README.md](src/symbols/README.md)). It names nothing else in
   the crate.
 - [`types`](src/types.rs) — the type lattice: the node vocabulary, the
-  interning registry of a frozen root and per-habitat branches, the identity recipe, the relations between types and the
+  interning registry of a frozen load, an agent tier and per-habitat branches, the identity recipe, the relations between types and the
   unifier ([src/types/README.md](src/types/README.md)). It names `symbols` and
   the bump tier, and nothing else.
 - [`bump`](src/bump.rs) — the bump tier, below. It names neither of the
@@ -25,7 +25,7 @@ as a law over generated types, and the compiler, not a review, refuses one.
 ## The bump tier
 
 Storage outside any cell graph, with no reach and no cell, released whole when
-its owner drops. It holds the type lattice's root and the scratch a caller
+its owner drops. It holds the type lattice's frozen load and agent tier, and the scratch a caller
 passes. It is a *collections* arena: `BumpAllocator` is `&Bump`, both
 bumpalo's verb receiver and the `Allocator` its growable `BumpVec` and its
 hashbrown `BumpBackedMap`, `BumpHashTable` and `BumpBackedSet` are built over. A cell's region
@@ -65,8 +65,14 @@ koan implements it for a habitat half — a cell region's or scratch habitat's
 so a habitat can host the table. A type branch's table is one
 ([storage](src/types/identity.md#storage-a-root-and-its-branches)).
 
+[`FrozenTable`](src/bump/frozen_table.rs) is a digest table's read-only copy,
+laid once by `DigestTable::frozen`: the same slots in the same places, probed
+by the same function, but a plain slice that is never written, so it holds no
+cell and is `Sync` wherever its entries are. The type lattice's frozen load
+indexes its nodes and its verdicts with two.
+
 `cargo bench -p lattice --bench node_table` times the digest table against
-the hashbrown table the root keeps.
+the hashbrown table the root builder and the agent tier keep.
 
 ## Strongly connected components
 

@@ -69,7 +69,7 @@ impl Language for Mini {
     fn builtins<'graph>(
         writer: Writer<'graph, '_>,
         symbols: &'graph SymbolInterner,
-        types: &Chain<'graph, 'graph, 'graph, '_, '_>,
+        types: &Chain<'graph, 'graph, 'graph, '_>,
         scratch: BumpAllocator<'_>,
     ) -> &'graph KBuiltins<'graph, 'graph> {
         let origin = ValueSymbol::declared("origin", symbols).expect("a value token");
@@ -152,7 +152,7 @@ fn read<'graph, 'here>(
 fn born<'graph>(
     member: Knotted<'graph, '_>,
     program: &'graph Program<'graph>,
-    types: &Chain<'_, '_, '_, '_, '_>,
+    types: &Chain<'_, '_, '_, '_>,
 ) -> String {
     let closure = member
         .function()
@@ -537,7 +537,7 @@ fn held<'graph, 'cell>(
     program: &Program<'graph>,
     contract: Option<Contract>,
     writer: crate::memory::Writer<'cell, '_>,
-    types: &Chain<'_, '_, 'cell, '_, '_>,
+    types: &Chain<'_, 'cell, '_, '_>,
     value: KValue<'graph, 'cell>,
 ) -> KValue<'graph, 'cell> {
     match contract {

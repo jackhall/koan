@@ -45,3 +45,8 @@ proptest = "1"
 # The lattice's and the cell graph's test counters, which koan's tests read.
 lattice = { path = "lattice", features = ["counters"] }
 cellgraph = { path = "cellgraph", features = ["counters"] }
+
+# Optimize lightly in the dev and test profiles: the property suites and the deep-chain tests run
+# about four times faster, a one-line edit rebuilds no slower, and debug assertions stay on.
+[profile.dev]
+opt-level = 1

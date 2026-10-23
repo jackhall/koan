@@ -39,7 +39,7 @@ fn an_annotation_the_load_settles_is_not_checked_at_run() {
         let annotation = shape
             .annotation(slot(program, shape, "n"))
             .expect("`n` is annotated");
-        assert!(shape.settled(Site::of(annotation)));
+        assert!(program.facts().settled(shape, Site::of(annotation)));
     });
 }
 
@@ -72,7 +72,7 @@ fn a_using_over_an_annotated_binder_surfaces_its_annotation_s_names() {
     using_block(source, |program, block| {
         let typed = interval(program, block, "a");
         let bump = Bump::new();
-        let types = reading(program.root(), &bump);
+        let types = reading(program.tiers(), &bump);
         let rendered = display_name(typed.upper, &types, program.symbols());
         assert_eq!(rendered.to_string(), ":(LIST OF Number)");
     });

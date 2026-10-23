@@ -14,12 +14,12 @@ use crate::knot::{KActivationView, KBuiltins, KValue};
 use crate::memory::{Bump, BumpAllocator, Writer};
 use crate::parse::{ExpressionPart, KExpression, ParseError};
 use crate::scheduler::{NativeStep, Work};
-use crate::scope::{BodyShape, ShapeError, Slot};
+use crate::scope::{BodyShape, LoadFacts, ShapeError, Shapes, Slot, Store};
 use crate::symbols::{BinderSymbol, SymbolInterner};
 use crate::type_lattice::{
-    DeclaredType, KType, Root, TypeNode, display_name, satisfied_by, substitute_quantified,
+    DeclaredType, KType, TypeNode, display_name, satisfied_by, substitute_quantified,
 };
-use crate::values::{Chain, Record, Tagged, Value, satisfies};
+use crate::values::{Chain, Record, Tagged, TypeTiers, Value, satisfies};
 
 use super::bundle::{KBirth, KBundle, Within};
 
@@ -35,7 +35,7 @@ pub trait Language {
     fn builtins<'graph>(
         writer: Writer<'graph, '_>,
         symbols: &'graph SymbolInterner,
-        types: &Chain<'graph, 'graph, 'graph, '_, '_>,
+        types: &Chain<'graph, 'graph, 'graph, '_>,
         scratch: BumpAllocator<'_>,
     ) -> &'graph KBuiltins<'graph, 'graph>;
 
@@ -43,16 +43,18 @@ pub trait Language {
     /// value delivered where the drain says.
     fn evaluator<'graph>() -> NativeStep<'graph, KBundle>;
 
-    /// What the language refuses of a shape once it is built, and what it records on it through
-    /// `writer`, before anything runs — the checks that need types. None by default.
-    fn check<'graph>(
-        shape: &'graph BodyShape<'graph>,
+    /// Run the language's one walk over `shapes`, keeping every record it computes in `store` and
+    /// interning through `types`: what the load decides, and what a resumption re-decides under
+    /// the store's binding. Runs nothing by default, so the run elaborates where it reads, as it
+    /// does wherever the load leaves a fact unknown.
+    fn facts<'graph: 'o, 'tier: 'o, 'o, S: Store<'o>>(
+        shapes: &'graph Shapes<'graph>,
         builtins: &'graph KBuiltins<'graph, 'graph>,
-        types: &Chain<'graph, 'graph, 'graph, '_, '_>,
-        writer: Writer<'graph, 'graph>,
+        store: &S,
+        types: &Chain<'tier, '_, '_, '_>,
         scratch: BumpAllocator<'_>,
-    ) -> Result<(), ShapeError<'graph>> {
-        let _ = (shape, builtins, types, writer, scratch);
+    ) -> Result<(), ShapeError<'o>> {
+        let _ = (shapes, builtins, store, types, scratch);
         Ok(())
     }
 }
@@ -96,7 +98,7 @@ impl Contract {
     /// before its frame solves, a quantified callee keeps nothing. The one answer for every call.
     pub fn kept_by(
         self,
-        types: &Chain<'_, '_, '_, '_, '_>,
+        types: &Chain<'_, '_, '_, '_>,
         callee: DeclaredType<KType>,
         solution: Option<&[KType]>,
     ) -> bool {
@@ -135,15 +137,17 @@ pub enum Evaluated<'graph> {
     Part(&'graph ExpressionPart<'graph>),
 }
 
-/// A loaded program's facts, laid down in program storage: its shape, its builtin table, the frozen
-/// root of the types the load built and the interner its names live in, the step that evaluates a
+/// A loaded program's facts, laid down in program storage: its shape, its builtin table, the tiers
+/// of the types the load built and the interner its names live in, the step that evaluates a
 /// node, the sinks it writes to, the builtin `Error` type, and whether its last run ended uncaught.
 /// `Copy` and without drop glue, so it rests in program storage beside the table it names.
 #[derive(Clone, Copy)]
 pub struct Program<'graph> {
-    shape: &'graph BodyShape<'graph>,
+    facts: &'graph LoadFacts<'graph>,
     builtins: &'graph KBuiltins<'graph, 'graph>,
-    root: &'graph Root<'graph>,
+    /// What tests read types over; the run reads the graph's own.
+    #[cfg(test)]
+    tiers: TypeTiers<'graph>,
     symbols: &'graph SymbolInterner,
     evaluator: NativeStep<'graph, KBundle>,
     output: Output,
@@ -156,19 +160,22 @@ pub struct Program<'graph> {
 impl<'graph> Program<'graph> {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn new(
-        shape: &'graph BodyShape<'graph>,
+        facts: &'graph LoadFacts<'graph>,
         builtins: &'graph KBuiltins<'graph, 'graph>,
-        root: &'graph Root<'graph>,
+        tiers: TypeTiers<'graph>,
         error: KType,
         symbols: &'graph SymbolInterner,
         evaluator: NativeStep<'graph, KBundle>,
         output: Output,
         uncaught: &'graph Cell<bool>,
     ) -> Self {
+        #[cfg(not(test))]
+        let _ = tiers;
         Program {
-            shape,
+            facts,
             builtins,
-            root,
+            #[cfg(test)]
+            tiers,
             symbols,
             evaluator,
             output,
@@ -179,17 +186,29 @@ impl<'graph> Program<'graph> {
 
     /// The top level's shape.
     pub fn shape(&self) -> &'graph BodyShape<'graph> {
-        self.shape
+        self.facts.shapes().root()
+    }
+
+    /// Every shape the load built, by segment.
+    #[cfg(test)]
+    pub fn shapes(&self) -> &'graph Shapes<'graph> {
+        self.facts.shapes()
+    }
+
+    /// What the load decided about every body.
+    pub fn facts(&self) -> &'graph LoadFacts<'graph> {
+        self.facts
     }
 
     pub fn builtins(&self) -> &'graph KBuiltins<'graph, 'graph> {
         self.builtins
     }
 
-    /// The frozen root of the types the load built: what the program's graph hands every step's
-    /// chain to read first, and what a reader outside a step reads over.
-    pub fn root(&self) -> &'graph Root<'graph> {
-        self.root
+    /// The tiers of the types the load built: what the program's graph hands every step's chain to
+    /// read first, and what a reader outside a step reads over.
+    #[cfg(test)]
+    pub fn tiers(&self) -> TypeTiers<'graph> {
+        self.tiers
     }
 
     pub fn symbols(&self) -> &'graph SymbolInterner {
@@ -236,7 +255,7 @@ impl<'graph> Program<'graph> {
     pub fn error<'cell>(
         &self,
         writer: Writer<'cell, '_>,
-        types: &Chain<'_, '_, 'cell, '_, '_>,
+        types: &Chain<'_, 'cell, '_, '_>,
         message: impl fmt::Display,
     ) -> KValue<'graph, 'cell> {
         let scratch = Bump::new();
@@ -255,7 +274,7 @@ impl<'graph> Program<'graph> {
     pub fn message<'cell>(
         &self,
         value: &KValue<'graph, 'cell>,
-        types: &Chain<'_, '_, '_, '_, '_>,
+        types: &Chain<'_, '_, '_, '_>,
     ) -> Option<&'cell str> {
         let Value::Tagged(tagged) = value else {
             return None;
@@ -275,7 +294,7 @@ impl<'graph> Program<'graph> {
     pub fn fulfilled<'cell>(
         &self,
         writer: Writer<'cell, '_>,
-        types: &Chain<'_, '_, 'cell, '_, '_>,
+        types: &Chain<'_, 'cell, '_, '_>,
         value: KValue<'graph, 'cell>,
         contract: Contract,
     ) -> KValue<'graph, 'cell> {
@@ -315,7 +334,7 @@ impl<'graph> Program<'graph> {
     pub fn annotated<'cell>(
         &self,
         writer: Writer<'cell, '_>,
-        types: &Chain<'_, '_, 'cell, '_, '_>,
+        types: &Chain<'_, 'cell, '_, '_>,
         value: KValue<'graph, 'cell>,
         annotation: KType,
         settled: bool,
@@ -346,7 +365,7 @@ impl<'graph> Program<'graph> {
     /// The top-level slot `name` binds, if the program declares it.
     pub fn binding(&self, name: &str) -> Option<Slot> {
         let name = BinderSymbol::declared(name, self.symbols)?;
-        self.shape.slot(name).map(|(slot, _)| slot)
+        self.shape().slot(name).map(|(slot, _)| slot)
     }
 }
 

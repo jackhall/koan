@@ -4,16 +4,18 @@ use std::cell::Cell;
 
 use self_cell::self_cell;
 
-use crate::elaborate::{builtin_error, type_channel};
-use crate::memory::{Bump, ProgramBrand, ProgramStorage, SlabHandle, program_storage, resident};
+use crate::elaborate::builtin_error;
+use crate::knot::KBuiltins;
+use crate::memory::{
+    Bump, BumpAllocator, ProgramBrand, ProgramStorage, SlabHandle, program_storage, resident,
+};
 use crate::parse::parse_with_path;
 use crate::scheduler::{
     DrainStalled, Graph, NativeStep, Placement, Resting, Roots, Scheduler, Work,
 };
-use crate::scope::BodyShape;
 use crate::symbols::SymbolInterner;
-use crate::type_lattice::{Halves, RootBuilder};
-use crate::values::{Chain, Half, SpecBounds, Types};
+use crate::type_lattice::{Agent, Halves, RootBuilder};
+use crate::values::{Chain, Half, SpecBounds, TypeTiers, Types};
 
 use super::body;
 use super::bundle::{KBirth, KBundle};
@@ -28,18 +30,20 @@ pub const STACK_BYTES: usize = 64 << 20;
 /// What the substrate owns outright. It borrows nothing, and `self_cell` boxes it and only ever
 /// lends it shared, so everything that borrows it lives in [`Running`].
 ///
-/// `registry` is the bump the [type lattice](crate::type_lattice)'s root is built over — the one
-/// tier that still needs a collections arena rather than program storage's write surface. It is
-/// released whole with the rest, and nothing laid in it runs a destructor.
+/// `registry` is the bump the [type lattice](crate::type_lattice)'s load is built over, and
+/// `agent` the bump its agent tier grows in: the tiers that still need a collections arena rather
+/// than program storage's write surface. Both are released whole with the rest, and nothing laid
+/// in them runs a destructor.
 struct Owner {
     storage: ProgramStorage,
     registry: Bump,
+    agent: Bump,
     symbols: SymbolInterner,
 }
 
 /// Everything that names `'graph`: the graph by value, since reclaiming a region needs exclusive
 /// access, and its two roots — the build root the load ran in, and the run root every root work is
-/// born under and the top level's bindings live in; the program record in program storage, holding the types' frozen root, so what a step
+/// born under and the top level's bindings live in; the program record in program storage, holding the type tiers, so what a step
 /// reads is a `'graph` borrow; and what the top level left at rest when it last ran.
 pub struct Running<'graph> {
     graph: Graph<'graph, KBundle>,
@@ -132,6 +136,22 @@ self_cell!(
 /// kept. `'graph` is invariant, so the running state is reached only through [`with`](Self::with).
 pub struct CellSubstrate(Joined);
 
+/// The load's one walk over `shapes`: every record the language's walk computes, laid in program
+/// storage through `writer`, beside the folds the load lays over them.
+fn walked<'graph, L: Language>(
+    shapes: &'graph crate::scope::Shapes<'graph>,
+    builtins: &'graph KBuiltins<'graph, 'graph>,
+    types: &Chain<'graph, 'graph, 'graph, '_>,
+    writer: crate::memory::Writer<'graph, 'graph>,
+    scratch: BumpAllocator<'_>,
+) -> Result<&'graph crate::scope::LoadFacts<'graph>, crate::scope::ShapeError<'graph>> {
+    let store = crate::build::LoadStore::new(writer, scratch, shapes, crate::scope::Binding::EMPTY);
+    L::facts(shapes, builtins, &store, types, scratch)?;
+    let unfolded = resident(writer, store.facts(scratch));
+    let folds = crate::build::fold(unfolded, writer, scratch);
+    Ok(resident(writer, unfolded.folded(writer, folds)))
+}
+
 impl CellSubstrate {
     /// Parse `source` into fresh program storage and stand the program up beside it, over a slab of
     /// `cap` cells, two of which are its build root and its run root: `language`'s builtin table at
@@ -140,8 +160,9 @@ impl CellSubstrate {
     /// `bounds` sets how many live children the build root's specialization table and every
     /// specialization's own table hold.
     ///
-    /// The load builds the types' root through one chain over a root builder, and freezes it when
-    /// the load ends, so no step can intern into it. A refused shape is rendered into its
+    /// The load builds its types through one chain over a root builder, and freezes it when the
+    /// load ends, so no step can intern into it: a step's types rest in the agent tier laid beside
+    /// it, and a name recorded after the load in the symbol table's overlay. A refused shape is rendered into its
     /// [`LoadError`] on the way out, while the interner and the chain its names and types render
     /// through still stand; a load that succeeds renders nothing.
     pub fn load<L: Language>(
@@ -154,6 +175,7 @@ impl CellSubstrate {
         let owner = Owner {
             storage: program_storage(),
             registry: Bump::new(),
+            agent: Bump::new(),
             symbols: SymbolInterner::new(),
         };
         Joined::try_new(owner, |owner| {
@@ -167,14 +189,14 @@ impl CellSubstrate {
                 // Everything the root owns is laid in the owner's registry arena, which releases it
                 // whole. The load's chain never leaves the load: its end freezes the root.
                 let builder = RootBuilder::in_region(&owner.registry);
-                let types: &Chain<'_, '_, '_, '_, '_> =
+                let types: &Chain<'_, '_, '_, '_> =
                     &Types::building(Halves::alone(Half::load(builder)));
                 let scratch = Bump::new();
                 let builtins = L::builtins(brand.writer(), &owner.symbols, types, &scratch);
                 let refused = |error: crate::scope::ShapeError<'_>| LoadError::Shape {
                     rendered: error.display(&owner.symbols, types).to_string(),
                 };
-                let shape = BodyShape::of_program(
+                let shapes = crate::scope::Shapes::of_program(
                     brand,
                     &parsed,
                     builtins,
@@ -183,17 +205,21 @@ impl CellSubstrate {
                     &scratch,
                 )
                 .map_err(refused)?;
-                type_channel(shape, builtins, types, brand.writer(), &scratch).map_err(refused)?;
-                L::check(shape, builtins, types, brand.writer(), &scratch).map_err(refused)?;
+                let walked = walked::<L>(shapes, builtins, types, brand.writer(), &scratch)
+                    .map_err(refused)?;
                 let error = builtin_error(types, &owner.symbols, &scratch);
-                let root = builder.freeze();
+                let tiers = TypeTiers {
+                    frozen: builder.freeze(),
+                    agent: Agent::in_region(&owner.agent),
+                };
+                owner.symbols.freeze();
                 let writer = brand.writer();
                 let program = resident(
                     writer,
                     Program::new(
-                        shape,
+                        walked,
                         builtins,
-                        root,
+                        tiers,
                         error,
                         &owner.symbols,
                         L::evaluator(),
@@ -201,7 +227,7 @@ impl CellSubstrate {
                         &writer.fill(1, |_| Cell::new(false))[0],
                     ),
                 );
-                Ok((root, program))
+                Ok((tiers, program))
             })?;
             Ok(Running {
                 graph,

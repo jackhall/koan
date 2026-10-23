@@ -29,7 +29,7 @@ fn rendered(class: Option<BodyClass>) -> String {
 /// The class of the body the top-level binder `name` of `COUNTER` and `source` births.
 fn class(source: &str, name: &str) -> String {
     loaded(&format!("{COUNTER}{source}"), |program| {
-        rendered(body(program, program.shape(), name).class())
+        rendered(program.facts().class(body(program, program.shape(), name)))
     })
 }
 
@@ -39,7 +39,7 @@ fn code_class(source: &str) -> String {
         let (_, code) = (program.shape().nested_shapes().iter())
             .find(|(_, nested)| nested.kind() == ShapeKind::Code)
             .expect("the program writes a quote");
-        rendered(code.class())
+        rendered(program.facts().class(code))
     })
 }
 
@@ -198,8 +198,43 @@ fn a_value_the_body_received_passed_on_is_no_exit() {
                   (h)))";
     loaded(&format!("{COUNTER}{source}"), |program| {
         let mk = body(program, program.shape(), "mk");
-        assert!(record_of(body(program, mk, "h")).2, "a capture");
+        assert!(record_of(program, body(program, mk, "h")).2, "a capture");
     });
+}
+
+#[test]
+fn a_let_bound_bare_to_a_received_value_passed_on_is_no_exit() {
+    let keep = "EXPR #(KEEP x :Any) -> Number = #(1)\n";
+    let view = "(LET v = (m :| Counter))";
+    let passing = |call: &str| {
+        class(
+            &format!(
+                "{keep}MODULE top = ((LET zero = [{{x = 1}}, 1]))\n\
+                 LET f = (FN :{{m :Counter, c :Number}} -> Number = #({view} {call} (c)))"
+            ),
+            "f",
+        )
+    };
+    assert_eq!(
+        passing("(LET a = m) (KEEP a)"),
+        "sealed 1 caches",
+        "a parameter"
+    );
+    assert_eq!(
+        passing("(LET a = m) (LET b = a) (KEEP b.zero)"),
+        "sealed 1 caches",
+        "a member of a `LET` bound to one"
+    );
+    assert_eq!(
+        passing("(LET a = top) (KEEP a.zero)"),
+        "sealed 1 caches",
+        "a capture"
+    );
+    assert_eq!(
+        passing("(LET a = v) (KEEP a)"),
+        "porous 1",
+        "what the body minted still leaves"
+    );
 }
 
 /// `SIG Holder`, `PEEK` and `KEEP`, registrations at a signature-typed and an `Any` slot, and `g`
@@ -254,7 +289,7 @@ fn a_module_capturing_what_the_body_minted_is_an_exit() {
                 "{COUNTER}{PASSERS}LET v = (ints :| Counter)\n\
                  MODULE pack = (LET held = v)\nPRINT (PEEK pack)"
             ),
-            |program| rendered(program.shape().class())
+            |program| rendered(program.facts().class(program.shape()))
         ),
         "porous 0",
         "a module reading the program's own binder, where the program is the frame body"
@@ -304,7 +339,7 @@ fn a_module_capturing_a_local_is_read_through_it() {
     loaded(&format!("{COUNTER}{source}"), |program| {
         let f = body(program, module_body(program, "lib"), "f");
         assert_eq!(
-            rendered(f.class()),
+            rendered(program.facts().class(f)),
             "sealed 1 caches",
             "a type capture of the body's own variable"
         );
@@ -410,7 +445,7 @@ fn a_nominal_declared_per_call_mints() {
                   #((NEWTYPE Box = :{v :Elt}) (1))))";
     loaded(&format!("{COUNTER}{source}"), |program| {
         let f = body(program, module_body(program, "lib"), "f");
-        assert_eq!(rendered(f.class()), "sealed 1 caches");
+        assert_eq!(rendered(program.facts().class(f)), "sealed 1 caches");
     });
     assert_eq!(
         class(
@@ -451,7 +486,10 @@ fn a_nested_function_is_a_body_of_its_own() {
     assert_eq!(class(source, "f"), "sealed 0");
     loaded(&format!("{COUNTER}{source}"), |program| {
         let f = body(program, program.shape(), "f");
-        assert_eq!(rendered(body(program, f, "h").class()), "sealed 1 caches");
+        assert_eq!(
+            rendered(program.facts().class(body(program, f, "h"))),
+            "sealed 1 caches"
+        );
     });
 }
 
@@ -489,7 +527,7 @@ fn the_program_and_a_quote_are_frame_bodies() {
     assert_eq!(
         loaded(
             &format!("{COUNTER}LET v = (ints :| Counter)\nPRINT v"),
-            |program| rendered(program.shape().class())
+            |program| rendered(program.facts().class(program.shape()))
         ),
         "sealed 0",
         "a view over a closed tree mints nothing at run"
@@ -507,8 +545,8 @@ fn the_program_and_a_quote_are_frame_bodies() {
 
 /// The caching record of `shape`: each own minting site's class in site order, how many
 /// composite sites it holds warm, and whether its frame caches.
-fn record_of(shape: &BodyShape<'_>) -> (Vec<Mint>, usize, bool) {
-    let caching = shape.caching().expect("the load fixed the record");
+fn record_of(program: &Program<'_>, shape: &BodyShape<'_>) -> (Vec<Mint>, usize, bool) {
+    let caching = (program.facts().caching(shape)).expect("the load fixed the record");
     let mints = caching
         .mints
         .entries()
@@ -521,7 +559,7 @@ fn record_of(shape: &BodyShape<'_>) -> (Vec<Mint>, usize, bool) {
 /// [`record_of`] the body the top-level binder `name` of `COUNTER` and `source` births.
 fn caching(source: &str, name: &str) -> (Vec<Mint>, usize, bool) {
     loaded(&format!("{COUNTER}{source}"), |program| {
-        record_of(body(program, program.shape(), name))
+        record_of(program, body(program, program.shape(), name))
     })
 }
 
@@ -569,12 +607,11 @@ fn a_keyworded_tail_loop_pairs_its_arguments_by_slot() {
             let (_, looping) = (program.shape().nested_shapes().iter())
                 .find(|(_, nested)| {
                     nested.kind() == ShapeKind::Callable
-                        && nested
-                            .caching()
+                        && (program.facts().caching(nested))
                             .is_some_and(|c| !c.mints.entries().is_empty())
                 })
                 .expect("the looping registration births a callable body");
-            record_of(looping)
+            record_of(program, looping)
         })
     };
     // A member of a received value is no exit either, so the loop caches.
@@ -615,7 +652,7 @@ fn a_view_over_a_capture_is_invariant() {
     loaded(&format!("{COUNTER}{source}"), |program| {
         let mk = body(program, program.shape(), "mk");
         assert_eq!(
-            record_of(body(program, mk, "h")),
+            record_of(program, body(program, mk, "h")),
             (vec![Mint::Invariant], 0, true)
         );
     });
@@ -640,7 +677,10 @@ fn a_nominal_declared_per_call_follows_the_type_it_reads() {
         let (_, registered) = (program.shape().nested_shapes().iter())
             .find(|(_, nested)| nested.kind() == ShapeKind::Callable)
             .expect("the registration births a callable body");
-        assert_eq!(record_of(registered), (vec![Mint::Invariant], 0, true));
+        assert_eq!(
+            record_of(program, registered),
+            (vec![Mint::Invariant], 0, true)
+        );
     });
 }
 
@@ -768,7 +808,7 @@ fn classes_over_the_tutorial() {
                     ShapeKind::Code => "code",
                     ShapeKind::Block | ShapeKind::Module => continue,
                 };
-                let class = match shape.class() {
+                let class = match running.program().facts().class(shape) {
                     None => "unfixed".to_string(),
                     Some(BodyClass::Porous { .. }) => "porous".to_string(),
                     Some(BodyClass::Sealed { mints, caches }) => {

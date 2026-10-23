@@ -34,8 +34,9 @@
 //! [`opaque_view_types`] is the half of an ascription computed from types alone: the bindings
 //! either side and the view's signature. The load calls it at a `:|` site over a content tree it
 //! sees all of, so the root holds each type the run's view would otherwise intern;
-//! [`nested_types`] is the same half of a nested re-view, which the load lays wherever it knows
-//! what a nested module carries (`dispatch/statics/views.rs`).
+//! [`opaque_view`] computes it beside what *fits* solves, which keys the view's content tree, from
+//! one fit. [`nested_types`] is the same half of a nested re-view, which the load lays wherever it
+//! knows what a nested module carries (`dispatch/walk/views.rs`).
 
 use crate::knot::{KActivationView, KValue, Knotted, composed};
 use crate::memory::{BumpAllocator, BumpVec, Writer};
@@ -78,7 +79,7 @@ pub enum Unascribable<'run, 'x> {
 }
 
 /// Whether the view door takes `ascribed`: one application of a signature, or the signature.
-pub fn takes(types: &Chain<'_, '_, '_, '_, '_>, ascribed: KType) -> bool {
+pub fn takes(types: &Chain<'_, '_, '_, '_>, ascribed: KType) -> bool {
     matches!(
         types.node(ascribed),
         TypeNode::Signature { .. } | TypeNode::SignatureApply { .. }
@@ -93,22 +94,22 @@ pub fn fill_at_view<'graph, 'cell>(
     source: KValue<'graph, 'cell>,
     slots: ViewSlots<'graph>,
     view: &KActivationView<'graph, 'cell>,
-    types: &Chain<'_, '_, '_, '_, '_>,
+    types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
 ) {
     let Some(module) = source.knot_member().and_then(Knotted::module) else {
         return;
     };
-    let Some((shape, closure)) = module.pending() else {
+    let Some((body, closure)) = module.pending() else {
         return;
     };
     // The memos are placed for the captures of the body the load read; any other module's
     // content is left to the view's own walk.
-    if !std::ptr::eq(shape, slots.body) {
+    if body.shape.segment() != slots.body {
         return;
     }
     let mut memo = None;
-    let captures = composed(shape, closure.links()).map(|(index, link)| {
+    let captures = composed(body, closure.links()).map(|(index, link)| {
         let cell = (slots.captures.iter())
             .find(|(each, _)| *each as usize == index)
             .and_then(|(_, at)| view.digest_memo(*at));
@@ -121,15 +122,15 @@ pub fn fill_at_view<'graph, 'cell>(
         }
         (index, digest)
     });
-    let content = ModuleContent::body(shape.code_digest(), captures);
+    let content = ModuleContent::body(body.shape.code_digest(), captures);
     #[cfg(test)]
     if CHECK_SLOT_MEMOS.get() {
         let mut fresh = Digests::new(types, scratch);
         let walked =
-            composed(shape, closure.links()).map(|(index, link)| (index, link.digest(&mut fresh)));
+            composed(body, closure.links()).map(|(index, link)| (index, link.digest(&mut fresh)));
         assert_eq!(
             content,
-            ModuleContent::body(shape.code_digest(), walked),
+            ModuleContent::body(body.shape.code_digest(), walked),
             "a slot's memo holds the digest of the value its capture holds"
         );
     }
@@ -151,7 +152,7 @@ pub fn ascribe<'graph, 'tier: 'x, 'cell, 'x>(
     writer: Writer<'cell, '_>,
     source: KValue<'graph, 'cell>,
     signature: KType,
-    types: &Chain<'_, 'tier, 'cell, '_, '_>,
+    types: &Chain<'tier, 'cell, '_, '_>,
     scratch: BumpAllocator<'x>,
 ) -> Result<Knotted<'graph, 'cell>, Unascribable<'tier, 'x>> {
     let member = (source.knot_member())
@@ -162,10 +163,11 @@ pub fn ascribe<'graph, 'tier: 'x, 'cell, 'x>(
     // has computed it yet, none after.
     let bare = Value::Knotted(member).digest(types, scratch);
     let (sig, from, pins) = fitted(held, signature, types, scratch)?;
+    let interned = Substitution::interned(from, types, scratch);
     let (viewed, content) = opaque(
         Some(held),
         sig,
-        from,
+        (from, interned),
         &pins,
         signature,
         bare,
@@ -213,7 +215,7 @@ pub(crate) fn nested_types<'run: 'x, 'x>(
     held: KType,
     src: KType,
     dst: KType,
-    types: &Chain<'_, 'run, '_, '_, '_>,
+    types: &Chain<'run, '_, '_, '_>,
     scratch: BumpAllocator<'x>,
 ) -> Result<ViewTypes<'run>, Unascribable<'run, 'x>> {
     let TypeNode::SignatureApply { pins, .. } = types.node(dst) else {
@@ -246,24 +248,39 @@ pub fn opaque_view_types<'run>(
     held: Option<KType>,
     signature: KType,
     source: ContentDigest,
-    types: &Chain<'_, 'run, '_, '_, '_>,
+    types: &Chain<'run, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
 ) -> Option<ViewTypes<'run>> {
-    let (sig, from, pins) = known_fit(held, signature, types, scratch)?;
-    Some(opaque(held, sig, from, &pins, signature, source, types, scratch).0)
+    opaque_view(held, signature, Some(source), types, scratch)?.1
 }
 
 /// What a view at `signature` of a module whose signature is `held`, where known, keys its content
-/// on: what *fits* solves, interned. `None` where the view door would refuse, or the load cannot
-/// tell what the fit solves.
-pub fn fit_of(
+/// on — what *fits* solves, interned — beside, where its source's bare member's digest is known,
+/// what it binds ([`opaque_view_types`]): one fit for both. `None` where the view door would
+/// refuse, or the load cannot tell what the fit solves.
+pub fn opaque_view<'run>(
     held: Option<KType>,
     signature: KType,
-    types: &Chain<'_, '_, '_, '_, '_>,
+    source: Option<ContentDigest>,
+    types: &Chain<'run, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
-) -> Option<KType> {
-    let (_, from, _) = known_fit(held, signature, types, scratch)?;
-    Some(Substitution::interned(from, types, scratch).handle)
+) -> Option<(KType, Option<ViewTypes<'run>>)> {
+    let (sig, from, pins) = known_fit(held, signature, types, scratch)?;
+    let interned = Substitution::interned(from, types, scratch);
+    let viewed = source.map(|source| {
+        opaque(
+            held,
+            sig,
+            (from, interned),
+            &pins,
+            signature,
+            source,
+            types,
+            scratch,
+        )
+        .0
+    });
+    Some((interned.handle, viewed))
 }
 
 /// [`fitted`] where `held` is known; without it, a signature pinning every parameter, whose fit
@@ -272,7 +289,7 @@ pub fn fit_of(
 fn known_fit<'run: 'x, 'x>(
     held: Option<KType>,
     signature: KType,
-    types: &Chain<'_, 'run, '_, '_, '_>,
+    types: &Chain<'run, '_, '_, '_>,
     scratch: BumpAllocator<'x>,
 ) -> Option<(
     SigSchema<'run>,
@@ -298,19 +315,19 @@ fn known_fit<'run: 'x, 'x>(
 }
 
 /// The opaque view at `signature`, whose schema is `sig` and pins `pins`, of a module whose fit
-/// solved `from` over a bare member whose digest is `source`, beside its content.
+/// solved `from`, beside it interned, over a bare member whose digest is `source`, beside its
+/// content.
 #[allow(clippy::too_many_arguments)]
 fn opaque<'run>(
     held: Option<KType>,
     sig: SigSchema<'run>,
-    from: Members<'_, TypeSymbol, KType>,
+    (from, interned): (Members<'_, TypeSymbol, KType>, Substitution<'run>),
     pins: &[(BinderSymbol, KType)],
     signature: KType,
     source: ContentDigest,
-    types: &Chain<'_, 'run, '_, '_, '_>,
+    types: &Chain<'run, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
 ) -> (ViewTypes<'run>, ModuleContent) {
-    let interned = Substitution::interned(from, types, scratch);
     let content = ModuleContent::view(Operator::Opaque, signature, source, interned.handle);
     // A carrier is keyed on the view's content. Two views of equal content share one, and the
     // parameter's name keeps two of one view apart.
@@ -332,7 +349,7 @@ fn opaque<'run>(
 pub(super) fn fitted<'run: 'x, 'x>(
     held: KType,
     signature: KType,
-    types: &Chain<'_, 'run, '_, '_, '_>,
+    types: &Chain<'run, '_, '_, '_>,
     scratch: BumpAllocator<'x>,
 ) -> Result<
     (
@@ -357,7 +374,7 @@ pub(super) fn fitted<'run: 'x, 'x>(
 #[allow(clippy::type_complexity)]
 fn applied<'run: 'x, 'x>(
     signature: KType,
-    types: &Chain<'_, 'run, '_, '_, '_>,
+    types: &Chain<'run, '_, '_, '_>,
     scratch: BumpAllocator<'x>,
 ) -> Result<(SigSchema<'run>, KType, BumpVec<'x, (BinderSymbol, KType)>), Unascribable<'run, 'x>> {
     if !takes(types, signature) {
@@ -395,7 +412,7 @@ pub(super) fn build<'graph, 'tier, 'cell, 'x>(
     from: Substitution<'tier>,
     to: Substitution<'tier>,
     content: ModuleContent,
-    types: &Chain<'_, 'tier, 'cell, '_, '_>,
+    types: &Chain<'tier, 'cell, '_, '_>,
     scratch: BumpAllocator<'x>,
 ) -> Result<Knotted<'graph, 'cell>, Unascribable<'tier, 'x>> {
     let cx = Coercion {
@@ -459,7 +476,7 @@ fn carriers<'x>(
     from: Members<'_, TypeSymbol, KType>,
     pins: &[(BinderSymbol, KType)],
     key: ContentKey,
-    types: &Chain<'_, '_, '_, '_, '_>,
+    types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'x>,
 ) -> Members<'x, TypeSymbol, KType> {
     Members::from_pairs(
@@ -486,7 +503,7 @@ fn carriers<'x>(
 pub(super) fn view_signature(
     sig: &SigSchema<'_>,
     to: Members<'_, TypeSymbol, KType>,
-    types: &Chain<'_, '_, '_, '_, '_>,
+    types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
 ) -> KType {
     let mut draft = SchemaDraft::new(scratch);

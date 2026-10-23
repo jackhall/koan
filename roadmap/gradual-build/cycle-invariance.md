@@ -2,7 +2,7 @@
 
 **Optional.** An optimization nothing needs yet.
 
-**Problem.** The static pass classes a sealed body's mint sites by whether
+**Problem.** The load's [folds](../../src/build/README.md#the-folds) class a sealed body's mint sites by whether
 the loop passes each leaf of the site's content tree through unchanged
 ([where each body interns](../../design/type-tiers.md#where-each-body-interns)),
 and reads "unchanged" as a bare parameter at the argument slot on every tail
@@ -37,8 +37,9 @@ cold: a `Fresh` loop re-lays it and recomputes its verdicts each hop, and a
 
 ## Dependencies
 
-The site classes it refines, their tail edges and the invariance fixpoint
-live in [the static pass](../../src/dispatch/statics/caching.rs).
+The site classes it refines live in [the folds](../../src/build/folds.rs),
+and their tail edges and the invariance fixpoint in
+[the shape's tail facts](../../src/scope/shapes/tails.rs).
 
 **Requires:** none.
 

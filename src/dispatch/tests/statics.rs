@@ -39,8 +39,8 @@ pub(super) fn slot(program: &Program<'_>, shape: &BodyShape<'_>, name: &str) -> 
 /// The static type of the binder `name` in `shape`, rendered: its upper end, or a quantified
 /// callable's scheme.
 pub(super) fn binder(program: &Program<'_>, shape: &BodyShape<'_>, name: &str) -> String {
-    let typed = shape
-        .binder_type(slot(program, shape, name))
+    let typed = (program.facts())
+        .binder_type(shape, slot(program, shape, name))
         .expect("the load typed the shape");
     let rendered = match typed {
         DeclaredType::Type(interval) => DeclaredType::Type(interval.upper),
@@ -48,7 +48,7 @@ pub(super) fn binder(program: &Program<'_>, shape: &BodyShape<'_>, name: &str) -
     };
     display_name(
         rendered,
-        &reading(program.root(), &Bump::new()),
+        &reading(program.tiers(), &Bump::new()),
         program.symbols(),
     )
     .to_string()
@@ -56,8 +56,8 @@ pub(super) fn binder(program: &Program<'_>, shape: &BodyShape<'_>, name: &str) -
 
 /// The static type of the binder `name` in `shape`, which binds no quantified callable.
 pub(super) fn interval(program: &Program<'_>, shape: &BodyShape<'_>, name: &str) -> Interval {
-    shape
-        .binder_type(slot(program, shape, name))
+    (program.facts())
+        .binder_type(shape, slot(program, shape, name))
         .expect("the load typed the shape")
         .as_type()
         .expect("the binder binds no quantified callable")
@@ -71,7 +71,7 @@ pub(super) fn top(source: &str, name: &str) -> String {
 /// The lexical variable at `level` named `name`, bounded by `bound`.
 pub(super) fn lexical(program: &Program<'_>, level: usize, name: &str, bound: KType) -> Parametric {
     let name = TypeSymbol::declared(name, program.symbols()).expect("a Type token");
-    reading(program.root(), &Bump::new()).lexical(level, name, bound)
+    reading(program.tiers(), &Bump::new()).lexical(level, name, bound)
 }
 
 /// The upper end of the static type of the binder `name` in `shape`.
@@ -110,7 +110,11 @@ pub(super) fn let_narrowing(program: &Program<'_>, shape: &BodyShape<'_>, name: 
     let Some(ExpressionPart::Expression(node)) = shape.rhs(slot(program, shape, name)) else {
         panic!("`{name}` is bound to a node");
     };
-    rendered(shape.use_statics(Site::of_node(node.reference())).narrowing)
+    rendered(
+        (program.facts())
+            .use_statics(shape, Site::of_node(node.reference()))
+            .narrowing,
+    )
 }
 
 /// A narrowing, rendered: `full`, `selected`, or `kept` followed by each kept candidate's verdict.
@@ -226,6 +230,24 @@ fn a_capture_keeps_its_type_along_the_chain() {
     );
 }
 
+/// Two overloads of `AREA`, one over each shape, and a callee that returns either.
+const AREAS: &str = "NEWTYPE Circle = :{r :Number}\n\
+                     NEWTYPE Square = :{s :Number}\n\
+                     EXPR #(AREA c :Circle) -> Number = #(1)\n\
+                     EXPR #(AREA s :Square) -> Str = #(\"square\")\n\
+                     EXPR #(EITHER) -> (Circle | Square) = #(Circle {r = 1})\n";
+
+/// The static type of each value part of `shape`'s statements the load typed, in program order.
+pub(super) fn typed_parts(program: &Program<'_>, shape: &BodyShape<'_>) -> Vec<Interval> {
+    let mut typed = Vec::new();
+    for statement in shape.body() {
+        crate::scope::each_part(statement, |part| {
+            typed.extend(program.facts().value_type(shape, Site::of(part)));
+        });
+    }
+    typed
+}
+
 #[test]
 fn a_cyclic_binding_and_a_quote_s_hole_are_typed() {
     loaded("LET f = (FN :{} -> Any = #(a))\nLET a = [f]", |program| {
@@ -235,27 +257,16 @@ fn a_cyclic_binding_and_a_quote_s_hole_are_typed() {
     });
     loaded("LET q = #(PRINT y)", |program| {
         let (_, code) = program.shape().nested_shapes()[0];
-        let statics = code.statics().expect("the load typed the code");
-        assert_eq!(statics.parts.len(), 1);
+        let parts = typed_parts(program, code);
+        assert_eq!(parts.len(), 1);
+        assert_eq!(parts[0].upper, KType::ANY.into(), "a hole is `Any`");
         assert_eq!(
-            statics.parts[0].1.upper,
-            KType::ANY.into(),
-            "a hole is `Any`"
-        );
-        assert_eq!(
-            statics.statements,
-            [Interval::within(KType::ANY)],
+            program.facts().statement_type(code, 0),
+            Some(Interval::within(KType::ANY)),
             "a hole a `USING` may fill is a candidate the load cannot read"
         );
     });
 }
-
-/// Two overloads of `AREA`, one over each shape, and a callee that returns either.
-const AREAS: &str = "NEWTYPE Circle = :{r :Number}\n\
-                     NEWTYPE Square = :{s :Number}\n\
-                     EXPR #(AREA c :Circle) -> Number = #(1)\n\
-                     EXPR #(AREA s :Square) -> Str = #(\"square\")\n\
-                     EXPR #(EITHER) -> (Circle | Square) = #(Circle {r = 1})\n";
 
 #[test]
 fn a_use_with_one_admitting_candidate_selects_it() {
@@ -454,7 +465,7 @@ fn a_surfaced_quantified_head_returns_exactly_its_solved_return() {
             assert_eq!(typed.lower, typed.upper, "`{name}` is exactly its return");
             display_name(
                 typed.upper,
-                &reading(program.root(), &Bump::new()),
+                &reading(program.tiers(), &Bump::new()),
                 program.symbols(),
             )
             .to_string()
@@ -479,7 +490,7 @@ fn a_surfaced_head_reads_the_ascription_s_pins() {
         assert_eq!(
             display_name(
                 typed.upper,
-                &reading(program.root(), &Bump::new()),
+                &reading(program.tiers(), &Bump::new()),
                 program.symbols()
             )
             .to_string(),
@@ -497,7 +508,7 @@ fn a_surfaced_head_reads_the_ascription_s_pins() {
         assert_eq!(
             display_name(
                 typed.upper,
-                &reading(program.root(), &Bump::new()),
+                &reading(program.tiers(), &Bump::new()),
                 program.symbols()
             )
             .to_string(),
@@ -559,12 +570,12 @@ fn a_signature_with_more_members_is_always_at_one_with_fewer_and_outranks_it() {
             shape
                 .registrations()
                 .iter()
-                .find_map(
-                    |registration| match shape.registered_type(registration.slot) {
+                .find_map(|registration| {
+                    match program.facts().registered_type(shape, registration.slot) {
                         Static::Closed(registered) => {
                             let rendered = display_name(
                                 registered.shape,
-                                &reading(program.root(), &Bump::new()),
+                                &reading(program.tiers(), &Bump::new()),
                                 program.symbols(),
                             )
                             .to_string();
@@ -572,15 +583,15 @@ fn a_signature_with_more_members_is_always_at_one_with_fewer_and_outranks_it() {
                                 .then_some(registered.shape)
                         }
                         _ => None,
-                    },
-                )
+                    }
+                })
                 .expect("both overloads are typed at load")
         };
         let (crates, boxes) = (pick(true), pick(false));
         let scratch = Bump::new();
         let (crates, boxes) = (crates.into(), boxes.into());
         assert!(outranks(
-            &reading(program.root(), &Bump::new()),
+            &reading(program.tiers(), &Bump::new()),
             &scratch,
             crates,
             boxes,
@@ -593,4 +604,130 @@ fn a_signature_with_more_members_is_always_at_one_with_fewer_and_outranks_it() {
         run(&format!("{CRATES}{module}PRINT (use {{c = crate}})")),
         "crates"
     );
+}
+
+#[test]
+fn a_fellow_in_a_knot_reads_its_seed_whatever_order_the_members_are_typed_in() {
+    let knot = "LET a = {next = b, v = 1}\nLET b = {next = a, v = \"s\"}";
+    let swapped = "LET b = {next = a, v = 1}\nLET a = {next = b, v = \"s\"}";
+    assert_eq!(top(knot, "a"), ":{next :Any v :Number}");
+    assert_eq!(top(knot, "b"), ":{next :Any v :Str}");
+    assert_eq!(top(swapped, "b"), top(knot, "a"));
+    assert_eq!(top(swapped, "a"), top(knot, "b"));
+}
+
+#[test]
+fn an_annotated_fellow_is_read_at_its_annotation() {
+    let knot = "LET a :{next :Any v :Number} = {next = b, v = 1}\nLET b = {next = a, v = \"s\"}";
+    assert_eq!(top(knot, "b"), ":{next :{next :Any v :Number} v :Str}");
+}
+
+#[test]
+fn a_fellow_s_callable_body_reads_the_fellow_s_own_type() {
+    let source = "LET a = {next = b, v = 1}\nLET b = {next = a, f = (FN :{} -> Any = #(a))}";
+    loaded(source, |program| {
+        let (_, f) = (program.shape().nested_shapes().iter())
+            .find(|(_, nested)| nested.kind() == ShapeKind::Callable)
+            .expect("the function's body is nested in the program");
+        let read = (program.facts().statement_type(f, 0)).expect("the load typed the body");
+        let rendered = display_name(
+            read.upper,
+            &reading(program.tiers(), &Bump::new()),
+            program.symbols(),
+        )
+        .to_string();
+        assert_eq!(rendered, ":{next :Any v :Number}");
+    });
+}
+
+/// Every fact of `program`'s top level and the bodies it births, keyed by the names binding them
+/// and sorted: an independent declaration's facts are the same lines wherever it is written.
+fn by_names(program: &Program<'_>) -> Vec<String> {
+    let bump = Bump::new();
+    let types = reading(program.tiers(), &bump);
+    let (facts, symbols) = (program.facts(), program.symbols());
+    let named = |typed: DeclaredType<Parametric>| display_name(typed, &types, symbols).to_string();
+    let statically = |typed: crate::scope::StaticType<'_>| match typed {
+        Static::Unknown => "unknown".to_string(),
+        Static::Closed(closed) => format!("closed {}", named(closed.into())),
+        Static::Rigid { value, .. } => format!("rigid {}", named(value.into())),
+    };
+    fn render(
+        program: &Program<'_>,
+        shape: &BodyShape<'_>,
+        path: &str,
+        out: &mut Vec<String>,
+        line: &dyn Fn(&BodyShape<'_>, Slot) -> Option<String>,
+        typed: &dyn Fn(&BodyShape<'_>, usize) -> String,
+    ) {
+        for at in (0..shape.slots()).map(|at| Slot(at as u32)) {
+            let name = program
+                .symbols()
+                .display(shape.slot_name(at).symbol())
+                .to_string();
+            if let Some(fact) = line(shape, at) {
+                out.push(format!("{path} {name} {fact}"));
+            }
+            if let Some(born) = shape.births(at) {
+                render(program, born, &format!("{path}/{name}"), out, line, typed);
+            }
+        }
+        if !path.is_empty() {
+            for index in 0..shape.body().len() {
+                out.push(format!("{path} #{index} = {}", typed(shape, index)));
+            }
+            if let Some((closing, _)) = program.facts().closing(shape.segment()) {
+                let summary = closing.summary.map(|summary| summary.is_some());
+                out.push(format!(
+                    "{path} recursive {} summary {summary:?}",
+                    closing.recursive
+                ));
+            }
+        }
+    }
+    let line = |shape: &BodyShape<'_>, at: Slot| -> Option<String> {
+        Some(match shape.slot_name(at) {
+            crate::symbols::BinderSymbol::Value(_) => match facts.binder_type(shape, at)? {
+                DeclaredType::Type(typed) => format!("= {}", named(typed.upper.into())),
+                DeclaredType::Scheme(scheme) => format!("= {}", named(scheme.into())),
+            },
+            crate::symbols::BinderSymbol::Type(_) => {
+                format!("declares {}", statically(facts.declared_type(shape, at)))
+            }
+            crate::symbols::BinderSymbol::Registration(_) => match facts.registered_type(shape, at)
+            {
+                Static::Unknown => "registers unknown".to_string(),
+                Static::Closed(registered) => {
+                    format!("registers closed {}", named(registered.shape.into()))
+                }
+                Static::Rigid { value, .. } => format!("registers rigid {}", named(value.shape)),
+            },
+            crate::symbols::BinderSymbol::Key(_) => return None,
+        })
+    };
+    let typed = |shape: &BodyShape<'_>, index: usize| {
+        (facts.statement_type(shape, index))
+            .map_or("untyped".to_string(), |typed| named(typed.upper.into()))
+    };
+    let mut out = Vec::new();
+    render(program, program.shape(), "", &mut out, &line, &typed);
+    out.sort();
+    out
+}
+
+proptest::proptest! {
+    #![proptest_config(proptest::prelude::ProptestConfig {
+        cases: crate::tests::case_share(1, 4),
+        ..proptest::prelude::ProptestConfig::default()
+    })]
+
+    /// 10. Reordering independent declarations changes no fact: two top-level declarations whose
+    /// units read nothing of each other, swapped, leave every fact each fixes as it was — a call
+    /// unfolds into its callee wherever either is written.
+    #[test]
+    fn reordering_independent_declarations_changes_no_fact(case in super::generate::independent()) {
+        let (written, swapped) = (case.render(false), case.render(true));
+        let facts = |source: &str| loaded(source, by_names);
+        proptest::prop_assert_eq!(facts(&written), facts(&swapped), "in\n{}\nswapped as\n{}", written, swapped);
+    }
 }

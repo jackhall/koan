@@ -321,7 +321,7 @@ fn a_declaration_the_door_cannot_elaborate_refuses_and_binds_nothing() {
 #[test]
 fn a_code_kind_needing_names_is_spelled_with_needing() {
     fn expression(
-        _: &Chain<'_, '_, '_, '_, '_>,
+        _: &Chain<'_, '_, '_, '_>,
         _: BumpAllocator<'_>,
         _: &SymbolInterner,
     ) -> Vec<(&'static str, KType)> {

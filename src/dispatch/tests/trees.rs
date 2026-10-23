@@ -6,7 +6,7 @@ use crate::program::{CellSubstrate, Outcome, Program};
 use crate::scope::{BodyShape, Leaf, Site, Tree};
 
 use super::statics::{body, loaded, slot};
-use super::{Koan, output};
+use super::{Koan, assert_linear, load_counts, output};
 use crate::values::SpecBounds;
 
 /// `SIG Counter`, and `MODULE ints`, which fits it.
@@ -16,10 +16,14 @@ const COUNTER: &str = "SIG Counter FOR ALL #[Carrier] = \
                        (LET succ = (FN :{x :Number} -> Number = #(x + 1))))\n";
 
 /// The content tree of the operand of the `:|` ascription that is statement `index` of `shape`.
-fn statement_tree<'graph>(shape: &BodyShape<'graph>, index: usize) -> Tree<'graph> {
+fn statement_tree<'graph>(
+    program: &Program<'graph>,
+    shape: &BodyShape<'_>,
+    index: usize,
+) -> Tree<'graph> {
     operand(
-        shape
-            .view_tree(Site::of_node(&shape.body()[index]))
+        (program.facts())
+            .view_tree(shape, Site::of_node(&shape.body()[index]))
             .expect("the statement is an opaque ascription"),
     )
 }
@@ -45,8 +49,8 @@ fn let_tree<'graph>(
         panic!("`{name}` is bound to a node");
     };
     operand(
-        shape
-            .view_tree(Site::of_node(node.reference()))
+        (program.facts())
+            .view_tree(shape, Site::of_node(node.reference()))
             .expect("the right-hand side is an opaque ascription"),
     )
 }
@@ -61,11 +65,12 @@ fn leaf_binder<'graph>(
         panic!("a leaf keyed on a binder: {tree:?}");
     };
     assert!(chain.is_empty());
+    let declaring = program.shapes().shape_at(binder.body);
     let name = program
         .symbols()
-        .display(binder.shape.slot_name(binder.slot).symbol())
+        .display(declaring.slot_name(binder.slot).symbol())
         .to_string();
-    (name, std::ptr::eq(binder.shape, shape))
+    (name, binder.body == shape.segment())
 }
 
 #[test]
@@ -73,7 +78,7 @@ fn a_view_over_a_parameter_reads_back_a_leaf_on_the_parameter() {
     let source = format!("{COUNTER}LET seal = (FN :{{m :Counter}} -> Any = #(m :| Counter))");
     loaded(&source, |program| {
         let seal = body(program, program.shape(), "seal");
-        let tree = statement_tree(seal, 0);
+        let tree = statement_tree(program, seal, 0);
         assert_eq!(leaf_binder(program, tree, seal), ("m".to_string(), true));
     });
 }
@@ -87,7 +92,7 @@ fn a_view_over_a_capture_reads_back_the_leaf_its_source_is() {
     loaded(&source, |program| {
         let outer = body(program, program.shape(), "outer");
         let inner = body(program, outer, "inner");
-        let tree = statement_tree(inner, 0);
+        let tree = statement_tree(program, inner, 0);
         assert_eq!(leaf_binder(program, tree, outer), ("m".to_string(), true));
     });
 }
@@ -100,7 +105,7 @@ fn a_view_over_a_local_reads_back_a_leaf_on_its_let() {
     );
     loaded(&source, |program| {
         let f = body(program, program.shape(), "f");
-        let tree = statement_tree(f, 1);
+        let tree = statement_tree(program, f, 1);
         assert_eq!(leaf_binder(program, tree, f), ("local".to_string(), true));
     });
 }
@@ -111,7 +116,7 @@ fn a_view_over_an_expression_no_binder_names_reads_back_unnamed() {
         format!("{COUNTER}LET f = (FN :{{g :(FN :{{}} -> Any)}} -> Any = #((g {{}}) :| Counter))");
     loaded(&source, |program| {
         let f = body(program, program.shape(), "f");
-        let tree = statement_tree(f, 0);
+        let tree = statement_tree(program, f, 0);
         assert!(matches!(tree, Tree::Leaf(Leaf::Unnamed(_))), "{tree:?}");
         assert!(!tree.same_as(&tree), "an unnamed leaf is unlike itself");
     });
@@ -180,8 +185,8 @@ fn ran<R>(
 /// The digest the load computes for the opaque view `LET name = (<operand> :| <Sig>)` builds.
 fn view_digest(program: &Program<'_>, name: &str) -> String {
     let shape = program.shape();
-    let tree = shape
-        .view_tree(Site::of_node(let_node(program, shape, name)))
+    let tree = (program.facts())
+        .view_tree(shape, Site::of_node(let_node(program, shape, name)))
         .expect("the right-hand side is an opaque ascription");
     let digest = tree.digest().unwrap_or_else(|| panic!("closed: {tree:?}"));
     format!("{digest:?}")
@@ -382,4 +387,107 @@ fn a_closure_retyped_at_a_parameter_is_closed_at_the_run_s_digest() {
         "the closure's own type is known, so its retype is exact"
     );
     assert_eq!(digest, digest_back(&mut substrate, "v"));
+}
+
+/// Signatures nested `n` deep: `Sig0` innermost, declaring a type member, and each other's `a` the
+/// next one in.
+pub(super) fn nested_signatures(n: usize) -> String {
+    let mut source = String::from("SIG Sig0 FOR ALL #[Elem] = #[(VAL zero :Elem)]\n");
+    for at in 1..=n {
+        source += &format!("SIG Sig{at} = #[(VAL a :Sig{})]\n", at - 1);
+    }
+    source
+}
+
+/// A type path read through a parameter extends the parameter's leaf by prefixes of the path's own
+/// chain, laying no label of its own.
+#[test]
+fn a_path_through_a_parameter_lays_its_chain_once() {
+    let program = |n: usize| {
+        let path = "a.".repeat(n);
+        let signatures = nested_signatures(n);
+        format!("{signatures}LET f = (FN :{{p :Sig{n}}} -> Any = #(LET x :(p.{path}Elem) = 1))\n")
+    };
+    assert_linear("chain labels", |n| load_counts(&program(n)).chain_labels);
+}
+
+/// A call unfolding a callee whose summary reads `n` steps through its parameter reads its
+/// argument's leaf through them once, laying one chain joining the leaf's to them.
+#[test]
+fn a_substituted_leaf_lays_its_chain_once() {
+    let callee = |n: usize| {
+        let path = ".a".repeat(n);
+        let signatures = nested_signatures(n);
+        format!("{signatures}LET g = (FN :{{p :Sig{n}}} -> Any = #(p{path}))\n")
+    };
+    // The call's own labels, past the callee's: its written `r.b` and the chain joined to it.
+    assert_linear("chain labels", |n| {
+        let call = format!(
+            "{}SIG Wrap = #[(VAL b :Sig{n})]\n\
+             LET f = (FN :{{r :Wrap}} -> Any = #(g {{p = r.b}}))\n",
+            callee(n)
+        );
+        load_counts(&call).chain_labels - load_counts(&callee(n)).chain_labels
+    });
+}
+
+/// A module binder read from `n` sites has its tree built once: its body's captures are laid once,
+/// however many sites read it.
+#[test]
+fn a_module_binder_read_from_many_sites_lays_its_captures_once() {
+    let program = |n: usize| {
+        let mut source = String::from(
+            "SIG Plain = #[(VAL zero :Number)]\n\
+             LET base = 1\n\
+             MODULE m = ((LET zero = base) (LET one = 1))\n",
+        );
+        for at in 0..n {
+            source += &format!("LET v{at} = (m :| Plain)\n");
+        }
+        source
+    };
+    let slices = |n: usize| load_counts(&program(n)).capture_slices;
+    assert_eq!(slices(8), slices(16), "capture slices laid");
+}
+
+/// Two bodies of one content share a print, and so the fit of a view over either: each view's
+/// tree is still over its own body.
+#[test]
+fn views_of_two_bodies_alike_are_each_over_their_own() {
+    let source = "SIG Plain = #[(VAL zero :Number)]\n\
+                  MODULE a = (LET zero = 0)\n\
+                  MODULE b = (LET zero = 0)\n\
+                  LET va = (a :| Plain)\n\
+                  LET vb = (b :| Plain)\n";
+    loaded(source, |program| {
+        let shape = program.shape();
+        let (Tree::Body { body: a, .. }, Tree::Body { body: b, .. }) = (
+            let_tree(program, shape, "va"),
+            let_tree(program, shape, "vb"),
+        ) else {
+            panic!("each view is over a body");
+        };
+        let print = |name| let_tree(program, shape, name).print();
+        assert_eq!(print("va"), print("vb"), "the two bodies are one content");
+        assert_ne!(a, b, "each view is over its own body");
+    });
+}
+
+/// A module binder read through its enclosing module's tree from `n` sites has its tree built
+/// once: its body's captures are laid once, however many sites read it.
+#[test]
+fn a_module_read_through_a_module_from_many_sites_lays_its_captures_once() {
+    let program = |n: usize| {
+        let mut source = String::from(
+            "SIG Plain = #[(VAL zero :Number)]\n\
+             LET base = 1\n\
+             MODULE m = ((LET zero = 0) (MODULE inner = ((LET zero = base) (LET one = 1))))\n",
+        );
+        for at in 0..n {
+            source += &format!("LET v{at} = (m.inner :| Plain)\n");
+        }
+        source
+    };
+    let slices = |n: usize| load_counts(&program(n)).capture_slices;
+    assert_eq!(slices(8), slices(16), "capture slices laid");
 }

@@ -10,10 +10,11 @@
 use crate::knot::{KActivationView, KValue, KnottedFamily};
 use crate::memory::{CrossedOperand, DropFree, Header, Writer, collect, covariant, reattachable};
 use crate::scheduler::{Born, StepBundle};
+use crate::scope::RegionHeader;
 use crate::scope::{BodyShape, Site};
 use crate::symbols::Symbol;
-use crate::type_lattice::{DeclaredType, Halves, KType, Root};
-use crate::values::{BuildRef, ContentDigest, Half, TypeHeader, Types, copy_severed};
+use crate::type_lattice::{DeclaredType, Halves, KType};
+use crate::values::{BuildRef, ContentDigest, Half, TypeTiers, copy_severed};
 
 use super::body::Runner;
 use super::record::{CallKind, Contract, Evaluated, Program};
@@ -83,8 +84,9 @@ pub enum KBirth<'graph, 'cell> {
 }
 
 /// What a body runs within, handed to every evaluation and block it asks for: whether it runs in
-/// the own body of a routing caching frame, whose reading chain it then interns through, and the
-/// build cell its frame runs under, which a callable born in it is born under.
+/// the own body of a routing caching frame, whose caching chain it then interns through and whose
+/// invariant sites it adopts into the agent tier under a specialization, and the build cell its
+/// frame runs under, which a callable born in it is born under.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Within {
     pub routes: bool,
@@ -213,20 +215,25 @@ impl<'graph> StepBundle<'graph> for KBundle {
     /// is rebuilt, each type its values carry adopted from the home's branch.
     fn cross<'cell>(
         writer: Writer<'cell, '_>,
-        header: Header<'graph, 'cell, '_, TypeHeader>,
-        view: &CrossedOperand<'graph, 'cell, '_, KBirthFamily, TypeHeader>,
+        header: Header<'graph, 'cell, '_, RegionHeader>,
+        view: &CrossedOperand<'graph, 'cell, '_, KBirthFamily, RegionHeader>,
         born: Born,
-        type_root: &'graph Root<'graph>,
+        tiers: TypeTiers<'graph>,
     ) -> KBirth<'graph, 'cell>
     where
         'graph: 'cell,
     {
         match view {
             CrossedOperand::Pinned { view, home, .. } => {
-                let types = Types::new(type_root, Halves::alone(Half::of(writer, header)));
-                home.read(|header, _| match born {
-                    Born::Child => types.link(header.into_value().branch()),
-                    Born::Hop | Born::Left => types.link_or_merge(header.into_value().branch()),
+                let types = tiers.chain(Halves::alone(Half::of(writer, header)));
+                home.read(|header, _| {
+                    let Some(branch) = header.into_value().branch() else {
+                        return;
+                    };
+                    match born {
+                        Born::Child => types.link(branch),
+                        Born::Hop | Born::Left => types.link_or_merge(branch),
+                    }
                 });
                 #[cfg(debug_assertions)]
                 view.values(&mut |value| {
@@ -247,8 +254,8 @@ impl<'graph> StepBundle<'graph> for KBundle {
                     handed,
                     owed,
                 } => {
-                    let types = Types::new(type_root, Halves::alone(Half::of(writer, header)));
-                    let [callee, arguments] = copy_severed::<_, KnottedFamily, 2>(
+                    let types = tiers.chain(Halves::alone(Half::of(writer, header)));
+                    let [callee, arguments] = copy_severed::<_, KnottedFamily, _, 2>(
                         writer,
                         &types,
                         view,
@@ -270,8 +277,8 @@ impl<'graph> StepBundle<'graph> for KBundle {
                     offered,
                     contract,
                 } => {
-                    let types = Types::new(type_root, Halves::alone(Half::of(writer, header)));
-                    let [code, offered] = copy_severed::<_, KnottedFamily, 2>(
+                    let types = tiers.chain(Halves::alone(Half::of(writer, header)));
+                    let [code, offered] = copy_severed::<_, KnottedFamily, _, 2>(
                         writer,
                         &types,
                         view,

@@ -17,7 +17,10 @@ use crate::memory::{BumpAllocator, BumpVec};
 use crate::parse::{BuiltinShapeId, KEYWORDS};
 use crate::parse::{ExpressionPart, KExpression};
 use crate::parse::{SlotLabel, needed_entry, needing, quantifier_entries};
-use crate::scope::{Coordinate, Elaboration, Site, Slot, Target, pair_label};
+use crate::scope::{
+    Coordinate, Elaboration, PathSpelling, Site, Slot, SpelledRoot, Target, pair_label,
+    path_spelling,
+};
 use crate::symbols::{BinderSymbol, KeywordSymbol, StaticName, Symbol, TypeSymbol};
 use crate::type_lattice::{
     DeclaredType, DispatchTokenElement, GroupIntern, KType, NodeSchema, Parametric, SigOrigin,
@@ -52,7 +55,7 @@ static CONNECTORS: Connectors = Connectors {
 pub fn type_expression<'graph, R: Reads<'graph> + ?Sized>(
     part: &ExpressionPart<'graph>,
     reader: &R,
-    types: &Chain<'_, '_, '_, '_, '_>,
+    types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
 ) -> Result<Parametric, Elaboration> {
     let groups = Groups {
@@ -133,9 +136,9 @@ pub(super) struct Fellow<'f> {
 }
 
 /// What elaborating one expression reads through.
-pub(super) struct Elaborator<'e, 'g, 'run, 'p, 'x, 'reg, R: ?Sized> {
+pub(super) struct Elaborator<'e, 'run, 'p, 'x, 'reg, R: ?Sized> {
     pub(super) reader: &'e R,
-    pub(super) types: &'e Chain<'g, 'run, 'p, 'reg, 'e>,
+    pub(super) types: &'e Chain<'run, 'p, 'reg, 'e>,
     pub(super) scratch: BumpAllocator<'x>,
     /// Fellow members of the component being declared, each at the relative handle it is named by
     /// until the group seals: a member's own sibling, or a `UNION` binder's union of its variants'
@@ -151,7 +154,7 @@ pub(super) struct Elaborator<'e, 'g, 'run, 'p, 'x, 'reg, R: ?Sized> {
     pub(super) binder: Cell<bool>,
 }
 
-impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, '_, '_, 'x, '_, R> {
+impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, '_, 'x, '_, R> {
     /// `part` as a type. A quantified callable's type is refused here: it is written only as the
     /// whole type of a signature member, which [`part_declared`](Self::part_declared) reads.
     pub(super) fn part(
@@ -249,54 +252,32 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, '_, '_, 'x, '_, R
         }
     }
 
-    /// `owner.label` at `site`, where `owner` is a value name holding a module, a chain of value
-    /// members rooted at one, or such a chain rooted at an expression written in place — a
-    /// **path** — and `label` a type name: the module's type member, as the reader reads the path.
-    /// `None` where `owner` names no module, which leaves the projection to a type's own members.
-    fn module_member(
+    /// The member read `node`, at `site`, where it is a **path** by its tokens ([`path_spelling`]):
+    /// a type member read through a value name holding a module, a chain of value members rooted at
+    /// one, or such a chain rooted at an expression written in place — as the reader reads the path.
+    /// `None` where `node` is no path, or its root name has no mention, which leaves the projection
+    /// to a type's own members.
+    pub(super) fn module_member(
         &self,
         site: Site,
-        owner: &ExpressionPart<'graph>,
-        label: &ExpressionPart<'graph>,
+        node: &KExpression<'graph>,
     ) -> Option<Result<Parametric, Elaboration>> {
-        let ExpressionPart::Type(name) = label else {
-            return None;
-        };
-        let mut chain = BumpVec::new_in(self.scratch);
-        let mut root = owner;
-        while let ExpressionPart::Expression(node) = root {
-            let node = node.reference();
-            match (node.cache().builtin_shape(), node.parts) {
-                (Some(form), [_, inner, step]) if form.id == BuiltinShapeId::Attribute => {
-                    let ExpressionPart::Identifier(step) = step.value else {
-                        return None;
-                    };
-                    chain.push(step);
-                    root = &inner.value;
-                }
-                (None, [only]) => root = &only.value,
-                // A path's root written in place: a call, say, whose module the path reads.
-                _ => {
-                    chain.reverse();
-                    let read = self
-                        .reader
-                        .inline_member(site, Site::of(root), &chain, *name);
-                    return Some(path_type(site, *name, read, KType::EMPTY_SIGNATURE));
-                }
+        let PathSpelling { root, chain, label } = path_spelling(node, self.scratch)?;
+        match root {
+            SpelledRoot::Inline(root) => {
+                let read = self
+                    .reader
+                    .inline_member(site, Site::of(root), &chain, label);
+                Some(path_type(site, label, read, KType::EMPTY_SIGNATURE))
+            }
+            SpelledRoot::Name(root) => {
+                let mention = self.reader.shape().mention(Site::of(root))?;
+                let (read, owner) =
+                    self.reader
+                        .member_type(mention.coordinate, site, &chain, label, self.types)?;
+                Some(path_type(site, label, read, owner))
             }
         }
-        let ExpressionPart::Identifier(_) = root else {
-            return None;
-        };
-        chain.reverse();
-        let mention = self.reader.shape().mention(Site::of(root))?;
-        if self.reader.type_at(mention.coordinate) != TypeAt::NotAType {
-            return None;
-        }
-        let (read, owner) =
-            self.reader
-                .member_type(mention.coordinate, site, &chain, *name, self.types)?;
-        Some(path_type(site, *name, read, owner))
     }
 
     /// `operands` elaborated, and refused `Unknown` at `site` when one read a lexical variable: the
@@ -395,7 +376,7 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, '_, '_, 'x, '_, R
                     self.shape(&group, part(4), part(6), groups)
                 }
                 BuiltinShapeId::Attribute => {
-                    if let Some(member) = self.module_member(site, part(1), part(2)) {
+                    if let Some(member) = self.module_member(site, node) {
                         return member.map(DeclaredType::Type);
                     }
                     let owner = self.closed_operands(site, || self.part(part(1), groups))?;
@@ -891,7 +872,7 @@ pub(super) fn walk_head<'p, 'graph, E>(
 /// `owner` or it declares no `name`; a ring of newtypes with no record under it, `NEWTYPE Loop =
 /// Loop`, is peeled once round and then refused.
 pub fn declared_field(
-    types: &Chain<'_, '_, '_, '_, '_>,
+    types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
     owner: KType,
     name: Symbol,

@@ -10,7 +10,7 @@ use crate::values::Chain;
 use super::super::builtin_shape_types;
 
 /// The bucket key an interned handle's elements spell.
-fn erasure(types: &Chain<'_, '_, '_, '_, '_>, handle: KType) -> Vec<KeyElement> {
+fn erasure(types: &Chain<'_, '_, '_, '_>, handle: KType) -> Vec<KeyElement> {
     let TypeNode::ExpressionShape { elements, .. } = types.node(handle) else {
         panic!("the door interns an expression shape");
     };

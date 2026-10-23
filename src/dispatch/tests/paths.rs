@@ -6,7 +6,7 @@ use proptest::prelude::*;
 
 use crate::scope::{Leaf, Resolved, Tree};
 
-use super::super::statics::unnarrowed;
+use super::super::walk::unnarrowed;
 use super::run;
 use super::statics::{body, interval, let_narrowing, loaded, narrowing};
 
@@ -209,6 +209,30 @@ fn a_type_through_an_inline_call_over_a_leaf_refuses_the_load() {
     );
 }
 
+/// An inline path the elaborator never reaches, after a meet it leaves unknown over a `FOR ALL`
+/// name, refuses the load as one it reaches does.
+#[test]
+fn a_type_through_an_inline_call_after_an_unknown_refuses_the_load() {
+    assert_eq!(
+        run(&format!(
+            "{ORDERED}EXPR FOR ALL #[Elt] #(USE p :Ordered AND e :Elt) -> Any = \
+             #(LET t = :{{a :(Elt & Number) b :((PICK p).Set)}})"
+        )),
+        "load: <test>:20:93: this type reads a member of a module built by a call written in \
+         place, and a call in a type is never made; bind the call with `LET` to name its type"
+    );
+}
+
+/// A quote's code that leaves a path's root name open reads the path as a path, left for the code's
+/// `EVAL` to read through what it is run with.
+#[test]
+fn a_path_through_a_name_a_quote_leaves_open_is_left_for_its_eval() {
+    assert_eq!(
+        run("LET q = #(LET y :(m.Carrier) = 1)\nPRINT \"loaded\""),
+        "loaded"
+    );
+}
+
 /// Once the load ends, each path over a tree with a leaf reads back that tree: through a parameter,
 /// a leaf on it; through a call that unfolds, the view it builds over the leaf it binds.
 /// `SIG Mapper`, whose `apply` is quantified over its own `Elt` and the signature's `Carrier`,
@@ -274,8 +298,10 @@ fn each_open_path_reads_back_its_tree() {
          LET one = (asc :| Ordered)\nLET a = (BUILD one)\nLET z = a.zero"
     );
     loaded(&source, |program| {
-        let mut trees = program.shape().paths().iter().filter_map(|entry| {
-            let resolution = entry.resolution().expect("the load resolves every path");
+        let (root, facts) = (program.shape(), program.facts());
+        let levels = 0..program.shapes().path_base(root.segment()) + 64;
+        let mut trees = levels.filter_map(|level| {
+            let (entry, resolution) = facts.path(root, level)?;
             match resolution.resolved {
                 Resolved::Class(_) => Some((entry.label, resolution.tree)),
                 Resolved::Closed(_) => None,
@@ -288,7 +314,8 @@ fn each_open_path_reads_back_its_tree() {
             panic!("a leaf on `p`: {tree:?}");
         };
         assert!(chain.is_empty());
-        assert_eq!(label(binder.shape.slot_name(binder.slot).symbol()), "p");
+        let declaring = program.shapes().shape_at(binder.body);
+        assert_eq!(label(declaring.slot_name(binder.slot).symbol()), "p");
         let (carrier, tree) = trees.next().expect("`a`'s `Carrier` is open");
         assert_eq!(label(carrier.symbol()), "Carrier");
         let Tree::View { source, .. } = tree else {

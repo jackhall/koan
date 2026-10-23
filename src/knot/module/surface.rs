@@ -42,7 +42,7 @@ pub fn surface<'graph, 'cell>(
     writer: Writer<'cell, '_>,
     module: KValue<'graph, 'cell>,
     block: &KActivation<'graph, 'cell>,
-    types: &Chain<'_, '_, 'cell, '_, '_>,
+    types: &Chain<'_, 'cell, '_, '_>,
     scratch: BumpAllocator<'_>,
 ) -> Result<(), Unsurfaceable> {
     debug_assert_eq!(block.shape().kind(), ShapeKind::Block);

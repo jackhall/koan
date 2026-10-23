@@ -19,13 +19,17 @@
 //! - [`HomeHeader`], an operand's home header at the operand's brand, which a build reads through
 //!   a closure and never writes. The graph resolves it from a region the operand's reach names;
 //!   [`StepContext::alloc_into`](crate::StepContext::alloc_into) documents the rule.
+//!
+//! A [`Header`] door may also be narrowed to a [`Projected`] one: the same slot at the same
+//! brands, its family erased behind a part of the header that the family names ([`Projects`]).
+//! Code that cannot name the family reads, and lays, the header through that part alone.
 
 use std::cell::Cell;
 use std::marker::PhantomData;
 
 use crate::carrier::Active;
 use crate::reattach::{Erased, Reattachable};
-use crate::region::DoorBrands;
+use crate::region::{DoorBrands, Writer};
 
 /// The habitat header family: a reattachable family whose erased form is `Copy`, kept one per
 /// habitat half and handed back at that half's brand. Implemented for every such family, so an
@@ -170,6 +174,104 @@ where
             self.slot.set(Some(Erased::erase(lay())));
         }
         self.get().expect("a header was just laid")
+    }
+}
+
+impl<'graph, 'cell, 'door, H: Projects<'graph>> Header<'graph, 'cell, 'door, H>
+where
+    'graph: 'cell,
+{
+    /// This door narrowed to the part of the header its family projects to, the family erased.
+    pub fn project(self) -> Projected<'cell, 'door, ProjectionAt<'graph, 'cell, H>> {
+        Projected {
+            slot: self.slot,
+            _brand: PhantomData,
+        }
+    }
+}
+
+/// A header family that lays its own empty header and projects one part of it: what a
+/// [`Projected`] door reads a header through.
+pub trait Projects<'graph>: HabitatHeader<'graph> {
+    /// The family of the part of the header a projected door hands out. A family rather than a
+    /// form, so a caller generic over a brand names the projection with no higher-ranked bound.
+    type Projection: Reattachable<'graph>;
+
+    /// A header with nothing set, laid through `writer`.
+    fn lay<'cell>(writer: Writer<'cell, '_>) -> Self::At<'cell>
+    where
+        'graph: 'cell;
+
+    /// The part of `header` a projected door hands out.
+    fn project<'cell>(header: Self::At<'cell>) -> ProjectionAt<'graph, 'cell, Self>
+    where
+        'graph: 'cell;
+}
+
+/// A header family's projection at one brand.
+pub type ProjectionAt<'graph, 'cell, H> =
+    <<H as Projects<'graph>>::Projection as Reattachable<'graph>>::At<'cell>;
+
+/// A header slot read through its family's projection, the family erased. Crate-private, so the
+/// only slot it is reached on is one a [`Header`] door was minted over. `'cell` is a parameter of
+/// the trait, so a `dyn` of it is invariant in the brand.
+pub(crate) trait ProjectedSlot<'cell, P> {
+    fn get(&'cell self) -> Option<P>;
+    fn get_or_lay(&'cell self, writer: Writer<'cell, '_>) -> P;
+}
+
+impl<'graph: 'cell, 'cell, H: Projects<'graph>> ProjectedSlot<'cell, ProjectionAt<'graph, 'cell, H>>
+    for HeaderSlot<'graph, H>
+{
+    // Each read goes through a `Header` door over the same slot at the same brand, so `get`'s
+    // safety argument covers it unchanged. No local holds an `H::At<'cell>` (see `get_or_lay`).
+    fn get(&'cell self) -> Option<ProjectionAt<'graph, 'cell, H>> {
+        Header::<'graph, 'cell, 'cell, H>::new(self)
+            .get()
+            .map(H::project)
+    }
+
+    fn get_or_lay(&'cell self, writer: Writer<'cell, '_>) -> ProjectionAt<'graph, 'cell, H> {
+        H::project(Header::<'graph, 'cell, 'cell, H>::new(self).get_or_lay(|| H::lay(writer)))
+    }
+}
+
+/// A [`Header`] door narrowed to its family's projection `P`: the same slot at the same brands,
+/// naming no family. Minted only by [`Header::project`]. Invariant in `'cell`, like the door it
+/// came from, so a projected door cannot be read back at a shorter brand:
+///
+/// ```compile_fail
+/// # use std::cell::Cell;
+/// # use cellgraph::Projected;
+/// fn shorten<'long: 'short, 'short, 'door>(
+///     door: Projected<'long, 'door, &'long Cell<u32>>,
+/// ) -> Projected<'short, 'door, &'short Cell<u32>> {
+///     door
+/// }
+/// ```
+pub struct Projected<'cell, 'door, P> {
+    slot: &'cell dyn ProjectedSlot<'cell, P>,
+    _brand: DoorBrands<'cell, 'door>,
+}
+
+impl<'cell, 'door, P> Clone for Projected<'cell, 'door, P> {
+    fn clone(&self) -> Self {
+        *self
+    }
+}
+
+impl<'cell, 'door, P> Copy for Projected<'cell, 'door, P> {}
+
+impl<'cell, 'door, P> Projected<'cell, 'door, P> {
+    /// The projected part of the half's header, or `None` while nothing has laid one.
+    pub fn get(self) -> Option<P> {
+        self.slot.get()
+    }
+
+    /// The projected part of the half's header, laying an empty header through `writer` where
+    /// none is.
+    pub fn get_or_lay(self, writer: Writer<'cell, 'door>) -> P {
+        self.slot.get_or_lay(writer)
     }
 }
 

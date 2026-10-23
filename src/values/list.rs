@@ -40,7 +40,7 @@ impl<'cell, X: Knotted> List<'cell, X> {
     pub fn new(
         writer: Writer<'cell, '_>,
         items: impl ExactSizeIterator<Item = Value<'cell, X>>,
-        types: &Chain<'_, '_, 'cell, '_, '_>,
+        types: &Chain<'_, 'cell, '_, '_>,
         scratch: BumpAllocator<'_>,
     ) -> &'cell List<'cell, X> {
         let cells = filled(writer, items);
@@ -55,7 +55,7 @@ impl<'cell, X: Knotted> List<'cell, X> {
     pub fn of_candidates(
         writer: Writer<'cell, '_>,
         functions: impl ExactSizeIterator<Item = Value<'cell, X>>,
-        types: &Chain<'_, '_, 'cell, '_, '_>,
+        types: &Chain<'_, 'cell, '_, '_>,
     ) -> &'cell List<'cell, X> {
         Self::typed(writer, functions, KType::LIST_OF_ANY, types)
     }
@@ -66,7 +66,7 @@ impl<'cell, X: Knotted> List<'cell, X> {
         writer: Writer<'cell, '_>,
         items: impl ExactSizeIterator<Item = Value<'cell, X>>,
         ktype: KType,
-        types: &Chain<'_, '_, 'cell, '_, '_>,
+        types: &Chain<'_, 'cell, '_, '_>,
     ) -> &'cell List<'cell, X> {
         Self::weighed(writer, filled(writer, items), ktype, types)
     }
@@ -77,7 +77,7 @@ impl<'cell, X: Knotted> List<'cell, X> {
         writer: Writer<'cell, '_>,
         cells: &'cell [Value<'cell, X>],
         ktype: KType,
-        types: &Chain<'_, '_, 'cell, '_, '_>,
+        types: &Chain<'_, 'cell, '_, '_>,
     ) -> &'cell Self {
         let weight = cells.iter().fold(Weight::flat::<Self>(), |weight, cell| {
             weight.plus(cell.weight())
@@ -133,7 +133,7 @@ impl<'cell, X: Copy, C: Copy> List<'cell, X, C> {
         &self,
         writer: Writer<'cell, '_>,
         ktype: KType,
-        types: &Chain<'_, '_, 'cell, '_, '_>,
+        types: &Chain<'_, 'cell, '_, '_>,
     ) -> &'cell Self {
         let weight = self.weight.get();
         let weight = weight.with_bits(restamp_bits(weight.bits(), types, ktype));

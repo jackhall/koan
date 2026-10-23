@@ -30,11 +30,12 @@ use crate::memory::{
 };
 use crate::parse::{BodyKind, Role};
 use crate::parse::{ExpressionPart, KExpression, parse};
-use crate::scope::{BodyShape, Builtins, Component, Slot};
+use crate::scope::{BodyShape, Builtins, Component, LoadFacts, Position, Slot};
 use crate::symbols::{BinderSymbol, SymbolInterner, TypeSymbol, ValueSymbol};
 use crate::type_lattice::KType;
+use crate::values::tests::TestHeader;
 use crate::values::tests::TestTypes;
-use crate::values::{Chain, Circular, Knotted as _, Link, TypeHeader, TypeValue, Types, Value};
+use crate::values::{Chain, Circular, Knotted as _, Link, TypeValue, Types, Value};
 
 use super::module::body_activation;
 use super::{KActivation, KValue, Knotted, Supplied, quote, tie};
@@ -44,16 +45,16 @@ pub(crate) struct Step;
 reattachable!(Step => ());
 
 /// A graph whose cells only store, keeping a type branch per habitat half.
-pub(crate) type TestGraph<'graph> = CellGraph<'graph, Step, NoScratch, NoDelivery, TypeHeader>;
+pub(crate) type TestGraph<'graph> = CellGraph<'graph, Step, NoScratch, NoDelivery, TestHeader>;
 
 /// A step context over [`TestGraph`].
 pub(crate) type TestContext<'graph, 'step, 'here, 'scratch, 'lent> =
-    StepContext<'graph, 'step, 'here, 'scratch, 'lent, Step, NoScratch, NoDelivery, TypeHeader>;
+    StepContext<'graph, 'step, 'here, 'scratch, 'lent, Step, NoScratch, NoDelivery, TestHeader>;
 
 pub(crate) struct Fixture<'f, 'graph> {
     pub program: ProgramBrand<'graph>,
     /// The load's chain, which a test's load-time work and every shape go through.
-    pub types: &'f Types<'graph, 'graph, 'f>,
+    pub types: &'f Types<'graph, 'f>,
     /// The tiers every cell's chain is built over.
     pub tiers: &'f TestTypes<'graph>,
     pub symbols: &'f SymbolInterner,
@@ -64,10 +65,11 @@ pub(crate) struct Fixture<'f, 'graph> {
 }
 
 /// A program the load shaped: its parsed lines, and the shape [`Fixture::parse`] built over them
-/// before any cell ran. Reads as its lines.
+/// before any cell ran, beside the facts its activations read. Reads as its lines.
 pub(crate) struct Parsed<'graph> {
     lines: Vec<KExpression<'graph>>,
     pub shape: &'graph BodyShape<'graph>,
+    pub load: &'graph LoadFacts<'graph>,
 }
 
 impl<'graph> std::ops::Deref for Parsed<'graph> {
@@ -111,7 +113,7 @@ impl<'graph> Fixture<'_, 'graph> {
     pub fn parse(&self, source: &str) -> Parsed<'graph> {
         let lines = parse(self.program, self.symbols, source)
             .unwrap_or_else(|error| panic!("`{source}` parses: {error:?}"));
-        let shape = BodyShape::of_program(
+        let shapes = crate::scope::Shapes::of_program(
             self.program,
             &lines,
             self.loaded,
@@ -125,7 +127,13 @@ impl<'graph> Fixture<'_, 'graph> {
                 error.display(self.symbols, self.types)
             )
         });
-        Parsed { lines, shape }
+        let writer = self.program.writer();
+        let load = resident(writer, LoadFacts::unwalked(writer, shapes));
+        Parsed {
+            lines,
+            shape: shapes.root(),
+            load,
+        }
     }
 
     /// Run `step` in one cell of a graph built under `verdict`.
@@ -160,11 +168,11 @@ impl<'graph> Fixture<'_, 'graph> {
     pub fn run<'cell>(
         &self,
         writer: Writer<'cell, '_>,
-        types: &Chain<'graph, 'cell, 'cell, '_, '_>,
+        types: &Chain<'cell, 'cell, '_, '_>,
         parsed: &Parsed<'graph>,
         leave: &[&str],
     ) -> &'cell KActivation<'graph, 'cell> {
-        self.activated(writer, types, parsed.shape, self.loaded, leave)
+        self.activated(writer, types, parsed, self.loaded, leave)
     }
 
     /// `shape` activated in `writer`'s region over `builtins`, every component brought in through
@@ -172,17 +180,21 @@ impl<'graph> Fixture<'_, 'graph> {
     fn activated<'cell>(
         &self,
         writer: Writer<'cell, '_>,
-        types: &Chain<'graph, 'cell, 'cell, '_, '_>,
-        shape: &'graph BodyShape<'graph>,
+        types: &Chain<'cell, 'cell, '_, '_>,
+        parsed: &Parsed<'graph>,
         builtins: &'cell Builtins<'cell, Knotted<'graph, 'cell>>,
         leave: &[&str],
     ) -> &'cell KActivation<'graph, 'cell> {
-        let activation = resident(writer, KActivation::of_program(writer, shape, builtins));
+        let shape = parsed.shape;
+        let activation = resident(
+            writer,
+            KActivation::of_program(writer, shape, parsed.load, builtins),
+        );
         let left: Vec<BinderSymbol> = leave.iter().map(|name| self.name(name)).collect();
         // A reader takes a body's statements from its shape, never from the parse: the shape owns
         // them rewritten, and every site it records is an address inside them.
         let statements: Vec<&KExpression<'graph>> = shape.body().iter().collect();
-        for component in shape.components() {
+        for component in in_unit_order(shape) {
             let names = component.members.iter().map(|slot| shape.slot_name(*slot));
             if names.clone().any(|name| left.contains(&name)) {
                 continue;
@@ -200,7 +212,7 @@ impl<'graph> Fixture<'_, 'graph> {
     fn bring_in<'cell>(
         &self,
         writer: Writer<'cell, '_>,
-        types: &Chain<'graph, 'cell, 'cell, '_, '_>,
+        types: &Chain<'cell, 'cell, '_, '_>,
         activation: &KActivation<'graph, 'cell>,
         statements: &[&KExpression<'graph>],
         component: &Component<'graph>,
@@ -278,7 +290,7 @@ impl<'graph> Fixture<'_, 'graph> {
     fn bring_module<'cell>(
         &self,
         writer: Writer<'cell, '_>,
-        types: &Chain<'graph, 'cell, 'cell, '_, '_>,
+        types: &Chain<'cell, 'cell, '_, '_>,
         activation: &KActivation<'graph, 'cell>,
         statements: &[&KExpression<'graph>],
         component: &Component<'graph>,
@@ -295,7 +307,7 @@ impl<'graph> Fixture<'_, 'graph> {
             writer,
             body_activation(writer, activation, slot, self.scratch),
         );
-        for inner_component in body.shape().components() {
+        for inner_component in in_unit_order(body.shape()) {
             self.bring_in(writer, types, body, &inner, inner_component);
         }
         let knot = tie(
@@ -327,7 +339,7 @@ impl<'graph> Fixture<'_, 'graph> {
 /// `ZZ _ _`, laid down in `writer`'s region, typed through `types`.
 fn builtin_table<'graph, 'cell>(
     writer: Writer<'cell, '_>,
-    types: &Chain<'graph, 'cell, 'cell, '_, '_>,
+    types: &Chain<'cell, 'cell, '_, '_>,
     symbols: &SymbolInterner,
     scratch: BumpAllocator<'_>,
 ) -> &'cell Builtins<'cell, Knotted<'graph, 'cell>> {
@@ -492,4 +504,19 @@ pub(crate) fn follow<'graph, 'cell>(
         Link::Edge(edge) => holder.sibling(edge),
         Link::Value(_) => panic!("an edge"),
     }
+}
+
+/// `shape`'s components in the order the run binds them: the entry's, all parameters, then each
+/// unit's in order — so a birth reads every type name bound before it.
+fn in_unit_order<'graph>(
+    shape: &'graph BodyShape<'graph>,
+) -> impl Iterator<Item = &'graph Component<'graph>> {
+    let entry = (shape.components().iter()).filter(move |component| {
+        (component.members.iter()).all(|slot| shape.position_of(*slot) == Position::PARAMETER)
+    });
+    let units = (shape.units().iter()).filter_map(|unit| match unit.work {
+        crate::scope::UnitWork::Component(index) => Some(&shape.components()[index.index()]),
+        crate::scope::UnitWork::Statement(_) => None,
+    });
+    entry.chain(units)
 }

@@ -133,6 +133,42 @@ fn a_closure_captures_a_type_only_where_a_call_in_it_contributes_it() {
     assert_eq!(run(&make("a", "Any")), "true");
 }
 
+/// A closure's layout carries every enclosing type name bound when its birth runs — `Elt` and
+/// `Key`, bound at `OUTER`'s entry, though `f` reads only `x` — and not `Later`, bound after it
+/// (ruling 37). Its content composes none of them: no call in it contributes one.
+#[test]
+fn a_closure_carries_every_enclosing_type_name_bound_at_its_birth() {
+    use crate::scope::{Coordinate, Target};
+    use crate::symbols::{BinderSymbol, TypeSymbol};
+    let source = "EXPR FOR ALL #[Elt Key] #(OUTER x :Elt AND k :Key) -> Any = #(\n  \
+                  LET f = (FN :{} -> Any = #(x))\n  \
+                  NEWTYPE Later = :{v :Elt}\n  \
+                  f\n)";
+    loaded(source, |program| {
+        let facts = program.facts();
+        let (_, outer) = (program.shape().nested_shapes().iter())
+            .find(|(_, nested)| nested.kind() == ShapeKind::Callable)
+            .expect("`OUTER`'s body");
+        let (_, f) = (outer.nested_shapes().iter())
+            .find(|(_, nested)| nested.kind() == ShapeKind::Callable)
+            .expect("`f`'s body");
+        let local = |name: &str| {
+            let name = TypeSymbol::declared(name, program.symbols()).expect("a Type token");
+            let (slot, _) = (outer.slot(BinderSymbol::Type(name))).expect("a type binder");
+            Coordinate::Activation {
+                hops: 0,
+                target: Target::Local(slot),
+            }
+        };
+        let mut carried = facts.type_captures(f).to_vec();
+        let mut expected = vec![local("Elt"), local("Key")];
+        carried.sort_by_key(|coordinate| format!("{coordinate:?}"));
+        expected.sort_by_key(|coordinate| format!("{coordinate:?}"));
+        assert_eq!(carried, expected);
+        assert!(facts.contract(f).iter().all(|composes| !composes));
+    });
+}
+
 /// `pair` is called by name; `USE` calls it over two parameters declared `Number | Str`.
 fn by_name(ret: &str, body: &str, call: &str) -> String {
     format!(

@@ -29,11 +29,13 @@ use super::{
 pub enum Resolved<'a, X> {
     /// A function, rendered as its type's name. It compares by `identity` — one per `FN`, `EXPR` or
     /// `OP` written, so a copy keeps it — by the solution an instance of a quantified function was
-    /// made at, empty for anything else, and by its closure bindings, read through the member.
+    /// made at, empty for anything else, and by the closure bindings its content composes, read
+    /// through the member: each slot `composes` marks, every one past its end.
     Function {
         identity: usize,
         instance: &'a [KType],
         closure: &'a [Link<'a, X>],
+        composes: &'a [bool],
     },
     /// A module: opaque to `values`, incomparable, rendered as its type's name.
     Module,
@@ -104,7 +106,7 @@ impl<'cell, X: Knotted> Circular<'cell, X> {
     /// knot [holds](super::Knotted::held) of this node.
     pub fn content_parts<'a>(
         holder: X,
-        types: &Chain<'_, '_, '_, '_, '_>,
+        types: &Chain<'_, '_, '_, '_>,
         scratch: BumpAllocator<'_>,
         out: &mut dyn FnMut(Seen<'a, X>),
     ) where
@@ -124,7 +126,7 @@ impl<'cell, X: Knotted> Circular<'cell, X> {
     /// `parts` answers in [`content_parts`](Self::content_parts)' order.
     pub fn content(
         holder: X,
-        types: &Chain<'_, '_, '_, '_, '_>,
+        types: &Chain<'_, '_, '_, '_>,
         scratch: BumpAllocator<'_>,
         parts: &mut dyn FnMut() -> ContentDigest,
     ) -> ContentDigest {
@@ -225,7 +227,7 @@ impl<'cell, X: Knotted> Circular<'cell, X> {
 /// `holder`'s data node opened through the door at its memo.
 fn opened<'x, 'a, X: Knotted + 'a>(
     holder: X,
-    types: &Chain<'_, '_, '_, '_, '_>,
+    types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'x>,
 ) -> Surface<'x, 'a, X> {
     Seen::of(Value::Knotted(holder))

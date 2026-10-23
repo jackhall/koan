@@ -31,7 +31,7 @@ impl<'cell, X: Knotted> Record<'cell, X> {
     pub fn new(
         writer: Writer<'cell, '_>,
         fields: &[(BinderSymbol, Value<'cell, X>)],
-        types: &Chain<'_, '_, 'cell, '_, '_>,
+        types: &Chain<'_, 'cell, '_, '_>,
         scratch: BumpAllocator<'_>,
     ) -> &'cell Record<'cell, X> {
         let ktype = record_type(
@@ -50,7 +50,7 @@ impl<'cell, X: Knotted> Record<'cell, X> {
         writer: Writer<'cell, '_>,
         fields: &[(BinderSymbol, Value<'cell, X>)],
         ktype: KType,
-        types: &Chain<'_, '_, 'cell, '_, '_>,
+        types: &Chain<'_, 'cell, '_, '_>,
         scratch: BumpAllocator<'_>,
     ) -> &'cell Record<'cell, X> {
         let order = symbol_order(fields, scratch);
@@ -66,7 +66,7 @@ impl<'cell, X: Knotted> Record<'cell, X> {
         names: &'cell [Symbol],
         cells: &'cell [Value<'cell, X>],
         ktype: KType,
-        types: &Chain<'_, '_, 'cell, '_, '_>,
+        types: &Chain<'_, 'cell, '_, '_>,
     ) -> &'cell Self {
         let weight = Weight::flat::<Self>().plus(Weight::run::<Symbol>(names.len()));
         let weight = cells
@@ -146,7 +146,7 @@ impl<'cell, X: Copy, C: Copy> Record<'cell, X, C> {
         &self,
         writer: Writer<'cell, '_>,
         ktype: KType,
-        types: &Chain<'_, '_, 'cell, '_, '_>,
+        types: &Chain<'_, 'cell, '_, '_>,
     ) -> &'cell Self {
         let weight = self.weight.get();
         let weight = weight.with_bits(restamp_bits(weight.bits(), types, ktype));

@@ -1,7 +1,8 @@
 //! The **activation**: one per call or block entry, laid down in the frame's region.
 //!
-//! Its read half, the [`ActivationView`], is four pointers — the shape in program storage, the
-//! callable's closure bindings, the builtin table, and the enclosing block's view — beside the
+//! Its read half, the [`ActivationView`], is five pointers — the shape and the load's facts in
+//! program storage, the callable's closure bindings, the builtin table, and the enclosing block's
+//! view — beside the
 //! callable the activation runs, a covariant view of one [`SlotArray`] over the shape's slots, and
 //! the digest memos of the slots the load marked digested
 //! ([`digest_memo`](ActivationView::digest_memo)): each empty until a `:|` or a call's hand-off
@@ -30,6 +31,7 @@ use crate::values::{ContentDigest, Knotted, KnottedFamily, Link, NoKnot, Value, 
 
 use super::builtins::Builtins;
 use super::closure::ClosureBindings;
+use super::records::LoadFacts;
 use super::shape::{BodyShape, Coordinate, ShapeKind, Slot, Target};
 
 /// The read half of one body's bindings for one call or one block entry: what an evaluation is
@@ -67,6 +69,8 @@ pub struct ActivationView<
     'graph: 'cell,
 {
     shape: &'graph BodyShape<'graph>,
+    /// What the load decided about every body, the shape's among them.
+    load: &'graph LoadFacts<'graph>,
     closure: &'cell ClosureBindings<'cell, X>,
     builtins: &'cell Builtins<'cell, X>,
     enclosing: Option<&'cell ActivationView<'graph, 'cell, XF, X>>,
@@ -76,8 +80,8 @@ pub struct ActivationView<
     /// its component, so it runs no member of its own.
     callable: Option<X>,
     slots: SlotView<'graph, 'cell, ValueFamily<XF>>,
-    /// One memo per slot the load marked digested, in the order of its
-    /// [`digested`](super::Statics::digested) slots.
+    /// One memo per slot the shape marks digested, in the order of its
+    /// digested slots ([`Shapes::digested_index`](super::Shapes::digested_index)).
     digests: &'cell [Cell<Option<ContentDigest>>],
 }
 
@@ -111,7 +115,7 @@ impl<'graph, XF: KnottedFamily<'graph>> Clone for Activation<'graph, '_, XF> {
 
 impl<'graph, XF: KnottedFamily<'graph>> Copy for Activation<'graph, '_, XF> {}
 
-const _: () = assert!(size_of::<Activation<'static, 'static>>() == 80);
+const _: () = assert!(size_of::<Activation<'static, 'static>>() == 88);
 const _: () = assert!(!std::mem::needs_drop::<Activation<'static, 'static>>());
 
 impl<'graph, 'cell, XF: KnottedFamily<'graph>> Deref for Activation<'graph, 'cell, XF> {
@@ -130,16 +134,18 @@ where
     fn laid_down(
         writer: Writer<'cell, '_>,
         shape: &'graph BodyShape<'graph>,
+        load: &'graph LoadFacts<'graph>,
         closure: &'cell ClosureBindings<'cell, XF::Closed<'cell>>,
         builtins: &'cell Builtins<'cell, XF::Closed<'cell>>,
         enclosing: Option<&'cell ActivationView<'graph, 'cell, XF>>,
         callable: Option<XF::Closed<'cell>>,
     ) -> Self {
         let slots = SlotArray::new(writer, shape.slots());
-        let digests = writer.fill(shape.digested_count(), |_| Cell::new(None));
+        let digests = writer.fill(load.digested_count(shape), |_| Cell::new(None));
         Activation {
             view: ActivationView {
                 shape,
+                load,
                 closure,
                 builtins,
                 enclosing,
@@ -155,12 +161,14 @@ where
     pub fn of_program(
         writer: Writer<'cell, '_>,
         shape: &'graph BodyShape<'graph>,
+        load: &'graph LoadFacts<'graph>,
         builtins: &'cell Builtins<'cell, XF::Closed<'cell>>,
     ) -> Self {
         debug_assert_eq!(shape.kind(), ShapeKind::Program);
         Self::laid_down(
             writer,
             shape,
+            load,
             ClosureBindings::empty(),
             builtins,
             None,
@@ -173,6 +181,7 @@ where
     pub fn of_callable(
         writer: Writer<'cell, '_>,
         shape: &'graph BodyShape<'graph>,
+        load: &'graph LoadFacts<'graph>,
         callable: XF::Closed<'cell>,
         closure: &'cell ClosureBindings<'cell, XF::Closed<'cell>>,
         builtins: &'cell Builtins<'cell, XF::Closed<'cell>>,
@@ -180,10 +189,10 @@ where
         debug_assert_eq!(shape.kind(), ShapeKind::Callable);
         debug_assert_eq!(
             closure.len(),
-            shape.capture_count(),
+            load.capture_count(shape),
             "the closure bindings follow the shape's capture layout",
         );
-        Self::laid_down(writer, shape, closure, builtins, None, Some(callable))
+        Self::laid_down(writer, shape, load, closure, builtins, None, Some(callable))
     }
 
     /// A fresh activation of the module shape `shape` over its closure bindings, every slot
@@ -192,16 +201,17 @@ where
     pub fn of_module(
         writer: Writer<'cell, '_>,
         shape: &'graph BodyShape<'graph>,
+        load: &'graph LoadFacts<'graph>,
         closure: &'cell ClosureBindings<'cell, XF::Closed<'cell>>,
         builtins: &'cell Builtins<'cell, XF::Closed<'cell>>,
     ) -> Self {
         debug_assert_eq!(shape.kind(), ShapeKind::Module);
         debug_assert_eq!(
             closure.len(),
-            shape.capture_count(),
+            load.capture_count(shape),
             "the closure bindings follow the shape's capture layout",
         );
-        Self::laid_down(writer, shape, closure, builtins, None, None)
+        Self::laid_down(writer, shape, load, closure, builtins, None, None)
     }
 
     /// A fresh activation of the code shape `shape` over its closure bindings — its `$` names, its
@@ -211,6 +221,7 @@ where
     pub fn of_code(
         writer: Writer<'cell, '_>,
         shape: &'graph BodyShape<'graph>,
+        load: &'graph LoadFacts<'graph>,
         closure: &'cell ClosureBindings<'cell, XF::Closed<'cell>>,
         builtins: &'cell Builtins<'cell, XF::Closed<'cell>>,
     ) -> Self {
@@ -220,7 +231,7 @@ where
             shape.captures().len(),
             "the closure bindings follow the shape's capture layout",
         );
-        Self::laid_down(writer, shape, closure, builtins, None, None)
+        Self::laid_down(writer, shape, load, closure, builtins, None, None)
     }
 
     /// A fresh activation of the block shape `shape` beside the resident view `enclosing`, every
@@ -235,6 +246,7 @@ where
         Self::laid_down(
             writer,
             shape,
+            enclosing.load,
             ClosureBindings::empty(),
             enclosing.builtins,
             Some(enclosing),
@@ -262,6 +274,11 @@ impl<'graph, 'cell, XF: KnottedFamily<'graph>> Activation<'graph, 'cell, XF> {
 impl<'graph, 'cell, XF: KnottedFamily<'graph>> ActivationView<'graph, 'cell, XF> {
     pub fn shape(&self) -> &'graph BodyShape<'graph> {
         self.shape
+    }
+
+    /// What the load decided about every body: where a reader holding this view reads a fact.
+    pub fn load(&self) -> &'graph LoadFacts<'graph> {
+        self.load
     }
 
     pub fn builtins(&self) -> &'cell Builtins<'cell, XF::Closed<'cell>> {
@@ -338,7 +355,7 @@ impl<'graph, 'cell, XF: KnottedFamily<'graph>> ActivationView<'graph, 'cell, XF>
         for _ in 0..hops {
             view = view.enclosing?;
         }
-        Some(&view.digests[view.shape.digested_index(slot)?])
+        Some(&view.digests[view.load.digested_index(view.shape, slot)?])
     }
 
     /// The value bound at `slot`, or `None` while it is empty.

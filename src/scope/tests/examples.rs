@@ -28,14 +28,15 @@ fn shaped<R>(
         let lines = fixture.parse(source);
         fixture.in_cell(|writer, _| {
             let table: &Builtins = builtins(fixture, writer);
-            let shape = BodyShape::of_program(
+            let shape = crate::scope::Shapes::of_program(
                 fixture.program,
                 &lines,
                 table,
                 fixture.types,
                 fixture.symbols,
                 fixture.scratch(),
-            );
+            )
+            .map(|shapes| shapes.root());
             check(fixture, &lines, shape)
         })
     })
@@ -957,8 +958,8 @@ fn a_lambdas_body_is_found_by_its_forms_body_site() {
 const PICK: &str = "LET pick = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(x))";
 
 /// A keyworded form's name and a surfaced quantified member are read only at the head of a call; a
-/// module body's quantified member is read unmarked anywhere, the static pass instantiating it, and
-/// any other quantified binding is the static pass's to instantiate or refuse.
+/// module body's quantified member is read unmarked anywhere, the load's walk instantiating it, and
+/// any other quantified binding is the load's walk's to instantiate or refuse.
 #[test]
 fn a_call_only_quantified_function_is_read_only_at_the_head_of_a_call() {
     let module = "MODULE m = (LET pick = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(x)))";
@@ -1029,7 +1030,7 @@ fn a_call_only_quantified_function_is_read_only_at_the_head_of_a_call() {
 
 /// A body whose value is read takes its last statement's, so one binding a quantified function by a
 /// keyworded form there would hand on a value read only at a call's head; a plain `LET` there is
-/// the static pass's to instantiate at the body's return.
+/// the load's walk's to instantiate at the body's return.
 #[test]
 fn a_body_s_value_binds_no_keyworded_quantified_function() {
     let expression = "EXPR FOR ALL #[Elt] #(ID x :Elt) -> Elt = #(x)";
@@ -1158,7 +1159,7 @@ fn nested_shapes_follow_program_order_not_address() {
             }
             fixture.in_cell(|writer, _| {
                 let table: &Builtins = builtins(fixture, writer);
-                let shape = BodyShape::of_program(
+                let shape = crate::scope::Shapes::of_program(
                     fixture.program,
                     &lines,
                     table,
@@ -1166,6 +1167,7 @@ fn nested_shapes_follow_program_order_not_address() {
                     fixture.symbols,
                     fixture.scratch(),
                 )
+                .map(|shapes| shapes.root())
                 .expect("the program shapes");
                 let nested: Vec<_> = (shape.nested_shapes().iter())
                     .map(|(_, nested)| (nested.kind(), nested.segment(), nested.code_digest()))
@@ -1186,4 +1188,50 @@ fn nested_shapes_follow_program_order_not_address() {
     let segments: Vec<_> = forward.2.iter().map(|(_, segment, _)| segment.0).collect();
     assert!(segments.is_sorted(), "segments follow program order");
     assert_eq!(forward, backward, "address order changes nothing");
+}
+
+#[test]
+fn every_shape_a_load_builds_is_found_by_its_segment() {
+    let source = "\
+LET f = (FN :{x :Number} -> Number = #((LET g = (FN :{} -> Number = #(x))) (g)))
+MODULE m = (LET h = (FN :{} -> Number = #(1)))
+LET q = #(PRINT $f)";
+    with_fixture(|fixture| {
+        let lines = fixture.parse(source);
+        fixture.in_cell(|writer, _| {
+            let table: &Builtins = builtins(fixture, writer);
+            let shapes = crate::scope::Shapes::of_program(
+                fixture.program,
+                &lines,
+                table,
+                fixture.types,
+                fixture.symbols,
+                fixture.scratch(),
+            )
+            .expect("the program shapes");
+            let shape = shapes.root();
+            fn visit<'graph>(
+                shapes: &crate::scope::Shapes<'graph>,
+                shape: &'graph BodyShape<'graph>,
+                seen: &mut usize,
+            ) {
+                *seen += 1;
+                assert!(std::ptr::eq(shape, shapes.shape_at(shape.segment())));
+                for (_, nested) in shape.nested_shapes() {
+                    visit(shapes, nested, seen);
+                }
+            }
+            let mut seen = 0;
+            visit(shapes, shape, &mut seen);
+            assert!(
+                seen >= 6,
+                "the program nests its callables, module and quote"
+            );
+            assert_eq!(
+                shape.segment().index() as usize,
+                seen - 1,
+                "the root seals last"
+            );
+        })
+    })
 }
