@@ -291,6 +291,16 @@ pub struct Resolution<'graph> {
     pub resolved: Resolved,
 }
 
+impl Resolution<'_> {
+    /// The type the path is at every run, where the load resolved it to one.
+    pub fn closed(&self) -> Option<KType> {
+        match self.resolved {
+            Resolved::Closed(closed) => Some(closed),
+            Resolved::Class(_) => None,
+        }
+    }
+}
+
 /// The type a path is at load.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Resolved {
@@ -498,9 +508,10 @@ pub fn solutions<'graph, 'x, XF: KnottedFamily<'graph>>(
             Source::Path { at, root, level } => {
                 let load = view.load();
                 let root = load.shapes().shape_at(root);
-                match load.path_closed(root, level) {
+                let (entry, resolution) = load.path(root, level)?;
+                match resolution.closed() {
                     Some(closed) => closed,
-                    None => paths(at?, load.path_entry(root, level)?)?,
+                    None => paths(at?, entry)?,
                 }
             }
         };

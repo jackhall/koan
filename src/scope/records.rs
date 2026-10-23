@@ -21,8 +21,8 @@ use super::shape::{BodyShape, Coordinate, Position, Segment, ShapeError, Site, S
 use super::shapes::Shapes;
 use super::tree::{Leaf, NodeCapture, Tree};
 use super::typed::{
-    BodyClass, Caching, Handoff, InstanceRead, Mint, PathEntry, Resolution, Resolved, Static,
-    StaticCallable, StaticRegistered, StaticSolution, StaticType, UseStatics, Variable, ViewSlots,
+    BodyClass, Caching, Handoff, InstanceRead, Mint, PathEntry, Resolution, Static, StaticCallable,
+    StaticRegistered, StaticSolution, StaticType, UseStatics, Variable, ViewSlots,
 };
 
 /// One unit's facts: everything the walk computed running it, the inline bodies it ran included.
@@ -670,27 +670,14 @@ impl<'graph> LoadFacts<'graph> {
         Some((self.shapes.chain_root(shape.segment()), level))
     }
 
-    /// The path entry at `level` of the chain the body `root` roots.
-    pub fn path_entry(&self, root: &BodyShape<'_>, level: usize) -> Option<PathEntry<'graph>> {
-        self.records
-            .path(root.segment(), level)
-            .map(|(entry, _)| entry)
-    }
-
-    /// What the load resolved the path at `level` of the chain `root` roots to.
-    pub fn resolution(&self, root: &BodyShape<'_>, level: usize) -> Option<Resolution<'graph>> {
-        self.records
-            .path(root.segment(), level)
-            .map(|(_, resolution)| resolution)
-    }
-
-    /// The type the path at `level` of the chain `root` roots is at every run, where the load
-    /// resolved it to one.
-    pub fn path_closed(&self, root: &BodyShape<'_>, level: usize) -> Option<KType> {
-        match self.resolution(root, level)?.resolved {
-            Resolved::Closed(closed) => Some(closed),
-            Resolved::Class(_) => None,
-        }
+    /// The path entry at `level` of the chain the body `root` roots, beside what the load resolved
+    /// it to.
+    pub fn path(
+        &self,
+        root: &BodyShape<'_>,
+        level: usize,
+    ) -> Option<(PathEntry<'graph>, Resolution<'graph>)> {
+        self.records.path(root.segment(), level)
     }
 
     /// Where `shape` reads each lexical variable of the path at `level`'s `through`.

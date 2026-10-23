@@ -301,8 +301,7 @@ fn each_open_path_reads_back_its_tree() {
         let (root, facts) = (program.shape(), program.facts());
         let levels = 0..program.shapes().path_base(root.segment()) + 64;
         let mut trees = levels.filter_map(|level| {
-            let entry = facts.path_entry(root, level)?;
-            let resolution = (facts.resolution(root, level)).expect("the load resolves every path");
+            let (entry, resolution) = facts.path(root, level)?;
             match resolution.resolved {
                 Resolved::Class(_) => Some((entry.label, resolution.tree)),
                 Resolved::Closed(_) => None,

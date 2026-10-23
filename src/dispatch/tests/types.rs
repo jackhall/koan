@@ -576,7 +576,9 @@ fn path_entry<'graph>(facts: &LoadFacts<'graph>, variables: &[Variable]) -> Path
         panic!("one path variable, not {variables:?}")
     };
     let root = facts.shapes().shape_at(*root);
-    (facts.path_entry(root, *level)).expect("a path variable reads a minted entry")
+    (facts.path(root, *level))
+        .map(|(entry, _)| entry)
+        .expect("a path variable reads a minted entry")
 }
 
 /// The path variable `typed` is rigid over: its value, a lexical variable, and its entry.
@@ -673,7 +675,9 @@ fn a_path_through_an_annotated_binder_reads_after_the_binders() {
             panic!("one path read")
         };
         let root = facts.shapes().shape_at(root);
-        let entry = (facts.path_entry(root, level)).expect("a minted entry");
+        let entry = (facts.path(root, level))
+            .map(|(entry, _)| entry)
+            .expect("a minted entry");
         assert!(
             entry.through.is_some(),
             "the annotation's application names `Carrier` a head parameter"

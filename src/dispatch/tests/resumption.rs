@@ -1248,7 +1248,7 @@ mod laws {
                             continue;
                         };
                         for (at, facts) in facts.iter().enumerate() {
-                            if let Some(entry) = facts.path_entry(root, level)
+                            if let Some(entry) = facts.path(root, level).map(|(entry, _)| entry)
                                 && (entry.root != id.root || entry.chain != id.chain || entry.label != id.label || entry.level != level)
                             {
                                 broken.push(format!("records {at} hold {entry:?} at the level the shape gives {id:?}"));

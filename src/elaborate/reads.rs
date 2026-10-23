@@ -129,10 +129,10 @@ impl<'graph, XF: KnottedFamily<'graph>> Reads<'graph> for ActivationView<'graph,
         let load = self.load();
         if let Some((root, level)) = load.path_read(self.shape(), site)
             && let root = load.shapes().shape_at(root)
-            && let Some(entry) = load.path_entry(root, level)
+            && let Some((entry, resolution)) = load.path(root, level)
             && entry.through.is_some()
         {
-            let bound = match load.path_closed(root, level) {
+            let bound = match resolution.closed() {
                 Some(closed) => Some(closed),
                 None => bound_path(self, types, at, entry),
             };
@@ -156,7 +156,8 @@ impl<'graph, XF: KnottedFamily<'graph>> Reads<'graph> for ActivationView<'graph,
     ) -> TypeAt {
         let load = self.load();
         let read = load.path_read(self.shape(), site);
-        match read.and_then(|(root, level)| load.path_closed(load.shapes().shape_at(root), level)) {
+        let path = read.and_then(|(root, level)| load.path(load.shapes().shape_at(root), level));
+        match path.and_then(|(_, resolution)| resolution.closed()) {
             Some(closed) => TypeAt::Type(closed),
             None => TypeAt::Unknown,
         }
