@@ -3042,6 +3042,11 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             if let (Some(bare), Some(signature)) = (tree.bare().digest(), signature) {
                 let exact = exact(types, typed);
                 // What the operand carries, read off its tree, else by its exact type.
+                #[cfg(test)]
+                count(|counts| {
+                    counts.source_reads += 1;
+                    counts.fits += 1;
+                });
                 let seen = self.carried_type(views::Carried::Tree(*tree), site)?;
                 debug_assert!(
                     exact.is_none() || seen.is_none() || exact == seen,
@@ -4751,6 +4756,47 @@ pub(super) fn unnarrowed<R>(load: impl FnOnce() -> R) -> R {
     UNNARROWED.with(|switch| switch.set(true));
     let _cleared = Cleared;
     load()
+}
+
+/// What a load did, counted for the tests that bound it: each a kind of work the pass's memos keep
+/// linear in the program.
+#[cfg(test)]
+#[derive(Clone, Copy, Default, Debug)]
+pub(super) struct LoadCounts {
+    /// Reads of what a view binds ([`view_of`](Pass::view_of)).
+    pub view_reads: usize,
+    /// Fits the walk computed for a `:|`'s view.
+    pub fits: usize,
+    /// Reads of the type a view's source carries, made to fit it.
+    pub source_reads: usize,
+    /// Labels laid in program storage for leaves' chains.
+    pub chain_labels: usize,
+    /// Slices laid in program storage for bodies' captures.
+    pub capture_slices: usize,
+}
+
+#[cfg(test)]
+thread_local! {
+    /// What the loads on this thread did since [`counted`] last began.
+    static COUNTS: std::cell::Cell<LoadCounts> = std::cell::Cell::new(LoadCounts::default());
+}
+
+/// Add to one of the load's counts.
+#[cfg(test)]
+fn count(bump: impl FnOnce(&mut LoadCounts)) {
+    COUNTS.with(|counts| {
+        let mut now = counts.get();
+        bump(&mut now);
+        counts.set(now);
+    });
+}
+
+/// Run `load` from zero counts, beside what it counted.
+#[cfg(test)]
+pub(super) fn counted<R>(load: impl FnOnce() -> R) -> (R, LoadCounts) {
+    COUNTS.with(|counts| counts.set(LoadCounts::default()));
+    let read = load();
+    (read, COUNTS.with(std::cell::Cell::get))
 }
 
 /// Whether loads leave every keyworded use whole now.

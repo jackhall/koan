@@ -8,9 +8,11 @@
 //! tree: a module body's exact signature, which the pass keeps by body; a view's, computed from
 //! its source's as the run computes it; a header's, which the load computed, each member read
 //! through it at the type it declares, as a member read retypes it; and a cell an opaque view
-//! rebuilt, as the coercion walk rebuilds it. Each step follows a view to its source or a slot into its declared type, so the
-//! lay ends at any depth. Every read of a view over a closed tree or of a rebuilt value is
-//! memoized on the pass ([`Identity`]), so a chain of views costs the load linear time.
+//! rebuilt, as the coercion walk rebuilds it. Each step follows a view to its source or a slot
+//! into its declared type, so the lay ends at any depth. A view over a closed tree is read once,
+//! by its print, and an open one reads nothing, so a chain of k views, open or closed, costs the
+//! load O(k) view reads; every read of a member of such a view or of a rebuilt value is memoized
+//! on the pass too ([`Identity`]).
 //!
 //! Where no tree shows a cell — a container literal's, a parameter's, a call's the load does not
 //! unfold — its exact type stands for it, and a view that type is is read as its signature declares
@@ -246,8 +248,8 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         })
     }
 
-    /// What the view `tree` binds, where the load knows it: an opaque view's over its source's
-    /// type and its bare member's digest. Memoized by print over a closed tree.
+    /// What the view `tree` binds, where the load knows it: a closed opaque view's over its
+    /// source's type and its bare member's digest, memoized by print.
     pub(super) fn view_of(
         &mut self,
         tree: Tree<'o>,
@@ -262,20 +264,24 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         else {
             return Ok(None);
         };
-        let closed = matches!(print, Print::Closed(_));
-        if closed && let Some((viewed, tag)) = self.views.get(&print).copied() {
+        #[cfg(test)]
+        super::count(|counts| counts.view_reads += 1);
+        // An open view's fit or source is unknown (`Tree::view`), so it binds nothing the load
+        // knows.
+        let Print::Closed(_) = print else {
+            return Ok(None);
+        };
+        if let Some((viewed, tag)) = self.views.get(&print).copied() {
             self.gather(tag);
             return Ok(viewed);
         }
         let viewed = self.view_read(operator, application, source, site)?;
-        if closed {
-            let tag = self.innermost();
-            self.views.insert(print, (viewed, tag));
-        }
+        let tag = self.innermost();
+        self.views.insert(print, (viewed, tag));
         Ok(viewed)
     }
 
-    /// [`view_of`](Self::view_of) unmemoized.
+    /// [`view_of`](Self::view_of) unmemoized, over a closed view.
     fn view_read(
         &mut self,
         operator: Operator,
@@ -284,9 +290,13 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         site: Site,
     ) -> Read<'o, Option<ViewTypes<'o>>> {
         let (types, scratch) = (self.types, self.scratch);
+        #[cfg(test)]
+        super::count(|counts| counts.source_reads += 1);
         let held = self.carried_type(Carried::Tree(*source), site)?;
         let viewed = match operator {
             Operator::Opaque => source.bare().digest().and_then(|digest| {
+                #[cfg(test)]
+                super::count(|counts| counts.fits += 1);
                 view::opaque_view_types(held, application, digest, types, scratch)
             }),
             Operator::Reviewed => None,

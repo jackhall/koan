@@ -39,6 +39,7 @@ use std::cell::RefCell;
 use crate::program::{CellSubstrate, Outcome, Output};
 
 use super::Koan;
+use super::walk::{LoadCounts, counted};
 use crate::values::SpecBounds;
 
 thread_local! {
@@ -72,4 +73,29 @@ fn run(source: &str) -> String {
         Ok(Outcome::Completed | Outcome::Uncaught) => written.join("\n"),
         Err(stalled) => format!("stalled: {stalled:?} after {written:?}"),
     }
+}
+
+/// What the load counted loading `source`.
+fn load_counts(source: &str) -> LoadCounts {
+    let (refused, counts) = counted(|| {
+        let loaded =
+            CellSubstrate::load::<Koan>(source, "<test>", 8, SpecBounds::default(), output());
+        loaded.err().map(|error| error.to_string())
+    });
+    if let Some(error) = refused {
+        panic!("the program loads: {error}");
+    }
+    counts
+}
+
+/// Assert that `count`, read off a program generated at size `n`, grows at most linearly: over
+/// `n` = 8, 16 and 24 its second step grows it by no more than an eighth past its first, where a
+/// quadratic count's grows by up to two thirds again.
+fn assert_linear(what: &str, count: impl Fn(usize) -> usize) {
+    let [at8, at16, at24] = [8, 16, 24].map(&count);
+    let (first, second) = (at16.saturating_sub(at8), at24.saturating_sub(at16));
+    assert!(
+        second <= first + first / 8,
+        "{what} grow faster than linearly: {at8} at 8, {at16} at 16, {at24} at 24"
+    );
 }

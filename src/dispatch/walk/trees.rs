@@ -479,6 +479,8 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 let mut extended = BumpVec::with_capacity_in(chain.len() + 1, self.scratch);
                 extended.extend(chain.iter().copied());
                 extended.push(label);
+                #[cfg(test)]
+                super::count(|counts| counts.chain_labels += extended.len());
                 let chain = collect(self.lay, extended.iter().copied());
                 Some(Tree::bound(binder, chain, within))
             }
@@ -578,6 +580,11 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         source: Tree<'o>,
         site: Site,
     ) -> Read<'o, Tree<'o>> {
+        #[cfg(test)]
+        super::count(|counts| {
+            counts.source_reads += 1;
+            counts.fits += 1;
+        });
         let held = self.carried_type(super::views::Carried::Tree(source), site)?;
         let from = view::fit_of(held, application, self.types, self.scratch);
         let source = resident(self.lay, source);
@@ -627,6 +634,8 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             };
             captures.push((index as u32, tree));
         }
+        #[cfg(test)]
+        super::count(|counts| counts.capture_slices += 1);
         Ok(collect(self.lay, captures.iter().copied()))
     }
 
