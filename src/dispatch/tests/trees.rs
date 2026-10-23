@@ -449,3 +449,26 @@ fn a_module_binder_read_from_many_sites_lays_its_captures_once() {
     let slices = |n: usize| load_counts(&program(n)).capture_slices;
     assert_eq!(slices(8), slices(16), "capture slices laid");
 }
+
+/// Two bodies of one content share a print, and so the fit of a view over either: each view's
+/// tree is still over its own body.
+#[test]
+fn views_of_two_bodies_alike_are_each_over_their_own() {
+    let source = "SIG Plain = #[(VAL zero :Number)]\n\
+                  MODULE a = (LET zero = 0)\n\
+                  MODULE b = (LET zero = 0)\n\
+                  LET va = (a :| Plain)\n\
+                  LET vb = (b :| Plain)\n";
+    loaded(source, |program| {
+        let shape = program.shape();
+        let (Tree::Body { body: a, .. }, Tree::Body { body: b, .. }) = (
+            let_tree(program, shape, "va"),
+            let_tree(program, shape, "vb"),
+        ) else {
+            panic!("each view is over a body");
+        };
+        let print = |name| let_tree(program, shape, name).print();
+        assert_eq!(print("va"), print("vb"), "the two bodies are one content");
+        assert_ne!(a, b, "each view is over its own body");
+    });
+}

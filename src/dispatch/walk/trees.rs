@@ -73,6 +73,17 @@ impl Shaped {
     };
 }
 
+/// What a `:|`'s fit solved, where the load knows it, beside the type its source carries and the
+/// unit that read them.
+pub(super) type Fitted = (Option<KType>, Option<KType>, super::Tag);
+
+/// A binder's tree as [`binder_tree`](Pass::binder_tree) builds it: settled, or a fallback the
+/// walk's progress could still sharpen, which each return names.
+enum Built<'o> {
+    Settled(Tree<'o>),
+    Provisional(Tree<'o>),
+}
+
 /// The value slot `shape`'s last statement binds, where it binds one: a binding statement's value
 /// is what it binds. Read among the slots of the unit running that statement.
 pub(super) fn last_binder(shape: &BodyShape<'_>) -> Option<Slot> {
@@ -332,18 +343,22 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         let depth = self.reading.len();
         self.reading.push(key);
         let outer = std::mem::replace(&mut self.shaped, Shaped::NONE);
-        let tree = self.binder_tree(scope, slot, site);
-        let shaped = self.shaped;
+        let (tree, provisional) = match self.binder_tree(scope, slot, site) {
+            Ok(Built::Settled(tree)) => (Ok(tree), self.shaped.provisional),
+            Ok(Built::Provisional(tree)) => (Ok(tree), true),
+            Err(error) => (Err(error), self.shaped.provisional),
+        };
+        let cut = self.shaped.cut;
         self.shaped = Shaped {
-            cut: outer.cut.min(shaped.cut),
-            provisional: outer.provisional || shaped.provisional,
+            cut: outer.cut.min(cut),
+            provisional: outer.provisional || provisional,
         };
         self.reading.pop();
         // A cut on this binder itself reads alike wherever the binder is read from.
         if chain
             && let Ok(tree) = tree
-            && !shaped.provisional
-            && shaped.cut >= depth
+            && !provisional
+            && cut >= depth
             && tree.print() != Print::Unnamed
         {
             let tag = self.innermost();
@@ -352,12 +367,14 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         tree
     }
 
+    /// [`slot_tree`](Self::slot_tree) unmemoized.
     fn binder_tree(
         &mut self,
         scope: Scope<'o, 'graph>,
         slot: Slot,
         site: Site,
-    ) -> Read<'o, Tree<'o>> {
+    ) -> Read<'o, Built<'o>> {
+        use Built::{Provisional, Settled};
         let shape = self.scope_shape(scope);
         // A binder the binding binds holds what it binds: a type name its type, a module binder
         // the closed content tree it binds.
@@ -366,27 +383,29 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             at: crate::scope::Address::Slot(slot),
         };
         match self.bound_to(unknown) {
-            Some(crate::scope::Bound::Module { tree, .. }) => return Ok(*tree),
-            Some(crate::scope::Bound::Type(bound)) => return Ok(named_type(self.types, bound)),
+            Some(crate::scope::Bound::Module { tree, .. }) => return Ok(Settled(*tree)),
+            Some(crate::scope::Bound::Type(bound)) => {
+                return Ok(Settled(named_type(self.types, bound)));
+            }
             None => {}
         }
         if let BinderSymbol::Type(_) = shape.slot_name(slot) {
             return match self.declared_cell(shape, slot) {
                 Static::Closed(handle) if shape.declarations(slot).is_some() => {
-                    Ok(named_type(self.types, handle))
+                    Ok(Settled(named_type(self.types, handle)))
                 }
-                Static::Closed(_) => self.leaf_on(scope, slot),
-                _ => self.provisional_leaf(scope, slot),
+                Static::Closed(_) => self.leaf_on(scope, slot).map(Settled),
+                _ => self.leaf_on(scope, slot).map(Provisional),
             };
         }
         if let Some(body) = shape.births(slot) {
             if body.kind() == ShapeKind::Module {
                 // A body not yet typed has not laid its type captures down.
                 if !self.done(body) {
-                    return self.provisional_leaf(scope, slot);
+                    return self.leaf_on(scope, slot).map(Provisional);
                 }
                 let captures = self.captures_of(scope, body, site)?;
-                return Ok(Tree::body(body, captures));
+                return Ok(Settled(Tree::body(body, captures)));
             }
             let component = shape.component_of(slot);
             let mut bodies = BumpVec::with_capacity_in(component.members.len(), self.scratch);
@@ -395,40 +414,33 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                     Some(body) if body.kind() == ShapeKind::Callable => {
                         bodies.push((body, keeps_scheme(shape, *member)));
                     }
-                    _ => return self.leaf_on(scope, slot),
+                    _ => return self.leaf_on(scope, slot).map(Settled),
                 }
             }
             let index = (component.members.iter())
                 .position(|member| *member == slot)
                 .expect("a binder is a member of its component");
             return match self.knot(scope, &bodies, index as u32, site)? {
-                Some(knot) => Ok(knot),
-                None => self.provisional_leaf(scope, slot),
+                Some(knot) => Ok(Settled(knot)),
+                None => self.leaf_on(scope, slot).map(Provisional),
             };
         }
         if shape.position_of(slot) == Position::PARAMETER {
-            return self.leaf_on(scope, slot);
+            return self.leaf_on(scope, slot).map(Settled);
         }
         let tree = match shape.rhs(slot) {
             Some(rhs) => self.tree_in(scope, rhs, Some(slot))?,
-            None => return self.leaf_on(scope, slot),
+            None => return self.leaf_on(scope, slot).map(Settled),
         };
         // An annotated `LET` binds its value retyped to the annotation.
         let level = self.scope_level(scope);
         match shape.annotation(slot) {
             Some(annotation) => match self.declared(level, annotation) {
-                Some(declared) => self.retyped_tree(tree, declared, site),
-                None => self.provisional_leaf(scope, slot),
+                Some(declared) => self.retyped_tree(tree, declared, site).map(Settled),
+                None => self.leaf_on(scope, slot).map(Provisional),
             },
-            None => Ok(tree),
+            None => Ok(Settled(tree)),
         }
-    }
-
-    /// A [leaf](Self::leaf_on) standing for a binder's tree the walk's progress could sharpen: the
-    /// binder's tree is then not memoized.
-    fn provisional_leaf(&mut self, scope: Scope<'o, 'graph>, slot: Slot) -> Read<'o, Tree<'o>> {
-        self.shaped.provisional = true;
-        self.leaf_on(scope, slot)
     }
 
     /// The tree an expression the load cannot see reads as: a leaf on the `LET` binder `named`
@@ -701,7 +713,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     }
 
     /// [`view_tree`](Self::view_tree) beside the type `source` carries, where the load knows it:
-    /// memoized by `application` and the source's print, and a closed view's
+    /// its fit is memoized by `application` and the source's print, and a closed view's
     /// [`view_of`](Self::view_of) seeded from the same fit.
     pub(super) fn view_tree_held(
         &mut self,
@@ -710,33 +722,43 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         site: Site,
     ) -> Read<'o, (Tree<'o>, Option<KType>)> {
         let key = (application, source.print());
-        if let Some((tree, held, tag)) = self.view_trees.get(&key).copied() {
-            self.gather(tag);
-            return Ok((tree, held));
-        }
-        #[cfg(test)]
-        super::count(|counts| {
-            counts.source_reads += 1;
-            counts.fits += 1;
-        });
-        let (types, scratch) = (self.types, self.scratch);
-        let held = self.carried_type(super::views::Carried::Tree(source), site)?;
-        let fit = view::opaque_view(held, application, source.bare().digest(), types, scratch);
-        let from = fit.map(|(from, _)| from);
+        let (from, held, seed) = match self.view_trees.get(&key).copied() {
+            Some((from, held, tag)) => {
+                self.gather(tag);
+                (from, held, None)
+            }
+            None => {
+                #[cfg(test)]
+                super::count(|counts| {
+                    counts.source_reads += 1;
+                    counts.fits += 1;
+                });
+                let (types, scratch) = (self.types, self.scratch);
+                let held = self.carried_type(super::views::Carried::Tree(source), site)?;
+                let fit =
+                    view::opaque_view(held, application, source.bare().digest(), types, scratch);
+                let (from, viewed) = (
+                    fit.map(|(from, _)| from),
+                    fit.and_then(|(_, viewed)| viewed),
+                );
+                let tag = self.innermost();
+                // A leaf no binder names is keyed on its site, which the print does not tell apart.
+                if key.1 != Print::Unnamed {
+                    self.view_trees.insert(key, (from, held, tag));
+                }
+                (from, held, viewed.map(|viewed| (viewed, tag)))
+            }
+        };
+        // Built over this source itself, which another of its print may not be.
         let tree = Tree::view(
             Operator::Opaque,
             application,
             resident(self.lay, source),
             from,
         );
-        let tag = self.innermost();
         // A closed view's source is closed, so its fit read what the view binds too.
-        if let (print @ Print::Closed(_), Some((_, viewed))) = (tree.print(), fit) {
-            self.views.entry(print).or_insert((viewed, tag));
-        }
-        // A leaf no binder names is keyed on its site, which the print does not tell apart.
-        if key.1 != Print::Unnamed {
-            self.view_trees.insert(key, (tree, held, tag));
+        if let (print @ Print::Closed(_), Some((viewed, tag))) = (tree.print(), seed) {
+            self.views.entry(print).or_insert((Some(viewed), tag));
         }
         Ok((tree, held))
     }

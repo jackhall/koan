@@ -542,9 +542,9 @@ struct Pass<'p, 'o, 'x, 'graph, 'tier, 'pair, 'reg, S: Store<'o>> {
     shaped: trees::Shaped,
     /// What each view over a closed tree binds, by its print: a chain of views reads each once.
     views: BumpBackedMap<'p, Print, (Option<ViewTypes<'o>>, Tag)>,
-    /// Each opaque view's tree the walk built, by its application and its source's print, beside
-    /// the type its source carries: a `:|` fits its source, and reads that type, once.
-    view_trees: BumpBackedMap<'p, (KType, Print), (Tree<'o>, Option<KType>, Tag)>,
+    /// What each opaque view's fit solves, by its application and its source's print, beside the
+    /// type its source carries: a `:|` fits its source, and reads that type, once.
+    view_trees: BumpBackedMap<'p, (KType, Print), trees::Fitted>,
     /// What each read of a value a lay may reach twice yields, so a chain of views reads each
     /// member once.
     steps: BumpBackedMap<'p, (views::Identity, views::Step), Option<views::Carried<'o>>>,
