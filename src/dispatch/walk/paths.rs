@@ -95,6 +95,11 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     /// Open the path table of the chain `root` roots, holding each identity a type of the chain
     /// spells at its level.
     pub(super) fn open_paths(&mut self, root: &'graph BodyShape<'graph>) {
+        debug_assert!(
+            (self.chain.last())
+                .is_some_and(|at| std::ptr::eq(at.shape, root) && at.paths == self.paths.len()),
+            "a chain's root opens its table as it is pushed"
+        );
         let (shapes, scratch) = (self.shapes, self.scratch);
         let segment = root.segment();
         let base = shapes.spelled_base(segment);
@@ -233,15 +238,12 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
 
     /// The index in `paths` of the table of the chain `level` sits on.
     fn table(&self, level: usize) -> usize {
-        let root = self.chain[self.chain_root(level)].shape;
-        (self.paths.iter())
-            .rposition(|table| std::ptr::eq(table.root, root))
-            .expect("a chain's paths are open while it is typed")
+        self.chain[level].paths
     }
 
     /// The segment of the body rooting the chain `level` sits on.
     pub(super) fn chain_root_segment(&self, level: usize) -> Segment {
-        self.chain[self.chain_root(level)].shape.segment()
+        self.paths[self.table(level)].root.segment()
     }
 
     /// The path entry of the chain `level` sits on for `root`, `chain` and `label`, read through

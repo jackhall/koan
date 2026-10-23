@@ -149,7 +149,7 @@ impl<'p, 'o: 'p, 'x, 'graph: 'o + 'p, 'tier: 'o, 'pair, 'reg, S: Store<'o>>
             &mut signatures,
         )?;
         self.set_registered(level, registration.slot, typed);
-        let root = self.chain[self.chain_root(level)].shape;
+        let root = self.shape_at(self.chain_root_segment(level));
         if root.kind() != ShapeKind::Code {
             overlap(
                 shape,

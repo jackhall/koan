@@ -387,6 +387,8 @@ struct Level<'p, 'o, 'graph> {
     shape: &'graph BodyShape<'graph>,
     /// Whether the shape roots a chain: the program or a quote's code.
     roots_chain: bool,
+    /// The index in `Pass::paths` of the table of the chain the shape sits on.
+    paths: usize,
     /// The type half's facts: each type binder's declaration and each registration's entry, by
     /// slot, and each recorded type expression's type, by site.
     declared: BumpVec<'p, Option<(StaticType<'o>, Tag)>>,
@@ -690,9 +692,19 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         registered.resize(shape.slots(), None);
         let mut uses = BumpVec::with_capacity_in(shape.candidate_lists().len(), scratch);
         uses.resize(shape.candidate_lists().len(), (UseStatics::UNFIXED, None));
+        // A chain's root opens its table next; any other shape shares the table of the one below.
+        let paths = match roots_chain {
+            true => self.paths.len(),
+            false => {
+                (self.chain.last())
+                    .expect("an inline body has an encloser on the chain")
+                    .paths
+            }
+        };
         self.chain.push(Level {
             shape,
             roots_chain,
+            paths,
             declared,
             registered,
             expressions: bump_table(scratch),
