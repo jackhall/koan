@@ -238,7 +238,12 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
 
     /// The index in `paths` of the table of the chain `level` sits on.
     fn table(&self, level: usize) -> usize {
-        self.chain[level].paths
+        let table = self.chain[level].paths;
+        debug_assert!(
+            table < self.paths.len(),
+            "a chain's paths are open while it is typed"
+        );
+        table
     }
 
     /// The segment of the body rooting the chain `level` sits on.

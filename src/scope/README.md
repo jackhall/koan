@@ -566,6 +566,10 @@ body:
 
 - `bind_site`, where an unknown binds — its body's entry, or the unit binding
   it ([seams](../build/README.md#frontiers-and-seams));
+- which unit's record holds a fact the shape places: a slot's (`slot_unit`), a
+  statement's (`running`) and a callable's or a quote's code's birth
+  (`birth_unit`), an inline body's facts resting in the unit running the
+  statement of its encloser that holds it;
 - each mention's **landing**, its coordinate followed through every capture to
   a builtin, a binder or a quote's open capture (`Mention::lands`), beside
   whether it reads a fellow of its own component with no callable between
@@ -664,8 +668,11 @@ birth, the overlap check and the suites — reads the load's facts through
 [`LoadFacts`](records.rs), each accessor taking the body's shape first
 (`typed_expression`, `value_type`, `use_statics`, `settled`, `instance_at`,
 `named_contributions`, `view_tree`, `class`, `caching` and the rest), so no
-reader names where a fact is kept. It indexes every site, slot and statement a
-record holds to that record, and forwards the text facts to the shape table.
+reader names where a fact is kept. A slot's, a statement's or a birth's fact
+lies in the record of the unit the shape table names for it, so it reads that
+record directly; it indexes only each site, through and path fact, whose unit
+the shape cannot name, to the record holding it, and forwards the text facts to
+the shape table. A path's entry and its resolution read in one lookup (`path`).
 A `LoadFacts` may sit over a base: every read tries its own records, then its
 base's, and a unit it re-ran replaces the base's record of it whole. The
 load's is laid in program storage before the program is, and an activation

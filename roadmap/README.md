@@ -37,7 +37,6 @@ subdirectory's README carries its own slice.
 - [Faults and call traces](conditionals/faults.md)
 - [Matching](conditionals/matching.md)
 - [The build arena](gradual-build/build-arena.md)
-- [Fact reads at their cost](gradual-build/fact-reads.md)
 - [The load walk's repeated work](gradual-build/load-walk-repeats.md)
 - [Tree and view memos](gradual-build/tree-and-view-memos.md)
 - [Placing a verdict without probing](gradual-build/verdict-placement.md)

@@ -164,8 +164,8 @@ the walk reaches it only through its façade, which keeps the gathering of each
 open unit. A binding miss adds the unknown to the innermost gathering, a read
 of a record or a closing adds that record's frontier, and a binding hit adds
 nothing; only an unknown declared on the reader's chain is gathered. A unit's
-**frontier** is its gathering when it ends: the unknowns it depends on,
-transitively. Every value a record keeps is laid where it rests, through the
+**frontier** is its gathering when it ends, sorted and deduplicated once
+there: the unknowns it depends on, transitively. Every value a record keeps is laid where it rests, through the
 store's `lay`, so nothing is relayed; transient work stays in the walk's
 scratch.
 
