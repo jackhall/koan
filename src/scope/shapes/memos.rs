@@ -55,9 +55,13 @@ pub(super) fn memos<'graph, 'x>(
         BumpVec::with_capacity_in(bodies.len(), scratch);
     digested.resize_with(bodies.len(), || BumpVec::new_in(scratch));
     let mut views = BumpVec::with_capacity_in(bodies.len(), scratch);
+    // Each body's own nodes, walked once: its hand-offs read every body's digests after.
+    let mut nodes = BumpVec::with_capacity_in(bodies.len(), scratch);
     for shape in bodies {
         let mut viewed = BumpVec::new_in(scratch);
+        let mut own = BumpVec::new_in(scratch);
         own_nodes(shape, &mut |node| {
+            own.push(node);
             let opaque = node
                 .cache()
                 .builtin_shape()
@@ -73,17 +77,18 @@ pub(super) fn memos<'graph, 'x>(
             }
         });
         views.push(viewed);
+        nodes.push(own.leak());
     }
     for slots in digested.iter_mut() {
         slots.sort_unstable();
         slots.dedup();
     }
     let mut laid = BumpVec::with_capacity_in(bodies.len(), scratch);
-    for (shape, viewed) in bodies.iter().zip(views.iter_mut()) {
+    for ((shape, viewed), own) in bodies.iter().zip(views.iter_mut()).zip(nodes.iter()) {
         let mut handoffs = BumpVec::new_in(scratch);
-        own_nodes(shape, &mut |node| {
+        for node in own.iter() {
             handed(shapes, shape, node, &digested, scratch, &mut handoffs);
-        });
+        }
         let mut laid_views = BumpVec::with_capacity_in(viewed.len(), scratch);
         laid_views.extend(viewed.iter().map(|(site, slots)| {
             let captures = collect(writer, slots.captures.iter().copied());

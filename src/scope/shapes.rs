@@ -5,7 +5,9 @@
 //!
 //! See [README.md § Load-time types](README.md#load-time-types).
 
-use crate::memory::{BumpAllocator, BumpVec, ProgramBrand, Writer, collect};
+use crate::memory::{
+    BumpAllocator, BumpBackedMap, BumpVec, ProgramBrand, Writer, bump_table, collect,
+};
 use crate::parse::{KExpression, Role};
 use crate::symbols::{BinderSymbol, SymbolInterner};
 use crate::values::{Chain, Knotted};
@@ -336,19 +338,14 @@ fn number_chain<'graph>(
 ) {
     let mut order = BumpVec::new_in(scratch);
     let top = number_names(writer, scratch, root, true, 0, levels, &mut order);
-    let mut identities: BumpVec<'_, PathId<'graph>> = BumpVec::new_in(scratch);
+    // Each path identity's index, handed out in first-spelling order.
+    let mut identities: BumpBackedMap<'_, PathId<'graph>, usize> = bump_table(scratch);
     for shape in order.iter() {
         let mut paths = BumpVec::with_capacity_in(shape.spelled().len(), scratch);
         for spelled in shape.spelled() {
             paths.push(spelled.id.map(|id| {
-                let index = match identities.iter().position(|held| *held == id) {
-                    Some(index) => index,
-                    None => {
-                        identities.push(id);
-                        identities.len() - 1
-                    }
-                };
-                top + index
+                let next = identities.len();
+                top + *identities.entry(id).or_insert(next)
             }));
         }
         levels[shape.segment().index() as usize].paths = collect(writer, paths.iter().copied());

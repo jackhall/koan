@@ -596,6 +596,9 @@ struct Draft<'graph, 'x> {
     /// Finished nested drafts, waiting on this draft's components to settle their captures, in
     /// program order, which numbers their segments alike at every load.
     children: BumpVec<'x, (Site, Draft<'graph, 'x>)>,
+    /// How many drafts are nested in this one, at any depth: the segments they take before it
+    /// seals. Counted as each finished child is adopted.
+    descendants: u32,
     /// Each slot's binder as far as the walk has found it, by slot.
     binders: BumpVec<'x, DraftBinder<'graph>>,
     /// Each type expression the load pass types on its own, as met.
@@ -685,14 +688,6 @@ impl Sealing<'_> {
     }
 }
 
-/// How many drafts are nested in `draft`, at any depth: the segments its nested drafts take before
-/// it seals.
-fn descendants(draft: &Draft<'_, '_>) -> u32 {
-    (draft.children.iter())
-        .map(|(_, child)| 1 + descendants(child))
-        .sum()
-}
-
 /// A type expression a draft records: see [`TypeExpression`](super::TypeExpression).
 #[derive(Clone, Copy)]
 struct Recorded<'graph> {
@@ -731,6 +726,12 @@ impl DraftComponent {
 }
 
 impl Draft<'_, '_> {
+    /// Take the finished draft `child`, nested at `site`, counting it and its descendants.
+    fn adopt(&mut self, site: Site, child: Self) {
+        self.descendants += 1 + child.descendants;
+        self.children.push((site, child));
+    }
+
     fn members_of(&self, component: ComponentIndex) -> &[Slot] {
         self.components[component.index()].run(&self.members)
     }
@@ -1026,6 +1027,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             unit_of_slot: BumpVec::new_in(scratch),
             unit_of_statement: BumpVec::new_in(scratch),
             children: BumpVec::new_in(scratch),
+            descendants: 0,
             binders: draft_binders,
             type_expressions: BumpVec::new_in(scratch),
             path_spellings: BumpVec::new_in(scratch),
@@ -2197,7 +2199,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             }
             Err(refusal) => self.refused_code(level, statement, entered_at, code, refusal)?,
         };
-        self.chain[level].children.push((Site::of(part), child));
+        self.chain[level].adopt(Site::of(part), child);
         Ok(())
     }
 
@@ -2463,7 +2465,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         parent.current = (statement, class);
         let entered_at = parent.boundary();
         let child = self.nested(|builder| builder.draft(kind, entry, entered_at, statements));
-        self.chain[level].children.push((site, child?));
+        self.chain[level].adopt(site, child?);
         Ok(())
     }
 
@@ -3403,7 +3405,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         let last_reads = self.last_reads(&draft);
         // The nested drafts take the segments before this one's, in program order: a frontier's
         // cut (`Cut`) rests on segments falling from the root inward along a chain.
-        let segment = Segment(self.next_segment.get() + descendants(&draft));
+        let segment = Segment(self.next_segment.get() + draft.descendants);
         let children = std::mem::replace(&mut draft.children, BumpVec::new_in(self.scratch));
         let mut chain = BumpVec::with_capacity_in(around.len() + 1, self.scratch);
         chain.extend_from_slice(around);
@@ -3412,11 +3414,11 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             component_of: &draft.component_of,
             statement_binders: &draft.statement_binders,
         });
-        let mut nested = BumpVec::with_capacity_in(draft.children.len(), self.scratch);
+        let mut nested = BumpVec::with_capacity_in(children.len(), self.scratch);
         // The children are drafted statement by statement, so each statement's are one run.
         let mut nested_starts =
             BumpVec::with_capacity_in(draft.statements as usize + 1, self.scratch);
-        let mut nested_parents = BumpVec::with_capacity_in(draft.children.len(), self.scratch);
+        let mut nested_parents = BumpVec::with_capacity_in(children.len(), self.scratch);
         for (site, child) in children {
             debug_assert!(
                 child.parent_statement < draft.statements

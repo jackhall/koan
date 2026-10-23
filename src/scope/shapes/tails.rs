@@ -86,15 +86,24 @@ pub(super) fn tails<'graph, 'x>(
         tail_edges(scratch, shapes, shape, &mut edges);
     }
 
+    // Each body's first slot in one flat set of every body's slots, by segment.
+    let mut offsets = BumpVec::with_capacity_in(count, scratch);
+    let mut total = 0;
+    for shape in bodies {
+        offsets.push(total);
+        total += shape.slots();
+    }
+    let bit = |segment: Segment, slot: Slot| offsets[segment.index() as usize] + slot.index();
     // Every parameter starts invariant and falls where a tail edge into it passes anything but a
     // bare invariant parameter of the caller there.
-    let mut varying: BumpVec<'_, (Segment, Slot)> = BumpVec::new_in(scratch);
+    let mut varying = BumpVec::with_capacity_in(total, scratch);
+    varying.resize(total, false);
     loop {
         let mut changed = false;
         for edge in edges.iter() {
             for (slot, passed) in edge.arguments {
-                let key = (edge.callee, *slot);
-                if varying.contains(&key) {
+                let key = bit(edge.callee, *slot);
+                if varying[key] {
                     continue;
                 }
                 let falls = match passed {
@@ -102,12 +111,10 @@ pub(super) fn tails<'graph, 'x>(
                     // A hop of a body into itself keeps a parameter only where it passes that same
                     // one on.
                     Some(from) if edge.caller == edge.callee && from != slot => true,
-                    Some(from) => {
-                        !invariant_body(edge.caller) || varying.contains(&(edge.caller, *from))
-                    }
+                    Some(from) => !invariant_body(edge.caller) || varying[bit(edge.caller, *from)],
                 };
                 if falls {
-                    varying.push(key);
+                    varying[key] = true;
                     changed = true;
                 }
             }
@@ -117,6 +124,18 @@ pub(super) fn tails<'graph, 'x>(
         }
     }
 
+    // Each parameter a hop of a body into itself rebinds, by segment, sorted.
+    let mut rebinds: BumpVec<'_, (Segment, Slot)> = BumpVec::new_in(scratch);
+    for edge in edges.iter().filter(|edge| edge.caller == edge.callee) {
+        for (slot, passed) in edge.arguments {
+            if *passed != Some(*slot) {
+                rebinds.push((edge.callee, *slot));
+            }
+        }
+    }
+    rebinds.sort_unstable();
+    rebinds.dedup();
+
     let mut laid = BumpVec::with_capacity_in(count, scratch);
     for shape in bodies {
         let segment = shape.segment();
@@ -124,27 +143,16 @@ pub(super) fn tails<'graph, 'x>(
             laid.push(Tails::default());
             continue;
         }
-        let mut rebound = BumpVec::new_in(scratch);
-        for edge in edges
-            .iter()
-            .filter(|edge| edge.caller == segment && edge.callee == segment)
-        {
-            for (slot, passed) in edge.arguments {
-                if *passed != Some(*slot) {
-                    rebound.push(*slot);
-                }
-            }
-        }
-        rebound.sort_unstable();
-        rebound.dedup();
+        let start = rebinds.partition_point(|(each, _)| *each < segment);
+        let end = rebinds.partition_point(|(each, _)| *each <= segment);
         let escapes = !invariant_body(segment);
         let mut invariant = BumpVec::new_in(scratch);
         if !escapes {
-            invariant.extend(parameters(shape).filter(|slot| !varying.contains(&(segment, *slot))));
+            invariant.extend(parameters(shape).filter(|slot| !varying[bit(segment, *slot)]));
         }
         laid.push(Tails {
             escapes,
-            rebound: collect(writer, rebound.iter().copied()),
+            rebound: collect(writer, rebinds[start..end].iter().map(|(_, slot)| *slot)),
             invariant: collect(writer, invariant.iter().copied()),
         });
     }
