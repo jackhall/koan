@@ -226,7 +226,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
 
     /// [`tree_form`](Self::tree_form) unmemoized: provisional where it falls back on what the
     /// walk's progress could sharpen — a type not closed yet, a closure not typed, a call not
-    /// unfolded.
+    /// unfolded. `tree_form` acts on that only through a body's tree.
     fn tree_read(
         &mut self,
         scope: Scope<'o, 'graph>,

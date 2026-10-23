@@ -33,10 +33,10 @@
 //!
 //! [`opaque_view_types`] is the half of an ascription computed from types alone: the bindings
 //! either side and the view's signature. The load calls it at a `:|` site over a content tree it
-//! sees all of, so the root holds each type the run's view would otherwise intern, and reads it
-//! beside the fit a view's content tree is keyed on from one fit ([`opaque_view`]);
-//! [`nested_types`] is the same half of a nested re-view, which the load lays wherever it knows
-//! what a nested module carries (`dispatch/walk/views.rs`).
+//! sees all of, so the root holds each type the run's view would otherwise intern;
+//! [`opaque_view`] computes it beside what *fits* solves, which keys the view's content tree, from
+//! one fit. [`nested_types`] is the same half of a nested re-view, which the load lays wherever it
+//! knows what a nested module carries (`dispatch/walk/views.rs`).
 
 use crate::knot::{KActivationView, KValue, Knotted, composed};
 use crate::memory::{BumpAllocator, BumpVec, Writer};

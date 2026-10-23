@@ -29,7 +29,7 @@ hand.
 
 - [The build arena](build-arena.md)
 - [The load walk's repeated work](load-walk-repeats.md)
-- [Tree and view memos](tree-and-view-memos.md)
+- [Shared frontiers](shared-frontiers.md)
 - [Placing a verdict without probing](verdict-placement.md)
 
 ## Unplanned work
@@ -54,3 +54,7 @@ as surprises, not scheduled.
   of the body (`dispatch/walk.rs` `source`, `walk/paths.rs` `resolve_entry`),
   so a body of n such reads loads in O(n²). The base the one walk replaced
   searched alike. A site-to-statement index on the shape would answer both.
+- **A member chain written through a leaf.** Each part of a written chain
+  `p.a1.….an` through a leaf is its own tree holding its own chain, so the load
+  lays n(n+1)/2 labels for it. Sharing one growable chain across the parts
+  would make it linear.

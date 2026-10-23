@@ -786,7 +786,15 @@ this type reads a member of a module built by a call written in place, and a cal
 **Content trees.** The walk reads a module-valued expression's tree
 ([`trees`](walk/trees.rs)) as the
 [module design](../../design/modules.md#the-load-and-the-run) tables it,
-memoized per shape and site, a binder read through itself reading as a leaf.
+memoized per shape and site on the chain, a binder read through itself
+reading as a leaf. Each binder's tree is built once per binding, wherever it
+is read: on the chain, and through a body's tree once per that tree's
+captures. So a module binder read from many sites, by name or through the
+module around it, lays its body's captures once. A binder's tree is rebuilt
+per read only where something besides the text shaped it: a cycle cut on an
+outer binder, a fallback the walk's progress could still sharpen (a module
+body not yet walked, a closure not yet typed, a type not yet closed), or a
+leaf keyed on the read site.
 A call **unfolds** where the load knows its callee: a keyworded use selected at
 one registration whose `FOR ALL` variables solve to closed points, or a call by
 name of an unquantified closure over a record literal. Its tree is the callee's
@@ -842,9 +850,15 @@ retype's, the type the load computed for it, each member read through it at the
 type it declares; and a member an opaque view rebuilt, as the coercion
 walk rebuilds it, a list's or dict's cells of several signatures one by one.
 The walk keeps what each read yields — a view over a closed tree by its print, a
-value a view rebuilt by what it was rebuilt from — so a chain of views reads
-each link once. Over an opaque view whose source the load does not type
-exactly, a member is read at the type the view declares for it. Where no tree
+value a view rebuilt by what it was rebuilt from — and a view over an open tree
+reads nothing, since its source or its fit is unknown and it binds nothing the
+load knows, so a chain of views, open or closed, reads each link once. A `:|`
+fits its source once: the walk keeps what each fit solves by the view's
+application and its source's print, beside the type the source carries, and
+builds each view's tree over its own source, so two sources of one content
+share a fit but not a tree. The one fit that keys the tree also gives what a
+closed view binds. Over an opaque view whose
+source the load does not type exactly, a member is read at the type the view declares for it. Where no tree
 shows a member — one written in a container literal, bound to a parameter or
 returned by a call the load does not unfold — its exact type stands for it, and
 a view of that type is read as its signature declares its members
@@ -1234,8 +1248,12 @@ each `:|` site reads back over a parameter, a capture, a local, an expression
 no binder names, a `MODULE` body over literals and a call that unfolds, a
 closed tree's digest against the run's, a functor ignoring its argument, a leaf
 keyed on a call's arguments or a body's captures, recursive functors never
-unfolding, and a closure retyped at a parameter closed at the run's digest; [paths](tests/paths.rs) — two member reads through one path sharing
-a type, two paths compared by their trees, a path through a call the carrier
+unfolding, a closure retyped at a parameter closed at the run's digest, views
+of two bodies of one content each over its own body, and the load's work held
+linear — a type path through a parameter and a substituted leaf each laying
+its chain once, and a module binder read from many sites, by name or through
+the module around it, laying its captures once; [paths](tests/paths.rs) — two member reads through one path sharing a
+type, two paths compared by their trees, a path through a call the carrier
 the run computes, a type through an inline call over a leaf refused, after an
 unknown too, a path through a name a quote leaves open left for its
 `EVAL`, each open
@@ -1250,8 +1268,9 @@ under a header or an opaque view or a chain of them, at a slot leaving a
 nested parameter unset, over a list or dict of modules of two signatures viewed
 twice, and inside a record literal past the tree's horizon; a lone `:!` laying
 its types; a view inside a record literal over a slot leaving a parameter open,
-running; and a chain of views over a module the load types at most, re-viewing
-at run no more than its first view does;
+running; a chain of views over a module the load types at most, re-viewing
+at run no more than its first view does; and the load reading each of a chain
+of open views once, and fitting a `:|` over a closed tree once;
 [classes](tests/classes.rs) — each body's class, a value holding nothing minted
 — received, a record literal written in place, a module built over received or
 literal content — passed on or returned as no exit, and each site's caching
