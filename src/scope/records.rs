@@ -352,7 +352,7 @@ struct Records<'graph> {
     units: Keyed<'graph, (UnitId, (&'graph UnitFacts<'graph>, Frontier<'graph>))>,
     /// Each owning body the walk closed.
     closings: Keyed<'graph, (Segment, (&'graph Closing<'graph>, Frontier<'graph>))>,
-    /// Which of `units` holds each fact.
+    /// Which of `units` holds each site, through and path fact: the facts the shape cannot place.
     index: Keyed<'graph, (Held, u32)>,
     /// Each body, by segment, beside its type captures as its birth reads them and its folds: none
     /// before the load folds, when a read falls to the base.
@@ -367,19 +367,49 @@ struct Laid<'graph> {
     folds: Option<Folds<'graph>>,
 }
 
-/// A fact a unit's record holds, by what it is found by.
+/// A fact a unit's record holds that the shape table cannot place, by what it is found by. A slot's,
+/// a statement's and a birth's unit is the shape's to name: [`Shapes::slot_unit`],
+/// [`Shapes::running`] and [`Shapes::birth_unit`].
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 enum Held {
     Site(Segment, Site),
-    Slot(Segment, Slot),
-    Statement(Segment, u32),
     Through(Segment, usize),
-    Born(Segment),
     /// A path entry, by its chain root and level.
     Path(Segment, usize),
 }
 
 impl<'graph> LoadFacts<'graph> {
+    /// The bytes of this load's records index.
+    #[cfg(test)]
+    pub fn index_bytes(&self) -> usize {
+        std::mem::size_of_val(self.records.index.entries())
+    }
+
+    /// The bytes of the facts this load's records index keys: each own record's paths, and each
+    /// body's site-keyed and through tables in it.
+    #[cfg(test)]
+    pub fn keyed_fact_bytes(&self) -> usize {
+        use std::mem::size_of_val;
+        let typed = |typed: &Typed<'_>| {
+            size_of_val(typed.expressions.entries())
+                + size_of_val(typed.parts.entries())
+                + size_of_val(typed.settled.entries())
+                + size_of_val(typed.instances.entries())
+                + size_of_val(typed.uses.entries())
+                + size_of_val(typed.selections.entries())
+                + size_of_val(typed.by_name.entries())
+                + size_of_val(typed.trees.entries())
+                + size_of_val(typed.minting.entries())
+                + size_of_val(typed.throughs.entries())
+        };
+        (self.own_units().iter())
+            .map(|(_, (facts, _))| {
+                size_of_val(facts.paths.entries())
+                    + facts.typed.iter().map(|(_, at)| typed(at)).sum::<usize>()
+            })
+            .sum()
+    }
+
     /// The facts of a load whose walk ran nothing over `shapes`: every fact unknown, and every
     /// capture composing.
     #[cfg(test)]
@@ -537,6 +567,12 @@ impl<'graph> LoadFacts<'graph> {
         self.fact(shape, Held::Site(shape.segment(), site), table, site)
     }
 
+    /// `shape`'s facts in the newest record of `unit`.
+    fn typed_in(&self, shape: &BodyShape<'_>, unit: UnitId) -> Option<&'graph Typed<'graph>> {
+        let (facts, _) = self.records.unit(unit)?;
+        facts.typed.get(shape.segment()).map(|(_, typed)| typed)
+    }
+
     /// The entry at `slot` of the slot-keyed `table` of `shape`'s facts.
     fn at_slot<V: Copy + 'graph>(
         &self,
@@ -544,7 +580,14 @@ impl<'graph> LoadFacts<'graph> {
         slot: Slot,
         table: impl FnOnce(&Typed<'graph>) -> Keyed<'graph, (Slot, V)>,
     ) -> Option<V> {
-        self.fact(shape, Held::Slot(shape.segment(), slot), table, slot)
+        let typed = self.typed_in(shape, self.shapes.slot_unit(shape.segment(), slot))?;
+        table(typed).get(slot).map(|(_, value)| *value)
+    }
+
+    /// The birth facts of `body`, a callable or a quote's code, in its birth unit's newest record.
+    fn born(&self, body: Segment) -> Option<&'graph Born<'graph>> {
+        let (facts, _) = self.records.unit(self.shapes.birth_unit(body)?)?;
+        facts.born.get(body).map(|(_, born)| born)
     }
 
     /// Whether the site-listing `table` of `shape`'s facts lists `site`.
@@ -578,20 +621,18 @@ impl<'graph> LoadFacts<'graph> {
 
     /// What the load fixed for the callable body `shape`'s type.
     pub fn callable_type(&self, shape: &BodyShape<'_>) -> StaticCallable<'graph> {
-        (self.records.born(shape.segment())).map_or(Static::Unknown, |born| born.callable)
+        (self.born(shape.segment())).map_or(Static::Unknown, |born| born.callable)
     }
 
     /// The callable body `shape`'s own `FOR ALL` group as its body reads it, by group order.
     pub fn group_levels(&self, shape: &BodyShape<'_>) -> &'graph [Parametric] {
-        self.records
-            .born(shape.segment())
-            .map_or(&[], |born| born.levels)
+        self.born(shape.segment()).map_or(&[], |born| born.levels)
     }
 
     /// The solution the callable body `shape`'s `FOR ALL` is born instantiated at, where the load
     /// solved one.
     pub fn born_instance(&self, shape: &BodyShape<'_>) -> Option<StaticSolution<'graph>> {
-        self.records.born(shape.segment())?.instance
+        self.born(shape.segment())?.instance
     }
 
     /// Each lexical variable `shape` declares, by level, beside where its activation holds it.
@@ -675,8 +716,8 @@ impl<'graph> LoadFacts<'graph> {
     /// The static type of statement `index` of `shape`'s body.
     pub fn statement_type(&self, shape: &BodyShape<'_>, index: usize) -> Option<Interval> {
         let index = index as u32;
-        let held = Held::Statement(shape.segment(), index);
-        self.fact(shape, held, |typed| typed.statements, index)
+        let typed = self.typed_in(shape, self.shapes.running(shape.segment(), index))?;
+        typed.statements.get(index).map(|(_, typed)| *typed)
     }
 
     /// The static type of the binder at `slot` of `shape`.
@@ -816,11 +857,6 @@ impl<'graph> Records<'graph> {
         facts.typed.get(segment).map(|(_, typed)| typed)
     }
 
-    fn born(&self, body: Segment) -> Option<&'graph Born<'graph>> {
-        let (_, facts) = self.holding(Held::Born(body))?;
-        facts.born.get(body).map(|(_, born)| born)
-    }
-
     /// The path entry at `level` of the chain `root` roots, beside its resolution.
     fn path(&self, root: Segment, level: usize) -> Option<(PathEntry<'graph>, Resolution<'graph>)> {
         let (_, facts) = self.holding(Held::Path(root, level))?;
@@ -853,13 +889,10 @@ impl<'graph> Records<'graph> {
 }
 
 impl UnitFacts<'_> {
-    /// Each fact this record holds, by what it is found by.
+    /// Each fact this record holds that the shape cannot place, by what it is found by.
     fn held(&self, each: &mut impl FnMut(Held)) {
         for (segment, typed) in self.typed.iter() {
             typed.held(*segment, each);
-        }
-        for (segment, _) in self.born.iter() {
-            each(Held::Born(*segment));
         }
         for ((root, level), _) in self.paths.iter() {
             each(Held::Path(*root, *level));
@@ -868,7 +901,7 @@ impl UnitFacts<'_> {
 }
 
 impl Typed<'_> {
-    /// Each fact of `segment` these tables hold, by what it is found by.
+    /// Each site and through fact of `segment` these tables hold, by what it is found by.
     fn held(&self, segment: Segment, each: &mut impl FnMut(Held)) {
         let sites = (self.expressions.iter().map(|(site, _)| *site))
             .chain(self.parts.iter().map(|(site, _)| *site))
@@ -880,14 +913,6 @@ impl Typed<'_> {
             .chain(self.trees.iter().map(|(site, _)| *site))
             .chain(self.minting.iter().copied());
         sites.for_each(|site| each(Held::Site(segment, site)));
-        let slots = (self.declared.iter().map(|(slot, _)| *slot))
-            .chain(self.registered.iter().map(|(slot, _)| *slot))
-            .chain(self.binders.iter().map(|(slot, _)| *slot))
-            .chain(self.contents.iter().map(|(slot, _)| *slot));
-        slots.for_each(|slot| each(Held::Slot(segment, slot)));
-        for (index, _) in self.statements.iter() {
-            each(Held::Statement(segment, *index));
-        }
         for (level, _) in self.throughs.iter() {
             each(Held::Through(segment, *level));
         }
