@@ -229,6 +229,7 @@ pub(super) fn walk<'graph: 'o, 'tier: 'o, 'o, S: Store<'o>>(
         steps: bump_table(scratch),
         rebuilds: bump_table(scratch),
         modules: bump_table(scratch),
+        sides: bump_table(scratch),
         paths: BumpVec::new_in(scratch),
         composites: bump_table(scratch),
         module_mints: bump_table(scratch),
@@ -550,7 +551,9 @@ struct Pass<'p, 'o, 'x, 'graph, 'tier, 'pair, 'reg, S: Store<'o>> {
     /// Each value a view rebuilt, by what it was rebuilt from.
     rebuilds: BumpBackedMap<'p, views::Rebuild, views::Carried<'o>>,
     /// The modules each rebuilt union of cells' signatures may be, cell by cell.
-    modules: BumpBackedMap<'p, views::Identity, &'o [views::Carried<'o>]>,
+    modules: BumpBackedMap<'p, views::Identity, &'p [views::Carried<'o>]>,
+    /// Each declared type a view reads either side, by its two sides' handles.
+    sides: BumpBackedMap<'p, (DeclaredType<Parametric>, KType, KType), views::Sides>,
     /// The path table of each chain being typed, outermost first.
     paths: BumpVec<'p, paths::ChainPaths<'p, 'o, 'graph>>,
     /// Each composite site's dependencies, by its site: a part that is one takes its class.

@@ -32,8 +32,8 @@ use crate::memory::{BumpBackedMap, BumpVec, bump_table, collect, resident};
 use crate::parse::{ExpressionPart, KExpression};
 use crate::scope::{
     Binder, BodyShape, CaptureSlot, CaptureSource, Coordinate, KnotNode, Leaf, Narrowing,
-    NodeCapture, ParameterBinding, Position, Print, Segment, ShapeError, ShapeKind, Site, Slot,
-    Static, StaticCallable, StaticSolution, Store, Target, Tree, Unfolded, Within,
+    NodeCapture, ParameterBinding, Position, Print, Segment, ShapeError, ShapeKind, Shapes, Site,
+    Slot, Static, StaticCallable, StaticSolution, Store, Target, Tree, Unfolded, Within,
 };
 use crate::symbols::{BinderSymbol, ValueSymbol};
 use crate::type_lattice::{KType, TypeNode};
@@ -74,16 +74,15 @@ impl Shaped {
 }
 
 /// The value slot `shape`'s last statement binds, where it binds one: a binding statement's value
-/// is what it binds.
+/// is what it binds. Read among the slots of the unit running that statement.
 pub(super) fn last_binder(shape: &BodyShape<'_>) -> Option<Slot> {
     let last = shape.body().len().checked_sub(1)?;
-    (0..shape.slots())
-        .map(|slot| Slot(slot as u32))
-        .find(|slot| {
-            shape.position_of(*slot).statement_index() == Some(last)
-                && !matches!(shape.slot_name(*slot), BinderSymbol::Type(_))
-                && shape.registration(*slot).is_none()
-        })
+    let unit = shape.holds(shape.unit_of_statement(last));
+    unit.slots.iter().copied().find(|slot| {
+        shape.position_of(*slot).statement_index() == Some(last)
+            && !matches!(shape.slot_name(*slot), BinderSymbol::Type(_))
+            && shape.registration(*slot).is_none()
+    })
 }
 
 /// Where an expression is written: a part, or a whole node, whose site is its first part's address
@@ -1171,7 +1170,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             }
             // A module body's binder is keyed on its captures, which read nothing.
             None if self.shape_at(binder.body).kind() == ShapeKind::Module => None,
-            None if inside(binder.body, self.shape_at(call.callee)) => Some(Within::Call(*call)),
+            None if inside(self.shapes, binder.body, call.callee) => Some(Within::Call(*call)),
             None => None,
         };
         let within = within.map(|within| resident(self.lay, within));
@@ -1198,12 +1197,18 @@ fn named_type<'o>(types: &crate::values::Chain<'_, '_, '_, '_>, named: KType) ->
     Tree::Digest(type_digest(named, KType::of_kind(named.kind_of(types))))
 }
 
-/// Whether `shape` is `callee` or a body nested in it, at any depth: a binder bound once per call
-/// of `callee`.
-fn inside(body: Segment, callee: &BodyShape<'_>) -> bool {
-    // Every body a binder births is a nested shape too.
-    body == callee.segment()
-        || (callee.nested_shapes().iter()).any(|(_, nested)| inside(body, nested))
+/// Whether `body` is `callee` or a body nested in it, at any depth: a binder bound once per call
+/// of `callee`. Walks up from `body`.
+fn inside(shapes: &Shapes<'_>, mut body: Segment, callee: Segment) -> bool {
+    loop {
+        if body == callee {
+            return true;
+        }
+        match shapes.parent(body) {
+            Some((up, _)) => body = up,
+            None => return false,
+        }
+    }
 }
 
 /// Whether the binder at `slot` of `shape` keeps the scheme of the quantified callable it births,
