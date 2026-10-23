@@ -129,28 +129,6 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         (self.chain.iter()).rposition(|level| level.shape.segment() == segment)
     }
 
-    /// The unit of the owning body around `segment` that runs statement `statement` of it.
-    pub(super) fn running(&self, segment: Segment, statement: u32) -> UnitId {
-        let shape = self.shape_at(segment);
-        match shape.kind() {
-            ShapeKind::Program | ShapeKind::Callable | ShapeKind::Code => UnitId {
-                segment,
-                unit: shape.unit_of_statement(statement as usize),
-            },
-            ShapeKind::Block | ShapeKind::Module => {
-                let (parent, statement) =
-                    (self.shapes.parent(segment)).expect("an inline body has an encloser");
-                self.running(parent, statement)
-            }
-        }
-    }
-
-    /// The unit that births `body`, a callable or a quote's code, or runs it, an inline body.
-    pub(super) fn birth_unit(&self, body: Segment) -> Option<UnitId> {
-        let (parent, statement) = self.shapes.parent(body)?;
-        Some(self.running(parent, statement))
-    }
-
     /// The record of `unit` as the walk has it, its frontier gathered: `None` where it is not
     /// written.
     fn record_of(&self, unit: UnitId) -> Option<&'o UnitFacts<'o>> {
@@ -167,7 +145,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
 
     /// The birth facts of `body`, a callable or a quote's code, its unit's frontier gathered.
     pub(super) fn born(&self, body: Segment) -> Option<Born<'o>> {
-        let unit = self.birth_unit(body)?;
+        let unit = self.shapes.birth_unit(body)?;
         if let Some((tag, state)) = self.state_of(unit)
             && let Some((_, born)) = state.born.iter().find(|(held, _)| *held == body)
         {
@@ -181,7 +159,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     /// The facts of `segment`, an inline body off the chain, as the unit that ran it keeps them,
     /// its frontier gathered.
     pub(super) fn inline_facts(&self, segment: Segment) -> Option<Typed<'o>> {
-        let unit = self.birth_unit(segment)?;
+        let unit = self.shapes.birth_unit(segment)?;
         if let Some((tag, state)) = self.state_of(unit)
             && let Some((_, typed)) = state.typed.iter().rev().find(|(held, _)| *held == segment)
         {
@@ -200,16 +178,9 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
 
     /// The facts of `segment` off the chain that hold a fact at `slot`.
     fn off_chain_slot(&self, segment: Segment, slot: Slot) -> Option<Typed<'o>> {
-        let shape = self.shape_at(segment);
-        match shape.kind() {
+        match self.shape_at(segment).kind() {
             ShapeKind::Block | ShapeKind::Module => self.inline_facts(segment),
-            _ => self.owner_facts(
-                segment,
-                UnitId {
-                    segment,
-                    unit: shape.unit_of_slot(slot),
-                },
-            ),
+            _ => self.owner_facts(segment, self.shapes.slot_unit(segment, slot)),
         }
     }
 
@@ -443,8 +414,9 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             .map(|at| expressions[at].statement);
         let facts = match shape.kind() {
             ShapeKind::Block | ShapeKind::Module => self.inline_facts(segment),
-            _ => statement
-                .and_then(|statement| self.owner_facts(segment, self.running(segment, statement))),
+            _ => statement.and_then(|statement| {
+                self.owner_facts(segment, self.shapes.running(segment, statement))
+            }),
         };
         (facts.and_then(|facts| facts.expressions.get(site).map(|(_, typed)| *typed)))
             .unwrap_or(Static::Unknown)

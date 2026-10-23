@@ -11,7 +11,7 @@ use crate::symbols::{BinderSymbol, SymbolInterner};
 use crate::values::{Chain, Knotted};
 
 use super::builtins::Builtins;
-use super::facts::{Address, Unknown};
+use super::facts::{Address, UnitId, Unknown};
 use super::shape::{
     BodyShape, CaptureChain, CaptureSlot, CaptureSource, ComponentIndex, Coordinate, Lands, PathId,
     Position, Segment, ShapeError, ShapeKind, Site, Slot, Target, UnitIndex, follow,
@@ -159,6 +159,45 @@ impl<'graph> Shapes<'graph> {
                         .expect("an inline body has an encloser")
                         .0;
                 }
+            }
+        }
+    }
+
+    /// The unit of the owning body around `segment` that runs statement `statement` of it: an
+    /// inline body runs in the unit running the statement of its encloser that holds it.
+    pub fn running(&self, segment: Segment, statement: u32) -> UnitId {
+        let shape = self.shape_at(segment);
+        match shape.kind() {
+            ShapeKind::Program | ShapeKind::Callable | ShapeKind::Code => UnitId {
+                segment,
+                unit: shape.unit_of_statement(statement as usize),
+            },
+            ShapeKind::Block | ShapeKind::Module => {
+                let (parent, statement) =
+                    (self.parent(segment)).expect("an inline body has an encloser");
+                self.running(parent, statement)
+            }
+        }
+    }
+
+    /// The unit that births `body`, a callable or a quote's code, or runs it, an inline body:
+    /// `None` for the root.
+    pub fn birth_unit(&self, body: Segment) -> Option<UnitId> {
+        let (parent, statement) = self.parent(body)?;
+        Some(self.running(parent, statement))
+    }
+
+    /// The unit whose record holds the facts of the slot `slot` of `segment`: the unit binding it
+    /// in an owning body, the unit running an inline body.
+    pub fn slot_unit(&self, segment: Segment, slot: Slot) -> UnitId {
+        let shape = self.shape_at(segment);
+        match shape.kind() {
+            ShapeKind::Program | ShapeKind::Callable | ShapeKind::Code => UnitId {
+                segment,
+                unit: shape.unit_of_slot(slot),
+            },
+            ShapeKind::Block | ShapeKind::Module => {
+                (self.birth_unit(segment)).expect("an inline body has an encloser")
             }
         }
     }

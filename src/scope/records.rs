@@ -422,6 +422,25 @@ impl<'graph> LoadFacts<'graph> {
             held.windows(2).all(|pair| pair[0].0 != pair[1].0),
             "each fact lies in one unit's record"
         );
+        debug_assert!(base.is_none_or(|base| std::ptr::eq(base.shapes, shapes)));
+        if cfg!(debug_assertions) {
+            for (id, (facts, _)) in units.iter() {
+                let placed = facts.typed.iter().all(|(segment, typed)| {
+                    let mut slots = (typed.declared.iter().map(|(slot, _)| *slot))
+                        .chain(typed.registered.iter().map(|(slot, _)| *slot))
+                        .chain(typed.binders.iter().map(|(slot, _)| *slot))
+                        .chain(typed.contents.iter().map(|(slot, _)| *slot));
+                    slots.all(|slot| shapes.slot_unit(*segment, slot) == *id)
+                        && (typed.statements.iter())
+                            .all(|(index, _)| shapes.running(*segment, *index) == *id)
+                }) && (facts.born.iter())
+                    .all(|(body, _)| shapes.birth_unit(*body) == Some(*id));
+                assert!(
+                    placed,
+                    "a slot's, statement's or birth's fact lies in the unit the shape names"
+                );
+            }
+        }
         let records = Records {
             base,
             binding,
