@@ -6,7 +6,7 @@ use crate::program::{CellSubstrate, Outcome, Program};
 use crate::scope::{BodyShape, Leaf, Site, Tree};
 
 use super::statics::{body, loaded, slot};
-use super::{Koan, output};
+use super::{Koan, assert_linear, load_counts, output};
 use crate::values::SpecBounds;
 
 /// `SIG Counter`, and `MODULE ints`, which fits it.
@@ -387,4 +387,46 @@ fn a_closure_retyped_at_a_parameter_is_closed_at_the_run_s_digest() {
         "the closure's own type is known, so its retype is exact"
     );
     assert_eq!(digest, digest_back(&mut substrate, "v"));
+}
+
+/// Signatures nested `n` deep: `Sig0` innermost, declaring a type member, and each other's `a` the
+/// next one in.
+fn nested_signatures(n: usize) -> String {
+    let mut source = String::from("SIG Sig0 FOR ALL #[Elem] = #[(VAL zero :Elem)]\n");
+    for at in 1..=n {
+        source += &format!("SIG Sig{at} = #[(VAL a :Sig{})]\n", at - 1);
+    }
+    source
+}
+
+/// A type path read through a parameter extends the parameter's leaf by prefixes of the path's own
+/// chain, laying no label of its own.
+#[test]
+fn a_path_through_a_parameter_lays_its_chain_once() {
+    let program = |n: usize| {
+        let path = "a.".repeat(n);
+        let signatures = nested_signatures(n);
+        format!("{signatures}LET f = (FN :{{p :Sig{n}}} -> Any = #(LET x :(p.{path}Elem) = 1))\n")
+    };
+    assert_linear("chain labels", |n| load_counts(&program(n)).chain_labels);
+}
+
+/// A call unfolding a callee whose summary reads `n` steps through its parameter reads its
+/// argument's leaf through them once, laying one chain joining the leaf's to them.
+#[test]
+fn a_substituted_leaf_lays_its_chain_once() {
+    let callee = |n: usize| {
+        let path = ".a".repeat(n);
+        let signatures = nested_signatures(n);
+        format!("{signatures}LET g = (FN :{{p :Sig{n}}} -> Any = #(p{path}))\n")
+    };
+    // The call's own labels, past the callee's: its written `r.b` and the chain joined to it.
+    assert_linear("chain labels", |n| {
+        let call = format!(
+            "{}SIG Wrap = #[(VAL b :Sig{n})]\n\
+             LET f = (FN :{{r :Wrap}} -> Any = #(g {{p = r.b}}))\n",
+            callee(n)
+        );
+        load_counts(&call).chain_labels - load_counts(&callee(n)).chain_labels
+    });
 }

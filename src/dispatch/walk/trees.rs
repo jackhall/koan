@@ -460,6 +460,39 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         label: ValueSymbol,
         site: Site,
     ) -> Read<'o, Option<Tree<'o>>> {
+        self.read_step(tree, label, &[], &mut None, site)
+    }
+
+    /// `tree` read through each of `labels` in turn, at the part at `site`: `None` where a step
+    /// reads nothing. A leaf's chain is extended as a prefix of `labels`, or of one chain joining
+    /// the leaf's to them, so the read lays O(n) labels for an n-step chain.
+    pub(super) fn read_chain(
+        &mut self,
+        tree: Tree<'o>,
+        labels: &'o [ValueSymbol],
+        site: Site,
+    ) -> Read<'o, Option<Tree<'o>>> {
+        let (mut read, mut joined) = (tree, None);
+        for at in 0..labels.len() {
+            match self.read_step(read, labels[at], &labels[at..], &mut joined, site)? {
+                Some(next) => read = next,
+                None => return Ok(None),
+            }
+        }
+        Ok(Some(read))
+    }
+
+    /// [`read_member`](Self::read_member) as one step of [`read_chain`](Self::read_chain): `rest`
+    /// is the chain's labels from `label` on, empty for a lone read, and `joined` the chain the
+    /// read laid joining a leaf's chain to them, where it laid one.
+    fn read_step(
+        &mut self,
+        tree: Tree<'o>,
+        label: ValueSymbol,
+        rest: &'o [ValueSymbol],
+        joined: &mut Option<&'o [ValueSymbol]>,
+        site: Site,
+    ) -> Read<'o, Option<Tree<'o>>> {
         Ok(match tree {
             Tree::Body { body, captures, .. } => {
                 match self.shape_at(body).slot(BinderSymbol::Value(label)) {
@@ -476,13 +509,31 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 within,
                 ..
             }) => {
-                let mut extended = BumpVec::with_capacity_in(chain.len() + 1, self.scratch);
-                extended.extend(chain.iter().copied());
-                extended.push(label);
-                #[cfg(test)]
-                super::count(|counts| counts.chain_labels += extended.len());
-                let chain = collect(self.lay, extended.iter().copied());
-                Some(Tree::bound(binder, chain, within))
+                let next = chain.len();
+                let extended = match *joined {
+                    // A leaf this read extended already: its chain is a prefix of the joined one.
+                    Some(joined)
+                        if std::ptr::eq(chain.as_ptr(), joined.as_ptr())
+                            && joined.get(next) == Some(&label) =>
+                    {
+                        &joined[..=next]
+                    }
+                    _ if rest.is_empty() => {
+                        let labels = chain.iter().copied().chain([label]);
+                        self.lay_chain(labels, next + 1)
+                    }
+                    _ => {
+                        let whole = match chain {
+                            [] => rest,
+                            _ => {
+                                self.lay_chain(chain.iter().chain(rest).copied(), next + rest.len())
+                            }
+                        };
+                        *joined = Some(whole);
+                        &whole[..=next]
+                    }
+                };
+                Some(Tree::bound(binder, extended, within))
             }
             Tree::Leaf(Leaf::Unnamed(site)) => Some(Tree::Leaf(Leaf::Unnamed(site))),
             // Through a header, the member at the type its carried signature declares it.
@@ -493,7 +544,10 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 let declared =
                     signature_member(types, scratch, carried.into(), BinderSymbol::Value(label))
                         .and_then(|read| read.declared.as_type());
-                match (self.read_member(*source, label, site)?, declared) {
+                match (
+                    self.read_step(*source, label, rest, joined, site)?,
+                    declared,
+                ) {
                     (Some(member), Some(declared)) => {
                         Some(self.retyped_tree(member, declared, site)?)
                     }
@@ -502,6 +556,19 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             }
             Tree::Digest(_) | Tree::Knot { .. } | Tree::View { .. } => None,
         })
+    }
+
+    /// The `len` labels of a leaf's chain, laid in program storage.
+    fn lay_chain(
+        &self,
+        labels: impl Iterator<Item = ValueSymbol>,
+        len: usize,
+    ) -> &'o [ValueSymbol] {
+        #[cfg(test)]
+        super::count(|counts| counts.chain_labels += len);
+        let mut chain = BumpVec::with_capacity_in(len, self.scratch);
+        chain.extend(labels);
+        collect(self.lay, chain.iter().copied())
     }
 
     /// `tree` retyped to `declared` where the run retypes its value — a parameter binding its
@@ -1027,14 +1094,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                     Some(declared) => self.retyped_tree(*argument, declared, site)?,
                     None => *argument,
                 };
-                let mut read = Some(argument);
-                for label in chain {
-                    read = match read {
-                        Some(tree) => self.read_member(tree, *label, site)?,
-                        None => None,
-                    };
-                }
-                if let Some(read) = read {
+                if let Some(read) = self.read_chain(argument, chain, site)? {
                     return Ok(read);
                 }
             }

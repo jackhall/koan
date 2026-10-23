@@ -495,12 +495,8 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 }
             }
         };
-        let mut tree = root;
-        for step in entry.chain {
-            tree = self
-                .read_member(tree, *step, site)?
-                .unwrap_or(Tree::Leaf(Leaf::Unnamed(site)));
-        }
+        let tree =
+            (self.read_chain(root, entry.chain, site)?).unwrap_or(Tree::Leaf(Leaf::Unnamed(site)));
         let through = match entry.through {
             None => Some(None),
             Some(through) => types.concrete(through).map(Some),
