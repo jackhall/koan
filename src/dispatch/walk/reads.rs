@@ -115,6 +115,9 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     /// names them — since a frontier is read under the reader's binding, which extends the binding
     /// of the layer that laid it: a layered store wakes only on what its base leaves unbound.
     pub(super) fn note_frontier(&self, frontier: Frontier<'o>, segment: Segment) {
+        if frontier.is_empty() {
+            return;
+        }
         let cut = Cut {
             frontier,
             from: self.meet(segment),
