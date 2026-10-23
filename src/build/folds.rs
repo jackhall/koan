@@ -181,7 +181,7 @@ pub fn fold<'o>(
 /// Each `(callable, slot)` a callable keys on through its frontiers: a keyable name of it in the
 /// frontier of a unit beneath it, its entry aside, whose seam is a callable's entry. Sorted. Each
 /// frontier's sites and names are read once, through a memo every frontier reading it shares.
-fn keyed_names<'x>(
+pub(super) fn keyed_names<'x>(
     shapes: &Shapes<'_>,
     frontiers: &[(Segment, UnitIndex, Frontier<'_>)],
     scratch: BumpAllocator<'x>,

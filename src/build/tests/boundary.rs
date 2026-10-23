@@ -9,6 +9,7 @@ const PREFIXES: &[&str] = &[
     "crate::memory",
     "crate::scope",
     "crate::tests::boundary",
+    "crate::tests::case_share",
     "crate::values",
 ];
 

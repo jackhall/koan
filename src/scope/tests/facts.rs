@@ -55,7 +55,7 @@ fn frontier<'a>(
         frontier: *frontier,
         from: Segment(*from),
     }));
-    Frontier::laid(lay, &mut staged, &mut cuts)
+    Frontier::laid(lay, &mut staged, &cuts)
 }
 
 #[test]
@@ -64,20 +64,41 @@ fn a_frontier_lays_its_own_unknowns_sorted_and_each_read_once_at_its_widest_cut(
     let writer = storage.brand().writer();
     let scratch = Bump::new();
     let read = frontier(writer, &scratch, &[unknown(4, 0)], &[]);
+    let other = frontier(writer, &scratch, &[unknown(5, 0)], &[]);
     let laid = frontier(
         writer,
         &scratch,
         &[unknown(2, 0), unknown(1, 3), unknown(2, 0), unknown(1, 1)],
-        &[(read, 3), (Frontier::EMPTY, 0), (read, 1)],
+        &[(read, 3), (Frontier::EMPTY, 0), (other, 0), (read, 1)],
     );
     assert_eq!(laid.own(), &[unknown(1, 1), unknown(1, 3), unknown(2, 0)]);
+    // In the order first read, whatever the address each read frontier is laid at.
+    let reads: Vec<_> = (laid.reads().iter())
+        .map(|cut| (cut.frontier.identity(), cut.from))
+        .collect();
     assert_eq!(
-        laid.reads(),
-        &[Cut {
-            frontier: read,
-            from: Segment(1)
-        }]
+        reads,
+        [
+            (read.identity(), Segment(1)),
+            (other.identity(), Segment(0))
+        ]
     );
+    assert_eq!(laid.top(), Some(Segment(5)));
+}
+
+/// A read whose cut keeps none of its frontier's unknowns is never laid, so a frontier is empty
+/// exactly where it holds no unknown.
+#[test]
+fn a_frontier_reading_only_past_its_cuts_is_empty() {
+    let storage = program_storage();
+    let writer = storage.brand().writer();
+    let scratch = Bump::new();
+    let read = frontier(writer, &scratch, &[unknown(1, 0), unknown(4, 0)], &[]);
+    let narrowed = frontier(writer, &scratch, &[], &[(read, 2)]);
+    assert_eq!(narrowed.unknowns(), [unknown(4, 0)]);
+    // The cut at 5 keeps nothing of `read`, nor of `narrowed`, whose latest unknown is at 4.
+    let past = frontier(writer, &scratch, &[], &[(read, 5), (narrowed, 5)]);
+    assert!(past.is_empty() && past.unknowns().is_empty() && past.top().is_none());
 }
 
 #[test]

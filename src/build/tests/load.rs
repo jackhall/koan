@@ -54,7 +54,7 @@ fn a_write_reads_back_and_the_laid_facts_find_every_site_it_keys() {
             );
             store.write(unit, facts, frontier);
             let (back, at) = store.fact(unit).expect("a write reads back");
-            assert!(std::ptr::eq(back, facts) && at == frontier);
+            assert!(std::ptr::eq(back, facts) && at.identity() == frontier.identity());
             written.push((index, sites));
         }
         assert!(

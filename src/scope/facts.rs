@@ -3,9 +3,9 @@
 //!
 //! The load keys its facts by unit ([`UnitId`]): one record per unit, beside its **frontier** — the
 //! [`Unknown`]s it read itself and the frontiers it read, together every unknown that could change
-//! it, transitively — kept in a [`Store`]. A unit with an empty
-//! frontier is fixed. A [`Binding`] gives each unknown a [`Bound`] — a closed type, or for a module
-//! binder a closed content tree — and **wakes** every unit whose frontier meets it.
+//! it, transitively — kept in a [`Store`]. A unit with an empty frontier is fixed. A [`Binding`]
+//! gives each unknown a [`Bound`] — a closed type, or for a module binder a closed content tree —
+//! and **wakes** every unit whose frontier meets it.
 //!
 //! An unknown is named by its **lexical address** — the segment of the body that declares it and
 //! the slot or capture its activation holds it at — never by its symbol or its lattice node, since
@@ -43,10 +43,14 @@ pub struct Unknown {
 /// record's body or a body enclosing it: the walk gathers only what its chain declares, and cuts
 /// each read to it. Empty for a fixed fact. Only the tests lay its unknowns flat
 /// (`Frontier::unknowns`).
-#[derive(Clone, Copy, PartialEq, Eq, Debug, Default)]
+///
+/// It compares by nothing and prints each read by its cut alone: a chain of k reads is k deep.
+#[derive(Clone, Copy)]
 pub struct Frontier<'a> {
     own: &'a [Unknown],
     reads: &'a [Cut<'a>],
+    /// The latest segment among its unknowns, where it holds some.
+    top: Segment,
 }
 
 /// An ended frontier a unit read, cut to the reader's chain: of its unknowns, only those declared
@@ -54,10 +58,41 @@ pub struct Frontier<'a> {
 /// least `from`, since three things hold: a frontier's unknowns lie on its record's chain
 /// ([`Frontier`]), `from` lies on that chain too, and segments fall along a chain ([`Segment`]).
 /// Segments compare within one shape table alone, and no frontier spans two.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+#[derive(Clone, Copy)]
 pub struct Cut<'a> {
     pub frontier: Frontier<'a>,
     pub from: Segment,
+}
+
+impl Cut<'_> {
+    /// Whether the cut keeps some unknown of its frontier.
+    pub fn keeps_any(self) -> bool {
+        self.frontier.top().is_some_and(|top| top >= self.from)
+    }
+}
+
+impl std::fmt::Debug for Frontier<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        (f.debug_struct("Frontier"))
+            .field("own", &self.own)
+            .field("reads", &self.reads)
+            .finish()
+    }
+}
+
+impl std::fmt::Debug for Cut<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        (f.debug_struct("Cut"))
+            .field("from", &self.from)
+            .field("laid at", &self.frontier.identity())
+            .finish()
+    }
+}
+
+impl Default for Frontier<'_> {
+    fn default() -> Self {
+        Frontier::EMPTY
+    }
 }
 
 impl<'a> Frontier<'a> {
@@ -65,6 +100,7 @@ impl<'a> Frontier<'a> {
     pub const EMPTY: Frontier<'static> = Frontier {
         own: &[],
         reads: &[],
+        top: Segment(0),
     };
 
     /// `unknowns`, already sorted and deduplicated, read from no other frontier.
@@ -73,32 +109,52 @@ impl<'a> Frontier<'a> {
         Frontier {
             own: unknowns,
             reads: &[],
+            top: unknowns
+                .last()
+                .map_or(Segment(0), |unknown| unknown.segment),
         }
     }
 
-    /// `own` sorted and deduplicated, beside `reads` each read once at its widest cut, laid down
-    /// through `lay`. A read of an empty frontier is dropped.
-    pub fn laid(
-        lay: impl Lays<'a>,
-        own: &mut BumpVec<'_, Unknown>,
-        reads: &mut BumpVec<'_, Cut<'a>>,
-    ) -> Self {
+    /// `own` sorted and deduplicated, beside each frontier of `reads` read once at its widest cut,
+    /// in the order first read, laid down through `lay`. A read whose cut keeps none of its
+    /// unknowns is dropped, so a frontier is empty exactly where it holds no unknown.
+    pub fn laid(lay: impl Lays<'a>, own: &mut BumpVec<'_, Unknown>, reads: &[Cut<'a>]) -> Self {
         own.sort_unstable();
         own.dedup();
-        reads.retain(|cut| !cut.frontier.is_empty());
-        // Sorted by cut within one frontier, the first of each run is its widest.
-        reads.sort_unstable_by_key(|cut| (cut.frontier.identity(), cut.from));
-        reads.dedup_by_key(|cut| cut.frontier.identity());
+        let mut ordered = BumpVec::with_capacity_in(reads.len(), *own.allocator());
+        ordered.extend(
+            reads
+                .iter()
+                .copied()
+                .enumerate()
+                .filter(|(_, cut)| cut.keeps_any()),
+        );
+        // Sorted by cut within one frontier, the first of each run is its widest; it keeps the
+        // run's earliest read for its order.
+        ordered.sort_unstable_by_key(|(_, cut)| (cut.frontier.identity(), cut.from));
+        ordered.dedup_by(|(later, cut), (kept, widest)| {
+            let same = cut.frontier.identity() == widest.frontier.identity();
+            if same {
+                *kept = (*kept).min(*later);
+            }
+            same
+        });
+        ordered.sort_unstable_by_key(|(read, _)| *read);
+        let top = (own.last().map(|unknown| unknown.segment).into_iter())
+            .chain(ordered.iter().map(|(_, cut)| cut.frontier.top))
+            .max()
+            .unwrap_or(Segment(0));
         // An empty slice is never laid, so it shares no address with a frontier's laid one.
         Frontier {
             own: match own.is_empty() {
                 true => &[],
                 false => collect(lay, own.iter().copied()),
             },
-            reads: match reads.is_empty() {
+            reads: match ordered.is_empty() {
                 true => &[],
-                false => collect(lay, reads.iter().copied()),
+                false => collect(lay, ordered.iter().map(|(_, cut)| *cut)),
             },
+            top,
         }
     }
 
@@ -112,9 +168,15 @@ impl<'a> Frontier<'a> {
         self.reads
     }
 
-    /// Whether it holds nothing: its unit gathered no unknown and read no frontier.
+    /// Whether it holds no unknown: its unit gathered none, and read no frontier its cut keeps
+    /// one of.
     pub fn is_empty(self) -> bool {
         self.own.is_empty() && self.reads.is_empty()
+    }
+
+    /// The latest segment among its unknowns: `None` where it holds none.
+    pub fn top(self) -> Option<Segment> {
+        (!self.is_empty()).then_some(self.top)
     }
 
     /// Which frontier this is, by where it is laid: a laid frontier lays each slice that holds

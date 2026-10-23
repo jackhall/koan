@@ -943,7 +943,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         let mut scopes = self.scopes.replace(BumpVec::new_in(self.scratch));
         let mut gathered = scopes.pop().expect("a running unit has its gathering");
         self.scopes.set(scopes);
-        let frontier = Frontier::laid(self.lay, &mut gathered.unknowns, &mut gathered.reads);
+        let frontier = Frontier::laid(self.lay, &mut gathered.unknowns, &gathered.reads);
         #[cfg(test)]
         count(|counts| counts.frontier_entries += frontier.own().len() + frontier.reads().len());
         self.units[tag.0 as usize].frontier = Some(frontier);

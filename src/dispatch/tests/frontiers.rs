@@ -396,8 +396,9 @@ fn a_chain_of_reads_lays_and_notes_frontiers_linear_in_its_length() {
     }
 }
 
-/// A call reads its callee's closing as one cut, at the innermost body on the caller's chain
-/// enclosing the callee: the callee's own names, off the caller's chain, are past the cut.
+/// A call reads its callee's closing cut at the innermost body on the caller's chain enclosing the
+/// callee: the callee's own names, off the caller's chain, are past the cut, and a read whose cut
+/// keeps nothing is dropped.
 #[test]
 fn a_call_reads_its_callee_s_closing_cut_to_the_caller_s_chain() {
     let source = "LET pair = FN EXPR FOR ALL #[Elt] #(PAIR x :Elt WITH y :Elt) -> Type = #(Elt)\n\
@@ -422,26 +423,21 @@ fn a_call_reads_its_callee_s_closing_cut_to_the_caller_s_chain() {
         let (both, wide) = (declaring("Outer"), declaring("p"));
         let outer = unknown(program, both, "Outer");
         let facts = program.facts();
+        let (_, closed) = facts.closing(both.segment()).expect("`BOTH` closes");
+        assert!(
+            closed.unknowns().contains(&outer),
+            "`BOTH`'s closing waits on `Outer`"
+        );
         let closing = facts.closing(wide.segment()).map(|(_, waits)| waits);
         let units = (facts.own_units().iter())
             .filter(|(unit, _)| unit.segment == wide.segment())
             .map(|(_, (_, waits))| *waits);
-        let reading: Vec<_> = (units.chain(closing))
-            .filter(|waits| {
-                (waits.reads().iter()).any(|cut| {
-                    cut.from == root.segment() && cut.frontier.unknowns().contains(&outer)
-                })
-            })
-            .collect();
-        assert!(
-            !reading.is_empty(),
-            "`WIDE` reads `BOTH`'s closing, which names `Outer`, cut at the program"
-        );
-        for waits in reading {
+        for waits in units.chain(closing) {
             assert!(
                 !waits.unknowns().contains(&outer),
                 "`Outer` is past the cut"
             );
+            assert!(waits.reads().iter().all(|cut| cut.keeps_any()));
         }
     });
 }
