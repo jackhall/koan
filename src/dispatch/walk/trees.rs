@@ -165,9 +165,9 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         let scope = Scope::Chain(level);
         let node = &shape.body()[last];
         let tree = match last_binder(shape) {
-            Some(slot) => self.slot_tree(scope, slot, Site::of_node(node))?,
+            Some(slot) => self.slot_tree(scope, slot, shape.site_of_node(node))?,
             None => {
-                let written = Written::Node(Site::of_node(node));
+                let written = Written::Node(shape.site_of_node(node));
                 self.tree_form(scope, of_node(shape, node), written, None)?
             }
         };
@@ -186,7 +186,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         self.tree_form(
             scope,
             of_part(shape, part),
-            Written::Part(Site::of(part)),
+            Written::Part(shape.site(part)),
             named,
         )
     }
@@ -238,7 +238,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         let shape = self.scope_shape(scope);
         let site = written.site();
         Ok(match form {
-            Form::Name(name) => Settled(match shape.mention(Site::of(name)) {
+            Form::Name(name) => Settled(match shape.mention(shape.site(name)) {
                 Some(mention) => self.resolve(scope, mention.coordinate, site)?,
                 None => self.fallback(scope, named, site)?,
             }),
@@ -255,7 +255,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 let [operand, _, ascribed] = node.parts else {
                     unreachable!("an ascription has an operand, its keyword and a type")
                 };
-                let typed = self.type_cell(shape, Site::of(&ascribed.value));
+                let typed = self.type_cell(shape, shape.site(&ascribed.value));
                 match self.resolved_type(self.scope_level(scope), typed) {
                     Static::Closed(application) => {
                         let source = self.tree_in(scope, &operand.value, None)?;
@@ -279,13 +279,15 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                     _ => Provisional(self.fallback(scope, named, site)?),
                 }
             }
-            Form::Lambda(node) => match Site::of_body(node).and_then(|body| shape.nested(body)) {
-                Some(body) => match self.knot(scope, &[(body, false)], 0, site)? {
-                    Some(knot) => Settled(knot),
-                    None => Provisional(self.fallback(scope, named, site)?),
-                },
-                None => Settled(self.fallback(scope, named, site)?),
-            },
+            Form::Lambda(node) => {
+                match shape.site_of_body(node).and_then(|body| shape.nested(body)) {
+                    Some(body) => match self.knot(scope, &[(body, false)], 0, site)? {
+                        Some(knot) => Settled(knot),
+                        None => Provisional(self.fallback(scope, named, site)?),
+                    },
+                    None => Settled(self.fallback(scope, named, site)?),
+                }
+            }
             Form::Call(node, _) => match scope {
                 Scope::Chain(level) => match self.keyworded(level, node)? {
                     Some(unfolded) => Settled(unfolded),
@@ -512,7 +514,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                         Some(first) => self.builder_captures(
                             Scope::Chain(level - 1),
                             shape,
-                            Site::of_node(first),
+                            shape.site_of_node(first),
                         )?,
                         None => &[][..],
                     };
@@ -904,7 +906,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         node: &'graph KExpression<'graph>,
     ) -> Read<'o, Option<Tree<'o>>> {
         let shape = self.chain[level].shape;
-        let Some(index) = shape.candidate_lists().position(Site::of_node(node)) else {
+        let Some(index) = shape.candidate_lists().position(shape.site_of_node(node)) else {
             return Ok(None);
         };
         let Narrowing::Selected(coordinate) = self.use_at(level, index).narrowing else {
@@ -932,7 +934,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         // Each `FOR ALL` variable at the closed point the pass solved it to at this use.
         let mut solution = BumpVec::new_in(self.scratch);
         if !registered.quantifier_map.is_empty() {
-            let site = Site::of_node(node);
+            let site = shape.site_of_node(node);
             let Some(points) = self.selection_at(level, site) else {
                 return Ok(None);
             };
@@ -957,7 +959,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             };
             arguments.push((parameter, self.tree(level, part)?));
         }
-        self.unfold(callee, &arguments, &solution, Site::of_node(node))
+        self.unfold(callee, &arguments, &solution, shape.site_of_node(node))
     }
 
     /// The tree of the call by name `node` of the shape at `level`, unfolded where its head's tree
@@ -992,7 +994,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             }
             arguments.push((parameter, self.tree(level, value)?));
         }
-        self.unfold(callee, &arguments, &[], Site::of_node(node))
+        self.unfold(callee, &arguments, &[], self.node_site(level, node))
     }
 
     /// `callee`'s summary with `arguments` and `solution` substituted, for a call at `site`:

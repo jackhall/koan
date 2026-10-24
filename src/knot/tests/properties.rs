@@ -19,7 +19,7 @@ use proptest::prelude::*;
 use crate::memory::{CellGraph, Edge, ReleaseAbsorption, Writer, resident};
 use crate::parse::ExpressionPart;
 use crate::scope::{
-    BodyShape, CaptureSlot, CaptureSource, Component, Coordinate, ShapeKind, Site, Slot, Target,
+    BodyShape, CaptureSlot, CaptureSource, Component, Coordinate, ShapeKind, Slot, Target,
 };
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::KType;
@@ -108,7 +108,7 @@ fn planned_items<'graph>(
         .map(|item| match item {
             ExpressionPart::Identifier(_) | ExpressionPart::Type(_) => {
                 let mention = shape
-                    .mention(Site::of(item))
+                    .mention(shape.site(item))
                     .expect("a name item is a read");
                 match mention.coordinate {
                     Coordinate::Activation {
@@ -120,7 +120,7 @@ fn planned_items<'graph>(
                     coordinate => Item::Read(coordinate),
                 }
             }
-            ExpressionPart::Expression(node) => Site::of_body(node.reference())
+            ExpressionPart::Expression(node) => (shape.site_of_body(node.reference()))
                 .and_then(|site| shape.nested(site))
                 .filter(|body| {
                     body.kind() == ShapeKind::Callable

@@ -15,7 +15,7 @@ use crate::parse::{BodyKind, Role};
 use crate::parse::{ExpressionPart, KExpression};
 use crate::scope::{
     Callable, Elaboration, FunctionGroupMap, IMPLICIT, ParameterBinding, Registered, Registration,
-    ShapeGroupMap, Site, Which, is_equal, is_unequal,
+    ShapeGroupMap, Which, is_equal, is_unequal,
 };
 use crate::symbols::{BinderSymbol, KeywordSymbol, Symbol};
 use crate::type_lattice::{
@@ -79,7 +79,7 @@ pub fn callable_type<'graph, 'x, R: Reads<'graph> + ?Sized>(
     }
     let (kind, body) = body.expect("a callable's form has a body");
     let unsupported = Elaboration::Unsupported {
-        site: Site::of(body),
+        site: elaborator.reader.shape().site(body),
     };
     match kind {
         BodyKind::Lambda => {
@@ -208,7 +208,7 @@ fn operator_function<'graph, R: Reads<'graph> + ?Sized>(
     groups: &Groups<'_>,
 ) -> Result<(KeywordSymbol, Parametric, Parametric), Elaboration> {
     let unsupported = Elaboration::Unsupported {
-        site: Site::of(symbol),
+        site: elaborator.reader.shape().site(symbol),
     };
     let ExpressionPart::QuotedExpression(quoted) = symbol else {
         return Err(unsupported);

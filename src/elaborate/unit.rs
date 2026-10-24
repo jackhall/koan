@@ -450,7 +450,7 @@ where
             let mut nodes = (component.members.iter()).filter_map(|slot| shape.declarations(*slot));
             let first = nodes.clone().next().expect("a type binder has its node");
             let at = nodes
-                .find_map(|node| source_of(node, error.site()))
+                .find_map(|node| source_of(shape, node, error.site()))
                 .unwrap_or(first.source);
             return Err(ShapeError::Type { error, at });
         }
@@ -500,7 +500,7 @@ where
             let statement = &shape.body()[expression.statement as usize];
             Err(ShapeError::Type {
                 error,
-                at: located(statement, error, expression.site),
+                at: located(shape, statement, error, expression.site),
             })
         }
     }
@@ -537,14 +537,14 @@ pub fn guards<'graph, 'o>(
         let (.., first) = run[0];
         (run[1..].iter()).map(move |(_, guard, _, expression)| (*expression, first, *guard))
     })
-    .min_by_key(|(expression, ..)| expression.order);
+    .min_by_key(|(expression, ..)| expression.site);
     let Some((expression, first, guard)) = repeat else {
         return Ok(());
     };
     let body = shape.body();
     let source = |expression: &TypeExpression<'_>| {
         let statement = &body[expression.statement as usize];
-        source_of(statement, expression.site).unwrap_or(statement.source)
+        source_of(shape, statement, expression.site).unwrap_or(statement.source)
     };
     Err(ShapeError::RepeatedGuard {
         guard,
@@ -596,7 +596,7 @@ where
         Err(Elaboration::Unknown { .. }) => Ok(Static::Unknown),
         Err(error) => Err(ShapeError::Type {
             error,
-            at: source_of(form, error.site()).unwrap_or(form.source),
+            at: source_of(shape, form, error.site()).unwrap_or(form.source),
         }),
     }
 }
@@ -718,7 +718,8 @@ where
         *declared, signature,
         "an ascription names the signature its SIG declares"
     );
-    let written = Site::of(&head.parts[0].value);
+    // A head's site is its declarer's, where the `SIG` writes it.
+    let written = shapes.shape_at(declaring.0).site(&head.parts[0].value);
     let (_, _, shape) = heads
         .iter()
         .find(|(site, which, _)| *site == written && *which == registration.which)
@@ -829,7 +830,7 @@ where
         Err(Elaboration::Unknown { .. }) => Ok(Static::Unknown),
         Err(error) => Err(ShapeError::Type {
             error,
-            at: source_of(form, error.site()).unwrap_or(form.source),
+            at: source_of(encloser, form, error.site()).unwrap_or(form.source),
         }),
     }
 }
@@ -951,9 +952,14 @@ fn close_registered<'o>(
 
 /// Where a refusal about the type expression at `site`, written in `statement`, is located: at the
 /// part the refusal names, else at the expression.
-fn located(statement: &KExpression<'_>, error: Elaboration, site: Site) -> SourceRef {
-    source_of(statement, error.site())
-        .or_else(|| source_of(statement, site))
+fn located(
+    shape: &BodyShape<'_>,
+    statement: &KExpression<'_>,
+    error: Elaboration,
+    site: Site,
+) -> SourceRef {
+    source_of(shape, statement, error.site())
+        .or_else(|| source_of(shape, statement, site))
         .unwrap_or(statement.source)
 }
 

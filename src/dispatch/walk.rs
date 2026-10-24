@@ -580,8 +580,9 @@ struct Pass<'p, 'o, 'x, 'graph, 'tier, 'pair, 'reg, S: Store<'o>> {
     sides: BumpBackedMap<'p, (DeclaredType<Parametric>, KType, KType), views::Sides>,
     /// The path table of each chain being typed, outermost first.
     paths: BumpVec<'p, paths::ChainPaths<'p, 'o, 'graph>>,
-    /// Each composite site's dependencies, by its site: a part that is one takes its class.
-    composites: BumpBackedMap<'p, Site, caching::Reads<'o>>,
+    /// Each composite site's dependencies, by its body's segment and its site: a part that is one
+    /// takes its class.
+    composites: BumpBackedMap<'p, (Segment, Site), caching::Reads<'o>>,
     /// Each `MODULE` or `GROUP` body the walk typed, by address: whether it, or a block or module
     /// body it runs, holds a minting site.
     module_mints: BumpBackedMap<'p, usize, bool>,
@@ -1423,7 +1424,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 continue;
             }
             let site = match (shape.rhs(slot), shape.birth_site(slot)) {
-                (Some(rhs), _) => Site::of(rhs),
+                (Some(rhs), _) => self.site(level, rhs),
                 (None, Some(born)) => born,
                 (None, None) => continue,
             };
@@ -1679,7 +1680,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             return self.holds_nothing_minted(
                 level,
                 form,
-                Written::Node(Site::of_node(node)),
+                Written::Node(self.node_site(level, node)),
                 last,
             );
         };
@@ -1687,7 +1688,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             && body.kind() == ShapeKind::Module
         {
             let scope = trees::Scope::Chain(level);
-            let tree = self.slot_tree(scope, slot, Site::of_node(node))?;
+            let tree = self.slot_tree(scope, slot, self.node_site(level, node))?;
             return Ok(!self.reaches_minted(level, &tree));
         }
         match (shape.rhs(slot), shape.annotation(slot)) {
@@ -2103,8 +2104,8 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 continue;
             }
             let spelled = &shape.spelled()[index];
-            let site = Site::of(spelled.part);
-            let used = source_of(&shape.body()[spelled.statement as usize], site)
+            let site = self.site(level, spelled.part);
+            let used = source_of(shape, &shape.body()[spelled.statement as usize], site)
                 .expect("a path is spelled in its statement");
             let located = self.located(level, &[through], used);
             self.record_through(level, entry.level, located);
@@ -2125,8 +2126,8 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             let closed = (component.members.iter())
                 .all(|member| matches!(self.declared_cell(shape, *member), Static::Closed(_)));
             if nominal && !closed {
-                self.record_minting(level, Site::of_node(first));
-                self.record_nominal(level, Site::of_node(first), component.members);
+                self.record_minting(level, self.node_site(level, first));
+                self.record_nominal(level, self.node_site(level, first), component.members);
             }
             return Ok(());
         }
@@ -2346,8 +2347,19 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     /// Where the part at `site` of the shape at `level` is written.
     fn source(&self, level: usize, site: Site) -> SourceRef {
         let statement = self.statement_holding(level, site);
-        source_of(&self.chain[level].shape.body()[statement], site)
+        let shape = self.chain[level].shape;
+        source_of(shape, &shape.body()[statement], site)
             .expect("a part lies in its shape's statements")
+    }
+
+    /// The site of `part` in the shape at `level`.
+    pub(super) fn site(&self, level: usize, part: &ExpressionPart<'_>) -> Site {
+        self.chain[level].shape.site(part)
+    }
+
+    /// The site of `node` in the shape at `level`.
+    pub(super) fn node_site(&self, level: usize, node: &KExpression<'_>) -> Site {
+        self.chain[level].shape.site_of_node(node)
     }
 
     /// The statement of the shape at `level` holding the part at `site`: the one the walk is
@@ -2357,12 +2369,14 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         let body = at.shape.body();
         if body
             .get(at.statement)
-            .is_some_and(|node| part_of(node, site).is_some())
+            .is_some_and(|node| part_of(at.shape, node, site).is_some())
         {
             return at.statement;
         }
-        (body.iter().position(|node| part_of(node, site).is_some()))
-            .expect("a part lies in its shape's statements")
+        (body
+            .iter()
+            .position(|node| part_of(at.shape, node, site).is_some()))
+        .expect("a part lies in its shape's statements")
     }
 
     /// The instance site `part` of the shape at `level` is, through one-part parentheses: a name
@@ -2376,20 +2390,21 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         let shape = self.chain[level].shape;
         Ok(match of_part(shape, part) {
             Form::Name(leaf) => {
-                let Some(mention) = shape.mention(Site::of(leaf)) else {
+                let Some(mention) = shape.mention(shape.site(leaf)) else {
                     return Ok(None);
                 };
                 match self.read_declared(level, mention.coordinate) {
                     DeclaredType::Scheme(scheme) => Some((
                         Instanced::Name(leaf),
                         scheme,
-                        self.source(level, Site::of(leaf)),
+                        self.source(level, self.site(level, leaf)),
                     )),
                     DeclaredType::Type(_) => None,
                 }
             }
             Form::Lambda(node) => {
-                let Some(body) = Site::of_body(node).and_then(|site| shape.nested(site)) else {
+                let Some(body) = shape.site_of_body(node).and_then(|site| shape.nested(site))
+                else {
                     return Ok(None);
                 };
                 match self.callable(level, body) {
@@ -2473,14 +2488,18 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         let (typed, solution) = self.instantiate(scheme, wanted, node.source)?;
         if !self.unfilled {
             let solution = self.solution(level, solution, node.source);
-            self.record_instance_read(level, Site::of_node(node), InstanceRead::Solved(solution));
+            self.record_instance_read(
+                level,
+                self.node_site(level, node),
+                InstanceRead::Solved(solution),
+            );
         }
         Ok(typed)
     }
 
     /// [`peeked`](Self::peeked) through the level's memo: each part is peeked once.
     fn peek(&mut self, level: usize, part: &'graph ExpressionPart<'graph>) -> Option<Interval> {
-        let (site, gathering) = (Site::of(part), self.open.last().copied());
+        let (site, gathering) = (self.site(level, part), self.open.last().copied());
         if let Some((peeked, noted)) = self.chain[level].peeks.get(&site) {
             debug_assert_eq!(
                 *noted, gathering,
@@ -2502,7 +2521,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         let shape = self.chain[level].shape;
         match of_part(shape, part) {
             Form::Name(leaf) => {
-                let mention = shape.mention(Site::of(leaf))?;
+                let mention = shape.mention(shape.site(leaf))?;
                 self.read_declared(level, mention.coordinate).as_type()
             }
             Form::Member { operand, label, .. } => {
@@ -2908,8 +2927,8 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         let shape = self.chain[level].shape;
         let form = of_part(shape, part);
         let typed = self.form(level, form, wanted)?;
-        let typed = self.viewed_tree(level, form, Written::Part(Site::of(part)), typed)?;
-        self.record_part(level, Site::of(part), typed);
+        let typed = self.viewed_tree(level, form, Written::Part(self.site(level, part)), typed)?;
+        self.record_part(level, self.site(level, part), typed);
         Ok(typed)
     }
 
@@ -2923,7 +2942,12 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         let shape = self.chain[level].shape;
         let form = of_node(shape, node);
         let typed = self.form(level, form, wanted)?;
-        self.viewed_tree(level, form, Written::Node(Site::of_node(node)), typed)
+        self.viewed_tree(
+            level,
+            form,
+            Written::Node(self.node_site(level, node)),
+            typed,
+        )
     }
 
     /// `typed`, the static type of a call, ascription or member read at `site` of the shape at
@@ -2951,7 +2975,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         let named = match written {
             Written::Part(site) => (0..shape.slots() as u32)
                 .map(Slot)
-                .find(|slot| (shape.rhs(*slot)).is_some_and(|part| Site::of(part) == site)),
+                .find(|slot| (shape.rhs(*slot)).is_some_and(|part| self.site(level, part) == site)),
             Written::Node(_) => None,
         };
         let tree = self.tree_form(trees::Scope::Chain(level), form, written, named)?;
@@ -2989,20 +3013,23 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             Form::Leaf(part) => self.leaf(level, part, wanted)?,
             Form::Name(part) => self.name(level, part, wanted)?,
             Form::Block(nested) => self.block(level, nested, None)?.unwrap_or_else(unknown),
-            Form::Lambda(node) => match Site::of_body(node).and_then(|site| shape.nested(site)) {
-                Some(body) => match self.callable(level, body) {
-                    DeclaredType::Type(typed) => typed,
-                    DeclaredType::Scheme(scheme) => {
-                        let (typed, solution) = self.instantiate(scheme, wanted, node.source)?;
-                        if !self.unfilled {
-                            let solution = self.solution(level, solution, node.source);
-                            self.fix_born_instance(body, solution);
+            Form::Lambda(node) => {
+                match shape.site_of_body(node).and_then(|site| shape.nested(site)) {
+                    Some(body) => match self.callable(level, body) {
+                        DeclaredType::Type(typed) => typed,
+                        DeclaredType::Scheme(scheme) => {
+                            let (typed, solution) =
+                                self.instantiate(scheme, wanted, node.source)?;
+                            if !self.unfilled {
+                                let solution = self.solution(level, solution, node.source);
+                                self.fix_born_instance(body, solution);
+                            }
+                            typed
                         }
-                        typed
-                    }
-                },
-                None => unknown(),
-            },
+                    },
+                    None => unknown(),
+                }
+            }
             Form::Declaration => Interval::point(KType::NULL.into()),
             Form::Ascribe(node, mode) => self.ascribe(level, node, mode)?,
             Form::Eval(node) => self.eval(level, node)?,
@@ -3020,7 +3047,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                     None => {
                         let typed = self.narrow(level, node, list)?;
                         // An operand `peeked` cannot read is typed by the read's use.
-                        let site = Site::of(operand);
+                        let site = self.site(level, operand);
                         let operand_type = (peeked.is_none())
                             .then(|| self.part_type(level, site))
                             .flatten()
@@ -3055,9 +3082,9 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         let shape = self.chain[level].shape;
         let read = match of_part(shape, head) {
             Form::Name(name) => shape
-                .mention(Site::of(name))
+                .mention(self.site(level, name))
                 .map(|mention| self.read_declared(level, mention.coordinate)),
-            Form::Lambda(node) => Site::of_body(node)
+            Form::Lambda(node) => (shape.site_of_body(node))
                 .and_then(|site| shape.nested(site))
                 .map(|body| self.callable(level, body)),
             // A member read at a call's head is read as it is, a quantified member by its scheme:
@@ -3069,7 +3096,11 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 label,
             } => {
                 if !self.unfilled {
-                    self.record_instance_read(level, Site::of_node(node), InstanceRead::AsIs);
+                    self.record_instance_read(
+                        level,
+                        self.node_site(level, node),
+                        InstanceRead::AsIs,
+                    );
                 }
                 let peeked = self.peek(level, operand);
                 match self.peeked_member_scheme(level, operand, peeked, label)? {
@@ -3077,7 +3108,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                     // A scheme over a parameter the load cannot name: the run solves the call.
                     Some((_, Some(_))) => {
                         let typed = self.narrow(level, node, list)?;
-                        self.record_part(level, Site::of(head), typed);
+                        self.record_part(level, self.site(level, head), typed);
                         return Ok(DeclaredType::Type(unknown()));
                     }
                     // An operand read only by typing it: the head is read as it is, as `part`
@@ -3086,9 +3117,13 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                         let typed = self.narrow(level, node, list)?;
                         let typed = self.read_through_paths(level, operand, label, typed)?;
                         let form = of_part(self.chain[level].shape, head);
-                        let typed =
-                            self.viewed_tree(level, form, Written::Part(Site::of(head)), typed)?;
-                        self.record_part(level, Site::of(head), typed);
+                        let typed = self.viewed_tree(
+                            level,
+                            form,
+                            Written::Part(self.site(level, head)),
+                            typed,
+                        )?;
+                        self.record_part(level, self.site(level, head), typed);
                         return Ok(DeclaredType::Type(typed));
                     }
                     None => None,
@@ -3119,10 +3154,10 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         let typed = self.part_at(level, &operand_part.value, declared)?;
         if mode == Ascription::Opaque {
             // An opaque view hides each unpinned head parameter behind a carrier it mints.
-            self.record_minting(level, Site::of_node(node));
+            self.record_minting(level, self.node_site(level, node));
             let tree = self.tree(level, &operand_part.value)?;
             let tree = resident(self.lay, tree);
-            let site = Site::of_node(node);
+            let site = self.node_site(level, node);
             if tree.closed() {
                 self.chain[level].closed += 1;
                 if let Some(unit) = self.fixing() {
@@ -3162,7 +3197,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             }
             return self.viewed(level, node, typed, declared);
         }
-        let held = self.held(level, typed, &ascribed.value, Site::of_node(node));
+        let held = self.held(level, typed, &ascribed.value, self.node_site(level, node));
         held.map_err(|(value, ascribed)| ShapeError::AscriptionNeverSatisfied {
             value,
             ascribed,
@@ -3220,7 +3255,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             return Ok(under(declared));
         }
         if fits(types, scratch, typed.upper, declared) {
-            self.record_settled(level, Site::of_node(node));
+            self.record_settled(level, self.node_site(level, node));
         }
         if let Some(exact) = exact(types, typed)
             && !fits(types, scratch, exact, declared)
@@ -3243,7 +3278,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         annotation: &'graph ExpressionPart<'graph>,
         typed: Interval,
     ) -> Result<Interval, ShapeError<'o>> {
-        let held = self.held(level, typed, annotation, Site::of(annotation));
+        let held = self.held(level, typed, annotation, self.site(level, annotation));
         held.map_err(|(value, annotated)| {
             let shape = self.chain[level].shape;
             let statement = shape.position_of(member).statement_index();
@@ -3314,7 +3349,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         };
         let typed = self.part(level, &operand.value)?;
         let shape = self.chain[level].shape;
-        let Some(body) = Site::of_body(node).and_then(|site| shape.nested(site)) else {
+        let Some(body) = shape.site_of_body(node).and_then(|site| shape.nested(site)) else {
             return Ok(unknown());
         };
         let tag = self.innermost();
@@ -3369,7 +3404,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
 
     /// The type the type part `part` of the shape at `level` denotes, where the load knows it.
     fn declared(&self, level: usize, part: &'graph ExpressionPart<'graph>) -> Option<Parametric> {
-        let typed = self.type_cell(self.chain[level].shape, Site::of(part));
+        let typed = self.type_cell(self.chain[level].shape, self.site(level, part));
         match self.resolved_type(level, typed) {
             Static::Closed(handle) => Some(handle.into()),
             Static::Rigid { value: handle, .. } => Some(handle),
@@ -3394,10 +3429,10 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             ExpressionPart::Literal(KLiteral::Boolean(_)) => Interval::point(KType::BOOL.into()),
             ExpressionPart::Literal(KLiteral::Null) => Interval::point(KType::NULL.into()),
             ExpressionPart::QuotedExpression(_) => shape
-                .nested(Site::of(part))
+                .nested(self.site(level, part))
                 .map_or_else(unknown, |code| Interval::point(code.code_type().into())),
             ExpressionPart::SigiledTypeExpr(_) | ExpressionPart::RecordType(_) => {
-                match self.resolved_type(level, self.type_cell(shape, Site::of(part))) {
+                match self.resolved_type(level, self.type_cell(shape, shape.site(part))) {
                     Static::Closed(handle) => {
                         Interval::point(KType::of_kind(handle.kind_of(types)).into())
                     }
@@ -3415,7 +3450,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 }
                 self.record_composite(
                     level,
-                    Site::of(part),
+                    self.site(level, part),
                     items.iter().zip(typed.iter().copied()),
                 );
                 Interval {
@@ -3436,7 +3471,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 let each = pairs.iter().zip(typed.iter());
                 self.record_composite(
                     level,
-                    Site::of(part),
+                    self.site(level, part),
                     each.flat_map(|((key, value), (k, v))| [(key, *k), (value, *v)]),
                 );
                 Interval {
@@ -3465,7 +3500,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 let each = fields.iter().zip(typed.iter());
                 self.record_composite(
                     level,
-                    Site::of(part),
+                    self.site(level, part),
                     each.map(|((_, value), (_, typed))| (value, *typed)),
                 );
                 Interval {
@@ -3488,7 +3523,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         part: &'graph ExpressionPart<'graph>,
         wanted: Option<Parametric>,
     ) -> Result<Interval, ShapeError<'o>> {
-        let site = Site::of(part);
+        let site = self.site(level, part);
         let Some(mention) = self.chain[level].shape.mention(site) else {
             return Ok(unknown());
         };
@@ -3614,7 +3649,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 .unwrap_or_else(|_| KType::NEVER.into());
             self.record_composite(
                 level,
-                Site::of_node(node),
+                self.node_site(level, node),
                 [(argument, payload)].into_iter(),
             );
             return Ok(Interval { lower, upper });
@@ -3783,7 +3818,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         };
         if !self.unfilled && (contributions.iter()).any(|each| !matches!(each, Static::Unknown)) {
             let recorded = collect(self.lay, contributions.iter().copied());
-            self.record_named(level, Site::of(argument), recorded);
+            self.record_named(level, self.site(level, argument), recorded);
         }
         let (types, scratch) = (self.types, self.scratch);
         let minted_free = self.minted_free_fields(level, callee.names, argument, whole)?;
@@ -3879,7 +3914,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             .any(|typed| typed.upper == KType::NEVER.into())
         {
             let never = Interval::point(KType::NEVER.into());
-            self.record_part(level, Site::of(argument), never);
+            self.record_part(level, self.site(level, argument), never);
             return Ok(None);
         }
         let mut arguments = BumpVec::with_capacity_in(callee.names.len(), scratch);
@@ -3927,7 +3962,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             lower: ends(|each| each.lower),
             upper: ends(|each| each.upper),
         };
-        self.record_part(level, Site::of(argument), payload);
+        self.record_part(level, self.site(level, argument), payload);
         Ok(Some((payload.upper, arguments.leak(), contributions)))
     }
 
@@ -3991,7 +4026,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         let shape = self.chain[level].shape;
         match head {
             ExpressionPart::Type(_) => {
-                let coordinate = shape.mention(Site::of(head))?.coordinate;
+                let coordinate = shape.mention(shape.site(head))?.coordinate;
                 if let Coordinate::Builtin(index) = coordinate {
                     return match self.builtins.get(index) {
                         Value::Type(value) => Some(value.handle()),
@@ -4007,7 +4042,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 }
             }
             ExpressionPart::SigiledTypeExpr(_) | ExpressionPart::RecordType(_) => {
-                match self.type_cell(shape, Site::of(head)) {
+                match self.type_cell(shape, shape.site(head)) {
                     Static::Closed(handle) => Some(handle),
                     _ => None,
                 }
@@ -4085,7 +4120,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         let shape = self.chain[level].shape;
         let index = shape
             .candidate_lists()
-            .position(Site::of_node(node))
+            .position(self.node_site(level, node))
             .expect("a keyworded use's candidate list is recorded at its node");
         // A use one of whose arguments never arrives never runs its call.
         if arguments
@@ -4323,7 +4358,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                             .map(|interval| exact(types, *interval)),
                     );
                     let points = collect(self.lay, points.iter().copied());
-                    self.record_selection(level, Site::of_node(node), points);
+                    self.record_selection(level, self.node_site(level, node), points);
                 }
                 self.set_narrowing(level, index, Narrowing::Selected(coordinate));
                 return Ok(self.candidate_return(chosen));
@@ -4426,7 +4461,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     /// ([type tiers](../../design/type-tiers.md#two-classes-of-body)). Read once per part, through
     /// the level's memo.
     fn received(&mut self, level: usize, part: &'graph ExpressionPart<'graph>) -> bool {
-        let site = Site::of(part);
+        let site = self.site(level, part);
         if let Some(received) = self.chain[level].received.get(&site) {
             return *received;
         }
@@ -4449,7 +4484,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             }
             _ => return false,
         };
-        let Some(mention) = shape.mention(Site::of(name)) else {
+        let Some(mention) = shape.mention(shape.site(name)) else {
             return false;
         };
         let frame = self.frame_level(level);
@@ -4471,7 +4506,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         shape.rhs(slot).is_some_and(|rhs| {
             rhs.is_name()
                 && shape
-                    .mention(Site::of(rhs))
+                    .mention(shape.site(rhs))
                     .is_some_and(|mention| !mention.fellow)
                 && self.received(at, rhs)
         })
@@ -4479,7 +4514,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
 
     /// The static type the pass recorded for `part` of the shape at `level`, where it typed it.
     fn typed_part(&self, level: usize, part: &'graph ExpressionPart<'graph>) -> Option<Interval> {
-        self.part_type(level, Site::of(part))
+        self.part_type(level, self.site(level, part))
     }
 
     /// Whether the value `form`, written as `written` in the shape at `level` and of the static
@@ -4526,7 +4561,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         typed: Interval,
     ) -> Result<bool, ShapeError<'o>> {
         let form = of_part(self.chain[level].shape, part);
-        self.holds_nothing_minted(level, form, Written::Part(Site::of(part)), typed)
+        self.holds_nothing_minted(level, form, Written::Part(self.site(level, part)), typed)
     }
 
     /// Whether the content tree `tree`, read in the shape at `level`, reaches content its frame
@@ -4649,16 +4684,18 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     /// part's static type, and its solution by its site or in its body's born-instance cell.
     fn record_instance(&mut self, level: usize, site: &InstanceArgument<'graph>, made: Made<'_>) {
         let (typed, solution) = made;
-        self.record_part(level, Site::of(site.part), typed);
+        self.record_part(level, self.site(level, site.part), typed);
         if self.unfilled {
             return;
         }
         let solution = self.solution(level, solution, site.at);
         let read = InstanceRead::Solved(solution);
         match site.instanced {
-            Instanced::Name(leaf) => self.record_instance_read(level, Site::of(leaf), read),
+            Instanced::Name(leaf) => self.record_instance_read(level, self.site(level, leaf), read),
             Instanced::Literal(body) => self.fix_born_instance(body, solution),
-            Instanced::Member(node) => self.record_instance_read(level, Site::of_node(node), read),
+            Instanced::Member(node) => {
+                self.record_instance_read(level, self.node_site(level, node), read)
+            }
         }
     }
 
@@ -4721,13 +4758,13 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     ) -> Option<&'graph BodyShape<'graph>> {
         let shape = self.chain[level].shape;
         match operand {
-            ExpressionPart::QuotedExpression(_) => shape.nested(Site::of(operand)),
+            ExpressionPart::QuotedExpression(_) => shape.nested(shape.site(operand)),
             ExpressionPart::Identifier(_) => {
-                let coordinate = shape.mention(Site::of(operand))?.coordinate;
+                let coordinate = shape.mention(shape.site(operand))?.coordinate;
                 let (at, slot) = self.landed_slot(level, coordinate)?;
                 let holder = self.chain[at].shape;
                 match holder.rhs(slot)? {
-                    rhs @ ExpressionPart::QuotedExpression(_) => holder.nested(Site::of(rhs)),
+                    rhs @ ExpressionPart::QuotedExpression(_) => holder.nested(holder.site(rhs)),
                     _ => None,
                 }
             }

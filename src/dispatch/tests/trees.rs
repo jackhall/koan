@@ -3,7 +3,7 @@
 
 use crate::program::tests::digest_back;
 use crate::program::{CellSubstrate, Outcome, Program};
-use crate::scope::{BodyShape, Leaf, Site, Tree};
+use crate::scope::{BodyShape, Leaf, Tree};
 
 use super::statics::{body, loaded, slot};
 use super::{Koan, assert_linear, load_counts, output};
@@ -23,7 +23,7 @@ fn statement_tree<'graph>(
 ) -> Tree<'graph> {
     operand(
         (program.facts())
-            .view_tree(shape, Site::of_node(&shape.body()[index]))
+            .view_tree(shape, shape.site_of_node(&shape.body()[index]))
             .expect("the statement is an opaque ascription"),
     )
 }
@@ -50,7 +50,7 @@ fn let_tree<'graph>(
     };
     operand(
         (program.facts())
-            .view_tree(shape, Site::of_node(node.reference()))
+            .view_tree(shape, shape.site_of_node(node.reference()))
             .expect("the right-hand side is an opaque ascription"),
     )
 }
@@ -186,7 +186,7 @@ fn ran<R>(
 fn view_digest(program: &Program<'_>, name: &str) -> String {
     let shape = program.shape();
     let tree = (program.facts())
-        .view_tree(shape, Site::of_node(let_node(program, shape, name)))
+        .view_tree(shape, shape.site_of_node(let_node(program, shape, name)))
         .expect("the right-hand side is an opaque ascription");
     let digest = tree.digest().unwrap_or_else(|| panic!("closed: {tree:?}"));
     format!("{digest:?}")

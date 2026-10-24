@@ -26,7 +26,7 @@ use crate::knot::{
 };
 use crate::memory::{Bump, BumpAllocator, BumpVec, Writer};
 use crate::parse::{BUILTIN_SHAPES, BuiltinShapeId, KExpression, ShapeElement};
-use crate::scope::{Builtins, InstanceRead, Site};
+use crate::scope::{Builtins, InstanceRead};
 use crate::symbols::{BinderSymbol, KeywordSymbol, Symbol, SymbolInterner, TypeSymbol};
 use crate::type_lattice::{DispatchTokenElement, KType, TypeNode, builtin_types, meet};
 use crate::values::{Chain, Circular, Seen, TypeValue, Value, record_type};
@@ -361,7 +361,7 @@ pub(super) fn run<'graph, 'here>(
             match at
                 .view
                 .load()
-                .instance_at(at.view.shape(), Site::of_node(node))
+                .instance_at(at.view.shape(), at.view.shape().site_of_node(node))
             {
                 Some(InstanceRead::AsIs) => member,
                 // Through a header at a scheme: a header at its instance over the same member.

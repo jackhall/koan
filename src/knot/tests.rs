@@ -192,7 +192,7 @@ impl<'graph> Fixture<'_, 'graph> {
         );
         let left: Vec<BinderSymbol> = leave.iter().map(|name| self.name(name)).collect();
         // A reader takes a body's statements from its shape, never from the parse: the shape owns
-        // them rewritten, and every site it records is an address inside them.
+        // them rewritten, and every site it records names a part inside them.
         let statements: Vec<&KExpression<'graph>> = shape.body().iter().collect();
         for component in in_unit_order(shape) {
             let names = component.members.iter().map(|slot| shape.slot_name(*slot));

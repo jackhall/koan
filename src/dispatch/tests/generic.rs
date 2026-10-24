@@ -5,7 +5,7 @@
 use crate::memory::Bump;
 use crate::parse::{ExpressionPart, KExpression};
 use crate::program::Program;
-use crate::scope::{BodyShape, ShapeKind, Site, Static};
+use crate::scope::{BodyShape, ShapeKind, Static};
 use crate::type_lattice::{DeclaredType, Interval, KType, Parametric, shape_slots};
 use crate::values::tests::reading;
 
@@ -41,7 +41,7 @@ pub(super) fn expressed<'graph>(
 fn statement(program: &Program<'_>, shape: &BodyShape<'_>, index: usize) -> String {
     rendered(
         (program.facts())
-            .use_statics(shape, Site::of_node(&shape.body()[index]))
+            .use_statics(shape, shape.site_of_node(&shape.body()[index]))
             .narrowing,
     )
 }
@@ -266,7 +266,7 @@ fn a_candidate_over_a_variable_outside_code_is_unknown_in_it() {
                 rendered(
                     program
                         .facts()
-                        .use_statics(code, Site::of_node(greet))
+                        .use_statics(code, code.site_of_node(greet))
                         .narrowing
                 ),
                 "full",

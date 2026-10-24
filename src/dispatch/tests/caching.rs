@@ -516,10 +516,10 @@ fn handoffs(program: &Program<'_>) -> usize {
     let mut handed = 0;
     for shape in shapes {
         for statement in shape.body() {
-            let mut sites = vec![crate::scope::Site::of_node(statement)];
+            let mut sites = vec![shape.site_of_node(statement)];
             crate::scope::each_part(statement, |part| {
                 if let crate::parse::ExpressionPart::Expression(node) = part {
-                    sites.push(crate::scope::Site::of_node(node.reference()));
+                    sites.push(shape.site_of_node(node.reference()));
                 }
             });
             handed += (sites.into_iter())

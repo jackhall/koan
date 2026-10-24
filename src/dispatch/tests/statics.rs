@@ -4,7 +4,7 @@
 use crate::memory::Bump;
 use crate::parse::ExpressionPart;
 use crate::program::{CellSubstrate, Program};
-use crate::scope::{BodyShape, Narrowing, ShapeKind, Site, Slot, Static};
+use crate::scope::{BodyShape, Narrowing, ShapeKind, Slot, Static};
 use crate::symbols::TypeSymbol;
 use crate::type_lattice::{
     DeclaredType, Interval, KType, Parametric, Verdict, display_name, outranks,
@@ -112,7 +112,7 @@ pub(super) fn let_narrowing(program: &Program<'_>, shape: &BodyShape<'_>, name: 
     };
     rendered(
         (program.facts())
-            .use_statics(shape, Site::of_node(node.reference()))
+            .use_statics(shape, shape.site_of_node(node.reference()))
             .narrowing,
     )
 }
@@ -242,7 +242,7 @@ pub(super) fn typed_parts(program: &Program<'_>, shape: &BodyShape<'_>) -> Vec<I
     let mut typed = Vec::new();
     for statement in shape.body() {
         crate::scope::each_part(statement, |part| {
-            typed.extend(program.facts().value_type(shape, Site::of(part)));
+            typed.extend(program.facts().value_type(shape, shape.site(part)));
         });
     }
     typed

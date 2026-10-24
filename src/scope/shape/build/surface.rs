@@ -110,8 +110,8 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
         out.body = level + 1;
         self.value_names(level, at, operand, out, &mut fuel)
             .map_err(|()| ShapeError::Unsurfaced {
-                at: self.part_source(level, statement, Site::of(operand)),
-                site: Site::of(operand),
+                at: self.part_source(level, statement, self.site(level, operand)),
+                site: self.site(level, operand),
             })
     }
 
@@ -131,7 +131,7 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
                 match node.cache().builtin_shape().map(|shape| shape.id) {
                     Some(BuiltinShapeId::AscribeOpaque | BuiltinShapeId::AscribeTransparent) => {
                         let signature = &node.parts.get(2).ok_or(())?.value;
-                        let ascription = (level, Site::of(signature));
+                        let ascription = (level, self.site(level, signature));
                         self.type_names(level, at, signature, ascription, out, fuel)
                     }
                     Some(_) => Err(()),
@@ -168,7 +168,7 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
                     // An annotated binder holds its value to its type, as `:!` does.
                     Some(BuiltinShapeId::LetAnnotated) => {
                         let annotation = role_part(statement, Role::TypeExpression).ok_or(())?;
-                        let ascription = (level, Site::of(annotation));
+                        let ascription = (level, self.site(level, annotation));
                         self.type_names(level, at, annotation, ascription, out, fuel)
                     }
                     _ => Err(()),

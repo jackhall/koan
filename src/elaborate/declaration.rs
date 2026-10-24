@@ -18,7 +18,7 @@ use crate::parse::{ExpressionPart, KExpression};
 use crate::parse::{
     bounded, declarator_parameters, quoted_body, quoted_part, symbol_from_quote_body,
 };
-use crate::scope::{BuiltinGroup, Component, Elaboration, Site, Which, is_equality};
+use crate::scope::{BodyShape, BuiltinGroup, Component, Elaboration, Site, Which, is_equality};
 use crate::symbols::{KeywordSymbol, TypeSymbol};
 use crate::type_lattice::{
     DeclaredGroup, DeclaredType, FoldDirection, KKind, KType, Parametric, RecursiveGroupWindow,
@@ -67,7 +67,7 @@ pub fn type_declarations<'graph, 'x, R: Reads<'graph> + ?Sized>(
         let node = shape
             .declarations(*slot)
             .expect("a type binder records its declaration node");
-        read.push(Declaration::of(node, scratch)?);
+        read.push(Declaration::of(shape, node, scratch)?);
     }
 
     // Only a nominal member can close a cycle: a transparent alias and a signature name no fresh
@@ -184,11 +184,11 @@ pub fn type_declarations<'graph, 'x, R: Reads<'graph> + ?Sized>(
                     let representation = elaborator.part(payload, &family)?;
                     if types.quantifies_contravariantly(scratch, representation, params.len()) {
                         return Err(Elaboration::Unsupported {
-                            site: Site::of(payload),
+                            site: elaborator.reader.shape().site(payload),
                         });
                     }
                     elaborator.untied(
-                        Site::of(payload),
+                        elaborator.reader.shape().site(payload),
                         (family.names, family.bounds),
                         [representation],
                     )?;
@@ -282,10 +282,11 @@ impl<'graph, 'x> Declaration<'graph, 'x> {
     /// Read one declaration node: which declaration it is, and where its declared part sits, from
     /// its builtin shape.
     fn of(
+        shape: &BodyShape<'graph>,
         node: &'graph KExpression<'graph>,
         scratch: BumpAllocator<'x>,
     ) -> Result<Self, Elaboration> {
-        let site = Site::of(&node.parts[0].value);
+        let site = shape.site(&node.parts[0].value);
         let unsupported = Elaboration::Unsupported { site };
         let form = node.cache().builtin_shape().ok_or(unsupported)?;
         let mut name_part = None;
@@ -393,7 +394,7 @@ pub(super) fn signature_heads<'graph, 'x, R: Reads<'graph> + ?Sized>(
     types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'x>,
 ) -> Result<(KType, BumpVec<'x, HeadShape>), Elaboration> {
-    let declaration = Declaration::of(node, scratch)?;
+    let declaration = Declaration::of(reader.shape(), node, scratch)?;
     let Declared::Signature { group, body } = declaration.kind else {
         return Err(Elaboration::Unsupported {
             site: declaration.site,
@@ -515,7 +516,7 @@ fn signature_type<'graph, 'h, R: Reads<'graph> + ?Sized>(
             locals: &locals,
             binder: Cell::new(false),
         };
-        let site = Site::of(&node.parts[0].value);
+        let site = elaborator.reader.shape().site(&node.parts[0].value);
         let unsupported = Elaboration::Unsupported { site };
         let form = node.cache().builtin_shape().ok_or(unsupported)?;
         let mut name_part = None;
@@ -677,7 +678,7 @@ fn group_members<'graph, 'x, R: Reads<'graph> + ?Sized>(
     scratch: BumpAllocator<'x>,
 ) -> Result<BumpVec<'x, KeywordSymbol>, Elaboration> {
     let unsupported = Elaboration::Unsupported {
-        site: Site::of(definition),
+        site: elaborator.reader.shape().site(definition),
     };
     let ExpressionPart::ListLiteral(heads) = definition else {
         return Err(unsupported);

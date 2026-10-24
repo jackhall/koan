@@ -28,7 +28,7 @@ use crate::program::{
 use crate::scheduler::{
     Action, NativeStep, Placement, Received, Request, Slot as Asked, Step, StepError, Taken, Use,
 };
-use crate::scope::{Builtins, CaptureSlot, Offer, Position, Site, Slot};
+use crate::scope::{Builtins, CaptureSlot, Offer, Position, Slot};
 use crate::symbols::{KeywordSymbol, SymbolInterner, TypeSymbol, ValueSymbol};
 use crate::type_lattice::KType;
 use crate::values::{Chain, Circular, Knotted as _, Link, List, Record, TypeValue, Value};
@@ -144,7 +144,7 @@ fn read<'graph, 'here>(
     view: &KActivationView<'graph, 'here>,
     part: &ExpressionPart<'graph>,
 ) -> Option<KValue<'graph, 'here>> {
-    let mention = view.shape().mention(Site::of(part))?;
+    let mention = view.shape().mention(view.shape().site(part))?;
     Some(view.read(mention.coordinate))
 }
 
@@ -296,7 +296,10 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'
         }
         Form::Leaf(_) => return step.failed(StepError::Refused),
         Form::Lambda(node) => {
-            let site = Site::of_body(node).expect("a lambda has a body");
+            let site = view
+                .shape()
+                .site_of_body(node)
+                .expect("a lambda has a body");
             let writer = step.writer();
             let Ok(member) = lambda(
                 writer,
@@ -403,7 +406,7 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'
             };
             let fields: Vec<_> = view
                 .shape()
-                .offers(Site::of(&operand.value))
+                .offers(view.shape().site(&operand.value))
                 .iter()
                 .map(|(name, offer)| match offer {
                     Offer::Name(at) => (*name, view.read(*at)),

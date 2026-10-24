@@ -3,7 +3,7 @@
 
 use crate::memory::BumpAllocator;
 use crate::parse::{ExpressionPart, KExpression};
-use crate::scope::{BodyShape, Position, Site, Slot, Which};
+use crate::scope::{BodyShape, Position, Slot, Which};
 use crate::symbols::{BinderSymbol, KeywordSymbol, SymbolInterner};
 use crate::type_lattice::{
     DeclaredType, DispatchTokenElement, KType, RecursiveGroupWindow, RelativeSchema, Scheme,
@@ -182,7 +182,7 @@ LET Applied = :(Number AS Wrap)";
             assert_eq!(
                 elaborated(&program, 2),
                 Err(Elaboration::Unsupported {
-                    site: Site::of(rhs(&program.lines[2])),
+                    site: program.activation.shape().site(rhs(&program.lines[2])),
                 })
             );
         },
@@ -387,7 +387,7 @@ LET negate = UNARY OP #(~) OVER Number -> Number = #(operands)";
             program
                 .activation
                 .shape()
-                .nested(Site::of(body))
+                .nested(program.activation.shape().site(body))
                 .expect("a bare definition's body is shaped")
         };
         let callable = |body| {
@@ -487,7 +487,12 @@ LET which = (FN FOR ALL #{Unused: Value, Held: Any} :{x :(LIST OF Held)} -> Held
         let twice = program
             .activation
             .shape()
-            .nested(Site::of(&program.lines[2].parts[8].value))
+            .nested(
+                program
+                    .activation
+                    .shape()
+                    .site(&program.lines[2].parts[8].value),
+            )
             .expect("the definition births a body");
         for body in [program.birth("lambda"), program.birth("id"), twice] {
             let form = body.form().expect("a callable body sits in a form");
@@ -567,7 +572,7 @@ fn a_unary_operator_at_its_binary_key_packs_its_slots_into_operands() {
             .last()
             .expect("a definition has a body")
             .value;
-        let body = shape.nested(Site::of(body)).expect("the body is shaped");
+        let body = shape.nested(shape.site(body)).expect("the body is shaped");
         let bridge = shape
             .registrations()
             .iter()

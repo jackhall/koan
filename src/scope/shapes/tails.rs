@@ -14,9 +14,7 @@ use crate::memory::{BumpAllocator, BumpVec, Writer, collect};
 use crate::parse::{BuiltinShapeId, ExpressionPart, KExpression, Role};
 use crate::symbols::BinderSymbol;
 
-use super::super::shape::{
-    BodyShape, Candidate, Lands, Position, Segment, ShapeKind, Site, Slot, Which,
-};
+use super::super::shape::{BodyShape, Candidate, Lands, Position, Segment, ShapeKind, Slot, Which};
 use super::super::signature::declare_parameters;
 use super::Shapes;
 
@@ -206,7 +204,7 @@ fn tail_of<'graph>(shape: &BodyShape<'graph>, node: &'graph KExpression<'graph>)
     {
         return Tail::Other;
     }
-    if shape.candidates(Site::of_node(node)).is_some() {
+    if shape.candidates(shape.site_of_node(node)).is_some() {
         // A member read whose label is written bare is no call of a registration.
         let member = builtin.is_some_and(|builtin| {
             builtin.id == BuiltinShapeId::Attribute
@@ -226,7 +224,9 @@ fn tail_of<'graph>(shape: &BodyShape<'graph>, node: &'graph KExpression<'graph>)
     }
     match node.parts {
         [only] => match &only.value {
-            ExpressionPart::Expression(inner) if shape.nested(Site::of(&only.value)).is_none() => {
+            ExpressionPart::Expression(inner)
+                if shape.nested(shape.site(&only.value)).is_none() =>
+            {
                 tail_of(shape, inner.reference())
             }
             ExpressionPart::MarkedUse(_, inner) => tail_of(shape, inner.reference()),
@@ -243,10 +243,10 @@ pub(super) fn name_of<'p>(
 ) -> Option<&'p ExpressionPart<'p>> {
     match part {
         part if part.is_name() => Some(part),
-        ExpressionPart::Expression(node) if shape.nested(Site::of(part)).is_none() => {
+        ExpressionPart::Expression(node) if shape.nested(shape.site(part)).is_none() => {
             let node = node.reference();
             match (node.cache().builtin_shape(), node.parts) {
-                (None, [only]) if shape.candidates(Site::of_node(node)).is_none() => {
+                (None, [only]) if shape.candidates(shape.site_of_node(node)).is_none() => {
                     name_of(shape, &only.value)
                 }
                 _ => None,
@@ -261,7 +261,7 @@ fn bare_parameter<'graph>(
     shape: &BodyShape<'graph>,
     value: &'graph ExpressionPart<'graph>,
 ) -> Option<Slot> {
-    let mention = shape.mention(Site::of(name_of(shape, value)?))?;
+    let mention = shape.mention(shape.site(name_of(shape, value)?))?;
     match mention.lands {
         Lands::Binder { at: segment, slot }
             if segment == shape.segment() && shape.position_of(slot) == Position::PARAMETER =>
@@ -363,7 +363,7 @@ fn tail_edges<'x, 'graph>(
     match tail_of(shape, last) {
         Tail::Apply(head, argument) => {
             let callee = name_of(shape, head)
-                .and_then(|head| shape.mention(Site::of(head)))
+                .and_then(|head| shape.mention(shape.site(head)))
                 .and_then(|mention| births_callable(shapes, mention.lands));
             let Some(callee) = callee else {
                 return;
@@ -383,7 +383,7 @@ fn tail_edges<'x, 'graph>(
         }
         Tail::Call(node) => {
             let list = shape
-                .candidates(Site::of_node(node))
+                .candidates(shape.site_of_node(node))
                 .expect("a call has its candidates");
             let wanted = evaluated(node, scratch);
             for candidate in list.candidates {

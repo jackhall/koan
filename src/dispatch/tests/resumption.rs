@@ -179,7 +179,7 @@ fn narrowing(
     };
     rendered(
         facts
-            .use_statics(shape, Site::of_node(node.reference()))
+            .use_statics(shape, shape.site_of_node(node.reference()))
             .narrowing,
     )
 }
@@ -421,8 +421,8 @@ fn re_running_every_fact_settles_what_skipping_does() {
 /// The settled sites of `shape`'s statement `index`, as `facts` holds them.
 fn settled_in(facts: &LoadFacts<'_>, shape: &BodyShape<'_>, index: usize) -> usize {
     let mut sites = Vec::new();
-    crate::scope::each_part(&shape.body()[index], |part| sites.push(Site::of(part)));
-    sites.push(Site::of_node(&shape.body()[index]));
+    crate::scope::each_part(&shape.body()[index], |part| sites.push(shape.site(part)));
+    sites.push(shape.site_of_node(&shape.body()[index]));
     (sites.into_iter())
         .filter(|site| facts.settled(shape, *site))
         .count()
@@ -597,7 +597,7 @@ fn node_of(symbols: &SymbolInterner, shape: &BodyShape<'_>, name: &str) -> Site 
     let Some(ExpressionPart::Expression(node)) = shape.rhs(slot(symbols, shape, name)) else {
         panic!("`{name}` is bound to a node");
     };
-    Site::of_node(node.reference())
+    shape.site_of_node(node.reference())
 }
 
 /// A module unknown binds to a closed content tree, so a view over a bound module parameter is
@@ -865,7 +865,7 @@ mod laws {
                 ));
             }
             let mut expressions: Vec<_> = shape.type_expressions().iter().collect();
-            expressions.sort_by_key(|expression| expression.order);
+            expressions.sort_by_key(|expression| expression.site);
             for (index, expression) in expressions.into_iter().enumerate() {
                 let typed = facts.typed_expression(shape, expression.site);
                 out.push(format!(
@@ -900,7 +900,7 @@ mod laws {
                 });
                 out.push(format!("{path} #{written} = {typed}"));
                 let mut sites = Vec::new();
-                each_part(statement, |part| sites.push(Site::of(part)));
+                each_part(statement, |part| sites.push(shape.site(part)));
                 let mut at = 0;
                 for site in sites.iter() {
                     let Some(typed) = facts.value_type(shape, *site) else {
@@ -933,10 +933,10 @@ mod laws {
                         out.push(format!("{part} views a tree closed {}", tree.closed()));
                     }
                 }
-                let mut uses = vec![Site::of_node(statement)];
+                let mut uses = vec![shape.site_of_node(statement)];
                 each_part(statement, |part| {
                     if let ExpressionPart::Expression(node) = part {
-                        uses.push(Site::of_node(node.reference()));
+                        uses.push(shape.site_of_node(node.reference()));
                     }
                 });
                 for (at, site) in uses.into_iter().enumerate() {
@@ -1288,7 +1288,7 @@ mod laws {
     }
 
     /// Whether each frame body of `SUBJECT`'s subtree is sealed, by path: each step a nested
-    /// body's place in program order, never its site, an address.
+    /// body's place in program order.
     fn classes(door: &Door<'_, '_>, facts: &LoadFacts<'_>) -> Vec<(String, bool)> {
         fn walk(
             facts: &LoadFacts<'_>,
@@ -1375,7 +1375,7 @@ mod laws {
                 shapes.push((nested, format!("{path}/{index}")));
             }
             let mut expressions: Vec<_> = shape.type_expressions().iter().collect();
-            expressions.sort_by_key(|expression| expression.order);
+            expressions.sort_by_key(|expression| expression.site);
             for (index, expression) in expressions.into_iter().enumerate() {
                 if let Static::Rigid { value, .. } = facts.typed_expression(shape, expression.site)
                     && let Some(read) = read(DeclaredType::Type(value))
@@ -1493,15 +1493,15 @@ mod laws {
             let vacuous = |site: Site| {
                 (shape.body().iter().enumerate()).any(|(index, statement)| {
                     resumed.statement_type(shape, index).is_some_and(never)
-                        && source_of(statement, site).is_some()
+                        && source_of(shape, statement, site).is_some()
                 })
             };
             for statement in shape.body() {
-                let mut sites = vec![Site::of_node(statement)];
+                let mut sites = vec![shape.site_of_node(statement)];
                 each_part(statement, |part| {
-                    sites.push(Site::of(part));
+                    sites.push(shape.site(part));
                     if let ExpressionPart::Expression(node) = part {
-                        sites.push(Site::of_node(node.reference()));
+                        sites.push(shape.site_of_node(node.reference()));
                     }
                 });
                 for site in sites {

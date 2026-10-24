@@ -4,7 +4,7 @@
 
 use crate::memory::{Knot, Writer};
 use crate::parse::ExpressionPart;
-use crate::scope::{CaptureSlot, Coordinate, Site, Target};
+use crate::scope::{CaptureSlot, Coordinate, Target};
 use crate::scope::{Elaboration, ParameterBinding};
 use crate::symbols::{BinderSymbol, KeywordSymbol};
 use crate::type_lattice::{DispatchTokenElement, KType, NodeSchema};
@@ -666,7 +666,7 @@ fn an_eager_part_refuses_by_site_and_ties_when_supplied() {
             else {
                 panic!("`a` is a list literal");
             };
-            let call = Site::of(&items[0]);
+            let call = activation.shape().site(&items[0]);
             assert_eq!(
                 tie_of(fixture, writer, types, activation, "a").err(),
                 Some(Untieable::Eager {
@@ -713,7 +713,7 @@ fn every_eager_part_is_asked_for_in_one_attempt() {
                 activation,
                 "a",
                 &mut |site, part| {
-                    assert!(part.is_some_and(|part| Site::of(part) == site));
+                    assert!(part.is_some_and(|part| activation.shape().site(part) == site));
                     asked.push(site);
                     None
                 },

@@ -9,7 +9,7 @@ use crate::memory::Bump;
 use crate::program::{CellSubstrate, Program};
 use crate::scope::{
     Address, BodyShape, CaptureSlot, Coordinate, FunctionGroupMap, LoadFacts, PathEntry, ShapeKind,
-    Site, Slot, Source, Static, StaticType, Target, TypeExpression, UnitId, Unknown, Variable,
+    Slot, Source, Static, StaticType, Target, TypeExpression, UnitId, Unknown, Variable,
 };
 use crate::symbols::{BinderSymbol, TypeSymbol, ValueSymbol};
 use crate::type_lattice::{DeclaredType, KType, Parametric, TypeNode, display_name};
@@ -265,7 +265,7 @@ fn sibling_quantified_bodies_number_their_own_names_alike() {
                   EXPR FOR ALL #[Be] #(HOLD b :Be) -> Be = #(b)\n  \
                   x\n)";
     loaded(source, |program| {
-        // Nested shapes sit in site order, which is address order, so the two may come either way.
+        // Nested shapes sit in site order, which is program order.
         let levels: Vec<_> = (callables(registered(program)).iter())
             .map(|body| program.facts().group_levels(body).to_vec())
             .collect();
@@ -467,8 +467,7 @@ fn a_quote_s_holes_are_rigid_variables() {
         let [first, second] = codes[..] else {
             panic!("two quotes")
         };
-        // Nested shapes are ordered by address, so the two quotes are told apart by their
-        // captures: both open with `PRINT`'s key, and only the alias quote's `$` name is marked.
+        // The two quotes are told apart by their captures: both open with `PRINT`'s key, and only the alias quote's `$` name is marked.
         let unmarked = |code: &BodyShape<'_>| code.captures().iter().all(|c| c.mark.is_none());
         let (hole, alias) = match unmarked(first) {
             true => (first, second),
@@ -607,7 +606,7 @@ fn path<'graph>(
 /// Each path `shape`'s spellings read: its chain root and level.
 fn path_reads(facts: &LoadFacts<'_>, shape: &BodyShape<'_>) -> Vec<(crate::scope::Segment, usize)> {
     (shape.spelled().iter())
-        .filter_map(|spelled| facts.path_read(shape, Site::of(spelled.part)))
+        .filter_map(|spelled| facts.path_read(shape, shape.site(spelled.part)))
         .collect()
 }
 

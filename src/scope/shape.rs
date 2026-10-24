@@ -6,9 +6,9 @@
 //! each entry at its slot — every mention with its class and coordinate, each bucket declaration's
 //! ranking and the ranking each registration carries, each keyworded use's candidate list,
 //! the capture layout a callable's closure bindings are born through, the strongly connected
-//! components of the body's bindings, the shapes nested in it — found by site, walked in program
-//! order, since a site is an address — the form node a callable's body sits in, and the order its
-//! units run in. What it knows of each binder — the body it births, a `LET` binder's right-hand
+//! components of the body's bindings, the shapes nested in it — found by site, which numbers them
+//! in program order ([`sites`]) — the form node a callable's body sits in, and the order its units
+//! run in. What it knows of each binder — the body it births, a `LET` binder's right-hand
 //! side and annotation, a type binder's declaration node, the registration bound there — is one
 //! record per slot. [`build`] is the one builder every kind goes through.
 //!
@@ -60,6 +60,9 @@ use super::keyed::{Keyed, KeyedEntry};
 use super::typed::{Elaboration, Root, Static, StaticCallable};
 
 mod build;
+mod sites;
+
+pub use sites::{Located, Site, Sites};
 
 pub(crate) use build::IMPLICIT;
 pub(super) use build::program as build_program;
@@ -182,41 +185,6 @@ impl Coordinate {
 pub enum MentionClass {
     Eager,
     Deferred,
-}
-
-/// The identity of one part in program storage — its address, which is what a reader holding the
-/// part can recompute.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
-pub struct Site(usize);
-
-impl Site {
-    pub fn of(part: &ExpressionPart<'_>) -> Site {
-        Site(std::ptr::from_ref(part) as usize)
-    }
-
-    /// The site of a whole node — its parts run's address, which every copy of the node shares.
-    pub fn of_node(node: &KExpression<'_>) -> Site {
-        Site(node.parts.as_ptr() as usize)
-    }
-
-    /// The site of `form`'s body part — where the shape enclosing `form` records the body nested in
-    /// it — or `None` for a node whose builtin shape declares no body.
-    pub fn of_body(form: &KExpression<'_>) -> Option<Site> {
-        let shape = form.cache().builtin_shape()?;
-        shape
-            .roles()
-            .zip(form.parts)
-            .find(|(role, _)| matches!(role, Role::Body(_)))
-            .map(|(_, part)| Site::of(&part.value))
-    }
-}
-
-impl KeyedEntry for Site {
-    type Key = Site;
-
-    fn key(&self) -> Site {
-        *self
-    }
 }
 
 /// One identifier or type-name occurrence a body reads.
@@ -582,9 +550,6 @@ pub struct TypeExpression<'graph> {
     /// The statement it is written in, by index into [`BodyShape::body`] — where a refusal about it
     /// is located.
     pub statement: u32,
-    /// Its place among the body's type expressions in program order, which a pass that mints
-    /// anything per expression walks them in: a site is an address, whose order says nothing.
-    pub order: u32,
     /// For a guard: the site of its arm set, and its place among the arms in written order.
     pub guard: Option<(Site, u32)>,
 }
@@ -621,8 +586,10 @@ pub struct BodyShape<'graph> {
     /// Each declared name at its slot, beside the position it writes at.
     names: Channels<'graph, Position>,
     /// This body's own statements, rewritten — the run every reader takes them from, and the one
-    /// every part address this shape records lies inside.
+    /// every site this shape records lies inside.
     body: &'graph [KExpression<'graph>],
+    /// Each part and node `body` holds, by site.
+    sites: Sites<'graph>,
     /// The operator groups the shapes enclosing this body hold, this body's own included.
     group_frame: &'graph GroupFrame<'graph>,
     /// The groups this body itself holds: a `GROUP`'s own group, or the groups a `USING … SCOPE`
@@ -646,10 +613,8 @@ pub struct BodyShape<'graph> {
     /// Each capture's top-level slot, where it reads the program's top level, parallel to
     /// `captures`.
     top_captures: &'graph [Option<Slot>],
+    /// Each nested shape by its site, so in program order.
     nested: Keyed<'graph, (Site, &'graph BodyShape<'graph>)>,
-    /// `nested`'s entries in program order: a site is an address, so the keyed order can differ
-    /// between two loads of one program, and a walk over it would too.
-    nested_order: &'graph [(Site, &'graph BodyShape<'graph>)],
     /// The `FN`, `EXPR` or `OP` node a callable's body sits in.
     form: Option<&'graph KExpression<'graph>>,
     /// Each binder's record, by slot.
@@ -759,10 +724,36 @@ impl<'graph> BodyShape<'graph> {
     }
 
     /// This body's statements, **rewritten**: every operator run in them is already chained, and
-    /// every site this shape records is an address inside this run. A reader takes a body's
+    /// every site this shape records names a part or node inside this run. A reader takes a body's
     /// statements from here and never from the parse.
     pub fn body(&self) -> &'graph [KExpression<'graph>] {
         self.body
+    }
+
+    /// Each part and node this body's statements hold, by site.
+    pub fn sites(&self) -> &Sites<'graph> {
+        &self.sites
+    }
+
+    /// The site of `part`, which this body's statements hold.
+    pub fn site(&self, part: &ExpressionPart<'_>) -> Site {
+        self.sites.site(part)
+    }
+
+    /// The site of a whole node this body's statements hold.
+    pub fn site_of_node(&self, node: &KExpression<'_>) -> Site {
+        self.sites.site_of_node(node)
+    }
+
+    /// The site of `form`'s body part — where this shape, which holds `form`, records the body
+    /// nested in it — or `None` for a node whose builtin shape declares no body.
+    pub fn site_of_body(&self, form: &KExpression<'_>) -> Option<Site> {
+        let shape = form.cache().builtin_shape()?;
+        shape
+            .roles()
+            .zip(form.parts)
+            .find(|(role, _)| matches!(role, Role::Body(_)))
+            .map(|(_, part)| self.site(&part.value))
     }
 
     /// The operator-group frame this body was built under — what decides which groups an operator
@@ -884,7 +875,7 @@ impl<'graph> BodyShape<'graph> {
     /// statement births or runs inline.
     pub fn nested_in(&self, index: usize) -> &'graph [(Site, &'graph BodyShape<'graph>)] {
         let (start, end) = (self.nested_starts[index], self.nested_starts[index + 1]);
-        &self.nested_order[start as usize..end as usize]
+        &self.nested.entries()[start as usize..end as usize]
     }
 
     /// The slots a callable's or a code body's last statement reads — directly, through a nested
@@ -912,7 +903,7 @@ impl<'graph> BodyShape<'graph> {
 
     /// Every nested shape beside its site, in program order.
     pub fn nested_shapes(&self) -> &'graph [(Site, &'graph BodyShape<'graph>)] {
-        self.nested_order
+        self.nested.entries()
     }
 
     /// What this body is to the `MATCH` or `TRY` holding it: `Some` exactly for an arm.
@@ -1051,10 +1042,10 @@ impl<'graph> BodyShape<'graph> {
     }
 }
 
-/// Where the part at `site` within `node` is written: its own span, else the nearest spanned part's
-/// or node's around it. `None` when `node` does not hold the part.
-pub fn source_of(node: &KExpression<'_>, site: Site) -> Option<SourceRef> {
-    build::source_within(node, site)
+/// Where the part at `site` of `shape` within `node` is written: its own span, else the nearest
+/// spanned part's or node's around it. `None` when `node` does not hold the part.
+pub fn source_of(shape: &BodyShape<'_>, node: &KExpression<'_>, site: Site) -> Option<SourceRef> {
+    build::source_within(node, shape.sites.address(site))
 }
 
 /// Call `visit` on every part within `node`, at any depth, in written order.
@@ -1062,9 +1053,13 @@ pub fn each_part<'a>(node: &'a KExpression<'a>, mut visit: impl FnMut(&'a Expres
     build::each_part_within(node, &mut visit)
 }
 
-/// The part at `site` within `node`, at any depth. `None` when `node` does not hold it.
-pub fn part_of<'a>(node: &'a KExpression<'a>, site: Site) -> Option<&'a ExpressionPart<'a>> {
-    build::part_within(node, site)
+/// The part at `site` of `shape` within `node`, at any depth. `None` when `node` does not hold it.
+pub fn part_of<'a>(
+    shape: &BodyShape<'_>,
+    node: &'a KExpression<'a>,
+    site: Site,
+) -> Option<&'a ExpressionPart<'a>> {
+    build::part_within(node, shape.sites.address(site))
 }
 
 /// `name` read through `mark` at `at` over one body's declared names and captures: a local visible

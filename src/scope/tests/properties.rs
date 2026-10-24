@@ -28,7 +28,8 @@ use super::{NOWHERE, Probe, ProbeFamily, builtins, unlocated, with_fixture};
 
 /// A name part, a nested body or a keyworded use met walking parsed parts in source order.
 enum Met<'g> {
-    Name(Site),
+    /// A name, at its site where the walk has shapes.
+    Name(Option<Site>),
     Open(&'g BodyShape<'g>),
     Close,
     /// A node its shape holds a candidate list for, at its [`Site::of_node`].
@@ -37,10 +38,10 @@ enum Met<'g> {
 
 /// Meet `node` as a keyworded use where the innermost shape holds a candidate list for it.
 fn meet_use<'g>(node: &KExpression<'g>, shapes: &[&'g BodyShape<'g>], met: &mut Vec<Met<'g>>) {
-    let site = Site::of_node(node);
-    if shapes
-        .last()
-        .is_some_and(|shape| shape.candidates(site).is_some())
+    // A body's own node is no statement of the body it opens.
+    if let Some(shape) = shapes.last()
+        && let Some(site) = shape.sites().find_node(node)
+        && shape.candidates(site).is_some()
     {
         met.push(Met::Use(site));
     }
@@ -56,7 +57,9 @@ fn walk<'g>(
     match part {
         ExpressionPart::Identifier(_)
         | ExpressionPart::Type(_)
-        | ExpressionPart::MarkedName(..) => met.push(Met::Name(Site::of(part))),
+        | ExpressionPart::MarkedName(..) => {
+            met.push(Met::Name(shapes.last().map(|shape| shape.site(part))))
+        }
         ExpressionPart::MarkedUse(_, node) => {
             meet_use(node.reference(), shapes, met);
             for inner in node.reference().parts {
@@ -69,7 +72,9 @@ fn walk<'g>(
         | ExpressionPart::SigiledTypeExpr(node)
         | ExpressionPart::RecordType(node)
         | ExpressionPart::QuotedExpression(node) => {
-            let nested = shapes.last().and_then(|shape| shape.nested(Site::of(part)));
+            // A statement block's own parts are no statement of the body it opens.
+            let nested = (shapes.last())
+                .and_then(|shape| (shape.sites().find(part)).and_then(|site| shape.nested(site)));
             if let Some(nested) = nested {
                 met.push(Met::Open(nested));
                 shapes.push(nested);
@@ -105,7 +110,8 @@ fn walk<'g>(
 
 /// Where each planned read, keyworded use and scope landed in the parsed source.
 struct Located<'g> {
-    sites: Vec<Site>,
+    /// Each planned read's site, met only where the walk had shapes.
+    sites: Vec<Option<Site>>,
     /// Each planned use's site, met only where the walk had shapes.
     uses: Vec<Option<Site>>,
     shapes: Vec<Option<&'g BodyShape<'g>>>,
@@ -370,7 +376,7 @@ fn check<'graph>(
             let mention = shape
                 .mentions()
                 .iter()
-                .find(|mention| mention.site == located.sites[read])
+                .find(|mention| Some(mention.site) == located.sites[read])
                 .expect("a mention at the planned read's site");
             assert_eq!(mention.name, placed.read.name.symbol(symbols), "`{source}`");
             assert_eq!(mention.class, class(placed.read.class), "`{source}`");
@@ -813,17 +819,20 @@ proptest! {
                         }
                     }
                     Refusal::Unbound { name } => {
-                        let nodes: Vec<_> = lines.iter().collect();
-                        let located = locate(&rendering, None, &nodes);
                         let read = rendering
                             .reads
                             .iter()
                             .position(|placed| placed.read.lands == Lands::Nowhere)
                             .expect("the refused read is placed");
                         assert!(covers(at, rendering.reads[read].offset), "`{source}`");
+                        // A refused program has no shape to number the read's site in: its
+                        // location pins the read.
+                        let ShapeError::Unbound { site, .. } = error else {
+                            panic!("`{source}` is refused with {refusal:?}, not {error:?}");
+                        };
                         ShapeError::Unbound {
                             name: name.symbol(symbols),
-                            site: located.sites[read],
+                            site,
                             at: NOWHERE,
                         }
                     }
@@ -934,10 +943,10 @@ enum Written<'g> {
 }
 
 impl Written<'_> {
-    fn site(self) -> Site {
+    fn site(self, shape: &BodyShape<'_>) -> Site {
         match self {
-            Written::Part(part) => Site::of(part),
-            Written::Node(node) => Site::of_node(node),
+            Written::Part(part) => shape.site(part),
+            Written::Node(node) => shape.site_of_node(node),
         }
     }
 }
@@ -958,7 +967,7 @@ fn unknowns_of(shapes: &Shapes<'_>, segment: Segment) -> Vec<Unknown> {
         .collect()
 }
 
-/// A path identity with an in-place root's site, an address, erased.
+/// A path identity with an in-place root's site erased.
 fn identity(id: Option<PathId<'_>>) -> Option<(Option<Binder>, Vec<ValueSymbol>, TypeSymbol)> {
     id.map(|id| {
         let root = match id.root {
@@ -970,7 +979,7 @@ fn identity(id: Option<PathId<'_>>) -> Option<(Option<Binder>, Vec<ValueSymbol>,
 }
 
 /// Whether two shape tables of one text agree on every text fact, each compared by segment and by
-/// its place in written order, never by address.
+/// its place in written order.
 fn agree(a: &Shapes<'_>, b: &Shapes<'_>) {
     assert_eq!(a.bodies().len(), b.bodies().len(), "one count of bodies");
     for (left, right) in a.bodies().iter().zip(b.bodies()) {
@@ -985,10 +994,10 @@ fn agree(a: &Shapes<'_>, b: &Shapes<'_>) {
             let (mine, theirs) = (left.holds(unit), right.holds(unit));
             assert_eq!(mine.slots, theirs.slots);
             assert_eq!(mine.spelled, theirs.spelled);
-            // The expressions index a table keyed by site, an address: compare program order.
-            let order = |shape: &BodyShape<'_>, held: &[u32]| -> Vec<u32> {
+            // The expressions index a table keyed by site, numbered in program order.
+            let order = |shape: &BodyShape<'_>, held: &[u32]| -> Vec<Site> {
                 (held.iter())
-                    .map(|at| shape.type_expressions()[*at as usize].order)
+                    .map(|at| shape.type_expressions()[*at as usize].site)
                     .collect()
             };
             assert_eq!(
@@ -1029,7 +1038,7 @@ fn agree(a: &Shapes<'_>, b: &Shapes<'_>) {
         assert_eq!(left.spelled().len(), right.spelled().len());
         for (index, (mine, theirs)) in left.spelled().iter().zip(right.spelled()).enumerate() {
             assert_eq!(mine.statement, theirs.statement);
-            assert_eq!(left.spelled_at(Site::of(mine.part)), Some(index));
+            assert_eq!(left.spelled_at(left.site(mine.part)), Some(index));
             assert_eq!(identity(mine.id), identity(theirs.id));
             assert_eq!(a.path_level(segment, index), b.path_level(segment, index));
         }
@@ -1039,7 +1048,7 @@ fn agree(a: &Shapes<'_>, b: &Shapes<'_>) {
         let (mine, theirs) = (written_parts(left), written_parts(right));
         assert_eq!(mine.len(), theirs.len());
         for (mine, theirs) in mine.iter().zip(theirs.iter()) {
-            let (here, there) = (mine.site(), theirs.site());
+            let (here, there) = (mine.site(left), theirs.site(right));
             let mention = |shape: &BodyShape<'_>, site| {
                 shape.mention(site).map(|mention| {
                     (
@@ -1100,7 +1109,7 @@ fn crosses_callable(shapes: &Shapes<'_>, mut segment: Segment, ancestor: Segment
 /// The statement of `shape` holding the part at `site`.
 fn statement_holding(shape: &BodyShape<'_>, site: Site) -> u32 {
     (shape.body().iter())
-        .position(|node| part_of(node, site).is_some() || Site::of_node(node) == site)
+        .position(|node| part_of(shape, node, site).is_some() || shape.site_of_node(node) == site)
         .expect("a mention sits in a statement") as u32
 }
 
@@ -1152,7 +1161,7 @@ proptest! {
                     (statement < shape.statements()).then(|| shape.unit_of_statement(statement as usize))
                 };
                 let mut expressions: Vec<u32> = (0..shape.type_expressions().len() as u32).collect();
-                expressions.sort_by_key(|at| shape.type_expressions()[*at as usize].order);
+                expressions.sort_by_key(|at| shape.type_expressions()[*at as usize].site);
                 for unit in units {
                     let holds = shape.holds(unit);
                     let slots: Vec<Slot> = (0..shape.slots() as u32)

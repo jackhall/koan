@@ -344,7 +344,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             );
         }
         let annotation = shape.annotation(binder.slot)?;
-        match self.type_cell(shape, Site::of(annotation)) {
+        match self.type_cell(shape, shape.site(annotation)) {
             Static::Closed(handle) => Some(handle.into()),
             Static::Rigid { value, .. } => Some(value),
             Static::Unknown => None,
@@ -374,7 +374,9 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         // A root written in place is typed where its path resolves, its own types first.
         if let Some(SpelledRoot::Inline(written)) = spelling {
             let holds = |site: Site| match written {
-                ExpressionPart::Expression(node) => part_of(node.reference(), site).is_some(),
+                ExpressionPart::Expression(node) => {
+                    part_of(shape, node.reference(), site).is_some()
+                }
                 _ => false,
             };
             // Its own types sit in its statement, so among its unit's, in program order.
@@ -479,7 +481,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 let shape = self.chain[level].shape;
                 let statement = statement as usize;
                 let node = &shape.body()[statement];
-                match part_of(node, site) {
+                match part_of(shape, node, site) {
                     Some(part) => {
                         let was = std::mem::replace(&mut self.chain[level].statement, statement);
                         let typed = match self.part_type(level, site) {
@@ -488,7 +490,8 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                         };
                         let tree = self.tree(level, part)?;
                         self.chain[level].statement = was;
-                        let at = source_of(node, site).expect("the part lies in its statement");
+                        let at =
+                            (source_of(shape, node, site)).expect("the part lies in its statement");
                         (tree, exact(types, typed), site, Some(at))
                     }
                     None => (Tree::Leaf(Leaf::Unnamed(site)), None, site, None),
@@ -559,8 +562,8 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         let shape = self.chain[home].shape;
         let statement = shape.position_of(binder.slot).statement_index();
         let Some(site) = statement
-            .map(|index| Site::of_node(&shape.body()[index]))
-            .or_else(|| shape.body().first().map(Site::of_node))
+            .map(|index| shape.site_of_node(&shape.body()[index]))
+            .or_else(|| shape.body().first().map(|node| shape.site_of_node(node)))
         else {
             return Ok(None);
         };
@@ -987,7 +990,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         let (root, chain) = match self.name_chain(level, operand) {
             Some((binder, chain)) => (Root::Binder(binder), chain),
             None => {
-                let site = Site::of(operand);
+                let site = self.site(level, operand);
                 let statement = self.statement_holding(level, site) as u32;
                 (
                     Root::Inline { site, statement },
@@ -1017,7 +1020,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         if !matches!(label, BinderSymbol::Value(_)) || typed.upper == KType::NEVER.into() {
             return Ok(typed);
         }
-        let site = Site::of(operand);
+        let site = self.site(level, operand);
         let Some(operand_type) = self.part_type(level, site) else {
             return Ok(typed);
         };
@@ -1054,7 +1057,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         let shape = self.chain[level].shape;
         match super::of_part(shape, part) {
             super::Form::Name(name) => {
-                let mention = shape.mention(Site::of(name))?;
+                let mention = shape.mention(shape.site(name))?;
                 let (home, slot) = self.landed_slot(level, mention.coordinate)?;
                 let binder = Binder {
                     body: self.chain[home].shape.segment(),

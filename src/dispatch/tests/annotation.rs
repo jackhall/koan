@@ -2,7 +2,6 @@
 //! operand — refused at load where the two can never meet, settled where the value always
 //! satisfies it, and checked and retyped at run otherwise.
 
-use crate::scope::Site;
 use crate::type_lattice::display_name;
 
 use super::run;
@@ -39,7 +38,7 @@ fn an_annotation_the_load_settles_is_not_checked_at_run() {
         let annotation = shape
             .annotation(slot(program, shape, "n"))
             .expect("`n` is annotated");
-        assert!(program.facts().settled(shape, Site::of(annotation)));
+        assert!(program.facts().settled(shape, shape.site(annotation)));
     });
 }
 

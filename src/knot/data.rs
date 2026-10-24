@@ -128,7 +128,7 @@ fn construction_parts<'graph>(
         [head, payload]
             if node.cache().builtin_shape().is_none()
                 && matches!(head.value, ExpressionPart::Type(_))
-                && shape.mention(Site::of(&head.value)).is_some() =>
+                && shape.mention(shape.site(&head.value)).is_some() =>
         {
             Some((&head.value, &payload.value))
         }
@@ -143,7 +143,7 @@ fn fellow_lambda<'graph>(
     shape: &BodyShape<'graph>,
     node: &KExpression<'graph>,
 ) -> Option<&'graph BodyShape<'graph>> {
-    let body = shape.nested(Site::of_body(node)?)?;
+    let body = shape.nested(shape.site_of_body(node)?)?;
     let fellow = body
         .captures()
         .iter()
@@ -160,7 +160,7 @@ fn fellow_quote<'graph>(
     let ExpressionPart::QuotedExpression(body) = part else {
         return None;
     };
-    let code = shape.nested(Site::of(part))?;
+    let code = shape.nested(shape.site(part))?;
     let fellow = code
         .captures()
         .iter()
@@ -272,7 +272,7 @@ impl<'stage, 'graph, 'cell> Stager<'stage, 'graph, 'cell> {
                 unreachable!("the shape builder refuses a mark outside a quote value")
             }
             ExpressionPart::Identifier(_) | ExpressionPart::Type(_) => {
-                return match shape.mention(Site::of(part)) {
+                return match shape.mention(shape.site(part)) {
                     Some(mention) => self.read(mention.name, mention.coordinate),
                     None => self.evaluate(part),
                 };
@@ -296,14 +296,14 @@ impl<'stage, 'graph, 'cell> Stager<'stage, 'graph, 'cell> {
                     return self.evaluate(part);
                 };
                 let mention = shape
-                    .mention(Site::of(head))
+                    .mention(shape.site(head))
                     .expect("a construction head is read");
                 let head = match self.read(mention.name, mention.coordinate)? {
                     Staged::Value(Value::Type(head)) => head,
                     Staged::Value(other) => {
                         return Err(Untieable::Construction {
                             name: self.name(),
-                            site: Site::of(part),
+                            site: shape.site(part),
                             refused: ConstructionRefused::NotConstructible(other.concrete_ktype()),
                         });
                     }
@@ -314,7 +314,7 @@ impl<'stage, 'graph, 'cell> Stager<'stage, 'graph, 'cell> {
                 let payload = self.part(payload, false)?;
                 Staged::Tagged {
                     head,
-                    site: Site::of(part),
+                    site: shape.site(part),
                     payload: scratch.alloc(payload),
                 }
             }
@@ -385,7 +385,7 @@ impl<'stage, 'graph, 'cell> Stager<'stage, 'graph, 'cell> {
         &mut self,
         part: &'graph ExpressionPart<'graph>,
     ) -> Result<Staged<'graph, 'cell, 'stage>, Untieable<'static>> {
-        let site = Site::of(part);
+        let site = self.activation.shape().site(part);
         match (self.eager)(site, Some(part)) {
             Some(Supplied::Value(value)) => Ok(Staged::Value(value)),
             Some(Supplied::Body(_)) => unreachable!("a data member's part is a value"),
@@ -401,7 +401,7 @@ impl<'stage, 'graph, 'cell> Stager<'stage, 'graph, 'cell> {
         &mut self,
         part: &'graph ExpressionPart<'graph>,
     ) -> Result<Key<'cell>, Untieable<'static>> {
-        let site = Site::of(part);
+        let site = self.activation.shape().site(part);
         let key = match part {
             ExpressionPart::Literal(KLiteral::String(literal)) => Ok(Key::str(literal)),
             ExpressionPart::Literal(KLiteral::Number(number)) => Key::number(*number),

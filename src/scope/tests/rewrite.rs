@@ -4,7 +4,7 @@
 //! depth its parse counted.
 
 use crate::parse::{ExpressionPart, KExpression};
-use crate::scope::{BodyShape, Builtins, ShapeError, ShapeKind, Site};
+use crate::scope::{BodyShape, Builtins, ShapeError, ShapeKind};
 use crate::source::SourceRef;
 use crate::symbols::{BinderSymbol, KeywordSymbol, SymbolInterner};
 
@@ -97,7 +97,7 @@ fn nested<'graph>(
     index: usize,
 ) -> &'graph BodyShape<'graph> {
     shape
-        .nested(Site::of(&node.parts[index].value))
+        .nested(shape.site(&node.parts[index].value))
         .expect("the part has a nested shape")
 }
 
@@ -562,7 +562,7 @@ LET e = #(1 + 2 - 3)",
         let block = nested(shape, &shape.body()[1], 3);
         let quoted = &block.body()[0].parts[0].value;
         let code = block
-            .nested(Site::of(quoted))
+            .nested(block.site(quoted))
             .expect("a quote value's code is shaped");
         assert_eq!(code.kind(), ShapeKind::Code);
         assert_eq!(
@@ -574,7 +574,7 @@ LET e = #(1 + 2 - 3)",
         );
         // A builtin group chains in code wherever the quote is written.
         let code = shape
-            .nested(Site::of(&shape.body()[2].parts[3].value))
+            .nested(shape.site(&shape.body()[2].parts[3].value))
             .expect("a quote value's code is shaped");
         assert!(code.refusal().is_none());
         assert_eq!(tree(&code.body()[0], fixture.symbols), "((1 + 2) - 3)");
@@ -588,7 +588,7 @@ LET e = #(1 + 2 - 3)",
     shaped(&source, |_, shape| {
         let shape = shape.expect("a quote's code is never refused where the program loads");
         let code = shape
-            .nested(Site::of(&shape.body()[1].parts[3].value))
+            .nested(shape.site(&shape.body()[1].parts[3].value))
             .expect("a quote value's code is shaped");
         assert!(matches!(
             code.refusal(),

@@ -15,7 +15,7 @@ use std::cell::Cell;
 
 use crate::memory::{BumpAllocator, BumpVec, Edge, KnotPlan, Writer, collect, resident};
 use crate::parse::{ExpressionPart, ProgramNode};
-use crate::scope::{BodyShape, CaptureSource, LoadFacts, ShapeKind, Site};
+use crate::scope::{BodyShape, CaptureSource, LoadFacts, ShapeKind};
 use crate::symbols::{BinderSymbol, KeySymbol};
 use crate::type_lattice::{KType, TypeNode};
 use crate::values::digest::{DigestHasher, Tag};
@@ -206,7 +206,7 @@ fn shape_of<'graph>(
     let ExpressionPart::QuotedExpression(body) = part else {
         return None;
     };
-    let code = shape.nested(Site::of(part))?;
+    let code = shape.nested(shape.site(part))?;
     (code.kind() == ShapeKind::Code).then_some((*body, code))
 }
 

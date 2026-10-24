@@ -211,7 +211,7 @@ pub fn denoted<'graph, XF: KnottedFamily<'graph>>(
     };
     let elaborated = || type_expression(part, view, types, scratch).map(concrete);
     let loaded = (view.load())
-        .typed_expression(view.shape(), Site::of(part))
+        .typed_expression(view.shape(), view.shape().site(part))
         .solved(
             view,
             scratch,

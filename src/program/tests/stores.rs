@@ -408,7 +408,7 @@ fn record<'graph>(
 ) -> &'graph UnitFacts<'graph> {
     let root = shapes.root();
     let mut sites = Vec::new();
-    each_part(&root.body()[index], |part| sites.push(Site::of(part)));
+    each_part(&root.body()[index], |part| sites.push(root.site(part)));
     let sites = Keyed::sorted(writer, &mut sites);
     let typed = match settles {
         true => Typed {
@@ -433,7 +433,7 @@ fn record<'graph>(
 fn sites_of(shapes: &Shapes<'_>, index: usize) -> Vec<Site> {
     let mut sites = Vec::new();
     each_part(&shapes.root().body()[index], |part| {
-        sites.push(Site::of(part))
+        sites.push(shapes.root().site(part))
     });
     sites
 }

@@ -3,7 +3,7 @@
 
 use crate::memory::Writer;
 use crate::parse::{ExpressionPart, KExpression};
-use crate::scope::{BodyShape, CaptureSlot, Site};
+use crate::scope::{BodyShape, CaptureSlot};
 use crate::symbols::TypeSymbol;
 use crate::type_lattice::{DeclaredType, KType};
 use crate::values::{Chain, Circular, Knotted as _, Link, Value};
@@ -42,7 +42,9 @@ fn body_of<'graph>(
     let ExpressionPart::Expression(node) = part else {
         panic!("a `FN` item is a parenthesized node");
     };
-    let site = Site::of_body(node.reference()).expect("a `FN` has a body");
+    let site = shape
+        .site_of_body(node.reference())
+        .expect("a `FN` has a body");
     shape.nested(site).expect("the body has a shape")
 }
 
@@ -55,7 +57,7 @@ fn born<'graph, 'cell>(
     statement: usize,
 ) -> Knotted<'graph, 'cell> {
     let node = statement_lambda(activation.shape(), statement);
-    let site = Site::of_body(node).expect("a `FN` has a body");
+    let site = (activation.shape().site_of_body(node)).expect("a `FN` has a body");
     lambda(
         writer,
         activation,
@@ -82,7 +84,7 @@ fn a_lambda_is_born_as_a_one_node_knot() {
             let node = statement_lambda(shape, 1);
             assert!(std::ptr::eq(
                 function.shape(),
-                shape.nested(Site::of_body(node).unwrap()).unwrap()
+                shape.nested(shape.site_of_body(node).unwrap()).unwrap()
             ));
             assert_eq!(
                 member.ktype(),
@@ -253,10 +255,10 @@ fn a_lambda_part_capturing_no_fellow_is_asked_of_the_caller() {
                 refused,
                 Some(Untieable::Eager {
                     name: fixture.name("a"),
-                    site: Site::of(part),
+                    site: activation.shape().site(part),
                 })
             );
-            assert_eq!(asked, [Site::of(part)]);
+            assert_eq!(asked, [activation.shape().site(part)]);
         });
     });
 }

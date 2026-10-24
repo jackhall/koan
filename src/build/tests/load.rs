@@ -4,8 +4,8 @@
 use crate::memory::{BumpVec, resident};
 use crate::scope::tests::with_shapes;
 use crate::scope::{
-    Address, Binding, Frontier, Keyed, Site, Slot, Store, Typed, UnitFacts, UnitId, UnitIndex,
-    Unknown, each_part,
+    Address, Binding, Frontier, Keyed, Slot, Store, Typed, UnitFacts, UnitId, UnitIndex, Unknown,
+    each_part,
 };
 
 use super::super::LoadStore;
@@ -30,7 +30,7 @@ fn a_write_reads_back_and_the_laid_facts_find_every_site_it_keys() {
                 unit: root.unit_of_statement(index),
             };
             let mut sites = BumpVec::new_in(scratch);
-            each_part(statement, |part| sites.push(Site::of(part)));
+            each_part(statement, |part| sites.push(root.site(part)));
             // Even statements settle their sites and odd ones mint at them, so a read tells which
             // table of which record answered.
             let sites = Keyed::sorted(writer, &mut sites);

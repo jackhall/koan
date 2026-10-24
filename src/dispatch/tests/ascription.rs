@@ -5,7 +5,7 @@
 
 use crate::parse::ExpressionPart;
 use crate::program::Program;
-use crate::scope::{BodyShape, Site};
+use crate::scope::BodyShape;
 use crate::type_lattice::display_name;
 
 use super::run;
@@ -35,7 +35,7 @@ fn settled(program: &Program<'_>, name: &str) -> bool {
     };
     program
         .facts()
-        .settled(shape, Site::of_node(node.reference()))
+        .settled(shape, shape.site_of_node(node.reference()))
 }
 
 /// The `WHICH` overloads each test dispatches the retyped value through.

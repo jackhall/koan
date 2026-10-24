@@ -4,8 +4,8 @@
 
 use crate::parse::{ExpressionPart, KExpression, Mark};
 use crate::scope::{
-    BodyShape, Builtins, CaptureSource, Coordinate, Offer, Position, ShapeError, ShapeKind, Site,
-    Slot, Target,
+    BodyShape, Builtins, CaptureSource, Coordinate, Offer, Position, ShapeError, ShapeKind, Slot,
+    Target,
 };
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::KType;
@@ -43,7 +43,7 @@ fn code<'graph>(shape: &BodyShape<'graph>, statement: usize) -> &'graph BodyShap
     let quote = &shape.body()[statement].parts[3].value;
     assert!(matches!(quote, ExpressionPart::QuotedExpression(_)));
     let code = shape
-        .nested(Site::of(quote))
+        .nested(shape.site(quote))
         .expect("a quote value's code is shaped");
     assert_eq!(code.kind(), ShapeKind::Code);
     code
@@ -56,7 +56,7 @@ fn nested<'graph>(
     index: usize,
 ) -> &'graph BodyShape<'graph> {
     shape
-        .nested(Site::of(&node.parts[index].value))
+        .nested(shape.site(&node.parts[index].value))
         .expect("the part has a shape")
 }
 
@@ -123,7 +123,7 @@ fn a_hole_a_written_name_and_a_built_name_each_resolve_their_own_way() {
         );
         let parts = code.body()[0].parts;
         for (index, capture) in [(1, 1), (2, 2), (3, 3)] {
-            let mention = code.mention(Site::of(&parts[index].value)).unwrap();
+            let mention = code.mention(code.site(&parts[index].value)).unwrap();
             assert_eq!(mention.coordinate, captured(capture));
         }
     });
@@ -148,7 +148,7 @@ fn a_written_name_never_binds_to_a_binder_in_its_code() {
             // The unmarked `x` is the code's own binder.
             let (inner, _) = code.slot(x).unwrap();
             let print = &code.body()[1];
-            let mention = code.mention(Site::of(&print.parts[2].value)).unwrap();
+            let mention = code.mention(code.site(&print.parts[2].value)).unwrap();
             assert_eq!(
                 mention.coordinate,
                 Coordinate::Activation {
@@ -219,7 +219,7 @@ fn marks_work_on_type_names_and_a_builtin_is_no_hole() {
             );
             let parts = code.body()[0].parts;
             for index in [3, 4] {
-                let mention = code.mention(Site::of(&parts[index].value)).unwrap();
+                let mention = code.mention(code.site(&parts[index].value)).unwrap();
                 assert!(matches!(mention.coordinate, Coordinate::Builtin(_)));
             }
         },
@@ -405,7 +405,7 @@ fn an_eval_of_a_parameter_needing_names_offers_them_where_it_is_written() {
             let it = value(fixture, "it");
             let (slot, _) = body.slot(it).unwrap();
             let eval = &body.body()[1];
-            let offered = body.offers(Site::of(&eval.parts[1].value));
+            let offered = body.offers(body.site(&eval.parts[1].value));
             let [(name, Offer::Name(at))] = offered else {
                 panic!("one name is offered");
             };
@@ -442,7 +442,7 @@ fn an_eval_of_a_parameter_needing_names_offers_them_where_it_is_written() {
             let lambda = node(&shape.body()[0].parts[3].value);
             let body = nested(shape, lambda, 5);
             let eval = &body.body()[0];
-            assert!(body.offers(Site::of(&eval.parts[1].value)).is_empty());
+            assert!(body.offers(body.site(&eval.parts[1].value)).is_empty());
         },
     );
 }

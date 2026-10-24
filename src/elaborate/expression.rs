@@ -165,7 +165,7 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, '_, 'x, '_, R> {
         match self.part_declared(part, groups)? {
             DeclaredType::Type(kt) => Ok(kt),
             DeclaredType::Scheme(_) => Err(Elaboration::Quantified {
-                site: Site::of(part),
+                site: self.reader.shape().site(part),
             }),
         }
     }
@@ -177,7 +177,7 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, '_, 'x, '_, R> {
         part: &ExpressionPart<'graph>,
         groups: &Groups<'_>,
     ) -> Result<DeclaredType<Parametric>, Elaboration> {
-        let site = Site::of(part);
+        let site = self.reader.shape().site(part);
         match part {
             ExpressionPart::Type(name) => self.name(site, *name, groups).map(DeclaredType::Type),
             // A marked name resolves past the definition's own quantifiers and names, through the
@@ -265,13 +265,16 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, '_, 'x, '_, R> {
         let PathSpelling { root, chain, label } = path_spelling(node, self.scratch)?;
         match root {
             SpelledRoot::Inline(root) => {
-                let read = self
-                    .reader
-                    .inline_member(site, Site::of(root), &chain, label);
+                let read =
+                    self.reader
+                        .inline_member(site, self.reader.shape().site(root), &chain, label);
                 Some(path_type(site, label, read, KType::EMPTY_SIGNATURE))
             }
             SpelledRoot::Name(root) => {
-                let mention = self.reader.shape().mention(Site::of(root))?;
+                let mention = self
+                    .reader
+                    .shape()
+                    .mention(self.reader.shape().site(root))?;
                 let (read, owner) =
                     self.reader
                         .member_type(mention.coordinate, site, &chain, label, self.types)?;
@@ -484,7 +487,7 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, '_, 'x, '_, R> {
                         self.part(&parts[2].value, groups)?,
                     ])
                 })?;
-                self.meet(Site::of(&parts[1].value), &operands)
+                self.meet(self.reader.shape().site(&parts[1].value), &operands)
             }
             2 if keyword(0, &CONNECTORS.meet) => {
                 let ExpressionPart::ListLiteral(written) = parts[1].value else {
@@ -497,7 +500,7 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, '_, 'x, '_, R> {
                     }
                     Ok(operands)
                 })?;
-                self.meet(Site::of(&parts[0].value), &operands)
+                self.meet(self.reader.shape().site(&parts[0].value), &operands)
             }
             _ => Err(unsupported),
         }
@@ -530,7 +533,7 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, '_, 'x, '_, R> {
         let mut written = BumpVec::new_in(self.scratch);
         for entry in quantifier_entries(part) {
             let name = entry.name.ok_or(Elaboration::Unsupported {
-                site: Site::of(entry.written),
+                site: self.reader.shape().site(entry.written),
             })?;
             group.names.push(name);
             written.push(entry.bound);
@@ -558,9 +561,10 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, '_, 'x, '_, R> {
         groups: &Groups<'_>,
     ) -> Result<KType, Elaboration> {
         let refused = Elaboration::Bound {
-            site: Site::of(part),
+            site: self.reader.shape().site(part),
         };
-        let bound = self.closed_operands(Site::of(part), || self.part(part, groups))?;
+        let bound =
+            self.closed_operands(self.reader.shape().site(part), || self.part(part, groups))?;
         // An opaque carrier is concrete, but a variable's bound holds none.
         match self.types.concrete(bound) {
             Some(bound) if bound != KType::NEVER && !self.types.holds_carrier(bound) => Ok(bound),
@@ -673,12 +677,12 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, '_, 'x, '_, R> {
         let groups = if group.names.is_empty() { groups } else { &own };
         let ExpressionPart::RecordType(fields) = schema else {
             return Err(Elaboration::Unsupported {
-                site: Site::of(schema),
+                site: self.reader.shape().site(schema),
             });
         };
         let mut params = BumpVec::new_in(self.scratch);
         self.pairs(
-            Site::of(schema),
+            self.reader.shape().site(schema),
             fields.reference(),
             groups,
             |name, ktype| {
@@ -688,7 +692,11 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, '_, 'x, '_, R> {
         )?;
         if !group.names.is_empty() {
             let params = params.iter().map(|(_, param)| *param);
-            self.untied(Site::of(schema), (&group.names, &group.bounds), params)?;
+            self.untied(
+                self.reader.shape().site(schema),
+                (&group.names, &group.bounds),
+                params,
+            )?;
         }
         let ret = self.part(ret, groups)?;
         Ok(self
@@ -717,7 +725,7 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, '_, 'x, '_, R> {
         };
         let groups = if group.names.is_empty() { groups } else { &own };
         let unsupported = Elaboration::Unsupported {
-            site: Site::of(head),
+            site: self.reader.shape().site(head),
         };
         let ExpressionPart::QuotedExpression(run) = head else {
             return Err(unsupported);
@@ -732,7 +740,11 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, '_, 'x, '_, R> {
         })?;
         if !group.names.is_empty() {
             let params = params.iter().map(|(_, param)| *param);
-            self.untied(Site::of(head), (&group.names, &group.bounds), params)?;
+            self.untied(
+                self.reader.shape().site(head),
+                (&group.names, &group.bounds),
+                params,
+            )?;
         }
         let ret = self.part(ret, groups)?;
         Ok(self
@@ -757,7 +769,7 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, '_, 'x, '_, R> {
             outer: Some(groups),
         };
         let unsupported = Elaboration::Unsupported {
-            site: Site::of(head),
+            site: self.reader.shape().site(head),
         };
         let ExpressionPart::QuotedExpression(run) = head else {
             return Err(unsupported);
@@ -781,7 +793,11 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, '_, 'x, '_, R> {
                 DispatchTokenElement::Slot(slot) => Some(*slot),
                 DispatchTokenElement::Keyword(_) => None,
             });
-            self.untied(Site::of(head), (&group.names, &group.bounds), slots)?;
+            self.untied(
+                self.reader.shape().site(head),
+                (&group.names, &group.bounds),
+                slots,
+            )?;
         }
         let ret = self.part(ret, own)?;
         Ok(self

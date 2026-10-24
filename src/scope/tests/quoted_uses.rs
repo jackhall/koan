@@ -5,7 +5,7 @@
 use crate::parse::{ExpressionPart, KExpression, Mark};
 use crate::scope::{
     BodyShape, Builtins, Candidate, CandidateList, CaptureSlot, CaptureSource, Coordinate, Offer,
-    ShapeError, ShapeKind, Site, Target,
+    ShapeError, ShapeKind, Target,
 };
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::{KType, display_name};
@@ -57,7 +57,7 @@ fn built<R>(
 /// The code shape of the quote a `LET <name> = #(…)` statement at `statement` binds.
 fn code<'graph>(shape: &BodyShape<'graph>, statement: usize) -> &'graph BodyShape<'graph> {
     let code = shape
-        .nested(Site::of(&shape.body()[statement].parts[3].value))
+        .nested(shape.site(&shape.body()[statement].parts[3].value))
         .expect("a quote value's code is shaped");
     assert_eq!(code.kind(), ShapeKind::Code);
     code
@@ -77,7 +77,7 @@ fn candidates<'graph>(
     node: &KExpression<'graph>,
 ) -> &'graph CandidateList<'graph> {
     shape
-        .candidates(Site::of_node(node))
+        .candidates(shape.site_of_node(node))
         .expect("a keyworded use has a candidate list")
 }
 
@@ -417,7 +417,7 @@ fn a_mark_over_a_hoisting_run_reaches_the_block_the_run_becomes() {
         // The mark holds the operator run's block in a node of one part.
         let holder = node(&code.body()[0].parts[0].value);
         let block = code
-            .nested(Site::of(&holder.parts[0].value))
+            .nested(code.site(&holder.parts[0].value))
             .expect("the hoisting operator run is a block");
         assert_eq!(block.kind(), ShapeKind::Block);
         let joined = block.body().last().expect("the folded pairs");
@@ -476,10 +476,10 @@ LET twice = (FN :{body :(Expression NEEDING #[(GREET _) (PRINT _)])} -> Any = #(
     built(source, |fixture, shape| {
         let lambda = node(&shape.body()[1].parts[3].value);
         let body = shape
-            .nested(Site::of(&lambda.parts[5].value))
+            .nested(shape.site(&lambda.parts[5].value))
             .expect("the lambda's body");
         let eval = &body.body()[0];
-        let offered = body.offers(Site::of(&eval.parts[1].value));
+        let offered = body.offers(body.site(&eval.parts[1].value));
         let keys: Vec<_> = offered.iter().map(|(name, _)| *name).collect();
         assert_eq!(keys, [key(fixture, "GREET _"), key(fixture, "PRINT _")]);
         let [(_, Offer::Key(greet)), (_, Offer::Key(print))] = offered else {

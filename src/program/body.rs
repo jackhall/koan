@@ -1372,7 +1372,9 @@ fn held_at<'graph, 'here>(
     annotation: KType,
     value: KValue<'graph, 'here>,
 ) -> Result<KValue<'graph, 'here>, Stopped<'here>> {
-    let settled = runner.load().settled(runner.shape(), Site::of(written));
+    let settled = runner
+        .load()
+        .settled(runner.shape(), runner.shape().site(written));
     let held = (runner.program).annotated(step.writer(), types, value, annotation, settled);
     runner.check(&held, types)?;
     Ok(held)
@@ -1578,7 +1580,7 @@ fn declared<'graph, 'here>(
                 .any(|member| shape.declarations(*member).is_some_and(declares_nominal))
                 || runner.load().mints_at(
                     shape,
-                    Site::of_node(
+                    shape.site_of_node(
                         shape
                             .declarations(component.members[0])
                             .expect("a type binder records its declaration node"),
@@ -1592,7 +1594,7 @@ fn declared<'graph, 'here>(
             })?;
         // Under `routes` an invariant nominal's types are adopted into the warm tier, so the next
         // hop finds them there.
-        let site = (shape.declarations(component.members[0])).map(Site::of_node);
+        let site = (shape.declarations(component.members[0])).map(|node| shape.site_of_node(node));
         if runner.within.routes
             && site.and_then(|site| runner.load().mint_at(shape, site)) == Some(Mint::Invariant)
             && let Some(warm) = step.agent_types()
