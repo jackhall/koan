@@ -14,7 +14,7 @@ use crate::knot::{KActivationView, KBuiltins, KValue};
 use crate::memory::{Bump, BumpAllocator, Writer};
 use crate::parse::ParseError;
 use crate::scheduler::{NativeStep, Work};
-use crate::scope::{BodyShape, LoadFacts, ShapeError, Shapes, Site, Slot, Store, Written};
+use crate::scope::{BodyShape, LoadFacts, Segment, ShapeError, Shapes, Site, Slot, Store, Written};
 use crate::symbols::{BinderSymbol, SymbolInterner};
 use crate::type_lattice::{
     DeclaredType, KType, TypeNode, display_name, satisfied_by, substitute_quantified,
@@ -43,18 +43,20 @@ pub trait Language {
     /// value delivered where the drain says.
     fn evaluator<'graph>() -> NativeStep<'graph, KBundle>;
 
-    /// Run the language's one walk over `shapes`, keeping every record it computes in `store` and
-    /// interning through `types`: what the load decides, and what a resumption re-decides under
-    /// the store's binding. Runs nothing by default, so the run elaborates where it reads, as it
-    /// does wherever the load leaves a fact unknown.
+    /// Run the language's one walk over the body at `at` of `shapes` and every body nested in it,
+    /// keeping every record it computes in `store` and interning through `types`: what the load
+    /// decides at the root, and what a resumption re-decides under the store's binding. Runs
+    /// nothing by default, so the run elaborates where it reads, as it does wherever the load
+    /// leaves a fact unknown.
     fn facts<'graph: 'o, 'tier: 'o, 'o, S: Store<'o>>(
         shapes: &'graph Shapes<'graph>,
         builtins: &'graph KBuiltins<'graph, 'graph>,
         store: &S,
         types: &Chain<'tier, '_, '_, '_>,
         scratch: BumpAllocator<'_>,
+        at: Segment,
     ) -> Result<(), ShapeError<'o>> {
-        let _ = (shapes, builtins, store, types, scratch);
+        let _ = (shapes, builtins, store, types, scratch, at);
         Ok(())
     }
 }

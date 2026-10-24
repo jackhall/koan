@@ -362,6 +362,9 @@ impl<'step> Facts<'step> {
 pub(crate) trait RecordSource<'a>: Copy {
     fn shapes(&self) -> &'a Shapes<'a>;
 
+    /// What the newest walk over these records bound: each layer's binding extends the one below.
+    fn binding(&self) -> Binding<'a>;
+
     /// The newest record of `unit`, beside its frontier.
     fn unit(&self, unit: UnitId) -> Option<(&'a UnitFacts<'a>, Frontier<'a>)>;
 
@@ -384,6 +387,10 @@ pub(crate) trait RecordSource<'a>: Copy {
 impl<'graph> RecordSource<'graph> for LoadRecords<'graph> {
     fn shapes(&self) -> &'graph Shapes<'graph> {
         self.shapes
+    }
+
+    fn binding(&self) -> Binding<'graph> {
+        self.records.binding
     }
 
     fn unit(&self, unit: UnitId) -> Option<(&'graph UnitFacts<'graph>, Frontier<'graph>)> {
@@ -419,6 +426,10 @@ impl<'step> RecordSource<'step> for Layers<'step> {
         self.base.shapes()
     }
 
+    fn binding(&self) -> Binding<'step> {
+        self.base.binding()
+    }
+
     fn unit(&self, unit: UnitId) -> Option<(&'step UnitFacts<'step>, Frontier<'step>)> {
         self.base.unit(unit)
     }
@@ -441,6 +452,41 @@ impl<'step> RecordSource<'step> for Layers<'step> {
 
     fn tree_of(&self, digest: ContentDigest) -> Option<&'step Tree<'step>> {
         self.base.tree_of(digest)
+    }
+}
+
+// A layer may rest on any fact reader: a resumption's base is the facts it extends.
+impl<'a, S: RecordSource<'a>> RecordSource<'a> for FactsOver<S> {
+    fn shapes(&self) -> &'a Shapes<'a> {
+        self.0.shapes()
+    }
+
+    fn binding(&self) -> Binding<'a> {
+        self.0.binding()
+    }
+
+    fn unit(&self, unit: UnitId) -> Option<(&'a UnitFacts<'a>, Frontier<'a>)> {
+        self.0.unit(unit)
+    }
+
+    fn closing(&self, body: Segment) -> Option<(&'a Closing<'a>, Frontier<'a>)> {
+        self.0.closing(body)
+    }
+
+    fn holding(&self, held: Held) -> Option<(UnitId, &'a UnitFacts<'a>)> {
+        self.0.holding(held)
+    }
+
+    fn laid(&self, body: Segment) -> &'a Laid<'a> {
+        self.0.laid(body)
+    }
+
+    fn folds(&self, body: Segment) -> Option<Folds<'a>> {
+        self.0.folds(body)
+    }
+
+    fn tree_of(&self, digest: ContentDigest) -> Option<&'a Tree<'a>> {
+        self.0.tree_of(digest)
     }
 }
 

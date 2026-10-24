@@ -144,7 +144,10 @@
 use crate::elaborate::{SignatureMember, declares_nominal, module_signature, signature_member};
 use crate::knot::module::view::{self, Ascription, ViewTypes, opaque_view_types};
 use crate::knot::{BuiltinFunction, KBuiltins};
-use crate::memory::{BumpAllocator, BumpBackedMap, BumpVec, Lays, bump_table, collect, resident};
+use crate::memory::{
+    BumpAllocator, BumpBackedMap, BumpBackedSet, BumpVec, Lays, bump_set, bump_table, collect,
+    resident,
+};
 use crate::parse::BuiltinShapeId;
 use crate::parse::{ExpressionPart, KExpression, KLiteral};
 use crate::scope::{
@@ -153,8 +156,8 @@ use crate::scope::{
     InstanceRead, Keyed, Lands, Leaf, Listed, NamedVariable, Narrowing, PathEntry, Position,
     Resolution, Segment, ShapeError, ShapeKind, Shapes, Site, SiteDeps, Slot, Source, Static,
     StaticRegistered, StaticSolution, StaticType, Store, SurfacedHead, Tree, Typed, UnitFacts,
-    UnitId, UnitIndex, UnitTable, UnitWork, Unknown, UseStatics, Variable as Located, Within,
-    follow, part_of, source_of,
+    UnitId, UnitIndex, UnitWork, Unknown, UseStatics, Variable as Located, Within, follow, part_of,
+    source_of,
 };
 use crate::source::SourceRef;
 use crate::symbols::{BinderSymbol, TypeSymbol};
@@ -187,17 +190,23 @@ use super::one_name;
 use super::rules::{self, Given, Lacks, member_read};
 use super::select;
 
-/// Walk every body of `shapes` into `store`, interning through `types`: the language's load, or a
-/// resumption under the store's binding. A refusal of written code stops the walk, worded by the
-/// store.
+/// Walk the body at `at` of `shapes`, and every body nested in it, into `store`, interning through
+/// `types`: the language's load at the root, or a resumption under the store's binding. A refusal
+/// of written code stops the walk, worded by the store.
+///
+/// A walk rooted below the program first stands the chain around `at` as the whole walk would hold
+/// it there: each enclosing body's level, holding the records of its units up to the one birthing
+/// the next, each entered as the whole walk enters it. Those units are read from the store, never
+/// re-run: a binding below them wakes none of them. So the walk costs the chain's prefix and `at`'s
+/// subtree, never the whole program.
 pub(super) fn walk<'graph: 'o, 'tier: 'o, 'o, S: Store<'o>>(
     shapes: &'graph Shapes<'graph>,
     builtins: &'graph KBuiltins<'graph, 'graph>,
     store: &S,
     types: &Chain<'tier, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
+    at: Segment,
 ) -> Result<(), ShapeError<'o>> {
-    let count = shapes.bodies().len();
     let mut pass = Pass {
         shapes,
         builtins,
@@ -207,17 +216,17 @@ pub(super) fn walk<'graph: 'o, 'tier: 'o, 'o, S: Store<'o>>(
         lay: store.lay(),
         chain: BumpVec::new_in(scratch),
         units: BumpVec::new_in(scratch),
-        started: UnitTable::new(shapes, scratch),
+        started: bump_table(scratch),
         open: BumpVec::new_in(scratch),
         scopes: std::cell::Cell::new(BumpVec::new_in(scratch)),
-        walked: scratch.alloc_slice_fill_with(count, |_| false),
+        walked: bump_set(scratch),
         demand: Demand {
-            marks: scratch.alloc_slice_fill_with(count, |_| None),
+            marks: bump_table(scratch),
             stack: BumpVec::new_in(scratch),
             next: 0,
             pending: BumpVec::new_in(scratch),
         },
-        composed: scratch.alloc_slice_fill_with(count, |_| BumpVec::new_in(scratch)),
+        composed: bump_set(scratch),
         unfilled: false,
         unnarrowed: unnarrowed_now(),
         trees: bump_table(scratch),
@@ -237,7 +246,10 @@ pub(super) fn walk<'graph: 'o, 'tier: 'o, 'o, S: Store<'o>>(
         open_path: None,
         components: BumpVec::new_in(scratch),
     };
-    pass.body(None, shapes.root())
+    let parent = pass.stand_chain(at);
+    pass.body(parent, shapes.shape_at(at))?;
+    pass.finish_rooted();
+    Ok(())
 }
 
 /// A binder's static type: a type's interval, or a quantified callable's scheme.
@@ -506,7 +518,7 @@ impl Level<'_, '_, '_> {
 /// walked in.
 struct Demand<'p, 'o> {
     /// Each callable's mark, by segment, once the walk enters it.
-    marks: &'p mut [Option<Mark>],
+    marks: BumpBackedMap<'p, Segment, Mark>,
     /// Each callable entered and not yet in a finished component, innermost last.
     stack: BumpVec<'p, Segment>,
     next: u32,
@@ -537,17 +549,17 @@ struct Pass<'p, 'o, 'x, 'graph, 'tier, 'pair, 'reg, S: Store<'o>> {
     /// Every unit the walk ran or absorbed, and every closing, by tag.
     units: BumpVec<'p, UnitState<'p, 'o>>,
     /// The tag of each unit the walk ran or absorbed, by id: the newest where it has two.
-    started: UnitTable<'p, Tag>,
+    started: BumpBackedMap<'p, UnitId, Tag>,
     /// The units running, innermost last, beside each one's gathering: every unknown and ended
     /// frontier its facts read so far, unsorted until its frontier lays it.
     open: BumpVec<'p, Tag>,
     scopes: std::cell::Cell<BumpVec<'p, Gathering<'p, 'o>>>,
     /// Each owning body the walk has entered, by segment.
-    walked: &'p mut [bool],
+    walked: BumpBackedSet<'p, Segment>,
     demand: Demand<'p, 'o>,
-    /// The levels of the type captures each body composes so far, by segment: a lexical variable a
-    /// contribution or a solution names, read from inside the body and homed outside it.
-    composed: &'p mut [BumpVec<'p, usize>],
+    /// The levels of the type captures each body composes so far, beside its segment: a lexical
+    /// variable a contribution or a solution names, read from inside the body and homed outside it.
+    composed: BumpBackedSet<'p, (Segment, usize)>,
     /// Whether the walk is typing a quote's code as a traced `EVAL` runs it, no hole filled: it
     /// fixes nothing.
     unfilled: bool,
@@ -812,7 +824,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         shape: &'graph BodyShape<'graph>,
     ) -> Result<(), ShapeError<'o>> {
         let segment = shape.segment();
-        if std::mem::replace(&mut self.walked[segment.index() as usize], true) {
+        if !self.walked.insert(segment) {
             return Ok(());
         }
         let code = shape.kind() == ShapeKind::Code;
@@ -879,6 +891,117 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         Ok(())
     }
 
+    /// Stand the chain of bodies around `at`, from the program down, as the whole walk holds it when
+    /// it reaches `at`: the chain level `at` is nested in, `None` at the program.
+    fn stand_chain(&mut self, at: Segment) -> Option<usize> {
+        let mut around = BumpVec::new_in(self.scratch);
+        let mut child = at;
+        while let Some((parent, statement)) = self.shapes.parent(child) {
+            around.push((parent, statement));
+            child = parent;
+        }
+        for (segment, statement) in around.into_iter().rev() {
+            let shape = self.shape_at(segment);
+            match shape.kind() {
+                ShapeKind::Program | ShapeKind::Callable | ShapeKind::Code => {
+                    self.walked.insert(segment);
+                    if shape.kind() == ShapeKind::Callable {
+                        self.enter(segment);
+                    }
+                    let roots_chain = self.chain.is_empty() || shape.kind() == ShapeKind::Code;
+                    self.push(shape, roots_chain);
+                    if roots_chain {
+                        self.open_paths(shape);
+                    }
+                    let level = self.chain.len() - 1;
+                    let birth = shape.unit_of_statement(statement as usize);
+                    let units = (shape.units().iter().enumerate())
+                        .map(|(index, _)| UnitIndex::of_run(index));
+                    for index in [UnitIndex::ENTRY].into_iter().chain(units) {
+                        self.absorb_standing(level, index);
+                        if index == birth {
+                            break;
+                        }
+                    }
+                }
+                ShapeKind::Block | ShapeKind::Module => _ = self.stand_inline(shape),
+            }
+        }
+        self.chain.len().checked_sub(1)
+    }
+
+    /// Push the inline body `shape` whose running unit the walk absorbed, holding the facts that
+    /// unit's record keeps of it: its chain level.
+    fn stand_inline(&mut self, shape: &'graph BodyShape<'graph>) -> usize {
+        let segment = shape.segment();
+        self.push(shape, false);
+        let level = self.chain.len() - 1;
+        let unit = (self.shapes.birth_unit(segment)).expect("an inline body has an encloser");
+        let tag = self.started[&unit];
+        let (facts, _) = (self.store.fact(unit)).expect("an absorbed unit's record stands");
+        if let Some((_, typed)) = facts.typed.get(segment) {
+            self.restore(level, typed, tag);
+        }
+        level
+    }
+
+    /// Walk each callable born inside the inline bodies the statements `statements` of the shape at
+    /// `level` run, where their unit was absorbed: the walk did not run it, so it did not reach
+    /// them, and a binding may wake their units still.
+    fn absorbed_births(
+        &mut self,
+        level: usize,
+        statements: impl Iterator<Item = usize>,
+    ) -> Result<(), ShapeError<'o>> {
+        let shape = self.chain[level].shape;
+        for index in statements {
+            for (_, nested) in shape.nested_in(index) {
+                if !matches!(nested.kind(), ShapeKind::Block | ShapeKind::Module) {
+                    continue;
+                }
+                let at = self.stand_inline(nested);
+                self.absorbed_births(at, 0..nested.body().len())?;
+                for index in 0..nested.body().len() {
+                    for (_, born) in nested.nested_in(index) {
+                        if born.kind() == ShapeKind::Callable {
+                            self.body(Some(at), born)?;
+                        }
+                    }
+                }
+                self.chain.pop();
+            }
+        }
+        Ok(())
+    }
+
+    /// Absorb the unit `index` of the owning body at chain level `level`, which a walk rooted below
+    /// it stands.
+    fn absorb_standing(&mut self, level: usize, index: UnitIndex) {
+        let id = UnitId {
+            segment: self.chain[level].shape.segment(),
+            unit: index,
+        };
+        let (facts, frontier) = (self.store.fact(id)).expect("the store holds the chain's records");
+        debug_assert!(
+            !self.store.wakes(frontier),
+            "a binding below the chain wakes none of its units"
+        );
+        self.absorb(level, id, facts, frontier);
+    }
+
+    /// Write the closings a rooted walk left pending: each of a component reaching a callable on the
+    /// chain around the walk's root, which the walk never finishes. Such a component holds that
+    /// callable too, so it is recursive.
+    fn finish_rooted(&mut self) {
+        for (segment, mut closing, frontier) in
+            std::mem::replace(&mut self.demand.pending, BumpVec::new_in(self.scratch))
+        {
+            closing.recursive = true;
+            closing.summary = Some(None);
+            self.write_closing(segment, closing, frontier);
+        }
+    }
+
     /// The first registration of the quote's code `shape`, or of a body nested in it short of
     /// another quote's code, that overlaps a builtin overload, each as the walk typed it.
     fn overlap_in(&self, shape: &'graph BodyShape<'graph>) -> Option<&'o ShapeError<'o>> {
@@ -898,7 +1021,10 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             // Collected outside the unit: one the store absorbs runs no steps but births its
             // callables.
             let nests = self.unit_statements(shape, unit.work);
-            self.unit(level, at, |pass| pass.steps(level, at, unit.work, nests))?;
+            let ran = self.unit(level, at, |pass| pass.steps(level, at, unit.work, nests))?;
+            if !ran {
+                self.absorbed_births(level, nests.statements.iter().copied())?;
+            }
             for born in nests.callables {
                 self.body(Some(level), born)?;
             }
@@ -950,33 +1076,37 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
 
     /// Run `run` as the unit `index` of the owning body at `level`, inside a gathering of its own,
     /// and write its record; or absorb the record the store holds where its binding does not wake
-    /// it. The unfilled typing of a quote's code keeps no record: its reads go to the closing
-    /// gathering it runs in.
+    /// it. Whether it ran. The unfilled typing of a quote's code keeps no record: its reads go to
+    /// the closing gathering it runs in.
     fn unit(
         &mut self,
         level: usize,
         index: UnitIndex,
         run: impl FnOnce(&mut Self) -> Result<(), ShapeError<'o>>,
-    ) -> Result<(), ShapeError<'o>> {
+    ) -> Result<bool, ShapeError<'o>> {
         if self.unfilled {
-            return run(self);
+            return run(self).map(|()| true);
         }
         let id = UnitId {
             segment: self.chain[level].shape.segment(),
             unit: index,
         };
+        #[cfg(test)]
+        if let Some(visit) = VISIT.with(std::cell::Cell::get) {
+            visit(id);
+        }
         if let Some((facts, frontier)) = self.store.fact(id)
             && !self.store.wakes(frontier)
         {
             self.absorb(level, id, facts, frontier);
-            return Ok(());
+            return Ok(false);
         }
         let tag = self.open_unit(id, false);
         run(self)?;
         let frontier = self.end(tag);
         let facts = self.record(level, tag);
         self.store.write(id, facts, frontier);
-        Ok(())
+        Ok(true)
     }
 
     /// Open a gathering for `id`, a unit or — `closing` — a body's closing.
@@ -985,7 +1115,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         let tag = Tag(self.units.len() as u32);
         self.units.push(UnitState::new(id, None, scratch));
         if !closing {
-            self.started.set(id, tag);
+            self.started.insert(id, tag);
         }
         self.open.push(tag);
         let mut scopes = self.scopes.replace(BumpVec::new_in(scratch));
@@ -1230,7 +1360,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         let tag = Tag(self.units.len() as u32);
         self.units
             .push(UnitState::new(id, Some(frontier), self.scratch));
-        self.started.set(id, tag);
+        self.started.insert(id, tag);
         let segment = self.chain[level].shape.segment();
         if let Some((_, typed)) = facts.typed.get(segment) {
             self.restore(level, typed, tag);
@@ -1411,7 +1541,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         // A block its value statics did not reach — an arm a builtin's rule reads no further than
         // its value — is typed on its own, inside the unit.
         for nested in nests.blocks {
-            if !self.walked[nested.segment().index() as usize] {
+            if !self.walked.contains(&nested.segment()) {
                 self.block(level, nested, None)?;
             }
         }
@@ -1475,7 +1605,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         }
         let popped = self.chain.pop().expect("the body was pushed");
         self.leave(nested);
-        self.walked[nested.segment().index() as usize] = true;
+        self.walked.insert(nested.segment());
         finished.map(|finished| (finished, popped))
     }
 
@@ -1774,12 +1904,15 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     /// Enter the callable `segment` on the demand stack.
     fn enter(&mut self, segment: Segment) {
         let demand = &mut self.demand;
-        demand.marks[segment.index() as usize] = Some(Mark {
-            index: demand.next,
-            low: demand.next,
-            on_stack: true,
-            self_edge: false,
-        });
+        demand.marks.insert(
+            segment,
+            Mark {
+                index: demand.next,
+                low: demand.next,
+                on_stack: true,
+                self_edge: false,
+            },
+        );
         demand.stack.push(segment);
         demand.next += 1;
     }
@@ -1789,7 +1922,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     /// or of one that calls itself, is recursive: none of its bodies keeps a summary.
     fn finish(&mut self, segment: Segment, closing: Closing<'o>, frontier: Frontier<'o>) {
         self.demand.pending.push((segment, closing, frontier));
-        let mark = self.demand.marks[segment.index() as usize].expect("a callable entered");
+        let mark = self.demand.marks[&segment];
         if mark.low != mark.index {
             return;
         }
@@ -1800,7 +1933,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         members.extend(self.demand.stack.drain(at..));
         let recursive = members.len() > 1 || mark.self_edge;
         for member in members.iter() {
-            if let Some(mark) = &mut self.demand.marks[member.index() as usize] {
+            if let Some(mark) = self.demand.marks.get_mut(member) {
                 mark.on_stack = false;
             }
             let held = (self.demand.pending.iter())
@@ -1826,11 +1959,14 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     fn kept_call(&mut self, callee: &'graph BodyShape<'graph>) -> Result<bool, ShapeError<'o>> {
         let segment = callee.segment();
         let on_stack = |pass: &Self| {
-            pass.demand.marks[segment.index() as usize].is_some_and(|mark| mark.on_stack)
+            pass.demand
+                .marks
+                .get(&segment)
+                .is_some_and(|mark| mark.on_stack)
         };
         let reaches = |pass: &mut Self, low: u32| {
             if let Some(caller) = pass.caller()
-                && let Some(mark) = &mut pass.demand.marks[caller.index() as usize]
+                && let Some(mark) = pass.demand.marks.get_mut(&caller)
             {
                 mark.low = mark.low.min(low);
                 if caller == segment {
@@ -1839,20 +1975,16 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             }
         };
         if on_stack(self) {
-            let index = self.demand.marks[segment.index() as usize]
-                .expect("a callable on the stack is marked")
-                .index;
+            let index = self.demand.marks[&segment].index;
             reaches(self, index);
             return Ok(false);
         }
-        if !self.walked[segment.index() as usize] {
+        if !self.walked.contains(&segment) {
             if self.unfilled || !self.typed_on_demand(callee)? {
                 return Ok(false);
             }
             if on_stack(self) {
-                let low = self.demand.marks[segment.index() as usize]
-                    .expect("a callable on the stack is marked")
-                    .low;
+                let low = self.demand.marks[&segment].low;
                 reaches(self, low);
                 return Ok(false);
             }
@@ -1908,10 +2040,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 return;
             }
             if matches!(shape.kind(), ShapeKind::Callable | ShapeKind::Module) {
-                let composed = &mut self.composed[shape.segment().index() as usize];
-                if !composed.contains(&variable) {
-                    composed.push(variable);
-                }
+                self.composed.insert((shape.segment(), variable));
             }
             let name = BinderSymbol::Type(name);
             if shape.kind() == ShapeKind::Module
@@ -4994,6 +5123,19 @@ pub(super) struct LoadCounts {
 thread_local! {
     /// What the loads on this thread did since [`counted`] last began.
     static COUNTS: std::cell::Cell<LoadCounts> = std::cell::Cell::new(LoadCounts::default());
+    /// What each unit the walks on this thread run or absorb in their own order
+    /// ([`unit`](Pass::unit)) is handed to, while [`visiting`] runs: not the chain a rooted walk
+    /// stands.
+    static VISIT: std::cell::Cell<Option<fn(UnitId)>> = const { std::cell::Cell::new(None) };
+}
+
+/// Run `walk`, handing `visit` each unit it runs or absorbs in its own order.
+#[cfg(test)]
+pub(super) fn visiting<R>(visit: fn(UnitId), walk: impl FnOnce() -> R) -> R {
+    VISIT.with(|held| held.set(Some(visit)));
+    let read = walk();
+    VISIT.with(|held| held.set(None));
+    read
 }
 
 /// Add to one of the load's counts.

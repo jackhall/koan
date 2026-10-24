@@ -202,7 +202,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
 
     /// The state of `unit` in this walk, where it ran or absorbed it.
     fn state_of(&self, unit: UnitId) -> Option<(Tag, &super::UnitState<'p, 'o>)> {
-        let tag = self.started.get(unit)?;
+        let tag = *self.started.get(&unit)?;
         Some((tag, &self.units[tag.0 as usize]))
     }
 
@@ -717,13 +717,13 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     pub(super) fn has_closed(&self, body: &BodyShape<'graph>) -> bool {
         let segment = body.segment();
         self.store.close(segment).is_some_and(|(_, frontier)| {
-            self.walked[segment.index() as usize] || !self.store.wakes(frontier)
+            self.walked.contains(&segment) || !self.store.wakes(frontier)
         })
     }
 
     /// Whether the walk has walked `nested`, or need not: a quote's code the shape refused is left.
     pub(super) fn done(&self, nested: &BodyShape<'graph>) -> bool {
-        self.walked[nested.segment().index() as usize]
+        self.walked.contains(&nested.segment())
             || (nested.kind() == ShapeKind::Code && nested.refusal().is_some())
     }
 
@@ -790,8 +790,8 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     /// one a contribution or a solution read from inside it names, homed outside it.
     pub(super) fn composes_type(&self, body: &BodyShape<'graph>, index: usize) -> bool {
         let layout = self.shapes.layout(body.segment());
-        layout.get(index).is_some_and(|(level, _)| {
-            self.composed[body.segment().index() as usize].contains(level)
-        })
+        layout
+            .get(index)
+            .is_some_and(|(level, _)| self.composed.contains(&(body.segment(), *level)))
     }
 }

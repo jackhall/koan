@@ -1,9 +1,10 @@
-//! The build module's tests: a settlement's key, the keys fold, the load's store, and the import
-//! boundary.
+//! The build module's tests: a settlement's key, the keys fold, the load's store, the wake memo,
+//! and the import boundary.
 
 mod boundary;
 mod folds;
 mod load;
+mod wake;
 
 use crate::scope::Segment;
 use crate::values::ContentDigest;

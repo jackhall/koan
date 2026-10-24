@@ -46,6 +46,7 @@ mod writes;
 #[cfg(test)]
 pub(crate) mod tests;
 
+pub(crate) use records::RecordSource;
 pub(crate) use shape::IMPLICIT;
 pub(crate) use signature::pair_label;
 pub(crate) use spelling::{PathSpelling, SpelledRoot, path_spelling};
@@ -77,4 +78,4 @@ pub use typed::{
     Resolution, Resolved, Root, ShapeGroupMap, Source, Static, StaticCallable, StaticRegistered,
     StaticSolution, StaticType, UseStatics, Variable, ViewSlots, solutions,
 };
-pub use writes::{UnitTable, Writes};
+pub use writes::{KeyedWrites, Writes};

@@ -367,6 +367,36 @@ fn an_inner_callable_over_an_outer_name_settles_under_its_binding() {
     assert_eq!(after, "selected");
 }
 
+/// A callable born inside a block keeps its own records: a binding its body reads re-runs it even
+/// where the unit running the block reads nothing the binding binds, and is absorbed.
+#[test]
+fn an_inner_callable_inside_a_block_settles_under_its_binding() {
+    let source = format!(
+        "{PICK}EXPR FOR ALL #[Elt] #(WRAP x :Elt) -> Any = #(\n  \
+         MATCH 1 -> :Any WITH #{{Number: ((LET g = (FN :{{y :Number}} -> Any = #(\
+         (LET p = (PICK x)) (p)))) (g))}}\n)"
+    );
+    let (before, after) = resumed(&source, |door| {
+        let symbols = door.symbols();
+        let f = quantified(door.load(), door.root());
+        let (_, arm) = (f.nested_shapes().iter())
+            .find(|(_, nested)| nested.kind() == ShapeKind::Block)
+            .expect("the `MATCH` has an arm");
+        let g = born(symbols, arm, "g");
+        let before = narrowing(symbols, door.load(), g, "p");
+        let binding = door.binding(&[(unknown(symbols, f, "Elt"), KType::NUMBER)]);
+        let resumed = (door.resume(None, binding, false)).expect("the resumption refuses nothing");
+        let arm_unit = (f.segment(), f.unit_of_statement(0));
+        assert!(
+            (resumed.own_units().iter()).all(|(unit, _)| (unit.segment, unit.unit) != arm_unit),
+            "the unit running the arm is absorbed"
+        );
+        (before, narrowing(symbols, resumed, g, "p"))
+    });
+    assert_eq!(before, "full");
+    assert_eq!(after, "selected");
+}
+
 #[test]
 fn a_binding_no_overload_admits_refuses_as_the_load_would() {
     let source = "EXPR FOR ALL #[Elt] #(WRAP x :Elt) -> Any = #(\n  LET y = (x + 1)\n  y\n)";
@@ -1087,6 +1117,17 @@ mod laws {
         }
     }
 
+    thread_local! {
+        /// Each unit a rooted resumption visited, in order.
+        static VISITED: std::cell::RefCell<Vec<crate::scope::UnitId>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    /// Note that a walk visited `unit`.
+    fn visited(unit: crate::scope::UnitId) {
+        VISITED.with(|visited| visited.borrow_mut().push(unit));
+    }
+
     proptest! {
         #![proptest_config(ProptestConfig {
             cases: crate::tests::case_share(1, 4),
@@ -1225,6 +1266,52 @@ mod laws {
             });
             let framed = framed.map_err(|error| unlocated(&error));
             prop_assert_eq!(&layered, &framed, "in\n{}", case.render());
+        }
+
+        /// 10. A rooted resumption is the program's on its bodies: resuming from `SUBJECT`'s body
+        /// down renders every fact of it as resuming the whole program does, refusals included.
+        #[test]
+        fn a_rooted_resumption_equals_the_programs_resumption_on_its_bodies(case in resumable()) {
+            let (rooted, whole) = resumed(&case.render(), |door| {
+                let binding = binding(door, &case.bound);
+                let at = subject(door.root()).segment();
+                let render = |facts: Result<&LoadFacts<'_>, ShapeError<'_>>| match facts {
+                    Ok(facts) => Ok(rendered(door, facts, &case.bound)),
+                    Err(error) => Err(error.display(door.symbols(), door.types).to_string()),
+                };
+                (
+                    render((door.running).resume_at::<Koan>(door.types, binding, at, door.bump)),
+                    render((door.running).resume::<Koan>(door.types, None, binding, false, door.bump)),
+                )
+            });
+            prop_assert_eq!(rooted, whole, "in\n{}", case.render());
+        }
+
+        /// 11. A rooted resumption visits no unit outside its subtree: each unit it runs or
+        /// absorbs in its own order is one of an owning body at or below `SUBJECT`'s, each once,
+        /// and it reads the chain around it whole.
+        #[test]
+        fn a_rooted_resumption_visits_no_unit_outside_its_subtree_and_chain_prefix(case in resumable()) {
+            let outside = resumed(&case.render(), |door| {
+                let binding = binding(door, &case.bound);
+                let at = subject(door.root()).segment();
+                VISITED.with(|visited| visited.borrow_mut().clear());
+                let _ = crate::dispatch::walk::visiting(visited, || {
+                    (door.running).resume_at::<Koan>(door.types, binding, at, door.bump)
+                });
+                let visited = VISITED.with(|visited| visited.take());
+                let mut seen = std::collections::HashSet::new();
+                let entry = crate::scope::UnitId { segment: at, unit: crate::scope::UnitIndex::ENTRY };
+                let mut outside: Vec<_> = (visited.iter())
+                    .filter(|unit| !on_chain(door, unit.segment, at) || !seen.insert(**unit))
+                    .map(|unit| format!("{unit:?}"))
+                    .collect();
+                if !visited.contains(&entry) {
+                    outside.push("not `SUBJECT`'s entry".to_string());
+                }
+                outside
+            });
+            prop_assert!(outside.is_empty(), "{:?} visited past the subtree in\n{}", outside, case.render());
         }
 
         /// 9. Levels and path identities depend on the shape alone: every path entry a record

@@ -49,7 +49,7 @@ use crate::memory::{BumpAllocator, Writer};
 use crate::parse::{ExpressionPart, KExpression};
 use crate::program::{Contract, KBirth, KBundle, Language, Program, Within};
 use crate::scheduler::NativeStep;
-use crate::scope::{Code, ShapeError, Shapes, Store};
+use crate::scope::{Code, Segment, ShapeError, Shapes, Store};
 use crate::symbols::{BinderSymbol, SymbolInterner};
 use crate::type_lattice::KType;
 use crate::values::Chain;
@@ -78,8 +78,9 @@ impl Language for Koan {
         store: &S,
         types: &Chain<'tier, '_, '_, '_>,
         scratch: BumpAllocator<'_>,
+        at: Segment,
     ) -> Result<(), ShapeError<'o>> {
-        walk::walk(shapes, builtins, store, types, scratch)
+        walk::walk(shapes, builtins, store, types, scratch, at)
     }
 }
 

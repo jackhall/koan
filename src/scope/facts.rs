@@ -268,7 +268,7 @@ impl<'a> Binding<'a> {
 /// Where one walk keeps its records, and what it binds: the walk reads and writes
 /// every unit's record through it, and never names where they rest
 /// ([the store](../build/README.md#the-store)). The load's store keeps the load's
-/// records; a test's store layers a resumption's over them.
+/// records; a layer keeps a resumption's over the facts it extends.
 pub trait Store<'o> {
     /// Where every record a unit keeps is laid.
     type Lay: Lays<'o> + Copy;

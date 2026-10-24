@@ -134,7 +134,14 @@ fn walked<'graph, L: Language>(
     scratch: BumpAllocator<'_>,
 ) -> Result<&'graph crate::scope::LoadFacts<'graph>, crate::scope::ShapeError<'graph>> {
     let store = crate::build::LoadStore::new(writer, scratch, shapes, crate::scope::Binding::EMPTY);
-    L::facts(shapes, builtins, &store, types, scratch)?;
+    L::facts(
+        shapes,
+        builtins,
+        &store,
+        types,
+        scratch,
+        shapes.root().segment(),
+    )?;
     let unfolded = resident(writer, store.facts(scratch));
     let folds = crate::build::fold(unfolded, writer, scratch);
     Ok(resident(writer, unfolded.folded(writer, folds)))
