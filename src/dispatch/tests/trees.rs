@@ -7,7 +7,7 @@ use crate::scope::{BodyShape, Leaf, Tree};
 
 use super::statics::{body, loaded, slot};
 use super::{Koan, assert_linear, load_counts, output};
-use crate::values::SpecBounds;
+use crate::values::BuildBudget;
 
 /// `SIG Counter`, and `MODULE ints`, which fits it.
 const COUNTER: &str = "SIG Counter FOR ALL #[Carrier] = \
@@ -127,7 +127,7 @@ fn a_view_over_an_expression_no_binder_names_reads_back_unnamed() {
 fn a_view_over_a_module_of_literals_is_closed_at_the_run_s_digest() {
     let source = format!("{COUNTER}LET v = (ints :| Counter)\nLET w = (ints :| Counter)");
     let mut substrate =
-        CellSubstrate::load::<Koan>(&source, "<test>", 8, SpecBounds::default(), output())
+        CellSubstrate::load::<Koan>(&source, "<test>", 8, BuildBudget::default(), output())
             .unwrap_or_else(|error| panic!("the program loads: {error}"));
     assert_eq!(
         substrate.with(|running| running.run()),
@@ -172,7 +172,7 @@ fn ran<R>(
     inspect: impl for<'graph> FnOnce(&Program<'graph>) -> R,
 ) -> (R, CellSubstrate) {
     let mut substrate =
-        CellSubstrate::load::<Koan>(source, "<test>", 8, SpecBounds::default(), output())
+        CellSubstrate::load::<Koan>(source, "<test>", 8, BuildBudget::default(), output())
             .unwrap_or_else(|error| panic!("the program loads: {error}"));
     assert_eq!(
         substrate.with(|running| running.run()),

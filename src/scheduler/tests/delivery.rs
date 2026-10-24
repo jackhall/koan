@@ -135,8 +135,11 @@ fn read_back<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Acti
 fn one_call(end: u32, use_: Use, consumer: AnyStep) -> Vec<String> {
     reset();
     let type_region = Bump::new();
-    let mut graph: TestGraph<'_> =
-        TestGraph::new(4, crate::values::tests::seeded_tiers(&type_region));
+    let mut graph: TestGraph<'_> = TestGraph::new(
+        4,
+        crate::values::tests::seeded_tiers(&type_region),
+        Default::default(),
+    );
     let root = graph.root().expect("a fresh slab admits a root");
     let mut scheduler = Scheduler::over(&mut graph);
     scheduler
@@ -284,8 +287,11 @@ fn address(entry: &str) -> usize {
 fn forwards(end: u32) {
     reset();
     let type_region = Bump::new();
-    let mut graph: TestGraph<'_> =
-        TestGraph::new(4, crate::values::tests::seeded_tiers(&type_region));
+    let mut graph: TestGraph<'_> = TestGraph::new(
+        4,
+        crate::values::tests::seeded_tiers(&type_region),
+        Default::default(),
+    );
     let root = graph.root().expect("a fresh slab admits a root");
     let mut scheduler = Scheduler::over(&mut graph);
     scheduler
@@ -341,8 +347,11 @@ fn a_build_in_home_forwarded_is_built_in_the_spawners_home() {
 fn a_finished_value_forwarded_reaches_the_spawners_home() {
     reset();
     let type_region = Bump::new();
-    let mut graph: TestGraph<'_> =
-        TestGraph::new(4, crate::values::tests::seeded_tiers(&type_region));
+    let mut graph: TestGraph<'_> = TestGraph::new(
+        4,
+        crate::values::tests::seeded_tiers(&type_region),
+        Default::default(),
+    );
     let root = graph.root().expect("a fresh slab admits a root");
     let mut scheduler = Scheduler::over(&mut graph);
     scheduler
@@ -419,8 +428,11 @@ fn drain_the_run<'graph>(
 fn a_consumer_parked_on_three_producers_wakes_once_when_the_last_slot_fills() {
     reset();
     let type_region = Bump::new();
-    let mut graph: TestGraph<'_> =
-        TestGraph::new(4, crate::values::tests::seeded_tiers(&type_region));
+    let mut graph: TestGraph<'_> = TestGraph::new(
+        4,
+        crate::values::tests::seeded_tiers(&type_region),
+        Default::default(),
+    );
     let root = graph.root().expect("a fresh slab admits a root");
     let mut scheduler = Scheduler::over(&mut graph);
     scheduler

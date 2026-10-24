@@ -9,7 +9,7 @@ use crate::type_lattice::KType;
 
 use super::evaluator::{Mini, contribute, recorded, reset};
 use super::{compare_back, loaded, output, read_back, run_and_read, type_back, written};
-use crate::values::SpecBounds;
+use crate::values::BuildBudget;
 
 /// The depth a recursion runs to: past the slab cap, and small under Miri.
 const DEPTH: u32 = if cfg!(miri) { 2 } else { 300 };
@@ -56,7 +56,7 @@ fn more_statements_than_the_slab_cap_run_to_completion() {
     let source: Vec<String> = (0..STATEMENTS)
         .map(|at| format!("LET v{at} = {at}"))
         .collect();
-    // Two cells: the build root and the run root fill the slab.
+    // Two cells: the run root and one more fill the slab.
     let mut substrate = loaded(&source.join("\n"), 2);
     let name = format!("v{}", STATEMENTS - 1);
     assert_eq!(
@@ -353,7 +353,7 @@ fn a_capitalized_name_holds_only_a_type() {
         source,
         "<test>",
         2,
-        SpecBounds::default(),
+        BuildBudget::default(),
         output(),
     ) {
         Err(_) => true,

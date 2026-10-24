@@ -70,8 +70,11 @@ fn a_subtree_two_hundred_deep_takes_no_slab_slot_but_its_root() {
     // level that reached for a slab slot would be refused and the drain would stall before the
     // bottom.
     let type_region = Bump::new();
-    let mut graph: TestGraph<'_> =
-        TestGraph::new(1, crate::values::tests::seeded_tiers(&type_region));
+    let mut graph: TestGraph<'_> = TestGraph::new(
+        1,
+        crate::values::tests::seeded_tiers(&type_region),
+        Default::default(),
+    );
     let root = graph.root().expect("a fresh slab admits a root");
     Scheduler::over(&mut graph)
         .run(work(start, KValue::Null), root, Placement::Fresh)

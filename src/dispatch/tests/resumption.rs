@@ -12,7 +12,7 @@ use crate::scope::{
 use crate::symbols::{BinderSymbol, SymbolInterner};
 use crate::type_lattice::{DeclaredType, KType, display_name};
 use crate::values::tests::reading;
-use crate::values::{Chain, SpecBounds};
+use crate::values::{BuildBudget, Chain};
 
 use super::statics::rendered;
 use super::{Koan, output};
@@ -111,7 +111,7 @@ impl<'d, 'graph: 'd> Door<'d, 'graph> {
 /// Load `source` and hand `check` the door its resumptions go through.
 fn resumed<R>(source: &str, check: impl for<'d, 'graph> FnOnce(&Door<'d, 'graph>) -> R) -> R {
     let mut substrate =
-        CellSubstrate::load::<Koan>(source, "<test>", 8, SpecBounds::default(), output())
+        CellSubstrate::load::<Koan>(source, "<test>", 8, BuildBudget::default(), output())
             .unwrap_or_else(|error| panic!("the program loads: {error}"));
     substrate.with(|running| {
         let bump = Bump::new();
@@ -673,7 +673,7 @@ mod laws {
         read_through,
     };
     use crate::values::tests::reading;
-    use crate::values::{Chain, SpecBounds};
+    use crate::values::{BuildBudget, Chain};
 
     use super::super::generate::{Bound, Resumable, resumable};
     use super::super::{Koan, output};
@@ -1052,7 +1052,7 @@ mod laws {
     /// What a plain load of `source` renders, or its refusal, but of the binders `bound` names.
     fn loaded_rendered(source: &str, bound: &Bound) -> Result<Vec<String>, String> {
         let loaded =
-            CellSubstrate::load::<Koan>(source, "<test>", 8, SpecBounds::default(), output());
+            CellSubstrate::load::<Koan>(source, "<test>", 8, BuildBudget::default(), output());
         let mut substrate = match loaded {
             Ok(substrate) => substrate,
             Err(LoadError::Shape { rendered }) => return Err(unlocated(&rendered)),
@@ -1208,7 +1208,7 @@ mod laws {
                 prop_assert_eq!(reloaded, layered, "in\n{}", case.render());
             }
             let [(_, layered), _] = stores;
-            let mut substrate = CellSubstrate::load::<Koan>(&case.render(), "<test>", 8, SpecBounds::default(), output())
+            let mut substrate = CellSubstrate::load::<Koan>(&case.render(), "<test>", 8, BuildBudget::default(), output())
                 .expect("the program loads");
             let framed = substrate.with(|running| {
                 running.run().expect("the program runs");
@@ -1267,7 +1267,7 @@ mod laws {
         fn a_body_sealed_at_the_load_is_sealed_in_every_restart(case in resumable()) {
             let sealed = resumed(&case.render(), |door| classes(door, door.load()));
             let restart = case.restart(&case.bound);
-            let Ok(mut substrate) = CellSubstrate::load::<Koan>(&restart, "<test>", 8, SpecBounds::default(), output()) else {
+            let Ok(mut substrate) = CellSubstrate::load::<Koan>(&restart, "<test>", 8, BuildBudget::default(), output()) else {
                 return Ok(());
             };
             let restarted = substrate.with(|running| {

@@ -9,7 +9,7 @@ use crate::scheduler::{Action, Step, StepError};
 
 use super::super::Koan;
 use super::{assert_linear, load_counts, output};
-use crate::values::SpecBounds;
+use crate::values::BuildBudget;
 
 thread_local! {
     /// What [`branch_length`] read.
@@ -38,7 +38,7 @@ fn branch_length<'graph>(
 /// The root cell's branch length once `source` has run.
 fn branch_after(source: &str) -> usize {
     let mut substrate =
-        CellSubstrate::load::<Koan>(source, "<test>", 2, SpecBounds::default(), output())
+        CellSubstrate::load::<Koan>(source, "<test>", 2, BuildBudget::default(), output())
             .unwrap_or_else(|error| panic!("the program loads: {error}"));
     assert_eq!(
         substrate.with(|running| running.run()),

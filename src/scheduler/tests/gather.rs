@@ -108,8 +108,11 @@ fn build<'graph, 'here>(
 fn a_cell_gathers_here_values_across_two_parks_and_builds_from_them_in_storage() {
     reset();
     let type_region = Bump::new();
-    let mut graph: TestGraph<'_> =
-        TestGraph::new(8, crate::values::tests::seeded_tiers(&type_region));
+    let mut graph: TestGraph<'_> = TestGraph::new(
+        8,
+        crate::values::tests::seeded_tiers(&type_region),
+        Default::default(),
+    );
     let root = graph.root().expect("a fresh slab admits a root");
     Scheduler::over(&mut graph)
         .run(work(ask_for_two, KValue::Null), root, Placement::Fresh)

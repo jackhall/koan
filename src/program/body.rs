@@ -82,7 +82,7 @@ pub struct Runner<'graph, 'cell> {
     barrier: Option<Barrier<'graph, 'cell>>,
     stage: Stage,
     /// What the body runs within: what it hands each evaluation and block it asks for
-    /// ([`KBirth::Evaluate`]), and the build cell a callable born in it is born under.
+    /// ([`KBirth::Evaluate`]), and the arena node a callable born in it is born under.
     within: Within,
 }
 
@@ -147,9 +147,9 @@ type Taking<'a, 'graph, 'step, 'here, 'scratch, 'lent> =
 ///
 /// Each step runs on one chain ([type tiers](../../design/type-tiers.md#where-each-body-interns)):
 /// the caching chain in a caching body, or in the own body of a routing caching frame — a `Fresh`
-/// one, which holds its scratch at its first step, or a `Shares` one borrowing a settlement —
-/// and its region's anywhere else. Under `routes`, an invariant site's types are adopted into the
-/// agent tier where the frame borrows a settlement.
+/// one, which holds its scratch at its first step, or a `Shares` one under a settlement — and its
+/// region's anywhere else. Under `routes`, an invariant site's types are adopted into the agent
+/// tier where the frame runs under a settlement.
 pub fn run<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'graph, KBundle> {
     let (step, state) = step.state();
     let (mut step, scratch) = step.scratch();
@@ -197,8 +197,8 @@ fn called_shape<'graph>(callee: KValue<'graph, '_>) -> Option<&'graph BodyShape<
     Some(called_function(callee)?.shape())
 }
 
-/// The build cell `callee`'s function was born under, behind every barrier: where a frame of it
-/// that borrows no settlement runs.
+/// The arena node `callee`'s function was born under, behind every barrier: where a frame of it
+/// runs that the drain found no settlement of its own for.
 fn born_under(callee: KValue<'_, '_>) -> ArenaRef {
     called_function(callee).map_or(ArenaRef::ROOT, |function| function.closure().build())
 }
@@ -1179,7 +1179,7 @@ fn code_frame<'graph, 'here>(
         };
         links.push(Link::Value(value));
     }
-    // A quote's lexical chain of build cells is not placed, so its frame seeks from the root.
+    // A quote's lexical chain of arena nodes is not placed, so its frame seeks from the root.
     let closure = ClosureBindings::of(writer, &links, ArenaRef::ROOT);
     Some(resident(
         writer,

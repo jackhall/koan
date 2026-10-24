@@ -426,8 +426,8 @@ pub enum Mint {
     /// Over a closed content tree: the same content at every run, its types in the root.
     Closed,
     /// The same content at every frame of one binding: interned into the warm tier — the agent
-    /// tier, where the frame borrows a settlement — and into the cold tier where it borrows
-    /// none.
+    /// tier, where the frame runs under a settlement — and into the cold tier where it runs
+    /// under none.
     Invariant,
     /// Content that may differ per hop: interned into the cold tier.
     Varying,

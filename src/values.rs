@@ -76,10 +76,7 @@ pub use list::List;
 pub use record::Record;
 pub use retyped::Retyped;
 pub(crate) use settled::stamp_knot;
-pub use settlement::{
-    ArenaRef, Decision, KeyedTypes, SettlementKey, SpecBinding, SpecBounds, SpecEntry, SpecHome,
-    SpecTable,
-};
+pub use settlement::{ArenaRef, BindingImage, BuildBudget, KeyedTypes, SettlementKey};
 pub use surface::{
     Seen, Surface, applications, fit_solution, pinned_at_fit, retype_target, retyped_to,
     retypes_by_header, under, unknown,

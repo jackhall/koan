@@ -36,5 +36,5 @@ pub use bundle::{
 };
 pub use exit::Exit;
 pub use record::{CallKind, Contract, Evaluated, Language, LoadError, Outcome, Output, Program};
-pub use settle::{called_function, seek, settle};
+pub use settle::{called_function, seek};
 pub use substrate::{CellSubstrate, Running, STACK_BYTES};

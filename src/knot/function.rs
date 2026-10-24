@@ -300,7 +300,7 @@ pub(super) struct Staged<'graph, 'cell, 'x> {
 }
 
 impl<'graph, 'cell> Staged<'graph, 'cell, '_> {
-    /// This node's closure run, born under the build cell `build`, and typing record laid down in
+    /// This node's closure run, born under the arena node `build`, and typing record laid down in
     /// `writer`'s region, beside what the two add to the knot's weight. A plain unquantified `FN` has
     /// no typing record and writes none.
     pub(super) fn laid_down(
@@ -539,7 +539,7 @@ pub(super) fn stage<'graph, 'cell, 'x>(
 /// load left unknown that does not elaborate refuses `Type`, and writes nothing.
 ///
 /// A callable that captures a fellow member is born inside its binder's knot by the tie, which
-/// never asks for it, so no capture here is an edge. It is born under the build cell `build`.
+/// never asks for it, so no capture here is an edge. It is born under the arena node `build`.
 pub fn lambda<'graph, 'cell, 'x>(
     writer: Writer<'cell, '_>,
     activation: &KActivationView<'graph, 'cell>,
@@ -659,7 +659,7 @@ pub fn instance<'graph, 'cell>(
         Link::Edge(edge) => Link::Value(Value::Knotted(member.sibling(*edge))),
         Link::Value(value) => Link::Value(*value),
     }));
-    // The same body over the same captures, so the same build cell.
+    // The same body over the same captures, so the same arena node.
     let closure = ClosureBindings::of(writer, &links, function.closure().build());
     let map = function.quantifier_map();
     let typing = Typing::laid_down(writer, map, None, solution, None);

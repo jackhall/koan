@@ -1,30 +1,27 @@
-//! What a call seeks, and what a settlement runs.
+//! What a call seeks.
 //!
-//! A call whose callee's body keys a settlement — the load laid it a key list
-//! (`LoadFacts::settlement_keys`) — hands the drain a [`Seek`], whatever its frame's placement:
-//! the build cell the callee was born under, the key of its segment under the content at each
-//! keyed name, the types that content carries, and [`settle`], the work a missed settlement
-//! runs. A parameter's content is its argument; a `FOR ALL` name's is the call's solution at it,
-//! digested as the type value the frame binds: carried by a keyworded call, held by an instance,
-//! and solved here, on the asker's region, for a call by name. A call past a header or a barrier
-//! of a body keyed on a `FOR ALL` name is born cold, since its frame solves only once the arguments
-//! are retyped or have crossed, unless it calls an instance, whose solution holds wherever it is
-//! called from. That step only lays the cell's own header and table; the drain
-//! enters it in its parent's table, and what it holds is the nodes the drain laid from its binding
-//! and the warm types its borrowers intern into it. See
+//! A call hands the drain a [`Seek`], whatever its frame's placement: the arena node the callee was
+//! born under and, where the callee's body keys a settlement — the load laid it a key list
+//! (`LoadFacts::settlement_keys`) — the key of its segment under the content at each keyed name and
+//! the image of the types that content carries. A parameter's content is its argument; a `FOR ALL`
+//! name's is the call's solution at it, digested as the type value the frame binds: carried by a
+//! keyworded call, held by an instance, and solved here, on the asker's region, for a call by
+//! name. A call past a header or a barrier of a body keyed on a `FOR ALL` name seeks no
+//! settlement, since its frame solves only once the arguments are retyped or have crossed, unless
+//! it calls an instance, whose solution holds wherever it is called from. See
 //! [build/README.md](../build/README.md).
 
 use crate::build::key_of;
 use crate::knot::{Function, KValue, Knotted};
 use crate::memory::{Bump, BumpVec};
-use crate::scheduler::{Action, Seek, Step, StepError, Work};
+use crate::scheduler::Seek;
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::KType;
 use crate::values::digest::type_digest;
-use crate::values::{Chain, KeyedTypes, SpecBinding};
+use crate::values::{ArenaRef, BindingImage, Chain, KeyedTypes};
 
 use super::body::admitted;
-use super::bundle::{KBirth, KBundle, KState};
+use super::bundle::KBirth;
 use super::record::CallKind;
 
 /// The function a call of `callee` runs, behind every barrier: `None` for a callee that is no
@@ -35,15 +32,36 @@ pub fn called_function<'graph, 'cell>(
     callee.as_callable()?.behind_barriers().function()
 }
 
-/// What the call `birth` asks for seeks: `None` for a birth that is no call, a callee that is no
-/// function, a body that keys no settlement, and a call whose content at a keyed name the asker
-/// cannot read, whose frame is born cold. `types` is the asker's evaluation chain, which reads the
-/// arguments; `region` its region's, where a call by name's solution is solved.
+/// What the call `birth` seeks: the arena node its callee was born under — the root for a birth
+/// that is no call or a callee that is no function — and the settlement under it its body keys,
+/// if the asker can read its content at every keyed name. `types` is the asker's evaluation
+/// chain, which reads the arguments; `region` its region's, where a call by name's solution is
+/// solved.
 pub fn seek<'graph>(
     birth: &KBirth<'graph, '_>,
     types: &Chain<'_, '_, '_, '_>,
     region: &Chain<'_, '_, '_, '_>,
-) -> Option<Seek<'graph, KBundle>> {
+) -> Seek<'graph> {
+    let parent = match birth {
+        KBirth::Call { callee, .. } => {
+            called_function(*callee).map_or(ArenaRef::ROOT, |function| function.closure().build())
+        }
+        _ => ArenaRef::ROOT,
+    };
+    Seek {
+        parent,
+        settlement: settlement(birth, types, region),
+    }
+}
+
+/// The key and binding image of the settlement the call `birth` seeks under its callee's arena
+/// node: `None` for a birth that is no call, a callee that is no function, a body that keys no
+/// settlement, and a call whose content at a keyed name the asker cannot read.
+fn settlement<'graph>(
+    birth: &KBirth<'graph, '_>,
+    types: &Chain<'_, '_, '_, '_>,
+    region: &Chain<'_, '_, '_, '_>,
+) -> Option<(crate::values::SettlementKey, BindingImage<'graph>)> {
     let KBirth::Call {
         program,
         callee,
@@ -89,7 +107,7 @@ pub fn seek<'graph>(
     };
     let mut solution = None;
     let mut digests = BumpVec::with_capacity_in(keyed.len(), &scratch);
-    let mut binding = SpecBinding::default();
+    let mut binding = smallvec::SmallVec::new();
     for slot in keyed {
         let name = shape.slot_name(*slot);
         if let BinderSymbol::Type(name) = name
@@ -112,23 +130,5 @@ pub fn seek<'graph>(
         binding.push(KeyedTypes::of(&argument));
     }
     let key = key_of(shape.segment(), digests.into_iter());
-    Some(Seek {
-        parent: function.closure().build(),
-        key,
-        binding,
-        work: Work {
-            step: settle,
-            state: KBirth::Settle,
-        },
-    })
-}
-
-/// A settlement's step: lay the cell's own header and table, and quiesce. The drain enters it in
-/// its parent's table.
-pub fn settle<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'graph, KBundle> {
-    let (step, state) = step.state();
-    match state {
-        KState::Born(KBirth::Settle) => step.enlist(),
-        _ => step.failed(StepError::Refused),
-    }
+    Some((key, BindingImage::of(binding, program.tiers(), types)))
 }

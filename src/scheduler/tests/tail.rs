@@ -131,8 +131,11 @@ fn run(hops: usize, start: AnyStep) -> Run {
     reset();
     REMAINING.with(|remaining| remaining.set(hops));
     let type_region = Bump::new();
-    let mut graph: TestGraph<'_> =
-        TestGraph::new(1, crate::values::tests::seeded_tiers(&type_region));
+    let mut graph: TestGraph<'_> = TestGraph::new(
+        1,
+        crate::values::tests::seeded_tiers(&type_region),
+        Default::default(),
+    );
     let root = graph.root().expect("a fresh slab admits a root");
     let mut scheduler = Scheduler::over(&mut graph);
     let before = crate::tests::allocation_count();

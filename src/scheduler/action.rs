@@ -10,7 +10,7 @@
 //!
 //! **No step names a place that is not its own.** No method takes or returns a handle, and none is
 //! a carrier door: a step holds values at its own brands and nothing else, and says what it needs —
-//! a child, a wait, a successor, a result — beside the hints that place it. A build cell reaches a
+//! a child, a wait, a successor, a result — beside the hints that place it. An arena node reaches a
 //! step only as an opaque [`ArenaRef`], which the scheduler alone opens.
 //!
 //! Every arm of an `Action` carries no region borrow. `enter` quantifies a step's three brands per
@@ -20,7 +20,7 @@
 use crate::knot::{KValue, KValueFamily};
 use crate::memory::{
     Active, CellHandle, CrossedOperand, DeliverError, Delivered, Dormant, Erased, Header, Operand,
-    Projects as _, Ready, ReattachableOverBoth, Receipt, Stale, StepContext, Writer,
+    Ready, ReattachableOverBoth, Receipt, Stale, StepContext, Writer,
 };
 use crate::scheduler::continuation::{
     BirthAt, Born, Continuation, ContinuationFamily, NativeStep, Provenance, Report, Rested,
@@ -77,10 +77,6 @@ pub(super) enum Kind<'graph, B: StepBundle<'graph>> {
     Left(Dormant<'graph, B::Birth>),
     /// The step could not proceed. The drain abandons the work.
     Failed(StepError),
-    /// A settlement's step has entered itself in its parent's table and stays alive with no
-    /// continuation, reporting to nobody. Only the drain's own synchronous entry of a
-    /// settlement sees it.
-    Quiesced,
 }
 
 impl<'graph, B: StepBundle<'graph>> Action<'graph, B> {
@@ -206,6 +202,8 @@ pub struct Step<
     /// The type tiers of the graph this step runs over, which every chain it builds reads first.
     tiers: TypeTiers<'graph>,
     provenance: &'a Provenance,
+    /// The arena node the cell runs under, which a park hands its successor.
+    arena: ArenaRef,
     spawns: &'a mut Spawns<'graph, B>,
     state: S::Of<StateAt<'graph, 'here, B>>,
     scratch: X::Of<Option<ScratchAt<'graph, 'here, 'scratch, B>>>,
@@ -242,12 +240,13 @@ where
     'lent: 'scratch,
 {
     /// The step the drain hands a cell's continuation, over its graph's type tiers, the provenance
-    /// it read off that same continuation, the buffer it cleared for this step, and both slots the
-    /// cell parked in.
+    /// and arena node it read off that same continuation, the buffer it cleared for this step, and
+    /// both slots the cell parked in.
     pub(super) fn new(
         context: &'a mut Context<'graph, 'step, 'here, 'scratch, 'lent, B>,
         tiers: TypeTiers<'graph>,
         provenance: &'a Provenance,
+        arena: ArenaRef,
         spawns: &'a mut Spawns<'graph, B>,
         state: StateAt<'graph, 'here, B>,
         scratch: Option<ScratchAt<'graph, 'here, 'scratch, B>>,
@@ -256,6 +255,7 @@ where
             context,
             tiers,
             provenance,
+            arena,
             spawns,
             state,
             scratch,
@@ -284,6 +284,7 @@ where
             context,
             tiers,
             provenance,
+            arena,
             spawns,
             state,
             scratch,
@@ -292,6 +293,7 @@ where
             context,
             tiers,
             provenance,
+            arena,
             spawns,
             state: (),
             scratch,
@@ -321,6 +323,7 @@ where
             context,
             tiers,
             provenance,
+            arena,
             spawns,
             state,
             scratch,
@@ -329,6 +332,7 @@ where
             context,
             tiers,
             provenance,
+            arena,
             spawns,
             state,
             scratch: (),
@@ -394,20 +398,24 @@ where
         self.context.hold_scratch()
     }
 
-    /// Whether this cell borrows a settlement: a region rather than a scratch, which in a run
-    /// cell is a call's frame the drain found one for, or an evaluation or block copying its lend.
-    pub fn under_settlement(&self) -> bool {
-        self.context.lent_region().is_some()
+    /// The type tiers of the graph this step runs over, for a test that builds a seek's image.
+    #[cfg(test)]
+    pub(crate) fn tiers(&self) -> TypeTiers<'graph> {
+        self.tiers
     }
 
-    /// The agent chain, the warm tier of a cell that borrows a settlement: the frozen load,
-    /// then the agent tier, which it writes and which outlives every hop born under the
-    /// settlement. What an invariant site's types are adopted into, so the next hop finds them.
-    /// Paired to the region writer; `None` for a cell that borrows no settlement, whose own
-    /// scratch is its warm tier.
+    /// Whether this cell runs under a settlement: a call's frame the drain found or built one
+    /// for, or a cell its asker's runs under.
+    pub fn under_settlement(&self) -> bool {
+        self.arena != ArenaRef::ROOT
+    }
+
+    /// The agent chain, the warm tier of a cell under a settlement: the frozen load, then the
+    /// agent tier, which it writes and which outlives every hop under the settlement. What an
+    /// invariant site's types are adopted into, so the next hop finds them. Paired to the region
+    /// writer; `None` for a cell under the root, whose own scratch is its warm tier.
     pub fn agent_types(&self) -> Option<Chain<'graph, 'here, 'graph, 'step>> {
-        self.context.lent_region()?;
-        Some(self.tiers.resting())
+        self.under_settlement().then(|| self.tiers.resting())
     }
 
     /// Ask for one child, and take back the slot of this step's run it will report to. The drain
@@ -419,14 +427,13 @@ where
         self.spawn_lending(request, Lending::Parent)
     }
 
-    /// [`spawn`](Self::spawn) a call's frame, born borrowing the settlement `seek` finds: the
-    /// drain looks it up, or builds it, before the child is born. With no `seek`, or none found,
-    /// the frame is born cold: a `Fresh` frame borrowing this cell's scratch, a `Shares` one
-    /// borrowing nothing, so it never reads this cell's settlement as its own.
+    /// [`spawn`](Self::spawn) a call's frame, born under the arena node `seek` finds: the drain
+    /// looks its settlement up, or builds it, before the child is born, so it never runs under
+    /// this cell's settlement unless the seek names it.
     pub fn spawn_seeking(
         &mut self,
         request: Request<'graph, 'here, B>,
-        seek: Option<Seek<'graph, B>>,
+        seek: Seek<'graph>,
     ) -> Slot {
         self.spawn_lending(request, Lending::Call(seek))
     }
@@ -434,7 +441,7 @@ where
     fn spawn_lending(
         &mut self,
         request: Request<'graph, 'here, B>,
-        lending: Lending<'graph, B>,
+        lending: Lending<'graph>,
     ) -> Slot {
         let state = self.rest(request.work.state);
         self.spawns.push(Asked {
@@ -446,12 +453,14 @@ where
         })
     }
 
-    /// The build cell this cell's frame runs under: the settlement whose region it borrows,
-    /// where it was born borrowing one, and `fallback` otherwise.
+    /// The arena node this cell runs under, where it is a settlement, and `fallback` under the
+    /// root.
     pub fn arena_ref(&self, fallback: ArenaRef) -> ArenaRef {
-        (self.context.lent_region())
-            .and_then(|(_, header)| header.get()?.home())
-            .map_or(fallback, |home| ArenaRef::of(home.me))
+        if self.under_settlement() {
+            self.arena
+        } else {
+            fallback
+        }
     }
 
     /// The results of the children this cell parked on, in the order it asked for them: a scratch
@@ -517,6 +526,7 @@ where
         self.context.store_successor(Continuation {
             step,
             provenance: *self.provenance,
+            arena: self.arena,
             state: Rested::Awake(state),
         });
         if let Some(scratch) = scratch {
@@ -531,20 +541,20 @@ where
         self.tail_lending(placement, work, Lending::Parent)
     }
 
-    /// [`tail`](Self::tail) into a call's frame, born borrowing the settlement `seek` finds,
-    /// or cold, as [`spawn_seeking`](Self::spawn_seeking) asks for a child.
+    /// [`tail`](Self::tail) into a call's frame, born under the arena node `seek` finds, as
+    /// [`spawn_seeking`](Self::spawn_seeking) asks for a child.
     pub fn tail_seeking(
         self,
         placement: Placement,
         work: Work<'graph, 'here, B>,
-        seek: Option<Seek<'graph, B>>,
+        seek: Seek<'graph>,
     ) -> Action<'graph, B> {
         self.tail_lending(placement, work, Lending::Call(seek))
     }
 
     /// [`tail`](Self::tail) into a frame of the same callee as the frame running under `build`,
-    /// born borrowing that same settlement with no lookup — sound only for a callee whose name
-    /// does not escape, so that every hop into it is a tail edge the load read; or cold, where that
+    /// born under that same settlement with no lookup — sound only for a callee whose name does
+    /// not escape, so that every hop into it is a tail edge the load read; or cold, where that
     /// settlement is no longer live.
     pub fn tail_under(
         self,
@@ -559,7 +569,7 @@ where
         mut self,
         placement: Placement,
         work: Work<'graph, 'here, B>,
-        lending: Lending<'graph, B>,
+        lending: Lending<'graph>,
     ) -> Action<'graph, B> {
         if !self.spawns.is_empty() {
             return self.failed(StepError::Unparked);
@@ -573,32 +583,6 @@ where
             state,
             lending,
         }))
-    }
-
-    /// End a settlement's step: lay this cell's own header and its table, as long as the
-    /// nested bound its parent's table records. The drain enters the cell in its parent's table
-    /// and sets its home once the step returns. The cell stays alive with no continuation.
-    /// Refused for a cell that asked for children, one that is no tree cell, one that borrows no
-    /// region, and one whose lent region holds no table.
-    pub fn enlist(self) -> Action<'graph, B> {
-        if !self.spawns.is_empty() {
-            return self.failed(StepError::Unparked);
-        }
-        let (CellHandle::Tree(_), Some((_, lent_header))) =
-            (self.context.cell(), self.context.lent_region())
-        else {
-            return self.failed(StepError::Refused);
-        };
-        let Some(nested) = (lent_header.get())
-            .and_then(|header| header.table())
-            .map(|table| table.nested())
-        else {
-            return self.failed(StepError::Refused);
-        };
-        let half = Half::of(self.writer(), self.header());
-        let header = (self.header()).get_or_lay(|| RegionHeader::lay(self.writer()));
-        header.lay_table(half, nested, nested);
-        Action(Kind::Quiesced)
     }
 
     /// Finish with a result built by `build`, which takes no operands, and deliver it where the
@@ -888,7 +872,7 @@ pub(super) struct Asked<'graph, B: StepBundle<'graph>> {
     pub step: NativeStep<'graph, B>,
     pub state: Dormant<'graph, B::Birth>,
     /// What the cell borrows, which the drain resolves at its creation.
-    pub lending: Lending<'graph, B>,
+    pub lending: Lending<'graph>,
 }
 
 /// The drain's own buffer of requests, reached by a step only through [`Step::spawn`] and emptied

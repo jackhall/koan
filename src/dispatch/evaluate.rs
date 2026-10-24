@@ -34,11 +34,11 @@
 //! and adopts what leaves the body into its region through an [`Exit`]: a call's callee, arguments,
 //! contributions and the contract it hands on, an `EVAL`'s code, offered record and declared type,
 //! and a value owed a frame's contract. Under `routes` an invariant view's operand and view, and a
-//! warm composite's own memo, are adopted into the agent tier where the frame borrows a
+//! warm composite's own memo, are adopted into the agent tier where the frame runs under a
 //! settlement.
 //!
 //! A call to a body keyed on its bindings is handed to the drain with what it seeks ([`seek`]), so
-//! its frame is born borrowing its settlement; a hop of the frame's own callee borrows the
+//! its frame is born under its settlement; a hop of the frame's own callee runs under the
 //! frame's, with no lookup.
 //!
 //! [`statics`](super::statics) reads nodes through this file's [`Form`], so the load types each node
@@ -996,7 +996,7 @@ fn called<'graph, 'here>(
     call: impl Fn(Option<Contract>) -> Request<'graph, 'here, KBundle>,
 ) -> Action<'graph, KBundle> {
     let request = call(tails);
-    // The frame's own callee, keyed, where the frame borrows a settlement: its build cell is
+    // The frame's own callee, keyed, where the frame runs under a settlement: its arena node is
     // then not the one the callee was born under, which a frame born with none runs under.
     let same = callee.as_callable().is_some() && callee.as_callable() == at.view.callable();
     let keyed = || {

@@ -13,7 +13,7 @@ use super::super::Koan;
 use super::classes::tutorial_snippets;
 use super::statics::loaded;
 use super::{WRITTEN, output};
-use crate::values::SpecBounds;
+use crate::values::{ArenaRef, BuildBudget};
 
 /// `SIG Counter`, whose head parameter an opaque view hides, `MODULE ints` and `MODULE words`,
 /// which fit it at different carriers, `Link`, a chain a loop walks to the `null` at its end, and
@@ -53,14 +53,14 @@ pub(super) fn program(depth: u32, source: &str) -> String {
 
 /// Run [`program`] at `depth` over `source`.
 fn ran(depth: u32, source: &str) -> Ran {
-    ran_under(depth, source, SpecBounds::default())
+    ran_under(depth, source, BuildBudget::default())
 }
 
-/// Run [`program`] at `depth` over `source`, its settlement tables `bounds` long.
-pub(super) fn ran_under(depth: u32, source: &str, bounds: SpecBounds) -> Ran {
+/// Run [`program`] at `depth` over `source`, its unheld settlements within `budget`.
+pub(super) fn ran_under(depth: u32, source: &str, budget: BuildBudget) -> Ran {
     let program = program(depth, source);
     WRITTEN.with(|written| written.borrow_mut().clear());
-    let mut substrate = CellSubstrate::load::<Koan>(&program, "<test>", 2, bounds, output())
+    let mut substrate = CellSubstrate::load::<Koan>(&program, "<test>", 2, budget, output())
         .unwrap_or_else(|error| panic!("the program loads: {error}"));
     let before = substrate.with(|running| running.program().tiers().frozen.len());
     TIERS.with(|tiers| tiers.set(Tiers::default()));
@@ -670,9 +670,9 @@ fn a_shares_loop_handing_a_keyed_shares_helper_a_module_over_its_link_holds_adop
     let runs = DEPTHS.map(ran_adopting);
     let [(few, few_adopted), _, (many, _)] = &runs;
     assert_eq!((few.printed.as_str(), few.root), ("done", 0));
-    // `PEEK` keys on the module it is handed, so it borrows a settlement of its own each hop,
+    // `PEEK` keys on the module it is handed, so it runs under a settlement of its own each hop,
     // and `WRAP` one across the loop; the region holds flat. The agent tier grows by each `PEEK`
-    // binding, run content, until the build rewrite keys a build cell on load content alone
+    // binding, run content, until the build rewrite keys an arena node on load content alone
     // (roadmap/gradual-build/build-rewrite.md).
     for ((ran, _), depth) in runs.iter().zip(DEPTHS) {
         assert_eq!(ran.tiers.settled, depth as usize + 1);
@@ -941,7 +941,7 @@ fn a_barrier_called_caching_frame_keeps_its_blocks_value() {
 /// load.
 fn laid(program: &str) -> Vec<(&'static str, usize, usize)> {
     let Ok(mut substrate) =
-        CellSubstrate::load::<Koan>(program, "<measured>", 2, SpecBounds::default(), output())
+        CellSubstrate::load::<Koan>(program, "<measured>", 2, BuildBudget::default(), output())
     else {
         return Vec::new();
     };
@@ -1224,16 +1224,17 @@ fn every_shape_of_a_load_has_its_own_segment_and_every_load_the_same() {
     assert_eq!(segments(), first, "a second load assigns the same segments");
 }
 
-/// What one load of `source` at depth 1 leaves after each run: the tiers, what the build root's
-/// table holds, and what it printed; `between` runs on the loaded program between the runs.
+/// What one load of `source` at depth 1 leaves after each run: the tiers, how many settlements lie
+/// directly under the root, and what it printed; `between` runs on the loaded program between the
+/// runs.
 pub(super) fn runs(
     source: &str,
     count: usize,
     between: impl Fn(&mut crate::program::Running<'_>),
-) -> Vec<(Tiers, Option<usize>, String)> {
+) -> Vec<(Tiers, usize, String)> {
     let program = program(1, source);
     let mut substrate =
-        CellSubstrate::load::<Koan>(&program, "<test>", 2, SpecBounds::default(), output())
+        CellSubstrate::load::<Koan>(&program, "<test>", 2, BuildBudget::default(), output())
             .unwrap_or_else(|error| panic!("the program loads: {error}"));
     (0..count)
         .map(|_| {
@@ -1243,10 +1244,9 @@ pub(super) fn runs(
                 .with(|running| running.run())
                 .expect("the program runs");
             let table = substrate.with(|running| {
-                let build = running.roots().build;
-                let table = running.scheduler().graph().table_len(build);
+                let table = running.scheduler().graph().children_of(ArenaRef::ROOT);
                 between(running);
-                table.expect("the build root is live")
+                table
             });
             let printed = WRITTEN.with(|written| written.borrow().join("\n"));
             (TIERS.with(Cell::get), table, printed)
@@ -1275,7 +1275,7 @@ fn a_loop_seeks_its_settlement_once_and_a_second_caller_finds_it_warm() {
         (2, 1),
         "the second caller builds nothing"
     );
-    assert_eq!(table, Some(1));
+    assert_eq!(table, 1);
     let warm = |source: &str| -> usize {
         laid(&program(1, source))
             .iter()
@@ -1294,7 +1294,7 @@ fn a_loop_seeks_its_settlement_once_and_a_second_caller_finds_it_warm() {
         unreachable!()
     };
     assert_eq!(apart.settled, 2, "two bindings, two settlements");
-    assert_eq!(table, Some(2));
+    assert_eq!(table, 2);
 }
 
 #[test]
@@ -1312,7 +1312,7 @@ fn a_callable_born_under_a_settlement_keys_its_own_beneath_it() {
         assert_eq!(printed, "1", "{body}");
         assert_eq!(
             (tiers.settled, table),
-            (2, Some(1)),
+            (2, 1),
             "`g`'s settlement is a child of `OUTER`'s, not of the root: {body}"
         );
     }
@@ -1324,15 +1324,7 @@ fn an_evicted_settlement_is_rebuilt_on_the_next_miss_with_the_same_answer() {
         "{INVARIANT}PRINT (COUNTDOWN ints chain)\nPRINT (COUNTDOWN words chain)\n\
          PRINT (COUNTDOWN ints chain)"
     );
-    let one = NonZeroUsize::MIN;
-    let tight = ran_under(
-        DEPTHS[0],
-        &source,
-        SpecBounds {
-            root: one,
-            nested: one,
-        },
-    );
+    let tight = ran_under(DEPTHS[0], &source, SMALLEST);
     assert_eq!(tight.printed, "7\n7\n7");
     assert_eq!(
         (tight.tiers.settled, tight.tiers.evicted),
@@ -1344,20 +1336,43 @@ fn an_evicted_settlement_is_rebuilt_on_the_next_miss_with_the_same_answer() {
     assert_eq!((roomy.tiers.settled, roomy.tiers.evicted), (2, 0));
 }
 
-/// Bounds of `root` and `nested`.
-pub(super) fn bounds(root: usize, nested: usize) -> SpecBounds {
-    SpecBounds {
-        root: NonZeroUsize::new(root).expect("a bound is not zero"),
-        nested: NonZeroUsize::new(nested).expect("a bound is not zero"),
+/// The smallest budget: every miss evicts every settlement no cell holds.
+pub(super) const SMALLEST: BuildBudget = BuildBudget {
+    bytes: NonZeroUsize::MIN,
+};
+
+/// A budget of `count` settlements, the largest a run of `source` at depth 1 lays measuring one.
+fn budget_of(count: usize, source: &str) -> BuildBudget {
+    let mut substrate = CellSubstrate::load::<Koan>(
+        &program(1, source),
+        "<test>",
+        2,
+        BuildBudget::default(),
+        output(),
+    )
+    .unwrap_or_else(|error| panic!("the program loads: {error}"));
+    substrate
+        .with(|running| running.run())
+        .expect("the program runs");
+    let largest = substrate.with(|running| {
+        let scheduler = running.scheduler();
+        let graph = scheduler.graph();
+        (graph.settlements().into_iter())
+            .filter_map(|at| graph.settlement_bytes(at))
+            .max()
+            .expect("the run settles something")
+    });
+    BuildBudget {
+        bytes: NonZeroUsize::new(count * largest).expect("a settlement weighs something"),
     }
 }
 
 #[test]
 fn a_loop_handing_a_keyed_helper_a_new_module_each_hop_holds_its_settlements_flat() {
     // `PEEK` keys on a new module each hop and `WRAP` on `ints` across the loop, both under the
-    // root: each `PEEK` miss evicts the last `PEEK`, never `WRAP`, whose hops are newer births.
+    // root: each `PEEK` miss evicts the last `PEEK`, never `WRAP`, whose hops hold it.
     let source = wrapped_peeks();
-    let [few, many] = ENDS.map(|depth| ran_under(depth, &source, bounds(2, 2)));
+    let [few, many] = ENDS.map(|depth| ran_under(depth, &source, SMALLEST));
     for (ran, depth) in [(&few, ENDS[0]), (&many, ENDS[1])] {
         let depth = depth as usize;
         assert_eq!(ran.printed, "done");
@@ -1369,14 +1384,14 @@ fn a_loop_handing_a_keyed_helper_a_new_module_each_hop_holds_its_settlements_fla
         assert_eq!(ran.live, 2);
     }
     // The agent tier grows by each `PEEK` binding, run content, until the build rewrite keys a
-    // build cell on load content alone (roadmap/gradual-build/build-rewrite.md).
+    // arena node on load content alone (roadmap/gradual-build/build-rewrite.md).
     assert_eq!(few.tiers.region, many.tiers.region);
-    // `ENDS` stops at the root's default bound, so an operator run past it shows the bound biting.
-    let bound = SpecBounds::default().root.get();
-    let depth = bound + 4;
-    let past = ran(depth as u32, &source);
+    // A budget of three settlements keeps three unheld `PEEK`s past each miss, the last `PEEK`
+    // and `WRAP` turning unheld as the operator run ends.
+    let depth = 7;
+    let past = ran_under(depth as u32, &source, budget_of(3, &source));
     assert_eq!(past.printed, "done");
-    assert_eq!((past.tiers.settled, past.live), (depth + 1, bound));
+    assert_eq!((past.tiers.settled, past.live), (depth + 1, 5));
 }
 
 #[test]
@@ -1411,9 +1426,10 @@ fn a_loop_whose_keyed_frame_calls_a_keyed_callable_holds_its_settlements_flat() 
         None,
         "`DRIVE` keys on nothing"
     );
-    // Each hop builds an `OUTER` under the root and a `g` beneath it; a miss on the root's full
-    // table releases the oldest `OUTER` with its `g`.
-    let [few, many] = ENDS.map(|depth| ran_under(depth, source, bounds(2, 2)));
+    // Each hop builds an `OUTER` under the root and a `g` beneath it; past a budget of two
+    // settlements, a miss evicts the oldest `g`, then its `OUTER`.
+    let two = budget_of(2, source);
+    let [few, many] = ENDS.map(|depth| ran_under(depth, source, two));
     for (ran, depth) in [(&few, ENDS[0]), (&many, ENDS[1])] {
         let depth = depth as usize;
         assert_eq!(ran.printed, "7");
@@ -1423,15 +1439,15 @@ fn a_loop_whose_keyed_frame_calls_a_keyed_callable_holds_its_settlements_flat() 
         );
     }
     // `OUTER` keys on a module built over each hop's link, so the agent tier grows by each
-    // binding, run content, until the build rewrite keys a build cell on load content alone
+    // binding, run content, until the build rewrite keys an arena node on load content alone
     // (roadmap/gradual-build/build-rewrite.md).
     assert_eq!(few.tiers.region, many.tiers.region);
 }
 
 #[test]
-fn a_frame_under_an_evicted_settlement_is_born_cold_with_the_same_answer() {
-    // `SWEEP`'s first `PEEK` miss evicts `OUTER`'s settlement while `OUTER` runs, so `g`, born
-    // under it, is born cold.
+fn a_settlement_its_frame_holds_outlives_every_miss_the_frame_waits_on() {
+    // `SWEEP`'s `PEEK` misses past the smallest budget evict every settlement no cell holds, and
+    // `OUTER`'s frame holds its own, so `g`, born under it, runs warm.
     let source = format!(
         "{PEEK}EXPR #(SWEEP link :Link) -> Str = \
          #((MODULE h OVER #[link] = (LET held = link)) (LET seen = (PEEK h)) \
@@ -1442,9 +1458,10 @@ fn a_frame_under_an_evicted_settlement_is_born_cold_with_the_same_answer() {
          (LET swept = (SWEEP chain)) (g {{x = 1}}))\n\
          PRINT (OUTER ints)"
     );
-    let tight = ran_under(2, &source, bounds(1, 1));
+    let tight = ran_under(2, &source, SMALLEST);
     assert_eq!(tight.printed, "1");
-    assert_eq!(tight.tiers.cold_births, 1, "`g` alone is born cold");
+    assert!(tight.tiers.evicted > 0, "the misses evict");
+    assert_eq!(tight.tiers.cold_births, 0, "no frame is born cold");
     let roomy = ran(2, &source);
     assert_eq!(roomy.printed, "1");
     assert_eq!(roomy.tiers.cold_births, 0);
@@ -1453,7 +1470,7 @@ fn a_frame_under_an_evicted_settlement_is_born_cold_with_the_same_answer() {
 /// The allocations one run of `source` makes.
 fn allocations(source: &str) -> u64 {
     let mut substrate =
-        CellSubstrate::load::<Koan>(source, "<test>", 2, SpecBounds::default(), output())
+        CellSubstrate::load::<Koan>(source, "<test>", 2, BuildBudget::default(), output())
             .unwrap_or_else(|error| panic!("the program loads: {error}"));
     let before = crate::tests::allocation_count();
     substrate
@@ -1512,7 +1529,7 @@ fn a_shares_callees_callable_keys_under_its_own_chain_not_its_hosts() {
         unreachable!()
     };
     assert_eq!(printed, "2");
-    assert_eq!((tiers.settled, table), (3, Some(2)));
+    assert_eq!((tiers.settled, table), (3, 2));
 }
 
 /// [`INVARIANT`] at `Shares`: the same loop, ending in a string.
@@ -1541,7 +1558,7 @@ fn a_shares_loop_seeks_its_settlement_once_and_a_second_park_finds_it_warm() {
         (2, 1),
         "the second park builds nothing"
     );
-    assert_eq!(table, Some(1));
+    assert_eq!(table, 1);
     let warm = |source: &str| -> usize {
         laid(&program(1, source))
             .iter()
@@ -1580,7 +1597,7 @@ fn a_callable_born_in_a_shares_frame_keys_its_own_beneath_it() {
         assert_eq!(printed, "1", "{body}");
         assert_eq!(
             (tiers.settled, table),
-            (2, Some(1)),
+            (2, 1),
             "`g`'s settlement is a child of `OUTER`'s, not of the root: {body}"
         );
     }
@@ -1588,9 +1605,8 @@ fn a_callable_born_in_a_shares_frame_keys_its_own_beneath_it() {
 
 #[test]
 fn an_unkeyed_shares_callee_in_a_keyed_frame_keys_its_callables_under_its_own_birth() {
-    // `OUTER` is a keyed tenant; `SHARE`, whose `m :Any` keys nothing, borrows nothing, so the
-    // callable it births keys under the root `SHARE` was born under, not under `OUTER`'s
-    // settlement.
+    // `OUTER` is a keyed tenant; `SHARE`, whose `m :Any` keys nothing, runs under the root it
+    // was born under, so the callable it births keys there, not under `OUTER`'s settlement.
     let source = "EXPR #(SHARE m :Any) -> Any = \
                   #((LET g = (FN :{x :Number} -> Number = #((LET v = (m :| Counter)) (x)))) \
                   (g {x = 1}))\n\
@@ -1600,7 +1616,7 @@ fn an_unkeyed_shares_callee_in_a_keyed_frame_keys_its_callables_under_its_own_bi
         unreachable!()
     };
     assert_eq!(printed, "2");
-    assert_eq!((tiers.settled, table), (2, Some(2)));
+    assert_eq!((tiers.settled, table), (2, 2));
 }
 
 #[test]

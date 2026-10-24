@@ -12,7 +12,7 @@ use crate::type_lattice::{FitsFailure, sig_fits};
 
 use super::super::Koan;
 use super::{output, run};
-use crate::values::SpecBounds;
+use crate::values::BuildBudget;
 
 /// Two `MOVE` definitions that rank opposite ways under the two orders.
 const MOVES: &str = "EXPR #(MOVE x :Any TO y :Number) -> Str = #(\"to a number\")\n\
@@ -131,7 +131,7 @@ fn a_module_ranked_in_written_order_does_not_satisfy_a_member_ranked_otherwise()
         let source =
             format!("SIG Mover = #[(EXPR #(MOVE 2 :Any TO 1 :Any) -> Any)]\nMODULE m = ({module})");
         let mut substrate =
-            CellSubstrate::load::<Koan>(&source, "<test>", 8, SpecBounds::default(), output())
+            CellSubstrate::load::<Koan>(&source, "<test>", 8, BuildBudget::default(), output())
                 .unwrap_or_else(|error| panic!("`{source}` loads: {error}"));
         substrate.with(|running| {
             running.run().expect("the program runs");

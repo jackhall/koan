@@ -89,8 +89,11 @@ fn run(cells: u32, start: AnyStep) -> Vec<String> {
     reset();
     HANDED.with(|handed| handed.set(KType::NUMBER));
     let type_region = Bump::new();
-    let mut graph: TestGraph<'_> =
-        TestGraph::new(cells, crate::values::tests::seeded_tiers(&type_region));
+    let mut graph: TestGraph<'_> = TestGraph::new(
+        cells,
+        crate::values::tests::seeded_tiers(&type_region),
+        Default::default(),
+    );
     let root = graph.root().expect("a fresh slab admits a root");
     Scheduler::over(&mut graph)
         .run(work(start, KValue::Null), root, Placement::Fresh)

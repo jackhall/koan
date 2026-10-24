@@ -27,8 +27,11 @@ fn inert<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'grap
 #[test]
 fn a_birth_continuation_comes_back_at_the_step_brand_and_a_successor_survives_to_the_next_step() {
     let type_region = Bump::new();
-    let mut graph: TestGraph<'_> =
-        TestGraph::new(2, crate::values::tests::seeded_tiers(&type_region));
+    let mut graph: TestGraph<'_> = TestGraph::new(
+        2,
+        crate::values::tests::seeded_tiers(&type_region),
+        Default::default(),
+    );
     let root: CellHandle = graph.root().expect("a fresh slab admits a root").into();
     let cells = graph.cells();
     let cell = cells
@@ -37,6 +40,7 @@ fn a_birth_continuation_comes_back_at_the_step_brand_and_a_successor_survives_to
             Some(Continuation {
                 step: inert,
                 provenance: place(root),
+                arena: crate::values::ArenaRef::ROOT,
                 state: Rested::Awake(KValue::Number(1.0)),
             }),
         )
@@ -55,6 +59,7 @@ fn a_birth_continuation_comes_back_at_the_step_brand_and_a_successor_survives_to
             context.store_successor(Continuation {
                 step: inert,
                 provenance: place(root),
+                arena: crate::values::ArenaRef::ROOT,
                 state: Rested::Awake(here),
             });
             let there = crate::values::text(context.scratch_writer(), "there");

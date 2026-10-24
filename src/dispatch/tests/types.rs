@@ -13,7 +13,7 @@ use crate::scope::{
 };
 use crate::symbols::{BinderSymbol, TypeSymbol, ValueSymbol};
 use crate::type_lattice::{DeclaredType, KType, Parametric, TypeNode, display_name};
-use crate::values::SpecBounds;
+use crate::values::BuildBudget;
 use crate::values::tests::reading;
 
 use super::statics::loaded;
@@ -21,7 +21,7 @@ use super::{Koan, output};
 
 /// Why `source` does not load, rendered.
 fn refused(source: &str) -> String {
-    match CellSubstrate::load::<Koan>(source, "<test>", 8, SpecBounds::default(), output()) {
+    match CellSubstrate::load::<Koan>(source, "<test>", 8, BuildBudget::default(), output()) {
         Ok(_) => panic!("`{source}` is refused"),
         Err(error) => error.to_string(),
     }

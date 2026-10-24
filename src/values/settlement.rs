@@ -1,56 +1,143 @@
-//! What a habitat half's header keeps for the build tree: the table of a build cell's
-//! settlements by key, and the opaque token naming the build cell a function was born under.
+//! What the build arena's books are keyed and bounded by, and how code above the scheduler names
+//! an arena node.
 //!
-//! A [`SpecBinding`] is the types a seek's keyed arguments carry, which the drain lays in a missed
-//! settlement's branch before its step runs.
-//!
-//! A [`SpecTable`] rests in a build cell's region beside its type branch, in the region header
-//! `scope` declares: a fixed run of entries laid with the cell and never grown, as long as the
-//! cell's bound ([`SpecBounds`]). Each entry is a key, a bare handle and the
-//! parent's birth count at the child's last birth. A bare handle holds nothing alive, so a stale
-//! one is a miss the drain rebuilds in place. A miss with no empty or stale entry takes the entry
-//! of the least recently born child, whose subtree the drain releases first. The table counts
-//! every birth under its cell, so every stamp is distinct. A [`ArenaRef`] is how code above the
-//! scheduler holds a build cell without naming a handle: only `values` and `scheduler` open one.
-//! See [build/README.md](../build/README.md#references-between-the-trees).
+//! A [`SettlementKey`] finds a settlement under its parent. A [`BindingImage`] is the types a
+//! seek's keyed arguments carry that the frozen load and the agent tier lack, with a copy of their
+//! nodes laid in the image's own bump from the asker's chain: what the drain relays into the agent tier
+//! when it builds a settlement, so a frame under it finds them after the asker is gone. A
+//! [`BuildBudget`] bounds the bytes of the arena nodes no run cell holds. An [`ArenaRef`] is how
+//! code above the scheduler holds an arena node without naming a slot: only `values` and
+//! `scheduler` open one. See [build/README.md](../build/README.md#references-between-the-trees).
 
 use std::cell::Cell;
 use std::num::NonZeroUsize;
 
+use self_cell::self_cell;
 use smallvec::SmallVec;
 
-use crate::memory::{CellHandle, LaysRuns, TreeHandle};
-use crate::type_lattice::{DeclaredType, KType, Parametric};
+use crate::memory::{Bump, LaysRuns};
+use crate::type_lattice::{Branch, DeclaredType, Habitat, KType, Own, Parametric, TypeChain};
 
-use super::{ContentDigest, Knotted, Value};
+use super::{ContentDigest, Knotted, TypeTiers, Value};
 
-/// What a parent's table finds a settlement by: the callee's segment and the content digests
-/// at the names its key lists, hashed into one digest.
+/// What a parent finds a settlement by: the callee's segment and the content digests at the
+/// names its key lists, hashed into one digest.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
 pub struct SettlementKey(pub ContentDigest);
 
-/// The types a settlement's binding carries, one entry per keyed name in the order its
-/// key digests them: what the drain lays in a missed settlement's branch before its step
-/// ([build/README.md](../build/README.md#references-between-the-trees)). A handle is a content
-/// digest and holds nothing alive, so a binding outlives the values it was read from. One entry
-/// sits inline, so a call keyed on one parameter allocates nothing, and a seek waiting on the
-/// drain's ready stack keeps its entries small.
-#[derive(Clone, Debug, Default)]
-pub struct SpecBinding(SmallVec<[KeyedTypes; 1]>);
+/// The types a settlement's binding carries that the frozen load and the agent tier lacked when
+/// the asker read them, one entry per keyed name in the order its key digests them, beside a copy
+/// of their nodes ([build/README.md](../build/README.md#references-between-the-trees)). A handle
+/// is a content digest, so the image outlives the values it was read from. A binding whose every
+/// type already rests is imaged by nothing, so a seek that hits allocates nothing.
+#[derive(Default)]
+pub struct BindingImage<'graph>(Option<ImageNodes<'graph>>);
 
-impl SpecBinding {
-    pub fn push(&mut self, keyed: KeyedTypes) {
-        self.0.push(keyed);
+impl<'graph> BindingImage<'graph> {
+    /// The image of `keyed`, its nodes read from `types`, the asker's chain, where `tiers` lacks
+    /// them.
+    pub fn of<'asker, H: Habitat<'asker>>(
+        keyed: SmallVec<[KeyedTypes; 1]>,
+        tiers: TypeTiers<'graph>,
+        types: &TypeChain<'asker, H>,
+    ) -> Self {
+        let resting = tiers.resting();
+        if (keyed.iter().flat_map(KeyedTypes::handles)).all(|kt| resting.resolves(kt)) {
+            return BindingImage(None);
+        }
+        let owner = ImageOwner {
+            bump: Bump::new(),
+            tiers,
+            keyed,
+        };
+        BindingImage(Some(ImageNodes::new(owner, |owner| {
+            let bump = &owner.bump;
+            let half = ImageHalf {
+                bump,
+                slot: bump.alloc(Cell::new(None)),
+            };
+            let image = TypeChain::new(owner.tiers.frozen, owner.tiers.agent, half);
+            for kt in owner.handles() {
+                image.adopt_from(types, kt);
+            }
+            half.slot.get()
+        })))
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.0.is_empty()
-    }
-
-    /// Every handle the binding carries: each entry's own type, then the type it names, if any.
+    /// Every handle the image holds the nodes of: each entry's own type, then the type it names,
+    /// if any. None for a binding whose every type already rested.
     pub fn handles(&self) -> impl Iterator<Item = DeclaredType<Parametric>> + '_ {
-        (self.0.iter()).flat_map(|keyed| {
-            std::iter::once(keyed.carried.into()).chain(keyed.named.map(Into::into))
+        (self.0.iter()).flat_map(|nodes| nodes.borrow_owner().handles())
+    }
+
+    /// Make every handle the image holds resolve in `into`, laying from the image what it lacks.
+    pub fn relay<'tier, H: Habitat<'tier>>(&self, into: &TypeChain<'tier, H>) {
+        let Some(nodes) = &self.0 else {
+            return;
+        };
+        nodes.with_dependent(|owner, branch| {
+            for kt in owner.handles() {
+                into.adopt(*branch, kt);
+            }
+        });
+    }
+}
+
+/// What an image's nodes are laid in: their own bump, beside the tiers the chain that lays them
+/// reads first and the keyed types they are the nodes of.
+struct ImageOwner<'graph> {
+    bump: Bump,
+    tiers: TypeTiers<'graph>,
+    keyed: SmallVec<[KeyedTypes; 1]>,
+}
+
+impl ImageOwner<'_> {
+    fn handles(&self) -> impl Iterator<Item = DeclaredType<Parametric>> + '_ {
+        (self.keyed.iter()).flat_map(KeyedTypes::handles)
+    }
+}
+
+/// The branch an image laid its nodes in: `None` where every node was found in the tiers.
+type ImageBranch<'a> = Option<&'a Branch<'a>>;
+
+self_cell!(
+    struct ImageNodes<'graph> {
+        owner: ImageOwner<'graph>,
+        #[not_covariant]
+        dependent: ImageBranch,
+    }
+);
+
+/// The habitat an image's chain lays into: its bump, and the slot its branch is laid in.
+#[derive(Clone, Copy)]
+struct ImageHalf<'a> {
+    bump: &'a Bump,
+    slot: &'a Cell<Option<&'a Branch<'a>>>,
+}
+
+impl<'a> LaysRuns<'a> for ImageHalf<'a> {
+    fn lay<T>(self, len: usize, fill: impl FnMut(usize) -> T) -> &'a [T] {
+        self.bump.lay(len, fill)
+    }
+
+    fn text(self, text: &str) -> &'a str {
+        self.bump.text(text)
+    }
+}
+
+impl<'a> Habitat<'a> for ImageHalf<'a> {
+    fn own(self) -> Option<Own<'a>> {
+        self.slot.get().map(Own::Branch)
+    }
+
+    fn own_or_lay(self) -> Own<'a> {
+        Own::Branch(match self.slot.get() {
+            Some(branch) => branch,
+            None => {
+                let branch = &*self.bump.alloc(Branch::new(self.bump));
+                self.slot.set(Some(branch));
+                branch
+            }
         })
     }
 }
@@ -72,177 +159,46 @@ impl KeyedTypes {
             },
         }
     }
+
+    /// Its own type, then the type it names, if any.
+    fn handles(&self) -> impl Iterator<Item = DeclaredType<Parametric>> {
+        std::iter::once(self.carried.into()).chain(self.named.map(Into::into))
+    }
 }
 
-/// The two bounds a load sets: how many live children the build root's table holds, and how many
-/// every settlement's table holds. The root's table is shared by every top-level keyed
-/// callee, so it is wider; the nested bound is a branching factor that nesting multiplies.
+/// How many bytes the build arena's unheld arena nodes may hold: past it, a miss evicts the least
+/// recently used unheld leaves.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct SpecBounds {
-    pub root: NonZeroUsize,
-    pub nested: NonZeroUsize,
+pub struct BuildBudget {
+    pub bytes: NonZeroUsize,
 }
 
-impl Default for SpecBounds {
+impl Default for BuildBudget {
     fn default() -> Self {
-        SpecBounds {
-            root: NonZeroUsize::new(16).expect("16 is not zero"),
-            nested: NonZeroUsize::new(4).expect("4 is not zero"),
+        BuildBudget {
+            bytes: NonZeroUsize::new(4 << 20).expect("4 MiB is not zero"),
         }
     }
 }
 
-/// One entry of a [`SpecTable`]: empty while it names no handle, its key meaningless then.
-pub struct SpecEntry {
-    key: Cell<SettlementKey>,
-    handle: Cell<Option<TreeHandle>>,
-    /// The parent's birth count at this settlement's last birth.
-    born: Cell<u64>,
-}
-
-/// What a miss or a hit on a [`SpecTable`] comes to.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Decision {
-    /// A live settlement holds the key; its entry is stamped.
-    Hit(TreeHandle),
-    /// The entry at this index is free for a new child: the key's own stale entry, an empty one,
-    /// or another stale one.
-    Fill(usize),
-    /// Every entry is live: the entry at this index goes to the new child once the least recently
-    /// born child it names is released.
-    Evict(usize, TreeHandle),
-}
-
-/// A build cell's settlements: a fixed run of entries, as many as the cell's bound.
-pub struct SpecTable<'cell> {
-    entries: &'cell [SpecEntry],
-    /// Every birth under this cell so far: misses, seek hits and hops.
-    births: Cell<u64>,
-    /// The length of a child's own table.
-    nested: NonZeroUsize,
-}
-
-impl<'cell> SpecTable<'cell> {
-    /// Lay a table of `length` empty entries through `lay`, whose children lay tables of `nested`.
-    pub fn lay(
-        lay: impl LaysRuns<'cell>,
-        length: NonZeroUsize,
-        nested: NonZeroUsize,
-    ) -> &'cell SpecTable<'cell> {
-        let entries = lay.lay(length.get(), |_| SpecEntry {
-            key: Cell::new(SettlementKey(ContentDigest::NONE)),
-            handle: Cell::new(None),
-            born: Cell::new(0),
-        });
-        let mut table = Some(SpecTable {
-            entries,
-            births: Cell::new(0),
-            nested,
-        });
-        &lay.lay(1, |_| table.take().expect("a run of one fills once"))[0]
-    }
-
-    /// Count one birth under this cell, and return the new count.
-    fn tick(&self) -> u64 {
-        let births = self.births.get() + 1;
-        self.births.set(births);
-        births
-    }
-
-    /// What a seek of `key` comes to, a handle live where `is_live` says so: a live hit, stamped
-    /// here; else the key's own stale entry, an empty entry, or another stale one, to fill; else
-    /// the least recently born child, to evict.
-    pub fn decide(&self, key: SettlementKey, is_live: impl Fn(TreeHandle) -> bool) -> Decision {
-        let held = |entry: &SpecEntry| entry.handle.get().filter(|_| entry.key.get() == key);
-        if let Some((index, handle)) =
-            (self.entries.iter().enumerate()).find_map(|(index, entry)| Some((index, held(entry)?)))
-        {
-            if is_live(handle) {
-                self.entries[index].born.set(self.tick());
-                return Decision::Hit(handle);
-            }
-            return Decision::Fill(index);
-        }
-        let empty = (self.entries.iter()).position(|entry| entry.handle.get().is_none());
-        let stale = || {
-            (self.entries.iter())
-                .position(|entry| entry.handle.get().is_some_and(|handle| !is_live(handle)))
-        };
-        if let Some(index) = empty.or_else(stale) {
-            return Decision::Fill(index);
-        }
-        let (index, entry) = (self.entries.iter().enumerate())
-            .min_by_key(|(_, entry)| entry.born.get())
-            .expect("a table has at least one entry");
-        Decision::Evict(index, entry.handle.get().expect("every entry is occupied"))
-    }
-
-    /// Name `handle` under `key` at `index`, stamped with a new birth.
-    pub fn fill(&self, index: usize, key: SettlementKey, handle: TreeHandle) {
-        let entry = &self.entries[index];
-        entry.key.set(key);
-        entry.handle.set(Some(handle));
-        entry.born.set(self.tick());
-    }
-
-    /// Stamp the entry naming `handle` with a new birth, as a hop under it is one: `false` where
-    /// no entry names it.
-    pub fn stamp(&self, handle: TreeHandle) -> bool {
-        match (self.entries.iter()).find(|entry| entry.handle.get() == Some(handle)) {
-            Some(entry) => {
-                entry.born.set(self.tick());
-                true
-            }
-            None => false,
-        }
-    }
-
-    /// Every child the table names that `is_live` says is live.
-    pub fn live(&self, is_live: impl Fn(TreeHandle) -> bool) -> impl Iterator<Item = TreeHandle> {
-        (self.entries.iter())
-            .filter_map(|entry| entry.handle.get())
-            .filter(move |handle| is_live(*handle))
-    }
-
-    /// How many entries name a child, live or stale.
-    #[cfg(test)]
-    pub(crate) fn len(&self) -> usize {
-        (self.entries.iter())
-            .filter(|entry| entry.handle.get().is_some())
-            .count()
-    }
-
-    /// The length of a child's own table.
-    pub fn nested(&self) -> NonZeroUsize {
-        self.nested
-    }
-}
-
-/// What a settlement's region header names: itself, and the build cell it is a child of, so a
-/// hop under it can find its entry.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct SpecHome {
-    pub me: TreeHandle,
-    pub parent: CellHandle,
-}
-
-/// The build cell a function was born under: a settlement, or the build root. Opaque above
-/// the scheduler, which alone turns one into a handle, so a step can hand the drain only a build
-/// cell the scheduler named to it.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct ArenaRef(Option<TreeHandle>);
+/// The arena node a function was born under: a settlement, by its slot and the slot's generation
+/// then, or the root, the frozen load. Opaque above the scheduler, which alone opens one, so a step
+/// can hand the drain only an arena node the scheduler named to it. A handle whose slot has since
+/// been evicted names nothing.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub struct ArenaRef(Option<(u32, u32)>);
 
 impl ArenaRef {
-    /// The build root.
+    /// The root: the frozen load.
     pub const ROOT: ArenaRef = ArenaRef(None);
 
-    /// The settlement `handle` names.
-    pub(crate) fn of(handle: TreeHandle) -> Self {
-        ArenaRef(Some(handle))
+    /// The settlement at `slot` while the slot is at `generation`.
+    pub(crate) fn of(slot: u32, generation: u32) -> Self {
+        ArenaRef(Some((slot, generation)))
     }
 
-    /// The settlement this names, or `None` for the build root.
-    pub(crate) fn opened(self) -> Option<TreeHandle> {
+    /// The slot and generation this names, or `None` for the root.
+    pub(crate) fn opened(self) -> Option<(u32, u32)> {
         self.0
     }
 }

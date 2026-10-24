@@ -78,14 +78,11 @@ pub enum KBirth<'graph, 'cell> {
         program: &'graph Program<'graph>,
         view: KActivationView<'graph, 'cell>,
     },
-    /// A settlement: it lays its own header and table, and the drain enters it in its parent's
-    /// table. Born at `'graph` by the drain, awake, so it never crosses.
-    Settle,
 }
 
 /// What a body runs within, handed to every evaluation and block it asks for: whether it runs in
 /// the own body of a routing caching frame, whose caching chain it then interns through and whose
-/// invariant sites it adopts into the agent tier under a settlement, and the build cell its
+/// invariant sites it adopts into the agent tier under a settlement, and the arena node its
 /// frame runs under, which a callable born in it is born under.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Within {
@@ -94,14 +91,14 @@ pub struct Within {
 }
 
 impl Within {
-    /// The top level's: no caching frame, and the build root.
+    /// The top level's: no caching frame, and the root.
     pub const TOP: Within = Within {
         routes: false,
         build: ArenaRef::ROOT,
     };
 
     /// What the evaluation a frame's tail hands its last statement runs within: it writes the
-    /// frame's parent, so it routes no more, and its frame's build cell stays.
+    /// frame's parent, so it routes no more, and its frame's arena node stays.
     pub fn handed_off(self) -> Self {
         Within {
             routes: false,
@@ -192,7 +189,6 @@ impl<'graph> StepBundle<'graph> for KBundle {
     {
         match birth {
             KBirth::Program { .. } => size_of::<usize>(),
-            KBirth::Settle => 0,
             KBirth::Call {
                 callee,
                 arguments,
@@ -243,7 +239,6 @@ impl<'graph> StepBundle<'graph> for KBundle {
             }
             CrossedOperand::Copied { view: copied, .. } => match *copied {
                 KBirth::Program { program } => KBirth::Program { program },
-                KBirth::Settle => KBirth::Settle,
                 // The values of one birth cross through one copy, so they share each knot.
                 KBirth::Call {
                     program,

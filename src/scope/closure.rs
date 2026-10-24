@@ -13,8 +13,8 @@ use crate::values::{ArenaRef, Knotted, KnottedFamily, Link, Value, Weight};
 use super::activation::ActivationView;
 use super::shape::{BodyShape, CaptureSlot, CaptureSource};
 
-/// A callable's closure bindings, in capture-slot order, beside the build cell the callable was
-/// born under: where a call of it looks up its settlement. The build cell is not content, so
+/// A callable's closure bindings, in capture-slot order, beside the arena node the callable was
+/// born under: where a call of it looks up its settlement. The arena node is not content, so
 /// the closure's digest and equality read the slots alone.
 #[derive(Clone, Copy)]
 pub struct ClosureBindings<'cell, X = crate::values::Nothing> {
@@ -59,7 +59,7 @@ impl<'graph, 'cell, X: Knotted> ClosureBindings<'cell, X> {
         read
     }
 
-    /// A finished read laid down in `writer`'s region, born under the build cell `build`.
+    /// A finished read laid down in `writer`'s region, born under the arena node `build`.
     pub fn of(
         writer: Writer<'cell, '_>,
         captures: &[Link<'cell, X>],
@@ -69,7 +69,7 @@ impl<'graph, 'cell, X: Knotted> ClosureBindings<'cell, X> {
         resident(writer, ClosureBindings { slots, build })
     }
 
-    /// The build cell the callable was born under.
+    /// The arena node the callable was born under.
     pub fn build(&self) -> ArenaRef {
         self.build
     }

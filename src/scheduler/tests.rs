@@ -1,6 +1,7 @@
 //! The scheduler's tests: the drain driven by native steps over a test bundle, with no layer of
 //! koan's above present.
 
+mod arena;
 mod boundary;
 mod branches;
 mod bundle;

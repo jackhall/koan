@@ -52,7 +52,7 @@ pub struct Tied<'graph, 'cell, 'x> {
 /// several learns them all at once. A refusal writes nothing.
 ///
 /// Member `i` of `component` is the knot's node `i`; the caller binds each member's slot to the
-/// member at that node. A function member is born under the build cell `build`.
+/// member at that node. A function member is born under the arena node `build`.
 pub fn tie<'graph, 'cell, 'x>(
     writer: Writer<'cell, '_>,
     activation: &KActivationView<'graph, 'cell>,

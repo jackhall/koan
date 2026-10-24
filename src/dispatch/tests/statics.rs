@@ -11,13 +11,13 @@ use crate::type_lattice::{
 };
 
 use super::{Koan, output, run};
-use crate::values::SpecBounds;
+use crate::values::BuildBudget;
 use crate::values::tests::reading;
 
 /// Load `source` under dispatch and hand `inspect` its program, or the load's refusal.
 pub(super) fn loaded<R>(source: &str, inspect: impl FnOnce(&Program<'_>) -> R) -> R {
     let mut substrate =
-        CellSubstrate::load::<Koan>(source, "<test>", 8, SpecBounds::default(), output())
+        CellSubstrate::load::<Koan>(source, "<test>", 8, BuildBudget::default(), output())
             .unwrap_or_else(|error| panic!("the program loads: {error}"));
     substrate.with(|running| inspect(running.program()))
 }

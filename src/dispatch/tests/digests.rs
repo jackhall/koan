@@ -39,12 +39,12 @@ fn interned_digests<'graph>(
 }
 
 use super::{Koan, output};
-use crate::values::SpecBounds;
+use crate::values::BuildBudget;
 
 /// The content digest of each of `names`, top-level bindings of `source` once it has run.
 fn digests<const N: usize>(source: &str, names: [&str; N]) -> [String; N] {
     let mut substrate =
-        CellSubstrate::load::<Koan>(source, "<test>", 8, SpecBounds::default(), output())
+        CellSubstrate::load::<Koan>(source, "<test>", 8, BuildBudget::default(), output())
             .unwrap_or_else(|error| panic!("the program loads: {error}"));
     assert_eq!(
         substrate.with(|running| running.run()),
@@ -190,7 +190,7 @@ PRINT kept
 PRINT (MOVE 1 TO 1)"##;
     let interned = || {
         let mut substrate =
-            CellSubstrate::load::<Koan>(PROGRAM, "<test>", 8, SpecBounds::default(), output())
+            CellSubstrate::load::<Koan>(PROGRAM, "<test>", 8, BuildBudget::default(), output())
                 .unwrap_or_else(|error| panic!("the program loads: {error}"));
         substrate.with(|running| {
             assert_eq!(running.run(), Ok(Outcome::Completed));
@@ -259,7 +259,7 @@ fn a_frame_binds_a_type_value_and_a_module_value_by_its_content() {
         "LET e = Number\nMODULE m = (LET v = 1)",
         "<test>",
         8,
-        SpecBounds::default(),
+        BuildBudget::default(),
         output(),
     )
     .unwrap_or_else(|error| panic!("the program loads: {error}"));

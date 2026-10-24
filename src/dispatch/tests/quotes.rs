@@ -267,7 +267,7 @@ fn a_quote_reads_its_dollar_names_at_their_static_types() {
 #[test]
 fn an_eval_of_a_written_quote_runs_no_overlap_check() {
     use crate::program::CellSubstrate;
-    use crate::values::SpecBounds;
+    use crate::values::BuildBudget;
 
     let source = "LET q = #((OP #(+) OVER Number = #(0)) (1 + 2))\nEVAL q -> Any\nEVAL q -> Any";
     let checks = || super::super::check::CHECKS.with(|checks| checks.get());
@@ -276,7 +276,7 @@ fn an_eval_of_a_written_quote_runs_no_overlap_check() {
         source,
         "<test>",
         8,
-        SpecBounds::default(),
+        BuildBudget::default(),
         super::output(),
     );
     assert!(loaded.is_ok(), "the program loads");

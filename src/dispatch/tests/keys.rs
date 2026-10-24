@@ -4,10 +4,10 @@
 use crate::program::Program;
 use crate::scope::{BodyShape, Mint, ShapeKind, Slot, UnitIndex, Unknown};
 
-use super::caching::{PRELUDE, Ran, bounds, every_shape, minted, ran_under};
+use super::caching::{PRELUDE, Ran, SMALLEST, every_shape, minted, ran_under};
 use super::frontiers::{quantified, seam, unknown};
 use super::statics::{body, loaded};
-use crate::values::SpecBounds;
+use crate::values::BuildBudget;
 
 /// Two overloads of `PICK`, one at `Number` and one at `Str`.
 const PICK: &str = "EXPR #(PICK x :Number) -> Str = #(\"n\")\n\
@@ -232,7 +232,7 @@ fn a_swapping_loop_s_view_routes_cold() {
 
 /// [`ran_under`] at depth 2 with roomy tables.
 fn ran(source: &str) -> Ran {
-    ran_under(2, source, SpecBounds::default())
+    ran_under(2, source, BuildBudget::default())
 }
 
 /// `source`'s run's seeks and builds.
@@ -274,7 +274,7 @@ fn an_evicted_settlement_costs_a_recomputation_and_never_a_different_answer() {
         "{PICK}{}PRINT (WRAP 1)\nPRINT (WRAP \"s\")\nPRINT (WRAP 1)\n",
         WRAPS[0]
     );
-    let tight = ran_under(2, &source, bounds(1, 1));
+    let tight = ran_under(2, &source, SMALLEST);
     let roomy = ran(&source);
     assert_eq!(tight.printed, "n\n1\nn");
     assert_eq!(roomy.printed, tight.printed);
