@@ -221,20 +221,12 @@ impl<'graph> Shapes<'graph> {
         }
     }
 
-    /// The unit of the owning body around `segment` that runs statement `statement` of it: an
-    /// inline body runs in the unit running the statement of its encloser that holds it.
+    /// The unit of `segment` that runs its statement `statement`. An inline body's units keep
+    /// records of their own, as an owning body's do.
     pub fn running(&self, segment: Segment, statement: u32) -> UnitId {
-        let shape = self.shape_at(segment);
-        match shape.kind() {
-            ShapeKind::Program | ShapeKind::Callable | ShapeKind::Code => UnitId {
-                segment,
-                unit: shape.unit_of_statement(statement as usize),
-            },
-            ShapeKind::Block | ShapeKind::Module => {
-                let (parent, statement) =
-                    (self.parent(segment)).expect("an inline body has an encloser");
-                self.running(parent, statement)
-            }
+        UnitId {
+            segment,
+            unit: self.shape_at(segment).unit_of_statement(statement as usize),
         }
     }
 
@@ -245,18 +237,11 @@ impl<'graph> Shapes<'graph> {
         Some(self.running(parent, statement))
     }
 
-    /// The unit whose record holds the facts of the slot `slot` of `segment`: the unit binding it
-    /// in an owning body, the unit running an inline body.
+    /// The unit whose record holds the facts of the slot `slot` of `segment`: the unit binding it.
     pub fn slot_unit(&self, segment: Segment, slot: Slot) -> UnitId {
-        let shape = self.shape_at(segment);
-        match shape.kind() {
-            ShapeKind::Program | ShapeKind::Callable | ShapeKind::Code => UnitId {
-                segment,
-                unit: shape.unit_of_slot(slot),
-            },
-            ShapeKind::Block | ShapeKind::Module => {
-                (self.birth_unit(segment)).expect("an inline body has an encloser")
-            }
+        UnitId {
+            segment,
+            unit: self.shape_at(segment).unit_of_slot(slot),
         }
     }
 
@@ -302,10 +287,10 @@ pub struct BindSite {
 }
 
 impl Shapes<'_> {
-    /// Where `unknown` binds. A callable's parameter, `FOR ALL` name or `:Type` parameter and a
-    /// quote's code's capture bind at that body's entry; a local or a type binder at the unit that
-    /// binds it; and a block's parameter — a `USING … SCOPE` block's surfaced name, an arm's `it` —
-    /// at the unit of the body enclosing the block that holds it, since the block is entered there.
+    /// Where `unknown` binds. A callable's parameter, `FOR ALL` name or `:Type` parameter, a
+    /// block's parameter — a `USING … SCOPE` block's surfaced name, an arm's `it` — and a quote's
+    /// code's capture bind at that body's entry; a local or a type binder at the unit that binds
+    /// it.
     pub fn bind_site(&self, unknown: Unknown) -> BindSite {
         let segment = unknown.segment;
         let declaring = self.shape_at(segment);
@@ -318,17 +303,9 @@ impl Shapes<'_> {
             Address::Capture(_) => return at(segment, UnitIndex::ENTRY),
             Address::Slot(slot) => slot,
         };
-        if declaring.position_of(slot) != Position::PARAMETER {
-            return at(segment, declaring.unit_of_slot(slot));
-        }
-        match (declaring.kind(), self.parent(segment)) {
-            (ShapeKind::Block, Some((encloser, statement))) => {
-                let unit = self
-                    .shape_at(encloser)
-                    .unit_of_statement(statement as usize);
-                at(encloser, unit)
-            }
-            _ => at(segment, UnitIndex::ENTRY),
+        match declaring.position_of(slot) == Position::PARAMETER {
+            true => at(segment, UnitIndex::ENTRY),
+            false => at(segment, declaring.unit_of_slot(slot)),
         }
     }
 }

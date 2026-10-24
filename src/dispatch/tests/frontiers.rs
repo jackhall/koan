@@ -338,8 +338,8 @@ fn a_dollar_name_in_a_quote_waits_on_the_outer_binder_s_type() {
     });
 }
 
-/// A name a `USING` surfaces binds at the unit holding its block, so a callable born in the block
-/// waits on it and seams there.
+/// A name a `USING` surfaces binds at its block's entry, so a callable born in the block waits on
+/// it and seams there, and the unit holding the block reads none of it.
 #[test]
 fn a_callable_in_a_using_block_waits_on_the_name_it_surfaces() {
     let source = format!(
@@ -357,10 +357,61 @@ fn a_callable_in_a_using_block_waits_on_the_name_it_surfaces() {
         assert!(seams_on(
             program,
             g,
-            |site| (site.segment, site.unit) == (s.segment, s.unit),
+            |site| (site.segment, site.unit) == entry_of(block),
             carrier
         ));
     });
+}
+
+/// A block's units keep records of their own: a fact over a name the block surfaces lies in the
+/// record of the block's unit fixing it, and the unit holding the block reads that frontier cut
+/// at itself, so it keeps none of the block's facts and waits on none of its names.
+#[test]
+fn a_blocks_units_keep_their_own_records() {
+    let source = format!(
+        "{COUNTER}{PICK}LET step = (FN :{{m :Counter}} -> Any = #(\n  \
+         LET s = (USING (m :! Counter) SCOPE (\n    \
+         LET a = zero\n    LET b = (PICK a)\n    b\n  ))\n  s\n))"
+    );
+    loaded(&source, |program| {
+        let step = body(program, program.shape(), "step");
+        let block = nested_of(step, ShapeKind::Block);
+        let carrier = unknown(program, block, "Carrier");
+        let b = unit_of(program, block, "b");
+        assert_eq!(b.segment, block.segment());
+        assert!(waits(program, block, "b").contains(&carrier));
+        let (facts, _) = program
+            .facts()
+            .unit(b)
+            .expect("the load ran the block's unit");
+        let (_, typed) =
+            (facts.typed.get(block.segment())).expect("the unit keeps the block's facts");
+        assert!(typed.binders.get(slot(program, block, "b")).is_some());
+        let s = unit_of(program, step, "s");
+        let (facts, _) = program.facts().unit(s).expect("the load ran the unit");
+        assert!(facts.typed.get(block.segment()).is_none());
+        assert!(!frontier(program, s).contains(&carrier));
+    });
+}
+
+/// An arm's `it` binds at its block's entry, as any block's parameter does: where an arm decides
+/// once `MATCH` runs.
+#[test]
+fn an_arms_it_binds_at_its_blocks_entry() {
+    loaded(
+        "MATCH 1 -> :Number WITH #{Number: (it), Str: (0)}",
+        |program| {
+            let arms: Vec<_> = (program.shapes().bodies().iter())
+                .filter(|shape| shape.kind() == ShapeKind::Block)
+                .collect();
+            assert_eq!(arms.len(), 2);
+            for arm in arms {
+                let it = unknown(program, arm, "it");
+                let site = program.shapes().bind_site(it);
+                assert_eq!((site.segment, site.unit), entry_of(arm));
+            }
+        },
+    );
 }
 
 /// A chain of views, each over the one before, lays and notes frontier entries linear in its

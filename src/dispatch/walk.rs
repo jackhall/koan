@@ -844,7 +844,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             true => Err(*shape
                 .refusal()
                 .expect("a refused code shape holds its refusal")),
-            false => self.units_of(level).and_then(|_| self.closing(level)),
+            false => self.units_of(level, None).and_then(|_| self.closing(level)),
         };
         // A quote's code keeps its first overlap for the `EVAL` running it to report.
         let walked = walked.map(|(mut closing, tag)| {
@@ -902,47 +902,30 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         }
         for (segment, statement) in around.into_iter().rev() {
             let shape = self.shape_at(segment);
-            match shape.kind() {
-                ShapeKind::Program | ShapeKind::Callable | ShapeKind::Code => {
-                    self.walked.insert(segment);
-                    if shape.kind() == ShapeKind::Callable {
-                        self.enter(segment);
-                    }
-                    let roots_chain = self.chain.is_empty() || shape.kind() == ShapeKind::Code;
-                    self.push(shape, roots_chain);
-                    if roots_chain {
-                        self.open_paths(shape);
-                    }
-                    let level = self.chain.len() - 1;
-                    let birth = shape.unit_of_statement(statement as usize);
-                    let units = (shape.units().iter().enumerate())
-                        .map(|(index, _)| UnitIndex::of_run(index));
-                    for index in [UnitIndex::ENTRY].into_iter().chain(units) {
-                        self.absorb_standing(level, index);
-                        if index == birth {
-                            break;
-                        }
-                    }
+            let inline = matches!(shape.kind(), ShapeKind::Block | ShapeKind::Module);
+            if !inline {
+                self.walked.insert(segment);
+            }
+            if shape.kind() == ShapeKind::Callable {
+                self.enter(segment);
+            }
+            let roots_chain = self.chain.is_empty() || shape.kind() == ShapeKind::Code;
+            self.push(shape, roots_chain);
+            if roots_chain {
+                self.open_paths(shape);
+            }
+            let level = self.chain.len() - 1;
+            let birth = shape.unit_of_statement(statement as usize);
+            let units =
+                (shape.units().iter().enumerate()).map(|(index, _)| UnitIndex::of_run(index));
+            for index in [UnitIndex::ENTRY].into_iter().chain(units) {
+                self.absorb_standing(level, index);
+                if index == birth {
+                    break;
                 }
-                ShapeKind::Block | ShapeKind::Module => _ = self.stand_inline(shape),
             }
         }
         self.chain.len().checked_sub(1)
-    }
-
-    /// Push the inline body `shape` whose running unit the walk absorbed, holding the facts that
-    /// unit's record keeps of it: its chain level.
-    fn stand_inline(&mut self, shape: &'graph BodyShape<'graph>) -> usize {
-        let segment = shape.segment();
-        self.push(shape, false);
-        let level = self.chain.len() - 1;
-        let unit = (self.shapes.birth_unit(segment)).expect("an inline body has an encloser");
-        let tag = self.started[&unit];
-        let (facts, _) = (self.store.fact(unit)).expect("an absorbed unit's record stands");
-        if let Some((_, typed)) = facts.typed.get(segment) {
-            self.restore(level, typed, tag);
-        }
-        level
     }
 
     /// Walk each callable born inside the inline bodies the statements `statements` of the shape at
@@ -959,15 +942,11 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 if !matches!(nested.kind(), ShapeKind::Block | ShapeKind::Module) {
                     continue;
                 }
-                let at = self.stand_inline(nested);
-                self.absorbed_births(at, 0..nested.body().len())?;
-                for index in 0..nested.body().len() {
-                    for (_, born) in nested.nested_in(index) {
-                        if born.kind() == ShapeKind::Callable {
-                            self.body(Some(at), born)?;
-                        }
-                    }
-                }
+                // Its units' frontiers are cut into the absorbed unit's, so none wakes: each is
+                // absorbed, and the callables they birth walked.
+                self.push(nested, false);
+                let at = self.chain.len() - 1;
+                self.units_of(at, None)?;
                 self.chain.pop();
             }
         }
@@ -1011,11 +990,15 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         overlaps.err().map(|error| resident(self.lay, error))
     }
 
-    /// Run the entry and each unit of the owning body at `level`, each callable a unit births
-    /// walked right after it.
-    fn units_of(&mut self, level: usize) -> Result<(), ShapeError<'o>> {
+    /// Run the entry and each unit of the body at `level`, each callable a unit births walked
+    /// right after it: an inline body's entry over what it is `surfacing`.
+    fn units_of(
+        &mut self,
+        level: usize,
+        surfacing: Option<(Interval, Tag)>,
+    ) -> Result<(), ShapeError<'o>> {
         let shape = self.chain[level].shape;
-        self.unit(level, UnitIndex::ENTRY, |pass| pass.entry(level, None))?;
+        self.unit(level, UnitIndex::ENTRY, |pass| pass.entry(level, surfacing))?;
         for (index, unit) in shape.units().iter().enumerate() {
             let at = UnitIndex::of_run(index);
             // Collected outside the unit: one the store absorbs runs no steps but births its
@@ -1583,9 +1566,10 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
 
     /// Type the inline body `nested` — an arm, a block, a `USING … SCOPE` body over what it is
     /// `surfacing`, a `MODULE` or `GROUP` body — inside the unit running it, nested in the shape at
-    /// `level`: its entry and its units through the same steps, each callable a sub-unit births
-    /// walked right after it. Its facts land in the running unit's record. Its last statement's
-    /// static type.
+    /// `level`: its entry and its units, each in a record of its own, each callable a unit births
+    /// walked right after it. The running unit reads each of their frontiers, cut at it, so it
+    /// wakes wherever one of them would on a name bound outside `nested`, and keeps the body's
+    /// signature. What `finish` makes of it.
     fn inline<T>(
         &mut self,
         level: usize,
@@ -1595,13 +1579,25 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     ) -> Result<(T, Level<'p, 'o, 'graph>), ShapeError<'o>> {
         self.push(nested, false);
         let at = level + 1;
-        let finished = match self.inline_units(at, surfacing) {
+        let finished = match self.units_of(at, surfacing) {
             Ok(()) => finish(self, at),
             Err(error) => Err(error),
         };
         if finished.is_ok() && !self.unfilled {
-            let typed = self.typed(at, None);
-            self.keep_inline(nested.segment(), typed);
+            let units =
+                (nested.units().iter().enumerate()).map(|(index, _)| UnitIndex::of_run(index));
+            for unit in [UnitIndex::ENTRY].into_iter().chain(units) {
+                let id = UnitId {
+                    segment: nested.segment(),
+                    unit,
+                };
+                if let Some(tag) = self.started.get(&id) {
+                    self.gather(*tag);
+                }
+            }
+            if let Some(signature) = self.chain[at].signature {
+                self.keep_signature(nested.segment(), signature);
+            }
         }
         let popped = self.chain.pop().expect("the body was pushed");
         self.leave(nested);
@@ -1623,31 +1619,19 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         Ok(last)
     }
 
-    /// The entry and units of the inline body at `level`.
-    fn inline_units(
-        &mut self,
-        level: usize,
-        surfacing: Option<(Interval, Tag)>,
-    ) -> Result<(), ShapeError<'o>> {
-        let shape = self.chain[level].shape;
-        self.entry(level, surfacing)?;
-        for (index, unit) in shape.units().iter().enumerate() {
-            let nests = self.unit_statements(shape, unit.work);
-            self.steps(level, UnitIndex::of_run(index), unit.work, nests)?;
-            for born in nests.callables {
-                self.body(Some(level), born)?;
-            }
-        }
-        Ok(())
-    }
-
-    /// Keep `typed`, the facts of the inline body `segment` just typed, in the unit running it: the
-    /// newest typing of a body the unit types twice stands.
-    fn keep_inline(&mut self, segment: Segment, typed: Typed<'o>) {
+    /// Keep `signature`, the exact signature of the `MODULE` or `GROUP` body `segment` just typed,
+    /// in the unit running it: the newest typing of a body the unit types twice stands.
+    fn keep_signature(&mut self, segment: Segment, signature: KType) {
         let tag = self.innermost();
         let held = &mut self.units[tag.0 as usize].typed;
         held.retain(|(each, _)| *each != segment);
-        held.push((segment, typed));
+        held.push((
+            segment,
+            Typed {
+                signature: Some(signature),
+                ..Typed::EMPTY
+            },
+        ));
     }
 
     /// The tag of the innermost unit running.
@@ -1743,10 +1727,9 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         at.exits |= inner.exits;
         at.folded += inner.run_mints();
         at.minted_within |= inner.minted_within || !inner.minting.is_empty();
-        // Folded into an owning body, the mints are the running unit's; into another inline body,
-        // they fold on with it.
-        let owning = !matches!(at.shape.kind(), ShapeKind::Block | ShapeKind::Module);
-        if owning && let Some(unit) = self.fixing() {
+        // The unit running `inner` is the shape's own, which a resumption absorbing it folds back.
+        if let Some(unit) = self.fixing() {
+            unit.exits |= inner.exits;
             unit.folded += inner.run_mints();
         }
     }
@@ -1885,7 +1868,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         self.push(code, true);
         let level = self.chain.len() - 1;
         self.open_paths(code);
-        let walked = self.units_of(level);
+        let walked = self.units_of(level, None);
         let last = self.last_statement(level);
         self.close_paths(code);
         self.unwind(open);

@@ -219,8 +219,8 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         facts.born.get(body).map(|(_, born)| *born)
     }
 
-    /// Read `read` off the facts of `segment`, an inline body off the chain, as the unit that ran
-    /// it keeps them, its frontier gathered.
+    /// Read `read` off the facts the unit that ran `segment`, an inline body off the chain, keeps
+    /// of it — its signature — its frontier gathered.
     pub(super) fn inline_facts<R>(
         &self,
         segment: Segment,
@@ -237,8 +237,8 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         facts.typed.get(segment).map(|(_, typed)| read(typed))
     }
 
-    /// Read `read` off the facts of `segment`, an owning body off the chain, that `unit` of it
-    /// fixed.
+    /// Read `read` off the facts of `segment`, a body off the chain, that `unit` of it fixed, its
+    /// frontier gathered.
     fn owner_facts<R>(
         &self,
         segment: Segment,
@@ -256,10 +256,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         slot: Slot,
         read: impl FnOnce(&Typed<'o>) -> R,
     ) -> Option<R> {
-        match self.shape_at(segment).kind() {
-            ShapeKind::Block | ShapeKind::Module => self.inline_facts(segment, read),
-            _ => self.owner_facts(segment, self.shapes.slot_unit(segment, slot), read),
-        }
+        self.owner_facts(segment, self.shapes.slot_unit(segment, slot), read)
     }
 
     /// The static type of the binder at `slot` of the shape at `level`, as the walk has it now,
@@ -491,12 +488,9 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             .ok()
             .map(|at| expressions[at].statement);
         let read = |facts: &Typed<'o>| facts.expressions.get(site).map(|(_, typed)| *typed);
-        let typed = match shape.kind() {
-            ShapeKind::Block | ShapeKind::Module => self.inline_facts(segment, read),
-            _ => statement.and_then(|statement| {
-                self.owner_facts(segment, self.shapes.running(segment, statement), read)
-            }),
-        };
+        let typed = statement.and_then(|statement| {
+            self.owner_facts(segment, self.shapes.running(segment, statement), read)
+        });
         typed.flatten().unwrap_or(Static::Unknown)
     }
 
