@@ -11,10 +11,11 @@ use smallvec::smallvec;
 
 use crate::knot::KValue;
 use crate::memory::{Active, Bump, SlabHandle};
+use crate::scheduler::seek::{Settles, Unsettled};
 use crate::scheduler::tests::bundle::{AnyStep, Native, TestGraph};
 use crate::scheduler::tests::native::{fresh, shares, work};
 use crate::scheduler::{
-    Action, Placement, Scheduler, Seek, Step, StepError, TIERS, Taken, Tiers, Use, Work,
+    Action, Ask, Placement, Scheduler, Seek, Step, StepError, TIERS, Taken, Tiers, Use, Work,
 };
 use crate::type_lattice::{KType, TypeNode};
 use crate::values::digest::{DigestHasher, Tag};
@@ -75,11 +76,19 @@ fn key(at: usize) -> SettlementKey {
     SettlementKey(DigestHasher::new(Tag::Number).count(at).finished())
 }
 
+/// What a test's miss settles: nothing, since the graph runs no program.
+fn ask() -> Ask {
+    Ask {
+        body: crate::scope::Segment(0),
+        bound: smallvec::SmallVec::new(),
+    }
+}
+
 /// A seek for the settlement keyed `at` under `parent`, its binding carrying no type.
 fn seek<'graph>(at: usize, parent: ArenaRef) -> Seek<'graph> {
     Seek {
         parent,
-        settlement: Some((key(at), BindingImage::default())),
+        settlement: Some((key(at), BindingImage::default(), ask())),
     }
 }
 
@@ -102,7 +111,10 @@ fn loaded(type_region: &Bump, budget: BuildBudget) -> (TestGraph<'_>, SlabHandle
     let (graph, run, ()) = TestGraph::load(1, budget, || {
         Ok::<_, ()>((
             crate::values::tests::seeded_tiers(type_region),
-            &crate::scope::LoadFacts::EMPTY,
+            (
+                &crate::scope::LoadFacts::EMPTY,
+                &Unsettled as &dyn Settles<'_>,
+            ),
             (),
         ))
     })
@@ -268,7 +280,7 @@ fn seek_bound<'graph>(
     let image = BindingImage::of(keyed, step.tiers(), &step.types());
     Seek {
         parent: ArenaRef::ROOT,
-        settlement: Some((key(at), image)),
+        settlement: Some((key(at), image, ask())),
     }
 }
 

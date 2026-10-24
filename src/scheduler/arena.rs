@@ -3,7 +3,9 @@
 //!
 //! An arena node is a settlement: one body's facts settled under one binding, found by its parent
 //! and its [`SettlementKey`]. Its parent is the arena node its callee was born under, or the root,
-//! the frozen load, which is no slot ([`ArenaRef::ROOT`]). A run cell born under an arena node
+//! the frozen load, which is no slot ([`ArenaRef::ROOT`]). Its facts are a [`Settled`]: a bump
+//! holding them beside a shared hold on its parent's, which they read below them, so a step reads
+//! the chain through the newest alone, borrowed from the arena for the step. A run cell born under an arena node
 //! borrows it for its life, through the drain, so a borrowed arena node is never evicted. Each
 //! slot carries a generation, bumped when its arena node is evicted, so an [`ArenaRef`] held past
 //! an eviction names nothing rather than the slot's next tenant.
@@ -18,13 +20,17 @@
 //! count. See [build/README.md § The store](../build/README.md#the-store).
 
 use std::collections::HashMap;
+use std::rc::Rc;
+
+use self_cell::self_cell;
 
 use crate::memory::Bump;
+use crate::scope::{Facts, LoadFacts, Settlement};
 use crate::values::{ArenaRef, BuildBudget, SettlementKey};
 
 /// A graph's arena nodes, their books, and the budget their unheld bytes stay within.
-pub(super) struct BuildArena {
-    slots: Vec<Slot>,
+pub(super) struct BuildArena<'graph> {
+    slots: Vec<Slot<'graph>>,
     /// Slots holding no arena node, reused before the slab grows.
     free: Vec<u32>,
     /// Every live settlement, by its parent and key.
@@ -39,13 +45,14 @@ pub(super) struct BuildArena {
 }
 
 /// One slot of the arena: its generation, and the arena node it holds, if any.
-struct Slot {
+struct Slot<'graph> {
     generation: u32,
-    node: Option<ArenaNode>,
+    node: Option<ArenaNode<'graph>>,
 }
 
-/// A settlement's books: where it sits, who holds it, when it was last used, and what it weighs.
-struct ArenaNode {
+/// A settlement's books: where it sits, who holds it, when it was last used, and what it weighs,
+/// beside its facts.
+struct ArenaNode<'graph> {
     parent: ArenaRef,
     key: SettlementKey,
     /// Run cells borrowing it.
@@ -57,21 +64,67 @@ struct ArenaNode {
     /// The clock at its last use: a miss, a hit, or a hop under it.
     used: u64,
     bytes: usize,
-    /// The settlement's own storage. It holds the key alone until a settlement holds its facts.
-    #[expect(
-        dead_code,
-        reason = "owned for its bytes until a settlement's facts are laid in it"
-    )]
-    bump: Bump,
+    facts: Rc<Settled<'graph>>,
 }
 
-impl ArenaNode {
+/// What a settlement's facts are laid in: their own bump, beside the parent settlement they read
+/// below them, which they keep alive, and the load beneath both.
+pub(super) struct SettledOwner<'graph> {
+    bump: Bump,
+    parent: Option<Rc<Settled<'graph>>>,
+    load: &'graph LoadFacts<'graph>,
+}
+
+self_cell!(
+    /// A settlement's facts, laid in the bump its owner keeps. A step reads them only borrowed
+    /// from the arena, at a borrow inside its own, so nothing of them can be laid in a region.
+    pub(super) struct Settled<'graph> {
+        owner: SettledOwner<'graph>,
+        #[covariant]
+        dependent: Settlement,
+    }
+);
+
+impl<'graph> Settled<'graph> {
+    /// The facts `settle` lays in a new bump over `parent`'s, the load's beneath: `None` where it
+    /// settles nothing. `settle` reads the layers it rests on, and is handed the witness that
+    /// `'graph` outlives the bump.
+    pub(super) fn build(
+        parent: Option<Rc<Settled<'graph>>>,
+        load: &'graph LoadFacts<'graph>,
+        settle: impl for<'a> FnOnce(&'a Bump, Facts<'a>, &'a &'graph ()) -> Option<Settlement<'a>>,
+    ) -> Option<Self> {
+        let owner = SettledOwner {
+            bump: Bump::new(),
+            parent,
+            load,
+        };
+        Settled::try_new(owner, |owner| {
+            let top = owner.parent.as_deref().map(Settled::borrow_dependent);
+            let facts = Facts::under(owner.load, top);
+            settle(&owner.bump, facts, &&()).ok_or(())
+        })
+        .ok()
+    }
+
+    /// The facts themselves.
+    pub(super) fn facts(&self) -> &Settlement<'_> {
+        self.borrow_dependent()
+    }
+
+    /// What the facts weigh: their bump's bytes.
+    fn bytes(&self) -> usize {
+        self.borrow_owner().bump.allocated_bytes()
+    }
+}
+
+impl ArenaNode<'_> {
     fn is_held(&self) -> bool {
         self.borrowers > 0 || self.held_children > 0
     }
 }
 
-impl BuildArena {
+impl<'graph> BuildArena<'graph> {
     /// An empty arena whose unheld bytes stay within `budget`.
     pub(super) fn new(budget: BuildBudget) -> Self {
         BuildArena {
@@ -85,13 +138,13 @@ impl BuildArena {
         }
     }
 
-    fn node(&self, at: ArenaRef) -> Option<&ArenaNode> {
+    fn node(&self, at: ArenaRef) -> Option<&ArenaNode<'graph>> {
         let (slot, generation) = at.opened()?;
         let slot = self.slots.get(slot as usize)?;
         (slot.generation == generation).then_some(slot.node.as_ref())?
     }
 
-    fn node_mut(&mut self, at: ArenaRef) -> Option<&mut ArenaNode> {
+    fn node_mut(&mut self, at: ArenaRef) -> Option<&mut ArenaNode<'graph>> {
         let (slot, generation) = at.opened()?;
         let slot = self.slots.get_mut(slot as usize)?;
         (slot.generation == generation).then_some(slot.node.as_mut())?
@@ -107,9 +160,20 @@ impl BuildArena {
         self.children.get(&(parent, key)).copied()
     }
 
-    /// A new settlement keyed `key` under the live `parent`, unheld and stamped. Evicts nothing:
-    /// the drain calls [`evict_to_budget`](Self::evict_to_budget) once a frame borrows it.
-    pub(super) fn insert(&mut self, parent: ArenaRef, key: SettlementKey) -> ArenaRef {
+    /// The facts of the live settlement `at`: `None` for the root, or a handle gone stale.
+    pub(super) fn facts(&self, at: ArenaRef) -> Option<&Rc<Settled<'graph>>> {
+        Some(&self.node(at)?.facts)
+    }
+
+    /// A new settlement keyed `key` under the live `parent`, holding `facts`, unheld and stamped.
+    /// Evicts nothing: the drain calls [`evict_to_budget`](Self::evict_to_budget) once a frame
+    /// borrows it.
+    pub(super) fn insert(
+        &mut self,
+        parent: ArenaRef,
+        key: SettlementKey,
+        facts: Settled<'graph>,
+    ) -> ArenaRef {
         debug_assert!(
             self.is_live(parent),
             "a settlement is built under a live parent"
@@ -118,9 +182,7 @@ impl BuildArena {
             self.find(parent, key).is_none(),
             "a key settles once per parent"
         );
-        let bump = Bump::new();
-        bump.alloc(key);
-        let bytes = size_of::<ArenaNode>() + bump.allocated_bytes();
+        let bytes = size_of::<ArenaNode<'_>>() + facts.bytes();
         self.clock += 1;
         let node = ArenaNode {
             parent,
@@ -130,7 +192,7 @@ impl BuildArena {
             children: 0,
             used: self.clock,
             bytes,
-            bump,
+            facts: Rc::new(facts),
         };
         let at = match self.free.pop() {
             Some(slot) => {
@@ -258,12 +320,6 @@ impl BuildArena {
     #[cfg(test)]
     pub(super) fn len(&self) -> usize {
         self.children.len()
-    }
-
-    /// Every live settlement.
-    #[cfg(test)]
-    pub(super) fn settlements(&self) -> impl Iterator<Item = ArenaRef> + '_ {
-        self.children.values().copied()
     }
 
     /// How many live settlements lie directly under `parent`.

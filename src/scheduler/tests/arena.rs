@@ -3,7 +3,8 @@
 
 use std::num::NonZeroUsize;
 
-use crate::scheduler::arena::BuildArena;
+use crate::scheduler::arena::{BuildArena, Settled};
+use crate::scope::{LoadFacts, Settlement};
 use crate::values::digest::{DigestHasher, Tag};
 use crate::values::{ArenaRef, BuildBudget, SettlementKey};
 
@@ -12,23 +13,31 @@ fn key(at: usize) -> SettlementKey {
     SettlementKey(DigestHasher::new(Tag::Number).count(at).finished())
 }
 
-/// What one settlement weighs: every settlement here holds one key, so all weigh the same.
+/// A settlement holding no fact, over no parent's.
+fn bare() -> Settled<'static> {
+    Settled::build(None, &LoadFacts::EMPTY, |_, below, _| {
+        Some(Settlement::empty(below.top()))
+    })
+    .expect("a bare settlement settles")
+}
+
+/// What one settlement weighs: every settlement here holds no fact, so all weigh the same.
 fn one() -> usize {
     let mut arena = BuildArena::new(BuildBudget::default());
-    let at = arena.insert(ArenaRef::ROOT, key(0));
+    let at = arena.insert(ArenaRef::ROOT, key(0), bare());
     arena.bytes_of(at).expect("a new settlement is live")
 }
 
 /// An arena whose unheld settlements stay within `count` settlements' bytes.
-fn arena_of(count: usize) -> BuildArena {
+fn arena_of(count: usize) -> BuildArena<'static> {
     let bytes = NonZeroUsize::new(count * one()).expect("a settlement weighs something");
     BuildArena::new(BuildBudget { bytes })
 }
 
 /// Settle `key` under `parent`, borrowed for the frame being born, then evict to the budget, as a
 /// miss does; and release the borrow, as the frame's end does.
-fn missed(arena: &mut BuildArena, parent: ArenaRef, at: usize) -> ArenaRef {
-    let settled = arena.insert(parent, key(at));
+fn missed(arena: &mut BuildArena<'_>, parent: ArenaRef, at: usize) -> ArenaRef {
+    let settled = arena.insert(parent, key(at), bare());
     arena.borrow(settled);
     arena.evict_to_budget();
     arena.release(settled);
@@ -84,9 +93,9 @@ fn eviction_takes_the_least_recently_used_unheld_leaf_first() {
 #[test]
 fn a_borrowed_settlement_and_every_ancestor_of_it_stay_through_eviction() {
     let mut arena = arena_of(1);
-    let outer = arena.insert(ArenaRef::ROOT, key(1));
-    let inner = arena.insert(outer, key(2));
-    let leaf = arena.insert(inner, key(3));
+    let outer = arena.insert(ArenaRef::ROOT, key(1), bare());
+    let inner = arena.insert(outer, key(2), bare());
+    let leaf = arena.insert(inner, key(3), bare());
     arena.borrow(leaf);
     assert_eq!(arena.unheld_bytes(), 0, "a borrow holds its every ancestor");
     for at in 4..8 {
@@ -122,7 +131,7 @@ fn unheld_bytes_stay_within_the_budget_after_every_miss() {
         } else {
             ArenaRef::ROOT
         };
-        let settled = arena.insert(parent, key(at));
+        let settled = arena.insert(parent, key(at), bare());
         arena.borrow(settled);
         arena.evict_to_budget();
         assert!(arena.unheld_bytes() <= budget, "after miss {at}");

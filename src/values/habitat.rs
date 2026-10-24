@@ -19,7 +19,7 @@
 use std::cell::Cell;
 use std::marker::PhantomData;
 
-use crate::memory::{Header, LaysRuns, Projected, Projects, Writer, reattachable};
+use crate::memory::{Bump, Header, LaysRuns, Projected, Projects, Writer, reattachable};
 use crate::type_lattice::{Agent, Branch, Frozen, Habitat, Halves, Own, RootBuilder, TypeChain};
 
 /// The two tiers every chain of the program's one agent reads above its own halves: the frozen
@@ -49,6 +49,22 @@ impl<'graph> TypeTiers<'graph> {
         'graph: 'reg,
     {
         TypeChain::scratch(self.frozen, self.agent, region, half)
+    }
+
+    /// A chain over the tiers that interns into a tier of its own, laid in `bump`: what a
+    /// settlement's walk interns through, the types its records name adopted into the agent tier
+    /// once it ends.
+    pub fn settling<'tier, 'pair, 'door>(
+        self,
+        bump: &'tier Bump,
+    ) -> Chain<'tier, 'pair, 'tier, 'door>
+    where
+        'graph: 'tier,
+    {
+        self.chain(Halves::alone(Half::Agent(
+            Agent::in_region(bump),
+            PhantomData,
+        )))
     }
 
     /// The agent chain: the frozen load, then the agent tier, which it writes. Paired to the writer

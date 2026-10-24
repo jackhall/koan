@@ -13,8 +13,11 @@ use std::fmt;
 use crate::knot::{KActivationView, KBuiltins, KValue};
 use crate::memory::{Bump, BumpAllocator, Writer};
 use crate::parse::ParseError;
-use crate::scheduler::{NativeStep, Work};
-use crate::scope::{BodyShape, LoadFacts, Segment, ShapeError, Shapes, Site, Slot, Store, Written};
+use crate::scheduler::{Ask, NativeStep, Settles, Work};
+use crate::scope::{
+    BodyShape, Facts, LoadFacts, Segment, Settlement, ShapeError, Shapes, Site, Slot, Store,
+    Written,
+};
 use crate::symbols::{BinderSymbol, SymbolInterner};
 use crate::type_lattice::{
     DeclaredType, KType, TypeNode, display_name, satisfied_by, substitute_quantified,
@@ -141,10 +144,32 @@ pub enum Evaluated {
     Part(Site),
 }
 
+/// The walk a miss settles through, the language's monomorphized in: [`settled`](super::settle).
+pub(super) type Settle<'graph> = for<'a> fn(
+    &Program<'graph>,
+    &'a Bump,
+    Facts<'a>,
+    &Ask,
+    &'a &'graph (),
+) -> Option<Settlement<'a>>;
+
+impl<'graph> Settles<'graph> for Program<'graph> {
+    fn settle<'a>(
+        &self,
+        bump: &'a Bump,
+        parent: Facts<'a>,
+        ask: &Ask,
+        witness: &'a &'graph (),
+    ) -> Option<Settlement<'a>> {
+        (self.settle)(self, bump, parent, ask, witness)
+    }
+}
+
 /// A loaded program's facts, laid down in program storage: its shape, its builtin table, the tiers
 /// of the types the load built and the interner its names live in, the step that evaluates a
-/// node, the sinks it writes to, the builtin `Error` type, and whether its last run ended uncaught.
-/// `Copy` and without drop glue, so it rests in program storage beside the table it names.
+/// node and the walk a miss settles through, the sinks it writes to, the builtin `Error` type, and
+/// whether its last run ended uncaught. `Copy` and without drop glue, so it rests in program
+/// storage beside the table it names; it is the door the graph settles a miss through.
 #[derive(Clone, Copy)]
 pub struct Program<'graph> {
     facts: &'graph LoadFacts<'graph>,
@@ -152,6 +177,7 @@ pub struct Program<'graph> {
     tiers: TypeTiers<'graph>,
     symbols: &'graph SymbolInterner,
     evaluator: NativeStep<'graph, KBundle>,
+    settle: Settle<'graph>,
     output: Output,
     error: KType,
     /// Set by the top level when a unit receives an error value; laid down in program storage, and
@@ -167,7 +193,7 @@ impl<'graph> Program<'graph> {
         tiers: TypeTiers<'graph>,
         error: KType,
         symbols: &'graph SymbolInterner,
-        evaluator: NativeStep<'graph, KBundle>,
+        (evaluator, settle): (NativeStep<'graph, KBundle>, Settle<'graph>),
         output: Output,
         uncaught: &'graph Cell<bool>,
     ) -> Self {
@@ -177,6 +203,7 @@ impl<'graph> Program<'graph> {
             tiers,
             symbols,
             evaluator,
+            settle,
             output,
             error,
             uncaught,
@@ -189,7 +216,6 @@ impl<'graph> Program<'graph> {
     }
 
     /// Every shape the load built, by segment.
-    #[cfg(test)]
     pub fn shapes(&self) -> &'graph Shapes<'graph> {
         self.facts.shapes()
     }

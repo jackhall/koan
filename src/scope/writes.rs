@@ -20,6 +20,12 @@ type Unit<'o> = (&'o UnitFacts<'o>, Frontier<'o>);
 /// An owning body's closing record beside its frontier.
 type Close<'o> = (&'o Closing<'o>, Frontier<'o>);
 
+/// One walk's writes sorted by id: its units, then its closings.
+type Sorted<'x, 'o> = (
+    BumpVec<'x, (UnitId, Unit<'o>)>,
+    BumpVec<'x, (Segment, Close<'o>)>,
+);
+
 /// One cell per unit of a shape table, numbered by segment, then by unit: set once, read by index.
 struct UnitTable<'p, T> {
     /// Where each segment's units start in `cells`: its entry, then each of its run units.
@@ -193,8 +199,19 @@ impl<'o, 'p> KeyedWrites<'o, 'p> {
         debug_assert!(held.is_none(), "a walk closes each body once");
     }
 
+    /// Every write, sorted by id: the units, then the closings.
+    pub fn sorted<'x>(&self, scratch: BumpAllocator<'x>) -> Sorted<'x, 'o> {
+        let mut units = BumpVec::new_in(scratch);
+        self.units(|held| units.extend(held.iter().map(|(unit, record)| (*unit, *record))));
+        units.sort_unstable_by_key(|(unit, _)| *unit);
+        let mut closings = BumpVec::new_in(scratch);
+        self.closings(|held| closings.extend(held.iter().map(|(body, record)| (*body, *record))));
+        closings.sort_unstable_by_key(|(body, _)| *body);
+        (units, closings)
+    }
+
     /// Every write, laid through `lay` as the facts of a walk over `shapes` and `base` under
-    /// `binding`, not yet folded, sorted by id.
+    /// `binding`, not yet folded.
     pub fn laid(
         &self,
         lay: impl Lays<'o>,
@@ -203,12 +220,7 @@ impl<'o, 'p> KeyedWrites<'o, 'p> {
         base: Option<&'o LoadFacts<'o>>,
         binding: Binding<'o>,
     ) -> LoadFacts<'o> {
-        let mut units = BumpVec::new_in(scratch);
-        self.units(|held| units.extend(held.iter().map(|(unit, record)| (*unit, *record))));
-        units.sort_unstable_by_key(|(unit, _)| *unit);
-        let mut closings = BumpVec::new_in(scratch);
-        self.closings(|held| closings.extend(held.iter().map(|(body, record)| (*body, *record))));
-        closings.sort_unstable_by_key(|(body, _)| *body);
+        let (units, closings) = self.sorted(scratch);
         LoadFacts::of_records(lay, scratch, shapes, base, binding, &units, &closings)
     }
 }

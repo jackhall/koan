@@ -214,12 +214,12 @@ impl CellSubstrate {
                         tiers,
                         error,
                         &owner.symbols,
-                        L::evaluator(),
+                        (L::evaluator(), super::settle::settled::<L>),
                         output,
                         &writer.fill(1, |_| Cell::new(false))[0],
                     ),
                 );
-                Ok((tiers, walked, program))
+                Ok((tiers, (walked, program), program))
             })?;
             Ok(Running {
                 graph,

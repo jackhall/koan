@@ -23,6 +23,7 @@ use crate::values::ContentDigest;
 
 use super::facts::{Binding, Frontier, UnitId};
 use super::keyed::Keyed;
+use super::settlement_facts::Settlement;
 use super::shape::{
     BodyShape, Coordinate, Located, Position, Segment, ShapeError, Site, Slot, Target,
 };
@@ -344,16 +345,48 @@ pub struct LoadRecords<'graph> {
     records: &'graph Records<'graph>,
 }
 
-/// A cell's layers over the load its chain rests on: none yet, so every read falls to the load.
+/// A cell's layers over the load its chain rests on: the settlement it runs under, whose parents
+/// lie below it, innermost first. A read tries each layer from the innermost, then the load, and a
+/// unit an inner layer re-ran replaces every outer record of it whole.
 #[derive(Clone, Copy)]
 pub struct Layers<'step> {
     base: LoadRecords<'step>,
+    top: Option<&'step Settlement<'step>>,
 }
 
 impl<'step> Facts<'step> {
     /// The facts a cell under the load reads: the load's alone.
     pub fn of(load: &LoadFacts<'step>) -> Self {
-        FactsOver(Layers { base: load.0 })
+        Facts::under(load, None)
+    }
+
+    /// The facts a cell under the settlement `top` reads: its layers over the load.
+    pub fn under(load: &LoadFacts<'step>, top: Option<&'step Settlement<'step>>) -> Self {
+        FactsOver(Layers { base: load.0, top })
+    }
+
+    /// The innermost settlement these facts read, if any.
+    pub fn top(&self) -> Option<&'step Settlement<'step>> {
+        self.0.top
+    }
+
+    /// The wording of the refusal the innermost settlement's walk reached, if it reached one.
+    pub fn refusal(&self) -> Option<&'step str> {
+        self.0.top?.refusal()
+    }
+}
+
+impl<'step> Layers<'step> {
+    /// Each layer, innermost first.
+    fn layers(&self) -> impl Iterator<Item = &'step Settlement<'step>> {
+        std::iter::successors(self.top, |layer| layer.parent())
+    }
+
+    /// Whether a layer inner to `outer` — every layer where `outer` is `None` — re-ran `unit`.
+    fn rerun_within(&self, outer: Option<&Settlement<'_>>, unit: UnitId) -> bool {
+        (self.layers())
+            .take_while(|layer| outer.is_none_or(|outer| !std::ptr::eq(*layer, outer)))
+            .any(|layer| layer.records().units.get(unit).is_some())
     }
 }
 
@@ -427,19 +460,39 @@ impl<'step> RecordSource<'step> for Layers<'step> {
     }
 
     fn binding(&self) -> Binding<'step> {
-        self.base.binding()
+        match self.top {
+            Some(top) => top.records().binding,
+            None => self.base.binding(),
+        }
     }
 
     fn unit(&self, unit: UnitId) -> Option<(&'step UnitFacts<'step>, Frontier<'step>)> {
-        self.base.unit(unit)
+        (self.layers())
+            .find_map(|layer| layer.records().units.get(unit).map(|(_, record)| *record))
+            .or_else(|| self.base.unit(unit))
     }
 
     fn closing(&self, body: Segment) -> Option<(&'step Closing<'step>, Frontier<'step>)> {
-        self.base.closing(body)
+        (self.layers())
+            .find_map(|layer| {
+                layer
+                    .records()
+                    .closings
+                    .get(body)
+                    .map(|(_, record)| *record)
+            })
+            .or_else(|| self.base.closing(body))
     }
 
     fn holding(&self, held: Held) -> Option<(UnitId, &'step UnitFacts<'step>)> {
-        self.base.holding(held)
+        for layer in self.layers() {
+            if let Some((_, at)) = layer.records().index.get(held) {
+                let (unit, (facts, _)) = layer.records().units[*at as usize];
+                return (!self.rerun_within(Some(layer), unit)).then_some((unit, facts));
+            }
+        }
+        let (unit, facts) = self.base.holding(held)?;
+        (!self.rerun_within(None, unit)).then_some((unit, facts))
     }
 
     fn laid(&self, body: Segment) -> &'step Laid<'step> {
@@ -451,7 +504,9 @@ impl<'step> RecordSource<'step> for Layers<'step> {
     }
 
     fn tree_of(&self, digest: ContentDigest) -> Option<&'step Tree<'step>> {
-        self.base.tree_of(digest)
+        (self.layers())
+            .find_map(|layer| layer.records().trees.get(digest).map(|(_, tree)| *tree))
+            .or_else(|| self.base.tree_of(digest))
     }
 }
 
@@ -553,7 +608,7 @@ fn composes<'graph>(
 
 /// One walk's records, over its base's where it has one.
 #[derive(Clone, Copy)]
-struct Records<'graph> {
+pub(super) struct Records<'graph> {
     base: Option<&'graph LoadFacts<'graph>>,
     /// What the walk bound: the base's binding and more.
     binding: Binding<'graph>,
@@ -667,51 +722,8 @@ impl<'graph> LoadFacts<'graph> {
         closings: &[(Segment, (&'graph Closing<'graph>, Frontier<'graph>))],
     ) -> Self {
         debug_assert!(base.is_none_or(|base| binding.extends(base.binding())));
-        let units = Keyed::from_sorted(collect(lay, units.iter().copied()));
-        let mut held = BumpVec::new_in(scratch);
-        for (at, (_, (facts, _))) in units.iter().enumerate() {
-            facts.held(&mut |key| held.push((key, at as u32)));
-        }
-        held.sort_unstable();
-        held.dedup();
-        debug_assert!(
-            held.windows(2).all(|pair| pair[0].0 != pair[1].0),
-            "each fact lies in one unit's record"
-        );
         debug_assert!(base.is_none_or(|base| std::ptr::eq(base.0.shapes, shapes)));
-        if cfg!(debug_assertions) {
-            for (id, (facts, _)) in units.iter() {
-                let placed = facts.typed.iter().all(|(segment, typed)| {
-                    let mut slots = (typed.declared.iter().map(|(slot, _)| *slot))
-                        .chain(typed.registered.iter().map(|(slot, _)| *slot))
-                        .chain(typed.binders.iter().map(|(slot, _)| *slot))
-                        .chain(typed.contents.iter().map(|(slot, _)| *slot));
-                    slots.all(|slot| shapes.slot_unit(*segment, slot) == *id)
-                        && (typed.statements.iter())
-                            .all(|(index, _)| shapes.running(*segment, *index) == *id)
-                }) && (facts.born.iter())
-                    .all(|(body, _)| shapes.birth_unit(*body) == Some(*id));
-                assert!(
-                    placed,
-                    "a slot's, statement's or birth's fact lies in the unit the shape names"
-                );
-            }
-        }
-        let computed = (units.iter())
-            .flat_map(|(_, (facts, _))| facts.typed.iter())
-            .flat_map(|(_, typed)| {
-                (typed.contents.iter().map(|(_, tree)| tree))
-                    .chain(typed.trees.iter().map(|(_, tree)| *tree))
-            });
-        let records = Records {
-            base,
-            binding,
-            units,
-            closings: Keyed::from_sorted(collect(lay, closings.iter().copied())),
-            index: Keyed::from_sorted(collect(lay, held.iter().copied())),
-            trees: closed_trees(lay, scratch, computed),
-            bodies: &[],
-        };
+        let records = Records::of(lay, scratch, shapes, base, binding, units, closings);
         FactsOver(LoadRecords {
             shapes,
             records: resident(lay, records),
@@ -747,11 +759,6 @@ impl<'graph> LoadFacts<'graph> {
         })
     }
 
-    /// What the load's walk bound: nothing, at the load.
-    pub fn binding(&self) -> Binding<'graph> {
-        self.0.records.binding
-    }
-
     /// The newest record of `unit` beside its frontier, its base's where this load did not re-run
     /// it.
     pub fn unit(&self, unit: UnitId) -> Option<(&'graph UnitFacts<'graph>, Frontier<'graph>)> {
@@ -777,6 +784,11 @@ impl<'a, S: RecordSource<'a>> FactsOver<S> {
     /// The shape table these are facts of.
     pub fn shapes(&self) -> &'a Shapes<'a> {
         self.0.shapes()
+    }
+
+    /// What the newest walk over these records bound: nothing, at the load.
+    pub fn binding(&self) -> Binding<'a> {
+        self.0.binding()
     }
 
     /// The closed tree whose identity is `digest`, among those these records computed.
@@ -1065,6 +1077,92 @@ impl<'a, S: RecordSource<'a>> FactsOver<S> {
 }
 
 impl<'graph> Records<'graph> {
+    /// One walk's records over `shapes`, laid through `lay`, over `base` where it has one, under
+    /// `binding`: `units` and `closings` sorted by id, not yet folded.
+    pub(super) fn of(
+        lay: impl Lays<'graph>,
+        scratch: BumpAllocator<'_>,
+        shapes: &Shapes<'_>,
+        base: Option<&'graph LoadFacts<'graph>>,
+        binding: Binding<'graph>,
+        units: &[(UnitId, (&'graph UnitFacts<'graph>, Frontier<'graph>))],
+        closings: &[(Segment, (&'graph Closing<'graph>, Frontier<'graph>))],
+    ) -> Self {
+        let units = Keyed::from_sorted(collect(lay, units.iter().copied()));
+        let mut held = BumpVec::new_in(scratch);
+        for (at, (_, (facts, _))) in units.iter().enumerate() {
+            facts.held(&mut |key| held.push((key, at as u32)));
+        }
+        held.sort_unstable();
+        held.dedup();
+        debug_assert!(
+            held.windows(2).all(|pair| pair[0].0 != pair[1].0),
+            "each fact lies in one unit's record"
+        );
+        if cfg!(debug_assertions) {
+            for (id, (facts, _)) in units.iter() {
+                let placed = facts.typed.iter().all(|(segment, typed)| {
+                    let mut slots = (typed.declared.iter().map(|(slot, _)| *slot))
+                        .chain(typed.registered.iter().map(|(slot, _)| *slot))
+                        .chain(typed.binders.iter().map(|(slot, _)| *slot))
+                        .chain(typed.contents.iter().map(|(slot, _)| *slot));
+                    slots.all(|slot| shapes.slot_unit(*segment, slot) == *id)
+                        && (typed.statements.iter())
+                            .all(|(index, _)| shapes.running(*segment, *index) == *id)
+                }) && (facts.born.iter())
+                    .all(|(body, _)| shapes.birth_unit(*body) == Some(*id));
+                assert!(
+                    placed,
+                    "a slot's, statement's or birth's fact lies in the unit the shape names"
+                );
+            }
+        }
+        let computed = (units.iter())
+            .flat_map(|(_, (facts, _))| facts.typed.iter())
+            .flat_map(|(_, typed)| {
+                (typed.contents.iter().map(|(_, tree)| tree))
+                    .chain(typed.trees.iter().map(|(_, tree)| *tree))
+            });
+        Records {
+            base,
+            binding,
+            units,
+            closings: Keyed::from_sorted(collect(lay, closings.iter().copied())),
+            index: Keyed::from_sorted(collect(lay, held.iter().copied())),
+            trees: closed_trees(lay, scratch, computed),
+            bodies: &[],
+        }
+    }
+
+    /// No record, under `binding`.
+    pub(super) fn bare(binding: Binding<'graph>) -> Self {
+        Records {
+            base: None,
+            binding,
+            units: Keyed::EMPTY,
+            closings: Keyed::EMPTY,
+            index: Keyed::EMPTY,
+            trees: Keyed::EMPTY,
+            bodies: &[],
+        }
+    }
+
+    /// Hand `each` every type these records name.
+    #[cfg(test)]
+    pub(super) fn each_type(&self, each: &mut dyn FnMut(DeclaredType<Parametric>)) {
+        for (_, (facts, _)) in self.units.iter() {
+            facts.each_type(each);
+        }
+        for (_, (closing, _)) in self.closings.iter() {
+            closing.each_type(each);
+        }
+    }
+
+    /// What the walk bound.
+    pub(super) fn binding(&self) -> Binding<'graph> {
+        self.binding
+    }
+
     fn unit(&self, unit: UnitId) -> Option<(&'graph UnitFacts<'graph>, Frontier<'graph>)> {
         match self.units.get(unit) {
             Some((_, record)) => Some(*record),

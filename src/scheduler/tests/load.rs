@@ -3,6 +3,7 @@
 
 use crate::memory::Bump;
 use crate::scheduler::Graph;
+use crate::scheduler::seek::{Settles, Unsettled};
 use crate::scheduler::tests::bundle::Native;
 use crate::scope::LoadFacts;
 use crate::values::BuildBudget;
@@ -13,7 +14,7 @@ fn the_graph_holds_one_slab_root() {
     let (mut graph, run, out) = Graph::<'_, Native>::load(1, BuildBudget::default(), || {
         Ok::<_, ()>((
             crate::values::tests::seeded_tiers(&type_region),
-            &LoadFacts::EMPTY,
+            (&LoadFacts::EMPTY, &Unsettled as &dyn Settles<'_>),
             7,
         ))
     })
@@ -32,7 +33,7 @@ fn the_graph_holds_one_slab_root() {
 #[test]
 fn a_refused_load_hands_its_refusal_back() {
     let refused = Graph::<'_, Native>::load(1, BuildBudget::default(), || {
-        Err::<(crate::values::TypeTiers<'_>, &LoadFacts<'_>, ()), _>("refused")
+        Err::<(_, (&LoadFacts<'_>, &dyn Settles<'_>), ()), _>("refused")
     });
     assert_eq!(refused.err(), Some("refused"));
 }

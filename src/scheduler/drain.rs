@@ -10,8 +10,10 @@
 //! cell but to run a step: a `Fresh` cell borrows its parent's scratch and a `Shares` one is its
 //! host's tenant.
 //!
-//! A miss builds the settlement, relays its binding's image into the agent tier, and, once the
-//! frame borrows it, evicts unheld settlements to the budget; nothing else evicts in a run.
+//! A miss relays its binding's image into the agent tier, settles the body through the door the
+//! program handed the graph at load ([`Settles`]), and, once the frame borrows the settlement,
+//! evicts unheld settlements to the budget; nothing else evicts in a run. A step's door reads the
+//! settlement its cell runs under over the load.
 //!
 //! Every field here is one scheduler's own. There is no static, no thread-local and no lazily
 //! minted cell, so a second scheduler runs beside the first with nothing shared but the program
@@ -24,16 +26,16 @@ use crate::memory::{
 use crate::scheduler::action::{
     Action, Asked, Context, Kind, Placement, Spawns, Step, StepError, Use,
 };
-use crate::scheduler::arena::BuildArena;
+use crate::scheduler::arena::{BuildArena, Settled};
 use crate::scheduler::continuation::{
     Born, Continuation, ContinuationFamily, NativeStep, Provenance, Report, Rested, StateAt,
     StepBundle, Work,
 };
 use crate::scheduler::delivery::KDelivery;
-use crate::scheduler::seek::{Lending, Seek};
+use crate::scheduler::seek::{Lending, Seek, Settles, Unsettled};
 #[cfg(test)]
 use crate::scope::HalfHeader;
-use crate::scope::{LoadFacts, RegionHeader};
+use crate::scope::{Facts, LoadFacts, RegionHeader};
 #[cfg(test)]
 use crate::type_lattice::Branch;
 use crate::values::{ArenaRef, BuildBudget, TypeTiers};
@@ -52,21 +54,24 @@ pub struct Graph<'graph, B: StepBundle<'graph>> {
     cells: CellGraph<'graph, ContinuationFamily<B>, B::Scratch, KDelivery, RegionHeader>,
     tiers: TypeTiers<'graph>,
     facts: &'graph LoadFacts<'graph>,
-    arena: BuildArena,
+    arena: BuildArena<'graph>,
+    /// The door a miss settles through.
+    settles: &'graph dyn Settles<'graph>,
 }
 
 impl<'graph, B: StepBundle<'graph>> Graph<'graph, B> {
     /// A graph over a slab of `cap` cells, under koan's own crossing verdict, its steps' types read
     /// over `tiers`, its unheld settlements within `budget`, over a load of no bodies.
     pub fn new(cap: u32, tiers: TypeTiers<'graph>, budget: BuildBudget) -> Self {
-        Graph::over(cap, tiers, &LoadFacts::EMPTY, budget)
+        Graph::over(cap, tiers, (&LoadFacts::EMPTY, &Unsettled), budget)
     }
 
-    /// A graph as [`new`](Self::new) stands one, its steps' facts read over `facts`.
+    /// A graph as [`new`](Self::new) stands one, its steps' facts read over `facts`, its misses
+    /// settled through `settles`.
     pub(super) fn over(
         cap: u32,
         tiers: TypeTiers<'graph>,
-        facts: &'graph LoadFacts<'graph>,
+        (facts, settles): (&'graph LoadFacts<'graph>, &'graph dyn Settles<'graph>),
         budget: BuildBudget,
     ) -> Self {
         Graph {
@@ -74,6 +79,7 @@ impl<'graph, B: StepBundle<'graph>> Graph<'graph, B> {
             tiers,
             facts,
             arena: BuildArena::new(budget),
+            settles,
         }
     }
 
@@ -102,12 +108,6 @@ impl<'graph, B: StepBundle<'graph>> Graph<'graph, B> {
     #[cfg(test)]
     pub(crate) fn live_settlements(&self) -> usize {
         self.arena.len()
-    }
-
-    /// Every live settlement.
-    #[cfg(test)]
-    pub(crate) fn settlements(&self) -> std::vec::Vec<ArenaRef> {
-        self.arena.settlements().collect()
     }
 
     /// How many live settlements lie directly under `parent`.
@@ -177,6 +177,8 @@ pub(crate) struct Tiers {
     pub cold_births: usize,
     /// Nodes the drain laid into the agent tier from new settlements' askers' branches: a count.
     pub relayed: usize,
+    /// Nodes new settlements' records named that their walks laid into the agent tier: a count.
+    pub rested: usize,
 }
 
 /// Add to one of the counts in [`TIERS`].
@@ -204,6 +206,7 @@ thread_local! {
             evicted: 0,
             cold_births: 0,
             relayed: 0,
+            rested: 0,
         })
     };
 }
@@ -236,6 +239,11 @@ pub struct Scheduler<'a, 'graph, B: StepBundle<'graph>> {
 }
 
 /// One entry of the ready stack.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "an unborn request carries what a miss settles; boxing it would allocate per call, \
+              and the stack holds only the unborn siblings along one path"
+)]
 enum Entry<'graph, B: StepBundle<'graph>> {
     /// A live cell with a step to run: a woken consumer, or a root work.
     Live(CellHandle),
@@ -469,7 +477,7 @@ where
     /// that is no longer live.
     fn seek(&mut self, seek: Seek<'graph>) -> (ArenaRef, bool) {
         let Seek { parent, settlement } = seek;
-        let Some((key, image)) = settlement else {
+        let Some((key, image, ask)) = settlement else {
             return match self.graph.arena.is_live(parent) {
                 true => (parent, false),
                 false => (ArenaRef::ROOT, false),
@@ -492,15 +500,27 @@ where
             self.graph.arena.stamp(found);
             return (found, false);
         }
-        let settled = arena.insert(parent, key);
+        // The binding's types rest before its walk reads them.
         let resting: crate::values::Chain<'graph, '_, 'graph, '_> = self.graph.tiers.resting();
         #[cfg(test)]
         let before = resting.own_len();
         image.relay(&resting);
         #[cfg(test)]
+        let relayed = resting.own_len();
+        let settles = self.graph.settles;
+        let Some(facts) = Settled::build(
+            arena.facts(parent).cloned(),
+            self.graph.facts,
+            |bump, below, witness| settles.settle(bump, below, &ask, witness),
+        ) else {
+            return (parent, false);
+        };
+        let settled = self.graph.arena.insert(parent, key, facts);
+        #[cfg(test)]
         tally(|tiers| {
             tiers.settled += 1;
-            tiers.relayed += resting.own_len() - before;
+            tiers.relayed += relayed - before;
+            tiers.rested += resting.own_len() - relayed;
         });
         (settled, true)
     }
@@ -523,9 +543,11 @@ where
         // `enter` borrows the graph exclusively and the step borrows the buffer, so the two are
         // taken as separate fields rather than through `self`.
         let Scheduler { graph, spawns, .. } = self;
-        let (tiers, facts) = (graph.tiers, graph.facts);
+        let (tiers, facts, books) = (graph.tiers, graph.facts, &graph.arena);
         (graph.cells)
-            .enter(cell, |context| run_step::<B>(context, tiers, facts, spawns))
+            .enter(cell, |context| {
+                run_step::<B>(context, tiers, (facts, books), spawns)
+            })
             .map_err(|_| DrainStalled::Unenterable)
     }
 
@@ -592,7 +614,7 @@ where
 fn run_step<'graph, 'step, 'here, 'scratch, 'lent, B: StepBundle<'graph>>(
     context: &mut Context<'graph, 'step, 'here, 'scratch, 'lent, B>,
     tiers: TypeTiers<'graph>,
-    facts: &'graph LoadFacts<'graph>,
+    (load, books): (&'graph LoadFacts<'graph>, &BuildArena<'graph>),
     spawns: &mut Spawns<'graph, B>,
 ) -> (Action<'graph, B>, Provenance, ArenaRef)
 where
@@ -630,10 +652,12 @@ where
             .map_or(0, Branch::len),
         tiers.agent.len(),
     );
+    // The door reads the settlement the cell runs under, borrowed from the arena for the step.
+    let top = books.facts(arena).map(|settled| settled.facts());
     let step = step(Step::new(
         context,
         tiers,
-        facts,
+        Facts::under(load, top),
         &provenance,
         arena,
         spawns,

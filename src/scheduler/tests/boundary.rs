@@ -20,15 +20,18 @@ const PREFIXES: &[&str] = &[
 ];
 
 /// The owning types outside the tests: the buffer a step pushes its requests into, the drain's
-/// ready stack, and the build arena's slots and free list. Each is the scheduler's runtime state,
-/// held beside the graph and never written into a region, so a value's no-drop-glue discipline
-/// does not reach them.
+/// ready stack, the build arena's slots and free list, and the shared hold each settlement's facts
+/// keep on their parent's. Each is the scheduler's runtime state, held beside the graph and never
+/// written into a region, so a value's no-drop-glue discipline does not reach them.
 const OWNING_ALLOWED: &[(&str, &str)] = &[
     ("src/scheduler/action.rs", "requests: Vec<Asked<'graph, B>>"),
     ("src/scheduler/action.rs", "Vec::new()"),
     ("src/scheduler/drain.rs", "ready: Vec<Entry<'graph, B>>"),
     ("src/scheduler/drain.rs", "Vec::new()"),
-    ("src/scheduler/arena.rs", "slots: Vec<Slot>"),
+    ("src/scheduler/arena.rs", "slots: Vec<Slot<'graph>>"),
+    ("src/scheduler/arena.rs", "use std::rc::Rc;"),
+    ("src/scheduler/arena.rs", "Rc<Settled<'graph>>"),
+    ("src/scheduler/arena.rs", "Rc::new(facts)"),
     ("src/scheduler/arena.rs", "free: Vec<u32>"),
     ("src/scheduler/arena.rs", "Vec::new()"),
 ];

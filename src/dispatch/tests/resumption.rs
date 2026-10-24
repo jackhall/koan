@@ -397,6 +397,42 @@ fn an_inner_callable_inside_a_block_settles_under_its_binding() {
     assert_eq!(after, "selected");
 }
 
+/// A settlement rests in the agent tier what its records name, adopted from the chain its walk
+/// interned through: each such type resolves there once the miss ends, and a second settlement
+/// under the same binding adds nothing.
+#[test]
+fn the_agent_tier_grows_by_the_types_a_settlements_records_name() {
+    let source = "LET Pt = :{x :Number}\n\
+                  EXPR FOR ALL #[Elt] #(WRAP x :Elt) -> Any = #((LET l = [x]) (l))\n";
+    let (grew, again, unresolved) = resumed(source, |door| {
+        let wrap = quantified(door.load(), door.root());
+        let ask = crate::scheduler::Ask {
+            body: wrap.segment(),
+            bound: [(
+                slot(door.symbols(), wrap, "Elt"),
+                crate::scheduler::Asked::Type(door.declared("Pt")),
+            )]
+            .into_iter()
+            .collect(),
+        };
+        let agent = door.running.program().tiers().agent;
+        let before = agent.len();
+        let facts = (door.running.settle::<Koan>(&ask, door.bump)).expect("`Pt` is a type");
+        let grew = agent.len() - before;
+        let resting = door.running.program().tiers().resting();
+        let mut unresolved = 0;
+        (facts.top().expect("a settlement")).each_type(&mut |kt| {
+            unresolved += usize::from(!resting.resolves(kt));
+        });
+        let before = agent.len();
+        door.running.settle::<Koan>(&ask, door.bump);
+        (grew, agent.len() - before, unresolved)
+    });
+    assert!(grew > 0, "`[x]` at `Pt` is a type the root lacks");
+    assert_eq!(unresolved, 0, "every type the records name rests");
+    assert_eq!(again, 0, "a type rests once");
+}
+
 #[test]
 fn a_binding_no_overload_admits_refuses_as_the_load_would() {
     let source = "EXPR FOR ALL #[Elt] #(WRAP x :Elt) -> Any = #(\n  LET y = (x + 1)\n  y\n)";
@@ -693,9 +729,9 @@ mod laws {
     use crate::program::tests::stores::framed;
     use crate::program::{CellSubstrate, LoadError};
     use crate::scope::{
-        Address, BodyClass, BodyShape, Bound as Bind, CandidateList, InstanceRead, LoadFacts,
-        Narrowing, ShapeError, ShapeKind, Site, Slot, Static, StaticSolution, Target, Tree,
-        Unknown, each_part, source_of,
+        Address, BodyClass, BodyShape, Bound as Bind, CandidateList, FactsOver, InstanceRead,
+        LoadFacts, Narrowing, RecordSource, ShapeError, ShapeKind, Site, Slot, Static,
+        StaticSolution, Target, Tree, Unknown, each_part, source_of,
     };
     use crate::symbols::{BinderSymbol, SymbolInterner};
     use crate::type_lattice::{
@@ -801,8 +837,8 @@ mod laws {
     }
 
     /// What the load fixed of a facts' reader: the chain its types render through.
-    struct Reader<'read, 'facts, 'tier, 'pair, 'reg, 'door> {
-        facts: &'read LoadFacts<'facts>,
+    struct Reader<'read, 'tier, 'pair, 'reg, 'door, S> {
+        facts: &'read FactsOver<S>,
         types: &'read Chain<'tier, 'pair, 'reg, 'door>,
         symbols: &'read SymbolInterner,
         /// The names a binding binds: a restart drops them from the shape or binds them anew, so
@@ -810,7 +846,7 @@ mod laws {
         bound: &'read [&'read str],
     }
 
-    impl Reader<'_, '_, '_, '_, '_, '_> {
+    impl<'f, S: RecordSource<'f>> Reader<'_, '_, '_, '_, '_, S> {
         fn named(&self, typed: impl Into<DeclaredType<Parametric>>) -> String {
             display_name(typed, self.types, self.symbols).to_string()
         }
@@ -1026,6 +1062,16 @@ mod laws {
         symbols: &SymbolInterner,
         leave: &[String],
     ) -> Vec<String> {
+        render_over(facts, types, symbols, leave)
+    }
+
+    /// [`render_facts`] over any source of records.
+    fn render_over<'f, S: RecordSource<'f>>(
+        facts: &FactsOver<S>,
+        types: &Chain<'_, '_, '_, '_>,
+        symbols: &SymbolInterner,
+        leave: &[String],
+    ) -> Vec<String> {
         let names: Vec<&str> = leave.iter().map(String::as_str).collect();
         let reader = Reader {
             facts,
@@ -1074,6 +1120,49 @@ mod laws {
                 Ok(facts) => Ok(rendered(door, facts, bindings.last().expect("a binding"))),
                 Err(error) => Err(unlocated(
                     &error.display(door.symbols(), door.types).to_string(),
+                )),
+            }
+        })
+    }
+
+    /// What `bound` asks a miss to settle at `SUBJECT`'s body: each type it binds, and each module
+    /// at the exact type it carries over the digest of the tree the load read for it.
+    fn ask(door: &Door<'_, '_>, bound: &Bound) -> crate::scheduler::Ask {
+        let binding = bind(door, bound, false);
+        let asked = (binding.entries().iter()).map(|(unknown, given)| {
+            let asked = match *given {
+                Bind::Type(typed) => crate::scheduler::Asked::Type(typed),
+                Bind::Module { carried, tree } => crate::scheduler::Asked::Module {
+                    carried,
+                    content: tree.digest().expect("a module binds a closed tree"),
+                    retyped: false,
+                },
+            };
+            let Address::Slot(slot) = unknown.at else {
+                unreachable!("a binder's unknown is its slot")
+            };
+            (slot, asked)
+        });
+        crate::scheduler::Ask {
+            body: subject(door.root()).segment(),
+            bound: asked.collect(),
+        }
+    }
+
+    /// What settling `case`'s `SUBJECT` under its binding renders, as a frame under the
+    /// settlement reads it, or the refusal it keeps.
+    fn settled_rendered(case: &Resumable) -> Result<Vec<String>, String> {
+        resumed(&case.render(), |door| {
+            let facts = (door.running)
+                .settle::<Koan>(&ask(door, &case.bound), door.bump)
+                .expect("every module the case binds has a tree in the load");
+            match facts.refusal() {
+                Some(refusal) => Err(unlocated(refusal)),
+                None => Ok(render_over(
+                    &facts,
+                    door.types,
+                    door.symbols(),
+                    &left_out(&case.bound),
                 )),
             }
         })
@@ -1227,12 +1316,13 @@ mod laws {
             }
         }
 
-        /// 8. Three stores give equal facts under one binding: a load's store binding it from the
-        /// start, a layer over the load, and a frame whose slots hold what it binds — read off the
-        /// top level once the program has run, each module bound by its digest, as a frame binds
-        /// one — render alike, refusals included.
+        /// 8. Every store gives equal facts under one binding: a load's store binding it from the
+        /// start, a layer over the load, a settlement over the load binding each module by the tree
+        /// the load read for it, and a frame whose slots hold what it binds — read off the top
+        /// level once the program has run, each module bound by its digest, as a frame binds one —
+        /// render alike, refusals included.
         #[test]
-        fn three_stores_give_equal_facts(case in resumable()) {
+        fn every_store_gives_equal_facts(case in resumable()) {
             let unlocate = |error: ShapeError<'_>, door: &Door<'_, '_>| unlocated(&error.display(door.symbols(), door.types).to_string());
             let stores = resumed(&case.render(), |door| {
                 // The load's store and a layer agree under a structural binding too.
@@ -1248,7 +1338,10 @@ mod laws {
             for (reloaded, layered) in &stores {
                 prop_assert_eq!(reloaded, layered, "in\n{}", case.render());
             }
-            let [(_, layered), _] = stores;
+            let [(_, layered), (_, structural)] = stores;
+            // A settlement binds a module by the tree the load read for it, as the structural layer
+            // does.
+            prop_assert_eq!(&settled_rendered(&case), &structural, "in\n{}", case.render());
             let mut substrate = CellSubstrate::load::<Koan>(&case.render(), "<test>", 8, BuildBudget::default(), output())
                 .expect("the program loads");
             let framed = substrate.with(|running| {
@@ -1266,6 +1359,15 @@ mod laws {
             });
             let framed = framed.map_err(|error| unlocated(&error));
             prop_assert_eq!(&layered, &framed, "in\n{}", case.render());
+        }
+
+        /// 12. A settlement holds the facts a load with its binding declared computes: settling
+        /// `SUBJECT` under the binding renders every fact of its body as the restart does,
+        /// refusals worded alike.
+        #[test]
+        fn a_settlement_holds_the_facts_a_load_with_its_binding_declared_computes(case in resumable()) {
+            let restart = case.restart(&case.bound);
+            prop_assert_eq!(settled_rendered(&case), loaded_rendered(&restart, &case.bound), "in\n{}\nrestarted as\n{}", case.render(), restart);
         }
 
         /// 10. A rooted resumption is the program's on its bodies: resuming from `SUBJECT`'s body

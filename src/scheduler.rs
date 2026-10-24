@@ -39,4 +39,4 @@ pub use continuation::{BirthAt, Born, NativeStep, StateAt, StepBundle, Work};
 #[cfg(test)]
 pub(crate) use drain::{CACHING, LAID, TIERS, Tiers};
 pub use drain::{DrainStalled, Graph, Resting, Scheduler};
-pub use seek::Seek;
+pub use seek::{Ask, Asked, Seek, Settles};

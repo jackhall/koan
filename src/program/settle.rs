@@ -8,22 +8,32 @@
 //! keyworded call, held by an instance, and solved here, on the asker's region, for a call by
 //! name. A call past a header or a barrier of a body keyed on a `FOR ALL` name seeks no
 //! settlement, since its frame solves only once the arguments are retyped or have crossed, unless
-//! it calls an instance, whose solution holds wherever it is called from. See
+//! it calls an instance, whose solution holds wherever it is called from.
+//!
+//! A keyed name holds **load content** where the load could have declared it: a type whose handle
+//! rests in the root, a type value naming one, or a module whose content digest names a closed tree
+//! the asker's layers hold. Anything else is content the run produced, and a call keying any seeks
+//! nothing. A miss runs [`settled`]: the language's walk rooted at the callee's body, over a layer
+//! on the settlement's parent, its types adopted into the agent tier once it ends. See
 //! [build/README.md](../build/README.md).
 
-use crate::build::key_of;
+use std::fmt::Write as _;
+
+use crate::build::{Layer, key_of};
 use crate::knot::{Function, KValue, Knotted};
-use crate::memory::{Bump, BumpVec};
-use crate::scheduler::Seek;
-use crate::scope::{Code, Facts};
+use crate::memory::{Bump, BumpVec, resident};
+use crate::scheduler::{Ask, Asked, Seek};
+use crate::scope::{Address, Binding, Bound, Code, Facts, Settlement, Tree, Unknown};
 use crate::symbols::BinderSymbol;
-use crate::type_lattice::KType;
+use crate::type_lattice::{DeclaredType, KType, TypeNode};
 use crate::values::digest::type_digest;
-use crate::values::{ArenaRef, BindingImage, Chain, KeyedTypes};
+use crate::values::{
+    ArenaRef, BindingImage, Chain, KeyedTypes, Knotted as _, Value, retype_target,
+};
 
 use super::body::admitted;
 use super::bundle::KBirth;
-use super::record::CallKind;
+use super::record::{CallKind, Language, Program};
 
 /// The function a call of `callee` runs, behind every barrier: `None` for a callee that is no
 /// function.
@@ -57,16 +67,17 @@ pub fn seek<'graph>(
     }
 }
 
-/// The key and binding image of the settlement the call `birth` seeks under its callee's arena
-/// node: `None` for a birth that is no call, a callee that is no function, a body that keys no
-/// settlement, and a call whose content at a keyed name the asker cannot read.
+/// The key, binding image and ask of the settlement the call `birth` seeks under its callee's
+/// arena node: `None` for a birth that is no call, a callee that is no function, a body that keys
+/// no settlement, and a call whose content at a keyed name the asker cannot read or is not load
+/// content.
 fn settlement<'graph>(
     birth: &KBirth<'graph, '_>,
     code: &Code<'_>,
     facts: &Facts<'_>,
     types: &Chain<'_, '_, '_, '_>,
     region: &Chain<'_, '_, '_, '_>,
-) -> Option<(crate::values::SettlementKey, BindingImage<'graph>)> {
+) -> Option<(crate::values::SettlementKey, BindingImage<'graph>, Ask)> {
     let KBirth::Call {
         program,
         callee,
@@ -110,9 +121,23 @@ fn settlement<'graph>(
             }
         }
     };
+    // The type the frame retypes a module argument at `name` to: its declared parameter type,
+    // where that is closed.
+    let retyped = |name: crate::symbols::Symbol, argument: &KValue<'graph, '_>| {
+        let declared = callee.as_callable()?.declared().view(types);
+        let TypeNode::KFunction { params, .. } = declared.body else {
+            return None;
+        };
+        let declared = types.concrete(params.get(name)?)?;
+        match retype_target(types, &scratch, argument.ktype(), declared) {
+            DeclaredType::Type(carried) => Some(carried),
+            DeclaredType::Scheme(_) => None,
+        }
+    };
     let mut solution = None;
     let mut digests = BumpVec::with_capacity_in(keyed.len(), &scratch);
     let mut binding = smallvec::SmallVec::new();
+    let mut bound = smallvec::SmallVec::new();
     for slot in keyed {
         let name = shape.slot_name(*slot);
         if let BinderSymbol::Type(name) = name
@@ -122,18 +147,145 @@ fn settlement<'graph>(
                 solution = Some(solve()?);
             }
             let solved = *solution.as_ref()?.get(index)?;
+            if !region.in_root(solved) {
+                return None;
+            }
             let kind = KType::of_kind(solved.kind_of(region));
             digests.push(type_digest(solved, kind));
             binding.push(KeyedTypes {
                 carried: kind.into(),
                 named: Some(solved),
             });
+            bound.push((*slot, Asked::Type(solved)));
             continue;
         }
         let argument = arguments.field(name.symbol(), types, &scratch)?.value();
-        digests.push(argument.digest(types, &scratch));
+        let digest = argument.digest(types, &scratch);
+        let asked = match (argument.as_type(), argument.as_module()) {
+            (Some(named), _) if region.in_root(named.handle()) => Asked::Type(named.handle()),
+            // A module is load content where its bare member is: the type it is seen at retypes
+            // the tree the load computed for it.
+            (_, Some(_)) => {
+                let member = argument.knot_member()?;
+                let content = Value::Knotted(member).digest(types, &scratch);
+                facts.tree_of(content)?;
+                let (DeclaredType::Type(own), Some(carried)) =
+                    (member.ktype(), retyped(name.symbol(), &argument))
+                else {
+                    return None;
+                };
+                // The type the frame binds the module at rests beside what it carries.
+                binding.push(KeyedTypes {
+                    carried: carried.into(),
+                    named: None,
+                });
+                Asked::Module {
+                    carried,
+                    content,
+                    retyped: carried != own,
+                }
+            }
+            _ => return None,
+        };
+        digests.push(digest);
         binding.push(KeyedTypes::of(&argument));
+        bound.push((*slot, asked));
     }
     let key = key_of(shape.segment(), digests.into_iter());
-    Some((key, BindingImage::of(binding, program.tiers(), types)))
+    let ask = Ask {
+        body: shape.segment(),
+        bound,
+    };
+    Some((key, BindingImage::of(binding, program.tiers(), types), ask))
+}
+
+/// What a miss settles for `ask` over `parent`, the layers below, laid in `bump`: `L`'s walk rooted
+/// at the asked body under the asked binding and `parent`'s, each record kept in a layer over
+/// `parent`. It interns through a chain of its own over the agent tier, laid in `bump` too, and
+/// adopts every type the records name into the agent tier. A refusal its walk reaches is kept
+/// worded as the load words it. `None` where a module the binding names has no tree in `parent`.
+pub(crate) fn settled<'a, 'graph, L: Language>(
+    program: &Program<'graph>,
+    bump: &'a Bump,
+    parent: Facts<'a>,
+    ask: &Ask,
+    _: &'a &'graph (),
+) -> Option<Settlement<'a>> {
+    let scratch = Bump::new();
+    let shapes = program.shapes();
+    let mut staged = BumpVec::new_in(&scratch);
+    for (slot, asked) in &ask.bound {
+        let bound = match *asked {
+            Asked::Type(named) => Bound::Type(named),
+            Asked::Module {
+                carried,
+                content,
+                retyped,
+            } => {
+                let tree = parent.tree_of(content)?;
+                Bound::Module {
+                    carried,
+                    tree: match retyped {
+                        true => resident(bump, Tree::retyped(carried, tree)),
+                        false => tree,
+                    },
+                }
+            }
+        };
+        let unknown = Unknown {
+            segment: ask.body,
+            at: Address::Slot(*slot),
+        };
+        staged.push((unknown, bound));
+    }
+    // The parent's binding stands beneath the asked one.
+    for below in parent.binding().entries() {
+        if !staged.iter().any(|(own, _)| *own == below.0) {
+            staged.push(*below);
+        }
+    }
+    let binding = Binding::laid(bump, &mut staged);
+    let layer = Layer::new(bump, &scratch, parent, binding);
+    let tiers = program.tiers();
+    let types = tiers.settling(bump);
+    let walked = L::facts(
+        shapes,
+        program.builtins(),
+        &layer,
+        &types,
+        &scratch,
+        ask.body,
+    );
+    let below = parent.top();
+    Some(match walked {
+        Ok(()) => {
+            let resting = tiers.resting();
+            let (units, closings) = layer.writes().sorted(&scratch);
+            let mut adopt = |kt| resting.adopt_from(&types, kt);
+            units
+                .iter()
+                .for_each(|(_, (facts, _))| facts.each_type(&mut adopt));
+            closings
+                .iter()
+                .for_each(|(_, (closing, _))| closing.each_type(&mut adopt));
+            Settlement::of(bump, &scratch, shapes, below, binding, layer.writes())
+        }
+        Err(error) => {
+            let mut text = Text(BumpVec::new_in(&scratch));
+            write!(text, "{}", error.display(program.symbols(), &types))
+                .expect("a refusal renders");
+            let refusal = bump.alloc_str(std::str::from_utf8(&text.0).expect("rendered as UTF-8"));
+            Settlement::refused(below, binding, refusal)
+        }
+    })
+}
+
+/// Text rendered into a scratch bump.
+struct Text<'x>(BumpVec<'x, u8>);
+
+impl std::fmt::Write for Text<'_> {
+    fn write_str(&mut self, text: &str) -> std::fmt::Result {
+        self.0.extend_from_slice(text.as_bytes());
+        Ok(())
+    }
 }

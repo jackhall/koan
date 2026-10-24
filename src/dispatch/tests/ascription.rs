@@ -93,12 +93,13 @@ fn a_module_ascribed_no_signature_is_held_to_it_as_a_value() {
         run("MODULE m = (LET x = 1)\nPRINT (m :| Any)"),
         "load: <test>:2:7: Any is no signature"
     );
-    // A type the load cannot read faults at run.
+    // A type the load cannot read faults at run, as `VIEW`'s settlement at `Elt := Number` words
+    // it.
     assert_eq!(
         run("MODULE m = (LET x = 1)\n\
              EXPR FOR ALL #[Elt] #(VIEW x :Elt) -> Any = #(m :| Elt)\n\
              PRINT (VIEW 1)"),
-        "error: Number is no signature"
+        "error: <test>:2:46: Number is no signature"
     );
 }
 

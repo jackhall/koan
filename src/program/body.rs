@@ -207,6 +207,8 @@ fn ran<'graph, 'here, 'scratch>(
     routes: bool,
     types: &Chain<'_, 'here, '_, '_>,
 ) -> Action<'graph, KBundle> {
+    let (_, facts) = step.door();
+    let refused = facts.refusal();
     let runner = match state {
         KState::Born(KBirth::Program { program }) => {
             let writer = step.writer();
@@ -216,6 +218,13 @@ fn ran<'graph, 'here, 'scratch>(
                 KActivation::of_program(writer, code.shapes().root(), &facts, program.builtins()),
             );
             Runner::at(program, activation, Level::Top, None)
+        }
+        // A frame under a settlement whose walk refused raises the refusal as its fault, worded as
+        // the load would word it with the binding declared.
+        KState::Born(KBirth::Call { program, .. }) if let Some(refusal) = refused => {
+            let region = step.types();
+            let error = program.error(step.writer(), &region, refusal);
+            return step.finish(error);
         }
         KState::Born(KBirth::Call {
             program,
@@ -529,7 +538,7 @@ impl<'graph, 'cell> Runner<'graph, 'cell> {
     /// The runner's activation, read through `step`'s door.
     fn reading<'step>(
         &self,
-        step: &Taking<'_, 'graph, 'step, 'cell, '_, '_>,
+        step: &Taking<'step, 'graph, '_, 'cell, '_, '_>,
     ) -> KReading<'step, 'graph, 'cell> {
         let (code, facts) = step.door();
         self.activation.view().reading(&code, facts)

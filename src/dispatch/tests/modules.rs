@@ -450,13 +450,16 @@ fn a_sealed_member_is_opaque_outside_its_view_whatever_its_bound() {
              EXPR #(PASS p :Counter) -> Any = #(TAKE p)\n{program}"
         )
     };
-    let refused_plus = "error: no overload of `_ + _` admits (Carrier, Number)";
+    // `USE c` settles at `c`'s closed tree, which refuses as a load would.
+    let refused_plus = "error: <test>:4:34: no overload of `_ + _` admits (Carrier, Number)";
     let refused_take = "no overload of `TAKE _` admits (SIG (Carrier: Carrier, zero: Carrier, \
                         succ: :(FN :{x :Carrier} -> Carrier)))";
     let loaded_take = format!("load: <test>:10:7: {refused_take}");
-    // Through `p :Counter`, the view is seen at `Counter` pinned at its own carrier.
-    let ran_take = "error: no overload of `TAKE _` admits (SIG FOR ALL #{Carrier: Number} \
-                    (zero: Carrier, succ: :(FN :{x :Carrier} -> Carrier)) WITH {Carrier = Carrier})";
+    // Through `p :Counter`, the view is seen at `Counter` pinned at its own carrier; `PASS c`'s
+    // settlement refuses as a load would.
+    let ran_take = "error: <test>:9:35: no overload of `TAKE _` admits (SIG FOR ALL \
+                    #{Carrier: Number} (zero: Carrier, succ: :(FN :{x :Carrier} -> Carrier)) WITH \
+                    {Carrier = Carrier})";
     for (program, printed) in [
         (
             "PRINT (c.zero + 1)",

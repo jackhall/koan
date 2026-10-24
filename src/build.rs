@@ -24,9 +24,5 @@ mod tests;
 
 pub use folds::fold;
 pub use key::key_of;
-#[cfg_attr(
-    not(test),
-    expect(unused_imports, reason = "no settlement runs a layer yet")
-)]
 pub(crate) use layer::Layer;
 pub use load::LoadStore;

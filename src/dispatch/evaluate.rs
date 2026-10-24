@@ -782,6 +782,11 @@ fn call<'step, 'graph, 'here>(
             select::selected(at, kept.iter().copied(), &arguments, &contributed, &scratch)
         }
         Narrowing::Selected(coordinate) => {
+            #[cfg(test)]
+            if let Some(chose) = CHOSE.with(std::cell::Cell::get) {
+                let shape = at.view.shape();
+                chose(shape.segment(), shape.site_of_node(node));
+            }
             select::chosen(at, coordinate, &arguments, &contributed, &scratch)
         }
     };
@@ -1320,4 +1325,16 @@ fn exits<'step, 'graph, 'here>(
     if at.view.facts().caches(at.view.shape()) {
         adopt(&Exit::new(step.types(), &at.types, scratch));
     }
+}
+
+/// What a test hands each use a frame finds selected: its body's segment and its node's site.
+#[cfg(test)]
+type Chose = fn(crate::scope::Segment, Site);
+
+#[cfg(test)]
+thread_local! {
+    /// What each use a frame finds selected in its facts is handed to, by its body's segment and
+    /// its node's site, while a test sets it: so a test sees a frame read the selection its facts
+    /// hold.
+    pub(super) static CHOSE: std::cell::Cell<Option<Chose>> = const { std::cell::Cell::new(None) };
 }

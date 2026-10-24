@@ -426,8 +426,8 @@ fn a_hops_adoptions_hold_flat_in_depth() {
             );
         }
         assert!(
-            deltas["skipped"] > 0,
-            "{name}: each hop's walks stop at a part on its bits"
+            deltas["entered"] == 0 || deltas["skipped"] > 0,
+            "{name}: each hop's walks enter nothing, or stop at a part on its bits"
         );
     }
 }
@@ -670,14 +670,13 @@ fn a_shares_loop_handing_a_keyed_shares_helper_a_module_over_its_link_holds_adop
     let runs = DEPTHS.map(ran_adopting);
     let [(few, few_adopted), _, (many, _)] = &runs;
     assert_eq!((few.printed.as_str(), few.root), ("done", 0));
-    // `PEEK` keys on the module it is handed, so it runs under a settlement of its own each hop,
-    // and `WRAP` one across the loop; the region holds flat. The agent tier grows by each `PEEK`
-    // binding, run content, until the build rewrite keys an arena node on load content alone
-    // (roadmap/gradual-build/build-rewrite.md).
-    for ((ran, _), depth) in runs.iter().zip(DEPTHS) {
-        assert_eq!(ran.tiers.settled, depth as usize + 1);
+    // `PEEK` keys on a module built over each hop's link, content the run produced, so it seeks
+    // nothing; `WRAP` settles once across the loop. The region and the agent tier hold flat.
+    for (ran, _) in runs.iter() {
+        assert_eq!(ran.tiers.settled, 1);
     }
     assert_eq!(few.tiers.region, many.tiers.region);
+    assert_eq!(few.tiers.agent, many.tiers.agent);
     assert!(*few_adopted > 0, "the loop's exits adopt");
     assert_flat("adoptions", runs.each_ref().map(|(_, adopted)| *adopted));
 }
@@ -1341,61 +1340,28 @@ pub(super) const SMALLEST: BuildBudget = BuildBudget {
     bytes: NonZeroUsize::MIN,
 };
 
-/// A budget of `count` settlements, the largest a run of `source` at depth 1 lays measuring one.
-fn budget_of(count: usize, source: &str) -> BuildBudget {
-    let mut substrate = CellSubstrate::load::<Koan>(
-        &program(1, source),
-        "<test>",
-        2,
-        BuildBudget::default(),
-        output(),
-    )
-    .unwrap_or_else(|error| panic!("the program loads: {error}"));
-    substrate
-        .with(|running| running.run())
-        .expect("the program runs");
-    let largest = substrate.with(|running| {
-        let scheduler = running.scheduler();
-        let graph = scheduler.graph();
-        (graph.settlements().into_iter())
-            .filter_map(|at| graph.settlement_bytes(at))
-            .max()
-            .expect("the run settles something")
-    });
-    BuildBudget {
-        bytes: NonZeroUsize::new(count * largest).expect("a settlement weighs something"),
-    }
-}
-
 #[test]
-fn a_loop_handing_a_keyed_helper_a_new_module_each_hop_holds_its_settlements_flat() {
-    // `PEEK` keys on a new module each hop and `WRAP` on `ints` across the loop, both under the
-    // root: each `PEEK` miss evicts the last `PEEK`, never `WRAP`, whose hops hold it.
+fn a_helper_keyed_on_a_module_built_each_hop_seeks_nothing_and_its_loop_settles_once() {
+    // `PEEK` keys on a module built over each hop's link: content the run produced, which no load
+    // could declare, so it seeks nothing and runs under its callee's arena node, the root. `WRAP`
+    // keys on `ints`, load content, and settles once across the loop.
     let source = wrapped_peeks();
     let [few, many] = ENDS.map(|depth| ran_under(depth, &source, SMALLEST));
-    for (ran, depth) in [(&few, ENDS[0]), (&many, ENDS[1])] {
-        let depth = depth as usize;
+    for ran in [&few, &many] {
         assert_eq!(ran.printed, "done");
         assert_eq!(
             (ran.tiers.settled, ran.tiers.evicted, ran.tiers.cold_births),
-            (depth + 1, depth - 1, 0),
+            (1, 0, 0),
             "every `WRAP` hop runs warm"
         );
-        assert_eq!(ran.live, 2);
+        assert_eq!(ran.live, 1);
     }
-    // The agent tier grows by each `PEEK` binding, run content, until the build rewrite keys a
-    // arena node on load content alone (roadmap/gradual-build/build-rewrite.md).
     assert_eq!(few.tiers.region, many.tiers.region);
-    // A budget of three settlements keeps three unheld `PEEK`s past each miss, the last `PEEK`
-    // and `WRAP` turning unheld as the operator run ends.
-    let depth = 7;
-    let past = ran_under(depth as u32, &source, budget_of(3, &source));
-    assert_eq!(past.printed, "done");
-    assert_eq!((past.tiers.settled, past.live), (depth + 1, 5));
+    assert_eq!(few.tiers.agent, many.tiers.agent, "no `PEEK` binding rests");
 }
 
 #[test]
-fn a_loop_whose_keyed_frame_calls_a_keyed_callable_holds_its_settlements_flat() {
+fn a_frame_keyed_on_a_module_built_each_hop_seeks_nothing_and_its_callable_settles_once() {
     let source = "EXPR #(OUTER m :Holder) -> Number = \
                   #((LET w = (m :| Holder)) \
                   (LET g = (FN :{x :Number} -> Number = #((LET v = (m :| Holder)) (x)))) \
@@ -1426,43 +1392,35 @@ fn a_loop_whose_keyed_frame_calls_a_keyed_callable_holds_its_settlements_flat() 
         None,
         "`DRIVE` keys on nothing"
     );
-    // Each hop builds an `OUTER` under the root and a `g` beneath it; past a budget of two
-    // settlements, a miss evicts the oldest `g`, then its `OUTER`.
-    let two = budget_of(2, source);
-    let [few, many] = ENDS.map(|depth| ran_under(depth, source, two));
-    for (ran, depth) in [(&few, ENDS[0]), (&many, ENDS[1])] {
-        let depth = depth as usize;
+    // `OUTER` keys on a module built over each hop's link, content the run produced, so it seeks
+    // nothing and runs under the root; `g`, born under the root, settles there once, and every
+    // later hop's `g` finds it.
+    let [few, many] = ENDS.map(|depth| ran_under(depth, source, SMALLEST));
+    for ran in [&few, &many] {
         assert_eq!(ran.printed, "7");
-        assert_eq!(
-            (ran.tiers.settled, ran.tiers.evicted, ran.live),
-            (2 * depth, 2 * depth - 4, 4)
-        );
+        assert_eq!((ran.tiers.settled, ran.tiers.evicted, ran.live), (1, 0, 1));
     }
-    // `OUTER` keys on a module built over each hop's link, so the agent tier grows by each
-    // binding, run content, until the build rewrite keys an arena node on load content alone
-    // (roadmap/gradual-build/build-rewrite.md).
     assert_eq!(few.tiers.region, many.tiers.region);
 }
 
 #[test]
 fn a_settlement_its_frame_holds_outlives_every_miss_the_frame_waits_on() {
-    // `SWEEP`'s `PEEK` misses past the smallest budget evict every settlement no cell holds, and
-    // `OUTER`'s frame holds its own, so `g`, born under it, runs warm.
-    let source = format!(
-        "{PEEK}EXPR #(SWEEP link :Link) -> Str = \
-         #((MODULE h OVER #[link] = (LET held = link)) (LET seen = (PEEK h)) \
-         (SWEEP (ATTR link next)))\n\
-         EXPR #(SWEEP end :Null) -> Str = #(\"done\")\n\
-         EXPR #(OUTER m :Counter) -> Number = #((LET w = (m :| Counter)) \
-         (LET g = (FN :{{x :Number}} -> Number = #((LET v = (m :| Counter)) (x)))) \
-         (LET swept = (SWEEP chain)) (g {{x = 1}}))\n\
-         PRINT (OUTER ints)"
-    );
-    let tight = ran_under(2, &source, SMALLEST);
+    // Each hop of `SWEEP` calls `TOUCH` on `ints`, then on `words`: past the smallest budget,
+    // each miss evicts the other's settlement, which no cell holds, while `OUTER`'s frame holds its
+    // own, so `g`, born under it, runs warm.
+    let source = "EXPR #(TOUCH m :Counter) -> Str = #((LET v = (m :| Counter)) (\"x\"))\n\
+                  EXPR #(SWEEP link :Link) -> Str = \
+                  #((LET a = (TOUCH ints)) (LET b = (TOUCH words)) (SWEEP (ATTR link next)))\n\
+                  EXPR #(SWEEP end :Null) -> Str = #(\"done\")\n\
+                  EXPR #(OUTER m :Counter) -> Number = #((LET w = (m :| Counter)) \
+                  (LET g = (FN :{x :Number} -> Number = #((LET v = (m :| Counter)) (x)))) \
+                  (LET swept = (SWEEP chain)) (g {x = 1}))\n\
+                  PRINT (OUTER ints)";
+    let tight = ran_under(2, source, SMALLEST);
     assert_eq!(tight.printed, "1");
     assert!(tight.tiers.evicted > 0, "the misses evict");
     assert_eq!(tight.tiers.cold_births, 0, "no frame is born cold");
-    let roomy = ran(2, &source);
+    let roomy = ran(2, source);
     assert_eq!(roomy.printed, "1");
     assert_eq!(roomy.tiers.cold_births, 0);
 }
@@ -1660,11 +1618,12 @@ const BOXED: &str = "EXPR #(BOXED Elt :Type) -> Number = #((NEWTYPE Box = :{v :E
                      #((LET r = (HOP :{a :Elt b :Elt})) (r))\n";
 
 #[test]
-fn a_type_composed_at_run_reaches_the_settlement_it_keys_by_value() {
-    // Each asker keys its own `Elt`, which its statement's call reads, and `HOP` keys the
-    // record it is handed: one settlement per keyed frame, and the record relayed into the
-    // agent tier once, where every settlement keyed on it reads it.
-    for (asker, keyed, relayed) in [("ASK", 2, 1), ("HOPPING", 3, 1)] {
+fn a_type_composed_at_run_keys_no_settlement_and_its_asker_settles_once() {
+    // Each asker keys its own `Elt`, load content the root holds, so its image relays nothing, and
+    // settles once. The record it composes from `Elt` is content the run produced, whose handle is
+    // not the root's, so the call it is handed to, by a child or by a tail hop, seeks nothing. What
+    // the asker's settlement's records name rests in the agent tier once.
+    for asker in ["ASK", "HOPPING"] {
         let once = ran(DEPTHS[0], &format!("{BOXED}PRINT ({asker} Number)\n"));
         let twice = ran(
             DEPTHS[0],
@@ -1673,18 +1632,20 @@ fn a_type_composed_at_run_reaches_the_settlement_it_keys_by_value() {
         assert_eq!((once.printed.as_str(), twice.printed.as_str()), ("1", "1"));
         assert_eq!(
             (once.tiers.sought, once.tiers.settled, once.tiers.relayed),
-            (keyed, keyed, relayed),
-            "`{asker}`'s composed record is laid by value"
+            (1, 1, 0),
+            "`{asker}` settles alone"
         );
+        assert!(once.tiers.rested > 0, "`{asker}`'s records name the record");
         assert_eq!(
-            (twice.tiers.sought, twice.tiers.settled, twice.tiers.relayed),
-            (2 * keyed, keyed, relayed),
-            "`{asker}`'s second call hits, and a hit relays nothing"
+            (twice.tiers.sought, twice.tiers.settled, twice.tiers.rested),
+            (2, 1, once.tiers.rested),
+            "`{asker}`'s second call hits, and a hit rests nothing"
         );
     }
     assert_eq!(
         ran(DEPTHS[0], &invariant_loop()).tiers.relayed,
-        0,
-        "a written module's types are the root's"
+        1,
+        "a written module's types are the root's: only the application its parameter's retype \
+         stamps, which the frame binds it at, is relayed"
     );
 }

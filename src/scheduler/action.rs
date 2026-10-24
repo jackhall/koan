@@ -28,7 +28,7 @@ use crate::scheduler::continuation::{
 };
 use crate::scheduler::delivery::KDelivery;
 use crate::scheduler::seek::{Lending, Seek};
-use crate::scope::{Code, Facts, LoadFacts, RegionHeader};
+use crate::scope::{Code, Facts, RegionHeader};
 use crate::type_lattice::Halves;
 use crate::values::{ArenaRef, Chain, Half, TypeTiers, Types};
 
@@ -201,8 +201,8 @@ pub struct Step<
     context: &'a mut Context<'graph, 'step, 'here, 'scratch, 'lent, B>,
     /// The type tiers of the graph this step runs over, which every chain it builds reads first.
     tiers: TypeTiers<'graph>,
-    /// The load's facts, beneath every layer the cell's door reads.
-    facts: &'graph LoadFacts<'graph>,
+    /// What the cell's door reads: the settlement it runs under, if any, over the load.
+    facts: Facts<'a>,
     provenance: &'a Provenance,
     /// The arena node the cell runs under, which a park hands its successor.
     arena: ArenaRef,
@@ -248,7 +248,7 @@ where
     pub(super) fn new(
         context: &'a mut Context<'graph, 'step, 'here, 'scratch, 'lent, B>,
         tiers: TypeTiers<'graph>,
-        facts: &'graph LoadFacts<'graph>,
+        facts: Facts<'a>,
         provenance: &'a Provenance,
         arena: ArenaRef,
         spawns: &'a mut Spawns<'graph, B>,
@@ -413,9 +413,10 @@ where
         self.tiers
     }
 
-    /// What this step reads shapes and facts through, at the step's own lifetime: the code and
-    /// the facts of the base the cell's chain rests on, beneath the cell's layers. Neither can be
-    /// kept past the step, so what a cell parks names a segment, a site or a digest instead.
+    /// What this step reads shapes and facts through, at the step's own borrow: the code and the
+    /// facts of the base the cell's chain rests on, beneath the settlement it runs under. Neither
+    /// can be kept past the step, so what a cell parks names a segment, a site or a digest
+    /// instead.
     ///
     /// ```compile_fail
     /// use koan::memory::resident;
@@ -430,8 +431,8 @@ where
     ///     resident(step.writer(), facts)
     /// }
     /// ```
-    pub fn door(&self) -> (Code<'step>, Facts<'step>) {
-        (Code::of(self.facts.shapes()), Facts::of(self.facts))
+    pub fn door(&self) -> (Code<'a>, Facts<'a>) {
+        (Code::of(self.facts.shapes()), self.facts)
     }
 
     /// Whether this cell runs under a settlement: a call's frame the drain found or built one

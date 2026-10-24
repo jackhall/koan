@@ -21,10 +21,6 @@ pub(crate) struct Layer<'o, 'p, L, B> {
     writes: KeyedWrites<'o, 'p>,
 }
 
-#[cfg_attr(
-    not(test),
-    expect(dead_code, reason = "no settlement runs a layer yet")
-)]
 impl<'o, 'p, L: Lays<'o>, B: RecordSource<'o>> Layer<'o, 'p, L, B> {
     /// A layer over `base` binding `binding`, which binds every unknown the base's binds alike.
     pub(crate) fn new(lay: L, scratch: BumpAllocator<'p>, base: B, binding: Binding<'o>) -> Self {
@@ -48,6 +44,7 @@ impl<'o, 'p, L: Lays<'o>, B: RecordSource<'o>> Layer<'o, 'p, L, B> {
     }
 
     /// What this layer binds: its base's binding and more.
+    #[cfg(test)]
     pub(crate) fn bound(&self) -> Binding<'o> {
         self.binding
     }

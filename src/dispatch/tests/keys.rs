@@ -1,12 +1,15 @@
 //! Settlement keys over frontiers: which names a callable's key lists, folded from the
 //! frontiers of the units beneath it, and what a call of it seeks at run.
 
+use crate::parse::ExpressionPart;
 use crate::program::Program;
-use crate::scope::{BodyShape, Mint, ShapeKind, Slot, UnitIndex, Unknown};
+use crate::scope::{
+    BodyShape, Mint, Narrowing, Segment, ShapeKind, Site, Slot, UnitIndex, Unknown,
+};
 
-use super::caching::{PRELUDE, Ran, SMALLEST, every_shape, minted, ran_under};
+use super::caching::{PRELUDE, Ran, SMALLEST, every_shape, minted, program, ran_under};
 use super::frontiers::{quantified, seam, unknown};
-use super::statics::{body, loaded};
+use super::statics::{body, loaded, slot};
 use crate::values::BuildBudget;
 
 /// Two overloads of `PICK`, one at `Number` and one at `Str`.
@@ -414,4 +417,142 @@ fn a_name_read_only_at_its_callable_s_entry_keys_nothing() {
     let source =
         "EXPR FOR ALL #[First Second] #(PAIR x :First WITH y :Second) -> Str = #(\"apart\")\n";
     assert_eq!(keyed(source, &["y", "x", "Second", "First"]), None);
+}
+
+thread_local! {
+    /// Each use a frame found selected in its facts, by its body's segment and its site.
+    static CHOSEN: std::cell::RefCell<Vec<(Segment, Site)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Note a use a frame found selected.
+fn chose(segment: Segment, site: Site) {
+    CHOSEN.with(|chosen| chosen.borrow_mut().push((segment, site)));
+}
+
+/// The site of `WRAP`'s `PICK` use in the program [`ran`] runs over `source`, and whether the load
+/// selected it.
+fn wraps_pick(source: &str) -> (Segment, Site, bool) {
+    loaded(&program(2, source), |program| {
+        let wrap = quantified(program);
+        let Some(ExpressionPart::Expression(node)) = wrap.rhs(slot(program, wrap, "p")) else {
+            panic!("`p` is bound to a call");
+        };
+        let site = wrap.site_of_node(node.reference());
+        let narrowing = program.facts().use_statics(wrap, site).narrowing;
+        (
+            wrap.segment(),
+            site,
+            matches!(narrowing, Narrowing::Selected(_)),
+        )
+    })
+}
+
+#[test]
+fn a_frame_under_a_settlement_reads_its_settled_facts() {
+    // `PICK x` waits on `Elt` at the load, which leaves both overloads; a frame under the
+    // settlement at `Elt := Number` finds the one at `Number` selected.
+    let source = format!("{PICK}{}PRINT (WRAP 1)\n", WRAPS[0]);
+    let (segment, site, selected) = wraps_pick(&source);
+    assert!(!selected, "the load selects nothing at `PICK x`");
+    CHOSEN.with(|chosen| chosen.borrow_mut().clear());
+    crate::dispatch::evaluate::CHOSE.with(|hook| hook.set(Some(chose)));
+    let ran = ran(&source);
+    crate::dispatch::evaluate::CHOSE.with(|hook| hook.set(None));
+    assert_eq!((ran.printed.as_str(), ran.tiers.settled), ("n", 1));
+    let chosen = CHOSEN.with(|chosen| chosen.take());
+    assert!(chosen.contains(&(segment, site)), "{chosen:?}");
+}
+
+thread_local! {
+    /// The body whose units a test counts the walks' visits to, beside the count.
+    static VISITS: std::cell::Cell<(Option<Segment>, usize)> = const { std::cell::Cell::new((None, 0)) };
+}
+
+/// Count a walk's visit to `unit`, where it is of the body counted.
+fn visit(unit: crate::scope::UnitId) {
+    VISITS.with(|visits| {
+        let (counted, count) = visits.get();
+        if counted == Some(unit.segment) {
+            visits.set((counted, count + 1));
+        }
+    });
+}
+
+#[test]
+fn a_fact_is_settled_once_per_settlement() {
+    // Two frames under one key: the second finds the settlement the first's miss built, so the
+    // units of `WRAP` its binding wakes are walked once past the load's walk.
+    let visits = |calls: &str| {
+        let source = format!("{PICK}{}{calls}", WRAPS[0]);
+        let (wrap, _, _) = wraps_pick(&source);
+        VISITS.with(|visits| visits.set((Some(wrap), 0)));
+        let ran = crate::dispatch::walk::visiting(visit, || ran(&source));
+        (ran.tiers.settled, VISITS.with(|visits| visits.get().1))
+    };
+    let (settled, walked) = visits("PRINT (WRAP 1)\n");
+    let (_, loaded) = visits("LET unused = 1\n");
+    assert_eq!(settled, 1);
+    assert!(
+        walked > loaded,
+        "the miss walks `WRAP`'s body past the load"
+    );
+    assert_eq!(visits("PRINT (WRAP 1)\nPRINT (WRAP 2)\n"), (1, walked));
+}
+
+/// Two overloads of `PICK` at `Number`, which a call at `Number` cannot rank, and one at `Str`.
+const TWINS: &str = "EXPR #(PICK x :Number) -> Str = #(\"a\")\n\
+                     EXPR #(PICK x :Number) -> Str = #(\"b\")\n\
+                     EXPR #(PICK x :Str) -> Number = #(1)\n";
+
+/// `WRAP` over [`TWINS`]: at the load `PICK x` waits on `Elt`.
+const TWIN_WRAP: &str = "EXPR FOR ALL #[Elt] #(WRAP x :Elt) -> Any = #((LET p = (PICK x)) (p))\n";
+
+/// A refusal's message, its location dropped.
+fn unlocated(message: &str) -> &str {
+    message.split_once(": ").map_or(message, |(_, rest)| rest)
+}
+
+/// The refusal the load words for [`TWINS`] with `WRAP`'s `x` declared at `Number`.
+fn declared_refusal() -> String {
+    let declared = format!(
+        "{TWINS}EXPR #(WRAP x :Number) -> Any = #((LET p = (PICK x)) (p))\nPRINT (WRAP 1)\n"
+    );
+    let refused = super::run(&declared);
+    let refused = refused
+        .strip_prefix("load: ")
+        .expect("the declared program refuses");
+    unlocated(refused).to_string()
+}
+
+/// The fault a run printed, its location dropped.
+fn fault(printed: &str) -> &str {
+    unlocated(printed.strip_prefix("error: ").expect("the run faults"))
+}
+
+#[test]
+fn a_refusal_a_settlement_reaches_faults_the_asker_worded_as_the_load_words_it() {
+    // `Elt := Number` makes `PICK x` certainly ambiguous: a load with `x` declared at `Number`
+    // refuses, and a frame under the settlement faults with that refusal. The second field's ask
+    // finds the refused settlement under the key and is born under it too.
+    let ran = ran(&format!(
+        "{TWINS}{TWIN_WRAP}PRINT {{a = (WRAP 1), b = (WRAP 2)}}\n"
+    ));
+    assert_eq!(fault(&ran.printed), declared_refusal());
+    assert_eq!((ran.tiers.sought, ran.tiers.settled), (2, 1));
+}
+
+#[test]
+fn a_settlements_facts_and_refusals_are_the_same_after_its_eviction() {
+    // The fields' frames run one after another, `WRAP "s"`'s between the two at `Number`: past the
+    // smallest budget, its miss evicts the refused settlement, and the next miss settles it again,
+    // refusing alike.
+    let source =
+        format!("{TWINS}{TWIN_WRAP}PRINT {{a = (WRAP 1), b = (WRAP \"s\"), c = (WRAP 2)}}\n");
+    let tight = ran_under(2, &source, SMALLEST);
+    let roomy = ran(&source);
+    assert_eq!(tight.printed, roomy.printed);
+    assert_eq!(fault(&tight.printed), declared_refusal());
+    assert_eq!((tight.tiers.settled, tight.tiers.evicted), (3, 2));
+    assert_eq!((roomy.tiers.settled, roomy.tiers.evicted), (2, 0));
 }

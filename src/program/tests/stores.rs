@@ -14,11 +14,11 @@
 use crate::build::{Layer, LoadStore};
 use crate::memory::{Bump, BumpAllocator, BumpVec, Lays, Writer, resident};
 use crate::program::{CellSubstrate, KBirth, KBundle, KState, Language, Running};
-use crate::scheduler::{Action, Step, StepError};
+use crate::scheduler::{Action, Ask, Step, StepError};
 use crate::scope::tests::with_shapes;
 use crate::scope::{
-    Address, Binding, Bound, Closing, Frontier, Keyed, LoadFacts, Segment, ShapeError, Shapes,
-    Site, Slot, Store, Tree, Typed, UnitFacts, UnitId, Unknown, each_part,
+    Address, Binding, Bound, Closing, Facts, Frontier, Keyed, LoadFacts, Segment, ShapeError,
+    Shapes, Site, Slot, Store, Tree, Typed, UnitFacts, UnitId, Unknown, each_part,
 };
 use crate::type_lattice::{KType, display_name};
 use crate::values::{Chain, Knotted, Nothing, TypeValue, Value};
@@ -241,6 +241,18 @@ impl<'graph> Running<'graph> {
             bump,
             &scratch,
         ))
+    }
+
+    /// What a miss under the root settles for `ask`, read through the facts a frame under it
+    /// reads, laid in `bump`: `None` where a module `ask` binds has no tree in the load.
+    pub fn settle<'l, L: Language>(&self, ask: &Ask, bump: &'l Bump) -> Option<Facts<'l>>
+    where
+        'graph: 'l,
+    {
+        let load: &'l LoadFacts<'l> = self.program().facts();
+        let settled =
+            super::super::settle::settled::<L>(self.program(), bump, Facts::of(load), ask, &&())?;
+        Some(Facts::under(load, Some(resident(bump, settled))))
     }
 
     /// Run `L`'s walk over the program from the body at `at` down into `store`, interning through
