@@ -38,10 +38,10 @@ turns the things those keys name into an image, and nothing resumes from one.
   a run started from it; a test observes that the binding's warm tier is not
   rebuilt.
 - The image closes over itself: every serialized reference names a cell in
-  the image, so the build tree's rule that no build cell holds a handle to a
+  the image, so the build tree's rule that no arena node holds a handle to a
   run cell is what makes the image complete.
 - Relocation is a property of the types laid, enforced where drop-freeness is
-  today: a value laid in program storage or in a build cell's region
+  today: a value laid in program storage or in an arena node's bump
   implements the relocation walk the `Writer` requires, as its lay verbs
   require `!needs_drop` ([`Writer`](../../cellgraph/src/region.rs)) — and a
   Rust function pointer, such as a

@@ -553,7 +553,7 @@ tied.
 ## Load-time types
 
 A shape holds no fact a type decides: it is a function of the text, the
-builtin table and the operator claims, built once per code value, and holds
+builtin table and the operator claims alone, and holds
 no cell, so `BodyShape` is covariant in its lifetime and `Sync`. What
 [the load's walk](../build/README.md#the-one-walk) decides rests in records
 off the shape, and the facts of the text that span bodies rest in the
@@ -924,8 +924,10 @@ A shape is built from code in two places, and each fills different names.
 - **`EVAL`.** `EVAL code -> <Type>` runs a shape built from the code alone. The shape
   depends on nothing else, since a `\` mark is filled by what the `EVAL`
   offers, so a written quote's is built once, where the program loads, and every
-  `EVAL` of that quote runs it; code composed at run time builds its own once,
-  kept where the value lives. The build refuses nothing where the program
+  `EVAL` of that quote runs it; code composed at run time has its own in a
+  composition, found by the code's digest wherever it runs
+  ([the build module](../build/README.md#two-trees-under-one-drain)). The
+  build refuses nothing where the program
   loads: an error in it is kept and reported by the `EVAL` that runs it, so a
   quote is checked only where its code runs. The frame it runs in fills no hole, so a name left unbound is an
   unbound-name error. No shape keeps a defining scope for an `EVAL` to search,

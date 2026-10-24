@@ -8,7 +8,7 @@ The **run tree** is the call tree: the program's run root with every frame a
 tree cell or a tenant under it. The **build tree** is where the program's
 text is decided: the build root's step writes the written program's shapes,
 its type facts and the frozen load's types, and a specialization holds what
-a binding settles, the types and verdicts it reaches resting in the agent
+a binding settles, a rooted one's types and verdicts resting in the agent
 tier. Its cells are
 **build cells**; the run tree's are **run cells**. The
 [scheduler](../scheduler/README.md) drains both, so type solving interleaves
@@ -56,19 +56,19 @@ door and the lookup before a birth, and nothing else.
   that specialization, so a specialization's ancestors are every enclosing
   binding's. A specialization is cache: its parent can evict it, and a miss
   rebuilds it.
-- **A composed-code cell** is born with a code value composed at run time. It
-  is a chain root in the one-chain sense of
-  [quotes](../scope/README.md#quotes), built from the code alone, but a tree
-  cell under the build root, since it reads the root's types. The code
-  value's home run cell counts it, and it is released when that count reaches
-  zero.
+- **A composition** holds the shape of code composed at run time, a chain
+  root in the one-chain sense of [quotes](../scope/README.md#quotes), built
+  from the code alone and keyed on its syntax digest. The drain finds it by
+  digest at each `EVAL` of the code and each call of a callable born in it,
+  rebuilding on a miss.
 - **One core, not one per segment.** Every written segment is program-long, a
   specialization's key already names its segment by its index, and the
   frozen load wants one table. Written code has
-  one core; composed code adds a build cell per code value.
+  one core; composed code adds a composition per distinct syntax, its
+  segments numbered per shape.
 - A specialization never rebuilds shapes: written code's shapes live in
-  program storage, composed code's in its cell. The raw parse stays in program
-  storage.
+  program storage, composed code's in its composition. The raw parse stays in
+  program storage.
 
 **Lingo.** A **type fact** is a
 [load-time type](../scope/README.md#load-time-types) or verdict, and the
@@ -273,13 +273,16 @@ unifier are what the rules call, and this module lives downstream of them.
   ([below](#keys-which-bindings-make-a-specialization)). A **statement
   seam** settles nothing: its binding is content the run produces, an
   `EVAL`'s or an action's result, which keys nothing, so the facts waiting on
-  it stay unsettled, read per read, and the run cell's lend never changes. A
+  it are decided in the frame's own
+  [activation](../../design/build-storage.md#settlements-and-compositions) at
+  the statement's binding event, and the run cell's lend never changes. A
   statement's binding that
   entry content determines — a `MATCH` arm's `it` over a parameter, a path
   hop rooted at one — is settled at the entry seam, since a load with that
   content declared would type it closed. A `USING … SCOPE` block's surfaced
   names are not among them: the load cannot type what a `USING` binds from
-  content, so they wait at the `USING` statement and stay unsettled. A unit
+  content, so they wait at the `USING` statement and are decided in the
+  activation there. A unit
   that reads an entry-bound unknown and a later-bound one seams at the later
   site, and keys nothing through it.
 - **One build cell per seam per observed binding.** Facts that wake together,
@@ -344,8 +347,9 @@ By variance alone:
   carrier the same each hop: the binding's digest names a shared
   specialization, the warm tier, shared across parks and across callers;
 - **varying** content, a carrier minted per call, an action's result, a
-  rebound parameter: no specialization. The facts waiting on it stay
-  unsettled, read per read, and the parent never sees a one-off child.
+  rebound parameter: no specialization. The facts waiting on it are decided
+  in the frame's activation, once per binding event, and the parent never
+  sees a one-off child.
 
 A binding is content and digests, and its types reach a specialization as
 nodes the drain lays in its branch before its step
@@ -367,7 +371,7 @@ frontier names, whether or not it caches; only a caching body's invariant
 sites name a warm tier, and a frame that does not cache borrows its
 specialization without reading a type tier through it. A frontier
 whose seam is a statement's unit keys nothing, nor does one at a quote's code entry: an
-`EVAL` frame seeks nothing. So a fact of `inner` waiting on `outer`'s `m` and
+`EVAL` frame seeks no specialization, only composed code's composition. So a fact of `inner` waiting on `outer`'s `m` and
 its own `Elt` sits at `inner`'s entry, `outer` keys on `m` and `inner` on
 `Elt`, and `inner`'s specialization, a child of `outer`'s, lies under a chain
 whose keys cover the frontier. A parameter keys only where its declared type is
@@ -398,7 +402,7 @@ itself through a value the load cannot follow, so its every hop seeks with the
 actual content, as a hop into another callee does; it keys on its names like
 any other, though its mint sites stay varying. Nothing else a frame binds
 enters the key, so a name no fact but its own type, and no invariant site,
-reads costs a birth nothing, a body that keys nothing seeks nothing, and a
+reads costs a birth nothing, a body that keys nothing seeks no specialization, and a
 keyed frame seeks
 whatever its placement. A capture never enters a key: `inner`'s fact on a
 capture `xs` waits at `outer`'s entry, so `outer` keys on `xs`, and a fact
@@ -407,8 +411,7 @@ whose frontier the chain's keys do not cover stays unsettled.
 ## References between the trees
 
 - **Run to build: one counted borrow per write home born under a binding.**
-  A run cell born under a binding borrows its specialization, and an `EVAL`
-  of composed code borrows the composed-code cell; a tail successor of the
+  A run cell born under a binding borrows its specialization; a tail successor of the
   same callee, whose name does not escape, borrows the specialization its
   frame ran under, with no lookup;
   a run cell born under no binding borrows its parent's scratch, which no
@@ -428,7 +431,10 @@ whose frontier the chain's keys do not cover stays unsettled.
   waits on the count, which drops at a borrower's disposal. No matrix pin runs in either
   direction: the run root pins nothing of the build tree, and a build cell is
   never pinned by a run cell. The drain resolves the borrow before the run
-  cell is born, and the cell holds it, unchanged, for its life.
+  cell is born, and the cell holds it, unchanged, for its life. A step reads
+  its node's shape and facts through that reference at its own lifetime and
+  copies out indexes, digests and type handles alone, so no byte in a half or
+  a value names the arena.
 - **Build to run: nothing stored.** A build cell holds no handle to a run
   cell. A binding reaches a build cell as the key the drain enters it under
   in its parent's table and as its **nodes**: the `Seek` carries the binding's
@@ -481,7 +487,7 @@ whose frontier the chain's keys do not cover stays unsettled.
 ## Types across the trees
 
 - **The tiers, longest-lived first:** the frozen load the build root's step
-  builds; the agent tier, where every specialization's types rest; a run
+  builds; the agent tier, where every rooted specialization's types rest; a run
   cell's region branch; its scratch branch. A run cell's chain reads them in
   that order however deep seams nest. A `Shares` run cell's scratch is its
   host's, and its caching chain reads its host's region between the agent
@@ -498,7 +504,7 @@ whose frontier the chain's keys do not cover stays unsettled.
   records keep is adopted into the agent tier. The agent tier outlives
   every cell, so a run cell's region and scratch reference its nodes by
   covariance alone, and the reverse never holds. It grows by each distinct
-  binding the program keys and is released with the program. A composite a
+  load-content binding the program keys and is released with the program. A composite a
   run cell builds over a specialization's carrier lies in the run cell's
   scratch tier.
 - **A per-call type reaches a run cell's region only by adopt at an exit**,
@@ -553,7 +559,7 @@ whose frontier the chain's keys do not cover stays unsettled.
 - **The load** stands the build root up beside the run root and runs the build
   root's step to quiescence over the written program before the top-level
   run cell's first value step. The root tier is written during the load and
-  never after; a specialization's branch and a composed-code cell's are
+  never after; a specialization's branch and a composition's bump are
   written during the program's run.
 
 ## Refusal
@@ -565,8 +571,8 @@ time.
   overlap refusal in written code refuse before anything runs. A written
   quote's code is elaborated eagerly and its refusal recorded, then reported
   where an `EVAL` runs it.
-- **Lazy:** a specialization checks its binding, and a composed-code cell its
-  text, when each arrives. Every refusal a resumption reaches faults at the
+- **Lazy:** a specialization checks its binding, and a composition its
+  syntax, when each arrives. Every refusal a resumption reaches faults at the
   resumption point, worded as the load words it, since a resumption is a
   load with its binding declared: a use left with no candidate names the
   call, as an admission miss reads, and an ambiguity or a return,
@@ -582,7 +588,7 @@ time.
 |---|---|---|---|
 | build root | the load | the program's end | the root-level table; it writes the shapes, records, folds and root tier into the owner's storage |
 | specialization | first miss on its binding | its own or an ancestor's eviction, then its last borrower's disposal | settled facts and the warm types they name, its residual, verdicts, its children's table |
-| composed-code cell | the code value's birth | the value's home's death | the code's shape and facts |
+| composition | the first `EVAL` or call missing on its syntax | its eviction | the code's shape and its facts |
 | run root | the load | the program's end | top-level bindings |
 | run cell | its birth | its disposal | activation, values, region branch, scratch |
 

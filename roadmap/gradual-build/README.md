@@ -44,8 +44,8 @@ as surprises, not scheduled.
 - **An `EVAL` frame over a written quote's code.** A quote's code binds its
   holes, marks and `$` names at its entry, but an `EVAL` frame seeks no
   specialization: it copies its asker's lend, and a quote's chain of build
-  cells is not placed. [Code splicing](../metaprogramming/code-splicing.md)
-  places composed code's; written code's has no owner.
+  cells is not placed. [The build arena](build-arena.md) places composed
+  code's under its composition; written code's has no owner.
 - **A site the load finds by searching its body.** A type path whose root is
   written in place (`:((ID b).Carrier)`) and a read of a name bound to a
   `FOR ALL` function find their part's statement by searching every statement

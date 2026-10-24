@@ -226,5 +226,5 @@ changes what a reader sees and which overload runs.
 - [A container literal's element type](../roadmap/gradual-typing/container-literal-types.md)
 - [A nested projection](../roadmap/gradual-typing/nested-projection.md)
 - [The build arena](../roadmap/gradual-build/build-arena.md) — a frame's
-  facts settled in a build cell or in its own activation, over the content
-  its bindings bring.
+  facts, in a settlement or in its own activation, over the content its
+  bindings bring.

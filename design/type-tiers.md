@@ -21,7 +21,7 @@ where each rests it.
 | tier | lives from | to | holds |
 |---|---|---|---|
 | frozen load | the load | the program's end | every type the load builds, shared by every agent |
-| agent tier | the agent's birth | its death | every type the agent's build cells rest: a binding's nodes and the types the cell's settled facts name, among them what the invariant sites of a caching frame keyed on that binding mint |
+| agent tier | the agent's birth | its death | every type the agent's settlements under the root rest: a binding's type nodes and the types the settlement's facts name, among them what the invariant sites of a caching frame keyed on that binding mint |
 | region branch | the region's birth | its death | a porous body's run-built types, and what a caching body's exits carry |
 | scratch branch | the habitat's reset | its next reset | a step's scratch types, and every type a caching body builds |
 
@@ -39,8 +39,8 @@ tier, then the branches longest-lived first, then follows a branch's link to
 its spawner's, caching the hit. A verdict over two load types is read from
 the load's table, one over load and agent types from the agent's, and any
 other from the branches' tables, shortest-lived first. The frozen load is
-closed after the load and the agent tier is written only by a build cell at
-its rest, so every type the run builds lives in a branch, a composite over
+closed after the load and the agent tier is written only by a settlement
+under the root at its rest, so every type the run builds lives in a branch, a composite over
 load types alone included.
 
 A crossing carries a value's types to where it lands
@@ -182,15 +182,16 @@ declared per call is classed alike by the type binders its declaration reads:
   would intern anything and finds itself there after the first.
 - **invariant**: a tree whose every leaf is a capture or a parameter the
   body's tail loop passes through unchanged, so the site mints the same
-  content each hop, and whose every parameter leaf keys a build cell — a
+  content each hop, and whose every parameter leaf keys a settlement — a
   type binder, or one declared closed under `Module` or as a type value,
   bound to content the load names
-  ([build storage](build-storage.md#a-build-cell)). Its type is a fact the
-  build cell settles under the binding, so it lies in the **warm tier**: the
-  agent tier, where the cell rests it
+  ([build storage](build-storage.md#settlements-and-compositions)). Its type
+  is a fact the settlement settles under the binding, so it lies in the
+  **warm tier**: the agent tier, where a settlement under the root rests it
   ([below](#the-agent-tier-as-the-warm-tier)), laid by the build and read by
   every frame under the binding, whatever its placement; a frame whose
-  binding names run content mints it into its scratch.
+  binding names run content, or whose settlement lies under a composition,
+  mints it into its scratch.
 - **varying**: any other tree — one with a leaf keyed on a binder inside the
   body, an action's result or an inline `MATCH`, on a parameter the loop
   rebinds, or on a parameter of any other declared type, whose digest costs
@@ -210,7 +211,7 @@ tier it reads between the agent tier and its own by value, so building one
 per step lays nothing; no branch holds that tier, since a habitat's door
 lives one step and a branch lives as long as its half. A type the body builds
 stays in its scratch; an invariant site's type is rested in the agent tier by
-the build cell before any frame is born under the binding, so every frame
+the settlement before any frame is born under the binding, so every frame
 reads it there and lays nothing into it, and the verdicts the build reaches
 over those types are recorded there and stay warm across hops and callers. A
 body whose binding names run content runs on the same chain and mints into
@@ -241,23 +242,25 @@ soundness rests on the sealed class alone.
 
 ## The agent tier as the warm tier
 
-A caching frame whose body keys a build cell — its caching record lists the
+A caching frame whose body keys a settlement — its caching record lists the
 parameters its invariant sites read, or a fact seamed at an entry in its
 subtree, other than a parameter's own type, waits on one of its names, and
 each name is bound to content the load names
-([build storage](build-storage.md#a-build-cell)) — is born under a build cell
-of its body under the content at those names: one the drain finds in, or
-builds into, the arena before the frame is born. The cell lays the binding's
-nodes and the types its facts name in the agent tier, so a frame finds them
-whatever became of the asker, and every frame of that body under that
-binding, whatever park asked for it and whatever its placement, reads the
-same nodes and verdicts; a hop of a tail loop of one callee whose name does
-not escape reads under the cell its frame ran under, with no lookup. The
-cell's facts are evicted under the arena's budget, least recently used and
-leaf first, while the types it rested stay for the agent's life, so no frame
-loses the warm tier under it. A frame whose binding names run content is born
-under no build cell and settles its facts in its own activation, minting into
-the scratch it writes, as below.
+([build storage](build-storage.md#settlements-and-compositions)) — is born
+under a settlement of its body under the content at those names: one the
+drain finds in, or builds into, the arena before the frame is born. A
+settlement under the root lays the binding's type nodes and the types its facts
+name in the agent tier, so a frame finds them whatever became of the asker,
+and every frame of that body under that binding, whatever park asked for it
+and whatever its placement, reads the same type nodes and verdicts; a hop of a
+tail loop of one callee whose name does not escape reads under the
+settlement its frame ran under, with no lookup. A settlement's facts are
+evicted under the arena's budget, least recently used and leaf first among
+the arena nodes no frame holds through its borrow, a parent link or a pin, while
+the types one under the root rested stay for the agent's life, so no frame
+under one loses the warm tier. A frame whose binding names run content is
+born under no settlement and settles its facts in its own activation,
+minting into the scratch it writes, as below.
 
 ## The scratch branch as a cache
 
@@ -267,7 +270,7 @@ holds that habitat's reset off until the registration that replaces it or the
 cell's death ([the cell](../cellgraph/README.md#the-cell)). So the host's
 scratch lives from the ask to the delivery, whatever the callee does in
 between, and resets at the first quiet step end after the evaluation wakes.
-Every `Shares` callee born under that park with no build cell is a tenant of
+Every `Shares` callee born under that park with no settlement is a tenant of
 the host, whose scratch is its own, so that scratch is its warm tier and its
 cold tier at once. A tail loop of `Shares` callees is therefore warm at its
 invariant sites, where the same carrier or per-call nominal minted each hop

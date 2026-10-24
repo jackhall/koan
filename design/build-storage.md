@@ -2,7 +2,7 @@
 
 Where the work of deciding a program lives: the frozen load every agent
 shares, the tier an agent keeps for what its build rests, and the arena its
-build cells are evicted from. The story across
+settlements and compositions are evicted from. The story across
 [the type lattice](../lattice/src/types/identity.md#storage-a-root-and-its-branches),
 which keeps each tier's table, [the build](../src/build/README.md), which
 decides, [the scheduler](../src/scheduler/README.md), which runs, and
@@ -13,7 +13,7 @@ decides, [the scheduler](../src/scheduler/README.md), which runs, and
 | tier | brand | written | holds | released |
 |---|---|---|---|---|
 | frozen load | `'load`, one per program, `Sync` | by the load alone, frozen at its end | load content: every type the load builds, its verdicts, the shape, builtins, symbols, sources, the facts it decides | at the program's end |
-| agent tier | `'agent`, one per agent | insert-only, by a build cell at its rest | what the agent's build cells rest: their types and verdicts; verdicts over load pairs the load's table lacks; the agent's symbol overlay | at the agent's death, whole |
+| agent tier | `'agent`, one per agent | insert-only, by a settlement under the root at its rest | what the agent's settlements under the root rest: their types and verdicts; verdicts over load pairs the load's table lacks; the agent's symbol overlay | at the agent's death, whole |
 | region, scratch | `'here`, `'scratch` | as [type tiers](type-tiers.md) says | runtime types: what a frame builds, mints in a loop, a deepening list | with the region; at the habitat's reset |
 
 The brands are ordered, `'load: 'agent: 'here: 'scratch`, and a chain reads
@@ -39,7 +39,13 @@ The frozen load and the agent tier are freed by none of the three. The load is
 released at the program's end, the agent tier at its agent's death, and every
 cell of the agent dies first. So a region node references a rested type as it
 references a load type, and a rested type is never relaid, never counted and
-never read through a sealed claim. The run's own halves keep the rules
+never read through a sealed claim. An arena node is freed by eviction, so no
+byte laid in a region, a scratch, a parked state or a value references one:
+a step reads its arena node's shape and facts at its own lifetime and copies
+out indexes, digests and type handles alone, which is what lets the borrower
+count drop at release. A settlement's pin on the composition whose shape its
+binding's tree names is a borrower count between arena nodes, and a borrowed
+arena node is never evicted. The run's own halves keep the rules
 [type tiers](type-tiers.md#a-node-lives-in-a-tier-its-children-outlive) gives
 them.
 
@@ -79,7 +85,7 @@ declarations decide, in layers each agent then reads instead of recomputing:
 the load's types, schemes, signatures, shapes, builtins and symbols; a
 decision at every site whose types are all concrete, no binder reachable; the
 closed verdict table; for each generic body, which binders each site's types
-mention, so a specialization evaluates only its dependent sites; and dispatch
+mention, so a settlement evaluates only its dependent sites; and dispatch
 candidates per site, narrowed by the load-known argument types. What it
 cannot hold is a node that mentions a binding's carried type, a verdict over
 one, a decision at a dependent site, and anything `EVAL` builds.
@@ -94,7 +100,7 @@ covariant in their lifetime.
 An insert-only tier of nodes and verdicts laid in a bump the agent owns. A
 node is handed out as `&'agent StoredNode<'agent>` and never moves, nothing in
 the tier is released before the tier is released whole, and the tier goes
-with its agent. Two things intern into it: a build cell at its rest, laying
+with its agent. Two things intern into it: a settlement under the root at its rest, laying
 the types its facts name, the binding's nodes it relaid from its image, and
 the verdicts it reached; and a run's verdict over two load types the load's
 table lacks. A run cell reads the agent tier and interns nothing into it: a
@@ -103,29 +109,55 @@ the names its `EVAL`s parse, sits beside it; a render reads the overlay, then
 the frozen table, and the two never disagree, since a symbol is its text's
 digest.
 
-## A build cell
+## Settlements and compositions
 
-A build cell is one frontier class under one binding, keyed on every name its
-seam binds, and each of those names is bound to content the frozen load
-names: a type whose in-root bit is set, a type value naming such a type, or a
-module whose content tree is closed, which the load computes. A binding to
-anything else births no build cell; the site it reaches is decided in the
+The **build arena** holds two kinds of node under one root. A **settlement**
+is the open facts of one frontier class settled under one binding, keyed on
+every name its seam binds, each of those names bound to content the frozen
+load names: a type whose in-root bit is set, a type value naming such a type,
+or a module whose content tree is closed, computed by the load under the root
+and by the load or a composition under one. A binding
+to anything else births no settlement; the site it reaches is decided in the
 frame's own activation, over the carried types, in the frame's own tiers
-([the build arena](../roadmap/gradual-build/build-arena.md)).
+([the build arena](../roadmap/gradual-build/build-arena.md)). A
+**composition** is the shape of code composed at run time and the facts that
+wait on nothing but its syntax, keyed on the code's syntax digest, as a
+module's shape is its text while its captures bind at their statements. The
+drain finds it by digest at each `EVAL` of the code and each call of a
+callable born in it, and rebuilds it on a miss from the syntax the value
+carries.
 
 | the key names | decided in | lives |
 |---|---|---|
-| load content | a build cell, its types rested in the agent tier | the agent's life, shared by every frame under the binding |
+| load content | a settlement, its types rested in the agent tier under the root | the agent's life, shared by every frame under the binding |
 | run content | the frame's activation | the frame |
+| composed syntax | a composition | until its eviction, shared by every `EVAL` of the code |
 
-A build cell's facts, residual and table live in the **build arena**: the
-agent's own, outside the cell graph, with parent links, a borrower count that
-drops at the borrower's release, and one budget over the whole arena evicted
-least recently used, leaf first. Its types are not in the arena: they rest in
-the agent tier and outlive the cell. So a loop whose statement binds
-load-named content holds O(1) build cells, since the budget evicts their
-facts, while the types those cells rested stay for the agent's life. The cell
-graph holds run cells alone, and the drain keeps the build's books.
+An arena node holds its facts, its residual and its children's table, and a
+composition its shape; no arena node holds a type. The arena is the agent's
+own, outside the cell graph, with parent links, a borrower count that drops
+at the borrower's release, and one budget over the whole arena evicted least
+recently used, leaf first, among the arena nodes no frame holds through its
+borrow, a parent link or a pin, since evicting a held one frees nothing. A
+settlement binds a module by the closed tree its layer computed, the load's
+under the root and the load's or a composition's under one, pinning the
+computing composition as a borrower; each layer indexes the closed trees it
+computes by their identity, the content's digest, so a request resolves a
+module's digest to its tree in the chain it reaches; an activation binds
+one by the value's digest. A callable carries the requests that built its
+chain, so a call after an eviction rebuilds the settlements it ran under
+rather than being born cold. A settlement under the root rests its types and
+verdicts in the agent tier, where they outlive it: its binding is load
+content, finitely many per text, so what it rests may live in an insert-only
+tier. So a loop calling a keyed callee on load-named content holds O(1)
+settlements, since the budget evicts their facts, while the types they rested
+stay for the agent's life. A composition and every settlement under it rest
+nothing there, since their number is bounded by the run: a type composed code
+declares is run content the frame mints at the declaring statement, routed by
+its mint-site class, and a fact names a type by its digest, resolved in the
+root, in the frame's chain or against the handles the frame's key carries,
+or minted by the frame as a term over those handles.
+The cell graph holds run cells alone, and the drain keeps the build's books.
 
 ## Agents
 
@@ -142,5 +174,6 @@ agent, its budget and its stack
 ## Open work
 
 - [The build arena](../roadmap/gradual-build/build-arena.md) — the arena,
-  its keys and its budget, and the activation as a decision's other home.
+  its keys and its budget, a composition's lifetime, and the activation as
+  a decision's other home.
 - [Agents](../roadmap/rewrite/agents.md) — threads sharing the frozen load.
