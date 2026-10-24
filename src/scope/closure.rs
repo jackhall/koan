@@ -8,18 +8,18 @@
 //! is never a placeholder.
 
 use crate::memory::{BumpAllocator, BumpVec, Edge, Writer, collect, resident};
-use crate::values::{BuildRef, Knotted, KnottedFamily, Link, Value, Weight};
+use crate::values::{ArenaRef, Knotted, KnottedFamily, Link, Value, Weight};
 
 use super::activation::ActivationView;
 use super::shape::{BodyShape, CaptureSlot, CaptureSource};
 
 /// A callable's closure bindings, in capture-slot order, beside the build cell the callable was
-/// born under: where a call of it looks up its specialization. The build cell is not content, so
+/// born under: where a call of it looks up its settlement. The build cell is not content, so
 /// the closure's digest and equality read the slots alone.
 #[derive(Clone, Copy)]
 pub struct ClosureBindings<'cell, X = crate::values::Nothing> {
     slots: &'cell [Link<'cell, X>],
-    build: BuildRef,
+    build: ArenaRef,
 }
 
 impl<'graph, 'cell, X: Knotted> ClosureBindings<'cell, X> {
@@ -27,7 +27,7 @@ impl<'graph, 'cell, X: Knotted> ClosureBindings<'cell, X> {
     pub fn empty() -> &'cell ClosureBindings<'cell, X> {
         &ClosureBindings {
             slots: &[],
-            build: BuildRef::ROOT,
+            build: ArenaRef::ROOT,
         }
     }
 
@@ -63,14 +63,14 @@ impl<'graph, 'cell, X: Knotted> ClosureBindings<'cell, X> {
     pub fn of(
         writer: Writer<'cell, '_>,
         captures: &[Link<'cell, X>],
-        build: BuildRef,
+        build: ArenaRef,
     ) -> &'cell ClosureBindings<'cell, X> {
         let slots = collect(writer, captures.iter().copied());
         resident(writer, ClosureBindings { slots, build })
     }
 
     /// The build cell the callable was born under.
-    pub fn build(&self) -> BuildRef {
+    pub fn build(&self) -> ArenaRef {
         self.build
     }
 

@@ -1,4 +1,4 @@
-//! The build module's tests: a specialization's key, the keys fold, the load's store, and the import
+//! The build module's tests: a settlement's key, the keys fold, the load's store, and the import
 //! boundary.
 
 mod boundary;

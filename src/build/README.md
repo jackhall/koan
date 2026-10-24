@@ -453,7 +453,7 @@ whose frontier the chain's keys do not cover stays unsettled.
 - **A callable to the build cell it was born under: an opaque token.** A
   callable's closure bindings carry the build cell its birth ran under, the
   specialization of the frame that bore it or the build root, as a
-  `BuildRef` ([values](../values/specialization.rs)) that only the scheduler
+  `BuildRef` ([values](../values/settlement.rs)) that only the scheduler
   and `values` open. It is not content: the closure's digest and equality
   skip it. A call seeks its frame's specialization under that cell, so
   nesting follows the lexical chain with no chain stored, and no step can

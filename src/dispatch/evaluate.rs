@@ -35,10 +35,10 @@
 //! contributions and the contract it hands on, an `EVAL`'s code, offered record and declared type,
 //! and a value owed a frame's contract. Under `routes` an invariant view's operand and view, and a
 //! warm composite's own memo, are adopted into the agent tier where the frame borrows a
-//! specialization.
+//! settlement.
 //!
 //! A call to a body keyed on its bindings is handed to the drain with what it seeks ([`seek`]), so
-//! its frame is born borrowing its specialization; a hop of the frame's own callee borrows the
+//! its frame is born borrowing its settlement; a hop of the frame's own callee borrows the
 //! frame's, with no lookup.
 //!
 //! [`statics`](super::statics) reads nodes through this file's [`Form`], so the load types each node
@@ -976,7 +976,7 @@ fn apply<'graph, 'here>(
 
 /// Run the frame `call` asks for over `callee`: a hop owing `tails` where it keeps the contract,
 /// else a child this evaluation parks on. A frame keyed on its bindings is born borrowing its
-/// specialization: a hop of the frame this evaluation runs in borrows that frame's own where the
+/// settlement: a hop of the frame this evaluation runs in borrows that frame's own where the
 /// body's name does not escape, so every hop into it is a tail edge the load read, and every other
 /// one is sought by the drain.
 fn called<'graph, 'here>(
@@ -987,13 +987,13 @@ fn called<'graph, 'here>(
     call: impl Fn(Option<Contract>) -> Request<'graph, 'here, KBundle>,
 ) -> Action<'graph, KBundle> {
     let request = call(tails);
-    // The frame's own callee, keyed, where the frame borrows a specialization: its build cell is
+    // The frame's own callee, keyed, where the frame borrows a settlement: its build cell is
     // then not the one the callee was born under, which a frame born with none runs under.
     let same = callee.as_callable().is_some() && callee.as_callable() == at.view.callable();
     let keyed = || {
         called_function(callee).is_some_and(|function| {
             let (load, shape) = (at.view.load(), function.shape());
-            load.specialization_keys(shape).is_some()
+            load.settlement_keys(shape).is_some()
                 && !load.shapes().escapes(shape.segment())
                 && at.within.build != function.closure().build()
         })

@@ -157,8 +157,8 @@ impl CellSubstrate {
     /// `cap` cells, two of which are its build root and its run root: `language`'s builtin table at
     /// `'graph`, the program's shape over it and checked by the language, and the [`Program`]
     /// record writing to `output`, all written by the build root's one step. `cap` is at least two.
-    /// `bounds` sets how many live children the build root's specialization table and every
-    /// specialization's own table hold.
+    /// `bounds` sets how many live children the build root's settlement table and every
+    /// settlement's own table hold.
     ///
     /// The load builds its types through one chain over a root builder, and freezes it when the
     /// load ends, so no step can intern into it: a step's types rest in the agent tier laid beside
@@ -184,7 +184,7 @@ impl CellSubstrate {
                 parse_with_path(brand, &owner.symbols, source, path).map_err(LoadError::Parse)?;
             // The load is the build root's one step: what it writes rests in program storage and
             // the owner's registry. The load door lays the build root's header and its table, which
-            // the root-level specializations fill.
+            // the root-level settlements fill.
             let (graph, roots, program) = Graph::load(cap, bounds, || {
                 // Everything the root owns is laid in the owner's registry arena, which releases it
                 // whole. The load's chain never leaves the load: its end freezes the root.

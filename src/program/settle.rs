@@ -1,9 +1,9 @@
-//! What a call seeks, and what a specialization runs.
+//! What a call seeks, and what a settlement runs.
 //!
-//! A call whose callee's body keys a specialization — the load laid it a key list
-//! (`LoadFacts::specialization_keys`) — hands the drain a [`Seek`], whatever its frame's placement:
+//! A call whose callee's body keys a settlement — the load laid it a key list
+//! (`LoadFacts::settlement_keys`) — hands the drain a [`Seek`], whatever its frame's placement:
 //! the build cell the callee was born under, the key of its segment under the content at each
-//! keyed name, the types that content carries, and [`specialize`], the work a missed specialization
+//! keyed name, the types that content carries, and [`settle`], the work a missed settlement
 //! runs. A parameter's content is its argument; a `FOR ALL` name's is the call's solution at it,
 //! digested as the type value the frame binds: carried by a keyworded call, held by an instance,
 //! and solved here, on the asker's region, for a call by name. A call past a header or a barrier
@@ -36,7 +36,7 @@ pub fn called_function<'graph, 'cell>(
 }
 
 /// What the call `birth` asks for seeks: `None` for a birth that is no call, a callee that is no
-/// function, a body that keys no specialization, and a call whose content at a keyed name the asker
+/// function, a body that keys no settlement, and a call whose content at a keyed name the asker
 /// cannot read, whose frame is born cold. `types` is the asker's evaluation chain, which reads the
 /// arguments; `region` its region's, where a call by name's solution is solved.
 pub fn seek<'graph>(
@@ -58,7 +58,7 @@ pub fn seek<'graph>(
     let (callee, arguments) = (*callee, *arguments);
     let function = called_function(callee)?;
     let shape = function.shape();
-    let keyed = program.facts().specialization_keys(shape)?;
+    let keyed = program.facts().settlement_keys(shape)?;
     let scratch = Bump::new();
     // The call's solution of its group, solved at most once and only for a keyed `FOR ALL` name:
     // `None` past a header or a barrier, whose frame solves after retyping or crossing.
@@ -117,20 +117,18 @@ pub fn seek<'graph>(
         key,
         binding,
         work: Work {
-            step: specialize,
-            state: KBirth::Specialize,
+            step: settle,
+            state: KBirth::Settle,
         },
     })
 }
 
-/// A specialization's step: lay the cell's own header and table, and quiesce. The drain enters it in
+/// A settlement's step: lay the cell's own header and table, and quiesce. The drain enters it in
 /// its parent's table.
-pub fn specialize<'graph>(
-    step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>,
-) -> Action<'graph, KBundle> {
+pub fn settle<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'graph, KBundle> {
     let (step, state) = step.state();
     match state {
-        KState::Born(KBirth::Specialize) => step.enlist(),
+        KState::Born(KBirth::Settle) => step.enlist(),
         _ => step.failed(StepError::Refused),
     }
 }

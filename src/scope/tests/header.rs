@@ -1,6 +1,6 @@
 //! The region header: a half that builds a chain lays no header until it interns, its first
 //! intern lays the record and the branch together, and a build cell's table and a
-//! specialization's home rest in the same record ([header.rs](../header.rs)).
+//! settlement's home rest in the same record ([header.rs](../header.rs)).
 
 use std::num::NonZeroUsize;
 use std::ptr;

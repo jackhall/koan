@@ -10,7 +10,7 @@ no `Step` ([`load.rs`](../../src/scheduler/load.rs)), and a missed
 specialization is entered off the ready stack, synchronously, through
 `enter_beside`, ending `Quiesced` as no other cell may
 ([`drain.rs`](../../src/scheduler/drain.rs), `seek`). Its one step ends
-`enlist()` ([`specialize.rs`](../../src/program/specialize.rs)): it
+`enlist()` ([`specialize.rs`](../../src/program/settle.rs)): it
 settles nothing, and the evaluator re-derives the build's typing per read —
 `bound_path`, retype-and-judge, ranking at a use no key covers. A frame's
 typing context rides cellgraph's lend of a writable half, fixed at the

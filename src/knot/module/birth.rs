@@ -14,7 +14,7 @@ use crate::knot::{Eager, KActivation, KActivationView, Knotted, Node, Supplied, 
 use crate::memory::{BumpAllocator, BumpVec, Knot, Writer};
 use crate::scope::{Activation, ClosureBindings, Component, Coordinate, ShapeKind, Slot, Target};
 use crate::symbols::BinderSymbol;
-use crate::values::{BuildRef, Chain};
+use crate::values::{ArenaRef, Chain};
 
 use super::{Born, Module};
 
@@ -35,9 +35,9 @@ pub fn body_activation<'graph, 'cell>(
     let captures = ClosureBindings::read_captures(body, enclosing, scratch, |_| {
         unreachable!("a module captures no fellow member: it is alone in its component")
     });
-    // A module is never called, so its closure seeks no specialization. The module keeps it, to
+    // A module is never called, so its closure seeks no settlement. The module keeps it, to
     // compute its content from where a demand first reaches it.
-    let closure = ClosureBindings::of(writer, &captures, BuildRef::ROOT);
+    let closure = ClosureBindings::of(writer, &captures, ArenaRef::ROOT);
     Activation::of_module(
         writer,
         body,

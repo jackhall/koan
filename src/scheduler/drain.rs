@@ -2,19 +2,19 @@
 //! over.
 //!
 //! The graph holds two slab roots when the [load door](super::load) stood it up: the run root every
-//! root work is born under, and the build root whose region holds the root-level specialization
-//! table. Before a call's frame is born the drain resolves what it borrows: the specialization its
+//! root work is born under, and the build root whose region holds the root-level settlement
+//! table. Before a call's frame is born the drain resolves what it borrows: the settlement its
 //! asker's [`Seek`] finds or builds with one synchronous step, or, born cold, its parent's scratch
 //! for a `Fresh` frame and nothing for a `Shares` one. Any other cell borrows what its parent reads.
 //!
-//! A miss enters the new specialization beside its asker, and the entry lays the binding's nodes
-//! from the asker's region into the specialization's branch before its step runs, so the branch
+//! A miss enters the new settlement beside its asker, and the entry lays the binding's nodes
+//! from the asker's region into the settlement's branch before its step runs, so the branch
 //! holds them by value.
 //!
 //! The drain keeps every build cell's books: it stamps a hit's entry and a hop's, fills a new
 //! child's entry and sets its home. A miss on a full table releases the least recently born child
 //! with its subtree, leaf first, before the new child is created; nothing else releases a
-//! specialization in a run. A released specialization a frame still borrows waits dead but
+//! settlement in a run. A released settlement a frame still borrows waits dead but
 //! undisposed until its last borrower disposes.
 //!
 //! Every field here is one scheduler's own. There is no static, no thread-local and no lazily
@@ -52,7 +52,7 @@ use crate::values::{Chain, Decision, SpecBinding, SpecHome, TypeTiers};
 pub struct Graph<'graph, B: StepBundle<'graph>> {
     cells: CellGraph<'graph, ContinuationFamily<B>, B::Scratch, KDelivery, RegionHeader>,
     tiers: TypeTiers<'graph>,
-    /// The build tree's core cell, whose region holds the root-level specialization table: `Some`
+    /// The build tree's core cell, whose region holds the root-level settlement table: `Some`
     /// for a graph the [load door](Graph::load) stood up, `None` for one [`new`](Graph::new) made,
     /// whose every frame is born cold.
     build_root: Option<SlabHandle>,
@@ -99,7 +99,7 @@ impl<'graph, B: StepBundle<'graph>> Graph<'graph, B> {
         self.cells.is_live(cell)
     }
 
-    /// How many entries the specialization table in `cell`'s region header names, live or stale:
+    /// How many entries the settlement table in `cell`'s region header names, live or stale:
     /// `None` where no header is laid, `0` where the header has no table.
     #[cfg(test)]
     pub(crate) fn table_len(
@@ -111,7 +111,7 @@ impl<'graph, B: StepBundle<'graph>> Graph<'graph, B> {
         })
     }
 
-    /// The live children the specialization table in `cell`'s region header names: `0` for a
+    /// The live children the settlement table in `cell`'s region header names: `0` for a
     /// cell with no table or none live.
     #[cfg(test)]
     pub(crate) fn live_children(&self, cell: impl Into<CellHandle>) -> usize {
@@ -123,10 +123,10 @@ impl<'graph, B: StepBundle<'graph>> Graph<'graph, B> {
         live.ok().flatten().unwrap_or(0)
     }
 
-    /// Every live specialization of the build tree, under the build root's table and each live
+    /// Every live settlement of the build tree, under the build root's table and each live
     /// child's in turn.
     #[cfg(test)]
-    pub(crate) fn live_specializations(&self) -> usize {
+    pub(crate) fn live_settlements(&self) -> usize {
         let mut pending = std::vec::Vec::new();
         if let Some(root) = self.build_root {
             self.children_of(root.into(), &mut pending);
@@ -150,10 +150,10 @@ impl<'graph, B: StepBundle<'graph>> Graph<'graph, B> {
         });
     }
 
-    /// Whether the specialization `build` names has no undisposed child: `None` for the build
-    /// root, or a specialization that is not live.
+    /// Whether the settlement `build` names has no undisposed child: `None` for the build
+    /// root, or a settlement that is not live.
     #[cfg(test)]
-    pub(crate) fn is_childless(&self, build: crate::values::BuildRef) -> Option<bool> {
+    pub(crate) fn is_childless(&self, build: crate::values::ArenaRef) -> Option<bool> {
         self.cells.is_childless(build.opened()?).ok()
     }
 
@@ -167,8 +167,8 @@ impl<'graph, B: StepBundle<'graph>> Graph<'graph, B> {
 }
 
 /// The most any step has left in each of its cell's type tiers, and how many frames sought and
-/// built a specialization: what a test reads to see a loop's tiers hold flat across hops and its
-/// specialization found once.
+/// built a settlement: what a test reads to see a loop's tiers hold flat across hops and its
+/// settlement found once.
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Tiers {
@@ -182,16 +182,16 @@ pub(crate) struct Tiers {
     pub agent_verdicts: usize,
     /// Bytes the scratch bump has handed out.
     pub scratch_bytes: usize,
-    /// How many frames sought a specialization: a count, not a high-water mark.
+    /// How many frames sought a settlement: a count, not a high-water mark.
     pub sought: usize,
     /// How many of those built one on a miss: a count.
-    pub specialized: usize,
-    /// How many specializations a miss or a test released, descendants included: a count.
+    pub settled: usize,
+    /// How many settlements a miss or a test released, descendants included: a count.
     pub evicted: usize,
     /// How many frames were born cold because the build cell their seek or hop named is dead: a
     /// count.
     pub cold_births: usize,
-    /// Nodes the drain laid into the agent tier from new specializations' askers' branches: a count.
+    /// Nodes the drain laid into the agent tier from new settlements' askers' branches: a count.
     pub relayed: usize,
 }
 
@@ -216,7 +216,7 @@ thread_local! {
             agent_verdicts: 0,
             scratch_bytes: 0,
             sought: 0,
-            specialized: 0,
+            settled: 0,
             evicted: 0,
             cold_births: 0,
             relayed: 0,
@@ -226,9 +226,9 @@ thread_local! {
 
 #[cfg(test)]
 thread_local! {
-    /// A specialization the drain evicts before its next step, for a test whose step cannot reach
+    /// A settlement the drain evicts before its next step, for a test whose step cannot reach
     /// [`Scheduler::evict`]: set by the step, taken by the drain. A refused eviction panics.
-    pub(crate) static EVICT_BEFORE_STEP: std::cell::Cell<Option<crate::values::BuildRef>> =
+    pub(crate) static EVICT_BEFORE_STEP: std::cell::Cell<Option<crate::values::ArenaRef>> =
         const { std::cell::Cell::new(None) };
 
     /// The caching body the running step runs, by its shape's address: set by the step, taken by
@@ -240,8 +240,8 @@ thread_local! {
     pub(crate) static LAID: std::cell::RefCell<std::collections::BTreeMap<usize, (usize, usize)>> =
         const { std::cell::RefCell::new(std::collections::BTreeMap::new()) };
 
-    /// A specialization whose children the drain logs to [`WATCH_LOG`] before each step it runs.
-    pub(crate) static WATCHED: std::cell::Cell<Option<crate::values::BuildRef>> =
+    /// A settlement whose children the drain logs to [`WATCH_LOG`] before each step it runs.
+    pub(crate) static WATCHED: std::cell::Cell<Option<crate::values::ArenaRef>> =
         const { std::cell::Cell::new(None) };
 
     /// What the drain saw of [`WATCHED`], interleaved with what the test's steps log as they run.
@@ -253,7 +253,7 @@ thread_local! {
 #[cfg(test)]
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(crate) enum Watched {
-    /// Whether the watched specialization had no undisposed child, logged before a step.
+    /// Whether the watched settlement had no undisposed child, logged before a step.
     Childless(bool),
     /// A test step, named as it starts.
     Step(&'static str),
@@ -264,7 +264,7 @@ enum Borrows {
     /// What its parent reads: a tree cell its parent's scratch, a tenant a copy of its parent's
     /// lend.
     Parent,
-    /// A call's frame: the specialization it found, or, `None`, what a cold frame borrows: its
+    /// A call's frame: the settlement it found, or, `None`, what a cold frame borrows: its
     /// parent's scratch for a tree cell, nothing for a tenant.
     Call(Option<CellHandle>),
 }
@@ -402,7 +402,7 @@ where
             };
             #[cfg(test)]
             if let Some(spec) = EVICT_BEFORE_STEP.take() {
-                self.evict(spec).expect("the test's specialization evicts");
+                self.evict(spec).expect("the test's settlement evicts");
             }
             #[cfg(test)]
             if let Some(watched) = WATCHED.get() {
@@ -435,8 +435,8 @@ where
                     asked,
                     release_after: Some(cell),
                 }),
-                // Only the drain's own entry of a specialization runs one.
-                Kind::Quiesced => unreachable!("a specialization is never on the ready stack"),
+                // Only the drain's own entry of a settlement runs one.
+                Kind::Quiesced => unreachable!("a settlement is never on the ready stack"),
                 // Only a root work leaves: `leave` refuses a cell that reports to somebody.
                 Kind::Left(dormant) => {
                     self.retire(cell)?;
@@ -482,7 +482,7 @@ where
 
     /// Give a request its cell, under the parent its provenance names, its birth crossing as
     /// `born` says, borrowing what its lending resolves to. `asker` is the cell whose region holds
-    /// the birth, which a missed specialization reads its binding's nodes from.
+    /// the birth, which a missed settlement reads its binding's nodes from.
     fn create(
         &mut self,
         provenance: Provenance,
@@ -519,7 +519,7 @@ where
         )
     }
 
-    /// The specialization a frame `seek` asks for borrows: the one the parent's table names under
+    /// The settlement a frame `seek` asks for borrows: the one the parent's table names under
     /// the key, if it is live, its entry stamped; or else one created under the parent and stepped
     /// at once beside `asker`, laying the binding's nodes first, before anything else runs, and
     /// entered in the table. A full table first releases its least recently born child with its
@@ -557,7 +557,7 @@ where
             }
         };
         // A loaded graph's build cells all hold a table: the load door lays the root's, and
-        // `enlist` a specialization's.
+        // `enlist` a settlement's.
         debug_assert!(decision.is_some(), "a live build cell holds a table");
         let index = match decision {
             None => return Ok(None),
@@ -565,7 +565,7 @@ where
                 #[cfg(debug_assertions)]
                 assert!(
                     self.holds_binding(&binding),
-                    "a hit's specialization holds its binding's nodes: its key digests the \
+                    "a hit's settlement holds its binding's nodes: its key digests the \
                      content they are read from"
                 );
                 return Ok(Some(spec.into()));
@@ -576,7 +576,7 @@ where
                 index
             }
         };
-        // A specialization reports to nobody and is entered here, never from the ready stack. Its
+        // A settlement reports to nobody and is entered here, never from the ready stack. Its
         // step seeks nothing (`enlist` refuses a cell that asked for children), so the entry
         // `decide` chose is still free when the step returns.
         let continuation = Continuation {
@@ -592,7 +592,7 @@ where
             .create_tree_lent(parent, Lend::Named(parent), Some(continuation))
             .map_err(|_| DrainStalled::Unspawnable)?;
         #[cfg(test)]
-        tally(|tiers| tiers.specialized += 1);
+        tally(|tiers| tiers.settled += 1);
         let (action, _) = self.step_beside(spec.into(), asker, &binding)?;
         match action.kind() {
             Kind::Quiesced => {
@@ -607,7 +607,7 @@ where
                 });
                 debug_assert!(
                     matches!((entered, homed), (Ok(Some(Some(()))), Ok(Some(())))),
-                    "the parent's table and the specialization's header stand"
+                    "the parent's table and the settlement's header stand"
                 );
                 Ok(Some(spec.into()))
             }
@@ -617,7 +617,7 @@ where
     }
 
     /// Whether the frozen load or the agent tier holds the node of every handle `binding` carries,
-    /// as a specialization's seed laid them. Lays nothing. `adopt` lays children before parents,
+    /// as a settlement's seed laid them. Lays nothing. `adopt` lays children before parents,
     /// so a found handle's children are there too.
     #[cfg(debug_assertions)]
     fn holds_binding(&self, binding: &SpecBinding) -> bool {
@@ -626,13 +626,13 @@ where
         binding.handles().all(|kt| resting.resolves(kt))
     }
 
-    /// Stamp the entry of the live specialization `spec` in its parent's table: a hop of the same
+    /// Stamp the entry of the live settlement `spec` in its parent's table: a hop of the same
     /// callee under it is a birth, as a seek that finds it is.
     fn stamp_hop(&self, spec: TreeHandle) {
         let cells = &self.graph.cells;
         let home = cells.peek(spec, |header, _| header.into_value().home());
         let Ok(Some(Some(home))) = home else {
-            debug_assert!(false, "a live specialization has a home");
+            debug_assert!(false, "a live settlement has a home");
             return;
         };
         let stamped = cells.peek(home.parent, |header, _| {
@@ -642,16 +642,12 @@ where
                 .is_some_and(|table| table.stamp(spec))
         });
         // An entry is rekeyed only when its handle is stale, or it names the victim a miss
-        // releases, so a live specialization's entry stands.
-        debug_assert_eq!(
-            stamped,
-            Ok(Some(true)),
-            "a live specialization has an entry"
-        );
+        // releases, so a live settlement's entry stands.
+        debug_assert_eq!(stamped, Ok(Some(true)), "a live settlement has an entry");
     }
 
-    /// Release the live specialization `top` and every live specialization beneath it, leaf
-    /// first, and return how many: descend from `top` through live children to a specialization
+    /// Release the live settlement `top` and every live settlement beneath it, leaf
+    /// first, and return how many: descend from `top` through live children to a settlement
     /// with none, release it, and start again. A released child's entry goes stale, so each
     /// descent finds a new leaf; the drain lays nothing and grows no call stack.
     fn release_subtree(&mut self, top: TreeHandle) -> Result<usize, DrainStalled> {
@@ -680,12 +676,12 @@ where
         found.ok().flatten().flatten()
     }
 
-    /// Evict the specialization `spec` names, with its subtree, leaf first: refused for the build
-    /// root and a specialization that is not live. Each waits dead but undisposed until its last
+    /// Evict the settlement `spec` names, with its subtree, leaf first: refused for the build
+    /// root and a settlement that is not live. Each waits dead but undisposed until its last
     /// borrower disposes, and its entry goes stale until the next miss on its key rebuilds it. A
     /// test drives this; in a run only a miss evicts.
     #[cfg(test)]
-    pub(crate) fn evict(&mut self, spec: crate::values::BuildRef) -> Result<(), DrainStalled> {
+    pub(crate) fn evict(&mut self, spec: crate::values::ArenaRef) -> Result<(), DrainStalled> {
         let spec = spec.opened().ok_or(DrainStalled::Unreleasable)?;
         if !self.graph.cells.is_live(spec) {
             return Err(DrainStalled::Unreleasable);
@@ -693,7 +689,7 @@ where
         self.release_subtree(spec).map(|_| ())
     }
 
-    /// Evict every live specialization, as a test's teardown does before it releases the roots.
+    /// Evict every live settlement, as a test's teardown does before it releases the roots.
     #[cfg(test)]
     pub(crate) fn evict_every(&mut self) {
         let Some(root) = self.graph.build_root else {
@@ -701,13 +697,13 @@ where
         };
         while let Some(child) = self.live_child(root.into()) {
             self.release_subtree(child)
-                .expect("a live specialization releases");
+                .expect("a live settlement releases");
         }
     }
 
     /// The law every test run checks as its root work ends: koan's lends close no wait cycle
-    /// ([`CellGraph::lend_cycle`]). A run cell never waits on a specialization, so a host's
-    /// scratch holding a specialization's count is never what that specialization waits on.
+    /// ([`CellGraph::lend_cycle`]). A run cell never waits on a settlement, so a host's
+    /// scratch holding a settlement's count is never what that settlement waits on.
     #[cfg(test)]
     fn no_lend_cycle(&self) {
         assert_eq!(
@@ -729,7 +725,7 @@ where
             .map_err(|_| DrainStalled::Unenterable)
     }
 
-    /// Enter the new specialization `spec` beside `asker` and run its one step, laying the node of
+    /// Enter the new settlement `spec` beside `asker` and run its one step, laying the node of
     /// every handle `binding` carries into the agent tier first: read from the region branch of the
     /// asker's write home, where the request's birth rests and so where every type its arguments
     /// carry resolves; insert-if-absent, a load handle at a bit test. The read sits at a brand of
@@ -857,8 +853,8 @@ where
             }
         },
     };
-    // A specialization's state is awake, so nothing above precedes its seeding. Its binding rests
-    // in the agent tier, which every frame under the specialization reads.
+    // A settlement's state is awake, so nothing above precedes its seeding. Its binding rests
+    // in the agent tier, which every frame under the settlement reads.
     if let Some((source, binding)) = seed {
         let types: Chain<'graph, 'here, 'graph, 'step> = tiers.resting();
         #[cfg(test)]

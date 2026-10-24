@@ -13,7 +13,7 @@ use crate::memory::{CellGraph, Header, ReleaseAbsorption};
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::{KType, TypeDigest, TypeNode};
 use crate::values::digest::{DigestHasher, Tag};
-use crate::values::{Decision, Half, Key, SpecKey, SpecTable, TypeValue, ValueFamily};
+use crate::values::{Decision, Half, Key, SettlementKey, SpecTable, TypeValue, ValueFamily};
 
 use super::{Dict, List, Record, TestGraph, TestHeader, Value, copy, pin, text, with_fixture};
 
@@ -185,7 +185,7 @@ fn a_table_decides_hits_free_entries_and_its_least_recently_born_victim() {
         let a = graph.create_tree(parent, None).unwrap();
         let b = graph.create_tree(parent, None).unwrap();
         let c = graph.create_tree(parent, None).unwrap();
-        let key = |at| SpecKey(DigestHasher::new(Tag::Number).count(at).finished());
+        let key = |at| SettlementKey(DigestHasher::new(Tag::Number).count(at).finished());
         let two = NonZeroUsize::new(2).unwrap();
         let live = RefCell::new(HashSet::from([a, b, c]));
         let is_live = |handle| live.borrow().contains(&handle);
@@ -203,7 +203,7 @@ fn a_table_decides_hits_free_entries_and_its_least_recently_born_victim() {
                     Decision::Evict(1, b),
                     "`a`'s hit is the newer birth"
                 );
-                assert!(table.stamp(b), "a hop stamps its specialization's entry");
+                assert!(table.stamp(b), "a hop stamps its settlement's entry");
                 assert_eq!(table.decide(key(3), is_live), Decision::Evict(0, a));
                 assert!(!table.stamp(c), "no entry names `c`");
                 live.borrow_mut().remove(&b);

@@ -246,7 +246,7 @@ fn a_module_member_with_no_body_supplied_is_eager_at_its_bodys_site() {
                 context.writer(),
                 activation,
                 shape.component_of(slot),
-                crate::values::BuildRef::ROOT,
+                crate::values::ArenaRef::ROOT,
                 types,
                 fixture.scratch(),
                 &mut |_, _| None,

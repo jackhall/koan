@@ -32,7 +32,7 @@
 //! a copy of the knot keeps it. That over-distinction is sound: a digest keys what is equal by
 //! content, and keying two equal things apart costs only a key.
 //!
-//! A digest is computed on demand — by a view, or by a specialization's key — and kept only by a
+//! A digest is computed on demand — by a view, or by a settlement's key — and kept only by a
 //! module, as its content, and by a slot the load marks digested, beside its value; a value no
 //! demand reaches never pays for one. A demand walks what the value reaches through one
 //! [`Digests`] memo over the demand's scratch, so a part shared many times over, and a knot met
@@ -128,8 +128,8 @@ pub enum Tag {
     /// What the load cannot see of a module's content, keyed on its binder: a load-time key, never
     /// a value's digest.
     Leaf = 0x30,
-    /// A specialization's key: a body's segment index and the argument digests it is keyed on.
-    Specialization = 0x31,
+    /// A settlement's key: a body's segment index and the argument digests it is keyed on.
+    Settlement = 0x31,
 }
 
 /// The one hasher every digest is computed through: a tag first, then payload, then each part's

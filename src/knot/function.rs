@@ -29,7 +29,7 @@ use crate::type_lattice::{
 };
 use crate::values::digest::function_content;
 use crate::values::{
-    BuildRef, Chain, ContentDigest, Knotted as _, Link, Retyped, Seen, Value, Weight,
+    ArenaRef, Chain, ContentDigest, Knotted as _, Link, Retyped, Seen, Value, Weight,
 };
 
 use super::{Coerced, KActivationView, KValue, Knotted, Node, Untieable, composed};
@@ -306,7 +306,7 @@ impl<'graph, 'cell> Staged<'graph, 'cell, '_> {
     pub(super) fn laid_down(
         &self,
         writer: Writer<'cell, '_>,
-        build: BuildRef,
+        build: ArenaRef,
     ) -> (
         &'cell ClosureBindings<'cell, Knotted<'graph, 'cell>>,
         Option<&'cell Typing<'cell>>,
@@ -544,7 +544,7 @@ pub fn lambda<'graph, 'cell, 'x>(
     writer: Writer<'cell, '_>,
     activation: &KActivationView<'graph, 'cell>,
     site: Site,
-    build: BuildRef,
+    build: ArenaRef,
     types: &Chain<'_, 'cell, '_, '_>,
     scratch: BumpAllocator<'x>,
 ) -> Result<Knotted<'graph, 'cell>, Untieable<'x>> {

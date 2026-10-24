@@ -19,7 +19,7 @@ fn the_load_stands_two_roots_and_lays_the_build_roots_header() {
     assert_eq!(
         graph.table_len(roots.build),
         Ok(Some(0)),
-        "the build root's header is laid, with no specialization in its table"
+        "the build root's header is laid, with no settlement in its table"
     );
     assert_eq!(
         graph.table_len(roots.run),

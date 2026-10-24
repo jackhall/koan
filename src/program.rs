@@ -24,7 +24,7 @@ mod body;
 mod bundle;
 mod exit;
 mod record;
-mod specialize;
+mod settle;
 mod substrate;
 
 #[cfg(test)]
@@ -36,5 +36,5 @@ pub use bundle::{
 };
 pub use exit::Exit;
 pub use record::{CallKind, Contract, Evaluated, Language, LoadError, Outcome, Output, Program};
-pub use specialize::{called_function, seek, specialize};
+pub use settle::{called_function, seek, settle};
 pub use substrate::{CellSubstrate, Running, STACK_BYTES};

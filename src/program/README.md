@@ -426,7 +426,7 @@ the frame received or passes on is walked once
 ### Specializations
 
 A call into a keyed frame, whatever its placement, hands the drain a `Seek`
-([`seek`](specialize.rs)): the build cell the callee was born under, read off
+([`seek`](settle.rs)): the build cell the callee was born under, read off
 its closure bindings; the key, the callee's segment and the content digest of
 each argument at its keyed names, read by name
 ([the build module](../build/README.md#keys-which-bindings-make-a-specialization));
@@ -434,7 +434,7 @@ the binding, each keyed argument's carried type and, for a type value, the type
 it names, whose nodes the drain lays in the agent tier for a missed
 specialization
 ([references between the trees](../build/README.md#references-between-the-trees));
-and the work a missed specialization runs, [`specialize`](specialize.rs),
+and the work a missed specialization runs, [`specialize`](settle.rs),
 which enlists the new cell in its parent's table and settles nothing until
 [the build arena](../../roadmap/gradual-build/build-arena.md) runs the walk
 there. The frame is born borrowing
@@ -447,7 +447,7 @@ specialization, `tail_under` the frame's build cell; any other call
 `spawn_seeking` or `tail_seeking`, with a `Seek` where the body keys one; and
 an evaluation, a block or a hand-off `spawn` or `tail`. A frame borrows one exactly when the build cell it runs
 under is not the one its callee was born under
-([`called_function`](specialize.rs) reads the callee's function).
+([`called_function`](settle.rs) reads the callee's function).
 
 A frame's runner takes the build cell it runs under at its first step, the
 specialization it borrows or else the build cell its callee was born under, and

@@ -461,7 +461,7 @@ pub enum Destination<'d, 'here, 'graph, 'door> {
     /// An exit: the region chain of the step whose caching body the value leaves. The adoption
     /// marks every value it entered settled.
     Region(&'d Types<'here, 'door>),
-    /// An invariant site under `routes`: the warm tier — the agent chain, under a specialization —
+    /// An invariant site under `routes`: the warm tier — the agent chain, under a settlement —
     /// beside the region chain of the step the value lies in, which a test build's audit reads.
     /// Marks nothing: the warm tier is not where the value lies.
     Warm {

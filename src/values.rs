@@ -42,7 +42,7 @@ mod record;
 mod render;
 mod retyped;
 mod settled;
-mod specialization;
+mod settlement;
 mod surface;
 mod tagged;
 mod type_value;
@@ -76,8 +76,8 @@ pub use list::List;
 pub use record::Record;
 pub use retyped::Retyped;
 pub(crate) use settled::stamp_knot;
-pub use specialization::{
-    BuildRef, Decision, KeyedTypes, SpecBinding, SpecBounds, SpecEntry, SpecHome, SpecKey,
+pub use settlement::{
+    ArenaRef, Decision, KeyedTypes, SettlementKey, SpecBinding, SpecBounds, SpecEntry, SpecHome,
     SpecTable,
 };
 pub use surface::{

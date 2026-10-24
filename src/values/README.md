@@ -346,7 +346,7 @@ The branch is kept in the habitat half's header, whose record is `scope`'s
 ([`RegionHeader`](../scope/header.rs)): beside the branch it holds a build
 cell's table of specializations, a fixed run of entries laid with the cell,
 each a key, a handle and the stamp of its child's last birth, rekeyed in place
-when a miss reuses it ([specialization.rs](specialization.rs)); and a
+when a miss reuses it ([specialization.rs](settlement.rs)); and a
 specialization's home, its own handle and its parent's, which the scheduler
 reads to name the build cell a frame runs under and to stamp a hop's entry,
 beside the facts its resumption settled

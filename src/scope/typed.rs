@@ -426,7 +426,7 @@ pub enum Mint {
     /// Over a closed content tree: the same content at every run, its types in the root.
     Closed,
     /// The same content at every frame of one binding: interned into the warm tier — the agent
-    /// tier, where the frame borrows a specialization — and into the cold tier where it borrows
+    /// tier, where the frame borrows a settlement — and into the cold tier where it borrows
     /// none.
     Invariant,
     /// Content that may differ per hop: interned into the cold tier.
@@ -436,7 +436,7 @@ pub enum Mint {
 /// What the load fixed about where a body's types intern at run: whether its frame caches, how
 /// each of its own minting sites is classed, and which of its composite sites — list, dict and
 /// record literals and constructions — build values whose own types are warm. On a callable's own
-/// record it also says which of its parameters may key its specialization.
+/// record it also says which of its parameters may key its settlement.
 #[derive(Clone, Copy, Debug)]
 pub struct Caching<'graph> {
     /// Whether the frame body this shape runs in caches: its own class for a callable or a quote's
@@ -450,7 +450,7 @@ pub struct Caching<'graph> {
     /// invariant minting site or an invariant composite site: the frame's parameter slots those
     /// sites read, sorted, which may be none. Each is a parameter whose arguments digest at a
     /// constant cost: one declared under `Module` or as a type value, or a type binder. A call to
-    /// the frame seeks the specialization these slots' arguments key. `None` on every other
+    /// the frame seeks the settlement these slots' arguments key. `None` on every other
     /// record.
     pub invariant: Option<&'graph [Slot]>,
 }

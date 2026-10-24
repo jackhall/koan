@@ -302,7 +302,7 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'
                 writer,
                 &view,
                 site,
-                crate::values::BuildRef::ROOT,
+                crate::values::ArenaRef::ROOT,
                 types,
                 &scratch,
             ) else {

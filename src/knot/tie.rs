@@ -32,7 +32,7 @@ use crate::parse::ExpressionPart;
 use crate::scope::{BodyShape, Component, ShapeKind};
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::{DeclaredType, KType, satisfied_by};
-use crate::values::{BuildRef, Chain, Weight, retype_target};
+use crate::values::{ArenaRef, Chain, Weight, retype_target};
 
 use super::data::{self, Stager};
 use super::{Eager, Function, KActivationView, Knotted, Node, Untieable, code, function, module};
@@ -57,7 +57,7 @@ pub fn tie<'graph, 'cell, 'x>(
     writer: Writer<'cell, '_>,
     activation: &KActivationView<'graph, 'cell>,
     component: &Component<'graph>,
-    build: BuildRef,
+    build: ArenaRef,
     types: &Chain<'_, 'cell, '_, '_>,
     scratch: BumpAllocator<'x>,
     eager: &mut Eager<'_, 'graph, 'cell>,

@@ -75,7 +75,7 @@ pub struct CaptureSlot(pub(crate) u32);
 
 /// A body's index among the shapes one load builds, assigned in the order the shapes are sealed:
 /// distinct per shape, the same in every load of one source text, and unrelated to where the shape
-/// lies in memory. A specialization's key names its callee's body by it.
+/// lies in memory. A settlement's key names its callee's body by it.
 ///
 /// A body's nested bodies take the indices before its own, in program order, so its index exceeds
 /// every body's it encloses, and along one chain indices fall from the root inward. A frontier's

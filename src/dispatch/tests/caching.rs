@@ -29,7 +29,7 @@ pub(super) const PRELUDE: &str = "SIG Counter FOR ALL #[Carrier] = \
                        MODULE empty = (LET unused = 0)\n";
 
 /// What one run left: the most any step left in each tier, how many nodes the run added to the
-/// root, what it printed, and how many specializations were live at its end.
+/// root, what it printed, and how many settlements were live at its end.
 #[derive(Debug, PartialEq, Eq)]
 pub(super) struct Ran {
     pub(super) tiers: Tiers,
@@ -56,7 +56,7 @@ fn ran(depth: u32, source: &str) -> Ran {
     ran_under(depth, source, SpecBounds::default())
 }
 
-/// Run [`program`] at `depth` over `source`, its specialization tables `bounds` long.
+/// Run [`program`] at `depth` over `source`, its settlement tables `bounds` long.
 pub(super) fn ran_under(depth: u32, source: &str, bounds: SpecBounds) -> Ran {
     let program = program(depth, source);
     WRITTEN.with(|written| written.borrow_mut().clear());
@@ -68,7 +68,7 @@ pub(super) fn ran_under(depth: u32, source: &str, bounds: SpecBounds) -> Ran {
         .with(|running| running.run())
         .expect("the program runs");
     let after = substrate.with(|running| running.program().tiers().frozen.len());
-    let live = substrate.with(|running| running.scheduler().graph().live_specializations());
+    let live = substrate.with(|running| running.scheduler().graph().live_settlements());
     Ran {
         tiers: TIERS.with(Cell::get),
         root: after - before,
@@ -368,7 +368,7 @@ fn digesting(depth: u32, source: &str) -> (Ran, Digested) {
 
 /// Across the caching suite's programs, what a loop hop's adoptions cost, printed as a table of each
 /// counter per hop: flat in depth, a root handle adopted at no lookup, no node laid where no hop
-/// builds a specialization, and every hop's walks stopping at a part on its bits.
+/// builds a settlement, and every hop's walks stopping at a part on its bits.
 #[test]
 fn a_hops_adoptions_hold_flat_in_depth() {
     let programs = [
@@ -387,7 +387,7 @@ fn a_hops_adoptions_hold_flat_in_depth() {
     let hops = (ENDS[1] - ENDS[0]) as usize;
     let per_hop = |delta: usize| format!("{:.1}", delta as f64 / hops as f64);
     let header = Adoptions::read().named().map(|(name, _)| name).join(" | ");
-    eprintln!("| program | {header} | specialized |");
+    eprintln!("| program | {header} | settled |");
     for (name, source) in programs {
         let runs = DEPTHS.map(|depth| adopting(depth, &source));
         let counts = runs.each_ref().map(|(_, adoptions)| adoptions.named());
@@ -398,24 +398,24 @@ fn a_hops_adoptions_hold_flat_in_depth() {
                 counts.map(|named| named[at].1),
             );
         }
-        let specialized = runs.each_ref().map(|(ran, _)| ran.tiers.specialized);
-        assert_flat(&format!("{name}: specialized"), specialized);
+        let settled = runs.each_ref().map(|(ran, _)| ran.tiers.settled);
+        assert_flat(&format!("{name}: settled"), settled);
         let deltas = (counts[0].into_iter().zip(counts[2]))
             .map(|((counter, few), (_, many))| (counter, many - few))
             .collect::<BTreeMap<_, _>>();
-        let specialized = specialized[2] - specialized[0];
+        let settled = settled[2] - settled[0];
         let row = (counts[0].iter())
             .map(|(counter, _)| per_hop(deltas[counter]))
             .collect::<Vec<_>>()
             .join(" | ");
-        eprintln!("| {name} | {row} | {} |", per_hop(specialized));
+        eprintln!("| {name} | {row} | {} |", per_hop(settled));
         assert!(
             deltas["probes"] < deltas["asked"],
             "{name}: each hop adopts root handles at no lookup, {} probes of {}",
             deltas["probes"],
             deltas["asked"]
         );
-        if specialized == 0 {
+        if settled == 0 {
             assert_eq!(
                 deltas["laid"], 0,
                 "{name}: a hop borrowing nothing new lays no node"
@@ -670,12 +670,12 @@ fn a_shares_loop_handing_a_keyed_shares_helper_a_module_over_its_link_holds_adop
     let runs = DEPTHS.map(ran_adopting);
     let [(few, few_adopted), _, (many, _)] = &runs;
     assert_eq!((few.printed.as_str(), few.root), ("done", 0));
-    // `PEEK` keys on the module it is handed, so it borrows a specialization of its own each hop,
+    // `PEEK` keys on the module it is handed, so it borrows a settlement of its own each hop,
     // and `WRAP` one across the loop; the region holds flat. The agent tier grows by each `PEEK`
     // binding, run content, until the build rewrite keys a build cell on load content alone
     // (roadmap/gradual-build/build-rewrite.md).
     for ((ran, _), depth) in runs.iter().zip(DEPTHS) {
-        assert_eq!(ran.tiers.specialized, depth as usize + 1);
+        assert_eq!(ran.tiers.settled, depth as usize + 1);
     }
     assert_eq!(few.tiers.region, many.tiers.region);
     assert!(*few_adopted > 0, "the loop's exits adopt");
@@ -752,16 +752,13 @@ fn a_fresh_loop_over_varying_content_holds_the_lattice_flat() {
 #[test]
 fn a_fresh_loop_calling_a_helper_over_its_link_keys_nothing_and_holds_flat() {
     // The helper's parameter is a record, whose digest costs its size, so it keys nothing: its
-    // view routes cold, and no hop seeks or builds a specialization.
+    // view routes cold, and no hop seeks or builds a settlement.
     let source = HELPER_LOOP;
     assert_eq!(caching(source), 2);
     let [few, many] = at_ends(source);
     assert_eq!(few.printed, "7");
     for ran in [&few, &many] {
-        assert_eq!(
-            (ran.tiers.sought, ran.tiers.specialized, ran.live),
-            (0, 0, 0)
-        );
+        assert_eq!((ran.tiers.sought, ran.tiers.settled, ran.live), (0, 0, 0));
     }
     assert_eq!(few, many);
 }
@@ -804,7 +801,7 @@ fn a_loops_scratch_resets_once_its_value_is_delivered() {
 fn two_loops_a_frame_asks_for_in_turn_leave_what_the_larger_leaves() {
     // A `Fresh` frame asks for two loops in turn, over content of different types: the second
     // starts on the scratch the first's delivery reset, so the two leave in it what the larger
-    // leaves; where each keys a specialization of its own binding, the agent tier keeps both.
+    // leaves; where each keys a settlement of its own binding, the agent tier keeps both.
     let cases = [
         (
             INVARIANT.to_string(),
@@ -1071,7 +1068,7 @@ const KEYED: &str = "EXPR #(OUTER m :Counter) -> Number = \
                      LET plain = (FN :{x :Number} -> Number = #(x))\n";
 
 /// Each shape's slot names, beside its kind and the parameters its record keys a
-/// specialization on, by name.
+/// settlement on, by name.
 fn keyed(source: &str) -> Vec<(ShapeKind, Vec<String>, Option<Vec<String>>)> {
     loaded(source, |program| {
         let mut shapes = Vec::new();
@@ -1133,7 +1130,7 @@ fn a_caching_frame_keys_on_the_parameters_its_invariant_sites_read() {
         (shapes.iter())
             .filter(|(kind, _, _)| *kind != ShapeKind::Callable)
             .all(|(_, _, invariant)| invariant.is_none()),
-        "only a frame body's record keys a specialization"
+        "only a frame body's record keys a settlement"
     );
 }
 
@@ -1258,13 +1255,13 @@ pub(super) fn runs(
 }
 
 #[test]
-fn a_loop_seeks_its_specialization_once_and_a_second_caller_finds_it_warm() {
+fn a_loop_seeks_its_settlement_once_and_a_second_caller_finds_it_warm() {
     let once = format!("{INVARIANT}PRINT (COUNTDOWN ints chain)\n");
     let [(alone, ..)] = runs(&once, 1, |_| {})[..] else {
         unreachable!()
     };
     assert_eq!(
-        (alone.sought, alone.specialized),
+        (alone.sought, alone.settled),
         (1, 1),
         "one seek for the whole loop"
     );
@@ -1274,7 +1271,7 @@ fn a_loop_seeks_its_specialization_once_and_a_second_caller_finds_it_warm() {
     };
     assert_eq!(printed, "7\n7");
     assert_eq!(
-        (both.sought, both.specialized),
+        (both.sought, both.settled),
         (2, 1),
         "the second caller builds nothing"
     );
@@ -1296,12 +1293,12 @@ fn a_loop_seeks_its_specialization_once_and_a_second_caller_finds_it_warm() {
     else {
         unreachable!()
     };
-    assert_eq!(apart.specialized, 2, "two bindings, two specializations");
+    assert_eq!(apart.settled, 2, "two bindings, two settlements");
     assert_eq!(table, Some(2));
 }
 
 #[test]
-fn a_callable_born_under_a_specialization_keys_its_own_beneath_it() {
+fn a_callable_born_under_a_settlement_keys_its_own_beneath_it() {
     let inner =
         "(LET g = (FN :{x :Number} -> Number = #((LET v = (m :| Counter)) (x)))) (g {x = 1})";
     for body in [inner.to_string(), format!("(USING empty SCOPE ({inner}))")] {
@@ -1314,15 +1311,15 @@ fn a_callable_born_under_a_specialization_keys_its_own_beneath_it() {
         };
         assert_eq!(printed, "1", "{body}");
         assert_eq!(
-            (tiers.specialized, table),
+            (tiers.settled, table),
             (2, Some(1)),
-            "`g`'s specialization is a child of `OUTER`'s, not of the root: {body}"
+            "`g`'s settlement is a child of `OUTER`'s, not of the root: {body}"
         );
     }
 }
 
 #[test]
-fn an_evicted_specialization_is_rebuilt_on_the_next_miss_with_the_same_answer() {
+fn an_evicted_settlement_is_rebuilt_on_the_next_miss_with_the_same_answer() {
     let source = format!(
         "{INVARIANT}PRINT (COUNTDOWN ints chain)\nPRINT (COUNTDOWN words chain)\n\
          PRINT (COUNTDOWN ints chain)"
@@ -1338,13 +1335,13 @@ fn an_evicted_specialization_is_rebuilt_on_the_next_miss_with_the_same_answer() 
     );
     assert_eq!(tight.printed, "7\n7\n7");
     assert_eq!(
-        (tight.tiers.specialized, tight.tiers.evicted),
+        (tight.tiers.settled, tight.tiers.evicted),
         (3, 2),
         "`words` evicts `ints`, and `ints` again evicts `words`"
     );
     let roomy = ran(DEPTHS[0], &source);
     assert_eq!(roomy.printed, tight.printed);
-    assert_eq!((roomy.tiers.specialized, roomy.tiers.evicted), (2, 0));
+    assert_eq!((roomy.tiers.settled, roomy.tiers.evicted), (2, 0));
 }
 
 /// Bounds of `root` and `nested`.
@@ -1356,7 +1353,7 @@ pub(super) fn bounds(root: usize, nested: usize) -> SpecBounds {
 }
 
 #[test]
-fn a_loop_handing_a_keyed_helper_a_new_module_each_hop_holds_its_specializations_flat() {
+fn a_loop_handing_a_keyed_helper_a_new_module_each_hop_holds_its_settlements_flat() {
     // `PEEK` keys on a new module each hop and `WRAP` on `ints` across the loop, both under the
     // root: each `PEEK` miss evicts the last `PEEK`, never `WRAP`, whose hops are newer births.
     let source = wrapped_peeks();
@@ -1365,11 +1362,7 @@ fn a_loop_handing_a_keyed_helper_a_new_module_each_hop_holds_its_specializations
         let depth = depth as usize;
         assert_eq!(ran.printed, "done");
         assert_eq!(
-            (
-                ran.tiers.specialized,
-                ran.tiers.evicted,
-                ran.tiers.cold_births
-            ),
+            (ran.tiers.settled, ran.tiers.evicted, ran.tiers.cold_births),
             (depth + 1, depth - 1, 0),
             "every `WRAP` hop runs warm"
         );
@@ -1383,11 +1376,11 @@ fn a_loop_handing_a_keyed_helper_a_new_module_each_hop_holds_its_specializations
     let depth = bound + 4;
     let past = ran(depth as u32, &source);
     assert_eq!(past.printed, "done");
-    assert_eq!((past.tiers.specialized, past.live), (depth + 1, bound));
+    assert_eq!((past.tiers.settled, past.live), (depth + 1, bound));
 }
 
 #[test]
-fn a_loop_whose_keyed_frame_calls_a_keyed_callable_holds_its_specializations_flat() {
+fn a_loop_whose_keyed_frame_calls_a_keyed_callable_holds_its_settlements_flat() {
     let source = "EXPR #(OUTER m :Holder) -> Number = \
                   #((LET w = (m :| Holder)) \
                   (LET g = (FN :{x :Number} -> Number = #((LET v = (m :| Holder)) (x)))) \
@@ -1425,7 +1418,7 @@ fn a_loop_whose_keyed_frame_calls_a_keyed_callable_holds_its_specializations_fla
         let depth = depth as usize;
         assert_eq!(ran.printed, "7");
         assert_eq!(
-            (ran.tiers.specialized, ran.tiers.evicted, ran.live),
+            (ran.tiers.settled, ran.tiers.evicted, ran.live),
             (2 * depth, 2 * depth - 4, 4)
         );
     }
@@ -1436,8 +1429,8 @@ fn a_loop_whose_keyed_frame_calls_a_keyed_callable_holds_its_specializations_fla
 }
 
 #[test]
-fn a_frame_under_an_evicted_specialization_is_born_cold_with_the_same_answer() {
-    // `SWEEP`'s first `PEEK` miss evicts `OUTER`'s specialization while `OUTER` runs, so `g`, born
+fn a_frame_under_an_evicted_settlement_is_born_cold_with_the_same_answer() {
+    // `SWEEP`'s first `PEEK` miss evicts `OUTER`'s settlement while `OUTER` runs, so `g`, born
     // under it, is born cold.
     let source = format!(
         "{PEEK}EXPR #(SWEEP link :Link) -> Str = \
@@ -1471,7 +1464,7 @@ fn allocations(source: &str) -> u64 {
 
 #[test]
 fn a_call_over_a_list_keys_nothing_and_its_birth_costs_below_the_lists_length() {
-    // `TAKE`'s parameter is `Any`, so it keys nothing: no call seeks a specialization, and the view
+    // `TAKE`'s parameter is `Any`, so it keys nothing: no call seeks a settlement, and the view
     // of the module born over the list routes cold.
     let source = |list: &str, count: usize| {
         let mut source = format!(
@@ -1495,7 +1488,7 @@ fn a_call_over_a_list_keys_nothing_and_its_birth_costs_below_the_lists_length() 
         TIERS.with(|tiers| tiers.set(Tiers::default()));
         let cost = (allocations(&source(&list, 4)) - allocations(&source(&list, 1))) / 3;
         let tiers = TIERS.with(Cell::get);
-        assert_eq!((tiers.sought, tiers.specialized), (0, 0));
+        assert_eq!((tiers.sought, tiers.settled), (0, 0));
         cost
     };
     let (short, long) = (per_birth(1), per_birth(64));
@@ -1508,8 +1501,8 @@ fn a_call_over_a_list_keys_nothing_and_its_birth_costs_below_the_lists_length() 
 #[test]
 fn a_shares_callees_callable_keys_under_its_own_chain_not_its_hosts() {
     // `SHARE` returns no scalar, so it is a tenant of `OUTER`'s frame, and keys `m`, which `g`'s
-    // view waits on; the callable it births was born under `SHARE`'s specialization, a child of
-    // the root as `SHARE` itself was, so its specialization lies beneath `SHARE`'s, not `OUTER`'s.
+    // view waits on; the callable it births was born under `SHARE`'s settlement, a child of
+    // the root as `SHARE` itself was, so its settlement lies beneath `SHARE`'s, not `OUTER`'s.
     let source = "EXPR #(SHARE m :Counter) -> Any = \
                   #((LET g = (FN :{x :Number} -> Number = #((LET v = (m :| Counter)) (x)))) \
                   (g {x = 1}))\n\
@@ -1519,7 +1512,7 @@ fn a_shares_callees_callable_keys_under_its_own_chain_not_its_hosts() {
         unreachable!()
     };
     assert_eq!(printed, "2");
-    assert_eq!((tiers.specialized, table), (3, Some(2)));
+    assert_eq!((tiers.settled, table), (3, Some(2)));
 }
 
 /// [`INVARIANT`] at `Shares`: the same loop, ending in a string.
@@ -1528,13 +1521,13 @@ const SHARES_INVARIANT: &str = "EXPR #(COUNTDOWN m :Counter link :Link) -> Str =
                                 EXPR #(COUNTDOWN m :Counter end :Null) -> Str = #(\"seven\")\n";
 
 #[test]
-fn a_shares_loop_seeks_its_specialization_once_and_a_second_park_finds_it_warm() {
+fn a_shares_loop_seeks_its_settlement_once_and_a_second_park_finds_it_warm() {
     let once = format!("{SHARES_INVARIANT}PRINT (COUNTDOWN ints chain)\n");
     let [(alone, ..)] = runs(&once, 1, |_| {})[..] else {
         unreachable!()
     };
     assert_eq!(
-        (alone.sought, alone.specialized),
+        (alone.sought, alone.settled),
         (1, 1),
         "one seek for the whole loop"
     );
@@ -1544,7 +1537,7 @@ fn a_shares_loop_seeks_its_specialization_once_and_a_second_park_finds_it_warm()
     };
     assert_eq!(printed, "seven\nseven");
     assert_eq!(
-        (both.sought, both.specialized),
+        (both.sought, both.settled),
         (2, 1),
         "the second park builds nothing"
     );
@@ -1586,9 +1579,9 @@ fn a_callable_born_in_a_shares_frame_keys_its_own_beneath_it() {
         };
         assert_eq!(printed, "1", "{body}");
         assert_eq!(
-            (tiers.specialized, table),
+            (tiers.settled, table),
             (2, Some(1)),
-            "`g`'s specialization is a child of `OUTER`'s, not of the root: {body}"
+            "`g`'s settlement is a child of `OUTER`'s, not of the root: {body}"
         );
     }
 }
@@ -1597,7 +1590,7 @@ fn a_callable_born_in_a_shares_frame_keys_its_own_beneath_it() {
 fn an_unkeyed_shares_callee_in_a_keyed_frame_keys_its_callables_under_its_own_birth() {
     // `OUTER` is a keyed tenant; `SHARE`, whose `m :Any` keys nothing, borrows nothing, so the
     // callable it births keys under the root `SHARE` was born under, not under `OUTER`'s
-    // specialization.
+    // settlement.
     let source = "EXPR #(SHARE m :Any) -> Any = \
                   #((LET g = (FN :{x :Number} -> Number = #((LET v = (m :| Counter)) (x)))) \
                   (g {x = 1}))\n\
@@ -1607,7 +1600,7 @@ fn an_unkeyed_shares_callee_in_a_keyed_frame_keys_its_callables_under_its_own_bi
         unreachable!()
     };
     assert_eq!(printed, "2");
-    assert_eq!((tiers.specialized, table), (2, Some(2)));
+    assert_eq!((tiers.settled, table), (2, Some(2)));
 }
 
 #[test]
@@ -1651,10 +1644,10 @@ const BOXED: &str = "EXPR #(BOXED Elt :Type) -> Number = #((NEWTYPE Box = :{v :E
                      #((LET r = (HOP :{a :Elt b :Elt})) (r))\n";
 
 #[test]
-fn a_type_composed_at_run_reaches_the_specialization_it_keys_by_value() {
+fn a_type_composed_at_run_reaches_the_settlement_it_keys_by_value() {
     // Each asker keys its own `Elt`, which its statement's call reads, and `HOP` keys the
-    // record it is handed: one specialization per keyed frame, and the record relayed into the
-    // agent tier once, where every specialization keyed on it reads it.
+    // record it is handed: one settlement per keyed frame, and the record relayed into the
+    // agent tier once, where every settlement keyed on it reads it.
     for (asker, keyed, relayed) in [("ASK", 2, 1), ("HOPPING", 3, 1)] {
         let once = ran(DEPTHS[0], &format!("{BOXED}PRINT ({asker} Number)\n"));
         let twice = ran(
@@ -1663,20 +1656,12 @@ fn a_type_composed_at_run_reaches_the_specialization_it_keys_by_value() {
         );
         assert_eq!((once.printed.as_str(), twice.printed.as_str()), ("1", "1"));
         assert_eq!(
-            (
-                once.tiers.sought,
-                once.tiers.specialized,
-                once.tiers.relayed
-            ),
+            (once.tiers.sought, once.tiers.settled, once.tiers.relayed),
             (keyed, keyed, relayed),
             "`{asker}`'s composed record is laid by value"
         );
         assert_eq!(
-            (
-                twice.tiers.sought,
-                twice.tiers.specialized,
-                twice.tiers.relayed
-            ),
+            (twice.tiers.sought, twice.tiers.settled, twice.tiers.relayed),
             (2 * keyed, keyed, relayed),
             "`{asker}`'s second call hits, and a hit relays nothing"
         );

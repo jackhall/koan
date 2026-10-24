@@ -11,7 +11,7 @@
 //! **No step names a place that is not its own.** No method takes or returns a handle, and none is
 //! a carrier door: a step holds values at its own brands and nothing else, and says what it needs —
 //! a child, a wait, a successor, a result — beside the hints that place it. A build cell reaches a
-//! step only as an opaque [`BuildRef`], which the scheduler alone opens.
+//! step only as an opaque [`ArenaRef`], which the scheduler alone opens.
 //!
 //! Every arm of an `Action` carries no region borrow. `enter` quantifies a step's three brands per
 //! call, so a step's return type can name none of them: what crosses back out is a dormant carrier,
@@ -30,7 +30,7 @@ use crate::scheduler::delivery::KDelivery;
 use crate::scheduler::seek::{Lending, Seek};
 use crate::scope::RegionHeader;
 use crate::type_lattice::Halves;
-use crate::values::{BuildRef, Chain, Half, TypeTiers, Types};
+use crate::values::{ArenaRef, Chain, Half, TypeTiers, Types};
 
 /// The raw context a step runs in: every door `cellgraph` hands one, over the bundle's families.
 /// Only a [`Step`] and the drain hold one.
@@ -77,9 +77,9 @@ pub(super) enum Kind<'graph, B: StepBundle<'graph>> {
     Left(Dormant<'graph, B::Birth>),
     /// The step could not proceed. The drain abandons the work.
     Failed(StepError),
-    /// A specialization's step has entered itself in its parent's table and stays alive with no
+    /// A settlement's step has entered itself in its parent's table and stays alive with no
     /// continuation, reporting to nobody. Only the drain's own synchronous entry of a
-    /// specialization sees it.
+    /// settlement sees it.
     Quiesced,
 }
 
@@ -394,16 +394,16 @@ where
         self.context.hold_scratch()
     }
 
-    /// Whether this cell borrows a specialization: a region rather than a scratch, which in a run
+    /// Whether this cell borrows a settlement: a region rather than a scratch, which in a run
     /// cell is a call's frame the drain found one for, or an evaluation or block copying its lend.
-    pub fn borrows_specialization(&self) -> bool {
+    pub fn under_settlement(&self) -> bool {
         self.context.lent_region().is_some()
     }
 
-    /// The agent chain, the warm tier of a cell that borrows a specialization: the frozen load,
+    /// The agent chain, the warm tier of a cell that borrows a settlement: the frozen load,
     /// then the agent tier, which it writes and which outlives every hop born under the
-    /// specialization. What an invariant site's types are adopted into, so the next hop finds them.
-    /// Paired to the region writer; `None` for a cell that borrows no specialization, whose own
+    /// settlement. What an invariant site's types are adopted into, so the next hop finds them.
+    /// Paired to the region writer; `None` for a cell that borrows no settlement, whose own
     /// scratch is its warm tier.
     pub fn agent_types(&self) -> Option<Chain<'graph, 'here, 'graph, 'step>> {
         self.context.lent_region()?;
@@ -419,10 +419,10 @@ where
         self.spawn_lending(request, Lending::Parent)
     }
 
-    /// [`spawn`](Self::spawn) a call's frame, born borrowing the specialization `seek` finds: the
+    /// [`spawn`](Self::spawn) a call's frame, born borrowing the settlement `seek` finds: the
     /// drain looks it up, or builds it, before the child is born. With no `seek`, or none found,
     /// the frame is born cold: a `Fresh` frame borrowing this cell's scratch, a `Shares` one
-    /// borrowing nothing, so it never reads this cell's specialization as its own.
+    /// borrowing nothing, so it never reads this cell's settlement as its own.
     pub fn spawn_seeking(
         &mut self,
         request: Request<'graph, 'here, B>,
@@ -446,12 +446,12 @@ where
         })
     }
 
-    /// The build cell this cell's frame runs under: the specialization whose region it borrows,
+    /// The build cell this cell's frame runs under: the settlement whose region it borrows,
     /// where it was born borrowing one, and `fallback` otherwise.
-    pub fn build_ref(&self, fallback: BuildRef) -> BuildRef {
+    pub fn arena_ref(&self, fallback: ArenaRef) -> ArenaRef {
         (self.context.lent_region())
             .and_then(|(_, header)| header.get()?.home())
-            .map_or(fallback, |home| BuildRef::of(home.me))
+            .map_or(fallback, |home| ArenaRef::of(home.me))
     }
 
     /// The results of the children this cell parked on, in the order it asked for them: a scratch
@@ -531,7 +531,7 @@ where
         self.tail_lending(placement, work, Lending::Parent)
     }
 
-    /// [`tail`](Self::tail) into a call's frame, born borrowing the specialization `seek` finds,
+    /// [`tail`](Self::tail) into a call's frame, born borrowing the settlement `seek` finds,
     /// or cold, as [`spawn_seeking`](Self::spawn_seeking) asks for a child.
     pub fn tail_seeking(
         self,
@@ -543,14 +543,14 @@ where
     }
 
     /// [`tail`](Self::tail) into a frame of the same callee as the frame running under `build`,
-    /// born borrowing that same specialization with no lookup — sound only for a callee whose name
+    /// born borrowing that same settlement with no lookup — sound only for a callee whose name
     /// does not escape, so that every hop into it is a tail edge the load read; or cold, where that
-    /// specialization is no longer live.
+    /// settlement is no longer live.
     pub fn tail_under(
         self,
         placement: Placement,
         work: Work<'graph, 'here, B>,
-        build: BuildRef,
+        build: ArenaRef,
     ) -> Action<'graph, B> {
         self.tail_lending(placement, work, Lending::Under(build))
     }
@@ -575,7 +575,7 @@ where
         }))
     }
 
-    /// End a specialization's step: lay this cell's own header and its table, as long as the
+    /// End a settlement's step: lay this cell's own header and its table, as long as the
     /// nested bound its parent's table records. The drain enters the cell in its parent's table
     /// and sets its home once the step returns. The cell stays alive with no continuation.
     /// Refused for a cell that asked for children, one that is no tree cell, one that borrows no

@@ -56,12 +56,12 @@ use crate::type_lattice::{
     Collector, DeclaredType, DeclaredView, KType, Parametric, Record as TypeRecord, TypeNode,
     Variance, admits_with, display_name, substitute_quantified,
 };
-use crate::values::{BuildRef, CALL_ONLY, Chain, Link, List, Record, TypeValue, Value};
+use crate::values::{ArenaRef, CALL_ONLY, Chain, Link, List, Record, TypeValue, Value};
 
 use super::bundle::{Handed, KBirth, KBundle, KState, Within};
 use super::exit::Exit;
 use super::record::{CallKind, Contract, Evaluated, Program, rendered};
-use super::specialize::called_function;
+use super::settle::called_function;
 
 /// The body runner's state between units: which body it is performing, how far it got, and where
 /// it parked.
@@ -147,9 +147,9 @@ type Taking<'a, 'graph, 'step, 'here, 'scratch, 'lent> =
 ///
 /// Each step runs on one chain ([type tiers](../../design/type-tiers.md#where-each-body-interns)):
 /// the caching chain in a caching body, or in the own body of a routing caching frame — a `Fresh`
-/// one, which holds its scratch at its first step, or a `Shares` one borrowing a specialization —
+/// one, which holds its scratch at its first step, or a `Shares` one borrowing a settlement —
 /// and its region's anywhere else. Under `routes`, an invariant site's types are adopted into the
-/// agent tier where the frame borrows a specialization.
+/// agent tier where the frame borrows a settlement.
 pub fn run<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'graph, KBundle> {
     let (step, state) = step.state();
     let (mut step, scratch) = step.scratch();
@@ -169,9 +169,9 @@ pub fn run<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'g
     let shape = shape.map(|(shape, _)| shape);
     let routes = match &state {
         // A tree cell holds its scratch whatever it borrows; a tenant routes where it borrows a
-        // specialization, writing its host's scratch.
+        // settlement, writing its host's scratch.
         KState::Born(KBirth::Call { .. }) => {
-            caches && (step.hold_scratch() || step.borrows_specialization())
+            caches && (step.hold_scratch() || step.under_settlement())
         }
         KState::Born(KBirth::Block { within, .. }) => within.routes,
         KState::Runner(runner) => runner.within.routes,
@@ -198,9 +198,9 @@ fn called_shape<'graph>(callee: KValue<'graph, '_>) -> Option<&'graph BodyShape<
 }
 
 /// The build cell `callee`'s function was born under, behind every barrier: where a frame of it
-/// that borrows no specialization runs.
-fn born_under(callee: KValue<'_, '_>) -> BuildRef {
-    called_function(callee).map_or(BuildRef::ROOT, |function| function.closure().build())
+/// that borrows no settlement runs.
+fn born_under(callee: KValue<'_, '_>) -> ArenaRef {
+    called_function(callee).map_or(ArenaRef::ROOT, |function| function.closure().build())
 }
 
 /// [`run`] on the chain `types` it picked; `routes` is a call's, taken at its frame's first step.
@@ -248,7 +248,7 @@ fn ran<'graph, 'here, 'scratch>(
                 barrier,
                 within: Within {
                     routes,
-                    build: step.build_ref(born_under(callee)),
+                    build: step.arena_ref(born_under(callee)),
                 },
                 ..Runner::at(program, activation, Level::Frame, Some(contract))
             },
@@ -1180,7 +1180,7 @@ fn code_frame<'graph, 'here>(
         links.push(Link::Value(value));
     }
     // A quote's lexical chain of build cells is not placed, so its frame seeks from the root.
-    let closure = ClosureBindings::of(writer, &links, BuildRef::ROOT);
+    let closure = ClosureBindings::of(writer, &links, ArenaRef::ROOT);
     Some(resident(
         writer,
         KActivation::of_code(writer, shape, program.facts(), closure, program.builtins()),

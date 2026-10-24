@@ -50,7 +50,7 @@ fn scheduler_names_only_the_layers_below_it_holds_no_heap_and_spells_the_stack_l
     crate::tests::boundary::holds("scheduler", PREFIXES, OWNING_ALLOWED);
 }
 
-/// Only the scheduler and `values` open a `BuildRef` or make one from a handle: every other module
+/// Only the scheduler and `values` open a `ArenaRef` or make one from a handle: every other module
 /// holds and passes the token, so a step can hand the drain only a build cell the scheduler named to
 /// it.
 #[test]
@@ -68,13 +68,13 @@ fn only_the_scheduler_and_values_open_a_build_ref() {
         .filter(|file| {
             let text = std::fs::read_to_string(file).expect("a source file reads");
             let code = crate::tests::boundary::strip_comments_and_strings(&text);
-            code.contains("BuildRef::of") || code.contains(".opened()")
+            code.contains("ArenaRef::of") || code.contains(".opened()")
         })
         .collect();
     assert!(files.len() > 100, "the walk found the crate's sources");
     assert!(
         offenders.is_empty(),
-        "a module outside the scheduler opens a `BuildRef`: {offenders:?}"
+        "a module outside the scheduler opens a `ArenaRef`: {offenders:?}"
     );
 }
 

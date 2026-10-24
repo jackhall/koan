@@ -233,7 +233,7 @@ fn run<'graph, 'cell>(
             writer,
             activation,
             component,
-            crate::values::BuildRef::ROOT,
+            crate::values::ArenaRef::ROOT,
             types,
             fixture.scratch(),
             &mut |_, _| Some(Supplied::Value(Value::Null)),

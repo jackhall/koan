@@ -7,7 +7,7 @@ the caller already holds.
 the same answer more than once:
 
 - **A call by name keyed on a `FOR ALL` name.** `seek`
-  ([`specialize.rs`](../../src/program/specialize.rs)) runs `admitted` over
+  ([`specialize.rs`](../../src/program/settle.rs)) runs `admitted` over
   the arguments to solve the group whose solution the specialization key
   digests, and the frame's birth in [`body.rs`](../../src/program/body.rs)
   runs `admitted` again over the same arguments, since `KBirth::Call`

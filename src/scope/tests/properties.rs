@@ -698,7 +698,7 @@ fn activate<'g, 'c>(
                         plan.edge(index).unwrap()
                     });
                 let bindings =
-                    ClosureBindings::of(writer, &captures, crate::values::BuildRef::ROOT);
+                    ClosureBindings::of(writer, &captures, crate::values::ArenaRef::ROOT);
                 // A captured value is the enclosing binding's word — the sibling a capture of the
                 // enclosing knot names — and a fellow is an edge.
                 for (index, capture) in nested.captures().iter().enumerate() {

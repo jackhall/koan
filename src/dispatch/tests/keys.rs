@@ -1,4 +1,4 @@
-//! Specialization keys over frontiers: which names a callable's key lists, folded from the
+//! Settlement keys over frontiers: which names a callable's key lists, folded from the
 //! frontiers of the units beneath it, and what a call of it seeks at run.
 
 use crate::program::Program;
@@ -31,7 +31,7 @@ fn name(program: &Program<'_>, shape: &BodyShape<'_>, slot: Slot) -> String {
 
 /// The names `shape`'s key lists, in slot order: `None` where a call of it seeks nothing.
 fn listed(program: &Program<'_>, shape: &BodyShape<'_>) -> Option<Vec<String>> {
-    (program.facts().specialization_keys(shape)).map(|slots| {
+    (program.facts().settlement_keys(shape)).map(|slots| {
         slots
             .iter()
             .map(|slot| name(program, shape, *slot))
@@ -115,7 +115,7 @@ fn a_body_keys_on_a_module_parameter_a_path_through_it_waits_on() {
 #[test]
 fn a_body_keys_on_its_own_names_a_nested_body_s_entry_frontier_waits_on() {
     // `PAIRED`'s unit waits on `OUTER`'s `m` and its own `Inner`, so it seams at `PAIRED`'s entry:
-    // `OUTER` keys `m`, and `PAIRED`, whose specialization lies beneath `OUTER`'s, `Inner`.
+    // `OUTER` keys `m`, and `PAIRED`, whose settlement lies beneath `OUTER`'s, `Inner`.
     let source = format!(
         "{PRELUDE}{SAME}EXPR #(OUTER m :Counter) -> Any = #((EXPR FOR ALL #[Inner] \
          #(PAIRED x :Inner) -> Any = #(SAME m.zero AND x)) (PAIRED 1))\n"
@@ -238,7 +238,7 @@ fn ran(source: &str) -> Ran {
 /// `source`'s run's seeks and builds.
 fn sought(source: &str) -> (usize, usize, String) {
     let ran = ran(source);
-    (ran.tiers.sought, ran.tiers.specialized, ran.printed)
+    (ran.tiers.sought, ran.tiers.settled, ran.printed)
 }
 
 /// `WRAP`, keyed on its `FOR ALL` name alone, at `Shares` and at `Fresh`.
@@ -248,7 +248,7 @@ const WRAPS: [&str; 2] = [
 ];
 
 #[test]
-fn two_calls_differing_at_a_frontier_name_build_two_specializations_and_agreeing_ones_share() {
+fn two_calls_differing_at_a_frontier_name_build_two_settlements_and_agreeing_ones_share() {
     for (wrap, printed) in WRAPS.into_iter().zip([["n\nn", "n\n1"], ["1\n1", "1\n1"]]) {
         let agree = format!("{PICK}{wrap}PRINT (WRAP 1)\nPRINT (WRAP 2)\n");
         assert_eq!(sought(&agree), (2, 1, printed[0].to_string()), "{wrap}");
@@ -258,7 +258,7 @@ fn two_calls_differing_at_a_frontier_name_build_two_specializations_and_agreeing
 }
 
 #[test]
-fn two_calls_differing_at_a_module_parameter_build_two_specializations() {
+fn two_calls_differing_at_a_module_parameter_build_two_settlements() {
     // `SAME`, called once a `step`, keys its own `Elt` on the carrier `m` passes it.
     let step = "LET step = (FN :{m :Counter} -> Any = \
                 #((LET s = (SAME m.zero AND (m.succ {x = m.zero}))) (s)))\n";
@@ -269,7 +269,7 @@ fn two_calls_differing_at_a_module_parameter_build_two_specializations() {
 }
 
 #[test]
-fn an_evicted_specialization_costs_a_recomputation_and_never_a_different_answer() {
+fn an_evicted_settlement_costs_a_recomputation_and_never_a_different_answer() {
     let source = format!(
         "{PICK}{}PRINT (WRAP 1)\nPRINT (WRAP \"s\")\nPRINT (WRAP 1)\n",
         WRAPS[0]
@@ -278,8 +278,8 @@ fn an_evicted_specialization_costs_a_recomputation_and_never_a_different_answer(
     let roomy = ran(&source);
     assert_eq!(tight.printed, "n\n1\nn");
     assert_eq!(roomy.printed, tight.printed);
-    assert_eq!((tight.tiers.specialized, tight.tiers.evicted), (3, 2));
-    assert_eq!((roomy.tiers.specialized, roomy.tiers.evicted), (2, 0));
+    assert_eq!((tight.tiers.settled, tight.tiers.evicted), (3, 2));
+    assert_eq!((roomy.tiers.settled, roomy.tiers.evicted), (2, 0));
 }
 
 /// `pick`, a quantified callable keyed on its `FOR ALL` name, as a module's member: a call by
@@ -365,7 +365,7 @@ fn an_escaping_body_s_hop_seeks_with_its_own_content() {
     // `Number` and two at `Str`.
     let ran = ran(&source);
     assert_eq!(ran.printed, "7");
-    assert_eq!((ran.tiers.sought, ran.tiers.specialized), (6, 4));
+    assert_eq!((ran.tiers.sought, ran.tiers.settled), (6, 4));
 }
 
 /// A unit that reads an entry-bound name beside a later-bound one seams at the later one, so its

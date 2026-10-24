@@ -14,7 +14,7 @@ use crate::scope::RegionHeader;
 use crate::scope::{BodyShape, Site};
 use crate::symbols::Symbol;
 use crate::type_lattice::{DeclaredType, Halves, KType};
-use crate::values::{BuildRef, ContentDigest, Half, TypeTiers, copy_severed};
+use crate::values::{ArenaRef, ContentDigest, Half, TypeTiers, copy_severed};
 
 use super::body::Runner;
 use super::record::{CallKind, Contract, Evaluated, Program};
@@ -78,26 +78,26 @@ pub enum KBirth<'graph, 'cell> {
         program: &'graph Program<'graph>,
         view: KActivationView<'graph, 'cell>,
     },
-    /// A specialization: it lays its own header and table, and the drain enters it in its parent's
+    /// A settlement: it lays its own header and table, and the drain enters it in its parent's
     /// table. Born at `'graph` by the drain, awake, so it never crosses.
-    Specialize,
+    Settle,
 }
 
 /// What a body runs within, handed to every evaluation and block it asks for: whether it runs in
 /// the own body of a routing caching frame, whose caching chain it then interns through and whose
-/// invariant sites it adopts into the agent tier under a specialization, and the build cell its
+/// invariant sites it adopts into the agent tier under a settlement, and the build cell its
 /// frame runs under, which a callable born in it is born under.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Within {
     pub routes: bool,
-    pub build: BuildRef,
+    pub build: ArenaRef,
 }
 
 impl Within {
     /// The top level's: no caching frame, and the build root.
     pub const TOP: Within = Within {
         routes: false,
-        build: BuildRef::ROOT,
+        build: ArenaRef::ROOT,
     };
 
     /// What the evaluation a frame's tail hands its last statement runs within: it writes the
@@ -192,7 +192,7 @@ impl<'graph> StepBundle<'graph> for KBundle {
     {
         match birth {
             KBirth::Program { .. } => size_of::<usize>(),
-            KBirth::Specialize => 0,
+            KBirth::Settle => 0,
             KBirth::Call {
                 callee,
                 arguments,
@@ -243,7 +243,7 @@ impl<'graph> StepBundle<'graph> for KBundle {
             }
             CrossedOperand::Copied { view: copied, .. } => match *copied {
                 KBirth::Program { program } => KBirth::Program { program },
-                KBirth::Specialize => KBirth::Specialize,
+                KBirth::Settle => KBirth::Settle,
                 // The values of one birth cross through one copy, so they share each knot.
                 KBirth::Call {
                     program,

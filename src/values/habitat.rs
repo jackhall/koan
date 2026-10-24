@@ -9,7 +9,7 @@
 //! value beside the projected header door of the same half, so a value door that takes both at one
 //! brand interns its type into the branch of the habitat it lays the value in. During the load the
 //! chain writes the root builder instead ([`Half::Load`]), and the agent chain writes the agent
-//! tier ([`Half::Agent`]): where a specialization's binding and an invariant site's types rest, so
+//! tier ([`Half::Agent`]): where a settlement's binding and an invariant site's types rest, so
 //! every later frame of the program finds them.
 //!
 //! `memory` names no type tier, so the habitat a chain writes is assembled here, where values pair

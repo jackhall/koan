@@ -154,7 +154,7 @@ pub struct Closing<'a> {
 #[derive(Clone, Copy, Debug)]
 pub struct Folds<'a> {
     pub caching: Option<&'a Caching<'a>>,
-    /// The parameter slots a callable's specialization keys on: `None` where a call seeks nothing.
+    /// The parameter slots a callable's settlement keys on: `None` where a call seeks nothing.
     pub keys: Option<&'a [Slot]>,
     /// Which of the body's type captures its content composes, parallel to its layout.
     pub contract: &'a [bool],
@@ -805,9 +805,9 @@ impl<'graph> LoadFacts<'graph> {
         (self.at_site(shape, site, |typed| typed.by_name)).unwrap_or(&[])
     }
 
-    /// The parameter slots the callable `shape`'s specialization keys on: `None` where a call of
+    /// The parameter slots the callable `shape`'s settlement keys on: `None` where a call of
     /// it seeks nothing.
-    pub fn specialization_keys(&self, shape: &BodyShape<'_>) -> Option<&'graph [Slot]> {
+    pub fn settlement_keys(&self, shape: &BodyShape<'_>) -> Option<&'graph [Slot]> {
         self.records.folds(shape.segment())?.keys
     }
 

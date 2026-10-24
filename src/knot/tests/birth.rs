@@ -33,7 +33,7 @@ pub(super) fn tie_with<'f, 'graph, 'cell>(
         writer,
         activation,
         shape.component_of(slot),
-        crate::values::BuildRef::ROOT,
+        crate::values::ArenaRef::ROOT,
         types,
         fixture.scratch(),
         eager,

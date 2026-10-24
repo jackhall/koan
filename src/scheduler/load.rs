@@ -1,7 +1,7 @@
 //! The load door: a graph stood up over two slab roots, the build root entered once by the load.
 //!
 //! The **build root** is the build tree's one core cell, living as long as the program; its region
-//! holds the root-level specialization table. The **run root** is the region every root work is
+//! holds the root-level settlement table. The **run root** is the region every root work is
 //! born under. The load runs in the build root's one entry, here rather than through the ready
 //! stack, before any root work, and returns the type tiers every later step reads; what it
 //! writes rests in program storage. The entry lays the build root's header and its table, as long
@@ -19,7 +19,7 @@ use crate::values::{Half, SpecBounds, TypeTiers};
 /// The two slab roots a loaded graph holds.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Roots {
-    /// The build tree's core cell, whose region holds the root-level specialization table.
+    /// The build tree's core cell, whose region holds the root-level settlement table.
     pub build: SlabHandle,
     /// The region every root work is born under, where the top level's bindings live.
     pub run: SlabHandle,
@@ -29,7 +29,7 @@ impl<'graph, B: StepBundle<'graph>> Graph<'graph, B> {
     /// A graph over a slab of `cap` cells, at least two, holding its build root and its run root,
     /// with the build root entered once to run `load`. `load` returns the type tiers every later
     /// step reads, beside its own result; a refusal drops the graph with it. The build root's
-    /// table holds `bounds.root` children, and every specialization's `bounds.nested`.
+    /// table holds `bounds.root` children, and every settlement's `bounds.nested`.
     pub fn load<R, E>(
         cap: u32,
         bounds: SpecBounds,
