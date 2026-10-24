@@ -13,7 +13,8 @@
 //!   unknowns — is a callable's entry, and on the parameters its invariant sites read. Each
 //!   frontier's sites and keyable names are read once, through a memo shared by every frontier that
 //!   reads it. The parameters such frontiers hold, keyable or not, are what a frame's entry binds
-//!   in its activation where nothing settled them.
+//!   in its activation where nothing settled them, and the slots an owning body binds at a
+//!   statement that any frontier holds are where its activation decides again.
 //! - **Contract.** Each lexical variable a contribution or a solution names is composed by every
 //!   callable or `MODULE` body between the body reading it and its home. The walk refuses a
 //!   `MODULE` body composing a type its `OVER` list does not name.
@@ -117,6 +118,7 @@ pub fn fold<'o>(
     let waiting = keyed_names(shapes, &frontiers, scratch, &|body, slot| {
         shapes.shape_at(body).position_of(slot) == Position::PARAMETER
     });
+    let seaming = seam_names(shapes, &frontiers, scratch);
     let mut folds = BumpVec::with_capacity_in(count, scratch);
     for (at, shape) in shapes.bodies().iter().enumerate() {
         let segment = shape.segment();
@@ -131,6 +133,7 @@ pub fn fold<'o>(
                 caching: None,
                 keys: None,
                 waits: &[],
+                seams: &[],
                 contract,
             });
             continue;
@@ -182,10 +185,13 @@ pub fn fold<'o>(
             }
             false => &[],
         };
+        let from = seaming.partition_point(|(each, _)| *each < segment);
+        let to = seaming.partition_point(|(each, _)| *each <= segment);
         folds.push(Folds {
             caching: Some(resident(lay, caching)),
             keys: keys.flatten(),
             waits,
+            seams: collect(lay, seaming[from..to].iter().map(|(_, slot)| *slot)),
             contract,
         });
     }
@@ -234,6 +240,61 @@ pub(super) fn keyed_names<'x>(
                 .copied()
                 .filter(|(declaring, _)| shapes.encloses(*declaring, *segment)),
         );
+    }
+    named.sort_unstable();
+    named.dedup();
+    named
+}
+
+/// Each `(body, slot)` of an owning body bound at a statement that some unit's frontier holds:
+/// where its frame's activation decides again once the statement binds it. Sorted. Each frontier's
+/// unknowns are laid flat once, through a memo every frontier reading it shares.
+fn seam_names<'x>(
+    shapes: &Shapes<'_>,
+    frontiers: &[(Segment, UnitIndex, Frontier<'_>)],
+    scratch: BumpAllocator<'x>,
+) -> BumpVec<'x, (Segment, Slot)> {
+    let mut flat: BumpBackedMap<'x, (usize, usize), &'x [(Segment, Slot)]> = bump_table(scratch);
+    let mut named = BumpVec::new_in(scratch);
+    for (segment, unit, frontier) in frontiers {
+        let mut stack = BumpVec::new_in(scratch);
+        stack.push((*frontier, false));
+        while let Some((at, expanded)) = stack.pop() {
+            if flat.contains_key(&at.identity()) {
+                continue;
+            }
+            if !expanded {
+                stack.push((at, true));
+                stack.extend((at.reads().iter()).map(|cut| (cut.frontier, false)));
+                continue;
+            }
+            let mut seams = BumpVec::new_in(scratch);
+            seams.extend((at.own().iter()).filter_map(|unknown| match unknown.at {
+                Address::Slot(slot)
+                    if shapes.owner(unknown.segment) == unknown.segment
+                        && shapes.shape_at(unknown.segment).position_of(slot)
+                            != Position::PARAMETER =>
+                {
+                    Some((unknown.segment, slot))
+                }
+                _ => None,
+            }));
+            for cut in at.reads() {
+                let read = flat[&cut.frontier.identity()];
+                seams.extend(read.iter().filter(|(segment, _)| *segment >= cut.from));
+            }
+            seams.sort_unstable();
+            seams.dedup();
+            flat.insert(at.identity(), collect(scratch, seams.iter().copied()));
+        }
+        // A unit's own binders are what it fixes, not what it waits on.
+        named.extend(flat[&frontier.identity()].iter().filter(|(body, slot)| {
+            let site = shapes.bind_site(crate::scope::Unknown {
+                segment: *body,
+                at: Address::Slot(*slot),
+            });
+            (site.segment, site.unit) != (*segment, *unit)
+        }));
     }
     named.sort_unstable();
     named.dedup();

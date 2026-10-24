@@ -38,7 +38,12 @@ fn callable<'graph>(program: &Program<'graph>, names: &[&str]) -> &'graph BodySh
     };
     let (_, found) = (program.shape().nested_shapes().iter())
         .find(|(_, nested)| nested.kind() == ShapeKind::Callable && named(nested) == names)
-        .unwrap_or_else(|| panic!("a callable binds {names:?}"));
+        .unwrap_or_else(|| {
+            let all: Vec<_> = (program.shape().nested_shapes().iter())
+                .map(|(_, nested)| named(nested))
+                .collect();
+            panic!("a callable binds {names:?}: {all:?}")
+        });
     found
 }
 
@@ -125,4 +130,79 @@ fn a_loop_calling_a_keyed_callee_on_load_content_holds_o1_settlements() {
         assert_eq!((ran.tiers.sought, ran.tiers.settled), (depth as usize, 1));
         assert_eq!(DECIDED.with(std::cell::Cell::get), 0);
     }
+}
+
+/// `MAKE`, a recursive functor the load never unfolds, and `USE`, which binds what it returns at
+/// a statement: a module the facts hold only as a leaf, whose `zero` `PICK` reads.
+const MAKE: &str = "EXPR #(MAKE m :Counter link :Link) -> Counter = #(MAKE m (ATTR link next))\n\
+                    EXPR #(MAKE m :Counter end :Null) -> Counter = #(m)\n\
+                    EXPR #(PICK x :Number) -> Str = #(\"n\")\n\
+                    EXPR #(PICK x :Str) -> Number = #(1)\n\
+                    EXPR #(USE n :Number) -> Any = \
+                    #((LET r = (MAKE ints chain)) (LET p = (PICK r.zero)) (p))\n";
+
+#[test]
+fn a_statement_seam_decides_the_units_it_wakes_in_the_activation() {
+    // The load leaves `PICK r.zero` open; once `r` is bound, `USE`'s activation decides it.
+    let source = format!("{MAKE}PRINT (USE 1)\n");
+    let (segment, site, selected) = loaded(&super::caching::program(2, &source), |program| {
+        let use_ = callable(program, &["r", "p", "n"]);
+        let Some(ExpressionPart::Expression(node)) = use_.rhs(slot(program, use_, "p")) else {
+            panic!("`p` is bound to a call");
+        };
+        let site = use_.site_of_node(node.reference());
+        let narrowing = program.facts().use_statics(use_, site).narrowing;
+        (
+            use_.segment(),
+            site,
+            matches!(narrowing, Narrowing::Selected(_)),
+        )
+    });
+    assert!(!selected, "the load selects nothing at `PICK r.zero`");
+    CHOSEN.with(|chosen| chosen.borrow_mut().clear());
+    crate::dispatch::evaluate::CHOSE.with(|hook| hook.set(Some(chose)));
+    DECIDED.with(|decided| decided.set(0));
+    let ran = ran_under(2, &source, BuildBudget::default());
+    crate::dispatch::evaluate::CHOSE.with(|hook| hook.set(None));
+    assert_eq!(ran.printed, "n");
+    assert_eq!(
+        DECIDED.with(std::cell::Cell::get),
+        1,
+        "`r`'s statement decides once"
+    );
+    let chosen = CHOSEN.with(|chosen| chosen.take());
+    assert!(chosen.contains(&(segment, site)), "{chosen:?}");
+}
+
+/// A message, its location dropped.
+fn unlocated(message: &str) -> &str {
+    message.split_once(": ").map_or(message, |(_, rest)| rest)
+}
+
+#[test]
+fn a_statement_binding_that_cannot_type_faults_where_the_load_would() {
+    // `r` is `words` at run, so `PICK r.zero` reads a string, which no overload admits: the
+    // activation refuses at `r`'s statement, worded as the load words the use with `r` declared.
+    let picks = "EXPR #(PICK x :Number) -> Str = #(\"n\")\n\
+                 EXPR #(PICK x :Bool) -> Number = #(1)\n";
+    let make = MAKE.lines().take(2).collect::<Vec<_>>().join("\n");
+    let run = format!(
+        "{make}\n{picks}EXPR #(USE n :Number) -> Any = \
+         #((LET r = (MAKE words chain)) (LET p = (PICK r.zero)) (p))\nPRINT (USE 1)\n"
+    );
+    let declared = format!(
+        "{make}\n{picks}EXPR #(USE n :Number) -> Any = #((LET p = (PICK words.zero)) (p))\n\
+         PRINT (USE 1)\n"
+    );
+    let ran = ran_under(2, &run, BuildBudget::default());
+    let fault = ran.printed.strip_prefix("error: ").expect("the run faults");
+    let refused = super::run(&super::caching::program(2, &declared));
+    let refused = refused
+        .strip_prefix("load: ")
+        .expect("the declared program refuses");
+    assert_eq!(unlocated(fault), unlocated(refused));
+    assert!(
+        unlocated(fault).starts_with("no overload of `PICK _`"),
+        "{fault}"
+    );
 }

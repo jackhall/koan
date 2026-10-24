@@ -56,7 +56,7 @@ use crate::parse::ExpressionPart;
 use crate::scheduler::{
     Action, Placement, Received, Request, Slot as Asked, Step, StepError, Taken, Use,
 };
-use crate::scope::{Address, RecordSource, Unknown};
+use crate::scope::{Address, RecordSource, Tree, Unknown};
 use crate::scope::{BodyShape, Component, Mint, Position, ShapeKind, Site, Slot, Unit, UnitWork};
 use crate::scope::{CaptureSource, ClosureBindings, Code, Facts, ShapeError};
 use crate::scope::{Coordinate, ParameterBinding, Static, Target};
@@ -91,6 +91,8 @@ pub struct Runner<'graph, 'cell> {
     /// The outermost barrier a frame was called through, which its value crosses outwards.
     barrier: Option<Barrier<'graph, 'cell>>,
     stage: Stage,
+    /// How many of its units' statement seams the runner has decided in its activation.
+    seen: u32,
     /// What the body runs within: what it hands each evaluation and block it asks for
     /// ([`KBirth::Evaluate`]), and the arena node a callable born in it is born under.
     within: Within,
@@ -586,6 +588,7 @@ impl<'graph, 'cell> Runner<'graph, 'cell> {
             contract,
             barrier: None,
             stage: Stage::Next,
+            seen: 0,
             within: Within::TOP,
         }
     }
@@ -1458,6 +1461,9 @@ fn perform<'graph, 'here>(
     types: &Chain<'_, 'here, '_, '_>,
 ) -> Action<'graph, KBundle> {
     loop {
+        if let Err(stopped) = decided_at_seams(&step, types, &mut runner) {
+            return stop(step, runner, stopped);
+        }
         let at = runner.reading(&step);
         let shape = at.shape();
         if runner.unit as usize == shape.units().len() {
@@ -1566,6 +1572,65 @@ fn perform<'graph, 'here>(
         runner.stage = Stage::Evaluation;
         return step.park(asked, run, KState::Runner(runner), None);
     }
+}
+
+/// The statement seams of the owning body the runner performs: each slot its units bound since it
+/// last looked that some unit's frontier holds and its facts leave unbound, bound to what it holds
+/// and decided in its activation over what it decided before. A block's or an inline module
+/// body's slots are no seam: their units' facts lie in the record of the unit running them.
+fn decided_at_seams<'graph, 'here>(
+    step: &Taking<'_, 'graph, '_, 'here, '_, '_>,
+    types: &Chain<'_, 'here, '_, '_>,
+    runner: &mut Runner<'graph, 'here>,
+) -> Result<(), Stopped<'here>> {
+    let (from, to) = (runner.seen as usize, runner.unit as usize);
+    runner.seen = runner.unit;
+    if from == to || runner.outer.is_some() || runner.level == Level::Block {
+        return Ok(());
+    }
+    let at = runner.reading(step);
+    let (shape, facts, view) = (at.shape(), *at.facts(), at.view());
+    let seams = facts.statement_seams(shape);
+    if seams.is_empty() {
+        return Ok(());
+    }
+    let scratch = Bump::new();
+    let mut own = BumpVec::new_in(&scratch);
+    for slot in seams {
+        let ran = shape.unit_of_slot(*slot).run_index();
+        if !ran.is_some_and(|ran| (from..to).contains(&ran)) {
+            continue;
+        }
+        let unknown = Unknown {
+            segment: shape.segment(),
+            at: Address::Slot(*slot),
+        };
+        // A seam is a binder whose content the facts hold only as a leaf: an action's result, a
+        // call that does not unfold. One whose tree they build, closed or over other binders, or
+        // whose declaration they close, was decided where they were.
+        let seen = facts
+            .content(shape, *slot)
+            .is_some_and(|tree| !matches!(tree, Tree::Leaf(_)));
+        let closed = seen || matches!(facts.declared_type(shape, *slot), Static::Closed(_));
+        if closed || facts.bound(unknown).is_some() {
+            continue;
+        }
+        let bound =
+            (view.bound(*slot)).and_then(|value| bound_of(&scratch, value, types, &scratch));
+        own.extend(bound.map(|bound| (unknown, bound)));
+    }
+    if own.is_empty() {
+        return Ok(());
+    }
+    let (program, writer) = (runner.program, step.writer());
+    let below = view.decided();
+    let decided = (program.activate())(program, writer, facts, types, below, &own, shape.segment())
+        .map_err(Stopped::Raised)?;
+    runner.activation = resident(
+        writer,
+        runner.activation.deciding(resident(writer, decided)),
+    );
+    Ok(())
 }
 
 /// Ask for one evaluation of `node` through the program's `evaluate`, at the runner's placement.

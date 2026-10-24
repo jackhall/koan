@@ -169,6 +169,9 @@ pub struct Folds<'a> {
     /// A callable's parameters that some unit beneath it waits on with its entry as its seam,
     /// keyable or not: what its frame's entry binds in its activation where nothing settled them.
     pub waits: &'a [Slot],
+    /// An owning body's slots bound at a statement that some unit's frontier holds: where its
+    /// frame's activation decides again once the statement binds them.
+    pub seams: &'a [Slot],
     /// Which of the body's type captures its content composes, parallel to its layout.
     pub contract: &'a [bool],
 }
@@ -1108,6 +1111,13 @@ impl<'a, S: RecordSource<'a>> FactsOver<S> {
     /// it seeks nothing.
     pub fn settlement_keys(&self, shape: &BodyShape<'_>) -> Option<&'a [Slot]> {
         self.0.folds(shape.segment())?.keys
+    }
+
+    /// The slots the owning body `shape` binds at a statement that some unit's frontier holds.
+    pub fn statement_seams(&self, shape: &BodyShape<'_>) -> &'a [Slot] {
+        self.0
+            .folds(shape.segment())
+            .map_or(&[], |folds| folds.seams)
     }
 
     /// The parameters of the callable `shape` some unit beneath it waits on with its entry as its
