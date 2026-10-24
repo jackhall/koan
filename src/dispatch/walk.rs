@@ -3679,7 +3679,8 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     /// The static type of what `coordinate`, read in the shape at `level`, holds, a quantified
     /// callable's its scheme. A capture along the chain reads its source's, each path variable
     /// there no path of whose class this shape reaches read through its bounds; one crossing into a
-    /// quote's code reads it through its bounds.
+    /// quote's code reads it through its bounds, or exactly the type the binding binds the code's
+    /// capture to.
     fn read_declared(&self, level: usize, coordinate: Coordinate) -> Bound {
         let Followed {
             landing,
@@ -3688,6 +3689,19 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         } = self.follow(level, coordinate);
         if let Some(entered) = entered {
             self.note(&[entered]);
+            // A capture the binding binds holds what its `EVAL` handed it, as a bound parameter
+            // does: exactly the type it binds.
+            if let Some(bound) = self.binds(entered)
+                && let Address::Capture(capture) = entered.at
+            {
+                let code = self.shape_at(entered.segment);
+                return DeclaredType::Type(match code.captures()[capture.0 as usize].name {
+                    BinderSymbol::Type(_) => {
+                        Interval::point(KType::of_kind(bound.kind_of(self.types)).into())
+                    }
+                    _ => Interval::point(bound.into()),
+                });
+            }
         }
         let read = match landing {
             Landing::Builtin(index) => {

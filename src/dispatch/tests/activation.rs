@@ -328,3 +328,37 @@ fn a_using_body_over_run_content_decides_at_its_entry() {
     assert_eq!(decided, 2, "`r`'s statement, then the block's entry");
     assert!(chosen.contains(&(segment, site)), "{chosen:?}");
 }
+
+#[test]
+fn an_eval_frame_decides_at_its_entry_over_its_dollar_names() {
+    // `$r` is a capture of the quote's code, bound to what `MAKE` returned as the `EVAL` runs it:
+    // `USE`'s statement binding `r` decides, then the code's frame at its entry. A quote reading
+    // no run content decides nothing at its `EVAL`.
+    let make = MAKE.lines().take(2).collect::<Vec<_>>().join("\n");
+    let run = |code: &str| {
+        let source = format!(
+            "{make}\nEXPR #(USE n :Number) -> Any = \
+             #((LET r = (MAKE ints chain)) (EVAL #({code}) -> Any))\nPRINT (USE 1)\n"
+        );
+        let (ran, decided, _) = ran_choosing(&source);
+        (ran.printed, decided)
+    };
+    assert_eq!(run("$r.zero + 1"), ("1".to_string(), 2));
+    assert_eq!(run("1 + 1"), ("2".to_string(), 0));
+}
+
+#[test]
+fn an_eval_whose_registrations_wait_on_a_dollar_name_checks_their_overlap_in_its_activation() {
+    // The load reads `$Elt` through its bounds, so the registration overlaps nothing there; the
+    // `EVAL` binds it to `Number`, where it overlaps the builtin `+`, and the frame refuses.
+    let source = "EXPR FOR ALL #[Elt] #(RUN x :Elt) -> Any = \
+                  #(EVAL #((OP #(+) OVER $Elt = #(0)) (1 + 2)) -> Any)\n\
+                  PRINT \"loaded\"\nPRINT (RUN 1)\n";
+    let (ran, decided) = ran(source);
+    assert_eq!(decided, 1, "the `EVAL`'s entry decides");
+    let fault = (ran.printed.strip_prefix("loaded\nerror: ")).expect("the `EVAL` faults");
+    assert!(
+        unlocated(fault).starts_with("this overload of `_ + _` takes operands the builtin"),
+        "{fault}"
+    );
+}

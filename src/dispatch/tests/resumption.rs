@@ -650,6 +650,42 @@ fn a_binding_that_closes_a_cycle_unfolds_neither_call() {
     );
 }
 
+/// A quote's code read under a binding of its `$` capture decides what reads it: binding `$r` to
+/// `ints` in the code's activation types `$r.zero` exactly, which the load leaves open.
+#[test]
+fn an_eval_frame_settles_facts_waiting_on_its_dollar_names_in_its_activation() {
+    let source = "SIG Counter FOR ALL #[Carrier] = \
+                  #[(VAL zero :Carrier) (VAL succ :(FN :{x :Carrier} -> Carrier))]\n\
+                  MODULE ints = ((LET zero = 0) \
+                  (LET succ = (FN :{x :Number} -> Number = #(x + 1))))\n\
+                  EXPR #(USE r :Counter) -> Any = #(EVAL #($r.zero) -> Any)\n";
+    resumed(source, |door| {
+        let code = (door.running.program().shapes().bodies().iter())
+            .find(|shape| shape.kind() == ShapeKind::Code)
+            .expect("the program quotes code");
+        let capture = (code.captures().iter())
+            .position(|capture| door.symbols().display(capture.name.symbol()).to_string() == "r")
+            .expect("the code captures `r`");
+        let loaded = (door.load().statement_type(code, 0)).expect("the load types `$r.zero`");
+        assert!(!loaded.is_exact(), "the load leaves `$r.zero` open");
+        let own = door.bound(&[(
+            Unknown {
+                segment: code.segment(),
+                at: Address::Capture(crate::scope::CaptureSlot(capture as u32)),
+            },
+            door.module("ints"),
+        )]);
+        let facts = (door.running)
+            .activate::<Koan>(door.types, own, code.segment(), door.bump)
+            .expect("the activation types the code");
+        let decided = (facts.statement_type(code, 0)).expect("the activation types `$r.zero`");
+        assert_eq!(
+            decided,
+            crate::type_lattice::Interval::point(KType::NUMBER.into())
+        );
+    });
+}
+
 /// `SUBJECT`'s body: the last callable the top level births.
 fn subject<'graph>(root: &'graph BodyShape<'graph>) -> &'graph BodyShape<'graph> {
     (root.nested_shapes().iter().rev())

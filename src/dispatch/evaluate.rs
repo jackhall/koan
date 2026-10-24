@@ -545,9 +545,10 @@ fn using<'step, 'graph, 'here>(
     park(step, at, asked, FINISHING)
 }
 
-/// `EVAL <code> -> <Type>`: the overlap the load found in the code's shape reported, else the code
-/// run in a frame over the names and keys the `EVAL` offers, owing the declared type as a called
-/// frame owes its return. An operand that is no code, and every refusal, is an error value.
+/// `EVAL <code> -> <Type>`: the code run in a frame over the names and keys the `EVAL` offers,
+/// owing the declared type as a called frame owes its return; the frame reports the code's first
+/// registration overlapping a builtin. An operand that is no code, and every refusal, is an error
+/// value.
 fn evaluated<'step, 'graph, 'here>(
     mut step: Taking<'_, 'graph, '_, 'here, '_, '_>,
     at: &Evaluation<'step, 'graph, 'here, '_, '_, '_>,
@@ -582,16 +583,6 @@ fn evaluated<'step, 'graph, 'here>(
             return finish(step, at, error);
         }
     };
-    let shape = at
-        .code
-        .shape(code.code().expect("a quote's code").segment());
-    if let Some(error) = at.view.facts().overlap(shape) {
-        return finish(
-            step,
-            at,
-            program.error(writer, types, error.display(symbols, types)),
-        );
-    }
     let offered = offered(at, writer, &operand.value, &scratch);
     exits(&step, at, &scratch, |exit| {
         exit.value(&value);

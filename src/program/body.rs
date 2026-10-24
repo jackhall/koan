@@ -17,11 +17,13 @@
 //! the error sink, marks the run uncaught, and leaves its view at rest as it always does.
 //! [`StepError::Refused`] is left for invariant breaks alone.
 //!
-//! **A frame decides in its activation.** Where its arena node's facts leave a parameter unbound
-//! that a unit of its body waits on with the entry as its seam — content the run produced — its
-//! entry binds it to what its slot holds and decides those units in its own activation
+//! **A cell decides in its activation.** Where its arena node's facts and its enclosers' decisions
+//! leave a name unbound that a unit of its body waits on — content the run produced — a frame, a
+//! block or an inline module body binds it to what its slot or capture holds at the binding event,
+//! its entry or the statement binding it, and decides those units in its own activation
 //! ([`activation_store`](super::activation_store)), whose records every reading of its view
-//! layers innermost.
+//! layers innermost, over its enclosers'. An `EVAL` frame then reports the first registration of
+//! its code overlapping a builtin, as the load or its entry typed it.
 //!
 //! **A declared parameter is an ascription.** A frame binds each value parameter to its argument
 //! retyped to the parameter's declared type, with the call's solution substituted. So is an
@@ -56,7 +58,7 @@ use crate::parse::ExpressionPart;
 use crate::scheduler::{
     Action, Placement, Received, Request, Slot as Asked, Step, StepError, Taken, Use,
 };
-use crate::scope::{Address, RecordSource, Tree, Unknown};
+use crate::scope::{Address, Bound, RecordSource, Tree, Unknown};
 use crate::scope::{BodyShape, Component, Mint, Position, ShapeKind, Site, Slot, Unit, UnitWork};
 use crate::scope::{CaptureSource, ClosureBindings, Code, Facts, ShapeError};
 use crate::scope::{Coordinate, ParameterBinding, Static, Target};
@@ -284,7 +286,24 @@ fn ran<'graph, 'here, 'scratch>(
             offered,
             contract,
         }) => match code_frame(&step, types, program, code, offered) {
-            Some(activation) => Runner::at(program, activation, Level::Frame, Some(contract)),
+            Some(activation) => match decided_at_entry(&step, types, program, activation) {
+                Ok(activation) => {
+                    // The first registration overlapping a builtin, as the load or this entry
+                    // typed the code, faults the frame before any statement runs.
+                    let (code, facts) = step.door();
+                    let facts = facts.activated(activation.view().decided());
+                    if let Some(overlap) = facts.overlap(code.shape(activation.segment())) {
+                        let message = overlap.display(program.symbols(), types);
+                        let error = program.error(step.writer(), &step.types(), message);
+                        return step.finish(error);
+                    }
+                    Runner::at(program, activation, Level::Frame, Some(contract))
+                }
+                Err(message) => {
+                    let error = program.error(step.writer(), &step.types(), message);
+                    return step.finish(error);
+                }
+            },
             None => return step.failed(StepError::Refused),
         },
         KState::Born(KBirth::Block {
@@ -331,8 +350,8 @@ fn ran<'graph, 'here, 'scratch>(
     perform(step, runner, types)
 }
 
-/// A frame's or a block's entry event: each parameter a unit beneath its body waits on with the
-/// entry as its seam, which its arena node's facts and what its encloser decided leave unbound,
+/// A frame's or a block's entry event: each parameter, or a quote's code's capture, a unit beneath
+/// its body waits on with the entry as its seam, which its arena node's facts and what its encloser decided leave unbound,
 /// bound to what its slot holds and decided in its activation over what its encloser decided
 /// ([`activated`](super::activation_store)). `activation` itself where it binds none; the message
 /// the cell faults with where the walk refuses.
@@ -346,23 +365,37 @@ fn decided_at_entry<'graph, 'here>(
     let below = activation.view().decided();
     let facts = facts.activated(below);
     let segment = activation.segment();
-    let waits = facts.entry_waits(code.shape(segment));
+    let shape = code.shape(segment);
+    let waits = facts.entry_waits(shape);
     if waits.is_empty() {
         return Ok(activation);
     }
     let scratch = Bump::new();
     let mut own = BumpVec::new_in(&scratch);
-    for slot in waits {
-        let unknown = Unknown {
-            segment,
-            at: Address::Slot(*slot),
-        };
+    for at in waits.iter().copied() {
+        let unknown = Unknown { segment, at };
         if facts.bound(unknown).is_some() {
             continue;
         }
-        let bound =
-            (activation.bound(*slot)).and_then(|value| bound_of(&scratch, value, types, &scratch));
-        own.extend(bound.map(|bound| (unknown, bound)));
+        // A quote's code's capture holds the value its `EVAL` handed it.
+        let (held, name) = match at {
+            Address::Slot(slot) => (activation.bound(slot), shape.slot_name(slot)),
+            Address::Capture(capture) => match activation.view().closure().get(capture) {
+                Link::Value(value) => (Some(value), shape.captures()[capture.index()].name),
+                Link::Edge(_) => continue,
+            },
+        };
+        // A type name binds a type, and a value name a module: a value name holding a type value
+        // is no unknown.
+        let bound = held.and_then(|value| bound_of(&scratch, value, types, &scratch));
+        own.extend(
+            bound
+                .filter(|bound| match bound {
+                    Bound::Type(_) => matches!(name, BinderSymbol::Type(_)),
+                    Bound::Module { .. } => matches!(name, BinderSymbol::Value(_)),
+                })
+                .map(|bound| (unknown, bound)),
+        );
     }
     if own.is_empty() {
         return Ok(activation);

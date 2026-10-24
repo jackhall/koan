@@ -115,6 +115,7 @@ pub fn fold<'o>(
     keyed.sort_unstable();
     keyed.dedup();
     classed.sort_unstable_by_key(|(holder, ..)| *holder);
+    let keyable = |body, at| matches!(at, Address::Slot(slot) if keyable(body, slot));
     let named = keyed_names(
         shapes,
         &frontiers,
@@ -122,9 +123,13 @@ pub fn fold<'o>(
         &keyable,
         &[ShapeKind::Callable],
     );
-    let parameter = |body, slot| shapes.shape_at(body).position_of(slot) == Position::PARAMETER;
-    let entered = [ShapeKind::Callable, ShapeKind::Block];
-    let waiting = keyed_names(shapes, &frontiers, scratch, &parameter, &entered);
+    // A quote's code's capture binds at its entry, as a callable's or a block's parameter does.
+    let entry_bound = |body, at| match at {
+        Address::Slot(slot) => shapes.shape_at(body).position_of(slot) == Position::PARAMETER,
+        Address::Capture(_) => true,
+    };
+    let entered = [ShapeKind::Callable, ShapeKind::Block, ShapeKind::Code];
+    let waiting = keyed_names(shapes, &frontiers, scratch, &entry_bound, &entered);
     let seaming = seam_names(shapes, &frontiers, scratch);
     let mut folds = BumpVec::with_capacity_in(count, scratch);
     for (at, shape) in shapes.bodies().iter().enumerate() {
@@ -178,17 +183,20 @@ pub fn fold<'o>(
             let from = named.partition_point(|(each, _)| *each < segment);
             let to = named.partition_point(|(each, _)| *each <= segment);
             let mut slots = BumpVec::new_in(scratch);
-            slots.extend(named[from..to].iter().map(|(_, slot)| *slot));
+            slots.extend(named[from..to].iter().filter_map(|(_, at)| match at {
+                Address::Slot(slot) => Some(*slot),
+                Address::Capture(_) => None,
+            }));
             slots.extend_from_slice(invariant.unwrap_or(&[]));
             slots.sort_unstable();
             slots.dedup();
             (invariant.is_some() || !slots.is_empty()).then(|| collect(lay, slots.iter().copied()))
         });
-        let waits = match callable || shape.kind() == ShapeKind::Block {
+        let waits = match callable || matches!(shape.kind(), ShapeKind::Block | ShapeKind::Code) {
             true => {
                 let from = waiting.partition_point(|(each, _)| *each < segment);
                 let to = waiting.partition_point(|(each, _)| *each <= segment);
-                collect(lay, waiting[from..to].iter().map(|(_, slot)| *slot))
+                collect(lay, waiting[from..to].iter().map(|(_, at)| *at))
             }
             false => &[],
         };
@@ -205,7 +213,7 @@ pub fn fold<'o>(
     collect(lay, folds.iter().copied())
 }
 
-/// Each `(body, slot)` a body of a kind in `entered` keys on through its frontiers: a `keyable`
+/// Each `(body, address)` a body of a kind in `entered` keys on through its frontiers: a `keyable`
 /// name of it in the frontier of a unit beneath it, its entry aside, whose seam is the entry of a
 /// body of such a kind. Sorted. Each frontier's sites and names are read once, through a memo
 /// every frontier reading it shares.
@@ -213,9 +221,9 @@ pub(super) fn keyed_names<'x>(
     shapes: &Shapes<'_>,
     frontiers: &[(Segment, UnitIndex, Frontier<'_>)],
     scratch: BumpAllocator<'x>,
-    keyable: &dyn Fn(Segment, Slot) -> bool,
+    keyable: &dyn Fn(Segment, Address) -> bool,
     entered: &[ShapeKind],
-) -> BumpVec<'x, (Segment, Slot)> {
+) -> BumpVec<'x, (Segment, Address)> {
     let mut summaries = bump_table(scratch);
     let mut named = BumpVec::new_in(scratch);
     for (segment, unit, frontier) in frontiers {
@@ -315,7 +323,7 @@ fn seam_names<'x>(
 #[derive(Clone, Copy)]
 struct Summary<'x> {
     sites: &'x [(Segment, [Option<BindSite>; 2])],
-    keyable: &'x [(Segment, Slot)],
+    keyable: &'x [(Segment, Address)],
 }
 
 /// The summary of `frontier`, and of every frontier it reads, memoized in `summaries` by
@@ -325,7 +333,7 @@ fn summarize<'x>(
     shapes: &Shapes<'_>,
     frontier: Frontier<'_>,
     scratch: BumpAllocator<'x>,
-    keyable: &dyn Fn(Segment, Slot) -> bool,
+    keyable: &dyn Fn(Segment, Address) -> bool,
     entered: &[ShapeKind],
     summaries: &mut BumpBackedMap<'x, (usize, usize), Summary<'x>>,
 ) -> Summary<'x> {
@@ -365,14 +373,10 @@ fn summarize<'x>(
             }
         }
         let mut keys = BumpVec::new_in(scratch);
-        keys.extend((at.own().iter()).filter_map(|unknown| match unknown.at {
-            Address::Slot(slot)
-                if entered.contains(&shapes.shape_at(unknown.segment).kind())
-                    && keyable(unknown.segment, slot) =>
-            {
-                Some((unknown.segment, slot))
-            }
-            _ => None,
+        keys.extend((at.own().iter()).filter_map(|unknown| {
+            let named = entered.contains(&shapes.shape_at(unknown.segment).kind())
+                && keyable(unknown.segment, unknown.at);
+            named.then_some((unknown.segment, unknown.at))
         }));
         for cut in at.reads() {
             let held = read(cut).keyable;

@@ -21,7 +21,7 @@ use crate::parse::{ExpressionPart, ProgramNode};
 use crate::type_lattice::{DeclaredType, Interval, KType, Parametric};
 use crate::values::ContentDigest;
 
-use super::facts::{Binding, Bound, Frontier, UnitId, Unknown};
+use super::facts::{Address, Binding, Bound, Frontier, UnitId, Unknown};
 use super::keyed::Keyed;
 use super::settlement_facts::{Activated, Settlement};
 use super::shape::{
@@ -166,10 +166,10 @@ pub struct Folds<'a> {
     pub caching: Option<&'a Caching<'a>>,
     /// The parameter slots a callable's settlement keys on: `None` where a call seeks nothing.
     pub keys: Option<&'a [Slot]>,
-    /// A callable's or a block's parameters that some unit beneath it waits on with its entry as
-    /// its seam, keyable or not: what its cell's entry binds in its activation where nothing
-    /// settled them.
-    pub waits: &'a [Slot],
+    /// A callable's or a block's parameters, or a quote's code's captures, that some unit beneath
+    /// it waits on with its entry as its seam, keyable or not: what its cell's entry binds in its
+    /// activation where nothing settled them.
+    pub waits: &'a [Address],
     /// A body's slots bound at a statement that some unit's frontier holds: where the cell running
     /// it decides again once the statement binds them.
     pub seams: &'a [Slot],
@@ -1121,9 +1121,9 @@ impl<'a, S: RecordSource<'a>> FactsOver<S> {
             .map_or(&[], |folds| folds.seams)
     }
 
-    /// The parameters of the callable or block `shape` some unit beneath it waits on with its
-    /// entry as its seam.
-    pub fn entry_waits(&self, shape: &BodyShape<'_>) -> &'a [Slot] {
+    /// The parameters of the callable or block `shape`, or the captures of the quote's code
+    /// `shape`, some unit beneath it waits on with its entry as its seam.
+    pub fn entry_waits(&self, shape: &BodyShape<'_>) -> &'a [Address] {
         self.0
             .folds(shape.segment())
             .map_or(&[], |folds| folds.waits)
