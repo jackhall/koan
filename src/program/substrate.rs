@@ -214,7 +214,11 @@ impl CellSubstrate {
                         tiers,
                         error,
                         &owner.symbols,
-                        (L::evaluator(), super::settle::settled::<L>),
+                        (
+                            L::evaluator(),
+                            super::settle::settled::<L>,
+                            super::activation_store::activated_in::<L>,
+                        ),
                         output,
                         &writer.fill(1, |_| Cell::new(false))[0],
                     ),

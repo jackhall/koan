@@ -281,7 +281,7 @@ pub(crate) fn settled<'a, 'graph, L: Language>(
 }
 
 /// Text rendered into a scratch bump.
-struct Text<'x>(BumpVec<'x, u8>);
+pub(super) struct Text<'x>(pub(super) BumpVec<'x, u8>);
 
 impl std::fmt::Write for Text<'_> {
     fn write_str(&mut self, text: &str) -> std::fmt::Result {

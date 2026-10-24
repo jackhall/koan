@@ -24,14 +24,19 @@ pub(crate) struct Layer<'o, 'p, L, B> {
 impl<'o, 'p, L: Lays<'o>, B: RecordSource<'o>> Layer<'o, 'p, L, B> {
     /// A layer over `base` binding `binding`, which binds every unknown the base's binds alike.
     pub(crate) fn new(lay: L, scratch: BumpAllocator<'p>, base: B, binding: Binding<'o>) -> Self {
-        debug_assert!(
-            binding.extends(base.binding()),
-            "a layer binds what its base binds"
-        );
+        if cfg!(debug_assertions) {
+            base.each_bound(&mut |unknown, below| {
+                let bound = binding.bound(unknown);
+                assert!(
+                    bound.is_some_and(|bound| bound.same_as(&below)),
+                    "a layer binds what its base binds"
+                );
+            });
+        }
         let mut fresh = BumpVec::new_in(scratch);
         fresh.extend(
             (binding.entries().iter())
-                .filter(|(unknown, _)| base.binding().bound(*unknown).is_none())
+                .filter(|(unknown, _)| base.bound(*unknown).is_none())
                 .copied(),
         );
         Layer {

@@ -12,7 +12,8 @@
 //!   unit beneath it, its entry aside, whose seam — the latest bind site among its frontier's
 //!   unknowns — is a callable's entry, and on the parameters its invariant sites read. Each
 //!   frontier's sites and keyable names are read once, through a memo shared by every frontier that
-//!   reads it.
+//!   reads it. The parameters such frontiers hold, keyable or not, are what a frame's entry binds
+//!   in its activation where nothing settled them.
 //! - **Contract.** Each lexical variable a contribution or a solution names is composed by every
 //!   callable or `MODULE` body between the body reading it and its home. The walk refuses a
 //!   `MODULE` body composing a type its `OVER` list does not name.
@@ -113,6 +114,9 @@ pub fn fold<'o>(
     keyed.dedup();
     classed.sort_unstable_by_key(|(holder, ..)| *holder);
     let named = keyed_names(shapes, &frontiers, scratch, &keyable);
+    let waiting = keyed_names(shapes, &frontiers, scratch, &|body, slot| {
+        shapes.shape_at(body).position_of(slot) == Position::PARAMETER
+    });
     let mut folds = BumpVec::with_capacity_in(count, scratch);
     for (at, shape) in shapes.bodies().iter().enumerate() {
         let segment = shape.segment();
@@ -126,6 +130,7 @@ pub fn fold<'o>(
             folds.push(Folds {
                 caching: None,
                 keys: None,
+                waits: &[],
                 contract,
             });
             continue;
@@ -169,9 +174,18 @@ pub fn fold<'o>(
             slots.dedup();
             (invariant.is_some() || !slots.is_empty()).then(|| collect(lay, slots.iter().copied()))
         });
+        let waits = match callable {
+            true => {
+                let from = waiting.partition_point(|(each, _)| *each < segment);
+                let to = waiting.partition_point(|(each, _)| *each <= segment);
+                collect(lay, waiting[from..to].iter().map(|(_, slot)| *slot))
+            }
+            false => &[],
+        };
         folds.push(Folds {
             caching: Some(resident(lay, caching)),
             keys: keys.flatten(),
+            waits,
             contract,
         });
     }

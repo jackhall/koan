@@ -11,7 +11,7 @@
 
 use crate::knot::KnottedFamily;
 use crate::memory::BumpAllocator;
-use crate::type_lattice::{DeclaredType, KType};
+use crate::type_lattice::{DeclaredType, KType, Parametric};
 use crate::values::{Chain, Destination, Types, adopt_value};
 
 use super::record::Contract;
@@ -53,6 +53,11 @@ impl<'a, 'tier, 'graph, 'here, 'reg> Exit<'a, 'tier, 'here, 'reg> {
     /// Adopt the type `kt`.
     pub fn handle(&self, kt: impl Into<DeclaredType<KType>>) {
         self.region.adopt_from(self.body, kt.into());
+    }
+
+    /// Adopt the type `kt`, which may be parametric: a record's.
+    pub fn declared(&self, kt: DeclaredType<Parametric>) {
+        self.region.adopt_from(self.body, kt);
     }
 
     /// Adopt every type `contract` names.

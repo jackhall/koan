@@ -33,6 +33,7 @@ use crate::values::{ContentDigest, Knotted, KnottedFamily, Link, NoKnot, Value, 
 use super::builtins::Builtins;
 use super::closure::ClosureBindings;
 use super::records::Facts;
+use super::settlement_facts::Activated;
 use super::shape::{BodyShape, Coordinate, Segment, ShapeKind, Slot, Target};
 use super::shapes::Code;
 
@@ -83,6 +84,9 @@ pub struct ActivationView<
     /// One memo per slot the shape marks digested, in the order of its
     /// digested slots ([`Shapes::digested_index`](super::Shapes::digested_index)).
     digests: &'cell [Cell<Option<ContentDigest>>],
+    /// What its frame decided in its own activation so far, innermost event first: a block's and a
+    /// module body's are its frame's as they stood when it was laid down.
+    decided: Option<&'cell Activated<'cell>>,
 }
 
 impl<'graph, XF: KnottedFamily<'graph>, X: Copy> Clone for ActivationView<'graph, '_, XF, X> {
@@ -115,7 +119,7 @@ impl<'graph, XF: KnottedFamily<'graph>> Clone for Activation<'graph, '_, XF> {
 
 impl<'graph, XF: KnottedFamily<'graph>> Copy for Activation<'graph, '_, XF> {}
 
-const _: () = assert!(size_of::<Activation<'static, 'static>>() == 80);
+const _: () = assert!(size_of::<Activation<'static, 'static>>() == 88);
 const _: () = assert!(!std::mem::needs_drop::<Activation<'static, 'static>>());
 
 impl<'graph, 'cell, XF: KnottedFamily<'graph>> Deref for Activation<'graph, 'cell, XF> {
@@ -151,6 +155,7 @@ where
                 callable,
                 slots: slots.view(),
                 digests,
+                decided: enclosing.and_then(|enclosing| enclosing.decided),
             },
             slots,
         }
@@ -261,6 +266,17 @@ where
             enclosing.callable,
         )
     }
+
+    /// This activation reading `decided`, what its frame decided so far, over its own slots.
+    pub fn deciding(self, decided: &'cell Activated<'cell>) -> Self {
+        Activation {
+            view: ActivationView {
+                decided: Some(decided),
+                ..self.view
+            },
+            ..self
+        }
+    }
 }
 
 impl<'graph, 'cell, XF: KnottedFamily<'graph>> Activation<'graph, 'cell, XF> {
@@ -290,12 +306,20 @@ impl<'graph, 'cell, XF: KnottedFamily<'graph>> ActivationView<'graph, 'cell, XF>
         self,
         code: &Code<'step>,
         facts: Facts<'step>,
-    ) -> Reading<'step, 'graph, 'cell, XF> {
+    ) -> Reading<'step, 'graph, 'cell, XF>
+    where
+        'cell: 'step,
+    {
         Reading {
             view: self,
             shape: code.shape(self.segment),
-            facts,
+            facts: facts.activated(self.decided),
         }
+    }
+
+    /// What its frame decided in its own activation so far, innermost event first.
+    pub fn decided(&self) -> Option<&'cell Activated<'cell>> {
+        self.decided
     }
 
     pub fn builtins(&self) -> &'cell Builtins<'cell, XF::Closed<'cell>> {
@@ -376,6 +400,7 @@ pub struct Reading<
     X = <XF as KnottedFamily<'graph>>::Closed<'cell>,
 > where
     'graph: 'cell,
+    'cell: 'step,
 {
     view: ActivationView<'graph, 'cell, XF, X>,
     shape: &'step BodyShape<'step>,
@@ -419,7 +444,7 @@ impl<'step, 'graph, 'cell, XF: KnottedFamily<'graph>> Reading<'step, 'graph, 'ce
         Reading {
             view,
             shape: self.facts.shapes().shape_at(view.segment),
-            facts: self.facts,
+            facts: self.facts.activated(view.decided),
         }
     }
 

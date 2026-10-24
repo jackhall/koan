@@ -24,6 +24,7 @@ use crate::type_lattice::{
 };
 use crate::values::{Chain, Record, Tagged, TypeTiers, Value, satisfies};
 
+use super::activation_store::Activate;
 use super::bundle::{KBirth, KBundle, Within};
 
 /// What the layer above `program` supplies: the builtin table a shape resolves builtin names
@@ -178,6 +179,7 @@ pub struct Program<'graph> {
     symbols: &'graph SymbolInterner,
     evaluator: NativeStep<'graph, KBundle>,
     settle: Settle<'graph>,
+    activate: Activate<'graph>,
     output: Output,
     error: KType,
     /// Set by the top level when a unit receives an error value; laid down in program storage, and
@@ -193,7 +195,11 @@ impl<'graph> Program<'graph> {
         tiers: TypeTiers<'graph>,
         error: KType,
         symbols: &'graph SymbolInterner,
-        (evaluator, settle): (NativeStep<'graph, KBundle>, Settle<'graph>),
+        (evaluator, settle, activate): (
+            NativeStep<'graph, KBundle>,
+            Settle<'graph>,
+            Activate<'graph>,
+        ),
         output: Output,
         uncaught: &'graph Cell<bool>,
     ) -> Self {
@@ -204,10 +210,16 @@ impl<'graph> Program<'graph> {
             symbols,
             evaluator,
             settle,
+            activate,
             output,
             error,
             uncaught,
         }
+    }
+
+    /// The walk a frame's binding event decides through.
+    pub(super) fn activate(&self) -> Activate<'graph> {
+        self.activate
     }
 
     /// The top level's shape.

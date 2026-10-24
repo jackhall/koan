@@ -1168,6 +1168,25 @@ mod laws {
         })
     }
 
+    /// What `SUBJECT`'s frame decides in its activation under the binding, a module bound by its
+    /// digest or by its tree, rendered as [`settled_rendered`] renders a settlement, or its
+    /// refusal.
+    fn activated_rendered(case: &Resumable, by_digest: bool) -> Result<Vec<String>, String> {
+        resumed(&case.render(), |door| {
+            let own = bind(door, &case.bound, by_digest);
+            let at = subject(door.root()).segment();
+            match (door.running).activate::<Koan>(door.types, own, at, door.bump) {
+                Ok(facts) => Ok(render_over(
+                    &facts,
+                    door.types,
+                    door.symbols(),
+                    &left_out(&case.bound),
+                )),
+                Err(refusal) => Err(unlocated(refusal)),
+            }
+        })
+    }
+
     /// What a plain load of `source` renders, or its refusal, but of the binders `bound` names.
     fn loaded_rendered(source: &str, bound: &Bound) -> Result<Vec<String>, String> {
         let loaded =
@@ -1342,6 +1361,9 @@ mod laws {
             // A settlement binds a module by the tree the load read for it, as the structural layer
             // does.
             prop_assert_eq!(&settled_rendered(&case), &structural, "in\n{}", case.render());
+            // A frame's activation binds a module by its digest, as the layer does, and reads its
+            // records again from the frame's region.
+            prop_assert_eq!(&activated_rendered(&case, true), &layered, "in\n{}", case.render());
             let mut substrate = CellSubstrate::load::<Koan>(&case.render(), "<test>", 8, BuildBudget::default(), output())
                 .expect("the program loads");
             let framed = substrate.with(|running| {
@@ -1368,6 +1390,15 @@ mod laws {
         fn a_settlement_holds_the_facts_a_load_with_its_binding_declared_computes(case in resumable()) {
             let restart = case.restart(&case.bound);
             prop_assert_eq!(settled_rendered(&case), loaded_rendered(&restart, &case.bound), "in\n{}\nrestarted as\n{}", case.render(), restart);
+        }
+
+        /// 13. An activation equals a restart with its bindings declared: deciding `SUBJECT`'s
+        /// entry in its frame's activation renders every fact of its body as the restart does,
+        /// refusals worded alike.
+        #[test]
+        fn an_activation_equals_a_restart_with_its_bindings_declared(case in resumable()) {
+            let restart = case.restart(&case.bound);
+            prop_assert_eq!(activated_rendered(&case, false), loaded_rendered(&restart, &case.bound), "in\n{}\nrestarted as\n{}", case.render(), restart);
         }
 
         /// 10. A rooted resumption is the program's on its bodies: resuming from `SUBJECT`'s body

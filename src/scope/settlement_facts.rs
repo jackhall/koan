@@ -8,11 +8,17 @@
 //! frame born under it faults as the load would, and a second ask refuses alike. The arena owns
 //! each settlement beside its parent; a step reads one only through [`Facts`](super::Facts), at
 //! its own lifetime.
+//!
+//! An [`Activated`] layer is what a frame decides in its own activation at one binding event: the
+//! walk rooted at its body under the names the event bound, over everything the frame read below.
+//! The [records copier](super::relay) lays it in the frame's region, so it points at nothing an
+//! arena node holds; it binds only the names its event bound, and a read of any other falls below.
 
-use crate::memory::{BumpAllocator, Lays};
+use crate::memory::{BumpAllocator, BumpVec, Lays, resident};
 
-use super::facts::Binding;
+use super::facts::{Binding, Bound, Unknown};
 use super::records::Records;
+use super::relay::Relay;
 use super::shapes::Shapes;
 use super::writes::KeyedWrites;
 
@@ -86,6 +92,76 @@ impl<'a> Settlement<'a> {
 
     pub(super) fn parent(&self) -> Option<&'a Settlement<'a>> {
         self.parent
+    }
+
+    pub(super) fn records(&self) -> &Records<'a> {
+        &self.records
+    }
+}
+
+/// One binding event's facts in a frame's activation, over the event's below it.
+#[derive(Clone, Copy)]
+pub struct Activated<'a> {
+    below: Option<&'a Activated<'a>>,
+    /// Bound to the names this event bound alone.
+    records: Records<'a>,
+}
+
+impl<'a> Activated<'a> {
+    /// The facts a walk over `shapes` wrote into `writes` under `binding`, which binds `own` over
+    /// what the layers beneath bind, laid again through `lay` over `below`.
+    pub fn of(
+        lay: impl Lays<'a>,
+        scratch: BumpAllocator<'_>,
+        shapes: &Shapes<'_>,
+        below: Option<&'a Activated<'a>>,
+        binding: Binding<'_>,
+        own: &[(Unknown, Bound<'_>)],
+        writes: &KeyedWrites<'_, '_>,
+    ) -> Self {
+        let mut relay = Relay::new(lay, scratch, binding);
+        let (units, closings) = writes.sorted(scratch);
+        let mut laid = BumpVec::with_capacity_in(units.len(), scratch);
+        for (unit, (facts, frontier)) in units.iter() {
+            let frontier = relay.frontier(*frontier);
+            laid.push((*unit, (resident(lay, relay.unit(facts)), frontier)));
+        }
+        let mut closed = BumpVec::with_capacity_in(closings.len(), scratch);
+        for (body, (closing, frontier)) in closings.iter() {
+            let frontier = relay.frontier(*frontier);
+            closed.push((*body, (resident(lay, relay.closing(closing)), frontier)));
+        }
+        let mut bound = BumpVec::with_capacity_in(own.len(), scratch);
+        bound.extend(own.iter().map(|(unknown, at)| (*unknown, relay.bound(at))));
+        Activated {
+            below,
+            records: Records::of(
+                lay,
+                scratch,
+                shapes,
+                None,
+                Binding::laid(lay, &mut bound),
+                &laid,
+                &closed,
+            ),
+        }
+    }
+
+    /// Hand `each` every type the records of this event and every one below it name.
+    pub fn each_type(
+        &self,
+        each: &mut dyn FnMut(crate::type_lattice::DeclaredType<crate::type_lattice::Parametric>),
+    ) {
+        let mut at = Some(self);
+        while let Some(layer) = at {
+            layer.records.each_type(each);
+            at = layer.below;
+        }
+    }
+
+    /// The event below this one, if any.
+    pub(super) fn below(&self) -> Option<&'a Activated<'a>> {
+        self.below
     }
 
     pub(super) fn records(&self) -> &Records<'a> {

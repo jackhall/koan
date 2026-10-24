@@ -36,6 +36,7 @@ mod header;
 mod keyed;
 mod record_types;
 mod records;
+mod relay;
 mod settlement_facts;
 mod shape;
 mod shapes;
@@ -64,7 +65,7 @@ pub use records::{
     BodyRef, Born, Closing, Deps, DepsGathering, Facts, FactsOver, Folds, Layers, LoadFacts,
     LoadRecords, NamedVariable, SiteDeps, Typed, UnitFacts, Written, tree_deps,
 };
-pub use settlement_facts::Settlement;
+pub use settlement_facts::{Activated, Settlement};
 pub use shape::{
     Arm, BodyShape, BuiltinIndex, Candidate, CandidateList, CaptureChain, CaptureSlot,
     CaptureSource, CaptureSpec, Component, ComponentIndex, Coordinate, Lands, Listed, Located,

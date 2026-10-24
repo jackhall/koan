@@ -17,6 +17,12 @@
 //! the error sink, marks the run uncaught, and leaves its view at rest as it always does.
 //! [`StepError::Refused`] is left for invariant breaks alone.
 //!
+//! **A frame decides in its activation.** Where its arena node's facts leave a parameter unbound
+//! that a unit of its body waits on with the entry as its seam — content the run produced — its
+//! entry binds it to what its slot holds and decides those units in its own activation
+//! ([`activation_store`](super::activation_store)), whose records every reading of its view
+//! layers innermost.
+//!
 //! **A declared parameter is an ascription.** A frame binds each value parameter to its argument
 //! retyped to the parameter's declared type, with the call's solution substituted. So is an
 //! annotated binder, `LET <name> <type> = <value>`: its value is checked against the type, unless
@@ -50,6 +56,7 @@ use crate::parse::ExpressionPart;
 use crate::scheduler::{
     Action, Placement, Received, Request, Slot as Asked, Step, StepError, Taken, Use,
 };
+use crate::scope::{Address, RecordSource, Unknown};
 use crate::scope::{BodyShape, Component, Mint, Position, ShapeKind, Site, Slot, Unit, UnitWork};
 use crate::scope::{CaptureSource, ClosureBindings, Code, Facts, ShapeError};
 use crate::scope::{Coordinate, ParameterBinding, Static, Target};
@@ -60,6 +67,7 @@ use crate::type_lattice::{
 };
 use crate::values::{ArenaRef, CALL_ONLY, Chain, Link, List, Record, TypeValue, Value};
 
+use super::activation_store::bound_of;
 use super::bundle::{Handed, KBirth, KBundle, KState, Within};
 use super::exit::Exit;
 use super::record::{CallKind, Contract, Evaluated, Program, rendered};
@@ -243,7 +251,14 @@ fn ran<'graph, 'here, 'scratch>(
             contributed,
             handed,
             owed,
-        ) {
+        )
+        .and_then(|(activation, contract, barrier)| {
+            Ok((
+                decided_at_entry(&step, types, program, activation)?,
+                contract,
+                barrier,
+            ))
+        }) {
             Ok((activation, contract, barrier)) => Runner {
                 barrier,
                 within: Within {
@@ -303,6 +318,47 @@ fn ran<'graph, 'here, 'scratch>(
         KState::Born(_) | KState::Evaluating { .. } => return step.failed(StepError::Refused),
     };
     perform(step, runner, types)
+}
+
+/// A frame's entry event: each parameter a unit beneath its body waits on with the entry as its
+/// seam, which its arena node's facts leave unbound, bound to what its slot holds and decided in
+/// its activation ([`activated`](super::activation_store)). `activation` itself where it binds
+/// none; the message the frame faults with where the walk refuses.
+fn decided_at_entry<'graph, 'here>(
+    step: &Taking<'_, 'graph, '_, 'here, '_, '_>,
+    types: &Chain<'_, 'here, '_, '_>,
+    program: &'graph Program<'graph>,
+    activation: &'here KActivation<'graph, 'here>,
+) -> Result<&'here KActivation<'graph, 'here>, &'here str> {
+    let (code, facts) = step.door();
+    let segment = activation.segment();
+    let waits = facts.entry_waits(code.shape(segment));
+    if waits.is_empty() {
+        return Ok(activation);
+    }
+    let scratch = Bump::new();
+    let mut own = BumpVec::new_in(&scratch);
+    for slot in waits {
+        let unknown = Unknown {
+            segment,
+            at: Address::Slot(*slot),
+        };
+        if facts.bound(unknown).is_some() {
+            continue;
+        }
+        let bound =
+            (activation.bound(*slot)).and_then(|value| bound_of(&scratch, value, types, &scratch));
+        own.extend(bound.map(|bound| (unknown, bound)));
+    }
+    if own.is_empty() {
+        return Ok(activation);
+    }
+    let writer = step.writer();
+    let decided = (program.activate())(program, writer, facts, types, None, &own, segment)?;
+    Ok(resident(
+        writer,
+        activation.deciding(resident(writer, decided)),
+    ))
 }
 
 /// What an evaluator asks for to call `callee` over `arguments`, a record of its parameters by name
@@ -1432,6 +1488,9 @@ fn perform<'graph, 'here>(
                         }
                         if let Some(contract) = &runner.contract {
                             exit.contract(contract);
+                        }
+                        if let Some(decided) = view.decided() {
+                            decided.each_type(&mut |kt| exit.declared(kt));
                         }
                     }
                     let program = runner.program;

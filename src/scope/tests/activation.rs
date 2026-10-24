@@ -15,8 +15,8 @@ fn assert_copy<T: Copy>() {}
 fn an_activation_is_a_copy_of_its_bytes_and_starts_empty() {
     assert_copy::<Activation<'static, 'static>>();
     assert_copy::<ActivationView<'static, 'static>>();
-    assert_eq!(size_of::<Activation<'static, 'static>>(), 80);
-    assert_eq!(size_of::<ActivationView<'static, 'static>>(), 64);
+    assert_eq!(size_of::<Activation<'static, 'static>>(), 88);
+    assert_eq!(size_of::<ActivationView<'static, 'static>>(), 72);
     with_fixture(|fixture| {
         let lines = fixture.parse("LET a = 1\nLET b = a");
         fixture.in_cell(|writer, _| {

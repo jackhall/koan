@@ -203,7 +203,7 @@ impl<'graph> Fixture<'_, 'graph> {
     pub fn reading_of<'cell>(
         &self,
         activation: &KActivation<'graph, 'cell>,
-    ) -> KReading<'graph, 'graph, 'cell> {
+    ) -> KReading<'cell, 'graph, 'cell> {
         let load = self.load_of(activation);
         (activation.view()).reading(&Code::of(load.shapes()), Facts::of(load))
     }

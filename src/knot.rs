@@ -131,7 +131,7 @@ pub struct Knotted<'graph, 'cell>(Member<'cell, Node<'graph, 'cell>>);
 
 const _: () = assert!(size_of::<Knotted<'static, 'static>>() == 16);
 const _: () = assert!(size_of::<KValue<'static, 'static>>() == 24);
-const _: () = assert!(size_of::<KActivation<'static, 'static>>() == 96);
+const _: () = assert!(size_of::<KActivation<'static, 'static>>() == 104);
 /// The module arm sets the node's width; a barrier's six fields would widen every node in the
 /// program, so [`Node::Coerced`] points at them instead.
 const _: () = assert!(size_of::<Node<'static, 'static>>() == 64);

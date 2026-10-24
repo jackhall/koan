@@ -21,9 +21,9 @@ use crate::parse::{ExpressionPart, ProgramNode};
 use crate::type_lattice::{DeclaredType, Interval, KType, Parametric};
 use crate::values::ContentDigest;
 
-use super::facts::{Binding, Frontier, UnitId};
+use super::facts::{Binding, Bound, Frontier, UnitId, Unknown};
 use super::keyed::Keyed;
-use super::settlement_facts::Settlement;
+use super::settlement_facts::{Activated, Settlement};
 use super::shape::{
     BodyShape, Coordinate, Located, Position, Segment, ShapeError, Site, Slot, Target,
 };
@@ -166,6 +166,9 @@ pub struct Folds<'a> {
     pub caching: Option<&'a Caching<'a>>,
     /// The parameter slots a callable's settlement keys on: `None` where a call seeks nothing.
     pub keys: Option<&'a [Slot]>,
+    /// A callable's parameters that some unit beneath it waits on with its entry as its seam,
+    /// keyable or not: what its frame's entry binds in its activation where nothing settled them.
+    pub waits: &'a [Slot],
     /// Which of the body's type captures its content composes, parallel to its layout.
     pub contract: &'a [bool],
 }
@@ -345,13 +348,15 @@ pub struct LoadRecords<'graph> {
     records: &'graph Records<'graph>,
 }
 
-/// A cell's layers over the load its chain rests on: the settlement it runs under, whose parents
-/// lie below it, innermost first. A read tries each layer from the innermost, then the load, and a
-/// unit an inner layer re-ran replaces every outer record of it whole.
+/// A cell's layers over the load its chain rests on: the events its frame's activation decided,
+/// innermost first, then the settlement it runs under, whose parents lie below it. A read tries
+/// each layer from the innermost, then the load, and a unit an inner layer re-ran replaces every
+/// outer record of it whole.
 #[derive(Clone, Copy)]
 pub struct Layers<'step> {
     base: LoadRecords<'step>,
     top: Option<&'step Settlement<'step>>,
+    activation: Option<&'step Activated<'step>>,
 }
 
 impl<'step> Facts<'step> {
@@ -362,7 +367,20 @@ impl<'step> Facts<'step> {
 
     /// The facts a cell under the settlement `top` reads: its layers over the load.
     pub fn under(load: &LoadFacts<'step>, top: Option<&'step Settlement<'step>>) -> Self {
-        FactsOver(Layers { base: load.0, top })
+        FactsOver(Layers {
+            base: load.0,
+            top,
+            activation: None,
+        })
+    }
+
+    /// These facts beneath `activation`, the events a frame's activation decided, in place of any
+    /// these read.
+    pub fn activated(self, activation: Option<&'step Activated<'step>>) -> Self {
+        FactsOver(Layers {
+            activation,
+            ..self.0
+        })
     }
 
     /// The innermost settlement these facts read, if any.
@@ -377,16 +395,23 @@ impl<'step> Facts<'step> {
 }
 
 impl<'step> Layers<'step> {
-    /// Each layer, innermost first.
-    fn layers(&self) -> impl Iterator<Item = &'step Settlement<'step>> {
-        std::iter::successors(self.top, |layer| layer.parent())
+    /// The activation's events, innermost first.
+    fn decided(&self) -> impl Iterator<Item = &'step Activated<'step>> {
+        std::iter::successors(self.activation, |layer| layer.below())
+    }
+
+    /// Each layer's records, innermost first: the activation's, then the settlements'.
+    fn layers(&self) -> impl Iterator<Item = &'step Records<'step>> {
+        (self.decided().map(|layer| layer.records())).chain(
+            std::iter::successors(self.top, |layer| layer.parent()).map(|layer| layer.records()),
+        )
     }
 
     /// Whether a layer inner to `outer` — every layer where `outer` is `None` — re-ran `unit`.
-    fn rerun_within(&self, outer: Option<&Settlement<'_>>, unit: UnitId) -> bool {
+    fn rerun_within(&self, outer: Option<&Records<'_>>, unit: UnitId) -> bool {
         (self.layers())
-            .take_while(|layer| outer.is_none_or(|outer| !std::ptr::eq(*layer, outer)))
-            .any(|layer| layer.records().units.get(unit).is_some())
+            .take_while(|layer| outer.is_none_or(|outer| !std::ptr::addr_eq(*layer, outer)))
+            .any(|layer| layer.units.get(unit).is_some())
     }
 }
 
@@ -396,7 +421,20 @@ pub(crate) trait RecordSource<'a>: Copy {
     fn shapes(&self) -> &'a Shapes<'a>;
 
     /// What the newest walk over these records bound: each layer's binding extends the one below.
+    /// A frame's activation binds more, which [`bound`](Self::bound) reads.
     fn binding(&self) -> Binding<'a>;
+
+    /// What `unknown` is bound to, by any layer.
+    fn bound(&self, unknown: Unknown) -> Option<Bound<'a>> {
+        self.binding().bound(unknown)
+    }
+
+    /// Hand `each` every unknown any layer binds, beside what it binds it to.
+    fn each_bound(&self, each: &mut dyn FnMut(Unknown, Bound<'a>)) {
+        for (unknown, bound) in self.binding().entries() {
+            each(*unknown, *bound);
+        }
+    }
 
     /// The newest record of `unit`, beside its frontier.
     fn unit(&self, unit: UnitId) -> Option<(&'a UnitFacts<'a>, Frontier<'a>)>;
@@ -466,28 +504,37 @@ impl<'step> RecordSource<'step> for Layers<'step> {
         }
     }
 
+    fn bound(&self, unknown: Unknown) -> Option<Bound<'step>> {
+        (self.decided())
+            .find_map(|layer| layer.records().binding.bound(unknown))
+            .or_else(|| self.binding().bound(unknown))
+    }
+
+    fn each_bound(&self, each: &mut dyn FnMut(Unknown, Bound<'step>)) {
+        let own = self.decided().map(|layer| layer.records().binding);
+        for binding in own.chain([self.binding()]) {
+            for (unknown, bound) in binding.entries() {
+                each(*unknown, *bound);
+            }
+        }
+    }
+
     fn unit(&self, unit: UnitId) -> Option<(&'step UnitFacts<'step>, Frontier<'step>)> {
         (self.layers())
-            .find_map(|layer| layer.records().units.get(unit).map(|(_, record)| *record))
+            .find_map(|layer| layer.units.get(unit).map(|(_, record)| *record))
             .or_else(|| self.base.unit(unit))
     }
 
     fn closing(&self, body: Segment) -> Option<(&'step Closing<'step>, Frontier<'step>)> {
         (self.layers())
-            .find_map(|layer| {
-                layer
-                    .records()
-                    .closings
-                    .get(body)
-                    .map(|(_, record)| *record)
-            })
+            .find_map(|layer| layer.closings.get(body).map(|(_, record)| *record))
             .or_else(|| self.base.closing(body))
     }
 
     fn holding(&self, held: Held) -> Option<(UnitId, &'step UnitFacts<'step>)> {
         for layer in self.layers() {
-            if let Some((_, at)) = layer.records().index.get(held) {
-                let (unit, (facts, _)) = layer.records().units[*at as usize];
+            if let Some((_, at)) = layer.index.get(held) {
+                let (unit, (facts, _)) = layer.units[*at as usize];
                 return (!self.rerun_within(Some(layer), unit)).then_some((unit, facts));
             }
         }
@@ -505,7 +552,7 @@ impl<'step> RecordSource<'step> for Layers<'step> {
 
     fn tree_of(&self, digest: ContentDigest) -> Option<&'step Tree<'step>> {
         (self.layers())
-            .find_map(|layer| layer.records().trees.get(digest).map(|(_, tree)| *tree))
+            .find_map(|layer| layer.trees.get(digest).map(|(_, tree)| *tree))
             .or_else(|| self.base.tree_of(digest))
     }
 }
@@ -518,6 +565,14 @@ impl<'a, S: RecordSource<'a>> RecordSource<'a> for FactsOver<S> {
 
     fn binding(&self) -> Binding<'a> {
         self.0.binding()
+    }
+
+    fn bound(&self, unknown: Unknown) -> Option<Bound<'a>> {
+        self.0.bound(unknown)
+    }
+
+    fn each_bound(&self, each: &mut dyn FnMut(Unknown, Bound<'a>)) {
+        self.0.each_bound(each);
     }
 
     fn unit(&self, unit: UnitId) -> Option<(&'a UnitFacts<'a>, Frontier<'a>)> {
@@ -1055,6 +1110,14 @@ impl<'a, S: RecordSource<'a>> FactsOver<S> {
         self.0.folds(shape.segment())?.keys
     }
 
+    /// The parameters of the callable `shape` some unit beneath it waits on with its entry as its
+    /// seam.
+    pub fn entry_waits(&self, shape: &BodyShape<'_>) -> &'a [Slot] {
+        self.0
+            .folds(shape.segment())
+            .map_or(&[], |folds| folds.waits)
+    }
+
     /// How many of `shape`'s slots keep a digest memo.
     pub fn digested_count(&self, shape: &BodyShape<'_>) -> usize {
         self.0.shapes().digested_count(shape.segment())
@@ -1148,7 +1211,6 @@ impl<'graph> Records<'graph> {
     }
 
     /// Hand `each` every type these records name.
-    #[cfg(test)]
     pub(super) fn each_type(&self, each: &mut dyn FnMut(DeclaredType<Parametric>)) {
         for (_, (facts, _)) in self.units.iter() {
             facts.each_type(each);

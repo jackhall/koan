@@ -20,6 +20,7 @@
 //!
 //! See [program/README.md](program/README.md).
 
+pub(crate) mod activation_store;
 mod body;
 mod bundle;
 mod exit;

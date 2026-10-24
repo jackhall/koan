@@ -18,7 +18,7 @@ use crate::scheduler::{Action, Ask, Step, StepError};
 use crate::scope::tests::with_shapes;
 use crate::scope::{
     Address, Binding, Bound, Closing, Facts, Frontier, Keyed, LoadFacts, Segment, ShapeError,
-    Shapes, Site, Slot, Store, Tree, Typed, UnitFacts, UnitId, Unknown, each_part,
+    Shapes, Site, Slot, Store, Typed, UnitFacts, UnitId, Unknown, each_part,
 };
 use crate::type_lattice::{KType, display_name};
 use crate::values::{Chain, Knotted, Nothing, TypeValue, Value};
@@ -76,25 +76,16 @@ fn layered<'o, L: Lays<'o>>(
 /// its content, by digest.
 pub struct Frame<'o, 'p, L>(Layer<'o, 'p, L, LoadFacts<'o>>);
 
-/// What a frame's slot holding `value` binds its unknown to: a type value its type, and a module
-/// value its carried type over its content, by digest.
-pub fn bound_of<'o, X: Knotted>(
+/// What a frame's slot holding `value` binds its unknown to, which a test's frame binds a type
+/// or a module to.
+fn bound_of<'o, X: Knotted>(
     lay: impl Lays<'o>,
     value: Value<'_, X>,
     types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
 ) -> Bound<'o> {
-    if let Some(named) = value.as_type() {
-        return Bound::Type(named.handle());
-    }
-    assert!(
-        value.as_module().is_some(),
-        "a frame binds a type or a module"
-    );
-    Bound::Module {
-        carried: value.concrete_ktype(),
-        tree: resident(lay, Tree::Digest(value.digest(types, scratch))),
-    }
+    super::super::activation_store::bound_of(lay, value, types, scratch)
+        .expect("a frame binds a type or a module")
 }
 
 impl<'o, 'p, L: Lays<'o>> Frame<'o, 'p, L> {
@@ -253,6 +244,32 @@ impl<'graph> Running<'graph> {
         let settled =
             super::super::settle::settled::<L>(self.program(), bump, Facts::of(load), ask, &&())?;
         Some(Facts::under(load, Some(resident(bump, settled))))
+    }
+
+    /// What a frame's binding event under the root decides for `own` at the body `at`, interning
+    /// through `types` and laid in `bump`, read through the facts a frame of it reads: or the
+    /// refusal it faults with.
+    pub fn activate<'l, L: Language>(
+        &self,
+        types: &Chain<'l, '_, '_, '_>,
+        own: Binding<'l>,
+        at: Segment,
+        bump: &'l Bump,
+    ) -> Result<Facts<'l>, &'l str>
+    where
+        'graph: 'l,
+    {
+        let load: &'l LoadFacts<'l> = self.program().facts();
+        let decided = super::super::activation_store::activated::<L>(
+            self.program(),
+            bump,
+            Facts::of(load),
+            types,
+            None,
+            own.entries(),
+            at,
+        )?;
+        Ok(Facts::of(load).activated(Some(resident(bump, decided))))
     }
 
     /// Run `L`'s walk over the program from the body at `at` down into `store`, interning through
