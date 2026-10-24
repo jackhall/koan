@@ -3,16 +3,17 @@
 //! frame's region — is adopted where the records rest through it, so every handle a reader meets
 //! resolves. A load handle costs the adopter a bit test, so the visitor does not tell them apart.
 //!
-//! Each match below lists every variant, so a type-bearing field a record gains does not compile
-//! until it is visited.
+//! Each record is destructured whole and each match lists every variant and field, so a
+//! type-bearing field a record gains does not compile until it is visited.
 
 use crate::type_lattice::{DeclaredType, Interval, KType, Parametric};
 
 use super::records::{Born, Closing, Typed, UnitFacts};
 use super::shape::ShapeError;
-use super::tree::{Leaf, NodeCapture, Tree, Within};
+use super::tree::{KnotNode, Leaf, NodeCapture, Tree, Unfolded, Within};
 use super::typed::{
-    Callable, Elaboration, InstanceRead, Registered, Resolved, Static, StaticSolution, StaticType,
+    Callable, Elaboration, InstanceRead, PathEntry, Registered, Resolution, Resolved, Static,
+    StaticSolution, StaticType, UseStatics,
 };
 
 /// What the visitor hands each type to.
@@ -21,19 +22,34 @@ type Each<'e> = dyn FnMut(DeclaredType<Parametric>) + 'e;
 impl UnitFacts<'_> {
     /// Hand `each` every type this record names.
     pub fn each_type(&self, each: &mut Each<'_>) {
-        for (_, typed) in self.typed.iter() {
+        let UnitFacts {
+            typed,
+            born,
+            paths,
+            sites: _,
+            named_variables: _,
+        } = self;
+        for (_, typed) in typed.iter() {
             typed_types(typed, each);
         }
-        for (_, born) in self.born.iter() {
+        for (_, born) in born.iter() {
             born_types(born, each);
         }
-        for (_, (entry, resolution)) in self.paths.iter() {
-            if let Some(through) = entry.through {
-                each(through.into());
+        for (_, (entry, resolution)) in paths.iter() {
+            let PathEntry {
+                root: _,
+                chain: _,
+                label: _,
+                level: _,
+                through,
+            } = entry;
+            if let Some(through) = through {
+                each((*through).into());
             }
-            tree_types(&resolution.tree, each);
-            match resolution.resolved {
-                Resolved::Closed(ktype) => each(ktype.into()),
+            let Resolution { tree, resolved } = resolution;
+            tree_types(tree, each);
+            match resolved {
+                Resolved::Closed(ktype) => each((*ktype).into()),
                 Resolved::Class(_) => {}
             }
         }
@@ -43,13 +59,21 @@ impl UnitFacts<'_> {
 impl Closing<'_> {
     /// Hand `each` every type this closing names.
     pub fn each_type(&self, each: &mut Each<'_>) {
-        if let Some(Some(summary)) = &self.summary {
+        let Closing {
+            class: _,
+            summary,
+            recursive: _,
+            ran,
+            refusal,
+            overlap,
+        } = self;
+        if let Some(Some(summary)) = summary {
             tree_types(summary, each);
         }
-        if let Some(ran) = self.ran {
-            interval(ran, each);
+        if let Some(ran) = ran {
+            interval(*ran, each);
         }
-        for error in self.refusal.iter().chain(self.overlap.iter()) {
+        for error in refusal.iter().chain(overlap.iter()) {
             error_types(error, each);
         }
     }
@@ -64,17 +88,30 @@ fn static_type(typed: &StaticType<'_>, each: &mut Each<'_>) {
     match typed {
         Static::Unknown => {}
         Static::Closed(ktype) => each((*ktype).into()),
-        Static::Rigid { value, .. } => each((*value).into()),
+        Static::Rigid {
+            value,
+            variables: _,
+        } => each((*value).into()),
     }
 }
 
 fn registered<T: Copy + Into<Parametric>>(typed: &Registered<'_, T>, each: &mut Each<'_>) {
-    each(declared(typed.shape));
+    let Registered {
+        shape,
+        quantifier_map: _,
+        parameters: _,
+    } = typed;
+    each(declared(*shape));
 }
 
 fn callable<T: Copy + Into<Parametric>>(typed: &Callable<'_, T>, each: &mut Each<'_>) {
-    each(declared(typed.ktype));
-    if let Some(registered_as) = &typed.registered {
+    let Callable {
+        ktype,
+        quantifier_map: _,
+        registered: registered_as,
+    } = typed;
+    each(declared(*ktype));
+    if let Some(registered_as) = registered_as {
         registered(registered_as, each);
     }
 }
@@ -90,78 +127,118 @@ fn declared<T: Into<Parametric>>(typed: DeclaredType<T>) -> DeclaredType<Paramet
 fn solution(solved: &StaticSolution<'_>, each: &mut Each<'_>) {
     match solved {
         StaticSolution::Closed(types) => types.iter().for_each(|ktype| each((*ktype).into())),
-        StaticSolution::Rigid { value, .. } => value.iter().for_each(|typed| each((*typed).into())),
+        StaticSolution::Rigid {
+            value,
+            variables: _,
+        } => value.iter().for_each(|typed| each((*typed).into())),
     }
 }
 
 fn typed_types(typed: &Typed<'_>, each: &mut Each<'_>) {
-    for (_, declared) in typed.declared.iter() {
+    let Typed {
+        declared,
+        registered: registrations,
+        expressions,
+        parts,
+        statements,
+        binders,
+        settled: _,
+        instances,
+        uses,
+        selections,
+        by_name,
+        trees,
+        contents,
+        minting: _,
+        throughs: _,
+        signature,
+        exits: _,
+        closed: _,
+        folded: _,
+    } = typed;
+    for (_, declared) in declared.iter() {
         static_type(declared, each);
     }
-    for (_, entry) in typed.registered.iter() {
+    for (_, entry) in registrations.iter() {
         match entry {
             Static::Unknown => {}
             Static::Closed(closed) => registered(closed, each),
-            Static::Rigid { value, .. } => registered(value, each),
+            Static::Rigid {
+                value,
+                variables: _,
+            } => registered(value, each),
         }
     }
-    for (_, expression) in typed.expressions.iter() {
+    for (_, expression) in expressions.iter() {
         static_type(expression, each);
     }
-    for (_, part) in typed.parts.iter() {
+    for (_, part) in parts.iter() {
         interval(*part, each);
     }
-    for (_, statement) in typed.statements.iter() {
+    for (_, statement) in statements.iter() {
         interval(*statement, each);
     }
-    for (_, binder) in typed.binders.iter() {
+    for (_, binder) in binders.iter() {
         match binder {
             DeclaredType::Type(typed) => interval(*typed, each),
             DeclaredType::Scheme(scheme) => each(DeclaredType::Scheme(*scheme)),
         }
     }
-    for (_, read) in typed.instances.iter() {
+    for (_, read) in instances.iter() {
         match read {
             InstanceRead::Solved(solved) => solution(solved, each),
             InstanceRead::AsIs => {}
         }
     }
     // A use's narrowing names candidates and verdicts, no type.
-    for (_, statics) in typed.uses.iter() {
-        for contribution in statics.contributions {
+    for (_, statics) in uses.iter() {
+        let UseStatics {
+            narrowing: _,
+            contributions,
+        } = statics;
+        for contribution in *contributions {
             static_type(contribution, each);
         }
     }
-    for (_, points) in typed.selections.iter() {
+    for (_, points) in selections.iter() {
         points
             .iter()
             .flatten()
             .for_each(|ktype| each((*ktype).into()));
     }
-    for (_, contributions) in typed.by_name.iter() {
+    for (_, contributions) in by_name.iter() {
         contributions
             .iter()
             .for_each(|typed| static_type(typed, each));
     }
-    for (_, tree) in typed.trees.iter() {
+    for (_, tree) in trees.iter() {
         tree_types(tree, each);
     }
-    for (_, tree) in typed.contents.iter() {
+    for (_, tree) in contents.iter() {
         tree_types(tree, each);
     }
-    if let Some(signature) = typed.signature {
-        each(signature.into());
+    if let Some(signature) = signature {
+        each((*signature).into());
     }
 }
 
 fn born_types(born: &Born<'_>, each: &mut Each<'_>) {
-    match &born.callable {
+    let Born {
+        callable: born_as,
+        levels,
+        instance,
+        digestible: _,
+    } = born;
+    match born_as {
         Static::Unknown => {}
         Static::Closed(closed) => callable(closed, each),
-        Static::Rigid { value, .. } => callable(value, each),
+        Static::Rigid {
+            value,
+            variables: _,
+        } => callable(value, each),
     }
-    born.levels.iter().for_each(|level| each((*level).into()));
-    if let Some(instance) = &born.instance {
+    levels.iter().for_each(|level| each((*level).into()));
+    if let Some(instance) = instance {
         solution(instance, each);
     }
 }
@@ -170,14 +247,24 @@ fn born_types(born: &Born<'_>, each: &mut Each<'_>) {
 pub(super) fn tree_types(tree: &Tree<'_>, each: &mut Each<'_>) {
     match tree {
         Tree::Digest(_) | Tree::Leaf(Leaf::Unnamed(_)) => {}
-        Tree::Body { captures, .. } => captures.iter().for_each(|(_, at)| tree_types(at, each)),
-        Tree::Knot { members, .. } => {
+        Tree::Body {
+            body: _,
+            captures,
+            identity: _,
+        } => captures.iter().for_each(|(_, at)| tree_types(at, each)),
+        Tree::Knot {
+            members,
+            index: _,
+            identity: _,
+        } => {
             for member in *members {
-                member
-                    .instance
-                    .iter()
-                    .for_each(|ktype| each((*ktype).into()));
-                for (_, capture) in member.captures {
+                let KnotNode {
+                    body: _,
+                    instance,
+                    captures,
+                } = member;
+                instance.iter().for_each(|ktype| each((*ktype).into()));
+                for (_, capture) in *captures {
                     match capture {
                         NodeCapture::Fellow(_) => {}
                         NodeCapture::Tree(at) => tree_types(at, each),
@@ -186,33 +273,39 @@ pub(super) fn tree_types(tree: &Tree<'_>, each: &mut Each<'_>) {
             }
         }
         Tree::View {
+            operator: _,
             application,
             source,
-            ..
+            identity: _,
         } => {
             each((*application).into());
             tree_types(source, each);
         }
         Tree::Retyped {
-            carried, source, ..
+            carried,
+            source,
+            identity: _,
         } => {
             each((*carried).into());
             tree_types(source, each);
         }
-        Tree::Leaf(Leaf::Bound { within, .. }) => match within {
+        Tree::Leaf(Leaf::Bound {
+            binder: _,
+            chain: _,
+            within,
+            identity: _,
+        }) => match within {
             None => {}
             Some(Within::Body(captures)) => {
                 captures.iter().for_each(|(_, at)| tree_types(at, each));
             }
-            Some(Within::Call(unfolded)) => {
-                unfolded
-                    .arguments
-                    .iter()
-                    .for_each(|(_, at)| tree_types(at, each));
-                unfolded
-                    .solution
-                    .iter()
-                    .for_each(|(_, ktype)| each((*ktype).into()));
+            Some(Within::Call(Unfolded {
+                callee: _,
+                arguments,
+                solution,
+            })) => {
+                arguments.iter().for_each(|(_, at)| tree_types(at, each));
+                solution.iter().for_each(|(_, ktype)| each((*ktype).into()));
             }
         },
     }
@@ -221,91 +314,172 @@ pub(super) fn tree_types(tree: &Tree<'_>, each: &mut Each<'_>) {
 fn error_types(error: &ShapeError<'_>, each: &mut Each<'_>) {
     let mut ktype = |ktype: KType| each(ktype.into());
     match *error {
-        ShapeError::Unfixed { wanted, .. } => wanted.into_iter().for_each(ktype),
-        ShapeError::NoInstance { scheme, wanted, .. } => {
+        ShapeError::Unfixed {
+            variables: _,
+            wanted,
+            at: _,
+        } => wanted.into_iter().for_each(ktype),
+        ShapeError::NoInstance {
+            scheme,
+            wanted,
+            at: _,
+        } => {
             ktype(wanted);
             each(DeclaredType::Scheme(scheme));
         }
-        ShapeError::Inadmissible { slot, .. } => ktype(slot),
-        ShapeError::Overlaps { builtin, .. } => ktype(builtin),
-        ShapeError::NoAdmittingCandidate { arguments, .. }
-        | ShapeError::Ambiguous { arguments, .. } => {
-            arguments.iter().for_each(|typed| each(*typed))
+        ShapeError::Inadmissible {
+            form: _,
+            index: _,
+            slot,
+            at: _,
+        } => ktype(slot),
+        ShapeError::Overlaps {
+            key: _,
+            builtin,
+            at: _,
+        } => ktype(builtin),
+        ShapeError::NoAdmittingCandidate {
+            key: _,
+            arguments,
+            at: _,
         }
-        ShapeError::NoField { of, .. } | ShapeError::NoMember { of, .. } => ktype(of),
-        ShapeError::ReturnNeverSatisfied { body, returns, .. } => {
+        | ShapeError::Ambiguous {
+            key: _,
+            arguments,
+            count: _,
+            at: _,
+        } => arguments.iter().for_each(|typed| each(*typed)),
+        ShapeError::NoField {
+            of,
+            field: _,
+            at: _,
+        }
+        | ShapeError::NoMember {
+            of,
+            member: _,
+            at: _,
+        } => ktype(of),
+        ShapeError::ReturnNeverSatisfied {
+            body,
+            returns,
+            at: _,
+        }
+        | ShapeError::EvalNeverSatisfied {
+            code: body,
+            returns,
+            at: _,
+        } => {
             ktype(body);
             ktype(returns);
         }
         ShapeError::AscriptionNeverSatisfied {
-            value, ascribed, ..
-        } => {
-            ktype(value);
-            ktype(ascribed);
+            value,
+            ascribed: other,
+            at: _,
         }
-        ShapeError::AnnotationNeverSatisfied {
-            value, annotated, ..
+        | ShapeError::AnnotationNeverSatisfied {
+            value,
+            annotated: other,
+            at: _,
         } => {
             ktype(value);
-            ktype(annotated);
+            ktype(other);
         }
         ShapeError::CallNeverSatisfied {
-            callee, arguments, ..
+            callee,
+            arguments,
+            at: _,
         } => {
             each(declared(callee));
             each(arguments.into());
         }
-        ShapeError::NotCode { value, .. } | ShapeError::NotAModule { value, .. } => ktype(value),
-        ShapeError::NotASignature { ascribed, .. } => ktype(ascribed),
-        ShapeError::EvalNeverSatisfied { code, returns, .. } => {
-            ktype(code);
-            ktype(returns);
-        }
-        ShapeError::Rebind { .. }
-        | ShapeError::ShadowsBuiltin { .. }
-        | ShapeError::Unbound { .. }
-        | ShapeError::QuantifiedValue { .. }
-        | ShapeError::AmbiguousInstance { .. }
-        | ShapeError::NoInstanceAtCandidates { .. }
-        | ShapeError::QuantifiedRead { .. }
-        | ShapeError::EagerCycle { .. }
-        | ShapeError::MarkOutsideQuote { .. }
-        | ShapeError::Unsupported { .. }
-        | ShapeError::Malformed { .. }
-        | ShapeError::Unsurfaced { .. }
-        | ShapeError::Unchained { .. }
-        | ShapeError::MixedGroups { .. }
-        | ShapeError::RedeclaresGroup { .. }
-        | ShapeError::ResultOutsidePairwise { .. }
-        | ShapeError::SpellsForm { .. }
-        | ShapeError::Derived { .. }
-        | ShapeError::Unquoted { .. }
-        | ShapeError::DictDefault { .. }
-        | ShapeError::ClosedBucket { .. }
-        | ShapeError::NoKeyword { .. }
-        | ShapeError::RankedDefinition { .. }
-        | ShapeError::NestedBinder { .. }
-        | ShapeError::RankingDisagrees { .. }
-        | ShapeError::NoCandidate { .. }
-        | ShapeError::Unlisted { .. }
-        | ShapeError::OpenPathInType { .. }
-        | ShapeError::UnpinnedMember { .. } => {}
-        ShapeError::RepeatedGuard { guard, .. } => each(guard.into()),
-        ShapeError::Type { error, .. } => match error {
-            Elaboration::NoSuchMember { owner, .. } => each(owner.into()),
+        ShapeError::NotCode { value, at: _ }
+        | ShapeError::NotAModule { value, at: _ }
+        | ShapeError::NotASignature {
+            ascribed: value,
+            at: _,
+        } => ktype(value),
+        ShapeError::RepeatedGuard {
+            guard,
+            first: _,
+            at: _,
+        } => each(guard.into()),
+        ShapeError::Type { error, at: _ } => match error {
+            Elaboration::NoSuchMember {
+                owner,
+                name: _,
+                site: _,
+            } => each(owner.into()),
             Elaboration::TiedUnion {
                 members: (first, second),
-                ..
+                site: _,
             } => {
                 each(first.into());
                 each(second.into());
             }
-            Elaboration::NotAType { .. }
-            | Elaboration::Unsupported { .. }
-            | Elaboration::Bound { .. }
-            | Elaboration::Quantified { .. }
-            | Elaboration::MeetOverVariable { .. }
-            | Elaboration::Unknown { .. } => {}
+            Elaboration::NotAType { name: _, site: _ }
+            | Elaboration::Unsupported { site: _ }
+            | Elaboration::Bound { site: _ }
+            | Elaboration::Quantified { site: _ }
+            | Elaboration::MeetOverVariable { site: _ }
+            | Elaboration::Unknown { site: _ } => {}
         },
+        ShapeError::Rebind {
+            name: _,
+            first: _,
+            second: _,
+        }
+        | ShapeError::ShadowsBuiltin { name: _, at: _ }
+        | ShapeError::Unbound {
+            name: _,
+            site: _,
+            at: _,
+        }
+        | ShapeError::QuantifiedValue { at: _ }
+        | ShapeError::AmbiguousInstance { key: _, at: _ }
+        | ShapeError::NoInstanceAtCandidates { key: _, at: _ }
+        | ShapeError::QuantifiedRead {
+            name: _,
+            site: _,
+            at: _,
+        }
+        | ShapeError::EagerCycle {
+            members: _,
+            definitions: _,
+            at: _,
+        }
+        | ShapeError::MarkOutsideQuote { at: _ }
+        | ShapeError::Unsupported { form: _, at: _ }
+        | ShapeError::Malformed { form: _, at: _ }
+        | ShapeError::Unsurfaced { at: _, site: _ }
+        | ShapeError::Unchained { symbol: _, at: _ }
+        | ShapeError::MixedGroups {
+            first: _,
+            second: _,
+            at: _,
+        }
+        | ShapeError::RedeclaresGroup { symbol: _, at: _ }
+        | ShapeError::ResultOutsidePairwise { symbol: _, at: _ }
+        | ShapeError::SpellsForm { symbol: _, at: _ }
+        | ShapeError::Derived { symbol: _, at: _ }
+        | ShapeError::Unquoted {
+            form: _,
+            part: _,
+            at: _,
+        }
+        | ShapeError::DictDefault { site: _, at: _ }
+        | ShapeError::ClosedBucket { key: _, at: _ }
+        | ShapeError::NoKeyword { at: _ }
+        | ShapeError::RankedDefinition { at: _ }
+        | ShapeError::NestedBinder { at: _ }
+        | ShapeError::RankingDisagrees { key: _, at: _ }
+        | ShapeError::NoCandidate { key: _, at: _ }
+        | ShapeError::Unlisted { name: _, at: _ }
+        | ShapeError::OpenPathInType { at: _ }
+        | ShapeError::UnpinnedMember {
+            member: _,
+            parameter: _,
+            at: _,
+        } => {}
     }
 }

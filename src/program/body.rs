@@ -207,12 +207,11 @@ fn ran<'graph, 'here, 'scratch>(
     routes: bool,
     types: &Chain<'_, 'here, '_, '_>,
 ) -> Action<'graph, KBundle> {
-    let (_, facts) = step.door();
+    let (code, facts) = step.door();
     let refused = facts.refusal();
     let runner = match state {
         KState::Born(KBirth::Program { program }) => {
             let writer = step.writer();
-            let (code, facts) = step.door();
             let activation = resident(
                 writer,
                 KActivation::of_program(writer, code.shapes().root(), &facts, program.builtins()),
