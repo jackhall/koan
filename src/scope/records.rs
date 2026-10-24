@@ -148,6 +148,9 @@ pub struct Closing<'a> {
     pub ran: Option<Interval<Parametric>>,
     /// Why a quote's code does not type, reported when an `EVAL` runs it.
     pub refusal: Option<&'a ShapeError<'a>>,
+    /// The first registration of a quote's code that overlaps a builtin overload, reported when an
+    /// `EVAL` runs it. Apart from `refusal`, since `USING` keeps code that does not type.
+    pub overlap: Option<&'a ShapeError<'a>>,
 }
 
 /// What the load folds per body after the walk.
@@ -704,6 +707,12 @@ impl<'graph> LoadFacts<'graph> {
     pub fn through_at(&self, shape: &BodyShape<'_>, level: usize) -> Option<&'graph [Variable]> {
         let held = Held::Through(shape.segment(), level);
         self.fact(shape, held, |typed| typed.throughs, level)
+    }
+
+    /// The first registration of the quote's code `shape` that overlaps a builtin overload,
+    /// reported when an `EVAL` runs it.
+    pub fn overlap(&self, shape: &BodyShape<'_>) -> Option<&'graph ShapeError<'graph>> {
+        (self.records.closing(shape.segment())).and_then(|(closing, _)| closing.overlap)
     }
 
     /// Why the code shape `shape`'s code cannot be built or does not type, reported when an `EVAL`

@@ -63,8 +63,8 @@
 //! typed before its statements, so an `EVAL` finds it typed. It is typed twice: once for its records,
 //! where an unmarked key's hole is a candidate the load cannot read, since a `USING` may fill it;
 //! and once as a traced `EVAL` runs it, unfilled, the hole holding nothing — which fixes nothing.
-//! Inside a quote's code a refusal is kept in the code's closing record, and the `EVAL` running it
-//! reports it.
+//! Inside a quote's code a refusal, and the first registration overlapping a builtin, is kept in
+//! the code's closing record, and the `EVAL` running it reports it.
 //!
 //! A `MODULE` or `GROUP` binder's body is typed where its binder is, since it runs inline, and the
 //! binder is exactly the signature the run ties where every member is exact ([`module_signature`]),
@@ -834,6 +834,13 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 .expect("a refused code shape holds its refusal")),
             false => self.units_of(level).and_then(|_| self.closing(level)),
         };
+        // A quote's code keeps its first overlap for the `EVAL` running it to report.
+        let walked = walked.map(|(mut closing, tag)| {
+            if code {
+                closing.overlap = self.overlap_in(shape);
+            }
+            (closing, tag)
+        });
         if roots_chain {
             self.close_paths(shape);
         }
@@ -855,6 +862,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                     recursive: false,
                     ran: None,
                     refusal: Some(resident(self.lay, error)),
+                    overlap: None,
                 };
                 (refused, Frontier::EMPTY)
             }
@@ -869,6 +877,15 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             false => self.write_closing(segment, closing, frontier),
         }
         Ok(())
+    }
+
+    /// The first registration of the quote's code `shape`, or of a body nested in it short of
+    /// another quote's code, that overlaps a builtin overload, each as the walk typed it.
+    fn overlap_in(&self, shape: &'graph BodyShape<'graph>) -> Option<&'o ShapeError<'o>> {
+        let typed = |body: &BodyShape<'graph>, slot| self.registered_cell(body, slot);
+        let overlaps =
+            super::check::overlaps_through(shape, &typed, self.builtins, self.types, self.scratch);
+        overlaps.err().map(|error| resident(self.lay, error))
     }
 
     /// Run the entry and each unit of the owning body at `level`, each callable a unit births
@@ -1724,6 +1741,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             recursive: false,
             ran: None,
             refusal: None,
+            overlap: None,
         };
         Ok((closing, tag))
     }

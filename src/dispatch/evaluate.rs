@@ -75,7 +75,7 @@ use crate::values::{
 use super::builtins::{self, Native};
 use super::errors::Raised;
 use super::select::{self, Selection};
-use super::{Evaluation, Operand, check};
+use super::{Evaluation, Operand};
 
 /// Where an evaluation parked.
 const BORN: u32 = 0;
@@ -523,7 +523,7 @@ fn using<'graph, 'here>(
     park(step, at, asked, FINISHING)
 }
 
-/// `EVAL <code> -> <Type>`: the code's shape checked for overlaps as a loaded program's is, then
+/// `EVAL <code> -> <Type>`: the overlap the load found in the code's shape reported, else the code
 /// run in a frame over the names and keys the `EVAL` offers, owing the declared type as a called
 /// frame owes its return. An operand that is no code, and every refusal, is an error value.
 fn evaluated<'graph, 'here>(
@@ -561,9 +561,7 @@ fn evaluated<'graph, 'here>(
         }
     };
     let shape = code.code().expect("a quote's code").shape();
-    if let Err(error) =
-        check::overlaps_through(program.facts(), shape, program.builtins(), types, &scratch)
-    {
+    if let Some(error) = program.facts().overlap(shape) {
         return finish(
             step,
             at,

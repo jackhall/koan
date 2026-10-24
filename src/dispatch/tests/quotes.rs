@@ -261,3 +261,29 @@ fn a_quote_reads_its_dollar_names_at_their_static_types() {
         "the `EVAL` reports the code's refusal"
     );
 }
+
+/// The load finds a written quote's overlap and an `EVAL` of it reports what the load found: the
+/// run checks no registration the load did not.
+#[test]
+fn an_eval_of_a_written_quote_runs_no_overlap_check() {
+    use crate::program::CellSubstrate;
+    use crate::values::SpecBounds;
+
+    let source = "LET q = #((OP #(+) OVER Number = #(0)) (1 + 2))\nEVAL q -> Any\nEVAL q -> Any";
+    let checks = || super::super::check::CHECKS.with(|checks| checks.get());
+    let before = checks();
+    let loaded = CellSubstrate::load::<super::Koan>(
+        source,
+        "<test>",
+        8,
+        SpecBounds::default(),
+        super::output(),
+    );
+    assert!(loaded.is_ok(), "the program loads");
+    let at_load = checks() - before;
+    assert!(at_load > 0, "the load checks the quote's registration");
+    let before = checks();
+    let printed = run(source);
+    assert!(printed.ends_with("already takes"), "{printed}");
+    assert_eq!(checks() - before, at_load, "the run checks nothing");
+}
