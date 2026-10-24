@@ -450,7 +450,7 @@ fn a_module_binder_read_from_many_sites_lays_its_captures_once() {
     assert_eq!(slices(8), slices(16), "capture slices laid");
 }
 
-/// Two bodies of one content share a print, and so the fit of a view over either: each view's
+/// Two bodies of one content share an identity, and so the fit of a view over either: each view's
 /// tree is still over its own body.
 #[test]
 fn views_of_two_bodies_alike_are_each_over_their_own() {
@@ -467,8 +467,12 @@ fn views_of_two_bodies_alike_are_each_over_their_own() {
         ) else {
             panic!("each view is over a body");
         };
-        let print = |name| let_tree(program, shape, name).print();
-        assert_eq!(print("va"), print("vb"), "the two bodies are one content");
+        let identity = |name| let_tree(program, shape, name).identity();
+        assert_eq!(
+            identity("va"),
+            identity("vb"),
+            "the two bodies are one content"
+        );
         assert_ne!(a, b, "each view is over its own body");
     });
 }
@@ -490,4 +494,94 @@ fn a_module_read_through_a_module_from_many_sites_lays_its_captures_once() {
     };
     let slices = |n: usize| load_counts(&program(n)).capture_slices;
     assert_eq!(slices(8), slices(16), "capture slices laid");
+}
+
+/// Each module binder named in `names` whose load tree is closed: its tree's identity is the
+/// digest its value computes at the run, and the load finds the tree by that identity.
+fn closed_identities_are_run_digests(source: &str, names: &[&str]) {
+    let (identities, mut substrate) = ran(source, |program| {
+        let shape = program.shape();
+        (names.iter())
+            .map(|name| {
+                let tree = (program.facts())
+                    .content(shape, slot(program, shape, name))
+                    .unwrap_or_else(|| panic!("the load reads `{name}`'s content"));
+                let digest = tree
+                    .digest()
+                    .unwrap_or_else(|| panic!("`{name}` is closed"));
+                let found = (program.facts().tree_of(digest))
+                    .unwrap_or_else(|| panic!("the load indexes `{name}`'s tree"));
+                assert!(found.same_as(&tree));
+                format!("{digest:?}")
+            })
+            .collect::<Vec<_>>()
+    });
+    for (name, identity) in names.iter().zip(identities) {
+        assert_eq!(identity, digest_back(&mut substrate, name), "`{name}`");
+    }
+}
+
+#[test]
+fn a_closed_module_trees_identity_is_the_digest_its_value_computes() {
+    closed_identities_are_run_digests(COUNTER, &["ints"]);
+    closed_identities_are_run_digests(
+        &format!(
+            "{ORDERED}EXPR #(MAKESET elem :Ordered) -> Module = #(\n  \
+             MODULE built OVER #[elem] = (LET sample = (elem.compare)))\n\
+             LET made = (MAKESET asc)"
+        ),
+        &["asc", "made"],
+    );
+    closed_identities_are_run_digests(
+        "MODULE outer = (MODULE inner = (LET one = 1))\nLET nested = outer.inner",
+        &["outer", "nested"],
+    );
+}
+
+/// Every closed subtree of a tree the load computed is indexed: the arguments a call unfolds over
+/// among them.
+#[test]
+fn the_load_finds_every_closed_module_tree_by_its_identity() {
+    let source = format!(
+        "{ORDERED}EXPR #(MAKESET elem :Ordered) -> Module = #(\n  \
+         MODULE built OVER #[elem] = (LET sample = (elem.compare)))\n\
+         LET a = ((MAKESET asc) :| Sample)\n\
+         LET c = ((MAKESET desc) :| Sample)"
+    );
+    loaded(&source, |program| {
+        let shape = program.shape();
+        let facts = program.facts();
+        for name in ["asc", "desc"] {
+            let tree = (facts.content(shape, slot(program, shape, name)))
+                .unwrap_or_else(|| panic!("the load reads `{name}`'s content"));
+            let digest = tree.digest().expect("a module of literals is closed");
+            assert!(
+                facts
+                    .tree_of(digest)
+                    .is_some_and(|found| found.same_as(&tree))
+            );
+        }
+        for name in ["a", "c"] {
+            let view = let_tree(program, shape, name);
+            let digest = view
+                .digest()
+                .expect("a call over closed arguments is closed");
+            assert!(
+                facts
+                    .tree_of(digest)
+                    .is_some_and(|found| found.same_as(&view))
+            );
+            let Tree::Body { captures, .. } = view else {
+                panic!("a call unfolds into the body its function builds: {view:?}");
+            };
+            for (_, capture) in captures {
+                if let Some(digest) = capture.digest() {
+                    assert!(
+                        facts.tree_of(digest).is_some(),
+                        "a closed subtree is indexed"
+                    );
+                }
+            }
+        }
+    });
 }

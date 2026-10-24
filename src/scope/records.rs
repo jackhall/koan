@@ -7,19 +7,21 @@
 //! frontier it gathered, one [`Closing`] per owning body, and the [`Folds`] the load lays per body
 //! after the walk. Every record is `Copy`, names bodies by segment and holds no cell, so each is
 //! covariant. A load may sit over a base: every read tries its own records, then its base's, and a
-//! unit it re-ran replaces the base's record of it whole.
+//! unit it re-ran replaces the base's record of it whole. The records index every closed tree their
+//! units computed by its identity, read through [`LoadFacts::tree_of`].
 //!
 //! A `LoadFacts` is laid in program storage before the program is, and an activation carries it, so
 //! every reader holding a view reads through [`ActivationView::load`](super::ActivationView::load).
 
 use crate::memory::{BumpAllocator, BumpVec, Lays, collect, resident};
 use crate::type_lattice::{DeclaredType, Interval, KType, Parametric};
+use crate::values::ContentDigest;
 
 use super::facts::{Binding, Frontier, UnitId};
 use super::keyed::Keyed;
 use super::shape::{BodyShape, Coordinate, Position, Segment, ShapeError, Site, Slot, Target};
 use super::shapes::Shapes;
-use super::tree::{Leaf, NodeCapture, Tree};
+use super::tree::{Leaf, NodeCapture, Tree, closed_trees};
 use super::typed::{
     BodyClass, Caching, Handoff, InstanceRead, Mint, PathEntry, Resolution, Static, StaticCallable,
     StaticRegistered, StaticSolution, StaticType, UseStatics, Variable, ViewSlots,
@@ -354,6 +356,8 @@ struct Records<'graph> {
     closings: Keyed<'graph, (Segment, (&'graph Closing<'graph>, Frontier<'graph>))>,
     /// Which of `units` holds each site, through and path fact: the facts the shape cannot place.
     index: Keyed<'graph, (Held, u32)>,
+    /// Each closed tree `units` computed, a subtree included, by its identity.
+    trees: Keyed<'graph, (ContentDigest, &'graph Tree<'graph>)>,
     /// Each body, by segment, beside its type captures as its birth reads them and its folds: none
     /// before the load folds, when a read falls to the base.
     bodies: &'graph [Laid<'graph>],
@@ -420,6 +424,7 @@ impl<'graph> LoadFacts<'graph> {
             units: Keyed::from_sorted(&[]),
             closings: Keyed::from_sorted(&[]),
             index: Keyed::from_sorted(&[]),
+            trees: Keyed::EMPTY,
             bodies: &[],
         };
         LoadFacts {
@@ -471,12 +476,19 @@ impl<'graph> LoadFacts<'graph> {
                 );
             }
         }
+        let computed = (units.iter())
+            .flat_map(|(_, (facts, _))| facts.typed.iter())
+            .flat_map(|(_, typed)| {
+                (typed.contents.iter().map(|(_, tree)| tree))
+                    .chain(typed.trees.iter().map(|(_, tree)| *tree))
+            });
         let records = Records {
             base,
             binding,
             units,
             closings: Keyed::from_sorted(collect(lay, closings.iter().copied())),
             index: Keyed::from_sorted(collect(lay, held.iter().copied())),
+            trees: closed_trees(lay, scratch, computed),
             bodies: &[],
         };
         LoadFacts {
@@ -525,6 +537,14 @@ impl<'graph> LoadFacts<'graph> {
     /// The newest closing record of the owning body `body`, beside its frontier.
     pub fn closing(&self, body: Segment) -> Option<(&'graph Closing<'graph>, Frontier<'graph>)> {
         self.records.closing(body)
+    }
+
+    /// The closed tree whose identity is `digest`, among those this load or its base computed.
+    pub fn tree_of(&self, digest: ContentDigest) -> Option<&'graph Tree<'graph>> {
+        match self.records.trees.get(digest) {
+            Some((_, tree)) => Some(tree),
+            None => self.records.base?.tree_of(digest),
+        }
     }
 
     /// The units this load ran itself, each beside its record and frontier, sorted.

@@ -70,7 +70,7 @@ pub use shape::{
     selection_refused, source_of, spelled, view_refused,
 };
 pub use shapes::{BindSite, Shapes};
-pub use tree::{Binder, KnotNode, Leaf, NodeCapture, Print, Tree, Unfolded, Within};
+pub use tree::{Binder, Identity, KnotNode, Leaf, NodeCapture, Tree, Unfolded, Within};
 pub use typed::{
     BodyClass, Caching, Callable, Elaboration, ElaborationDisplay, FunctionGroupMap, HandedTo,
     Handoff, InstanceRead, Mint, Narrowing, ParameterBinding, PathEntry, Paths, Registered,

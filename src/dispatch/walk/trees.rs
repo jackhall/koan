@@ -31,9 +31,9 @@ use crate::elaborate::signature_member;
 use crate::memory::{BumpBackedMap, BumpVec, bump_table, collect, resident};
 use crate::parse::{ExpressionPart, KExpression};
 use crate::scope::{
-    Binder, BodyShape, CaptureSlot, CaptureSource, Coordinate, KnotNode, Leaf, Narrowing,
-    NodeCapture, ParameterBinding, Position, Print, Segment, ShapeError, ShapeKind, Shapes, Site,
-    Slot, Static, StaticCallable, StaticSolution, Store, Target, Tree, Unfolded, Within,
+    Binder, BodyShape, CaptureSlot, CaptureSource, Coordinate, Identity, KnotNode, Leaf, Narrowing,
+    NodeCapture, ParameterBinding, Position, Segment, ShapeError, ShapeKind, Shapes, Site, Slot,
+    Static, StaticCallable, StaticSolution, Store, Target, Tree, Unfolded, Within,
 };
 use crate::symbols::{BinderSymbol, ValueSymbol};
 use crate::type_lattice::{KType, TypeNode};
@@ -378,7 +378,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         if let Ok(tree) = tree
             && !provisional
             && cut >= depth
-            && tree.print() != Print::Unnamed
+            && tree.identity() != Identity::Unnamed
         {
             let tag = self.innermost();
             self.binders.insert((key.0, slot, under), (tree, tag));
@@ -732,7 +732,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     }
 
     /// [`view_tree`](Self::view_tree) beside the type `source` carries, where the load knows it:
-    /// its fit is memoized by `application` and the source's print, and a closed view's
+    /// its fit is memoized by `application` and the source's identity, and a closed view's
     /// [`view_of`](Self::view_of) seeded from the same fit.
     pub(super) fn view_tree_held(
         &mut self,
@@ -740,7 +740,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         source: Tree<'o>,
         site: Site,
     ) -> Read<'o, (Tree<'o>, Option<KType>)> {
-        let key = (application, source.print());
+        let key = (application, source.identity());
         let (from, held, seed) = match self.view_trees.get(&key).copied() {
             Some((from, held, tag)) => {
                 self.gather(tag);
@@ -761,14 +761,14 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                     fit.and_then(|(_, viewed)| viewed),
                 );
                 let tag = self.innermost();
-                // A leaf no binder names is keyed on its site, which the print does not tell apart.
-                if key.1 != Print::Unnamed {
+                // A leaf no binder names is keyed on its site, which the identity does not tell apart.
+                if key.1 != Identity::Unnamed {
                     self.view_trees.insert(key, (from, held, tag));
                 }
                 (from, held, viewed.map(|viewed| (viewed, tag)))
             }
         };
-        // Built over this source itself, which another of its print may not be.
+        // Built over this source itself, which another of its identity may not be.
         let tree = Tree::view(
             Operator::Opaque,
             application,
@@ -776,8 +776,8 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             from,
         );
         // A closed view's source is closed, so its fit read what the view binds too.
-        if let (print @ Print::Closed(_), Some((viewed, tag))) = (tree.print(), seed) {
-            self.views.entry(print).or_insert((Some(viewed), tag));
+        if let (identity @ Identity::Closed(_), Some((viewed, tag))) = (tree.identity(), seed) {
+            self.views.entry(identity).or_insert((Some(viewed), tag));
         }
         Ok((tree, held))
     }
@@ -1079,21 +1079,21 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     /// `tree`, a summary of `call`'s callee, with the call substituted: each parameter's leaf by
     /// its argument's tree read through the leaf's chain, each `FOR ALL` variable's by its point,
     /// and every other leaf of the callee's body keyed on the call. `done` holds each subtree
-    /// substituted for this call already, by print, so a subtree shared across the summary is
+    /// substituted for this call already, by identity, so a subtree shared across the summary is
     /// substituted once.
     fn substituted(
         &mut self,
         tree: Tree<'o>,
         call: &Unfolded<'o>,
         site: Site,
-        done: &mut BumpBackedMap<'p, Print, Tree<'o>>,
+        done: &mut BumpBackedMap<'p, Identity, Tree<'o>>,
     ) -> Read<'o, Tree<'o>> {
-        let print = tree.print();
+        let identity = tree.identity();
         // A closed tree holds no leaf to substitute.
-        if let Print::Closed(_) = print {
+        if let Identity::Closed(_) = identity {
             return Ok(tree);
         }
-        if let Some(substituted) = done.get(&print) {
+        if let Some(substituted) = done.get(&identity) {
             return Ok(*substituted);
         }
         let substituted = match tree {
@@ -1149,8 +1149,8 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 ..
             }) => self.substituted_leaf(binder, chain, within, call, site, done)?,
         };
-        if print != Print::Unnamed {
-            done.insert(print, substituted);
+        if identity != Identity::Unnamed {
+            done.insert(identity, substituted);
         }
         Ok(substituted)
     }
@@ -1164,7 +1164,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         within: Option<&'o Within<'o>>,
         call: &Unfolded<'o>,
         site: Site,
-        done: &mut BumpBackedMap<'p, Print, Tree<'o>>,
+        done: &mut BumpBackedMap<'p, Identity, Tree<'o>>,
     ) -> Read<'o, Tree<'o>> {
         if binder.body == call.callee {
             let callee = self.shape_at(call.callee);
@@ -1223,7 +1223,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         captures: &'o [(u32, Tree<'o>)],
         call: &Unfolded<'o>,
         site: Site,
-        done: &mut BumpBackedMap<'p, Print, Tree<'o>>,
+        done: &mut BumpBackedMap<'p, Identity, Tree<'o>>,
     ) -> Read<'o, &'o [(u32, Tree<'o>)]> {
         let mut substituted = BumpVec::with_capacity_in(captures.len(), self.scratch);
         for (slot, tree) in captures {

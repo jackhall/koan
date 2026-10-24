@@ -27,8 +27,8 @@ use crate::elaborate::{SignatureMember, applied_member, path_binding, signature_
 use crate::memory::{BumpBackedMap, BumpVec, bump_hash_table, bump_table, collect};
 use crate::parse::ExpressionPart;
 use crate::scope::{
-    Binder, BodyShape, Callable, CaptureSlot, CaptureSource, Coordinate, Leaf, PathEntry, Position,
-    Print, Registered, Resolution, Resolved, Root, Segment, ShapeError, ShapeKind, Site, Source,
+    Binder, BodyShape, Callable, CaptureSlot, CaptureSource, Coordinate, Identity, Leaf, PathEntry,
+    Position, Registered, Resolution, Resolved, Root, Segment, ShapeError, ShapeKind, Site, Source,
     SpelledRoot, Static, StaticCallable, StaticRegistered, StaticType, Store, Target, Tree,
     Variable as Located, part_of, path_spelling, source_of,
 };
@@ -62,9 +62,9 @@ pub(super) struct ChainPaths<'p, 'o, 'graph> {
     entries: BumpVec<'p, Option<Entry<'o>>>,
     /// Each entry's index in `entries`, by root, chain and label.
     found: Found<'p>,
-    /// Each class's representative's level, by the label, application and tree print its paths
+    /// Each class's representative's level, by the label, application and tree identity its paths
     /// share.
-    classes: BumpBackedMap<'p, (TypeSymbol, Option<Parametric>, Print), usize>,
+    classes: BumpBackedMap<'p, (TypeSymbol, Option<Parametric>, Identity), usize>,
     /// Each path resolved to a class, by the class's representative's level, then its own.
     members: BumpVec<'p, (usize, usize)>,
     /// Each entry being resolved, by level.
@@ -195,9 +195,9 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             });
         }
         if let Resolved::Class(rep) = resolution.resolved {
-            let print = resolution.tree.print();
-            if !matches!(print, Print::Unnamed) {
-                let key = (entry.label, entry.through, print);
+            let identity = resolution.tree.identity();
+            if !matches!(identity, Identity::Unnamed) {
+                let key = (entry.label, entry.through, identity);
                 table.classes.entry(key).or_insert(rep);
             }
             let at = (table.members).partition_point(|member| *member < (rep, entry.level));
@@ -581,11 +581,11 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         let table = self.table(level);
         let table = &mut self.paths[table];
         // A tree holding a leaf no binder names is like no other.
-        match tree.print() {
-            Print::Unnamed => entry.level,
-            print => *table
+        match tree.identity() {
+            Identity::Unnamed => entry.level,
+            identity => *table
                 .classes
-                .entry((entry.label, entry.through, print))
+                .entry((entry.label, entry.through, identity))
                 .or_insert(entry.level),
         }
     }

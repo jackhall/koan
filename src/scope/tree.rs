@@ -12,10 +12,12 @@
 //!
 //! A tree with no leaf is **closed**, and its [digest](Tree::digest) is the one the run computes
 //! for the value the expression evaluates to, through the run's own recipes in
-//! [`values::digest`](crate::values::digest). Each tree carries a [`Print`], computed from its
+//! [`values::digest`](crate::values::digest). Each tree carries an [`Identity`], computed from its
 //! children's as it is built: the digest where it is closed, else the same recipes over each
-//! leaf's key. Two trees are compared by [`Tree::same_as`] alone, by print, so a comparison and a
-//! digest cost the same however deep the tree or however often a subtree is shared.
+//! leaf's key. Two trees are compared by [`Tree::same_as`] alone, by identity, so a comparison and a
+//! digest cost the same however deep the tree or however often a subtree is shared. A layer that
+//! computes trees indexes the closed ones by identity through [`closed_trees`], so a module's digest
+//! finds the tree its layer computed for it.
 //!
 //! The load's walk (`dispatch/walk/trees.rs`) builds the trees, through the constructors here.
 //! Everything here is `Copy` and names a body by its [`Segment`], never by a reference into program
@@ -24,6 +26,7 @@
 
 use std::fmt;
 
+use crate::memory::{BumpAllocator, BumpBackedSet, BumpVec, Lays, bump_set};
 use crate::symbols::ValueSymbol;
 use crate::type_lattice::KType;
 use crate::values::ContentDigest;
@@ -32,10 +35,11 @@ use crate::values::digest::{
     member_digest, retyped_content, view_content,
 };
 
+use super::keyed::Keyed;
 use super::shape::{BodyShape, Segment, Site, Slot};
 
 /// What the load knows of one module-valued expression's content. Built through the constructors
-/// below, which compute each node's [`Print`].
+/// below, which compute each node's [`Identity`].
 #[derive(Clone, Copy)]
 pub enum Tree<'graph> {
     /// A value the load computes, by its digest: a scalar literal, a closed type value.
@@ -44,13 +48,13 @@ pub enum Tree<'graph> {
     Body {
         body: Segment,
         captures: &'graph [(u32, Tree<'graph>)],
-        print: Print,
+        identity: Identity,
     },
     /// Member `index` of closures tied into one knot, its nodes in the order the tie lays them.
     Knot {
         members: &'graph [KnotNode<'graph>],
         index: u32,
-        print: Print,
+        identity: Identity,
     },
     /// An opaque view: its operator and the application it is built at, over its operand, digested
     /// over the operand's bare member and what its fit solves.
@@ -58,7 +62,7 @@ pub enum Tree<'graph> {
         operator: Operator,
         application: KType,
         source: &'graph Tree<'graph>,
-        print: Print,
+        identity: Identity,
     },
     /// A value retyped to `carried` over its bare member's tree: a knot member under a header.
     /// Where the load knows the source's own type it is built only where `carried` differs from
@@ -66,16 +70,16 @@ pub enum Tree<'graph> {
     Retyped {
         carried: KType,
         source: &'graph Tree<'graph>,
-        print: Print,
+        identity: Identity,
     },
     Leaf(Leaf<'graph>),
 }
 
 /// A tree's identity: the digest the run computes where the tree is closed; the run's recipes
-/// over each leaf's key where it is open, so two open trees share a print exactly where they are
+/// over each leaf's key where it is open, so two open trees share an identity exactly where they are
 /// alike, leaf for leaf; and nothing where a leaf no binder names sits in it.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub enum Print {
+pub enum Identity {
     Closed(ContentDigest),
     Open(ContentDigest),
     Unnamed,
@@ -106,7 +110,7 @@ pub enum Leaf<'graph> {
         binder: Binder,
         chain: &'graph [ValueSymbol],
         within: Option<&'graph Within<'graph>>,
-        print: Print,
+        identity: Identity,
     },
     /// An expression no binder names, written at `Site`: unlike every tree.
     Unnamed(Site),
@@ -140,16 +144,20 @@ pub struct Unfolded<'graph> {
 impl<'graph> Tree<'graph> {
     /// A `MODULE` or `GROUP` body's tree over the captures its content composes.
     pub fn body(shape: &BodyShape<'_>, captures: &'graph [(u32, Tree<'graph>)]) -> Self {
-        let print = Print::over(captures.iter().map(|(_, tree)| tree.print()), |digests| {
-            lone_member(body_content(
-                shape.code_digest(),
-                (captures.iter().zip(digests)).map(|((slot, _), digest)| (*slot as usize, digest)),
-            ))
-        });
+        let identity = Identity::over(
+            captures.iter().map(|(_, tree)| tree.identity()),
+            |digests| {
+                lone_member(body_content(
+                    shape.code_digest(),
+                    (captures.iter().zip(digests))
+                        .map(|((slot, _), digest)| (*slot as usize, digest)),
+                ))
+            },
+        );
         Tree::Body {
             body: shape.segment(),
             captures,
-            print,
+            identity,
         }
     }
 
@@ -165,15 +173,17 @@ impl<'graph> Tree<'graph> {
                 .iter()
                 .filter_map(|(_, capture)| match capture {
                     NodeCapture::Fellow(_) => None,
-                    NodeCapture::Tree(tree) => Some(tree.print()),
+                    NodeCapture::Tree(tree) => Some(tree.identity()),
                 })
         });
-        let print = Print::over(captured, |digests| {
+        let identity = Identity::over(captured, |digests| {
             let contents = members.iter().map(|node| {
                 let captures = node.captures.iter().map(|(slot, capture)| {
                     let digest = match capture {
                         NodeCapture::Fellow(fellow) => edge_at(*fellow as usize),
-                        NodeCapture::Tree(_) => digests.next().expect("a print per tree capture"),
+                        NodeCapture::Tree(_) => {
+                            digests.next().expect("an identity per tree capture")
+                        }
                     };
                     (*slot as usize, digest)
                 });
@@ -184,7 +194,7 @@ impl<'graph> Tree<'graph> {
         Tree::Knot {
             members,
             index,
-            print,
+            identity,
         }
     }
 
@@ -196,32 +206,32 @@ impl<'graph> Tree<'graph> {
         source: &'graph Tree<'graph>,
         from: Option<KType>,
     ) -> Self {
-        let print = Print::over(std::iter::once(source.bare().print()), |digests| {
-            let source = digests.next().expect("the source's print");
+        let identity = Identity::over(std::iter::once(source.bare().identity()), |digests| {
+            let source = digests.next().expect("the source's identity");
             lone_member(view_content(operator, application, source, from))
         });
-        let print = match (print, from) {
-            (Print::Closed(digest), None) => Print::Open(digest),
-            (print, _) => print,
+        let identity = match (identity, from) {
+            (Identity::Closed(digest), None) => Identity::Open(digest),
+            (identity, _) => identity,
         };
         Tree::View {
             operator,
             application,
             source,
-            print,
+            identity,
         }
     }
 
     /// `source` retyped to `carried`, as the run digests a member under a header.
     pub fn retyped(carried: KType, source: &'graph Tree<'graph>) -> Self {
-        let print = Print::over(std::iter::once(source.print()), |digests| {
-            let source = digests.next().expect("the source's print");
+        let identity = Identity::over(std::iter::once(source.identity()), |digests| {
+            let source = digests.next().expect("the source's identity");
             retyped_content(carried.into(), source)
         });
         Tree::Retyped {
             carried,
             source,
-            print,
+            identity,
         }
     }
 
@@ -240,9 +250,9 @@ impl<'graph> Tree<'graph> {
             Some(Within::Call(call)) => call.arguments,
             _ => &[],
         };
-        let children = (keyed.iter().map(|(_, tree)| tree.print()))
-            .chain(arguments.iter().map(|(_, tree)| tree.print()));
-        let print = match Print::over(children, |digests| {
+        let children = (keyed.iter().map(|(_, tree)| tree.identity()))
+            .chain(arguments.iter().map(|(_, tree)| tree.identity()));
+        let identity = match Identity::over(children, |digests| {
             let mut hasher = DigestHasher::new(Tag::Leaf);
             hasher
                 .count(binder.body.index() as usize)
@@ -277,33 +287,33 @@ impl<'graph> Tree<'graph> {
             hasher.finished()
         }) {
             // A leaf is open however closed what keys it.
-            Print::Closed(digest) => Print::Open(digest),
-            print => print,
+            Identity::Closed(digest) => Identity::Open(digest),
+            identity => identity,
         };
         Tree::Leaf(Leaf::Bound {
             binder,
             chain,
             within,
-            print,
+            identity,
         })
     }
 
-    /// The tree's print.
-    pub fn print(&self) -> Print {
+    /// The tree's identity.
+    pub fn identity(&self) -> Identity {
         match *self {
-            Tree::Digest(digest) => Print::Closed(digest),
-            Tree::Body { print, .. }
-            | Tree::Knot { print, .. }
-            | Tree::View { print, .. }
-            | Tree::Retyped { print, .. }
-            | Tree::Leaf(Leaf::Bound { print, .. }) => print,
-            Tree::Leaf(Leaf::Unnamed(_)) => Print::Unnamed,
+            Tree::Digest(digest) => Identity::Closed(digest),
+            Tree::Body { identity, .. }
+            | Tree::Knot { identity, .. }
+            | Tree::View { identity, .. }
+            | Tree::Retyped { identity, .. }
+            | Tree::Leaf(Leaf::Bound { identity, .. }) => identity,
+            Tree::Leaf(Leaf::Unnamed(_)) => Identity::Unnamed,
         }
     }
 
     /// Whether the tree holds no leaf, a call's key included.
     pub fn closed(&self) -> bool {
-        matches!(self.print(), Print::Closed(_))
+        matches!(self.identity(), Identity::Closed(_))
     }
 
     /// The tree of the bare member behind a header, or this tree where it is none.
@@ -317,9 +327,9 @@ impl<'graph> Tree<'graph> {
     /// The digest the run computes for the value this tree's expression evaluates to, where the
     /// tree is closed.
     pub fn digest(&self) -> Option<ContentDigest> {
-        match self.print() {
-            Print::Closed(digest) => Some(digest),
-            Print::Open(_) | Print::Unnamed => None,
+        match self.identity() {
+            Identity::Closed(digest) => Some(digest),
+            Identity::Open(_) | Identity::Unnamed => None,
         }
     }
 
@@ -327,41 +337,92 @@ impl<'graph> Tree<'graph> {
     /// one structure whose leaves are keyed alike. Never where either holds a leaf no binder names.
     /// The one equality trees have.
     pub fn same_as(&self, other: &Tree<'graph>) -> bool {
-        match (self.print(), other.print()) {
-            (Print::Unnamed, _) | (_, Print::Unnamed) => false,
+        match (self.identity(), other.identity()) {
+            (Identity::Unnamed, _) | (_, Identity::Unnamed) => false,
             (mine, theirs) => mine == theirs,
+        }
+    }
+
+    /// Each tree this one is built over, a leaf's key included.
+    fn subtrees(&self, each: &mut impl FnMut(&'graph Tree<'graph>)) {
+        match *self {
+            Tree::Digest(_) | Tree::Leaf(Leaf::Unnamed(_)) => {}
+            Tree::Body { captures, .. } => captures.iter().for_each(|(_, tree)| each(tree)),
+            Tree::Knot { members, .. } => {
+                for member in members {
+                    for (_, capture) in member.captures {
+                        if let NodeCapture::Tree(tree) = capture {
+                            each(tree);
+                        }
+                    }
+                }
+            }
+            Tree::View { source, .. } | Tree::Retyped { source, .. } => each(source),
+            Tree::Leaf(Leaf::Bound { within, .. }) => match within {
+                None => {}
+                Some(Within::Body(captures)) => captures.iter().for_each(|(_, tree)| each(tree)),
+                Some(Within::Call(unfolded)) => {
+                    unfolded.arguments.iter().for_each(|(_, tree)| each(tree))
+                }
+            },
         }
     }
 }
 
-impl Print {
-    /// A node's print over its `children`'s, in order: `digest` reads each child's digest, or each
+/// Every closed tree among `trees` and their subtrees, keyed by its identity, laid through `lay`:
+/// one entry per digest, since two closed trees of one digest are one content. A layer that
+/// computes closed trees indexes them so, and a request finds a module's tree by its digest.
+pub fn closed_trees<'a>(
+    lay: impl Lays<'a>,
+    scratch: BumpAllocator<'_>,
+    trees: impl Iterator<Item = &'a Tree<'a>>,
+) -> Keyed<'a, (ContentDigest, &'a Tree<'a>)> {
+    let mut seen: BumpBackedSet<'_, Identity> = bump_set(scratch);
+    let mut closed = BumpVec::new_in(scratch);
+    let mut pending: BumpVec<'_, &'a Tree<'a>> = BumpVec::new_in(scratch);
+    pending.extend(trees);
+    while let Some(tree) = pending.pop() {
+        let identity = tree.identity();
+        // A shared subtree is walked once; a leaf no binder names is unlike every tree.
+        if identity != Identity::Unnamed && !seen.insert(identity) {
+            continue;
+        }
+        if let Identity::Closed(digest) = identity {
+            closed.push((digest, tree));
+        }
+        tree.subtrees(&mut |subtree| pending.push(subtree));
+    }
+    Keyed::sorted(lay, &mut closed)
+}
+
+impl Identity {
+    /// A node's identity over its `children`'s, in order: `digest` reads each child's digest, or each
     /// child's open key where one is open.
     fn over(
-        children: impl Iterator<Item = Print>,
+        children: impl Iterator<Item = Identity>,
         digest: impl FnOnce(&mut dyn Iterator<Item = ContentDigest>) -> ContentDigest,
-    ) -> Print {
+    ) -> Identity {
         let (mut open, mut unnamed) = (false, false);
         let children: smallvec::SmallVec<[ContentDigest; 8]> = children
-            .map(|print| match print {
-                Print::Closed(digest) => digest,
-                Print::Open(digest) => {
+            .map(|identity| match identity {
+                Identity::Closed(digest) => digest,
+                Identity::Open(digest) => {
                     open = true;
                     digest
                 }
-                Print::Unnamed => {
+                Identity::Unnamed => {
                     unnamed = true;
                     ContentDigest::NONE
                 }
             })
             .collect();
         if unnamed {
-            return Print::Unnamed;
+            return Identity::Unnamed;
         }
         let digest = digest(&mut children.into_iter());
         match open {
-            true => Print::Open(digest),
-            false => Print::Closed(digest),
+            true => Identity::Open(digest),
+            false => Identity::Closed(digest),
         }
     }
 }

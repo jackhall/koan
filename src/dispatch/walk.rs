@@ -149,12 +149,12 @@ use crate::parse::BuiltinShapeId;
 use crate::parse::{ExpressionPart, KExpression, KLiteral};
 use crate::scope::{
     Address, BodyClass, BodyShape, Born, BuiltinIndex, Candidate, CandidateList, CaptureChain,
-    CaptureSlot, CaptureSource, Closing, ComponentIndex, Coordinate, Cut, Frontier, InstanceRead,
-    Keyed, Lands, Leaf, Listed, NamedVariable, Narrowing, PathEntry, Position, Print, Resolution,
-    Segment, ShapeError, ShapeKind, Shapes, Site, SiteDeps, Slot, Source, Static, StaticRegistered,
-    StaticSolution, StaticType, Store, SurfacedHead, Tree, Typed, UnitFacts, UnitId, UnitIndex,
-    UnitTable, UnitWork, Unknown, UseStatics, Variable as Located, Within, follow, part_of,
-    source_of,
+    CaptureSlot, CaptureSource, Closing, ComponentIndex, Coordinate, Cut, Frontier, Identity,
+    InstanceRead, Keyed, Lands, Leaf, Listed, NamedVariable, Narrowing, PathEntry, Position,
+    Resolution, Segment, ShapeError, ShapeKind, Shapes, Site, SiteDeps, Slot, Source, Static,
+    StaticRegistered, StaticSolution, StaticType, Store, SurfacedHead, Tree, Typed, UnitFacts,
+    UnitId, UnitIndex, UnitTable, UnitWork, Unknown, UseStatics, Variable as Located, Within,
+    follow, part_of, source_of,
 };
 use crate::source::SourceRef;
 use crate::symbols::{BinderSymbol, TypeSymbol};
@@ -564,18 +564,18 @@ struct Pass<'p, 'o, 'x, 'graph, 'tier, 'pair, 'reg, S: Store<'o>> {
     binders: BumpBackedMap<'p, (usize, Slot, Option<usize>), (Tree<'o>, Tag)>,
     /// What shaped the binder tree being built besides the program's text.
     shaped: trees::Shaped,
-    /// What each view over a closed tree binds, by its print: a chain of views reads each once.
-    views: BumpBackedMap<'p, Print, (Option<ViewTypes<'o>>, Tag)>,
-    /// What each opaque view's fit solves, by its application and its source's print, beside the
+    /// What each view over a closed tree binds, by its identity: a chain of views reads each once.
+    views: BumpBackedMap<'p, Identity, (Option<ViewTypes<'o>>, Tag)>,
+    /// What each opaque view's fit solves, by its application and its source's identity, beside the
     /// type its source carries: a `:|` fits its source, and reads that type, once.
-    view_trees: BumpBackedMap<'p, (KType, Print), trees::Fitted>,
+    view_trees: BumpBackedMap<'p, (KType, Identity), trees::Fitted>,
     /// What each read of a value a lay may reach twice yields, so a chain of views reads each
     /// member once.
-    steps: BumpBackedMap<'p, (views::Identity, views::Step), Option<views::Carried<'o>>>,
+    steps: BumpBackedMap<'p, (views::ViewIdentity, views::Step), Option<views::Carried<'o>>>,
     /// Each value a view rebuilt, by what it was rebuilt from.
     rebuilds: BumpBackedMap<'p, views::Rebuild, views::Carried<'o>>,
     /// The modules each rebuilt union of cells' signatures may be, cell by cell.
-    modules: BumpBackedMap<'p, views::Identity, &'p [views::Carried<'o>]>,
+    modules: BumpBackedMap<'p, views::ViewIdentity, &'p [views::Carried<'o>]>,
     /// Each declared type a view reads either side, by its two sides' handles.
     sides: BumpBackedMap<'p, (DeclaredType<Parametric>, KType, KType), views::Sides>,
     /// The path table of each chain being typed, outermost first.

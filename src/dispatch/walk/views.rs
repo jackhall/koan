@@ -10,9 +10,9 @@
 //! through it at the type it declares, as a member read retypes it; and a cell an opaque view
 //! rebuilt, as the coercion walk rebuilds it. Each step follows a view to its source or a slot
 //! into its declared type, so the lay ends at any depth. A view over a closed tree is read once,
-//! by its print, and an open one reads nothing, so a chain of k views, open or closed, costs the
+//! by its identity, and an open one reads nothing, so a chain of k views, open or closed, costs the
 //! load O(k) view reads; every read of a member of such a view or of a rebuilt value is memoized
-//! on the pass too ([`Identity`]).
+//! on the pass too ([`ViewIdentity`]).
 //!
 //! Where no tree shows a cell — a container literal's, a parameter's, a call's the load does not
 //! unfold — its exact type stands for it, and a view that type is is read as its signature declares
@@ -26,7 +26,7 @@ use crate::elaborate::signature_member;
 use crate::knot::module::coerce::Substitution;
 use crate::knot::module::view::{self, ViewTypes};
 use crate::memory::{BumpAllocator, BumpVec, collect, resident};
-use crate::scope::{Print, ShapeError, Site, Store, Tree};
+use crate::scope::{Identity, ShapeError, Site, Store, Tree};
 use crate::symbols::{BinderSymbol, Symbol, TypeSymbol, ValueSymbol};
 use crate::type_lattice::{
     DeclaredType, KType, Members, Parametric, SigSchema, TypeHandle, TypeNode,
@@ -73,10 +73,10 @@ pub(super) enum Inside {
 }
 
 /// A value the load reads twice, wherever it is reached from: a view over a closed tree, by its
-/// print, or a value a view rebuilt, by its address. What each yields is memoized on it.
+/// identity, or a value a view rebuilt, by its address. What each yields is memoized on it.
 #[derive(Clone, Copy, PartialEq, Eq, Hash)]
-pub(super) enum Identity {
-    Tree(Print),
+pub(super) enum ViewIdentity {
+    Tree(Identity),
     Across(usize),
 }
 
@@ -88,7 +88,7 @@ pub(super) enum Step {
 }
 
 /// A value rebuilt by a view: its declared type, the two sides' handles, and the source.
-pub(super) type Rebuild = (DeclaredType<Parametric>, KType, KType, Identity);
+pub(super) type Rebuild = (DeclaredType<Parametric>, KType, KType, ViewIdentity);
 
 /// The modules a value may be: itself, or each cell of a union of cells' signatures.
 #[derive(Clone, Copy)]
@@ -107,13 +107,13 @@ impl<'o> Modules<'_, 'o> {
 }
 
 /// What `carried` is known by, where a read of it is worth keeping.
-fn identity(carried: Carried<'_>) -> Option<Identity> {
+fn identity(carried: Carried<'_>) -> Option<ViewIdentity> {
     match carried {
-        Carried::Tree(tree) => match tree.print() {
-            print @ Print::Closed(_) => Some(Identity::Tree(print)),
+        Carried::Tree(tree) => match tree.identity() {
+            identity @ Identity::Closed(_) => Some(ViewIdentity::Tree(identity)),
             _ => None,
         },
-        Carried::Across(across) => Some(Identity::Across(std::ptr::from_ref(across).addr())),
+        Carried::Across(across) => Some(ViewIdentity::Across(std::ptr::from_ref(across).addr())),
         Carried::Typed(_) => None,
     }
 }
@@ -267,7 +267,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     }
 
     /// What the view `tree` binds, where the load knows it: a closed opaque view's over its
-    /// source's type and its bare member's digest, memoized by print.
+    /// source's type and its bare member's digest, memoized by identity.
     pub(super) fn view_of(
         &mut self,
         tree: Tree<'o>,
@@ -277,7 +277,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             operator,
             application,
             source,
-            print,
+            identity,
         } = tree
         else {
             return Ok(None);
@@ -286,16 +286,16 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         super::count(|counts| counts.view_reads += 1);
         // An open view's fit or source is unknown (`Tree::view`), so it binds nothing the load
         // knows.
-        let Print::Closed(_) = print else {
+        let Identity::Closed(_) = identity else {
             return Ok(None);
         };
-        if let Some((viewed, tag)) = self.views.get(&print).copied() {
+        if let Some((viewed, tag)) = self.views.get(&identity).copied() {
             self.gather(tag);
             return Ok(viewed);
         }
         let viewed = self.view_read(operator, application, source, site)?;
         let tag = self.innermost();
-        self.views.insert(print, (viewed, tag));
+        self.views.insert(identity, (viewed, tag));
         Ok(viewed)
     }
 
@@ -370,7 +370,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         Ok(rebuilt)
     }
 
-    /// What `step` reads of `carried`, memoized where `carried` has an [`Identity`].
+    /// What `step` reads of `carried`, memoized where `carried` has an [`ViewIdentity`].
     fn step(
         &mut self,
         carried: Carried<'o>,
@@ -540,7 +540,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             Carried::Across(across) if across.held.is_none() => across,
             _ => return Ok(Modules::One(carried)),
         };
-        let key = Identity::Across(std::ptr::from_ref(across).addr());
+        let key = ViewIdentity::Across(std::ptr::from_ref(across).addr());
         if let Some(modules) = self.modules.get(&key) {
             return Ok(Modules::Cells(modules));
         }
