@@ -55,10 +55,12 @@ pub(super) type Activate<'graph> =
         &Chain<'_, '_, '_, '_>,
         Option<&'here Activated<'here>>,
         &[(Unknown, Bound<'bind>)],
+        bool,
         Segment,
     ) -> Result<Activated<'here>, &'here str>;
 
 /// [`activated`] laying through a frame's region writer: what the program holds.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn activated_in<'here, L: Language>(
     program: &Program<'_>,
     writer: Writer<'here, '_>,
@@ -66,15 +68,18 @@ pub(super) fn activated_in<'here, L: Language>(
     types: &Chain<'_, '_, '_, '_>,
     below: Option<&'here Activated<'here>>,
     own: &[(Unknown, Bound<'_>)],
+    rewakes: bool,
     at: Segment,
 ) -> Result<Activated<'here>, &'here str> {
-    activated::<L>(program, writer, facts, types, below, own, at)
+    activated::<L>(program, writer, facts, types, below, own, rewakes, at)
 }
 
-/// What the binding event binding `own` decides for the frame body `at` over `facts`, which read
-/// `below`, the frame's earlier events: `L`'s walk rooted at the body, laid through `lay` and
-/// interned through `types`, the frame's chain. A refusal the walk reaches is the message the
-/// frame faults with, worded as the load words it.
+/// What the binding event binding `own` decides for the body `at` over `facts`, which read
+/// `below`, its cell's and enclosers' earlier events: `L`'s walk rooted at the body, laid through
+/// `lay` and interned through `types`, the frame's chain. It wakes the units whose records name
+/// what `own` binds, or, where it `rewakes`, any name `facts` bind too. A refusal the walk reaches
+/// is the message the cell faults with, worded as the load words it.
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn activated<'here, L: Language>(
     program: &Program<'_>,
     lay: impl Lays<'here>,
@@ -82,6 +87,7 @@ pub(crate) fn activated<'here, L: Language>(
     types: &Chain<'_, '_, '_, '_>,
     below: Option<&'here Activated<'here>>,
     own: &[(Unknown, Bound<'_>)],
+    rewakes: bool,
     at: Segment,
 ) -> Result<Activated<'here>, &'here str> {
     #[cfg(test)]
@@ -91,7 +97,10 @@ pub(crate) fn activated<'here, L: Language>(
     facts.each_bound(&mut |unknown, bound| staged.push((unknown, bound)));
     staged.extend(own.iter().copied());
     let binding = Binding::laid(&bump, &mut staged);
-    let layer = Layer::new(&bump, &scratch, facts, binding);
+    let layer = match rewakes {
+        true => Layer::waking_all(&bump, &scratch, facts, binding),
+        false => Layer::new(&bump, &scratch, facts, binding),
+    };
     let walked = L::facts(
         program.shapes(),
         program.builtins(),

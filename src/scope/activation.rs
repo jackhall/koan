@@ -181,7 +181,7 @@ where
     }
 
     /// A fresh activation of the callable shape `shape`, run by `callable` over its closure
-    /// bindings, every slot empty.
+    /// bindings, every slot empty, reading what the activation the callable was born in decided.
     pub fn of_callable(
         writer: Writer<'cell, '_>,
         shape: &BodyShape<'_>,
@@ -196,7 +196,7 @@ where
             facts.capture_count(shape),
             "the closure bindings follow the shape's capture layout",
         );
-        Self::laid_down(
+        let mut called = Self::laid_down(
             writer,
             shape,
             facts,
@@ -204,7 +204,10 @@ where
             builtins,
             None,
             Some(callable),
-        )
+        );
+        // A call reads first what the activation the callable was born in had decided.
+        called.view.decided = closure.decided();
+        called
     }
 
     /// A fresh activation of the module shape `shape` over its closure bindings, every slot

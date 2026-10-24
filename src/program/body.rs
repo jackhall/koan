@@ -351,10 +351,15 @@ fn ran<'graph, 'here, 'scratch>(
 }
 
 /// A frame's or a block's entry event: each parameter, or a quote's code's capture, a unit beneath
-/// its body waits on with the entry as its seam, which its arena node's facts and what its encloser decided leave unbound,
-/// bound to what its slot holds and decided in its activation over what its encloser decided
-/// ([`activated`](super::activation_store)). `activation` itself where it binds none; the message
-/// the cell faults with where the walk refuses.
+/// its body waits on with the entry as its seam, which its arena node's facts and what its
+/// encloser decided leave unbound, bound to what its slot holds and decided in its activation over
+/// what its encloser decided ([`activated`](super::activation_store)). `activation` itself where
+/// it binds none; the message the cell faults with where the walk refuses.
+///
+/// A call whose closure holds what its encloser decided, under a settlement of its own, decides
+/// even binding nothing: the settlement was walked without the encloser's names, and the layers
+/// without its keys, so each leaves open what the other binds. The walk wakes every unit whose
+/// record names a bound name, which is every unit one of them leaves open.
 fn decided_at_entry<'graph, 'here>(
     step: &Taking<'_, 'graph, '_, 'here, '_, '_>,
     types: &Chain<'_, 'here, '_, '_>,
@@ -367,7 +372,8 @@ fn decided_at_entry<'graph, 'here>(
     let segment = activation.segment();
     let shape = code.shape(segment);
     let waits = facts.entry_waits(shape);
-    if waits.is_empty() {
+    let rewakes = activation.view().closure().decided().is_some() && facts.top().is_some();
+    if waits.is_empty() && !rewakes {
         return Ok(activation);
     }
     let scratch = Bump::new();
@@ -397,11 +403,12 @@ fn decided_at_entry<'graph, 'here>(
                 .map(|bound| (unknown, bound)),
         );
     }
-    if own.is_empty() {
+    if own.is_empty() && !rewakes {
         return Ok(activation);
     }
     let writer = step.writer();
-    let decided = (program.activate())(program, writer, facts, types, below, &own, segment)?;
+    let activate = program.activate();
+    let decided = activate(program, writer, facts, types, below, &own, rewakes, segment)?;
     Ok(resident(
         writer,
         activation.deciding(resident(writer, decided)),
@@ -1296,7 +1303,7 @@ fn code_frame<'graph, 'here>(
         links.push(Link::Value(value));
     }
     // A quote's lexical chain of arena nodes is not placed, so its frame seeks from the root.
-    let closure = ClosureBindings::of(writer, &links, ArenaRef::ROOT);
+    let closure = ClosureBindings::of(writer, &links, ArenaRef::ROOT, None);
     Some(resident(
         writer,
         KActivation::of_code(writer, shape, &facts, closure, program.builtins()),
@@ -1669,8 +1676,17 @@ fn decided_at_seams<'graph, 'here>(
     }
     let (program, writer) = (runner.program, step.writer());
     let below = view.decided();
-    let decided = (program.activate())(program, writer, facts, types, below, &own, shape.segment())
-        .map_err(Stopped::Raised)?;
+    let decided = (program.activate())(
+        program,
+        writer,
+        facts,
+        types,
+        below,
+        &own,
+        false,
+        shape.segment(),
+    )
+    .map_err(Stopped::Raised)?;
     runner.activation = resident(
         writer,
         runner.activation.deciding(resident(writer, decided)),

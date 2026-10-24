@@ -20,9 +20,9 @@ use std::cell::Cell;
 
 use crate::elaborate::{bound_path, callable_type};
 use crate::memory::{BumpAllocator, BumpVec, Edge, KnotPlan, Writer, resident};
+use crate::scope::{Activated, StaticSolution, solutions};
 use crate::scope::{BodyRef, BodyShape, ClosureBindings, Registration, ShapeKind, Site, Written};
 use crate::scope::{Callable, FunctionGroupMap, ParameterBinding, Registered, ShapeGroupMap};
-use crate::scope::{StaticSolution, solutions};
 use crate::symbols::{BinderSymbol, TypeSymbol};
 use crate::type_lattice::{
     DeclaredType, KType, Parametric, instantiate_quantified, substitute_levels,
@@ -289,6 +289,8 @@ pub(super) struct Staged<'graph, 'cell, 'x> {
     /// retypes it: `ktype` is then the annotation's retype.
     pub declared: Option<DeclaredType<KType>>,
     pub captures: BumpVec<'x, Link<'cell, Knotted<'graph, 'cell>>>,
+    /// What the activation the function is born in had decided, which its closure keeps.
+    pub decided: Option<&'cell Activated<'cell>>,
 }
 
 impl<'graph, 'cell> Staged<'graph, 'cell, '_> {
@@ -304,7 +306,7 @@ impl<'graph, 'cell> Staged<'graph, 'cell, '_> {
         Option<&'cell Typing<'cell>>,
         Weight,
     ) {
-        let closure = ClosureBindings::of(writer, &self.captures, build);
+        let closure = ClosureBindings::of(writer, &self.captures, build, self.decided);
         let typing = Typing::laid_down(
             writer,
             self.quantifier_map,
@@ -372,6 +374,7 @@ pub(super) fn staged<'graph, 'cell, 'x>(
         instance,
         declared: None,
         captures,
+        decided: activation.view().decided(),
     })
 }
 
@@ -655,7 +658,12 @@ pub fn instance<'graph, 'cell>(
         Link::Value(value) => Link::Value(*value),
     }));
     // The same body over the same captures, so the same arena node.
-    let closure = ClosureBindings::of(writer, &links, function.closure().build());
+    let closure = ClosureBindings::of(
+        writer,
+        &links,
+        function.closure().build(),
+        function.closure().decided(),
+    );
     let map = function.quantifier_map();
     let typing = Typing::laid_down(writer, map, None, solution, None);
     let knot_weight = Weight::flat::<usize>()

@@ -1,7 +1,8 @@
 //! The **records copier**: a unit's record or a closing laid again through another layer, so it
 //! outlives the memory it was read from. A frame's activation walks at its step's borrow, over
 //! facts an arena node holds; what it decides is relaid into the frame's region, which no arena
-//! node outlives the type system's view of. Every slice and tree a record reaches is laid again, so
+//! node outlives the type system's view of; a closure holding those records lays them again into
+//! the region a copy of it lands in. Every slice and tree a record reaches is laid again, so
 //! nothing it holds points where it was read from; a frontier is laid flat, its unknowns past the
 //! cut of each read, less those the binding binds, which no later event of the frame rebinds.
 //!

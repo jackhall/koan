@@ -267,6 +267,7 @@ impl<'graph> Running<'graph> {
             types,
             None,
             own.entries(),
+            false,
             at,
         )?;
         Ok(Facts::of(load).activated(Some(resident(bump, decided))))

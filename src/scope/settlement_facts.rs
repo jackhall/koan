@@ -14,7 +14,7 @@
 //! The [records copier](super::relay) lays it in the frame's region, so it points at nothing an
 //! arena node holds; it binds only the names its event bound, and a read of any other falls below.
 
-use crate::memory::{BumpAllocator, BumpVec, Lays, resident};
+use crate::memory::{Bump, BumpAllocator, BumpVec, Lays, resident};
 
 use super::facts::{Binding, Bound, Unknown};
 use super::records::Records;
@@ -157,6 +157,41 @@ impl<'a> Activated<'a> {
             layer.records.each_type(each);
             at = layer.below;
         }
+    }
+
+    /// This event and every one below it laid again through `lay`: what a function value carries
+    /// out of the region its closure was born in, once the crossing has made every type they name
+    /// resolve there.
+    pub fn copied<'to, L: Lays<'to>>(&self, lay: L) -> &'to Activated<'to> {
+        let scratch = Bump::new();
+        let mut layers = BumpVec::new_in(&scratch);
+        let mut at = Some(self);
+        while let Some(layer) = at {
+            layers.push(layer);
+            at = layer.below;
+        }
+        // One copier for every layer: a frontier two layers share is laid once.
+        let mut relay = Relay::new(lay, &scratch, Binding::EMPTY);
+        let mut below = None;
+        for layer in layers.iter().rev() {
+            let records = layer.records.relaid(lay, &scratch, &mut relay);
+            below = Some(resident(lay, Activated { below, records }));
+        }
+        below.expect("an event is a layer")
+    }
+
+    /// What [`copied`](Self::copied) lays for this event and every one below it: each layer and
+    /// its records' tables, by entry. A record's own slices are not counted.
+    pub fn weight(&self) -> crate::values::Weight {
+        let mut weight = crate::values::Weight::flat::<()>();
+        let mut at = Some(self);
+        while let Some(layer) = at {
+            weight = weight
+                .plus(crate::values::Weight::flat::<Activated<'_>>())
+                .plus(layer.records.weight());
+            at = layer.below;
+        }
+        weight
     }
 
     /// The event below this one, if any.

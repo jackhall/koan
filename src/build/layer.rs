@@ -48,6 +48,21 @@ impl<'o, 'p, L: Lays<'o>, B: RecordSource<'o>> Layer<'o, 'p, L, B> {
         }
     }
 
+    /// A layer over `base` binding `binding`, as [`new`](Self::new), waking every record whose
+    /// frontier meets anything `binding` binds: one a base layered over another walked without
+    /// its names still names them.
+    pub(crate) fn waking_all(
+        lay: L,
+        scratch: BumpAllocator<'p>,
+        base: B,
+        binding: Binding<'o>,
+    ) -> Self {
+        Layer {
+            wakes: Wakes::new(binding, scratch),
+            ..Self::new(lay, scratch, base, binding)
+        }
+    }
+
     /// What this layer binds: its base's binding and more.
     #[cfg(test)]
     pub(crate) fn bound(&self) -> Binding<'o> {

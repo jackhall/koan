@@ -23,6 +23,7 @@ use crate::values::ContentDigest;
 
 use super::facts::{Address, Binding, Bound, Frontier, UnitId, Unknown};
 use super::keyed::Keyed;
+use super::relay::Relay;
 use super::settlement_facts::{Activated, Settlement};
 use super::shape::{
     BodyShape, Coordinate, Located, Position, Segment, ShapeError, Site, Slot, Target,
@@ -1206,6 +1207,62 @@ impl<'graph> Records<'graph> {
             trees: closed_trees(lay, scratch, computed),
             bodies: &[],
         }
+    }
+
+    /// These records, which lie over no base, laid again through `lay` by `relay`, their trees
+    /// gathered in `scratch`: what a copy of an activation into another region holds.
+    pub(super) fn relaid<'to, L: Lays<'to>>(
+        &self,
+        lay: L,
+        scratch: BumpAllocator<'_>,
+        relay: &mut Relay<'to, '_, '_, L>,
+    ) -> Records<'to> {
+        debug_assert!(self.base.is_none() && self.bodies.is_empty());
+        let mut units = BumpVec::with_capacity_in(self.units.len(), scratch);
+        for (unit, (facts, frontier)) in self.units.iter() {
+            let frontier = relay.frontier(*frontier);
+            units.push((*unit, (resident(lay, relay.unit(facts)), frontier)));
+        }
+        let mut closings = BumpVec::with_capacity_in(self.closings.len(), scratch);
+        for (body, (closing, frontier)) in self.closings.iter() {
+            let frontier = relay.frontier(*frontier);
+            closings.push((*body, (resident(lay, relay.closing(closing)), frontier)));
+        }
+        let mut bound = BumpVec::with_capacity_in(self.binding.entries().len(), scratch);
+        (bound).extend(
+            (self.binding.entries().iter()).map(|(unknown, at)| (*unknown, relay.bound(at))),
+        );
+        let units = Keyed::from_sorted(collect(lay, units.iter().copied()));
+        let computed = (units.iter())
+            .flat_map(|(_, (facts, _))| facts.typed.iter())
+            .flat_map(|(_, typed)| {
+                (typed.contents.iter().map(|(_, tree)| tree))
+                    .chain(typed.trees.iter().map(|(_, tree)| *tree))
+            });
+        Records {
+            base: None,
+            binding: Binding::laid(lay, &mut bound),
+            units,
+            closings: Keyed::from_sorted(collect(lay, closings.iter().copied())),
+            index: Keyed::from_sorted(collect(lay, self.index.iter().copied())),
+            trees: closed_trees(lay, scratch, computed),
+            bodies: &[],
+        }
+    }
+
+    /// What [`relaid`](Self::relaid) lays of these records' tables, by entry, each record once.
+    pub(super) fn weight(&self) -> crate::values::Weight {
+        use crate::values::Weight;
+        let units = Weight::run::<(UnitId, (&UnitFacts<'_>, Frontier<'_>))>(self.units.len())
+            .plus(Weight::run::<UnitFacts<'_>>(self.units.len()));
+        let closings = Weight::run::<(Segment, (&Closing<'_>, Frontier<'_>))>(self.closings.len())
+            .plus(Weight::run::<Closing<'_>>(self.closings.len()));
+        units
+            .plus(closings)
+            .plus(Weight::run::<(Unknown, Bound<'_>)>(
+                self.binding.entries().len(),
+            ))
+            .plus(Weight::run::<(Held, u32)>(self.index.len()))
     }
 
     /// No record, under `binding`.

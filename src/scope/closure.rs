@@ -6,20 +6,28 @@
 //! node. Birth is two steps: every
 //! source is read into scratch first, and only a finished read is laid down — so a closure binding
 //! is never a placeholder.
+//!
+//! A callable's closure also holds what the activation it was born in had **decided**
+//! ([build/README.md § Resumption](../build/README.md#resumption)): its encloser's walk decided the
+//! callable's units under the names bound before its birth, so a call of it reads those layers
+//! first. They lie in the region the closure does, and a copy of the closure into another region
+//! lays them again there, its types made to resolve by the crossing beforehand.
 
 use crate::memory::{BumpAllocator, BumpVec, Edge, Writer, collect, resident};
 use crate::values::{ArenaRef, Knotted, KnottedFamily, Link, Value, Weight};
 
 use super::activation::Reading;
+use super::settlement_facts::Activated;
 use super::shape::{BodyShape, CaptureSlot, CaptureSource};
 
 /// A callable's closure bindings, in capture-slot order, beside the arena node the callable was
-/// born under: where a call of it looks up its settlement. The arena node is not content, so
-/// the closure's digest and equality read the slots alone.
+/// born under, where a call of it looks up its settlement, and what the activation it was born in
+/// had decided. Neither is content, so the closure's digest and equality read the slots alone.
 #[derive(Clone, Copy)]
 pub struct ClosureBindings<'cell, X = crate::values::Nothing> {
     slots: &'cell [Link<'cell, X>],
     build: ArenaRef,
+    decided: Option<&'cell Activated<'cell>>,
 }
 
 impl<'graph, 'cell, X: Knotted> ClosureBindings<'cell, X> {
@@ -28,6 +36,7 @@ impl<'graph, 'cell, X: Knotted> ClosureBindings<'cell, X> {
         &ClosureBindings {
             slots: &[],
             build: ArenaRef::ROOT,
+            decided: None,
         }
     }
 
@@ -59,19 +68,33 @@ impl<'graph, 'cell, X: Knotted> ClosureBindings<'cell, X> {
         read
     }
 
-    /// A finished read laid down in `writer`'s region, born under the arena node `build`.
+    /// A finished read laid down in `writer`'s region, born under the arena node `build` in an
+    /// activation that had `decided` what it had.
     pub fn of(
         writer: Writer<'cell, '_>,
         captures: &[Link<'cell, X>],
         build: ArenaRef,
+        decided: Option<&'cell Activated<'cell>>,
     ) -> &'cell ClosureBindings<'cell, X> {
         let slots = collect(writer, captures.iter().copied());
-        resident(writer, ClosureBindings { slots, build })
+        resident(
+            writer,
+            ClosureBindings {
+                slots,
+                build,
+                decided,
+            },
+        )
     }
 
     /// The arena node the callable was born under.
     pub fn build(&self) -> ArenaRef {
         self.build
+    }
+
+    /// What the activation the callable was born in had decided.
+    pub fn decided(&self) -> Option<&'cell Activated<'cell>> {
+        self.decided
     }
 
     /// Every value these bindings hold, in the order [`copied`](Self::copied) asks for them.
@@ -84,7 +107,8 @@ impl<'graph, 'cell, X: Knotted> ClosureBindings<'cell, X> {
     }
 
     /// These bindings rebuilt in `writer`'s region: each value through `copy`, each edge verbatim —
-    /// an edge names a node by index, so it means the same in a copy of its knot.
+    /// an edge names a node by index, so it means the same in a copy of its knot — and what was
+    /// decided laid again.
     pub fn copied<'to, Y: Knotted>(
         &self,
         writer: Writer<'to, '_>,
@@ -97,16 +121,20 @@ impl<'graph, 'cell, X: Knotted> ClosureBindings<'cell, X> {
             ClosureBindings {
                 slots,
                 build: self.build,
+                decided: self.decided.map(|decided| decided.copied(writer)),
             },
         )
     }
 
-    /// What [`copied`](Self::copied) writes: the resident run header, every binding's word, and
-    /// what each captured value points at.
+    /// What [`copied`](Self::copied) writes: the resident run header, every binding's word, what
+    /// each captured value points at, and the decided layers' records.
     pub fn weight(&self) -> Weight {
+        let decided = self
+            .decided
+            .map_or(Weight::flat::<()>(), |decided| decided.weight());
         self.slots
             .iter()
-            .fold(Weight::flat::<Self>(), |weight, link| {
+            .fold(Weight::flat::<Self>().plus(decided), |weight, link| {
                 weight.plus(link.weight())
             })
     }

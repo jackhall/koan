@@ -362,3 +362,122 @@ fn an_eval_whose_registrations_wait_on_a_dollar_name_checks_their_overlap_in_its
         "{fault}"
     );
 }
+
+/// The segment and site of the `PICK r.zero` the callable `g` is, and whether the load selected it.
+fn gs_pick(source: &str) -> (Segment, Site, bool) {
+    loaded(&super::caching::program(2, source), |program| {
+        let g = callable(program, &["u"]);
+        let statement = &g.body()[0];
+        let site = g.site_of_node(statement);
+        let narrowing = program.facts().use_statics(g, site).narrowing;
+        (
+            g.segment(),
+            site,
+            matches!(narrowing, Narrowing::Selected(_)),
+        )
+    })
+}
+
+#[test]
+fn a_callable_reads_its_enclosers_statement_decisions() {
+    // `USE`'s statement binding `r` decides `g`'s `PICK r.zero`, since its walk descends into the
+    // callables born under it; a call of `g` reads that decision through its closure.
+    let make = MAKE.lines().take(4).collect::<Vec<_>>().join("\n");
+    let source = format!(
+        "{make}\nEXPR #(USE n :Number) -> Any = #(\n  LET r = (MAKE ints chain)\n  \
+         LET g = (FN :{{u :Number}} -> Any = #(PICK r.zero))\n  (g {{u = 1}})\n)\n\
+         PRINT (USE 1)\n"
+    );
+    let (segment, site, selected) = gs_pick(&source);
+    assert!(!selected, "the load selects nothing at `PICK r.zero`");
+    let (ran, decided, chosen) = ran_choosing(&source);
+    assert_eq!(ran.printed, "n");
+    assert_eq!(
+        decided, 1,
+        "`r`'s statement decides, and `g`'s call nothing"
+    );
+    assert!(chosen.contains(&(segment, site)), "{chosen:?}");
+}
+
+#[test]
+fn an_escaping_callable_keeps_its_enclosers_decisions() {
+    // `g` leaves `MAKE_G`'s frame as its result, its closure copied out with what `r`'s statement
+    // decided: a call of it after that frame ends reads the copy.
+    let make = MAKE.lines().take(4).collect::<Vec<_>>().join("\n");
+    let source = format!(
+        "{make}\nEXPR #(MAKE_G n :Number) -> Any = #(\n  LET r = (MAKE ints chain)\n  \
+         (FN :{{u :Number}} -> Any = #(PICK r.zero))\n)\n\
+         LET g = (MAKE_G 1)\nPRINT (g {{u = 1}})\n"
+    );
+    let (segment, site, selected) = gs_pick(&source);
+    assert!(!selected, "the load selects nothing at `PICK r.zero`");
+    let (ran, decided, chosen) = ran_choosing(&source);
+    assert_eq!(ran.printed, "n");
+    assert_eq!(
+        decided, 1,
+        "`r`'s statement decides, and `g`'s call nothing"
+    );
+    assert!(chosen.contains(&(segment, site)), "{chosen:?}");
+}
+
+/// `BOTH`, whose overloads tell a pair of numbers from a pair holding a string.
+const BOTH: &str = "EXPR #(BOTH x :Number AND y :Number) -> Str = #(\"nn\")\n\
+                    EXPR #(BOTH x :Any AND y :Str) -> Number = #(1)\n";
+
+/// The segment and site of `g`'s last statement, a call, and whether the load selected it.
+fn gs_last(source: &str, names: &[&str]) -> (Segment, Site, bool) {
+    loaded(&super::caching::program(2, source), |program| {
+        let g = callable(program, names);
+        let statement = g.body().last().expect("`g` has a statement");
+        let site = g.site_of_node(statement);
+        let narrowing = program.facts().use_statics(g, site).narrowing;
+        (
+            g.segment(),
+            site,
+            matches!(narrowing, Narrowing::Selected(_)),
+        )
+    })
+}
+
+#[test]
+fn a_callable_bound_to_run_content_decides_over_its_enclosers_decisions() {
+    // `g`'s `p` is bound to `h`, a module built over `n` at run, and its call reads `r` too: its
+    // entry decides over what `r`'s statement decided, standing `USE`'s units without waking one.
+    let make = MAKE.lines().take(2).collect::<Vec<_>>().join("\n");
+    let source = format!(
+        "{make}\n{BOTH}EXPR #(USE n :Number) -> Any = #(\n  LET r = (MAKE ints chain)\n  \
+         MODULE h OVER #[n] = ((LET zero = n) \
+         (LET succ = (FN :{{x :Number}} -> Number = #(x))))\n  \
+         LET g = (FN :{{p :Counter}} -> Any = #(BOTH r.zero AND p.zero))\n  (g {{p = h}})\n)\n\
+         PRINT (USE 1)\n"
+    );
+    let (segment, site, selected) = gs_last(&source, &["p"]);
+    assert!(
+        !selected,
+        "the load selects nothing at `BOTH r.zero AND p.zero`"
+    );
+    let (ran, decided, chosen) = ran_choosing(&source);
+    assert_eq!(ran.printed, "nn");
+    assert_eq!(decided, 2, "`r`'s statement, then `g`'s entry");
+    assert!(chosen.contains(&(segment, site)), "{chosen:?}");
+}
+
+#[test]
+fn a_captured_layer_over_a_keyed_settlement_wakes_its_units() {
+    // `g` keys a settlement on `k`, load content, which leaves `r` open; what `r`'s statement
+    // decided leaves `k` open. The call wakes the units both leave open, and decides them.
+    let make = MAKE.lines().take(2).collect::<Vec<_>>().join("\n");
+    let source = format!(
+        "{make}\n{BOTH}EXPR #(USE n :Number) -> Any = #(\n  LET r = (MAKE ints chain)\n  \
+         LET g = (FN :{{k :Counter}} -> Any = #(BOTH r.zero AND k.zero))\n  (g {{k = ints}})\n)\n\
+         PRINT (USE 1)\n"
+    );
+    let (segment, site, selected) = gs_last(&source, &["k"]);
+    assert!(
+        !selected,
+        "the load selects nothing at `BOTH r.zero AND k.zero`"
+    );
+    let (ran, _, chosen) = ran_choosing(&source);
+    assert_eq!(ran.printed, "nn");
+    assert!(chosen.contains(&(segment, site)), "{chosen:?}");
+}
