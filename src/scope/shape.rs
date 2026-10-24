@@ -735,6 +735,11 @@ impl<'graph> BodyShape<'graph> {
         &self.sites
     }
 
+    /// What `site` names: a part, or a whole node.
+    pub fn located(&self, site: Site) -> Located<'graph> {
+        self.sites.located(site)
+    }
+
     /// The site of `part`, which this body's statements hold.
     pub fn site(&self, part: &ExpressionPart<'_>) -> Site {
         self.sites.site(part)

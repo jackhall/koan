@@ -14,8 +14,8 @@ mod projections;
 use crate::memory::{Bump, BumpAllocator, ProgramBrand, Writer, program_storage, resident};
 use crate::parse::{KExpression, parse};
 use crate::scope::{
-    Activation, BodyShape, Builtins, ClosureBindings, Coordinate, LoadFacts, Registration, Slot,
-    Target, Which,
+    Activation, BodyShape, Builtins, ClosureBindings, Code, Coordinate, Facts, LoadFacts, Reading,
+    Registration, Slot, Target, Which,
 };
 use crate::symbols::{BinderSymbol, SymbolInterner, TypeSymbol};
 use crate::type_lattice::KType;
@@ -49,6 +49,8 @@ pub(super) struct Program<'p, 'graph, 'cell> {
     pub scratch: BumpAllocator<'p>,
     pub lines: &'p [KExpression<'graph>],
     pub activation: &'cell Activation<'graph, 'cell>,
+    /// The activation read through the load's door.
+    pub reading: Reading<'graph, 'graph, 'cell>,
     pub writer: Writer<'cell, 'p>,
 }
 
@@ -61,7 +63,7 @@ impl<'p, 'graph, 'cell> Program<'p, 'graph, 'cell> {
     /// slot as a type value. The first refusal comes back whole, having bound nothing of its own
     /// component.
     pub fn declare(&self) -> Result<(), Elaboration> {
-        let shape = self.activation.shape();
+        let shape = self.reading.shape();
         for component in shape.components() {
             let types_only = component
                 .members
@@ -70,7 +72,7 @@ impl<'p, 'graph, 'cell> Program<'p, 'graph, 'cell> {
             if !types_only {
                 continue;
             }
-            let handles = type_declarations(component, self.activation, self.types, self.scratch)?;
+            let handles = type_declarations(component, &self.reading, self.types, self.scratch)?;
             for (slot, handle) in component.members.iter().zip(handles) {
                 let value = Value::Type(TypeValue::new(self.writer, *handle, self.types));
                 self.activation
@@ -85,7 +87,7 @@ impl<'p, 'graph, 'cell> Program<'p, 'graph, 'cell> {
     pub fn bound(&self, name: &str) -> KType {
         let name = BinderSymbol::Type(self.type_name(name));
         let (slot, _) = self
-            .activation
+            .reading
             .shape()
             .slot(name)
             .expect("a declared type binder");
@@ -100,7 +102,7 @@ impl<'p, 'graph, 'cell> Program<'p, 'graph, 'cell> {
     pub fn unbound(&self, name: &str) -> bool {
         let name = BinderSymbol::Type(self.type_name(name));
         let (slot, _) = self
-            .activation
+            .reading
             .shape()
             .slot(name)
             .expect("a declared type binder");
@@ -117,7 +119,7 @@ impl<'p, 'graph, 'cell> Program<'p, 'graph, 'cell> {
             Activation::of_module(
                 self.writer,
                 body,
-                self.activation.load(),
+                self.reading.facts(),
                 ClosureBindings::empty(),
                 self.activation.builtins(),
             ),
@@ -127,19 +129,16 @@ impl<'p, 'graph, 'cell> Program<'p, 'graph, 'cell> {
     /// Bind `name`'s slot in `body` to `value`.
     pub fn bind_member(&self, body: &Activation<'graph, 'cell>, name: &str, value: Value<'cell>) {
         let name = BinderSymbol::classify(name).expect("a binder name");
-        let (slot, _) = body.shape().slot(name).expect("a declared binder");
+        let shape = self.reading.beside(body.view()).shape();
+        let (slot, _) = shape.slot(name).expect("a declared binder");
         body.bind(slot, value).expect("an empty slot binds");
     }
 
     /// The body shape the binder `name` births.
     pub fn birth(&self, name: &str) -> &'graph BodyShape<'graph> {
         let name = BinderSymbol::classify(name).expect("a binder name");
-        let (slot, _) = self
-            .activation
-            .shape()
-            .slot(name)
-            .expect("a declared binder");
-        self.activation
+        let (slot, _) = self.reading.shape().slot(name).expect("a declared binder");
+        self.reading
             .shape()
             .births(slot)
             .expect("the binder births a body")
@@ -147,7 +146,7 @@ impl<'p, 'graph, 'cell> Program<'p, 'graph, 'cell> {
 
     /// The registration `body` is born for — a `UNARY OP`'s keyword-first one of its two.
     pub fn registration(&self, body: &BodyShape<'graph>) -> &'graph Registration<'graph> {
-        let shape = self.activation.shape();
+        let shape = self.reading.shape();
         shape
             .registrations()
             .iter()
@@ -165,13 +164,7 @@ impl<'p, 'graph, 'cell> Program<'p, 'graph, 'cell> {
         let body = self.birth(name);
         let form = body.form().expect("a callable body sits in a form");
         let registration = registered.then(|| self.registration(body));
-        callable_type(
-            form,
-            self.activation,
-            self.types,
-            self.scratch,
-            registration,
-        )
+        callable_type(form, &self.reading, self.types, self.scratch, registration)
     }
 }
 
@@ -227,7 +220,7 @@ pub(super) fn with_program<R>(
     let load = resident(writer, LoadFacts::unwalked(writer, shapes));
     let activation: &Activation = resident(
         writer,
-        Activation::of_program(writer, shape, load, builtins),
+        Activation::of_program(writer, shape, &Facts::of(load), builtins),
     );
     for slot in 0..shape.slots() {
         let slot = Slot(slot as u32);
@@ -244,6 +237,9 @@ pub(super) fn with_program<R>(
         // them rewritten, and every site it records names a part inside them.
         lines: shape.body(),
         activation,
+        reading: activation
+            .view()
+            .reading(&Code::of(shapes), Facts::of(load)),
         writer,
     })
 }

@@ -24,7 +24,8 @@
 //! edge to a sibling by its index, beside its index there — so values that reach one another
 //! digest as one knot. A member lists the values its knot holds and hashes the knot over their
 //! digests; `values` walks them on its own stack, so a chain of knots never nests a call per knot.
-//! A function compares by its shape's address — one per `FN` written, so a copy keeps it — and its
+//! A function compares by its body's base and segment — one per `FN` written, so a copy keeps it —
+//! and its
 //! captures, a builtin by its record's address, a quote by its code and bindings, and a module or a
 //! barrier is
 //! [`Incomparable`](crate::values::Incomparable).
@@ -66,13 +67,13 @@ use std::fmt;
 use crate::memory::{BumpAllocator, DropFree, Edge, Knot, Member, Writer, covariant, reattachable};
 use crate::parse::ExpressionPart;
 use crate::scope::Elaboration;
-use crate::scope::{Activation, ActivationView, Body, Builtins, Site};
+use crate::scope::{Activation, ActivationView, BodyRef, Builtins, Reading, Site};
 use crate::symbols::{BinderSymbol, SymbolInterner};
 use crate::type_lattice::{DeclaredType, KType, display_name};
 use crate::values::digest::{DigestHasher, Tag};
 use crate::values::{
-    self, Chain, Circular, ConstructionRefused, ContentDigest, KeyRejected, MemoBits, Resolved,
-    Seen, Value, ValueCarrier, ValueFamily, Weight,
+    self, Chain, Circular, ConstructionRefused, ContentDigest, FunctionIdentity, KeyRejected,
+    MemoBits, Resolved, Seen, Value, ValueCarrier, ValueFamily, Weight,
 };
 
 /// The payload of a knot node.
@@ -115,7 +116,7 @@ fn stamped<'graph, 'cell>(
 /// builder capture its code digest does not name — every one but a read of the program's top level
 /// — and each type capture the body's contract names. What a closure's or a module's content
 /// composes over its code.
-fn composed<'l, L>(body: &Body<'_>, links: &'l [L]) -> impl Iterator<Item = (usize, &'l L)> {
+fn composed<'l, L>(body: &BodyRef<'_>, links: &'l [L]) -> impl Iterator<Item = (usize, &'l L)> {
     let body = *body;
     links
         .iter()
@@ -130,7 +131,7 @@ pub struct Knotted<'graph, 'cell>(Member<'cell, Node<'graph, 'cell>>);
 
 const _: () = assert!(size_of::<Knotted<'static, 'static>>() == 16);
 const _: () = assert!(size_of::<KValue<'static, 'static>>() == 24);
-const _: () = assert!(size_of::<KActivation<'static, 'static>>() == 104);
+const _: () = assert!(size_of::<KActivation<'static, 'static>>() == 96);
 /// The module arm sets the node's width; a barrier's six fields would widen every node in the
 /// program, so [`Node::Coerced`] points at them instead.
 const _: () = assert!(size_of::<Node<'static, 'static>>() == 64);
@@ -363,16 +364,19 @@ impl values::Knotted for Knotted<'_, '_> {
         Self: 'a,
     {
         match self.node() {
-            // One shape per function written, so its address is the function's identity.
+            // One body per function written, so its base and segment are the function's identity.
             Node::Function(function) => Resolved::Function {
-                identity: std::ptr::from_ref(function.shape()).addr(),
+                identity: FunctionIdentity::Body(
+                    function.body().base,
+                    function.body().segment.index(),
+                ),
                 instance: function.instance().unwrap_or(&[]),
                 closure: function.closure().links(),
                 composes: function.body().composes,
             },
             // One record per overload, so its address is the builtin's identity.
             Node::Builtin(builtin) => Resolved::Function {
-                identity: std::ptr::from_ref(*builtin).addr(),
+                identity: FunctionIdentity::Builtin(std::ptr::from_ref(*builtin).addr()),
                 instance: &[],
                 closure: &[],
                 composes: &[],
@@ -419,7 +423,7 @@ pub enum Supplied<'graph, 'cell> {
 /// What a tie's caller answers a part only it can evaluate with, asked by site with the part itself
 /// — or `None` for a module body, which the caller runs.
 pub type Eager<'e, 'graph, 'cell> =
-    dyn FnMut(Site, Option<&'graph ExpressionPart<'graph>>) -> Option<Supplied<'graph, 'cell>> + 'e;
+    dyn FnMut(Site, Option<&ExpressionPart<'_>>) -> Option<Supplied<'graph, 'cell>> + 'e;
 
 /// Why a birth refused: a component [`tie`] could not tie, or a lambda [`lambda`] could not birth.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -584,6 +588,11 @@ pub type KActivation<'graph, 'cell> = Activation<'graph, 'cell, KnottedFamily>;
 /// default names would not be.
 pub type KActivationView<'graph, 'cell> =
     ActivationView<'graph, 'cell, KnottedFamily, Knotted<'graph, 'cell>>;
+
+/// A [`KActivationView`] beside what a step reads it through. The member is spelled out as the
+/// view's is.
+pub type KReading<'step, 'graph, 'cell> =
+    Reading<'step, 'graph, 'cell, KnottedFamily, Knotted<'graph, 'cell>>;
 
 /// A builtin table whose values may hold functions.
 pub type KBuiltins<'graph, 'cell> = Builtins<'cell, Knotted<'graph, 'cell>>;

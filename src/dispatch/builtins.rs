@@ -266,8 +266,8 @@ pub(super) fn table<'graph>(
 /// `at`, building in `writer`'s region and taking transients from `scratch`.
 pub(super) fn run<'graph, 'here>(
     native: Native,
-    at: &Evaluation<'graph, 'here, '_, '_, '_>,
-    node: &'graph KExpression<'graph>,
+    at: &Evaluation<'_, 'graph, 'here, '_, '_, '_>,
+    node: &KExpression<'_>,
     writer: Writer<'here, '_>,
     operands: &[Operand<'graph, 'here>],
     scratch: &Bump,
@@ -360,7 +360,7 @@ pub(super) fn run<'graph, 'here>(
             // is at a call's head.
             match at
                 .view
-                .load()
+                .facts()
                 .instance_at(at.view.shape(), at.view.shape().site_of_node(node))
             {
                 Some(InstanceRead::AsIs) => member,
@@ -449,7 +449,15 @@ pub(super) fn run<'graph, 'here>(
         }
         Native::Using => {
             let code = value(0).as_code().expect("a `Code` slot admits code alone");
-            match using(writer, at.view.load(), code, value(1), types, scratch) {
+            match using(
+                writer,
+                &at.code,
+                at.view.facts(),
+                code,
+                value(1),
+                types,
+                scratch,
+            ) {
                 Ok(filled) => Value::Knotted(filled),
                 Err(UsingRefused::Ranking { key }) => raise(Raised::RankedTwice { key }),
             }

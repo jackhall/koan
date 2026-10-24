@@ -15,6 +15,7 @@ use crate::build::key_of;
 use crate::knot::{Function, KValue, Knotted};
 use crate::memory::{Bump, BumpVec};
 use crate::scheduler::Seek;
+use crate::scope::{Code, Facts};
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::KType;
 use crate::values::digest::type_digest;
@@ -39,6 +40,8 @@ pub fn called_function<'graph, 'cell>(
 /// solved.
 pub fn seek<'graph>(
     birth: &KBirth<'graph, '_>,
+    code: &Code<'_>,
+    facts: &Facts<'_>,
     types: &Chain<'_, '_, '_, '_>,
     region: &Chain<'_, '_, '_, '_>,
 ) -> Seek<'graph> {
@@ -50,7 +53,7 @@ pub fn seek<'graph>(
     };
     Seek {
         parent,
-        settlement: settlement(birth, types, region),
+        settlement: settlement(birth, code, facts, types, region),
     }
 }
 
@@ -59,6 +62,8 @@ pub fn seek<'graph>(
 /// settlement, and a call whose content at a keyed name the asker cannot read.
 fn settlement<'graph>(
     birth: &KBirth<'graph, '_>,
+    code: &Code<'_>,
+    facts: &Facts<'_>,
     types: &Chain<'_, '_, '_, '_>,
     region: &Chain<'_, '_, '_, '_>,
 ) -> Option<(crate::values::SettlementKey, BindingImage<'graph>)> {
@@ -75,8 +80,8 @@ fn settlement<'graph>(
     };
     let (callee, arguments) = (*callee, *arguments);
     let function = called_function(callee)?;
-    let shape = function.shape();
-    let keyed = program.facts().settlement_keys(shape)?;
+    let shape = code.shape(function.body().segment);
+    let keyed = facts.settlement_keys(shape)?;
     let scratch = Bump::new();
     // The call's solution of its group, solved at most once and only for a keyed `FOR ALL` name:
     // `None` past a header or a barrier, whose frame solves after retyping or crossing.

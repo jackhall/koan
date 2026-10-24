@@ -10,9 +10,11 @@
 //! it, and lays the registrations after them in slot order. Nothing assumes the body's slot order.
 
 use crate::elaborate::{member_count, schema_member, schema_of, self_signature};
-use crate::knot::{Eager, KActivation, KActivationView, Knotted, Node, Supplied, Untieable};
+use crate::knot::{Eager, KActivation, KReading, Knotted, Node, Supplied, Untieable};
 use crate::memory::{BumpAllocator, BumpVec, Knot, Writer};
-use crate::scope::{Activation, ClosureBindings, Component, Coordinate, ShapeKind, Slot, Target};
+use crate::scope::{
+    Activation, ClosureBindings, Component, Coordinate, ShapeKind, Slot, Target, Written,
+};
 use crate::symbols::BinderSymbol;
 use crate::values::{ArenaRef, Chain};
 
@@ -23,7 +25,7 @@ use super::{Born, Module};
 /// activation.
 pub fn body_activation<'graph, 'cell>(
     writer: Writer<'cell, '_>,
-    enclosing: &KActivationView<'graph, 'cell>,
+    enclosing: &KReading<'_, 'graph, 'cell>,
     slot: Slot,
     scratch: BumpAllocator<'_>,
 ) -> KActivation<'graph, 'cell> {
@@ -41,7 +43,7 @@ pub fn body_activation<'graph, 'cell>(
     Activation::of_module(
         writer,
         body,
-        enclosing.load(),
+        enclosing.facts(),
         closure,
         enclosing.builtins(),
     )
@@ -51,11 +53,13 @@ pub fn body_activation<'graph, 'cell>(
 /// the module's signature places its name.
 ///
 /// A module is alone in its component and shares nothing with the staging the
-/// [tie](crate::knot::tie()) does for the other member kinds, so it ties on its own path.
+/// [tie](crate::knot::tie()) does for the other member kinds, so it ties on its own path. The
+/// module keeps its body's record as `written` holds it.
 pub fn tie_member<'graph, 'cell, 'x>(
     writer: Writer<'cell, '_>,
-    activation: &KActivationView<'graph, 'cell>,
-    component: &Component<'graph>,
+    activation: &KReading<'_, 'graph, 'cell>,
+    written: Written<'graph>,
+    component: &Component<'_>,
     types: &Chain<'_, 'cell, '_, '_>,
     scratch: BumpAllocator<'x>,
     eager: &mut Eager<'_, 'graph, 'cell>,
@@ -70,7 +74,7 @@ pub fn tie_member<'graph, 'cell, 'x>(
         .birth_site(*slot)
         .expect("a module binder's body sits at a site of its own");
     let body = match eager(site, None) {
-        Some(Supplied::Body(body)) => body,
+        Some(Supplied::Body(body)) => activation.beside(body.view()),
         Some(Supplied::Value(_)) => unreachable!("a module member is asked for its run body"),
         None => return Err(Untieable::Eager { name, site }),
     };
@@ -91,7 +95,7 @@ pub fn tie_member<'graph, 'cell, 'x>(
             .expect("a registration binds the function born for it");
         keyworded.push(member);
     }
-    let ktype = self_signature(body, &keyworded, types, scratch);
+    let ktype = self_signature(&body, &keyworded, types, scratch);
     // The signature places each named slot by its name; the registrations follow in slot order.
     let schema = schema_of(ktype, types).expect("a module's type is its signature");
     let mut placed = BumpVec::with_capacity_in(member_count(&schema, scratch), scratch);
@@ -116,7 +120,7 @@ pub fn tie_member<'graph, 'cell, 'x>(
     // A body-born module is its code over what it captures, digested where a demand first
     // reaches it: the module keeps its body's closure until then.
     let born = Born::Body {
-        body: body.load().body(body.shape()),
+        body: written.body(body.segment()),
         closure: body.closure(),
     };
     Ok(Module::tie(writer, ktype, &members, born, types))

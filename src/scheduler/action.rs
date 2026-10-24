@@ -28,7 +28,7 @@ use crate::scheduler::continuation::{
 };
 use crate::scheduler::delivery::KDelivery;
 use crate::scheduler::seek::{Lending, Seek};
-use crate::scope::RegionHeader;
+use crate::scope::{Code, Facts, LoadFacts, RegionHeader};
 use crate::type_lattice::Halves;
 use crate::values::{ArenaRef, Chain, Half, TypeTiers, Types};
 
@@ -201,6 +201,8 @@ pub struct Step<
     context: &'a mut Context<'graph, 'step, 'here, 'scratch, 'lent, B>,
     /// The type tiers of the graph this step runs over, which every chain it builds reads first.
     tiers: TypeTiers<'graph>,
+    /// The load's facts, beneath every layer the cell's door reads.
+    facts: &'graph LoadFacts<'graph>,
     provenance: &'a Provenance,
     /// The arena node the cell runs under, which a park hands its successor.
     arena: ArenaRef,
@@ -242,9 +244,11 @@ where
     /// The step the drain hands a cell's continuation, over its graph's type tiers, the provenance
     /// and arena node it read off that same continuation, the buffer it cleared for this step, and
     /// both slots the cell parked in.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn new(
         context: &'a mut Context<'graph, 'step, 'here, 'scratch, 'lent, B>,
         tiers: TypeTiers<'graph>,
+        facts: &'graph LoadFacts<'graph>,
         provenance: &'a Provenance,
         arena: ArenaRef,
         spawns: &'a mut Spawns<'graph, B>,
@@ -254,6 +258,7 @@ where
         Step {
             context,
             tiers,
+            facts,
             provenance,
             arena,
             spawns,
@@ -283,6 +288,7 @@ where
         let Step {
             context,
             tiers,
+            facts,
             provenance,
             arena,
             spawns,
@@ -292,6 +298,7 @@ where
         let step = Step {
             context,
             tiers,
+            facts,
             provenance,
             arena,
             spawns,
@@ -322,6 +329,7 @@ where
         let Step {
             context,
             tiers,
+            facts,
             provenance,
             arena,
             spawns,
@@ -331,6 +339,7 @@ where
         let step = Step {
             context,
             tiers,
+            facts,
             provenance,
             arena,
             spawns,
@@ -402,6 +411,27 @@ where
     #[cfg(test)]
     pub(crate) fn tiers(&self) -> TypeTiers<'graph> {
         self.tiers
+    }
+
+    /// What this step reads shapes and facts through, at the step's own lifetime: the code and
+    /// the facts of the base the cell's chain rests on, beneath the cell's layers. Neither can be
+    /// kept past the step, so what a cell parks names a segment, a site or a digest instead.
+    ///
+    /// ```compile_fail
+    /// use koan::memory::resident;
+    /// use koan::program::KBundle;
+    /// use koan::scheduler::{Action, Step};
+    /// use koan::scope::Facts;
+    ///
+    /// fn keep<'graph, 'here>(
+    ///     step: Step<'_, 'graph, '_, 'here, '_, '_, KBundle>,
+    /// ) -> &'here Facts<'here> {
+    ///     let (_, facts) = step.door();
+    ///     resident(step.writer(), facts)
+    /// }
+    /// ```
+    pub fn door(&self) -> (Code<'step>, Facts<'step>) {
+        (Code::of(self.facts.shapes()), Facts::of(self.facts))
     }
 
     /// Whether this cell runs under a settlement: a call's frame the drain found or built one

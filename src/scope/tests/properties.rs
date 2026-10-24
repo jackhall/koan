@@ -12,9 +12,9 @@ use crate::memory::{BumpAllocator, KnotPlan, Writer, resident};
 use crate::parse::{ExpressionPart, KExpression};
 use crate::scope::{
     Activation, Address, Binder, BodyShape, Builtins, Candidate, CaptureSlot, CaptureSource,
-    ClosureBindings, Coordinate, Lands as ScopeLands, LoadFacts, MentionClass, PathId, Position,
-    Root, Segment, ShapeError, ShapeKind, Shapes, Site, Slot, Target, UnitIndex, UnitWork, Unknown,
-    each_part, part_of,
+    ClosureBindings, Code, Coordinate, Facts, Lands as ScopeLands, LoadFacts, MentionClass, PathId,
+    Position, Root, Segment, ShapeError, ShapeKind, Shapes, Site, Slot, Target, UnitIndex,
+    UnitWork, Unknown, each_part, part_of,
 };
 use crate::source::SourceRef;
 use crate::symbols::{BinderSymbol, SymbolInterner, TypeSymbol, ValueSymbol};
@@ -625,13 +625,14 @@ fn activate<'g, 'c>(
     writer: Writer<'c, '_>,
     scratch: BumpAllocator<'_>,
     table: &'c Builtins<'c, Probe>,
-    activation: Activation<'g, 'c, ProbeFamily>,
+    (activation, facts): (Activation<'g, 'c, ProbeFamily>, Facts<'g>),
     chain: &mut Vec<&'g BodyShape<'g>>,
     next: &mut f64,
 ) {
     let plan = KnotPlan::new(64);
     let activation = resident(writer, activation);
-    let shape = activation.shape();
+    let code = Code::of(facts.shapes());
+    let shape = code.shape(activation.segment());
     chain.push(shape);
     for slot in 0..shape.slots() {
         activation
@@ -694,15 +695,18 @@ fn activate<'g, 'c>(
                 writer,
                 scratch,
                 table,
-                Activation::of_block(writer, nested, activation),
+                (
+                    Activation::of_block(writer, nested, &facts, activation),
+                    facts,
+                ),
                 chain,
                 next,
             ),
             ShapeKind::Callable => {
-                let captures =
-                    ClosureBindings::read_captures(nested, activation, scratch, |index| {
-                        plan.edge(index).unwrap()
-                    });
+                let reading = activation.view().reading(&code, facts);
+                let captures = ClosureBindings::read_captures(nested, &reading, scratch, |index| {
+                    plan.edge(index).unwrap()
+                });
                 let bindings =
                     ClosureBindings::of(writer, &captures, crate::values::ArenaRef::ROOT);
                 // A captured value is the enclosing binding's word — the sibling a capture of the
@@ -724,13 +728,16 @@ fn activate<'g, 'c>(
                     writer,
                     scratch,
                     table,
-                    Activation::of_callable(
-                        writer,
-                        nested,
-                        activation.load(),
-                        Probe(u32::MAX),
-                        bindings,
-                        table,
+                    (
+                        Activation::of_callable(
+                            writer,
+                            nested,
+                            &facts,
+                            Probe(u32::MAX),
+                            bindings,
+                            table,
+                        ),
+                        facts,
                     ),
                     chain,
                     next,
@@ -874,10 +881,12 @@ proptest! {
     fn activations_read_what_their_coordinates_name(choices in plan::choices()) {
         let program = Generator::new(&choices).program();
         shaped_plan(&program, |shaped| {
+            let facts = Facts::of(shaped.load);
             let activation: Activation<'_, '_, ProbeFamily> =
-                Activation::of_program(shaped.writer, shaped.shape, shaped.load, shaped.table);
+                Activation::of_program(shaped.writer, shaped.shape, &facts, shaped.table);
             let mut chain = Vec::new();
-            activate(shaped.writer, shaped.scratch, shaped.table, activation, &mut chain, &mut 1.0);
+            let activated = (activation, facts);
+            activate(shaped.writer, shaped.scratch, shaped.table, activated, &mut chain, &mut 1.0);
         });
     }
 }

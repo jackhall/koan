@@ -53,7 +53,7 @@ pub use birth::{body_activation, tie_member};
 use std::cell::Cell;
 
 use crate::memory::{Knot, KnotPlan, Writer, collect, resident};
-use crate::scope::{Body, ClosureBindings};
+use crate::scope::{BodyRef, ClosureBindings};
 use crate::type_lattice::{ContentKey, DeclaredType, KType, Parametric};
 pub use crate::values::digest::Operator;
 use crate::values::digest::{DigestHasher, Tag, body_content, view_content};
@@ -80,7 +80,7 @@ pub struct Module<'graph, 'cell> {
 pub enum Born<'graph, 'cell> {
     View(ModuleContent),
     Body {
-        body: &'graph Body<'graph>,
+        body: &'graph BodyRef<'graph>,
         closure: &'cell ClosureBindings<'cell, Knotted<'graph, 'cell>>,
     },
 }
@@ -90,7 +90,7 @@ pub enum Born<'graph, 'cell> {
 struct Content<'graph, 'cell> {
     known: Cell<Option<ModuleContent>>,
     body: Option<(
-        &'graph Body<'graph>,
+        &'graph BodyRef<'graph>,
         &'cell ClosureBindings<'cell, Knotted<'graph, 'cell>>,
     )>,
 }
@@ -175,7 +175,7 @@ impl<'graph, 'cell> Module<'graph, 'cell> {
     pub fn pending(
         &self,
     ) -> Option<(
-        &'graph Body<'graph>,
+        &'graph BodyRef<'graph>,
         &'cell ClosureBindings<'cell, Knotted<'graph, 'cell>>,
     )> {
         self.content
@@ -220,7 +220,7 @@ impl<'graph, 'cell> Module<'graph, 'cell> {
         let (body, closure) = self.content.body.expect("a view's content is known");
         let captures =
             composed(body, closure.links()).map(|(index, link)| (index, link.digest_from(parts)));
-        let content = ModuleContent::body(body.shape.code_digest(), captures);
+        let content = ModuleContent::body(body.code, captures);
         self.fill(content);
         content.digest()
     }

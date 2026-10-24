@@ -50,7 +50,7 @@ pub(crate) use shape::IMPLICIT;
 pub(crate) use signature::pair_label;
 pub(crate) use spelling::{PathSpelling, SpelledRoot, path_spelling};
 
-pub use activation::{Activation, ActivationView};
+pub use activation::{Activation, ActivationView, Reading};
 pub use builtins::Builtins;
 pub use closure::ClosureBindings;
 pub use facts::{Address, Binding, Bound, Cut, Frontier, Store, UnitId, Unknown};
@@ -58,8 +58,8 @@ pub use groups::{BuiltinGroup, GroupFrame, is_equal, is_equality, is_unequal};
 pub use header::{HalfHeader, RegionHeader};
 pub use keyed::{Keyed, KeyedEntry};
 pub use records::{
-    Body, Born, Closing, Deps, DepsGathering, Folds, LoadFacts, NamedVariable, SiteDeps, Typed,
-    UnitFacts, tree_deps,
+    BodyRef, Born, Closing, Deps, DepsGathering, Facts, FactsOver, Folds, Layers, LoadFacts,
+    LoadRecords, NamedVariable, SiteDeps, Typed, UnitFacts, Written, tree_deps,
 };
 pub use shape::{
     Arm, BodyShape, BuiltinIndex, Candidate, CandidateList, CaptureChain, CaptureSlot,
@@ -69,7 +69,7 @@ pub use shape::{
     TypeExpression, Unit, UnitHolds, UnitIndex, UnitWork, ViewRefused, Which, each_part, follow,
     in_body_of, part_of, selection_refused, source_of, spelled, view_refused,
 };
-pub use shapes::{BindSite, Shapes};
+pub use shapes::{BindSite, Code, Shapes};
 pub use tree::{Binder, Identity, KnotNode, Leaf, NodeCapture, Tree, Unfolded, Within};
 pub use typed::{
     BodyClass, Caching, Callable, Elaboration, ElaborationDisplay, FunctionGroupMap, HandedTo,

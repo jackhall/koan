@@ -24,6 +24,15 @@ use super::{
     Weight,
 };
 
+/// What a function is one of, which two equal functions share: a builtin overload, by its
+/// record's address, or a body, by the digest of the base whose shape table holds it and its
+/// segment there, so a body rebuilt from the same base keeps it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum FunctionIdentity {
+    Builtin(usize),
+    Body(ContentDigest, u32),
+}
+
 /// What a knot member holds.
 #[derive(Clone, Copy)]
 pub enum Resolved<'a, X> {
@@ -32,7 +41,7 @@ pub enum Resolved<'a, X> {
     /// made at, empty for anything else, and by the closure bindings its content composes, read
     /// through the member: each slot `composes` marks, every one past its end.
     Function {
-        identity: usize,
+        identity: FunctionIdentity,
         instance: &'a [KType],
         closure: &'a [Link<'a, X>],
         composes: &'a [bool],

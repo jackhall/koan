@@ -100,7 +100,11 @@ fn smallest() -> BuildBudget {
 /// A graph stood up by the load door under `budget`, and its run root.
 fn loaded(type_region: &Bump, budget: BuildBudget) -> (TestGraph<'_>, SlabHandle) {
     let (graph, run, ()) = TestGraph::load(1, budget, || {
-        Ok::<_, ()>((crate::values::tests::seeded_tiers(type_region), ()))
+        Ok::<_, ()>((
+            crate::values::tests::seeded_tiers(type_region),
+            &crate::scope::LoadFacts::EMPTY,
+            (),
+        ))
     })
     .expect("the load succeeds");
     (graph, run)

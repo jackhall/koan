@@ -56,11 +56,12 @@ fn born<'graph, 'cell>(
     activation: &KActivation<'graph, 'cell>,
     statement: usize,
 ) -> Knotted<'graph, 'cell> {
-    let node = statement_lambda(activation.shape(), statement);
-    let site = (activation.shape().site_of_body(node)).expect("a `FN` has a body");
+    let node = statement_lambda(fixture.shape_of(activation), statement);
+    let site = (fixture.shape_of(activation).site_of_body(node)).expect("a `FN` has a body");
     lambda(
         writer,
-        activation,
+        &fixture.reading_of(activation),
+        fixture.written(),
         site,
         crate::values::ArenaRef::ROOT,
         types,
@@ -80,12 +81,15 @@ fn a_lambda_is_born_as_a_one_node_knot() {
             let member = born(fixture, writer, types, activation, 1);
             assert_eq!(member.member().knot().len(), 1);
             let function = member.function().expect("a function");
-            let shape = activation.shape();
+            let shape = fixture.shape_of(activation);
             let node = statement_lambda(shape, 1);
-            assert!(std::ptr::eq(
-                function.shape(),
-                shape.nested(shape.site_of_body(node).unwrap()).unwrap()
-            ));
+            assert_eq!(
+                function.body().segment,
+                shape
+                    .nested(shape.site_of_body(node).unwrap())
+                    .unwrap()
+                    .segment()
+            );
             assert_eq!(
                 member.ktype(),
                 types
@@ -172,11 +176,11 @@ fn a_lambda_capturing_its_binder_is_a_node_of_its_knot() {
             assert_eq!(a.member().knot().len(), 2);
             let lambda = follow(a, list.cells()[0]);
             let function = lambda.function().expect("the item is a function node");
-            let shape = activation.shape();
-            assert!(std::ptr::eq(
-                function.shape(),
-                body_of(shape, item_lambda(shape, 0, 0))
-            ));
+            let shape = fixture.shape_of(activation);
+            assert_eq!(
+                function.body().segment,
+                body_of(shape, item_lambda(shape, 0, 0)).segment()
+            );
             let any = types.function_type(fixture.scratch(), &[], KType::ANY);
             assert_eq!(lambda.ktype(), any.into());
             assert_eq!(list.ktype(), types.list(any));
@@ -244,7 +248,7 @@ fn a_lambda_part_capturing_no_fellow_is_asked_of_the_caller() {
             let types = &fixture.tiers.of(context);
             let writer = context.writer();
             let activation = fixture.run(writer, types, &lines, &["a", "f"]);
-            let part = item_lambda(activation.shape(), 1, 0);
+            let part = item_lambda(fixture.shape_of(activation), 1, 0);
             let mut asked = Vec::new();
             let refused = tie_with(fixture, writer, types, activation, "a", &mut |site, _| {
                 asked.push(site);
@@ -255,10 +259,10 @@ fn a_lambda_part_capturing_no_fellow_is_asked_of_the_caller() {
                 refused,
                 Some(Untieable::Eager {
                     name: fixture.name("a"),
-                    site: activation.shape().site(part),
+                    site: fixture.shape_of(activation).site(part),
                 })
             );
-            assert_eq!(asked, [activation.shape().site(part)]);
+            assert_eq!(asked, [fixture.shape_of(activation).site(part)]);
         });
     });
 }

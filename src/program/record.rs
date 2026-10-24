@@ -12,9 +12,9 @@ use std::fmt;
 
 use crate::knot::{KActivationView, KBuiltins, KValue};
 use crate::memory::{Bump, BumpAllocator, Writer};
-use crate::parse::{ExpressionPart, KExpression, ParseError};
+use crate::parse::ParseError;
 use crate::scheduler::{NativeStep, Work};
-use crate::scope::{BodyShape, LoadFacts, ShapeError, Shapes, Slot, Store};
+use crate::scope::{BodyShape, LoadFacts, ShapeError, Shapes, Site, Slot, Store, Written};
 use crate::symbols::{BinderSymbol, SymbolInterner};
 use crate::type_lattice::{
     DeclaredType, KType, TypeNode, display_name, satisfied_by, substitute_quantified,
@@ -130,11 +130,13 @@ pub enum CallKind {
     ByName,
 }
 
-/// What the body runner hands an evaluator: a whole statement, or one part of one.
-#[derive(Clone, Copy, Debug)]
-pub enum Evaluated<'graph> {
-    Statement(&'graph KExpression<'graph>),
-    Part(&'graph ExpressionPart<'graph>),
+/// What the body runner hands an evaluator: a whole statement, by its index into the body, or one
+/// part of one, by its site. Plain data, so it crosses a park; the evaluator reads the node off the
+/// shape its view binds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Evaluated {
+    Statement(u32),
+    Part(Site),
 }
 
 /// A loaded program's facts, laid down in program storage: its shape, its builtin table, the tiers
@@ -190,9 +192,14 @@ impl<'graph> Program<'graph> {
         self.facts.shapes()
     }
 
-    /// What the load decided about every body.
+    /// What the load decided about every body. A step reads facts through its door instead.
     pub fn facts(&self) -> &'graph LoadFacts<'graph> {
         self.facts
+    }
+
+    /// The program's written code: what a value born of it keeps.
+    pub fn written(&self) -> Written<'graph> {
+        Written::of(self.facts)
     }
 
     pub fn builtins(&self) -> &'graph KBuiltins<'graph, 'graph> {
@@ -228,7 +235,7 @@ impl<'graph> Program<'graph> {
     /// names an expression shape. `within` is [`KBirth::Evaluate`]'s.
     pub fn evaluate<'here>(
         &'graph self,
-        node: Evaluated<'graph>,
+        node: Evaluated,
         view: KActivationView<'graph, 'here>,
         contract: Option<Contract>,
         within: Within,

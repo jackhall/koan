@@ -33,7 +33,7 @@ use crate::scheduler::delivery::KDelivery;
 use crate::scheduler::seek::{Lending, Seek};
 #[cfg(test)]
 use crate::scope::HalfHeader;
-use crate::scope::RegionHeader;
+use crate::scope::{LoadFacts, RegionHeader};
 #[cfg(test)]
 use crate::type_lattice::Branch;
 use crate::values::{ArenaRef, BuildBudget, TypeTiers};
@@ -46,21 +46,33 @@ use crate::values::{ArenaRef, BuildBudget, TypeTiers};
 /// reaches every other cell only through a [`Scheduler`] over it.
 ///
 /// It holds the type tiers every step's chain reads first, so a step and a crossing take it
-/// from the graph they run over rather than from a program or a static, and the build arena its
-/// frames run under.
+/// from the graph they run over rather than from a program or a static, the load's facts every
+/// step's door reads beneath its cell's layers, and the build arena its frames run under.
 pub struct Graph<'graph, B: StepBundle<'graph>> {
     cells: CellGraph<'graph, ContinuationFamily<B>, B::Scratch, KDelivery, RegionHeader>,
     tiers: TypeTiers<'graph>,
+    facts: &'graph LoadFacts<'graph>,
     arena: BuildArena,
 }
 
 impl<'graph, B: StepBundle<'graph>> Graph<'graph, B> {
     /// A graph over a slab of `cap` cells, under koan's own crossing verdict, its steps' types read
-    /// over `tiers`, its unheld settlements within `budget`.
+    /// over `tiers`, its unheld settlements within `budget`, over a load of no bodies.
     pub fn new(cap: u32, tiers: TypeTiers<'graph>, budget: BuildBudget) -> Self {
+        Graph::over(cap, tiers, &LoadFacts::EMPTY, budget)
+    }
+
+    /// A graph as [`new`](Self::new) stands one, its steps' facts read over `facts`.
+    pub(super) fn over(
+        cap: u32,
+        tiers: TypeTiers<'graph>,
+        facts: &'graph LoadFacts<'graph>,
+        budget: BuildBudget,
+    ) -> Self {
         Graph {
             cells: CellGraph::new(cap, crate::values::verdict),
             tiers,
+            facts,
             arena: BuildArena::new(budget),
         }
     }
@@ -511,9 +523,9 @@ where
         // `enter` borrows the graph exclusively and the step borrows the buffer, so the two are
         // taken as separate fields rather than through `self`.
         let Scheduler { graph, spawns, .. } = self;
-        let tiers = graph.tiers;
+        let (tiers, facts) = (graph.tiers, graph.facts);
         (graph.cells)
-            .enter(cell, |context| run_step::<B>(context, tiers, spawns))
+            .enter(cell, |context| run_step::<B>(context, tiers, facts, spawns))
             .map_err(|_| DrainStalled::Unenterable)
     }
 
@@ -580,6 +592,7 @@ where
 fn run_step<'graph, 'step, 'here, 'scratch, 'lent, B: StepBundle<'graph>>(
     context: &mut Context<'graph, 'step, 'here, 'scratch, 'lent, B>,
     tiers: TypeTiers<'graph>,
+    facts: &'graph LoadFacts<'graph>,
     spawns: &mut Spawns<'graph, B>,
 ) -> (Action<'graph, B>, Provenance, ArenaRef)
 where
@@ -620,6 +633,7 @@ where
     let step = step(Step::new(
         context,
         tiers,
+        facts,
         &provenance,
         arena,
         spawns,

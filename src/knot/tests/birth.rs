@@ -27,11 +27,12 @@ pub(super) fn tie_with<'f, 'graph, 'cell>(
     name: &str,
     eager: &mut Eager<'_, 'graph, 'cell>,
 ) -> Result<Knot<'cell, Node<'graph, 'cell>>, Untieable<'f>> {
-    let shape = activation.shape();
+    let shape = fixture.shape_of(activation);
     let (slot, _) = shape.slot(fixture.name(name)).unwrap();
     tie(
         writer,
-        activation,
+        &fixture.reading_of(activation),
+        fixture.written(),
         shape.component_of(slot),
         crate::values::ArenaRef::ROOT,
         types,
@@ -71,10 +72,18 @@ fn a_lone_function_is_a_one_node_knot_typed_by_its_signature() {
                     .into()
             );
             assert!(std::ptr::eq(
-                f.function().expect("a function").shape(),
-                activation
-                    .shape()
-                    .births(activation.shape().slot(fixture.name("f")).unwrap().0)
+                fixture
+                    .code()
+                    .shape(f.function().expect("a function").body().segment),
+                fixture
+                    .shape_of(activation)
+                    .births(
+                        fixture
+                            .shape_of(activation)
+                            .slot(fixture.name("f"))
+                            .unwrap()
+                            .0
+                    )
                     .unwrap()
             ));
             // The knot's weight: its header, one node, and an empty closure run.
@@ -205,8 +214,12 @@ fn a_combined_statement_births_two_equal_members_over_its_one_body() {
             let registration = at_key(fixture, activation, "TWICE _");
             assert!(!std::ptr::eq(named.node(), registration.node()));
             assert!(std::ptr::eq(
-                named.function().expect("a function").shape(),
-                registration.function().expect("a function").shape()
+                fixture
+                    .code()
+                    .shape(named.function().expect("a function").body().segment),
+                fixture
+                    .code()
+                    .shape(registration.function().expect("a function").body().segment)
             ));
             assert_eq!(
                 Value::Knotted(named).equals(&Value::Knotted(registration), types, scratch),
@@ -297,8 +310,9 @@ fn capture_read<'graph, 'cell>(
 ) -> KValue<'graph, 'cell> {
     let function = callable.function().expect("a function");
     let name = fixture.name(name);
-    let mention = function
-        .shape()
+    let mention = fixture
+        .code()
+        .shape(function.body().segment)
         .mentions()
         .iter()
         .find(|mention| mention.name == name)
@@ -312,8 +326,8 @@ fn capture_read<'graph, 'cell>(
     ));
     let call = KActivation::of_callable(
         writer,
-        function.shape(),
-        around.load(),
+        fixture.code().shape(function.body().segment),
+        &fixture.facts(),
         callable,
         function.closure(),
         around.builtins(),
@@ -393,8 +407,8 @@ fn a_nested_capture_of_an_enclosing_edge_reads_the_sibling_value() {
                 writer,
                 KActivation::of_callable(
                     writer,
-                    function.shape(),
-                    activation.load(),
+                    fixture.code().shape(function.body().segment),
+                    &fixture.facts(),
                     f,
                     function.closure(),
                     activation.builtins(),
@@ -573,7 +587,7 @@ fn a_cycle_of_containers_refuses_naming_it() {
                 let types = &fixture.tiers.of(context);
                 let writer = context.writer();
                 let activation = fixture.run(writer, types, &lines, names);
-                let shape = activation.shape();
+                let shape = fixture.shape_of(activation);
                 let (slot, _) = shape.slot(fixture.name("a")).unwrap();
                 let expected: Vec<_> = shape
                     .component_of(slot)
@@ -666,7 +680,7 @@ fn an_eager_part_refuses_by_site_and_ties_when_supplied() {
             else {
                 panic!("`a` is a list literal");
             };
-            let call = activation.shape().site(&items[0]);
+            let call = fixture.shape_of(activation).site(&items[0]);
             assert_eq!(
                 tie_of(fixture, writer, types, activation, "a").err(),
                 Some(Untieable::Eager {
@@ -678,7 +692,7 @@ fn an_eager_part_refuses_by_site_and_ties_when_supplied() {
                 (site == call).then_some(Supplied::Value(Value::Number(7.0)))
             })
             .expect("the supplied part ties");
-            let shape = activation.shape();
+            let shape = fixture.shape_of(activation);
             let (slot, _) = shape.slot(fixture.name("a")).unwrap();
             let index = shape
                 .component_of(slot)
@@ -713,7 +727,9 @@ fn every_eager_part_is_asked_for_in_one_attempt() {
                 activation,
                 "a",
                 &mut |site, part| {
-                    assert!(part.is_some_and(|part| activation.shape().site(part) == site));
+                    assert!(
+                        part.is_some_and(|part| fixture.shape_of(activation).site(part) == site)
+                    );
                     asked.push(site);
                     None
                 },

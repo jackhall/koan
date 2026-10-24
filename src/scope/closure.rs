@@ -10,7 +10,7 @@
 use crate::memory::{BumpAllocator, BumpVec, Edge, Writer, collect, resident};
 use crate::values::{ArenaRef, Knotted, KnottedFamily, Link, Value, Weight};
 
-use super::activation::ActivationView;
+use super::activation::Reading;
 use super::shape::{BodyShape, CaptureSlot, CaptureSource};
 
 /// A callable's closure bindings, in capture-slot order, beside the arena node the callable was
@@ -38,13 +38,13 @@ impl<'graph, 'cell, X: Knotted> ClosureBindings<'cell, X> {
     /// caller minted for member `index` of the component the callable is born in. Each type capture
     /// follows, read from `enclosing` at its coordinate. Nothing is written to a region.
     pub fn read_captures<'x, XF: KnottedFamily<'graph, Closed<'cell> = X>>(
-        shape: &BodyShape<'graph>,
-        enclosing: &ActivationView<'graph, 'cell, XF>,
+        shape: &BodyShape<'_>,
+        enclosing: &Reading<'_, 'graph, 'cell, XF>,
         scratch: BumpAllocator<'x>,
         mut edge: impl FnMut(u32) -> Edge,
     ) -> BumpVec<'x, Link<'cell, X>> {
         let captures = shape.captures();
-        let load = enclosing.load();
+        let load = enclosing.facts();
         let mut read = BumpVec::with_capacity_in(load.capture_count(shape), scratch);
         read.extend(captures.iter().map(|capture| match capture.source {
             CaptureSource::Read(coordinate) => Link::Value(enclosing.read(coordinate)),

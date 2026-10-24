@@ -56,7 +56,7 @@ pub use admission::{
     ConstructionRefused, SealRefused, admits, admits_part, construction, dict_type, list_type,
     part_ktype, record_type, representation, satisfies, sealing, solves_identity,
 };
-pub use circular::{Circular, CodeView, Resolved};
+pub use circular::{Circular, CodeView, FunctionIdentity, Resolved};
 #[cfg(test)]
 pub use crossing::{ADOPTED, EXIT_WALKS, PARTS_ENTERED, PARTS_SKIPPED, WARM_WALKS};
 pub use crossing::{

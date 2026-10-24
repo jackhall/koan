@@ -1,7 +1,9 @@
 //! The **shape table**: every shape one load builds, by [`Segment`], beside where each sits in the
 //! body enclosing it. It is laid once, where the root's shape is built, and every fact of the text
 //! that spans bodies — where an unknown binds, the levels a chain numbers its type names at, the
-//! layout a closure carries — is read through it, so no shape needs a pointer to any other.
+//! layout a closure carries — is read through it, so no shape needs a pointer to any other. A step
+//! reads it through [`Code`], built per step at the step's own lifetime, so what a cell parks names a
+//! segment or a site rather than a shape.
 //!
 //! See [README.md § Load-time types](README.md#load-time-types).
 
@@ -26,6 +28,38 @@ mod tails;
 
 use memos::Memos;
 use tails::Tails;
+
+/// What a step reads shapes through, at the step's own lifetime `'step`: the shape table of the base
+/// its cell's chain rests on. Built per step from the cell's arena reference; what crosses a park
+/// holds a segment or a site instead, so keeping one past the step does not compile:
+///
+/// ```compile_fail
+/// use koan::memory::{Writer, resident};
+/// use koan::scope::Code;
+///
+/// fn keep<'here>(writer: Writer<'here, '_>, code: Code<'_>) -> &'here Code<'here> {
+///     resident(writer, code)
+/// }
+/// ```
+#[derive(Clone, Copy)]
+pub struct Code<'step>(&'step Shapes<'step>);
+
+impl<'step> Code<'step> {
+    /// The code `shapes` holds.
+    pub fn of(shapes: &'step Shapes<'step>) -> Self {
+        Code(shapes)
+    }
+
+    /// The shape at `segment`.
+    pub fn shape(&self, segment: Segment) -> &'step BodyShape<'step> {
+        self.0.shape_at(segment)
+    }
+
+    /// The shape table itself.
+    pub fn shapes(&self) -> &'step Shapes<'step> {
+        self.0
+    }
+}
 
 /// Every shape one load built, by segment, and each one's place in its encloser.
 #[derive(Clone, Copy)]
@@ -75,6 +109,15 @@ impl Levels<'_> {
 }
 
 impl<'graph> Shapes<'graph> {
+    /// The table of a load that built no shape.
+    pub const EMPTY: Self = Shapes {
+        bodies: &[],
+        parents: &[],
+        levels: &[],
+        tails: &[],
+        memos: &[],
+    };
+
     /// The shapes of a program's top-level statements and of every body nested in them.
     pub fn of_program<X: Knotted>(
         brand: ProgramBrand<'graph>,

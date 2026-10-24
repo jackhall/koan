@@ -42,14 +42,16 @@ use crate::elaborate::{declares_nominal, denoted, type_declarations};
 use crate::knot::body_activation;
 use crate::knot::module::coerce::{self, CoercionRefused};
 use crate::knot::module::surface::surface;
-use crate::knot::{KActivation, KActivationView, KValue, Knotted, Supplied, Tied, Untieable, tie};
+use crate::knot::{
+    KActivation, KActivationView, KReading, KValue, Knotted, Supplied, Tied, Untieable, tie,
+};
 use crate::memory::{Bump, BumpVec, Writer, resident};
 use crate::parse::ExpressionPart;
 use crate::scheduler::{
     Action, Placement, Received, Request, Slot as Asked, Step, StepError, Taken, Use,
 };
 use crate::scope::{BodyShape, Component, Mint, Position, ShapeKind, Site, Slot, Unit, UnitWork};
-use crate::scope::{CaptureSource, ClosureBindings, LoadFacts, ShapeError};
+use crate::scope::{CaptureSource, ClosureBindings, Code, Facts, ShapeError};
 use crate::scope::{Coordinate, ParameterBinding, Static, Target};
 use crate::symbols::{BinderSymbol, Symbol, SymbolInterner, TypeSymbol};
 use crate::type_lattice::{
@@ -153,20 +155,20 @@ type Taking<'a, 'graph, 'step, 'here, 'scratch, 'lent> =
 pub fn run<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'graph, KBundle> {
     let (step, state) = step.state();
     let (mut step, scratch) = step.scratch();
-    let shape = match &state {
-        KState::Born(KBirth::Call {
-            callee, program, ..
-        }) => called_shape(*callee).map(|shape| (shape, program.facts())),
-        KState::Born(KBirth::Eval { code, program, .. }) => (code.as_code())
+    let segment = match &state {
+        KState::Born(KBirth::Call { callee, .. }) => {
+            called_function(*callee).map(|function| function.body().segment)
+        }
+        KState::Born(KBirth::Eval { code, .. }) => (code.as_code())
             .and_then(|member| member.code())
-            .map(|node| (node.shape(), program.facts())),
-        KState::Born(KBirth::Block { shape, program, .. }) => Some((*shape, program.facts())),
-        KState::Runner(runner) => Some((runner.shape(), runner.load())),
+            .map(|node| node.segment()),
+        KState::Born(KBirth::Block { segment, .. }) => Some(*segment),
+        KState::Runner(runner) => Some(runner.activation.segment()),
         KState::Born(_) | KState::Evaluating { .. } => None,
     };
-    let caches = shape.is_some_and(|(shape, facts)| facts.caches(shape));
-    #[cfg(test)]
-    let shape = shape.map(|(shape, _)| shape);
+    let (code, facts) = step.door();
+    let shape = segment.map(|segment| code.shape(segment));
+    let caches = shape.is_some_and(|shape| facts.caches(shape));
     let routes = match &state {
         // A tree cell holds its scratch whatever it borrows; a tenant routes where it borrows a
         // settlement, writing its host's scratch.
@@ -191,12 +193,6 @@ pub fn run<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'g
     }
 }
 
-/// The shape a call of `callee` runs: its function's, behind every barrier. `None` for a callee
-/// that is no function, which the frame refuses.
-fn called_shape<'graph>(callee: KValue<'graph, '_>) -> Option<&'graph BodyShape<'graph>> {
-    Some(called_function(callee)?.shape())
-}
-
 /// The arena node `callee`'s function was born under, behind every barrier: where a frame of it
 /// runs that the drain found no settlement of its own for.
 fn born_under(callee: KValue<'_, '_>) -> ArenaRef {
@@ -214,14 +210,10 @@ fn ran<'graph, 'here, 'scratch>(
     let runner = match state {
         KState::Born(KBirth::Program { program }) => {
             let writer = step.writer();
+            let (code, facts) = step.door();
             let activation = resident(
                 writer,
-                KActivation::of_program(
-                    writer,
-                    program.shape(),
-                    program.facts(),
-                    program.builtins(),
-                ),
+                KActivation::of_program(writer, code.shapes().root(), &facts, program.builtins()),
             );
             Runner::at(program, activation, Level::Top, None)
         }
@@ -270,19 +262,24 @@ fn ran<'graph, 'here, 'scratch>(
         },
         KState::Born(KBirth::Block {
             program,
-            shape,
+            segment,
             enclosing,
             module,
             within,
         }) => {
             let writer = step.writer();
+            let (code, facts) = step.door();
+            let shape = code.shape(segment);
             let enclosing = resident(writer, enclosing);
-            let activation = resident(writer, KActivation::of_block(writer, shape, enclosing));
+            let activation = resident(
+                writer,
+                KActivation::of_block(writer, shape, &facts, enclosing),
+            );
             // A `USING` body's parameters are the module's surfaced names, which its shape and the
             // module cannot disagree on: a refusal is an invariant break.
             if let Some(module) = module {
                 let bump = Bump::new();
-                if surface(writer, module, activation, types, &bump).is_err() {
+                if surface(writer, module, activation, shape, types, &bump).is_err() {
                     return step.failed(StepError::Refused);
                 }
             }
@@ -349,7 +346,7 @@ pub fn call<'graph, 'here>(
 /// `within` is [`KBirth::Block`]'s.
 pub fn block<'graph, 'here>(
     program: &'graph Program<'graph>,
-    shape: &'graph BodyShape<'graph>,
+    shape: &BodyShape<'_>,
     enclosing: KActivationView<'graph, 'here>,
     use_: Use,
     within: Within,
@@ -362,7 +359,7 @@ pub fn block<'graph, 'here>(
 /// module.
 pub fn surfaced_block<'graph, 'here>(
     program: &'graph Program<'graph>,
-    shape: &'graph BodyShape<'graph>,
+    shape: &BodyShape<'_>,
     enclosing: KActivationView<'graph, 'here>,
     module: Option<KValue<'graph, 'here>>,
     use_: Use,
@@ -376,7 +373,7 @@ pub fn surfaced_block<'graph, 'here>(
             step: run,
             state: KBirth::Block {
                 program,
-                shape,
+                segment: shape.segment(),
                 enclosing,
                 module,
                 within,
@@ -438,17 +435,19 @@ impl fmt::Display for CodeRefusedDisplay<'_, '_, '_, '_, '_> {
 /// bound neither by a `USING` nor by `offered`, read through `types`. The frame owes `returns`, the
 /// type the `EVAL` declares, as a called frame owes its own. Nothing builds a shape here: the
 /// code's was built where the program loaded.
-pub fn eval<'graph, 'here>(
+#[allow(clippy::too_many_arguments)]
+pub fn eval<'step, 'graph, 'here>(
     program: &'graph Program<'graph>,
+    (door, facts): (&Code<'step>, &Facts<'step>),
     types: &Chain<'_, '_, '_, '_>,
     code: Knotted<'graph, 'here>,
     offered: KValue<'graph, 'here>,
     returns: KType,
     use_: Use,
-) -> Result<Request<'graph, 'here, KBundle>, CodeRefused<'graph>> {
+) -> Result<Request<'graph, 'here, KBundle>, CodeRefused<'step>> {
     let node = code.code().expect("an `EVAL` is handed a quote's code");
-    let shape = node.shape();
-    if let Some(error) = program.facts().typing_refusal(shape) {
+    let shape = door.shape(node.segment());
+    if let Some(error) = facts.typing_refusal(shape) {
         return Err(CodeRefused::Shape(error));
     }
     let scratch = Bump::new();
@@ -527,16 +526,18 @@ impl<'graph, 'cell> Runner<'graph, 'cell> {
         }
     }
 
-    fn shape(&self) -> &'graph BodyShape<'graph> {
-        self.activation.shape()
+    /// The runner's activation, read through `step`'s door.
+    fn reading<'step>(
+        &self,
+        step: &Taking<'_, 'graph, 'step, 'cell, '_, '_>,
+    ) -> KReading<'step, 'graph, 'cell> {
+        let (code, facts) = step.door();
+        self.activation.view().reading(&code, facts)
     }
 
-    fn load(&self) -> &'graph LoadFacts<'graph> {
-        self.activation.load()
-    }
-
-    fn current(&self) -> Unit {
-        self.shape().units()[self.unit as usize]
+    /// The unit the runner is at, of its activation's `shape`.
+    fn current(&self, shape: &BodyShape<'_>) -> Unit {
+        shape.units()[self.unit as usize]
     }
 
     /// Whether `unit`'s value is the body's: a frame's or a block's last statement, outside any
@@ -548,11 +549,11 @@ impl<'graph, 'cell> Runner<'graph, 'cell> {
     /// Whether `unit` is a frame's last, a statement binding nothing whose value is the frame's —
     /// which the runner hands to the evaluator by a tail rather than waiting on. A frame called
     /// through a barrier never tails: its value crosses the barrier where the frame ends.
-    fn tails(&self, unit: Unit) -> bool {
+    fn tails(&self, unit: Unit, shape: &BodyShape<'_>) -> bool {
         self.level == Level::Frame
             && self.barrier.is_none()
             && self.yields(unit)
-            && self.unit as usize + 1 == self.shape().units().len()
+            && self.unit as usize + 1 == shape.units().len()
             && matches!(unit.work, UnitWork::Statement(_))
     }
 
@@ -731,7 +732,8 @@ fn frame<'graph, 'here>(
         )
     };
     arguments.as_record().ok_or_else(misnamed)?;
-    let shape = function.shape();
+    let (code, facts) = step.door();
+    let shape = code.shape(function.body().segment);
     let quantified = matches!(declared, DeclaredType::Scheme(_));
     let view = declared.view(types);
     let TypeNode::KFunction { params, ret } = view.body else {
@@ -799,12 +801,13 @@ fn frame<'graph, 'here>(
         KActivation::of_callable(
             writer,
             shape,
-            program.facts(),
+            &facts,
             member,
             function.closure(),
             program.builtins(),
         ),
     );
+    let reading = activation.view().reading(&code, facts);
     let mut parameters = 0;
     for slot in (0..shape.slots()).map(|slot| Slot(slot as u32)) {
         let name = shape.slot_name(slot);
@@ -837,7 +840,7 @@ fn frame<'graph, 'here>(
                 // digest: the frame laid no header over it, so the slot holds the caller's value.
                 if let Some(handed) = (handed.iter()).find(|each| each.name == name.symbol())
                     && handed.carried == value.ktype()
-                    && let Some(memo) = activation.digest_memo(Coordinate::Activation {
+                    && let Some(memo) = reading.digest_memo(Coordinate::Activation {
                         hops: 0,
                         target: Target::Local(slot),
                     })
@@ -1154,7 +1157,8 @@ fn code_frame<'graph, 'here>(
 ) -> Option<&'here KActivation<'graph, 'here>> {
     let member = code.as_code()?;
     let node = member.code()?;
-    let shape = node.shape();
+    let (door, facts) = step.door();
+    let shape = door.shape(node.segment());
     offered.as_record()?;
     let find = |run: &[(BinderSymbol, Link<'here, Knotted<'graph, 'here>>)], name| {
         let at = run.binary_search_by_key(&name, |(held, _)| *held).ok()?;
@@ -1183,7 +1187,7 @@ fn code_frame<'graph, 'here>(
     let closure = ClosureBindings::of(writer, &links, ArenaRef::ROOT);
     Some(resident(
         writer,
-        KActivation::of_code(writer, shape, program.facts(), closure, program.builtins()),
+        KActivation::of_code(writer, shape, &facts, closure, program.builtins()),
     ))
 }
 
@@ -1196,8 +1200,10 @@ fn woken<'graph, 'here, 'scratch, 'lent>(
     scratch: Option<&'scratch [Site]>,
     types: &Chain<'_, 'here, '_, '_>,
 ) -> Result<(), Stopped<'scratch>> {
-    let unit = runner.current();
-    let caches = runner.load().caches(runner.shape());
+    let at = runner.reading(step);
+    let shape = at.shape();
+    let unit = runner.current(shape);
+    let caches = at.facts().caches(shape);
     match runner.stage {
         Stage::Next => unreachable!("a runner parks only with an evaluation in flight"),
         Stage::Evaluation => {
@@ -1215,7 +1221,7 @@ fn woken<'graph, 'here, 'scratch, 'lent>(
                             "a binding is asked for with `Keeps`, which never delivers to scratch"
                         )
                     };
-                    let slot = runner.shape().components()[component.index()].members[0];
+                    let slot = shape.components()[component.index()].members[0];
                     let value = held(step, types, runner, slot, value)?;
                     runner.bind(unit, slot, value);
                 }
@@ -1248,7 +1254,7 @@ fn woken<'graph, 'here, 'scratch, 'lent>(
                 supplied.push((*site, value));
             }
             supplied.sort_unstable_by_key(|(site, _)| *site);
-            let component = &runner.shape().components()[component.index()];
+            let component = &shape.components()[component.index()];
             tied(step, types, runner, unit, component, &supplied)?;
         }
     }
@@ -1278,13 +1284,14 @@ fn tied<'graph, 'here>(
     types: &Chain<'_, 'here, '_, '_>,
     runner: &mut Runner<'graph, 'here>,
     unit: Unit,
-    component: &Component<'graph>,
+    component: &Component<'_>,
     supplied: &[(Site, KValue<'graph, 'here>)],
 ) -> Result<(), Stopped<'here>> {
     let scratch = Bump::new();
     let tied = tie(
         step.writer(),
-        runner.activation,
+        &runner.reading(step),
+        runner.program.written(),
         component,
         runner.within.build,
         types,
@@ -1315,10 +1322,11 @@ fn bound_members<'graph, 'here>(
     types: &Chain<'_, 'here, '_, '_>,
     runner: &mut Runner<'graph, 'here>,
     unit: Unit,
-    component: &Component<'graph>,
+    component: &Component<'_>,
     tied: &Tied<'graph, 'here, '_>,
 ) -> Result<(), Stopped<'here>> {
-    let shape = runner.shape();
+    let at = runner.reading(step);
+    let shape = at.shape();
     for (index, slot) in component.members.iter().enumerate() {
         let member = Value::Knotted(Knotted::of(tied.knot, index));
         let resolved = tied.annotations.get(index).copied().flatten();
@@ -1347,13 +1355,13 @@ fn held<'graph, 'here>(
     slot: Slot,
     value: KValue<'graph, 'here>,
 ) -> Result<KValue<'graph, 'here>, Stopped<'here>> {
-    let shape = runner.shape();
-    let Some(written) = shape.annotation(slot) else {
+    let at = runner.reading(step);
+    let Some(written) = at.shape().annotation(slot) else {
         return Ok(value);
     };
     let program = runner.program;
     let (writer, scratch) = (step.writer(), Bump::new());
-    match denoted(written, &runner.activation.view(), types, &scratch) {
+    match denoted(written, &at, types, &scratch) {
         Ok(annotation) => held_at(step, types, runner, written, annotation, value),
         Err(refused) => {
             let error = program.error(writer, types, refused.display(program.symbols(), types));
@@ -1368,13 +1376,12 @@ fn held_at<'graph, 'here>(
     step: &Taking<'_, 'graph, '_, 'here, '_, '_>,
     types: &Chain<'_, 'here, '_, '_>,
     runner: &Runner<'graph, 'here>,
-    written: &'graph ExpressionPart<'graph>,
+    written: &ExpressionPart<'_>,
     annotation: KType,
     value: KValue<'graph, 'here>,
 ) -> Result<KValue<'graph, 'here>, Stopped<'here>> {
-    let settled = runner
-        .load()
-        .settled(runner.shape(), runner.shape().site(written));
+    let at = runner.reading(step);
+    let settled = at.facts().settled(at.shape(), at.shape().site(written));
     let held = (runner.program).annotated(step.writer(), types, value, annotation, settled);
     runner.check(&held, types)?;
     Ok(held)
@@ -1387,7 +1394,8 @@ fn perform<'graph, 'here>(
     types: &Chain<'_, 'here, '_, '_>,
 ) -> Action<'graph, KBundle> {
     loop {
-        let shape = runner.shape();
+        let at = runner.reading(&step);
+        let shape = at.shape();
         if runner.unit as usize == shape.units().len() {
             match runner.outer {
                 Some(outer) => match left(&step, types, runner, outer) {
@@ -1398,11 +1406,11 @@ fn perform<'graph, 'here>(
             }
             continue;
         }
-        let unit = runner.current();
+        let unit = runner.current(shape);
         let component = match unit.work {
             UnitWork::Statement(statement) => {
-                let node = Evaluated::Statement(&shape.body()[statement as usize]);
-                if runner.tails(unit) {
+                let node = Evaluated::Statement(statement);
+                if runner.tails(unit, shape) {
                     // The frame's scratch departs after the successor's first step, while the
                     // statement still reads the frame's bindings: adopt what it reads first.
                     if runner.within.routes {
@@ -1430,7 +1438,7 @@ fn perform<'graph, 'here>(
                 }
                 // A caching body keeps its value, so it leaves only where the frame adopts it.
                 let use_ = match runner.yields(unit) {
-                    true if runner.load().caches(shape) => Use::Keeps,
+                    true if at.facts().caches(shape) => Use::Keeps,
                     true => Use::Forwards,
                     false => Use::Reads,
                 };
@@ -1482,7 +1490,12 @@ fn perform<'graph, 'here>(
         let Some(rhs) = shape.rhs(*slot) else {
             return step.failed(StepError::Refused);
         };
-        let asked = ask(&mut step, &runner, Evaluated::Part(rhs), Use::Keeps);
+        let asked = ask(
+            &mut step,
+            &runner,
+            Evaluated::Part(shape.site(rhs)),
+            Use::Keeps,
+        );
         runner.stage = Stage::Evaluation;
         return step.park(asked, run, KState::Runner(runner), None);
     }
@@ -1492,7 +1505,7 @@ fn perform<'graph, 'here>(
 fn ask<'graph, 'here>(
     step: &mut Taking<'_, 'graph, '_, 'here, '_, '_>,
     runner: &Runner<'graph, 'here>,
-    node: Evaluated<'graph>,
+    node: Evaluated,
     use_: Use,
 ) -> Asked {
     let work = runner
@@ -1512,19 +1525,20 @@ fn first_tie<'graph, 'here, 'scratch, 'lent>(
     types: &Chain<'_, 'here, '_, '_>,
     runner: &mut Runner<'graph, 'here>,
     unit: Unit,
-    component: &Component<'graph>,
+    component: &Component<'_>,
 ) -> Result<Option<(Asked, &'scratch [Site])>, Stopped<'here>> {
     let scratch = Bump::new();
-    let mut missed: BumpVec<'_, (Site, &'graph ExpressionPart<'graph>)> = BumpVec::new_in(&scratch);
+    let mut missed: BumpVec<'_, Site> = BumpVec::new_in(&scratch);
     let tied = tie(
         step.writer(),
-        runner.activation,
+        &runner.reading(step),
+        runner.program.written(),
         component,
         runner.within.build,
         types,
         &scratch,
         &mut |site, part| {
-            missed.extend(part.map(|part| (site, part)));
+            missed.extend(part.map(|_| site));
             None
         },
     );
@@ -1534,10 +1548,10 @@ fn first_tie<'graph, 'here, 'scratch, 'lent>(
             Ok(None)
         }
         Err(Untieable::Eager { .. }) if !missed.is_empty() => {
-            let sites = step.scratch_writer().fill(missed.len(), |at| missed[at].0);
+            let sites = step.scratch_writer().fill(missed.len(), |at| missed[at]);
             let mut asked = None;
-            for (_, part) in missed.iter() {
-                asked = Some(ask(step, runner, Evaluated::Part(part), Use::Keeps));
+            for site in missed.iter() {
+                asked = Some(ask(step, runner, Evaluated::Part(*site), Use::Keeps));
             }
             let asked = asked.expect("a tie refused on an eager part named one");
             Ok(Some((asked, sites)))
@@ -1554,22 +1568,23 @@ fn declared<'graph, 'here>(
     types: &Chain<'_, 'here, '_, '_>,
     runner: &mut Runner<'graph, 'here>,
     unit: Unit,
-    component: &Component<'graph>,
+    component: &Component<'_>,
 ) -> Result<(), Stopped<'here>> {
     let scratch = Bump::new();
     let program = runner.program;
     let writer = step.writer();
-    let shape = runner.activation.shape();
+    let at = runner.reading(step);
+    let shape = at.shape();
     let mut loaded = BumpVec::with_capacity_in(component.members.len(), &scratch);
     for slot in component.members {
-        match runner.load().declared_type(shape, *slot) {
+        match at.facts().declared_type(shape, *slot) {
             Static::Closed(handle) => loaded.push(handle),
             _ => break,
         }
     }
     let handles: &[KType] = if loaded.len() == component.members.len() {
         debug_assert_eq!(
-            type_declarations(component, runner.activation, types, &scratch).ok(),
+            type_declarations(component, &at, types, &scratch).ok(),
             Some(&loaded[..]),
             "the load-time types agree with declaring where they run"
         );
@@ -1578,7 +1593,7 @@ fn declared<'graph, 'here>(
         debug_assert!(
             !(component.members.iter())
                 .any(|member| shape.declarations(*member).is_some_and(declares_nominal))
-                || runner.load().mints_at(
+                || at.facts().mints_at(
                     shape,
                     shape.site_of_node(
                         shape
@@ -1588,15 +1603,14 @@ fn declared<'graph, 'here>(
                 ),
             "the load recorded a nominal component declared where it runs as a minting site",
         );
-        let declared =
-            type_declarations(component, runner.activation, types, &scratch).map_err(|error| {
-                Stopped::Raised(rendered(writer, error.display(program.symbols(), types)))
-            })?;
+        let declared = type_declarations(component, &at, types, &scratch).map_err(|error| {
+            Stopped::Raised(rendered(writer, error.display(program.symbols(), types)))
+        })?;
         // Under `routes` an invariant nominal's types are adopted into the warm tier, so the next
         // hop finds them there.
         let site = (shape.declarations(component.members[0])).map(|node| shape.site_of_node(node));
         if runner.within.routes
-            && site.and_then(|site| runner.load().mint_at(shape, site)) == Some(Mint::Invariant)
+            && site.and_then(|site| at.facts().mint_at(shape, site)) == Some(Mint::Invariant)
             && let Some(warm) = step.agent_types()
         {
             for handle in declared.iter() {
@@ -1626,7 +1640,7 @@ fn entered<'graph, 'here>(
     let scratch = Bump::new();
     let body = resident(
         writer,
-        body_activation(writer, runner.activation, slot, &scratch),
+        body_activation(writer, &runner.reading(step), slot, &scratch),
     );
     let outer = resident(
         writer,
@@ -1657,10 +1671,13 @@ fn left<'graph, 'here>(
 ) -> Result<Runner<'graph, 'here>, Stopped<'here>> {
     let scratch = Bump::new();
     let activation = outer.activation;
+    let (code, facts) = step.door();
+    let reading = activation.view().reading(&code, facts);
     let knot = tie(
         step.writer(),
-        activation,
-        activation.shape().component_of(outer.binder),
+        &reading,
+        body.program.written(),
+        reading.shape().component_of(outer.binder),
         body.within.build,
         types,
         &scratch,
@@ -1674,7 +1691,7 @@ fn left<'graph, 'here>(
         outer: outer.outer,
         ..body
     };
-    let unit = resumed.current();
+    let unit = resumed.current(reading.shape());
     resumed.bind(
         unit,
         outer.binder,
@@ -1693,15 +1710,15 @@ fn ended<'graph, 'here>(
     types: &Chain<'_, 'here, '_, '_>,
 ) -> Action<'graph, KBundle> {
     let value = runner.result.unwrap_or(Value::Null);
+    let at = runner.reading(&step);
+    let caches = at.facts().caches(at.shape());
     match (runner.level, runner.contract) {
         (Level::Top, _) => step.leave(KBirth::Inspect {
             program: runner.program,
             view: runner.activation.view(),
         }),
         // A block's value stays in the body it runs in, whose chain reads its types.
-        (Level::Frame | Level::Block, None) if runner.load().caches(runner.shape()) => {
-            step.finish_with(value, types)
-        }
+        (Level::Frame | Level::Block, None) if caches => step.finish_with(value, types),
         (Level::Frame | Level::Block, None) => step.finish(value),
         (Level::Frame | Level::Block, Some(contract)) => {
             let scratch = Bump::new();
@@ -1726,7 +1743,7 @@ fn ended<'graph, 'here>(
                 }
                 None => value,
             };
-            if runner.load().caches(runner.shape()) {
+            if caches {
                 Exit::new(step.types(), types, &scratch).value(&value);
             }
             step.finish(value)

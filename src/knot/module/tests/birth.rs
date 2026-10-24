@@ -48,9 +48,15 @@ LET outside = 1";
             // The members are the body's slots in slot order: value names first, then type names,
             // each channel sorted by name.
             let node = m.module().expect("a module node");
-            let body = activation
-                .shape()
-                .births(activation.shape().slot(fixture.name("m")).unwrap().0)
+            let body = fixture
+                .shape_of(activation)
+                .births(
+                    fixture
+                        .shape_of(activation)
+                        .slot(fixture.name("m"))
+                        .unwrap()
+                        .0,
+                )
                 .expect("a module binder births its body");
             assert_eq!(body.kind(), ShapeKind::Module);
             assert_eq!(node.members().len(), body.slots());
@@ -116,9 +122,15 @@ MODULE outer = ((MODULE inner = (LET n = 1)) (LET f = (FN :{} -> Str = #(greetin
             let activation = fixture.run(context.writer(), types, &lines, &[]);
             let outer = module(fixture, activation, "outer");
             let node = outer.module().expect("a module node");
-            let body = activation
-                .shape()
-                .births(activation.shape().slot(fixture.name("outer")).unwrap().0)
+            let body = fixture
+                .shape_of(activation)
+                .births(
+                    fixture
+                        .shape_of(activation)
+                        .slot(fixture.name("outer"))
+                        .unwrap()
+                        .0,
+                )
                 .expect("a module binder births its body");
             assert_eq!(
                 body.captures().len(),
@@ -240,11 +252,12 @@ fn a_module_member_with_no_body_supplied_is_eager_at_its_bodys_site() {
         fixture.in_cell(pin, |context| {
             let types = &fixture.tiers.of(context);
             let activation = fixture.run(context.writer(), types, &lines, &["m"]);
-            let shape = activation.shape();
+            let shape = fixture.shape_of(activation);
             let (slot, _) = shape.slot(fixture.name("m")).unwrap();
             let refused = tie(
                 context.writer(),
-                activation,
+                &fixture.reading_of(activation),
+                fixture.written(),
                 shape.component_of(slot),
                 crate::values::ArenaRef::ROOT,
                 types,

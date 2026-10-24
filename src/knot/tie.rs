@@ -29,13 +29,13 @@ use std::cell::Cell;
 use crate::elaborate::denoted;
 use crate::memory::{BumpAllocator, BumpVec, Knot, KnotPlan, Writer};
 use crate::parse::ExpressionPart;
-use crate::scope::{BodyShape, Component, ShapeKind};
+use crate::scope::{BodyShape, Component, ShapeKind, Written};
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::{DeclaredType, KType, satisfied_by};
 use crate::values::{ArenaRef, Chain, Weight, retype_target};
 
 use super::data::{self, Stager};
-use super::{Eager, Function, KActivationView, Knotted, Node, Untieable, code, function, module};
+use super::{Eager, Function, KReading, Knotted, Node, Untieable, code, function, module};
 
 /// A knot [`tie`] laid down, beside each member's annotation as the tie resolved it, by member
 /// index: `None` where the member states none, or it does not resolve. The caller holds each slot
@@ -52,11 +52,14 @@ pub struct Tied<'graph, 'cell, 'x> {
 /// several learns them all at once. A refusal writes nothing.
 ///
 /// Member `i` of `component` is the knot's node `i`; the caller binds each member's slot to the
-/// member at that node. A function member is born under the arena node `build`.
+/// member at that node. A function member is born under the arena node `build`, and every member
+/// keeps what it holds of its written code as `written` holds it.
+#[allow(clippy::too_many_arguments)]
 pub fn tie<'graph, 'cell, 'x>(
     writer: Writer<'cell, '_>,
-    activation: &KActivationView<'graph, 'cell>,
-    component: &Component<'graph>,
+    activation: &KReading<'_, 'graph, 'cell>,
+    written: Written<'graph>,
+    component: &Component<'_>,
     build: ArenaRef,
     types: &Chain<'_, 'cell, '_, '_>,
     scratch: BumpAllocator<'x>,
@@ -68,14 +71,15 @@ pub fn tie<'graph, 'cell, 'x>(
     );
     let shape = activation.shape();
     let names = |owner: u32| shape.slot_name(component.members[owner as usize]);
-    let mut roots: BumpVec<'x, Option<&'graph ExpressionPart<'graph>>> =
+    let mut roots: BumpVec<'x, Option<&ExpressionPart<'_>>> =
         BumpVec::with_capacity_in(component.members.len(), scratch);
     for slot in component.members {
         match shape.births(*slot).map(BodyShape::kind) {
             // A module is alone in its component and shares nothing with the staging below.
             Some(ShapeKind::Module) => {
-                let knot =
-                    module::tie_member(writer, activation, component, types, scratch, eager)?;
+                let knot = module::tie_member(
+                    writer, activation, written, component, types, scratch, eager,
+                )?;
                 return Ok(Tied {
                     knot,
                     annotations: BumpVec::new_in(scratch),
@@ -122,7 +126,7 @@ pub fn tie<'graph, 'cell, 'x>(
         let annotation = shape.annotation(*slot)?;
         denoted(annotation, activation, types, scratch).ok()
     }));
-    let mut functions = function::stage(&plan, activation, &bodies, types, scratch)?;
+    let mut functions = function::stage(&plan, activation, written, &bodies, types, scratch)?;
     // An annotated function member is born at the annotation's retype, keeping the signature its
     // body was checked against for its frame.
     for (staged, annotation) in functions.iter_mut().zip(&annotations) {
@@ -138,7 +142,8 @@ pub fn tie<'graph, 'cell, 'x>(
     }
     let mut codes = BumpVec::with_capacity_in(nodes.len(), scratch);
     codes.extend(nodes.iter().map(|node| {
-        let (body, shape) = node.as_ref()?.code()?;
+        let (site, shape) = node.as_ref()?.code()?;
+        let body = written.quote(activation.segment(), site);
         Some(code::staged(body, shape, activation, scratch, |index| {
             plan.edge(index)
                 .expect("a member index is below the knot's count")

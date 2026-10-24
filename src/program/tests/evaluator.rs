@@ -18,7 +18,7 @@
 
 use std::cell::RefCell;
 
-use crate::knot::{KActivationView, KBuiltins, KValue, Knotted, lambda, quote};
+use crate::knot::{KBuiltins, KReading, KValue, Knotted, lambda, quote};
 use crate::memory::{Active, Bump, BumpAllocator, Writer, collect};
 use crate::parse::BuiltinShapeId;
 use crate::parse::{ExpressionPart, KExpression, KLiteral, Spanned};
@@ -28,7 +28,7 @@ use crate::program::{
 use crate::scheduler::{
     Action, NativeStep, Placement, Received, Request, Slot as Asked, Step, StepError, Taken, Use,
 };
-use crate::scope::{Builtins, CaptureSlot, Offer, Position, Slot};
+use crate::scope::{BodyShape, Builtins, CaptureSlot, Code, Located, Offer, Position, Site, Slot};
 use crate::symbols::{KeywordSymbol, SymbolInterner, TypeSymbol, ValueSymbol};
 use crate::type_lattice::KType;
 use crate::values::{Chain, Circular, Knotted as _, Link, List, Record, TypeValue, Value};
@@ -110,18 +110,30 @@ impl Language for Mini {
 }
 
 /// What a node is to the evaluator: one part, a `FN`, or a formless call over several.
-enum Form<'graph> {
-    Leaf(&'graph ExpressionPart<'graph>),
-    Lambda(&'graph KExpression<'graph>),
-    Call(&'graph [Spanned<ExpressionPart<'graph>>]),
+enum Form<'step> {
+    Leaf(&'step ExpressionPart<'step>),
+    Lambda(&'step KExpression<'step>),
+    Call(&'step [Spanned<ExpressionPart<'step>>]),
 }
 
-fn form(node: Evaluated<'_>) -> Form<'_> {
-    let expression = match node {
-        Evaluated::Part(ExpressionPart::Expression(node)) => node.reference(),
-        Evaluated::Part(part) => return Form::Leaf(part),
-        Evaluated::Statement(expression) => expression,
-    };
+fn form<'step>(shape: &'step BodyShape<'step>, node: Evaluated) -> Form<'step> {
+    match node {
+        Evaluated::Statement(index) => of_node(&shape.body()[index as usize]),
+        Evaluated::Part(site) => match shape.located(site) {
+            Located::Part(part) => of_part(part),
+            Located::Node(_) => unreachable!("an evaluated part's site locates a part"),
+        },
+    }
+}
+
+fn of_part<'step>(part: &'step ExpressionPart<'step>) -> Form<'step> {
+    match part {
+        ExpressionPart::Expression(node) => of_node(node.reference()),
+        part => Form::Leaf(part),
+    }
+}
+
+fn of_node<'step>(expression: &'step KExpression<'step>) -> Form<'step> {
     let shape = expression.cache().builtin_shape().map(|shape| shape.id);
     if matches!(
         shape,
@@ -130,7 +142,7 @@ fn form(node: Evaluated<'_>) -> Form<'_> {
         return Form::Lambda(expression);
     }
     match expression.parts {
-        [only] => form(Evaluated::Part(&only.value)),
+        [only] => of_part(&only.value),
         parts => Form::Call(parts),
     }
 }
@@ -141,8 +153,8 @@ fn keyword(part: &Spanned<ExpressionPart<'_>>, text: &str) -> bool {
 
 /// What `part`, a name, reads through `view`.
 fn read<'graph, 'here>(
-    view: &KActivationView<'graph, 'here>,
-    part: &ExpressionPart<'graph>,
+    view: &KReading<'_, 'graph, 'here>,
+    part: &ExpressionPart<'_>,
 ) -> Option<KValue<'graph, 'here>> {
     let mention = view.shape().mention(view.shape().site(part))?;
     Some(view.read(mention.coordinate))
@@ -209,9 +221,11 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'
     else {
         return step.failed(StepError::Refused);
     };
+    let (door, facts) = step.door();
+    let view = view.reading(&door, facts);
     let types = &step.types();
     let scratch = Bump::new();
-    let parts = match form(node) {
+    let parts = match form(view.shape(), node) {
         Form::Leaf(part @ ExpressionPart::Literal(literal)) => {
             if let KLiteral::Number(number) = literal {
                 record(format!("literal {number}"));
@@ -223,7 +237,8 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'
             });
         }
         Form::Leaf(part @ ExpressionPart::QuotedExpression(_)) => {
-            let member = quote(step.writer(), &view, part, types, &scratch);
+            let written = program.written();
+            let member = quote(step.writer(), &view, written, part, types, &scratch);
             return {
                 let writer = step.writer();
                 step.finish(held(
@@ -281,7 +296,9 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'
                         None => return step.failed(StepError::Refused),
                     },
                     ExpressionPart::QuotedExpression(_) => {
-                        cells.push(Value::Knotted(quote(writer, &view, item, types, &scratch)));
+                        let written = program.written();
+                        let member = quote(writer, &view, written, item, types, &scratch);
+                        cells.push(Value::Knotted(member));
                     }
                     _ => match Value::lower_part(writer, item, types, &scratch) {
                         Some(value) => cells.push(value),
@@ -304,6 +321,7 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'
             let Ok(member) = lambda(
                 writer,
                 &view,
+                program.written(),
                 site,
                 crate::values::ArenaRef::ROOT,
                 types,
@@ -326,7 +344,12 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'
         ([when, condition, then, _, otherwise, _], 0)
             if keyword(when, "WHEN") && keyword(then, "THEN") && keyword(otherwise, "ELSE") =>
         {
-            let asked = ask(&mut step, birth, &condition.value, Use::Reads);
+            let asked = ask(
+                &mut step,
+                birth,
+                view.shape().site(&condition.value),
+                Use::Reads,
+            );
             park(step, asked, birth, 1)
         }
         ([_, _, _, taken, _, other], 1) => {
@@ -340,19 +363,29 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'
             let branch = if holds { taken } else { other };
             if contract.is_some() {
                 let work = program.evaluate(
-                    Evaluated::Part(&branch.value),
-                    view,
+                    Evaluated::Part(view.shape().site(&branch.value)),
+                    view.view(),
                     contract,
                     crate::program::Within::TOP,
                 );
                 return step.tail(Placement::Shares, work);
             }
-            let asked = ask(&mut step, birth, &branch.value, Use::Forwards);
+            let asked = ask(
+                &mut step,
+                birth,
+                view.shape().site(&branch.value),
+                Use::Forwards,
+            );
             park(step, asked, birth, 2)
         }
         ([left, minus, right], 0) if keyword(minus, "MINUS") => {
-            ask(&mut step, birth, &left.value, Use::Reads);
-            let asked = ask(&mut step, birth, &right.value, Use::Reads);
+            ask(&mut step, birth, view.shape().site(&left.value), Use::Reads);
+            let asked = ask(
+                &mut step,
+                birth,
+                view.shape().site(&right.value),
+                Use::Reads,
+            );
             park(step, asked, birth, 1)
         }
         ([_, _, _], 1) => {
@@ -394,7 +427,12 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'
             }
         }
         ([head, operand, _, _], 0) if keyword(head, "EVAL") => {
-            let asked = ask(&mut step, birth, &operand.value, Use::Keeps);
+            let asked = ask(
+                &mut step,
+                birth,
+                view.shape().site(&operand.value),
+                Use::Keeps,
+            );
             park(step, asked, birth, 3)
         }
         ([_, operand, _, _], 3) => {
@@ -416,6 +454,7 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'
             let offered = Record::new(step.writer(), &fields, types, &scratch);
             match eval(
                 program,
+                (&door, &facts),
                 types,
                 code,
                 Value::Record(offered),
@@ -435,7 +474,12 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'
             }
         }
         ([_, argument], 0) => {
-            let asked = ask(&mut step, birth, &argument.value, Use::Keeps);
+            let asked = ask(
+                &mut step,
+                birth,
+                view.shape().site(&argument.value),
+                Use::Keeps,
+            );
             park(step, asked, birth, 1)
         }
         ([head, _], 1) => {
@@ -445,7 +489,7 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'
             let Some(callee) = read(&view, &head.value) else {
                 return step.failed(StepError::Refused);
             };
-            let Some(parameter) = parameter(callee) else {
+            let Some(parameter) = parameter(&door, callee) else {
                 return step.failed(StepError::Refused);
             };
             let writer = step.writer();
@@ -493,11 +537,12 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'
 type Taking<'a, 'graph, 'step, 'here, 'scratch, 'lent> =
     Step<'a, 'graph, 'step, 'here, 'scratch, 'lent, KBundle, Taken, Taken>;
 
-/// Ask for one child evaluating `part` through the view `birth` holds, in a region of its own.
+/// Ask for one child evaluating the part at `site` through the view `birth` holds, in a region of
+/// its own.
 fn ask<'graph, 'here>(
     step: &mut Taking<'_, 'graph, '_, 'here, '_, '_>,
     birth: KBirth<'graph, 'here>,
-    part: &'graph ExpressionPart<'graph>,
+    site: Site,
     use_: Use,
 ) -> Asked {
     let KBirth::Evaluate { program, view, .. } = birth else {
@@ -507,7 +552,7 @@ fn ask<'graph, 'here>(
         placement: Placement::Fresh,
         use_,
         work: program.evaluate(
-            Evaluated::Part(part),
+            Evaluated::Part(site),
             view,
             None,
             crate::program::Within::TOP,
@@ -527,8 +572,12 @@ fn park<'graph, 'here>(
 
 /// The name of `callee`'s one **value** parameter. A quantified callee's type-parameter slots are
 /// bound by the frame from its solved group, not by the caller, so they are skipped here.
-fn parameter(callee: KValue<'_, '_>) -> Option<crate::symbols::BinderSymbol> {
-    let shape = callee.as_callable().and_then(Knotted::function)?.shape();
+fn parameter<'step>(
+    code: &Code<'step>,
+    callee: KValue<'_, '_>,
+) -> Option<crate::symbols::BinderSymbol> {
+    let function = callee.as_callable().and_then(Knotted::function)?;
+    let shape = code.shape(function.body().segment);
     (0..shape.slots())
         .map(|slot| shape.slot_name(Slot(slot as u32)))
         .filter(|name| matches!(name, crate::symbols::BinderSymbol::Value(_)))

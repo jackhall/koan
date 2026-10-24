@@ -1,4 +1,4 @@
-//! A function as a knot node: its memoized type, the body shape it runs, the closure bindings a
+//! A function as a knot node: its memoized type, the record of the body it runs, the closure bindings a
 //! call reads its captures through, the shape a registration puts in its bucket, and the weight of
 //! the whole knot it sits in. Its content, which its knot's digest covers, is its body's code
 //! digest, its instance's solution, and the digest of each capture the code digest does not name
@@ -20,7 +20,7 @@ use std::cell::Cell;
 
 use crate::elaborate::{bound_path, callable_type};
 use crate::memory::{BumpAllocator, BumpVec, Edge, KnotPlan, Writer, resident};
-use crate::scope::{Body, BodyShape, ClosureBindings, Registration, ShapeKind, Site};
+use crate::scope::{BodyRef, BodyShape, ClosureBindings, Registration, ShapeKind, Site, Written};
 use crate::scope::{Callable, FunctionGroupMap, ParameterBinding, Registered, ShapeGroupMap};
 use crate::scope::{StaticSolution, solutions};
 use crate::symbols::{BinderSymbol, TypeSymbol};
@@ -32,7 +32,7 @@ use crate::values::{
     ArenaRef, Chain, ContentDigest, Knotted as _, Link, Retyped, Seen, Value, Weight,
 };
 
-use super::{Coerced, KActivationView, KValue, Knotted, Node, Untieable, composed};
+use super::{Coerced, KReading, KValue, Knotted, Node, Untieable, composed};
 
 /// A function: what one knot node holds.
 pub struct Function<'graph, 'cell, X> {
@@ -46,7 +46,7 @@ pub struct Function<'graph, 'cell, X> {
     /// [`Node::Coerced`]: super::Node::Coerced
     typing: Option<&'cell Typing<'cell>>,
     /// The body it runs, beside which of its type captures its content composes.
-    body: &'graph Body<'graph>,
+    body: &'graph BodyRef<'graph>,
     closure: &'cell ClosureBindings<'cell, X>,
     /// What rebuilding the whole knot this node sits in writes, the same on every node; the root
     /// node's also carries the knot's memo bits.
@@ -59,7 +59,7 @@ impl<'graph, 'cell, X> Function<'graph, 'cell, X> {
     pub(super) fn new(
         ktype: DeclaredType<KType>,
         typing: Option<&'cell Typing<'cell>>,
-        body: &'graph Body<'graph>,
+        body: &'graph BodyRef<'graph>,
         closure: &'cell ClosureBindings<'cell, X>,
         knot_weight: Weight,
     ) -> Self {
@@ -122,13 +122,9 @@ impl<'graph, 'cell, X> Function<'graph, 'cell, X> {
         self.quantifier_map().get(name)
     }
 
-    /// The body shape a call activates.
-    pub fn shape(&self) -> &'graph BodyShape<'graph> {
-        self.body.shape
-    }
-
-    /// The body as the function holds it: its shape, and the closure slots its content composes.
-    pub fn body(&self) -> &'graph Body<'graph> {
+    /// The body as the function holds it: the segment of the shape a call activates, and the
+    /// closure slots its content composes.
+    pub fn body(&self) -> &'graph BodyRef<'graph> {
         self.body
     }
 
@@ -190,11 +186,7 @@ impl<'graph, 'cell> Function<'graph, 'cell, Knotted<'graph, 'cell>> {
     pub(super) fn content(&self, parts: &mut dyn FnMut() -> ContentDigest) -> ContentDigest {
         let captures = composed(self.body, self.closure.links())
             .map(|(index, link)| (index, link.digest_from(parts)));
-        function_content(
-            self.body.shape.code_digest(),
-            self.instance().unwrap_or(&[]),
-            captures,
-        )
+        function_content(self.body.code, self.instance().unwrap_or(&[]), captures)
     }
 }
 
@@ -283,7 +275,7 @@ impl<'cell> Typing<'cell> {
 
 /// A function node, read and not yet written.
 pub(super) struct Staged<'graph, 'cell, 'x> {
-    pub body: &'graph Body<'graph>,
+    pub body: &'graph BodyRef<'graph>,
     pub ktype: DeclaredType<KType>,
     /// The name-keyed quantifier map the elaborator handed back, scratch-lived until the tie lays
     /// it into the region.
@@ -332,11 +324,13 @@ impl<'graph, 'cell> Staged<'graph, 'cell, '_> {
 
 /// Read the callable of `body` into `scratch`: its type as the load fixed it, or — where the load
 /// left it unknown — elaborated from the declaration it sits in, born for `registration` or for
-/// none, and its captures read through `activation`, each `Member` source minted by `edge`.
+/// none, and its captures read through `activation`, each `Member` source minted by `edge`. The
+/// function keeps its body's record as `written` holds it.
 pub(super) fn staged<'graph, 'cell, 'x>(
-    body: &'graph BodyShape<'graph>,
-    registration: Option<&Registration<'graph>>,
-    activation: &KActivationView<'graph, 'cell>,
+    body: &BodyShape<'_>,
+    registration: Option<&Registration<'_>>,
+    activation: &KReading<'_, 'graph, 'cell>,
+    written: Written<'graph>,
     types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'x>,
     edge: impl FnMut(u32) -> Edge,
@@ -358,7 +352,7 @@ pub(super) fn staged<'graph, 'cell, 'x>(
         None => elaborated().map_err(Untieable::Type)?,
     };
     // A body whose group the load solved where it is wanted is born as that instance.
-    let (ktype, instance) = match (activation.load().born_instance(body), callable.ktype) {
+    let (ktype, instance) = match (activation.facts().born_instance(body), callable.ktype) {
         (Some(solution), DeclaredType::Scheme(scheme)) => {
             debug_assert!(registration.is_none(), "a registration binds its scheme");
             let solution = solved(solution, activation, types, scratch);
@@ -371,7 +365,7 @@ pub(super) fn staged<'graph, 'cell, 'x>(
     };
     let captures = ClosureBindings::read_captures(body, activation, scratch, edge);
     Ok(Staged {
-        body: activation.load().body(body),
+        body: written.body(body.segment()),
         ktype,
         quantifier_map: callable.quantifier_map,
         registered: callable.registered,
@@ -392,9 +386,9 @@ const BOUND: &str = "an instance's lexical variables are bound where it is read 
 /// `solution`, an instance's solution in group order as the load recorded it, where the site runs:
 /// as it is when closed, and with each lexical variable it names replaced by the type `activation`
 /// reads at its coordinate when rigid.
-fn solved<'graph, 'x>(
-    solution: StaticSolution<'graph>,
-    activation: &KActivationView<'graph, '_>,
+fn solved<'x>(
+    solution: StaticSolution<'_>,
+    activation: &KReading<'_, '_, '_>,
     types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'x>,
 ) -> &'x [KType] {
@@ -437,10 +431,10 @@ fn born<'x>(
 /// through `activation`: as it is when closed, and with its variables substituted when rigid, its
 /// runs copied into `scratch` as an elaborated type's are. `None` where the load left the callable
 /// or its registration unknown.
-fn loaded<'graph, 'x>(
-    body: &'graph BodyShape<'graph>,
-    registration: Option<&Registration<'graph>>,
-    activation: &KActivationView<'graph, '_>,
+fn loaded<'x>(
+    body: &BodyShape<'_>,
+    registration: Option<&Registration<'_>>,
+    activation: &KReading<'_, '_, '_>,
     types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'x>,
 ) -> Option<Callable<'x, KType>> {
@@ -450,7 +444,7 @@ fn loaded<'graph, 'x>(
             .expect(BORN)
     };
     let paths = |at, entry| bound_path(activation, types, at, entry);
-    let callable = (activation.load().callable_type(body)).solved(
+    let callable = (activation.facts().callable_type(body)).solved(
         activation,
         scratch,
         &paths,
@@ -465,7 +459,7 @@ fn loaded<'graph, 'x>(
     let registered = match registration {
         Some(registration) => {
             let registered = activation
-                .load()
+                .facts()
                 .registered_type(activation.shape(), registration.slot)
                 .solved(activation, scratch, &paths, |registered, bindings| {
                     Some(Registered {
@@ -497,18 +491,16 @@ fn loaded<'graph, 'x>(
 }
 
 /// A callable body a knot node runs, beside the registration it is born for.
-pub(super) type Born<'graph> = (
-    &'graph BodyShape<'graph>,
-    Option<&'graph Registration<'graph>>,
-);
+pub(super) type Born<'step> = (&'step BodyShape<'step>, Option<&'step Registration<'step>>);
 
 /// Read every function node into `scratch`, by node index — `bodies[i]` is node `i`'s callable
 /// body beside the registration it is born for, `None` for a data node — each capture of a fellow
 /// member minted as an edge through `plan`.
 pub(super) fn stage<'graph, 'cell, 'x>(
     plan: &KnotPlan,
-    activation: &KActivationView<'graph, 'cell>,
-    bodies: &[Option<Born<'graph>>],
+    activation: &KReading<'_, 'graph, 'cell>,
+    written: Written<'graph>,
+    bodies: &[Option<Born<'_>>],
     types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'x>,
 ) -> Result<BumpVec<'x, Option<Staged<'graph, 'cell, 'x>>>, Untieable<'x>> {
@@ -519,6 +511,7 @@ pub(super) fn stage<'graph, 'cell, 'x>(
                 body,
                 *registration,
                 activation,
+                written,
                 types,
                 scratch,
                 |index| {
@@ -539,10 +532,12 @@ pub(super) fn stage<'graph, 'cell, 'x>(
 /// load left unknown that does not elaborate refuses `Type`, and writes nothing.
 ///
 /// A callable that captures a fellow member is born inside its binder's knot by the tie, which
-/// never asks for it, so no capture here is an edge. It is born under the arena node `build`.
+/// never asks for it, so no capture here is an edge. It is born under the arena node `build`, and
+/// keeps its body's record as `written` holds it.
 pub fn lambda<'graph, 'cell, 'x>(
     writer: Writer<'cell, '_>,
-    activation: &KActivationView<'graph, 'cell>,
+    activation: &KReading<'_, 'graph, 'cell>,
+    written: Written<'graph>,
     site: Site,
     build: ArenaRef,
     types: &Chain<'_, 'cell, '_, '_>,
@@ -553,7 +548,7 @@ pub fn lambda<'graph, 'cell, 'x>(
         .nested(site)
         .filter(|body| body.kind() == ShapeKind::Callable)
         .expect("a lambda is born at the site of a callable body its shape holds");
-    let staged = staged(body, None, activation, types, scratch, |_| {
+    let staged = staged(body, None, activation, written, types, scratch, |_| {
         unreachable!("only the tie births a callable that captures a fellow member")
     })?;
     let (closure, typing, weight) = staged.laid_down(writer, build);
@@ -579,8 +574,8 @@ pub fn lambda<'graph, 'cell, 'x>(
 pub fn barrier_instance<'graph, 'cell>(
     writer: Writer<'cell, '_>,
     member: Knotted<'graph, 'cell>,
-    solution: StaticSolution<'graph>,
-    activation: &KActivationView<'graph, '_>,
+    solution: StaticSolution<'_>,
+    activation: &KReading<'_, '_, '_>,
     types: &Chain<'_, 'cell, '_, '_>,
     scratch: BumpAllocator<'_>,
 ) -> Knotted<'graph, 'cell> {
@@ -616,8 +611,8 @@ pub fn barrier_instance<'graph, 'cell>(
 pub fn header_instance<'graph, 'cell>(
     writer: Writer<'cell, '_>,
     header: &Retyped<Knotted<'graph, 'cell>>,
-    solution: StaticSolution<'graph>,
-    activation: &KActivationView<'graph, '_>,
+    solution: StaticSolution<'_>,
+    activation: &KReading<'_, '_, '_>,
     types: &Chain<'_, 'cell, '_, '_>,
     scratch: BumpAllocator<'_>,
 ) -> KValue<'graph, 'cell> {
@@ -640,8 +635,8 @@ pub fn header_instance<'graph, 'cell>(
 pub fn instance<'graph, 'cell>(
     writer: Writer<'cell, '_>,
     member: Knotted<'graph, 'cell>,
-    solution: StaticSolution<'graph>,
-    activation: &KActivationView<'graph, '_>,
+    solution: StaticSolution<'_>,
+    activation: &KReading<'_, '_, '_>,
     types: &Chain<'_, 'cell, '_, '_>,
     scratch: BumpAllocator<'_>,
 ) -> Knotted<'graph, 'cell> {

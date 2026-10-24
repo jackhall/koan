@@ -124,6 +124,12 @@ impl<'graph> Sites<'graph> {
         self.located.len()
     }
 
+    /// Every site of the body, in program order.
+    #[cfg(test)]
+    pub fn all(&self) -> impl Iterator<Item = Site> {
+        (0..self.located.len() as u32).map(Site)
+    }
+
     fn at(&self, address: usize) -> Site {
         self.find_at(address)
             .expect("a part or node of this shape's statements")

@@ -11,7 +11,7 @@ use crate::knot::{KActivationView, KValue, KnottedFamily};
 use crate::memory::{CrossedOperand, DropFree, Header, Writer, collect, covariant, reattachable};
 use crate::scheduler::{Born, StepBundle};
 use crate::scope::RegionHeader;
-use crate::scope::{BodyShape, Site};
+use crate::scope::{Segment, Site};
 use crate::symbols::Symbol;
 use crate::type_lattice::{DeclaredType, Halves, KType};
 use crate::values::{ArenaRef, ContentDigest, Half, TypeTiers, copy_severed};
@@ -57,7 +57,7 @@ pub enum KBirth<'graph, 'cell> {
     /// evaluation then owes its value. `within` is what its frame runs within.
     Evaluate {
         program: &'graph Program<'graph>,
-        node: Evaluated<'graph>,
+        node: Evaluated,
         view: KActivationView<'graph, 'cell>,
         contract: Option<Contract>,
         within: Within,
@@ -67,7 +67,7 @@ pub enum KBirth<'graph, 'cell> {
     /// parameters bound to what `module` surfaces. `within` as an evaluation's.
     Block {
         program: &'graph Program<'graph>,
-        shape: &'graph BodyShape<'graph>,
+        segment: Segment,
         enclosing: KActivationView<'graph, 'cell>,
         module: Option<KValue<'graph, 'cell>>,
         within: Within,

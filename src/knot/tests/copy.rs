@@ -29,8 +29,9 @@ fn capture<'graph, 'cell>(
 ) -> Link<'cell, Knotted<'graph, 'cell>> {
     let function = callable.function().expect("a function");
     let name = fixture.name(name);
-    let index = function
-        .shape()
+    let index = fixture
+        .code()
+        .shape(function.body().segment)
         .captures()
         .iter()
         .position(|capture| capture.name == name)
@@ -96,8 +97,12 @@ fn a_copied_knot_is_the_same_knot_rebuilt() {
                     "a function equals its copy"
                 );
                 assert!(ptr::eq(
-                    copied.function().expect("a function").shape(),
-                    g.function().expect("a function").shape()
+                    fixture
+                        .code()
+                        .shape(copied.function().expect("a function").body().segment),
+                    fixture
+                        .code()
+                        .shape(g.function().expect("a function").body().segment)
                 ));
                 // The quantifier map is a run in the source region, so the copy re-homes it: a
                 // different address holding the same entries.
@@ -444,12 +449,12 @@ MODULE m = (\
 
 /// The slot each named member of `m`'s body takes — the body shape lives in program storage, so
 /// one reading serves the source module and its copy in another region alike.
-fn member_slots<const N: usize>(
-    fixture: &Fixture<'_, '_>,
-    activation: &super::super::KActivation<'_, '_>,
+fn member_slots<'graph, const N: usize>(
+    fixture: &Fixture<'_, 'graph>,
+    activation: &super::super::KActivation<'graph, '_>,
     names: [&str; N],
 ) -> [Slot; N] {
-    let shape = activation.shape();
+    let shape = fixture.shape_of(activation);
     let (binder, _) = shape.slot(fixture.name("m")).expect("`m` is declared");
     let body = shape
         .births(binder)

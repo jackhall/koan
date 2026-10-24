@@ -1,6 +1,7 @@
-//! A quote's code as a knot node: the quote's body as written, the code shape the program built
-//! for it where it loads, its carried type, and the bindings its code carries — each `$` name's
-//! binding, and each hole a `USING` filled — both runs sorted by name.
+//! A quote's code as a knot node: the quote's body as written, the segment and code digest of the
+//! code shape the program built for it where it loads, its carried type, and the bindings its code
+//! carries — each `$` name's binding, and each hole a `USING` filled — both runs sorted by name. A
+//! reader that needs the shape reads it by segment through its step's door.
 //!
 //! A quote is born where it is evaluated through the quote door, [`quote`], as a one-node knot
 //! whose `$` names are read through the activation the quote sits in. A quote a data member holds
@@ -15,13 +16,13 @@ use std::cell::Cell;
 
 use crate::memory::{BumpAllocator, BumpVec, Edge, KnotPlan, Writer, collect, resident};
 use crate::parse::{ExpressionPart, ProgramNode};
-use crate::scope::{BodyShape, CaptureSource, LoadFacts, ShapeKind};
+use crate::scope::{self, BodyShape, CaptureSource, Facts, Segment, ShapeKind, Site, Written};
 use crate::symbols::{BinderSymbol, KeySymbol};
 use crate::type_lattice::{KType, TypeNode};
 use crate::values::digest::{DigestHasher, Tag};
 use crate::values::{Chain, CodeView, ContentDigest, Link, List, Seen, Value, Weight};
 
-use super::{KActivationView, KValue, Knotted, Node};
+use super::{KActivationView, KReading, KValue, Knotted, Node};
 
 /// One name the code binds, beside its binding.
 pub type Binding<'graph, 'cell> = (BinderSymbol, Link<'cell, Knotted<'graph, 'cell>>);
@@ -30,7 +31,9 @@ pub type Binding<'graph, 'cell> = (BinderSymbol, Link<'cell, Knotted<'graph, 'ce
 /// [`Node::Coerced`] is.
 pub struct Code<'graph, 'cell> {
     body: ProgramNode<'graph>,
-    shape: &'graph BodyShape<'graph>,
+    /// The code shape's segment, and its code digest, which its content covers.
+    segment: Segment,
+    code: ContentDigest,
     ktype: KType,
     /// Each `$` name's binding, sorted by name.
     bound: &'cell [Binding<'graph, 'cell>],
@@ -47,9 +50,9 @@ impl<'graph, 'cell> Code<'graph, 'cell> {
         self.body
     }
 
-    /// The code shape the program built for this quote where it loads.
-    pub fn shape(&self) -> &'graph BodyShape<'graph> {
-        self.shape
+    /// The segment of the code shape the program built for this quote where it loads.
+    pub fn segment(&self) -> Segment {
+        self.segment
     }
 
     /// The carried type: the code's kind, needing the `\` names no binder in the code fills, or the
@@ -93,7 +96,7 @@ impl<'graph, 'cell> Code<'graph, 'cell> {
     /// digest, bound then supplied, a value's answered by `parts`.
     pub(super) fn content(&self, parts: &mut dyn FnMut() -> ContentDigest) -> ContentDigest {
         let mut hasher = DigestHasher::new(Tag::Code);
-        hasher.digest(self.shape.code_digest()).feed(self.ktype);
+        hasher.digest(self.code).feed(self.ktype);
         for run in [self.bound, self.supplied] {
             hasher.count(run.len());
             for (name, link) in run {
@@ -139,7 +142,8 @@ impl<'graph, 'cell> Code<'graph, 'cell> {
         let supplied = run(self.supplied);
         Code {
             body: self.body,
-            shape: self.shape,
+            segment: self.segment,
+            code: self.code,
             ktype: self.ktype,
             bound,
             supplied,
@@ -159,7 +163,8 @@ fn run_weight(run: &[Binding<'_, '_>]) -> Weight {
 /// A code node, read and not yet written.
 pub(super) struct Staged<'graph, 'cell, 'x> {
     pub body: ProgramNode<'graph>,
-    pub shape: &'graph BodyShape<'graph>,
+    pub segment: Segment,
+    pub code: ContentDigest,
     pub bound: BumpVec<'x, Binding<'graph, 'cell>>,
     /// The carried type: the code's own, or the annotation's retype its binder births it at.
     pub ktype: KType,
@@ -188,7 +193,8 @@ impl<'graph, 'cell> Staged<'graph, 'cell, '_> {
             writer,
             Code {
                 body: self.body,
-                shape: self.shape,
+                segment: self.segment,
+                code: self.code,
                 ktype: self.ktype,
                 bound,
                 supplied: &[],
@@ -198,23 +204,24 @@ impl<'graph, 'cell> Staged<'graph, 'cell, '_> {
     }
 }
 
-/// The code shape of the quote `part`, if `part` is one `shape` holds.
-fn shape_of<'graph>(
-    shape: &BodyShape<'graph>,
-    part: &ExpressionPart<'graph>,
-) -> Option<(ProgramNode<'graph>, &'graph BodyShape<'graph>)> {
-    let ExpressionPart::QuotedExpression(body) = part else {
+/// The site and the code shape of the quote `part`, if `part` is one `shape` holds.
+fn shape_of<'step>(
+    shape: &BodyShape<'step>,
+    part: &ExpressionPart<'_>,
+) -> Option<(Site, &'step BodyShape<'step>)> {
+    let ExpressionPart::QuotedExpression(_) = part else {
         return None;
     };
-    let code = shape.nested(shape.site(part))?;
-    (code.kind() == ShapeKind::Code).then_some((*body, code))
+    let site = shape.site(part);
+    let code = shape.nested(site)?;
+    (code.kind() == ShapeKind::Code).then_some((site, code))
 }
 
 /// Read the quote `body` of code shape `shape` into `scratch`: each `$` name's binding read through
 /// `activation`, each `Member` source minted by `edge`.
 pub(super) fn staged<'graph, 'cell, 'x>(
     body: ProgramNode<'graph>,
-    shape: &'graph BodyShape<'graph>,
+    shape: &BodyShape<'_>,
     activation: &KActivationView<'graph, 'cell>,
     scratch: BumpAllocator<'x>,
     mut edge: impl FnMut(u32) -> Edge,
@@ -231,7 +238,8 @@ pub(super) fn staged<'graph, 'cell, 'x>(
     bound.sort_unstable_by_key(|(name, _)| *name);
     Staged {
         body,
-        shape,
+        segment: shape.segment(),
+        code: shape.code_digest(),
         bound,
         ktype: shape.code_type(),
     }
@@ -241,7 +249,7 @@ pub(super) fn staged<'graph, 'cell, 'x>(
 fn one_node<'graph, 'cell>(
     writer: Writer<'cell, '_>,
     body: ProgramNode<'graph>,
-    shape: &'graph BodyShape<'graph>,
+    shape: &BodyShape<'_>,
     bound: &[Binding<'graph, 'cell>],
     supplied: &[Binding<'graph, 'cell>],
     types: &Chain<'_, '_, '_, '_>,
@@ -258,7 +266,8 @@ fn one_node<'graph, 'cell>(
             writer,
             Code {
                 body,
-                shape,
+                segment: shape.segment(),
+                code: shape.code_digest(),
                 ktype: shape.code_type(),
                 bound,
                 supplied,
@@ -270,21 +279,23 @@ fn one_node<'graph, 'cell>(
 }
 
 /// The quote door: birth the quote `part` that `activation`'s shape holds as a one-node knot in
-/// `writer`'s region, each `$` name read through `activation`. The shape was built where the
-/// program loaded, so nothing is refused here: an error in the code waits for the `EVAL` that runs
-/// it.
+/// `writer`'s region, each `$` name read through `activation`, its syntax kept as `written` holds
+/// it. The shape was built where the program loaded, so nothing is refused here: an error in the
+/// code waits for the `EVAL` that runs it.
 ///
 /// A quote whose `$` name reads a fellow member is born inside its binder's knot by the tie, which
 /// never asks for it, so no binding here is an edge.
 pub fn quote<'graph, 'cell>(
     writer: Writer<'cell, '_>,
-    activation: &KActivationView<'graph, 'cell>,
-    part: &'graph ExpressionPart<'graph>,
+    activation: &KReading<'_, 'graph, 'cell>,
+    written: Written<'graph>,
+    part: &ExpressionPart<'_>,
     types: &Chain<'_, 'cell, '_, '_>,
     scratch: BumpAllocator<'_>,
 ) -> Knotted<'graph, 'cell> {
-    let (body, shape) = shape_of(activation.shape(), part)
+    let (site, shape) = shape_of(activation.shape(), part)
         .expect("a quote is born at the site of a code shape its shape holds");
+    let body = written.quote(activation.segment(), site);
     let staged = staged(body, shape, activation, scratch, |_| {
         unreachable!("only the tie births a quote that reads a fellow member")
     });
@@ -303,8 +314,9 @@ pub enum UsingRefused {
 /// whose other holes stay holes. A name hole takes the field of `source` — a record, or a module's
 /// member — that it names; a keyworded hole takes the list of a module's registrations at its key,
 /// and stays open where the module has none. A field naming no hole is ignored, and a hole an
-/// earlier `USING` filled is no hole, so it is never rebound. Code whose shape carries a refusal
-/// comes back unchanged — `facts` say which does: its holes are unknown, and the `EVAL` that runs it reports the refusal.
+/// earlier `USING` filled is no hole, so it is never rebound. Code whose shape, read through
+/// `door`, carries a refusal comes back unchanged — `facts` say which does: its holes are unknown,
+/// and the `EVAL` that runs it reports the refusal.
 /// Each binding of `code` that is an edge is resolved to the member it names, so the new knot's
 /// runs hold value words only.
 ///
@@ -312,7 +324,8 @@ pub enum UsingRefused {
 /// than the code's own candidates at the key do.
 pub fn using<'graph, 'cell>(
     writer: Writer<'cell, '_>,
-    facts: &LoadFacts<'graph>,
+    door: &scope::Code<'_>,
+    facts: &Facts<'_>,
     code: Knotted<'graph, 'cell>,
     source: KValue<'graph, 'cell>,
     types: &Chain<'_, 'cell, '_, '_>,
@@ -321,7 +334,7 @@ pub fn using<'graph, 'cell>(
     let node = code
         .code()
         .expect("`USING` fills the holes of a quote's code");
-    let shape = node.shape();
+    let shape = door.shape(node.segment());
     if facts.typing_refusal(shape).is_some() {
         return Ok(code);
     }
@@ -373,7 +386,7 @@ pub fn using<'graph, 'cell>(
 /// is refused.
 fn keyed<'graph, 'cell>(
     writer: Writer<'cell, '_>,
-    shape: &BodyShape<'graph>,
+    shape: &BodyShape<'_>,
     key: KeySymbol,
     source: KValue<'graph, 'cell>,
     types: &Chain<'_, 'cell, '_, '_>,

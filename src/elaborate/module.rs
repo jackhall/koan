@@ -11,7 +11,7 @@
 //! binds every name it declares.
 
 use crate::memory::BumpAllocator;
-use crate::scope::{ActivationView, BodyShape, ShapeKind, Slot};
+use crate::scope::{BodyShape, Reading, ShapeKind, Slot};
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::{DeclaredType, KType, Parametric, SchemaDraft};
 use crate::values::{Chain, KnottedFamily, Value};
@@ -20,7 +20,7 @@ use crate::values::{Chain, KnottedFamily, Value};
 /// of its registrations' functions registers. Every slot is bound: the caller runs the body to
 /// completion and only then ties the binder.
 pub fn self_signature<'graph, XF: KnottedFamily<'graph>>(
-    activation: &ActivationView<'graph, '_, XF>,
+    activation: &Reading<'_, 'graph, '_, XF>,
     keyworded: &[DeclaredType<KType>],
     types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,

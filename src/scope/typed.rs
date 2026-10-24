@@ -22,7 +22,7 @@ use crate::symbols::{BinderSymbol, Symbol, SymbolInterner, TypeSymbol, ValueSymb
 use crate::type_lattice::{DeclaredType, KType, Parametric, Verdict, display_name};
 use crate::values::{Chain, KnottedFamily, Value};
 
-use super::activation::ActivationView;
+use super::activation::Reading;
 use super::keyed::Keyed;
 use super::shape::{Candidate, Coordinate, Segment, Site, Slot};
 use super::tree::{Binder, Tree};
@@ -490,11 +490,11 @@ pub type Paths<'f, 'graph> = &'f dyn Fn(Coordinate, PathEntry<'graph>) -> Option
 /// for a path variable, the type `paths` reads through its root — and `Never` where no variable is
 /// listed: a gap no free variable of the rigid value names. A path the load resolved closed is that
 /// type, with no read. `None` when a coordinate holds anything but a type, or a path reads none.
-pub fn solutions<'graph, 'x, XF: KnottedFamily<'graph>>(
+pub fn solutions<'step, 'graph, 'x, XF: KnottedFamily<'graph>>(
     variables: &[Variable],
-    view: &ActivationView<'graph, '_, XF>,
+    view: &Reading<'step, 'graph, '_, XF>,
     scratch: BumpAllocator<'x>,
-    paths: Paths<'_, 'graph>,
+    paths: Paths<'_, 'step>,
 ) -> Option<BumpVec<'x, KType>> {
     let len = variables.iter().map(|variable| variable.level + 1).max();
     let mut bindings = BumpVec::with_capacity_in(len.unwrap_or(0), scratch);
@@ -506,9 +506,9 @@ pub fn solutions<'graph, 'x, XF: KnottedFamily<'graph>>(
                 _ => return None,
             },
             Source::Path { at, root, level } => {
-                let load = view.load();
-                let root = load.shapes().shape_at(root);
-                let (entry, resolution) = load.path(root, level)?;
+                let facts = view.facts();
+                let root = facts.shapes().shape_at(root);
+                let (entry, resolution) = facts.path(root, level)?;
                 match resolution.closed() {
                     Some(closed) => closed,
                     None => paths(at?, entry)?,
@@ -519,7 +519,7 @@ pub fn solutions<'graph, 'x, XF: KnottedFamily<'graph>>(
     Some(bindings)
 }
 
-impl<'graph, C, R> Static<'graph, C, R> {
+impl<C, R> Static<'_, C, R> {
     /// Whether the value is rigid over a path variable.
     pub fn over_paths(&self) -> bool {
         match self {
@@ -534,11 +534,11 @@ impl<'graph, C, R> Static<'graph, C, R> {
     /// its variables replaced by what their coordinates read, through `substitute`. `None` for an
     /// unknown value, where a variable's coordinate holds no type, and where `substitute` finds no
     /// concrete value.
-    pub fn solved<'x, XF: KnottedFamily<'graph>>(
+    pub fn solved<'step, 'graph, 'x, XF: KnottedFamily<'graph>>(
         self,
-        view: &ActivationView<'graph, '_, XF>,
+        view: &Reading<'step, 'graph, '_, XF>,
         scratch: BumpAllocator<'x>,
-        paths: Paths<'_, 'graph>,
+        paths: Paths<'_, 'step>,
         substitute: impl FnOnce(R, &[KType]) -> Option<C>,
     ) -> Option<C> {
         match self {

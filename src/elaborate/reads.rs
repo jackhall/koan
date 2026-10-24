@@ -11,7 +11,7 @@
 
 use crate::memory::{Bump, BumpAllocator};
 use crate::parse::ExpressionPart;
-use crate::scope::{Activation, ActivationView, BodyShape, Coordinate, Elaboration, Site};
+use crate::scope::{BodyShape, Coordinate, Elaboration, Reading, Site};
 use crate::symbols::{BinderSymbol, TypeSymbol, ValueSymbol};
 use crate::type_lattice::{KType, Parametric, TypeNode, substitute_levels};
 use crate::values::{Chain, KnottedFamily, Value};
@@ -101,9 +101,9 @@ fn member_through(
     Some(read.map_or(TypeAt::NotAType, TypeAt::Type))
 }
 
-impl<'graph, XF: KnottedFamily<'graph>> Reads<'graph> for ActivationView<'graph, '_, XF> {
-    fn shape(&self) -> &'graph BodyShape<'graph> {
-        ActivationView::shape(self)
+impl<'step, 'graph, XF: KnottedFamily<'graph>> Reads<'step> for Reading<'step, 'graph, '_, XF> {
+    fn shape(&self) -> &'step BodyShape<'step> {
+        Reading::shape(self)
     }
 
     fn type_at(&self, at: Coordinate) -> TypeAt {
@@ -126,10 +126,10 @@ impl<'graph, XF: KnottedFamily<'graph>> Reads<'graph> for ActivationView<'graph,
         let signature = held.concrete_ktype();
         // The shape numbers every path its type expressions spell; one the load read through a
         // declared application binds as the run's path variable does.
-        let load = self.load();
-        if let Some((root, level)) = load.path_read(self.shape(), site)
-            && let root = load.shapes().shape_at(root)
-            && let Some((entry, resolution)) = load.path(root, level)
+        let facts = self.facts();
+        if let Some((root, level)) = facts.path_read(self.shape(), site)
+            && let root = facts.shapes().shape_at(root)
+            && let Some((entry, resolution)) = facts.path(root, level)
             && entry.through.is_some()
         {
             let bound = match resolution.closed() {
@@ -154,9 +154,9 @@ impl<'graph, XF: KnottedFamily<'graph>> Reads<'graph> for ActivationView<'graph,
         _chain: &[ValueSymbol],
         _name: TypeSymbol,
     ) -> TypeAt {
-        let load = self.load();
-        let read = load.path_read(self.shape(), site);
-        let path = read.and_then(|(root, level)| load.path(load.shapes().shape_at(root), level));
+        let facts = self.facts();
+        let read = facts.path_read(self.shape(), site);
+        let path = read.and_then(|(root, level)| facts.path(facts.shapes().shape_at(root), level));
         match path.and_then(|(_, resolution)| resolution.closed()) {
             Some(closed) => TypeAt::Type(closed),
             None => TypeAt::Unknown,
@@ -164,42 +164,11 @@ impl<'graph, XF: KnottedFamily<'graph>> Reads<'graph> for ActivationView<'graph,
     }
 }
 
-impl<'graph, XF: KnottedFamily<'graph>> Reads<'graph> for Activation<'graph, '_, XF> {
-    fn shape(&self) -> &'graph BodyShape<'graph> {
-        ActivationView::shape(self)
-    }
-
-    fn type_at(&self, at: Coordinate) -> TypeAt {
-        ActivationView::type_at(self, at)
-    }
-
-    fn member_type(
-        &self,
-        at: Coordinate,
-        site: Site,
-        chain: &[ValueSymbol],
-        name: TypeSymbol,
-        types: &Chain<'_, '_, '_, '_>,
-    ) -> Option<(TypeAt, KType)> {
-        ActivationView::member_type(self, at, site, chain, name, types)
-    }
-
-    fn inline_member(
-        &self,
-        site: Site,
-        root: Site,
-        chain: &[ValueSymbol],
-        name: TypeSymbol,
-    ) -> TypeAt {
-        ActivationView::inline_member(self, site, root, chain, name)
-    }
-}
-
 /// The type the type part `part` of `view`'s shape denotes where it runs: the load fixed it where
 /// it could, and only what it left unknown is elaborated here.
-pub fn denoted<'graph, XF: KnottedFamily<'graph>>(
-    part: &'graph ExpressionPart<'graph>,
-    view: &ActivationView<'graph, '_, XF>,
+pub fn denoted<'step, 'graph, XF: KnottedFamily<'graph>>(
+    part: &'step ExpressionPart<'step>,
+    view: &Reading<'step, 'graph, '_, XF>,
     types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
 ) -> Result<KType, Elaboration> {
@@ -210,7 +179,7 @@ pub fn denoted<'graph, XF: KnottedFamily<'graph>>(
             .expect("a type read where it runs holds no variable")
     };
     let elaborated = || type_expression(part, view, types, scratch).map(concrete);
-    let loaded = (view.load())
+    let loaded = (view.facts())
         .typed_expression(view.shape(), view.shape().site(part))
         .solved(
             view,

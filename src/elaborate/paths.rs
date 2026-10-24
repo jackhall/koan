@@ -10,7 +10,7 @@
 //! written in a type it left unknown through the same function.
 
 use crate::memory::{Bump, BumpAllocator, BumpVec};
-use crate::scope::{ActivationView, Coordinate, PathEntry, solutions};
+use crate::scope::{Coordinate, PathEntry, Reading, solutions};
 use crate::symbols::{BinderSymbol, TypeSymbol, ValueSymbol};
 use crate::type_lattice::{
     DeclaredType, KType, Parametric, TypeNode, fits_application, member, substitute_levels,
@@ -83,11 +83,11 @@ pub fn path_binding(
 /// The type a path entry binds to, read through the module at `at` of `view`: its `through`
 /// solved where `view`'s shape locates its variables, then [`path_binding`]. What [`solutions`] is
 /// handed to bind a path variable the load did not resolve closed.
-pub fn bound_path<'graph, XF: KnottedFamily<'graph>>(
-    view: &ActivationView<'graph, '_, XF>,
+pub fn bound_path<'step, 'graph, XF: KnottedFamily<'graph>>(
+    view: &Reading<'step, 'graph, '_, XF>,
     types: &Chain<'_, '_, '_, '_>,
     at: Coordinate,
-    entry: PathEntry<'graph>,
+    entry: PathEntry<'step>,
 ) -> Option<KType> {
     let held = view.read(at);
     held.as_module()?;
@@ -97,7 +97,7 @@ pub fn bound_path<'graph, XF: KnottedFamily<'graph>>(
         Some(through) => Some(match types.concrete(through) {
             Some(closed) => closed,
             None => {
-                let located = view.load().through_at(view.shape(), entry.level)?;
+                let located = view.facts().through_at(view.shape(), entry.level)?;
                 let bindings = solutions(located, view, &scratch, &|_, _| None)?;
                 types.concrete(substitute_levels(types, &scratch, through, &bindings))?
             }

@@ -212,7 +212,7 @@ impl CellSubstrate {
                         &writer.fill(1, |_| Cell::new(false))[0],
                     ),
                 );
-                Ok((tiers, program))
+                Ok((tiers, walked, program))
             })?;
             Ok(Running {
                 graph,

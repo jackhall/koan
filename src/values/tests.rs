@@ -472,7 +472,7 @@ impl Knotted for Stand<'_> {
     {
         match *self {
             Stand::Function(identity) => Resolved::Function {
-                identity,
+                identity: super::FunctionIdentity::Builtin(identity),
                 instance: &[],
                 closure: &[],
                 composes: &[],

@@ -38,7 +38,7 @@
 //! one fit. [`nested_types`] is the same half of a nested re-view, which the load lays wherever it
 //! knows what a nested module carries (`dispatch/walk/views.rs`).
 
-use crate::knot::{KActivationView, KValue, Knotted, composed};
+use crate::knot::{KReading, KValue, Knotted, composed};
 use crate::memory::{BumpAllocator, BumpVec, Writer};
 use crate::scope::ViewSlots;
 use crate::symbols::{BinderSymbol, TypeSymbol, ValueSymbol};
@@ -92,8 +92,8 @@ pub fn takes(types: &Chain<'_, '_, '_, '_>, ascribed: KType) -> bool {
 /// value its slot does. Any other capture is digested through one demand opened for them all.
 pub fn fill_at_view<'graph, 'cell>(
     source: KValue<'graph, 'cell>,
-    slots: ViewSlots<'graph>,
-    view: &KActivationView<'graph, 'cell>,
+    slots: ViewSlots<'_>,
+    view: &KReading<'_, 'graph, 'cell>,
     types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
 ) {
@@ -105,7 +105,7 @@ pub fn fill_at_view<'graph, 'cell>(
     };
     // The memos are placed for the captures of the body the load read; any other module's
     // content is left to the view's own walk.
-    if body.shape.segment() != slots.body {
+    if body.segment != slots.body {
         return;
     }
     let mut memo = None;
@@ -122,7 +122,7 @@ pub fn fill_at_view<'graph, 'cell>(
         }
         (index, digest)
     });
-    let content = ModuleContent::body(body.shape.code_digest(), captures);
+    let content = ModuleContent::body(body.code, captures);
     #[cfg(test)]
     if CHECK_SLOT_MEMOS.get() {
         let mut fresh = Digests::new(types, scratch);
@@ -130,7 +130,7 @@ pub fn fill_at_view<'graph, 'cell>(
             composed(body, closure.links()).map(|(index, link)| (index, link.digest(&mut fresh)));
         assert_eq!(
             content,
-            ModuleContent::body(body.shape.code_digest(), walked),
+            ModuleContent::body(body.code, walked),
             "a slot's memo holds the digest of the value its capture holds"
         );
     }

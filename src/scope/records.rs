@@ -1,7 +1,8 @@
-//! The **load's facts**, read through one door: [`LoadFacts`]. The run and the suites read every
-//! fact the load decided about a body through it, each accessor taking the body's shape first, so
-//! no reader names where a fact is kept. A shape names its body by its segment alone, so a reader
-//! may hand in a shape borrowed for any lifetime.
+//! The **load's facts**, read through one set of readers over a source of records: [`LoadFacts`]
+//! over one load's own, and [`Facts`], what a step reads through its door, over a cell's layers and
+//! the load they rest on. Every reader takes the body's shape first, so no reader names where a
+//! fact is kept. A shape names its body by its segment alone, so a reader may hand in a shape
+//! borrowed for any lifetime.
 //!
 //! It reads the one walk's records: one [`UnitFacts`] per unit the walk ran, each beside the
 //! frontier it gathered, one [`Closing`] per owning body, and the [`Folds`] the load lays per body
@@ -10,16 +11,21 @@
 //! unit it re-ran replaces the base's record of it whole. The records index every closed tree their
 //! units computed by its identity, read through [`LoadFacts::tree_of`].
 //!
-//! A `LoadFacts` is laid in program storage before the program is, and an activation carries it, so
-//! every reader holding a view reads through [`ActivationView::load`](super::ActivationView::load).
+//! A `LoadFacts` is laid in program storage before the program is. A step reads it at its own
+//! lifetime through the [`Facts`] its door builds, so nothing a cell parks points into it; a value
+//! born of written code keeps what it holds of its body through [`Written`], since the load is
+//! never evicted.
 
 use crate::memory::{BumpAllocator, BumpVec, Lays, collect, resident};
+use crate::parse::{ExpressionPart, ProgramNode};
 use crate::type_lattice::{DeclaredType, Interval, KType, Parametric};
 use crate::values::ContentDigest;
 
 use super::facts::{Binding, Frontier, UnitId};
 use super::keyed::Keyed;
-use super::shape::{BodyShape, Coordinate, Position, Segment, ShapeError, Site, Slot, Target};
+use super::shape::{
+    BodyShape, Coordinate, Located, Position, Segment, ShapeError, Site, Slot, Target,
+};
 use super::shapes::Shapes;
 use super::tree::{Leaf, NodeCapture, Tree, closed_trees};
 use super::typed::{
@@ -308,24 +314,176 @@ pub struct NamedVariable {
     pub level: usize,
 }
 
-/// Every fact one load decided, by body, beside the shape table they are facts of.
+/// The fact readers over a source of records: [`LoadFacts`] over one load's, [`Facts`] over a
+/// cell's layers and the load they rest on. Every reader takes the body's shape first and finds
+/// the fact by its segment, so a reader may hand in a shape borrowed for any lifetime.
 #[derive(Clone, Copy)]
-pub struct LoadFacts<'graph> {
+pub struct FactsOver<S>(S);
+
+/// Every fact one load decided, by body, beside the shape table they are facts of.
+pub type LoadFacts<'graph> = FactsOver<LoadRecords<'graph>>;
+
+/// What a step reads facts through, at the step's own lifetime `'step`: the load its cell's chain
+/// rests on, beneath the cell's own layers. Built per step from the cell's arena reference, so
+/// keeping one past the step does not compile:
+///
+/// ```compile_fail
+/// use koan::memory::{Writer, resident};
+/// use koan::scope::Facts;
+///
+/// fn keep<'here>(writer: Writer<'here, '_>, facts: Facts<'_>) -> &'here Facts<'here> {
+///     resident(writer, facts)
+/// }
+/// ```
+pub type Facts<'step> = FactsOver<Layers<'step>>;
+
+/// One load's records, beside the shape table they are records of.
+#[derive(Clone, Copy)]
+pub struct LoadRecords<'graph> {
     shapes: &'graph Shapes<'graph>,
     records: &'graph Records<'graph>,
 }
 
-/// A body as a value born of it holds it: its shape, beside which of its closure slots its content
-/// composes — its builder captures but those reading the program's top level, then the type
-/// captures its contract names. A value's digest and its equality read those alone. One pointer,
-/// so a value holds it in place of its shape's.
+/// A cell's layers over the load its chain rests on: none yet, so every read falls to the load.
 #[derive(Clone, Copy)]
-pub struct Body<'graph> {
-    pub shape: &'graph BodyShape<'graph>,
-    pub composes: &'graph [bool],
+pub struct Layers<'step> {
+    base: LoadRecords<'step>,
 }
 
-impl Body<'_> {
+impl<'step> Facts<'step> {
+    /// The facts a cell under the load reads: the load's alone.
+    pub fn of(load: &LoadFacts<'step>) -> Self {
+        FactsOver(Layers { base: load.0 })
+    }
+}
+
+/// Where the fact readers find a record. A load's own records lie over its base's, and a re-run
+/// unit's record replaces the base's whole.
+pub(crate) trait RecordSource<'a>: Copy {
+    fn shapes(&self) -> &'a Shapes<'a>;
+
+    /// The newest record of `unit`, beside its frontier.
+    fn unit(&self, unit: UnitId) -> Option<(&'a UnitFacts<'a>, Frontier<'a>)>;
+
+    /// The newest closing record of the owning body `body`, beside its frontier.
+    fn closing(&self, body: Segment) -> Option<(&'a Closing<'a>, Frontier<'a>)>;
+
+    /// The record holding `held`, beside its unit.
+    fn holding(&self, held: Held) -> Option<(UnitId, &'a UnitFacts<'a>)>;
+
+    /// `body` as its load laid it.
+    fn laid(&self, body: Segment) -> &'a Laid<'a>;
+
+    /// The folds of `body`.
+    fn folds(&self, body: Segment) -> Option<Folds<'a>>;
+
+    /// The closed tree whose identity is `digest`.
+    fn tree_of(&self, digest: ContentDigest) -> Option<&'a Tree<'a>>;
+}
+
+impl<'graph> RecordSource<'graph> for LoadRecords<'graph> {
+    fn shapes(&self) -> &'graph Shapes<'graph> {
+        self.shapes
+    }
+
+    fn unit(&self, unit: UnitId) -> Option<(&'graph UnitFacts<'graph>, Frontier<'graph>)> {
+        self.records.unit(unit)
+    }
+
+    fn closing(&self, body: Segment) -> Option<(&'graph Closing<'graph>, Frontier<'graph>)> {
+        self.records.closing(body)
+    }
+
+    fn holding(&self, held: Held) -> Option<(UnitId, &'graph UnitFacts<'graph>)> {
+        self.records.holding(held)
+    }
+
+    fn laid(&self, body: Segment) -> &'graph Laid<'graph> {
+        self.records.laid(body)
+    }
+
+    fn folds(&self, body: Segment) -> Option<Folds<'graph>> {
+        self.records.folds(body)
+    }
+
+    fn tree_of(&self, digest: ContentDigest) -> Option<&'graph Tree<'graph>> {
+        match self.records.trees.get(digest) {
+            Some((_, tree)) => Some(tree),
+            None => self.records.base?.0.tree_of(digest),
+        }
+    }
+}
+
+impl<'step> RecordSource<'step> for Layers<'step> {
+    fn shapes(&self) -> &'step Shapes<'step> {
+        self.base.shapes()
+    }
+
+    fn unit(&self, unit: UnitId) -> Option<(&'step UnitFacts<'step>, Frontier<'step>)> {
+        self.base.unit(unit)
+    }
+
+    fn closing(&self, body: Segment) -> Option<(&'step Closing<'step>, Frontier<'step>)> {
+        self.base.closing(body)
+    }
+
+    fn holding(&self, held: Held) -> Option<(UnitId, &'step UnitFacts<'step>)> {
+        self.base.holding(held)
+    }
+
+    fn laid(&self, body: Segment) -> &'step Laid<'step> {
+        self.base.laid(body)
+    }
+
+    fn folds(&self, body: Segment) -> Option<Folds<'step>> {
+        self.base.folds(body)
+    }
+
+    fn tree_of(&self, digest: ContentDigest) -> Option<&'step Tree<'step>> {
+        self.base.tree_of(digest)
+    }
+}
+
+/// The program's written code, read at the program's own lifetime: what a value born of it keeps,
+/// its body's record or a quote's syntax. The load is never evicted, so a value may point into it;
+/// every fact a step decides by is read through [`Facts`] instead.
+#[derive(Clone, Copy)]
+pub struct Written<'graph>(LoadRecords<'graph>);
+
+impl<'graph> Written<'graph> {
+    /// The written code `load` holds.
+    pub fn of(load: &LoadFacts<'graph>) -> Self {
+        Written(load.0)
+    }
+
+    /// The body at `segment`, as a value born of it holds it.
+    pub fn body(&self, segment: Segment) -> &'graph BodyRef<'graph> {
+        &self.0.laid(segment).body
+    }
+
+    /// The written syntax of the quote at `site` of the body at `segment`.
+    pub fn quote(&self, segment: Segment, site: Site) -> ProgramNode<'graph> {
+        match self.0.shapes.shape_at(segment).located(site) {
+            Located::Part(ExpressionPart::QuotedExpression(node)) => *node,
+            _ => unreachable!("a quote's site locates its quoted expression"),
+        }
+    }
+}
+
+/// A body as a value born of it holds it: the base whose shape table holds it, by digest, its
+/// segment there, its code digest, and which of its closure slots its content composes — its
+/// builder captures but those reading the program's top level, then the type captures its contract
+/// names. A value's identity, digest and equality read those alone. One pointer, so a value holds
+/// it in place of its shape's.
+#[derive(Clone, Copy)]
+pub struct BodyRef<'a> {
+    pub base: ContentDigest,
+    pub segment: Segment,
+    pub code: ContentDigest,
+    pub composes: &'a [bool],
+}
+
+impl BodyRef<'_> {
     /// Whether the closure slot `at` composes: one past the slots recorded does.
     pub fn composed(&self, at: usize) -> bool {
         self.composes.get(at).copied().unwrap_or(true)
@@ -368,8 +526,8 @@ struct Records<'graph> {
 
 /// One body as a [`Records`] load lays it.
 #[derive(Clone, Copy)]
-struct Laid<'graph> {
-    body: Body<'graph>,
+pub(crate) struct Laid<'graph> {
+    body: BodyRef<'graph>,
     captures: &'graph [Coordinate],
     folds: Option<Folds<'graph>>,
 }
@@ -378,7 +536,7 @@ struct Laid<'graph> {
 /// a statement's and a birth's unit is the shape's to name: [`Shapes::slot_unit`],
 /// [`Shapes::running`] and [`Shapes::birth_unit`].
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
-enum Held {
+pub(crate) enum Held {
     Site(Segment, Site),
     Through(Segment, usize),
     /// A path entry, by its chain root and level.
@@ -386,10 +544,24 @@ enum Held {
 }
 
 impl<'graph> LoadFacts<'graph> {
+    /// The facts of a load that built no shape: what a graph that runs no program reads.
+    pub const EMPTY: Self = FactsOver(LoadRecords {
+        shapes: &Shapes::EMPTY,
+        records: &Records {
+            base: None,
+            binding: Binding::EMPTY,
+            units: Keyed::EMPTY,
+            closings: Keyed::EMPTY,
+            index: Keyed::EMPTY,
+            trees: Keyed::EMPTY,
+            bodies: &[],
+        },
+    });
+
     /// The bytes of this load's records index.
     #[cfg(test)]
     pub fn index_bytes(&self) -> usize {
-        std::mem::size_of_val(self.records.index.entries())
+        std::mem::size_of_val(self.0.records.index.entries())
     }
 
     /// The bytes of the facts this load's records index keys: each own record's paths, and each
@@ -430,10 +602,10 @@ impl<'graph> LoadFacts<'graph> {
             trees: Keyed::EMPTY,
             bodies: &[],
         };
-        LoadFacts {
+        FactsOver(LoadRecords {
             shapes,
             records: resident(lay, records),
-        }
+        })
         .folded(lay, &[])
     }
 
@@ -460,7 +632,7 @@ impl<'graph> LoadFacts<'graph> {
             held.windows(2).all(|pair| pair[0].0 != pair[1].0),
             "each fact lies in one unit's record"
         );
-        debug_assert!(base.is_none_or(|base| std::ptr::eq(base.shapes, shapes)));
+        debug_assert!(base.is_none_or(|base| std::ptr::eq(base.0.shapes, shapes)));
         if cfg!(debug_assertions) {
             for (id, (facts, _)) in units.iter() {
                 let placed = facts.typed.iter().all(|(segment, typed)| {
@@ -494,122 +666,134 @@ impl<'graph> LoadFacts<'graph> {
             trees: closed_trees(lay, scratch, computed),
             bodies: &[],
         };
-        LoadFacts {
+        FactsOver(LoadRecords {
             shapes,
             records: resident(lay, records),
-        }
+        })
     }
 
     /// These records beside `folds`, by segment: every capture composing where it is empty.
     pub fn folded(&self, lay: impl Lays<'graph>, folds: &[Folds<'graph>]) -> Self {
-        let records = self.records;
-        let shapes = self.shapes;
+        let records = self.0.records;
+        let shapes = self.0.shapes;
         debug_assert!(folds.is_empty() || folds.len() == shapes.bodies().len());
         let bodies = shapes.bodies();
+        let base = shapes.root().code_digest();
         let bodies = lay.fill(bodies.len(), |at| {
             let shape = bodies[at];
             let layout = shapes.layout(shape.segment());
             let folds = folds.get(at).copied();
             let contract = |index: usize| folds.is_none_or(|folds| folds.contract[index]);
             Laid {
-                body: Body {
-                    shape,
+                body: BodyRef {
+                    base,
+                    segment: shape.segment(),
+                    code: shape.code_digest(),
                     composes: composes(lay, shape, contract, layout.len()),
                 },
                 captures: collect(lay, layout.iter().map(|(_, coordinate)| *coordinate)),
                 folds,
             }
         });
-        LoadFacts {
+        FactsOver(LoadRecords {
             shapes,
             records: resident(lay, Records { bodies, ..*records }),
-        }
+        })
     }
 
     /// What the load's walk bound: nothing, at the load.
     pub fn binding(&self) -> Binding<'graph> {
-        self.records.binding
+        self.0.records.binding
     }
 
     /// The newest record of `unit` beside its frontier, its base's where this load did not re-run
     /// it.
     pub fn unit(&self, unit: UnitId) -> Option<(&'graph UnitFacts<'graph>, Frontier<'graph>)> {
-        self.records.unit(unit)
+        self.0.records.unit(unit)
     }
 
     /// The newest closing record of the owning body `body`, beside its frontier.
     pub fn closing(&self, body: Segment) -> Option<(&'graph Closing<'graph>, Frontier<'graph>)> {
-        self.records.closing(body)
-    }
-
-    /// The closed tree whose identity is `digest`, among those this load or its base computed.
-    pub fn tree_of(&self, digest: ContentDigest) -> Option<&'graph Tree<'graph>> {
-        match self.records.trees.get(digest) {
-            Some((_, tree)) => Some(tree),
-            None => self.records.base?.tree_of(digest),
-        }
+        self.0.records.closing(body)
     }
 
     /// The units this load ran itself, each beside its record and frontier, sorted.
     pub fn own_units(&self) -> &'graph [(UnitId, (&'graph UnitFacts<'graph>, Frontier<'graph>))] {
-        self.records.units.entries()
+        self.0.records.units.entries()
+    }
+}
+
+#[expect(
+    private_bounds,
+    reason = "a source of records is the crate's own; outside it only the two aliases are named"
+)]
+impl<'a, S: RecordSource<'a>> FactsOver<S> {
+    /// The shape table these are facts of.
+    pub fn shapes(&self) -> &'a Shapes<'a> {
+        self.0.shapes()
     }
 
-    /// The shape table these are facts of.
-    pub fn shapes(&self) -> &'graph Shapes<'graph> {
-        self.shapes
+    /// The closed tree whose identity is `digest`, among those these records computed.
+    pub fn tree_of(&self, digest: ContentDigest) -> Option<&'a Tree<'a>> {
+        self.0.tree_of(digest)
+    }
+
+    /// `segment`'s facts in the record holding `held`.
+    fn typed(&self, segment: Segment, held: Held) -> Option<&'a Typed<'a>> {
+        let (_, facts) = self.0.holding(held)?;
+        facts.typed.get(segment).map(|(_, typed)| typed)
     }
 
     /// `shape` as this load's table holds it, found by its segment: so a reader's shape may be
     /// borrowed for any lifetime.
-    fn at(&self, shape: &BodyShape<'_>) -> &'graph BodyShape<'graph> {
-        let at = self.shapes.shape_at(shape.segment());
+    fn at(&self, shape: &BodyShape<'_>) -> &'a BodyShape<'a> {
+        let at = self.0.shapes().shape_at(shape.segment());
         debug_assert!(std::ptr::addr_eq(at, shape), "a shape of this load");
         at
     }
 
     /// The entry at `key` of the `table` of the facts the unit holding `held` fixed for `shape`.
-    fn fact<K: Ord + Copy + 'graph, V: Copy + 'graph>(
+    fn fact<K: Ord + Copy + 'a, V: Copy + 'a>(
         &self,
         shape: &BodyShape<'_>,
         held: Held,
-        table: impl FnOnce(&Typed<'graph>) -> Keyed<'graph, (K, V)>,
+        table: impl FnOnce(&Typed<'a>) -> Keyed<'a, (K, V)>,
         key: K,
     ) -> Option<V> {
-        let typed = self.records.typed(shape.segment(), held)?;
+        let typed = self.typed(shape.segment(), held)?;
         table(typed).get(key).map(|(_, value)| *value)
     }
 
     /// The entry at `site` of the site-keyed `table` of `shape`'s facts.
-    fn at_site<V: Copy + 'graph>(
+    fn at_site<V: Copy + 'a>(
         &self,
         shape: &BodyShape<'_>,
         site: Site,
-        table: impl FnOnce(&Typed<'graph>) -> Keyed<'graph, (Site, V)>,
+        table: impl FnOnce(&Typed<'a>) -> Keyed<'a, (Site, V)>,
     ) -> Option<V> {
         self.fact(shape, Held::Site(shape.segment(), site), table, site)
     }
 
     /// `shape`'s facts in the newest record of `unit`.
-    fn typed_in(&self, shape: &BodyShape<'_>, unit: UnitId) -> Option<&'graph Typed<'graph>> {
-        let (facts, _) = self.records.unit(unit)?;
+    fn typed_in(&self, shape: &BodyShape<'_>, unit: UnitId) -> Option<&'a Typed<'a>> {
+        let (facts, _) = self.0.unit(unit)?;
         facts.typed.get(shape.segment()).map(|(_, typed)| typed)
     }
 
     /// The entry at `slot` of the slot-keyed `table` of `shape`'s facts.
-    fn at_slot<V: Copy + 'graph>(
+    fn at_slot<V: Copy + 'a>(
         &self,
         shape: &BodyShape<'_>,
         slot: Slot,
-        table: impl FnOnce(&Typed<'graph>) -> Keyed<'graph, (Slot, V)>,
+        table: impl FnOnce(&Typed<'a>) -> Keyed<'a, (Slot, V)>,
     ) -> Option<V> {
-        let typed = self.typed_in(shape, self.shapes.slot_unit(shape.segment(), slot))?;
+        let typed = self.typed_in(shape, self.0.shapes().slot_unit(shape.segment(), slot))?;
         table(typed).get(slot).map(|(_, value)| *value)
     }
 
     /// The birth facts of `body`, a callable or a quote's code, in its birth unit's newest record.
-    fn born(&self, body: Segment) -> Option<&'graph Born<'graph>> {
-        let (facts, _) = self.records.unit(self.shapes.birth_unit(body)?)?;
+    fn born(&self, body: Segment) -> Option<&'a Born<'a>> {
+        let (facts, _) = self.0.unit(self.0.shapes().birth_unit(body)?)?;
         facts.born.get(body).map(|(_, born)| born)
     }
 
@@ -618,54 +802,52 @@ impl<'graph> LoadFacts<'graph> {
         &self,
         shape: &BodyShape<'_>,
         site: Site,
-        table: impl FnOnce(&Typed<'graph>) -> Keyed<'graph, Site>,
+        table: impl FnOnce(&Typed<'a>) -> Keyed<'a, Site>,
     ) -> bool {
-        (self
-            .records
-            .typed(shape.segment(), Held::Site(shape.segment(), site)))
-        .is_some_and(|typed| table(typed).get(site).is_some())
+        (self.typed(shape.segment(), Held::Site(shape.segment(), site)))
+            .is_some_and(|typed| table(typed).get(site).is_some())
     }
 
     /// What the load fixed for the type expression at `site` of `shape`: `Unknown` where it records
     /// none there.
-    pub fn typed_expression(&self, shape: &BodyShape<'_>, site: Site) -> StaticType<'graph> {
+    pub fn typed_expression(&self, shape: &BodyShape<'_>, site: Site) -> StaticType<'a> {
         (self.at_site(shape, site, |typed| typed.expressions)).unwrap_or(Static::Unknown)
     }
 
     /// What the load fixed for the type binder at `slot` of `shape`.
-    pub fn declared_type(&self, shape: &BodyShape<'_>, slot: Slot) -> StaticType<'graph> {
+    pub fn declared_type(&self, shape: &BodyShape<'_>, slot: Slot) -> StaticType<'a> {
         (self.at_slot(shape, slot, |typed| typed.declared)).unwrap_or(Static::Unknown)
     }
 
     /// What the load fixed for the registration at `slot` of `shape`.
-    pub fn registered_type(&self, shape: &BodyShape<'_>, slot: Slot) -> StaticRegistered<'graph> {
+    pub fn registered_type(&self, shape: &BodyShape<'_>, slot: Slot) -> StaticRegistered<'a> {
         (self.at_slot(shape, slot, |typed| typed.registered)).unwrap_or(Static::Unknown)
     }
 
     /// What the load fixed for the callable body `shape`'s type.
-    pub fn callable_type(&self, shape: &BodyShape<'_>) -> StaticCallable<'graph> {
+    pub fn callable_type(&self, shape: &BodyShape<'_>) -> StaticCallable<'a> {
         (self.born(shape.segment())).map_or(Static::Unknown, |born| born.callable)
     }
 
     /// The callable body `shape`'s own `FOR ALL` group as its body reads it, by group order.
-    pub fn group_levels(&self, shape: &BodyShape<'_>) -> &'graph [Parametric] {
+    pub fn group_levels(&self, shape: &BodyShape<'_>) -> &'a [Parametric] {
         self.born(shape.segment()).map_or(&[], |born| born.levels)
     }
 
     /// The solution the callable body `shape`'s `FOR ALL` is born instantiated at, where the load
     /// solved one.
-    pub fn born_instance(&self, shape: &BodyShape<'_>) -> Option<StaticSolution<'graph>> {
+    pub fn born_instance(&self, shape: &BodyShape<'_>) -> Option<StaticSolution<'a>> {
         self.born(shape.segment())?.instance
     }
 
     /// Each lexical variable `shape` declares, by level, beside where its activation holds it.
-    pub fn homes(&self, shape: &BodyShape<'_>) -> &'graph [(usize, Target)] {
-        self.shapes.homes(shape.segment())
+    pub fn homes(&self, shape: &BodyShape<'_>) -> &'a [(usize, Target)] {
+        self.0.shapes().homes(shape.segment())
     }
 
     /// Each type capture of `shape` past its builder captures, as the coordinate its birth reads.
-    pub fn type_captures(&self, shape: &BodyShape<'_>) -> &'graph [Coordinate] {
-        self.records.laid(shape.segment()).captures
+    pub fn type_captures(&self, shape: &BodyShape<'_>) -> &'a [Coordinate] {
+        self.0.laid(shape.segment()).captures
     }
 
     /// How many closure slots a birth of `shape` fills: its builder captures, then its type
@@ -674,23 +856,18 @@ impl<'graph> LoadFacts<'graph> {
         shape.captures().len() + self.type_captures(shape).len()
     }
 
-    /// `shape` as a value born of it holds it.
-    pub fn body(&self, shape: &BodyShape<'_>) -> &'graph Body<'graph> {
-        &self.records.laid(shape.segment()).body
-    }
-
     /// Which of `shape`'s type captures its content composes, parallel to
     /// [`type_captures`](Self::type_captures).
-    pub fn contract(&self, shape: &BodyShape<'_>) -> &'graph [bool] {
-        &self.body(shape).composes[shape.captures().len()..]
+    pub fn contract(&self, shape: &BodyShape<'_>) -> &'a [bool] {
+        &self.0.laid(shape.segment()).body.composes[shape.captures().len()..]
     }
 
     /// The path `shape` spells at `site`, where it spells one its chain numbers: the segment of
     /// the body rooting its chain, beside its level there. A text fact, read off the shape table.
     pub fn path_read(&self, shape: &BodyShape<'_>, site: Site) -> Option<(Segment, usize)> {
         let index = shape.spelled_at(site)?;
-        let level = self.shapes.path_level(shape.segment(), index)?;
-        Some((self.shapes.chain_root(shape.segment()), level))
+        let level = self.0.shapes().path_level(shape.segment(), index)?;
+        Some((self.0.shapes().chain_root(shape.segment()), level))
     }
 
     /// The path entry at `level` of the chain the body `root` roots, beside what the load resolved
@@ -699,27 +876,31 @@ impl<'graph> LoadFacts<'graph> {
         &self,
         root: &BodyShape<'_>,
         level: usize,
-    ) -> Option<(PathEntry<'graph>, Resolution<'graph>)> {
-        self.records.path(root.segment(), level)
+    ) -> Option<(PathEntry<'a>, Resolution<'a>)> {
+        let (_, facts) = self.0.holding(Held::Path(root.segment(), level))?;
+        facts
+            .paths
+            .get((root.segment(), level))
+            .map(|(_, path)| *path)
     }
 
     /// Where `shape` reads each lexical variable of the path at `level`'s `through`.
-    pub fn through_at(&self, shape: &BodyShape<'_>, level: usize) -> Option<&'graph [Variable]> {
+    pub fn through_at(&self, shape: &BodyShape<'_>, level: usize) -> Option<&'a [Variable]> {
         let held = Held::Through(shape.segment(), level);
         self.fact(shape, held, |typed| typed.throughs, level)
     }
 
     /// The first registration of the quote's code `shape` that overlaps a builtin overload,
     /// reported when an `EVAL` runs it.
-    pub fn overlap(&self, shape: &BodyShape<'_>) -> Option<&'graph ShapeError<'graph>> {
-        (self.records.closing(shape.segment())).and_then(|(closing, _)| closing.overlap)
+    pub fn overlap(&self, shape: &BodyShape<'_>) -> Option<&'a ShapeError<'a>> {
+        (self.0.closing(shape.segment())).and_then(|(closing, _)| closing.overlap)
     }
 
     /// Why the code shape `shape`'s code cannot be built or does not type, reported when an `EVAL`
     /// runs it.
-    pub fn typing_refusal(&self, shape: &BodyShape<'_>) -> Option<&'graph ShapeError<'graph>> {
+    pub fn typing_refusal(&self, shape: &BodyShape<'_>) -> Option<&'a ShapeError<'a>> {
         // A code shape the builder could not build holds its refusal itself.
-        (self.records.closing(shape.segment()))
+        (self.0.closing(shape.segment()))
             .and_then(|(closing, _)| closing.refusal)
             .or_else(|| self.at(shape).refusal())
     }
@@ -732,7 +913,7 @@ impl<'graph> LoadFacts<'graph> {
     /// The static type of statement `index` of `shape`'s body.
     pub fn statement_type(&self, shape: &BodyShape<'_>, index: usize) -> Option<Interval> {
         let index = index as u32;
-        let typed = self.typed_in(shape, self.shapes.running(shape.segment(), index))?;
+        let typed = self.typed_in(shape, self.0.shapes().running(shape.segment(), index))?;
         typed.statements.get(index).map(|(_, typed)| *typed)
     }
 
@@ -742,13 +923,13 @@ impl<'graph> LoadFacts<'graph> {
     }
 
     /// What the load fixed about the keyworded use whose node sits at `site` of `shape`.
-    pub fn use_statics(&self, shape: &BodyShape<'_>, site: Site) -> UseStatics<'graph> {
+    pub fn use_statics(&self, shape: &BodyShape<'_>, site: Site) -> UseStatics<'a> {
         (self.at_site(shape, site, |typed| typed.uses)).unwrap_or(UseStatics::UNFIXED)
     }
 
     /// The class the load fixed for the frame body `shape`.
     pub fn class(&self, shape: &BodyShape<'_>) -> Option<BodyClass> {
-        self.records.closing(shape.segment())?.0.class
+        self.0.closing(shape.segment())?.0.class
     }
 
     /// Whether the frame body `shape` caches.
@@ -757,8 +938,8 @@ impl<'graph> LoadFacts<'graph> {
     }
 
     /// Where `shape`'s types intern at run.
-    pub fn caching(&self, shape: &BodyShape<'_>) -> Option<&'graph Caching<'graph>> {
-        self.records.folds(shape.segment())?.caching
+    pub fn caching(&self, shape: &BodyShape<'_>) -> Option<&'a Caching<'a>> {
+        self.0.folds(shape.segment())?.caching
     }
 
     /// How the load classed the minting site at `site`, one of `shape`'s own.
@@ -779,7 +960,7 @@ impl<'graph> LoadFacts<'graph> {
 
     /// The content tree of the view the `:|` at `site` of `shape` builds, where its signature is
     /// closed.
-    pub fn view_tree(&self, shape: &BodyShape<'_>, site: Site) -> Option<&'graph Tree<'graph>> {
+    pub fn view_tree(&self, shape: &BodyShape<'_>, site: Site) -> Option<&'a Tree<'a>> {
         self.at_site(shape, site, |typed| typed.trees)
     }
 
@@ -789,55 +970,51 @@ impl<'graph> LoadFacts<'graph> {
     }
 
     /// What the load fixed where `shape` reads a quantified function at `site`.
-    pub fn instance_at(&self, shape: &BodyShape<'_>, site: Site) -> Option<InstanceRead<'graph>> {
+    pub fn instance_at(&self, shape: &BodyShape<'_>, site: Site) -> Option<InstanceRead<'a>> {
         self.at_site(shape, site, |typed| typed.instances)
     }
 
     /// The closed point each variable of the group of the candidate the keyworded use at `site` of
     /// `shape` selects solves to, by group index, where the load selected one.
-    pub fn selection(&self, shape: &BodyShape<'_>, site: Site) -> Option<&'graph [Option<KType>]> {
+    pub fn selection(&self, shape: &BodyShape<'_>, site: Site) -> Option<&'a [Option<KType>]> {
         self.at_site(shape, site, |typed| typed.selections)
     }
 
     /// The content tree of the module the binder at `slot` of `shape` holds, if the load read it.
-    pub fn content(&self, shape: &BodyShape<'_>, slot: Slot) -> Option<Tree<'graph>> {
+    pub fn content(&self, shape: &BodyShape<'_>, slot: Slot) -> Option<Tree<'a>> {
         self.at_slot(shape, slot, |typed| typed.contents)
     }
 
     /// What each parameter of the call by name whose argument sits at `site` of `shape` is solved
     /// from.
-    pub fn named_contributions(
-        &self,
-        shape: &BodyShape<'_>,
-        site: Site,
-    ) -> &'graph [StaticType<'graph>] {
+    pub fn named_contributions(&self, shape: &BodyShape<'_>, site: Site) -> &'a [StaticType<'a>] {
         (self.at_site(shape, site, |typed| typed.by_name)).unwrap_or(&[])
     }
 
     /// The parameter slots the callable `shape`'s settlement keys on: `None` where a call of
     /// it seeks nothing.
-    pub fn settlement_keys(&self, shape: &BodyShape<'_>) -> Option<&'graph [Slot]> {
-        self.records.folds(shape.segment())?.keys
+    pub fn settlement_keys(&self, shape: &BodyShape<'_>) -> Option<&'a [Slot]> {
+        self.0.folds(shape.segment())?.keys
     }
 
     /// How many of `shape`'s slots keep a digest memo.
     pub fn digested_count(&self, shape: &BodyShape<'_>) -> usize {
-        self.shapes.digested_count(shape.segment())
+        self.0.shapes().digested_count(shape.segment())
     }
 
     /// Where `slot`'s digest memo sits among `shape`'s, if it keeps one.
     pub fn digested_index(&self, shape: &BodyShape<'_>, slot: Slot) -> Option<usize> {
-        self.shapes.digested_index(shape.segment(), slot)
+        self.0.shapes().digested_index(shape.segment(), slot)
     }
 
     /// Where the captures of the module the `:|` at `site` of `shape` views keep their memos.
-    pub fn view_slots(&self, shape: &BodyShape<'_>, site: Site) -> Option<ViewSlots<'graph>> {
-        self.shapes.view_slots(shape.segment(), site)
+    pub fn view_slots(&self, shape: &BodyShape<'_>, site: Site) -> Option<ViewSlots<'a>> {
+        self.0.shapes().view_slots(shape.segment(), site)
     }
 
     /// The digested slots the call keyed by `site` of `shape` passes bare.
-    pub fn handoffs(&self, shape: &BodyShape<'_>, site: Site) -> &'graph [Handoff] {
-        self.shapes.handoffs(shape.segment(), site)
+    pub fn handoffs(&self, shape: &BodyShape<'_>, site: Site) -> &'a [Handoff] {
+        self.0.shapes().handoffs(shape.segment(), site)
     }
 }
 
@@ -845,14 +1022,14 @@ impl<'graph> Records<'graph> {
     fn unit(&self, unit: UnitId) -> Option<(&'graph UnitFacts<'graph>, Frontier<'graph>)> {
         match self.units.get(unit) {
             Some((_, record)) => Some(*record),
-            None => self.base?.unit(unit),
+            None => self.base?.0.records.unit(unit),
         }
     }
 
     fn closing(&self, body: Segment) -> Option<(&'graph Closing<'graph>, Frontier<'graph>)> {
         match self.closings.get(body) {
             Some((_, record)) => Some(*record),
-            None => self.base?.closing(body),
+            None => self.base?.0.records.closing(body),
         }
     }
 
@@ -863,20 +1040,8 @@ impl<'graph> Records<'graph> {
             let (unit, (facts, _)) = self.units[*at as usize];
             return Some((unit, facts));
         }
-        let (unit, facts) = self.base?.records.holding(held)?;
+        let (unit, facts) = self.base?.0.records.holding(held)?;
         self.units.get(unit).is_none().then_some((unit, facts))
-    }
-
-    /// `segment`'s facts in the record holding `held`.
-    fn typed(&self, segment: Segment, held: Held) -> Option<&'graph Typed<'graph>> {
-        let (_, facts) = self.holding(held)?;
-        facts.typed.get(segment).map(|(_, typed)| typed)
-    }
-
-    /// The path entry at `level` of the chain `root` roots, beside its resolution.
-    fn path(&self, root: Segment, level: usize) -> Option<(PathEntry<'graph>, Resolution<'graph>)> {
-        let (_, facts) = self.holding(Held::Path(root, level))?;
-        facts.paths.get((root, level)).map(|(_, path)| *path)
     }
 
     /// `body` as this load laid it, or its base where this load has not folded yet.
@@ -886,6 +1051,7 @@ impl<'graph> Records<'graph> {
             None => (self
                 .base
                 .expect("a load folds its records before a body is read"))
+            .0
             .records
             .laid(body),
         }
@@ -899,7 +1065,7 @@ impl<'graph> Records<'graph> {
             .and_then(|laid| laid.folds)
         {
             Some(folds) => Some(folds),
-            None => self.base?.records.folds(body),
+            None => self.base?.0.records.folds(body),
         }
     }
 }
