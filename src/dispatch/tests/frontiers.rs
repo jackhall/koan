@@ -275,8 +275,8 @@ fn a_fact_over_a_local_module_seams_at_the_unit_binding_it() {
 }
 
 /// A name a `USING` surfaces from a module parameter is read through the parameter: the unit
-/// holding the `USING` binds the surfaced name itself and waits on `m`, a module unknown wherever
-/// its content is read, and so seams at the callable's entry.
+/// holding the `USING` waits on `m`, a module unknown wherever its content is read, and on none of
+/// the block's names, and so seams at the callable's entry.
 #[test]
 fn a_name_using_surfaces_from_a_parameter_waits_on_the_parameter() {
     let source = format!(

@@ -198,7 +198,8 @@ use super::select;
 /// it there: each enclosing body's level, holding the records of its units up to the one birthing
 /// the next, each entered as the whole walk enters it. Those units are read from the store, never
 /// re-run: a binding below them wakes none of them. So the walk costs the chain's prefix and `at`'s
-/// subtree, never the whole program.
+/// subtree, never the whole program. A block or module body at `at` is walked as its encloser's
+/// unit would walk it, over what the standing encloser says a `USING` holding it surfaces.
 pub(super) fn walk<'graph: 'o, 'tier: 'o, 'o, S: Store<'o>>(
     shapes: &'graph Shapes<'graph>,
     builtins: &'graph KBuiltins<'graph, 'graph>,
@@ -247,7 +248,11 @@ pub(super) fn walk<'graph: 'o, 'tier: 'o, 'o, S: Store<'o>>(
         components: BumpVec::new_in(scratch),
     };
     let parent = pass.stand_chain(at);
-    pass.body(parent, shapes.shape_at(at))?;
+    let shape = shapes.shape_at(at);
+    match (shape.kind(), parent) {
+        (ShapeKind::Block | ShapeKind::Module, Some(parent)) => pass.inline_root(parent, shape)?,
+        _ => pass.body(parent, shape)?,
+    }
     pass.finish_rooted();
     Ok(())
 }
@@ -353,9 +358,9 @@ struct UnitState<'p, 'o> {
     id: UnitId,
     /// Once it ends: its record's frontier. While it runs, its gathering is the walk's.
     frontier: Option<Frontier<'o>>,
-    /// What its record keeps beside its owner's own facts: each inline body it ran, laid as the
-    /// body leaves the chain; each callable or quote's code it births; each path it resolved first
-    /// on its chain; what the folds read.
+    /// What its record keeps beside its body's own facts: the signature of each module body it
+    /// ran; each callable or quote's code it births; each path it resolved first on its chain;
+    /// what the folds read.
     typed: BumpVec<'p, (Segment, Typed<'o>)>,
     born: BumpVec<'p, (Segment, Born<'o>)>,
     paths: BumpVec<'p, ((Segment, usize), (PathEntry<'o>, Resolution<'o>))>,
@@ -479,33 +484,6 @@ struct Level<'p, 'o, 'graph> {
 }
 
 impl Level<'_, '_, '_> {
-    /// Where every fact this level holds sits, whichever unit wrote it: what an inline body lays
-    /// whole as it leaves the chain.
-    fn everything<'x>(&self, scratch: BumpAllocator<'x>) -> BumpVec<'x, Wrote> {
-        let mut wrote = BumpVec::new_in(scratch);
-        for index in 0..self.shape.slots() {
-            let slot = Slot(index as u32);
-            wrote.extend([
-                Wrote::Declared(slot),
-                Wrote::Registered(slot),
-                Wrote::Binder(slot),
-            ]);
-        }
-        wrote.extend((0..self.statements.len()).map(Wrote::Statement));
-        wrote.extend((0..self.uses.len()).map(Wrote::Use));
-        wrote.extend(self.parts.keys().map(|site| Wrote::Part(*site)));
-        wrote.extend(self.expressions.keys().map(|site| Wrote::Expression(*site)));
-        wrote.extend(self.selections.keys().map(|site| Wrote::Selection(*site)));
-        wrote.extend(self.throughs.keys().map(|level| Wrote::Through(*level)));
-        wrote.extend((0..self.settled.len()).map(Wrote::Settled));
-        wrote.extend((0..self.minting.len()).map(Wrote::Minting));
-        wrote.extend((0..self.instances.len()).map(Wrote::Instance));
-        wrote.extend((0..self.named.len()).map(Wrote::Named));
-        wrote.extend((0..self.trees.len()).map(Wrote::Tree));
-        wrote.extend((0..self.contents.len()).map(Wrote::Content));
-        wrote
-    }
-
     /// The sites this shape and the blocks and module bodies it runs mint at at run: every minting
     /// site but a view over a closed content tree.
     fn run_mints(&self) -> u32 {
@@ -953,6 +931,47 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         Ok(())
     }
 
+    /// Walk the inline body `shape`, the root of a walk, nested in the standing shape at `level`: its
+    /// units, its entry over what the encloser's absorbed facts say a `USING` holding it surfaces.
+    fn inline_root(
+        &mut self,
+        level: usize,
+        shape: &'graph BodyShape<'graph>,
+    ) -> Result<(), ShapeError<'o>> {
+        let surfacing = self.surfacing_of(level, shape);
+        self.push(shape, false);
+        let at = self.chain.len() - 1;
+        self.units_of(at, surfacing)?;
+        self.chain.pop();
+        Ok(())
+    }
+
+    /// The static type of the operand of the `USING … SCOPE` whose body is `block`, as the shape at
+    /// `level` holding it has it, beside the unit that fixed it: `None` for any other inline body.
+    fn surfacing_of(&self, level: usize, block: &BodyShape<'graph>) -> Option<(Interval, Tag)> {
+        let shape = self.chain[level].shape;
+        let (_, statement) = self.shapes.parent(block.segment())?;
+        let holding = &shape.body()[statement as usize];
+        let surfaces = |node: &'graph KExpression<'graph>| {
+            matches!(of_node(shape, node), Form::Using(_))
+                && (shape.site_of_body(node).and_then(|site| shape.nested(site)))
+                    .is_some_and(|body| body.segment() == block.segment())
+        };
+        let mut using = surfaces(holding).then_some(holding);
+        crate::scope::each_part(holding, |part| {
+            if let ExpressionPart::Expression(node) = part
+                && surfaces(node)
+            {
+                using = Some(node);
+            }
+        });
+        let [_, operand, _, _] = using?.parts else {
+            unreachable!("a `USING … SCOPE` has its keyword, its module, `SCOPE` and a body")
+        };
+        let site = self.site(level, &operand.value);
+        self.chain[level].parts.get(&site).copied()
+    }
+
     /// Absorb the unit `index` of the owning body at chain level `level`, which a walk rooted below
     /// it stands.
     fn absorb_standing(&mut self, level: usize, index: UnitIndex) {
@@ -1136,7 +1155,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     /// own facts the unit fixed, beside what the unit kept as it ran.
     fn record(&mut self, level: usize, tag: Tag) -> &'o UnitFacts<'o> {
         let lay = self.lay;
-        let own = self.typed(level, Some(tag));
+        let own = self.typed(level, tag);
         let state = &mut self.units[tag.0 as usize];
         let mut typed = BumpVec::with_capacity_in(state.typed.len() + 1, self.scratch);
         typed.push((self.chain[level].shape.segment(), own));
@@ -1151,32 +1170,18 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         resident(lay, facts)
     }
 
-    /// The facts of the shape at `level` the unit `tag` fixed, laid down, from where it wrote them:
-    /// every fact the level holds where `tag` is `None`. The writes sort by kind, then by key, so
-    /// each table keyed as its writes are comes out sorted.
-    fn typed(&mut self, level: usize, tag: Option<Tag>) -> Typed<'o> {
+    /// The facts of the shape at `level` the unit `tag` fixed, laid down, from where it wrote them.
+    /// The writes sort by kind, then by key, so each table keyed as its writes are comes out
+    /// sorted.
+    fn typed(&mut self, level: usize, tag: Tag) -> Typed<'o> {
         let (lay, scratch) = (self.lay, self.scratch);
-        let mut wrote = match tag {
-            Some(tag) => std::mem::replace(
-                &mut self.units[tag.0 as usize].wrote,
-                BumpVec::new_in(scratch),
-            ),
-            None => self.chain[level].everything(scratch),
-        };
+        let unit = &mut self.units[tag.0 as usize];
+        let mut wrote = std::mem::replace(&mut unit.wrote, BumpVec::new_in(scratch));
         wrote.sort_unstable();
         wrote.dedup();
-        let (exits, closed, folded) = match tag {
-            Some(tag) => {
-                let unit = &self.units[tag.0 as usize];
-                (unit.exits, unit.closed, unit.folded)
-            }
-            None => {
-                let at = &self.chain[level];
-                (at.exits, at.closed, at.folded)
-            }
-        };
+        let (exits, closed, folded) = (unit.exits, unit.closed, unit.folded);
         let at = &self.chain[level];
-        let ours = |held: Tag| tag.is_none_or(|tag| tag == held);
+        let ours = |held: Tag| held == tag;
         let lists = at.shape.candidate_lists();
         let mut declared = BumpVec::new_in(scratch);
         let mut registered = BumpVec::new_in(scratch);

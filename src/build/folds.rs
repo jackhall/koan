@@ -12,9 +12,10 @@
 //!   unit beneath it, its entry aside, whose seam — the latest bind site among its frontier's
 //!   unknowns — is a callable's entry, and on the parameters its invariant sites read. Each
 //!   frontier's sites and keyable names are read once, through a memo shared by every frontier that
-//!   reads it. The parameters such frontiers hold, keyable or not, are what a frame's entry binds
-//!   in its activation where nothing settled them, and the slots an owning body binds at a
-//!   statement that any frontier holds are where its activation decides again.
+//!   reads it. The parameters such frontiers hold, keyable or not, are what a frame's or a block's
+//!   entry binds in its activation where nothing settled them, a block's entry counting as a
+//!   seam here, and the slots any body binds at a statement that any frontier holds are where the
+//!   cell running it decides again.
 //! - **Contract.** Each lexical variable a contribution or a solution names is composed by every
 //!   callable or `MODULE` body between the body reading it and its home. The walk refuses a
 //!   `MODULE` body composing a type its `OVER` list does not name.
@@ -114,10 +115,16 @@ pub fn fold<'o>(
     keyed.sort_unstable();
     keyed.dedup();
     classed.sort_unstable_by_key(|(holder, ..)| *holder);
-    let named = keyed_names(shapes, &frontiers, scratch, &keyable);
-    let waiting = keyed_names(shapes, &frontiers, scratch, &|body, slot| {
-        shapes.shape_at(body).position_of(slot) == Position::PARAMETER
-    });
+    let named = keyed_names(
+        shapes,
+        &frontiers,
+        scratch,
+        &keyable,
+        &[ShapeKind::Callable],
+    );
+    let parameter = |body, slot| shapes.shape_at(body).position_of(slot) == Position::PARAMETER;
+    let entered = [ShapeKind::Callable, ShapeKind::Block];
+    let waiting = keyed_names(shapes, &frontiers, scratch, &parameter, &entered);
     let seaming = seam_names(shapes, &frontiers, scratch);
     let mut folds = BumpVec::with_capacity_in(count, scratch);
     for (at, shape) in shapes.bodies().iter().enumerate() {
@@ -177,7 +184,7 @@ pub fn fold<'o>(
             slots.dedup();
             (invariant.is_some() || !slots.is_empty()).then(|| collect(lay, slots.iter().copied()))
         });
-        let waits = match callable {
+        let waits = match callable || shape.kind() == ShapeKind::Block {
             true => {
                 let from = waiting.partition_point(|(each, _)| *each < segment);
                 let to = waiting.partition_point(|(each, _)| *each <= segment);
@@ -198,24 +205,26 @@ pub fn fold<'o>(
     collect(lay, folds.iter().copied())
 }
 
-/// Each `(callable, slot)` a callable keys on through its frontiers: a keyable name of it in the
-/// frontier of a unit beneath it, its entry aside, whose seam is a callable's entry. Sorted. Each
-/// frontier's sites and names are read once, through a memo every frontier reading it shares.
+/// Each `(body, slot)` a body of a kind in `entered` keys on through its frontiers: a `keyable`
+/// name of it in the frontier of a unit beneath it, its entry aside, whose seam is the entry of a
+/// body of such a kind. Sorted. Each frontier's sites and names are read once, through a memo
+/// every frontier reading it shares.
 pub(super) fn keyed_names<'x>(
     shapes: &Shapes<'_>,
     frontiers: &[(Segment, UnitIndex, Frontier<'_>)],
     scratch: BumpAllocator<'x>,
     keyable: &dyn Fn(Segment, Slot) -> bool,
+    entered: &[ShapeKind],
 ) -> BumpVec<'x, (Segment, Slot)> {
     let mut summaries = bump_table(scratch);
     let mut named = BumpVec::new_in(scratch);
     for (segment, unit, frontier) in frontiers {
-        // A callable's entry holds its parameters' own types, which key nothing: whatever reads a
-        // parameter waits on its names too.
-        if *unit == UnitIndex::ENTRY && shapes.shape_at(*segment).kind() == ShapeKind::Callable {
+        // An entry holds its parameters' own types, which key nothing: whatever reads a parameter
+        // waits on its names too.
+        if *unit == UnitIndex::ENTRY && entered.contains(&shapes.shape_at(*segment).kind()) {
             continue;
         }
-        let summary = summarize(shapes, *frontier, scratch, keyable, &mut summaries);
+        let summary = summarize(shapes, *frontier, scratch, keyable, entered, &mut summaries);
         // A unit's own binders are what it fixes, not what it waits on: of each segment's two
         // latest distinct sites, at most one is the unit's.
         let Some(seam) = (summary.sites.iter())
@@ -228,8 +237,7 @@ pub(super) fn keyed_names<'x>(
         else {
             continue;
         };
-        if seam.unit != UnitIndex::ENTRY
-            || shapes.shape_at(seam.segment).kind() != ShapeKind::Callable
+        if seam.unit != UnitIndex::ENTRY || !entered.contains(&shapes.shape_at(seam.segment).kind())
         {
             continue;
         }
@@ -246,8 +254,8 @@ pub(super) fn keyed_names<'x>(
     named
 }
 
-/// Each `(body, slot)` of an owning body bound at a statement that some unit's frontier holds:
-/// where its frame's activation decides again once the statement binds it. Sorted. Each frontier's
+/// Each `(body, slot)` bound at a statement of `body` that some unit's frontier holds: where the
+/// cell running `body` decides again once the statement binds it. Sorted. Each frontier's
 /// unknowns are laid flat once, through a memo every frontier reading it shares.
 fn seam_names<'x>(
     shapes: &Shapes<'_>,
@@ -271,9 +279,8 @@ fn seam_names<'x>(
             let mut seams = BumpVec::new_in(scratch);
             seams.extend((at.own().iter()).filter_map(|unknown| match unknown.at {
                 Address::Slot(slot)
-                    if shapes.owner(unknown.segment) == unknown.segment
-                        && shapes.shape_at(unknown.segment).position_of(slot)
-                            != Position::PARAMETER =>
+                    if shapes.shape_at(unknown.segment).position_of(slot)
+                        != Position::PARAMETER =>
                 {
                     Some((unknown.segment, slot))
                 }
@@ -312,13 +319,14 @@ struct Summary<'x> {
 }
 
 /// The summary of `frontier`, and of every frontier it reads, memoized in `summaries` by
-/// identity. Frontiers read only ended ones, so they form a DAG; a chain of k reads is k deep, so
+/// identity: its latest bind sites, and its `keyable` names of bodies of the kinds `entered`. Frontiers read only ended ones, so they form a DAG; a chain of k reads is k deep, so
 /// the post-order keeps its own stack.
 fn summarize<'x>(
     shapes: &Shapes<'_>,
     frontier: Frontier<'_>,
     scratch: BumpAllocator<'x>,
     keyable: &dyn Fn(Segment, Slot) -> bool,
+    entered: &[ShapeKind],
     summaries: &mut BumpBackedMap<'x, (usize, usize), Summary<'x>>,
 ) -> Summary<'x> {
     let mut stack = BumpVec::new_in(scratch);
@@ -359,7 +367,7 @@ fn summarize<'x>(
         let mut keys = BumpVec::new_in(scratch);
         keys.extend((at.own().iter()).filter_map(|unknown| match unknown.at {
             Address::Slot(slot)
-                if shapes.shape_at(unknown.segment).kind() == ShapeKind::Callable
+                if entered.contains(&shapes.shape_at(unknown.segment).kind())
                     && keyable(unknown.segment, slot) =>
             {
                 Some((unknown.segment, slot))

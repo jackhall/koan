@@ -2,9 +2,9 @@
 //! never names where a fact rests ([the store](../../build/README.md#the-store)).
 //!
 //! A fact the walk fixed rests in its shape's level while the shape is on the chain, beside the
-//! unit that fixed it; an inline body's facts rest in the record of the unit that ran it once the
-//! body leaves the chain; a callable's or a quote's code's birth facts in its birth unit's; a
-//! body's closing facts in its closing record. A read gathers what the fact waits on, at unit
+//! unit that fixed it, and once it leaves the chain in that unit's record, an inline body's as an
+//! owning body's; a module body's signature in the record of the unit that ran it; a callable's or
+//! a quote's code's birth facts in its birth unit's; a body's closing facts in its closing record. A read gathers what the fact waits on, at unit
 //! grain: nothing for a fact of the unit running, the gathering so far of a unit still running
 //! around it, and a read of the frontier of one that ended, cut to the chain. Only an unknown of a
 //! shape on the chain is gathered, and one the binding binds is closed.
@@ -273,7 +273,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     }
 
     /// Log that the unit `tag` wrote at `wrote` in the shape at `level`, where that shape is the
-    /// unit's own owning body: its record lays what it wrote. An inline body lays itself whole.
+    /// unit's own body: its record lays what it wrote.
     fn wrote(&mut self, level: usize, tag: Tag, wrote: Wrote) {
         let segment = self.chain[level].shape.segment();
         let state = &mut self.units[tag.0 as usize];

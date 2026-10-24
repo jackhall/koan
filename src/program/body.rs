@@ -310,6 +310,13 @@ fn ran<'graph, 'here, 'scratch>(
                     return step.failed(StepError::Refused);
                 }
             }
+            let activation = match decided_at_entry(&step, types, program, activation) {
+                Ok(activation) => activation,
+                Err(message) => {
+                    let error = program.error(step.writer(), &step.types(), message);
+                    return step.finish(error);
+                }
+            };
             Runner {
                 within,
                 ..Runner::at(program, activation, Level::Block, None)
@@ -324,10 +331,11 @@ fn ran<'graph, 'here, 'scratch>(
     perform(step, runner, types)
 }
 
-/// A frame's entry event: each parameter a unit beneath its body waits on with the entry as its
-/// seam, which its arena node's facts leave unbound, bound to what its slot holds and decided in
-/// its activation ([`activated`](super::activation_store)). `activation` itself where it binds
-/// none; the message the frame faults with where the walk refuses.
+/// A frame's or a block's entry event: each parameter a unit beneath its body waits on with the
+/// entry as its seam, which its arena node's facts and what its encloser decided leave unbound,
+/// bound to what its slot holds and decided in its activation over what its encloser decided
+/// ([`activated`](super::activation_store)). `activation` itself where it binds none; the message
+/// the cell faults with where the walk refuses.
 fn decided_at_entry<'graph, 'here>(
     step: &Taking<'_, 'graph, '_, 'here, '_, '_>,
     types: &Chain<'_, 'here, '_, '_>,
@@ -335,6 +343,8 @@ fn decided_at_entry<'graph, 'here>(
     activation: &'here KActivation<'graph, 'here>,
 ) -> Result<&'here KActivation<'graph, 'here>, &'here str> {
     let (code, facts) = step.door();
+    let below = activation.view().decided();
+    let facts = facts.activated(below);
     let segment = activation.segment();
     let waits = facts.entry_waits(code.shape(segment));
     if waits.is_empty() {
@@ -358,7 +368,7 @@ fn decided_at_entry<'graph, 'here>(
         return Ok(activation);
     }
     let writer = step.writer();
-    let decided = (program.activate())(program, writer, facts, types, None, &own, segment)?;
+    let decided = (program.activate())(program, writer, facts, types, below, &own, segment)?;
     Ok(resident(
         writer,
         activation.deciding(resident(writer, decided)),
@@ -1576,10 +1586,10 @@ fn perform<'graph, 'here>(
     }
 }
 
-/// The statement seams of the owning body the runner performs: each slot its units bound since it
-/// last looked that some unit's frontier holds and its facts leave unbound, bound to what it holds
-/// and decided in its activation over what it decided before. A block's or an inline module
-/// body's slots are no seam: their units' facts lie in the record of the unit running them.
+/// The statement seams of the body the runner performs, a block's and an inline module body's
+/// included: each slot its units bound since it last looked that some unit's frontier holds and
+/// its facts leave unbound, bound to what it holds and decided in its activation over what it and
+/// its enclosers decided before.
 fn decided_at_seams<'graph, 'here>(
     step: &Taking<'_, 'graph, '_, 'here, '_, '_>,
     types: &Chain<'_, 'here, '_, '_>,
@@ -1587,7 +1597,7 @@ fn decided_at_seams<'graph, 'here>(
 ) -> Result<(), Stopped<'here>> {
     let (from, to) = (runner.seen as usize, runner.unit as usize);
     runner.seen = runner.unit;
-    if from == to || runner.outer.is_some() || runner.level == Level::Block {
+    if from == to {
         return Ok(());
     }
     let at = runner.reading(step);

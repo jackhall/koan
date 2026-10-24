@@ -114,7 +114,7 @@ proptest! {
                 laid.push((body.segment(), unit, frontier));
             }
             let keyable = |segment: Segment, slot: Slot| !(segment.index() + slot.0).is_multiple_of(3);
-            let memoized = keyed_names(shapes, &laid, &scratch, &keyable);
+            let memoized = keyed_names(shapes, &laid, &scratch, &keyable, &[ShapeKind::Callable]);
             assert_eq!(memoized.to_vec(), keyed_flat(shapes, &laid, &keyable));
         });
     }

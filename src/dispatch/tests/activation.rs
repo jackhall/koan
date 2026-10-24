@@ -246,3 +246,85 @@ fn a_module_body_reads_its_frames_entry_decisions() {
     let chosen = CHOSEN.with(|chosen| chosen.take());
     assert!(chosen.contains(&(segment, site)), "{chosen:?}");
 }
+
+/// The body of `kind` in `program` binding a slot named `name`.
+fn holding<'graph>(
+    program: &Program<'graph>,
+    kind: ShapeKind,
+    name: &str,
+) -> &'graph BodyShape<'graph> {
+    let binds = |shape: &BodyShape<'_>| {
+        (0..shape.slots()).any(|index| {
+            let symbol = shape.slot_name(crate::scope::Slot(index as u32)).symbol();
+            program.symbols().display(symbol).to_string() == name
+        })
+    };
+    (program.shapes().bodies().iter())
+        .find(|shape| shape.kind() == kind && binds(shape))
+        .unwrap_or_else(|| panic!("a {kind:?} body binds `{name}`"))
+}
+
+/// The segment and site of the call `p` is bound to in the block binding it, and whether the load
+/// selected it.
+fn blocks_pick(source: &str) -> (Segment, Site, bool) {
+    loaded(&super::caching::program(2, source), |program| {
+        let block = holding(program, ShapeKind::Block, "p");
+        let Some(ExpressionPart::Expression(node)) = block.rhs(slot(program, block, "p")) else {
+            panic!("`p` is bound to a call");
+        };
+        let site = block.site_of_node(node.reference());
+        let narrowing = program.facts().use_statics(block, site).narrowing;
+        (
+            block.segment(),
+            site,
+            matches!(narrowing, Narrowing::Selected(_)),
+        )
+    })
+}
+
+/// Run `source` over the caching prelude and a chain of two links, counting the binding events
+/// that walked and noting each use a frame found selected.
+fn ran_choosing(source: &str) -> (Ran, usize, Vec<(Segment, Site)>) {
+    CHOSEN.with(|chosen| chosen.borrow_mut().clear());
+    crate::dispatch::evaluate::CHOSE.with(|hook| hook.set(Some(chose)));
+    DECIDED.with(|decided| decided.set(0));
+    let ran = ran_under(2, source, BuildBudget::default());
+    crate::dispatch::evaluate::CHOSE.with(|hook| hook.set(None));
+    let decided = DECIDED.with(std::cell::Cell::get);
+    (ran, decided, CHOSEN.with(|chosen| chosen.take()))
+}
+
+#[test]
+fn a_blocks_statement_seam_decides_in_the_block() {
+    // `r` is bound at a statement of the block `USING empty` runs: the block's own cell decides
+    // `PICK r.zero` there.
+    let make = MAKE.lines().take(4).collect::<Vec<_>>().join("\n");
+    let source = format!(
+        "{make}\nEXPR #(USE n :Number) -> Any = #(USING empty SCOPE (\n  \
+         LET r = (MAKE ints chain)\n  LET p = (PICK r.zero)\n  p\n))\nPRINT (USE 1)\n"
+    );
+    let (segment, site, selected) = blocks_pick(&source);
+    assert!(!selected, "the load selects nothing at `PICK r.zero`");
+    let (ran, decided, chosen) = ran_choosing(&source);
+    assert_eq!(ran.printed, "n");
+    assert_eq!(decided, 1, "`r`'s statement decides once");
+    assert!(chosen.contains(&(segment, site)), "{chosen:?}");
+}
+
+#[test]
+fn a_using_body_over_run_content_decides_at_its_entry() {
+    // The block surfaces `Carrier` from what `MAKE` returned, opaque: `USE`'s statement binding
+    // `r` decides first, leaving `PICK zero` open, and the block's entry decides it at `Any`.
+    let make = MAKE.lines().take(2).collect::<Vec<_>>().join("\n");
+    let source = format!(
+        "{make}\n{PICK}EXPR #(USE n :Number) -> Any = #(\n  LET r = (MAKE ints chain)\n  \
+         USING (r :! Counter) SCOPE (\n    LET p = (PICK zero)\n    p\n  )\n)\n\
+         PRINT (USE 1)\n"
+    );
+    let (segment, site, selected) = blocks_pick(&source);
+    assert!(!selected, "the load selects nothing at `PICK zero`");
+    let (ran, decided, chosen) = ran_choosing(&source);
+    assert_eq!(ran.printed, "n");
+    assert_eq!(decided, 2, "`r`'s statement, then the block's entry");
+    assert!(chosen.contains(&(segment, site)), "{chosen:?}");
+}

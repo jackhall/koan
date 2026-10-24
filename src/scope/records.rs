@@ -34,10 +34,10 @@ use super::typed::{
     StaticRegistered, StaticSolution, StaticType, UseStatics, Variable, ViewSlots,
 };
 
-/// One unit's facts: everything the walk computed running it, the inline bodies it ran included.
+/// One unit's facts: everything the walk computed running it.
 #[derive(Clone, Copy)]
 pub struct UnitFacts<'a> {
-    /// The unit's own body first, then each inline body it ran, by segment.
+    /// The unit's own body's, and the signature of each module body it ran, by segment.
     pub typed: Keyed<'a, (Segment, Typed<'a>)>,
     /// Each callable or quote's code born here, by its segment.
     pub born: Keyed<'a, (Segment, Born<'a>)>,
@@ -166,11 +166,12 @@ pub struct Folds<'a> {
     pub caching: Option<&'a Caching<'a>>,
     /// The parameter slots a callable's settlement keys on: `None` where a call seeks nothing.
     pub keys: Option<&'a [Slot]>,
-    /// A callable's parameters that some unit beneath it waits on with its entry as its seam,
-    /// keyable or not: what its frame's entry binds in its activation where nothing settled them.
+    /// A callable's or a block's parameters that some unit beneath it waits on with its entry as
+    /// its seam, keyable or not: what its cell's entry binds in its activation where nothing
+    /// settled them.
     pub waits: &'a [Slot],
-    /// An owning body's slots bound at a statement that some unit's frontier holds: where its
-    /// frame's activation decides again once the statement binds them.
+    /// A body's slots bound at a statement that some unit's frontier holds: where the cell running
+    /// it decides again once the statement binds them.
     pub seams: &'a [Slot],
     /// Which of the body's type captures its content composes, parallel to its layout.
     pub contract: &'a [bool],
@@ -1113,15 +1114,15 @@ impl<'a, S: RecordSource<'a>> FactsOver<S> {
         self.0.folds(shape.segment())?.keys
     }
 
-    /// The slots the owning body `shape` binds at a statement that some unit's frontier holds.
+    /// The slots `shape` binds at a statement that some unit's frontier holds.
     pub fn statement_seams(&self, shape: &BodyShape<'_>) -> &'a [Slot] {
         self.0
             .folds(shape.segment())
             .map_or(&[], |folds| folds.seams)
     }
 
-    /// The parameters of the callable `shape` some unit beneath it waits on with its entry as its
-    /// seam.
+    /// The parameters of the callable or block `shape` some unit beneath it waits on with its
+    /// entry as its seam.
     pub fn entry_waits(&self, shape: &BodyShape<'_>) -> &'a [Slot] {
         self.0
             .folds(shape.segment())
