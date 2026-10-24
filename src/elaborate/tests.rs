@@ -122,6 +122,7 @@ impl<'p, 'graph, 'cell> Program<'p, 'graph, 'cell> {
                 self.reading.facts(),
                 ClosureBindings::empty(),
                 self.activation.builtins(),
+                None,
             ),
         )
     }

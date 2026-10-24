@@ -46,6 +46,7 @@ pub fn body_activation<'graph, 'cell>(
         enclosing.facts(),
         closure,
         enclosing.builtins(),
+        enclosing.view().decided(),
     )
 }
 

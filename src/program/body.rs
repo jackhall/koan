@@ -127,6 +127,8 @@ struct Outer<'graph, 'cell> {
     result: Option<KValue<'graph, 'cell>>,
     /// The module binder's slot in `activation`, bound when the body ends.
     binder: Slot,
+    /// The runner's `seen` in `activation`, where its statement seams resume.
+    seen: u32,
     outer: Option<&'cell Outer<'graph, 'cell>>,
 }
 
@@ -1781,12 +1783,14 @@ fn entered<'graph, 'here>(
             unit: runner.unit,
             result: runner.result,
             binder: slot,
+            seen: runner.seen,
             outer: runner.outer,
         },
     );
     Runner {
         activation: body,
         unit: 0,
+        seen: 0,
         result: None,
         outer: Some(outer),
         ..runner
@@ -1820,6 +1824,7 @@ fn left<'graph, 'here>(
         activation,
         unit: outer.unit,
         result: outer.result,
+        seen: outer.seen,
         outer: outer.outer,
         ..body
     };

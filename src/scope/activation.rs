@@ -208,14 +208,16 @@ where
     }
 
     /// A fresh activation of the module shape `shape` over its closure bindings, every slot
-    /// empty. It runs no knot member: a module's captures are never edges, and the caller ties
-    /// the binder once this activation's every slot is bound.
+    /// empty, reading `decided`, what the frame running it decided so far. It runs no knot
+    /// member: a module's captures are never edges, and the caller ties the binder once this
+    /// activation's every slot is bound.
     pub fn of_module(
         writer: Writer<'cell, '_>,
         shape: &BodyShape<'_>,
         facts: &Facts<'_>,
         closure: &'cell ClosureBindings<'cell, XF::Closed<'cell>>,
         builtins: &'cell Builtins<'cell, XF::Closed<'cell>>,
+        decided: Option<&'cell Activated<'cell>>,
     ) -> Self {
         debug_assert_eq!(shape.kind(), ShapeKind::Module);
         debug_assert_eq!(
@@ -223,7 +225,9 @@ where
             facts.capture_count(shape),
             "the closure bindings follow the shape's capture layout",
         );
-        Self::laid_down(writer, shape, facts, closure, builtins, None, None)
+        let mut module = Self::laid_down(writer, shape, facts, closure, builtins, None, None);
+        module.view.decided = decided;
+        module
     }
 
     /// A fresh activation of the code shape `shape` over its closure bindings — its `$` names, its

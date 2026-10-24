@@ -26,8 +26,17 @@ fn ran(source: &str) -> (Ran, usize) {
     (ran, DECIDED.with(std::cell::Cell::get))
 }
 
-/// The callable of `program` whose slots bind `slots`, by name, in slot order.
+/// The callable of `program` whose slots bind `names`, in slot order.
 fn callable<'graph>(program: &Program<'graph>, names: &[&str]) -> &'graph BodyShape<'graph> {
+    nested(program, ShapeKind::Callable, names)
+}
+
+/// The body of `kind` in `program` whose slots bind `names`, in slot order.
+fn nested<'graph>(
+    program: &Program<'graph>,
+    kind: ShapeKind,
+    names: &[&str],
+) -> &'graph BodyShape<'graph> {
     let named = |shape: &BodyShape<'_>| {
         (0..shape.slots())
             .map(|index| {
@@ -36,15 +45,14 @@ fn callable<'graph>(program: &Program<'graph>, names: &[&str]) -> &'graph BodySh
             })
             .collect::<Vec<_>>()
     };
-    let (_, found) = (program.shape().nested_shapes().iter())
-        .find(|(_, nested)| nested.kind() == ShapeKind::Callable && named(nested) == names)
+    (program.shapes().bodies().iter())
+        .find(|nested| nested.kind() == kind && named(nested) == names)
         .unwrap_or_else(|| {
-            let all: Vec<_> = (program.shape().nested_shapes().iter())
-                .map(|(_, nested)| named(nested))
+            let all: Vec<_> = (program.shapes().bodies().iter())
+                .map(|nested| named(nested))
                 .collect();
-            panic!("a callable binds {names:?}: {all:?}")
-        });
-    found
+            panic!("a {kind:?} body binds {names:?}: {all:?}")
+        })
 }
 
 /// The site of `WRAP`'s `PICK x`, and whether the load selected it.
@@ -205,4 +213,36 @@ fn a_statement_binding_that_cannot_type_faults_where_the_load_would() {
         unlocated(fault).starts_with("no overload of `PICK _`"),
         "{fault}"
     );
+}
+
+#[test]
+fn a_module_body_reads_its_frames_entry_decisions() {
+    // `INNER`'s `m` is bound to what `MAKE` returned, so its entry decides `h`'s `PICK m.zero`,
+    // which the module body, running inline in `INNER`'s frame, reads.
+    let inner = "EXPR #(INNER m :Counter) -> Any = \
+                 #((MODULE h OVER #[m] = (LET p = (PICK m.zero))) (h.p))\n\
+                 EXPR #(OUTER n :Number) -> Any = #((LET r = (MAKE ints chain)) (INNER r))\n";
+    let make = MAKE.lines().take(4).collect::<Vec<_>>().join("\n");
+    let source = format!("{make}\n{inner}PRINT (OUTER 1)\n");
+    let (segment, site, selected) = loaded(&super::caching::program(2, &source), |program| {
+        let body = nested(program, ShapeKind::Module, &["p"]);
+        let Some(ExpressionPart::Expression(node)) = body.rhs(slot(program, body, "p")) else {
+            panic!("`p` is bound to a call");
+        };
+        let site = body.site_of_node(node.reference());
+        let narrowing = program.facts().use_statics(body, site).narrowing;
+        (
+            body.segment(),
+            site,
+            matches!(narrowing, Narrowing::Selected(_)),
+        )
+    });
+    assert!(!selected, "the load selects nothing at `PICK m.zero`");
+    CHOSEN.with(|chosen| chosen.borrow_mut().clear());
+    crate::dispatch::evaluate::CHOSE.with(|hook| hook.set(Some(chose)));
+    let ran = ran_under(2, &source, BuildBudget::default());
+    crate::dispatch::evaluate::CHOSE.with(|hook| hook.set(None));
+    assert_eq!(ran.printed, "n");
+    let chosen = CHOSEN.with(|chosen| chosen.take());
+    assert!(chosen.contains(&(segment, site)), "{chosen:?}");
 }
