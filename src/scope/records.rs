@@ -28,14 +28,27 @@ use super::keyed::Keyed;
 use super::relay::Relay;
 use super::settlement_facts::{Activated, Settlement};
 use super::shape::{
-    BodyShape, Coordinate, Located, Position, Segment, ShapeError, Site, Slot, Target,
+    BodyShape, Coordinate, Lands, Located, Position, Segment, ShapeError, Site, Slot, Target,
 };
 use super::shapes::Shapes;
 use super::tree::{Leaf, NodeCapture, Tree, closed_trees};
 use super::typed::{
-    BodyClass, Caching, Handoff, InstanceRead, Mint, PathEntry, Pick, Points, Resolution, Static,
-    StaticCallable, StaticInstance, StaticRegistered, StaticType, UseStatics, Variable, ViewSlots,
+    BodyClass, Caching, Elaboration, Handoff, InstanceRead, Mint, PathEntry, Pick, Points,
+    Resolution, Source, Static, StaticCallable, StaticInstance, StaticRegistered, StaticType,
+    UseStatics, Variable, ViewSlots,
 };
+
+/// What a cell reads of a typed fact where it runs ([`Facts::at_run`]).
+#[derive(Clone, Copy, Debug)]
+pub enum AtRun<T> {
+    /// The same at every run.
+    Closed(T),
+    /// Left to the run's own door: a contribution read off the argument's carried type, or a
+    /// view's type over a tree the binding leaves open.
+    Open,
+    /// Refused at every run, as the load words it.
+    Refused(Elaboration),
+}
 
 /// One unit's facts: everything the walk computed running it.
 #[derive(Clone, Copy)]
@@ -180,6 +193,9 @@ pub struct Folds<'a> {
     /// A body's slots bound at a statement that some unit's frontier holds: where the cell running
     /// it decides again once the statement binds them.
     pub seams: &'a [Slot],
+    /// The seams some path the load left open is rooted at, sorted: decided at their statement
+    /// even where the load built their content, which a path reads off what the run binds.
+    pub rooting: &'a [Slot],
     /// Which of the body's type captures its content composes, parallel to its layout.
     pub contract: &'a [bool],
 }
@@ -439,6 +455,75 @@ impl<'step> Facts<'step> {
             .for_each(each);
     }
 
+    /// `fact`, a fact of `shape` read at `site` where the cell runs: closed, refused at every run,
+    /// or left open to the run's own door. A rigid fact never reaches the run — every variable the
+    /// load left open is bound in a layer the cell reads — save one over a path the load read off a
+    /// signature lacking its member, which every run refuses; any other is a bug, refused as the
+    /// load refuses a name with no binding.
+    pub fn at_run<C, R>(
+        &self,
+        shape: &BodyShape<'_>,
+        site: Site,
+        fact: Static<'step, C, R>,
+    ) -> AtRun<C> {
+        match fact {
+            Static::Closed(value) => AtRun::Closed(value),
+            Static::Unknown => AtRun::Open,
+            Static::Rigid { variables, .. } => AtRun::Refused(self.unbound(shape, site, variables)),
+        }
+    }
+
+    /// The type the type expression at `site` of `shape` denotes where the cell runs, or why every
+    /// run refuses it. The load, or a layer the cell reads, fixed it: one left open is a bug.
+    pub fn denoted(&self, shape: &BodyShape<'_>, site: Site) -> Result<KType, Elaboration> {
+        match self.at_run(shape, site, self.typed_expression(shape, site)) {
+            AtRun::Closed(closed) => Ok(closed),
+            AtRun::Refused(refused) => Err(refused),
+            AtRun::Open => {
+                debug_assert!(
+                    false,
+                    "the type at {site:?} of body {:?} is open where it runs",
+                    shape.segment()
+                );
+                Err(Elaboration::Unknown { site })
+            }
+        }
+    }
+
+    /// Why a rigid fact of `shape` over `variables`, read at `site`, refuses.
+    fn unbound(&self, shape: &BodyShape<'_>, site: Site, variables: &[Variable]) -> Elaboration {
+        let shapes = self.shapes();
+        let path = |root: Segment, level| self.path(shapes.shape_at(root), level);
+        for variable in variables {
+            if let Source::Path { root, level, .. } = variable.source
+                && let Some((entry, resolution)) = path(root, level)
+                && let Some(owner) = resolution.lacks
+            {
+                return Elaboration::NoSuchMember {
+                    owner: owner.into(),
+                    name: entry.label.symbol(),
+                    site,
+                };
+            }
+        }
+        debug_assert!(
+            false,
+            "a rigid fact of body {:?} at {site:?} reached the run",
+            shape.segment()
+        );
+        let name = variables.iter().find_map(|variable| match variable.source {
+            Source::Type(at) => match shapes.follow(shape.segment(), at)? {
+                Lands::Binder { at, slot } => Some(shapes.shape_at(at).slot_name(slot).symbol()),
+                _ => None,
+            },
+            Source::Path { root, level, .. } => Some(path(root, level)?.0.label.symbol()),
+        });
+        match name {
+            Some(name) => Elaboration::Unbound { name, site },
+            None => Elaboration::Unknown { site },
+        }
+    }
+
     /// The wording of the refusal the innermost settlement's walk reached, else the refusal of the
     /// composed code the chain rests on, if either reached one.
     pub fn refusal(&self) -> Option<&'step str> {
@@ -500,6 +585,10 @@ pub(crate) trait RecordSource<'a>: Copy {
     /// The record holding `held`, beside its unit.
     fn holding(&self, held: Held) -> Option<(UnitId, &'a UnitFacts<'a>)>;
 
+    /// Hand `each` every path entry of the chain `root` roots that any record holds, an entry
+    /// perhaps more than once.
+    fn each_path(&self, root: Segment, each: &mut dyn FnMut(PathEntry<'a>));
+
     /// `body` as its load laid it.
     fn laid(&self, body: Segment) -> &'a Laid<'a>;
 
@@ -529,6 +618,10 @@ impl<'graph> RecordSource<'graph> for LoadRecords<'graph> {
 
     fn holding(&self, held: Held) -> Option<(UnitId, &'graph UnitFacts<'graph>)> {
         self.records.holding(held)
+    }
+
+    fn each_path(&self, root: Segment, each: &mut dyn FnMut(PathEntry<'graph>)) {
+        self.records.each_path(root, each);
     }
 
     fn laid(&self, body: Segment) -> &'graph Laid<'graph> {
@@ -597,6 +690,13 @@ impl<'step> RecordSource<'step> for Layers<'step> {
         (!self.rerun_within(None, unit)).then_some((unit, facts))
     }
 
+    fn each_path(&self, root: Segment, each: &mut dyn FnMut(PathEntry<'step>)) {
+        for layer in self.layers() {
+            layer.each_path(root, each);
+        }
+        self.base.each_path(root, each);
+    }
+
     fn laid(&self, body: Segment) -> &'step Laid<'step> {
         self.base.laid(body)
     }
@@ -640,6 +740,10 @@ impl<'a, S: RecordSource<'a>> RecordSource<'a> for FactsOver<S> {
 
     fn holding(&self, held: Held) -> Option<(UnitId, &'a UnitFacts<'a>)> {
         self.0.holding(held)
+    }
+
+    fn each_path(&self, root: Segment, each: &mut dyn FnMut(PathEntry<'a>)) {
+        self.0.each_path(root, each);
     }
 
     fn laid(&self, body: Segment) -> &'a Laid<'a> {
@@ -1301,6 +1405,11 @@ impl<'a, S: RecordSource<'a>> FactsOver<S> {
     }
 
     /// The slots `shape` binds at a statement that some unit's frontier holds.
+    pub fn rooting_seams(&self, shape: &BodyShape<'_>) -> &'a [Slot] {
+        self.folds(shape.segment())
+            .map_or(&[], |folds| folds.rooting)
+    }
+
     pub fn statement_seams(&self, shape: &BodyShape<'_>) -> &'a [Slot] {
         self.0
             .folds(shape.segment())
@@ -1501,6 +1610,24 @@ impl<'graph> Records<'graph> {
         }
         let (unit, facts) = self.base?.0.records.holding(held)?;
         self.units.get(unit).is_none().then_some((unit, facts))
+    }
+
+    /// Hand `each` every path entry of the chain `root` roots these records, or their base's, hold.
+    fn each_path(&self, root: Segment, each: &mut dyn FnMut(PathEntry<'graph>)) {
+        let entries = self.index.entries();
+        let from = entries.partition_point(|(held, _)| *held < Held::Path(root, 0));
+        let to = entries.partition_point(|(held, _)| *held <= Held::Path(root, usize::MAX));
+        for (held, at) in &entries[from..to] {
+            let (_, (facts, _)) = self.units[*at as usize];
+            if let Held::Path(_, level) = held
+                && let Some((_, (entry, _))) = facts.paths.get((root, *level))
+            {
+                each(*entry);
+            }
+        }
+        if let Some(base) = self.base {
+            base.0.records.each_path(root, each);
+        }
     }
 
     /// `body` as this load laid it, or its base where this load has not folded yet.

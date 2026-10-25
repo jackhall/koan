@@ -469,7 +469,8 @@ proptest! {
 
     /// The load's verdict on two paths through drawn modules, views and functor calls holds at
     /// every run: where it selects `SAME` over two `zero` members the run prints one, where it
-    /// refuses the use the run faults there, and otherwise the run is the unnarrowed one.
+    /// refuses the use the run faults there — at the load, or at the decision over a binder its
+    /// paths are rooted at — and otherwise the run is the unnarrowed one.
     #[test]
     fn a_load_verdict_on_two_paths_holds_at_the_run(program in functors()) {
         let (source, line) = program.render();
@@ -489,6 +490,11 @@ proptest! {
                 whole,
                 source
             );
+        } else if let Some(located) = narrowed.strip_prefix(&format!("error: <test>:{line}:")) {
+            // The decision at a binder the paths are rooted at refused the use, worded as the
+            // load words it: the unnarrowed run raises the same at the use.
+            let message = located.split_once(": ").map_or(located, |(_, message)| message);
+            prop_assert_eq!(&whole, &format!("error: {message}"), "in\n{}", source);
         } else {
             prop_assert_eq!(&narrowed, &whole, "in\n{}", source);
             if narrowing(&source, "s") == "selected" {

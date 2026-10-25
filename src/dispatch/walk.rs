@@ -1436,6 +1436,13 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         at.exits |= typed.exits;
         at.closed += typed.closed;
         at.folded += typed.folded;
+        // A module binder's content tree stands with its unit, its body typed when it was.
+        let shape = address(at.shape);
+        for (slot, tree) in typed.contents.iter() {
+            self.binders
+                .entry((shape, *slot, None))
+                .or_insert((*tree, tag));
+        }
     }
 
     /// The unit running, whose record keeps what the walk fixes now: none while an unfilled
@@ -2095,9 +2102,10 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     /// The point each variable of `judgement`'s group solves to at every run of the call at `at`
     /// in the shape at `level`, whose arguments contribute `contributions`: closed where its
     /// interval is exactly a closed type, rigid where it is exactly one over the run's lexical
-    /// variables, and the carried type where the variable is the whole type of one slot, which
-    /// [`judge_by_class`] admits as *always* at the variable's bound, and that slot's argument
-    /// contributes nothing. `None` where a variable has none of the three.
+    /// variables — which the layer binding them closes before any run reads it — and the carried
+    /// type where the variable is the whole type of one slot, which [`judge_by_class`] admits as
+    /// *always* at the variable's bound, and that slot's argument contributes nothing. `None` where
+    /// a variable has none of the three.
     fn points(
         &mut self,
         level: usize,

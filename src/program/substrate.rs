@@ -126,7 +126,7 @@ pub struct CellSubstrate(Joined);
 
 /// The load's one walk over `shapes`: every record the language's walk computes, laid in program
 /// storage through `writer`, beside the folds the load lays over them.
-fn walked<'graph, L: Language>(
+pub(crate) fn walked<'graph, L: Language>(
     shapes: &'graph crate::scope::Shapes<'graph>,
     builtins: &'graph KBuiltins<'graph, 'graph>,
     types: &Chain<'graph, 'graph, 'graph, '_>,

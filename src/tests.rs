@@ -33,6 +33,35 @@ pub(crate) fn case_share(numerator: u32, denominator: u32) -> u32 {
     (proptest::prelude::ProptestConfig::default().cases * numerator / denominator).max(64)
 }
 
+/// The load's walk of koan over `shapes`, as a program's load runs it: what a suite below the
+/// language reads facts through where it needs the walk's, beside the walk's refusal, rendered.
+pub(crate) fn walked<'graph>(
+    shapes: &'graph crate::scope::Shapes<'graph>,
+    builtins: &'graph crate::knot::KBuiltins<'graph, 'graph>,
+    types: &crate::values::Chain<'graph, 'graph, 'graph, '_>,
+    writer: crate::memory::Writer<'graph, 'graph>,
+    scratch: crate::memory::BumpAllocator<'_>,
+    symbols: &crate::symbols::SymbolInterner,
+) -> Result<&'graph crate::scope::LoadFacts<'graph>, String> {
+    crate::program::walked::<crate::dispatch::Koan>(shapes, builtins, types, writer, scratch)
+        .map_err(|error| error.display(symbols, types).to_string())
+}
+
+/// Koan's load walk over the records `store` keeps, rooted at `at`: what a test language below
+/// koan runs as its own [`Language::facts`](crate::program::Language::facts), so every fact a run
+/// reads is the walk's.
+pub(crate) fn walk<'graph: 'o, 'tier: 'o, 'o, S: crate::scope::Store<'o>>(
+    shapes: &'graph crate::scope::Shapes<'graph>,
+    builtins: &'graph crate::knot::KBuiltins<'graph, 'graph>,
+    store: &S,
+    types: &crate::values::Chain<'tier, '_, '_, '_>,
+    scratch: crate::memory::BumpAllocator<'_>,
+    at: crate::scope::Segment,
+) -> Result<(), crate::scope::ShapeError<'o>> {
+    use crate::program::Language;
+    crate::dispatch::Koan::facts(shapes, builtins, store, types, scratch, at)
+}
+
 thread_local! {
     static TEST_FILE: crate::source::FileId =
         crate::source::register(crate::source::SourceFile::new("<test>", String::new()));

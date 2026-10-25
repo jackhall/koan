@@ -1608,29 +1608,42 @@ struct Renderer<'p> {
     out: Rendering<'p>,
     scope: usize,
     statement: u32,
+    /// Whether to write the plan as a program the load's walk accepts ([`program_source`]).
+    typed: bool,
 }
 
 /// The source of the program `choices` plans, writing no quote value — what the knot suite runs a
-/// plan as, which does not read how a quote ties.
+/// plan as, which does not read how a quote ties — and well-typed, so the load's walk accepts it:
+/// each callable returns its planned return type joined with `Any`, and each `MATCH` arm after the
+/// first guards its planned head joined with a list type no other arm names. Every planned read
+/// stays a mention where it was.
 pub(crate) fn program_source(choices: &[u32]) -> String {
     let mut generator = Generator::new(choices);
     generator.quotes = false;
-    render_program(&generator.program()).source
+    let program = generator.program();
+    let mut renderer = Renderer::new(&program, 0);
+    renderer.typed = true;
+    renderer.program(&program);
+    renderer.out.source
 }
 
 /// A program's source: one line per statement.
 pub(super) fn render_program(program: &Scope) -> Rendering<'_> {
     let mut renderer = Renderer::new(program, 0);
-    for (index, statement) in program.statements.iter().enumerate() {
-        if index > 0 {
-            renderer.text("\n");
-        }
-        renderer.statement(index, statement);
-    }
+    renderer.program(program);
     renderer.out
 }
 
 impl<'p> Renderer<'p> {
+    fn program(&mut self, program: &'p Scope) {
+        for (index, statement) in program.statements.iter().enumerate() {
+            if index > 0 {
+                self.text("\n");
+            }
+            self.statement(index, statement);
+        }
+    }
+
     fn new(root: &'p Scope, level: usize) -> Self {
         Renderer {
             out: Rendering {
@@ -1648,6 +1661,19 @@ impl<'p> Renderer<'p> {
             },
             scope: 0,
             statement: 0,
+            typed: false,
+        }
+    }
+
+    /// A callable's return type: the planned read, joined with `Any` where the walk is to accept
+    /// whatever the body returns.
+    fn returns(&mut self, returns: &'p Read) {
+        if self.typed {
+            self.text("(");
+        }
+        self.read(returns);
+        if self.typed {
+            self.text(" | Any)");
         }
     }
 
@@ -1741,7 +1767,7 @@ impl<'p> Renderer<'p> {
                     self.read(ty);
                 }
                 self.text("} -> ");
-                self.read(&callable.returns);
+                self.returns(&callable.returns);
                 self.text(" = #");
                 self.body(&callable.body);
                 self.text(")");
@@ -1769,7 +1795,7 @@ impl<'p> Renderer<'p> {
                 self.text(" :");
                 self.read(&body.types[0]);
                 self.text(") -> ");
-                self.read(&body.returns);
+                self.returns(&body.returns);
                 self.text(" = #");
                 self.body(&body.body);
             }
@@ -1895,7 +1921,16 @@ impl<'p> Renderer<'p> {
                     if index > 0 {
                         self.text(", ");
                     }
-                    self.read(head);
+                    // Two arms guarding one type refuse the load.
+                    match self.typed && index > 0 {
+                        true => {
+                            self.text(":(");
+                            self.read(head);
+                            let (open, close) = ("(LIST OF ".repeat(index), ")".repeat(index));
+                            self.text(&format!(" | {open}Bool{close})"));
+                        }
+                        false => self.read(head),
+                    }
                     self.text(": ");
                     self.body(body);
                 }
@@ -1921,7 +1956,7 @@ impl<'p> Renderer<'p> {
             self.read(ty);
         }
         self.text("} -> ");
-        self.read(&callable.returns);
+        self.returns(&callable.returns);
         self.text(" = #");
         self.body(&callable.body);
         self.text(")");

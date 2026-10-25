@@ -2,7 +2,7 @@
 //!
 //! `knot` is the top of the value stack: it may name `elaborate`, `memory`, `parse`,
 //! `scope`, `symbols`, `type_lattice` and `values`, and nothing else in the crate — no scheduler,
-//! no builtins. Outside its tests it holds no owning heap type.
+//! no builtins. Its tests reach the language's walk only through `crate::tests::walked`. Outside its tests it holds no owning heap type.
 //!
 //! The direction *inside* `knot` — [`function`](crate::knot::function) and
 //! [`module`](crate::knot::module) reach their vocabulary through the facade and never each other —
@@ -19,6 +19,7 @@ const PREFIXES: &[&str] = &[
     "crate::symbols",
     "crate::tests::boundary",
     "crate::tests::case_share",
+    "crate::tests::walked",
     "crate::type_lattice",
     "crate::values",
 ];

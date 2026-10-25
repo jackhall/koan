@@ -146,8 +146,8 @@ fn a_called_bodys_evaluations_are_tenants_of_the_frame() {
 #[test]
 fn a_component_is_one_unit_bound_from_one_knot() {
     let mut substrate = loaded(
-        "LET even = (FN :{n :Number} -> Number = #(odd))\n\
-         LET odd = (FN :{n :Number} -> Number = #(even))",
+        "LET even = (FN :{n :Number} -> Any = #(odd))\n\
+         LET odd = (FN :{n :Number} -> Any = #(even))",
         2,
     );
     let read = run_and_read(&mut substrate, &["even", "odd"]);
@@ -222,9 +222,9 @@ fn a_whole_program() {
 }
 
 #[test]
-fn a_quantified_lambda_is_called_by_name() {
+fn a_quantified_definition_is_called_by_name() {
     let mut substrate = loaded(
-        "LET id = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(x))\nLET r = (id 7)",
+        "LET id = FN EXPR FOR ALL #[Elt] #(ID x :Elt) -> Elt = #(x)\nLET r = (id 7)",
         2,
     );
     let read = run_and_read(&mut substrate, &["r"]);
@@ -249,18 +249,6 @@ fn a_call_binds_each_type_parameter_to_its_solution() {
     // The frame solves the callee's group against the arguments' carried types and binds `Elt` to
     // what it solved, so the body reads the argument's own type.
     let mut substrate = loaded(
-        "LET which = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #((Elt) (x)))\n\
-         LET n = (which 7)\nLET s = (which \"a\")",
-        2,
-    );
-    assert_eq!(read_types(&mut substrate), ["read Number", "read Str"]);
-}
-
-#[test]
-fn a_combined_quantified_expression_called_by_name_binds_its_solution() {
-    // A combined definition is typed by its function type, so a call through its `LET` name solves
-    // the group as a `FN FOR ALL`'s does.
-    let mut substrate = loaded(
         "LET which = FN EXPR FOR ALL #[Elt] #(WHICH x :Elt) -> Elt = #((Elt) (x))\n\
          LET n = (which 7)\nLET s = (which \"a\")",
         2,
@@ -273,7 +261,7 @@ fn a_combined_quantified_expression_called_by_name_binds_its_solution() {
 #[test]
 fn contributions_for_other_parameters_misname_the_call() {
     let mut substrate = loaded(
-        "LET which = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(x))\nLET r = (which 7)",
+        "LET which = FN EXPR FOR ALL #[Elt] #(WHICH x :Elt) -> Elt = #(x)\nLET r = (which 7)",
         2,
     );
     reset();
@@ -300,8 +288,8 @@ fn each_type_parameter_is_bound_by_name_not_by_slot_order() {
     // read the map positionally would hand one of them the other's answer. No argument reaches
     // `Unused`, so both must read it as its bound `Any` whichever way the two symbols sort.
     let mut substrate = loaded(
-        "LET ab = (FN FOR ALL #[Held Unused] :{x :(LIST OF Held)} -> Any = #(Unused))\n\
-         LET ba = (FN FOR ALL #[Unused Held] :{x :(LIST OF Held)} -> Any = #(Unused))\n\
+        "LET ab = FN EXPR FOR ALL #[Held Unused] #(AB x :(LIST OF Held)) -> Any = #(Unused)\n\
+         LET ba = FN EXPR FOR ALL #[Unused Held] #(BA x :(LIST OF Held)) -> Any = #(Unused)\n\
          LET one = (ab [1 2])\nLET two = (ba [1 2])",
         2,
     );
@@ -334,7 +322,7 @@ fn a_lowercase_name_holds_a_value_a_type_or_code() {
 fn a_generic_function_carries_types_and_code() {
     // A `FOR ALL` parameter's default bound is `Any`, so it stands for a type or a quote too.
     let mut substrate = loaded(
-        "LET id = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(x))\n\
+        "LET id = FN EXPR FOR ALL #[Elt] #(ID x :Elt) -> Elt = #(x)\n\
          LET t = (id Number)\nLET q = (id #(1))",
         2,
     );
@@ -372,7 +360,7 @@ fn a_call_whose_argument_does_not_fit_its_parameter_is_refused() {
     // `Held` is reached only under a list, so a bare number admits nowhere and the walk refuses
     // before the frame binds anything.
     let mut substrate = loaded(
-        "LET first = (FN FOR ALL #[Held] :{x :(LIST OF Held)} -> Held = #(x))\nLET r = (first 7)",
+        "LET first = FN EXPR FOR ALL #[Held] #(HEAD x :(LIST OF Held)) -> Held = #(x)\nLET r = (first 7)",
         2,
     );
     assert_eq!(
@@ -405,14 +393,14 @@ fn a_quantified_return_shares_its_frame() {
     // A quantified return places as `Shares`, so the frame forwards the argument rather than
     // copying it: `r` reads back at the very address `xs` was built at. The list is long enough
     // that copying it never costs less than pinning the calling evaluation's region, which holds
-    // the types the call builds beside its own work.
-    let elements = (1..=24)
+    // the types the call builds and the request its settlement is sought with beside its own work.
+    let elements = (1..=64)
         .map(|n| n.to_string())
         .collect::<Vec<_>>()
         .join(" ");
     let mut substrate = loaded(
         &format!(
-            "LET id = (FN FOR ALL #[Elt] :{{x :Elt}} -> Elt = #(x))\nLET xs = [{elements}]\nLET r = (id xs)"
+            "LET id = FN EXPR FOR ALL #[Elt] #(ID x :Elt) -> Elt = #(x)\nLET xs = [{elements}]\nLET r = (id xs)"
         ),
         2,
     );
@@ -421,32 +409,16 @@ fn a_quantified_return_shares_its_frame() {
 }
 
 #[test]
-fn an_annotated_binder_is_held_to_its_annotation() {
-    // Mini runs no walk, so nothing is settled and every annotation is checked here.
-    let mut substrate = loaded("LET n :Number = 1\nLET xs :(LIST OF Any) = [1]", 2);
-    assert_eq!(run_and_read(&mut substrate, &["n"]), ["1"]);
-    let mut substrate = loaded("LET s :Number = \"a\"", 2);
-    assert_eq!(
-        substrate.with(|running| running.run()),
-        Ok(Outcome::Uncaught)
-    );
-    assert_eq!(
-        written(),
-        ["error: Str does not satisfy its annotation Number"]
-    );
-}
-
-#[test]
 fn a_bounded_type_parameter_refuses_an_argument_outside_its_bound() {
     let mut substrate = loaded(
-        "LET num = (FN FOR ALL #{Elt: Number} :{x :Elt} -> Elt = #(x))\nLET r = (num 7)",
+        "LET num = FN EXPR FOR ALL #{Elt: Number} #(NUM x :Elt) -> Elt = #(x)\nLET r = (num 7)",
         2,
     );
     assert_eq!(run_and_read(&mut substrate, &["r"]), ["7"]);
     for source in [
-        "LET num = (FN FOR ALL #{Elt: Number} :{x :Elt} -> Elt = #(x))\nLET r = (num \"a\")",
+        "LET num = FN EXPR FOR ALL #{Elt: Number} #(NUM x :Elt) -> Elt = #(x)\nLET r = (num \"a\")",
         // A quote is code, not a value.
-        "LET v = (FN FOR ALL #{Elt: Value} :{x :Elt} -> Elt = #(x))\nLET q = (v #(1))",
+        "LET v = FN EXPR FOR ALL #{Elt: Value} #(VALUED x :Elt) -> Elt = #(x)\nLET q = (v #(1))",
     ] {
         let mut substrate = loaded(source, 2);
         assert_eq!(
@@ -460,7 +432,7 @@ fn a_bounded_type_parameter_refuses_an_argument_outside_its_bound() {
 #[test]
 fn a_type_parameter_no_argument_reaches_binds_its_bound() {
     let mut substrate = loaded(
-        "LET which = (FN FOR ALL #{Unused: Value, Held: Any} :{x :(LIST OF Held)} -> Any = #(Unused))\n\
+        "LET which = FN EXPR FOR ALL #{Unused: Value, Held: Any} #(WHICH x :(LIST OF Held)) -> Any = #(Unused)\n\
          LET t = (which [1 2])",
         2,
     );
@@ -776,7 +748,7 @@ fn a_tail_chain_returns_at_the_outermost_contract() {
 fn a_return_that_misses_its_declared_type_is_an_error_value() {
     for body in ["#(n)", "#((LET m = n))"] {
         let mut substrate = loaded(
-            &format!("LET f = (FN :{{n :Number}} -> Str = {body})\nLET r = (f 1)"),
+            &format!("LET f = (FN :{{n :Any}} -> Str = {body})\nLET r = (f 1)"),
             2,
         );
         assert_eq!(
@@ -786,7 +758,7 @@ fn a_return_that_misses_its_declared_type_is_an_error_value() {
         );
         assert_eq!(
             written(),
-            ["error: :(FN :{n :Number} -> Str) returned Number, which does not satisfy Str"],
+            ["error: :(FN :{n :Any} -> Str) returned Number, which does not satisfy Str"],
             "{body}"
         );
     }

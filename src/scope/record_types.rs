@@ -46,8 +46,15 @@ impl UnitFacts<'_> {
             if let Some(through) = through {
                 each((*through).into());
             }
-            let Resolution { tree, resolved } = resolution;
+            let Resolution {
+                tree,
+                resolved,
+                lacks,
+            } = resolution;
             tree_types(tree, each);
+            if let Some(lacks) = lacks {
+                each((*lacks).into());
+            }
             match resolved {
                 Resolved::Closed(ktype) => each((*ktype).into()),
                 Resolved::Class(_) => {}
@@ -429,7 +436,8 @@ fn error_types(error: &ShapeError<'_>, each: &mut Each<'_>) {
             | Elaboration::Bound { site: _ }
             | Elaboration::Quantified { site: _ }
             | Elaboration::MeetOverVariable { site: _ }
-            | Elaboration::Unknown { site: _ } => {}
+            | Elaboration::Unknown { site: _ }
+            | Elaboration::Unbound { name: _, site: _ } => {}
         },
         ShapeError::Rebind {
             name: _,

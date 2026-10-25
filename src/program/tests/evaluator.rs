@@ -4,8 +4,9 @@
 //! list of literals, names and quotes, `(EVAL code -> <Type>)` through the
 //! [`EVAL` door](crate::program::eval), whose declared type it does not read,
 //! `(WHEN c THEN a ELSE b)`,
-//! `(a MINUS b)`, `(FIRST xs)` over a list data node whose first cell is an edge, a call `(f x)` of a function with one
-//! parameter, and a `FN`, born through the [lambda door](crate::knot::lambda). `WHEN`, `THEN`,
+//! `(a MINUS b)`, `(FIRST xs)` over a list data node whose first cell is an edge, a call `(f x)` of
+//! a function with one parameter, and a `FN`, born through the [lambda door](crate::knot::lambda).
+//! Its load runs koan's walk, so every fact a run reads is the walk's. `WHEN`, `THEN`,
 //! `ELSE`, `MINUS` and `FIRST` are no builtin shapes, so the shape builder walks them as plain
 //! calls; anything else is refused.
 //!
@@ -106,6 +107,17 @@ impl Language for Mini {
 
     fn evaluator<'graph>() -> NativeStep<'graph, KBundle> {
         evaluate
+    }
+
+    fn facts<'graph: 'o, 'tier: 'o, 'o, S: crate::scope::Store<'o>>(
+        shapes: &'graph crate::scope::Shapes<'graph>,
+        builtins: &'graph KBuiltins<'graph, 'graph>,
+        store: &S,
+        types: &Chain<'tier, '_, '_, '_>,
+        scratch: BumpAllocator<'_>,
+        at: crate::scope::Segment,
+    ) -> Result<(), crate::scope::ShapeError<'o>> {
+        crate::tests::walk(shapes, builtins, store, types, scratch, at)
     }
 }
 

@@ -23,8 +23,8 @@
 use crate::memory::{BumpAllocator, BumpBackedMap, BumpVec, Lays, bump_table, collect, resident};
 use crate::scope::{
     Address, BindSite, BodyClass, Caching, Cut, Deps, DepsGathering, Folds, Frontier, Keyed,
-    LoadFacts, Mint, Position, Resolution, Segment, ShapeKind, Shapes, SiteDeps, Slot, UnitIndex,
-    tree_deps,
+    LoadFacts, Mint, Position, Resolution, Resolved, Root, Segment, ShapeKind, Shapes, SiteDeps,
+    Slot, UnitIndex, tree_deps,
 };
 
 /// The folds of every body `load` holds records for, by segment, laid through `lay`.
@@ -39,6 +39,7 @@ pub fn fold<'o>(
     let mut sites: BumpVec<'_, SiteDeps<'o>> = BumpVec::new_in(scratch);
     let mut digestible: BumpVec<'_, (Segment, &'o [Slot])> = BumpVec::new_in(scratch);
     let mut resolutions: BumpVec<'_, ((Segment, usize), Resolution<'o>)> = BumpVec::new_in(scratch);
+    let mut rooting: BumpVec<'_, (Segment, Slot)> = BumpVec::new_in(scratch);
     let mut frontiers: BumpVec<'_, (Segment, UnitIndex, Frontier<'o>)> = BumpVec::new_in(scratch);
     let mut contract = BumpVec::with_capacity_in(count, scratch);
     for shape in shapes.bodies() {
@@ -50,6 +51,12 @@ pub fn fold<'o>(
         sites.extend(facts.sites.iter().copied());
         digestible.extend((facts.born.iter()).map(|(body, born)| (*body, born.digestible)));
         resolutions.extend((facts.paths.iter()).map(|(at, (_, resolution))| (*at, *resolution)));
+        rooting.extend((facts.paths.iter()).filter_map(|(_, (entry, resolution))| {
+            match (entry.root, resolution.resolved) {
+                (Root::Binder(binder), Resolved::Class(_)) => Some((binder.body, binder.slot)),
+                _ => None,
+            }
+        }));
         frontiers.push((unit.segment, unit.unit, *frontier));
         for named in facts.named_variables {
             compose(shapes, named.reading, named.level, &mut contract);
@@ -57,6 +64,8 @@ pub fn fold<'o>(
     }
     digestible.sort_unstable_by_key(|(body, _)| *body);
     resolutions.sort_unstable_by_key(|(at, _)| *at);
+    rooting.sort_unstable();
+    rooting.dedup();
     let digestible = |body: Segment, slot: Slot| {
         (digestible.binary_search_by_key(&body, |(held, _)| *held))
             .is_ok_and(|at| digestible[at].1.binary_search(&slot).is_ok())
@@ -146,6 +155,7 @@ pub fn fold<'o>(
                 keys: None,
                 waits: &[],
                 seams: &[],
+                rooting: &[],
                 contract,
             });
             continue;
@@ -207,6 +217,15 @@ pub fn fold<'o>(
             keys: keys.flatten(),
             waits,
             seams: collect(lay, seaming[from..to].iter().map(|(_, slot)| *slot)),
+            rooting: {
+                let mut slots = BumpVec::new_in(scratch);
+                slots.extend(
+                    (seaming[from..to].iter())
+                        .filter(|at| rooting.binary_search(at).is_ok())
+                        .map(|(_, slot)| *slot),
+                );
+                collect(lay, slots.iter().copied())
+            },
             contract,
         });
     }

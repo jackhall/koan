@@ -143,9 +143,9 @@ fn a_lambda_weighs_what_the_tie_gives_the_same_function() {
 }
 
 #[test]
-fn a_quantified_lambda_carries_its_quantifier_map() {
+fn a_quantified_function_carries_its_quantifier_map() {
     with_fixture(|fixture| {
-        let lines = fixture.parse("LET pick = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(x))");
+        let lines = fixture.parse("LET pick = FN EXPR FOR ALL #[Elt] #(PICK x :Elt) -> Elt = #(x)");
         fixture.in_cell(pin, |context| {
             let types = &fixture.tiers.of(context);
             let activation = fixture.run(context.writer(), types, &lines, &[]);

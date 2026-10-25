@@ -46,7 +46,6 @@
 //! static type; the narrowing law (`tests/narrowing.rs`) is what holds a narrowed call to full
 //! selection.
 
-use crate::elaborate::{bound_path, denoted};
 use crate::knot::module::view::{self, Ascription, Unascribable};
 use crate::knot::{
     CodeBody, KValue, Knotted, KnottedFamily, instance, lambda, quote, refused_construction,
@@ -63,11 +62,11 @@ use crate::scheduler::{
     Action, Placement, Received, Request, Slot as Asked, Step, StepError, Taken, Use,
 };
 use crate::scope::{
-    BodyShape, Candidate, CandidateList, Elimination, HandedTo, InstanceRead, Located, Mint,
-    Narrowing, Offer, ParameterBinding, ShapeKind, Site, Static, StaticType,
+    AtRun, BodyShape, Candidate, CandidateList, Elaboration, Elimination, HandedTo, InstanceRead,
+    Located, Mint, Narrowing, Offer, ParameterBinding, ShapeKind, Site, StaticType,
 };
 use crate::symbols::{BinderSymbol, Symbol};
-use crate::type_lattice::{KType, Verdict, substitute_levels};
+use crate::type_lattice::{KType, Verdict};
 #[cfg(debug_assertions)]
 use crate::type_lattice::{bound_above, lower_end_outside, satisfied_by};
 use crate::values::{
@@ -339,12 +338,15 @@ fn leaf<'step, 'graph, 'here>(
 ) -> Action<'graph, KBundle> {
     let program = at.program;
     let types = &at.types;
-    let scratch = Bump::new();
     match part {
         ExpressionPart::Literal(_) | ExpressionPart::QuotedExpression(_) => read(step, at, part),
         ExpressionPart::SigiledTypeExpr(_) | ExpressionPart::RecordType(_) => {
             let writer = step.writer();
-            let value = match denoted(part, &at.view, types, &scratch) {
+            let value = match at
+                .view
+                .facts()
+                .denoted(at.view.shape(), at.view.shape().site(part))
+            {
                 Ok(handle) => Value::Type(TypeValue::new(writer, handle, types)),
                 Err(refused) => {
                     program.error(writer, types, refused.display(program.symbols(), types))
@@ -400,13 +402,14 @@ fn ascribe<'step, 'graph, 'here>(
         unreachable!("an ascription's operand is evaluated")
     };
     let writer = step.writer();
-    let ascribed = match denoted(&ascribed.value, &at.view, types, &scratch) {
-        Ok(ascribed) => ascribed,
-        Err(refused) => {
-            let error = program.error(writer, types, refused.display(program.symbols(), types));
-            return finish(step, at, error);
-        }
-    };
+    let ascribed =
+        match (at.view.facts()).denoted(at.view.shape(), at.view.shape().site(&ascribed.value)) {
+            Ok(ascribed) => ascribed,
+            Err(refused) => {
+                let error = program.error(writer, types, refused.display(program.symbols(), types));
+                return finish(step, at, error);
+            }
+        };
     // `:|` views its operand; `:!` retypes it.
     if mode == Ascription::Opaque {
         debug_assert!(
@@ -579,13 +582,14 @@ fn evaluated<'step, 'graph, 'here>(
         };
         return finish(step, at, raised.raise(program, writer, &at.types));
     };
-    let returns = match denoted(&declared.value, &at.view, types, &scratch) {
-        Ok(returns) => returns,
-        Err(refused) => {
-            let error = program.error(writer, types, refused.display(symbols, types));
-            return finish(step, at, error);
-        }
-    };
+    let returns =
+        match (at.view.facts()).denoted(at.view.shape(), at.view.shape().site(&declared.value)) {
+            Ok(returns) => returns,
+            Err(refused) => {
+                let error = program.error(writer, types, refused.display(symbols, types));
+                return finish(step, at, error);
+            }
+        };
     let offered = offered(at, writer, &operand.value, &scratch);
     exits(&step, at, &scratch, |exit| {
         exit.value(&value);
@@ -774,8 +778,16 @@ fn call<'step, 'graph, 'here>(
     let writer = step.writer();
     let mut arguments = BumpVec::with_capacity_in(operands.len(), &scratch);
     arguments.extend(operands.iter().map(Operand::ktype));
-    let fixed = (at.view.facts()).use_statics(at.view.shape(), at.view.shape().site_of_node(node));
-    let contributed = contributed(at, fixed.contributions, &scratch);
+    let site = at.view.shape().site_of_node(node);
+    let fixed = (at.view.facts()).use_statics(at.view.shape(), site);
+    let contributed = match contributed(at, site, fixed.contributions, &scratch) {
+        Ok(contributed) => contributed,
+        Err(refused) => {
+            let refused = refused.display(program.symbols(), types);
+            let error = program.error(writer, types, refused);
+            return finish(step, at, error);
+        }
+    };
     let selection = match fixed.narrowing {
         Narrowing::Full => {
             let maybe = list.candidates.iter().map(|c| (*c, Verdict::Maybe));
@@ -922,33 +934,25 @@ fn handed<'here>(
     collect(writer, handed.iter().copied())
 }
 
-/// What each recorded contribution is where the call runs: a closed type as it is, a rigid one at
-/// the types the run binds its variables to, and `None` where the call reads the carried type.
+/// What each recorded contribution, read at `site`, is where the call runs: a closed type as it
+/// is, and `None` where the call reads the carried type. A contribution the run refuses is the
+/// call's refusal.
 fn contributed<'x>(
     at: &Evaluation<'_, '_, '_, '_, '_, '_>,
+    site: Site,
     recorded: &[StaticType<'_>],
     scratch: &'x Bump,
-) -> BumpVec<'x, Option<KType>> {
-    let types = &at.types;
+) -> Result<BumpVec<'x, Option<KType>>, Elaboration> {
+    let (facts, shape) = (at.view.facts(), at.view.shape());
     let mut contributed = BumpVec::with_capacity_in(recorded.len(), scratch);
-    contributed.extend(recorded.iter().map(|each| {
-        match each {
-            Static::Unknown => None,
-            known => Some(
-                known
-                    .solved(
-                        &at.view,
-                        scratch,
-                        &|at_, entry| bound_path(&at.view, types, at_, entry),
-                        |value, bindings| {
-                            types.concrete(substitute_levels(types, scratch, value, bindings))
-                        },
-                    )
-                    .expect("a contribution's variables are bound where its call runs"),
-            ),
-        }
-    }));
-    contributed
+    for each in recorded {
+        contributed.push(match facts.at_run(shape, site, *each) {
+            AtRun::Closed(closed) => Some(closed),
+            AtRun::Open => None,
+            AtRun::Refused(refused) => return Err(refused),
+        });
+    }
+    Ok(contributed)
 }
 
 /// The parts of a keyworded node its call needs: every slot evaluated, save an `ATTR` label
@@ -1023,7 +1027,14 @@ fn apply<'step, 'graph, 'here>(
         return finish(step, at, value);
     }
     // What the frame solves each parameter from, in symbol order: `None` where its carried type.
-    let contributed = collect(writer, contributed(at, recorded, &scratch).iter().copied());
+    let contributed = match contributed(at, argument_site, recorded, &scratch) {
+        Ok(contributed) => collect(writer, contributed.iter().copied()),
+        Err(refused) => {
+            let refused = refused.display(program.symbols(), types);
+            let error = program.error(writer, types, refused);
+            return finish(step, at, error);
+        }
+    };
     // A call keeps its contract by the type its callee shows; a barrier never tails, since its
     // value crosses the barrier where its frame ends.
     let tails = at.contract.filter(|contract| {
@@ -1187,7 +1198,7 @@ fn in_place<'step, 'graph, 'here>(
                 )
             };
             Some(Value::Knotted(instance(
-                writer, member, solution, &at.view, types, scratch,
+                writer, member, solution, types, scratch,
             )))
         }
     }

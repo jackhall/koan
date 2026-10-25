@@ -51,7 +51,6 @@ use std::fmt;
 
 use smallvec::SmallVec;
 
-use crate::elaborate::{declares_nominal, denoted, type_declarations};
 use crate::knot::body_activation;
 use crate::knot::module::coerce::{self, CoercionRefused};
 use crate::knot::module::surface::surface;
@@ -66,8 +65,8 @@ use crate::scheduler::{
     Taken, Use,
 };
 use crate::scope::{Activated, Entry, EventSite, MemoKey, extended};
-use crate::scope::{Address, Bound, RecordSource, Tree, Unknown};
-use crate::scope::{BodyShape, Component, Mint, Position, ShapeKind, Site, Slot, Unit, UnitWork};
+use crate::scope::{Address, AtRun, Bound, RecordSource, Tree, Unknown};
+use crate::scope::{BodyShape, Component, Position, ShapeKind, Site, Slot, Unit, UnitWork};
 use crate::scope::{CaptureSource, ClosureBindings, Code, ComposedRoot, Facts, ShapeError};
 use crate::scope::{ComposedSyntax, Level as SettlementLevel, Stamp};
 use crate::scope::{Coordinate, ParameterBinding, Static, Target};
@@ -1934,8 +1933,8 @@ fn held<'graph, 'here>(
         return Ok(value);
     };
     let program = runner.program;
-    let (writer, scratch) = (step.writer(), Bump::new());
-    match denoted(written, &at, types, &scratch) {
+    let writer = step.writer();
+    match at.facts().denoted(at.shape(), at.shape().site(written)) {
         Ok(annotation) => held_at(step, types, runner, written, annotation, value),
         Err(refused) => {
             let error = program.error(writer, types, refused.display(program.symbols(), types));
@@ -2114,10 +2113,11 @@ fn decided_at_seams<'graph, 'here>(
         };
         // A seam is a binder whose content the facts hold only as a leaf: an action's result, a
         // call that does not unfold. One whose tree they build, closed or over other binders, or
-        // whose declaration they close, was decided where they were.
-        let seen = facts
-            .content(shape, *slot)
-            .is_some_and(|tree| !matches!(tree, Tree::Leaf(_)));
+        // whose declaration they close, was decided where they were — save one an open path is
+        // rooted at over an open tree, which the path reads off what the run binds.
+        let rooting = facts.rooting_seams(shape).binary_search(slot).is_ok();
+        let seen = (facts.content(shape, *slot))
+            .is_some_and(|tree| !matches!(tree, Tree::Leaf(_)) && (!rooting || tree.closed()));
         let closed = seen || matches!(facts.declared_type(shape, *slot), Static::Closed(_));
         if closed || facts.bound(unknown).is_some() {
             continue;
@@ -2200,9 +2200,9 @@ fn first_tie<'graph, 'here, 'scratch, 'lent>(
     }
 }
 
-/// Bind each member of a component of type binders to the handle the load fixed for it when every
-/// member's is closed, and otherwise declare the component through the elaborator's door, over the
-/// activation.
+/// Bind each member of a component of type binders to the handle the load, or a layer the runner
+/// reads, fixed for it — a nominal one an activation's walk declared interned through the frame's
+/// chain — or raise the refusal every run of it meets.
 fn declared<'graph, 'here>(
     step: &Taking<'_, 'graph, '_, 'here, '_, '_>,
     types: &Chain<'_, 'here, '_, '_>,
@@ -2210,60 +2210,26 @@ fn declared<'graph, 'here>(
     unit: Unit,
     component: &Component<'_>,
 ) -> Result<(), Stopped<'here>> {
-    let scratch = Bump::new();
     let program = runner.program;
     let writer = step.writer();
     let at = runner.reading(step);
-    let shape = at.shape();
-    let mut loaded = BumpVec::with_capacity_in(component.members.len(), &scratch);
+    let (facts, shape) = (at.facts(), at.shape());
     for slot in component.members {
-        match at.facts().declared_type(shape, *slot) {
-            Static::Closed(handle) => loaded.push(handle),
-            _ => break,
-        }
-    }
-    let handles: &[KType] = if loaded.len() == component.members.len() {
-        debug_assert_eq!(
-            type_declarations(component, &at, types, &scratch).ok(),
-            Some(&loaded[..]),
-            "the load-time types agree with declaring where they run"
-        );
-        &loaded
-    } else {
-        debug_assert!(
-            !(component.members.iter())
-                .any(|member| shape.declarations(*member).is_some_and(declares_nominal))
-                || at.facts().mints_at(
-                    shape,
-                    shape.site_of_node(
-                        shape
-                            .declarations(component.members[0])
-                            .expect("a type binder records its declaration node"),
-                    )
-                ),
-            "the load recorded a nominal component declared where it runs as a minting site",
-        );
-        let declared = type_declarations(component, &at, types, &scratch).map_err(|error| {
-            Stopped::Raised(rendered(writer, error.display(program.symbols(), types)))
-        })?;
-        // Under `routes` an invariant nominal's types are adopted into the warm tier, so the next
-        // hop finds them there.
-        let site = (shape.declarations(component.members[0])).map(|node| shape.site_of_node(node));
-        if runner.within.routes
-            && site.and_then(|site| at.facts().mint_at(shape, site)) == Some(Mint::Invariant)
-            && let Some(warm) = step.agent_types()
-        {
-            for handle in declared.iter() {
-                warm.adopt_from(types, *handle);
+        let declaration =
+            (shape.declarations(*slot)).expect("a type binder records its declaration");
+        let site = shape.site_of_node(declaration);
+        let handle = match facts.at_run(shape, site, facts.declared_type(shape, *slot)) {
+            AtRun::Closed(handle) => handle,
+            AtRun::Refused(refused) => {
+                let refused = refused.display(program.symbols(), types);
+                return Err(Stopped::Raised(rendered(writer, refused)));
             }
-        }
-        declared
-    };
-    for (slot, handle) in component.members.iter().zip(handles) {
+            AtRun::Open => unreachable!("a type binder's declaration is fixed where it runs"),
+        };
         runner.bind(
             unit,
             *slot,
-            Value::Type(TypeValue::new(writer, *handle, types)),
+            Value::Type(TypeValue::new(writer, handle, types)),
         );
     }
     Ok(())

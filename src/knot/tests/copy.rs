@@ -65,7 +65,7 @@ const KNOT: &str = "\
 LET greeting = \"hi\"
 LET words = [\"alpha\" \"beta\"]
 LET f = FN EXPR #(GREET n :Number) -> Str = #(greeting words (g {x = n}))
-LET g = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(words f x))";
+LET g = FN EXPR FOR ALL #[Elt] #(PICKED x :Elt) -> Elt = #(words f x)";
 
 #[test]
 fn a_copied_knot_is_the_same_knot_rebuilt() {
@@ -86,8 +86,8 @@ fn a_copied_knot_is_the_same_knot_rebuilt() {
                     panic!("a callable crosses as a callable");
                 };
                 assert!(!ptr::eq(copied.node(), g.node()), "a copy is a new knot");
-                // `f`, its registration, and `g`.
-                assert_eq!(copied.member().knot().len(), 3);
+                // `f` and `g`, each beside its registration.
+                assert_eq!(copied.member().knot().len(), 4);
                 assert_eq!(copied.member().index(), g.member().index());
                 assert_eq!(copied.ktype(), g.ktype());
                 assert_eq!(copied.weight(), g.weight());
@@ -443,8 +443,8 @@ const MODULE: &str = "\
 LET greeting = \"hi\"
 MODULE m = (\
 (LET words = [\"alpha\" \"beta\"]) \
-(LET f = (FN :{} -> Str = #(greeting g))) \
-(LET g = (FN :{} -> Str = #(f))) \
+(LET f = (FN :{} -> Any = #(greeting g))) \
+(LET g = (FN :{} -> Any = #(f))) \
 (NEWTYPE Dist = Number))";
 
 /// The slot each named member of `m`'s body takes — the body shape lives in program storage, so

@@ -26,7 +26,6 @@
 
 use std::cell::Cell;
 
-use crate::elaborate::denoted;
 use crate::memory::{BumpAllocator, BumpVec, Knot, KnotPlan, Writer};
 use crate::parse::ExpressionPart;
 use crate::scope::{BodyShape, Component, ShapeKind, Stamp, Written};
@@ -127,7 +126,9 @@ where
         BumpVec::with_capacity_in(component.members.len(), scratch);
     annotations.extend(component.members.iter().map(|slot| {
         let annotation = shape.annotation(*slot)?;
-        denoted(annotation, activation, types, scratch).ok()
+        (activation.facts())
+            .denoted(activation.shape(), activation.shape().site(annotation))
+            .ok()
     }));
     let mut functions = function::stage(&plan, activation, written, &bodies, types, scratch)?;
     // An annotated function member is born at the annotation's retype, keeping the signature its

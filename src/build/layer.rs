@@ -5,8 +5,8 @@
 
 use crate::memory::{BumpAllocator, BumpVec, Lays};
 use crate::scope::{
-    Binding, Bound, Closing, Frontier, KeyedWrites, RecordSource, Segment, Store, UnitFacts,
-    UnitId, Unknown,
+    Binding, Bound, Closing, Frontier, KeyedWrites, PathEntry, RecordSource, Segment, Store,
+    UnitFacts, UnitId, Unknown,
 };
 
 use super::wake::Wakes;
@@ -96,6 +96,10 @@ impl<'o, L: Lays<'o>, B: RecordSource<'o>> Store<'o> for Layer<'o, '_, L, B> {
 
     fn wakes(&self, frontier: Frontier<'_>) -> bool {
         self.wakes.wakes(frontier)
+    }
+
+    fn base_paths(&self, root: Segment, each: &mut dyn FnMut(PathEntry<'o>)) {
+        self.base.each_path(root, each);
     }
 
     fn write(&self, unit: UnitId, facts: &'o UnitFacts<'o>, frontier: Frontier<'o>) {

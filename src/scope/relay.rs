@@ -360,10 +360,15 @@ impl<'to, 'x, 'bind, L: Lays<'to>> Relay<'to, 'x, 'bind, L> {
     }
 
     fn resolution(&self, resolution: &Resolution<'_>) -> Resolution<'to> {
-        let Resolution { tree, resolved } = resolution;
+        let Resolution {
+            tree,
+            resolved,
+            lacks,
+        } = resolution;
         Resolution {
             tree: self.tree(tree),
             resolved: *resolved,
+            lacks: *lacks,
         }
     }
 

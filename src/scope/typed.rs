@@ -22,9 +22,8 @@ use crate::symbols::{BinderSymbol, Symbol, SymbolInterner, TypeSymbol, ValueSymb
 use crate::type_lattice::{
     DeclaredType, KType, Parametric, TypeNode, Verdict, display_name, outranks,
 };
-use crate::values::{Chain, KnottedFamily, Value};
+use crate::values::Chain;
 
-use super::activation::Reading;
 use super::keyed::Keyed;
 use super::shape::{Candidate, Coordinate, Segment, Site, Slot};
 use super::tree::{Binder, Tree};
@@ -140,6 +139,9 @@ pub enum Elaboration {
     /// The load-time reader cannot know the type at `site` before the program runs: the load
     /// pass's cue to leave it for the run, never reported.
     Unknown { site: Site },
+    /// A type at `site` reads the name `name`, which no layer the run reads binds: what a rigid
+    /// fact reaching the run refuses as, worded as the load words a name with no binding.
+    Unbound { name: Symbol, site: Site },
 }
 
 impl Elaboration {
@@ -153,7 +155,8 @@ impl Elaboration {
             | Elaboration::Quantified { site }
             | Elaboration::MeetOverVariable { site }
             | Elaboration::TiedUnion { site, .. }
-            | Elaboration::Unknown { site } => *site,
+            | Elaboration::Unknown { site }
+            | Elaboration::Unbound { site, .. } => *site,
         }
     }
 
@@ -209,6 +212,11 @@ impl fmt::Display for ElaborationDisplay<'_, '_, '_, '_> {
                 display_name(*b, self.types, self.symbols)
             ),
             Elaboration::Unknown { .. } => f.write_str("this type is known only where it runs"),
+            Elaboration::Unbound { name, .. } => write!(
+                f,
+                "`{}` names no binding visible here",
+                self.symbols.display(*name)
+            ),
         }
     }
 }
@@ -291,6 +299,9 @@ impl fmt::Debug for PathEntry<'_> {
 pub struct Resolution<'graph> {
     pub tree: Tree<'graph>,
     pub resolved: Resolved,
+    /// The signature the root holds at every run, where the path reads no type member off it:
+    /// every run refuses the path.
+    pub lacks: Option<KType>,
 }
 
 impl Resolution<'_> {
@@ -345,7 +356,8 @@ pub type StaticType<'graph> = Static<'graph, KType, Parametric>;
 pub enum Point {
     /// The same type at every run.
     Closed(KType),
-    /// A type over the run's lexical variables, read through its [`Points`]' variables.
+    /// A type over the run's lexical variables, read through its [`Points`]' variables: the load's
+    /// record alone, since the layer binding them closes it before any run reads it.
     Rigid(Parametric),
     /// The type the argument at this slot carries: the variable is the slot's whole type, its own
     /// class's, which no other slot of the class names, and the argument contributes nothing.
@@ -376,27 +388,18 @@ impl<'graph> Points<'graph> {
     }
 
     /// The solution where the call runs over operands carrying `arguments`: a closed point as it
-    /// is, a rigid one with its variables replaced by what `view` reads, through `substitute`,
-    /// and a carried one its argument's type. `None` where a variable's coordinate holds no type
-    /// or `substitute` finds no concrete value.
-    pub fn solved<'step, 'run, 'x, XF: KnottedFamily<'run>>(
+    /// is, and a carried one its argument's type. `None` where an argument is missing, or a point
+    /// is rigid, which no run reads.
+    pub fn solved<'x>(
         &self,
-        view: &Reading<'step, 'run, '_, XF>,
         scratch: BumpAllocator<'x>,
-        paths: Paths<'_, 'step>,
         arguments: &[KType],
-        substitute: impl Fn(Parametric, &[KType]) -> Option<KType>,
     ) -> Option<BumpVec<'x, KType>> {
-        let rigid = (self.points.iter()).any(|point| matches!(point, Point::Rigid(_)));
-        let bindings = match rigid {
-            true => Some(solutions(self.variables, view, scratch, paths)?),
-            false => None,
-        };
         let mut solved = BumpVec::with_capacity_in(self.points.len(), scratch);
         for point in self.points {
             solved.push(match point {
                 Point::Closed(point) => *point,
-                Point::Rigid(value) => substitute(*value, bindings.as_deref()?)?,
+                Point::Rigid(_) => return None,
                 Point::Carried(slot) => *arguments.get(usize::from(*slot))?,
             });
         }
@@ -695,45 +698,6 @@ pub enum HandedTo {
     Position(u32),
 }
 
-/// How the run binds a path variable: the type a path's entry reads through the module at a
-/// coordinate of the view a value is solved against. The elaborator's `bound_path` is the one
-/// reader, passed in from above.
-pub type Paths<'f, 'graph> = &'f dyn Fn(Coordinate, PathEntry<'graph>) -> Option<KType>;
-
-/// What each of `variables` reads through `view`, as the bindings a substitution takes: an entry
-/// per level up to the largest, each variable's the handle of the type its coordinate holds — or,
-/// for a path variable, the type `paths` reads through its root — and `Never` where no variable is
-/// listed: a gap no free variable of the rigid value names. A path the load resolved closed is that
-/// type, with no read. `None` when a coordinate holds anything but a type, or a path reads none.
-pub fn solutions<'step, 'graph, 'x, XF: KnottedFamily<'graph>>(
-    variables: &[Variable],
-    view: &Reading<'step, 'graph, '_, XF>,
-    scratch: BumpAllocator<'x>,
-    paths: Paths<'_, 'step>,
-) -> Option<BumpVec<'x, KType>> {
-    let len = variables.iter().map(|variable| variable.level + 1).max();
-    let mut bindings = BumpVec::with_capacity_in(len.unwrap_or(0), scratch);
-    bindings.resize(len.unwrap_or(0), KType::NEVER);
-    for variable in variables {
-        bindings[variable.level] = match variable.source {
-            Source::Type(at) => match view.read(at) {
-                Value::Type(value) => value.handle(),
-                _ => return None,
-            },
-            Source::Path { at, root, level } => {
-                let facts = view.facts();
-                let root = facts.shapes().shape_at(root);
-                let (entry, resolution) = facts.path(root, level)?;
-                match resolution.closed() {
-                    Some(closed) => closed,
-                    None => paths(at?, entry)?,
-                }
-            }
-        };
-    }
-    Some(bindings)
-}
-
 impl<C, R> Static<'_, C, R> {
     /// Whether the value is rigid over a path variable.
     pub fn over_paths(&self) -> bool {
@@ -742,27 +706,6 @@ impl<C, R> Static<'_, C, R> {
                 .iter()
                 .any(|variable| matches!(variable.source, Source::Path { .. })),
             _ => false,
-        }
-    }
-
-    /// The value where it runs, read through `view`: a closed value as it is, and a rigid one with
-    /// its variables replaced by what their coordinates read, through `substitute`. `None` for an
-    /// unknown value, where a variable's coordinate holds no type, and where `substitute` finds no
-    /// concrete value.
-    pub fn solved<'step, 'graph, 'x, XF: KnottedFamily<'graph>>(
-        self,
-        view: &Reading<'step, 'graph, '_, XF>,
-        scratch: BumpAllocator<'x>,
-        paths: Paths<'_, 'step>,
-        substitute: impl FnOnce(R, &[KType]) -> Option<C>,
-    ) -> Option<C> {
-        match self {
-            Static::Unknown => None,
-            Static::Closed(value) => Some(value),
-            Static::Rigid { value, variables } => {
-                let bindings = solutions(variables, view, scratch, paths)?;
-                substitute(value, &bindings)
-            }
         }
     }
 }

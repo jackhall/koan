@@ -67,8 +67,9 @@ pub use header::{HalfHeader, RegionHeader};
 pub use keyed::{Keyed, KeyedEntry};
 pub use memo::{DecisionMemo, Entry, EntryFamily, EventSite, MemoFamily, MemoKey, extended};
 pub use records::{
-    BodyAt, BodyRef, Born, Closing, ComposedRoot, Deps, DepsGathering, Facts, FactsOver, Folds,
-    Layers, LoadFacts, LoadRecords, NamedVariable, SiteDeps, Typed, UnitFacts, Written, tree_deps,
+    AtRun, BodyAt, BodyRef, Born, Closing, ComposedRoot, Deps, DepsGathering, Facts, FactsOver,
+    Folds, Layers, LoadFacts, LoadRecords, NamedVariable, SiteDeps, Typed, UnitFacts, Written,
+    tree_deps,
 };
 pub use settlement_facts::{Activated, Settlement};
 pub use shape::{
@@ -84,9 +85,9 @@ pub use stamp::{Ask, Asked, Level, Stamp};
 pub use tree::{Binder, Identity, KnotNode, Leaf, NodeCapture, Tree, Unfolded, Within};
 pub use typed::{
     BodyClass, Caching, Callable, Elaboration, ElaborationDisplay, Elimination, FunctionGroupMap,
-    HandedTo, Handoff, InstanceRead, Kept, Mint, Narrowing, ParameterBinding, PathEntry, Paths,
-    Pick, Point, Points, Registered, Resolution, Resolved, Root, ShapeGroupMap, Source, Static,
+    HandedTo, Handoff, InstanceRead, Kept, Mint, Narrowing, ParameterBinding, PathEntry, Pick,
+    Point, Points, Registered, Resolution, Resolved, Root, ShapeGroupMap, Source, Static,
     StaticCallable, StaticInstance, StaticRegistered, StaticType, Table, UseStatics, Variable,
-    ViewSlots, solutions,
+    ViewSlots,
 };
 pub use writes::{KeyedWrites, Writes};

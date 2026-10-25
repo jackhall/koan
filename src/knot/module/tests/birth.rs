@@ -194,7 +194,7 @@ fn a_group_binder_births_a_module_the_same_way() {
 #[test]
 fn a_module_whose_body_ties_a_knot_holds_each_member_callable() {
     let source = "\
-MODULE m = ((LET f = (FN :{} -> Number = #(g))) (LET g = (FN :{} -> Number = #(f))))";
+MODULE m = ((LET f = (FN :{} -> Any = #(g))) (LET g = (FN :{} -> Any = #(f))))";
     with_fixture(|fixture| {
         let lines = fixture.parse(source);
         fixture.in_cell(pin, |context| {

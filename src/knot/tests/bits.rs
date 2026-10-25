@@ -19,14 +19,18 @@ fn a_knots_bits_sit_on_its_root_node() {
 LET g = (FN :{x :Number} -> Number = #(f {x = x}))",
         );
         fixture.in_cell(pin, |context| {
-            // Born through a paired chain, the knot starts with no bit set.
+            // Born of the load's types, every memo it reaches is the root's; nothing has settled it.
             let types = &fixture.tiers.paired(context);
             let activation = fixture.run(context.writer(), types, &lines, &[]);
             let knot = callable(fixture, activation, "f").member().knot();
             assert_eq!(knot.len(), 2);
             let (root, other) = (Knotted::of(knot, 0), Knotted::of(knot, 1));
             let bytes = root.weight();
-            assert_eq!(root.bits(), MemoBits::NONE);
+            let born = MemoBits {
+                root_closed: true,
+                settled: false,
+            };
+            assert_eq!(root.bits(), born);
             other.set_bits(MemoBits::BOTH);
             for member in [root, other] {
                 assert_eq!(member.bits(), MemoBits::BOTH);

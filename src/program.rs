@@ -40,4 +40,6 @@ pub use bundle::{
 pub use exit::Exit;
 pub use record::{CallKind, Contract, Evaluated, Language, LoadError, Outcome, Output, Program};
 pub use settle::{called_function, seek};
+#[cfg(test)]
+pub(crate) use substrate::walked;
 pub use substrate::{CellSubstrate, Running, STACK_BYTES};

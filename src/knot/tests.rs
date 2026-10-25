@@ -25,7 +25,6 @@ mod properties;
 
 use std::cell::{Cell, RefCell};
 
-use crate::elaborate::type_declarations;
 use crate::memory::{
     Bump, BumpAllocator, CellGraph, NoDelivery, NoScratch, Prices, ProgramBrand, ReleaseAbsorption,
     StepContext, Verdict, Writer, program_storage, reattachable, resident,
@@ -33,7 +32,7 @@ use crate::memory::{
 use crate::parse::{BodyKind, Role};
 use crate::parse::{ExpressionPart, KExpression, parse};
 use crate::scope::{
-    BodyShape, Builtins, Code, Component, Facts, LoadFacts, Position, Slot, Written,
+    BodyShape, Builtins, Code, Component, Facts, LoadFacts, Position, Slot, Static, Written,
 };
 use crate::symbols::{BinderSymbol, SymbolInterner, TypeSymbol, ValueSymbol};
 use crate::type_lattice::KType;
@@ -118,10 +117,16 @@ impl<'graph> Fixture<'_, 'graph> {
         self.scratch
     }
 
-    /// Every top-level line of `source`, parsed into program storage and shaped through the
-    /// load's chain over the fixture's builtins — the load's work, done before any cell's chain
-    /// freezes the root.
+    /// Every top-level line of `source`, parsed into program storage, shaped through the load's
+    /// chain over the fixture's builtins and walked — the load's work, done before any cell's
+    /// chain freezes the root.
     pub fn parse(&self, source: &str) -> Parsed<'graph> {
+        self.parsed(source)
+            .unwrap_or_else(|refused| panic!("`{source}` loads: {refused}"))
+    }
+
+    /// [`parse`](Self::parse), handing back the load's refusal, rendered.
+    pub fn parsed(&self, source: &str) -> Result<Parsed<'graph>, String> {
         let lines = parse(self.program, self.symbols, source)
             .unwrap_or_else(|error| panic!("`{source}` parses: {error:?}"));
         let shapes = crate::scope::Shapes::of_program(
@@ -132,20 +137,23 @@ impl<'graph> Fixture<'_, 'graph> {
             self.symbols,
             self.scratch,
         )
-        .unwrap_or_else(|error| {
-            panic!(
-                "the program shapes: {}",
-                error.display(self.symbols, self.types)
-            )
-        });
+        .map_err(|error| error.display(self.symbols, self.types).to_string())?;
         let writer = self.program.writer();
-        let load = resident(writer, LoadFacts::unwalked(writer, shapes));
+        // The load's walk, as a program's: every fact a tie reads is the walk's.
+        let load = crate::tests::walked(
+            shapes,
+            self.loaded,
+            self.types,
+            writer,
+            self.scratch,
+            self.symbols,
+        )?;
         self.load.set(Some(load));
-        Parsed {
+        Ok(Parsed {
             lines,
             shape: shapes.root(),
             load,
-        }
+        })
     }
 
     /// Run `step` in one cell of a graph built under `verdict`.
@@ -283,11 +291,16 @@ impl<'graph> Fixture<'_, 'graph> {
             .iter()
             .any(|slot| matches!(shape.slot_name(*slot), BinderSymbol::Type(_)));
         if declares_types {
-            let handles =
-                type_declarations(component, &self.reading_of(activation), types, self.scratch)
-                    .expect("the component declares its types");
+            // The handles the load fixed, as a program binds them.
+            let reading = self.reading_of(activation);
+            let handles = (component.members.iter()).map(|slot| {
+                match reading.facts().declared_type(shape, *slot) {
+                    Static::Closed(handle) => handle,
+                    _ => panic!("the load fixed every declaration a fixture runs"),
+                }
+            });
             for (slot, handle) in component.members.iter().zip(handles) {
-                let value = Value::Type(TypeValue::new(writer, *handle, types));
+                let value = Value::Type(TypeValue::new(writer, handle, types));
                 activation.bind(*slot, value).expect("an empty slot binds");
             }
             return;

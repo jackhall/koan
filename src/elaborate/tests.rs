@@ -22,8 +22,53 @@ use crate::type_lattice::KType;
 use crate::values::tests::TestTypes;
 use crate::values::{Chain, TypeValue, Value};
 
-use super::{callable_type, type_declarations};
+use super::paths::{member_module, member_type};
+use super::{Reads, TypeAt, callable_type, type_declarations};
+use crate::scope::Site;
 use crate::scope::{Callable, Elaboration};
+use crate::symbols::ValueSymbol;
+use crate::type_lattice::TypeNode;
+use crate::values::KnottedFamily;
+
+/// The suites' reader: an activation's type names, read where a test bound them by hand, standing in
+/// for the load's reader. The run reads no type through an activation, so this lives here.
+impl<'step, 'graph, XF: KnottedFamily<'graph>> Reads<'step> for Reading<'step, 'graph, '_, XF> {
+    fn shape(&self) -> &'step BodyShape<'step> {
+        Reading::shape(self)
+    }
+
+    fn type_at(&self, at: Coordinate) -> TypeAt {
+        match self.read(at) {
+            Value::Type(value) => TypeAt::Type(value.handle()),
+            _ => TypeAt::NotAType,
+        }
+    }
+
+    fn member_type(
+        &self,
+        at: Coordinate,
+        _site: Site,
+        chain: &[ValueSymbol],
+        name: TypeSymbol,
+        types: &Chain<'_, '_, '_, '_>,
+    ) -> Option<(TypeAt, KType)> {
+        let held = self.read(at);
+        held.as_module()?;
+        let signature = held.concrete_ktype();
+        if !matches!(
+            types.node(signature),
+            TypeNode::Signature { .. }
+                | TypeNode::SignatureApply { .. }
+                | TypeNode::SignatureMeet { .. }
+        ) {
+            return None;
+        }
+        let scratch = Bump::new();
+        let read = member_module(types, &scratch, signature, chain)
+            .and_then(|inner| member_type(types, &scratch, inner, BinderSymbol::Type(name)));
+        Some((read.map_or(TypeAt::NotAType, TypeAt::Type), signature))
+    }
+}
 
 /// This activation's own `slot`.
 fn local(slot: Slot) -> Coordinate {

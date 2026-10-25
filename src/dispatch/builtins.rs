@@ -381,16 +381,16 @@ pub(super) fn run<'graph, 'here>(
                     if let Value::Retyped(header) = member
                         && header.ktype().as_scheme().is_some() =>
                 {
-                    header_instance(writer, header, solution, &at.view, types, scratch)
+                    header_instance(writer, header, solution, types, scratch)
                 }
                 Some(InstanceRead::Solved(solution)) => match member.as_callable() {
-                    Some(function) if function.function().is_some() => Value::Knotted(instance(
-                        writer, function, solution, &at.view, types, scratch,
-                    )),
+                    Some(function) if function.function().is_some() => {
+                        Value::Knotted(instance(writer, function, solution, types, scratch))
+                    }
                     // Behind an opaque view's barrier: a barrier at the instance.
-                    Some(barrier) if barrier.coerced().is_some() => Value::Knotted(
-                        barrier_instance(writer, barrier, solution, &at.view, types, scratch),
-                    ),
+                    Some(barrier) if barrier.coerced().is_some() => {
+                        Value::Knotted(barrier_instance(writer, barrier, solution, types, scratch))
+                    }
                     _ => raise(Raised::BarrierInstance {
                         name: name.symbol(),
                     }),

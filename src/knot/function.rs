@@ -8,30 +8,27 @@
 //! stays 64 bytes and nothing it holds points into an arena node.
 //!
 //! Beside it, the staging a [tie](super::tie()) does for a function node. Everything a node needs
-//! is read into scratch with no writer in reach — its body shape, its type elaborated from the form
-//! that body sits in, and its captures, every mention of a fellow member minted as an edge into the
+//! is read into scratch with no writer in reach — its body shape, its type as the facts fix it, and
+//! its captures, every mention of a fellow member minted as an edge into the
 //! knot about to be tied — so a refusal writes nothing. The same staging and lay-down serve the
 //! lambda door, [`lambda`], which births a callable no binder names as a one-node knot.
 //!
 //! A quantified function is made concrete where the load solved its group at the type it is wanted
 //! at: born so, where its body shape holds the solution ([`BodyShape::born_instance`]), or read so
-//! through [`instance`], a one-node knot over the same body and captures. Either way each lexical
-//! variable the solution names is read where the site runs, the typing record carries the solution
-//! so bound, and a frame binds the body's `FOR ALL` names from it.
+//! through [`instance`], a one-node knot over the same body and captures. Either way the solution is
+//! closed where the site runs — the load, or a layer the site reads, fixed it — the typing record
+//! carries it, and a frame binds the body's `FOR ALL` names from it.
 
 use std::cell::Cell;
 
-use crate::elaborate::{bound_path, callable_type};
 use crate::memory::{BumpAllocator, BumpVec, Edge, KnotPlan, Writer, resident};
-use crate::scope::{Activated, StaticInstance, solutions};
+use crate::scope::{Activated, AtRun, Elaboration, StaticInstance};
 use crate::scope::{
     BodyAt, BodyRef, BodyShape, ClosureBindings, Registration, ShapeKind, Site, Stamp, Written,
 };
 use crate::scope::{Callable, FunctionGroupMap, ParameterBinding, Registered, ShapeGroupMap};
 use crate::symbols::{BinderSymbol, TypeSymbol};
-use crate::type_lattice::{
-    DeclaredType, KType, Parametric, Scheme, instantiate_quantified, substitute_levels,
-};
+use crate::type_lattice::{DeclaredType, KType, Scheme, instantiate_quantified};
 use crate::values::digest::function_content;
 use crate::values::{
     ArenaRef, Chain, ContentDigest, Knotted as _, Link, Retyped, Seen, Value, Weight,
@@ -362,10 +359,10 @@ impl<'graph, 'cell> Staged<'graph, 'cell, '_> {
     }
 }
 
-/// Read the callable of `body` into `scratch`: its type as the load fixed it, or — where the load
-/// left it unknown — elaborated from the declaration it sits in, born for `registration` or for
-/// none, and its captures read through `activation`, each `Member` source minted by `edge`. The
-/// function keeps its body's record as `written` holds it.
+/// Read the callable of `body` into `scratch`: its type as the load, or a layer `activation`
+/// reads, fixed it, born for `registration` or for none, and its captures read through
+/// `activation`, each `Member` source minted by `edge`. The function keeps its body's record as
+/// `written` holds it.
 pub(super) fn staged<'graph, 'cell, 'x>(
     body: &BodyShape<'_>,
     registration: Option<&Registration<'_>>,
@@ -378,27 +375,12 @@ pub(super) fn staged<'graph, 'cell, 'x>(
 where
     'graph: 'x,
 {
-    let form = body.form().expect("a callable body sits in its form");
-    let elaborated = || {
-        callable_type(form, activation, types, scratch, registration)
-            .map(|callable| born(types, callable))
-    };
-    let callable = match loaded(body, registration, activation, types, scratch) {
-        Some(callable) => {
-            debug_assert_eq!(
-                elaborated().ok(),
-                Some(callable),
-                "the load-time type agrees with elaborating where the callable is born"
-            );
-            callable
-        }
-        None => elaborated().map_err(Untieable::Type)?,
-    };
+    let callable = loaded(body, registration, activation, scratch).map_err(Untieable::Type)?;
     // A body whose group the load solved where it is wanted is born as that instance.
     let (ktype, instance) = match (activation.facts().born_instance(body), callable.ktype) {
         (Some(instance), DeclaredType::Scheme(scheme)) => {
             debug_assert!(registration.is_none(), "a registration binds its scheme");
-            let (solution, instance) = solved(instance, activation, types, scratch);
+            let (solution, instance) = solved(instance, scratch);
             debug_assert!(instantiates(types, scratch, scheme, solution, instance));
             (DeclaredType::Type(instance), solution)
         }
@@ -436,100 +418,40 @@ fn instantiates(
     types.concrete(instantiate_quantified(types, scratch, scheme, solution)) == Some(instance)
 }
 
-/// Why an instance's variables are bound where it is read or born: the wanted type names each of
-/// them, and the run reads that type at or before the site.
-const BOUND: &str = "an instance's lexical variables are bound where it is read or born";
-
-/// `instance`, as the load recorded it, where the site runs: its solution in group order and its
-/// type, as they are when closed, and with each lexical variable they name replaced by the type
-/// `activation` reads at its coordinate when rigid.
-fn solved<'x>(
-    instance: StaticInstance<'_>,
-    activation: &KReading<'_, '_, '_>,
-    types: &Chain<'_, '_, '_, '_>,
-    scratch: BumpAllocator<'x>,
-) -> (&'x [KType], KType) {
+/// `instance`, as the load or a layer the site reads recorded it: its solution in group order and
+/// its type. A rigid one never reaches the run: the layer binding its variables closes it.
+fn solved<'x>(instance: StaticInstance<'_>, scratch: BumpAllocator<'x>) -> (&'x [KType], KType) {
     match instance {
         StaticInstance::Closed { solution, ktype } => (scratch.alloc_slice_copy(solution), ktype),
-        StaticInstance::Rigid {
-            solution,
-            ktype,
-            variables,
-        } => {
-            let paths = |at, entry| bound_path(activation, types, at, entry);
-            let bindings = solutions(variables, activation, scratch, &paths).expect(BOUND);
-            let read = |each| {
-                let each = substitute_levels(types, scratch, each, &bindings);
-                types.concrete(each).expect(BOUND)
-            };
-            let mut solved = BumpVec::with_capacity_in(solution.len(), scratch);
-            solved.extend(solution.iter().map(|each| read(*each)));
-            (solved.leak(), read(ktype))
-        }
+        StaticInstance::Rigid { .. } => unreachable!("an instance is closed where it is born"),
     }
 }
 
-/// Why a callable's type is concrete outside its own group where it is born: every lexical variable
-/// its declaration read is bound there.
-const BORN: &str = "a callable's type holds no variable once its levels are bound";
-
-/// `callable` as a function is born with it, every level its declaration read bound.
-fn born<'x>(
-    types: &Chain<'_, '_, '_, '_>,
-    callable: Callable<'x, Parametric>,
-) -> Callable<'x, KType> {
-    Callable {
-        ktype: types.concrete_declared(callable.ktype).expect(BORN),
-        quantifier_map: callable.quantifier_map,
-        registered: callable.registered.map(|registered| Registered {
-            shape: types.concrete_declared(registered.shape).expect(BORN),
-            quantifier_map: registered.quantifier_map,
-            parameters: registered.parameters,
-        }),
+/// A callable's fact where it is born: fixed, or refused at every run.
+fn closed<T>(fact: AtRun<T>) -> Result<T, Elaboration> {
+    match fact {
+        AtRun::Closed(closed) => Ok(closed),
+        AtRun::Refused(refused) => Err(refused),
+        AtRun::Open => unreachable!("a callable's type is fixed where it is born"),
     }
 }
 
-/// The type the load fixed for the callable of `body`, born for `registration` or for none, read
-/// through `activation`: as it is when closed, and with its variables substituted when rigid, its
-/// runs copied into `scratch` as an elaborated type's are. `None` where the load left the callable
-/// or its registration unknown.
+/// The type the load, or a layer `activation` reads, fixed for the callable of `body`, born for
+/// `registration` or for none, its runs copied into `scratch`; or why every run refuses it.
 fn loaded<'x>(
     body: &BodyShape<'_>,
     registration: Option<&Registration<'_>>,
     activation: &KReading<'_, '_, '_>,
-    types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'x>,
-) -> Option<Callable<'x, KType>> {
-    let substitute = |value: DeclaredType<Parametric>, bindings: &[KType]| {
-        types
-            .concrete_declared(substitute_levels(types, scratch, value, bindings))
-            .expect(BORN)
-    };
-    let paths = |at, entry| bound_path(activation, types, at, entry);
-    let callable = (activation.facts().callable_type(body)).solved(
-        activation,
-        scratch,
-        &paths,
-        |callable, bindings| {
-            Some(Callable {
-                ktype: substitute(callable.ktype, bindings),
-                quantifier_map: callable.quantifier_map,
-                registered: None,
-            })
-        },
-    )?;
+) -> Result<Callable<'x, KType>, Elaboration> {
+    let (facts, shape) = (activation.facts(), activation.shape());
+    let form = body.form().expect("a callable body sits in its form");
+    let site = shape.site_of_node(form);
+    let callable = closed(facts.at_run(shape, site, facts.callable_type(body)))?;
     let registered = match registration {
         Some(registration) => {
-            let registered = activation
-                .facts()
-                .registered_type(activation.shape(), registration.slot)
-                .solved(activation, scratch, &paths, |registered, bindings| {
-                    Some(Registered {
-                        shape: substitute(registered.shape, bindings),
-                        quantifier_map: registered.quantifier_map,
-                        parameters: registered.parameters,
-                    })
-                })?;
+            let fact = facts.registered_type(shape, registration.slot);
+            let registered = closed(facts.at_run(shape, site, fact))?;
             Some(Registered {
                 shape: registered.shape,
                 quantifier_map: ShapeGroupMap(
@@ -545,7 +467,7 @@ fn loaded<'x>(
         }
         None => None,
     };
-    Some(Callable {
+    Ok(Callable {
         ktype: callable.ktype,
         quantifier_map: FunctionGroupMap(scratch.alloc_slice_copy(callable.quantifier_map.0)),
         registered,
@@ -637,17 +559,15 @@ where
 
 /// `member`, a quantified function behind an opaque view's barrier, read where the load solved its
 /// group to `solution`: a barrier of its own at the instance — what a caller sees, and the types its
-/// arguments cross at — before the same function, which solves its own group where it runs. Each
-/// lexical variable `solution` names is read through `activation`.
+/// arguments cross at — before the same function, which solves its own group where it runs.
 pub fn barrier_instance<'graph, 'cell>(
     writer: Writer<'cell, '_>,
     member: Knotted<'graph, 'cell>,
     instance: StaticInstance<'_>,
-    activation: &KReading<'_, '_, '_>,
     types: &Chain<'_, 'cell, '_, '_>,
     scratch: BumpAllocator<'_>,
 ) -> Knotted<'graph, 'cell> {
-    let (solution, instance) = solved(instance, activation, types, scratch);
+    let (solution, instance) = solved(instance, scratch);
     let barrier = member
         .coerced()
         .expect("a barrier instance is read of a member behind a barrier");
@@ -677,17 +597,15 @@ pub fn barrier_instance<'graph, 'cell>(
 /// `header`, a function seen at a scheme other than its own — a member read through a signature
 /// declaring it so — read where the load solved that scheme's group to `solution`: a header over
 /// the same bare member at the scheme's instance. No knot is made: a call through it solves the
-/// member's own group, as a call by name does. Each lexical variable `solution` names is read
-/// through `activation`.
+/// member's own group, as a call by name does.
 pub fn header_instance<'graph, 'cell>(
     writer: Writer<'cell, '_>,
     header: &Retyped<Knotted<'graph, 'cell>>,
     instance: StaticInstance<'_>,
-    activation: &KReading<'_, '_, '_>,
     types: &Chain<'_, 'cell, '_, '_>,
     scratch: BumpAllocator<'_>,
 ) -> KValue<'graph, 'cell> {
-    let (solution, instance) = solved(instance, activation, types, scratch);
+    let (solution, instance) = solved(instance, scratch);
     let DeclaredType::Scheme(scheme) = header.ktype() else {
         unreachable!("a header instance is read of a header at a scheme")
     };
@@ -698,8 +616,6 @@ pub fn header_instance<'graph, 'cell>(
 
 /// `member`, a quantified function, read where the load solved its group to `solution`: a one-node
 /// knot in `writer`'s region running the same body over the same captures, typed by its instance.
-/// Each lexical variable `solution` names is read through `activation`, the activation the site
-/// runs in.
 ///
 /// An edge in `member`'s closure is relative to its own knot, so each is rehomed as the sibling
 /// value it names.
@@ -707,11 +623,10 @@ pub fn instance<'graph, 'cell>(
     writer: Writer<'cell, '_>,
     member: Knotted<'graph, 'cell>,
     instance: StaticInstance<'_>,
-    activation: &KReading<'_, '_, '_>,
     types: &Chain<'_, 'cell, '_, '_>,
     scratch: BumpAllocator<'_>,
 ) -> Knotted<'graph, 'cell> {
-    let (solution, instance) = solved(instance, activation, types, scratch);
+    let (solution, instance) = solved(instance, scratch);
     let function = member
         .function()
         .expect("an instance is read of a function member");

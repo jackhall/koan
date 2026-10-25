@@ -58,8 +58,8 @@ pub use members::{
     type_members, value_count,
 };
 pub use module::{module_signature, self_signature};
-pub use paths::{bound_path, declared_through, path_binding};
-pub use reads::{Reads, TypeAt, denoted};
+pub use paths::{declared_through, path_binding};
+pub use reads::{Reads, TypeAt};
 pub use signature::callable_type;
 pub use unit::{
     Mode, Reader, Signatures, Tools, TypeContext, callable, declarations, expression, guards,

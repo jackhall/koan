@@ -4,8 +4,8 @@
 
 use crate::memory::{Knot, Writer};
 use crate::parse::ExpressionPart;
+use crate::scope::ParameterBinding;
 use crate::scope::{CaptureSlot, Coordinate, Target};
-use crate::scope::{Elaboration, ParameterBinding};
 use crate::symbols::{BinderSymbol, KeywordSymbol};
 use crate::type_lattice::{DispatchTokenElement, KType, NodeSchema};
 use crate::values::{Chain, Circular, ConstructionRefused, KeyRejected, Link};
@@ -256,7 +256,7 @@ fn registrations_that_call_each_other_are_one_knot() {
 #[test]
 fn a_unary_operator_registers_under_both_its_keys() {
     with_fixture(|fixture| {
-        let lines = fixture.parse("UNARY OP #(~) OVER Number -> Number = #(operands)");
+        let lines = fixture.parse("UNARY OP #(~) OVER Number -> Any = #(operands)");
         fixture.in_cell(pin, |context| {
             let types = &fixture.tiers.of(context);
             let activation = fixture.run(context.writer(), types, &lines, &[]);
@@ -339,8 +339,7 @@ fn capture_read<'graph, 'cell>(
 #[test]
 fn mutual_recursion_is_one_knot_whose_edges_read_as_siblings() {
     with_fixture(|fixture| {
-        let lines =
-            fixture.parse("LET f = (FN :{} -> Number = #(g))\nLET g = (FN :{} -> Number = #(f))");
+        let lines = fixture.parse("LET f = (FN :{} -> Any = #(g))\nLET g = (FN :{} -> Any = #(f))");
         fixture.in_cell(pin, |context| {
             let types = &fixture.tiers.of(context);
             let writer = context.writer();
@@ -376,7 +375,7 @@ fn mutual_recursion_is_one_knot_whose_edges_read_as_siblings() {
 #[test]
 fn a_self_recursive_function_edges_itself() {
     with_fixture(|fixture| {
-        let lines = fixture.parse("LET loop = (FN :{} -> Number = #(loop))");
+        let lines = fixture.parse("LET loop = (FN :{} -> Any = #(loop))");
         fixture.in_cell(pin, |context| {
             let types = &fixture.tiers.of(context);
             let writer = context.writer();
@@ -395,9 +394,8 @@ fn a_self_recursive_function_edges_itself() {
 #[test]
 fn a_nested_capture_of_an_enclosing_edge_reads_the_sibling_value() {
     with_fixture(|fixture| {
-        let lines = fixture.parse(
-            "LET f = (FN :{} -> Number = #(\n    LET h = (FN :{} -> Number = #(f))\n    h))",
-        );
+        let lines = fixture
+            .parse("LET f = (FN :{} -> Any = #(\n    LET h = (FN :{} -> Any = #(f))\n    h))");
         fixture.in_cell(pin, |context| {
             let types = &fixture.tiers.of(context);
             let writer = context.writer();
@@ -431,18 +429,13 @@ fn a_nested_capture_of_an_enclosing_edge_reads_the_sibling_value() {
 }
 
 #[test]
-fn an_unsupported_signature_is_a_type_refusal() {
+fn an_unsupported_signature_refuses_the_load() {
     with_fixture(|fixture| {
-        let lines = fixture.parse("LET f = (FN :{x :(Number AS Any)} -> Number = #(x))");
-        fixture.in_cell(pin, |context| {
-            let types = &fixture.tiers.of(context);
-            let writer = context.writer();
-            let activation = fixture.run(writer, types, &lines, &["f"]);
-            assert!(matches!(
-                tie_of(fixture, writer, types, activation, "f"),
-                Err(Untieable::Type(Elaboration::Unsupported { .. }))
-            ));
-        });
+        let refused = fixture.parsed("LET f = (FN :{x :(Number AS Any)} -> Number = #(x))");
+        assert_eq!(
+            refused.err().as_deref(),
+            Some("<input>:1:17: this type expression is not supported")
+        );
     });
 }
 
@@ -798,19 +791,11 @@ fn a_type_declaration_is_declared_rather_than_tied() {
 }
 
 #[test]
-fn a_type_binder_over_a_container_literal_is_opaque() {
+fn a_type_binder_over_a_container_literal_refuses_the_load() {
     with_fixture(|fixture| {
-        let lines = fixture.parse("LET Wrap = [1]");
-        fixture.in_cell(pin, |context| {
-            let types = &fixture.tiers.of(context);
-            let writer = context.writer();
-            let activation = fixture.run(writer, types, &lines, &["Wrap"]);
-            assert_eq!(
-                tie_of(fixture, writer, types, activation, "Wrap").err(),
-                Some(Untieable::Opaque {
-                    name: fixture.name("Wrap"),
-                })
-            );
-        });
+        assert_eq!(
+            fixture.parsed("LET Wrap = [1]").err().as_deref(),
+            Some("<input>:1:12: this type expression is not supported")
+        );
     });
 }

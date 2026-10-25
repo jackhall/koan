@@ -144,6 +144,29 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 });
             }
         }
+        // A path the records this walk extends hold keeps its level: only a path new to this walk
+        // mints past them.
+        self.store.base_paths(segment, &mut |entry| {
+            let Some(at) = entry.level.checked_sub(base) else {
+                return;
+            };
+            if entries.len() <= at {
+                entries.resize(at + 1, None);
+            }
+            if entries[at].is_some() {
+                return;
+            }
+            entries[at] = Some(Entry {
+                entry,
+                through: true,
+                resolution: None,
+            });
+            let hash = PathEntry::hash_of(entry.root, entry.chain, entry.label);
+            found.insert_unique(hash, at, |held: &usize| {
+                let held = entries[*held].expect("an indexed entry is held").entry;
+                PathEntry::hash_of(held.root, held.chain, held.label)
+            });
+        });
         let table: ChainPaths<'p, 'o, 'graph> = ChainPaths {
             root,
             base,
@@ -472,6 +495,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                         Resolution {
                             tree: leaf,
                             resolved,
+                            lacks: None,
                         },
                         None,
                     ));
@@ -538,11 +562,23 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             }
             _ => None,
         };
-        let resolved = match pinned.or(closed).or_else(bound) {
-            Some(closed) => Resolved::Closed(closed),
-            None => Resolved::Class(self.class_of(level, entry, tree)),
+        let (resolved, lacks) = match pinned.or(closed).or_else(bound) {
+            Some(closed) => (Resolved::Closed(closed), None),
+            // A root of an exact signature through a known application that reads no type here
+            // reads none at any run.
+            None => (
+                Resolved::Class(self.class_of(level, entry, tree)),
+                held.filter(|_| through.is_some()),
+            ),
         };
-        Ok((Resolution { tree, resolved }, at))
+        Ok((
+            Resolution {
+                tree,
+                resolved,
+                lacks,
+            },
+            at,
+        ))
     }
 
     /// The tree, exact signature and a site of the binder `binder` a path's root names, read from
@@ -571,9 +607,17 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             true => self.leaf_on(Scope::Chain(home), binder.slot)?,
             false => self.slot_tree(Scope::Chain(home), binder.slot, site)?,
         };
-        let held = match self.binder_at(home, binder.slot) {
-            DeclaredType::Type(typed) => exact(self.types, typed),
-            DeclaredType::Scheme(_) => None,
+        // A module binder the binding binds is exactly the type it carries. One it leaves unbound
+        // over open content is what the path waits on, whatever its static type.
+        let unknown = self.unknown_at(home, binder.slot);
+        let bound = self.binds(unknown);
+        if bound.is_none() && !tree.closed() {
+            self.note(&[unknown]);
+        }
+        let held = match (bound, self.binder_at(home, binder.slot)) {
+            (Some(carried), _) => Some(carried),
+            (None, DeclaredType::Type(typed)) => exact(self.types, typed),
+            (None, DeclaredType::Scheme(_)) => None,
         };
         Ok(Some((tree, held, site)))
     }
