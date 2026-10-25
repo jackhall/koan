@@ -29,7 +29,7 @@ exists only at run time to live.
 - A fragment taken out of a quote holds each fellow knot member it names as
   that member's value word, and no code value outside a knot holds an edge.
 - Code composed at run time has its shape in a composition of
-  [the build arena](../gradual-build/build-arena.md), found by the code's
+  [the build arena](../../src/scheduler/README.md#the-build-arena), found by the code's
   syntax digest at each `EVAL` and rebuilt after an eviction, so an `EVAL` of
   composed code evaluated in a loop grows neither program storage nor the
   agent tier.
@@ -89,26 +89,24 @@ exists only at run time to live.
   becomes a callable as the body of an `FN` ([quotes and functions](../../src/scope/README.md#quotes-and-functions)).
 - *A composed body's segment and settlement — decided.* Segments number per
   shape, and a key digests the code's syntax digest beside the segment
-  ([keys](../../src/build/README.md#keys-which-bindings-make-a-specialization)),
+  ([keys](../../src/build/README.md#keys-which-bindings-make-a-settlement)),
   so no count runs past the load's. A callable born in composed code keys a
   settlement under the code's composition, whatever encloses the `EVAL`, and
   that settlement rests nothing in the agent tier; the callable carries its
   code's syntax beside the composition's digest and its segment, and the
   requests that built its chain, so a call after an eviction rebuilds rather
   than is born cold
-  ([the build arena](../gradual-build/build-arena.md)).
+  ([the build module](../../src/build/README.md#references-between-frames-and-the-arena)).
 - *The shape's storage — decided.* A shape in a composition's bump is read
   at the step's own lifetime through the frame's arena reference, and what
   crosses a park holds a segment, a site index or a digest, so `BodyShape`
   needs no brand of its own
-  ([the build arena](../gradual-build/build-arena.md)).
+  ([the build module](../../src/build/README.md#references-between-frames-and-the-arena)).
 
 ## Dependencies
 
 **Requires:**
 
-- [The build arena](../gradual-build/build-arena.md) — the composition a
-  run-built shape lives in.
 - [Slicing and splicing](slicing-and-splicing.md) — slice as a builtin, views, and `..` outside a quote.
 - [`parse`](../../src/parse/README.md#the-syntax-depth-limit) — shipped: the syntax depth limit composed code is checked against.
 

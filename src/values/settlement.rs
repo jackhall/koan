@@ -7,7 +7,7 @@
 //! when it builds a settlement, so a frame under it finds them after the asker is gone. A
 //! [`BuildBudget`] bounds the bytes of the arena nodes no run cell holds. An [`ArenaRef`] is how
 //! code above the scheduler holds an arena node without naming a slot: only `values` and
-//! `scheduler` open one. See [build/README.md](../build/README.md#references-between-the-trees).
+//! `scheduler` open one. See [build/README.md](../build/README.md#references-between-frames-and-the-arena).
 
 use std::cell::Cell;
 use std::num::NonZeroUsize;
@@ -27,7 +27,7 @@ pub struct SettlementKey(pub ContentDigest);
 
 /// The types a settlement's binding carries that the frozen load and the agent tier lacked when
 /// the asker read them, one entry per keyed name in the order its key digests them, beside a copy
-/// of their nodes ([build/README.md](../build/README.md#references-between-the-trees)). A handle
+/// of their nodes ([build/README.md](../build/README.md#references-between-frames-and-the-arena)). A handle
 /// is a content digest, so the image outlives the values it was read from. A binding whose every
 /// type already rests is imaged by nothing, so a seek that hits allocates nothing.
 #[derive(Default)]

@@ -218,6 +218,7 @@ changes what a reader sees and which overload runs.
 | Binding arguments and holding the return contract | [program: the body runner](../src/program/README.md#the-body-runner) |
 | Where a load-time type is stored | [scope: load-time types](../src/scope/README.md#load-time-types) |
 | Where a run-built type lives, and how it crosses with a value | [type lattice: storage](../lattice/src/types/identity.md#storage-a-root-and-its-branches), [values: crossing](../src/values/README.md#crossing) |
+| A fact the load left open, decided in a settlement or a frame's activation | [build storage](build-storage.md#settlements-and-compositions), [build: activations](../src/build/README.md#activations) |
 
 ## Open work
 
@@ -225,6 +226,3 @@ changes what a reader sees and which overload runs.
   items.
 - [A container literal's element type](../roadmap/gradual-typing/container-literal-types.md)
 - [A nested projection](../roadmap/gradual-typing/nested-projection.md)
-- [The build arena](../roadmap/gradual-build/build-arena.md) — a frame's
-  facts, in a settlement or in its own activation, over the content its
-  bindings bring.

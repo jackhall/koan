@@ -1,12 +1,13 @@
-//! Type expressions elaborated into lattice handles, where the program loads and, for what the load
-//! leaves unknown, where they are read.
+//! Type expressions elaborated into lattice handles: where the program loads and, for what the load
+//! leaves unknown, in the walk a settlement or a frame's activation runs under the binding that
+//! closes it. The run elaborates none.
 //!
 //! A type expression is syntax in program storage; its type names are mentions the shape builder
-//! already resolved to coordinates. [`type_expression`] turns one into a [`KType`] by reading each
-//! name through a [`Reads`] and building lattice nodes over what it reads. [`callable_type`] reads
+//! already resolved to coordinates. [`type_expression`](expression::type_expression) turns one into a [`KType`] by reading each
+//! name through a [`Reads`] and building lattice nodes over what it reads. [`callable_type`](signature::callable_type) reads
 //! a callable's function type off the builtin shape node its body sits in and — born for a
 //! registration — what the registration's bucket holds: the expression shape ranked by the
-//! registration's classes, and how a keyworded call binds its slots. [`type_declarations`] takes a
+//! registration's classes, and how a keyworded call binds its slots. [`type_declarations`](declaration::type_declarations) takes a
 //! whole component of type binders and hands back one handle per member, sealing a group of
 //! mutually recursive declarations in one window. [`builtin_shape_types`] interns a builtin
 //! bucket's own overloads — the `static` slot types of a
@@ -16,7 +17,7 @@
 //!
 //! The load's walk runs each of those doors unit by unit through the type half ([`unit`]): a
 //! reader that reads no activation, over a [`TypeContext`] the walk implements, which fixes each
-//! fact closed, rigid over the names a run binds, or unknown. Everything else reads through an
+//! fact closed, rigid over the names a run binds, or unknown. [`self_signature`] alone reads an
 //! activation, where a type binding holds a [`TypeValue`](crate::values::TypeValue).
 //!
 //! Elaborated: a bare type name, `LIST OF Elem`, `MAP Key -> Val`, `FN :{…} -> Ret`,

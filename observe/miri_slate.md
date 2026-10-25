@@ -81,11 +81,9 @@ silence the stale-anchor check; delete a redundant test instead.
   keep and redeem doors and its reattach seam.
 - `src/scope/header.rs` — a habitat half's region header is laid once, through its header door
   or the door `values` holds projected to its branch slot, and holds `Cell`s written after it is
-  laid: the branch, a build cell's specialization table, renewed in place, and a specialization's
-  own handle. A specialization writes its parent's table through its lent region's writer, a frame
-  reads its specialization's handle through its lent region, and the drain reads the table through
-  `peek` between steps. No `unsafe` of its own; the backing
-  `unsafe` is `cellgraph`'s header reattach, its projected door and `peek`.
+  laid: the branch, and the decision memo of the cells whose results are built in the half,
+  replaced as a cell lays a new one. No `unsafe` of its own; the backing `unsafe` is
+  `cellgraph`'s header reattach and its projected door.
 <!-- slate-audit-whitelist:end -->
 
 ## The slate

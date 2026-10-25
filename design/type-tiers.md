@@ -39,9 +39,10 @@ tier, then the branches longest-lived first, then follows a branch's link to
 its spawner's, caching the hit. A verdict over two load types is read from
 the load's table, one over load and agent types from the agent's, and any
 other from the branches' tables, shortest-lived first. The frozen load is
-closed after the load and the agent tier is written only by a settlement
-under the root at its rest, so every type the run builds lives in a branch, a composite over
-load types alone included.
+closed after the load and the agent tier's types are laid only by a
+settlement under the root at its rest, so every type the run builds lives in
+a branch, a composite over load types alone included; a run records only
+verdicts there ([below](#verdicts)).
 
 A crossing carries a value's types to where it lands
 ([storage](../lattice/src/types/identity.md#storage-a-root-and-its-branches)).
@@ -282,8 +283,8 @@ across them; two calls from the host's own body in separate statements are
 cold, since that body replaces its own receipt between them, save a keyed
 callee's, warm through the agent tier. A `Fresh` caching frame holds its own
 scratch for its life, its warm and cold tier at once, and drops it with the
-frame. It reads no other cell's scratch, so a `Fresh` frame with no build
-cell is warm across its own statements alone, and each hop of a `Fresh` tail
+frame. It reads no other cell's scratch, so a `Fresh` frame with no
+settlement is warm across its own statements alone, and each hop of a `Fresh` tail
 loop under such a binding mints its invariant sites afresh. A loop that parks
 once a hop lays no receipt run per hop: the scratch habitat keeps the runs
 its cells released, drained, on a free list a registration searches first
@@ -320,7 +321,7 @@ bounded by what the body hands out, never by what it minted.
 
 ## An adoption stops at a settled part
 
-Exits and invariant sites adopt through one door ([`adopt_value`](../src/values/crossing.rs)), whose contract
+A caching body's exits adopt through one door ([`adopt_value`](../src/values/crossing.rs)), whose contract
 is that every memo a value reaches resolves where the value's readers read. A
 value carries two bits in its weight's top, memoized as its weight is, on every
 composite header and on a knot's root node: **root-closed**, every memo it
@@ -337,16 +338,13 @@ header over a knot member carry no bits of their own: a header hands over its
 own memo wherever it is adopted and is read through to its member's bits. A
 part with either bit set already meets the contract — a root type resolves
 everywhere, and a settled type in the region every chain over a value there
-links — so the walk does not enter it, at an exit and at an invariant site
-alike. At an exit it hands over nothing for that part, its own memo included,
-since the region's chain reaches both the root and the home branch; an
-invariant site adopts into the warm tier, where the value does not lie, so
-there the part's own memo is still handed over. The debug check walks with the
-same cutoff. The walk reads the top value's bits before it lays anything, so an
+links — so the walk does not enter it, and hands over nothing for it, its own memo
+included, since the region's chain reaches both the root and the home branch.
+The debug check walks with the same cutoff. The walk reads the top value's bits before it lays anything, so an
 exit of a value that meets the contract allocates nothing, and it lays its
 stack, knot set and settled list in its caller's step scratch. An exit marks
-every value it entered settled after adopting its memos into the region; an
-invariant site marks nothing. A clear bit is always safe and a
+every value it entered settled after adopting its memos into the region. A
+clear bit is always safe and a
 set bit is true: a restamp keeps the old bits only as far as the new memo
 allows — root-closed where the new type lies in the root, settled where its
 chain interns where it lays — a copy recomputes both through the same doors at
@@ -369,8 +367,6 @@ released with that branch.
 
 ## Open work
 
-- [The build arena](../roadmap/gradual-build/build-arena.md) — a frame's
-  facts settled in its own activation where its binding names run content.
 - [Invariance around a tail cycle](../roadmap/gradual-build/cycle-invariance.md)
   — an argument built over invariant leaves classed invariant.
 - [Presizing a branch](../roadmap/gradual-build/branch-presizing.md) — a branch

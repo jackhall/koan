@@ -343,21 +343,20 @@ over the graph's type tiers and the build's writer and header.
 branch of the habitat its value is laid down in
 ([storage](../../lattice/src/types/identity.md#storage-a-root-and-its-branches)).
 The branch is kept in the habitat half's header, whose record is `scope`'s
-([`RegionHeader`](../scope/header.rs)): beside the branch it holds a build
-cell's table of specializations, a fixed run of entries laid with the cell,
-each a key, a handle and the stamp of its child's last birth, rekeyed in place
-when a miss reuses it ([specialization.rs](settlement.rs)); and a
-specialization's home, its own handle and its parent's, which the scheduler
-reads to name the build cell a frame runs under and to stamp a hop's entry,
-beside the facts its resumption settled
-([the build module](../build/README.md#references-between-the-trees)).
+([`RegionHeader`](../scope/header.rs)): beside the branch it holds the
+decision memo of the cells whose results are built in the half
+([the build module](../build/README.md#activations)).
 `values` cannot name that record, so a [`Half`](habitat.rs) holds its header
 door projected to the branch's slot ([`BranchSlot`](habitat.rs)): any header
 family that projects to it serves, and `values` reads and lays the header
 through that slot alone. Projecting lays nothing, so a half that never interns
 lays no header; its first intern lays the record and the branch.
-A `BuildRef`, the opaque token naming a build cell above the scheduler, lives
-there too, opened only by `values` and the scheduler. A
+What the build arena's books are keyed and bounded by lives in
+[settlement.rs](settlement.rs): a settlement's key, a seek's binding image, the
+budget, and `ArenaRef`, the opaque handle naming an arena node above the
+scheduler — a slot and its generation — opened only by `values` and the
+scheduler
+([the build module](../build/README.md#references-between-frames-and-the-arena)). A
 [`Chain`](habitat.rs) carries a pairing brand naming the writer it serves
 beside the brand its tiers sit at, so a value door handed one half's writer and
 a chain paired to another does not compile. [`Types`](habitat.rs) is the chain
@@ -387,10 +386,7 @@ holds — and adopts every type into the region, reading the whole chain the
 body ran on. A part whose [memo bits](#weight) meet the contract is not
 entered and hands over nothing, its own memo included, and the exit marks every
 value it did enter settled after, so a value handed on through a loop is walked
-once. An invariant site adopts its operand and the view built over it into the
-warm tier — the agent tier, under a specialization — through the same door, which there still hands over a meeting
-part's own memo and marks nothing; a header, whose bits are its member's, hands
-over its own memo at both. The walk reads the top value's bits before it lays
+once. A header, whose bits are its member's, hands over its own memo. The walk reads the top value's bits before it lays
 anything and lays its stack, knot set and settled list in its caller's step
 scratch
 ([type tiers](../../design/type-tiers.md#an-adoption-stops-at-a-settled-part)).
@@ -545,7 +541,7 @@ over-distinction is sound: keying two equal things apart costs only a key.
 
 **A digest is computed on demand**, and kept where the load says the demand
 recurs: a view asks for its source's, a call of a keyed body for the argument
-at each keyed parameter ([keys](../build/README.md#keys-which-bindings-make-a-specialization)),
+at each keyed parameter ([keys](../build/README.md#keys-which-bindings-make-a-settlement)),
 and nothing else, so a value no view or key reaches never pays for one. A
 value carries no digest but a module, which keeps its content from the first
 view or key that reaches it; a slot the load marks as digested — the source of

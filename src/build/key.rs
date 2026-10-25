@@ -4,7 +4,7 @@
 //! root, or a composition's — and its [`Segment`] there, so two bodies of one text whose captures
 //! differ in type never share one, nor do two bases' bodies at one segment; and its binding by the content digests of the arguments at the
 //! names its key list holds, in slot order. The keys fold ([`folds`](super::folds)) lays that list
-//! ([keys](README.md#keys-which-bindings-make-a-specialization)). The asker computes the digests;
+//! ([keys](README.md#keys-which-bindings-make-a-settlement)). The asker computes the digests;
 //! the drain looks the key up in the parent's table.
 
 use crate::scope::Segment;

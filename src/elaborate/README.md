@@ -5,8 +5,9 @@ Type expressions and type declarations turned into
 `elaborate` sits above [`scope`](../scope/README.md) and below
 [`knot`](../knot/README.md): [the type half of the load's walk](#the-type-channel-at-load)
 types every type expression, callable signature and component of type binders in
-a loaded program, a component through [one door](#declarations), and leaves to
-the run only what names a type a run binds. Nothing below `scope` can read a
+a loaded program, a component through [one door](#declarations), and leaves
+only what names a type a run binds to the walk that runs under that binding —
+a settlement's or a frame's activation — so the run elaborates no type. Nothing below `scope` can read a
 name.
 
 ## What a type expression is
@@ -17,21 +18,18 @@ the shape builder already resolved each one to a coordinate and recorded it as
 a mention ([Resolution](../scope/README.md#resolution)), so
 [`type_expression`](expression.rs) looks the mention up by the name part's site
 through `BodyShape::mention` and reads its coordinate through a **reader**
-([`Reads`](reads.rs)). Two readers exist:
-
-- **the load-time reader**, which reads no activation and answers from the
-  builtin table and the load-time types of the shapes enclosing the expression
-  ([below](#the-type-channel-at-load)) — a type, a rigid variable standing for a
-  type a run binds, or *unknown*;
-- **an activation's view** — `scope`'s `ActivationView`, the one read type at
-  every level, which names no habitat — for what the load left unknown. The body
-  runner reads a name only once its binder's unit has run, so every read finds
-  its slot bound, and a name bound to a type value elaborates to that value's
-  handle.
+([`Reads`](reads.rs)). In production one reader exists, **the load-time
+reader**, which reads no activation and answers from the builtin table and the
+load-time types of the shapes enclosing the expression
+([below](#the-type-channel-at-load)) — a type, a rigid variable standing for a
+type a run binds, or *unknown*. Under a binding, the same reader answers a
+bound name with the type the binding gives it. The tests also read through an
+activation's view, to hold the load's types to what reading the bound slots
+gives.
 
 A parameter and return type of a callable are eager mentions of the enclosing
 shape, so a signature is read through the enclosing shape's reader: at load, the
-shape the callable is written in; at a birth, the activation it is born in.
+shape the callable is written in.
 
 A type expression elaborates to a
 [parametric type](../../lattice/src/types/identity.md#typed-handles): a `FOR ALL` name
@@ -187,8 +185,8 @@ result in the record of the unit that births it, and each registration's
 expression shape in the record of the unit that binds it
 ([below](#the-type-channel-at-load)). A birth reads that type rather
 than elaborating its signature: as it is when it is closed, with its variables
-substituted when it is rigid, and through the activation it is born in only where
-the load left it unknown. [Dispatch's overlap check](../dispatch/README.md#the-overlap-check)
+substituted when it is rigid, and as the layer that settled it under the
+binding fixed it where the load left it unknown. [Dispatch's overlap check](../dispatch/README.md#the-overlap-check)
 reads the registrations' shapes.
 
 A module body has no callable type here, and neither has a `USING` body: its
@@ -424,8 +422,9 @@ fact rests in the unit's record. A load-time type is one of three:
   holds over a rigid variable holds for every type the run can put there; where
   it runs it is the handle with each variable replaced by what its coordinate
   reads, one [substitution](../../lattice/src/types/solving.md#substitute-then-ask);
-- **unknown** — left to the run, which elaborates it where it is read, through
-  the activation.
+- **unknown** — left to the layer whose binding closes it, a settlement or
+  the frame's activation, whose walk elaborates it under that binding; the
+  run reads what that walk fixed.
 
 **What a run binds.** A type-channel slot whose value only a run supplies: a
 callable's `FOR ALL` parameter, a `:Type` parameter, a name
@@ -478,8 +477,9 @@ application, read off a parameter's type or an annotated binder's. Dispatch's
 [walk](../dispatch/README.md#paths) resolves every path a unit spells, before
 the unit's declarations, to a closed type or a class off the module's content
 tree, and the reader reads each through that resolution: closed as it is, and
-in `Typing` mode a class as its representative's path variable. Where it runs,
-a path variable binds as the path reads (`bound_path`). A **type binder over a
+in `Typing` mode a class as its representative's path variable. The run binds
+no path variable: a fact reading one is decided closed in the layer that knows
+the root's module, and the run reads it there. A **type binder over a
 path** reads through the path's resolution in `Declaring` mode: closed where
 the resolution is closed, and unknown otherwise.
 

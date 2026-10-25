@@ -30,8 +30,10 @@ Four things it does not keep, because a neighbour already does:
 The graph a drain runs over is `Graph`: a `CellGraph` closed over the
 continuation family, the scratch-state family and the delivery bundle, so the
 families stay the scheduler's own, beside the type tiers every step's chain
-reads first (`TypeTiers`: the frozen load and the agent tier). What owns a
-graph makes one with `Graph::new` over those tiers — a loaded program over the
+reads first (`TypeTiers`: the frozen load and the agent tier), the load's
+facts every step's door reads beneath its arena node, and the
+[build arena](#the-build-arena). What owns a graph makes one with
+`Graph::new` over those tiers — a loaded program over the
 load it froze and the agent tier laid beside it, a test over ones it seeds in
 a local bump — takes a storage-only slab cell from `Graph::root` — a region that
 outlives every drain over it and is never entered — gives it back with
@@ -39,15 +41,13 @@ outlives every drain over it and is never entered — gives it back with
 the drain's.
 
 A loaded program's graph is stood up instead by the **load door**,
-`Graph::load` ([load.rs](load.rs)): it takes two slab roots, the **build
-root** and the **run root**, and enters the build root once with the
-caller's load closure, before any root work. The closure is handed nothing,
-and returns the type tiers every later step reads; a refusal it returns
-drops the graph with it. Once it returns, the entry lays the build root's
-region header and its specialization table, as long as the root bound and
-recording the nested bound ([the build module](../build/README.md)); the run root
-is where every root work is born. A graph `Graph::new` makes has no build
-root, and every frame in it is born cold.
+`Graph::load` ([load.rs](load.rs)): it runs the caller's load closure first,
+outside any cell, and only then stands the graph over one slab root, the
+**run root**, where every root work is born. The closure is handed nothing,
+and returns the type tiers, the load's facts and the door a miss settles
+through ([`Settles`](seek.rs)); a refusal it returns stands no graph. The
+load door also takes the arena's budget. A graph `Graph::new` makes runs no
+program: its facts are empty and every settlement it builds holds none.
 
 `Scheduler` owns no graph. It is a view made per call: `Scheduler::over` borrows
 a `Graph` mutably and keeps the ready stack and a buffer of requests beside it.
@@ -89,10 +89,6 @@ runs the step its continuation names, and acts on the `Kind` the returned
   successor's first step has run.
 - `Failed` — the drain abandons the work.
 
-A specialization's step ends `Quiesced`, which only the drain's own entry of
-a specialization reads ([below](#specializations)); none is ever on the
-stack.
-
 A stack makes the drain **depth-first**. The child asked first runs to
 completion — its own children, their children, and its delivery — before the
 child asked second is born. Three things follow.
@@ -129,8 +125,7 @@ work, so nothing a stalled run left there is ever popped.
 ## What a step may name
 
 `enter` quantifies a step's four brands — `'step`, `'here`, `'scratch` and
-`'lent`, a tree cell's borrow of its lender's half, its parent's scratch or
-its specialization's region — per call, so a step's
+`'lent`, a tree cell's borrow of its parent's scratch — per call, so a step's
 return type can name none of them. That is why `Action`
 carries no region borrow, and why the children a step asks for go into a
 drain-owned buffer rather than into what it returns.
@@ -145,17 +140,19 @@ previous step parked, and exposes:
   each writer — `types` and `scratch_types`, built over the graph's type tiers
   once per step and never parked — so a type the step builds lands in the
   branch of the habitat it lays its value in;
-- the chains a [caching body](../program/README.md#caching-bodies) runs on,
+- the chain a [caching body](../program/README.md#caching-bodies) runs on,
   paired to the region writer: `caching_types`, over the write home's region
   and scratch, its own tier in scratch, which a tree cell holds as its own and
-  a tenant shares with its host; and `agent_types`, the chain that writes the
-  agent tier, the warm tier of a cell borrowing a specialization, `None` for a
-  cell that borrows none. A frame routes once `hold_scratch` has held its
-  scratch for the cell's life, or, as a tenant, where
-  `borrows_specialization` says it borrows one. No chain reads a lent half:
-  a specialization's region holds its facts and its table, and its types
-  rest in the agent tier. `results_with` and
+  a tenant shares with its host. A frame routes once `hold_scratch` has held
+  its scratch for the cell's life, or, as a tenant, where `under_settlement`
+  says it runs under one. No chain reads a lent half, and none writes the
+  agent tier's types. `results_with` and
   `finish_with` run a pinned value's debug check against such a chain;
+- its **door**, the code and the facts of the base its chain rests on beneath
+  the settlement it runs under, borrowed from the arena for the step alone,
+  so what a cell parks names a segment, a site or a digest instead; and the
+  decision memo's doors, `memo_entry` and `memo_lay`, over the home its
+  result is built in ([the build module](../build/README.md#activations));
 - `state` and `scratch`, which take the cell's state and its parked scratch
   state, each once. A state is a projection of the step bundle, which a
   higher-ranked function pointer cannot take as a parameter (rustc #100013), so
@@ -166,20 +163,23 @@ previous step parked, and exposes:
   second take to call. A step that never takes its scratch state leaves it in
   the `Step`, and the end hands its bump back unless the step parks again;
 - `results`, the children's results it parked on;
-- `spawn`, to ask for a child, and `spawn_seeking`, to ask for one born
-  borrowing the specialization a `Seek` names ([below](#specializations));
-- `build_ref`, the build cell the cell's frame runs under;
-- the ends — `park`, `tail`, `tail_seeking`, `tail_under`, `finish_fresh`,
-  `finish_in_home`, `finish`, `done`, `leave`, `enlist` and `failed`.
+- `spawn`, to ask for a child; `spawn_seeking`, to ask for one born under the
+  arena node a `Seek` finds or builds; and `spawn_composing`, to ask for one
+  born under the composition of code composed at run time
+  ([below](#the-build-arena));
+- `arena_ref`, the arena node the cell runs under;
+- the ends — `park`, `tail`, `tail_seeking`, `tail_under`, `bounce`,
+  `rebuild`, `replay`, `finish_fresh`, `finish_in_home`, `finish`, `done`,
+  `leave` and `failed`.
 
 **No step names a place that is not its own.** There is no handle among those
 doors — not the cell's own, not its consumer's, not its result's home — and no
 carrier door: no `alloc_into`, `lift`, `keep`, `redeem` or `receipt`. A step
-holds values at its own brands and nothing else. A build cell travels above
-the scheduler as a `BuildRef`, an opaque token only the scheduler and
-`values` open: a step is handed one by `build_ref` and hands one back in a
-`Seek` or to `tail_under`, so it can name to the drain only a build cell the
-scheduler named to it. Each crossing a computation needs is the veneer's to
+holds values at its own brands and nothing else. An arena node travels above
+the scheduler as an `ArenaRef`, an opaque handle only the scheduler and
+`values` open: a step is handed one by `arena_ref` and hands one back in a
+`Seek` or to `tail_under`, so it can name to the drain only an arena node the
+scheduler named to it, and a handle gone stale names nothing. Each crossing a computation needs is the veneer's to
 perform, from the provenance the drain filled:
 
 - **A child's birth is handed over awake and arrives awake.** `spawn` and
@@ -391,61 +391,62 @@ its row, so the release would seal rather than reclaim and constant occupancy
 would be lost. Tree siblings share a root, and root identity is the
 entitlement — no hold, no pin, no seal.
 
-## Specializations
+## The build arena
 
-A cell is born borrowing a half of another cell, which the drain
-resolves at its creation from how it was asked for ([seek.rs](seek.rs)):
+The [build's](../build/README.md#where-facts-are-decided) books live in a
+**build arena** the graph owns beside the cell graph ([arena.rs](arena.rs)),
+so the cell graph holds run cells alone and the drain reads no cellgraph door
+between steps. Its arena nodes are **settlements**, one body's facts settled
+under one binding and found by their parent and key, and **compositions**,
+the facts of code composed at run time, children of the root found by syntax
+digest. The root is the frozen load itself and no slot. Each arena node rests
+in a slot with a generation, bumped at its eviction, so an `ArenaRef` held
+past it names nothing rather than the slot's next tenant. Its facts are a
+`self_cell` over its own bump and an `Rc` of each arena node its records read
+— its parent, the composition its chain rests on, and each composition it
+pins — and a step reads them borrowed from the arena for the step alone.
 
-- `spawn` and `tail` ask for an evaluation, a block or a hand-off: a tree
-  cell borrows its parent's scratch, as every cell born under no binding
-  does, and a tenant copies its parent's lend.
-- `spawn_seeking` and `tail_seeking` ask for a call's frame, handing a
-  `Seek` where the body keys one: the build cell the callee was born under,
-  the key, the binding's handles, and the work a missed specialization runs.
-  The drain reads that build cell's table through a `peek`, which stamps a
-  live hit with the table's birth count. A miss on a table with no free
-  entry first releases the child with the oldest stamp and its subtree,
-  leaf first; then it creates the specialization, a tree cell under that
-  build cell borrowing its region, and enters it at once, outside the ready
-  stack, before anything else runs. Where the binding is not empty the entry
-  is opened beside the **asker** (`enter_beside`): the cell whose write home
-  holds the request's birth, a hop's predecessor or else the cell that asked.
-  Before the step function runs, the entry adopts each binding handle's node
-  from the region branch of the asker's write home, with its links, into the
-  agent tier, insert-if-absent, so every frame under the specialization reads
-  it there. That header is read at a brand of its own, so the agent tier
-  keeps no reference into the run tree, and the asker is between steps. A hit
-  lays nothing; a debug build checks that the frozen load or the agent tier
-  holds every handle. Its step lays its region header and its
-  own table, as long as the nested bound its parent's table records, and
-  ends `enlist`, which refuses a cell that asked for children and returns
-  `Quiesced`: the cell stays alive with no continuation, reporting to nobody,
-  and is never on the stack. It settles nothing yet: running the walk there is
-  [the build arena](../../roadmap/gradual-build/build-arena.md)'s. The drain then fills the entry with the key,
-  the handle and a fresh stamp, and records in the specialization's header
-  its own handle and its parent. The frame is then born borrowing the
-  specialization's region, a `Fresh` cell as its lend and a `Shares` tenant
-  as a lend of its own, counted on the specialization until its host's
-  scratch next resets after the tenant's release. A call with no `Seek`, a
-  build cell that is not live, or a graph with no build root births the
-  frame cold: a tree cell borrowing its parent's scratch, a tenant borrowing
-  nothing.
-- `tail_under` hands the `BuildRef` its frame ran under, for a hop of the
-  same callee, of either placement: the successor borrows that
-  specialization with no lookup, stamping its entry in the parent its header
-  names, or is born cold where the specialization is no longer live.
+A cell is born under an arena node, which the drain resolves at its creation
+from how it was asked for ([seek.rs](seek.rs)), and borrows it for its life,
+tenants included:
 
-So a warm birth costs one peek, a cold birth one synchronous step, and no cell
-parks for either. `build_ref` reads the specialization a cell borrows off
-its region header, where the drain recorded the specialization's own
-handle, and answers the fallback it is handed for any cell borrowing none.
-The two bounds, the build root's and every specialization's, are parameters
-of the [load door](load.rs), which lays the build root's table. A
-specialization lives until its parent evicts it at a miss, or an ancestor's
-eviction takes it with its subtree; it waits dead but undisposed until its
-last borrower disposes, and the next miss on its key builds it again.
-`Scheduler::evict`, a test-only door, releases a specialization's subtree
-the same way.
+- `spawn` and `tail` ask for an evaluation, a block or a hand-off, born under
+  what its asker runs under.
+- `spawn_seeking` and `tail_seeking` ask for a call's frame, handing a `Seek`:
+  the arena node the callee was born under and, where its body keys a
+  settlement on content the load names, the key, the binding's image and
+  what a miss settles. A live hit is stamped. A miss settles the body there
+  and then, through the program's `Settles` door, relaying the image into the
+  agent tier under the root, and the frame is born under the new settlement.
+  A seek with no key runs the frame under the callee's arena node; one whose
+  parent is gone runs it under the root, where its first step replays its
+  callee's stamp (`replay`): each level found or settled under the one
+  before, borrowed until the frame borrows its own, so the frame is born
+  warm.
+- `tail_under` hands the `ArenaRef` its frame ran under, for a hop of the same
+  callee: the successor borrows that settlement with no lookup, stamping it,
+  or runs under the root where it is no longer live.
+- `spawn_composing` asks for a cell running code composed at run time, under
+  its composition, found by syntax digest. The books hold digests alone, so
+  on a miss the cell is born under the root and its first step copies the
+  code's syntax and asks again (`bounce`), and the drain builds the
+  composition over the copy. A miss under a composition binding a module of
+  other composed code pins that code's composition; where it is gone, the
+  frame's first step copies the module's syntax and asks again (`rebuild`).
+
+So no cell parks for its arena node. A hand-off successor borrows before its
+predecessor's release, and every retire releases its cell's borrow.
+
+**Held and evicted.** An arena node is **held** while a run cell borrows it,
+while a held arena node lies below it, or while a held settlement pins it; the
+held total moves only where a count turns, so a borrow costs the depth of its
+chain. One **budget** bounds the bytes of the arena nodes no frame holds
+(`BuildBudget`, 4 MiB by default): after a miss, while the unheld bytes exceed
+it, the unheld arena node with no child, no pinner and the oldest use is
+evicted, so eviction takes leaves first, and an evicted settlement releases
+its pin before the composition it pinned is a candidate. What frames hold is
+linear in the frame stack's distinct arena nodes and the compositions they
+pin, whatever the nesting depth.
 
 ## Memory
 
@@ -456,7 +457,9 @@ The matrix width is therefore one word — `WIDTH` in
 
 The view's heap is the ready stack and the request buffer. Both are amortized,
 neither grows per step once warm, and the stack's depth is the unborn siblings
-along the current path. Everything a computation keeps across a park is in its
+along the current path. The graph's heap beyond its cells is the build
+arena: its slots and maps, sized by the live arena nodes, and each arena
+node's bump, bounded by the budget where no frame holds it. Everything a computation keeps across a park is in its
 cell: the continuation in storage, the in-progress state and the receipt run in
 the scratch habitat, handed back whole at the first step end that leaves
 nothing naming it.
@@ -469,17 +472,20 @@ the crate — its tests included, which may name the crate's test scaffolding
 besides. It does not name `parse`, `elaborate`, `symbols` or `program`. It
 names the lattice for the frozen load, the agent tier and a branch alone, the
 tiers a graph holds and hands every step and crossing; `scope` for the header a graph keeps
-per habitat half (`RegionHeader`), whose table and home the drain keeps the
-books of; and `values` for the type chain those doors
-build and the specialization's key and token (`SpecKey`, `BuildRef`). `scope`
+per habitat half (`RegionHeader`), the facts a step's door reads and an arena
+node holds, and the decision memo; and `values` for the type chain those doors
+build and the arena's key, image, budget and handle (`SettlementKey`,
+`BindingImage`, `BuildBudget`, `ArenaRef`). `scope`
 names `values` and is named by `knot`, so the edge forms no cycle, and neither
 names this module. `cellgraph` is reached
 only through `memory`, and `cellgraph` itself depends on neither this module
 nor koan. `tests/boundary.rs` reads the source to hold the rule there; the
 ready stack and the request buffer are the owning heap types it blanks,
 because each is the scheduler's own runtime state and never a value in a
-region. It also holds `Step`'s public signatures free of every handle, and
-every module but this one and `values` from opening a `BuildRef`.
+region, beside the replay's request list. It also holds `Step`'s public
+signatures free of every handle, every module but this one and `values` from
+opening an `ArenaRef`, and the drain from opening a cellgraph door between
+steps.
 
 ## Testing
 
@@ -515,39 +521,31 @@ no layer of koan's above present. They hold, each with a workload of its own:
   empty;
 - the round trip a continuation makes between `'graph` and a step's `'here`,
   through the raw slot doors a step never reaches;
-- the load door standing two roots and laying the build root's header and
-  its table, and
-  handing a refusal back ([tests/load.rs](tests/load.rs));
-- a missed specialization built once and found warm by the next birth, two
-  bindings giving two under one parent, a graph with no build root birthing
-  every seeking frame cold, a specialization nesting under the frame that
-  seeks beneath it, a parent past its bound releasing its least recently
-  born child, a victim's subtree released leaf first, a hop stamping its
-  specialization, a frame under an evicted parent born cold, a hop of the
-  same callee borrowing its frame's specialization and running cold once it
-  is gone, an evicted specialization disposing with its last borrower, a
-  missed specialization holding the nodes of a binding its asker minted, read
-  by a frame on a miss and on a later hit after the asker is gone, and a
-  binding of root types laying nothing; and
-  at `Shares`, two tenants seeking one key borrowing one specialization that
-  their plain children copy, a call seeking nothing borrowing nothing under a
-  frame that borrows one, a hop keeping its lend, and a tenant whose
-  specialization is evicted under it waking to read what it laid in the agent
-  tier, the
-  specialization disposing only once the tenant's host's scratch resets
+- the load door standing one slab root after the load, and handing a
+  refusal back ([tests/load.rs](tests/load.rs));
+- the arena alone: a stale handle naming nothing once its slot is reused,
+  eviction taking the least recently used unheld leaf first, a borrowed
+  settlement and every ancestor of it staying through eviction, unheld bytes
+  within the budget after every miss, a parent evicted only after its last
+  child, and a child settlement and a pinned composition each releasing what
+  it holds last ([tests/arena.rs](tests/arena.rs));
+- a missed settlement built once and found warm by the next birth, two
+  bindings giving two under one parent, a settlement nesting under the frame
+  that seeks beneath it, a miss past the budget evicting the least recently
+  used unheld settlement, a parent going after its child, a loop of hops
+  holding its settlement through every miss, a call keying nothing running
+  under its callee's arena node, a hand-off successor holding its frame's
+  settlement until its own release, a tenant's count running from its
+  creation to its release, every run cell born under a settlement carrying
+  its reference, and a missed settlement relaying the image of a binding its
+  asker minted, read by a frame after the asker is gone
   ([tests/seek.rs](tests/seek.rs)).
-
-Every root work run under `cfg(test)` ends by asserting that koan's lends
-close no wait cycle (`CellGraph::lend_cycle` finds none,
-[tree cells](../../cellgraph/src/tree/README.md#death)): a run cell never
-waits on a specialization, so the count a host's scratch holds on one is
-never what that specialization waits on.
 
 A native step is a bare `fn` and carries no closure state, so what a step
 observes it records in `tests/native.rs` for the test around it to read back.
 
 ## Open work
 
-- [The build arena](../../roadmap/gradual-build/build-arena.md) — the drain's
-  books over build cells outside the cell graph, and frames reading what the
-  build decided.
+- [Setting the build budget](../../roadmap/gradual-build/bound-settings.md)
+  — the budget as a setting a user names.
+- [Agents](../../roadmap/rewrite/agents.md) — an arena per agent.

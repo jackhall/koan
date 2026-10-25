@@ -44,8 +44,9 @@ byte laid in a region, a scratch, a parked state or a value references one:
 a step reads its arena node's shape and facts at its own lifetime and copies
 out indexes, digests and type handles alone, which is what lets the borrower
 count drop at release. A settlement's pin on the composition whose shape its
-binding's tree names is a borrower count between arena nodes, and a borrowed
-arena node is never evicted. The run's own halves keep the rules
+binding's tree names is a count between arena nodes: a pinned composition is
+no eviction candidate while a pinner lives, and is held while one is held,
+and a borrowed arena node is never evicted. The run's own halves keep the rules
 [type tiers](type-tiers.md#a-node-lives-in-a-tier-its-children-outlive) gives
 them.
 
@@ -102,9 +103,10 @@ node is handed out as `&'agent StoredNode<'agent>` and never moves, nothing in
 the tier is released before the tier is released whole, and the tier goes
 with its agent. Two things intern into it: a settlement under the root at its rest, laying
 the types its facts name, the binding's nodes it relaid from its image, and
-the verdicts it reached; and a run's verdict over two load types the load's
-table lacks. A run cell reads the agent tier and interns nothing into it: a
-type the run builds lives in the run's halves. The agent's symbol overlay,
+the verdicts it reached; and a run's verdict over load or agent types, which
+no run may write into the load's table. A run cell reads the agent tier,
+records verdicts there and interns no type into it: a type the run builds
+lives in the run's halves. The agent's symbol overlay,
 the names its `EVAL`s parse, sits beside it; a render reads the overlay, then
 the frozen table, and the two never disagree, since a symbol is its text's
 digest.
@@ -119,7 +121,7 @@ or a module whose content tree is closed, computed by the load under the root
 and by the load or a composition under one. A binding
 to anything else births no settlement; the site it reaches is decided in the
 frame's own activation, over the carried types, in the frame's own tiers
-([the build arena](../roadmap/gradual-build/build-arena.md)). A
+([the build module](../src/build/README.md#activations)). A
 **composition** is the shape of code composed at run time and the facts that
 wait on nothing but its syntax, keyed on the code's syntax digest, as a
 module's shape is its text while its captures bind at their statements. The
@@ -136,12 +138,13 @@ carries.
 An arena node holds its facts, its residual and its children's table, and a
 composition its shape; no arena node holds a type. The arena is the agent's
 own, outside the cell graph, with parent links, a borrower count that drops
-at the borrower's release, and one budget over the whole arena evicted least
-recently used, leaf first, among the arena nodes no frame holds through its
-borrow, a parent link or a pin, since evicting a held one frees nothing. A
+at the borrower's release, and one budget over the bytes of the arena nodes
+no frame holds through its borrow, a parent link or a pin, evicted least
+recently used, leaf first, since evicting a held one frees nothing
+([the scheduler](../src/scheduler/README.md#the-build-arena)). A
 settlement binds a module by the closed tree its layer computed, the load's
 under the root and the load's or a composition's under one, pinning the
-computing composition as a borrower; each layer indexes the closed trees it
+computing composition; each layer indexes the closed trees it
 computes by their identity, the content's digest, so a request resolves a
 module's digest to its tree in the chain it reaches; an activation binds
 one by the value's digest. A callable carries the requests that built its
@@ -173,7 +176,4 @@ agent, its budget and its stack
 
 ## Open work
 
-- [The build arena](../roadmap/gradual-build/build-arena.md) — the arena,
-  its keys and its budget, a composition's lifetime, and the activation as
-  a decision's other home.
 - [Agents](../roadmap/rewrite/agents.md) — threads sharing the frozen load.

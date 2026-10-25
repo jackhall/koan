@@ -595,5 +595,9 @@ module value by its digest tree. The two-program test,
   which build an `Error` from a fault and release its frames.
 - [A refused program stays loaded](../../roadmap/rewrite/refused-programs-stay-loaded.md)
   — a refused load kept, so its shape error renders on demand rather than once.
+- [A stamp level laid once per frame](../../roadmap/gradual-build/stamp-level-once.md)
+  — a keyed call that births no callable lays no level in its asker's region.
+- [Flat memory for a hop under its own settlement](../../roadmap/gradual-build/settled-hop-memory.md)
+  — the bytes a tail loop under its own settlement leaves per hop.
 - [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — the
   bytes a `Shares` tail hop leaves in its host.

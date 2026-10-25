@@ -3,7 +3,8 @@
 The types a settlement under a composition derives, kept warm across hops.
 
 **Problem.** A settlement under a composition rests no type
-([the build arena](build-arena.md)), so a type its facts derive is a term
+([types across the arena](../../src/build/README.md#types-across-the-arena)),
+so a type its facts derive is a term
 over the key's handles that the frame mints into its own tiers once per
 binding event. A `Shares` frame keeps it warm through its host's scratch
 alone, and a `Fresh` loop calling one composed callable under one binding
@@ -26,9 +27,6 @@ mints every derived type again each hop, as a run-content binding does.
 
 ## Dependencies
 
-**Requires:**
-
-- [The build arena](build-arena.md) — the composition and the settlement
-  under it whose derived types this keeps warm.
+**Requires:** none.
 
 **Unblocks:** none.

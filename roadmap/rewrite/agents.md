@@ -4,14 +4,14 @@ Concurrent runs of one program, each on a thread of its own, sharing the
 frozen load.
 
 **Problem.** A program is one process: one cell graph, one drain
-([the scheduler](../../src/scheduler/README.md)), one build tree, one frozen
+([the scheduler](../../src/scheduler/README.md)), one build arena, one frozen
 load of types with one agent tier above it, and one symbol table, all laid in
 storage its substrate owns ([the program](../../src/program/README.md)).
 Nothing in the language or the runtime names a second concurrent run of a
 program. The frozen load's types are `Sync`
 ([storage](../../lattice/src/types/identity.md#storage-a-root-and-its-branches)),
 but the rest of what the load lays is not shared: the symbol table's frozen
-map sits beside the agent's overlay in one interner, the build tree's books
+map sits beside the agent's overlay in one interner, the build arena's books
 are the drain's, and every region is one thread's.
 
 **Acceptance criteria.**
@@ -37,7 +37,7 @@ are the drain's, and every region is one thread's.
   value, or the runtime, one per entry point. Nothing is ruled.
 - *How a value crosses — open.* A result at a join, a message at the spawn,
   or a channel value. Nothing is ruled.
-- *Per-agent rebuild — open.* An agent always rebuilds its specializations,
+- *Per-agent rebuild — open.* An agent always rebuilds its settlements,
   or seeds one from another agent's record through the
   [build image](build-image.md). Recommended: always rebuilt, so no books
   are shared.
@@ -46,9 +46,6 @@ are the drain's, and every region is one thread's.
 
 ## Dependencies
 
-**Requires:**
-
-- [The build arena](../gradual-build/build-arena.md) — the per-agent build
-  arena.
+**Requires:** none.
 
 **Unblocks:** none — a leaf.
