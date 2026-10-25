@@ -56,6 +56,10 @@ silence the stale-anchor check; delete a redundant test instead.
   resident and cell runs, each module's member run and each barrier's resident are written into
   the same region, over the finished copies of the values the knot holds. No `unsafe` of its own; the backing `unsafe` is
   `cellgraph`'s `thin_run`, `fill` and reattach seam.
+- `src/scheduler/arena.rs` — the build arena's settlements and compositions are `self_cell`s
+  whose dependents read their parents' and pinned compositions' bumps through the `Rc`s their
+  owners hold. No `unsafe` of its own; the backing `unsafe` is `self_cell`'s, and these tests pin
+  the release orders the arena's eviction makes.
 - `src/scheduler/drain.rs` — the drain performs every birth and every death: it creates a tail
   successor, wakes its state out of its predecessor, and only then releases that predecessor, whose
   region goes back to the pool for the hop after. No `unsafe` of its own; the backing `unsafe` is
@@ -297,49 +301,38 @@ in a tenant's storage and crossed into the callee's birth.
   a barrier reached by its key, over a value member the block reads, its result crossing the
   block's frame and the barrier both, every captured byte read back.
 
-**Build tree** ([src/scope/header.rs](../src/scope/header.rs),
-[src/values/habitat.rs](../src/values/habitat.rs)) — a header's interior cells written after the
-header is laid: through the half's own door, through a borrower's lent region, and read back
-through `peek` between steps.
+**Region header** ([src/scope/header.rs](../src/scope/header.rs),
+[src/values/habitat.rs](../src/values/habitat.rs)) — a half's header, laid by the first door that
+interns into it, its branch written through `Cell`s and read by a later chain over the same half.
 
-- `a_region_header_is_laid_on_the_first_intern_and_holds_the_table_and_the_home`
-  a slab cell's header laid by its first intern through the projected door, its branch, table
-  and home written through `Cell`s, and read back through the same header at the next step.
-- `a_table_decides_hits_free_entries_and_its_least_recently_born_victim`
-  a fixed table laid in a slab cell's region, entries filled, stamped and rekeyed in place through
-  `Cell` writes.
-- `two_frames_under_one_key_borrow_one_specialization_through_their_lend`
-  a specialization's own step laying its header and table in its region, its handle read by two
-  frames through their lent region and by none that borrows no region.
-- `a_missed_specialization_holds_its_bindings_nodes_and_a_frame_reads_them_after_the_asker_is_gone`
-  a new specialization's entry, opened beside its asker, laying the binding's nodes from the
-  asker's region into the agent tier, read by a frame after the asker's region is gone.
-- `a_parent_past_its_bound_releases_its_least_recently_born_child`
-  the drain writing a parent's books through `peek` between steps — a hit's stamp, a new child's
-  entry and home — under the root's table and a specialization's own, its victims released and an
-  entry rebuilt in place, and the graph emptied.
-- `a_miss_releases_its_victims_subtree_leaf_first`
-  a specialization with a child of its own released by a miss, leaf first, a frame born cold under
-  the dead parent, and a test's eviction releasing a subtree.
-- `an_evicted_specialization_a_shares_frame_borrowed_waits_on_its_hosts_scratch`
-  a tenant lent a specialization's region parks, the specialization is evicted under it, and the
-  tenant wakes and reads what it laid in the agent tier; the region goes only once the host's
-  scratch resets.
-- `a_shares_loop_seeks_its_specialization_once_and_a_second_park_finds_it_warm`
-  a keyed `Shares` body adopting its invariant sites into the agent tier over its host's scratch at
-  two parks, the second reading the types and verdicts the first laid.
 - `a_keyed_shares_call_runs_beside_a_host_scratch_laid_before_it`
   a host's scratch branch laid by an unkeyed tenant's caching chain, then read by a keyed tenant's
   caching chain over the host's region and the agent tier.
+
+**Build arena** ([src/scheduler/arena.rs](../src/scheduler/arena.rs)) — each settlement's facts
+are `self_cell`'s dependent, laid in its owner's bump and reading its parent's facts and the
+compositions it rests on or pins through the `Rc`s that owner holds, so a settlement, a
+composition and their pinners may be released in any order the arena's policy allows.
+
+- `a_child_settlement_keeps_its_parent_and_releases_it_last`
+  the arena's handle on a parent dropped first, the child's facts read through to the parent's
+  after, and the parent released last, by the child's own `Rc`.
+- `a_replay_borrows_every_level_it_reaches_until_the_frame_is_born`
+  a chain of three settlements, each over its parent's facts, evicted leaf first under a small
+  budget and settled again by a replay.
+- `a_pinned_composition_outlives_its_last_pinner`
+  a settlement whose facts read a wording out of a composition it pins, the arena's handle on the
+  composition dropped first, and the composition released last, by the pinner's own `Rc`. (A
+  program-level composition test leaks the syntax the test-only `COMPOSE` parses, by design.)
 
 ## Recent full-slate run durations
 
 Prepended by `python3 tools/miri.py --log` on a clean run, trimmed to five.
 
 <!-- slate-durations:start -->
+- 2026-10-25: 1979s — 41 tests, 0 leaks, 0 UB
 - 2026-10-22: 1174s — 46 tests, 0 leaks, 0 UB
 - 2026-10-22: 1176s — 46 tests, 0 leaks, 0 UB
 - 2026-10-22: 1173s — 46 tests, 0 leaks, 0 UB
 - 2026-10-22: 1173s — 46 tests, 0 leaks, 0 UB
-- 2026-10-22: 1223s — 46 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

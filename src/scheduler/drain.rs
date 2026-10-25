@@ -202,6 +202,11 @@ pub(crate) struct Tiers {
     /// How many cells running composed code bounced with its syntax, their composition not live
     /// at their birth: a count.
     pub bounced: usize,
+    /// The most bytes of live settlements and compositions no run cell held once a miss had
+    /// evicted: a high-water mark.
+    pub unheld: usize,
+    /// The most settlements live at once at a birth: a high-water mark.
+    pub live: usize,
 }
 
 /// Add to one of the counts in [`TIERS`].
@@ -233,6 +238,8 @@ thread_local! {
             stepped: 0,
             composed: 0,
             bounced: 0,
+            unheld: 0,
+            live: 0,
         })
     };
 }
@@ -500,7 +507,18 @@ where
         if missed {
             let _evicted = self.graph.arena.evict_to_budget();
             #[cfg(test)]
-            tally(|tiers| tiers.evicted += _evicted);
+            {
+                let unheld = self.graph.arena.unheld_bytes();
+                tally(|tiers| {
+                    tiers.evicted += _evicted;
+                    tiers.unheld = tiers.unheld.max(unheld);
+                });
+            }
+        }
+        #[cfg(test)]
+        {
+            let live = self.graph.arena.len();
+            tally(|tiers| tiers.live = tiers.live.max(live));
         }
         let arrival = match wanting {
             Some(digest) => Arrival::Wanting(digest),

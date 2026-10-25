@@ -33,6 +33,21 @@ pub(crate) fn case_share(numerator: u32, denominator: u32) -> u32 {
     (proptest::prelude::ProptestConfig::default().cases * numerator / denominator).max(64)
 }
 
+/// The syntax of the quote `#(1)`, copied into storage of its own, as a composition owns its
+/// syntax: what a suite below the parser builds a composition over.
+pub(crate) fn composed_syntax() -> crate::scope::ComposedSyntax {
+    let symbols = crate::symbols::SymbolInterner::new();
+    let storage = crate::memory::program_storage();
+    let parsed = crate::parse::parse(storage.brand(), &symbols, "#(1)").expect("a quote parses");
+    let crate::parse::ExpressionPart::QuotedExpression(syntax) = parsed[0].parts[0].value else {
+        panic!("the statement is a quote")
+    };
+    let digest = crate::values::digest::DigestHasher::new(crate::values::digest::Tag::Number)
+        .count(0)
+        .finished();
+    crate::scope::ComposedSyntax::of(crate::scope::ComposedRoot { syntax, digest })
+}
+
 /// The load's walk of koan over `shapes`, as a program's load runs it: what a suite below the
 /// language reads facts through where it needs the walk's, beside the walk's refusal, rendered.
 pub(crate) fn walked<'graph>(

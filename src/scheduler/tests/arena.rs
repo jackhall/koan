@@ -5,8 +5,8 @@ use std::num::NonZeroUsize;
 
 use smallvec::SmallVec;
 
-use crate::scheduler::arena::{BuildArena, Settled, Under};
-use crate::scope::{Facts, LoadFacts, Settlement};
+use crate::scheduler::arena::{BuildArena, Composed, Settled, Under};
+use crate::scope::{Binding, Composition, Facts, Keyed, LoadFacts, Settlement};
 use crate::values::digest::{DigestHasher, Tag};
 use crate::values::{ArenaRef, BuildBudget, SettlementKey};
 
@@ -169,4 +169,60 @@ fn a_parent_is_evicted_only_after_its_last_child() {
     // Childless now, `parent` goes at the next miss.
     missed(&mut arena, ArenaRef::ROOT, 4);
     assert!(!arena.is_live(parent));
+}
+
+#[test]
+fn a_child_settlement_keeps_its_parent_and_releases_it_last() {
+    let parent = std::rc::Rc::new(bare());
+    let child = Settled::build(
+        Under::Settlement(std::rc::Rc::clone(&parent)),
+        SmallVec::new(),
+        &LoadFacts::EMPTY,
+        |_, below: Facts<'_>, _, _| Some(Settlement::empty(below.top())),
+    )
+    .expect("a bare settlement settles");
+    // The arena's handle on the parent goes first, as an eviction of it would: the child's
+    // facts still read through to the parent's, which its owner alone keeps, and dropping the
+    // child releases the parent last.
+    drop(parent);
+    let mut layers = 0;
+    Facts::under(&LoadFacts::EMPTY, Some(child.facts())).each_term(&mut |_| layers += 1);
+    assert_eq!(layers, 0, "a bare settlement holds no term");
+    drop(child);
+}
+
+#[test]
+fn a_pinned_composition_outlives_its_last_pinner() {
+    // A composition whose facts hold a wording laid in its own bump.
+    let composition = std::rc::Rc::new(Composed::build(
+        crate::tests::composed_syntax(),
+        |syntax, bump, _| {
+            let wording = &*bump.alloc_str("held");
+            Composition::new(
+                syntax.syntax(),
+                &LoadFacts::EMPTY,
+                Keyed::EMPTY,
+                Some(wording),
+                &[],
+            )
+        },
+    ));
+    // A settlement pinning it, whose facts read that wording out of the composition's bump.
+    let pinner = Settled::build(
+        Under::Root,
+        SmallVec::from_iter([std::rc::Rc::clone(&composition)]),
+        &LoadFacts::EMPTY,
+        |_, _, pinned, _| {
+            let wording = pinned[0]
+                .refusal()
+                .expect("the composition holds a wording");
+            Some(Settlement::refused(None, Binding::EMPTY, wording))
+        },
+    )
+    .expect("a pinner settles");
+    // The arena's handle on the composition goes first; the pinner still reads it, and releases
+    // it last.
+    drop(composition);
+    assert_eq!(pinner.facts().refusal(), Some("held"));
+    drop(pinner);
 }
