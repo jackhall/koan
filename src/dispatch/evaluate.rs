@@ -337,11 +337,11 @@ fn leaf<'step, 'graph, 'here>(
         ExpressionPart::Literal(_) | ExpressionPart::QuotedExpression(_) => read(step, at, part),
         ExpressionPart::SigiledTypeExpr(_) | ExpressionPart::RecordType(_) => {
             let writer = step.writer();
-            let value = match at
-                .view
-                .facts()
-                .denoted(at.view.shape(), at.view.shape().site(part))
-            {
+            let facts = at.view.facts();
+            let value = match facts.minted(
+                types,
+                facts.denoted(at.view.shape(), at.view.shape().site(part)),
+            ) {
                 Ok(handle) => Value::Type(TypeValue::new(writer, handle, types)),
                 Err(refused) => {
                     program.error(writer, types, refused.display(program.symbols(), types))
@@ -397,14 +397,17 @@ fn ascribe<'step, 'graph, 'here>(
         unreachable!("an ascription's operand is evaluated")
     };
     let writer = step.writer();
-    let ascribed =
-        match (at.view.facts()).denoted(at.view.shape(), at.view.shape().site(&ascribed.value)) {
-            Ok(ascribed) => ascribed,
-            Err(refused) => {
-                let error = program.error(writer, types, refused.display(program.symbols(), types));
-                return finish(step, at, error);
-            }
-        };
+    let facts = at.view.facts();
+    let ascribed = match facts.minted(
+        types,
+        facts.denoted(at.view.shape(), at.view.shape().site(&ascribed.value)),
+    ) {
+        Ok(ascribed) => ascribed,
+        Err(refused) => {
+            let error = program.error(writer, types, refused.display(program.symbols(), types));
+            return finish(step, at, error);
+        }
+    };
     // `:|` views its operand; `:!` retypes it.
     if mode == Ascription::Opaque {
         debug_assert!(
@@ -551,14 +554,17 @@ fn evaluated<'step, 'graph, 'here>(
         };
         return finish(step, at, raised.raise(program, writer, &at.types));
     };
-    let returns =
-        match (at.view.facts()).denoted(at.view.shape(), at.view.shape().site(&declared.value)) {
-            Ok(returns) => returns,
-            Err(refused) => {
-                let error = program.error(writer, types, refused.display(symbols, types));
-                return finish(step, at, error);
-            }
-        };
+    let facts = at.view.facts();
+    let returns = match facts.minted(
+        types,
+        facts.denoted(at.view.shape(), at.view.shape().site(&declared.value)),
+    ) {
+        Ok(returns) => returns,
+        Err(refused) => {
+            let error = program.error(writer, types, refused.display(symbols, types));
+            return finish(step, at, error);
+        }
+    };
     let offered = offered(at, writer, &operand.value, &scratch);
     exits(&step, at, &scratch, |exit| {
         exit.value(&value);
@@ -768,7 +774,8 @@ fn call<'step, 'graph, 'here>(
                 chose(shape.segment(), shape.site_of_node(node));
             }
             let site = at.view.shape().site_of_node(node);
-            let points = (at.view.facts().selection(at.view.shape(), site))
+            let facts = at.view.facts();
+            let points = (facts.minted(&at.types, facts.selection(at.view.shape(), site)))
                 .expect("a selected use records its points");
             select::chosen(at, coordinate, &points, &arguments, &contributed, &scratch)
         }
@@ -896,11 +903,13 @@ fn contributed<'x>(
     let (facts, shape) = (at.view.facts(), at.view.shape());
     let mut contributed = BumpVec::with_capacity_in(recorded.len(), scratch);
     for each in recorded {
-        contributed.push(match facts.at_run(shape, site, *each) {
-            AtRun::Closed(closed) => Some(closed),
-            AtRun::Open => None,
-            AtRun::Refused(refused) => return Err(refused),
-        });
+        contributed.push(
+            match facts.minted(&at.types, facts.at_run(shape, site, *each)) {
+                AtRun::Closed(closed) => Some(closed),
+                AtRun::Open => None,
+                AtRun::Refused(refused) => return Err(refused),
+            },
+        );
     }
     Ok(contributed)
 }
@@ -1076,10 +1085,12 @@ fn carried_under_static<'step, 'graph, 'here>(
     let KBirth::Evaluate { node, .. } = at.birth else {
         return;
     };
+    let facts = at.view.facts();
     let expected = match node {
-        Evaluated::Part(site) => at.view.facts().value_type(shape, site),
-        Evaluated::Statement(index) => at.view.facts().statement_type(shape, index as usize),
+        Evaluated::Part(site) => facts.value_type(shape, site),
+        Evaluated::Statement(index) => facts.statement_type(shape, index as usize),
     };
+    let expected = facts.minted(&at.types, expected);
     let Some(expected) = expected else {
         return;
     };
@@ -1131,8 +1142,9 @@ fn in_place<'step, 'graph, 'here>(
             let shape = at.view.shape();
             let mention = shape.mention(shape.site(part))?;
             let read = at.view.read(mention.coordinate);
+            let facts = at.view.facts();
             let Some(InstanceRead::Solved(solution)) =
-                at.view.facts().instance_at(shape, shape.site(part))
+                facts.minted(&at.types, facts.instance_at(shape, shape.site(part)))
             else {
                 return Some(read);
             };

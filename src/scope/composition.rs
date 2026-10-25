@@ -18,9 +18,10 @@ use crate::memory::{
     BumpAllocator, BumpVec, Lays, ProgramBrand, ProgramStorage, collect, program_storage,
 };
 use crate::parse::{ExpressionPart, KExpression, ProgramNode, copied};
-use crate::type_lattice::Term;
+use crate::type_lattice::{Term, TypeDigest};
 use crate::values::ContentDigest;
 
+use super::keyed::Keyed;
 use super::records::{ComposedRoot, LoadFacts};
 use super::shape::{Located, Segment, ShapeKind};
 use super::shapes::Shapes;
@@ -82,7 +83,7 @@ pub struct Composition<'a> {
     /// Its own copy of the root syntax, which its shapes are built over.
     syntax: ProgramNode<'a>,
     facts: &'a LoadFacts<'a>,
-    terms: &'a [Term<'a>],
+    terms: Keyed<'a, (TypeDigest, Term<'a>)>,
     refusal: Option<&'a str>,
     /// Each code shape's path through the root's syntax, by segment: empty for a body that is no
     /// nested quote's.
@@ -93,7 +94,7 @@ impl<'a> Composition<'a> {
     pub fn new(
         syntax: ProgramNode<'a>,
         facts: &'a LoadFacts<'a>,
-        terms: &'a [Term<'a>],
+        terms: Keyed<'a, (TypeDigest, Term<'a>)>,
         refusal: Option<&'a str>,
         quotes: &'a [&'a [u32]],
     ) -> Self {
@@ -117,8 +118,8 @@ impl<'a> Composition<'a> {
     }
 
     /// A term of each type its facts name that a chain over the root and the agent tier does not
-    /// resolve.
-    pub fn terms(&self) -> &'a [Term<'a>] {
+    /// resolve, by the type's digest.
+    pub fn terms(&self) -> Keyed<'a, (TypeDigest, Term<'a>)> {
         self.terms
     }
 

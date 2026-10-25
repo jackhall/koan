@@ -8,7 +8,7 @@
 
 use crate::type_lattice::{DeclaredType, Interval, KType, Parametric};
 
-use super::records::{Born, Closing, Typed, UnitFacts};
+use super::records::{AtRun, Born, Closing, Typed, UnitFacts};
 use super::shape::ShapeError;
 use super::tree::{KnotNode, Leaf, NodeCapture, Tree, Unfolded, Within};
 use super::typed::{
@@ -417,27 +417,7 @@ fn error_types(error: &ShapeError<'_>, each: &mut Each<'_>) {
             first: _,
             at: _,
         } => each(guard.into()),
-        ShapeError::Type { error, at: _ } => match error {
-            Elaboration::NoSuchMember {
-                owner,
-                name: _,
-                site: _,
-            } => each(owner.into()),
-            Elaboration::TiedUnion {
-                members: (first, second),
-                site: _,
-            } => {
-                each(first.into());
-                each(second.into());
-            }
-            Elaboration::NotAType { name: _, site: _ }
-            | Elaboration::Unsupported { site: _ }
-            | Elaboration::Bound { site: _ }
-            | Elaboration::Quantified { site: _ }
-            | Elaboration::MeetOverVariable { site: _ }
-            | Elaboration::Unknown { site: _ }
-            | Elaboration::Unbound { name: _, site: _ } => {}
-        },
+        ShapeError::Type { error, at: _ } => elaboration_types(&error, each),
         ShapeError::Rebind {
             name: _,
             first: _,
@@ -495,6 +475,132 @@ fn error_types(error: &ShapeError<'_>, each: &mut Each<'_>) {
             parameter: _,
             at: _,
         } => {}
+    }
+}
+
+fn elaboration_types(error: &Elaboration, each: &mut Each<'_>) {
+    match *error {
+        Elaboration::NoSuchMember {
+            owner,
+            name: _,
+            site: _,
+        } => each(owner.into()),
+        Elaboration::TiedUnion {
+            members: (first, second),
+            site: _,
+        } => {
+            each(first.into());
+            each(second.into());
+        }
+        Elaboration::NotAType { name: _, site: _ }
+        | Elaboration::Unsupported { site: _ }
+        | Elaboration::Bound { site: _ }
+        | Elaboration::Quantified { site: _ }
+        | Elaboration::MeetOverVariable { site: _ }
+        | Elaboration::Unknown { site: _ }
+        | Elaboration::Unbound { name: _, site: _ } => {}
+    }
+}
+
+/// A fact the run reads off its [`Facts`](super::Facts): every type it names, which
+/// [`minted`](super::FactsOver::minted) makes resolve in the frame's chain.
+pub trait Named {
+    fn each_named(&self, each: &mut Each<'_>);
+}
+
+impl Named for KType {
+    fn each_named(&self, each: &mut Each<'_>) {
+        each((*self).into());
+    }
+}
+
+impl Named for Interval {
+    fn each_named(&self, each: &mut Each<'_>) {
+        interval(*self, each);
+    }
+}
+
+impl<T: Copy + Into<Parametric>> Named for Callable<'_, T> {
+    fn each_named(&self, each: &mut Each<'_>) {
+        callable(self, each);
+    }
+}
+
+impl<T: Copy + Into<Parametric>> Named for Registered<'_, T> {
+    fn each_named(&self, each: &mut Each<'_>) {
+        registered(self, each);
+    }
+}
+
+impl Named for StaticInstance<'_> {
+    fn each_named(&self, each: &mut Each<'_>) {
+        instance_types(self, each);
+    }
+}
+
+impl Named for InstanceRead<'_> {
+    fn each_named(&self, each: &mut Each<'_>) {
+        match self {
+            InstanceRead::Solved(solved) => instance_types(solved, each),
+            InstanceRead::AsIs => {}
+        }
+    }
+}
+
+impl Named for Points<'_> {
+    fn each_named(&self, each: &mut Each<'_>) {
+        points_types(self, each);
+    }
+}
+
+impl Named for Tree<'_> {
+    fn each_named(&self, each: &mut Each<'_>) {
+        tree_types(self, each);
+    }
+}
+
+impl Named for ShapeError<'_> {
+    fn each_named(&self, each: &mut Each<'_>) {
+        error_types(self, each);
+    }
+}
+
+impl Named for Elaboration {
+    fn each_named(&self, each: &mut Each<'_>) {
+        elaboration_types(self, each);
+    }
+}
+
+impl<T: Named + ?Sized> Named for &T {
+    fn each_named(&self, each: &mut Each<'_>) {
+        (**self).each_named(each);
+    }
+}
+
+impl<T: Named> Named for Option<T> {
+    fn each_named(&self, each: &mut Each<'_>) {
+        if let Some(value) = self {
+            value.each_named(each);
+        }
+    }
+}
+
+impl<T: Named, E: Named> Named for Result<T, E> {
+    fn each_named(&self, each: &mut Each<'_>) {
+        match self {
+            Ok(value) => value.each_named(each),
+            Err(error) => error.each_named(each),
+        }
+    }
+}
+
+impl<T: Named> Named for AtRun<T> {
+    fn each_named(&self, each: &mut Each<'_>) {
+        match self {
+            AtRun::Closed(value) => value.each_named(each),
+            AtRun::Refused(refused) => refused.each_named(each),
+            AtRun::Open => {}
+        }
     }
 }
 

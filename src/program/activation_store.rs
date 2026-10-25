@@ -118,6 +118,11 @@ pub(crate) fn activated<'here, L: Language>(
         true => Layer::waking_all(&bump, &scratch, facts, binding),
         false => Layer::new(&bump, &scratch, facts, binding),
     };
+    // The walk reads its base's records whole, not through the typed readers: every type they
+    // name resolves in the frame's chain before it runs.
+    facts.each_term(&mut |term| {
+        types.mint(term);
+    });
     // The base the frame's chain rests on: the load's shapes, or its composition's.
     let walked = L::facts(
         facts.shapes(),

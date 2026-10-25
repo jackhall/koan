@@ -126,8 +126,10 @@ where
         BumpVec::with_capacity_in(component.members.len(), scratch);
     annotations.extend(component.members.iter().map(|slot| {
         let annotation = shape.annotation(*slot)?;
-        (activation.facts())
-            .denoted(activation.shape(), activation.shape().site(annotation))
+        let facts = activation.facts();
+        let site = activation.shape().site(annotation);
+        facts
+            .minted(types, facts.denoted(activation.shape(), site))
             .ok()
     }));
     let mut functions = function::stage(&plan, activation, written, &bodies, types, scratch)?;

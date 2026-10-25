@@ -375,9 +375,14 @@ pub(super) fn staged<'graph, 'cell, 'x>(
 where
     'graph: 'x,
 {
-    let callable = loaded(body, registration, activation, scratch).map_err(Untieable::Type)?;
+    let callable =
+        loaded(body, registration, activation, types, scratch).map_err(Untieable::Type)?;
     // A body whose group the load solved where it is wanted is born as that instance.
-    let (ktype, instance) = match (activation.facts().born_instance(body), callable.ktype) {
+    let facts = activation.facts();
+    let (ktype, instance) = match (
+        facts.minted(types, facts.born_instance(body)),
+        callable.ktype,
+    ) {
         (Some(instance), DeclaredType::Scheme(scheme)) => {
             debug_assert!(registration.is_none(), "a registration binds its scheme");
             let (solution, instance) = solved(instance, scratch);
@@ -437,21 +442,24 @@ fn closed<T>(fact: AtRun<T>) -> Result<T, Elaboration> {
 }
 
 /// The type the load, or a layer `activation` reads, fixed for the callable of `body`, born for
-/// `registration` or for none, its runs copied into `scratch`; or why every run refuses it.
+/// `registration` or for none, resolving in `types`, its runs copied into `scratch`; or why every
+/// run refuses it.
 fn loaded<'x>(
     body: &BodyShape<'_>,
     registration: Option<&Registration<'_>>,
     activation: &KReading<'_, '_, '_>,
+    types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'x>,
 ) -> Result<Callable<'x, KType>, Elaboration> {
     let (facts, shape) = (activation.facts(), activation.shape());
     let form = body.form().expect("a callable body sits in its form");
     let site = shape.site_of_node(form);
-    let callable = closed(facts.at_run(shape, site, facts.callable_type(body)))?;
+    let callable =
+        closed(facts.minted(types, facts.at_run(shape, site, facts.callable_type(body))))?;
     let registered = match registration {
         Some(registration) => {
             let fact = facts.registered_type(shape, registration.slot);
-            let registered = closed(facts.at_run(shape, site, fact))?;
+            let registered = closed(facts.minted(types, facts.at_run(shape, site, fact)))?;
             Some(Registered {
                 shape: registered.shape,
                 quantifier_map: ShapeGroupMap(

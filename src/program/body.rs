@@ -426,7 +426,6 @@ fn ran<'graph, 'here, 'scratch>(
             inherit,
             level,
         }) => {
-            minted(&facts, types);
             let home = Some(step.memo_home());
             let mut memo = Memo::at(home, inherit);
             match frame(
@@ -485,7 +484,6 @@ fn ran<'graph, 'here, 'scratch>(
                 return step.finish(error);
             }
             if facts.composition().is_some() {
-                minted(&facts, types);
                 let member = code.as_code().expect("an `EVAL` is handed a quote's code");
                 let node = member.code().expect("a code member holds code");
                 let unbound = match unbound(member, node.shape(&step.door().0), offered, types) {
@@ -516,7 +514,8 @@ fn ran<'graph, 'here, 'scratch>(
                     // typed the code, faults the frame before any statement runs.
                     let (code, facts) = step.door();
                     let facts = facts.activated(activation.view().decided());
-                    if let Some(overlap) = facts.overlap(code.shape(activation.segment())) {
+                    let overlap = facts.overlap(code.shape(activation.segment()));
+                    if let Some(overlap) = facts.minted(types, overlap) {
                         let message = overlap.display(program.symbols(), types);
                         let error = program.error(step.writer(), &step.types(), message);
                         return step.finish(error);
@@ -599,15 +598,6 @@ fn ran<'graph, 'here, 'scratch>(
         KState::Born(_) | KState::Evaluating { .. } => return step.failed(StepError::Refused),
     };
     perform(step, runner, types)
-}
-
-/// Mint into `types` each term of the composition a frame reading `facts` rests on and of each
-/// settlement under it, so every type its facts name resolves in the frame's chain: once per frame,
-/// its binding event.
-fn minted(facts: &Facts<'_>, types: &Chain<'_, '_, '_, '_>) {
-    facts.each_term(&mut |term| {
-        types.mint(term);
-    });
 }
 
 /// A frame's or a block's entry event: each parameter, or a quote's code's capture, a unit beneath
@@ -956,7 +946,7 @@ pub fn eval<'step, 'graph, 'here>(
     // Composed code's shape lies in its composition, where its frame checks it.
     if let CodeBody::Written { segment } = node.shaped() {
         let shape = door.shape(segment);
-        if let Some(error) = facts.typing_refusal(shape) {
+        if let Some(error) = facts.minted(types, facts.typing_refusal(shape)) {
             return Err(CodeRefused::Shape(error));
         }
         if let Some(name) = unbound(code, shape, offered, types)? {
@@ -1934,7 +1924,8 @@ fn held<'graph, 'here>(
     };
     let program = runner.program;
     let writer = step.writer();
-    match at.facts().denoted(at.shape(), at.shape().site(written)) {
+    let facts = at.facts();
+    match facts.minted(types, facts.denoted(at.shape(), at.shape().site(written))) {
         Ok(annotation) => held_at(step, types, runner, written, annotation, value),
         Err(refused) => {
             let error = program.error(writer, types, refused.display(program.symbols(), types));
@@ -2218,7 +2209,10 @@ fn declared<'graph, 'here>(
         let declaration =
             (shape.declarations(*slot)).expect("a type binder records its declaration");
         let site = shape.site_of_node(declaration);
-        let handle = match facts.at_run(shape, site, facts.declared_type(shape, *slot)) {
+        let handle = match facts.minted(
+            types,
+            facts.at_run(shape, site, facts.declared_type(shape, *slot)),
+        ) {
             AtRun::Closed(handle) => handle,
             AtRun::Refused(refused) => {
                 let refused = refused.display(program.symbols(), types);

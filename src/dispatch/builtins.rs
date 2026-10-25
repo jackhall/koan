@@ -370,11 +370,11 @@ pub(super) fn run<'graph, 'here>(
             };
             // A quantified member is read at the instance the load solved at this site, or as it
             // is at a call's head.
-            match at
-                .view
-                .facts()
-                .instance_at(at.view.shape(), at.view.shape().site_of_node(node))
-            {
+            let facts = at.view.facts();
+            match facts.minted(
+                &at.types,
+                facts.instance_at(at.view.shape(), at.view.shape().site_of_node(node)),
+            ) {
                 Some(InstanceRead::AsIs) => member,
                 // Through a header at a scheme: a header at its instance over the same member.
                 Some(InstanceRead::Solved(solution))

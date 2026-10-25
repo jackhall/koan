@@ -35,13 +35,11 @@ use smallvec::SmallVec;
 
 use crate::build::{Layer, LoadStore, fold, key_of};
 use crate::knot::{Function, KValue, Knotted};
-use crate::memory::{
-    Bump, BumpBackedSet, BumpVec, ProgramBrand, Writer, bump_set, collect, resident,
-};
+use crate::memory::{Bump, BumpBackedSet, BumpVec, ProgramBrand, Writer, bump_set, resident};
 use crate::parse::ProgramNode;
 use crate::scheduler::{Ask, Asked, Seek};
 use crate::scope::{
-    Address, Binding, Bound, Composition, Facts, Level, Settlement, Shapes, Tree, Unknown,
+    Address, Binding, Bound, Composition, Facts, Keyed, Level, Settlement, Shapes, Tree, Unknown,
     quote_paths,
 };
 use crate::symbols::BinderSymbol;
@@ -351,10 +349,10 @@ pub(crate) fn settled<'a, 'graph, L: Language>(
             let mut terms = BumpVec::new_in(&scratch);
             for kt in named.iter() {
                 if !resting.resolves(*kt) && exported.insert(*kt) {
-                    terms.push(types.export(*kt, &resting, bump, &scratch));
+                    terms.push((kt.digest(), types.export(*kt, &resting, bump, &scratch)));
                 }
             }
-            settlement.termed(collect(bump, terms.iter().copied()))
+            settlement.termed(Keyed::sorted(bump, &mut terms))
         }
         Err(error) => {
             let mut text = Text(BumpVec::new_in(&scratch));
@@ -425,14 +423,14 @@ pub(crate) fn composed<'a, 'graph, L: Language>(
     let mut terms = BumpVec::new_in(&scratch);
     for kt in named.iter() {
         if !resting.resolves(*kt) && exported.insert(*kt) {
-            terms.push(types.export(*kt, &resting, bump, &scratch));
+            terms.push((kt.digest(), types.export(*kt, &resting, bump, &scratch)));
         }
     }
     let quotes = quote_paths(writer, &scratch, shapes, syntax.reference());
     Composition::new(
         syntax,
         facts,
-        collect(bump, terms.iter().copied()),
+        Keyed::sorted(bump, &mut terms),
         refusal,
         quotes,
     )

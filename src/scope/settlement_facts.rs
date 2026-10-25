@@ -19,9 +19,10 @@
 //! arena node holds; it binds only the names its event bound, and a read of any other falls below.
 
 use crate::memory::{Bump, BumpAllocator, BumpVec, Lays, resident};
-use crate::type_lattice::Term;
+use crate::type_lattice::{Term, TypeDigest};
 
 use super::facts::{Binding, Bound, Unknown};
+use super::keyed::Keyed;
 use super::records::Records;
 use super::relay::Relay;
 use super::shapes::Shapes;
@@ -33,8 +34,8 @@ pub struct Settlement<'a> {
     parent: Option<&'a Settlement<'a>>,
     records: Records<'a>,
     refusal: Option<&'a str>,
-    /// Empty under the root.
-    terms: &'a [Term<'a>],
+    /// By the type's digest. Empty under the root.
+    terms: Keyed<'a, (TypeDigest, Term<'a>)>,
 }
 
 impl<'a> Settlement<'a> {
@@ -53,7 +54,7 @@ impl<'a> Settlement<'a> {
             parent,
             records: Records::of(lay, scratch, shapes, None, binding, &units, &closings),
             refusal: None,
-            terms: &[],
+            terms: Keyed::EMPTY,
         }
     }
 
@@ -63,7 +64,7 @@ impl<'a> Settlement<'a> {
             parent,
             records: Records::bare(parent.map_or(Binding::EMPTY, |parent| parent.binding())),
             refusal: None,
-            terms: &[],
+            terms: Keyed::EMPTY,
         }
     }
 
@@ -77,18 +78,19 @@ impl<'a> Settlement<'a> {
             parent,
             records: Records::bare(binding),
             refusal: Some(refusal),
-            terms: &[],
+            terms: Keyed::EMPTY,
         }
     }
 
-    /// These facts beside `terms`, a term of each type their records name past the agent tier.
-    pub fn termed(self, terms: &'a [Term<'a>]) -> Self {
+    /// These facts beside `terms`, a term of each type their records name past the agent tier,
+    /// by the type's digest.
+    pub fn termed(self, terms: Keyed<'a, (TypeDigest, Term<'a>)>) -> Self {
         Settlement { terms, ..self }
     }
 
-    /// A term of each type its records name that the root and the agent tier do not hold: empty
-    /// under the root.
-    pub fn terms(&self) -> &'a [Term<'a>] {
+    /// A term of each type its records name that the root and the agent tier do not hold, by the
+    /// type's digest: empty under the root.
+    pub fn terms(&self) -> Keyed<'a, (TypeDigest, Term<'a>)> {
         self.terms
     }
 

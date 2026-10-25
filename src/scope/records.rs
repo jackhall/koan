@@ -20,11 +20,12 @@ use crate::memory::{BumpAllocator, BumpVec, Lays, collect, resident};
 use crate::parse::{ExpressionPart, ProgramNode};
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::{DeclaredType, Interval, KType, Parametric, Term};
-use crate::values::{ContentDigest, Weight};
+use crate::values::{Chain, ContentDigest, Weight};
 
 use super::composition::Composition;
 use super::facts::{Address, Binding, Bound, Frontier, UnitId, Unknown};
 use super::keyed::Keyed;
+use super::record_types::Named;
 use super::relay::Relay;
 use super::settlement_facts::{Activated, Settlement};
 use super::shape::{
@@ -433,23 +434,51 @@ impl<'step> Facts<'step> {
         self.0.top
     }
 
+    /// `fact`, read off these facts, with every type it names resolving in `types`, the frame's
+    /// chain: each the chain lacks is minted from its term, found by digest in the composition's
+    /// table and then each settlement's. A frame mints only what it reads, once per tier the chain
+    /// interns in. Over the load and the settlements under the root, every type a fact names lies
+    /// in the root or the agent tier already.
+    pub fn minted<T: Named>(&self, types: &Chain<'_, '_, '_, '_>, fact: T) -> T {
+        let Some(composition) = self.0.composition else {
+            return fact;
+        };
+        fact.each_named(&mut |kt| {
+            if types.resolves(kt) {
+                return;
+            }
+            #[cfg(test)]
+            TERM_PROBES.with(|probes| probes.set(probes.get() + 1));
+            let digest = kt.digest();
+            let term = composition.terms().get(digest).or_else(|| {
+                std::iter::successors(self.0.top, |layer| layer.parent())
+                    .find_map(|layer| layer.terms().get(digest))
+            });
+            match term {
+                Some((_, term)) => types.mint(term),
+                None => debug_assert!(false, "a type a fact names has a term"),
+            }
+        });
+        fact
+    }
+
     /// Hand `each` every term a frame reading these facts mints so every type they name resolves
     /// in its chain, in the order a term's leaves resolve: the composition's, then each
     /// settlement's from the outermost. None over the load.
     pub fn each_term(&self, each: &mut dyn FnMut(&'step Term<'step>)) {
-        let terms = |composition: &'step Composition<'step>| composition.terms();
-        self.0
-            .composition
-            .map_or(&[][..], terms)
-            .iter()
-            .for_each(&mut *each);
+        #[cfg(test)]
+        let each = &mut |term| {
+            TERM_PROBES.with(|probes| probes.set(probes.get() + 1));
+            each(term)
+        };
+        let terms = |composition: &'step Composition<'step>| composition.terms().entries();
+        (self.0.composition.map_or(&[][..], terms).iter()).for_each(|(_, term)| each(term));
         let mut settlements: smallvec::SmallVec<[&Settlement<'step>; 4]> =
             std::iter::successors(self.0.top, |layer| layer.parent()).collect();
         settlements.reverse();
-        settlements
-            .iter()
-            .flat_map(|layer| layer.terms())
-            .for_each(each);
+        (settlements.iter())
+            .flat_map(|layer| layer.terms().entries())
+            .for_each(|(_, term)| each(term));
     }
 
     /// `fact`, a fact of `shape` read at `site` where the cell runs: closed, refused at every run,
@@ -1682,4 +1711,11 @@ thread_local! {
 #[cfg(test)]
 pub(crate) fn rigid_at_run() {
     RIGID_AT_RUN.with(|count| count.set(count.get() + 1));
+}
+
+#[cfg(test)]
+thread_local! {
+    /// How many terms the run probed: each a frame's read found its chain lacking, and each a
+    /// walk minted whole before it ran. Tests reset it.
+    pub(crate) static TERM_PROBES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }

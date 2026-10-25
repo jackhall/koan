@@ -54,7 +54,7 @@ pub(crate) mod tests;
 
 pub(crate) use records::RecordSource;
 #[cfg(test)]
-pub(crate) use records::{RIGID_AT_RUN, rigid_at_run};
+pub(crate) use records::{RIGID_AT_RUN, TERM_PROBES, rigid_at_run};
 pub(crate) use shape::IMPLICIT;
 pub(crate) use signature::pair_label;
 pub(crate) use spelling::{PathSpelling, SpelledRoot, path_spelling};
@@ -68,6 +68,7 @@ pub use groups::{BuiltinGroup, GroupFrame, is_equal, is_equality, is_unequal};
 pub use header::{HalfHeader, RegionHeader};
 pub use keyed::{Keyed, KeyedEntry};
 pub use memo::{DecisionMemo, Entry, EntryFamily, EventSite, MemoFamily, MemoKey, extended};
+pub use record_types::Named;
 pub use records::{
     AtRun, BodyAt, BodyRef, Born, Closing, ComposedRoot, Deps, DepsGathering, Facts, FactsOver,
     Folds, Layers, LoadFacts, LoadRecords, NamedVariable, SiteDeps, Typed, UnitFacts, Written,

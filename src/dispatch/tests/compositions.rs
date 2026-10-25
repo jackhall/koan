@@ -222,8 +222,49 @@ fn a_derived_type_under_a_composition_is_minted_once_per_binding_event() {
     };
     let (once, twice) = (minted(1), minted(2));
     assert!(once > 0, "the record over `$x` is a term the frame mints");
-    // Each `EVAL` is its own binding event, and mints the composition's terms once.
+    // Each `EVAL` is its own binding event, whose activation walk mints the composition's terms once.
     assert_eq!(twice, 2 * once);
+}
+
+/// What the calls of `f`, a function composed code returns beside `unused` more functions whose
+/// types are over the `$` name it splices too, left once `calls` of them ran: the types their
+/// frames found their chains lacking, and the nodes the run laid.
+fn lazily(unused: usize, calls: usize) -> (usize, usize) {
+    let mut code = String::from("#(");
+    for at in 0..unused {
+        code.push_str(&format!(
+            "(LET u{at} = (FN :{{s :Str}} -> Any = #((LET r :{{a{at} :($Alias)}} = {{a{at} = 1}}) (r)))) "
+        ));
+    }
+    code.push_str("(FN :{n :Number} -> Any = #((LET r :{b :($Alias)} = {b = n}) (r))))");
+    let source = format!(
+        "LET Alias = Number\nLET q = {code}\nLET f = (EVAL (COMPOSE q) -> Any)\n{}",
+        "PRINT (f {n = 1})\n".repeat(calls)
+    );
+    crate::scope::TERM_PROBES.with(|probes| probes.set(0));
+    let laid = ADOPT_LAID.with(Cell::get);
+    let (printed, tiers, _) = composed(&source);
+    assert_eq!(printed, vec!["{b = 1}"; calls].join("\n"));
+    assert_eq!(tiers.composed, 1);
+    (
+        crate::scope::TERM_PROBES.with(Cell::get),
+        ADOPT_LAID.with(Cell::get) - laid,
+    )
+}
+
+#[test]
+fn a_frame_under_a_composition_probes_no_term_it_does_not_read() {
+    // A call's frame mints what its reads name and nothing else, so a composition naming eight
+    // more types costs each call nothing more: the `EVAL`'s activation walk mints them once.
+    let per_call = |unused: usize| {
+        let (once, twice) = (lazily(unused, 1), lazily(unused, 2));
+        (twice.0 - once.0, twice.1 - once.1)
+    };
+    assert!(
+        lazily(8, 1).0 > lazily(0, 1).0,
+        "the eight are terms the `EVAL`'s walk mints"
+    );
+    assert_eq!(per_call(8), per_call(0));
 }
 
 /// What one run of `source` under the smallest budget printed, with how many compositions it built.
