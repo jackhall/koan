@@ -467,9 +467,10 @@ where
     /// The agent chain, the warm tier of a cell under a settlement: the frozen load, then the
     /// agent tier, which it writes and which outlives every hop under the settlement. What an
     /// invariant site's types are adopted into, so the next hop finds them. Paired to the region
-    /// writer; `None` for a cell under the root, whose own scratch is its warm tier.
+    /// writer; `None` for a cell under the root, whose own scratch is its warm tier, and for a
+    /// cell whose chain rests on a composition, which rests nothing in the agent tier.
     pub fn agent_types(&self) -> Option<Chain<'graph, 'here, 'graph, 'step>> {
-        self.under_settlement().then(|| self.tiers.resting())
+        (self.under_settlement() && self.root.is_none()).then(|| self.tiers.resting())
     }
 
     /// Ask for one child, and take back the slot of this step's run it will report to. The drain

@@ -101,6 +101,18 @@ EVAL (COMPOSE q) -> Any",
 }
 
 #[test]
+fn a_composed_invariant_site_adopts_nothing_into_the_agent_tier() {
+    let (printed, tiers, _) = composed(
+        "LET q = #((SIG Hold FOR ALL #[Elt] = #[(VAL held :Elt)]) (MODULE m = ((LET held = 1))) \
+         (LET peek = (FN :{m :Hold} -> Str = #((LET v = (m :| Hold)) (\"x\")))) \
+         (PRINT (peek {m = m})) (PRINT (peek {m = m})))
+EVAL (COMPOSE q) -> Any",
+    );
+    assert_eq!(printed, "x\nx");
+    assert_eq!(tiers.agent, 0);
+}
+
+#[test]
 fn a_derived_type_under_a_composition_is_minted_once_per_binding_event() {
     let minted = |evals: usize| {
         let source = format!(
