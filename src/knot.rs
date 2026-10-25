@@ -118,7 +118,7 @@ fn stamped<'graph, 'cell>(
 /// builder capture its code digest does not name — every one but a read of the program's top level
 /// — and each type capture the body's contract names. What a closure's or a module's content
 /// composes over its code.
-fn composed<'l, L>(body: &BodyRef<'_>, links: &'l [L]) -> impl Iterator<Item = (usize, &'l L)> {
+fn composed<'l, L>(body: &BodyRef<'_, '_>, links: &'l [L]) -> impl Iterator<Item = (usize, &'l L)> {
     let body = *body;
     links
         .iter()

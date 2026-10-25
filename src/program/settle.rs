@@ -68,9 +68,7 @@ pub fn seek<'graph>(
     };
     Seek {
         parent: function.map_or(ArenaRef::ROOT, |function| function.closure().build()),
-        root: function
-            .and_then(|function| function.composed())
-            .map(|(_, root)| root),
+        root: function.and_then(|function| function.body().root),
         settlement: settlement(birth, code, facts, types, region),
     }
 }
@@ -100,7 +98,7 @@ fn settlement<'graph>(
     let (callee, arguments) = (*callee, *arguments);
     let function = called_function(callee)?;
     // A body of composed code lies in its composition's shapes, where nothing settles yet.
-    if function.composed().is_some() {
+    if function.body().root.is_some() {
         return None;
     }
     let shape = code.shape(function.body().segment);

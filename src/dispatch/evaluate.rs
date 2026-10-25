@@ -1063,7 +1063,7 @@ fn called<'step, 'graph, 'here>(
     let keyed = || {
         called_function(callee).is_some_and(|function| {
             let (facts, segment) = (at.view.facts(), function.body().segment);
-            function.composed().is_none()
+            function.body().root.is_none()
                 && facts.settlement_keys(at.code.shape(segment)).is_some()
                 && !facts.shapes().escapes(segment)
                 && at.within.build != function.closure().build()

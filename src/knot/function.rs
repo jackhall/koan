@@ -4,7 +4,7 @@
 //! digest, its instance's solution, and the digest of each capture the code digest does not name
 //! ([`Function::content`]). A function of written code points at the load's record of its body;
 //! one born of code composed at run time keeps a copy of its composition's record in its typing
-//! record, beside the root of that code, which finds or rebuilds the composition — so the node
+//! record, the root of that code on it, which finds or rebuilds the composition — so the knot node
 //! stays 64 bytes and nothing it holds points into an arena node.
 //!
 //! Beside it, the staging a [tie](super::tie()) does for a function node. Everything a node needs
@@ -25,8 +25,7 @@ use crate::elaborate::{bound_path, callable_type};
 use crate::memory::{BumpAllocator, BumpVec, Edge, KnotPlan, Writer, resident};
 use crate::scope::{Activated, StaticInstance, solutions};
 use crate::scope::{
-    BodyAt, BodyRef, BodyShape, ClosureBindings, ComposedRoot, Registration, ShapeKind, Site,
-    Written,
+    BodyAt, BodyRef, BodyShape, ClosureBindings, Registration, ShapeKind, Site, Written,
 };
 use crate::scope::{Callable, FunctionGroupMap, ParameterBinding, Registered, ShapeGroupMap};
 use crate::symbols::{BinderSymbol, TypeSymbol};
@@ -53,7 +52,7 @@ pub struct Function<'graph, 'cell, X> {
     typing: Option<&'cell Typing<'graph, 'cell>>,
     /// The body it runs, beside which of its type captures its content composes: the load's, or
     /// `None` for a body of composed code, whose record its typing record holds.
-    body: Option<&'graph BodyRef<'graph>>,
+    body: Option<&'graph BodyRef<'graph, 'graph>>,
     closure: &'cell ClosureBindings<'cell, X>,
     /// What rebuilding the whole knot this node sits in writes, the same on every node; the root
     /// node's also carries the knot's memo bits.
@@ -66,7 +65,7 @@ impl<'graph, 'cell, X> Function<'graph, 'cell, X> {
     pub(super) fn new(
         ktype: DeclaredType<KType>,
         typing: Option<&'cell Typing<'graph, 'cell>>,
-        body: Option<&'graph BodyRef<'graph>>,
+        body: Option<&'graph BodyRef<'graph, 'graph>>,
         closure: &'cell ClosureBindings<'cell, X>,
         knot_weight: Weight,
     ) -> Self {
@@ -129,23 +128,17 @@ impl<'graph, 'cell, X> Function<'graph, 'cell, X> {
         self.quantifier_map().get(name)
     }
 
-    /// The body as the function holds it: the segment of the shape a call activates, and the
-    /// closure slots its content composes.
-    pub fn body(&self) -> &'cell BodyRef<'cell>
+    /// The body as the function holds it: the segment of the shape a call activates, the closure
+    /// slots its content composes, and the root of the composed code it lies in, if any.
+    pub fn body(&self) -> &'cell BodyRef<'graph, 'cell>
     where
         'graph: 'cell,
     {
-        match (self.body, self.composed()) {
-            (Some(body), _) => body,
-            (None, Some((body, _))) => body,
-            (None, None) => unreachable!("a function holds its body's record, or its typing does"),
+        match self.body {
+            Some(body) => body,
+            None => (self.typing.and_then(|typing| typing.composed))
+                .expect("a function holds its body's record, or its typing does"),
         }
-    }
-
-    /// The body's record of a function born of code composed at run time, beside that code's root,
-    /// which finds or rebuilds the composition its shape lies in.
-    pub fn composed(&self) -> Option<(&'cell BodyRef<'cell>, ComposedRoot<'graph>)> {
-        self.typing.and_then(|typing| typing.composed)
     }
 
     /// The closure bindings a call's activation reads its captures through.
@@ -178,7 +171,7 @@ impl<'graph, 'cell, X> Function<'graph, 'cell, X> {
                 self.registered(),
                 self.instance().unwrap_or(&[]),
                 self.typing.and_then(|typing| typing.declared),
-                self.composed(),
+                self.body.is_none().then(|| self.body()),
             ),
             body: self.body,
             closure,
@@ -228,21 +221,21 @@ pub struct Typing<'graph, 'cell> {
     /// The signature the body was checked against, where the function was born at an annotation
     /// its own type differs from.
     declared: Option<DeclaredType<KType>>,
-    /// The body's record of a function born of code composed at run time, which a copy lays again,
-    /// beside that code's root.
-    composed: Option<(&'cell BodyRef<'cell>, ComposedRoot<'graph>)>,
+    /// The body's record of a function born of code composed at run time, its root on it, which a
+    /// copy lays again.
+    composed: Option<&'cell BodyRef<'graph, 'cell>>,
 }
 
 impl<'graph, 'cell> Typing<'graph, 'cell> {
-    /// `map`, `registered`, `instance`, `declared` and a body of composed code's record beside its
-    /// root written into the region `writer` fills, or `None` where the function has none of them.
+    /// `map`, `registered`, `instance`, `declared` and a body of composed code's record written
+    /// into the region `writer` fills, or `None` where the function has none of them.
     pub(super) fn laid_down(
         writer: Writer<'cell, '_>,
         map: FunctionGroupMap<'_>,
         registered: Option<Registered<'_, KType>>,
         instance: &[KType],
         declared: Option<DeclaredType<KType>>,
-        composed: Option<(&BodyRef<'_>, ComposedRoot<'graph>)>,
+        composed: Option<&BodyRef<'graph, '_>>,
     ) -> Option<&'cell Typing<'graph, 'cell>> {
         let empty = map.is_empty() && registered.is_none() && instance.is_empty();
         (!empty || declared.is_some() || composed.is_some()).then(|| {
@@ -268,7 +261,7 @@ impl<'graph, 'cell> Typing<'graph, 'cell> {
                     registered,
                     instance: writer.fill(instance.len(), |at| instance[at]),
                     declared,
-                    composed: composed.map(|(body, root)| (BodyAt::laid(writer, body), root)),
+                    composed: composed.map(|body| body.laid(writer, body.root)),
                 },
             )
         })
@@ -280,14 +273,12 @@ impl<'graph, 'cell> Typing<'graph, 'cell> {
         registered: Option<&Registered<'_, KType>>,
         instance: usize,
         declared: bool,
-        composed: Option<&BodyRef<'_>>,
+        composed: Option<&BodyRef<'_, '_>>,
     ) -> Weight {
         if len == 0 && registered.is_none() && instance == 0 && !declared && composed.is_none() {
             return Weight::ZERO;
         }
-        let composed = composed.map_or(Weight::ZERO, |body| {
-            Weight::flat::<BodyRef<'_>>().plus(Weight::run::<bool>(body.composes.len()))
-        });
+        let composed = composed.map_or(Weight::ZERO, BodyRef::weight);
         let (map, names) = registered.map_or((0, 0), |registered| {
             let names = match registered.parameters {
                 ParameterBinding::Named(names) => names.len(),
@@ -306,10 +297,8 @@ impl<'graph, 'cell> Typing<'graph, 'cell> {
 
 /// A function node, read and not yet written.
 pub(super) struct Staged<'graph, 'cell, 'x> {
-    /// Its body, any copy in scratch until the tie lays the node, beside the root of the composed
-    /// code it is born of.
+    /// Its body, a composed record's copy in scratch until the tie lays the node.
     pub body: BodyAt<'graph, 'x>,
-    pub root: Option<ComposedRoot<'graph>>,
     pub ktype: DeclaredType<KType>,
     /// The name-keyed quantifier map the elaborator handed back, scratch-lived until the tie lays
     /// it into the region.
@@ -330,7 +319,7 @@ pub(super) struct Staged<'graph, 'cell, 'x> {
 impl<'graph, 'cell> Staged<'graph, 'cell, '_> {
     /// The load's record of its body, which the function holds itself: `None` for a body of
     /// composed code, whose record [`laid_down`](Self::laid_down) copies into its closure.
-    pub(super) fn written_body(&self) -> Option<&'graph BodyRef<'graph>> {
+    pub(super) fn written_body(&self) -> Option<&'graph BodyRef<'graph, 'graph>> {
         match self.body {
             BodyAt::Written(body) => Some(body),
             BodyAt::Composed(_) => None,
@@ -351,10 +340,7 @@ impl<'graph, 'cell> Staged<'graph, 'cell, '_> {
     ) {
         let composed = match self.body {
             BodyAt::Written(_) => None,
-            BodyAt::Composed(body) => {
-                let root = (self.root).expect("composed code's body is staged beside its root");
-                Some((body, root))
-            }
+            BodyAt::Composed(body) => Some(body),
         };
         let closure = ClosureBindings::of(writer, &self.captures, build, self.decided);
         let typing = Typing::laid_down(
@@ -370,7 +356,7 @@ impl<'graph, 'cell> Staged<'graph, 'cell, '_> {
             self.registered.as_ref(),
             self.instance.len(),
             self.declared.is_some(),
-            composed.map(|(body, _)| body),
+            composed,
         ));
         (closure, typing, weight)
     }
@@ -422,7 +408,6 @@ where
     let captures = ClosureBindings::read_captures(body, activation, scratch, edge);
     Ok(Staged {
         body: written.body(scratch, body.segment()),
-        root: written.root(),
         ktype,
         quantifier_map: callable.quantifier_map,
         registered: callable.registered,
@@ -748,7 +733,14 @@ pub fn instance<'graph, 'cell>(
         function.closure().decided(),
     );
     let map = function.quantifier_map();
-    let typing = Typing::laid_down(writer, map, None, solution, None, function.composed());
+    let typing = Typing::laid_down(
+        writer,
+        map,
+        None,
+        solution,
+        None,
+        function.body.is_none().then(|| function.body()),
+    );
     let knot_weight = Weight::flat::<usize>()
         .plus(closure.weight())
         .plus(Typing::weight(
@@ -756,7 +748,7 @@ pub fn instance<'graph, 'cell>(
             None,
             solution.len(),
             false,
-            function.composed().map(|(body, _)| body),
+            function.body.is_none().then(|| function.body()),
         ))
         .plus(Weight::flat::<Node<'graph, 'cell>>());
     let knot = KnotPlan::new(1).tie(writer, |_| {

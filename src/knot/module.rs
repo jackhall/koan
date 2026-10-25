@@ -175,7 +175,7 @@ impl<'graph, 'cell> Module<'graph, 'cell> {
     pub fn pending(
         &self,
     ) -> Option<(
-        &'cell BodyRef<'cell>,
+        &'cell BodyRef<'graph, 'cell>,
         &'cell ClosureBindings<'cell, Knotted<'graph, 'cell>>,
     )> {
         (self.content.body)

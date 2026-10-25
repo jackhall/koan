@@ -18,8 +18,9 @@
 
 use crate::memory::{BumpAllocator, BumpVec, Lays, collect, resident};
 use crate::parse::{ExpressionPart, ProgramNode};
+use crate::symbols::BinderSymbol;
 use crate::type_lattice::{DeclaredType, Interval, KType, Parametric};
-use crate::values::ContentDigest;
+use crate::values::{ContentDigest, Weight};
 
 use super::composition::Composition;
 use super::facts::{Address, Binding, Bound, Frontier, UnitId, Unknown};
@@ -649,21 +650,16 @@ pub struct Written<'graph, 'step> {
 }
 
 /// A body's record as a value born of it holds it: the load's, by pointer, or one of composed code,
-/// copied into the value's region.
+/// its root included, copied into the value's region.
 #[derive(Clone, Copy)]
 pub enum BodyAt<'graph, 'cell> {
-    Written(&'graph BodyRef<'graph>),
-    Composed(&'cell BodyRef<'cell>),
+    Written(&'graph BodyRef<'graph, 'graph>),
+    Composed(&'cell BodyRef<'graph, 'cell>),
 }
 
 impl<'graph: 'cell, 'cell> BodyAt<'graph, 'cell> {
-    /// `body`, of composed code, copied through `lay`.
-    pub fn laid(lay: impl Lays<'cell>, body: &BodyRef<'_>) -> &'cell BodyRef<'cell> {
-        laid_body(lay, body)
-    }
-
     /// The record itself.
-    pub fn get(self) -> &'cell BodyRef<'cell> {
+    pub fn get(self) -> &'cell BodyRef<'graph, 'cell> {
         match self {
             BodyAt::Written(body) => body,
             BodyAt::Composed(body) => body,
@@ -678,20 +674,9 @@ impl<'graph: 'cell, 'cell> BodyAt<'graph, 'cell> {
     {
         match self {
             BodyAt::Written(body) => BodyAt::Written(body),
-            BodyAt::Composed(body) => BodyAt::Composed(laid_body(lay, body)),
+            BodyAt::Composed(body) => BodyAt::Composed(body.laid(lay, body.root)),
         }
     }
-}
-
-/// `body` copied through `lay`.
-pub(super) fn laid_body<'to>(lay: impl Lays<'to>, body: &BodyRef<'_>) -> &'to BodyRef<'to> {
-    resident(
-        lay,
-        BodyRef {
-            composes: collect(lay, body.composes.iter().copied()),
-            ..*body
-        },
-    )
 }
 
 impl<'graph, 'step> Written<'graph, 'step> {
@@ -720,16 +705,22 @@ impl<'graph, 'step> Written<'graph, 'step> {
         self.composed.map(|(root, _)| root)
     }
 
-    /// The body at `segment`, as a value born of it holds it, any copy laid through `lay`.
+    /// The body at `segment`, as a value born of it holds it, a composed record laid through `lay`
+    /// beside its root.
     pub fn body<'cell>(&self, lay: impl Lays<'cell>, segment: Segment) -> BodyAt<'graph, 'cell>
     where
         'graph: 'cell,
     {
         match self.composed {
             None => BodyAt::Written(&self.load.laid(segment).body),
-            Some((_, composition)) => {
-                BodyAt::Composed(laid_body(lay, &composition.facts().0.laid(segment).body))
-            }
+            Some((root, composition)) => BodyAt::Composed(
+                composition
+                    .facts()
+                    .0
+                    .laid(segment)
+                    .body
+                    .laid(lay, Some(root)),
+            ),
         }
     }
 
@@ -752,14 +743,21 @@ impl<'graph, 'step> Written<'graph, 'step> {
 /// A body as a value born of it holds it: the base whose shape table holds it, by digest, its
 /// segment there, its code digest, and which of its closure slots its content composes — its
 /// builder captures but those reading the program's top level, then the type captures its contract
-/// names. A value's identity, digest and equality read those alone. One pointer, so a value holds
-/// it in place of its shape's.
+/// names. A value's identity, digest and equality read those alone. Beside them, what a caller
+/// needs of a body it did not shape: the slots a call's settlement keys on, by name, and the root
+/// of the composed code it lies in, which finds or rebuilds its composition. One pointer, so a
+/// value holds it in place of its shape's.
 #[derive(Clone, Copy)]
-pub struct BodyRef<'a> {
+pub struct BodyRef<'graph, 'a> {
     pub base: ContentDigest,
     pub segment: Segment,
     pub code: ContentDigest,
     pub composes: &'a [bool],
+    /// The parameter slots a call's settlement keys on, beside their names: `None` where a call
+    /// seeks nothing.
+    pub keys: Option<&'a [(Slot, BinderSymbol)]>,
+    /// `None` for written code.
+    pub root: Option<ComposedRoot<'graph>>,
 }
 
 /// The root of code composed at run time: its syntax, which lives in program storage until code
@@ -770,10 +768,42 @@ pub struct ComposedRoot<'a> {
     pub digest: ContentDigest,
 }
 
-impl BodyRef<'_> {
+impl<'graph> BodyRef<'graph, '_> {
     /// Whether the closure slot `at` composes: one past the slots recorded does.
     pub fn composed(&self, at: usize) -> bool {
         self.composes.get(at).copied().unwrap_or(true)
+    }
+
+    /// This record copied through `lay` beside `root`.
+    pub fn laid<'root, 'to>(
+        &self,
+        lay: impl Lays<'to>,
+        root: Option<ComposedRoot<'root>>,
+    ) -> &'to BodyRef<'root, 'to> {
+        resident(
+            lay,
+            BodyRef {
+                base: self.base,
+                segment: self.segment,
+                code: self.code,
+                composes: collect(lay, self.composes.iter().copied()),
+                keys: self.keys.map(|keys| collect(lay, keys.iter().copied())),
+                root,
+            },
+        )
+    }
+
+    /// What laying a copy of this record costs a rebuild: nothing for written code, whose record
+    /// the load holds.
+    pub fn weight(&self) -> Weight {
+        match self.root {
+            None => Weight::ZERO,
+            Some(_) => Weight::flat::<BodyRef<'_, '_>>()
+                .plus(Weight::run::<bool>(self.composes.len()))
+                .plus(Weight::run::<(Slot, BinderSymbol)>(
+                    self.keys.map_or(0, <[_]>::len),
+                )),
+        }
     }
 }
 
@@ -814,7 +844,7 @@ pub(super) struct Records<'graph> {
 /// One body as a [`Records`] load lays it.
 #[derive(Clone, Copy)]
 pub(crate) struct Laid<'graph> {
-    body: BodyRef<'graph>,
+    body: BodyRef<'graph, 'graph>,
     captures: &'graph [Coordinate],
     folds: Option<Folds<'graph>>,
 }
@@ -935,6 +965,10 @@ impl<'graph> LoadFacts<'graph> {
                     segment: shape.segment(),
                     code: shape.code_digest(),
                     composes: composes(lay, shape, contract, layout.len()),
+                    keys: folds.and_then(|folds| folds.keys).map(|keys| {
+                        collect(lay, keys.iter().map(|slot| (*slot, shape.slot_name(*slot))))
+                    }),
+                    root: None,
                 },
                 captures: collect(lay, layout.iter().map(|(_, coordinate)| *coordinate)),
                 folds,
