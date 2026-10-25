@@ -5,13 +5,14 @@
 //! An [`Ask`] is what a miss settles: a body and what each name its key lists binds. A [`Level`]
 //! is one settlement's whole request — its key, its ask, the types its binding carries, and each
 //! module of other composed code it pins, whose root rebuilds that code's composition. A level is
-//! laid once per frame, in the region the frame writes, and only for a frame born under the
-//! settlement it sought whose callee's body can birth a callable: a `Shares` frame's asker lays it
-//! at the call, into the birth; a `Fresh` frame's region does not exist yet, so its asker hands the
-//! request by value ([`Sought`]) to the drain, which hands it back to the frame's first step to
-//! lay. The stamp of a callable born in the frame is that level over the stamp of the frame's
-//! callee ([`Stamp`]), two words a closure holds by value, so a birth lays nothing for it. Neither is content: a closure's digest and equality skip
-//! its stamp, as they skip its arena node.
+//! laid once per frame, in the region the frame writes, and only for a frame that seeks a
+//! settlement and whose callee's body can birth a callable: a `Shares` frame's asker lays it at
+//! the call, into the birth; a `Fresh` frame's region does not exist yet, so its asker hands the
+//! request by value ([`Sought`]) to the drain, which hands it back to the frame's first step to lay
+//! once the frame is born under that settlement. The stamp of a callable born in the frame is that
+//! level over the stamp of the frame's callee ([`Stamp`]), two words a closure holds by value, so a
+//! birth lays nothing for it. Neither is content: a closure's digest and equality skip its stamp,
+//! as they skip its arena node.
 
 use smallvec::SmallVec;
 

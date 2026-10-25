@@ -589,12 +589,12 @@ where
     /// The arena node a frame `seek` asks for runs under, whether it was a miss, the composition
     /// its first step must rebuild, and — where the seek hands it back and the frame runs under the
     /// settlement it sought — the request its first step lays a level from: the parent itself for a
-    /// seek with no key; else the
-    /// settlement under the parent the key names, stamped, or built — its binding's image relayed
-    /// into the agent tier under the root, nothing relayed under a composition. The root, cold, for
-    /// a parent that is no longer live. A miss under a composition binding a module of another
-    /// composed code pins that code's composition, where no layer below holds the module's tree;
-    /// where that composition is gone, the frame is born under the parent wanting it rebuilt.
+    /// seek with no key; else the settlement under the parent the key names, stamped, or built —
+    /// its binding's image relayed into the agent tier under the root, nothing relayed under a
+    /// composition. The root, cold, for a parent that is no longer live. A miss under a composition
+    /// binding a module of another composed code pins that code's composition, where no layer below
+    /// holds the module's tree; where that composition is gone, the frame is born under the parent
+    /// wanting it rebuilt.
     fn seek(&mut self, seek: Seek<'graph>) -> Placing {
         let Seek {
             parent,

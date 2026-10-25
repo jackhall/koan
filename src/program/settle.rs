@@ -7,11 +7,12 @@
 //! name's is the call's solution at it, digested as the type value the frame binds: carried by a
 //! keyworded call, held by an instance, and solved here, on the asker's region, for a call by
 //! name. Where the callee's body can birth a callable, the request is laid as the frame's
-//! [level] — by a `Shares` frame's asker at the call, or by a `Fresh` frame's first step
-//! from the request the drain hands it back — which a callable born under the settlement records
-//! in its [stamp](crate::scope::Stamp), so a call of it replays the chain where it was evicted. A call past a header or a barrier of a body keyed on a `FOR ALL` name seeks no
-//! settlement, since its frame solves only once the arguments are retyped or have crossed, unless
-//! it calls an instance, whose solution holds wherever it is called from.
+//! [level] — by a `Shares` frame's asker at the call, or by a `Fresh` frame's first step from the
+//! request the drain hands it back — which a callable born under the settlement records in its
+//! [stamp](crate::scope::Stamp), so a call of it replays the chain where it was evicted. A call
+//! past a header or a barrier of a body keyed on a `FOR ALL` name seeks no settlement, since its
+//! frame solves only once the arguments are retyped or have crossed, unless it calls an instance,
+//! whose solution holds wherever it is called from.
 //!
 //! A keyed name holds **load content** where the load could have declared it: a type whose handle
 //! rests in the root, a type value naming one, or a module whose content digest names a closed tree

@@ -431,8 +431,24 @@ closure bindings, and, where the callee's body record lists keys and the
 asker can read load content at each, the key — the callee's base and segment
 and the content digest at each keyed name
 ([the build module](../build/README.md#keys-which-bindings-make-a-settlement))
-— the image of the types that content carries, and what a miss settles. The
-request is laid as the birth's level. A miss runs [`settled`](settle.rs): the
+— the image of the types that content carries, and what a miss settles.
+
+Where the callee's body can birth a callable — a bit its shape seals and its
+body record carries, set by a nested callable directly or through a nested
+block or module body, never through a quote, whose callables the `EVAL` that
+runs it births — the request is laid as the frame's **level**, once, in the
+region the frame writes, by the one function [`level`](settle.rs). A `Shares`
+frame writes its asker's region, so the asker lays it at the call, into the
+birth. A `Fresh` frame's region does not exist while its asker runs, so the
+`Seek` carries the request by value and the drain hands it back to the frame's
+first step once the frame is born under that settlement
+([the scheduler](../scheduler/README.md#the-build-arena)), and the frame lays it at entry. A
+call whose callee's body births no callable lays no level, so a loop making a
+keyed call each hop leaves nothing per hop in its asker's region. A `Shares`
+asker lays before the drain places the frame, so a frame then born cold leaves
+that level unused.
+
+A miss runs [`settled`](settle.rs): the
 language's walk rooted at the callee's body over a layer on its parent's
 facts, its types adopted into the agent tier under the root and kept as terms
 under a composition, so every frame of that body under that binding finds its
@@ -448,7 +464,10 @@ A frame's runner takes the arena node it runs under at its first step and
 hands it, with its stamp — the frame's level over its callee's — in its
 `Within`, to every evaluation and block it asks for, so a callable a tie or a
 lambda births in the frame, its blocks included, is born under it, seeks
-beneath it and replays its chain where it is gone. A call whose callee's
+beneath it and replays its chain where it is gone. A frame under its own
+settlement whose body births no callable holds no level, and its `Within`
+carries no stamp; a frame under the arena node its callee was born under
+carries its callee's. A call whose callee's
 arena node is no longer live replays the callee's stamp before the frame
 runs. The top level and a module's closure run under the root, and an `EVAL`
 of composed code under its composition.
@@ -595,8 +614,6 @@ module value by its digest tree. The two-program test,
   which build an `Error` from a fault and release its frames.
 - [A refused program stays loaded](../../roadmap/rewrite/refused-programs-stay-loaded.md)
   — a refused load kept, so its shape error renders on demand rather than once.
-- [A stamp level laid once per frame](../../roadmap/gradual-build/stamp-level-once.md)
-  — a keyed call that births no callable lays no level in its asker's region.
 - [Flat memory for a hop under its own settlement](../../roadmap/gradual-build/settled-hop-memory.md)
   — the bytes a tail loop under its own settlement leaves per hop.
 - [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — the

@@ -6,8 +6,9 @@
 //! image of the types its binding carries beside its request ([`Sought`]): the key, the [`Ask`] a
 //! miss settles, and those types. Where the frame lays its own level from that request — a frame
 //! with a region of its own, whose callee's body can birth a callable — the drain hands the
-//! request back to the frame's first step once the frame is born under the settlement. The drain looks
-//! the key up in the [arena](super::arena) under that parent: a live hit is stamped, and a miss
+//! request back to the frame's first step once the frame is born under the settlement
+//! ([`Step::sought`](super::Step::sought)). The drain looks the key up in the
+//! [arena](super::arena) under that parent: a live hit is stamped, and a miss
 //! settles the body through the program's [`Settles`] door — the image's nodes relayed into the
 //! agent tier under the root, into the walk's own chain under a composition — and evicts to the
 //! budget once the frame borrows it. A miss under a composition binding a module of other composed

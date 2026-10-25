@@ -32,7 +32,6 @@ hand.
 
 - [A birth solved once](birth-solved-once.md)
 - [Flat memory for a hop under its own settlement](settled-hop-memory.md)
-- [A stamp level laid once per frame](stamp-level-once.md)
 - [Placing a verdict without probing](verdict-placement.md)
 - [Warm composed types](warm-composed-types.md)
 

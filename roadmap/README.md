@@ -38,7 +38,6 @@ subdirectory's README carries its own slice.
 - [Matching](conditionals/matching.md)
 - [A birth solved once](gradual-build/birth-solved-once.md)
 - [Flat memory for a hop under its own settlement](gradual-build/settled-hop-memory.md)
-- [A stamp level laid once per frame](gradual-build/stamp-level-once.md)
 - [Placing a verdict without probing](gradual-build/verdict-placement.md)
 - [Warm composed types](gradual-build/warm-composed-types.md)
 - [A container literal's element type](gradual-typing/container-literal-types.md)

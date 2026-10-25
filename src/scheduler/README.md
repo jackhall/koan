@@ -168,6 +168,8 @@ previous step parked, and exposes:
   born under the composition of code composed at run time
   ([below](#the-build-arena));
 - `arena_ref`, the arena node the cell runs under;
+- `sought`, at a call's first step, the request the drain hands back for the
+  frame to lay its level from ([below](#the-build-arena)), taken once;
 - the ends — `park`, `tail`, `tail_seeking`, `tail_under`, `bounce`,
   `rebuild`, `replay`, `finish_fresh`, `finish_in_home`, `finish`, `done`,
   `leave` and `failed`.
@@ -414,11 +416,19 @@ tenants included:
   what its asker runs under.
 - `spawn_seeking` and `tail_seeking` ask for a call's frame, handing a `Seek`:
   the arena node the callee was born under and, where its body keys a
-  settlement on content the load names, the key, the binding's image and
-  what a miss settles. A live hit is stamped. A miss settles the body there
+  settlement on content the load names, the binding's image beside the
+  request by value (`Sought`): the key, what a miss settles and the types the
+  binding carries. A live hit is stamped. A miss settles the body there
   and then, through the program's `Settles` door, relaying the image into the
   agent tier under the root, and the frame is born under the new settlement.
-  A seek with no key runs the frame under the callee's arena node; one whose
+  A `Seek` that `hands_back` — a `Fresh` frame's, whose callee's body can
+  birth a callable — has the drain keep the request in the frame's
+  continuation where the frame is born under that settlement, by a hit, a
+  miss, a replay's last level or a pinning seek, and its first step takes it
+  (`sought`) to lay the frame's level in its own region
+  ([the program](../program/README.md#settlements-and-activations)); it is
+  the scheduler's runtime state, never written into a region. A seek with no
+  key runs the frame under the callee's arena node; one whose
   parent is gone runs it under the root, where its first step replays its
   callee's stamp (`replay`): each level found or settled under the one
   before, borrowed until the frame borrows its own, so the frame is born
