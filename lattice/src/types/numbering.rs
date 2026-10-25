@@ -43,7 +43,7 @@ pub(super) fn group_order<'s, 't>(
 ) -> BumpVec<'s, usize> {
     let mut numbering = Numbering::new(scratch, bounds.len());
     for position in positions {
-        numbering.walk(scratch, *position);
+        numbering.walk(scratch, position);
     }
     let settled = settle(types, scratch, bounds, positions, numbering);
     settled.order(scratch, bounds)
@@ -120,7 +120,7 @@ impl<'s, 't> Numbering<'s, 't> {
         sorted.extend_from_slice(fields);
         sorted.sort_unstable_by_key(|(name, _)| name.symbol());
         for (_, kt) in sorted.iter() {
-            self.walk(scratch, *kt);
+            self.walk(scratch, kt);
         }
     }
 
@@ -203,7 +203,7 @@ fn settle<'s, 't>(
                     tie.get_or_insert(set);
                 } else {
                     numbering.walked.push(*member);
-                    numbering.walk(scratch, *member);
+                    numbering.walk(scratch, member);
                     moved = true;
                 }
             }
@@ -268,7 +268,7 @@ fn score<'s, 't>(
     score.extend(order.iter().map(|declared| bounds[*declared].raw()));
     score.extend(
         (positions.iter())
-            .map(|position| substitute_quantified(types, scratch, *position, &bindings).handle()),
+            .map(|position| substitute_quantified(types, scratch, position, &bindings).handle()),
     );
     score
 }
