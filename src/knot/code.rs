@@ -17,7 +17,9 @@ use std::cell::Cell;
 
 use crate::memory::{BumpAllocator, BumpVec, Edge, KnotPlan, Writer, collect, resident};
 use crate::parse::{ExpressionPart, ProgramNode};
-use crate::scope::{self, BodyShape, CaptureSource, Facts, Segment, ShapeKind, Site, Written};
+use crate::scope::{
+    self, BodyShape, CaptureSource, ComposedRoot, Facts, Segment, ShapeKind, Site, Written,
+};
 use crate::symbols::{BinderSymbol, KeySymbol};
 use crate::type_lattice::{KType, TypeNode};
 use crate::values::digest::{DigestHasher, Tag, syntax_digest};
@@ -39,14 +41,6 @@ pub enum CodeBody<'graph> {
         root: ComposedRoot<'graph>,
         segment: Option<Segment>,
     },
-}
-
-/// The root of code composed at run time: its syntax, which lives in program storage until code
-/// splicing lays composed syntax in regions, and its syntax digest, which finds its composition.
-#[derive(Clone, Copy, Debug)]
-pub struct ComposedRoot<'graph> {
-    pub syntax: ProgramNode<'graph>,
-    pub digest: ContentDigest,
 }
 
 /// A quote's code: what one knot node points at, homed beside it for the reason
@@ -266,7 +260,7 @@ fn shape_of<'step>(
 /// Read the quote `body` of code shape `shape` into `scratch`: each `$` name's binding read through
 /// `activation`, each `Member` source minted by `edge`.
 pub(super) fn staged<'graph, 'cell, 'x>(
-    body: ProgramNode<'graph>,
+    (body, root): (ProgramNode<'graph>, Option<ComposedRoot<'graph>>),
     shape: &BodyShape<'_>,
     activation: &KActivationView<'graph, 'cell>,
     scratch: BumpAllocator<'x>,
@@ -283,12 +277,25 @@ pub(super) fn staged<'graph, 'cell, 'x>(
         bound.push((capture.name, link));
     }
     bound.sort_unstable_by_key(|(name, _)| *name);
+    // A quote of composed code is its syntax under the root it lies in, not its code as resolved
+    // where it was composed.
+    let (shaped, code) = match root {
+        None => {
+            let segment = shape.segment();
+            (CodeBody::Written { segment }, shape.code_digest())
+        }
+        Some(root) => {
+            let segment = Some(shape.segment());
+            (
+                CodeBody::Composed { root, segment },
+                syntax_digest(body.reference()),
+            )
+        }
+    };
     Staged {
         body,
-        shaped: CodeBody::Written {
-            segment: shape.segment(),
-        },
-        code: shape.code_digest(),
+        shaped,
+        code,
         bound,
         ktype: shape.code_type(),
     }
@@ -339,7 +346,7 @@ fn one_node<'graph, 'cell>(
 pub fn quote<'graph, 'cell>(
     writer: Writer<'cell, '_>,
     activation: &KReading<'_, 'graph, 'cell>,
-    written: Written<'graph>,
+    written: Written<'graph, '_>,
     part: &ExpressionPart<'_>,
     types: &Chain<'_, 'cell, '_, '_>,
     scratch: BumpAllocator<'_>,
@@ -347,7 +354,7 @@ pub fn quote<'graph, 'cell>(
     let (site, shape) = shape_of(activation.shape(), part)
         .expect("a quote is born at the site of a code shape its shape holds");
     let body = written.quote(activation.segment(), site);
-    let staged = staged(body, shape, activation, scratch, |_| {
+    let staged = staged((body, written.root()), shape, activation, scratch, |_| {
         unreachable!("only the tie births a quote that reads a fellow member")
     });
     let written = (staged.shaped, staged.code, staged.ktype);

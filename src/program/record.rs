@@ -10,13 +10,13 @@
 use std::cell::Cell;
 use std::fmt;
 
-use crate::knot::{ComposedRoot, KActivationView, KBuiltins, KValue};
+use crate::knot::{KActivationView, KBuiltins, KValue};
 use crate::memory::{Bump, BumpAllocator, ProgramBrand, Writer};
 use crate::parse::{ParseError, ProgramNode};
 use crate::scheduler::{Ask, NativeStep, Settles, Work};
 use crate::scope::{
-    BodyShape, Composition, Facts, LoadFacts, Segment, Settlement, ShapeError, Shapes, Site, Slot,
-    Store, Written,
+    BodyShape, ComposedRoot, Composition, Facts, LoadFacts, Segment, Settlement, ShapeError,
+    Shapes, Site, Slot, Store, Written,
 };
 use crate::symbols::{BinderSymbol, SymbolInterner};
 use crate::type_lattice::{
@@ -261,8 +261,21 @@ impl<'graph> Program<'graph> {
     }
 
     /// The program's written code: what a value born of it keeps.
-    pub fn written(&self) -> Written<'graph> {
+    pub fn written(&self) -> Written<'graph, 'graph> {
         Written::of(self.facts)
+    }
+
+    /// The code a value born in a cell reading `facts` is born of: the program's, or the code
+    /// composed at run time rooted at `root` whose composition the cell's chain rests on.
+    pub fn written_under<'step>(
+        &self,
+        facts: &Facts<'step>,
+        root: Option<ComposedRoot<'graph>>,
+    ) -> Written<'graph, 'step> {
+        match (facts.composition(), root) {
+            (Some(composition), Some(root)) => Written::of(self.facts).composed(root, composition),
+            _ => Written::of(self.facts),
+        }
     }
 
     pub fn builtins(&self) -> &'graph KBuiltins<'graph, 'graph> {

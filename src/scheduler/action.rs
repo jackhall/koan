@@ -19,7 +19,7 @@
 //! call, so a step's return type can name none of them: what crosses back out is a dormant carrier,
 //! a function pointer or a hint, and nothing else.
 
-use crate::knot::{ComposedRoot, KValue, KValueFamily};
+use crate::knot::{KValue, KValueFamily};
 use crate::memory::Projects;
 use crate::memory::{
     Active, CellHandle, CrossedOperand, DeliverError, Delivered, Dormant, Erased, Header, Operand,
@@ -32,7 +32,7 @@ use crate::scheduler::continuation::{
 use crate::scheduler::delivery::KDelivery;
 use crate::scheduler::seek::{Lending, Seek};
 use crate::scope::{
-    Code, Entry, EntryFamily, Facts, HalfHeader, MemoFamily, MemoKey, RegionHeader,
+    Code, ComposedRoot, Entry, EntryFamily, Facts, HalfHeader, MemoFamily, MemoKey, RegionHeader,
 };
 use crate::type_lattice::Halves;
 use crate::values::{ArenaRef, Chain, Half, TypeTiers, Types};
@@ -64,6 +64,11 @@ pub struct Action<'graph, B: StepBundle<'graph>>(Kind<'graph, B>);
 
 /// What an [`Action`] turned out to be, read by the drain and by nothing else. Anything in
 /// `scheduler` can name a `Kind`; only this file can wrap one into an `Action`.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "a tail carries what a miss settles or composes, as an unborn entry does; boxing it \
+              would allocate per hop"
+)]
 pub(super) enum Kind<'graph, B: StepBundle<'graph>> {
     /// Finished. The drain releases the cell, and when `completed` — the step's delivery filled the
     /// last slot of its consumer's receipt run — pushes that consumer, which is the only way a
@@ -211,6 +216,8 @@ pub struct Step<
     provenance: &'a Provenance,
     /// The arena node the cell runs under, which a park hands its successor.
     arena: ArenaRef,
+    /// The root of the composed code the cell's chain rests on, if not the load.
+    root: Option<ComposedRoot<'graph>>,
     spawns: &'a mut Spawns<'graph, B>,
     state: S::Of<StateAt<'graph, 'here, B>>,
     scratch: X::Of<Option<ScratchAt<'graph, 'here, 'scratch, B>>>,
@@ -255,7 +262,7 @@ where
         tiers: TypeTiers<'graph>,
         facts: Facts<'a>,
         provenance: &'a Provenance,
-        arena: ArenaRef,
+        (arena, root): (ArenaRef, Option<ComposedRoot<'graph>>),
         spawns: &'a mut Spawns<'graph, B>,
         state: StateAt<'graph, 'here, B>,
         scratch: Option<ScratchAt<'graph, 'here, 'scratch, B>>,
@@ -266,6 +273,7 @@ where
             facts,
             provenance,
             arena,
+            root,
             spawns,
             state,
             scratch,
@@ -296,6 +304,7 @@ where
             facts,
             provenance,
             arena,
+            root,
             spawns,
             state,
             scratch,
@@ -306,6 +315,7 @@ where
             facts,
             provenance,
             arena,
+            root,
             spawns,
             state: (),
             scratch,
@@ -337,6 +347,7 @@ where
             facts,
             provenance,
             arena,
+            root,
             spawns,
             state,
             scratch,
@@ -347,6 +358,7 @@ where
             facts,
             provenance,
             arena,
+            root,
             spawns,
             state,
             scratch: (),
@@ -438,6 +450,12 @@ where
     /// ```
     pub fn door(&self) -> (Code<'a>, Facts<'a>) {
         (Code::of(self.facts.shapes()), self.facts)
+    }
+
+    /// The root of the code composed at run time whose composition this cell's chain rests on:
+    /// `None` for a chain on the load.
+    pub fn composed_root(&self) -> Option<ComposedRoot<'graph>> {
+        self.root
     }
 
     /// Whether this cell runs under a settlement: a call's frame the drain found or built one

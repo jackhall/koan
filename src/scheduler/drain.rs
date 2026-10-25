@@ -19,7 +19,6 @@
 //! minted cell, so a second scheduler runs beside the first with nothing shared but the program
 //! text and the shapes in it.
 
-use crate::knot::ComposedRoot;
 use crate::memory::{
     CellGraph, CellHandle, CreateError, Dormant, Erased, Lend, Operand, RedeemError,
     ReleaseAbsorption, ReleaseError, SlabHandle,
@@ -36,7 +35,7 @@ use crate::scheduler::delivery::KDelivery;
 use crate::scheduler::seek::{Lending, Seek, Settles, Unsettled};
 #[cfg(test)]
 use crate::scope::HalfHeader;
-use crate::scope::{Facts, LoadFacts, RegionHeader};
+use crate::scope::{ComposedRoot, Facts, LoadFacts, RegionHeader};
 #[cfg(test)]
 use crate::type_lattice::Branch;
 use crate::values::{ArenaRef, BuildBudget, TypeTiers};
@@ -487,11 +486,17 @@ where
     /// or built and its binding's image relayed into the agent tier. The root, cold, for a parent
     /// that is no longer live.
     fn seek(&mut self, seek: Seek<'graph>) -> (ArenaRef, bool) {
-        let Seek { parent, settlement } = seek;
+        let Seek {
+            parent,
+            root,
+            settlement,
+        } = seek;
         let Some((key, image, ask)) = settlement else {
-            return match self.graph.arena.is_live(parent) {
-                true => (parent, false),
-                false => (ArenaRef::ROOT, false),
+            // A callee of composed code runs under its composition, rebuilt where it is gone.
+            return match (self.graph.arena.is_live(parent), root) {
+                (true, _) => (parent, false),
+                (false, Some(root)) => self.composed(root),
+                (false, None) => (ArenaRef::ROOT, false),
             };
         };
         #[cfg(test)]
@@ -548,7 +553,7 @@ where
             Composed::build(|brand, bump, witness| settles.compose(brand, bump, root, witness));
         #[cfg(test)]
         tally(|tiers| tiers.composed += 1);
-        (self.graph.arena.compose(root.digest, facts), true)
+        (self.graph.arena.compose(root, facts), true)
     }
 
     /// Whether the frozen load or the agent tier holds the node of every handle `image` carries,
@@ -681,16 +686,16 @@ where
     // The door reads the settlement the cell runs under, over the composition its chain rests on
     // or the load, borrowed from the arena for the step.
     let door = books.door(arena);
-    let facts = match door.composition {
-        Some(composition) => Facts::composed(composition, door.top),
-        None => Facts::under(load, door.top),
+    let (facts, root) = match door.composition {
+        Some((root, composition)) => (Facts::composed(composition, door.top), Some(root)),
+        None => (Facts::under(load, door.top), None),
     };
     let step = step(Step::new(
         context,
         tiers,
         facts,
         &provenance,
-        arena,
+        (arena, root),
         spawns,
         state,
         scratch,

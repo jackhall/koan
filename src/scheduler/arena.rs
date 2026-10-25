@@ -29,7 +29,7 @@ use std::rc::Rc;
 use self_cell::self_cell;
 
 use crate::memory::{Bump, ProgramBrand, ProgramStorage, program_storage};
-use crate::scope::{Composition, Facts, LoadFacts, Settlement};
+use crate::scope::{ComposedRoot, Composition, Facts, LoadFacts, Settlement};
 use crate::values::{ArenaRef, BuildBudget, ContentDigest, SettlementKey};
 
 /// A graph's arena nodes, their books, and the budget their unheld bytes stay within.
@@ -79,15 +79,15 @@ enum Kind<'graph> {
         facts: Rc<Settled<'graph>>,
     },
     Composition {
-        digest: ContentDigest,
+        root: ComposedRoot<'graph>,
         facts: Rc<Composed<'graph>>,
     },
 }
 
 /// What a step under an arena node reads facts through: the composition its chain rests on, if
 /// not the load, and the settlement it runs under, if any.
-pub(super) struct Door<'a> {
-    pub composition: Option<&'a Composition<'a>>,
+pub(super) struct Door<'a, 'graph> {
+    pub composition: Option<(ComposedRoot<'graph>, &'a Composition<'a>)>,
     pub top: Option<&'a Settlement<'a>>,
 }
 
@@ -242,7 +242,7 @@ impl<'graph> BuildArena<'graph> {
     }
 
     /// What a step under the live `at` reads: nothing past the load for the root.
-    pub(super) fn door(&self, at: ArenaRef) -> Door<'_> {
+    pub(super) fn door(&self, at: ArenaRef) -> Door<'_, 'graph> {
         match self.node(at).map(|node| &node.kind) {
             None => Door {
                 composition: None,
@@ -252,8 +252,8 @@ impl<'graph> BuildArena<'graph> {
                 composition: None,
                 top: Some(facts.facts()),
             },
-            Some(Kind::Composition { facts, .. }) => Door {
-                composition: Some(facts.facts()),
+            Some(Kind::Composition { root, facts }) => Door {
+                composition: Some((*root, facts.facts())),
                 top: None,
             },
         }
@@ -288,14 +288,21 @@ impl<'graph> BuildArena<'graph> {
         at
     }
 
-    /// A new composition of the code whose syntax digest is `digest`, a child of the root holding
-    /// `facts`, unheld and stamped. Evicts nothing, as [`insert`](Self::insert) does not.
-    pub(super) fn compose(&mut self, digest: ContentDigest, facts: Composed<'graph>) -> ArenaRef {
-        debug_assert!(self.composition(digest).is_none(), "a syntax composes once");
+    /// A new composition of the code `root` holds, a child of the root holding `facts`, unheld
+    /// and stamped. Evicts nothing, as [`insert`](Self::insert) does not.
+    pub(super) fn compose(
+        &mut self,
+        root: ComposedRoot<'graph>,
+        facts: Composed<'graph>,
+    ) -> ArenaRef {
+        debug_assert!(
+            self.composition(root.digest).is_none(),
+            "a syntax composes once"
+        );
         let bytes = facts.bytes();
         let facts = Rc::new(facts);
-        let at = self.laid(ArenaRef::ROOT, bytes, Kind::Composition { digest, facts });
-        self.compositions.insert(digest, at);
+        let at = self.laid(ArenaRef::ROOT, bytes, Kind::Composition { root, facts });
+        self.compositions.insert(root.digest, at);
         at
     }
 
@@ -429,7 +436,7 @@ impl<'graph> BuildArena<'graph> {
         self.total -= node.bytes;
         match node.kind {
             Kind::Settlement { key, .. } => self.children.remove(&(node.parent, key)),
-            Kind::Composition { digest, .. } => self.compositions.remove(&digest),
+            Kind::Composition { root, .. } => self.compositions.remove(&root.digest),
         };
         if let Some(parent) = self.node_mut(node.parent) {
             parent.children -= 1;

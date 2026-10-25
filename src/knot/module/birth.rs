@@ -59,7 +59,7 @@ pub fn body_activation<'graph, 'cell>(
 pub fn tie_member<'graph, 'cell, 'x>(
     writer: Writer<'cell, '_>,
     activation: &KReading<'_, 'graph, 'cell>,
-    written: Written<'graph>,
+    written: Written<'graph, '_>,
     component: &Component<'_>,
     types: &Chain<'_, 'cell, '_, '_>,
     scratch: BumpAllocator<'x>,
@@ -121,7 +121,7 @@ pub fn tie_member<'graph, 'cell, 'x>(
     // A body-born module is its code over what it captures, digested where a demand first
     // reaches it: the module keeps its body's closure until then.
     let born = Born::Body {
-        body: written.body(body.segment()),
+        body: written.body(writer, body.segment()),
         closure: body.closure(),
     };
     Ok(Module::tie(writer, ktype, &members, born, types))

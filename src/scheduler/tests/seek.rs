@@ -88,6 +88,7 @@ fn ask() -> Ask {
 fn seek<'graph>(at: usize, parent: ArenaRef) -> Seek<'graph> {
     Seek {
         parent,
+        root: None,
         settlement: Some((key(at), BindingImage::default(), ask())),
     }
 }
@@ -241,6 +242,7 @@ fn a_call_keying_no_settlement_runs_under_its_callees_arena_node() {
         for parent in [ArenaRef::ROOT, mine] {
             let unkeyed = Seek {
                 parent,
+                root: None,
                 settlement: None,
             };
             step.spawn_seeking(shares(observe, Use::Reads, KValue::Null), unkeyed);
@@ -280,6 +282,7 @@ fn seek_bound<'graph>(
     let image = BindingImage::of(keyed, step.tiers(), &step.types());
     Seek {
         parent: ArenaRef::ROOT,
+        root: None,
         settlement: Some((key(at), image, ask())),
     }
 }

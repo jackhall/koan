@@ -195,7 +195,7 @@ impl<'graph> Fixture<'_, 'graph> {
     }
 
     /// The written code of the program the fixture last parsed.
-    pub fn written(&self) -> Written<'graph> {
+    pub fn written(&self) -> Written<'graph, 'graph> {
         Written::of(self.load())
     }
 

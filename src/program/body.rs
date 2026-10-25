@@ -287,6 +287,7 @@ fn ran<'graph, 'here, 'scratch>(
             owed,
             inherit,
         }) => {
+            minted(&facts, types);
             let home = Some(step.memo_home());
             let mut memo = Memo::at(home, inherit);
             match frame(
@@ -339,10 +340,8 @@ fn ran<'graph, 'here, 'scratch>(
                 let error = program.error(step.writer(), &step.types(), refusal);
                 return step.finish(error);
             }
-            if let Some(composition) = facts.composition() {
-                for term in composition.terms() {
-                    types.mint(term);
-                }
+            if facts.composition().is_some() {
+                minted(&facts, types);
                 let member = code.as_code().expect("an `EVAL` is handed a quote's code");
                 let node = member.code().expect("a code member holds code");
                 let unbound = match unbound(member, node.shape(&step.door().0), offered, types) {
@@ -359,6 +358,12 @@ fn ran<'graph, 'here, 'scratch>(
             let Some(activation) = code_frame(&step, types, program, code, offered) else {
                 return step.failed(StepError::Refused);
             };
+            // A callable born of composed code is born under its composition; a written quote's
+            // lexical chain of arena nodes is not placed, so its callables seek from the root.
+            let build = match facts.composition() {
+                Some(_) => step.arena_ref(ArenaRef::ROOT),
+                None => ArenaRef::ROOT,
+            };
             let home = Some(step.memo_home());
             let mut memo = Memo::at(home, inherit);
             match decided_at_entry(&mut step, types, program, activation, &mut memo) {
@@ -374,6 +379,7 @@ fn ran<'graph, 'here, 'scratch>(
                     }
                     Runner {
                         within: Within {
+                            build,
                             memo: home,
                             ..Within::TOP
                         },
@@ -433,6 +439,17 @@ fn ran<'graph, 'here, 'scratch>(
         KState::Born(_) | KState::Evaluating { .. } => return step.failed(StepError::Refused),
     };
     perform(step, runner, types)
+}
+
+/// Mint into `types` each term of the composition a frame reading `facts` rests on, so every type
+/// its facts name resolves in the frame's chain: once per frame, its binding event.
+fn minted(facts: &Facts<'_>, types: &Chain<'_, '_, '_, '_>) {
+    for term in facts
+        .composition()
+        .map_or(&[][..], |composition| composition.terms())
+    {
+        types.mint(term);
+    }
 }
 
 /// A frame's or a block's entry event: each parameter, or a quote's code's capture, a unit beneath
@@ -1660,10 +1677,12 @@ fn tied<'graph, 'here>(
     supplied: &[(Site, KValue<'graph, 'here>)],
 ) -> Result<(), Stopped<'here>> {
     let scratch = Bump::new();
+    let reading = runner.reading(step);
+    let written = (runner.program).written_under(reading.facts(), step.composed_root());
     let tied = tie(
         step.writer(),
-        &runner.reading(step),
-        runner.program.written(),
+        &reading,
+        written,
         component,
         runner.within.build,
         types,
@@ -1965,10 +1984,12 @@ fn first_tie<'graph, 'here, 'scratch, 'lent>(
 ) -> Result<Option<(Asked, &'scratch [Site])>, Stopped<'here>> {
     let scratch = Bump::new();
     let mut missed: BumpVec<'_, Site> = BumpVec::new_in(&scratch);
+    let reading = runner.reading(step);
+    let written = (runner.program).written_under(reading.facts(), step.composed_root());
     let tied = tie(
         step.writer(),
-        &runner.reading(step),
-        runner.program.written(),
+        &reading,
+        written,
         component,
         runner.within.build,
         types,
@@ -2111,10 +2132,11 @@ fn left<'graph, 'here>(
     let activation = outer.activation;
     let (code, facts) = step.door();
     let reading = activation.view().reading(&code, facts);
+    let written = (body.program).written_under(&facts, step.composed_root());
     let knot = tie(
         step.writer(),
         &reading,
-        body.program.written(),
+        written,
         reading.shape().component_of(outer.binder),
         body.within.build,
         types,

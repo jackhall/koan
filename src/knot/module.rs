@@ -53,7 +53,7 @@ pub use birth::{body_activation, tie_member};
 use std::cell::Cell;
 
 use crate::memory::{Knot, KnotPlan, Writer, collect, resident};
-use crate::scope::{BodyRef, ClosureBindings};
+use crate::scope::{BodyAt, BodyRef, ClosureBindings};
 use crate::type_lattice::{ContentKey, DeclaredType, KType, Parametric};
 pub use crate::values::digest::Operator;
 use crate::values::digest::{DigestHasher, Tag, body_content, view_content};
@@ -80,7 +80,7 @@ pub struct Module<'graph, 'cell> {
 pub enum Born<'graph, 'cell> {
     View(ModuleContent),
     Body {
-        body: &'graph BodyRef<'graph>,
+        body: BodyAt<'graph, 'cell>,
         closure: &'cell ClosureBindings<'cell, Knotted<'graph, 'cell>>,
     },
 }
@@ -90,7 +90,7 @@ pub enum Born<'graph, 'cell> {
 struct Content<'graph, 'cell> {
     known: Cell<Option<ModuleContent>>,
     body: Option<(
-        &'graph BodyRef<'graph>,
+        BodyAt<'graph, 'cell>,
         &'cell ClosureBindings<'cell, Knotted<'graph, 'cell>>,
     )>,
 }
@@ -175,12 +175,12 @@ impl<'graph, 'cell> Module<'graph, 'cell> {
     pub fn pending(
         &self,
     ) -> Option<(
-        &'graph BodyRef<'graph>,
+        &'cell BodyRef<'cell>,
         &'cell ClosureBindings<'cell, Knotted<'graph, 'cell>>,
     )> {
-        self.content
-            .body
+        (self.content.body)
             .filter(|_| self.content.known.get().is_none())
+            .map(|(body, closure)| (body.get(), closure))
     }
 
     /// Keep `content`, computed by a demand, as what the module is.
@@ -218,9 +218,9 @@ impl<'graph, 'cell> Module<'graph, 'cell> {
             return known.digest();
         }
         let (body, closure) = self.content.body.expect("a view's content is known");
-        let captures =
-            composed(body, closure.links()).map(|(index, link)| (index, link.digest_from(parts)));
-        let content = ModuleContent::body(body.code, captures);
+        let captures = composed(body.get(), closure.links())
+            .map(|(index, link)| (index, link.digest_from(parts)));
+        let content = ModuleContent::body(body.get().code, captures);
         self.fill(content);
         content.digest()
     }
@@ -234,7 +234,7 @@ impl<'graph, 'cell> Module<'graph, 'cell> {
         members: &'to [KValue<'graph, 'to>],
         closure: Option<&'to ClosureBindings<'to, Knotted<'graph, 'to>>>,
     ) -> Module<'graph, 'to> {
-        let body = (self.content.body.map(|(body, _)| body)).zip(closure);
+        let body = (self.content.body.map(|(body, _)| body.copied(writer))).zip(closure);
         Module {
             ktype: self.ktype,
             members,

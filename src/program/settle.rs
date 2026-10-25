@@ -14,7 +14,10 @@
 //! rests in the root, a type value naming one, or a module whose content digest names a closed tree
 //! the asker's layers hold. Anything else is content the run produced, and a call keying any seeks
 //! nothing. A miss runs [`settled`]: the language's walk rooted at the callee's body, over a layer
-//! on the settlement's parent, its types adopted into the agent tier once it ends. See
+//! on the settlement's parent, its types adopted into the agent tier once it ends. A callee born of
+//! code composed at run time seeks no settlement yet, and runs under its composition, which the
+//! seek's root rebuilds where it is gone. A composition's miss runs [`composed`]: its code's shapes
+//! built alone and walked as the load walks the program's. See
 //! [build/README.md](../build/README.md).
 
 use std::fmt::Write as _;
@@ -26,6 +29,7 @@ use crate::parse::ProgramNode;
 use crate::scheduler::{Ask, Asked, Seek};
 use crate::scope::{
     Address, Binding, Bound, Code, Composition, Facts, Settlement, Shapes, Tree, Unknown,
+    quote_paths,
 };
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::{DeclaredType, KType, Parametric, TypeNode};
@@ -58,14 +62,15 @@ pub fn seek<'graph>(
     types: &Chain<'_, '_, '_, '_>,
     region: &Chain<'_, '_, '_, '_>,
 ) -> Seek<'graph> {
-    let parent = match birth {
-        KBirth::Call { callee, .. } => {
-            called_function(*callee).map_or(ArenaRef::ROOT, |function| function.closure().build())
-        }
-        _ => ArenaRef::ROOT,
+    let function = match birth {
+        KBirth::Call { callee, .. } => called_function(*callee),
+        _ => None,
     };
     Seek {
-        parent,
+        parent: function.map_or(ArenaRef::ROOT, |function| function.closure().build()),
+        root: function
+            .and_then(|function| function.composed())
+            .map(|(_, root)| root),
         settlement: settlement(birth, code, facts, types, region),
     }
 }
@@ -94,6 +99,10 @@ fn settlement<'graph>(
     };
     let (callee, arguments) = (*callee, *arguments);
     let function = called_function(callee)?;
+    // A body of composed code lies in its composition's shapes, where nothing settles yet.
+    if function.composed().is_some() {
+        return None;
+    }
     let shape = code.shape(function.body().segment);
     let keyed = facts.settlement_keys(shape)?;
     let scratch = Bump::new();
@@ -345,7 +354,8 @@ pub(crate) fn composed<'a, 'graph, L: Language>(
             terms.push(types.export(*kt, &resting, bump, &scratch));
         }
     }
-    Composition::new(facts, collect(bump, terms.iter().copied()), refusal)
+    let quotes = quote_paths(writer, &scratch, shapes, syntax.reference());
+    Composition::new(facts, collect(bump, terms.iter().copied()), refusal, quotes)
 }
 
 /// Text rendered into a scratch bump.

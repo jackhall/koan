@@ -58,13 +58,16 @@ pub struct Tied<'graph, 'cell, 'x> {
 pub fn tie<'graph, 'cell, 'x>(
     writer: Writer<'cell, '_>,
     activation: &KReading<'_, 'graph, 'cell>,
-    written: Written<'graph>,
+    written: Written<'graph, '_>,
     component: &Component<'_>,
     build: ArenaRef,
     types: &Chain<'_, 'cell, '_, '_>,
     scratch: BumpAllocator<'x>,
     eager: &mut Eager<'_, 'graph, 'cell>,
-) -> Result<Tied<'graph, 'cell, 'x>, Untieable<'x>> {
+) -> Result<Tied<'graph, 'cell, 'x>, Untieable<'x>>
+where
+    'graph: 'x,
+{
     debug_assert!(
         component.deferred_only,
         "the shape builder refuses a component with an eager cycle"
@@ -144,10 +147,16 @@ pub fn tie<'graph, 'cell, 'x>(
     codes.extend(nodes.iter().map(|node| {
         let (site, shape) = node.as_ref()?.code()?;
         let body = written.quote(activation.segment(), site);
-        Some(code::staged(body, shape, activation, scratch, |index| {
-            plan.edge(index)
-                .expect("a member index is below the knot's count")
-        }))
+        Some(code::staged(
+            (body, written.root()),
+            shape,
+            activation,
+            scratch,
+            |index| {
+                plan.edge(index)
+                    .expect("a member index is below the knot's count")
+            },
+        ))
     }));
     // An annotated code member is born at the annotation's retype, as a function member is.
     for (staged, annotation) in codes.iter_mut().zip(&annotations) {
@@ -217,7 +226,7 @@ pub fn tie<'graph, 'cell, 'x>(
             (Some((staged, (closure, typing))), _) => Node::Function(Function::new(
                 staged.ktype,
                 typing,
-                staged.body,
+                staged.written_body(),
                 closure,
                 knot_weight,
             )),

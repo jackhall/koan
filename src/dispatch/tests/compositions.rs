@@ -10,7 +10,7 @@ use crate::type_lattice::ADOPT_LAID;
 use crate::values::BuildBudget;
 
 use super::super::Koan;
-use super::caching::program;
+use super::caching::{SMALLEST, program};
 use super::{WRITTEN, output, run};
 
 /// What one run of `source` left: what it printed, the drain's tallies, and how many compositions
@@ -116,4 +116,88 @@ fn a_derived_type_under_a_composition_is_minted_once_per_binding_event() {
     assert!(once > 0, "the record over `$x` is a term the frame mints");
     // Each `EVAL` is its own binding event, and mints the composition's terms once.
     assert_eq!(twice, 2 * once);
+}
+
+/// What one run of `source` under the smallest budget printed, with how many compositions it built.
+fn smallest(source: &str) -> (String, usize) {
+    WRITTEN.with(|written| written.borrow_mut().clear());
+    let mut substrate = CellSubstrate::load::<Koan>(source, "<test>", 4, SMALLEST, output())
+        .unwrap_or_else(|error| panic!("the program loads: {error}"));
+    TIERS.with(|tiers| tiers.set(Tiers::default()));
+    substrate
+        .with(|running| running.run())
+        .expect("the program runs");
+    let printed = WRITTEN.with(|written| written.borrow().join("\n"));
+    (printed, TIERS.with(Cell::get).composed)
+}
+
+#[test]
+fn a_composition_evicted_and_rebuilt_gives_its_functions_the_same_identity() {
+    let (printed, composed) = smallest(
+        "LET q = #(FN :{n :Number} -> Number = #(n + 1))
+LET p = #(PRINT 0)
+LET f = (EVAL (COMPOSE q) -> Any)
+EVAL (COMPOSE p) -> Any
+LET g = (EVAL (COMPOSE q) -> Any)
+PRINT (f == g)
+EVAL (COMPOSE p) -> Any
+PRINT (f {n = 1})",
+    );
+    // `p`'s miss evicts `q`'s composition, which `g`'s rebuilds; then `p`'s evicts it again, and
+    // the call of `f` rebuilds it from the root `f` keeps.
+    assert_eq!(printed, "0\ntrue\n0\n2");
+    assert_eq!(composed, 5);
+}
+
+#[test]
+fn a_quote_born_of_composed_code_runs_under_its_composition() {
+    let (printed, composed) = smallest(
+        "LET q = #((LET inner = #(PRINT 5)) (EVAL inner -> Any) (inner))
+LET p = #(PRINT 0)
+LET i = (EVAL (COMPOSE q) -> Any)
+EVAL (COMPOSE p) -> Any
+EVAL i -> Any
+PRINT i",
+    );
+    // The quote keeps its syntax inside its root's, so it outlives its composition.
+    assert_eq!(printed, "5\n0\n5\nPRINT 5");
+    assert_eq!(composed, 3);
+}
+
+#[test]
+fn a_module_born_of_composed_code_reads_as_one_written() {
+    let source = |eval: &str| {
+        format!(
+            "LET q = #((MODULE m = ((LET x = 1) (LET y = 2))) m)\nLET m = ({eval} -> Any)\nPRINT m.y"
+        )
+    };
+    assert_eq!(run(&source("EVAL (COMPOSE q)")), run(&source("EVAL q")));
+}
+
+#[test]
+fn a_call_of_a_function_born_of_composed_code_reads_its_compositions_types() {
+    let (printed, tiers, _) = composed(
+        "LET Alias = Number
+LET q = #((LET g = (FN :{n :($Alias)} -> Number = #(n + 1))) (g))
+LET f = (EVAL (COMPOSE q) -> Any)
+PRINT (f {n = 1})
+PRINT (f {n = 2})",
+    );
+    assert_eq!(printed, "2\n3");
+    assert_eq!(tiers.agent, 0);
+}
+
+/// A nominal declared over a `$` type the composition cannot see is declared by the frame at its
+/// declaring statement, as the written quote's is, and rests nothing in the agent tier.
+#[test]
+fn a_composed_declared_nominal_is_minted_at_its_declaring_statement() {
+    let source = |eval: &str| {
+        format!(
+            "LET Alias = Number\nLET q = #((NEWTYPE Boxed = :(LIST OF $Alias)) (PRINT (Boxed [1, 2])))\n{eval} -> Any"
+        )
+    };
+    let (composed, tiers, _) = composed(&source("EVAL (COMPOSE q)"));
+    assert_eq!(composed, run(&source("EVAL q")));
+    assert_eq!(composed, "Boxed([1, 2])");
+    assert_eq!(tiers.agent, 0);
 }

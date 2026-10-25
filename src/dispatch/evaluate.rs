@@ -209,7 +209,7 @@ fn evaluate_on<'graph, 'here, 'tier, 'reg>(
             let site = view.shape().site_of_body(node).expect("a `FN` has a body");
             let scratch = Bump::new();
             let writer = step.writer();
-            let written = program.written();
+            let written = program.written_under(view.facts(), step.composed_root());
             let value = match lambda(
                 writer,
                 &view,
@@ -1063,7 +1063,8 @@ fn called<'step, 'graph, 'here>(
     let keyed = || {
         called_function(callee).is_some_and(|function| {
             let (facts, segment) = (at.view.facts(), function.body().segment);
-            facts.settlement_keys(at.code.shape(segment)).is_some()
+            function.composed().is_none()
+                && facts.settlement_keys(at.code.shape(segment)).is_some()
                 && !facts.shapes().escapes(segment)
                 && at.within.build != function.closure().build()
         })
@@ -1159,7 +1160,7 @@ fn in_place<'step, 'graph, 'here>(
         ExpressionPart::QuotedExpression(_) => Some(Value::Knotted(quote(
             writer,
             &at.view,
-            at.program.written(),
+            (at.program).written_under(at.view.facts(), step.composed_root()),
             part,
             types,
             scratch,

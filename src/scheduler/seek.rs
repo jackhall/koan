@@ -16,9 +16,8 @@
 
 use smallvec::SmallVec;
 
-use crate::knot::ComposedRoot;
 use crate::memory::{Bump, ProgramBrand};
-use crate::scope::{Composition, Facts, Segment, Settlement, Slot};
+use crate::scope::{ComposedRoot, Composition, Facts, Segment, Settlement, Slot};
 use crate::type_lattice::KType;
 use crate::values::{ArenaRef, BindingImage, ContentDigest, SettlementKey};
 
@@ -26,6 +25,9 @@ use crate::values::{ArenaRef, BindingImage, ContentDigest, SettlementKey};
 /// and the settlement under it the frame seeks, if any.
 pub struct Seek<'graph> {
     pub parent: ArenaRef,
+    /// The root of the code composed at run time the callee was born of: what rebuilds its
+    /// composition where `parent`, that composition, is gone.
+    pub root: Option<ComposedRoot<'graph>>,
     /// A keyed body's key under `parent`, its binding's image, and what a miss settles: `None` for
     /// a body that keys no settlement or a call whose content at a keyed name the asker could not
     /// read or the load does not hold, whose frame runs under `parent`.
