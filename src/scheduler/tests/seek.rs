@@ -273,6 +273,31 @@ fn a_seek_handing_its_request_back_gives_the_frame_s_first_step_its_request() {
     assert_eq!(settled(), 1, "the second seek hits the first's settlement");
 }
 
+/// A replay hands back only its last level's request, the frame's own: each level before it is a
+/// settlement the frame's chain rests on, whose level a stamp already holds.
+#[test]
+fn a_replay_hands_the_frame_back_only_its_own_level_s_request() {
+    fn replaying<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
+        let levels = [1, 2].map(|at| crate::scheduler::Replayed {
+            seek: seek_handing(at, ArenaRef::ROOT, true),
+            pins: smallvec::SmallVec::new(),
+        });
+        let work = Work {
+            step: handed,
+            state: KValue::Null,
+        };
+        step.replay(work, levels)
+    }
+    fn start<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
+        let asked = step.spawn(fresh(replaying, Use::Reads, KValue::Null));
+        step.park(asked, finished, KValue::Null, None)
+    }
+    run_loaded(start, BuildBudget::default());
+    let read = HANDED.with(|handed| handed.borrow().clone());
+    assert_eq!(read, [(Some(key(2)), true)]);
+    assert_eq!(settled(), 2, "each level settles under the one before");
+}
+
 #[test]
 fn two_bindings_give_two_settlements_under_one_parent() {
     reset();
