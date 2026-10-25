@@ -78,6 +78,19 @@ impl<'graph, 'cell> Code<'graph, 'cell> {
         self.shaped
     }
 
+    /// The code shape this code runs, read through `door`: a written quote's by its segment in the
+    /// load's table, composed code's in its composition's, which `door` must rest on.
+    pub fn shape<'step>(&self, door: &scope::Code<'step>) -> &'step BodyShape<'step> {
+        match self.shaped {
+            CodeBody::Written { segment }
+            | CodeBody::Composed {
+                segment: Some(segment),
+                ..
+            } => door.shape(segment),
+            CodeBody::Composed { segment: None, .. } => door.shapes().root(),
+        }
+    }
+
     /// The segment of the code shape the program built for this quote where it loads.
     pub fn segment(&self) -> Segment {
         match self.shaped {

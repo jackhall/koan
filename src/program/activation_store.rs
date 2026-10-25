@@ -118,8 +118,9 @@ pub(crate) fn activated<'here, L: Language>(
         true => Layer::waking_all(&bump, &scratch, facts, binding),
         false => Layer::new(&bump, &scratch, facts, binding),
     };
+    // The base the frame's chain rests on: the load's shapes, or its composition's.
     let walked = L::facts(
-        program.shapes(),
+        facts.shapes(),
         program.builtins(),
         &layer,
         types,
@@ -130,7 +131,7 @@ pub(crate) fn activated<'here, L: Language>(
         Ok(()) => Ok(Activated::of(
             lay,
             &scratch,
-            program.shapes(),
+            facts.shapes(),
             below,
             binding,
             own,

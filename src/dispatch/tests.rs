@@ -7,6 +7,7 @@ mod ascription;
 mod boundary;
 mod caching;
 mod classes;
+mod compositions;
 mod contributions;
 mod digests;
 mod door;

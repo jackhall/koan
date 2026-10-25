@@ -19,7 +19,7 @@
 //! call, so a step's return type can name none of them: what crosses back out is a dormant carrier,
 //! a function pointer or a hint, and nothing else.
 
-use crate::knot::{KValue, KValueFamily};
+use crate::knot::{ComposedRoot, KValue, KValueFamily};
 use crate::memory::Projects;
 use crate::memory::{
     Active, CellHandle, CrossedOperand, DeliverError, Delivered, Dormant, Erased, Header, Operand,
@@ -472,6 +472,17 @@ where
         seek: Seek<'graph>,
     ) -> Slot {
         self.spawn_lending(request, Lending::Call(seek))
+    }
+
+    /// [`spawn`](Self::spawn) an `EVAL`'s frame over code composed at run time, born under the
+    /// composition of its code, which the drain finds by its syntax digest or builds before the
+    /// child is born.
+    pub fn spawn_composing(
+        &mut self,
+        request: Request<'graph, 'here, B>,
+        root: ComposedRoot<'graph>,
+    ) -> Slot {
+        self.spawn_lending(request, Lending::Compose(root))
     }
 
     fn spawn_lending(

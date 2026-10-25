@@ -217,6 +217,7 @@ impl CellSubstrate {
                         (
                             L::evaluator(),
                             super::settle::settled::<L>,
+                            super::settle::composed::<L>,
                             super::activation_store::activated_in::<L>,
                         ),
                         output,

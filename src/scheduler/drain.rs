@@ -19,6 +19,7 @@
 //! minted cell, so a second scheduler runs beside the first with nothing shared but the program
 //! text and the shapes in it.
 
+use crate::knot::ComposedRoot;
 use crate::memory::{
     CellGraph, CellHandle, CreateError, Dormant, Erased, Lend, Operand, RedeemError,
     ReleaseAbsorption, ReleaseError, SlabHandle,
@@ -26,7 +27,7 @@ use crate::memory::{
 use crate::scheduler::action::{
     Action, Asked, Context, Kind, Placement, Spawns, Step, StepError, Use,
 };
-use crate::scheduler::arena::{BuildArena, Settled};
+use crate::scheduler::arena::{BuildArena, Composed, Settled};
 use crate::scheduler::continuation::{
     Born, Continuation, ContinuationFamily, NativeStep, Provenance, Report, Rested, StateAt,
     StepBundle, Work,
@@ -110,6 +111,12 @@ impl<'graph, B: StepBundle<'graph>> Graph<'graph, B> {
         self.arena.len()
     }
 
+    /// How many compositions are live.
+    #[cfg(test)]
+    pub(crate) fn live_compositions(&self) -> usize {
+        self.arena.compositions()
+    }
+
     /// How many live settlements lie directly under `parent`.
     #[cfg(test)]
     pub(crate) fn children_of(&self, parent: ArenaRef) -> usize {
@@ -179,6 +186,8 @@ pub(crate) struct Tiers {
     pub relayed: usize,
     /// Nodes new settlements' records named that their walks laid into the agent tier: a count.
     pub rested: usize,
+    /// How many compositions a miss built: a count.
+    pub composed: usize,
 }
 
 /// Add to one of the counts in [`TIERS`].
@@ -207,6 +216,7 @@ thread_local! {
             cold_births: 0,
             relayed: 0,
             rested: 0,
+            composed: 0,
         })
     };
 }
@@ -452,6 +462,7 @@ where
                 tally(|tiers| tiers.cold_births += 1);
                 (ArenaRef::ROOT, false)
             }
+            Lending::Compose(root) => self.composed(root),
         };
         self.graph.arena.borrow(under);
         if missed {
@@ -523,6 +534,21 @@ where
             tiers.rested += resting.own_len() - relayed;
         });
         (settled, true)
+    }
+
+    /// The composition of the code `root` holds, and whether it was a miss: found by its syntax
+    /// digest and stamped, or built through the program's door.
+    fn composed(&mut self, root: ComposedRoot<'graph>) -> (ArenaRef, bool) {
+        if let Some(found) = self.graph.arena.composition(root.digest) {
+            self.graph.arena.stamp(found);
+            return (found, false);
+        }
+        let settles = self.graph.settles;
+        let facts =
+            Composed::build(|brand, bump, witness| settles.compose(brand, bump, root, witness));
+        #[cfg(test)]
+        tally(|tiers| tiers.composed += 1);
+        (self.graph.arena.compose(root.digest, facts), true)
     }
 
     /// Whether the frozen load or the agent tier holds the node of every handle `image` carries,
@@ -652,12 +678,17 @@ where
             .map_or(0, Branch::len),
         tiers.agent.len(),
     );
-    // The door reads the settlement the cell runs under, borrowed from the arena for the step.
-    let top = books.facts(arena).map(|settled| settled.facts());
+    // The door reads the settlement the cell runs under, over the composition its chain rests on
+    // or the load, borrowed from the arena for the step.
+    let door = books.door(arena);
+    let facts = match door.composition {
+        Some(composition) => Facts::composed(composition, door.top),
+        None => Facts::under(load, door.top),
+    };
     let step = step(Step::new(
         context,
         tiers,
-        Facts::under(load, top),
+        facts,
         &provenance,
         arena,
         spawns,

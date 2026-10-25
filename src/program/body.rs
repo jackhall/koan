@@ -54,7 +54,8 @@ use crate::knot::body_activation;
 use crate::knot::module::coerce::{self, CoercionRefused};
 use crate::knot::module::surface::surface;
 use crate::knot::{
-    KActivation, KActivationView, KReading, KValue, Knotted, Supplied, Tied, Untieable, tie,
+    CodeBody, KActivation, KActivationView, KReading, KValue, Knotted, Supplied, Tied, Untieable,
+    tie,
 };
 use crate::memory::{Bump, BumpVec, Writer, resident};
 use crate::parse::ExpressionPart;
@@ -199,19 +200,18 @@ type Taking<'a, 'graph, 'step, 'here, 'scratch, 'lent> =
 pub fn run<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'graph, KBundle> {
     let (step, state) = step.state();
     let (mut step, scratch) = step.scratch();
-    let segment = match &state {
+    let (code, facts) = step.door();
+    let shape = match &state {
         KState::Born(KBirth::Call { callee, .. }) => {
-            called_function(*callee).map(|function| function.body().segment)
+            called_function(*callee).map(|function| code.shape(function.body().segment))
         }
-        KState::Born(KBirth::Eval { code, .. }) => (code.as_code())
+        KState::Born(KBirth::Eval { code: value, .. }) => (value.as_code())
             .and_then(|member| member.code())
-            .map(|node| node.segment()),
-        KState::Born(KBirth::Block { segment, .. }) => Some(*segment),
-        KState::Runner(runner) => Some(runner.activation.segment()),
+            .map(|node| node.shape(&code)),
+        KState::Born(KBirth::Block { segment, .. }) => Some(code.shape(*segment)),
+        KState::Runner(runner) => Some(code.shape(runner.activation.segment())),
         KState::Born(_) | KState::Evaluating { .. } => None,
     };
-    let (code, facts) = step.door();
-    let shape = segment.map(|segment| code.shape(segment));
     let caches = shape.is_some_and(|shape| facts.caches(shape));
     let routes = match &state {
         // A tree cell holds its scratch whatever it borrows; a tenant routes where it borrows a
@@ -332,38 +332,61 @@ fn ran<'graph, 'here, 'scratch>(
             offered,
             contract,
             inherit,
-        }) => match code_frame(&step, types, program, code, offered) {
-            Some(activation) => {
-                let home = Some(step.memo_home());
-                let mut memo = Memo::at(home, inherit);
-                match decided_at_entry(&mut step, types, program, activation, &mut memo) {
-                    Ok(activation) => {
-                        // The first registration overlapping a builtin, as the load or this entry
-                        // typed the code, faults the frame before any statement runs.
-                        let (code, facts) = step.door();
-                        let facts = facts.activated(activation.view().decided());
-                        if let Some(overlap) = facts.overlap(code.shape(activation.segment())) {
-                            let message = overlap.display(program.symbols(), types);
-                            let error = program.error(step.writer(), &step.types(), message);
-                            return step.finish(error);
-                        }
-                        Runner {
-                            within: Within {
-                                memo: home,
-                                ..Within::TOP
-                            },
-                            memo,
-                            ..Runner::at(program, activation, Level::Frame, Some(contract))
-                        }
-                    }
-                    Err(message) => {
+        }) => {
+            // Composed code is checked here, under its composition: the refusal it reached, then
+            // each name it reads, once the types its facts name resolve in this frame's chain.
+            if let Some(refusal) = refused {
+                let error = program.error(step.writer(), &step.types(), refusal);
+                return step.finish(error);
+            }
+            if let Some(composition) = facts.composition() {
+                for term in composition.terms() {
+                    types.mint(term);
+                }
+                let member = code.as_code().expect("an `EVAL` is handed a quote's code");
+                let node = member.code().expect("a code member holds code");
+                let unbound = match unbound(member, node.shape(&step.door().0), offered, types) {
+                    Ok(None) => None,
+                    Ok(Some(name)) => Some(CodeRefused::Unbound(name)),
+                    Err(refused) => Some(refused),
+                };
+                if let Some(refused) = unbound {
+                    let message = refused.display(program.symbols(), types);
+                    let error = program.error(step.writer(), &step.types(), message);
+                    return step.finish(error);
+                }
+            }
+            let Some(activation) = code_frame(&step, types, program, code, offered) else {
+                return step.failed(StepError::Refused);
+            };
+            let home = Some(step.memo_home());
+            let mut memo = Memo::at(home, inherit);
+            match decided_at_entry(&mut step, types, program, activation, &mut memo) {
+                Ok(activation) => {
+                    // The first registration overlapping a builtin, as the load or this entry
+                    // typed the code, faults the frame before any statement runs.
+                    let (code, facts) = step.door();
+                    let facts = facts.activated(activation.view().decided());
+                    if let Some(overlap) = facts.overlap(code.shape(activation.segment())) {
+                        let message = overlap.display(program.symbols(), types);
                         let error = program.error(step.writer(), &step.types(), message);
                         return step.finish(error);
                     }
+                    Runner {
+                        within: Within {
+                            memo: home,
+                            ..Within::TOP
+                        },
+                        memo,
+                        ..Runner::at(program, activation, Level::Frame, Some(contract))
+                    }
+                }
+                Err(message) => {
+                    let error = program.error(step.writer(), &step.types(), message);
+                    return step.finish(error);
                 }
             }
-            None => return step.failed(StepError::Refused),
-        },
+        }
         KState::Born(KBirth::Block {
             program,
             segment,
@@ -731,10 +754,48 @@ pub fn eval<'step, 'graph, 'here>(
     use_: Use,
 ) -> Result<Request<'graph, 'here, KBundle>, CodeRefused<'step>> {
     let node = code.code().expect("an `EVAL` is handed a quote's code");
-    let shape = door.shape(node.segment());
-    if let Some(error) = facts.typing_refusal(shape) {
-        return Err(CodeRefused::Shape(error));
+    // Composed code's shape lies in its composition, where its frame checks it.
+    if let CodeBody::Written { segment } = node.shaped() {
+        let shape = door.shape(segment);
+        if let Some(error) = facts.typing_refusal(shape) {
+            return Err(CodeRefused::Shape(error));
+        }
+        if let Some(name) = unbound(code, shape, offered, types)? {
+            return Err(CodeRefused::Unbound(name));
+        }
     }
+    Ok(Request {
+        placement: Placement::Shares,
+        use_,
+        work: crate::scheduler::Work {
+            step: run,
+            state: KBirth::Eval {
+                program,
+                code: Value::Knotted(code),
+                offered,
+                contract: Contract {
+                    callee: None,
+                    returns,
+                    retype: returns,
+                    checked: false,
+                },
+                inherit,
+            },
+        },
+    })
+}
+
+/// The first name `code`, of code shape `shape`, reads that nothing binds — a hole no `USING`
+/// filled, a key some use selects from alone, a `\` name `offered` lacks, a `$` name composed code
+/// carries no binding of — or `None`; refused where a quantified function is bound at its entry
+/// and read anywhere but a call's head.
+fn unbound<'step>(
+    code: Knotted<'_, '_>,
+    shape: &BodyShape<'_>,
+    offered: KValue<'_, '_>,
+    types: &Chain<'_, '_, '_, '_>,
+) -> Result<Option<BinderSymbol>, CodeRefused<'step>> {
+    let node = code.code().expect("an `EVAL` is handed a quote's code");
     let scratch = Bump::new();
     let offers = |name: BinderSymbol| offered.field(name.symbol(), types, &scratch).is_some();
     for capture in shape.captures() {
@@ -763,28 +824,10 @@ pub fn eval<'step, 'graph, 'here>(
             }
         };
         if !bound {
-            return Err(CodeRefused::Unbound(capture.name));
+            return Ok(Some(capture.name));
         }
     }
-    Ok(Request {
-        placement: Placement::Shares,
-        use_,
-        work: crate::scheduler::Work {
-            step: run,
-            state: KBirth::Eval {
-                program,
-                code: Value::Knotted(code),
-                offered,
-                contract: Contract {
-                    callee: None,
-                    returns,
-                    retype: returns,
-                    checked: false,
-                },
-                inherit,
-            },
-        },
-    })
+    Ok(None)
 }
 
 /// Whether `value` is a quantified function not made an instance: read only at a call's head.
@@ -1480,7 +1523,7 @@ fn code_frame<'graph, 'here>(
     let member = code.as_code()?;
     let node = member.code()?;
     let (door, facts) = step.door();
-    let shape = door.shape(node.segment());
+    let shape = node.shape(&door);
     offered.as_record()?;
     let find = |run: &[(BinderSymbol, Link<'here, Knotted<'graph, 'here>>)], name| {
         let at = run.binary_search_by_key(&name, |(held, _)| *held).ok()?;

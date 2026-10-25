@@ -48,7 +48,9 @@
 
 use crate::elaborate::{bound_path, denoted};
 use crate::knot::module::view::{self, Ascription, Unascribable};
-use crate::knot::{KValue, Knotted, KnottedFamily, instance, lambda, quote, refused_construction};
+use crate::knot::{
+    CodeBody, KValue, Knotted, KnottedFamily, instance, lambda, quote, refused_construction,
+};
 use crate::memory::{Bump, BumpAllocator, BumpVec, Writer, collect};
 use crate::parse::BuiltinShapeId;
 use crate::parse::Role;
@@ -602,7 +604,15 @@ fn evaluated<'step, 'graph, 'here>(
         Use::Forwards,
     ) {
         Ok(request) => {
-            let asked = step.spawn(request);
+            // Code composed at run time runs under its composition, where its shape lies.
+            let composed = (code.code()).and_then(|node| match node.shaped() {
+                CodeBody::Composed { root, .. } => Some(root),
+                CodeBody::Written { .. } => None,
+            });
+            let asked = match composed {
+                Some(root) => step.spawn_composing(request, root),
+                None => step.spawn(request),
+            };
             park(step, at, asked, FINISHING)
         }
         Err(refused) => {

@@ -1,11 +1,14 @@
 //! The build arena: the settlements a graph's frames run under, kept as books beside the cell
 //! graph rather than as cells in it.
 //!
-//! An arena node is a settlement: one body's facts settled under one binding, found by its parent
-//! and its [`SettlementKey`]. Its parent is the arena node its callee was born under, or the root,
-//! the frozen load, which is no slot ([`ArenaRef::ROOT`]). Its facts are a [`Settled`]: a bump
-//! holding them beside a shared hold on its parent's, which they read below them, so a step reads
-//! the chain through the newest alone, borrowed from the arena for the step. A run cell born under an arena node
+//! An arena node is a settlement or a composition. A settlement is one body's facts settled under
+//! one binding, found by its parent and its [`SettlementKey`]. Its parent is the arena node its
+//! callee was born under, or the root, the frozen load, which is no slot ([`ArenaRef::ROOT`]). Its
+//! facts are a [`Settled`]: a bump holding them beside a shared hold on its parent's, which they
+//! read below them, so a step reads the chain through the newest alone, borrowed from the arena for
+//! the step. A composition is the facts of code composed at run time, a child of the root found
+//! by its syntax digest: a [`Composed`], its shapes and records in program storage of its own,
+//! which a step under it reads as its chain's base in place of the load. A run cell born under an arena node
 //! borrows it for its life, through the drain, so a borrowed arena node is never evicted. Each
 //! slot carries a generation, bumped when its arena node is evicted, so an [`ArenaRef`] held past
 //! an eviction names nothing rather than the slot's next tenant.
@@ -20,13 +23,14 @@
 //! count. See [build/README.md § The store](../build/README.md#the-store).
 
 use std::collections::HashMap;
+use std::marker::PhantomData;
 use std::rc::Rc;
 
 use self_cell::self_cell;
 
-use crate::memory::Bump;
-use crate::scope::{Facts, LoadFacts, Settlement};
-use crate::values::{ArenaRef, BuildBudget, SettlementKey};
+use crate::memory::{Bump, ProgramBrand, ProgramStorage, program_storage};
+use crate::scope::{Composition, Facts, LoadFacts, Settlement};
+use crate::values::{ArenaRef, BuildBudget, ContentDigest, SettlementKey};
 
 /// A graph's arena nodes, their books, and the budget their unheld bytes stay within.
 pub(super) struct BuildArena<'graph> {
@@ -35,6 +39,8 @@ pub(super) struct BuildArena<'graph> {
     free: Vec<u32>,
     /// Every live settlement, by its parent and key.
     children: HashMap<(ArenaRef, SettlementKey), ArenaRef>,
+    /// Every live composition, by its syntax digest.
+    compositions: HashMap<ContentDigest, ArenaRef>,
     budget: BuildBudget,
     /// Bytes of every live arena node.
     total: usize,
@@ -50,11 +56,11 @@ struct Slot<'graph> {
     node: Option<ArenaNode<'graph>>,
 }
 
-/// A settlement's books: where it sits, who holds it, when it was last used, and what it weighs,
+/// An arena node's books: where it sits, who holds it, when it was last used, and what it weighs,
 /// beside its facts.
 struct ArenaNode<'graph> {
     parent: ArenaRef,
-    key: SettlementKey,
+    kind: Kind<'graph>,
     /// Run cells borrowing it.
     borrowers: usize,
     /// Children that are held.
@@ -64,7 +70,72 @@ struct ArenaNode<'graph> {
     /// The clock at its last use: a miss, a hit, or a hop under it.
     used: u64,
     bytes: usize,
-    facts: Rc<Settled<'graph>>,
+}
+
+/// Which arena node it is, by what finds it, beside its facts.
+enum Kind<'graph> {
+    Settlement {
+        key: SettlementKey,
+        facts: Rc<Settled<'graph>>,
+    },
+    Composition {
+        digest: ContentDigest,
+        facts: Rc<Composed<'graph>>,
+    },
+}
+
+/// What a step under an arena node reads facts through: the composition its chain rests on, if
+/// not the load, and the settlement it runs under, if any.
+pub(super) struct Door<'a> {
+    pub composition: Option<&'a Composition<'a>>,
+    pub top: Option<&'a Settlement<'a>>,
+}
+
+/// What a composition's facts are laid in: program storage of its own, which its shapes and
+/// records rest in as the load's rest in the program's, and a bump its walk interns through and
+/// its terms are laid in. Its facts may read what lives at `'graph`, which outlives it.
+pub(super) struct ComposedOwner<'graph> {
+    storage: ProgramStorage,
+    bump: Bump,
+    graph: PhantomData<&'graph ()>,
+}
+
+self_cell!(
+    /// A composition's facts, laid in the storage its owner keeps. A step reads them only borrowed
+    /// from the arena, as it reads a settlement's.
+    pub(super) struct Composed<'graph> {
+        owner: ComposedOwner<'graph>,
+        #[covariant]
+        dependent: Composition,
+    }
+);
+
+impl<'graph> Composed<'graph> {
+    /// The facts `compose` lays in fresh storage, through its brand and beside its bump, handed
+    /// the witness that `'graph` outlives both.
+    pub(super) fn build(
+        compose: impl for<'a> FnOnce(ProgramBrand<'a>, &'a Bump, &'a &'graph ()) -> Composition<'a>,
+    ) -> Self {
+        let owner = ComposedOwner {
+            storage: program_storage(),
+            bump: Bump::new(),
+            graph: PhantomData,
+        };
+        Composed::new(owner, |owner| {
+            compose(owner.storage.brand(), &owner.bump, &&())
+        })
+    }
+
+    /// The facts themselves.
+    pub(super) fn facts(&self) -> &Composition<'_> {
+        self.borrow_dependent()
+    }
+
+    /// What the facts weigh: their storage's bytes and their bump's.
+    fn bytes(&self) -> usize {
+        let owner = self.borrow_owner();
+        owner.storage.allocated_bytes() + owner.bump.allocated_bytes()
+    }
 }
 
 /// What a settlement's facts are laid in: their own bump, beside the parent settlement they read
@@ -131,6 +202,7 @@ impl<'graph> BuildArena<'graph> {
             slots: Vec::new(),
             free: Vec::new(),
             children: HashMap::new(),
+            compositions: HashMap::new(),
             budget,
             total: 0,
             held: 0,
@@ -160,9 +232,36 @@ impl<'graph> BuildArena<'graph> {
         self.children.get(&(parent, key)).copied()
     }
 
-    /// The facts of the live settlement `at`: `None` for the root, or a handle gone stale.
+    /// The facts of the live settlement `at`: `None` for the root, a composition, or a handle gone
+    /// stale.
     pub(super) fn facts(&self, at: ArenaRef) -> Option<&Rc<Settled<'graph>>> {
-        Some(&self.node(at)?.facts)
+        match &self.node(at)?.kind {
+            Kind::Settlement { facts, .. } => Some(facts),
+            Kind::Composition { .. } => None,
+        }
+    }
+
+    /// What a step under the live `at` reads: nothing past the load for the root.
+    pub(super) fn door(&self, at: ArenaRef) -> Door<'_> {
+        match self.node(at).map(|node| &node.kind) {
+            None => Door {
+                composition: None,
+                top: None,
+            },
+            Some(Kind::Settlement { facts, .. }) => Door {
+                composition: None,
+                top: Some(facts.facts()),
+            },
+            Some(Kind::Composition { facts, .. }) => Door {
+                composition: Some(facts.facts()),
+                top: None,
+            },
+        }
+    }
+
+    /// The live composition of the code whose syntax digest is `digest`, if any. Stamps nothing.
+    pub(super) fn composition(&self, digest: ContentDigest) -> Option<ArenaRef> {
+        self.compositions.get(&digest).copied()
     }
 
     /// A new settlement keyed `key` under the live `parent`, holding `facts`, unheld and stamped.
@@ -182,17 +281,36 @@ impl<'graph> BuildArena<'graph> {
             self.find(parent, key).is_none(),
             "a key settles once per parent"
         );
-        let bytes = size_of::<ArenaNode<'_>>() + facts.bytes();
+        let bytes = facts.bytes();
+        let facts = Rc::new(facts);
+        let at = self.laid(parent, bytes, Kind::Settlement { key, facts });
+        self.children.insert((parent, key), at);
+        at
+    }
+
+    /// A new composition of the code whose syntax digest is `digest`, a child of the root holding
+    /// `facts`, unheld and stamped. Evicts nothing, as [`insert`](Self::insert) does not.
+    pub(super) fn compose(&mut self, digest: ContentDigest, facts: Composed<'graph>) -> ArenaRef {
+        debug_assert!(self.composition(digest).is_none(), "a syntax composes once");
+        let bytes = facts.bytes();
+        let facts = Rc::new(facts);
+        let at = self.laid(ArenaRef::ROOT, bytes, Kind::Composition { digest, facts });
+        self.compositions.insert(digest, at);
+        at
+    }
+
+    /// A slot for a new arena node of `kind` weighing `bytes` past its books, under `parent`.
+    fn laid(&mut self, parent: ArenaRef, bytes: usize, kind: Kind<'graph>) -> ArenaRef {
+        let bytes = size_of::<ArenaNode<'_>>() + bytes;
         self.clock += 1;
         let node = ArenaNode {
             parent,
-            key,
+            kind,
             borrowers: 0,
             held_children: 0,
             children: 0,
             used: self.clock,
             bytes,
-            facts: Rc::new(facts),
         };
         let at = match self.free.pop() {
             Some(slot) => {
@@ -213,7 +331,6 @@ impl<'graph> BuildArena<'graph> {
         if let Some(parent) = self.node_mut(parent) {
             parent.children += 1;
         }
-        self.children.insert((parent, key), at);
         at
     }
 
@@ -310,7 +427,10 @@ impl<'graph> BuildArena<'graph> {
         entry.generation += 1;
         self.free.push(slot);
         self.total -= node.bytes;
-        self.children.remove(&(node.parent, node.key));
+        match node.kind {
+            Kind::Settlement { key, .. } => self.children.remove(&(node.parent, key)),
+            Kind::Composition { digest, .. } => self.compositions.remove(&digest),
+        };
         if let Some(parent) = self.node_mut(node.parent) {
             parent.children -= 1;
         }
@@ -320,6 +440,12 @@ impl<'graph> BuildArena<'graph> {
     #[cfg(test)]
     pub(super) fn len(&self) -> usize {
         self.children.len()
+    }
+
+    /// How many compositions are live.
+    #[cfg(test)]
+    pub(super) fn compositions(&self) -> usize {
+        self.compositions.len()
     }
 
     /// How many live settlements lie directly under `parent`.

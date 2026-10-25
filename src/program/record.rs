@@ -10,13 +10,13 @@
 use std::cell::Cell;
 use std::fmt;
 
-use crate::knot::{KActivationView, KBuiltins, KValue};
-use crate::memory::{Bump, BumpAllocator, Writer};
-use crate::parse::ParseError;
+use crate::knot::{ComposedRoot, KActivationView, KBuiltins, KValue};
+use crate::memory::{Bump, BumpAllocator, ProgramBrand, Writer};
+use crate::parse::{ParseError, ProgramNode};
 use crate::scheduler::{Ask, NativeStep, Settles, Work};
 use crate::scope::{
-    BodyShape, Facts, LoadFacts, Segment, Settlement, ShapeError, Shapes, Site, Slot, Store,
-    Written,
+    BodyShape, Composition, Facts, LoadFacts, Segment, Settlement, ShapeError, Shapes, Site, Slot,
+    Store, Written,
 };
 use crate::symbols::{BinderSymbol, SymbolInterner};
 use crate::type_lattice::{
@@ -154,6 +154,16 @@ pub(super) type Settle<'graph> = for<'a> fn(
     &'a &'graph (),
 ) -> Option<Settlement<'a>>;
 
+/// The miss a composition is built through, the language's monomorphized in:
+/// [`composed`](super::settle::composed).
+pub(super) type Compose<'graph> = for<'a> fn(
+    &Program<'graph>,
+    ProgramBrand<'a>,
+    &'a Bump,
+    ProgramNode<'graph>,
+    &'a &'graph (),
+) -> Composition<'a>;
+
 impl<'graph> Settles<'graph> for Program<'graph> {
     fn settle<'a>(
         &self,
@@ -163,6 +173,16 @@ impl<'graph> Settles<'graph> for Program<'graph> {
         witness: &'a &'graph (),
     ) -> Option<Settlement<'a>> {
         (self.settle)(self, bump, parent, ask, witness)
+    }
+
+    fn compose<'a>(
+        &self,
+        brand: ProgramBrand<'a>,
+        bump: &'a Bump,
+        root: ComposedRoot<'graph>,
+        witness: &'a &'graph (),
+    ) -> Composition<'a> {
+        (self.compose)(self, brand, bump, root.syntax, witness)
     }
 }
 
@@ -179,6 +199,7 @@ pub struct Program<'graph> {
     symbols: &'graph SymbolInterner,
     evaluator: NativeStep<'graph, KBundle>,
     settle: Settle<'graph>,
+    compose: Compose<'graph>,
     activate: Activate<'graph>,
     output: Output,
     error: KType,
@@ -195,9 +216,10 @@ impl<'graph> Program<'graph> {
         tiers: TypeTiers<'graph>,
         error: KType,
         symbols: &'graph SymbolInterner,
-        (evaluator, settle, activate): (
+        (evaluator, settle, compose, activate): (
             NativeStep<'graph, KBundle>,
             Settle<'graph>,
+            Compose<'graph>,
             Activate<'graph>,
         ),
         output: Output,
@@ -210,6 +232,7 @@ impl<'graph> Program<'graph> {
             symbols,
             evaluator,
             settle,
+            compose,
             activate,
             output,
             error,

@@ -21,6 +21,7 @@ use crate::parse::{ExpressionPart, ProgramNode};
 use crate::type_lattice::{DeclaredType, Interval, KType, Parametric};
 use crate::values::ContentDigest;
 
+use super::composition::Composition;
 use super::facts::{Address, Binding, Bound, Frontier, UnitId, Unknown};
 use super::keyed::Keyed;
 use super::relay::Relay;
@@ -357,13 +358,14 @@ pub struct LoadRecords<'graph> {
     records: &'graph Records<'graph>,
 }
 
-/// A cell's layers over the load its chain rests on: the events its frame's activation decided,
-/// innermost first, then the settlement it runs under, whose parents lie below it. A read tries
-/// each layer from the innermost, then the load, and a unit an inner layer re-ran replaces every
-/// outer record of it whole.
+/// A cell's layers over the base its chain rests on — the load, or a composition: the events its
+/// frame's activation decided, innermost first, then the settlement it runs under, whose parents
+/// lie below it. A read tries each layer from the innermost, then the base, and a unit an inner
+/// layer re-ran replaces every outer record of it whole.
 #[derive(Clone, Copy)]
 pub struct Layers<'step> {
     base: LoadRecords<'step>,
+    composition: Option<&'step Composition<'step>>,
     top: Option<&'step Settlement<'step>>,
     activation: Option<&'step Activated<'step>>,
 }
@@ -378,9 +380,29 @@ impl<'step> Facts<'step> {
     pub fn under(load: &LoadFacts<'step>, top: Option<&'step Settlement<'step>>) -> Self {
         FactsOver(Layers {
             base: load.0,
+            composition: None,
             top,
             activation: None,
         })
+    }
+
+    /// The facts a cell whose chain rests on `composition` reads: its layers over the
+    /// composition's, under the settlement `top`.
+    pub fn composed(
+        composition: &'step Composition<'step>,
+        top: Option<&'step Settlement<'step>>,
+    ) -> Self {
+        FactsOver(Layers {
+            base: composition.facts().0,
+            composition: Some(composition),
+            top,
+            activation: None,
+        })
+    }
+
+    /// The composition the cell's chain rests on, if not the load.
+    pub fn composition(&self) -> Option<&'step Composition<'step>> {
+        self.0.composition
     }
 
     /// These facts beneath `activation`, the events a frame's activation decided, in place of any
@@ -397,9 +419,13 @@ impl<'step> Facts<'step> {
         self.0.top
     }
 
-    /// The wording of the refusal the innermost settlement's walk reached, if it reached one.
+    /// The wording of the refusal the innermost settlement's walk reached, else the refusal of the
+    /// composed code the chain rests on, if either reached one.
     pub fn refusal(&self) -> Option<&'step str> {
-        self.0.top?.refusal()
+        match self.0.top {
+            Some(top) => top.refusal(),
+            None => self.0.composition?.refusal(),
+        }
     }
 }
 
@@ -836,6 +862,11 @@ impl<'graph> LoadFacts<'graph> {
     }
 
     /// The units this load ran itself, each beside its record and frontier, sorted.
+    /// Hand `each` every type these records name.
+    pub fn each_type(&self, each: &mut dyn FnMut(DeclaredType<Parametric>)) {
+        self.0.records.each_type(each);
+    }
+
     pub fn own_units(&self) -> &'graph [(UnitId, (&'graph UnitFacts<'graph>, Frontier<'graph>))] {
         self.0.records.units.entries()
     }

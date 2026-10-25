@@ -26,6 +26,11 @@ impl ProgramStorage {
     pub fn brand(&self) -> ProgramBrand<'_> {
         ProgramBrand(self.store.writer(), PhantomData)
     }
+
+    /// The bytes laid in it so far.
+    pub fn allocated_bytes(&self) -> usize {
+        self.store.allocated_bytes()
+    }
 }
 
 /// A [`Writer`] carrying the proof that its store is [`ProgramStorage`]'s. The parse entry points

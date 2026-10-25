@@ -133,13 +133,6 @@ impl<'graph> Shapes<'graph> {
 
     /// The shapes of code composed at run time, built alone under the program's `claims`: see
     /// [`build::code`](super::shape::build_code).
-    #[cfg_attr(
-        not(test),
-        expect(
-            dead_code,
-            reason = "a composition's miss builds its shapes here (P13)"
-        )
-    )]
     pub(crate) fn of_code<X: Knotted>(
         brand: ProgramBrand<'graph>,
         syntax: &KExpression<'graph>,

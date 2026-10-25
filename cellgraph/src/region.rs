@@ -924,6 +924,11 @@ impl Storage {
     pub fn writer(&self) -> Writer<'_, '_> {
         Writer(&self.0, PhantomData)
     }
+
+    /// The bytes written so far.
+    pub fn allocated_bytes(&self) -> usize {
+        self.0.allocated_bytes()
+    }
 }
 
 /// What sits at the front of a [`ThinRun`]'s allocation: its length. The elements follow at

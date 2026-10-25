@@ -19,13 +19,16 @@
 
 use std::fmt::Write as _;
 
-use crate::build::{Layer, key_of};
+use crate::build::{Layer, LoadStore, fold, key_of};
 use crate::knot::{Function, KValue, Knotted};
-use crate::memory::{Bump, BumpVec, resident};
+use crate::memory::{Bump, BumpBackedSet, BumpVec, ProgramBrand, bump_set, collect, resident};
+use crate::parse::ProgramNode;
 use crate::scheduler::{Ask, Asked, Seek};
-use crate::scope::{Address, Binding, Bound, Code, Facts, Settlement, Tree, Unknown};
+use crate::scope::{
+    Address, Binding, Bound, Code, Composition, Facts, Settlement, Shapes, Tree, Unknown,
+};
 use crate::symbols::BinderSymbol;
-use crate::type_lattice::{DeclaredType, KType, TypeNode};
+use crate::type_lattice::{DeclaredType, KType, Parametric, TypeNode};
 use crate::values::digest::type_digest;
 use crate::values::{
     ArenaRef, BindingImage, Chain, KeyedTypes, Knotted as _, Value, retype_target,
@@ -278,6 +281,71 @@ pub(crate) fn settled<'a, 'graph, L: Language>(
             Settlement::refused(below, binding, refusal)
         }
     })
+}
+
+/// The composition of the code `syntax`, composed at run time: its shapes built alone under the
+/// program's claims and laid through `brand`, then `L`'s walk rooted at them with nothing bound,
+/// its records and folds laid there too, as the load lays the program's. The walk interns through
+/// a chain of its own over the agent tier, laid in `bump`; a term of each type the shapes or
+/// records name that the agent tier and the root do not hold is laid in `bump` too, for a frame
+/// under the composition to mint, so nothing rests in the agent tier. A refusal its code reached —
+/// the walk's, or the code's own — is kept worded as the load words it.
+pub(crate) fn composed<'a, 'graph, L: Language>(
+    program: &Program<'graph>,
+    brand: ProgramBrand<'a>,
+    bump: &'a Bump,
+    syntax: ProgramNode<'graph>,
+    _: &'a &'graph (),
+) -> Composition<'a> {
+    let scratch = Bump::new();
+    let tiers = program.tiers();
+    let types = tiers.settling(bump);
+    let claims = program.shapes().root().group_frame().claims();
+    let builtins = program.builtins();
+    let symbols = program.symbols();
+    let shapes = Shapes::of_code(
+        brand,
+        syntax.reference(),
+        claims,
+        builtins,
+        &types,
+        symbols,
+        &scratch,
+    );
+    let writer = brand.writer();
+    let store = LoadStore::new(writer, &scratch, shapes, Binding::EMPTY);
+    let root = shapes.root();
+    let walked = L::facts(shapes, builtins, &store, &types, &scratch, root.segment());
+    let unfolded = resident(writer, store.facts(&scratch));
+    let facts = resident(
+        writer,
+        unfolded.folded(writer, fold(unfolded, writer, &scratch)),
+    );
+    let rendered = |text: std::fmt::Arguments<'_>| {
+        let mut rendered = Text(BumpVec::new_in(&scratch));
+        rendered.write_fmt(text).expect("a refusal renders");
+        &*bump.alloc_str(std::str::from_utf8(&rendered.0).expect("rendered as UTF-8"))
+    };
+    let refusal = match walked {
+        Err(error) => Some(rendered(format_args!("{}", error.display(symbols, &types)))),
+        Ok(()) => (facts.typing_refusal(root).or_else(|| facts.overlap(root)))
+            .map(|error| rendered(format_args!("{}", error.display(symbols, &types)))),
+    };
+    // Each type a frame under the composition reads, as a term where the agent tier lacks it.
+    let resting = tiers.resting();
+    let mut named: BumpVec<'_, DeclaredType<Parametric>> = BumpVec::new_in(&scratch);
+    for shape in shapes.bodies() {
+        named.push(DeclaredType::from(shape.code_type()));
+    }
+    facts.each_type(&mut |kt| named.push(kt));
+    let mut exported: BumpBackedSet<'_, DeclaredType<Parametric>> = bump_set(&scratch);
+    let mut terms = BumpVec::new_in(&scratch);
+    for kt in named.iter() {
+        if !resting.resolves(*kt) && exported.insert(*kt) {
+            terms.push(types.export(*kt, &resting, bump, &scratch));
+        }
+    }
+    Composition::new(facts, collect(bump, terms.iter().copied()), refusal)
 }
 
 /// Text rendered into a scratch bump.
