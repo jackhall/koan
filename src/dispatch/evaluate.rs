@@ -1076,8 +1076,6 @@ thread_local! {
     pub(crate) static DERIVED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     /// How many tail calls hopped under their frame's own settlement.
     pub(crate) static HOPPED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-    /// The most bytes an asker's region had handed out at a call that sought a settlement.
-    pub(crate) static ASKER_BYTES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// Run the frame `call` asks for over `callee`: a hop owing `tails` where it keeps the contract,
@@ -1140,11 +1138,6 @@ fn called<'step, 'graph, 'here>(
         &at.types,
         &types,
     );
-    #[cfg(test)]
-    if seek.settlement.is_some() {
-        let bytes = step.writer().in_use();
-        ASKER_BYTES.with(|most| most.set(most.get().max(bytes)));
-    }
     let asked = step.spawn_seeking(request, seek);
     park(step, at, asked, FINISHING)
 }

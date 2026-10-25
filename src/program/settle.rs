@@ -321,14 +321,11 @@ pub(crate) fn settled<'a, 'graph, L: Language>(
         }
     }
     let binding = Binding::laid(bump, &mut staged);
-    let layer = Layer::new(bump, &scratch, parent, binding);
     let tiers = program.tiers();
     let types = tiers.settling(bump);
     // Every type the layers below and the binding name resolves in the walk's chain before it
     // reads them.
-    parent.each_term(&mut |term| {
-        types.mint(term);
-    });
+    let layer = Layer::new(bump, &scratch, parent.whole(&types), binding);
     rest(Some(&types));
     let walked = L::facts(
         shapes,
@@ -430,7 +427,6 @@ pub(crate) fn composed<'a, 'graph, L: Language>(
     )
 }
 
-/// Text rendered into a scratch bump.
 /// A term of each type in `named` that `resting` lacks, exported from `types` and laid in `bump`,
 /// by digest: what a frame under a composition mints so every type its facts name resolves.
 fn exported<'a>(
@@ -457,6 +453,7 @@ fn rendered<'a>(bump: &'a Bump, scratch: &Bump, display: std::fmt::Arguments<'_>
     bump.alloc_str(std::str::from_utf8(&text.0).expect("rendered as UTF-8"))
 }
 
+/// Text rendered into a scratch bump.
 pub(super) struct Text<'x>(pub(super) BumpVec<'x, u8>);
 
 impl std::fmt::Write for Text<'_> {

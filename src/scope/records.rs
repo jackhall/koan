@@ -1,7 +1,7 @@
 //! The **load's facts**, read through one set of readers over a source of records: [`LoadFacts`]
 //! over one load's own, and [`Facts`], what a step reads through its door, over a cell's layers and
-//! the load they rest on. Every reader takes the body's shape first, so no reader names where a
-//! fact is kept. A shape names its body by its segment alone, so a reader may hand in a shape
+//! the load they rest on. Every reader takes the body's shape, so no reader names where a fact is
+//! kept. A shape names its body by its segment alone, so a reader may hand in a shape
 //! borrowed for any lifetime. A reader whose fact names a type takes the reading frame's chain
 //! before the shape and hands back the fact with every type it names resolving there, minted from
 //! its composition's term where the chain lacks it, so no read can skip the mint.
@@ -378,8 +378,9 @@ pub struct NamedVariable {
 }
 
 /// The fact readers over a source of records: [`LoadFacts`] over one load's, [`Facts`] over a
-/// cell's layers and the load they rest on. Every reader takes the body's shape first and finds
-/// the fact by its segment, so a reader may hand in a shape borrowed for any lifetime.
+/// cell's layers and the load they rest on. Every reader takes the body's shape and finds the fact
+/// by its segment, so a reader may hand in a shape borrowed for any lifetime; one whose fact names
+/// a type takes the reading frame's chain before it.
 #[derive(Clone, Copy)]
 pub struct FactsOver<S>(S);
 
@@ -485,6 +486,20 @@ impl<'step> Facts<'step> {
         (settlements.iter())
             .flat_map(|layer| layer.terms().entries())
             .for_each(|(_, term)| each(term));
+    }
+
+    /// These facts' layers, for a walk to rest on: every term they hold is minted into `types`
+    /// first, so each type their records name resolves in the walk's chain.
+    pub(crate) fn whole(&self, types: &Chain<'_, '_, '_, '_>) -> Layers<'step> {
+        self.each_term(&mut |term| {
+            types.mint(term);
+        });
+        self.0
+    }
+
+    /// Whether any layer binds `unknown`.
+    pub fn binds(&self, unknown: Unknown) -> bool {
+        self.0.bound(unknown).is_some()
     }
 
     /// The wording of the refusal the innermost settlement's walk reached, else the refusal of the
@@ -700,8 +715,10 @@ impl<'step> RecordSource<'step> for Layers<'step> {
     }
 }
 
-// A layer may rest on any fact reader: a resumption's base is the facts it extends.
-impl<'a, S: RecordSource<'a>> RecordSource<'a> for FactsOver<S> {
+// A resumption's base is the load facts it extends. Every type the load's records name lies in the
+// root or the agent tier, so a raw read of them needs no mint; a step's [`Facts`] hands a walk its
+// layers only through [`Facts::whole`].
+impl<'a> RecordSource<'a> for LoadFacts<'a> {
     fn shapes(&self) -> &'a Shapes<'a> {
         self.0.shapes()
     }
@@ -744,14 +761,6 @@ impl<'a, S: RecordSource<'a>> RecordSource<'a> for FactsOver<S> {
 
     fn tree_of(&self, digest: ContentDigest) -> Option<&'a Tree<'a>> {
         self.0.tree_of(digest)
-    }
-
-    fn composed(&self) -> bool {
-        self.0.composed()
-    }
-
-    fn term(&self, digest: TypeDigest) -> Option<&'a Term<'a>> {
-        self.0.term(digest)
     }
 }
 
@@ -1110,12 +1119,12 @@ impl<'graph> LoadFacts<'graph> {
         self.0.records.closing(body)
     }
 
-    /// The units this load ran itself, each beside its record and frontier, sorted.
     /// Hand `each` every type these records name.
     pub fn each_type(&self, each: &mut dyn FnMut(DeclaredType<Parametric>)) {
         self.0.records.each_type(each);
     }
 
+    /// The units this load ran itself, each beside its record and frontier, sorted.
     pub fn own_units(&self) -> &'graph [(UnitId, (&'graph UnitFacts<'graph>, Frontier<'graph>))] {
         self.0.records.units.entries()
     }
@@ -1149,26 +1158,26 @@ impl<'a, S: RecordSource<'a>> FactsOver<S> {
         fact
     }
 
-    /// `fact`, a fact of `shape` read at `site` where the cell runs: closed, refused at every run,
-    /// or left open to the run's own door. A rigid fact never reaches the run — every variable the
+    /// `fact`, a fact of `shape` read at `site` where the cell runs, as a reader handed it back
+    /// with its types resolving in `types`: closed, refused at every run, or left open to the run's
+    /// own door. A rigid fact never reaches the run — every variable the
     /// load left open is bound in a layer the cell reads — save one over a path the load read off a
     /// signature lacking its member, which every run refuses; any other is a bug, refused as the
     /// load refuses a name with no binding.
-    pub fn at_run<C: Named, R>(
+    pub fn at_run<C, R>(
         &self,
         types: &Chain<'_, '_, '_, '_>,
         shape: &BodyShape<'_>,
         site: Site,
         fact: Static<'a, C, R>,
     ) -> AtRun<C> {
-        let read = match fact {
+        match fact {
             Static::Closed(value) => AtRun::Closed(value),
             Static::Unknown => AtRun::Open,
             Static::Rigid { variables, .. } => {
                 AtRun::Refused(self.unbound(types, shape, site, variables))
             }
-        };
-        self.minted(types, read)
+        }
     }
 
     /// The type the type expression at `site` of `shape` denotes where the cell runs, or why every
@@ -1625,7 +1634,8 @@ impl<'a, S: RecordSource<'a>> FactsOver<S> {
 
     /// The slots `shape` binds at a statement that some unit's frontier holds.
     pub fn rooting_seams(&self, shape: &BodyShape<'_>) -> &'a [Slot] {
-        self.folds(shape.segment())
+        self.0
+            .folds(shape.segment())
             .map_or(&[], |folds| folds.rooting)
     }
 

@@ -5,7 +5,7 @@
 use crate::memory::Bump;
 use crate::parse::{ExpressionPart, KExpression};
 use crate::program::Program;
-use crate::scope::{BodyShape, ShapeKind, Static};
+use crate::scope::{BodyShape, Narrowing, ShapeKind, Static};
 use crate::type_lattice::{DeclaredType, Interval, KType, Parametric, shape_slots};
 use crate::values::tests::reading;
 
@@ -382,6 +382,39 @@ fn a_call_admits_only_its_maybe_candidates() {
         assert_eq!(let_narrowing(program, program.shape(), "p"), "selected");
     });
     assert_eq!(run(&format!("{exact}\nPRINT p")), "joint");
+}
+
+#[test]
+fn a_kept_list_s_points_are_types_its_records_name() {
+    // `exact` keeps the list open; `apart` always admits, its `First` solved to `Number | Str`,
+    // which no fact names whole but this point: a settlement rests it and a composition exports
+    // its term only if the records name it.
+    let source = "EXPR FOR ALL #[First Second] #(PAIR x :(LIST OF First) WITH y :Second) -> Str = \
+                  #(\"apart\")\n\
+                  EXPR #(PAIR x :(LIST OF Any) WITH y :Bool) -> Str = #(\"exact\")\n\
+                  EXPR #(USE e :(Str | Bool)) -> Str = #(PAIR [1, \"a\"] WITH e)";
+    loaded(source, |program| {
+        let (facts, types) = (program.facts(), program.tiers().resting());
+        let body = expressed(program, program.shape(), "USE");
+        let statics = facts.use_statics(&types, body, body.site_of_node(&body.body()[0]));
+        let Narrowing::Kept(kept) = statics.narrowing else {
+            panic!(
+                "the use keeps its candidates, not {}",
+                rendered(statics.narrowing)
+            )
+        };
+        let points: Vec<KType> = (kept.points.iter())
+            .flat_map(|points| (0..points.points.len()).filter_map(|at| points.closed(at)))
+            .collect();
+        let mut named = Vec::new();
+        facts.each_type(&mut |typed| named.push(typed));
+        let scratch = Bump::new();
+        let union = types.union_of(&scratch, &[KType::NUMBER, KType::STR]);
+        assert!(points.contains(&union), "{points:?}");
+        for point in points {
+            assert!(named.contains(&point.into()), "the records name {point:?}");
+        }
+    });
 }
 
 #[test]

@@ -1,8 +1,9 @@
 //! The region header: what a koan graph keeps per habitat half.
 //!
 //! A half's branch of the type lattice rests here, laid by the first door that interns into the
-//! half, beside the [decision memo](super::memo) of the cells whose results are built in it. The record is `scope`'s, so it can hold what `scope` names; `values` reads the branch
-//! through the projection [`RegionHeader`] implements ([`Projects`]).
+//! half, beside the [decision memo](super::memo) of the cells whose results are built in it. The
+//! record is `scope`'s, so it can hold what `scope` names; `values` reads the branch through the
+//! projection [`RegionHeader`] implements ([`Projects`]).
 
 use std::cell::Cell;
 

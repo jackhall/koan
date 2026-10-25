@@ -110,19 +110,17 @@ pub(crate) fn activated<'here, L: Language>(
     #[cfg(test)]
     DECIDED.with(|decided| decided.set(decided.get() + 1));
     let (bump, scratch) = (Bump::new(), Bump::new());
+    // The walk reads its base's records whole, not through the typed readers: every type they
+    // name resolves in the frame's chain before it runs.
+    let base = facts.whole(types);
     let mut staged = BumpVec::new_in(&scratch);
-    facts.each_bound(&mut |unknown, bound| staged.push((unknown, bound)));
+    base.each_bound(&mut |unknown, bound| staged.push((unknown, bound)));
     staged.extend(own.iter().copied());
     let binding = Binding::laid(&bump, &mut staged);
     let layer = match rewakes {
-        true => Layer::waking_all(&bump, &scratch, facts, binding),
-        false => Layer::new(&bump, &scratch, facts, binding),
+        true => Layer::waking_all(&bump, &scratch, base, binding),
+        false => Layer::new(&bump, &scratch, base, binding),
     };
-    // The walk reads its base's records whole, not through the typed readers: every type they
-    // name resolves in the frame's chain before it runs.
-    facts.each_term(&mut |term| {
-        types.mint(term);
-    });
     // The base the frame's chain rests on: the load's shapes, or its composition's.
     let walked = L::facts(
         facts.shapes(),

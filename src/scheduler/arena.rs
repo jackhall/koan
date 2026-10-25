@@ -28,7 +28,8 @@
 //! **Eviction** runs after a miss: while the unheld bytes exceed the [`BuildBudget`], the unheld
 //! arena node with no children, no pinner and the oldest use goes. A parent is no candidate while
 //! it has a child, nor a composition while a settlement pins it, so eviction takes leaves first.
-//! Each victim is found by a linear scan of the live arena nodes, held ones included. See [build/README.md § The store](../build/README.md#the-store).
+//! Each victim is found by a linear scan of the live arena nodes, held ones included. See
+//! [build/README.md § The store](../build/README.md#the-store).
 
 use std::collections::HashMap;
 use std::marker::PhantomData;

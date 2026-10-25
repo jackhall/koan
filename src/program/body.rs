@@ -66,7 +66,7 @@ use crate::scheduler::{
     Taken, Use,
 };
 use crate::scope::{Activated, Entry, EventSite, MemoKey, extended};
-use crate::scope::{Address, AtRun, Bound, RecordSource, Tree, Unknown};
+use crate::scope::{Address, AtRun, Bound, Tree, Unknown};
 use crate::scope::{BodyShape, Component, Position, ShapeKind, Site, Slot, Unit, UnitWork};
 use crate::scope::{CaptureSource, ClosureBindings, Code, ComposedRoot, Facts, ShapeError};
 use crate::scope::{ComposedSyntax, Level as SettlementLevel, Stamp};
@@ -633,7 +633,7 @@ fn decided_at_entry<'graph, 'here>(
     let reading = activation.view().reading(&code, facts);
     for at in waits.iter().copied() {
         let unknown = Unknown { segment, at };
-        if facts.bound(unknown).is_some() {
+        if facts.binds(unknown) {
             continue;
         }
         // A quote's code's capture holds the value its `EVAL` handed it.
@@ -2129,7 +2129,7 @@ fn decided_at_seams<'graph, 'here>(
         let seen = (facts.content(types, shape, *slot))
             .is_some_and(|tree| !matches!(tree, Tree::Leaf(_)) && (!rooting || tree.closed()));
         let closed = seen || matches!(facts.declared_type(types, shape, *slot), Static::Closed(_));
-        if closed || facts.bound(unknown).is_some() {
+        if closed || facts.binds(unknown) {
             continue;
         }
         let memo = at.digest_memo(local(*slot));
