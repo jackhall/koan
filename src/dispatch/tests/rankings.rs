@@ -146,3 +146,70 @@ fn a_module_ranked_in_written_order_does_not_satisfy_a_member_ranked_otherwise()
         "satisfies"
     );
 }
+
+/// Two overloads of `AREA` a call over a value typed `Any` may meet either of: the load keeps both
+/// and records how they rank.
+const AREAS: &str = "EXPR #(AREA x :Number) -> Str = #(\"number\")\n\
+                     EXPR #(AREA x :(Number | Str)) -> Str = #(\"either\")\n\
+                     LET r = ({v = 1} :! :{v :Any})\n";
+
+/// Run `source`, counting the pairs of shapes the run ranks, past the load.
+fn ranking(source: &str) -> (String, usize) {
+    use crate::dispatch::select::RANKED;
+    super::WRITTEN.with(|written| written.borrow_mut().clear());
+    let mut substrate =
+        CellSubstrate::load::<Koan>(source, "<test>", 8, BuildBudget::default(), output())
+            .unwrap_or_else(|error| panic!("the program loads: {error}"));
+    RANKED.with(|ranked| ranked.set(0));
+    substrate
+        .with(|running| running.run())
+        .expect("the program runs");
+    let written = super::WRITTEN.with(|written| written.borrow().join("\n"));
+    (written, RANKED.with(std::cell::Cell::get))
+}
+
+#[test]
+fn a_call_over_closed_candidates_ranks_nothing_at_the_run() {
+    let (printed, ranked) = ranking(&format!("{AREAS}PRINT (AREA r.v)"));
+    assert_eq!(printed, "number");
+    assert_eq!(ranked, 0, "the load recorded the pair's table");
+}
+
+proptest::proptest! {
+    #![proptest_config(proptest::prelude::ProptestConfig {
+        cases: crate::tests::case_share(1, 4),
+        ..proptest::prelude::ProptestConfig::default()
+    })]
+
+    /// A recorded ranking is the lattice's: at a call over a list the load recorded a table for,
+    /// every subset of its candidates as admitted is decided as the class-by-class elimination
+    /// decides it.
+    #[test]
+    fn a_recorded_table_decides_as_elimination_by_class(
+        program in super::generate::dispatched(),
+    ) {
+        use crate::dispatch::select::SUBSETS;
+        let rendered = program.render();
+        SUBSETS.with(|subsets| subsets.set(Some(0)));
+        let _ = run(&rendered.source);
+        SUBSETS.with(|subsets| subsets.set(None));
+    }
+}
+
+#[test]
+fn a_cycle_of_pairs_is_decided_whole() {
+    // `a` beats `b`, `b` beats `c` and `c` beats `a` pair by pair, yet over all three the
+    // elimination at the first class leaves `c`: the table keeps every pair's answer, and the
+    // call, which admits `a` and `b`, checks it at every subset of the three.
+    use crate::dispatch::select::SUBSETS;
+    let source = "EXPR #(PAIR x :Number AND y :Any) -> Str = #(\"a\")\n\
+                  EXPR #(PAIR x :(Number | Str) AND y :Number) -> Str = #(\"b\")\n\
+                  EXPR #(PAIR x :(Str | Bool) AND y :(Number | Str)) -> Str = #(\"c\")\n\
+                  LET r = ({v = 1, w = 1} :! :{v :Any, w :Any})\n\
+                  PRINT (PAIR r.v AND r.w)";
+    SUBSETS.with(|subsets| subsets.set(Some(0)));
+    let printed = run(source);
+    let checked = SUBSETS.with(|subsets| subsets.replace(None));
+    assert_eq!(printed, "a");
+    assert_eq!(checked, Some(1), "the call read a recorded table");
+}

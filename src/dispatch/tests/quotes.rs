@@ -243,7 +243,7 @@ fn a_quote_reads_its_dollar_names_at_their_static_types() {
             let Narrowing::Kept(kept) = facts.use_statics(code, *site).narrowing else {
                 return false;
             };
-            (kept.iter()).any(|(candidate, verdict)| {
+            (kept.entries.iter()).any(|(candidate, verdict)| {
                 matches!(candidate, Candidate::One(_)) && *verdict == Verdict::Always
             })
         });

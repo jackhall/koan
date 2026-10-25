@@ -121,13 +121,17 @@ pub(super) fn let_narrowing(program: &Program<'_>, shape: &BodyShape<'_>, name: 
 pub(super) fn rendered(narrowing: Narrowing<'_>) -> String {
     match narrowing {
         Narrowing::Full => "full".to_string(),
-        Narrowing::Kept(kept) => kept.iter().fold("kept".to_string(), |text, (_, verdict)| {
-            text + match verdict {
-                Verdict::Always => " always",
-                Verdict::Maybe => " maybe",
-                Verdict::Never => " never",
-            }
-        }),
+        Narrowing::Kept(kept) => {
+            kept.entries
+                .iter()
+                .fold("kept".to_string(), |text, (_, verdict)| {
+                    text + match verdict {
+                        Verdict::Always => " always",
+                        Verdict::Maybe => " maybe",
+                        Verdict::Never => " never",
+                    }
+                })
+        }
         Narrowing::Selected(_) => "selected".to_string(),
     }
 }
@@ -279,10 +283,10 @@ fn a_use_with_one_admitting_candidate_selects_it() {
 #[test]
 fn a_use_several_candidates_may_admit_joins_their_returns() {
     let source = format!("{AREAS}LET a = (AREA (EITHER))");
-    assert_eq!(narrowing(&source, "a"), "full");
+    assert_eq!(narrowing(&source, "a"), "kept maybe maybe");
     assert_eq!(top(&source, "a"), ":(Str | Number)");
     let source = format!("{AREAS}LET r = ({{v = 1}} :! :{{v :Any}})\nLET a = (AREA r.v)");
-    assert_eq!(narrowing(&source, "a"), "full");
+    assert_eq!(narrowing(&source, "a"), "kept maybe maybe");
     assert_eq!(top(&source, "a"), ":(Str | Number)");
 }
 

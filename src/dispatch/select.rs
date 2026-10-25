@@ -5,15 +5,18 @@
 //! solve reads ([`solving_slots`]), an operand the load recorded a **contribution** for is read as
 //! that type instead — its static type's upper end, resolved where the call runs — so a call
 //! solves from what the load knows of each argument and from the carried type only where it knows
-//! nothing. The admitting candidates are ranked by the lattice's per-class verdicts
-//! ([`select_by_class`]), which the registry records the first time a pair meets, so dispatch
-//! compares no slot types of its own. A lone survivor runs; where several survive, a builtin among
-//! them wins, and otherwise the call is ambiguous, whichever scopes the survivors were declared in.
+//! nothing. The admitting candidates are eliminated class by class over a [`Table`] of the
+//! lattice's per-class verdicts ([`outranks`]), which the registry records the first time a pair
+//! meets, so dispatch compares no slot types of its own. A lone survivor runs; where several
+//! survive, a builtin among them wins, and otherwise the call is ambiguous, whichever scopes the
+//! survivors were declared in.
 //!
 //! Where the load [narrowed](super::statics) a use's candidates, a call selects among those it
 //! kept: it admits each *maybe* one, takes each *always* one as admitted — solving only a
-//! quantified one's group — and ranks. Where it selected one, the call reads that candidate
-//! ([`chosen`]) and admits nothing, save to solve a quantified one's group.
+//! quantified one's group — and ranks. A kept list of closed functions carries the table the load
+//! recorded, so the call ranks nothing; any other list's table is built at the call over what
+//! admitted. Where the load selected one, the call reads that candidate ([`chosen`]) and admits
+//! nothing, save to solve a quantified one's group.
 //!
 //! A selected function is called by keyword: its argument record binds each slot to the parameter
 //! its registration names for it — or packs every slot into `operands` — and carries each of its
@@ -21,13 +24,13 @@
 
 use crate::knot::module::layout;
 use crate::knot::{BuiltinFunction, KValue, Knotted};
-use crate::memory::{Bump, BumpVec, Writer};
-use crate::scope::{Candidate, Coordinate, IMPLICIT};
+use crate::memory::{Bump, BumpVec, Lays, Writer};
+use crate::scope::{Candidate, Coordinate, Elimination, IMPLICIT, Table};
 use crate::scope::{ParameterBinding, Registered, ShapeGroupMap};
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::{
-    DeclaredType, KType, Parametric, Verdict, admit_by_class, outranks, satisfied_by, scheme_slots,
-    select_by_class, shape_slots, solving_slots, substitute_quantified,
+    DeclaredType, KType, Parametric, TypeNode, Verdict, admit_by_class, outranks, satisfied_by,
+    scheme_slots, select_by_class, shape_slots, solving_slots, substitute_quantified,
 };
 use crate::values::{Chain, List, Record, TypeValue, Value};
 
@@ -47,27 +50,33 @@ pub(super) enum Selection<'x, 'graph, 'here> {
     Ambiguous(usize),
 }
 
-/// One candidate that admitted the call's operands.
+/// One candidate that admitted the call's operands, beside its position on the list it was kept
+/// on.
 #[derive(Clone, Copy)]
 struct Admitted<'x, 'graph, 'here> {
     callee: KValue<'graph, 'here>,
     shape: DeclaredType<KType>,
     solution: &'x [KType],
+    position: usize,
 }
 
 /// Select among `candidates`, read through `at`'s view, for operands of the types `arguments`, each
 /// solving slot reading its operand's entry of `contributed` where it holds one: each candidate
-/// beside the load's verdict, where an *always* one is taken as admitted.
+/// beside the load's verdict, where an *always* one is taken as admitted. Those that admit are
+/// ranked by `elimination`, which names them by their position among `candidates`, or, where it is
+/// open, by a table of the admitted ones built here.
 pub(super) fn selected<'x, 'graph, 'here>(
     at: &Evaluation<'_, 'graph, 'here, '_, '_, '_>,
     candidates: impl IntoIterator<Item = (Candidate, Verdict)>,
+    elimination: Elimination<'_>,
     arguments: &[KType],
     contributed: &[Option<KType>],
     scratch: &'x Bump,
 ) -> Selection<'x, 'graph, 'here> {
     let types = &at.types;
     let mut admitted: BumpVec<'_, Admitted<'x, 'graph, 'here>> = BumpVec::new_in(scratch);
-    let mut consider = |callee: KValue<'graph, 'here>, verdict: Verdict| {
+    let mut positions = 0u64;
+    let mut consider = |callee: KValue<'graph, 'here>, verdict: Verdict, position: usize| {
         let Some(shape) = registered_shape(callee) else {
             return;
         };
@@ -78,24 +87,29 @@ pub(super) fn selected<'x, 'graph, 'here>(
             admit_by_class(types, scratch, shape, solved)
         };
         match solution {
-            Some(solution) => admitted.push(Admitted {
-                callee,
-                shape,
-                solution,
-            }),
+            Some(solution) => {
+                positions |= 1 << position.min(63);
+                admitted.push(Admitted {
+                    callee,
+                    shape,
+                    solution,
+                    position,
+                })
+            }
             None => debug_assert!(verdict != Verdict::Always, "an always candidate admits"),
         }
     };
-    for (candidate, verdict) in candidates {
+    for (position, (candidate, verdict)) in candidates.into_iter().enumerate() {
         match candidate {
-            Candidate::One(coordinate) => consider(at.view.read(coordinate), verdict),
+            Candidate::One(coordinate) => consider(at.view.read(coordinate), verdict, position),
             Candidate::Spread(coordinate) => {
                 let spread = at.view.read(coordinate);
                 if let (Some(_), Some(functions)) =
                     (spread.as_list(), spread.surface(types, scratch))
                 {
                     for at in 0..functions.len() {
-                        consider(functions.child(at, types, scratch).value(), Verdict::Maybe);
+                        let function = functions.child(at, types, scratch).value();
+                        consider(function, Verdict::Maybe, position);
                     }
                 }
             }
@@ -104,22 +118,30 @@ pub(super) fn selected<'x, 'graph, 'here>(
     if admitted.is_empty() {
         return Selection::NoOverload;
     }
-    let mut shapes: BumpVec<'_, DeclaredType<Parametric>> =
-        BumpVec::with_capacity_in(admitted.len(), scratch);
-    shapes.extend(
-        admitted
-            .iter()
-            .map(|admitted| DeclaredType::<Parametric>::from(admitted.shape)),
-    );
-    let survivors = select_by_class(types, scratch, &shapes);
-    let builtin = |index: usize| {
-        admitted[index]
-            .callee
-            .as_callable()
-            .and_then(Knotted::builtin)
-            .is_some()
+    let decided = match elimination {
+        Elimination::Table(table) => table.decide(positions).map(|position| {
+            (admitted
+                .iter()
+                .position(|admitted| admitted.position == position))
+            .expect("a table's winner admitted")
+        }),
+        Elimination::Open => {
+            let mut shapes: BumpVec<'_, DeclaredType<Parametric>> =
+                BumpVec::with_capacity_in(admitted.len(), scratch);
+            shapes.extend((admitted.iter()).map(|admitted| DeclaredType::from(admitted.shape)));
+            let builtin = |index: usize| {
+                (admitted[index].callee.as_callable())
+                    .and_then(Knotted::builtin)
+                    .is_some()
+            };
+            // More than a table ranks: the lattice's own elimination.
+            match table(scratch, types, scratch, &shapes, builtin) {
+                Some(table) => table.decide(u64::MAX >> (64 - admitted.len())),
+                None => winner(&select_by_class(types, scratch, &shapes), builtin),
+            }
+        }
     };
-    let chosen = match winner(&survivors, builtin) {
+    let chosen = match decided {
         Ok(index) => admitted[index],
         Err(count) => return Selection::Ambiguous(count),
     };
@@ -152,6 +174,82 @@ pub(super) fn winner(
             .find(|survivor| is_builtin(*survivor))
             .ok_or(survivors.len()),
     }
+}
+
+/// How many classes `shape`'s ranking has: one past the highest.
+fn class_count(types: &Chain<'_, '_, '_, '_>, shape: DeclaredType<Parametric>) -> usize {
+    // Only the ranking is read, which a scheme's body spells as a type's does.
+    let TypeNode::ExpressionShape { classes, .. } = shape.view(types).body else {
+        unreachable!("a registered shape is an expression shape")
+    };
+    classes
+        .iter()
+        .max()
+        .map_or(0, |highest| usize::from(highest) + 1)
+}
+
+/// The elimination table of `shapes`, registered shapes under one key and one ranking, each pair's
+/// answer read from the lattice's [`outranks`] and laid through `lay`; `builtin` says which are
+/// builtins. `None` for more shapes than a table ranks.
+pub(super) fn table<'l>(
+    lay: impl Lays<'l>,
+    types: &Chain<'_, '_, '_, '_>,
+    scratch: &Bump,
+    shapes: &[DeclaredType<Parametric>],
+    builtin: impl Fn(usize) -> bool,
+) -> Option<Table<'l>> {
+    let classes = shapes.first().map_or(0, |shape| class_count(types, *shape));
+    let outranks = |class, a: usize, b: usize| {
+        #[cfg(test)]
+        RANKED.with(|ranked| ranked.set(ranked.get() + 1));
+        outranks(types, scratch, shapes[a], shapes[b], class)
+    };
+    Table::laid(lay, shapes.len(), classes, outranks, builtin)
+}
+
+#[cfg(test)]
+thread_local! {
+    /// How many pairs of shapes were ranked: what a test reads to see a call rank nothing.
+    pub(crate) static RANKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// How many subsets of a recorded table's list [`checked`] held to the lattice's elimination,
+    /// `None` while no law asks.
+    pub(crate) static SUBSETS: std::cell::Cell<Option<usize>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// The ranking law's check at a call over `entries`, a kept list the load recorded `table` for:
+/// at every subset of the list as admitted, the table decides what the lattice's class-by-class
+/// elimination and [`winner`] decide over those shapes.
+#[cfg(test)]
+pub(super) fn checked(
+    at: &Evaluation<'_, '_, '_, '_, '_, '_>,
+    entries: &[(Candidate, Verdict)],
+    table: &Table<'_>,
+    scratch: &Bump,
+) {
+    let Some(count) = SUBSETS.with(std::cell::Cell::get) else {
+        return;
+    };
+    let types = &at.types;
+    let read = |candidate: &(Candidate, Verdict)| match candidate.0 {
+        Candidate::One(coordinate) => at.view.read(coordinate),
+        Candidate::Spread(_) => unreachable!("a table ranks no spread"),
+    };
+    let mut shapes: BumpVec<'_, DeclaredType<Parametric>> = BumpVec::new_in(scratch);
+    shapes.extend((entries.iter()).map(|entry| {
+        DeclaredType::from(registered_shape(read(entry)).expect("a ranked candidate has a shape"))
+    }));
+    let builtin = |at: usize| (read(&entries[at]).as_callable()).and_then(Knotted::builtin);
+    for mask in 1u64..1 << shapes.len() {
+        let mut subset = BumpVec::new_in(scratch);
+        subset.extend((0..shapes.len()).filter(|at| mask & 1 << at != 0));
+        let mut picked = BumpVec::new_in(scratch);
+        picked.extend(subset.iter().map(|at| shapes[*at]));
+        let survivors = select_by_class(types, scratch, &picked);
+        let expected = winner(&survivors, |k| builtin(subset[k]).is_some()).map(|k| subset[k]);
+        assert_eq!(table.decide(mask), expected, "over the subset {subset:?}");
+    }
+    SUBSETS.with(|subsets| subsets.set(Some(count + 1)));
 }
 
 /// Whether a candidate that may admit, registered at `maybe`, never runs beside candidates that

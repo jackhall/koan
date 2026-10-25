@@ -36,7 +36,9 @@
 //! A use left with none refuses the load. A *maybe* an *always* one outranks at class 0, both
 //! closed, drops too. Where no *maybe* is left, a lone candidate, or the one closed candidates rank
 //! first, is **selected** and runs without admitting; where they rank none first, the load refuses
-//! the certain ambiguity. A builtin candidate is judged through its native's [type rule](super::rules)
+//! the certain ambiguity. Where every candidate kept is one closed function, the load records how
+//! they rank, a table of each pair's answer at each class, so a call ranks nothing; a rigid one is
+//! ranked where a settlement or the call closes it. A builtin candidate is judged through its native's [type rule](super::rules)
 //! too: an argument whose lower end lies outside the type the rule needs drops it, and a use whose
 //! last candidate a need dropped is refused in the native's words. A builtin's call is the return
 //! its rule gives — `FROM`'s the projection of its record and `ATTR`'s the named field's type. An
@@ -152,12 +154,12 @@ use crate::parse::BuiltinShapeId;
 use crate::parse::{ExpressionPart, KExpression, KLiteral};
 use crate::scope::{
     Address, BodyClass, BodyShape, Born, BuiltinIndex, Candidate, CandidateList, CaptureChain,
-    CaptureSlot, CaptureSource, Closing, ComponentIndex, Coordinate, Cut, Frontier, Identity,
-    InstanceRead, Keyed, Lands, Leaf, Listed, NamedVariable, Narrowing, PathEntry, Position,
-    Resolution, Segment, ShapeError, ShapeKind, Shapes, Site, SiteDeps, Slot, Source, Static,
-    StaticRegistered, StaticSolution, StaticType, Store, SurfacedHead, Tree, Typed, UnitFacts,
-    UnitId, UnitIndex, UnitWork, Unknown, UseStatics, Variable as Located, Within, follow, part_of,
-    source_of,
+    CaptureSlot, CaptureSource, Closing, ComponentIndex, Coordinate, Cut, Elimination, Frontier,
+    Identity, InstanceRead, Kept, Keyed, Lands, Leaf, Listed, NamedVariable, Narrowing, PathEntry,
+    Position, Resolution, Segment, ShapeError, ShapeKind, Shapes, Site, SiteDeps, Slot, Source,
+    Static, StaticRegistered, StaticSolution, StaticType, Store, SurfacedHead, Tree, Typed,
+    UnitFacts, UnitId, UnitIndex, UnitWork, Unknown, UseStatics, Variable as Located, Within,
+    follow, part_of, source_of,
 };
 use crate::source::SourceRef;
 use crate::symbols::{BinderSymbol, TypeSymbol};
@@ -4460,39 +4462,52 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         }));
         let judged = left;
 
+        // Where every candidate kept is one closed function, how they rank is the same at every
+        // run: the table of each pair's answer, in scratch until a kept list records it. A rigid
+        // one is ranked at the call, whose binding closes it, and a spread — a surfaced key's,
+        // typed by its head — at the call that knows its functions.
+        let mut shapes: BumpVec<'_, DeclaredType<Parametric>> =
+            BumpVec::with_capacity_in(judged.len(), scratch);
+        shapes.extend(judged.iter().map_while(|judgement| {
+            match (judgement.candidate, judgement.known) {
+                (Candidate::One(_), Known::Closed(registered)) => {
+                    Some(DeclaredType::from(registered))
+                }
+                _ => None,
+            }
+        }));
+        let closed = shapes.len() == judged.len();
+        let builtin = |at: usize| self.builtin(judged[at].candidate).is_some();
+        // A lone candidate ranks against nothing.
+        let table = (closed && judged.len() > 1)
+            .then(|| select::table(scratch, types, scratch, &shapes, builtin))
+            .flatten();
         if judged
             .iter()
             .all(|judgement| judgement.verdict == Verdict::Always)
         {
-            let chosen = match judged[..] {
-                [only] => Some(only),
-                _ if judged
-                    .iter()
-                    .all(|judgement| matches!(judgement.known, Known::Closed(_))) =>
-                {
-                    let mut shapes: BumpVec<'_, DeclaredType<Parametric>> =
-                        BumpVec::with_capacity_in(judged.len(), scratch);
-                    shapes.extend(judged.iter().map(|judgement| match judgement.known {
-                        Known::Closed(registered) => DeclaredType::<Parametric>::from(registered),
-                        _ => unreachable!("every candidate is closed"),
-                    }));
+            let decided = match (&judged[..], table) {
+                ([_], _) => Some(Ok(0)),
+                (_, Some(table)) => Some(table.decide(u64::MAX >> (64 - judged.len()))),
+                // More than a table ranks: the lattice's own elimination.
+                _ if closed => {
                     let survivors = select_by_class(types, scratch, &shapes);
-                    let builtin =
-                        |survivor: usize| self.builtin(judged[survivor].candidate).is_some();
-                    match select::winner(&survivors, builtin) {
-                        Ok(survivor) => Some(judged[survivor]),
-                        Err(count) => {
-                            return Err(ShapeError::Ambiguous {
-                                key: list.elements,
-                                arguments: uppers(),
-                                count,
-                                at: node.source,
-                            });
-                        }
-                    }
+                    Some(select::winner(&survivors, builtin))
                 }
                 // Several, a rigid one among them: ranked at the call.
                 _ => None,
+            };
+            let chosen = match decided {
+                Some(Ok(survivor)) => Some(judged[survivor]),
+                Some(Err(count)) => {
+                    return Err(ShapeError::Ambiguous {
+                        key: list.elements,
+                        arguments: uppers(),
+                        count,
+                        at: node.source,
+                    });
+                }
+                None => None,
             };
             if let Some(chosen) = chosen {
                 let Candidate::One(coordinate) = chosen.candidate else {
@@ -4514,15 +4529,27 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             }
         }
         if judged.len() < list.candidates.len()
+            || table.is_some()
             || judged
                 .iter()
                 .any(|judgement| judgement.verdict == Verdict::Always)
         {
-            let kept = collect(
+            let entries = collect(
                 self.lay,
                 judged
                     .iter()
                     .map(|judgement| (judgement.candidate, judgement.verdict)),
+            );
+            let elimination = match table {
+                Some(table) => Elimination::Table(table.relaid(self.lay)),
+                None => Elimination::Open,
+            };
+            let kept = resident(
+                self.lay,
+                Kept {
+                    entries,
+                    elimination,
+                },
             );
             self.set_narrowing(level, index, Narrowing::Kept(kept));
         }

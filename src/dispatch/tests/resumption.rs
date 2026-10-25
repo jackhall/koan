@@ -217,9 +217,51 @@ fn binding_a_for_all_name_selects_the_overload_at_its_type() {
         let after = narrowing(symbols, resumed, f, "p");
         (before, after, upper(door, resumed, f, "p"))
     });
-    assert_eq!(before, "full");
+    assert_eq!(before, "kept maybe maybe");
     assert_eq!(after, "selected");
     assert_eq!(typed, "Str", "the `Number` overload returns `Str`");
+}
+
+/// How the use `LET name = <use>` in `shape` ranks its candidates, as `facts` holds it: open, by a
+/// recorded table, or selected.
+fn elimination(
+    symbols: &SymbolInterner,
+    facts: &LoadFacts<'_>,
+    shape: &BodyShape<'_>,
+    name: &str,
+) -> &'static str {
+    let Some(ExpressionPart::Expression(node)) = shape.rhs(slot(symbols, shape, name)) else {
+        panic!("`{name}` is bound to a node");
+    };
+    let site = shape.site_of_node(node.reference());
+    match facts.use_statics(shape, site).narrowing {
+        crate::scope::Narrowing::Kept(kept) => match kept.elimination {
+            crate::scope::Elimination::Open => "open",
+            crate::scope::Elimination::Table(_) => "table",
+        },
+        crate::scope::Narrowing::Full => "open",
+        crate::scope::Narrowing::Selected(_) => "selected",
+    }
+}
+
+#[test]
+fn a_rigid_pair_left_open_at_the_load_is_ranked_by_its_settlement() {
+    // `PICK y :Elt` is rigid at the load, where ranking it beside `PICK y :Str` would read `Elt`
+    // through its bound: the load leaves the pair open. Bound to `Number`, both are closed, and
+    // the resumption records their table.
+    let source = "EXPR FOR ALL #[Elt] #(WRAP x :Elt z :Any) -> Any = #(\n  \
+                  EXPR #(PICK y :Elt) -> Str = #(\"e\")\n  \
+                  EXPR #(PICK y :Str) -> Number = #(1)\n  \
+                  LET p = (PICK z)\n  p\n)";
+    let (before, after) = resumed(source, |door| {
+        let symbols = door.symbols();
+        let f = quantified(door.load(), door.root());
+        let before = elimination(symbols, door.load(), f, "p");
+        let binding = door.binding(&[(unknown(symbols, f, "Elt"), KType::NUMBER)]);
+        let resumed = (door.resume(None, binding, false)).expect("the resumption refuses nothing");
+        (before, elimination(symbols, resumed, f, "p"))
+    });
+    assert_eq!((before, after), ("open", "table"));
 }
 
 #[test]
@@ -236,7 +278,7 @@ fn binding_a_module_parameter_closes_its_paths() {
         let resumed = (door.resume(None, binding, false)).expect("the resumption refuses nothing");
         (before, narrowing(symbols, resumed, step, "p"))
     });
-    assert_eq!(before, "full");
+    assert_eq!(before, "kept maybe maybe");
     assert_eq!(after, "selected");
 }
 
@@ -363,7 +405,7 @@ fn an_inner_callable_over_an_outer_name_settles_under_its_binding() {
         let resumed = (door.resume(None, binding, false)).expect("the resumption refuses nothing");
         (before, narrowing(symbols, resumed, g, "p"))
     });
-    assert_eq!(before, "full");
+    assert_eq!(before, "kept maybe maybe");
     assert_eq!(after, "selected");
 }
 
@@ -393,7 +435,7 @@ fn an_inner_callable_inside_a_block_settles_under_its_binding() {
         );
         (before, narrowing(symbols, resumed, g, "p"))
     });
-    assert_eq!(before, "full");
+    assert_eq!(before, "kept maybe maybe");
     assert_eq!(after, "selected");
 }
 
@@ -555,7 +597,10 @@ fn a_resumption_extends_the_one_before_it() {
         };
         (render(first), render(second))
     });
-    assert_eq!(first, ("selected".to_string(), "full".to_string()));
+    assert_eq!(
+        first,
+        ("selected".to_string(), "kept maybe maybe".to_string())
+    );
     assert_eq!(second, ("selected".to_string(), "selected".to_string()));
 }
 
@@ -861,13 +906,17 @@ mod laws {
         };
         match narrowing {
             Narrowing::Full => "full".to_string(),
-            Narrowing::Kept(kept) => kept.iter().fold("kept".to_string(), |text, (at, verdict)| {
-                let at = match at {
-                    crate::scope::Candidate::One(coordinate) => index(*coordinate),
-                    crate::scope::Candidate::Spread(_) => usize::MAX,
-                };
-                format!("{text} {at}:{verdict:?}")
-            }),
+            Narrowing::Kept(kept) => {
+                kept.entries
+                    .iter()
+                    .fold("kept".to_string(), |text, (at, verdict)| {
+                        let at = match at {
+                            crate::scope::Candidate::One(coordinate) => index(*coordinate),
+                            crate::scope::Candidate::Spread(_) => usize::MAX,
+                        };
+                        format!("{text} {at}:{verdict:?}")
+                    })
+            }
             Narrowing::Selected(coordinate) => format!("selected {}", index(coordinate)),
         }
     }
@@ -1795,7 +1844,8 @@ mod laws {
             match narrowing {
                 Narrowing::Full => None,
                 Narrowing::Kept(kept) => Some(
-                    kept.iter()
+                    kept.entries
+                        .iter()
                         .map(|(at, verdict)| (*at, Some(*verdict)))
                         .collect(),
                 ),

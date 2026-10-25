@@ -17,7 +17,7 @@
 use std::fmt;
 use std::hash::{Hash, Hasher};
 
-use crate::memory::{BumpAllocator, BumpVec};
+use crate::memory::{BumpAllocator, BumpVec, Lays, collect};
 use crate::symbols::{BinderSymbol, Symbol, SymbolInterner, TypeSymbol, ValueSymbol};
 use crate::type_lattice::{DeclaredType, KType, Parametric, Verdict, display_name};
 use crate::values::{Chain, KnottedFamily, Value};
@@ -374,11 +374,108 @@ pub type StaticRegistered<'graph> =
 pub enum Narrowing<'graph> {
     /// Every candidate on the list, each *maybe*: a call admits them all.
     Full,
-    /// The candidates a call selects among, in list order, each beside its verdict — *always* or
-    /// *maybe*, never *never*: a *maybe* one is admitted, an *always* one taken as admitted.
-    Kept(&'graph [(Candidate, Verdict)]),
+    /// The candidates a call selects among, and how they rank.
+    Kept(&'graph Kept<'graph>),
     /// The one candidate the load selected: always a [`Candidate::One`], read at this coordinate.
     Selected(Coordinate),
+}
+
+/// The candidates a call selects among, in list order, each beside its verdict — *always* or
+/// *maybe*, never *never*: a *maybe* one is admitted, an *always* one taken as admitted — and how
+/// those that admit rank.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Kept<'graph> {
+    pub entries: &'graph [(Candidate, Verdict)],
+    pub elimination: Elimination<'graph>,
+}
+
+/// How a kept list's candidates rank: read off a table the load recorded, or ranked at the call.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Elimination<'graph> {
+    /// Ranked at the call: a spread, a shape the load cannot read, a rigid one, or a list of more
+    /// than [`Table::MOST`] candidates.
+    Open,
+    Table(Table<'graph>),
+}
+
+/// The elimination table of a kept list of closed shapes: at each class, which of the list's
+/// candidates each one strictly outranks there, beside which are builtins. No single rank order
+/// exists — three candidates may beat each other in a cycle pair by pair — so each class keeps
+/// every pair's answer, by position in the list.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Table<'graph> {
+    /// `beats[class * len + at]`: the positions the candidate at `at` strictly outranks at `class`.
+    beats: &'graph [u64],
+    builtins: u64,
+    len: u16,
+}
+
+impl<'graph> Table<'graph> {
+    /// The longest list a table ranks: one bit per candidate.
+    pub const MOST: usize = 64;
+
+    /// The table of `len` candidates over `classes` classes, `outranks(class, a, b)` answering
+    /// whether the candidate at `a` strictly outranks the one at `b` there, laid through `lay`;
+    /// `builtin(at)` says which are builtins. `None` past [`MOST`](Self::MOST).
+    pub fn laid(
+        lay: impl Lays<'graph>,
+        len: usize,
+        classes: usize,
+        mut outranks: impl FnMut(u16, usize, usize) -> bool,
+        builtin: impl Fn(usize) -> bool,
+    ) -> Option<Self> {
+        if len > Self::MOST {
+            return None;
+        }
+        let beats = lay.fill(classes * len, |at| {
+            let class = u16::try_from(at / len).expect("a shape has fewer than 65536 slots");
+            let a = at % len;
+            ((0..len).filter(|b| *b != a && outranks(class, a, *b)))
+                .fold(0, |mask, b| mask | 1 << b)
+        });
+        let builtins = (0..len)
+            .filter(|at| builtin(*at))
+            .fold(0u64, |mask, at| mask | 1 << at);
+        Some(Table {
+            beats,
+            builtins,
+            len: len as u16,
+        })
+    }
+
+    /// The candidate a call runs among those `admitted` names, by position: the class-by-class
+    /// elimination — at each class, a survivor another survivor strictly outranks there drops out
+    /// — then the lone survivor, else the first builtin among several in list order. `Err` with
+    /// the survivors' count where several survive and none is a builtin, or where none admitted.
+    pub fn decide(&self, admitted: u64) -> Result<usize, usize> {
+        let len = usize::from(self.len);
+        let mut survivors = admitted;
+        for class in self.beats.chunks(len.max(1)) {
+            if survivors.count_ones() <= 1 {
+                break;
+            }
+            let beaten = (0..len)
+                .filter(|at| survivors & 1 << at != 0)
+                .fold(0u64, |mask, at| mask | class[at]);
+            survivors &= !beaten;
+        }
+        match survivors.count_ones() {
+            1 => Ok(survivors.trailing_zeros() as usize),
+            count => match survivors & self.builtins {
+                0 => Err(count as usize),
+                builtins => Ok(builtins.trailing_zeros() as usize),
+            },
+        }
+    }
+
+    /// This table laid again through `lay`.
+    pub fn relaid<'to>(&self, lay: impl Lays<'to>) -> Table<'to> {
+        Table {
+            beats: collect(lay, self.beats.iter().copied()),
+            builtins: self.builtins,
+            len: self.len,
+        }
+    }
 }
 
 /// What the load fixed about one keyworded use: which candidates a call selects among, and what

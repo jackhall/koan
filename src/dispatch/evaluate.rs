@@ -61,8 +61,8 @@ use crate::scheduler::{
     Action, Placement, Received, Request, Slot as Asked, Step, StepError, Taken, Use,
 };
 use crate::scope::{
-    BodyShape, Candidate, CandidateList, HandedTo, InstanceRead, Located, Mint, Narrowing, Offer,
-    ParameterBinding, ShapeKind, Site, Static, StaticType,
+    BodyShape, Candidate, CandidateList, Elimination, HandedTo, InstanceRead, Located, Mint,
+    Narrowing, Offer, ParameterBinding, ShapeKind, Site, Static, StaticType,
 };
 use crate::symbols::{BinderSymbol, Symbol};
 use crate::type_lattice::{KType, Verdict, substitute_levels};
@@ -768,10 +768,23 @@ fn call<'step, 'graph, 'here>(
     let selection = match fixed.narrowing {
         Narrowing::Full => {
             let maybe = list.candidates.iter().map(|c| (*c, Verdict::Maybe));
-            select::selected(at, maybe, &arguments, &contributed, &scratch)
+            let open = Elimination::Open;
+            select::selected(at, maybe, open, &arguments, &contributed, &scratch)
         }
         Narrowing::Kept(kept) => {
-            select::selected(at, kept.iter().copied(), &arguments, &contributed, &scratch)
+            #[cfg(test)]
+            if let Elimination::Table(table) = &kept.elimination {
+                select::checked(at, kept.entries, table, &scratch);
+            }
+            let entries = kept.entries.iter().copied();
+            select::selected(
+                at,
+                entries,
+                kept.elimination,
+                &arguments,
+                &contributed,
+                &scratch,
+            )
         }
         Narrowing::Selected(coordinate) => {
             #[cfg(test)]

@@ -18,8 +18,8 @@ use super::records::{Born, Closing, Deps, SiteDeps, Typed, UnitFacts};
 use super::shape::ShapeError;
 use super::tree::{KnotNode, Leaf, NodeCapture, Tree, Unfolded, Within};
 use super::typed::{
-    Callable, FunctionGroupMap, InstanceRead, Narrowing, ParameterBinding, PathEntry, Registered,
-    Resolution, ShapeGroupMap, Static, StaticSolution, UseStatics,
+    Callable, Elimination, FunctionGroupMap, InstanceRead, Kept, Narrowing, ParameterBinding,
+    PathEntry, Registered, Resolution, ShapeGroupMap, Static, StaticSolution, UseStatics,
 };
 
 /// A copier laying records through `lay`, flattening frontiers under `binding` with a memo of
@@ -451,7 +451,19 @@ impl<'to, 'x, 'bind, L: Lays<'to>> Relay<'to, 'x, 'bind, L> {
         UseStatics {
             narrowing: match narrowing {
                 Narrowing::Full => Narrowing::Full,
-                Narrowing::Kept(kept) => Narrowing::Kept(self.copied(kept)),
+                Narrowing::Kept(Kept {
+                    entries,
+                    elimination,
+                }) => Narrowing::Kept(resident(
+                    self.lay,
+                    Kept {
+                        entries: self.copied(entries),
+                        elimination: match elimination {
+                            Elimination::Open => Elimination::Open,
+                            Elimination::Table(table) => Elimination::Table(table.relaid(self.lay)),
+                        },
+                    },
+                )),
                 Narrowing::Selected(at) => Narrowing::Selected(*at),
             },
             contributions: self.lay.fill(contributions.len(), |at| {
