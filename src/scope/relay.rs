@@ -19,7 +19,7 @@ use super::shape::ShapeError;
 use super::tree::{KnotNode, Leaf, NodeCapture, Tree, Unfolded, Within};
 use super::typed::{
     Callable, Elimination, FunctionGroupMap, InstanceRead, Kept, Narrowing, ParameterBinding,
-    PathEntry, Registered, Resolution, ShapeGroupMap, Static, StaticSolution, UseStatics,
+    PathEntry, Points, Registered, Resolution, ShapeGroupMap, Static, StaticSolution, UseStatics,
 };
 
 /// A copier laying records through `lay`, flattening frontiers under `binding` with a memo of
@@ -299,7 +299,7 @@ impl<'to, 'x, 'bind, L: Lays<'to>> Relay<'to, 'x, 'bind, L> {
                 InstanceRead::AsIs => InstanceRead::AsIs,
             }),
             uses: self.keyed(*uses, |statics| self.uses(statics)),
-            selections: self.keyed(*selections, |points| self.copied(points)),
+            selections: self.keyed(*selections, |points| self.points(points)),
             by_name: self.keyed(*by_name, |contributed| {
                 self.lay
                     .fill(contributed.len(), |at| self.static_type(&contributed[at]))
@@ -453,11 +453,13 @@ impl<'to, 'x, 'bind, L: Lays<'to>> Relay<'to, 'x, 'bind, L> {
                 Narrowing::Full => Narrowing::Full,
                 Narrowing::Kept(Kept {
                     entries,
+                    points,
                     elimination,
                 }) => Narrowing::Kept(resident(
                     self.lay,
                     Kept {
                         entries: self.copied(entries),
+                        points: self.lay.fill(points.len(), |at| self.points(&points[at])),
                         elimination: match elimination {
                             Elimination::Open => Elimination::Open,
                             Elimination::Table(table) => Elimination::Table(table.relaid(self.lay)),
@@ -469,6 +471,15 @@ impl<'to, 'x, 'bind, L: Lays<'to>> Relay<'to, 'x, 'bind, L> {
             contributions: self.lay.fill(contributions.len(), |at| {
                 self.static_type(&contributions[at])
             }),
+        }
+    }
+
+    /// `points`, laid again.
+    fn points(&self, points: &Points<'_>) -> Points<'to> {
+        let Points { points, variables } = points;
+        Points {
+            points: self.copied(points),
+            variables: self.copied(variables),
         }
     }
 

@@ -569,3 +569,46 @@ fn members_no_argument_admits_both_of_or_taken_whole_do_not_tie() {
         "a parameter's own parameter takes its union whole"
     );
 }
+
+/// Run `source`, counting the candidates its calls admitted and the solutions they read off the
+/// load's points.
+fn solving(source: &str) -> (String, usize, usize) {
+    use crate::dispatch::select::{ADMITTED, POINTED};
+    ADMITTED.with(|admitted| admitted.set(0));
+    POINTED.with(|pointed| pointed.set(0));
+    let printed = run(source);
+    (
+        printed,
+        ADMITTED.with(std::cell::Cell::get),
+        POINTED.with(std::cell::Cell::get),
+    )
+}
+
+#[test]
+fn a_selected_candidates_group_is_solved_once_at_the_load() {
+    // `ONLY 1` solves `Elt` to `Number` at the load; `ONLY r.v`, whose argument the load knows
+    // only as `Any`, solves it to the type the argument carries. Neither call admits.
+    let only = "EXPR FOR ALL #[Elt] #(ONLY x :Elt) -> Elt = #(x)\n\
+                LET r = ({v = 1} :! :{v :Any})\n";
+    for call in ["ONLY 1", "ONLY r.v"] {
+        let (printed, admitted, pointed) = solving(&format!("{only}PRINT ({call})"));
+        assert_eq!(printed, "1", "{call}");
+        assert_eq!((admitted, pointed), (0, 1), "{call}");
+    }
+}
+
+proptest::proptest! {
+    #![proptest_config(proptest::prelude::ProptestConfig {
+        cases: crate::tests::case_share(1, 4),
+        ..proptest::prelude::ProptestConfig::default()
+    })]
+
+    /// The load's points are the call's solution: wherever a call reads its group's solution off
+    /// them, admitting the candidate over its arguments solves to the same, which every such call
+    /// checks.
+    #[test]
+    fn recorded_points_solve_as_admission_does(program in super::generate::dispatched()) {
+        let rendered = program.render();
+        let _ = run(&rendered.source);
+    }
+}

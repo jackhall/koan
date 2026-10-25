@@ -338,6 +338,70 @@ pub enum Static<'graph, C, R = C> {
 /// What the load fixed for a type: concrete where closed, parametric over the run's variables.
 pub type StaticType<'graph> = Static<'graph, KType, Parametric>;
 
+/// What one variable of a selected candidate's group solves to at every run of its call.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Point {
+    /// The same type at every run.
+    Closed(KType),
+    /// A type over the run's lexical variables, read through its [`Points`]' variables.
+    Rigid(Parametric),
+    /// The type the argument at this slot carries: the variable is the slot's whole type, its own
+    /// class's, which no other slot of the class names, and the argument contributes nothing.
+    Carried(u16),
+}
+
+/// The points a selected candidate's group solves to, in group order, beside where the run reads
+/// the lexical variables a rigid one names.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Points<'graph> {
+    pub points: &'graph [Point],
+    pub variables: &'graph [Variable],
+}
+
+impl<'graph> Points<'graph> {
+    /// The points of a group of no variables.
+    pub const NONE: Points<'static> = Points {
+        points: &[],
+        variables: &[],
+    };
+
+    /// The variable at `at`'s closed point, where it has one.
+    pub fn closed(&self, at: usize) -> Option<KType> {
+        match self.points.get(at)? {
+            Point::Closed(point) => Some(*point),
+            Point::Rigid(_) | Point::Carried(_) => None,
+        }
+    }
+
+    /// The solution where the call runs over operands carrying `arguments`: a closed point as it
+    /// is, a rigid one with its variables replaced by what `view` reads, through `substitute`,
+    /// and a carried one its argument's type. `None` where a variable's coordinate holds no type
+    /// or `substitute` finds no concrete value.
+    pub fn solved<'step, 'run, 'x, XF: KnottedFamily<'run>>(
+        &self,
+        view: &Reading<'step, 'run, '_, XF>,
+        scratch: BumpAllocator<'x>,
+        paths: Paths<'_, 'step>,
+        arguments: &[KType],
+        substitute: impl Fn(Parametric, &[KType]) -> Option<KType>,
+    ) -> Option<BumpVec<'x, KType>> {
+        let rigid = (self.points.iter()).any(|point| matches!(point, Point::Rigid(_)));
+        let bindings = match rigid {
+            true => Some(solutions(self.variables, view, scratch, paths)?),
+            false => None,
+        };
+        let mut solved = BumpVec::with_capacity_in(self.points.len(), scratch);
+        for point in self.points {
+            solved.push(match point {
+                Point::Closed(point) => *point,
+                Point::Rigid(value) => substitute(*value, bindings.as_deref()?)?,
+                Point::Carried(slot) => *arguments.get(usize::from(*slot))?,
+            });
+        }
+        Some(solved)
+    }
+}
+
 /// What the load fixed for an instance's solution, in group order: concrete where closed,
 /// parametric over the run's variables where it names a type a run binds. Unlike [`Static`], it
 /// has no unknown arm: the load fixes every instance's solution.
@@ -386,6 +450,9 @@ pub enum Narrowing<'graph> {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct Kept<'graph> {
     pub entries: &'graph [(Candidate, Verdict)],
+    /// Beside each entry, the points an *always* one's group solves to: [`Points::NONE`] for a
+    /// *maybe* one and one of no group.
+    pub points: &'graph [Points<'graph>],
     pub elimination: Elimination<'graph>,
 }
 

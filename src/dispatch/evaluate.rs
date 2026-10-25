@@ -769,18 +769,20 @@ fn call<'step, 'graph, 'here>(
         Narrowing::Full => {
             let maybe = list.candidates.iter().map(|c| (*c, Verdict::Maybe));
             let open = Elimination::Open;
-            select::selected(at, maybe, open, &arguments, &contributed, &scratch)
+            select::selected(at, maybe, &[], open, &arguments, &contributed, &scratch)
         }
         Narrowing::Kept(kept) => {
             #[cfg(test)]
             if let Elimination::Table(table) = &kept.elimination {
                 select::checked(at, kept.entries, table, &scratch);
             }
-            let entries = kept.entries.iter().copied();
+            let (entries, points) = (kept.entries.iter().copied(), kept.points);
+            let elimination = kept.elimination;
             select::selected(
                 at,
                 entries,
-                kept.elimination,
+                points,
+                elimination,
                 &arguments,
                 &contributed,
                 &scratch,
@@ -792,7 +794,10 @@ fn call<'step, 'graph, 'here>(
                 let shape = at.view.shape();
                 chose(shape.segment(), shape.site_of_node(node));
             }
-            select::chosen(at, coordinate, &arguments, &contributed, &scratch)
+            let site = at.view.shape().site_of_node(node);
+            let points = (at.view.facts().selection(at.view.shape(), site))
+                .expect("a selected use records its points");
+            select::chosen(at, coordinate, &points, &arguments, &contributed, &scratch)
         }
     };
     let raised = match selection {

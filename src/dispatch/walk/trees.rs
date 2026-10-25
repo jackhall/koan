@@ -939,10 +939,9 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 return Ok(None);
             };
             for (name, at) in registered.quantifier_map.iter() {
-                let (Some(point), Some((variable, _))) = (
-                    points.get(at).copied().flatten(),
-                    callee.slot(BinderSymbol::Type(name)),
-                ) else {
+                let (Some(point), Some((variable, _))) =
+                    (points.closed(at), callee.slot(BinderSymbol::Type(name)))
+                else {
                     return Ok(None);
                 };
                 solution.push((variable, point));

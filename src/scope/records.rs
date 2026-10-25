@@ -31,8 +31,8 @@ use super::shape::{
 use super::shapes::Shapes;
 use super::tree::{Leaf, NodeCapture, Tree, closed_trees};
 use super::typed::{
-    BodyClass, Caching, Handoff, InstanceRead, Mint, PathEntry, Resolution, Static, StaticCallable,
-    StaticRegistered, StaticSolution, StaticType, UseStatics, Variable, ViewSlots,
+    BodyClass, Caching, Handoff, InstanceRead, Mint, PathEntry, Points, Resolution, Static,
+    StaticCallable, StaticRegistered, StaticSolution, StaticType, UseStatics, Variable, ViewSlots,
 };
 
 /// One unit's facts: everything the walk computed running it.
@@ -73,7 +73,7 @@ pub struct Typed<'a> {
     pub instances: Keyed<'a, (Site, InstanceRead<'a>)>,
     pub uses: Keyed<'a, (Site, UseStatics<'a>)>,
     /// Each selected use's closed points, by group index.
-    pub selections: Keyed<'a, (Site, &'a [Option<KType>])>,
+    pub selections: Keyed<'a, (Site, Points<'a>)>,
     /// Each call by name's contributions, by its argument part's site.
     pub by_name: Keyed<'a, (Site, &'a [StaticType<'a>])>,
     /// Each `:|` at a closed signature, beside its view's content tree.
@@ -1092,9 +1092,9 @@ impl<'a, S: RecordSource<'a>> FactsOver<S> {
         self.at_site(shape, site, |typed| typed.instances)
     }
 
-    /// The closed point each variable of the group of the candidate the keyworded use at `site` of
+    /// The point each variable of the group of the candidate the keyworded use at `site` of
     /// `shape` selects solves to, by group index, where the load selected one.
-    pub fn selection(&self, shape: &BodyShape<'_>, site: Site) -> Option<&'a [Option<KType>]> {
+    pub fn selection(&self, shape: &BodyShape<'_>, site: Site) -> Option<Points<'a>> {
         self.at_site(shape, site, |typed| typed.selections)
     }
 

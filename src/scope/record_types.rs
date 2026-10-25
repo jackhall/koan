@@ -12,8 +12,8 @@ use super::records::{Born, Closing, Typed, UnitFacts};
 use super::shape::ShapeError;
 use super::tree::{KnotNode, Leaf, NodeCapture, Tree, Unfolded, Within};
 use super::typed::{
-    Callable, Elaboration, InstanceRead, PathEntry, Registered, Resolution, Resolved, Static,
-    StaticSolution, StaticType, UseStatics,
+    Callable, Elaboration, InstanceRead, PathEntry, Point, Points, Registered, Resolution,
+    Resolved, Static, StaticSolution, StaticType, UseStatics,
 };
 
 /// What the visitor hands each type to.
@@ -201,10 +201,7 @@ fn typed_types(typed: &Typed<'_>, each: &mut Each<'_>) {
         }
     }
     for (_, points) in selections.iter() {
-        points
-            .iter()
-            .flatten()
-            .for_each(|ktype| each((*ktype).into()));
+        points_types(points, each);
     }
     for (_, contributions) in by_name.iter() {
         contributions
@@ -481,5 +478,16 @@ fn error_types(error: &ShapeError<'_>, each: &mut Each<'_>) {
             parameter: _,
             at: _,
         } => {}
+    }
+}
+
+/// Hand `each` every type `points` name.
+fn points_types(points: &Points<'_>, each: &mut dyn FnMut(DeclaredType<Parametric>)) {
+    for point in points.points {
+        match point {
+            Point::Closed(point) => each((*point).into()),
+            Point::Rigid(point) => each((*point).into()),
+            Point::Carried(_) => {}
+        }
     }
 }

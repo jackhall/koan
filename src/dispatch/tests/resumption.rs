@@ -1109,9 +1109,11 @@ mod laws {
                         narrowed(fixed.narrowing, list)
                     ));
                     if let Some(points) = facts.selection(shape, site) {
-                        let points: Vec<String> = (points.iter())
-                            .map(|point| {
-                                point.map_or("open".to_string(), |point| self.named(point))
+                        let points: Vec<String> = (0..points.points.len())
+                            .map(|at| {
+                                points
+                                    .closed(at)
+                                    .map_or("open".to_string(), |point| self.named(point))
                             })
                             .collect();
                         out.push(format!("{path} #{written} use {at} solves {points:?}"));

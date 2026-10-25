@@ -12,9 +12,9 @@
 use crate::elaborate::schema_of;
 use crate::memory::BumpVec;
 use crate::scope::{
-    Address, BodyShape, Born, Cut, Frontier, InstanceRead, Narrowing, Segment, ShapeKind, Site,
-    Slot, Static, StaticCallable, StaticRegistered, StaticSolution, StaticType, Store, Tree, Typed,
-    UnitFacts, UnitId, Unknown, UseStatics, in_body_of,
+    Address, BodyShape, Born, Cut, Frontier, InstanceRead, Narrowing, Points, Segment, ShapeKind,
+    Site, Slot, Static, StaticCallable, StaticRegistered, StaticSolution, StaticType, Store, Tree,
+    Typed, UnitFacts, UnitId, Unknown, UseStatics, in_body_of,
 };
 use crate::symbols::{BinderSymbol, Symbol};
 use crate::type_lattice::{DeclaredType, Interval, KType, Parametric, Side, TypeNode, Variable};
@@ -367,9 +367,9 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         self.wrote(level, tag, Wrote::Use(index));
     }
 
-    /// The closed point each variable of the candidate selected at the use at `site` of the shape
-    /// at `level` solves to, where the walk selected one there.
-    pub(super) fn selection_at(&self, level: usize, site: Site) -> Option<&'o [Option<KType>]> {
+    /// The point each variable of the candidate selected at the use at `site` of the shape at
+    /// `level` solves to, where the walk selected one there.
+    pub(super) fn selection_at(&self, level: usize, site: Site) -> Option<Points<'o>> {
         let at = &self.chain[level];
         if let Some(index) = at.shape.candidate_lists().position(site)
             && let (_, Some(tag)) = at.uses[index]
@@ -380,12 +380,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     }
 
     /// Record the points the candidate selected at the use at `site` solves to.
-    pub(super) fn record_selection(
-        &mut self,
-        level: usize,
-        site: Site,
-        points: &'o [Option<KType>],
-    ) {
+    pub(super) fn record_selection(&mut self, level: usize, site: Site, points: Points<'o>) {
         let tag = self.innermost();
         self.chain[level].selections.insert(site, (points, tag));
         self.wrote(level, tag, Wrote::Selection(site));

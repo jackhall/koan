@@ -156,10 +156,10 @@ use crate::scope::{
     Address, BodyClass, BodyShape, Born, BuiltinIndex, Candidate, CandidateList, CaptureChain,
     CaptureSlot, CaptureSource, Closing, ComponentIndex, Coordinate, Cut, Elimination, Frontier,
     Identity, InstanceRead, Kept, Keyed, Lands, Leaf, Listed, NamedVariable, Narrowing, PathEntry,
-    Position, Resolution, Segment, ShapeError, ShapeKind, Shapes, Site, SiteDeps, Slot, Source,
-    Static, StaticRegistered, StaticSolution, StaticType, Store, SurfacedHead, Tree, Typed,
-    UnitFacts, UnitId, UnitIndex, UnitWork, Unknown, UseStatics, Variable as Located, Within,
-    follow, part_of, source_of,
+    Point, Points, Position, Resolution, Segment, ShapeError, ShapeKind, Shapes, Site, SiteDeps,
+    Slot, Source, Static, StaticRegistered, StaticSolution, StaticType, Store, SurfacedHead, Tree,
+    Typed, UnitFacts, UnitId, UnitIndex, UnitWork, Unknown, UseStatics, Variable as Located,
+    Within, follow, part_of, source_of,
 };
 use crate::source::SourceRef;
 use crate::symbols::{BinderSymbol, TypeSymbol};
@@ -448,7 +448,7 @@ struct Level<'p, 'o, 'graph> {
     uses: BumpVec<'p, (UseStatics<'o>, Option<Tag>)>,
     /// Each keyworded use the walk selected a candidate at, by its node's site, beside the closed
     /// point each variable of the candidate's group solves to there, by group index.
-    selections: BumpBackedMap<'p, Site, (&'o [Option<KType>], Tag)>,
+    selections: BumpBackedMap<'p, Site, (Points<'o>, Tag)>,
     /// Each `:!` whose operand's static upper end lies under its type, and each annotated binder's
     /// type part whose value's does.
     settled: BumpVec<'p, (Site, Tag)>,
@@ -2073,6 +2073,64 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     /// The solution `solution` of an instance site in the shape at `level`, as its cell records it:
     /// closed where every entry is concrete, and otherwise beside where the site reads each lexical
     /// variable an entry names.
+    /// The point each variable of `judgement`'s group solves to at every run of the call at `at`
+    /// in the shape at `level`, whose arguments contribute `contributions`: closed where its
+    /// interval is exactly a closed type, rigid where it is exactly one over the run's lexical
+    /// variables, and the carried type where the variable is the whole type of one slot, which
+    /// [`judge_by_class`] admits as *always* at the variable's bound, and that slot's argument
+    /// contributes nothing. `None` where a variable has none of the three.
+    fn points(
+        &mut self,
+        level: usize,
+        judgement: &Judgement<'_>,
+        contributions: &[StaticType<'o>],
+        at: SourceRef,
+    ) -> Option<Points<'o>> {
+        let (types, scratch) = (self.types, self.scratch);
+        let Some(DeclaredType::Scheme(scheme)) = judgement.known.shape() else {
+            return Some(Points::NONE);
+        };
+        let intervals = judgement.intervals?;
+        let mut slots = BumpVec::new_in(scratch);
+        slots.extend(scheme_slots(scheme, types));
+        let mut points = BumpVec::with_capacity_in(intervals.len(), scratch);
+        let mut rigid = BumpVec::new_in(scratch);
+        for (variable, interval) in intervals.iter().enumerate() {
+            points.push(match exact(types, *interval) {
+                Some(point) => Point::Closed(point),
+                None if interval.is_exact() => {
+                    rigid.push(interval.upper);
+                    Point::Rigid(interval.upper)
+                }
+                None => {
+                    let bare = |slot: &Parametric| {
+                        matches!(types.node(*slot),
+                            TypeNode::Quantified { index, .. } if index == variable)
+                    };
+                    let mut bares = (0..slots.len()).filter(|slot| bare(&slots[*slot]));
+                    let (Some(slot), None) = (bares.next(), bares.next()) else {
+                        return None;
+                    };
+                    if contributions
+                        .get(slot)
+                        .is_some_and(|contributed| !matches!(contributed, Static::Unknown))
+                    {
+                        return None;
+                    }
+                    Point::Carried(u16::try_from(slot).ok()?)
+                }
+            });
+        }
+        let variables = match rigid.is_empty() {
+            true => &[][..],
+            false => self.located(level, &rigid, at),
+        };
+        Some(Points {
+            points: collect(self.lay, points.iter().copied()),
+            variables,
+        })
+    }
+
     fn solution(
         &mut self,
         level: usize,
@@ -4460,7 +4518,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 if judgement.verdict == Verdict::Maybe
                     && select::never_runs(types, scratch, maybe.into(), always()))
         }));
-        let judged = left;
+        let mut judged = left;
 
         // Where every candidate kept is one closed function, how they rank is the same at every
         // run: the table of each pair's answer, in scratch until a kept list records it. A rigid
@@ -4509,23 +4567,34 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 }
                 None => None,
             };
-            if let Some(chosen) = chosen {
+            // A candidate whose group has a variable with no point is left to solve at the call.
+            let chosen = chosen.and_then(|chosen| {
+                let points = self.points(level, &chosen, &contributions, node.source)?;
+                Some((chosen, points))
+            });
+            if let Some((chosen, points)) = chosen {
                 let Candidate::One(coordinate) = chosen.candidate else {
                     unreachable!("an always candidate is no spread");
                 };
                 self.use_exits(level, arguments, minted_free, &sites, &[chosen]);
                 self.made(level, node, list, &sites, &[chosen])?;
                 if !self.unfilled {
-                    let mut points = BumpVec::new_in(scratch);
-                    points.extend(
-                        (chosen.intervals.unwrap_or(&[]).iter())
-                            .map(|interval| exact(types, *interval)),
-                    );
-                    let points = collect(self.lay, points.iter().copied());
                     self.record_selection(level, self.node_site(level, node), points);
                 }
                 self.set_narrowing(level, index, Narrowing::Selected(coordinate));
                 return Ok(self.candidate_return(chosen));
+            }
+        }
+        // An *always* candidate whose group has a variable with no point is admitted at the call.
+        let mut points = BumpVec::with_capacity_in(judged.len(), scratch);
+        for judgement in judged.iter_mut() {
+            let solved = match judgement.verdict {
+                Verdict::Always => self.points(level, judgement, &contributions, node.source),
+                _ => Some(Points::NONE),
+            };
+            points.push(solved.unwrap_or(Points::NONE));
+            if solved.is_none() {
+                judgement.verdict = Verdict::Maybe;
             }
         }
         if judged.len() < list.candidates.len()
@@ -4540,6 +4609,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                     .iter()
                     .map(|judgement| (judgement.candidate, judgement.verdict)),
             );
+            let points = collect(self.lay, points.iter().copied());
             let elimination = match table {
                 Some(table) => Elimination::Table(table.relaid(self.lay)),
                 None => Elimination::Open,
@@ -4548,6 +4618,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 self.lay,
                 Kept {
                     entries,
+                    points,
                     elimination,
                 },
             );

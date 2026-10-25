@@ -12,25 +12,29 @@
 //! survivors were declared in.
 //!
 //! Where the load [narrowed](super::statics) a use's candidates, a call selects among those it
-//! kept: it admits each *maybe* one, takes each *always* one as admitted — solving only a
-//! quantified one's group — and ranks. A kept list of closed functions carries the table the load
-//! recorded, so the call ranks nothing; any other list's table is built at the call over what
-//! admitted. Where the load selected one, the call reads that candidate ([`chosen`]) and admits
-//! nothing, save to solve a quantified one's group.
+//! kept: it admits each *maybe* one, takes each *always* one as admitted, and ranks. A kept list
+//! of closed functions carries the table the load recorded, so the call ranks nothing; any other
+//! list's table is built at the call over what admitted. Where the load selected one, the call
+//! reads that candidate ([`chosen`]) and admits nothing. An *always* or selected candidate's group
+//! is solved by the load's [points](crate::scope::Points): each variable's closed type, a type
+//! over the run's lexical variables substituted as a contribution is, or the type an argument
+//! carries; a debug build checks it against admission.
 //!
 //! A selected function is called by keyword: its argument record binds each slot to the parameter
 //! its registration names for it — or packs every slot into `operands` — and carries each of its
 //! type parameters, by name, as the type the call solved it to.
 
+use crate::elaborate::bound_path;
 use crate::knot::module::layout;
 use crate::knot::{BuiltinFunction, KValue, Knotted};
 use crate::memory::{Bump, BumpVec, Lays, Writer};
-use crate::scope::{Candidate, Coordinate, Elimination, IMPLICIT, Table};
+use crate::scope::{Candidate, Coordinate, Elimination, IMPLICIT, Points, Table};
 use crate::scope::{ParameterBinding, Registered, ShapeGroupMap};
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::{
     DeclaredType, KType, Parametric, TypeNode, Verdict, admit_by_class, outranks, satisfied_by,
-    scheme_slots, select_by_class, shape_slots, solving_slots, substitute_quantified,
+    scheme_slots, select_by_class, shape_slots, solving_slots, substitute_levels,
+    substitute_quantified,
 };
 use crate::values::{Chain, List, Record, TypeValue, Value};
 
@@ -68,6 +72,7 @@ struct Admitted<'x, 'graph, 'here> {
 pub(super) fn selected<'x, 'graph, 'here>(
     at: &Evaluation<'_, 'graph, 'here, '_, '_, '_>,
     candidates: impl IntoIterator<Item = (Candidate, Verdict)>,
+    points: &[Points<'_>],
     elimination: Elimination<'_>,
     arguments: &[KType],
     contributed: &[Option<KType>],
@@ -80,11 +85,21 @@ pub(super) fn selected<'x, 'graph, 'here>(
         let Some(shape) = registered_shape(callee) else {
             return;
         };
-        let solution = if verdict == Verdict::Always && matches!(shape, DeclaredType::Type(_)) {
-            Some(&[][..])
-        } else {
-            let solved = solved_from(types, scratch, shape, arguments, contributed);
-            admit_by_class(types, scratch, shape, solved)
+        let solution = match (verdict, shape) {
+            (Verdict::Always, DeclaredType::Type(_)) => Some(&[][..]),
+            (Verdict::Always, DeclaredType::Scheme(_)) => {
+                let points = points.get(position).unwrap_or(&Points::NONE);
+                let solution = pointed(at, points, arguments, scratch)
+                    .expect("an always candidate's points are read where its call runs");
+                debug_assert!(agrees(at, shape, arguments, contributed, solution));
+                Some(solution)
+            }
+            _ => {
+                #[cfg(test)]
+                ADMITTED.with(|admitted| admitted.set(admitted.get() + 1));
+                let solved = solved_from(types, scratch, shape, arguments, contributed);
+                admit_by_class(types, scratch, shape, solved)
+            }
         };
         match solution {
             Some(solution) => {
@@ -286,16 +301,16 @@ fn registration<'here>(callee: KValue<'_, 'here>) -> Option<Registered<'here, KT
 }
 
 /// The candidate the load selected, read at `coordinate` through `at`'s view, for operands of the
-/// types `arguments`: run without admitting, save that a quantified one solves its group from them
-/// and `contributed` — and where that solve fails, no overload, as full selection finds.
+/// types `arguments`: run without admitting, a quantified one's group solved by `points`, the
+/// load's, which a debug build checks against admitting it over `arguments` and `contributed`.
 pub(super) fn chosen<'x, 'graph, 'here>(
     at: &Evaluation<'_, 'graph, 'here, '_, '_, '_>,
     coordinate: Coordinate,
+    points: &Points<'_>,
     arguments: &[KType],
     contributed: &[Option<KType>],
     scratch: &'x Bump,
 ) -> Selection<'x, 'graph, 'here> {
-    let types = &at.types;
     let callee = at.view.read(coordinate);
     let member = callee
         .as_callable()
@@ -305,13 +320,19 @@ pub(super) fn chosen<'x, 'graph, 'here>(
     }
     let registered = registration(callee)
         .expect("a selected candidate is a builtin or a registration's function");
-    let solution = if matches!(registered.shape, DeclaredType::Type(_)) {
-        &[][..]
-    } else {
-        let solved = solved_from(types, scratch, registered.shape, arguments, contributed);
-        match admit_by_class(types, scratch, registered.shape, solved) {
-            Some(solution) => solution,
-            None => return Selection::NoOverload,
+    let solution = match registered.shape {
+        DeclaredType::Type(_) => &[][..],
+        DeclaredType::Scheme(_) => {
+            let solution = pointed(at, points, arguments, scratch)
+                .expect("a selected candidate's points are read where its call runs");
+            debug_assert!(agrees(
+                at,
+                registered.shape,
+                arguments,
+                contributed,
+                solution
+            ));
+            solution
         }
     };
     Selection::Function {
@@ -319,6 +340,51 @@ pub(super) fn chosen<'x, 'graph, 'here>(
         registered,
         solution,
     }
+}
+
+/// The solution `points` give where a call over operands carrying `arguments` runs, read through
+/// `at`'s view: a rigid point substituted as a contribution is.
+fn pointed<'x>(
+    at: &Evaluation<'_, '_, '_, '_, '_, '_>,
+    points: &Points<'_>,
+    arguments: &[KType],
+    scratch: &'x Bump,
+) -> Option<&'x [KType]> {
+    let types = &at.types;
+    let solved = points.solved(
+        &at.view,
+        scratch,
+        &|at_, entry| bound_path(&at.view, types, at_, entry),
+        arguments,
+        |value, bindings| types.concrete(substitute_levels(types, scratch, value, bindings)),
+    )?;
+    Some(solved.leak())
+}
+
+/// The points law's check: whether the solution the load's points give is what admitting `shape`
+/// over the arguments' types solves its group to. Not gated on `debug_assertions`: its callers are
+/// `debug_assert!`s, which type-check in every profile.
+fn agrees(
+    at: &Evaluation<'_, '_, '_, '_, '_, '_>,
+    shape: DeclaredType<KType>,
+    arguments: &[KType],
+    contributed: &[Option<KType>],
+    solution: &[KType],
+) -> bool {
+    #[cfg(test)]
+    POINTED.with(|pointed| pointed.set(pointed.get() + 1));
+    let (types, scratch) = (&at.types, Bump::new());
+    let carried = scratch.alloc_slice_copy(arguments);
+    let solved = solved_from(types, &scratch, shape, carried, contributed);
+    admit_by_class(types, &scratch, shape, solved) == Some(solution)
+}
+
+#[cfg(test)]
+thread_local! {
+    /// How many candidates a call admitted, solving any group by admission.
+    pub(crate) static ADMITTED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// How many calls read their solution off the load's points.
+    pub(crate) static POINTED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// The types `shape`'s group is solved from: at each slot the solve reads, the argument's
