@@ -516,19 +516,21 @@ where
             self.graph.arena.stamp(found);
             return (found, false);
         }
-        // The binding's types rest before its walk reads them.
+        // The binding's types rest once it resolves, before its walk reads them.
         let resting: crate::values::Chain<'graph, '_, 'graph, '_> = self.graph.tiers.resting();
-        #[cfg(test)]
         let before = resting.own_len();
-        image.relay(&resting);
-        #[cfg(test)]
-        let relayed = resting.own_len();
+        let mut relayed = before;
+        let mut rest = || {
+            image.relay(&resting);
+            relayed = resting.own_len();
+        };
         let settles = self.graph.settles;
         let Some(facts) = Settled::build(
             arena.facts(parent).cloned(),
             self.graph.facts,
-            |bump, below, witness| settles.settle(bump, below, &ask, witness),
+            |bump, below, witness| settles.settle(bump, below, &ask, &mut rest, witness),
         ) else {
+            debug_assert_eq!(relayed, before, "nothing rests for a settlement not built");
             return (parent, false);
         };
         let settled = self.graph.arena.insert(parent, key, facts);

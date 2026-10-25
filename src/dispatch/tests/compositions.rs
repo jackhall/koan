@@ -10,7 +10,7 @@ use crate::type_lattice::ADOPT_LAID;
 use crate::values::BuildBudget;
 
 use super::super::Koan;
-use super::caching::{SMALLEST, program};
+use super::caching::{PRELUDE, SMALLEST, program};
 use super::{WRITTEN, output, run};
 
 /// What one run of `source` left: what it printed, the drain's tallies, and how many compositions
@@ -110,6 +110,34 @@ EVAL (COMPOSE q) -> Any",
     );
     assert_eq!(printed, "x\nx");
     assert_eq!(tiers.agent, 0);
+}
+
+/// `OUTER`, a written operator keyed on a module, whose invariant site reads it as a `Holder`.
+const OUTER: &str = "EXPR #(OUTER m :Holder) -> Number = #((LET w = (m :| Holder)) (7))\n";
+
+#[test]
+fn a_composed_asker_calling_a_written_keyed_operator_settles_it() {
+    let (printed, tiers, _) = composed(&format!(
+        "{PRELUDE}{OUTER}LET q = #((MODULE m = ((LET held = 1))) (PRINT $(OUTER m)))
+EVAL (COMPOSE q) -> Any"
+    ));
+    assert_eq!(printed, "7");
+    // The module is the one the load computed for the written quote: load content, so the call
+    // settles under the root.
+    assert_eq!((tiers.sought, tiers.settled), (1, 1));
+}
+
+#[test]
+fn a_written_callee_under_the_root_bound_to_a_composed_module_relays_nothing() {
+    let (printed, tiers, _) = composed(&format!(
+        "{PRELUDE}{OUTER}LET f = (FN :{{n :Number}} -> Number = #(n))
+LET x = (f {{n = 1}})
+LET q = #((MODULE m = ((LET held = $x))) (PRINT $(OUTER m)))
+EVAL (COMPOSE q) -> Any"
+    ));
+    assert_eq!(printed, "7");
+    // No layer of the callee's chain holds the module's tree: the call seeks nothing.
+    assert_eq!((tiers.sought, tiers.relayed, tiers.agent), (0, 0, 0));
 }
 
 #[test]

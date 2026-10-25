@@ -4,7 +4,7 @@
 use crate::parse::ExpressionPart;
 use crate::program::Program;
 use crate::scope::{
-    BodyShape, Mint, Narrowing, Segment, ShapeKind, Site, Slot, UnitIndex, Unknown,
+    BodyShape, Mint, Narrowing, Segment, ShapeKind, Site, Slot, UnitIndex, Unknown, Written,
 };
 
 use super::caching::{PRELUDE, Ran, SMALLEST, every_shape, minted, program, ran_under};
@@ -32,12 +32,19 @@ fn name(program: &Program<'_>, shape: &BodyShape<'_>, slot: Slot) -> String {
     program.symbols().display(symbol).to_string()
 }
 
-/// The names `shape`'s key lists, in slot order: `None` where a call of it seeks nothing.
+/// The names `shape`'s key lists, in slot order, as its body's record carries them: `None` where
+/// a call of it seeks nothing.
 fn listed(program: &Program<'_>, shape: &BodyShape<'_>) -> Option<Vec<String>> {
-    (program.facts().settlement_keys(shape)).map(|slots| {
-        slots
-            .iter()
-            .map(|slot| name(program, shape, *slot))
+    let bump = crate::memory::Bump::new();
+    let body = Written::of(program.facts())
+        .body(&bump, shape.segment())
+        .get();
+    (body.keys).map(|keys| {
+        keys.iter()
+            .map(|(slot, binder)| {
+                debug_assert_eq!(*binder, shape.slot_name(*slot));
+                name(program, shape, *slot)
+            })
             .collect()
     })
 }

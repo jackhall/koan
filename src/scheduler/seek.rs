@@ -55,13 +55,16 @@ pub enum Asked {
 /// The door a miss settles through, which the program hands the graph at load: it walks the
 /// asked body under the asked binding over `parent`, the layers the new settlement rests on, and
 /// lays what it decides in `bump`. `None` where the binding names a module whose tree no layer
-/// holds, so nothing settles. `witness` is that `'graph` outlives the bump.
+/// holds, so nothing settles; `rest` is called once the binding resolves, before the walk reads
+/// its types, so nothing rests for a settlement that is not built. `witness` is that `'graph`
+/// outlives the bump.
 pub trait Settles<'graph> {
     fn settle<'a>(
         &self,
         bump: &'a Bump,
         parent: Facts<'a>,
         ask: &Ask,
+        rest: &mut dyn FnMut(),
         witness: &'a &'graph (),
     ) -> Option<Settlement<'a>>;
 
@@ -86,8 +89,10 @@ impl<'graph> Settles<'graph> for Unsettled {
         _: &'a Bump,
         parent: Facts<'a>,
         _: &Ask,
+        rest: &mut dyn FnMut(),
         _: &'a &'graph (),
     ) -> Option<Settlement<'a>> {
+        rest();
         Some(Settlement::empty(parent.top()))
     }
 

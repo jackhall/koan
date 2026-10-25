@@ -1064,7 +1064,7 @@ fn called<'step, 'graph, 'here>(
         called_function(callee).is_some_and(|function| {
             let (facts, segment) = (at.view.facts(), function.body().segment);
             function.body().root.is_none()
-                && facts.settlement_keys(at.code.shape(segment)).is_some()
+                && function.body().keys.is_some()
                 && !facts.shapes().escapes(segment)
                 && at.within.build != function.closure().build()
         })
@@ -1076,25 +1076,13 @@ fn called<'step, 'graph, 'here>(
             } = request;
             return step.tail_under(placement, work, at.within.build);
         }
-        let seek = seek(
-            &request.work.state,
-            &at.code,
-            at.view.facts(),
-            &at.types,
-            &step.types(),
-        );
+        let seek = seek(&request.work.state, &at.types, &step.types());
         let Request {
             placement, work, ..
         } = request;
         return step.tail_seeking(placement, work, seek);
     }
-    let seek = seek(
-        &request.work.state,
-        &at.code,
-        at.view.facts(),
-        &at.types,
-        &step.types(),
-    );
+    let seek = seek(&request.work.state, &at.types, &step.types());
     let asked = step.spawn_seeking(request, seek);
     park(step, at, asked, FINISHING)
 }

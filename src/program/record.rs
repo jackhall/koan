@@ -151,6 +151,7 @@ pub(super) type Settle<'graph> = for<'a> fn(
     &'a Bump,
     Facts<'a>,
     &Ask,
+    &mut dyn FnMut(),
     &'a &'graph (),
 ) -> Option<Settlement<'a>>;
 
@@ -170,9 +171,10 @@ impl<'graph> Settles<'graph> for Program<'graph> {
         bump: &'a Bump,
         parent: Facts<'a>,
         ask: &Ask,
+        rest: &mut dyn FnMut(),
         witness: &'a &'graph (),
     ) -> Option<Settlement<'a>> {
-        (self.settle)(self, bump, parent, ask, witness)
+        (self.settle)(self, bump, parent, ask, rest, witness)
     }
 
     fn compose<'a>(

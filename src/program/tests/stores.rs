@@ -241,8 +241,14 @@ impl<'graph> Running<'graph> {
         'graph: 'l,
     {
         let load: &'l LoadFacts<'l> = self.program().facts();
-        let settled =
-            super::super::settle::settled::<L>(self.program(), bump, Facts::of(load), ask, &&())?;
+        let settled = super::super::settle::settled::<L>(
+            self.program(),
+            bump,
+            Facts::of(load),
+            ask,
+            &mut || {},
+            &&(),
+        )?;
         Some(Facts::under(load, Some(resident(bump, settled))))
     }
 

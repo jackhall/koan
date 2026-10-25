@@ -139,7 +139,6 @@ const READ_ACCESSORS: &[&str] = &[
     "named_contributions",
     "settled",
     "shape_at",
-    "settlement_keys",
     "statement_type",
     "use_statics",
     "view_slots",

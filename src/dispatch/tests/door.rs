@@ -44,7 +44,6 @@ fn facts_over_no_layers_answer_as_the_load_does() {
             alike!(contract());
             alike!(class());
             alike!(caches());
-            alike!(settlement_keys());
             alike!(digested_count());
             alike!(overlap());
             alike!(typing_refusal());

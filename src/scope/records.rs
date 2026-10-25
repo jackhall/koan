@@ -1281,12 +1281,6 @@ impl<'a, S: RecordSource<'a>> FactsOver<S> {
         (self.at_site(shape, site, |typed| typed.by_name)).unwrap_or(&[])
     }
 
-    /// The parameter slots the callable `shape`'s settlement keys on: `None` where a call of
-    /// it seeks nothing.
-    pub fn settlement_keys(&self, shape: &BodyShape<'_>) -> Option<&'a [Slot]> {
-        self.0.folds(shape.segment())?.keys
-    }
-
     /// The slots `shape` binds at a statement that some unit's frontier holds.
     pub fn statement_seams(&self, shape: &BodyShape<'_>) -> &'a [Slot] {
         self.0
