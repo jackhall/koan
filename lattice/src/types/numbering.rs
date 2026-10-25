@@ -15,9 +15,11 @@
 //! member whose key is unique is walked in key order, numbering more variables and deferring the
 //! sets nested in it, and the rounds repeat until none moves. Members still tied after that encode
 //! a graph over their variables, and only a search settles them: each variable of the first tie
-//! is numbered next in turn, the rest settled, and the least result kept. That runs only for a
-//! variable that occurs inside sets alone, between members that differ only in which such
-//! variables they hold.
+//! is numbered next in turn, the rest settled, and the least result kept. Two variables a swap
+//! leaves the scheme unchanged under are one branch, so a symmetric tie, such as a union of bare
+//! variables under one bound, takes none. The search branches only for a variable that occurs
+//! inside sets alone, between members that differ only in which such variables they hold, and
+//! that no swap carries onto another.
 //!
 //! A variable no position names comes last, by bound: two with one bound are interchangeable.
 
@@ -231,8 +233,22 @@ fn settle<'s, 't>(
             Visit::Skip
         });
     }
-    let mut best: Option<(BumpVec<'s, Handle>, Numbering<'s, 't>)> = None;
+    // Two variables a swap leaves the scheme unchanged under number alike, so one stands for both:
+    // a symmetric tie, such as a union of bare variables under one bound, takes one branch.
+    let mut representatives: BumpVec<'_, usize> = BumpVec::new_in(scratch);
     for candidate in candidates.iter().copied() {
+        if !(representatives.iter())
+            .any(|kept| interchangeable(types, scratch, bounds, positions, *kept, candidate))
+        {
+            representatives.push(candidate);
+        }
+    }
+    if let [only] = representatives[..] {
+        numbering.number(only);
+        return settle(types, scratch, bounds, positions, numbering);
+    }
+    let mut best: Option<(BumpVec<'s, Handle>, Numbering<'s, 't>)> = None;
+    for candidate in representatives.iter().copied() {
         let mut branch = numbering.clone();
         branch.number(candidate);
         let branch = settle(types, scratch, bounds, positions, branch);
@@ -243,6 +259,33 @@ fn settle<'s, 't>(
     }
     best.expect("a tied run holds a variable not yet numbered")
         .1
+}
+
+/// Whether swapping declared variables `a` and `b` leaves every position as it is: then the swap
+/// is a symmetry of the scheme, and fixes every other variable's number, so numbering either next
+/// settles to one result.
+fn interchangeable<'t>(
+    types: &TypeChain<'t, impl Habitat<'t>>,
+    scratch: BumpAllocator<'_>,
+    bounds: &[KType],
+    positions: &[Linked<'t>],
+    a: usize,
+    b: usize,
+) -> bool {
+    if bounds[a] != bounds[b] {
+        return false;
+    }
+    let mut bindings = BumpVec::with_capacity_in(bounds.len(), scratch);
+    bindings.extend((0..bounds.len()).map(|index| {
+        let swapped = match index {
+            _ if index == a => b,
+            _ if index == b => a,
+            _ => index,
+        };
+        types.quantified_node(swapped, bounds[index])
+    }));
+    (positions.iter())
+        .all(|position| substitute_quantified(types, scratch, *position, &bindings) == *position)
 }
 
 /// What a finished numbering builds, as a sequence that reads no index: the bounds in group order,

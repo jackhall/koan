@@ -607,6 +607,31 @@ proptest! {
     }
 }
 
+/// A symmetric tie settles without a search: eight variables under one bound, met only in one
+/// union, take one branch rather than 8!, and a rebuild finds the same handle.
+#[test]
+fn a_symmetric_group_numbers_without_a_search() {
+    let world = world();
+    let types = &world.types;
+    let names: Vec<TypeSymbol> = (0..8)
+        .map(|index| {
+            TypeSymbol::declared(&format!("Same{index}"), &world.symbols).expect("a Type token")
+        })
+        .collect();
+    let bounds = vec![KType::NUMBER; names.len()];
+    let build = |indices: &mut dyn Iterator<Item = usize>| {
+        with_scratch(|scratch| {
+            let vars: Vec<Handle> = indices
+                .map(|index| types.quantified(index, KType::NUMBER).raw())
+                .collect();
+            let union = types.union_of(scratch, &vars);
+            let params = [(world.binders[0], union)];
+            (types.function_scheme_raw(scratch, &names, &bounds, &params, KType::NULL.raw())).0
+        })
+    };
+    assert_eq!(build(&mut (0..8)), build(&mut (0..8).rev()));
+}
+
 /// A function scheme's draw whose variables occur only inside unions: each variable's bound (`Number`
 /// or `Str`), and each position — the parameters, then the return — as a union of members, each a
 /// form over one or two variables. Beside it, a permutation of the declaration order.
