@@ -205,6 +205,26 @@ PRINT i",
 }
 
 #[test]
+fn a_using_over_a_quote_born_of_composed_code_fills_its_holes() {
+    let source = |eval: &str| {
+        format!(
+            "LET q = #((LET inner = #(PRINT (x + 1))) (inner))
+LET p = #(PRINT 0)
+LET i = ({eval} -> Any)
+EVAL (COMPOSE p) -> Any
+LET j = (i USING {{x = 4}})
+EVAL j -> Any"
+        )
+    };
+    let (printed, tiers) = smallest(&source("EVAL (COMPOSE q)"));
+    // `p`'s miss evicts `q`'s composition between the birth of `i` and the `USING`, which
+    // rebuilds it to fill the hole there; the `EVAL` of `j` finds it.
+    assert_eq!(printed, "0\n5");
+    assert_eq!(printed, smallest(&source("EVAL q")).0);
+    assert_eq!((tiers.composed, tiers.bounced), (3, 3));
+}
+
+#[test]
 fn a_module_born_of_composed_code_reads_as_one_written() {
     let source = |eval: &str| {
         format!(

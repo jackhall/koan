@@ -240,9 +240,8 @@ fn using_reads_a_module_by_member_name_and_keeps_refused_code_unchanged() {
             ));
             let bad = code(fixture, activation, "bad");
             assert!(
-                fixture
-                    .code()
-                    .shape(bad.code().expect("a quote's node").segment())
+                (bad.code().expect("a quote's node"))
+                    .shape(&fixture.code())
                     .refusal()
                     .is_some()
             );

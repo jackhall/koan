@@ -55,6 +55,13 @@ pub enum KBirth<'graph, 'cell> {
         contract: Contract,
         inherit: Option<MemoHome>,
     },
+    /// A `USING` over code composed at run time: one step, under the code's composition, where its
+    /// shape lies, fills the holes of `code` from `source` and finishes with the filled code.
+    Using {
+        program: &'graph Program<'graph>,
+        code: KValue<'graph, 'cell>,
+        source: KValue<'graph, 'cell>,
+    },
     /// An evaluation: what it evaluates, and the view of the activation it reads names through.
     /// A frame's tail hands its last statement over with the frame's `contract`, which the
     /// evaluation then owes its value. `within` is what its frame runs within.
@@ -136,6 +143,10 @@ impl<'graph, 'cell> KBirth<'graph, 'cell> {
                 out(code);
                 out(offered);
             }
+            KBirth::Using { code, source, .. } => {
+                out(code);
+                out(source);
+            }
             KBirth::Block {
                 module: Some((module, _)),
                 ..
@@ -214,6 +225,7 @@ impl<'graph> StepBundle<'graph> for KBundle {
                     + size_of_val(*handed)
             }
             KBirth::Eval { code, offered, .. } => code.weight().plus(offered.weight()).bytes(),
+            KBirth::Using { code, source, .. } => code.weight().plus(source.weight()).bytes(),
             KBirth::Evaluate { .. } | KBirth::Block { .. } | KBirth::Inspect { .. } => usize::MAX,
         }
     }
@@ -301,6 +313,24 @@ impl<'graph> StepBundle<'graph> for KBundle {
                         offered,
                         contract,
                         inherit,
+                    }
+                }
+                KBirth::Using {
+                    program,
+                    code,
+                    source,
+                } => {
+                    let types = tiers.chain(Halves::alone(Half::of(writer, header)));
+                    let [code, source] = copy_severed::<_, KnottedFamily, _, 2>(
+                        writer,
+                        &types,
+                        view,
+                        [&code, &source],
+                    );
+                    KBirth::Using {
+                        program,
+                        code,
+                        source,
                     }
                 }
                 // Only a forced copy reaches here with a view: a `Fresh` hop's successor, a sibling

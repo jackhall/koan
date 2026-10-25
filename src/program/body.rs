@@ -55,7 +55,7 @@ use crate::knot::module::coerce::{self, CoercionRefused};
 use crate::knot::module::surface::surface;
 use crate::knot::{
     CodeBody, KActivation, KActivationView, KReading, KValue, Knotted, Supplied, Tied, Untieable,
-    tie,
+    tie, using,
 };
 use crate::memory::{Bump, BumpVec, Writer, resident};
 use crate::parse::ExpressionPart;
@@ -257,7 +257,9 @@ pub fn run<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'g
 fn composed_root<'graph>(birth: &KBirth<'graph, '_>) -> Option<ComposedRoot<'graph>> {
     match birth {
         KBirth::Call { callee, .. } => called_function(*callee)?.body().root,
-        KBirth::Eval { code, .. } => composed_root_of(code.as_code()?.code()?.shaped()),
+        KBirth::Eval { code, .. } | KBirth::Using { code, .. } => {
+            composed_root_of(code.as_code()?.code()?.shaped())
+        }
         _ => None,
     }
 }
@@ -469,6 +471,21 @@ fn ran<'graph, 'here, 'scratch>(
                 memo,
                 ..Runner::at(program, activation, Level::Block, None)
             }
+        }
+        KState::Born(KBirth::Using {
+            program,
+            code,
+            source,
+        }) => {
+            let scratch = Bump::new();
+            let (door, facts) = step.door();
+            let member = code.as_code().expect("`USING` fills a quote's code");
+            let writer = step.writer();
+            let filled = match using(writer, &door, &facts, member, source, types, &scratch) {
+                Ok(filled) => Value::Knotted(filled),
+                Err(refused) => program.error(writer, types, refused.display(program.symbols())),
+            };
+            return step.finish(filled);
         }
         KState::Runner(mut runner) => match woken(&mut step, &mut runner, scratch, types) {
             Ok(()) => runner,
@@ -787,6 +804,29 @@ impl fmt::Display for CodeRefusedDisplay<'_, '_, '_, '_, '_> {
                 self.symbols.display(name.symbol())
             ),
         }
+    }
+}
+
+/// What an evaluator asks for to fill the holes of `code`, code composed at run time, from
+/// `source` under `USING`: a one-step frame under the code's composition, where its shape lies,
+/// which shares its operands' storage.
+pub fn using_composed<'graph, 'here>(
+    program: &'graph Program<'graph>,
+    code: KValue<'graph, 'here>,
+    source: KValue<'graph, 'here>,
+    use_: Use,
+) -> Request<'graph, 'here, KBundle> {
+    Request {
+        placement: Placement::Shares,
+        use_,
+        work: crate::scheduler::Work {
+            step: run,
+            state: KBirth::Using {
+                program,
+                code,
+                source,
+            },
+        },
     }
 }
 

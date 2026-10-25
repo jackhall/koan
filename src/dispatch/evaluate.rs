@@ -814,6 +814,19 @@ fn call<'step, 'graph, 'here>(
     let raised = match selection {
         Selection::Builtin(builtin) => {
             let native = Native::of(builtin.id());
+            // A `USING` over code composed at run time fills its holes under its composition,
+            // where its shape lies.
+            if native == Native::Using
+                && let Some(code) = operands[0].value()
+                && let Some(CodeBody::Composed { root, .. }) = (code.as_code())
+                    .and_then(|member| member.code())
+                    .map(|node| node.shaped())
+                && let Some(source) = operands[1].value()
+            {
+                let request = crate::program::using_composed(program, code, source, Use::Forwards);
+                let asked = step.spawn_composing(request, root.digest);
+                return park(step, at, asked, FINISHING);
+            }
             let value = builtins::run(native, at, node, writer, &operands, &scratch);
             return finish(step, at, value);
         }

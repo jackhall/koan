@@ -4,8 +4,8 @@
 
 use std::fmt;
 
-use crate::knot::KValue;
 use crate::knot::module::coerce::CoercionRefused;
+use crate::knot::{KValue, UsingRefused};
 use crate::memory::Writer;
 use crate::parse::{KExpression, KeyElement};
 use crate::program::Program;
@@ -174,11 +174,7 @@ impl fmt::Display for RaisedDisplay<'_, '_, '_, '_, '_> {
                 write!(f, "{} is not code for `EVAL` to run", ktype(value))
             }
             Raised::RankedTwice { key } => {
-                write!(
-                    f,
-                    "{} is ranked two ways",
-                    self.symbols.display(key.symbol())
-                )
+                write!(f, "{}", UsingRefused::Ranking { key }.display(self.symbols))
             }
             Raised::NotAKey { rejected } => match rejected {
                 KeyRejected::NotAScalar(handle) => {

@@ -20,7 +20,7 @@ use crate::parse::{ExpressionPart, ProgramNode};
 use crate::scope::{
     self, BodyShape, CaptureSource, ComposedRoot, Facts, Segment, ShapeKind, Site, Written,
 };
-use crate::symbols::{BinderSymbol, KeySymbol};
+use crate::symbols::{BinderSymbol, KeySymbol, SymbolInterner};
 use crate::type_lattice::{KType, TypeNode};
 use crate::values::digest::{DigestHasher, Tag, syntax_digest};
 use crate::values::{Chain, CodeView, ContentDigest, Link, List, Seen, Value, Weight};
@@ -82,16 +82,6 @@ impl<'graph, 'cell> Code<'graph, 'cell> {
                 ..
             } => door.shape(segment),
             CodeBody::Composed { segment: None, .. } => door.shapes().root(),
-        }
-    }
-
-    /// The segment of the code shape the program built for this quote where it loads.
-    pub fn segment(&self) -> Segment {
-        match self.shaped {
-            CodeBody::Written { segment } => segment,
-            CodeBody::Composed { .. } => {
-                unreachable!("composed code is read through its composition")
-            }
         }
     }
 
@@ -388,6 +378,30 @@ pub enum UsingRefused {
     Ranking { key: KeySymbol },
 }
 
+impl UsingRefused {
+    /// The refusal as the error `USING` raises words it, its names read through `symbols`.
+    pub fn display(self, symbols: &SymbolInterner) -> impl std::fmt::Display + '_ {
+        let UsingRefused::Ranking { key } = self;
+        RankedTwice { key, symbols }
+    }
+}
+
+/// [`UsingRefused::display`]'s view.
+struct RankedTwice<'x> {
+    key: KeySymbol,
+    symbols: &'x SymbolInterner,
+}
+
+impl std::fmt::Display for RankedTwice<'_> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "{} is ranked two ways",
+            self.symbols.display(self.key.symbol())
+        )
+    }
+}
+
 /// `code USING source`: a new one-node knot in `writer`'s region whose holes `source` fills, and
 /// whose other holes stay holes. A name hole takes the field of `source` — a record, or a module's
 /// member — that it names; a keyworded hole takes the list of a module's registrations at its key,
@@ -412,7 +426,7 @@ pub fn using<'graph, 'cell>(
     let node = code
         .code()
         .expect("`USING` fills the holes of a quote's code");
-    let shape = door.shape(node.segment());
+    let shape = node.shape(door);
     if facts.typing_refusal(shape).is_some() {
         return Ok(code);
     }
