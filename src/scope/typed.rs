@@ -621,6 +621,25 @@ impl UseStatics<'_> {
     }
 }
 
+/// How a call in its frame body's tail position routes its frame, as the walk fixed it: per
+/// candidate, in the order the call reads them — one for a selected use or a call by name.
+/// Written only at a tail call of a callable body whose callee the load knows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Route<'graph> {
+    pub per: &'graph [CandidateRoute],
+}
+
+/// One candidate's route from a tail call.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CandidateRoute {
+    /// Whether the candidate's return keeps the frame's contract, where the frame's return and the
+    /// candidate's solution are closed: `None` where the call decides.
+    pub kept: Option<bool>,
+    /// Whether the call is a self tail edge of a body whose name does not escape: a hop that keeps
+    /// the frame's settlement where its body keys one.
+    pub hop: bool,
+}
+
 /// What the load fixed about a frame body's minted types — the program's, a callable's or a quote's
 /// code's: whether one can leave it, and how many sites it and the blocks and module bodies it runs
 /// mint at run — every minting site but a view over a closed content tree, whose types the load

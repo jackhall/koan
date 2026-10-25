@@ -215,7 +215,8 @@ pub fn run<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'g
             unreachable!("matched above")
         };
         let types = step.types();
-        let seek = super::settle::seek(&mut birth, step.writer(), &types, &types);
+        let keys = super::settle::callee_keys(&birth);
+        let seek = super::settle::seek(&mut birth, keys, step.writer(), &types, &types);
         let work = crate::scheduler::Work {
             step: run,
             state: birth,
@@ -268,7 +269,8 @@ pub fn run<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'g
         let KState::Born(mut birth) = state else {
             unreachable!("matched above")
         };
-        let own = super::settle::seek(&mut birth, step.writer(), &types, &types);
+        let keys = super::settle::callee_keys(&birth);
+        let own = super::settle::seek(&mut birth, keys, step.writer(), &types, &types);
         let own = Replayed {
             seek: own,
             pins: SmallVec::new(),

@@ -205,3 +205,38 @@ fn a_fresh_loop_viewing_a_new_module_each_hop_holds_its_types_flat() {
         "minting costs {per_many} over {many} hops against {per_few} over {few}"
     );
 }
+
+/// `RUNS`, keyed on `k` — its `PICK` reads `k`'s carrier — which hops into itself down the chain,
+/// and `GO`, which tails into `RUNS` by name.
+const RUNS: &str = "EXPR #(PICK x :Number) -> Str = #(\"n\")\n\
+                    EXPR #(PICK x :Str) -> Number = #(1)\n\
+                    EXPR #(RUNS k :Counter link :Link) -> Number = \
+                    #((PRINT (PICK k.zero)) (RUNS k (ATTR link next)))\n\
+                    EXPR #(RUNS k :Counter end :Null) -> Number = #(7)\n\
+                    LET go = (FN :{k :Counter} -> Number = #(RUNS k chain))\n";
+
+/// Run `source` over a chain of `depth` links: what it printed, how many tail calls decided at the
+/// call whether they keep their frame's contract, and how many hopped under their frame's own
+/// settlement.
+fn routed(depth: u32, source: &str) -> (String, usize, usize) {
+    use crate::dispatch::evaluate::{DERIVED, HOPPED};
+    DERIVED.with(|derived| derived.set(0));
+    HOPPED.with(|hopped| hopped.set(0));
+    let ran = super::caching::ran_under(depth, source, BuildBudget::default());
+    (ran.printed, DERIVED.with(Cell::get), HOPPED.with(Cell::get))
+}
+
+#[test]
+fn a_tail_call_reads_its_route_and_derives_none() {
+    // `GO`'s call by name and each `RUNS` hop read whether they keep the contract off their route,
+    // and each hop of `RUNS` into itself stays under its frame's settlement: three, the last
+    // link's into the `end` overload's body.
+    let (printed, derived, hopped) = routed(4, &format!("{RUNS}PRINT (go {{k = ints}})\n"));
+    assert_eq!(printed, format!("{}7", "n\n".repeat(4)));
+    assert_eq!((derived, hopped), (0, 3));
+    // A call of a function the load does not know decides at the call.
+    let unknown = "EXPR #(VIA f :Any) -> Number = #(f {k = ints})\nPRINT (VIA go)\n";
+    let (printed, derived, _) = routed(4, &format!("{RUNS}{unknown}"));
+    assert_eq!(printed, format!("{}7", "n\n".repeat(4)));
+    assert_eq!(derived, 1);
+}

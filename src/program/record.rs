@@ -98,33 +98,44 @@ pub struct Contract {
 }
 
 impl Contract {
-    /// Whether a call of a callable of type `callee` — a function type or an expression shape —
-    /// returns a type satisfying this contract, its group solved to `solution`, so the evaluation
-    /// owing the contract can hop to the callee's frame. With no solution, as a call by name has
-    /// before its frame solves, a quantified callee keeps nothing. The one answer for every call.
+    /// Whether a call of a callable of type `callee` keeps this contract ([`kept`]).
     pub fn kept_by(
         self,
         types: &Chain<'_, '_, '_, '_>,
         callee: DeclaredType<KType>,
         solution: Option<&[KType]>,
     ) -> bool {
-        let scratch = Bump::new();
-        let solution = match (callee, solution) {
-            (DeclaredType::Type(_), _) => &[][..],
-            (DeclaredType::Scheme(_), Some(solution)) => solution,
-            (DeclaredType::Scheme(_), None) => return false,
-        };
-        let (TypeNode::KFunction { ret, .. } | TypeNode::ExpressionShape { ret, .. }) =
-            callee.view(types).body
-        else {
-            return false;
-        };
-        // A run-time solution is concrete, and a scheme holds only its own group's variables.
-        let ret = substitute_quantified(types, &scratch, ret, solution);
-        types
-            .concrete(ret)
-            .is_some_and(|ret| satisfied_by(types, &scratch, self.returns, ret))
+        kept(types, self.returns, callee, solution)
     }
+}
+
+/// Whether a call of a callable of type `callee` — a function type or an expression shape —
+/// returns a type satisfying `returns`, a frame's contract, its group solved to `solution`, so the
+/// evaluation owing the contract can hop to the callee's frame. With no solution, as a call by name
+/// has before its frame solves, a quantified callee keeps nothing. The one answer for every call,
+/// whether the load's walk or the call reads it.
+pub fn kept(
+    types: &Chain<'_, '_, '_, '_>,
+    returns: KType,
+    callee: DeclaredType<KType>,
+    solution: Option<&[KType]>,
+) -> bool {
+    let scratch = Bump::new();
+    let solution = match (callee, solution) {
+        (DeclaredType::Type(_), _) => &[][..],
+        (DeclaredType::Scheme(_), Some(solution)) => solution,
+        (DeclaredType::Scheme(_), None) => return false,
+    };
+    let (TypeNode::KFunction { ret, .. } | TypeNode::ExpressionShape { ret, .. }) =
+        callee.view(types).body
+    else {
+        return false;
+    };
+    // A run-time solution is concrete, and a scheme holds only its own group's variables.
+    let ret = substitute_quantified(types, &scratch, ret, solution);
+    types
+        .concrete(ret)
+        .is_some_and(|ret| satisfied_by(types, &scratch, returns, ret))
 }
 
 /// How a call reached its callee. A keyworded call's arguments were admitted by the selection that

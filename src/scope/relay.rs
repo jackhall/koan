@@ -19,7 +19,7 @@ use super::shape::ShapeError;
 use super::tree::{KnotNode, Leaf, NodeCapture, Tree, Unfolded, Within};
 use super::typed::{
     Callable, Elimination, FunctionGroupMap, InstanceRead, Kept, Narrowing, ParameterBinding,
-    PathEntry, Pick, Points, Registered, Resolution, ShapeGroupMap, Static, StaticInstance,
+    PathEntry, Pick, Points, Registered, Resolution, Route, ShapeGroupMap, Static, StaticInstance,
     UseStatics,
 };
 
@@ -272,6 +272,7 @@ impl<'to, 'x, 'bind, L: Lays<'to>> Relay<'to, 'x, 'bind, L> {
             uses,
             selections,
             by_name,
+            routes,
             trees,
             picks,
             contents,
@@ -304,6 +305,9 @@ impl<'to, 'x, 'bind, L: Lays<'to>> Relay<'to, 'x, 'bind, L> {
             by_name: self.keyed(*by_name, |contributed| {
                 self.lay
                     .fill(contributed.len(), |at| self.static_type(&contributed[at]))
+            }),
+            routes: self.keyed(*routes, |route| Route {
+                per: self.copied(route.per),
             }),
             trees: self.keyed(*trees, |tree| resident(self.lay, self.tree(tree))),
             picks: self.keyed(*picks, |picks| {

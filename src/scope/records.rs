@@ -35,8 +35,8 @@ use super::shapes::Shapes;
 use super::tree::{Leaf, NodeCapture, Tree, closed_trees};
 use super::typed::{
     BodyClass, Caching, Elaboration, Handoff, InstanceRead, Mint, PathEntry, Pick, Points,
-    Resolution, Source, Static, StaticCallable, StaticInstance, StaticRegistered, StaticType,
-    UseStatics, Variable, ViewSlots,
+    Resolution, Route, Source, Static, StaticCallable, StaticInstance, StaticRegistered,
+    StaticType, UseStatics, Variable, ViewSlots,
 };
 
 /// What a cell reads of a typed fact where it runs ([`Facts::at_run`]).
@@ -92,6 +92,8 @@ pub struct Typed<'a> {
     pub selections: Keyed<'a, (Site, Points<'a>)>,
     /// Each call by name's contributions, by its argument part's site.
     pub by_name: Keyed<'a, (Site, &'a [StaticType<'a>])>,
+    /// Each tail call's route, by its node's site.
+    pub routes: Keyed<'a, (Site, Route<'a>)>,
     /// Each `:|` at a closed signature, beside its view's content tree.
     pub trees: Keyed<'a, (Site, &'a Tree<'a>)>,
     /// Each `:|` over a body-born module whose content is closed, beside its keyworded members'
@@ -125,6 +127,7 @@ impl Typed<'_> {
         uses: Keyed::EMPTY,
         selections: Keyed::EMPTY,
         by_name: Keyed::EMPTY,
+        routes: Keyed::EMPTY,
         trees: Keyed::EMPTY,
         picks: Keyed::EMPTY,
         contents: Keyed::EMPTY,
@@ -1044,6 +1047,7 @@ impl<'graph> LoadFacts<'graph> {
                 + size_of_val(typed.uses.entries())
                 + size_of_val(typed.selections.entries())
                 + size_of_val(typed.by_name.entries())
+                + size_of_val(typed.routes.entries())
                 + size_of_val(typed.trees.entries())
                 + size_of_val(typed.picks.entries())
                 + size_of_val(typed.minting.entries())
@@ -1352,6 +1356,12 @@ impl<'a, S: RecordSource<'a>> FactsOver<S> {
     /// What the load fixed about the keyworded use whose node sits at `site` of `shape`.
     pub fn use_statics(&self, shape: &BodyShape<'_>, site: Site) -> UseStatics<'a> {
         (self.at_site(shape, site, |typed| typed.uses)).unwrap_or(UseStatics::UNFIXED)
+    }
+
+    /// The route the load fixed for the tail call whose node sits at `site` of `shape`, where it
+    /// knows the callee.
+    pub fn route(&self, shape: &BodyShape<'_>, site: Site) -> Option<Route<'a>> {
+        self.at_site(shape, site, |typed| typed.routes)
     }
 
     /// The class the load fixed for the frame body `shape`.
@@ -1693,6 +1703,7 @@ impl Typed<'_> {
             .chain(self.uses.iter().map(|(site, _)| *site))
             .chain(self.selections.iter().map(|(site, _)| *site))
             .chain(self.by_name.iter().map(|(site, _)| *site))
+            .chain(self.routes.iter().map(|(site, _)| *site))
             .chain(self.trees.iter().map(|(site, _)| *site))
             .chain(self.picks.iter().map(|(site, _)| *site))
             .chain(self.minting.iter().copied());

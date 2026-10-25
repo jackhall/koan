@@ -47,6 +47,9 @@ pub(super) enum Selection<'x, 'graph, 'here> {
         callee: KValue<'graph, 'here>,
         registered: Registered<'here, KType>,
         solution: &'x [KType],
+        /// The chosen candidate's position among those the call selected among, where its route
+        /// sits.
+        position: usize,
     },
     NoOverload,
     Ambiguous(usize),
@@ -173,6 +176,7 @@ pub(super) fn selected<'x, 'graph, 'here>(
         registered: registration(chosen.callee)
             .expect("a candidate with a shape is a builtin or a registration's function"),
         solution: chosen.solution,
+        position: chosen.position,
     }
 }
 
@@ -327,6 +331,7 @@ pub(super) fn chosen<'x, 'graph, 'here>(
         callee,
         registered,
         solution,
+        position: 0,
     }
 }
 

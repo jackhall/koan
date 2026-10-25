@@ -12,7 +12,7 @@
 use crate::elaborate::schema_of;
 use crate::memory::BumpVec;
 use crate::scope::{
-    Address, BodyShape, Born, Cut, Frontier, InstanceRead, Narrowing, Pick, Points, Segment,
+    Address, BodyShape, Born, Cut, Frontier, InstanceRead, Narrowing, Pick, Points, Route, Segment,
     ShapeKind, Site, Slot, Static, StaticCallable, StaticInstance, StaticRegistered, StaticType,
     Store, Tree, Typed, UnitFacts, UnitId, Unknown, UseStatics, in_body_of,
 };
@@ -450,6 +450,14 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         let index = self.chain[level].named.len();
         self.chain[level].named.push((site, contributions, tag));
         self.wrote(level, tag, Wrote::Named(index));
+    }
+
+    /// Record the route of the tail call whose node sits at `site`.
+    pub(super) fn record_route(&mut self, level: usize, site: Site, route: Route<'o>) {
+        let tag = self.innermost();
+        let index = self.chain[level].routes.len();
+        self.chain[level].routes.push((site, route, tag));
+        self.wrote(level, tag, Wrote::Route(index));
     }
 
     /// The type the walk fixed for the type expression at `site` of `shape`.

@@ -39,8 +39,8 @@ use crate::memory::{Bump, BumpBackedSet, BumpVec, ProgramBrand, Writer, bump_set
 use crate::parse::ProgramNode;
 use crate::scheduler::{Ask, Asked, Seek};
 use crate::scope::{
-    Address, Binding, Bound, Composition, Facts, Keyed, Level, Settlement, Shapes, Tree, Unknown,
-    quote_paths,
+    Address, Binding, Bound, Composition, Facts, Keyed, Level, Settlement, Shapes, Slot, Tree,
+    Unknown, quote_paths,
 };
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::{DeclaredType, KType, Parametric, TypeNode};
@@ -61,14 +61,25 @@ pub fn called_function<'graph, 'cell>(
     callee.as_callable()?.behind_barriers().function()
 }
 
+/// The parameter slots the call `birth`'s callee keys a settlement on, beside their names: `None`
+/// for a birth that is no call, a callee that is no function, and a body that keys none.
+pub fn callee_keys<'here>(birth: &KBirth<'_, 'here>) -> Option<&'here [(Slot, BinderSymbol)]> {
+    let KBirth::Call { callee, .. } = birth else {
+        return None;
+    };
+    called_function(*callee)?.body().keys
+}
+
 /// What the call `birth` seeks: the arena node its callee was born under — the root for a birth
 /// that is no call or a callee that is no function — and the settlement under it its body keys,
-/// if the asker can read its content at every keyed name. `types` is the asker's evaluation
+/// `keys`, the callee's as the caller read them ([`callee_keys`]), if the asker can read its
+/// content at every keyed name. `types` is the asker's evaluation
 /// chain, which reads the arguments; `region` its region's, where a call by name's solution is
 /// solved. The settlement's request is laid through `writer` as the birth's level, which a
 /// callable born in the frame records in its stamp.
 pub fn seek<'graph, 'here>(
     birth: &mut KBirth<'graph, 'here>,
+    keys: Option<&[(Slot, BinderSymbol)]>,
     writer: Writer<'here, '_>,
     types: &Chain<'_, '_, '_, '_>,
     region: &Chain<'_, '_, '_, '_>,
@@ -80,7 +91,8 @@ pub fn seek<'graph, 'here>(
         _ => (None, None),
     };
     let parent = function.map_or(ArenaRef::ROOT, |function| function.closure().build());
-    let settlement = settlement(birth, types, region).map(|(key, keyed, ask, modules)| {
+    let settlement = keys.and_then(|keys| settlement(birth, keys, types, region));
+    let settlement = settlement.map(|(key, keyed, ask, modules)| {
         if let KBirth::Call { level, .. } = birth {
             *level = Some(Level::laid(writer, key, &ask, &keyed, &modules));
         }
@@ -91,12 +103,13 @@ pub fn seek<'graph, 'here>(
 }
 
 /// The key, binding image and ask of the settlement the call `birth` seeks under its callee's
-/// arena node: `None` for a birth that is no call, a callee that is no function, a body that keys
-/// no settlement, and a call whose content at a keyed name the asker cannot read or is not load
+/// arena node, its body keyed on `keyed`: `None` for a birth that is no call, a callee that is no
+/// function, and a call whose content at a keyed name the asker cannot read or is not load
 /// content.
 #[allow(clippy::type_complexity)]
 fn settlement<'graph, 'here>(
     birth: &KBirth<'graph, 'here>,
+    keyed: &[(Slot, BinderSymbol)],
     types: &Chain<'_, '_, '_, '_>,
     region: &Chain<'_, '_, '_, '_>,
 ) -> Option<(
@@ -119,7 +132,6 @@ fn settlement<'graph, 'here>(
     let (callee, arguments) = (*callee, *arguments);
     let function = called_function(callee)?;
     let body = function.body();
-    let keyed = body.keys?;
     let under_root = function.closure().build() == ArenaRef::ROOT;
     let scratch = Bump::new();
     // The call's solution of its group, solved at most once and only for a keyed `FOR ALL` name:

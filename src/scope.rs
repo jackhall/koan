@@ -87,10 +87,10 @@ pub use shapes::{BindSite, Code, Shapes};
 pub use stamp::{Ask, Asked, Level, Stamp};
 pub use tree::{Binder, Identity, KnotNode, Leaf, NodeCapture, Tree, Unfolded, Within};
 pub use typed::{
-    BodyClass, Caching, Callable, Elaboration, ElaborationDisplay, Elimination, FunctionGroupMap,
-    HandedTo, Handoff, InstanceRead, Kept, Mint, Narrowing, ParameterBinding, PathEntry, Pick,
-    Point, Points, Registered, Resolution, Resolved, Root, ShapeGroupMap, Source, Static,
-    StaticCallable, StaticInstance, StaticRegistered, StaticType, Table, UseStatics, Variable,
-    ViewSlots,
+    BodyClass, Caching, Callable, CandidateRoute, Elaboration, ElaborationDisplay, Elimination,
+    FunctionGroupMap, HandedTo, Handoff, InstanceRead, Kept, Mint, Narrowing, ParameterBinding,
+    PathEntry, Pick, Point, Points, Registered, Resolution, Resolved, Root, Route, ShapeGroupMap,
+    Source, Static, StaticCallable, StaticInstance, StaticRegistered, StaticType, Table,
+    UseStatics, Variable, ViewSlots,
 };
 pub use writes::{KeyedWrites, Writes};

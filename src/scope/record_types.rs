@@ -163,6 +163,7 @@ fn typed_types(typed: &Typed<'_>, each: &mut Each<'_>) {
         uses,
         selections,
         by_name,
+        routes: _,
         trees,
         picks: _,
         contents,

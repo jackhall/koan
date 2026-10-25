@@ -38,7 +38,9 @@ pub use bundle::{
     Handed, KBirth, KBirthFamily, KBundle, KScratchFamily, KState, KStateFamily, Within,
 };
 pub use exit::Exit;
-pub use record::{CallKind, Contract, Evaluated, Language, LoadError, Outcome, Output, Program};
+pub use record::{
+    CallKind, Contract, Evaluated, Language, LoadError, Outcome, Output, Program, kept,
+};
 pub use settle::{called_function, seek};
 #[cfg(test)]
 pub(crate) use substrate::walked;

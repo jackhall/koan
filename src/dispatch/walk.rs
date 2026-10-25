@@ -47,7 +47,9 @@
 //! quantified candidate's return is read through its group's intervals. A call whose callee and
 //! solve the load knows exactly — a selected registration, or a call by name of an exact callee —
 //! is exactly the return its frame retypes to; a call in tail position never finishes, and is
-//! typed as any other. A callable body whose static type meets its declared return at `Never`
+//! typed as any other. A callable body's tail call is recorded with its **route**: per candidate,
+//! whether its return keeps the frame's contract where both are closed, and whether it is a self
+//! tail edge of a body whose name does not escape. A callable body whose static type meets its declared return at `Never`
 //! refuses the load too, as does an ascription whose operand's static type meets its type at
 //! `Never`; one whose operand's static upper end lies under its type is **settled**, and the run
 //! checks nothing. An annotated binder, `LET <name> <type> = <value>`, is held to its type as an
@@ -153,14 +155,15 @@ use crate::memory::{
 };
 use crate::parse::BuiltinShapeId;
 use crate::parse::{ExpressionPart, KExpression, KLiteral};
+use crate::program::kept;
 use crate::scope::{
-    Address, BodyClass, BodyShape, Born, BuiltinIndex, Candidate, CandidateList, CaptureChain,
-    CaptureSlot, CaptureSource, Closing, ComponentIndex, Coordinate, Cut, Elimination, Frontier,
-    Identity, InstanceRead, Kept, Keyed, Lands, Leaf, Listed, NamedVariable, Narrowing, PathEntry,
-    Pick, Point, Points, Position, Resolution, Segment, ShapeError, ShapeKind, Shapes, Site,
-    SiteDeps, Slot, Source, Static, StaticInstance, StaticRegistered, StaticType, Store,
-    SurfacedHead, Tree, Typed, UnitFacts, UnitId, UnitIndex, UnitWork, Unknown, UseStatics,
-    Variable as Located, Within, follow, part_of, source_of,
+    Address, BodyClass, BodyShape, Born, BuiltinIndex, Candidate, CandidateList, CandidateRoute,
+    CaptureChain, CaptureSlot, CaptureSource, Closing, ComponentIndex, Coordinate, Cut,
+    Elimination, Frontier, Identity, InstanceRead, Kept, Keyed, Lands, Leaf, Listed, NamedVariable,
+    Narrowing, PathEntry, Pick, Point, Points, Position, Resolution, Route, Segment, ShapeError,
+    ShapeKind, Shapes, Site, SiteDeps, Slot, Source, Static, StaticInstance, StaticRegistered,
+    StaticType, Store, SurfacedHead, Tree, Typed, UnitFacts, UnitId, UnitIndex, UnitWork, Unknown,
+    UseStatics, Variable as Located, Within, follow, part_of, source_of,
 };
 use crate::source::SourceRef;
 use crate::symbols::{BinderSymbol, TypeSymbol};
@@ -418,6 +421,7 @@ enum Wrote {
     Minting(usize),
     Instance(usize),
     Named(usize),
+    Route(usize),
     Tree(usize),
     Picks(usize),
     Content(usize),
@@ -460,6 +464,8 @@ struct Level<'p, 'o, 'graph> {
     /// Each call by name's contributions, by its argument part's site: per parameter in symbol
     /// order.
     named: BumpVec<'p, (Site, &'o [StaticType<'o>], Tag)>,
+    /// Each tail call's route, by its node's site.
+    routes: BumpVec<'p, (Site, Route<'o>, Tag)>,
     /// Whether a porous value leaves the shape: through its return, or an argument of a call it
     /// makes into a frame. A block's and a module body's are folded into the shape enclosing them.
     exits: bool,
@@ -781,6 +787,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             settled: BumpVec::new_in(scratch),
             instances: BumpVec::new_in(scratch),
             named: BumpVec::new_in(scratch),
+            routes: BumpVec::new_in(scratch),
             exits: false,
             minting: BumpVec::new_in(scratch),
             closed: 0,
@@ -1198,6 +1205,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         let mut minting = BumpVec::new_in(scratch);
         let mut instances = BumpVec::new_in(scratch);
         let mut named = BumpVec::new_in(scratch);
+        let mut routes = BumpVec::new_in(scratch);
         let mut trees = BumpVec::new_in(scratch);
         let mut picks = BumpVec::new_in(scratch);
         let mut contents = BumpVec::new_in(scratch);
@@ -1284,6 +1292,12 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                         named.push((site, read));
                     }
                 }
+                Wrote::Route(index) => {
+                    let (site, route, held) = at.routes[index];
+                    if ours(held) {
+                        routes.push((site, route));
+                    }
+                }
                 Wrote::Tree(index) => {
                     let (site, tree, held) = at.trees[index];
                     if ours(held) {
@@ -1312,6 +1326,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         let (settled, minting) = (sites(&mut settled), sites(&mut minting));
         newest(&mut instances);
         newest(&mut named);
+        newest(&mut routes);
         newest(&mut trees);
         newest(&mut picks);
         Typed {
@@ -1326,6 +1341,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             uses: Keyed::sorted(lay, &mut uses),
             selections: keyed(lay, &selections),
             by_name: Keyed::sorted(lay, &mut named),
+            routes: Keyed::sorted(lay, &mut routes),
             trees: Keyed::sorted(lay, &mut trees),
             picks: Keyed::sorted(lay, &mut picks),
             contents: Keyed::sorted(lay, &mut contents),
@@ -1408,6 +1424,12 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         );
         at.named
             .extend(typed.by_name.iter().map(|(site, read)| (*site, *read, tag)));
+        at.routes.extend(
+            typed
+                .routes
+                .iter()
+                .map(|(site, route)| (*site, *route, tag)),
+        );
         at.minting
             .extend(typed.minting.iter().map(|site| (*site, tag)));
         at.trees
@@ -3900,6 +3922,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             );
             return Ok(Interval { lower, upper });
         }
+        self.route_by_name(level, node, callee);
         match self.callee(callee) {
             Some(callee) => self.called(level, callee, argument, node),
             None => {
@@ -4619,6 +4642,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                     self.record_selection(level, self.node_site(level, node), points);
                 }
                 self.set_narrowing(level, index, Narrowing::Selected(coordinate));
+                self.route_use(level, node, &[(chosen, Some(points))]);
                 return Ok(self.candidate_return(chosen));
             }
         }
@@ -4661,6 +4685,14 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             );
             self.set_narrowing(level, index, Narrowing::Kept(kept));
         }
+        let mut routed = BumpVec::with_capacity_in(judged.len(), scratch);
+        routed.extend(
+            (judged.iter().zip(points.iter())).map(|(judgement, points)| {
+                let solved = judgement.verdict == Verdict::Always;
+                (*judgement, solved.then_some(*points))
+            }),
+        );
+        self.route_use(level, node, &routed);
         self.use_exits(level, arguments, minted_free, &sites, &judged);
         self.made(level, node, list, &sites, &judged)?;
         // A lone closed signature head, with no hole skipped, is the only list that may admit, and
@@ -4679,6 +4711,93 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             returns.push(self.candidate_return(*judgement).upper);
         }
         Ok(under(types.union_of(scratch, &returns)))
+    }
+
+    /// The return of the callable body at `level`, as the contract its frame owes holds it, where
+    /// `node` is the body's tail call: `Some(None)` where that return is open.
+    fn tail_returns(&self, level: usize, node: &KExpression<'graph>) -> Option<Option<KType>> {
+        let shape = self.chain[level].shape;
+        if self.unfilled || shape.kind() != ShapeKind::Callable {
+            return None;
+        }
+        let tail = self.shapes.tail_call(shape)?;
+        if !std::ptr::eq(tail, node) {
+            return None;
+        }
+        let returns = self.in_body(level, Part::Return);
+        Some(returns.and_then(|returns| self.types.concrete(returns)))
+    }
+
+    /// Record the route of the keyworded use `node` where it is the tail call of the callable body
+    /// at `level`: per candidate the call reads, in its order — each judged, beside the closed
+    /// points an *always* one's group solves to — whether its return keeps the frame's contract,
+    /// where the frame's return and its solution are closed, and whether it hops into the frame's
+    /// own body. A builtin's call, a surfaced head's and a spread's are decided at the call.
+    fn route_use(
+        &mut self,
+        level: usize,
+        node: &KExpression<'graph>,
+        judged: &[(Judgement<'_>, Option<Points<'_>>)],
+    ) {
+        let Some(returns) = self.tail_returns(level, node) else {
+            return;
+        };
+        let (shape, types, scratch) = (self.chain[level].shape, self.types, self.scratch);
+        let per = self.lay.fill(judged.len(), |at| {
+            let (judgement, points) = judged[at];
+            let Candidate::One(coordinate) = judgement.candidate else {
+                return CandidateRoute {
+                    kept: None,
+                    hop: false,
+                };
+            };
+            let decided = judgement.ruled.is_none() && !judgement.surfaced && !judgement.retyped;
+            let kept = match (returns, judgement.known) {
+                (Some(returns), Known::Closed(callee)) if decided => {
+                    let solution = match callee {
+                        DeclaredType::Type(_) => Some(BumpVec::new_in(scratch)),
+                        DeclaredType::Scheme(_) => points.and_then(|points| {
+                            let mut solved =
+                                BumpVec::with_capacity_in(points.points.len(), scratch);
+                            for at in 0..points.points.len() {
+                                solved.push(points.closed(at)?);
+                            }
+                            Some(solved)
+                        }),
+                    };
+                    solution.map(|solution| kept(types, returns, callee, Some(&solution)))
+                }
+                _ => None,
+            };
+            CandidateRoute {
+                kept,
+                hop: self.shapes.hops_at(shape, coordinate),
+            }
+        });
+        self.record_route(level, self.node_site(level, node), Route { per });
+    }
+
+    /// Record the route of the call by name `node` of a callee whose static type is `head` where it
+    /// is the tail call of the callable body at `level`: whether an exact callee's return keeps the
+    /// frame's contract, where both are closed, and whether it hops into the frame's own body.
+    fn route_by_name(&mut self, level: usize, node: &KExpression<'graph>, head: Bound) {
+        let Some(returns) = self.tail_returns(level, node) else {
+            return;
+        };
+        let (shape, types) = (self.chain[level].shape, self.types);
+        let callee = match head {
+            DeclaredType::Type(head) if head.is_exact() => {
+                types.concrete(head.upper).map(DeclaredType::Type)
+            }
+            DeclaredType::Type(_) => None,
+            DeclaredType::Scheme(scheme) => Some(DeclaredType::Scheme(scheme)),
+        };
+        let kept = returns
+            .zip(callee)
+            .map(|(returns, callee)| kept(types, returns, callee, None));
+        let hop = self.shapes.hops_by_name(shape, &node.parts[0].value);
+        let per = self.lay.fill(1, |_| CandidateRoute { kept, hop });
+        self.record_route(level, self.node_site(level, node), Route { per });
     }
 
     /// Mark the shape at `level` porous where the keyworded use whose arguments are typed
