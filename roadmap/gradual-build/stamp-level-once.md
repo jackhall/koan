@@ -13,22 +13,34 @@ laid (419904 B). A tail loop that seeks a settlement each hop stays flat
 
 **Acceptance criteria.**
 
-- A frame lays its stamp's level in its region once, at its first closure
-  birth; a keyed call whose frame births no callable lays no `Level`.
+- A frame's level is laid once, in the region the frame writes, where its
+  callee's body can birth a callable — in its own statements, its blocks or
+  the module bodies it runs; a keyed call whose callee's body births none
+  lays no `Level`.
 - A test measuring the asker's region at each keyed call finds that a loop
-  making a keyed call each hop lays no `Level` per hop.
+  making a keyed call each hop — to a callee that births no callable, or to a
+  `Fresh` callee that does — lays no `Level` there per hop.
 - A callable born under a settlement still records its chain's stamp, and a
   call through its stale handle replays it
-  ([replay tests](../../src/dispatch/tests/replay.rs)).
+  ([replay tests](../../src/dispatch/tests/replay.rs)), a `Fresh` frame's
+  level and a callable born in a block included.
 
 **Directions.**
 
-- *Where the request waits — open.* The `Call` birth carries the request by
-  value and the frame lays it in its own region at its first closure birth;
-  or the asker lays it in its scratch and the frame copies it into its region
-  at that birth. Recommended: by value in the birth, if the request's size
-  (the key, the binding's handles and each module's digest) stays small
-  enough to move.
+- *When a level is laid — decided.* A bit sealed on each body shape and
+  copied to its body record says whether the body can birth a callable,
+  through its blocks and module bodies but not its quotes; a call whose
+  callee's body has it clear lays no level. Laying at the first birth itself
+  would need a slot shared by the frame's evaluation and block cells, which
+  each hold their `Within` by value.
+- *Where the request waits — decided.* A `Shares` callee's frame writes its
+  asker's region, so the asker lays the level at the call. A `Fresh` callee's
+  frame has a region of its own, which does not exist while the asker runs:
+  the `Seek` carries the request by value, the drain hands it to the frame's
+  first step, and the frame lays it. One function lays it on both paths. A
+  birth cannot carry it by value — about 130–220 B per keyed name, a count
+  that varies, in a `Copy` birth — and an asker's scratch is gone before its
+  frame runs.
 
 ## Dependencies
 
