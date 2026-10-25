@@ -18,9 +18,9 @@
 
 use crate::memory::{BumpAllocator, BumpVec, Lays, collect, resident};
 use crate::parse::{ExpressionPart, ProgramNode};
-use crate::symbols::BinderSymbol;
+use crate::symbols::{BinderSymbol, Symbol};
 use crate::type_lattice::{DeclaredType, Interval, KType, Parametric, Term};
-use crate::values::{Chain, ContentDigest, Weight};
+use crate::values::{Chain, ContentDigest, Retype, Weight};
 
 use super::composition::Composition;
 use super::facts::{Address, Binding, Bound, Frontier, UnitId, Unknown};
@@ -94,6 +94,9 @@ pub struct Typed<'a> {
     pub by_name: Keyed<'a, (Site, &'a [StaticType<'a>])>,
     /// Each tail call's route, by its node's site.
     pub routes: Keyed<'a, (Site, Route<'a>)>,
+    /// Each retype to a closed declared type, by the site its check is settled at, and each module
+    /// member read's, by its node's site.
+    pub retypes: Keyed<'a, (Site, Retype)>,
     /// Each `:|` at a closed signature, beside its view's content tree.
     pub trees: Keyed<'a, (Site, &'a Tree<'a>)>,
     /// Each `:|` over a body-born module whose content is closed, beside its keyworded members'
@@ -128,6 +131,7 @@ impl Typed<'_> {
         selections: Keyed::EMPTY,
         by_name: Keyed::EMPTY,
         routes: Keyed::EMPTY,
+        retypes: Keyed::EMPTY,
         trees: Keyed::EMPTY,
         picks: Keyed::EMPTY,
         contents: Keyed::EMPTY,
@@ -179,6 +183,31 @@ pub struct Closing<'a> {
     /// The first registration of a quote's code that overlaps a builtin overload, reported when an
     /// `EVAL` runs it. Apart from `refusal`, since `USING` keeps code that does not type.
     pub overlap: Option<&'a ShapeError<'a>>,
+    /// What a callable's frame re-stamps its arguments and its value at.
+    pub retypes: Retypes<'a>,
+}
+
+/// What a callable's frame re-stamps each argument and its value at, where the declared type of
+/// each is closed: the retype to each value parameter's type, by name, and to its return.
+#[derive(Clone, Copy, Debug)]
+pub struct Retypes<'a> {
+    pub parameters: &'a [(Symbol, Retype)],
+    pub returns: Option<Retype>,
+}
+
+impl Retypes<'_> {
+    /// A body whose frame re-stamps by no record.
+    pub const NONE: Self = Retypes {
+        parameters: &[],
+        returns: None,
+    };
+
+    /// The retype to the parameter `name`'s type, where it is closed.
+    pub fn parameter(&self, name: Symbol) -> Option<Retype> {
+        (self.parameters.iter())
+            .find(|(each, _)| *each == name)
+            .map(|(_, retype)| *retype)
+    }
 }
 
 /// What the load folds per body after the walk.
@@ -1048,6 +1077,7 @@ impl<'graph> LoadFacts<'graph> {
                 + size_of_val(typed.selections.entries())
                 + size_of_val(typed.by_name.entries())
                 + size_of_val(typed.routes.entries())
+                + size_of_val(typed.retypes.entries())
                 + size_of_val(typed.trees.entries())
                 + size_of_val(typed.picks.entries())
                 + size_of_val(typed.minting.entries())
@@ -1362,6 +1392,18 @@ impl<'a, S: RecordSource<'a>> FactsOver<S> {
     /// knows the callee.
     pub fn route(&self, shape: &BodyShape<'_>, site: Site) -> Option<Route<'a>> {
         self.at_site(shape, site, |typed| typed.routes)
+    }
+
+    /// What the load recorded a retype at `site` of `shape` re-stamps at, where it closed the
+    /// declared type.
+    pub fn retype(&self, shape: &BodyShape<'_>, site: Site) -> Option<Retype> {
+        self.at_site(shape, site, |typed| typed.retypes)
+    }
+
+    /// What a frame of the callable `shape` re-stamps its arguments and its value at, where the
+    /// load closed their declared types.
+    pub fn retypes(&self, shape: &BodyShape<'_>) -> Retypes<'a> {
+        (self.0.closing(shape.segment())).map_or(Retypes::NONE, |(closing, _)| closing.retypes)
     }
 
     /// The class the load fixed for the frame body `shape`.
@@ -1704,6 +1746,7 @@ impl Typed<'_> {
             .chain(self.selections.iter().map(|(site, _)| *site))
             .chain(self.by_name.iter().map(|(site, _)| *site))
             .chain(self.routes.iter().map(|(site, _)| *site))
+            .chain(self.retypes.iter().map(|(site, _)| *site))
             .chain(self.trees.iter().map(|(site, _)| *site))
             .chain(self.picks.iter().map(|(site, _)| *site))
             .chain(self.minting.iter().copied());

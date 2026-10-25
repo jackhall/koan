@@ -77,9 +77,11 @@ pub use record::Record;
 pub use retyped::Retyped;
 pub(crate) use settled::stamp_knot;
 pub use settlement::{ArenaRef, BindingImage, BuildBudget, KeyedTypes, SettlementKey};
+#[cfg(test)]
+pub(crate) use surface::TARGETS;
 pub use surface::{
-    Seen, Surface, applications, fit_solution, pinned_at_fit, retype_target, retyped_to,
-    retypes_by_header, under, unknown,
+    Retype, Seen, Surface, applications, fit_solution, pinned_at_fit, retype_target,
+    retype_target_as, retyped_to, retypes_by_header, under, unknown,
 };
 pub use tagged::Tagged;
 pub use type_value::TypeValue;

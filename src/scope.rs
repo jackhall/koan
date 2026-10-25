@@ -71,8 +71,8 @@ pub use memo::{DecisionMemo, Entry, EntryFamily, EventSite, MemoFamily, MemoKey,
 pub use record_types::Named;
 pub use records::{
     AtRun, BodyAt, BodyRef, Born, Closing, ComposedRoot, Deps, DepsGathering, Facts, FactsOver,
-    Folds, Layers, LoadFacts, LoadRecords, NamedVariable, SiteDeps, Typed, UnitFacts, Written,
-    tree_deps,
+    Folds, Layers, LoadFacts, LoadRecords, NamedVariable, Retypes, SiteDeps, Typed, UnitFacts,
+    Written, tree_deps,
 };
 pub use settlement_facts::{Activated, Settlement};
 pub use shape::{

@@ -77,7 +77,7 @@ pub fn surface<'graph, 'cell>(
             bindings.push((slot, Value::List(list)));
             continue;
         }
-        let member = layout::member(writer, module, name, types, scratch)
+        let member = layout::member(writer, module, (name, None), types, scratch)
             .ok_or(Unsurfaceable::Unnamed { name })?;
         named += 1;
         bindings.push((slot, member));

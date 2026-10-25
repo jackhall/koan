@@ -18,7 +18,7 @@ use crate::type_lattice::{
     DeclaredType, DispatchTokenElement, KType, Members, Parametric, TypeNode, satisfied_by,
     select_by_class, substitute_parameters,
 };
-use crate::values::{Chain, Seen, TypeValue, Value, applications};
+use crate::values::{Chain, Retype, Seen, TypeValue, Value, applications};
 
 #[cfg(test)]
 thread_local! {
@@ -49,13 +49,13 @@ pub fn registrations<'graph, 'cell>(
 
 /// The member of `module` named `name` — what `m.f` reads — at the type the signature `module`
 /// carries declares it: a header's application, or a bare module's own signature. A value member
-/// is retyped to it in `writer`'s region, a scheme included; a type member is a type value of it,
-/// which the node itself need not bind. `None` if `module` is no module, or its type does not
-/// name `name`.
+/// is retyped to it in `writer`'s region, a scheme included, by `retype` where the load recorded
+/// the read's; a type member is a type value of it, which the node itself need not bind. `None` if
+/// `module` is no module, or its type does not name `name`.
 pub fn member<'graph, 'cell>(
     writer: Writer<'cell, '_>,
     module: KValue<'graph, 'cell>,
-    name: BinderSymbol,
+    (name, retype): (BinderSymbol, Option<Retype>),
     types: &Chain<'_, 'cell, '_, '_>,
     scratch: BumpAllocator<'_>,
 ) -> Option<KValue<'graph, 'cell>> {
@@ -70,11 +70,13 @@ pub fn member<'graph, 'cell>(
     let own = schema_of(node.ktype(), types)?;
     let (index, _) = schema_member(&own, scratch, name)?;
     let held = *node.members().get(index)?;
-    Some(
-        Seen::of(held)
-            .seen_at(declared, types, scratch)
-            .restamped(writer, types),
-    )
+    let seen = match (declared, retype) {
+        (DeclaredType::Type(declared), Some(_)) => {
+            Seen::of(held).seen_as(declared, retype, types, scratch)
+        }
+        _ => Seen::of(held).seen_at(declared, types, scratch),
+    };
+    Some(seen.restamped(writer, types))
 }
 
 /// How many named members a module carrying `carried` shows: each name an application `carried`

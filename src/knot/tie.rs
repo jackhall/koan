@@ -31,7 +31,7 @@ use crate::parse::ExpressionPart;
 use crate::scope::{BodyShape, Component, ShapeKind, Stamp, Written};
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::{DeclaredType, KType, satisfied_by};
-use crate::values::{ArenaRef, Chain, Weight, retype_target};
+use crate::values::{ArenaRef, Chain, Retype, Weight, retype_target_as};
 
 use super::data::{self, Stager};
 use super::{Eager, Function, KReading, Knotted, Node, Untieable, code, function, module};
@@ -132,14 +132,23 @@ where
             .minted(types, facts.denoted(activation.shape(), site))
             .ok()
     }));
+    // What each annotation re-stamps a member at, where the load recorded it.
+    let mut retypes: BumpVec<'x, Option<Retype>> =
+        BumpVec::with_capacity_in(component.members.len(), scratch);
+    retypes.extend(component.members.iter().map(|slot| {
+        let annotation = shape.annotation(*slot)?;
+        let facts = activation.facts();
+        let site = activation.shape().site(annotation);
+        facts.minted(types, facts.retype(activation.shape(), site))
+    }));
     let mut functions = function::stage(&plan, activation, written, &bodies, types, scratch)?;
     // An annotated function member is born at the annotation's retype, keeping the signature its
     // body was checked against for its frame.
-    for (staged, annotation) in functions.iter_mut().zip(&annotations) {
+    for ((staged, annotation), retype) in functions.iter_mut().zip(&annotations).zip(&retypes) {
         if let (Some(staged), Some(annotation)) = (staged.as_mut(), *annotation)
             && satisfied_by(types, scratch, annotation, staged.ktype)
         {
-            let born = retype_target(types, scratch, staged.ktype, annotation);
+            let born = retype_target_as(types, scratch, staged.ktype, annotation, *retype);
             if born != staged.ktype {
                 staged.declared = Some(staged.ktype);
                 staged.ktype = born;
@@ -162,11 +171,11 @@ where
         ))
     }));
     // An annotated code member is born at the annotation's retype, as a function member is.
-    for (staged, annotation) in codes.iter_mut().zip(&annotations) {
+    for ((staged, annotation), retype) in codes.iter_mut().zip(&annotations).zip(&retypes) {
         if let (Some(staged), Some(annotation)) = (staged.as_mut(), *annotation)
             && satisfied_by(types, scratch, annotation, staged.ktype)
         {
-            let born = retype_target(types, scratch, staged.ktype.into(), annotation);
+            let born = retype_target_as(types, scratch, staged.ktype.into(), annotation, *retype);
             staged.ktype = born.as_type().expect("a quote's code is typed by a type");
         }
     }
@@ -179,7 +188,14 @@ where
             .map(|staged| staged.ktype)
             .or_else(|| code.as_ref().map(|staged| staged.ktype.into()))
     }));
-    data::memos(&nodes, &mut memos, &annotations, &names, types, scratch)?;
+    data::memos(
+        &nodes,
+        &mut memos,
+        (&annotations, &retypes),
+        &names,
+        types,
+        scratch,
+    )?;
     data::check(&nodes, &memos, &names, types, scratch)?;
 
     let mut knot_weight = Weight::flat::<usize>();

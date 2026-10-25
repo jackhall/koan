@@ -7,8 +7,9 @@
 //! type-bearing field a record gains does not compile until it is visited.
 
 use crate::type_lattice::{DeclaredType, Interval, KType, Parametric};
+use crate::values::Retype;
 
-use super::records::{AtRun, Born, Closing, Typed, UnitFacts};
+use super::records::{AtRun, Born, Closing, Retypes, Typed, UnitFacts};
 use super::shape::ShapeError;
 use super::tree::{KnotNode, Leaf, NodeCapture, Tree, Unfolded, Within};
 use super::typed::{
@@ -73,7 +74,16 @@ impl Closing<'_> {
             ran,
             refusal,
             overlap,
+            retypes,
         } = self;
+        let Retypes {
+            parameters,
+            returns,
+        } = retypes;
+        for (_, retype) in parameters.iter() {
+            retype.each_named(each);
+        }
+        returns.each_named(each);
         if let Some(Some(summary)) = summary {
             tree_types(summary, each);
         }
@@ -164,6 +174,7 @@ fn typed_types(typed: &Typed<'_>, each: &mut Each<'_>) {
         selections,
         by_name,
         routes: _,
+        retypes,
         trees,
         picks: _,
         contents,
@@ -224,6 +235,9 @@ fn typed_types(typed: &Typed<'_>, each: &mut Each<'_>) {
         contributions
             .iter()
             .for_each(|typed| static_type(typed, each));
+    }
+    for (_, retype) in retypes.iter() {
+        retype.each_named(each);
     }
     for (_, tree) in trees.iter() {
         tree_types(tree, each);
@@ -512,6 +526,17 @@ pub trait Named {
 impl Named for KType {
     fn each_named(&self, each: &mut Each<'_>) {
         each((*self).into());
+    }
+}
+
+impl Named for Retype {
+    fn each_named(&self, each: &mut Each<'_>) {
+        match self {
+            Retype::Point(ktype) | Retype::Members(ktype) | Retype::Fit(ktype) => {
+                each((*ktype).into())
+            }
+            Retype::Keeps => {}
+        }
     }
 }
 

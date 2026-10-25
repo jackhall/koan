@@ -437,8 +437,14 @@ pub(super) fn build<'graph, 'tier, 'cell, 'x>(
     // Value members first, in the signature's own order — which is layout order, since both
     // schemas' value tables hold the same names symbol-sorted.
     for (name, declared) in sig.value_slots.iter().copied() {
-        let held = layout::member(writer, source, BinderSymbol::Value(name), types, scratch)
-            .expect("satisfaction admitted the member, so the source holds it");
+        let held = layout::member(
+            writer,
+            source,
+            (BinderSymbol::Value(name), None),
+            types,
+            scratch,
+        )
+        .expect("satisfaction admitted the member, so the source holds it");
         let member = coerce(&cx, held, declared)
             .map_err(|refused| Unascribable::Coercion { name, refused })?;
         members.push(member);

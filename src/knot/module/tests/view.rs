@@ -49,8 +49,9 @@ fn a_retype_at_a_signature_reads_what_the_signature_names_and_drops_the_rest() {
                 "the header stands over `m`'s own node"
             );
 
-            let read =
-                |name: &str| layout::member(writer, retyped, fixture.name(name), types, scratch);
+            let read = |name: &str| {
+                layout::member(writer, retyped, (fixture.name(name), None), types, scratch)
+            };
             assert!(matches!(read("zero"), Some(Value::Number(zero)) if zero == 0.0));
             let Some(Value::Type(carrier)) = read("Carrier") else {
                 panic!("`Carrier` is a type member");

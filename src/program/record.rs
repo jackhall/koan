@@ -22,7 +22,7 @@ use crate::symbols::{BinderSymbol, SymbolInterner};
 use crate::type_lattice::{
     DeclaredType, KType, TypeNode, display_name, satisfied_by, substitute_quantified,
 };
-use crate::values::{Chain, Record, Tagged, TypeTiers, Value, satisfies};
+use crate::values::{Chain, Record, Retype, Tagged, TypeTiers, Value, satisfies};
 
 use super::activation_store::Activate;
 use super::bundle::{KBirth, KBundle, Within};
@@ -91,6 +91,8 @@ pub struct Contract {
     /// The return the value is retyped to: the outermost frame's in a chain of tail hops, since
     /// that frame's caller asked for it.
     pub retype: KType,
+    /// What a retype to `retype` re-stamps the value at, where the load recorded it.
+    pub restamp: Option<Retype>,
     /// Whether the value must satisfy `retype` too: a callee called past the type it shows, where
     /// either is quantified, so the order does not promise the node's return lies under the shown
     /// one.
@@ -398,7 +400,7 @@ impl<'graph> Program<'graph> {
             _ => contract.returns,
         };
         if satisfies(returns, &value, types, &scratch) {
-            return value.retyped(writer, contract.retype, types, &scratch);
+            return value.retyped_as(writer, contract.retype, contract.restamp, types, &scratch);
         }
         let name = |handle: DeclaredType<KType>| display_name(handle, types, self.symbols);
         let (value, returns) = (name(value.ktype()), name(returns.into()));
@@ -421,13 +423,14 @@ impl<'graph> Program<'graph> {
 
     /// `value`, bound by `LET <name> <type> = …`, held to `annotation`: an error value passes
     /// unchanged, a value satisfying it — `settled` where the load showed it always does — is
-    /// retyped to it, and anything else is the error naming the miss.
+    /// retyped to it, by the load's record of the retype where it holds one, and anything else is
+    /// the error naming the miss.
     pub fn annotated<'cell>(
         &self,
         writer: Writer<'cell, '_>,
         types: &Chain<'_, 'cell, '_, '_>,
         value: KValue<'graph, 'cell>,
-        annotation: KType,
+        (annotation, retype): (KType, Option<Retype>),
         settled: bool,
     ) -> KValue<'graph, 'cell> {
         if self.message(&value, types).is_some() {
@@ -439,7 +442,7 @@ impl<'graph> Program<'graph> {
             "a settled annotation always holds"
         );
         if settled || satisfies(annotation, &value, types, &scratch) {
-            return value.retyped(writer, annotation, types, &scratch);
+            return value.retyped_as(writer, annotation, retype, types, &scratch);
         }
         let name = |handle: DeclaredType<KType>| display_name(handle, types, self.symbols);
         self.error(

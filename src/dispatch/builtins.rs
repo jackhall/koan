@@ -362,7 +362,11 @@ pub(super) fn run<'graph, 'here>(
                 "a module slot admits modules alone"
             );
             let name = label(operands[1]);
-            let Some(member) = layout::member(writer, value(0), name, types, scratch) else {
+            let facts = at.view.facts();
+            let site = at.view.shape().site_of_node(node);
+            let retype = facts.minted(&at.types, facts.retype(at.view.shape(), site));
+            let Some(member) = layout::member(writer, value(0), (name, retype), types, scratch)
+            else {
                 return raise(Raised::NoMember {
                     of: value(0).concrete_ktype(),
                     member: name.symbol(),
@@ -370,7 +374,6 @@ pub(super) fn run<'graph, 'here>(
             };
             // A quantified member is read at the instance the load solved at this site, or as it
             // is at a call's head.
-            let facts = at.view.facts();
             match facts.minted(
                 &at.types,
                 facts.instance_at(at.view.shape(), at.view.shape().site_of_node(node)),

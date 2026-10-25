@@ -53,7 +53,10 @@
 //! refuses the load too, as does an ascription whose operand's static type meets its type at
 //! `Never`; one whose operand's static upper end lies under its type is **settled**, and the run
 //! checks nothing. An annotated binder, `LET <name> <type> = <value>`, is held to its type as an
-//! ascription holds its operand, settled by its type part's site.
+//! ascription holds its operand, settled by its type part's site. Where the type is closed, the
+//! walk records what the retype re-stamps at ([`Retype`]) by that site, as it does for a module
+//! member read over an exact module and, in a callable's closing, for each parameter and its
+//! return: the run re-stamps by the record and computes no target.
 //!
 //! A call by name of an exact callee is judged as a keyworded use of its lone candidate: the
 //! callee's parameters laid out as one class, in symbol order, and its argument's static type laid
@@ -160,10 +163,10 @@ use crate::scope::{
     Address, BodyClass, BodyShape, Born, BuiltinIndex, Candidate, CandidateList, CandidateRoute,
     CaptureChain, CaptureSlot, CaptureSource, Closing, ComponentIndex, Coordinate, Cut,
     Elimination, Frontier, Identity, InstanceRead, Kept, Keyed, Lands, Leaf, Listed, NamedVariable,
-    Narrowing, PathEntry, Pick, Point, Points, Position, Resolution, Route, Segment, ShapeError,
-    ShapeKind, Shapes, Site, SiteDeps, Slot, Source, Static, StaticInstance, StaticRegistered,
-    StaticType, Store, SurfacedHead, Tree, Typed, UnitFacts, UnitId, UnitIndex, UnitWork, Unknown,
-    UseStatics, Variable as Located, Within, follow, part_of, source_of,
+    Narrowing, PathEntry, Pick, Point, Points, Position, Resolution, Retypes, Route, Segment,
+    ShapeError, ShapeKind, Shapes, Site, SiteDeps, Slot, Source, Static, StaticInstance,
+    StaticRegistered, StaticType, Store, SurfacedHead, Tree, Typed, UnitFacts, UnitId, UnitIndex,
+    UnitWork, Unknown, UseStatics, Variable as Located, Within, follow, part_of, source_of,
 };
 use crate::source::SourceRef;
 use crate::symbols::{BinderSymbol, TypeSymbol};
@@ -175,7 +178,7 @@ use crate::type_lattice::{
     solving_slots,
 };
 use crate::values::{
-    Chain, ConstructionRefused, Value, construction, dict_type, list_type, pinned_at_fit,
+    Chain, ConstructionRefused, Retype, Value, construction, dict_type, list_type, pinned_at_fit,
     record_type, retype_target, retyped_to, under, unknown,
 };
 
@@ -422,6 +425,7 @@ enum Wrote {
     Instance(usize),
     Named(usize),
     Route(usize),
+    Retype(usize),
     Tree(usize),
     Picks(usize),
     Content(usize),
@@ -466,6 +470,8 @@ struct Level<'p, 'o, 'graph> {
     named: BumpVec<'p, (Site, &'o [StaticType<'o>], Tag)>,
     /// Each tail call's route, by its node's site.
     routes: BumpVec<'p, (Site, Route<'o>, Tag)>,
+    /// Each retype to a closed declared type, by its settled site or member read's node site.
+    retypes: BumpVec<'p, (Site, Retype, Tag)>,
     /// Whether a porous value leaves the shape: through its return, or an argument of a call it
     /// makes into a frame. A block's and a module body's are folded into the shape enclosing them.
     exits: bool,
@@ -788,6 +794,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             instances: BumpVec::new_in(scratch),
             named: BumpVec::new_in(scratch),
             routes: BumpVec::new_in(scratch),
+            retypes: BumpVec::new_in(scratch),
             exits: false,
             minting: BumpVec::new_in(scratch),
             closed: 0,
@@ -863,6 +870,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                     ran: None,
                     refusal: Some(resident(self.lay, error)),
                     overlap: None,
+                    retypes: Retypes::NONE,
                 };
                 (refused, Frontier::EMPTY)
             }
@@ -1206,6 +1214,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         let mut instances = BumpVec::new_in(scratch);
         let mut named = BumpVec::new_in(scratch);
         let mut routes = BumpVec::new_in(scratch);
+        let mut retypes = BumpVec::new_in(scratch);
         let mut trees = BumpVec::new_in(scratch);
         let mut picks = BumpVec::new_in(scratch);
         let mut contents = BumpVec::new_in(scratch);
@@ -1298,6 +1307,12 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                         routes.push((site, route));
                     }
                 }
+                Wrote::Retype(index) => {
+                    let (site, retype, held) = at.retypes[index];
+                    if ours(held) {
+                        retypes.push((site, retype));
+                    }
+                }
                 Wrote::Tree(index) => {
                     let (site, tree, held) = at.trees[index];
                     if ours(held) {
@@ -1327,6 +1342,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         newest(&mut instances);
         newest(&mut named);
         newest(&mut routes);
+        newest(&mut retypes);
         newest(&mut trees);
         newest(&mut picks);
         Typed {
@@ -1342,6 +1358,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             selections: keyed(lay, &selections),
             by_name: Keyed::sorted(lay, &mut named),
             routes: Keyed::sorted(lay, &mut routes),
+            retypes: Keyed::sorted(lay, &mut retypes),
             trees: Keyed::sorted(lay, &mut trees),
             picks: Keyed::sorted(lay, &mut picks),
             contents: Keyed::sorted(lay, &mut contents),
@@ -1429,6 +1446,12 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 .routes
                 .iter()
                 .map(|(site, route)| (*site, *route, tag)),
+        );
+        at.retypes.extend(
+            typed
+                .retypes
+                .iter()
+                .map(|(site, retype)| (*site, *retype, tag)),
         );
         at.minting
             .extend(typed.minting.iter().map(|site| (*site, tag)));
@@ -1894,8 +1917,36 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             ran: None,
             refusal: None,
             overlap: None,
+            retypes: self.retypes(level),
         };
         Ok((closing, tag))
+    }
+
+    /// What a frame of the callable body at `level` re-stamps each argument and its value at, where
+    /// the walk closes the declared type of each.
+    fn retypes(&self, level: usize) -> Retypes<'o> {
+        let (shape, types) = (self.chain[level].shape, self.types);
+        if shape.kind() != ShapeKind::Callable {
+            return Retypes::NONE;
+        }
+        let closed = |part| {
+            let declared = self.in_body(level, part)?;
+            Some(Retype::of(types, types.concrete(declared)?))
+        };
+        let mut parameters = BumpVec::new_in(self.scratch);
+        parameters.extend((0..shape.slots() as u32).map(Slot).filter_map(|slot| {
+            if shape.position_of(slot) != Position::PARAMETER {
+                return None;
+            }
+            let BinderSymbol::Value(name) = shape.slot_name(slot) else {
+                return None;
+            };
+            Some((name.symbol(), closed(Part::Parameter(name.symbol()))?))
+        }));
+        Retypes {
+            parameters: collect(self.lay, parameters.iter().copied()),
+            returns: closed(Part::Return),
+        }
     }
 
     /// The quote's code `code`'s last statement's static type as a traced `EVAL` runs it: typed a
@@ -3529,7 +3580,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
 
     /// A value of the static type `typed` held to the type part `part`: that type, exactly where
     /// the retype makes it so ([`retyped_to`]), and settled at `site` where `typed`'s upper end
-    /// lies under it. Where the two meet at `Never`, both read through their bounds. A module exact
+    /// lies under it. Where the type is closed, what the retype re-stamps at is recorded at `site`. Where the two meet at `Never`, both read through their bounds. A module exact
     /// at a closed type is exactly what the run retypes it to, pinned by the run's own
     /// [`pinned_at_fit`], and refused where it fits a signature type not at all.
     fn held(
@@ -3569,7 +3620,11 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 .as_type()
                 .expect("a module's type is a type");
             self.lay_carried(carried);
+            self.record_retype(level, site, Retype::Point(carried));
             return Ok(Interval::point(carried.into()));
+        }
+        if let Some(closed) = types.concrete(declared) {
+            self.record_retype(level, site, Retype::of(types, closed));
         }
         Ok(retyped_to(types, declared))
     }
@@ -4492,6 +4547,9 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             if let Some(builtin) = builtin.filter(|_| verdict != Verdict::Never) {
                 let native = Native::of(builtin.id());
                 let typed = rules::typed(native, builtin.ktype(), given_here, types, scratch);
+                if native == Native::ModuleMember {
+                    self.member_retype(level, node, given_here);
+                }
                 if let Some((slot, lacks)) = typed.dropped {
                     verdict = Verdict::Never;
                     dropped = dropped.or(Some((given_here[slot].typed.lower, lacks)));
@@ -4711,6 +4769,33 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             returns.push(self.candidate_return(*judgement).upper);
         }
         Ok(under(types.union_of(scratch, &returns)))
+    }
+
+    /// Record what the member read `node`, given `given`, re-stamps the member at, where its module
+    /// operand is exact and the value member's declared type closed: the run reads the member
+    /// there.
+    fn member_retype(&mut self, level: usize, node: &KExpression<'graph>, given: &[Given<'_>]) {
+        let (types, scratch) = (self.types, self.scratch);
+        let [module, label] = given else {
+            return;
+        };
+        let (Some([name @ BinderSymbol::Value(_)]), Some(exact)) =
+            (label.names, exact(types, module.typed))
+        else {
+            return;
+        };
+        let declared = signature_member(types, scratch, exact.into(), *name)
+            .and_then(|read| read.declared.as_type())
+            .and_then(|declared| types.concrete(declared));
+        if let Some(declared) = declared
+            && !self.unfilled
+        {
+            self.record_retype(
+                level,
+                self.node_site(level, node),
+                Retype::of(types, declared),
+            );
+        }
     }
 
     /// The return of the callable body at `level`, as the contract its frame owes holds it, where

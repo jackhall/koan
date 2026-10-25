@@ -12,7 +12,7 @@
 use crate::knot::KnottedFamily;
 use crate::memory::BumpAllocator;
 use crate::type_lattice::{DeclaredType, KType, Parametric};
-use crate::values::{Chain, Types, adopt_value};
+use crate::values::{Chain, Retype, Types, adopt_value};
 
 use super::record::Contract;
 
@@ -62,5 +62,9 @@ impl<'a, 'tier, 'graph, 'here, 'reg> Exit<'a, 'tier, 'here, 'reg> {
         }
         self.handle(contract.returns);
         self.handle(contract.retype);
+        match contract.restamp {
+            Some(Retype::Point(kt) | Retype::Members(kt) | Retype::Fit(kt)) => self.handle(kt),
+            Some(Retype::Keeps) | None => {}
+        }
     }
 }

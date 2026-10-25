@@ -14,7 +14,7 @@ use crate::memory::{BumpAllocator, BumpBackedMap, BumpVec, Lays, bump_table, col
 
 use super::facts::{Binding, Bound, Frontier, Unknown};
 use super::keyed::Keyed;
-use super::records::{Born, Closing, Deps, SiteDeps, Typed, UnitFacts};
+use super::records::{Born, Closing, Deps, Retypes, SiteDeps, Typed, UnitFacts};
 use super::shape::ShapeError;
 use super::tree::{KnotNode, Leaf, NodeCapture, Tree, Unfolded, Within};
 use super::typed::{
@@ -114,6 +114,7 @@ impl<'to, 'x, 'bind, L: Lays<'to>> Relay<'to, 'x, 'bind, L> {
             ran,
             refusal,
             overlap,
+            retypes,
         } = closing;
         Closing {
             class: *class,
@@ -122,6 +123,10 @@ impl<'to, 'x, 'bind, L: Lays<'to>> Relay<'to, 'x, 'bind, L> {
             ran: *ran,
             refusal: refusal.map(|error| resident(self.lay, self.error(error))),
             overlap: overlap.map(|error| resident(self.lay, self.error(error))),
+            retypes: Retypes {
+                parameters: self.copied(retypes.parameters),
+                returns: retypes.returns,
+            },
         }
     }
 
@@ -273,6 +278,7 @@ impl<'to, 'x, 'bind, L: Lays<'to>> Relay<'to, 'x, 'bind, L> {
             selections,
             by_name,
             routes,
+            retypes,
             trees,
             picks,
             contents,
@@ -309,6 +315,7 @@ impl<'to, 'x, 'bind, L: Lays<'to>> Relay<'to, 'x, 'bind, L> {
             routes: self.keyed(*routes, |route| Route {
                 per: self.copied(route.per),
             }),
+            retypes: self.keyed_copied(*retypes),
             trees: self.keyed(*trees, |tree| resident(self.lay, self.tree(tree))),
             picks: self.keyed(*picks, |picks| {
                 self.lay.fill(picks.len(), |at| Pick {

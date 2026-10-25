@@ -403,7 +403,7 @@ fn field<'graph, 'cell>(
 ) -> Option<KValue<'graph, 'cell>> {
     match source.knot_member() {
         Some(member) if member.module().is_some() => {
-            module::layout::member(writer, source, name, types, scratch)
+            module::layout::member(writer, source, (name, None), types, scratch)
         }
         _ => Some(
             source

@@ -19,6 +19,7 @@ use crate::scope::{
 use crate::symbols::{BinderSymbol, Symbol};
 use crate::type_lattice::{DeclaredType, Interval, KType, Parametric, Side, TypeNode, Variable};
 use crate::type_lattice::{bound_above, read_through};
+use crate::values::Retype;
 
 use super::{Bound, Pass, Tag, Wrote};
 
@@ -450,6 +451,14 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         let index = self.chain[level].named.len();
         self.chain[level].named.push((site, contributions, tag));
         self.wrote(level, tag, Wrote::Named(index));
+    }
+
+    /// Record what the retype at `site` re-stamps at.
+    pub(super) fn record_retype(&mut self, level: usize, site: Site, retype: Retype) {
+        let tag = self.innermost();
+        let index = self.chain[level].retypes.len();
+        self.chain[level].retypes.push((site, retype, tag));
+        self.wrote(level, tag, Wrote::Retype(index));
     }
 
     /// Record the route of the tail call whose node sits at `site`.

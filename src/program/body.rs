@@ -70,7 +70,7 @@ use crate::scope::{Address, AtRun, Bound, RecordSource, Tree, Unknown};
 use crate::scope::{BodyShape, Component, Position, ShapeKind, Site, Slot, Unit, UnitWork};
 use crate::scope::{CaptureSource, ClosureBindings, Code, ComposedRoot, Facts, ShapeError};
 use crate::scope::{ComposedSyntax, Level as SettlementLevel, Stamp};
-use crate::scope::{Coordinate, ParameterBinding, Static, Target};
+use crate::scope::{Coordinate, ParameterBinding, Retypes, Static, Target};
 use crate::symbols::{BinderSymbol, Symbol, SymbolInterner, TypeSymbol};
 use crate::type_lattice::{
     Collector, DeclaredType, DeclaredView, KType, Parametric, Record as TypeRecord, TypeNode,
@@ -968,6 +968,7 @@ pub fn eval<'step, 'graph, 'here>(
                     callee: None,
                     returns,
                     retype: returns,
+                    restamp: None,
                     checked: false,
                 },
                 inherit,
@@ -1364,6 +1365,12 @@ fn frame<'graph, 'here>(
         ),
     );
     let reading = activation.view().reading(&code, facts);
+    // What the frame re-stamps its arguments and value at, where the load closed their types: a
+    // quantified callee's are solved per call.
+    let retypes = match quantified {
+        true => Retypes::NONE,
+        false => facts.retypes(shape),
+    };
     let mut parameters = 0;
     for slot in (0..shape.slots()).map(|slot| Slot(slot as u32)) {
         let name = shape.slot_name(slot);
@@ -1389,8 +1396,9 @@ fn frame<'graph, 'here>(
                     argument.satisfies(declared, types, scratch),
                     "a frame binds an argument its parameter admits"
                 );
+                let retype = facts.minted(types, retypes.parameter(name.symbol()));
                 let value = argument
-                    .seen_at(declared, types, scratch)
+                    .seen_as(declared, retype, types, scratch)
                     .restamped(writer, types);
                 // A memo handed for a value carrying the type the parameter binds is that value's
                 // digest: the frame laid no header over it, so the slot holds the caller's value.
@@ -1458,10 +1466,17 @@ fn frame<'graph, 'here>(
         ),
         _ => (owed.map_or(returns, |outer| outer.retype), false),
     };
+    // What the value is re-stamped at, read off the load's record where it closed the return the
+    // value is retyped to: a barrier's shown return is no record's.
+    let restamp = match (outermost, shown_return) {
+        (None, Some(_)) => owed.and_then(|outer| outer.restamp),
+        _ => owed.map_or(facts.minted(types, retypes.returns), |outer| outer.restamp),
+    };
     let contract = Contract {
         callee: Some(declared),
         returns,
         retype,
+        restamp,
         checked,
     };
     let barrier = outermost.map(|outermost| Barrier {
@@ -1947,8 +1962,11 @@ fn held_at<'graph, 'here>(
     value: KValue<'graph, 'here>,
 ) -> Result<KValue<'graph, 'here>, Stopped<'here>> {
     let at = runner.reading(step);
-    let settled = at.facts().settled(at.shape(), at.shape().site(written));
-    let held = (runner.program).annotated(step.writer(), types, value, annotation, settled);
+    let (facts, site) = (at.facts(), at.shape().site(written));
+    let settled = facts.settled(at.shape(), site);
+    let retype = facts.minted(types, facts.retype(at.shape(), site));
+    let held =
+        (runner.program).annotated(step.writer(), types, value, (annotation, retype), settled);
     runner.check(&held, types)?;
     Ok(held)
 }

@@ -270,8 +270,9 @@ fn every_member_is_read_by_its_name() {
                 .expect("the block's parameters are `m`'s members");
                 for (text, bound) in bound {
                     let name = fixture.name(text);
-                    let member = layout::member(writer, Value::Knotted(m), name, types, scratch)
-                        .expect("a member");
+                    let member =
+                        layout::member(writer, Value::Knotted(m), (name, None), types, scratch)
+                            .expect("a member");
                     assert!(holds(member, *bound), "`{source}`: `{text}` is {bound:?}");
                     let (slot, _) = fixture
                         .shape_of(block)

@@ -14,7 +14,8 @@
 //!
 //! The static type of a value retyped to a type ([`retyped_to`]) and of one at most a type
 //! ([`under`]) live here too, beside the retype they describe: the load reads the same predicate
-//! `seen_at` retypes by.
+//! `seen_at` retypes by. Where the load closes a retype's declared type it records the
+//! [`Retype`], and the run re-stamps by it ([`Seen::seen_by`]) without computing the target.
 
 use crate::memory::{BumpAllocator, BumpVec, Edge, Writer};
 use crate::symbols::{BinderSymbol, Symbol, TypeSymbol};
@@ -113,6 +114,50 @@ impl<'cell, X: Knotted + 'cell> Seen<'cell, X> {
             Some(ktype) => Seen {
                 value: self.value,
                 ktype,
+            },
+            None => self,
+        }
+    }
+
+    /// [`seen_at`](Self::seen_at) `declared`, by `retype` where the load recorded one for it.
+    pub fn seen_as(
+        self,
+        declared: KType,
+        retype: Option<Retype>,
+        types: &Chain<'_, '_, '_, '_>,
+        scratch: BumpAllocator<'_>,
+    ) -> Self {
+        let Some(retype) = retype else {
+            return self.seen_at(declared, types, scratch);
+        };
+        #[cfg(debug_assertions)]
+        if let Some(kind) = kind(self.value) {
+            let seen = |target: Option<KType>| target.map_or(self.ktype, DeclaredType::from);
+            debug_assert_eq!(
+                seen(target_by(types, scratch, kind, self.ktype, retype)),
+                seen(computed(types, scratch, kind, self.ktype, declared)),
+                "a recorded retype re-stamps where the target is"
+            );
+        }
+        self.seen_by(retype, types, scratch)
+    }
+
+    /// The value seen as `retype`, the load's record of a retype to a closed declared type, after
+    /// the caller has checked it satisfies that type: [`seen_at`](Self::seen_at) that type, with
+    /// the target read off the record — computed only for a union's members or a module's fit.
+    pub fn seen_by(
+        self,
+        retype: Retype,
+        types: &Chain<'_, '_, '_, '_>,
+        scratch: BumpAllocator<'_>,
+    ) -> Self {
+        let Some(kind) = kind(self.value) else {
+            return self;
+        };
+        match target_by(types, scratch, kind, self.ktype, retype) {
+            Some(ktype) => Seen {
+                value: self.value,
+                ktype: ktype.into(),
             },
             None => self,
         }
@@ -241,6 +286,21 @@ impl<'cell, X: Knotted + 'cell> Value<'cell, X> {
     ) -> Value<'cell, X> {
         Seen::of(self)
             .seen_at(declared, types, scratch)
+            .restamped(writer, types)
+    }
+
+    /// [`retyped`](Self::retyped) to `declared`, re-stamped by `retype` where the load recorded
+    /// one for it ([`Seen::seen_by`]).
+    pub fn retyped_as(
+        self,
+        writer: Writer<'cell, '_>,
+        declared: KType,
+        retype: Option<Retype>,
+        types: &Chain<'_, 'cell, '_, '_>,
+        scratch: BumpAllocator<'_>,
+    ) -> Value<'cell, X> {
+        Seen::of(self)
+            .seen_as(declared, retype, types, scratch)
             .restamped(writer, types)
     }
 }
@@ -540,12 +600,85 @@ fn kind<X: Knotted>(value: Value<'_, X>) -> Option<Kind> {
     })
 }
 
+/// What a retype to a closed declared type re-stamps a value satisfying it at, as the load records
+/// it where it closes that type, so the run re-stamps without computing the target ([`target`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Retype {
+    /// This type, whatever the value: the declared type re-stamps every value of its kind at
+    /// itself ([`retyped_to`] is a point), or the type an exact module is pinned at.
+    Point(KType),
+    /// The value's own type: the declared type re-stamps no kind — `Any`, a scalar, `Module` or
+    /// `Code`.
+    Keeps,
+    /// The meet of what the members of this union of the value's kind take it at.
+    Members(KType),
+    /// What *fits* pins a module at under this signature type, which leaves a head parameter
+    /// unpinned.
+    Fit(KType),
+}
+
+impl Retype {
+    /// The retype to `declared`, read off its node: the classes [`retyped_to`] reads.
+    pub fn of(types: &Chain<'_, '_, '_, '_>, declared: KType) -> Self {
+        if let TypeNode::Union { .. } = types.node(declared) {
+            return Retype::Members(declared);
+        }
+        match retyped_kind(types, declared.into()) {
+            None => Retype::Keeps,
+            Some(Kind::Module) if !pins_every_parameter(types, declared.into()) => {
+                Retype::Fit(declared)
+            }
+            Some(_) => Retype::Point(declared),
+        }
+    }
+}
+
+/// The type a value of `kind` and type `own` is re-stamped at by `retype`: [`target`]'s answer,
+/// computed only for a union's members or a module's fit. `None` where it keeps `own`.
+fn target_by(
+    types: &Chain<'_, '_, '_, '_>,
+    scratch: BumpAllocator<'_>,
+    kind: Kind,
+    own: DeclaredType<KType>,
+    retype: Retype,
+) -> Option<KType> {
+    match retype {
+        Retype::Point(point) => Some(point),
+        Retype::Keeps => None,
+        Retype::Members(declared) | Retype::Fit(declared) => {
+            target(types, scratch, kind, own, declared)
+        }
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// How many retype targets the run computed rather than read off a record, past a value
+    /// already of the declared type.
+    pub(crate) static TARGETS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// The type a value of `kind` and type `own` is retyped to where a holder declares `declared`, after
 /// the caller has checked it satisfies `declared`: the meet of what `declared`'s members — or
 /// `declared` alone — of that kind take it at. A container, a tagged value, a function, a quote's
 /// code or a type value is taken at each such member its type fits, a module at each application it fits, pinned
 /// ([`pinned_at_fit`]). `None` where none is.
 fn target(
+    types: &Chain<'_, '_, '_, '_>,
+    scratch: BumpAllocator<'_>,
+    kind: Kind,
+    own: DeclaredType<KType>,
+    declared: KType,
+) -> Option<KType> {
+    #[cfg(test)]
+    if own != declared.into() {
+        TARGETS.with(|targets| targets.set(targets.get() + 1));
+    }
+    computed(types, scratch, kind, own, declared)
+}
+
+/// [`target`], uncounted: what a recorded retype is checked against.
+fn computed(
     types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
     kind: Kind,
@@ -676,6 +809,28 @@ pub fn retype_target(
     node_kind(own.view(types).body)
         .and_then(|kind| target(types, scratch, kind, own, declared))
         .map_or(own, DeclaredType::from)
+}
+
+/// [`retype_target`] to `declared`, read off `retype` where the load recorded one for it.
+pub fn retype_target_as(
+    types: &Chain<'_, '_, '_, '_>,
+    scratch: BumpAllocator<'_>,
+    own: DeclaredType<KType>,
+    declared: KType,
+    retype: Option<Retype>,
+) -> DeclaredType<KType> {
+    let Some(retype) = retype else {
+        return retype_target(types, scratch, own, declared);
+    };
+    let kind = node_kind(own.view(types).body);
+    let seen = |target: Option<KType>| target.map_or(own, DeclaredType::from);
+    let by = seen(kind.and_then(|kind| target_by(types, scratch, kind, own, retype)));
+    debug_assert_eq!(
+        by,
+        seen(kind.and_then(|kind| computed(types, scratch, kind, own, declared))),
+        "a recorded retype re-stamps where the target is"
+    );
+    by
 }
 
 /// The kind of value a retype to `declared` re-stamps at `declared` itself: a list, dict or

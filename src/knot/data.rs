@@ -29,9 +29,9 @@ use crate::scope::{BodyShape, CaptureSource, Component, Coordinate, ShapeKind, S
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::{DeclaredType, KType, satisfied_by};
 use crate::values::{
-    CALL_ONLY, Chain, Circular, ConstructionRefused, Dict, Key, Link, List, Record, Tagged,
+    CALL_ONLY, Chain, Circular, ConstructionRefused, Dict, Key, Link, List, Record, Retype, Tagged,
     TypeValue, Value, construction, dict_type, kept_entries, list_type, part_ktype, record_type,
-    retype_target, solves_identity,
+    retype_target_as, solves_identity,
 };
 
 use super::{Eager, KReading, KValue, Knotted, Supplied, Untieable};
@@ -452,13 +452,14 @@ fn is_derived(staged: &Staged<'_, '_, '_, '_>, types: &Chain<'_, '_, '_, '_>) ->
 }
 
 /// Every node's memo: `memos[i]` is `Some` for a function node on entry, and on success every
-/// node's memo is `Some`. Member `i`'s root is born at `annotations[i]`'s retype of its memo, set
+/// node's memo is `Some`. Member `i`'s root is born at `annotations[i]`'s retype of its memo, by
+/// `retypes[i]` where the load recorded it, set
 /// before any fellow derives its own over an edge into it. A cycle of derived nodes refuses with the members holding it, and a
 /// construction the rule refuses while its memo is derived refuses as it would at the check.
 pub(super) fn memos<'x>(
     nodes: &Nodes<'_, '_, '_, '_>,
     memos: &mut [Option<DeclaredType<KType>>],
-    annotations: &[Option<KType>],
+    (annotations, retypes): (&[Option<KType>], &[Option<Retype>]),
     names: &dyn Fn(u32) -> BinderSymbol,
     types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'x>,
@@ -467,7 +468,8 @@ pub(super) fn memos<'x>(
     // not, the slot's annotation faults as at the top level.
     let annotated = |index: usize, memo: KType| match annotations.get(index).copied().flatten() {
         Some(annotation) if satisfied_by(types, scratch, annotation, memo) => {
-            retype_target(types, scratch, memo.into(), annotation)
+            let retype = retypes.get(index).copied().flatten();
+            retype_target_as(types, scratch, memo.into(), annotation, retype)
                 .as_type()
                 .expect("a data node's memo is concrete")
         }

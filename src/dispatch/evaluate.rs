@@ -465,11 +465,8 @@ fn ascribe<'step, 'graph, 'here>(
         };
         return finish(step, at, raised.raise(program, writer, &at.types));
     }
-    if at
-        .view
-        .facts()
-        .settled(at.view.shape(), at.view.shape().site_of_node(node))
-    {
+    let (facts, site) = (at.view.facts(), at.view.shape().site_of_node(node));
+    if facts.settled(at.view.shape(), site) {
         debug_assert!(
             satisfies(ascribed, &value, types, &scratch),
             "a settled ascription's operand satisfies it"
@@ -481,7 +478,12 @@ fn ascribe<'step, 'graph, 'here>(
         };
         return finish(step, at, raised.raise(program, writer, &at.types));
     }
-    finish(step, at, value.retyped(writer, ascribed, types, &scratch))
+    let retype = facts.minted(types, facts.retype(at.view.shape(), site));
+    finish(
+        step,
+        at,
+        value.retyped_as(writer, ascribed, retype, types, &scratch),
+    )
 }
 
 /// `USING <module> SCOPE <body>`: the body run as a block whose parameters are bound to what the
