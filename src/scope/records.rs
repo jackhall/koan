@@ -1349,11 +1349,6 @@ impl<'a, S: RecordSource<'a>> FactsOver<S> {
         self.lists_site(shape, site, |typed| typed.minting)
     }
 
-    /// Whether the composite site at `site` of `shape` builds a value whose own type is warm.
-    pub fn warm_at(&self, shape: &BodyShape<'_>, site: Site) -> bool {
-        (self.caching(shape)).is_some_and(|caching| caching.warm.get(site).is_some())
-    }
-
     /// The content tree of the view the `:|` at `site` of `shape` builds, where its signature is
     /// closed.
     pub fn view_tree(&self, shape: &BodyShape<'_>, site: Site) -> Option<&'a Tree<'a>> {

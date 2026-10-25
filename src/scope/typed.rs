@@ -642,18 +642,16 @@ pub enum BodyClass {
 pub enum Mint {
     /// Over a closed content tree: the same content at every run, its types in the root.
     Closed,
-    /// The same content at every frame of one binding: interned into the warm tier — the agent
-    /// tier, where the frame runs under a settlement — and into the cold tier where it runs
-    /// under none.
+    /// The same content at every frame of one binding: rested in the agent tier by the
+    /// settlement the frame runs under, and interned into the cold tier where it runs under none.
     Invariant,
     /// Content that may differ per hop: interned into the cold tier.
     Varying,
 }
 
-/// What the load fixed about where a body's types intern at run: whether its frame caches, how
-/// each of its own minting sites is classed, and which of its composite sites — list, dict and
-/// record literals and constructions — build values whose own types are warm. On a callable's own
-/// record it also says which of its parameters may key its settlement.
+/// What the load fixed about where a body's types intern at run: whether its frame caches and how
+/// each of its own minting sites is classed. On a callable's own record it also says which of its
+/// parameters may key its settlement.
 #[derive(Clone, Copy, Debug)]
 pub struct Caching<'graph> {
     /// Whether the frame body this shape runs in caches: its own class for a callable or a quote's
@@ -661,8 +659,6 @@ pub struct Caching<'graph> {
     pub caches: bool,
     /// Each of the shape's own minting sites, sorted by site, beside its class.
     pub mints: Keyed<'graph, (Site, Mint)>,
-    /// Each composite site whose parts the load classed invariant, sorted.
-    pub warm: Keyed<'graph, Site>,
     /// On a caching frame body's own record, when it or a block or module body it runs has an
     /// invariant minting site or an invariant composite site: the frame's parameter slots those
     /// sites read, sorted, which may be none. Each is a parameter whose arguments digest at a

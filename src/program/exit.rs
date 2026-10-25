@@ -12,7 +12,7 @@
 use crate::knot::KnottedFamily;
 use crate::memory::BumpAllocator;
 use crate::type_lattice::{DeclaredType, KType, Parametric};
-use crate::values::{Chain, Destination, Types, adopt_value};
+use crate::values::{Chain, Types, adopt_value};
 
 use super::record::Contract;
 
@@ -42,12 +42,7 @@ impl<'a, 'tier, 'graph, 'here, 'reg> Exit<'a, 'tier, 'here, 'reg> {
     /// Adopt every type `value` reaches, stopping at a settled part, and mark what was walked
     /// settled.
     pub fn value(&self, value: &crate::knot::KValue<'graph, 'here>) {
-        adopt_value::<KnottedFamily>(
-            Destination::Region(&self.region),
-            self.body,
-            value,
-            self.scratch,
-        );
+        adopt_value::<KnottedFamily>(&self.region, self.body, value, self.scratch);
     }
 
     /// Adopt the type `kt`.

@@ -263,8 +263,6 @@ struct Adoptions {
     adopted: usize,
     /// Walks into a region, at an exit.
     exits: usize,
-    /// Walks into a warm tier, at an invariant site.
-    warm: usize,
     /// Parts the walks entered.
     entered: usize,
     /// Parts the walks skipped on their bits.
@@ -275,7 +273,7 @@ impl Adoptions {
     /// Zero every counter.
     fn reset() {
         use crate::type_lattice::{ADOPT_ASKED, ADOPT_HITS, ADOPT_LAID, ADOPT_PROBES};
-        use crate::values::{ADOPTED, EXIT_WALKS, PARTS_ENTERED, PARTS_SKIPPED, WARM_WALKS};
+        use crate::values::{ADOPTED, EXIT_WALKS, PARTS_ENTERED, PARTS_SKIPPED};
         let counters = [
             &ADOPT_ASKED,
             &ADOPT_PROBES,
@@ -283,7 +281,6 @@ impl Adoptions {
             &ADOPT_LAID,
             &ADOPTED,
             &EXIT_WALKS,
-            &WARM_WALKS,
             &PARTS_ENTERED,
             &PARTS_SKIPPED,
         ];
@@ -295,7 +292,7 @@ impl Adoptions {
     /// Every counter as it stands.
     fn read() -> Self {
         use crate::type_lattice::{ADOPT_ASKED, ADOPT_HITS, ADOPT_LAID, ADOPT_PROBES};
-        use crate::values::{ADOPTED, EXIT_WALKS, PARTS_ENTERED, PARTS_SKIPPED, WARM_WALKS};
+        use crate::values::{ADOPTED, EXIT_WALKS, PARTS_ENTERED, PARTS_SKIPPED};
         Adoptions {
             asked: ADOPT_ASKED.get(),
             probes: ADOPT_PROBES.get(),
@@ -303,14 +300,13 @@ impl Adoptions {
             laid: ADOPT_LAID.get(),
             adopted: ADOPTED.get(),
             exits: EXIT_WALKS.get(),
-            warm: WARM_WALKS.get(),
             entered: PARTS_ENTERED.get(),
             skipped: PARTS_SKIPPED.get(),
         }
     }
 
     /// The counters in table order, each named.
-    fn named(self) -> [(&'static str, usize); 9] {
+    fn named(self) -> [(&'static str, usize); 8] {
         [
             ("asked", self.asked),
             ("probes", self.probes),
@@ -318,7 +314,6 @@ impl Adoptions {
             ("laid", self.laid),
             ("adopted", self.adopted),
             ("exits", self.exits),
-            ("warm", self.warm),
             ("entered", self.entered),
             ("skipped", self.skipped),
         ]
@@ -683,8 +678,8 @@ fn a_shares_loop_handing_a_keyed_shares_helper_a_module_over_its_link_holds_adop
 
 #[test]
 fn a_fresh_loop_handing_a_fresh_helper_a_module_over_its_link_holds_adoptions_flat() {
-    // `PEEK` adopts the module it views into the warm tier at an invariant site, which stops at
-    // the link the module holds, settled by the exit that handed it on.
+    // `PEEK` views the module it is handed at an invariant site, whose types its settlement rests;
+    // an exit's adoption stops at the link the module holds, settled by the exit that handed it on.
     let source = FRESH_WRAPPED;
     assert_eq!(caching(source), 2, "`WRAP` and `PEEK` cache");
     let ran_adopting = |depth: u32| {
@@ -719,7 +714,7 @@ fn a_fresh_loop_over_an_invariant_module_holds_its_agent_tier_flat() {
     assert_eq!(caching(&source), 1);
     let [few, many] = at_ends(&source);
     assert_eq!(few.printed, "7");
-    assert!(few.tiers.agent > 0, "the view's types are adopted warm");
+    assert!(few.tiers.agent > 0, "the settlement rests the view's types");
     assert!(
         few.tiers.agent_verdicts > 0,
         "the view's verdicts are recorded warm, once across hops"
@@ -1194,6 +1189,38 @@ fn a_parameter_keys_only_where_its_digest_is_constant_cost() {
 }
 
 #[test]
+fn no_run_cell_interns_into_the_agent_tier() {
+    // An invariant view, a view in a `Shares` helper, a mixed tail chain, a nominal over a keyed
+    // type binder and varying content: whatever settles, its settlement rests, and no step lays a
+    // type in the agent tier.
+    let boxed = String::from(
+        "EXPR #(BOXED Elt :Type) -> Number = #((NEWTYPE Box = :{v :Elt}) (1))\n\
+         PRINT (BOXED Number)\nPRINT (BOXED Number)",
+    );
+    let sources = [
+        invariant_loop(),
+        format!("{SHARES_INVARIANT}PRINT (COUNTDOWN ints chain)\n"),
+        hosted_peeks(),
+        wrapped_peeks(),
+        mixed_chain(),
+        varying_loop(),
+        boxed,
+    ];
+    let mut settled = 0;
+    for source in &sources {
+        let [(tiers, ..)] = runs(source, 1, |_| {})[..] else {
+            unreachable!()
+        };
+        assert_eq!(
+            tiers.stepped, 0,
+            "a step laid a type in the agent tier in\n{source}"
+        );
+        settled += tiers.settled;
+    }
+    assert!(settled > 0, "some program settles");
+}
+
+#[test]
 fn every_shape_of_a_load_has_its_own_segment_and_every_load_the_same() {
     let source = format!("{PRELUDE}{INVARIANT}{KEYED}LET q = #(1)\n");
     let segments = || {
@@ -1275,17 +1302,14 @@ fn a_loop_seeks_its_settlement_once_and_a_second_caller_finds_it_warm() {
         "the second caller builds nothing"
     );
     assert_eq!(table, 1);
-    let warm = |source: &str| -> usize {
-        laid(&program(1, source))
-            .iter()
-            .map(|(_, _, warm)| warm)
-            .sum()
-    };
-    let warm_once = warm(&once);
-    assert!(warm_once > 0, "the loop's view is adopted warm");
+    assert!(alone.rested > 0, "the settlement rests the loop's view");
     assert_eq!(
-        warm(&twice),
-        warm_once,
+        (alone.stepped, both.stepped),
+        (0, 0),
+        "no step lays a type in the agent tier"
+    );
+    assert_eq!(
+        both.agent, alone.agent,
         "the second caller finds every warm type laid"
     );
     let [(apart, table, _)] = runs(&format!("{once}PRINT (COUNTDOWN words chain)"), 1, |_| {})[..]
@@ -1517,17 +1541,14 @@ fn a_shares_loop_seeks_its_settlement_once_and_a_second_park_finds_it_warm() {
         "the second park builds nothing"
     );
     assert_eq!(table, 1);
-    let warm = |source: &str| -> usize {
-        laid(&program(1, source))
-            .iter()
-            .map(|(_, _, warm)| warm)
-            .sum()
-    };
-    let warm_once = warm(&once);
-    assert!(warm_once > 0, "the loop's view is adopted warm");
+    assert!(alone.rested > 0, "the settlement rests the loop's view");
     assert_eq!(
-        warm(&twice),
-        warm_once,
+        (alone.stepped, both.stepped),
+        (0, 0),
+        "no step lays a type in the agent tier"
+    );
+    assert_eq!(
+        both.agent, alone.agent,
         "the second park finds every warm type laid"
     );
     assert!(

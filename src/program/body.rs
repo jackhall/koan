@@ -45,7 +45,8 @@
 //! keeps its blocks' and its last statement's values rather than forwarding them, so a value
 //! leaves it only through an [`Exit`]: the frame's end, and — in a `Fresh` frame holding its
 //! scratch — the hand-off of its last statement, which adopts the slots the statement reads and
-//! the frame's contract. An invariant nominal's types are adopted into the warm tier.
+//! the frame's contract. An invariant site's types rest in the agent tier already, rested by the
+//! settlement the frame runs under: a step lays nothing there.
 
 use std::fmt;
 
@@ -200,8 +201,7 @@ type Taking<'a, 'graph, 'step, 'here, 'scratch, 'lent> =
 /// Each step runs on one chain ([type tiers](../../design/type-tiers.md#where-each-body-interns)):
 /// the caching chain in a caching body, or in the own body of a routing caching frame — a `Fresh`
 /// one, which holds its scratch at its first step, or a `Shares` one under a settlement — and its
-/// region's anywhere else. Under `routes`, an invariant site's types are adopted into the agent
-/// tier where the frame runs under a settlement.
+/// region's anywhere else.
 pub fn run<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'graph, KBundle> {
     let (step, state) = step.state();
     let (mut step, scratch) = step.scratch();

@@ -94,9 +94,8 @@ pub enum KBirth<'graph, 'cell> {
 }
 
 /// What a body runs within, handed to every evaluation and block it asks for: whether it runs in
-/// the own body of a routing caching frame, whose caching chain it then interns through and whose
-/// invariant sites it adopts into the agent tier under a settlement; the arena node its
-/// frame runs under, which a callable born in it is born under; where its frame's decision memo
+/// the own body of a routing caching frame, whose caching chain it then interns through; the arena
+/// node its frame runs under, which a callable born in it is born under; where its frame's decision memo
 /// rests, which a block decides in; the memo a frame it calls seeds its own from; and the root of
 /// the composed code its frame runs, which a value born in it keeps — the books hold only its
 /// digest; and the stamp of the chain of settlements its frame's arena node closes, which a

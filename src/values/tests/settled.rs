@@ -6,9 +6,7 @@ use crate::symbols::BinderSymbol;
 use crate::type_lattice::KType;
 use std::cell::Cell;
 
-use crate::values::{
-    ADOPTED, Destination, MemoBits, NoKnot, ValueFamily, Weight, adopt_value, cross,
-};
+use crate::values::{ADOPTED, MemoBits, NoKnot, ValueFamily, Weight, adopt_value, cross};
 
 use super::{Fixture, List, Record, TestGraph, Value, copy, pin, with_fixture};
 
@@ -207,9 +205,9 @@ fn an_exit_settles_what_it_walked() {
                 let fields = [(outer, Value::Record(part))];
                 (part, Record::new(writer, &fields, shares, scratch))
             };
-            let adopted = |into, record: &Record<'_>| {
+            let adopted = |record: &Record<'_>| {
                 ADOPTED.with(|adopted| adopted.set(0));
-                adopt_value::<NoKnot>(into, shares, &Value::Record(record), &Bump::new());
+                adopt_value::<NoKnot>(own, shares, &Value::Record(record), &Bump::new());
                 ADOPTED.with(Cell::get)
             };
             let settled = MemoBits {
@@ -219,28 +217,12 @@ fn an_exit_settles_what_it_walked() {
 
             let (part, record) = laid();
             assert_eq!(record.bits(), MemoBits::NONE);
-            adopted(Destination::Region(own), record);
+            adopted(record);
             assert_eq!((record.bits(), part.bits()), (settled, settled));
             assert_eq!(
-                adopted(Destination::Region(own), record),
+                adopted(record),
                 0,
                 "a settled value's second exit adopts nothing"
-            );
-            let warm = || Destination::Warm {
-                warm: own,
-                region: own,
-            };
-            assert_eq!(
-                adopted(warm(), record),
-                1,
-                "an invariant site adopts a settled value's own memo alone"
-            );
-
-            let (part, record) = laid();
-            adopted(warm(), record);
-            assert_eq!(
-                (record.bits(), part.bits()),
-                (MemoBits::NONE, MemoBits::NONE)
             );
         })
     });
@@ -256,25 +238,20 @@ fn an_exit_of_a_value_meeting_its_contract_lays_nothing() {
             let own = &fixture.tiers.of(context);
             let shares = &fixture.tiers.shares(context);
             // What a walk lays in the scratch it is handed, and what it adopted.
-            let walked = |into, value: Value<'_>| {
+            let walked = |value: Value<'_>| {
                 let walk = Bump::new();
                 ADOPTED.with(|adopted| adopted.set(0));
-                adopt_value::<NoKnot>(into, shares, &value, &walk);
+                adopt_value::<NoKnot>(own, shares, &value, &walk);
                 (walk.allocated_bytes(), ADOPTED.with(Cell::get))
-            };
-            let warm = || Destination::Warm {
-                warm: own,
-                region: own,
             };
             let settled = Record::new(writer, &[(inner, Value::Number(1.0))], own, scratch);
             let numbers = [Value::Number(1.0)].into_iter();
             let closed = List::typed(writer, numbers, KType::LIST_OF_ANY, own);
             for meeting in [Value::Record(settled), Value::List(closed)] {
-                assert_eq!(walked(Destination::Region(own), meeting), (0, 0));
-                assert_eq!(walked(warm(), meeting), (0, 1));
+                assert_eq!(walked(meeting), (0, 0));
             }
             let porous = Record::new(writer, &[(inner, Value::Number(1.0))], shares, scratch);
-            let (laid, _) = walked(Destination::Region(own), Value::Record(porous));
+            let (laid, _) = walked(Value::Record(porous));
             assert!(
                 laid > 0,
                 "a walk past an unsettled part lays its stack in the scratch"

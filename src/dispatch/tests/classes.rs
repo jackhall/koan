@@ -198,7 +198,7 @@ fn a_value_the_body_received_passed_on_is_no_exit() {
                   (h)))";
     loaded(&format!("{COUNTER}{source}"), |program| {
         let mk = body(program, program.shape(), "mk");
-        assert!(record_of(program, body(program, mk, "h")).2, "a capture");
+        assert!(record_of(program, body(program, mk, "h")).1, "a capture");
     });
 }
 
@@ -543,9 +543,9 @@ fn the_program_and_a_quote_are_frame_bodies() {
     );
 }
 
-/// The caching record of `shape`: each own minting site's class in site order, how many
-/// composite sites it holds warm, and whether its frame caches.
-fn record_of(program: &Program<'_>, shape: &BodyShape<'_>) -> (Vec<Mint>, usize, bool) {
+/// The caching record of `shape`: each own minting site's class in site order, and whether its
+/// frame caches.
+fn record_of(program: &Program<'_>, shape: &BodyShape<'_>) -> (Vec<Mint>, bool) {
     let caching = (program.facts().caching(shape)).expect("the load fixed the record");
     let mints = caching
         .mints
@@ -553,11 +553,11 @@ fn record_of(program: &Program<'_>, shape: &BodyShape<'_>) -> (Vec<Mint>, usize,
         .iter()
         .map(|(_, mint)| *mint)
         .collect();
-    (mints, caching.warm.entries().len(), caching.caches)
+    (mints, caching.caches)
 }
 
 /// [`record_of`] the body the top-level binder `name` of `COUNTER` and `source` births.
-fn caching(source: &str, name: &str) -> (Vec<Mint>, usize, bool) {
+fn caching(source: &str, name: &str) -> (Vec<Mint>, bool) {
     loaded(&format!("{COUNTER}{source}"), |program| {
         record_of(program, body(program, program.shape(), name))
     })
@@ -570,7 +570,7 @@ fn a_closed_view_mints_nothing_at_run() {
             "LET f = (FN :{c :Number} -> Any = #((LET v = (ints :| Counter)) (c)))",
             "f"
         ),
-        (vec![Mint::Closed], 0, false)
+        (vec![Mint::Closed], false)
     );
 }
 
@@ -586,7 +586,7 @@ fn a_view_over_a_parameter_a_tail_loop_passes_on_is_invariant() {
         )
     };
     // Passing the module on bare is no exit, so the loop caches.
-    assert_eq!(looping("m"), (vec![Mint::Invariant], 0, true));
+    assert_eq!(looping("m"), (vec![Mint::Invariant], true));
     assert_eq!(
         looping("ints").0,
         [Mint::Varying],
@@ -615,7 +615,7 @@ fn a_keyworded_tail_loop_pairs_its_arguments_by_slot() {
         })
     };
     // A member of a received value is no exit either, so the loop caches.
-    assert_eq!(looping("m"), (vec![Mint::Invariant], 0, true));
+    assert_eq!(looping("m"), (vec![Mint::Invariant], true));
     assert_eq!(looping("ints").0, [Mint::Varying], "a slot rebound varies");
 }
 
@@ -627,7 +627,7 @@ fn a_callable_read_as_a_value_keeps_its_parameters_varying() {
              LET k = h",
             "h"
         ),
-        (vec![Mint::Varying], 0, true)
+        (vec![Mint::Varying], true)
     );
 }
 
@@ -653,7 +653,7 @@ fn a_view_over_a_capture_is_invariant() {
         let mk = body(program, program.shape(), "mk");
         assert_eq!(
             record_of(program, body(program, mk, "h")),
-            (vec![Mint::Invariant], 0, true)
+            (vec![Mint::Invariant], true)
         );
     });
 }
@@ -665,7 +665,7 @@ fn a_view_over_a_view_follows_the_parameter_under_it() {
             "LET f = (FN :{m :Counter} -> Number = #((LET v = ((m :| Counter) :| Counter)) (1)))",
             "f"
         ),
-        (vec![Mint::Invariant, Mint::Invariant], 0, true)
+        (vec![Mint::Invariant, Mint::Invariant], true)
     );
 }
 
@@ -679,30 +679,9 @@ fn a_nominal_declared_per_call_follows_the_type_it_reads() {
             .expect("the registration births a callable body");
         assert_eq!(
             record_of(program, registered),
-            (vec![Mint::Invariant], 0, true)
+            (vec![Mint::Invariant], true)
         );
     });
-}
-
-#[test]
-fn a_composite_is_warm_where_its_parts_read_invariant_views_alone() {
-    let built = |value: &str| {
-        caching(
-            &format!(
-                "LET f = (FN :{{m :Counter, a :Any}} -> Any = \
-                 #((LET v = (m :| Counter)) (LET w = {value}) (1)))"
-            ),
-            "f",
-        )
-        .1
-    };
-    assert_eq!(
-        built("{z = v.zero}"),
-        1,
-        "a record over an invariant view's member"
-    );
-    assert_eq!(built("[1 2]"), 0, "a list of numbers is closed");
-    assert_eq!(built("[a]"), 0, "a list over a name typed `Any` varies");
 }
 
 /// Debug builds check at each minting door that the load recorded the site: a view and a nominal

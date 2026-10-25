@@ -284,13 +284,15 @@ fn seek_bound<'graph>(
     }
 }
 
-/// A frame that reads its binding's type, a list of a list of `Bool`, through the agent chain, and
-/// finishes.
+/// A frame under its settlement that reads its binding's type, a list of a list of `Bool`, through
+/// the agent chain, and finishes.
 fn reading<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
     {
-        let warm = step
-            .agent_types()
-            .expect("the frame runs under its settlement");
+        assert!(
+            step.under_settlement(),
+            "the frame runs under its settlement"
+        );
+        let warm = step.tiers().resting();
         let bound = BOUND.get();
         assert!(
             warm.resolves(bound),

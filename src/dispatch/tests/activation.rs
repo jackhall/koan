@@ -105,6 +105,22 @@ fn a_frame_bound_to_run_content_decides_its_dependent_units_in_its_activation() 
     assert!(chosen.contains(&(segment, site)), "{chosen:?}");
 }
 
+/// `HOLD`, keyed on `Item`, whose statement binds a record the run composes and whose closure
+/// captures it.
+const HOLD: &str = "EXPR FOR ALL #[Item] #(HOLD y :Item) -> Any = \
+                    #((LET r = {a = y}) (LET f = (FN :{} -> Any = #(r))) (f {}))\n";
+
+#[test]
+fn a_capture_bound_at_a_statement_grows_the_agent_tier_by_nothing() {
+    // Each `HOLD` frame runs under its one settlement and binds `r` at a statement: the types its
+    // activation decides rest in its frame's tiers, so a second outer call rests nothing more.
+    let (once, _) = ran(&format!("{HOLD}PRINT (HOLD 1)\n"));
+    let (twice, _) = ran(&format!("{HOLD}LET first = (HOLD 1)\nPRINT (HOLD 2)\n"));
+    assert_eq!((once.tiers.settled, twice.tiers.settled), (1, 1));
+    assert_eq!(once.tiers.agent, twice.tiers.agent);
+    assert_eq!((once.tiers.stepped, twice.tiers.stepped), (0, 0));
+}
+
 #[test]
 fn run_content_bindings_grow_the_agent_tier_by_nothing() {
     // Each `WRAP` frame binds a record type the run composed and decides in its activation, whose

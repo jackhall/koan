@@ -5,7 +5,7 @@ use std::cell::Cell;
 use crate::memory::{Bump, CellGraph, ReleaseAbsorption};
 use crate::type_lattice::KType;
 use crate::values::{
-    ADOPTED, Destination, Knotted as _, MemoBits, PARTS_ENTERED, Retyped, Value, adopt_value, cross,
+    ADOPTED, Knotted as _, MemoBits, PARTS_ENTERED, Retyped, Value, adopt_value, cross,
 };
 
 use super::super::{KValueFamily, Knotted, KnottedFamily};
@@ -111,8 +111,7 @@ fn an_exit_hands_over_a_headers_memo_and_stops_at_its_settled_member() {
             let exited = |value: Value<'_, _>| {
                 ADOPTED.with(|adopted| adopted.set(0));
                 PARTS_ENTERED.with(|entered| entered.set(0));
-                let into = Destination::Region(types);
-                adopt_value::<KnottedFamily>(into, types, &value, &Bump::new());
+                adopt_value::<KnottedFamily>(types, types, &value, &Bump::new());
                 (ADOPTED.with(Cell::get), PARTS_ENTERED.with(Cell::get))
             };
             let header = Retyped::of(writer, f, KType::ANY.into());

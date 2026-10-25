@@ -64,7 +64,6 @@ fn facts_over_no_layers_answer_as_the_load_does() {
                 alike!(named_contributions(site));
                 alike!(mint_at(site));
                 alike!(mints_at(site));
-                alike!(warm_at(site));
                 alike!(view_tree(site));
                 alike!(path_read(site));
             }

@@ -33,9 +33,8 @@
 //! In a caching body the step runs on the body's chain ([`evaluate`]), asks for blocks with `Keeps`,
 //! and adopts what leaves the body into its region through an [`Exit`]: a call's callee, arguments,
 //! contributions and the contract it hands on, an `EVAL`'s code, offered record and declared type,
-//! and a value owed a frame's contract. Under `routes` an invariant view's operand and view, and a
-//! warm composite's own memo, are adopted into the agent tier where the frame runs under a
-//! settlement.
+//! and a value owed a frame's contract. A step lays nothing in the agent tier: an invariant site's
+//! types are there already, rested by the settlement its frame runs under.
 //!
 //! A call to a body keyed on its bindings is handed to the drain with what it seeks ([`seek`]), so
 //! its frame is born under its settlement; a hop of the frame's own callee runs under the
@@ -47,9 +46,7 @@
 //! selection.
 
 use crate::knot::module::view::{self, Ascription, Unascribable};
-use crate::knot::{
-    CodeBody, KValue, Knotted, KnottedFamily, instance, lambda, quote, refused_construction,
-};
+use crate::knot::{CodeBody, KValue, Knotted, instance, lambda, quote, refused_construction};
 use crate::memory::{Bump, BumpAllocator, BumpVec, Writer, collect};
 use crate::parse::BuiltinShapeId;
 use crate::parse::Role;
@@ -63,15 +60,13 @@ use crate::scheduler::{
 };
 use crate::scope::{
     AtRun, BodyShape, Candidate, CandidateList, Elaboration, Elimination, HandedTo, InstanceRead,
-    Located, Mint, Narrowing, Offer, ParameterBinding, ShapeKind, Site, StaticType,
+    Located, Narrowing, Offer, ParameterBinding, ShapeKind, Site, StaticType,
 };
 use crate::symbols::{BinderSymbol, Symbol};
 use crate::type_lattice::{KType, Verdict};
 #[cfg(debug_assertions)]
 use crate::type_lattice::{bound_above, lower_end_outside, satisfied_by};
-use crate::values::{
-    Chain, Destination, Dict, Key, List, Record, Tagged, TypeValue, Value, adopt_value, satisfies,
-};
+use crate::values::{Chain, Dict, Key, List, Record, Tagged, TypeValue, Value, satisfies};
 
 use super::builtins::{self, Native};
 use super::errors::Raised;
@@ -238,7 +233,7 @@ fn evaluate_on<'graph, 'here, 'tier, 'reg>(
             let [head, argument] = node.parts else {
                 unreachable!("an application is a head and its argument")
             };
-            apply(step, &at, node, &head.value, &argument.value, stage)
+            apply(step, &at, &head.value, &argument.value, stage)
         }
         Form::Unevaluable(node) => {
             let error = Raised::Unevaluable { node }.raise(program, step.writer(), &at.types);
@@ -425,24 +420,6 @@ fn ascribe<'step, 'graph, 'here>(
             };
             return finish(step, at, raised.raise(program, writer, &at.types));
         }
-        // Under `routes` an invariant site's operand and view are adopted into the warm tier, so
-        // the next hop finds both there and the verdicts over them stay warm.
-        let invariant = at
-            .view
-            .facts()
-            .mint_at(at.view.shape(), at.view.shape().site_of_node(node))
-            == Some(Mint::Invariant);
-        let warm = (at.within.routes && invariant)
-            .then(|| step.agent_types())
-            .flatten();
-        let region = step.types();
-        let into = |warm| Destination::Warm {
-            warm,
-            region: &region,
-        };
-        if let Some(warm) = &warm {
-            adopt_value::<KnottedFamily>(into(warm), types, &value, &scratch);
-        }
         if let Some(slots) = at
             .view
             .facts()
@@ -453,14 +430,6 @@ fn ascribe<'step, 'graph, 'here>(
         let picks = (at.view.facts()).picks(at.view.shape(), at.view.shape().site_of_node(node));
         let raised = match view::ascribe(writer, value, ascribed, picks, types, &scratch) {
             Ok(view) => {
-                if let Some(warm) = &warm {
-                    adopt_value::<KnottedFamily>(
-                        into(warm),
-                        types,
-                        &Value::Knotted(view),
-                        &scratch,
-                    );
-                }
                 // The load lays a view's types over a closed tree, so that tree is the view's
                 // content.
                 debug_assert!(
@@ -678,7 +647,6 @@ fn container<'step, 'graph, 'here>(
     if stage == BORN
         && let Some(value) = Value::lower_part(step.writer(), part, types, &scratch)
     {
-        warmed(&step, at, at.view.shape().site(part), &value);
         return finish(step, at, value);
     }
     let mut wanted = BumpVec::new_in(&scratch);
@@ -737,25 +705,7 @@ fn container<'step, 'graph, 'here>(
         }
         _ => unreachable!("a container is a list, dict or record literal"),
     };
-    warmed(&step, at, at.view.shape().site(part), &value);
     finish(step, at, value)
-}
-
-/// Under `routes`, adopt the own memo of `value`, built at `site`, into the warm tier where the
-/// load found the site warm — a composite whose parts read invariant views alone — so the next hop
-/// finds it there. Only the memo: a warm composite's parts are no deeper walk's.
-fn warmed<'step, 'graph, 'here>(
-    step: &Taking<'_, 'graph, '_, 'here, '_, '_>,
-    at: &Evaluation<'step, 'graph, 'here, '_, '_, '_>,
-    site: Site,
-    value: &KValue<'graph, 'here>,
-) {
-    if at.within.routes
-        && at.view.facts().warm_at(at.view.shape(), site)
-        && let Some(warm) = step.agent_types()
-    {
-        warm.adopt_from(&at.types, value.ktype());
-    }
 }
 
 /// A keyworded call: its slots evaluated, a candidate selected, and the builtin's native run or the
@@ -989,7 +939,6 @@ pub(super) fn slots<'step, 'x>(
 fn apply<'step, 'graph, 'here>(
     mut step: Taking<'_, 'graph, '_, 'here, '_, '_>,
     at: &Evaluation<'step, 'graph, 'here, '_, '_, '_>,
-    node: &'step KExpression<'step>,
     head: &'step ExpressionPart<'step>,
     argument: &'step ExpressionPart<'step>,
     stage: u32,
@@ -1013,11 +962,7 @@ fn apply<'step, 'graph, 'here>(
     let writer = step.writer();
     if let Value::Type(head) = head {
         let value = match Tagged::construct(writer, head, argument, types, &scratch) {
-            Ok(tagged) => {
-                let value = Value::Tagged(tagged);
-                warmed(&step, at, at.view.shape().site_of_node(node), &value);
-                value
-            }
+            Ok(tagged) => Value::Tagged(tagged),
             Err(refused) => program.error(
                 writer,
                 types,

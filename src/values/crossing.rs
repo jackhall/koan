@@ -18,9 +18,8 @@
 //! keys every knot it rebuilds by its root, so two references to one knot arrive as members of one
 //! copy of it. Plain values reached twice still copy twice.
 //!
-//! An adoption ([`adopt_value`]) is the other walk: a value leaving a caching body, or an operand at
-//! an invariant site, keeps its words, and only the type memos it reaches are made to resolve in
-//! the destination. It stops at a part whose memo bits ([settled.rs](settled.rs)) say its memos
+//! An adoption ([`adopt_value`]) is the other walk: a value leaving a caching body keeps its words,
+//! and only the type memos it reaches are made to resolve in the region it leaves for. It stops at a part whose memo bits ([settled.rs](settled.rs)) say its memos
 //! already resolve there, and an exit marks what it walked settled after. It reads a value's bits
 //! before laying anything, and lays its walk in its caller's step scratch.
 
@@ -321,8 +320,6 @@ fn check_parts<'graph, 'cell, XF: KnottedFamily<'graph>>(
 enum Cutoff {
     /// Nowhere: every part is entered and every memo handed over.
     Off,
-    /// Below the part: its own memo is handed over and it is not entered.
-    Below,
     /// At the part: it hands over nothing and is not entered.
     At,
 }
@@ -330,9 +327,8 @@ enum Cutoff {
 /// Every type `value` carries over its first `limit` parts, handed to `each`: each part's own memo,
 /// hidden parts included, each type value's payload, and every type a knot it reaches carries — so
 /// every closure's and quote's captures and every knot member. A part whose
-/// [bits](super::MemoBits) meet the contract is handed to `skipped` and not entered, under
-/// [`Cutoff::Below`] after handing over its own memo, under [`Cutoff::At`] handing over nothing; a
-/// header's bits are its member's, so it always hands over its own memo. Every composite and knot
+/// [bits](super::MemoBits) meet the contract is handed to `skipped` and not entered, handing over
+/// nothing under [`Cutoff::At`]; a header's bits are its member's, so it always hands over its own memo. Every composite and knot
 /// member the walk does enter is handed to `entered`, a knot once. The top value is read before
 /// anything is laid, so one with no part or whose bits meet costs no allocation; the walk's stack
 /// and knot set live in `scratch`.
@@ -372,7 +368,7 @@ fn reached<'cell, X: Knotted>(
 ) -> bool {
     let meets = cutoff != Cutoff::Off && bits(value).is_some_and(MemoBits::meets);
     // A header's bits are its member's, so its own memo is handed over at every cutoff.
-    if !meets || cutoff == Cutoff::Below || matches!(value, Value::Retyped(_)) {
+    if !meets || matches!(value, Value::Retyped(_)) {
         each(value.ktype().into());
     }
     if let Value::Type(type_value) = value {
@@ -456,95 +452,33 @@ fn settle_knot<X: Knotted>(member: &X) {
     });
 }
 
-/// Where [`adopt_value`] makes a value's types resolve.
-pub enum Destination<'d, 'here, 'graph, 'door> {
-    /// An exit: the region chain of the step whose caching body the value leaves. The adoption
-    /// marks every value it entered settled.
-    Region(&'d Types<'here, 'door>),
-    /// An invariant site under `routes`: the warm tier — the agent chain, under a settlement —
-    /// beside the region chain of the step the value lies in, which a test build's audit reads.
-    /// Marks nothing: the warm tier is not where the value lies.
-    Warm {
-        warm: &'d Chain<'graph, 'here, 'graph, 'door>,
-        region: &'d Types<'here, 'door>,
-    },
-}
-
-/// Make every type `value` carries resolve in `into`, adopting it from `source`, the chain the body
-/// runs on — the one door at a caching body's exits and at an invariant site. The walk does not
-/// enter a part whose bits meet the contract: a root-closed part's memos resolve everywhere, and a
-/// settled one's in its home's branch, which every chain reading the value reads. At an exit such a
-/// part hands over nothing, its own memo included; at an invariant site, whose warm tier is not
-/// where the value lies, its own memo alone; a header, whose bits are its member's, always its own
-/// memo. At an exit every value it entered is marked settled after. The walk lays its stack, knot
-/// set and settled list in `scratch`, its caller's step scratch, and lays nothing for a value
-/// whose bits meet. A test build audits each part as it is skipped, and a debug build checks what
-/// it adopted resolves, with the same cutoff. See [design/type-tiers.md § An adoption stops at a settled part](../../design/type-tiers.md#an-adoption-stops-at-a-settled-part).
+/// Make every type `value` carries resolve in `region`, the region chain of the step whose caching
+/// body the value leaves, adopting it from `source`, the chain the body runs on — the one door at a
+/// caching body's exits. The walk does not enter a part whose bits meet the contract: a root-closed
+/// part's memos resolve everywhere, and a settled one's in its home's branch, which every chain
+/// reading the value reads. Such a part hands over nothing, its own memo included; a header, whose
+/// bits are its member's, always its own memo. Every value it entered is marked settled after. The
+/// walk lays its stack, knot set and settled list in `scratch`, its caller's step scratch, and lays
+/// nothing for a value whose bits meet. A test build audits each part as it is skipped, and a
+/// debug build checks what it adopted resolves, with the same cutoff. See [design/type-tiers.md § An adoption stops at a settled part](../../design/type-tiers.md#an-adoption-stops-at-a-settled-part).
 pub fn adopt_value<'graph, 'cell, XF: KnottedFamily<'graph>>(
-    into: Destination<'_, '_, '_, '_>,
+    region: &Types<'_, '_>,
     source: &Chain<'_, '_, '_, '_>,
     value: &Value<'cell, XF::Closed<'cell>>,
     scratch: BumpAllocator<'_>,
 ) {
-    match into {
-        Destination::Region(region) => {
-            #[cfg(test)]
-            EXIT_WALKS.with(|count| count.set(count.get() + 1));
-            let mut entered = BumpVec::new_in(scratch);
-            adopted::<XF>(
-                region,
-                region,
-                source,
-                value,
-                Cutoff::At,
-                scratch,
-                &mut |part| entered.push(part),
-            );
-            entered.iter().for_each(settle);
-        }
-        Destination::Warm { warm, region } => {
-            #[cfg(test)]
-            WARM_WALKS.with(|count| count.set(count.get() + 1));
-            adopted::<XF>(
-                warm,
-                region,
-                source,
-                value,
-                Cutoff::Below,
-                scratch,
-                &mut |_| {},
-            );
-        }
-    }
-}
-
-/// [`adopt_value`]'s walk into `dest` under `cutoff`, laid in `scratch`, each part it skips audited
-/// against `region` as it is skipped, each value it entered handed to `entered`.
-#[cfg_attr(
-    not(test),
-    expect(
-        unused_variables,
-        reason = "only the test build's audit reads the region"
-    )
-)]
-fn adopted<'graph, 'cell, XF: KnottedFamily<'graph>>(
-    dest: &Chain<'_, '_, '_, '_>,
-    region: &Chain<'_, '_, '_, '_>,
-    source: &Chain<'_, '_, '_, '_>,
-    value: &Value<'cell, XF::Closed<'cell>>,
-    cutoff: Cutoff,
-    scratch: BumpAllocator<'_>,
-    entered: &mut dyn FnMut(Value<'cell, XF::Closed<'cell>>),
-) {
+    #[cfg(test)]
+    EXIT_WALKS.with(|count| count.set(count.get() + 1));
+    let mut entered = BumpVec::new_in(scratch);
     carried::<XF>(
         value,
         usize::MAX,
-        cutoff,
+        Cutoff::At,
         scratch,
         &mut |kt| {
             #[cfg(test)]
             ADOPTED.with(|adopted| adopted.set(adopted.get() + 1));
-            dest.adopt_from(source, kt);
+            region.adopt_from(source, kt);
         },
         &mut |part| {
             #[cfg(test)]
@@ -558,11 +492,12 @@ fn adopted<'graph, 'cell, XF: KnottedFamily<'graph>>(
         &mut |part| {
             #[cfg(test)]
             PARTS_ENTERED.with(|count| count.set(count.get() + 1));
-            entered(part);
+            entered.push(part);
         },
     );
     #[cfg(debug_assertions)]
-    check_parts::<XF>(dest, value, usize::MAX, cutoff);
+    check_parts::<XF>(region, value, usize::MAX, Cutoff::At);
+    entered.iter().for_each(settle);
 }
 
 /// The test build's audit of a part an adoption skips, as it skips it: walked whole in a bump of its
@@ -610,8 +545,6 @@ thread_local! {
     pub static ADOPTED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     /// How many walks [`adopt_value`] has run into a region, at an exit.
     pub static EXIT_WALKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-    /// How many walks [`adopt_value`] has run into a warm tier, at an invariant site.
-    pub static WARM_WALKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     /// How many parts an adoption's walk has entered: each composite, and each knot once a walk.
     pub static PARTS_ENTERED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     /// How many parts an adoption's walk has skipped on their bits.

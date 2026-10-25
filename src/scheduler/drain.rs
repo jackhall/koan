@@ -194,6 +194,9 @@ pub(crate) struct Tiers {
     pub relayed: usize,
     /// Nodes new settlements' records named that their walks laid into the agent tier: a count.
     pub rested: usize,
+    /// Nodes run steps laid into the agent tier, waking their state included: a count, which a
+    /// settlement's resting leaves at nothing.
+    pub stepped: usize,
     /// How many compositions a miss built: a count.
     pub composed: usize,
     /// How many cells running composed code bounced with its syntax, their composition not live
@@ -227,6 +230,7 @@ thread_local! {
             cold_births: 0,
             relayed: 0,
             rested: 0,
+            stepped: 0,
             composed: 0,
             bounced: 0,
         })
@@ -793,6 +797,8 @@ where
     } = context
         .continuation()
         .expect("a ready cell carries a continuation");
+    #[cfg(test)]
+    let agent_before = tiers.agent.len();
     // Both slots come off here, so the step is handed what it parked in each and
     // reaches neither door itself. Only a park stores them back, so a step that
     // finishes, hops or fails leaves the scratch slot empty and its bump goes back at
@@ -836,6 +842,7 @@ where
     {
         let len = |branch: Option<&Branch<'_>>| branch.map_or(0, Branch::len);
         let agent = tiers.agent;
+        tally(|tiers| tiers.stepped += agent.len() - agent_before);
         if let Some(shape) = CACHING.take() {
             let scratch = len(context.scratch_header().get().and_then(HalfHeader::branch))
                 .saturating_sub(before.0);

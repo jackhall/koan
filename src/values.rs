@@ -58,10 +58,10 @@ pub use admission::{
 };
 pub use circular::{Circular, CodeView, FunctionIdentity, Resolved};
 #[cfg(test)]
-pub use crossing::{ADOPTED, EXIT_WALKS, PARTS_ENTERED, PARTS_SKIPPED, WARM_WALKS};
+pub use crossing::{ADOPTED, EXIT_WALKS, PARTS_ENTERED, PARTS_SKIPPED};
 pub use crossing::{
-    COPY_RATIO, Destination, adopt_value, copy_severed, cross, cross_here, cross_view,
-    cross_view_against, verdict,
+    COPY_RATIO, adopt_value, copy_severed, cross, cross_here, cross_view, cross_view_against,
+    verdict,
 };
 #[cfg(debug_assertions)]
 pub use crossing::{check_habitat, check_pinned_habitat};

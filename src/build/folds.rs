@@ -161,14 +161,12 @@ pub fn fold<'o>(
             continue;
         };
         let caches = matches!(closing.class, Some(BodyClass::Sealed { caches: true, .. }));
-        let (mut mints, mut warm) = (BumpVec::new_in(scratch), BumpVec::new_in(scratch));
+        let mut mints = BumpVec::new_in(scratch);
         let from = classed.partition_point(|(holder, ..)| *holder < segment);
         let to = classed.partition_point(|(holder, ..)| *holder <= segment);
         for (_, site, minting, class) in classed[from..to].iter() {
-            match minting {
-                true => mints.push((*site, *class)),
-                false if *class == Mint::Invariant => warm.push(*site),
-                false => {}
+            if *minting {
+                mints.push((*site, *class));
             }
         }
         let own = segment == frame;
@@ -186,7 +184,6 @@ pub fn fold<'o>(
         let caching = Caching {
             caches,
             mints: Keyed::sorted(lay, &mut mints),
-            warm: Keyed::sorted(lay, &mut warm),
             invariant,
         };
         let keys = callable.then(|| {
