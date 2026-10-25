@@ -1118,26 +1118,16 @@ fn called<'step, 'graph, 'here>(
             return step.tail_under(placement, work, at.within.build);
         }
         let types = step.types();
-        let seek = seek(
-            &mut request.work.state,
-            keys,
-            step.writer(),
-            &at.types,
-            &types,
-        );
+        let lay = (request.placement == Placement::Shares).then(|| step.writer());
+        let seek = seek(&mut request.work.state, keys, lay, &at.types, &types);
         let Request {
             placement, work, ..
         } = request;
         return step.tail_seeking(placement, work, seek);
     }
     let types = step.types();
-    let seek = seek(
-        &mut request.work.state,
-        keys,
-        step.writer(),
-        &at.types,
-        &types,
-    );
+    let lay = (request.placement == Placement::Shares).then(|| step.writer());
+    let seek = seek(&mut request.work.state, keys, lay, &at.types, &types);
     let asked = step.spawn_seeking(request, seek);
     park(step, at, asked, FINISHING)
 }

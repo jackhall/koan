@@ -69,7 +69,7 @@ use crate::scope::{Activated, Entry, EventSite, MemoKey, extended};
 use crate::scope::{Address, AtRun, Bound, Tree, Unknown};
 use crate::scope::{BodyShape, Component, Position, ShapeKind, Site, Slot, Unit, UnitWork};
 use crate::scope::{CaptureSource, ClosureBindings, Code, ComposedRoot, Facts, ShapeError};
-use crate::scope::{ComposedSyntax, Level as SettlementLevel, Stamp};
+use crate::scope::{ComposedSyntax, Sought, Stamp};
 use crate::scope::{Coordinate, ParameterBinding, Retypes, Static, Target};
 use crate::symbols::{BinderSymbol, Symbol, SymbolInterner, TypeSymbol};
 use crate::type_lattice::{
@@ -216,7 +216,7 @@ pub fn run<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'g
         };
         let types = step.types();
         let keys = super::settle::callee_keys(&birth);
-        let seek = super::settle::seek(&mut birth, keys, step.writer(), &types, &types);
+        let seek = super::settle::seek(&mut birth, keys, None, &types, &types);
         let work = crate::scheduler::Work {
             step: run,
             state: birth,
@@ -254,11 +254,12 @@ pub fn run<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'g
             .map(|level| Replayed {
                 seek: Seek {
                     parent: ArenaRef::ROOT,
-                    settlement: Some((
-                        level.key,
-                        BindingImage::of(level.keyed.iter().copied().collect(), tiers, &types),
-                        level.ask(),
-                    )),
+                    settlement: Some({
+                        let sought = level.sought();
+                        let image = BindingImage::of(sought.keyed.clone(), tiers, &types);
+                        (image, sought)
+                    }),
+                    hands_back: false,
                 },
                 pins: (level.modules.iter())
                     .filter_map(|module| module.knot_member()?.module()?.body()?.root)
@@ -270,7 +271,7 @@ pub fn run<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'g
             unreachable!("matched above")
         };
         let keys = super::settle::callee_keys(&birth);
-        let own = super::settle::seek(&mut birth, keys, step.writer(), &types, &types);
+        let own = super::settle::seek(&mut birth, keys, None, &types, &types);
         let own = Replayed {
             seek: own,
             pins: SmallVec::new(),
@@ -360,21 +361,35 @@ fn composed_root_of(body: CodeBody<'_>) -> Option<ComposedRoot<'_>> {
     }
 }
 
-/// The stamp of the chain of settlements a frame of `callee` runs under, which a callable born in
-/// it records: `level`, the request of the settlement the frame sought, over the callee's own
-/// stamp where the frame runs under that settlement; the callee's own where it runs under the
-/// arena node the callee was born under.
+/// The stamp of the chain of settlements the frame of the call `birth` runs under, which a
+/// callable born in it records. Where the frame runs under the settlement it sought, that is the
+/// settlement's level over the callee's own stamp: the level the birth holds — laid by a `Shares`
+/// frame's asker, or kept by a hop — or else one laid here, in the frame's region, from `sought`,
+/// the request the drain handed a `Fresh` frame's first step back. A frame under its own
+/// settlement whose body births no callable has neither, and no stamp. Where the frame runs under
+/// the arena node its callee was born under, it is the callee's own stamp.
 fn stamped<'graph, 'here>(
     step: &Taking<'_, 'graph, '_, 'here, '_, '_>,
-    callee: KValue<'graph, 'here>,
-    level: Option<&'here SettlementLevel<'here, Knotted<'graph, 'here>>>,
+    birth: &KBirth<'graph, 'here>,
+    sought: Option<&Sought>,
+    types: &Chain<'_, '_, '_, '_>,
 ) -> Option<Stamp<'here, Knotted<'graph, 'here>>> {
-    let below = called_function(callee).and_then(|function| function.closure().stamp());
-    let sought = step.under_settlement() && step.arena_ref(ArenaRef::ROOT) != born_under(callee);
-    match level.filter(|_| sought) {
-        Some(level) => Some(Stamp { level, below }),
-        None => below.copied(),
+    let KBirth::Call { callee, level, .. } = *birth else {
+        unreachable!("a stamp is a call's");
+    };
+    let function = called_function(callee);
+    let below = function.and_then(|function| function.closure().stamp());
+    let under_own = step.under_settlement() && step.arena_ref(ArenaRef::ROOT) != born_under(callee);
+    if !under_own {
+        return below.copied();
     }
+    let level = level
+        .or_else(|| sought.map(|sought| super::settle::level(step.writer(), birth, sought, types)));
+    debug_assert!(
+        level.is_some() || !function.is_some_and(|function| function.body().births),
+        "a frame under its own settlement whose body can birth a callable holds its level"
+    );
+    level.map(|level| Stamp { level, below })
 }
 
 /// The arena node `callee`'s function was born under, behind every barrier: where a frame of it
@@ -417,17 +432,20 @@ fn ran<'graph, 'here, 'scratch>(
             let error = program.error(step.writer(), &region, refusal);
             return step.finish(error);
         }
-        KState::Born(KBirth::Call {
-            program,
-            callee,
-            arguments,
-            kind,
-            contributed,
-            handed,
-            owed,
-            inherit,
-            level,
-        }) => {
+        KState::Born(
+            birth @ KBirth::Call {
+                program,
+                callee,
+                arguments,
+                kind,
+                contributed,
+                handed,
+                owed,
+                inherit,
+                ..
+            },
+        ) => {
+            let sought = step.sought();
             let home = Some(step.memo_home());
             let mut memo = Memo::at(home, inherit);
             match frame(
@@ -453,7 +471,7 @@ fn ran<'graph, 'here, 'scratch>(
                     within: Within {
                         routes,
                         build: step.arena_ref(born_under(callee)),
-                        stamp: stamped(&step, callee, level),
+                        stamp: stamped(&step, &birth, sought.as_deref(), types),
                         memo: home,
                         inherit,
                         root: called_function(callee).and_then(|function| function.body().root),

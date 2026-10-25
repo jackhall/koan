@@ -4,10 +4,13 @@
 //!
 //! An [`Ask`] is what a miss settles: a body and what each name its key lists binds. A [`Level`]
 //! is one settlement's whole request — its key, its ask, the types its binding carries, and each
-//! module of other composed code it pins, whose root rebuilds that code's composition. A frame born
-//! under the settlement it sought holds its level in its birth; the stamp of a callable born in it
-//! is that level over the stamp of the frame's callee ([`Stamp`]), two words a closure holds by
-//! value, so a birth lays nothing for it. Neither is content: a closure's digest and equality skip
+//! module of other composed code it pins, whose root rebuilds that code's composition. A level is
+//! laid once per frame, in the region the frame writes, and only for a frame born under the
+//! settlement it sought whose callee's body can birth a callable: a `Shares` frame's asker lays it
+//! at the call, into the birth; a `Fresh` frame's region does not exist yet, so its asker hands the
+//! request by value ([`Sought`]) to the drain, which hands it back to the frame's first step to
+//! lay. The stamp of a callable born in the frame is that level over the stamp of the frame's
+//! callee ([`Stamp`]), two words a closure holds by value, so a birth lays nothing for it. Neither is content: a closure's digest and equality skip
 //! its stamp, as they skip its arena node.
 
 use smallvec::SmallVec;
@@ -61,6 +64,14 @@ impl Asked {
     }
 }
 
+/// One settlement's request by value, before it is laid as a [`Level`]: its key, what a miss
+/// settles, and the types its binding carries, in the order its key digests them.
+pub struct Sought {
+    pub key: SettlementKey,
+    pub ask: Ask,
+    pub keyed: SmallVec<[KeyedTypes; 1]>,
+}
+
 /// One settlement's request, laid in a region: its key, the body it settles and what each keyed
 /// name binds, the types the binding carries, and each module of other composed code whose
 /// composition it pins.
@@ -74,32 +85,33 @@ pub struct Level<'cell, X> {
 }
 
 impl<'cell, X: Knotted> Level<'cell, X> {
-    /// `ask`'s level under `key`, its binding carrying `keyed` and pinning the compositions of
-    /// `modules`, laid in `writer`'s region.
+    /// `sought`'s level, pinning the compositions of `modules`, laid in `writer`'s region.
     pub fn laid(
         writer: Writer<'cell, '_>,
-        key: SettlementKey,
-        ask: &Ask,
-        keyed: &[KeyedTypes],
+        sought: &Sought,
         modules: &[Value<'cell, X>],
     ) -> &'cell Self {
         resident(
             writer,
             Level {
-                key,
-                body: ask.body,
-                bound: collect(writer, ask.bound.iter().copied()),
-                keyed: collect(writer, keyed.iter().copied()),
+                key: sought.key,
+                body: sought.ask.body,
+                bound: collect(writer, sought.ask.bound.iter().copied()),
+                keyed: collect(writer, sought.keyed.iter().copied()),
                 modules: collect(writer, modules.iter().copied()),
             },
         )
     }
 
-    /// What this level asks a miss to settle.
-    pub fn ask(&self) -> Ask {
-        Ask {
-            body: self.body,
-            bound: self.bound.iter().copied().collect(),
+    /// This level's request by value: what a replay of it seeks.
+    pub fn sought(&self) -> Sought {
+        Sought {
+            key: self.key,
+            ask: Ask {
+                body: self.body,
+                bound: self.bound.iter().copied().collect(),
+            },
+            keyed: self.keyed.iter().copied().collect(),
         }
     }
 }

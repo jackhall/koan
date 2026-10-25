@@ -3,7 +3,10 @@
 //!
 //! An asker that calls a body hands a [`Seek`]: the arena node the callee was born under, and, for
 //! a body keyed on its bindings whose content the asker read and the load could have declared, the
-//! key, the image of the types its binding carries, and the [`Ask`] a miss settles. The drain looks
+//! image of the types its binding carries beside its request ([`Sought`]): the key, the [`Ask`] a
+//! miss settles, and those types. Where the frame lays its own level from that request — a frame
+//! with a region of its own, whose callee's body can birth a callable — the drain hands the
+//! request back to the frame's first step once the frame is born under the settlement. The drain looks
 //! the key up in the [arena](super::arena) under that parent: a live hit is stamped, and a miss
 //! settles the body through the program's [`Settles`] door — the image's nodes relayed into the
 //! agent tier under the root, into the walk's own chain under a composition — and evicts to the
@@ -24,19 +27,24 @@
 //! [build/README.md § Steps and the drain](../build/README.md#steps-and-the-drain).
 
 use crate::memory::Bump;
-pub use crate::scope::{Ask, Asked};
+pub use crate::scope::{Ask, Asked, Sought};
 use crate::scope::{ComposedSyntax, Composition, Facts, Settlement};
-use crate::values::{ArenaRef, BindingImage, Chain, ContentDigest, SettlementKey};
+use crate::values::{ArenaRef, BindingImage, Chain, ContentDigest};
 use smallvec::SmallVec;
 
 /// What an asker hands the drain to find a frame's arena node: the one the callee was born under,
-/// and the settlement under it the frame seeks, if any.
+/// the settlement under it the frame seeks, if any, and whether the frame's first step is handed
+/// that request back to lay its own level.
 pub struct Seek<'graph> {
     pub parent: ArenaRef,
-    /// A keyed body's key under `parent`, its binding's image, and what a miss settles: `None` for
-    /// a body that keys no settlement or a call whose content at a keyed name the asker could not
-    /// read or the load does not hold, whose frame runs under `parent`.
-    pub settlement: Option<(SettlementKey, BindingImage<'graph>, Ask)>,
+    /// A keyed body's binding image under `parent`, beside its request — its key, what a miss
+    /// settles and the types its binding carries: `None` for a body that keys no settlement or a
+    /// call whose content at a keyed name the asker could not read or the load does not hold, whose
+    /// frame runs under `parent`.
+    pub settlement: Option<(BindingImage<'graph>, Sought)>,
+    /// Whether the drain hands the request back to the frame's first step, which lays its level:
+    /// set for a frame whose callee's body can birth a callable and whose asker laid no level.
+    pub hands_back: bool,
 }
 
 /// The door a miss settles through, which the program hands the graph at load: it walks the

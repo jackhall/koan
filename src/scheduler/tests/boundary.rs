@@ -23,8 +23,11 @@ const PREFIXES: &[&str] = &[
 /// The owning types outside the tests: the buffer a step pushes its requests into, the drain's
 /// ready stack, the build arena's slots and free list, and the shared hold each settlement's facts
 /// keep on their parent's and on the compositions they rest on or pin, and the arena keeps on a
-/// composition's; and the levels of a replay a frame's first step hands the drain. Each is the scheduler's runtime state, held beside the graph and never
-/// written into a region, so a value's no-drop-glue discipline does not reach them.
+/// composition's; the levels of a replay a frame's first step hands the drain; and the request a
+/// `Fresh` frame's asker hands the drain, which it keeps in the frame's continuation until the
+/// frame's first step takes it. Each is the scheduler's runtime state, held beside the graph or in
+/// a cell's continuation slot and never written into a region, so a value's no-drop-glue discipline
+/// does not reach them.
 const OWNING_ALLOWED: &[(&str, &str)] = &[
     ("src/scheduler/action.rs", "requests: Vec<Asked<'graph, B>>"),
     ("src/scheduler/action.rs", "Vec::new()"),
@@ -40,6 +43,10 @@ const OWNING_ALLOWED: &[(&str, &str)] = &[
     ("src/scheduler/seek.rs", "Replay(Vec<Replayed<'graph>>)"),
     ("src/scheduler/drain.rs", "levels: Vec<Replayed<'graph>>"),
     ("src/scheduler/arena.rs", "Vec::new()"),
+    ("src/scheduler/continuation.rs", "Option<Box<Sought>>"),
+    ("src/scheduler/action.rs", "Option<Box<Sought>>"),
+    ("src/scheduler/drain.rs", "Option<Box<Sought>>"),
+    ("src/scheduler/drain.rs", "Box::new(sought)"),
 ];
 
 /// The cellgraph doors no drain opens between steps: a peek into a cell's header, an entry beside

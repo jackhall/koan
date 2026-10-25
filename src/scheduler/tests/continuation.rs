@@ -42,6 +42,7 @@ fn a_birth_continuation_comes_back_at_the_step_brand_and_a_successor_survives_to
                 provenance: place(root),
                 arena: crate::values::ArenaRef::ROOT,
                 arrival: crate::scheduler::continuation::Arrival::Placed,
+                sought: None,
                 state: Rested::Awake(KValue::Number(1.0)),
             }),
         )
@@ -62,6 +63,7 @@ fn a_birth_continuation_comes_back_at_the_step_brand_and_a_successor_survives_to
                 provenance: place(root),
                 arena: crate::values::ArenaRef::ROOT,
                 arrival: crate::scheduler::continuation::Arrival::Placed,
+                sought: None,
                 state: Rested::Awake(here),
             });
             let there = crate::values::text(context.scratch_writer(), "there");

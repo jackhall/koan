@@ -18,6 +18,7 @@ use crate::memory::{
     ReattachableOverBoth, Writer, reattachable,
 };
 use crate::scheduler::action::{Action, Step, Use};
+use crate::scheduler::seek::Sought;
 use crate::scope::RegionHeader;
 use crate::values::{ArenaRef, ContentDigest, TypeTiers};
 
@@ -121,6 +122,9 @@ where
     pub arena: ArenaRef,
     /// What the drain tells the cell's first step about how it placed it.
     pub arrival: Arrival,
+    /// The request a frame's asker handed the drain to give its first step: the frame lays its
+    /// level from it.
+    pub sought: Option<Box<Sought>>,
     pub state: Rested<'graph, 'cell, B>,
 }
 

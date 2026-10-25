@@ -31,7 +31,7 @@ use crate::scheduler::continuation::{
     Rested, StateAt, StepBundle, Work,
 };
 use crate::scheduler::delivery::KDelivery;
-use crate::scheduler::seek::{Compose, Lending, Replayed, Seek};
+use crate::scheduler::seek::{Compose, Lending, Replayed, Seek, Sought};
 use crate::scope::{
     Code, ComposedRoot, ComposedSyntax, Entry, EntryFamily, Facts, HalfHeader, MemoFamily, MemoKey,
     RegionHeader,
@@ -66,6 +66,11 @@ pub struct Action<'graph, B: StepBundle<'graph>>(Kind<'graph, B>);
 
 /// What an [`Action`] turned out to be, read by the drain and by nothing else. Anything in
 /// `scheduler` can name a `Kind`; only this file can wrap one into an `Action`.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "a tail's request carries what a miss settles and the request a frame lays its level \
+              from; boxing it would allocate per tail call, and an action lives one step"
+)]
 pub(super) enum Kind<'graph, B: StepBundle<'graph>> {
     /// Finished. The drain releases the cell, and when `completed` — the step's delivery filled the
     /// last slot of its consumer's receipt run — pushes that consumer, which is the only way a
@@ -217,6 +222,9 @@ pub struct Step<
     composed: Option<ContentDigest>,
     /// What the drain told the cell's first step about how it placed it.
     arrival: Arrival,
+    /// The request a call's asker handed the drain, which the frame's first step lays a level
+    /// from.
+    sought: Option<Box<Sought>>,
     /// The books the cell's arena node is kept in, which the step reads liveness from.
     books: &'a BuildArena<'graph>,
     spawns: &'a mut Spawns<'graph, B>,
@@ -263,7 +271,12 @@ where
         tiers: TypeTiers<'graph>,
         facts: Facts<'a>,
         provenance: &'a Provenance,
-        (arena, composed, arrival): (ArenaRef, Option<ContentDigest>, Arrival),
+        (arena, composed, arrival, sought): (
+            ArenaRef,
+            Option<ContentDigest>,
+            Arrival,
+            Option<Box<Sought>>,
+        ),
         books: &'a BuildArena<'graph>,
         spawns: &'a mut Spawns<'graph, B>,
         state: StateAt<'graph, 'here, B>,
@@ -277,6 +290,7 @@ where
             arena,
             composed,
             arrival,
+            sought,
             books,
             spawns,
             state,
@@ -310,6 +324,7 @@ where
             arena,
             composed,
             arrival,
+            sought,
             books,
             spawns,
             state,
@@ -323,6 +338,7 @@ where
             arena,
             composed,
             arrival,
+            sought,
             books,
             spawns,
             state: (),
@@ -357,6 +373,7 @@ where
             arena,
             composed,
             arrival,
+            sought,
             books,
             spawns,
             state,
@@ -370,6 +387,7 @@ where
             arena,
             composed,
             arrival,
+            sought,
             books,
             spawns,
             state,
@@ -489,6 +507,12 @@ where
     /// root always does.
     pub fn arena_live(&self, at: ArenaRef) -> bool {
         self.books.is_live(at)
+    }
+
+    /// At a call's first step, the request its asker handed the drain, where the frame lays its
+    /// own level; `None` past the first take and for every other cell.
+    pub fn sought(&mut self) -> Option<Box<Sought>> {
+        self.sought.take()
     }
 
     /// Whether this cell runs under a settlement: a call's frame the drain found or built one
@@ -734,6 +758,7 @@ where
             provenance: *self.provenance,
             arena: self.arena,
             arrival: Arrival::Placed,
+            sought: None,
             state: Rested::Awake(state),
         });
         if let Some(scratch) = scratch {

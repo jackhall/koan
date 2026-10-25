@@ -6,9 +6,10 @@
 //! the image of the types that content carries. A parameter's content is its argument; a `FOR ALL`
 //! name's is the call's solution at it, digested as the type value the frame binds: carried by a
 //! keyworded call, held by an instance, and solved here, on the asker's region, for a call by
-//! name. The request is laid as the birth's level, which a callable born under the settlement
-//! records in its [stamp](crate::scope::Stamp), so a call of it replays the chain where it was
-//! evicted. A call past a header or a barrier of a body keyed on a `FOR ALL` name seeks no
+//! name. Where the callee's body can birth a callable, the request is laid as the frame's
+//! [level] — by a `Shares` frame's asker at the call, or by a `Fresh` frame's first step
+//! from the request the drain hands it back — which a callable born under the settlement records
+//! in its [stamp](crate::scope::Stamp), so a call of it replays the chain where it was evicted. A call past a header or a barrier of a body keyed on a `FOR ALL` name seeks no
 //! settlement, since its frame solves only once the arguments are retyped or have crossed, unless
 //! it calls an instance, whose solution holds wherever it is called from.
 //!
@@ -37,7 +38,7 @@ use crate::build::{Layer, LoadStore, fold, key_of};
 use crate::knot::{Function, KValue, Knotted};
 use crate::memory::{Bump, BumpBackedSet, BumpVec, ProgramBrand, Writer, bump_set, resident};
 use crate::parse::ProgramNode;
-use crate::scheduler::{Ask, Asked, Seek};
+use crate::scheduler::{Ask, Asked, Seek, Sought};
 use crate::scope::{
     Address, Binding, Bound, Composition, Facts, Keyed, Level, Settlement, Shapes, Slot, Tree,
     Unknown, quote_paths,
@@ -46,7 +47,7 @@ use crate::symbols::BinderSymbol;
 use crate::type_lattice::{DeclaredType, KType, Parametric, Term, TypeDigest, TypeNode};
 use crate::values::digest::type_digest;
 use crate::values::{
-    ArenaRef, BindingImage, Chain, KeyedTypes, Knotted as _, SettlementKey, Value, retype_target,
+    ArenaRef, BindingImage, Chain, KeyedTypes, Knotted as _, Value, retype_target,
 };
 
 use super::body::admitted;
@@ -73,14 +74,15 @@ pub fn callee_keys<'here>(birth: &KBirth<'_, 'here>) -> Option<&'here [(Slot, Bi
 /// What the call `birth` seeks: the arena node its callee was born under — the root for a birth
 /// that is no call or a callee that is no function — and the settlement under it its body keys,
 /// `keys`, the callee's as the caller read them ([`callee_keys`]), if the asker can read its
-/// content at every keyed name. `types` is the asker's evaluation
-/// chain, which reads the arguments; `region` its region's, where a call by name's solution is
-/// solved. The settlement's request is laid through `writer` as the birth's level, which a
-/// callable born in the frame records in its stamp.
+/// content at every keyed name. `types` is the asker's evaluation chain, which reads the
+/// arguments; `region` its region's, where a call by name's solution is solved. Where the callee's
+/// body can birth a callable and the birth holds no level yet, the request is laid as its level
+/// through `lay` — a `Shares` frame's asker, whose region the frame writes — or, with no writer,
+/// handed back to the frame's first step to lay ([`level`]).
 pub fn seek<'graph, 'here>(
     birth: &mut KBirth<'graph, 'here>,
     keys: Option<&[(Slot, BinderSymbol)]>,
-    writer: Writer<'here, '_>,
+    lay: Option<Writer<'here, '_>>,
     types: &Chain<'_, '_, '_, '_>,
     region: &Chain<'_, '_, '_, '_>,
 ) -> Seek<'graph> {
@@ -91,33 +93,98 @@ pub fn seek<'graph, 'here>(
         _ => (None, None),
     };
     let parent = function.map_or(ArenaRef::ROOT, |function| function.closure().build());
+    let births = function.is_some_and(|function| function.body().births);
+    let mut hands_back = false;
     let settlement = keys.and_then(|keys| settlement(birth, keys, types, region));
-    let settlement = settlement.map(|(key, keyed, ask, modules)| {
-        if let KBirth::Call { level, .. } = birth {
-            *level = Some(Level::laid(writer, key, &ask, &keyed, &modules));
+    let settlement = settlement.map(|sought| {
+        if births && let KBirth::Call { level: None, .. } = birth {
+            match lay {
+                Some(writer) => {
+                    let laid = level(writer, birth, &sought, types);
+                    if let KBirth::Call { level, .. } = birth {
+                        *level = Some(laid);
+                    }
+                }
+                None => hands_back = true,
+            }
         }
         let tiers = program.expect("a keyed birth is a call").tiers();
-        (key, BindingImage::of(keyed, tiers, types), ask)
+        (BindingImage::of(sought.keyed.clone(), tiers, types), sought)
     });
-    Seek { parent, settlement }
+    Seek {
+        parent,
+        settlement,
+        hands_back,
+    }
 }
 
-/// The key, binding image and ask of the settlement the call `birth` seeks under its callee's
-/// arena node, its body keyed on `keyed`: `None` for a birth that is no call, a callee that is no
-/// function, and a call whose content at a keyed name the asker cannot read or is not load
-/// content.
-#[allow(clippy::type_complexity)]
+#[cfg(test)]
+thread_local! {
+    /// How many levels were laid.
+    pub(crate) static LEVELS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// The level of `sought`, the request of the call `birth`, laid through `writer`: the one function
+/// that lays a level. A `Shares` frame's asker lays it at the call ([`seek`]), and a `Fresh`
+/// frame's first step from the request the drain hands it back, each in the region the frame
+/// writes. It pins each keyed module of composed code other than the callee's own, whose root
+/// rebuilds that code's composition on a replay; `types` reads those arguments.
+pub fn level<'graph, 'here>(
+    writer: Writer<'here, '_>,
+    birth: &KBirth<'graph, 'here>,
+    sought: &Sought,
+    types: &Chain<'_, '_, '_, '_>,
+) -> &'here Level<'here, Knotted<'graph, 'here>> {
+    #[cfg(test)]
+    LEVELS.with(|levels| levels.set(levels.get() + 1));
+    let KBirth::Call {
+        callee, arguments, ..
+    } = birth
+    else {
+        unreachable!("a level is laid for a call");
+    };
+    let body = called_function(*callee)
+        .expect("a call seeking a settlement calls a function")
+        .body();
+    let keys = body
+        .keys
+        .expect("a call seeking a settlement keys its body");
+    let own = body.root.map(|root| root.digest);
+    let scratch = Bump::new();
+    let mut modules: SmallVec<[KValue<'graph, 'here>; 1]> = SmallVec::new();
+    for asked in &sought.ask.bound {
+        let Asked::Module {
+            slot,
+            composition: Some(composition),
+            ..
+        } = *asked
+        else {
+            continue;
+        };
+        if Some(composition) == own {
+            continue;
+        }
+        let (_, name) = keys
+            .iter()
+            .find(|(keyed, _)| *keyed == slot)
+            .expect("a keyed module names a key");
+        let argument = arguments
+            .field(name.symbol(), types, &scratch)
+            .expect("a keyed module's argument was read when its request was");
+        modules.push(argument.value());
+    }
+    Level::laid(writer, sought, &modules)
+}
+
+/// The request of the settlement the call `birth` seeks under its callee's arena node, its body
+/// keyed on `keyed`: `None` for a birth that is no call, a callee that is no function, and a call
+/// whose content at a keyed name the asker cannot read or is not load content.
 fn settlement<'graph, 'here>(
     birth: &KBirth<'graph, 'here>,
     keyed: &[(Slot, BinderSymbol)],
     types: &Chain<'_, '_, '_, '_>,
     region: &Chain<'_, '_, '_, '_>,
-) -> Option<(
-    SettlementKey,
-    SmallVec<[KeyedTypes; 1]>,
-    Ask,
-    SmallVec<[KValue<'graph, 'here>; 1]>,
-)> {
+) -> Option<Sought> {
     let KBirth::Call {
         program,
         callee,
@@ -178,7 +245,6 @@ fn settlement<'graph, 'here>(
     let mut digests = BumpVec::with_capacity_in(keyed.len(), &scratch);
     let mut binding = SmallVec::new();
     let mut bound = SmallVec::new();
-    let mut modules = SmallVec::new();
     for &(slot, name) in keyed {
         if let BinderSymbol::Type(name) = name
             && let Some(index) = function.quantifier_index(name)
@@ -235,14 +301,7 @@ fn settlement<'graph, 'here>(
                     retyped: carried != own,
                     composition: (member.module())
                         .and_then(|module| module.body()?.root)
-                        .map(|root| root.digest)
-                        .inspect(|composition| {
-                            // A module of other composed code may be pinned: its root rebuilds
-                            // its composition on a replay.
-                            if Some(*composition) != body.root.map(|root| root.digest) {
-                                modules.push(argument);
-                            }
-                        }),
+                        .map(|root| root.digest),
                 }
             }
             _ => return None,
@@ -256,7 +315,11 @@ fn settlement<'graph, 'here>(
         body: body.segment,
         bound,
     };
-    Some((key, binding, ask, modules))
+    Some(Sought {
+        key,
+        ask,
+        keyed: binding,
+    })
 }
 
 /// What a miss settles for `ask` over `parent`, the layers below, laid in `bump`: `L`'s walk rooted

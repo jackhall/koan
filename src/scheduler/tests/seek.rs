@@ -15,7 +15,8 @@ use crate::scheduler::seek::{Settles, Unsettled};
 use crate::scheduler::tests::bundle::{AnyStep, Native, TestGraph};
 use crate::scheduler::tests::native::{fresh, shares, work};
 use crate::scheduler::{
-    Action, Ask, Placement, Scheduler, Seek, Step, StepError, TIERS, Taken, Tiers, Use, Work,
+    Action, Ask, Placement, Scheduler, Seek, Sought, Step, StepError, TIERS, Taken, Tiers, Use,
+    Work,
 };
 use crate::type_lattice::{KType, TypeNode};
 use crate::values::digest::{DigestHasher, Tag};
@@ -33,6 +34,9 @@ thread_local! {
     static BOUND: std::cell::Cell<KType> = const { std::cell::Cell::new(KType::NUMBER) };
     /// How many settlements had been evicted each time [`noted`] ran.
     static EVICTED_THEN: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
+    /// The key of the request each [`handed`] frame's first step was handed back, in the order
+    /// they ran, then what a second take read.
+    static HANDED: RefCell<Vec<(Option<SettlementKey>, bool)>> = const { RefCell::new(Vec::new()) };
 }
 
 fn builds() -> Vec<ArenaRef> {
@@ -47,6 +51,7 @@ fn reset() {
     BUILDS.with(|builds| builds.borrow_mut().clear());
     COUNTS.with(|counts| counts.borrow_mut().clear());
     EVICTED_THEN.with(|evicted| evicted.borrow_mut().clear());
+    HANDED.with(|handed| handed.borrow_mut().clear());
 }
 
 /// How many settlements the drains on this thread have evicted, and how many frames were born
@@ -84,12 +89,31 @@ fn ask() -> Ask {
     }
 }
 
-/// A seek for the settlement keyed `at` under `parent`, its binding carrying no type.
-fn seek<'graph>(at: usize, parent: ArenaRef) -> Seek<'graph> {
+/// The request for the settlement keyed `at`, its binding carrying `keyed`.
+fn sought(at: usize, keyed: smallvec::SmallVec<[KeyedTypes; 1]>) -> Sought {
+    Sought {
+        key: key(at),
+        ask: ask(),
+        keyed,
+    }
+}
+
+/// A seek for the settlement keyed `at` under `parent`, its binding carrying no type, handing its
+/// request back to the frame where `hands_back` is set.
+fn seek_handing<'graph>(at: usize, parent: ArenaRef, hands_back: bool) -> Seek<'graph> {
     Seek {
         parent,
-        settlement: Some((key(at), BindingImage::default(), ask())),
+        settlement: Some((
+            BindingImage::default(),
+            sought(at, smallvec::SmallVec::new()),
+        )),
+        hands_back,
     }
+}
+
+/// A seek for the settlement keyed `at` under `parent`, its binding carrying no type.
+fn seek<'graph>(at: usize, parent: ArenaRef) -> Seek<'graph> {
+    seek_handing(at, parent, false)
 }
 
 /// A budget of `bytes`.
@@ -213,6 +237,42 @@ fn a_missed_settlement_is_built_once_and_found_warm_by_the_next_birth() {
     torn_down(graph, run);
 }
 
+/// Record the key of the request this frame's first step was handed back, and whether a second
+/// take reads none, then finish.
+fn handed<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
+    let first = step.sought().map(|sought| sought.key);
+    let again = step.sought().is_none();
+    HANDED.with(|handed| handed.borrow_mut().push((first, again)));
+    step.finish_fresh(|_, _, _| Active::new(KValue::Null))
+}
+
+/// A seek handing its request back gives the frame's first step that request, on the miss that
+/// builds its settlement and on the hit that finds it; one that does not hands nothing.
+#[test]
+fn a_seek_handing_its_request_back_gives_the_frame_s_first_step_its_request() {
+    fn start<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
+        for hands_back in [true, true, false] {
+            let request = fresh(handed, Use::Reads, KValue::Null);
+            step.spawn_seeking(request, seek_handing(1, ArenaRef::ROOT, hands_back));
+        }
+        let asked = step.spawn(fresh(handed, Use::Reads, KValue::Null));
+        step.park(asked, finished, KValue::Null, None)
+    }
+    run_loaded(start, BuildBudget::default());
+    let read = HANDED.with(|handed| handed.borrow().clone());
+    assert_eq!(
+        read,
+        [
+            (Some(key(1)), true),
+            (Some(key(1)), true),
+            (None, true),
+            (None, true)
+        ],
+        "the miss's frame and the hit's are handed the request; the others are not"
+    );
+    assert_eq!(settled(), 1, "the second seek hits the first's settlement");
+}
+
 #[test]
 fn two_bindings_give_two_settlements_under_one_parent() {
     reset();
@@ -242,6 +302,7 @@ fn a_call_keying_no_settlement_runs_under_its_callees_arena_node() {
             let unkeyed = Seek {
                 parent,
                 settlement: None,
+                hands_back: false,
             };
             step.spawn_seeking(shares(observe, Use::Reads, KValue::Null), unkeyed);
         }
@@ -277,10 +338,11 @@ fn seek_bound<'graph>(
         carried: bound.into(),
         named: None,
     }];
-    let image = BindingImage::of(keyed, step.tiers(), &step.types());
+    let image = BindingImage::of(keyed.clone(), step.tiers(), &step.types());
     Seek {
         parent: ArenaRef::ROOT,
-        settlement: Some((key(at), image, ask())),
+        settlement: Some((image, sought(at, keyed))),
+        hands_back: false,
     }
 }
 

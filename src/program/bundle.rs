@@ -34,8 +34,10 @@ pub enum KBirth<'graph, 'cell> {
     /// none. `handed` are the digest memos the caller hands on with arguments it passed bare.
     /// `owed` is the contract of the evaluation that tailed into this frame: `None` when the frame
     /// was spawned. `inherit` is where the asker's decision memo rests, which seeds the frame's
-    /// where its home holds none. `level` is the request of the settlement the asker sought for
-    /// the frame, which a callable born under it records in its stamp.
+    /// where its home holds none. `level` is the request of the settlement the frame seeks, which a
+    /// callable born under it records in its stamp: laid by a `Shares` frame's asker where the
+    /// callee's body can birth a callable, or kept by a hop under its frame's own settlement;
+    /// `None` for a `Fresh` frame, which lays its own from the request the drain hands it back.
     Call {
         program: &'graph Program<'graph>,
         callee: KValue<'graph, 'cell>,
@@ -99,7 +101,8 @@ pub enum KBirth<'graph, 'cell> {
 /// rests, which a block decides in; the memo a frame it calls seeds its own from; and the root of
 /// the composed code its frame runs, which a value born in it keeps — the books hold only its
 /// digest; and the stamp of the chain of settlements its frame's arena node closes, which a
-/// callable born in it keeps beside that node.
+/// callable born in it keeps beside that node — `None` for a frame under its own settlement whose
+/// body births no callable.
 #[derive(Clone, Copy)]
 pub struct Within<'graph, 'cell> {
     pub routes: bool,

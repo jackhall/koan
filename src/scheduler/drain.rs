@@ -34,7 +34,7 @@ use crate::scheduler::continuation::{
     StateAt, StepBundle, Work,
 };
 use crate::scheduler::delivery::KDelivery;
-use crate::scheduler::seek::{Compose, Lending, Replayed, Seek, Settles, Unsettled};
+use crate::scheduler::seek::{Compose, Lending, Replayed, Seek, Settles, Sought, Unsettled};
 #[cfg(test)]
 use crate::scope::HalfHeader;
 use crate::scope::{Facts, LoadFacts, RegionHeader};
@@ -271,6 +271,11 @@ pub struct Scheduler<'a, 'graph, B: StepBundle<'graph>> {
     census: Census,
 }
 
+/// Where the drain places a frame it seeks for: the arena node it runs under, whether placing it
+/// missed, the composition its first step must rebuild, and the request its first step lays a
+/// level from.
+type Placing = (ArenaRef, bool, Option<ContentDigest>, Option<Box<Sought>>);
+
 /// One entry of the ready stack.
 #[expect(
     clippy::large_enum_variant,
@@ -372,6 +377,7 @@ where
                 },
                 arena: ArenaRef::ROOT,
                 arrival: Arrival::Placed,
+                sought: None,
                 state,
             },
         )?;
@@ -476,27 +482,27 @@ where
         let arena = &mut self.graph.arena;
         let mut replayed = SmallVec::<[ArenaRef; 4]>::new();
         let replaying = matches!(asked.lending, Lending::Replay(_));
-        let (under, missed, wanting) = match asked.lending {
-            Lending::Parent => (asker, false, None),
+        let (under, missed, wanting, sought) = match asked.lending {
+            Lending::Parent => (asker, false, None, None),
             Lending::Call(seek) => self.seek(seek),
             Lending::Replay(levels) => self.replay(levels, asker, &mut replayed),
             Lending::Pinning(seek, syntax) => {
                 let (_, built) = self.composed(Compose::Owned(syntax));
-                let (under, missed, wanting) = self.seek(seek);
-                (under, missed || built, wanting)
+                let (under, missed, wanting, sought) = self.seek(seek);
+                (under, missed || built, wanting, sought)
             }
             Lending::Under(under) if arena.is_live(under) => {
                 arena.stamp(under);
-                (under, false, None)
+                (under, false, None, None)
             }
             Lending::Under(_) => {
                 #[cfg(test)]
                 tally(|tiers| tiers.cold_births += 1);
-                (ArenaRef::ROOT, false, None)
+                (ArenaRef::ROOT, false, None, None)
             }
             Lending::Compose(compose) => {
                 let (under, missed) = self.composed(compose);
-                (under, missed, None)
+                (under, missed, None, None)
             }
         };
         self.graph.arena.borrow(under);
@@ -533,22 +539,24 @@ where
                 provenance,
                 arena: under,
                 arrival,
+                sought,
                 state: Rested::Dormant(asked.state, born),
             },
         )
     }
 
-    /// The arena node a frame born by a replay runs under, whether any level missed, and the
-    /// composition its first step must rebuild: each of `levels` found under the one before, or
-    /// settled there, from `base`, the asker's — its pins found or built first — and borrowed into
-    /// `held` until the frame borrows its own; the last is the frame's own seek. A level that
-    /// settles nothing ends the replay, and the frame is born where it stopped.
+    /// The arena node a frame born by a replay runs under, whether any level missed, the
+    /// composition its first step must rebuild, and the request its first step lays a level from:
+    /// each of `levels` found under the one before, or settled there, from `base`, the asker's —
+    /// its pins found or built first — and borrowed into `held` until the frame borrows its own;
+    /// the last is the frame's own seek. A level that settles nothing ends the replay, and the
+    /// frame is born where it stopped, with no request.
     fn replay(
         &mut self,
         levels: Vec<Replayed<'graph>>,
         base: ArenaRef,
         held: &mut SmallVec<[ArenaRef; 4]>,
-    ) -> (ArenaRef, bool, Option<ContentDigest>) {
+    ) -> Placing {
         // The frame was counted cold where its own seek found its parent gone; it is born warm.
         #[cfg(test)]
         if levels
@@ -563,43 +571,54 @@ where
             for syntax in pins {
                 missed |= self.composed(Compose::Owned(syntax)).1;
             }
-            let (under, miss, wanting) = self.seek(Seek { parent, ..seek });
+            let (under, miss, wanting, sought) = self.seek(Seek { parent, ..seek });
             missed |= miss;
-            if at + 1 == count || wanting.is_some() || under == parent {
-                return (under, missed, wanting);
+            if at + 1 == count {
+                return (under, missed, wanting, sought);
+            }
+            if wanting.is_some() || under == parent {
+                return (under, missed, wanting, None);
             }
             self.graph.arena.borrow(under);
             held.push(under);
             parent = under;
         }
-        (parent, missed, None)
+        (parent, missed, None, None)
     }
 
-    /// The arena node a frame `seek` asks for runs under, whether it was a miss, and the
-    /// composition its first step must rebuild: the parent itself for a seek with no key; else the
+    /// The arena node a frame `seek` asks for runs under, whether it was a miss, the composition
+    /// its first step must rebuild, and — where the seek hands it back and the frame runs under the
+    /// settlement it sought — the request its first step lays a level from: the parent itself for a
+    /// seek with no key; else the
     /// settlement under the parent the key names, stamped, or built — its binding's image relayed
     /// into the agent tier under the root, nothing relayed under a composition. The root, cold, for
     /// a parent that is no longer live. A miss under a composition binding a module of another
     /// composed code pins that code's composition, where no layer below holds the module's tree;
     /// where that composition is gone, the frame is born under the parent wanting it rebuilt.
-    fn seek(&mut self, seek: Seek<'graph>) -> (ArenaRef, bool, Option<ContentDigest>) {
-        let Seek { parent, settlement } = seek;
-        let Some((key, image, ask)) = settlement else {
+    fn seek(&mut self, seek: Seek<'graph>) -> Placing {
+        let Seek {
+            parent,
+            settlement,
+            hands_back,
+        } = seek;
+        let Some((image, sought)) = settlement else {
             // A callee of composed code whose composition is gone is born under the root, and
             // bounces with its syntax.
             return match self.graph.arena.is_live(parent) {
-                true => (parent, false, None),
-                false => (ArenaRef::ROOT, false, None),
+                true => (parent, false, None, None),
+                false => (ArenaRef::ROOT, false, None, None),
             };
         };
+        let key = sought.key;
         #[cfg(test)]
         tally(|tiers| tiers.sought += 1);
         let arena = &mut self.graph.arena;
         if !arena.is_live(parent) {
             #[cfg(test)]
             tally(|tiers| tiers.cold_births += 1);
-            return (ArenaRef::ROOT, false, None);
+            return (ArenaRef::ROOT, false, None, None);
         }
+        let handed = |sought| hands_back.then(|| Box::new(sought));
         let door = arena.door(parent);
         let base = door.composition.map(|(digest, _)| digest);
         if let Some(found) = arena.find(parent, key) {
@@ -609,7 +628,7 @@ where
                 "a hit's binding rests: its key digests the content its types are read from"
             );
             self.graph.arena.stamp(found);
-            return (found, false, None);
+            return (found, false, None, handed(sought));
         }
         // Under a composition, each module of other composed code no layer below holds the tree
         // of pins its composition.
@@ -619,7 +638,7 @@ where
                 Some((_, composition)) => Facts::composed(composition, door.top),
                 None => Facts::under(self.graph.facts, door.top),
             };
-            for asked in &ask.bound {
+            for asked in &sought.ask.bound {
                 let super::seek::Asked::Module {
                     content,
                     composition: Some(composed),
@@ -640,7 +659,7 @@ where
                             pins.push(at);
                         }
                     }
-                    None => return (parent, false, Some(composed)),
+                    None => return (parent, false, Some(composed), None),
                 }
             }
         }
@@ -664,11 +683,11 @@ where
             pinned,
             self.graph.facts,
             |bump, below, pinned, witness| {
-                settles.settle(bump, below, pinned, &ask, &mut rest, witness)
+                settles.settle(bump, below, pinned, &sought.ask, &mut rest, witness)
             },
         ) else {
             debug_assert_eq!(relayed, before, "nothing rests for a settlement not built");
-            return (parent, false, None);
+            return (parent, false, None, None);
         };
         let settled = self.graph.arena.insert(parent, key, facts, pins);
         #[cfg(test)]
@@ -677,7 +696,7 @@ where
             tiers.relayed += relayed - before;
             tiers.rested += resting.own_len() - relayed;
         });
-        (settled, true, None)
+        (settled, true, None, handed(sought))
     }
 
     /// The composition `compose` asks for, and whether it was a miss: found by its syntax digest
@@ -811,6 +830,7 @@ where
         provenance,
         arena,
         arrival,
+        sought,
         state,
     } = context
         .continuation()
@@ -850,7 +870,7 @@ where
         tiers,
         facts,
         &provenance,
-        (arena, composed, arrival),
+        (arena, composed, arrival, sought),
         books,
         spawns,
         state,
