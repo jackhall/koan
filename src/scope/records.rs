@@ -503,6 +503,8 @@ impl<'step> Facts<'step> {
                 };
             }
         }
+        #[cfg(test)]
+        rigid_at_run();
         debug_assert!(
             false,
             "a rigid fact of body {:?} at {site:?} reached the run",
@@ -1667,4 +1669,17 @@ impl Typed<'_> {
             .chain(self.minting.iter().copied());
         sites.for_each(|site| each(Held::Site(segment, site)));
     }
+}
+
+#[cfg(test)]
+thread_local! {
+    /// How many rigid facts and points reached the run's door: what the door law holds at nothing.
+    /// Tests reset it.
+    pub(crate) static RIGID_AT_RUN: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Count a rigid fact or point the run's door met.
+#[cfg(test)]
+pub(crate) fn rigid_at_run() {
+    RIGID_AT_RUN.with(|count| count.set(count.get() + 1));
 }

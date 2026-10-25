@@ -502,4 +502,14 @@ proptest! {
             }
         }
     }
+
+    /// The door law: whatever paths and functor calls the load leaves open, no rigid fact or point
+    /// reaches the run's door; each is closed in some layer first.
+    #[test]
+    fn the_door_never_yields_rigid_at_the_run(program in functors()) {
+        crate::scope::RIGID_AT_RUN.with(|count| count.set(0));
+        let (source, _) = program.render();
+        let _ = run(&source);
+        prop_assert_eq!(crate::scope::RIGID_AT_RUN.with(std::cell::Cell::get), 0, "in\n{}", source);
+    }
 }

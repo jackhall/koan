@@ -53,6 +53,8 @@ mod writes;
 pub(crate) mod tests;
 
 pub(crate) use records::RecordSource;
+#[cfg(test)]
+pub(crate) use records::{RIGID_AT_RUN, rigid_at_run};
 pub(crate) use shape::IMPLICIT;
 pub(crate) use signature::pair_label;
 pub(crate) use spelling::{PathSpelling, SpelledRoot, path_spelling};

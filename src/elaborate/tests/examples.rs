@@ -11,7 +11,8 @@ use crate::type_lattice::{
 };
 use crate::values::{Chain, Value};
 
-use super::super::{callable_type, type_expression};
+use super::super::expression::type_expression;
+use super::super::signature::callable_type;
 use super::{Held, Program, nulls, scalars, with_program};
 use crate::scope::{Elaboration, ParameterBinding, ShapeGroupMap};
 

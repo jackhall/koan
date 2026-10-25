@@ -211,6 +211,8 @@ pub(super) fn walk<'graph: 'o, 'tier: 'o, 'o, S: Store<'o>>(
     scratch: BumpAllocator<'_>,
     at: Segment,
 ) -> Result<(), ShapeError<'o>> {
+    #[cfg(test)]
+    let _walking = crate::elaborate::Walking::enter();
     let mut pass = Pass {
         shapes,
         builtins,

@@ -4,7 +4,7 @@
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::{KType, Parametric};
 
-use super::super::callable_type;
+use super::super::signature::callable_type;
 use super::{brought, declared};
 use crate::scope::Elaboration;
 

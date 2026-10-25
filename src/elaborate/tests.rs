@@ -22,8 +22,10 @@ use crate::type_lattice::KType;
 use crate::values::tests::TestTypes;
 use crate::values::{Chain, TypeValue, Value};
 
+use super::declaration::type_declarations;
 use super::paths::{member_module, member_type};
-use super::{Reads, TypeAt, callable_type, type_declarations};
+use super::signature::callable_type;
+use super::{Reads, TypeAt};
 use crate::scope::Site;
 use crate::scope::{Callable, Elaboration};
 use crate::symbols::ValueSymbol;

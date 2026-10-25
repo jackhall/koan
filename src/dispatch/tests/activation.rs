@@ -105,6 +105,22 @@ fn a_frame_bound_to_run_content_decides_its_dependent_units_in_its_activation() 
     assert!(chosen.contains(&(segment, site)), "{chosen:?}");
 }
 
+/// `KEEP`, whose annotation names `Elt`, and `BOX`, which hands it a record it builds: a type the
+/// run composes, so `KEEP`'s entry decides the annotation in its activation.
+const KEEP: &str = "EXPR FOR ALL #[Elt] #(KEEP x :Elt) -> Any = #((LET p :(LIST OF Elt) = [x]) (p))\n\
+                    EXPR FOR ALL #[Item] #(BOX y :Item) -> Any = #(KEEP {a = y})\n";
+
+#[test]
+fn a_type_expression_is_never_elaborated_at_the_run() {
+    crate::elaborate::ELABORATED.with(|counts| counts.set((0, 0)));
+    let (ran, decided) = ran(&format!("{KEEP}PRINT (BOX 1)\nPRINT (BOX \"s\")\n"));
+    assert_eq!(ran.printed, "[{a = 1}]\n[{a = s}]");
+    assert!(decided > 0, "`KEEP`'s entry decides in its activation");
+    let (walked, run) = crate::elaborate::ELABORATED.with(std::cell::Cell::get);
+    assert!(walked > 0);
+    assert_eq!(run, 0, "the run elaborated a type expression");
+}
+
 /// `HOLD`, keyed on `Item`, whose statement binds a record the run composes and whose closure
 /// captures it.
 const HOLD: &str = "EXPR FOR ALL #[Item] #(HOLD y :Item) -> Any = \

@@ -58,6 +58,8 @@ pub fn type_expression<'graph, R: Reads<'graph> + ?Sized>(
     types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
 ) -> Result<Parametric, Elaboration> {
+    #[cfg(test)]
+    super::elaborated();
     let groups = Groups {
         names: &[],
         bounds: &[],

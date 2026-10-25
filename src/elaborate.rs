@@ -51,8 +51,8 @@ mod unit;
 mod tests;
 
 pub use builtin::{builtin_error, builtin_result, builtin_shape_types};
-pub use declaration::{declares_nominal, type_declarations};
-pub use expression::{declared_field, type_expression};
+pub use declaration::declares_nominal;
+pub use expression::declared_field;
 pub use members::{
     SignatureMember, applied_member, member_count, schema_member, schema_of, signature_member,
     type_members, value_count,
@@ -60,8 +60,49 @@ pub use members::{
 pub use module::{module_signature, self_signature};
 pub use paths::{declared_through, path_binding};
 pub use reads::{Reads, TypeAt};
-pub use signature::callable_type;
 pub use unit::{
     Mode, Reader, Signatures, Tools, TypeContext, callable, declarations, expression, guards,
     own_levels, registration,
 };
+
+#[cfg(test)]
+thread_local! {
+    /// How many walks this thread is inside: a type expression elaborated outside every walk is
+    /// the run's, which elaborates none.
+    static WALKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Type expressions elaborated inside a walk, then outside every walk. Tests reset it.
+    pub(crate) static ELABORATED: std::cell::Cell<(usize, usize)> =
+        const { std::cell::Cell::new((0, 0)) };
+}
+
+/// A walk this thread is inside, for as long as it is held.
+#[cfg(test)]
+pub(crate) struct Walking;
+
+#[cfg(test)]
+impl Walking {
+    pub(crate) fn enter() -> Self {
+        WALKS.with(|walks| walks.set(walks.get() + 1));
+        Walking
+    }
+}
+
+#[cfg(test)]
+impl Drop for Walking {
+    fn drop(&mut self) {
+        WALKS.with(|walks| walks.set(walks.get() - 1));
+    }
+}
+
+/// Count one type expression elaborated, inside a walk or outside every walk.
+#[cfg(test)]
+fn elaborated() {
+    let walking = WALKS.with(std::cell::Cell::get) > 0;
+    ELABORATED.with(|counts| {
+        let (inside, outside) = counts.get();
+        counts.set(match walking {
+            true => (inside + 1, outside),
+            false => (inside, outside + 1),
+        });
+    });
+}

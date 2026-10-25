@@ -334,6 +334,10 @@ pub(super) fn chosen<'x, 'graph, 'here>(
 /// one is rigid, which no run reads — the layer binding its variables closes it.
 fn pointed<'x>(points: &Points<'_>, arguments: &[KType], scratch: &'x Bump) -> Option<&'x [KType]> {
     let solved = points.solved(scratch, arguments);
+    #[cfg(test)]
+    if solved.is_none() {
+        crate::scope::rigid_at_run();
+    }
     debug_assert!(solved.is_some(), "a rigid point reached the run");
     Some(solved?.leak())
 }
