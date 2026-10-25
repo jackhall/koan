@@ -205,10 +205,10 @@ pub(super) fn side_handles(content: Content<'_>, each: &mut impl FnMut(DeclaredT
                 each((*kt).into());
             }
             for (_, kt) in schema.value_slots.iter() {
-                each((*kt).into());
+                each(*kt);
             }
             for kt in schema.keyworded {
-                each((*kt).into());
+                each(*kt);
             }
         }
         _ => {}
