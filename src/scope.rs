@@ -82,7 +82,7 @@ pub use typed::{
     BodyClass, Caching, Callable, Elaboration, ElaborationDisplay, Elimination, FunctionGroupMap,
     HandedTo, Handoff, InstanceRead, Kept, Mint, Narrowing, ParameterBinding, PathEntry, Paths,
     Point, Points, Registered, Resolution, Resolved, Root, ShapeGroupMap, Source, Static,
-    StaticCallable, StaticRegistered, StaticSolution, StaticType, Table, UseStatics, Variable,
+    StaticCallable, StaticInstance, StaticRegistered, StaticType, Table, UseStatics, Variable,
     ViewSlots, solutions,
 };
 pub use writes::{KeyedWrites, Writes};

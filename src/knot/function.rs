@@ -20,12 +20,12 @@ use std::cell::Cell;
 
 use crate::elaborate::{bound_path, callable_type};
 use crate::memory::{BumpAllocator, BumpVec, Edge, KnotPlan, Writer, resident};
-use crate::scope::{Activated, StaticSolution, solutions};
+use crate::scope::{Activated, StaticInstance, solutions};
 use crate::scope::{BodyRef, BodyShape, ClosureBindings, Registration, ShapeKind, Site, Written};
 use crate::scope::{Callable, FunctionGroupMap, ParameterBinding, Registered, ShapeGroupMap};
 use crate::symbols::{BinderSymbol, TypeSymbol};
 use crate::type_lattice::{
-    DeclaredType, KType, Parametric, instantiate_quantified, substitute_levels,
+    DeclaredType, KType, Parametric, Scheme, instantiate_quantified, substitute_levels,
 };
 use crate::values::digest::function_content;
 use crate::values::{
@@ -355,11 +355,10 @@ pub(super) fn staged<'graph, 'cell, 'x>(
     };
     // A body whose group the load solved where it is wanted is born as that instance.
     let (ktype, instance) = match (activation.facts().born_instance(body), callable.ktype) {
-        (Some(solution), DeclaredType::Scheme(scheme)) => {
+        (Some(instance), DeclaredType::Scheme(scheme)) => {
             debug_assert!(registration.is_none(), "a registration binds its scheme");
-            let solution = solved(solution, activation, types, scratch);
-            let instance = instantiate_quantified(types, scratch, scheme, solution);
-            let instance = types.concrete(instance).expect(INSTANCE);
+            let (solution, instance) = solved(instance, activation, types, scratch);
+            debug_assert!(instantiates(types, scratch, scheme, solution, instance));
             (DeclaredType::Type(instance), solution)
         }
         (None, ktype) => (ktype, &[][..]),
@@ -378,34 +377,53 @@ pub(super) fn staged<'graph, 'cell, 'x>(
     })
 }
 
-/// Why an instance's type is concrete: the scheme it instantiates is born with its levels bound,
-/// and its solution is bound where it runs.
-const INSTANCE: &str = "a born scheme instantiated at a solution solved where it runs is concrete";
+#[cfg(test)]
+thread_local! {
+    /// How many types the run instantiated from a scheme: a barrier's declared instance alone.
+    pub(crate) static INSTANTIATED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+/// Whether `instance`, the type the load recorded for an instance of `scheme` at `solution`, is the
+/// scheme instantiated there. Not gated on `debug_assertions`: its callers are `debug_assert!`s.
+fn instantiates(
+    types: &Chain<'_, '_, '_, '_>,
+    scratch: BumpAllocator<'_>,
+    scheme: Scheme,
+    solution: &[KType],
+    instance: KType,
+) -> bool {
+    types.concrete(instantiate_quantified(types, scratch, scheme, solution)) == Some(instance)
+}
 
 /// Why an instance's variables are bound where it is read or born: the wanted type names each of
 /// them, and the run reads that type at or before the site.
 const BOUND: &str = "an instance's lexical variables are bound where it is read or born";
 
-/// `solution`, an instance's solution in group order as the load recorded it, where the site runs:
-/// as it is when closed, and with each lexical variable it names replaced by the type `activation`
-/// reads at its coordinate when rigid.
+/// `instance`, as the load recorded it, where the site runs: its solution in group order and its
+/// type, as they are when closed, and with each lexical variable they name replaced by the type
+/// `activation` reads at its coordinate when rigid.
 fn solved<'x>(
-    solution: StaticSolution<'_>,
+    instance: StaticInstance<'_>,
     activation: &KReading<'_, '_, '_>,
     types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'x>,
-) -> &'x [KType] {
-    match solution {
-        StaticSolution::Closed(solution) => scratch.alloc_slice_copy(solution),
-        StaticSolution::Rigid { value, variables } => {
+) -> (&'x [KType], KType) {
+    match instance {
+        StaticInstance::Closed { solution, ktype } => (scratch.alloc_slice_copy(solution), ktype),
+        StaticInstance::Rigid {
+            solution,
+            ktype,
+            variables,
+        } => {
             let paths = |at, entry| bound_path(activation, types, at, entry);
             let bindings = solutions(variables, activation, scratch, &paths).expect(BOUND);
-            let mut solved = BumpVec::with_capacity_in(value.len(), scratch);
-            solved.extend(value.iter().map(|each| {
-                let each = substitute_levels(types, scratch, *each, &bindings);
+            let read = |each| {
+                let each = substitute_levels(types, scratch, each, &bindings);
                 types.concrete(each).expect(BOUND)
-            }));
-            solved.leak()
+            };
+            let mut solved = BumpVec::with_capacity_in(solution.len(), scratch);
+            solved.extend(solution.iter().map(|each| read(*each)));
+            (solved.leak(), read(ktype))
         }
     }
 }
@@ -577,12 +595,12 @@ pub fn lambda<'graph, 'cell, 'x>(
 pub fn barrier_instance<'graph, 'cell>(
     writer: Writer<'cell, '_>,
     member: Knotted<'graph, 'cell>,
-    solution: StaticSolution<'_>,
+    instance: StaticInstance<'_>,
     activation: &KReading<'_, '_, '_>,
     types: &Chain<'_, 'cell, '_, '_>,
     scratch: BumpAllocator<'_>,
 ) -> Knotted<'graph, 'cell> {
-    let solution = solved(solution, activation, types, scratch);
+    let (solution, instance) = solved(instance, activation, types, scratch);
     let barrier = member
         .coerced()
         .expect("a barrier instance is read of a member behind a barrier");
@@ -591,8 +609,11 @@ pub fn barrier_instance<'graph, 'cell>(
     else {
         unreachable!("a barrier instance is read of a quantified member")
     };
-    let instance = instantiate_quantified(types, scratch, scheme, solution);
-    let ktype = DeclaredType::Type(types.concrete(instance).expect(INSTANCE));
+    debug_assert!(instantiates(types, scratch, scheme, solution, instance));
+    let ktype = DeclaredType::Type(instance);
+    // The declared instance is in the view's terms, which no record holds: instantiated here.
+    #[cfg(test)]
+    INSTANTIATED.with(|count| count.set(count.get() + 1));
     let declared = DeclaredType::Type(instantiate_quantified(types, scratch, declared, solution));
     let knot = Coerced::tie(
         writer,
@@ -614,17 +635,17 @@ pub fn barrier_instance<'graph, 'cell>(
 pub fn header_instance<'graph, 'cell>(
     writer: Writer<'cell, '_>,
     header: &Retyped<Knotted<'graph, 'cell>>,
-    solution: StaticSolution<'_>,
+    instance: StaticInstance<'_>,
     activation: &KReading<'_, '_, '_>,
     types: &Chain<'_, 'cell, '_, '_>,
     scratch: BumpAllocator<'_>,
 ) -> KValue<'graph, 'cell> {
-    let solution = solved(solution, activation, types, scratch);
+    let (solution, instance) = solved(instance, activation, types, scratch);
     let DeclaredType::Scheme(scheme) = header.ktype() else {
         unreachable!("a header instance is read of a header at a scheme")
     };
-    let instance = instantiate_quantified(types, scratch, scheme, solution);
-    let ktype = DeclaredType::Type(types.concrete(instance).expect(INSTANCE));
+    debug_assert!(instantiates(types, scratch, scheme, solution, instance));
+    let ktype = DeclaredType::Type(instance);
     Value::Retyped(Retyped::of(writer, header.member(), ktype))
 }
 
@@ -638,20 +659,20 @@ pub fn header_instance<'graph, 'cell>(
 pub fn instance<'graph, 'cell>(
     writer: Writer<'cell, '_>,
     member: Knotted<'graph, 'cell>,
-    solution: StaticSolution<'_>,
+    instance: StaticInstance<'_>,
     activation: &KReading<'_, '_, '_>,
     types: &Chain<'_, 'cell, '_, '_>,
     scratch: BumpAllocator<'_>,
 ) -> Knotted<'graph, 'cell> {
-    let solution = solved(solution, activation, types, scratch);
+    let (solution, instance) = solved(instance, activation, types, scratch);
     let function = member
         .function()
         .expect("an instance is read of a function member");
     let DeclaredType::Scheme(scheme) = function.ktype() else {
         unreachable!("an instance is read of a quantified function")
     };
-    let instance = instantiate_quantified(types, scratch, scheme, solution);
-    let ktype = DeclaredType::Type(types.concrete(instance).expect(INSTANCE));
+    debug_assert!(instantiates(types, scratch, scheme, solution, instance));
+    let ktype = DeclaredType::Type(instance);
     let mut links = BumpVec::with_capacity_in(function.closure().len(), scratch);
     links.extend(function.closure().links().iter().map(|link| match link {
         Link::Edge(edge) => Link::Value(Value::Knotted(member.sibling(*edge))),

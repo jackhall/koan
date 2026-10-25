@@ -32,7 +32,7 @@ use super::shapes::Shapes;
 use super::tree::{Leaf, NodeCapture, Tree, closed_trees};
 use super::typed::{
     BodyClass, Caching, Handoff, InstanceRead, Mint, PathEntry, Points, Resolution, Static,
-    StaticCallable, StaticRegistered, StaticSolution, StaticType, UseStatics, Variable, ViewSlots,
+    StaticCallable, StaticInstance, StaticRegistered, StaticType, UseStatics, Variable, ViewSlots,
 };
 
 /// One unit's facts: everything the walk computed running it.
@@ -138,7 +138,7 @@ pub struct Born<'a> {
     /// Its own `FOR ALL` group as its body reads it, by group order.
     pub levels: &'a [Parametric],
     /// The solution its `FOR ALL` is born instantiated at, where the walk solved one.
-    pub instance: Option<StaticSolution<'a>>,
+    pub instance: Option<StaticInstance<'a>>,
     /// Its parameters whose arguments digest at a constant cost, sorted: a type binder, or one
     /// declared closed under `Module` or as a type value. The keys and caching folds read it.
     pub digestible: &'a [Slot],
@@ -954,7 +954,7 @@ impl<'a, S: RecordSource<'a>> FactsOver<S> {
 
     /// The solution the callable body `shape`'s `FOR ALL` is born instantiated at, where the load
     /// solved one.
-    pub fn born_instance(&self, shape: &BodyShape<'_>) -> Option<StaticSolution<'a>> {
+    pub fn born_instance(&self, shape: &BodyShape<'_>) -> Option<StaticInstance<'a>> {
         self.born(shape.segment())?.instance
     }
 

@@ -812,7 +812,7 @@ mod laws {
     use crate::scope::{
         Address, BodyClass, BodyShape, Bound as Bind, CandidateList, FactsOver, InstanceRead,
         LoadFacts, Narrowing, RecordSource, ShapeError, ShapeKind, Site, Slot, Static,
-        StaticSolution, Target, Tree, Unknown, each_part, source_of,
+        StaticInstance, Target, Tree, Unknown, each_part, source_of,
     };
     use crate::symbols::{BinderSymbol, SymbolInterner};
     use crate::type_lattice::{
@@ -936,16 +936,16 @@ mod laws {
             display_name(typed, self.types, self.symbols).to_string()
         }
 
-        fn solution(&self, solution: StaticSolution<'_>) -> String {
+        fn solution(&self, solution: StaticInstance<'_>) -> String {
             match solution {
-                StaticSolution::Closed(points) => {
+                StaticInstance::Closed { solution, .. } => {
                     let points: Vec<String> =
-                        points.iter().map(|point| self.named(*point)).collect();
+                        solution.iter().map(|point| self.named(*point)).collect();
                     format!("closed {points:?}")
                 }
-                StaticSolution::Rigid { value, .. } => {
+                StaticInstance::Rigid { solution, .. } => {
                     let points: Vec<String> =
-                        value.iter().map(|point| self.named(*point)).collect();
+                        solution.iter().map(|point| self.named(*point)).collect();
                     format!("rigid {points:?}")
                 }
             }

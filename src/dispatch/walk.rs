@@ -157,7 +157,7 @@ use crate::scope::{
     CaptureSlot, CaptureSource, Closing, ComponentIndex, Coordinate, Cut, Elimination, Frontier,
     Identity, InstanceRead, Kept, Keyed, Lands, Leaf, Listed, NamedVariable, Narrowing, PathEntry,
     Point, Points, Position, Resolution, Segment, ShapeError, ShapeKind, Shapes, Site, SiteDeps,
-    Slot, Source, Static, StaticRegistered, StaticSolution, StaticType, Store, SurfacedHead, Tree,
+    Slot, Source, Static, StaticInstance, StaticRegistered, StaticType, Store, SurfacedHead, Tree,
     Typed, UnitFacts, UnitId, UnitIndex, UnitWork, Unknown, UseStatics, Variable as Located,
     Within, follow, part_of, source_of,
 };
@@ -2131,25 +2131,37 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         })
     }
 
-    fn solution(
+    /// The instance made at `solution` of type `ktype`, at `at` in the shape at `level`: closed
+    /// where both are, and otherwise rigid over the lexical variables they name, located once.
+    fn instance(
         &mut self,
         level: usize,
         solution: &[Parametric],
+        ktype: Parametric,
         at: SourceRef,
-    ) -> StaticSolution<'o> {
+    ) -> StaticInstance<'o> {
         let types = self.types;
         let mut closed = BumpVec::with_capacity_in(solution.len(), self.scratch);
         closed.extend(solution.iter().map_while(|each| types.concrete(*each)));
-        if closed.len() == solution.len() {
-            return StaticSolution::Closed(collect(self.lay, closed.iter().copied()));
+        if closed.len() == solution.len()
+            && let Some(ktype) = types.concrete(ktype)
+        {
+            return StaticInstance::Closed {
+                solution: collect(self.lay, closed.iter().copied()),
+                ktype,
+            };
         }
-        let variables = self.located(level, solution, at);
+        let mut named = BumpVec::with_capacity_in(solution.len() + 1, self.scratch);
+        named.extend(solution.iter().copied());
+        named.push(ktype);
+        let variables = self.located(level, &named, at);
         assert!(
             !variables.is_empty(),
-            "an instance's solution names no variable but its chain's lexical ones"
+            "an instance names no variable but its chain's lexical ones"
         );
-        StaticSolution::Rigid {
-            value: collect(self.lay, solution.iter().copied()),
+        StaticInstance::Rigid {
+            solution: collect(self.lay, solution.iter().copied()),
+            ktype,
             variables,
         }
     }
@@ -2494,7 +2506,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         };
         let (typed, solution) = self.instantiate(scheme, wanted, statement.source)?;
         if !self.unfilled {
-            let solution = self.solution(level, solution, statement.source);
+            let solution = self.instance(level, solution, typed.upper, statement.source);
             self.fix_born_instance(body, solution);
         }
         Ok(DeclaredType::Type(typed))
@@ -2682,7 +2694,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         }
         let (typed, solution) = self.instantiate(scheme, wanted, node.source)?;
         if !self.unfilled {
-            let solution = self.solution(level, solution, node.source);
+            let solution = self.instance(level, solution, typed.upper, node.source);
             self.record_instance_read(
                 level,
                 self.node_site(level, node),
@@ -3216,7 +3228,8 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                             let (typed, solution) =
                                 self.instantiate(scheme, wanted, node.source)?;
                             if !self.unfilled {
-                                let solution = self.solution(level, solution, node.source);
+                                let solution =
+                                    self.instance(level, solution, typed.upper, node.source);
                                 self.fix_born_instance(body, solution);
                             }
                             typed
@@ -3728,7 +3741,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 let at = self.source(level, site);
                 let (typed, solution) = self.instantiate(scheme, wanted, at)?;
                 if !self.unfilled {
-                    let solution = self.solution(level, solution, at);
+                    let solution = self.instance(level, solution, typed.upper, at);
                     self.record_instance_read(level, site, InstanceRead::Solved(solution));
                 }
                 typed
@@ -4935,7 +4948,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         if self.unfilled {
             return;
         }
-        let solution = self.solution(level, solution, site.at);
+        let solution = self.instance(level, solution, typed.upper, site.at);
         let read = InstanceRead::Solved(solution);
         match site.instanced {
             Instanced::Name(leaf) => self.record_instance_read(level, self.site(level, leaf), read),

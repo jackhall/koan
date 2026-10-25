@@ -612,3 +612,17 @@ proptest::proptest! {
         let _ = run(&rendered.source);
     }
 }
+
+#[test]
+fn an_instance_type_is_read_and_never_instantiated_at_the_run() {
+    // `lib.pick` is wanted at `Number` where `f` is bound, and at `Str` where it is handed to
+    // `APPLY`: the load records each instance's type beside its solution, and the run reads it.
+    use crate::knot::INSTANTIATED;
+    let source = "MODULE lib = (LET pick = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(x)))\n\
+                  LET f :(FN :{x :Number} -> Number) = lib.pick\n\
+                  EXPR #(APPLY g :(FN :{x :Str} -> Str)) -> Str = #(g {x = \"s\"})\n\
+                  PRINT (f {x = 1})\nPRINT (APPLY lib.pick)";
+    INSTANTIATED.with(|count| count.set(0));
+    assert_eq!(run(source), "1\ns");
+    assert_eq!(INSTANTIATED.with(std::cell::Cell::get), 0);
+}

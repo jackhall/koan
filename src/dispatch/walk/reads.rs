@@ -13,7 +13,7 @@ use crate::elaborate::schema_of;
 use crate::memory::BumpVec;
 use crate::scope::{
     Address, BodyShape, Born, Cut, Frontier, InstanceRead, Narrowing, Points, Segment, ShapeKind,
-    Site, Slot, Static, StaticCallable, StaticRegistered, StaticSolution, StaticType, Store, Tree,
+    Site, Slot, Static, StaticCallable, StaticInstance, StaticRegistered, StaticType, Store, Tree,
     Typed, UnitFacts, UnitId, Unknown, UseStatics, in_body_of,
 };
 use crate::symbols::{BinderSymbol, Symbol};
@@ -653,7 +653,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     }
 
     /// The solution the callable body `body` is born instantiated at, where the walk fixed one.
-    pub(super) fn born_instance(&self, body: &BodyShape<'graph>) -> Option<StaticSolution<'o>> {
+    pub(super) fn born_instance(&self, body: &BodyShape<'graph>) -> Option<StaticInstance<'o>> {
         self.born(body.segment())?.instance
     }
 
@@ -661,7 +661,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     pub(super) fn fix_born_instance(
         &mut self,
         body: &'graph BodyShape<'graph>,
-        solution: StaticSolution<'o>,
+        solution: StaticInstance<'o>,
     ) {
         let segment = body.segment();
         let born = self.born(segment).unwrap_or(Born {

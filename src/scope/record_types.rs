@@ -13,7 +13,7 @@ use super::shape::ShapeError;
 use super::tree::{KnotNode, Leaf, NodeCapture, Tree, Unfolded, Within};
 use super::typed::{
     Callable, Elaboration, InstanceRead, PathEntry, Point, Points, Registered, Resolution,
-    Resolved, Static, StaticSolution, StaticType, UseStatics,
+    Resolved, Static, StaticInstance, StaticType, UseStatics,
 };
 
 /// What the visitor hands each type to.
@@ -124,13 +124,22 @@ fn declared<T: Into<Parametric>>(typed: DeclaredType<T>) -> DeclaredType<Paramet
     }
 }
 
-fn solution(solved: &StaticSolution<'_>, each: &mut Each<'_>) {
-    match solved {
-        StaticSolution::Closed(types) => types.iter().for_each(|ktype| each((*ktype).into())),
-        StaticSolution::Rigid {
-            value,
+fn instance_types(instance: &StaticInstance<'_>, each: &mut Each<'_>) {
+    match instance {
+        StaticInstance::Closed { solution, ktype } => {
+            solution
+                .iter()
+                .for_each(|each_type| each((*each_type).into()));
+            each((*ktype).into());
+        }
+        StaticInstance::Rigid {
+            solution,
+            ktype,
             variables: _,
-        } => value.iter().for_each(|typed| each((*typed).into())),
+        } => {
+            solution.iter().for_each(|typed| each((*typed).into()));
+            each((*ktype).into());
+        }
     }
 }
 
@@ -186,7 +195,7 @@ fn typed_types(typed: &Typed<'_>, each: &mut Each<'_>) {
     }
     for (_, read) in instances.iter() {
         match read {
-            InstanceRead::Solved(solved) => solution(solved, each),
+            InstanceRead::Solved(solved) => instance_types(solved, each),
             InstanceRead::AsIs => {}
         }
     }
@@ -236,7 +245,7 @@ fn born_types(born: &Born<'_>, each: &mut Each<'_>) {
     }
     levels.iter().for_each(|level| each((*level).into()));
     if let Some(instance) = instance {
-        solution(instance, each);
+        instance_types(instance, each);
     }
 }
 

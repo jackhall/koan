@@ -33,7 +33,7 @@ use crate::parse::{ExpressionPart, KExpression};
 use crate::scope::{
     Binder, BodyShape, CaptureSlot, CaptureSource, Coordinate, Identity, KnotNode, Leaf, Narrowing,
     NodeCapture, ParameterBinding, Position, Segment, ShapeError, ShapeKind, Shapes, Site, Slot,
-    Static, StaticCallable, StaticSolution, Store, Target, Tree, Unfolded, Within,
+    Static, StaticCallable, StaticInstance, Store, Target, Tree, Unfolded, Within,
 };
 use crate::symbols::{BinderSymbol, ValueSymbol};
 use crate::type_lattice::{KType, TypeNode};
@@ -886,8 +886,8 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     /// quantified. `None` where the load cannot say.
     fn born_at(&self, body: &'graph BodyShape<'graph>, keeps_scheme: bool) -> Option<&'o [KType]> {
         match self.born_instance(body) {
-            Some(StaticSolution::Closed(solution)) => Some(solution),
-            Some(StaticSolution::Rigid { .. }) => None,
+            Some(StaticInstance::Closed { solution, .. }) => Some(solution),
+            Some(StaticInstance::Rigid { .. }) => None,
             None => match self.callable_of(body) {
                 Static::Closed(callable) if callable.ktype.as_type().is_some() => Some(&[]),
                 Static::Rigid { value, .. } if value.ktype.as_type().is_some() => Some(&[]),

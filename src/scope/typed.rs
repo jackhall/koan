@@ -402,16 +402,21 @@ impl<'graph> Points<'graph> {
     }
 }
 
-/// What the load fixed for an instance's solution, in group order: concrete where closed,
-/// parametric over the run's variables where it names a type a run binds. Unlike [`Static`], it
-/// has no unknown arm: the load fixes every instance's solution.
+/// What the load fixed for an instance: the solution it is made at, in group order, and the
+/// instance's type — concrete where closed, parametric over the run's variables where the solution
+/// names a type a run binds. Unlike [`Static`], it has no unknown arm: the load fixes every
+/// instance it records.
 #[derive(Clone, Copy, Debug)]
-pub enum StaticSolution<'graph> {
+pub enum StaticInstance<'graph> {
     /// The same at every run.
-    Closed(&'graph [KType]),
-    /// Over rigid variables the run supplies, each read at its coordinate.
+    Closed {
+        solution: &'graph [KType],
+        ktype: KType,
+    },
+    /// Over rigid variables the run supplies, each read at its coordinate: one list for both.
     Rigid {
-        value: &'graph [Parametric],
+        solution: &'graph [Parametric],
+        ktype: Parametric,
         variables: &'graph [Variable],
     },
 }
@@ -421,7 +426,7 @@ pub enum StaticSolution<'graph> {
 /// group.
 #[derive(Clone, Copy, Debug)]
 pub enum InstanceRead<'graph> {
-    Solved(StaticSolution<'graph>),
+    Solved(StaticInstance<'graph>),
     AsIs,
 }
 

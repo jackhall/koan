@@ -19,7 +19,7 @@ use super::shape::ShapeError;
 use super::tree::{KnotNode, Leaf, NodeCapture, Tree, Unfolded, Within};
 use super::typed::{
     Callable, Elimination, FunctionGroupMap, InstanceRead, Kept, Narrowing, ParameterBinding,
-    PathEntry, Points, Registered, Resolution, ShapeGroupMap, Static, StaticSolution, UseStatics,
+    PathEntry, Points, Registered, Resolution, ShapeGroupMap, Static, StaticInstance, UseStatics,
 };
 
 /// A copier laying records through `lay`, flattening frontiers under `binding` with a memo of
@@ -295,7 +295,7 @@ impl<'to, 'x, 'bind, L: Lays<'to>> Relay<'to, 'x, 'bind, L> {
             binders: self.keyed_copied(*binders),
             settled: self.keyed_copied(*settled),
             instances: self.keyed(*instances, |read| match read {
-                InstanceRead::Solved(solved) => InstanceRead::Solved(self.solution(solved)),
+                InstanceRead::Solved(solved) => InstanceRead::Solved(self.instance(solved)),
                 InstanceRead::AsIs => InstanceRead::AsIs,
             }),
             uses: self.keyed(*uses, |statics| self.uses(statics)),
@@ -329,7 +329,7 @@ impl<'to, 'x, 'bind, L: Lays<'to>> Relay<'to, 'x, 'bind, L> {
                 |rigid| self.callable(rigid),
             ),
             levels: self.copied(levels),
-            instance: instance.as_ref().map(|solved| self.solution(solved)),
+            instance: instance.as_ref().map(|solved| self.instance(solved)),
             digestible: self.copied(digestible),
         }
     }
@@ -433,11 +433,19 @@ impl<'to, 'x, 'bind, L: Lays<'to>> Relay<'to, 'x, 'bind, L> {
         }
     }
 
-    fn solution(&self, solved: &StaticSolution<'_>) -> StaticSolution<'to> {
-        match solved {
-            StaticSolution::Closed(types) => StaticSolution::Closed(self.copied(types)),
-            StaticSolution::Rigid { value, variables } => StaticSolution::Rigid {
-                value: self.copied(value),
+    fn instance(&self, instance: &StaticInstance<'_>) -> StaticInstance<'to> {
+        match instance {
+            StaticInstance::Closed { solution, ktype } => StaticInstance::Closed {
+                solution: self.copied(solution),
+                ktype: *ktype,
+            },
+            StaticInstance::Rigid {
+                solution,
+                ktype,
+                variables,
+            } => StaticInstance::Rigid {
+                solution: self.copied(solution),
+                ktype: *ktype,
                 variables: self.copied(variables),
             },
         }
