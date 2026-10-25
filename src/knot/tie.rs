@@ -128,9 +128,7 @@ where
         let annotation = shape.annotation(*slot)?;
         let facts = activation.facts();
         let site = activation.shape().site(annotation);
-        facts
-            .minted(types, facts.denoted(activation.shape(), site))
-            .ok()
+        facts.denoted(types, activation.shape(), site).ok()
     }));
     // What each annotation re-stamps a member at, where the load recorded it.
     let mut retypes: BumpVec<'x, Option<Retype>> =
@@ -139,7 +137,7 @@ where
         let annotation = shape.annotation(*slot)?;
         let facts = activation.facts();
         let site = activation.shape().site(annotation);
-        facts.minted(types, facts.retype(activation.shape(), site))
+        facts.retype(types, activation.shape(), site)
     }));
     let mut functions = function::stage(&plan, activation, written, &bodies, types, scratch)?;
     // An annotated function member is born at the annotation's retype, keeping the signature its

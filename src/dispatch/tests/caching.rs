@@ -1032,7 +1032,7 @@ fn a_tail_edge_into_an_untyped_registration_pairs_by_its_written_slots() {
             })
             .expect("the looping `SPIN`");
         assert!(matches!(
-            facts.registered_type(drive, registration),
+            facts.registered_type(&program.tiers().resting(), drive, registration),
             crate::scope::Static::Unknown
         ));
         let spin = drive.births(registration).expect("`SPIN`'s body");

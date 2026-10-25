@@ -383,7 +383,7 @@ fn a_call_in_tail_position_is_typed_as_any_call() {
     loaded(&source, |program| {
         let top = program.shape();
         let tail = (program.facts())
-            .statement_type(body(program, top, "outer"), 0)
+            .statement_type(&program.tiers().resting(), body(program, top, "outer"), 0)
             .expect("the load typed the tail");
         let render = |handle| {
             display_name(

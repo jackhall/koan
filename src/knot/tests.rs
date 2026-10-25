@@ -294,7 +294,7 @@ impl<'graph> Fixture<'_, 'graph> {
             // The handles the load fixed, as a program binds them.
             let reading = self.reading_of(activation);
             let handles = (component.members.iter()).map(|slot| {
-                match reading.facts().declared_type(shape, *slot) {
+                match reading.facts().declared_type(types, shape, *slot) {
                     Static::Closed(handle) => handle,
                     _ => panic!("the load fixed every declaration a fixture runs"),
                 }

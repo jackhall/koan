@@ -280,10 +280,11 @@ statement after every unit it reads — so a `FN` that captures a name declared
 after it is born once that name is bound. The door shares the tie's staging and
 lay-down for a function node, so a door-born function weighs exactly what the
 tie gives the same function in a one-node knot. The tie and the door are each
-handed the build cell the birth runs under, which every function they lay
-records on its closure bindings, and an instance keeps its function's: a call
-of it seeks its [specialization](../build/README.md#references-between-the-trees)
-beneath that cell. No capture it reads is an edge:
+handed the arena node the birth runs under and the stamp of its chain, which
+every function they lay records on its closure bindings beside the layers its
+encloser's activation decided, and an instance keeps its function's: a call
+of it seeks its [settlement](../build/README.md#references-between-frames-and-the-arena)
+beneath that arena node, and replays the stamp where it is gone. No capture it reads is an edge:
 a callable that captures a fellow member is a node of its binder's knot, which
 the tie never asks the evaluator for. Its type is read as the tie's is, and a
 signature the load left unknown that does not elaborate refuses `Type` and

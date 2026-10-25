@@ -21,7 +21,10 @@ const COUNTER: &str = "SIG Counter FOR ALL #[Carrier] = \
 pub(super) fn quantified<'graph>(program: &Program<'graph>) -> &'graph BodyShape<'graph> {
     let facts = program.facts();
     let mut found = (program.shape().nested_shapes().iter()).filter(|(_, nested)| {
-        nested.kind() == ShapeKind::Callable && !facts.group_levels(nested).is_empty()
+        nested.kind() == ShapeKind::Callable
+            && !facts
+                .group_levels(&program.tiers().resting(), nested)
+                .is_empty()
     });
     let (_, body) = found.next().expect("a quantified registration");
     assert!(found.next().is_none(), "one quantified registration");

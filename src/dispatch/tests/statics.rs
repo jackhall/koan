@@ -40,7 +40,11 @@ pub(super) fn slot(program: &Program<'_>, shape: &BodyShape<'_>, name: &str) -> 
 /// callable's scheme.
 pub(super) fn binder(program: &Program<'_>, shape: &BodyShape<'_>, name: &str) -> String {
     let typed = (program.facts())
-        .binder_type(shape, slot(program, shape, name))
+        .binder_type(
+            &program.tiers().resting(),
+            shape,
+            slot(program, shape, name),
+        )
         .expect("the load typed the shape");
     let rendered = match typed {
         DeclaredType::Type(interval) => DeclaredType::Type(interval.upper),
@@ -57,7 +61,11 @@ pub(super) fn binder(program: &Program<'_>, shape: &BodyShape<'_>, name: &str) -
 /// The static type of the binder `name` in `shape`, which binds no quantified callable.
 pub(super) fn interval(program: &Program<'_>, shape: &BodyShape<'_>, name: &str) -> Interval {
     (program.facts())
-        .binder_type(shape, slot(program, shape, name))
+        .binder_type(
+            &program.tiers().resting(),
+            shape,
+            slot(program, shape, name),
+        )
         .expect("the load typed the shape")
         .as_type()
         .expect("the binder binds no quantified callable")
@@ -112,7 +120,11 @@ pub(super) fn let_narrowing(program: &Program<'_>, shape: &BodyShape<'_>, name: 
     };
     rendered(
         (program.facts())
-            .use_statics(shape, shape.site_of_node(node.reference()))
+            .use_statics(
+                &program.tiers().resting(),
+                shape,
+                shape.site_of_node(node.reference()),
+            )
             .narrowing,
     )
 }
@@ -246,7 +258,11 @@ pub(super) fn typed_parts(program: &Program<'_>, shape: &BodyShape<'_>) -> Vec<I
     let mut typed = Vec::new();
     for statement in shape.body() {
         crate::scope::each_part(statement, |part| {
-            typed.extend(program.facts().value_type(shape, shape.site(part)));
+            typed.extend(program.facts().value_type(
+                &program.tiers().resting(),
+                shape,
+                shape.site(part),
+            ));
         });
     }
     typed
@@ -265,7 +281,9 @@ fn a_cyclic_binding_and_a_quote_s_hole_are_typed() {
         assert_eq!(parts.len(), 1);
         assert_eq!(parts[0].upper, KType::ANY.into(), "a hole is `Any`");
         assert_eq!(
-            program.facts().statement_type(code, 0),
+            program
+                .facts()
+                .statement_type(&program.tiers().resting(), code, 0),
             Some(Interval::within(KType::ANY)),
             "a hole a `USING` may fill is a candidate the load cannot read"
         );
@@ -575,7 +593,11 @@ fn a_signature_with_more_members_is_always_at_one_with_fewer_and_outranks_it() {
                 .registrations()
                 .iter()
                 .find_map(|registration| {
-                    match program.facts().registered_type(shape, registration.slot) {
+                    match program.facts().registered_type(
+                        &program.tiers().resting(),
+                        shape,
+                        registration.slot,
+                    ) {
                         Static::Closed(registered) => {
                             let rendered = display_name(
                                 registered.shape,
@@ -633,7 +655,10 @@ fn a_fellow_s_callable_body_reads_the_fellow_s_own_type() {
         let (_, f) = (program.shape().nested_shapes().iter())
             .find(|(_, nested)| nested.kind() == ShapeKind::Callable)
             .expect("the function's body is nested in the program");
-        let read = (program.facts().statement_type(f, 0)).expect("the load typed the body");
+        let read = (program
+            .facts()
+            .statement_type(&program.tiers().resting(), f, 0))
+        .expect("the load typed the body");
         let rendered = display_name(
             read.upper,
             &reading(program.tiers(), &Bump::new()),
@@ -691,26 +716,34 @@ fn by_names(program: &Program<'_>) -> Vec<String> {
     }
     let line = |shape: &BodyShape<'_>, at: Slot| -> Option<String> {
         Some(match shape.slot_name(at) {
-            crate::symbols::BinderSymbol::Value(_) => match facts.binder_type(shape, at)? {
-                DeclaredType::Type(typed) => format!("= {}", named(typed.upper.into())),
-                DeclaredType::Scheme(scheme) => format!("= {}", named(scheme.into())),
-            },
-            crate::symbols::BinderSymbol::Type(_) => {
-                format!("declares {}", statically(facts.declared_type(shape, at)))
-            }
-            crate::symbols::BinderSymbol::Registration(_) => match facts.registered_type(shape, at)
-            {
-                Static::Unknown => "registers unknown".to_string(),
-                Static::Closed(registered) => {
-                    format!("registers closed {}", named(registered.shape.into()))
+            crate::symbols::BinderSymbol::Value(_) => {
+                match facts.binder_type(&program.tiers().resting(), shape, at)? {
+                    DeclaredType::Type(typed) => format!("= {}", named(typed.upper.into())),
+                    DeclaredType::Scheme(scheme) => format!("= {}", named(scheme.into())),
                 }
-                Static::Rigid { value, .. } => format!("registers rigid {}", named(value.shape)),
-            },
+            }
+            crate::symbols::BinderSymbol::Type(_) => {
+                format!(
+                    "declares {}",
+                    statically(facts.declared_type(&program.tiers().resting(), shape, at))
+                )
+            }
+            crate::symbols::BinderSymbol::Registration(_) => {
+                match facts.registered_type(&program.tiers().resting(), shape, at) {
+                    Static::Unknown => "registers unknown".to_string(),
+                    Static::Closed(registered) => {
+                        format!("registers closed {}", named(registered.shape.into()))
+                    }
+                    Static::Rigid { value, .. } => {
+                        format!("registers rigid {}", named(value.shape))
+                    }
+                }
+            }
             crate::symbols::BinderSymbol::Key(_) => return None,
         })
     };
     let typed = |shape: &BodyShape<'_>, index: usize| {
-        (facts.statement_type(shape, index))
+        (facts.statement_type(&program.tiers().resting(), shape, index))
             .map_or("untyped".to_string(), |typed| named(typed.upper.into()))
     };
     let mut out = Vec::new();

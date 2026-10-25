@@ -516,8 +516,7 @@ fn ran<'graph, 'here, 'scratch>(
                     // typed the code, faults the frame before any statement runs.
                     let (code, facts) = step.door();
                     let facts = facts.activated(activation.view().decided());
-                    let overlap = facts.overlap(code.shape(activation.segment()));
-                    if let Some(overlap) = facts.minted(types, overlap) {
+                    if let Some(overlap) = facts.overlap(types, code.shape(activation.segment())) {
                         let message = overlap.display(program.symbols(), types);
                         let error = program.error(step.writer(), &step.types(), message);
                         return step.finish(error);
@@ -948,7 +947,7 @@ pub fn eval<'step, 'graph, 'here>(
     // Composed code's shape lies in its composition, where its frame checks it.
     if let CodeBody::Written { segment } = node.shaped() {
         let shape = door.shape(segment);
-        if let Some(error) = facts.minted(types, facts.typing_refusal(shape)) {
+        if let Some(error) = facts.typing_refusal(types, shape) {
             return Err(CodeRefused::Shape(error));
         }
         if let Some(name) = unbound(code, shape, offered, types)? {
@@ -1369,7 +1368,7 @@ fn frame<'graph, 'here>(
     // quantified callee's are solved per call.
     let retypes = match quantified {
         true => Retypes::NONE,
-        false => facts.retypes(shape),
+        false => facts.retypes(types, shape),
     };
     let mut parameters = 0;
     for slot in (0..shape.slots()).map(|slot| Slot(slot as u32)) {
@@ -1396,7 +1395,7 @@ fn frame<'graph, 'here>(
                     argument.satisfies(declared, types, scratch),
                     "a frame binds an argument its parameter admits"
                 );
-                let retype = facts.minted(types, retypes.parameter(name.symbol()));
+                let retype = retypes.parameter(name.symbol());
                 let value = argument
                     .seen_as(declared, retype, types, scratch)
                     .restamped(writer, types);
@@ -1470,7 +1469,7 @@ fn frame<'graph, 'here>(
     // value is retyped to: a barrier's shown return is no record's.
     let restamp = match (outermost, shown_return) {
         (None, Some(_)) => owed.and_then(|outer| outer.restamp),
-        _ => owed.map_or(facts.minted(types, retypes.returns), |outer| outer.restamp),
+        _ => owed.map_or(retypes.returns, |outer| outer.restamp),
     };
     let contract = Contract {
         callee: Some(declared),
@@ -1942,7 +1941,7 @@ fn held<'graph, 'here>(
     let program = runner.program;
     let writer = step.writer();
     let facts = at.facts();
-    match facts.minted(types, facts.denoted(at.shape(), at.shape().site(written))) {
+    match facts.denoted(types, at.shape(), at.shape().site(written)) {
         Ok(annotation) => held_at(step, types, runner, written, annotation, value),
         Err(refused) => {
             let error = program.error(writer, types, refused.display(program.symbols(), types));
@@ -1964,7 +1963,7 @@ fn held_at<'graph, 'here>(
     let at = runner.reading(step);
     let (facts, site) = (at.facts(), at.shape().site(written));
     let settled = facts.settled(at.shape(), site);
-    let retype = facts.minted(types, facts.retype(at.shape(), site));
+    let retype = facts.retype(types, at.shape(), site);
     let held =
         (runner.program).annotated(step.writer(), types, value, (annotation, retype), settled);
     runner.check(&held, types)?;
@@ -2127,9 +2126,9 @@ fn decided_at_seams<'graph, 'here>(
         // whose declaration they close, was decided where they were — save one an open path is
         // rooted at over an open tree, which the path reads off what the run binds.
         let rooting = facts.rooting_seams(shape).binary_search(slot).is_ok();
-        let seen = (facts.content(shape, *slot))
+        let seen = (facts.content(types, shape, *slot))
             .is_some_and(|tree| !matches!(tree, Tree::Leaf(_)) && (!rooting || tree.closed()));
-        let closed = seen || matches!(facts.declared_type(shape, *slot), Static::Closed(_));
+        let closed = seen || matches!(facts.declared_type(types, shape, *slot), Static::Closed(_));
         if closed || facts.bound(unknown).is_some() {
             continue;
         }
@@ -2229,10 +2228,8 @@ fn declared<'graph, 'here>(
         let declaration =
             (shape.declarations(*slot)).expect("a type binder records its declaration");
         let site = shape.site_of_node(declaration);
-        let handle = match facts.minted(
-            types,
-            facts.at_run(shape, site, facts.declared_type(shape, *slot)),
-        ) {
+        let declared = facts.declared_type(types, shape, *slot);
+        let handle = match facts.at_run(types, shape, site, declared) {
             AtRun::Closed(handle) => handle,
             AtRun::Refused(refused) => {
                 let refused = refused.display(program.symbols(), types);

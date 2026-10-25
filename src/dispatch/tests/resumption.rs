@@ -66,11 +66,11 @@ impl<'d, 'graph: 'd> Door<'d, 'graph> {
     fn module(&self, name: &str) -> Bound<'d> {
         let (root, load) = (self.root(), self.load());
         let at = slot(self.symbols(), root, name);
-        let Some(DeclaredType::Type(typed)) = load.binder_type(root, at) else {
+        let Some(DeclaredType::Type(typed)) = load.binder_type(self.types, root, at) else {
             panic!("`{name}` is typed");
         };
         let tree = load
-            .content(root, at)
+            .content(self.types, root, at)
             .expect("the load reads the module's tree");
         assert!(
             typed.is_exact() && tree.closed(),
@@ -98,9 +98,9 @@ impl<'d, 'graph: 'd> Door<'d, 'graph> {
     /// The type `name` declares at the top level, closed.
     fn declared(&self, name: &str) -> KType {
         let root = self.root();
-        let Static::Closed(typed) = self
-            .load()
-            .declared_type(root, slot(self.symbols(), root, name))
+        let Static::Closed(typed) =
+            self.load()
+                .declared_type(self.types, root, slot(self.symbols(), root, name))
         else {
             panic!("`{name}` declares closed");
         };
@@ -145,12 +145,10 @@ fn unknown(symbols: &SymbolInterner, shape: &BodyShape<'_>, name: &str) -> Unkno
 }
 
 /// The one quantified callable body the top level registers.
-fn quantified<'graph>(
-    facts: &LoadFacts<'graph>,
-    root: &'graph BodyShape<'graph>,
-) -> &'graph BodyShape<'graph> {
-    let mut found = (root.nested_shapes().iter()).filter(|(_, nested)| {
-        nested.kind() == ShapeKind::Callable && !facts.group_levels(nested).is_empty()
+fn quantified<'graph>(door: &Door<'_, 'graph>) -> &'graph BodyShape<'graph> {
+    let mut found = (door.root().nested_shapes().iter()).filter(|(_, nested)| {
+        nested.kind() == ShapeKind::Callable
+            && !door.load().group_levels(door.types, nested).is_empty()
     });
     let (_, body) = found.next().expect("a quantified registration");
     body
@@ -169,17 +167,18 @@ fn born<'graph>(
 
 /// The narrowing of the use `LET name = <use>` in `shape`, as `facts` holds it.
 fn narrowing(
-    symbols: &SymbolInterner,
+    door: &Door<'_, '_>,
     facts: &LoadFacts<'_>,
     shape: &BodyShape<'_>,
     name: &str,
 ) -> String {
-    let Some(ExpressionPart::Expression(node)) = shape.rhs(slot(symbols, shape, name)) else {
+    let Some(ExpressionPart::Expression(node)) = shape.rhs(slot(door.symbols(), shape, name))
+    else {
         panic!("`{name}` is bound to a node");
     };
     rendered(
         facts
-            .use_statics(shape, shape.site_of_node(node.reference()))
+            .use_statics(door.types, shape, shape.site_of_node(node.reference()))
             .narrowing,
     )
 }
@@ -187,7 +186,7 @@ fn narrowing(
 /// The upper end of the binder `name` of `shape`, as `facts` holds it, rendered.
 fn upper(door: &Door<'_, '_>, facts: &LoadFacts<'_>, shape: &BodyShape<'_>, name: &str) -> String {
     let at = slot(door.symbols(), shape, name);
-    let Some(DeclaredType::Type(typed)) = facts.binder_type(shape, at) else {
+    let Some(DeclaredType::Type(typed)) = facts.binder_type(door.types, shape, at) else {
         panic!("`{name}` is typed, and no scheme");
     };
     display_name(typed.upper, door.types, door.symbols()).to_string()
@@ -201,7 +200,10 @@ fn declares_closed(
     name: &str,
 ) -> bool {
     let at = slot(door.symbols(), shape, name);
-    matches!(facts.declared_type(shape, at), Static::Closed(_))
+    matches!(
+        facts.declared_type(door.types, shape, at),
+        Static::Closed(_)
+    )
 }
 
 #[test]
@@ -210,11 +212,11 @@ fn binding_a_for_all_name_selects_the_overload_at_its_type() {
         format!("{PICK}EXPR FOR ALL #[Elt] #(WRAP x :Elt) -> Any = #(\n  LET p = (PICK x)\n  p\n)");
     let (before, after, typed) = resumed(&source, |door| {
         let symbols = door.symbols();
-        let f = quantified(door.load(), door.root());
-        let before = narrowing(symbols, door.load(), f, "p");
+        let f = quantified(door);
+        let before = narrowing(door, door.load(), f, "p");
         let binding = door.binding(&[(unknown(symbols, f, "Elt"), KType::NUMBER)]);
         let resumed = (door.resume(None, binding, false)).expect("the resumption refuses nothing");
-        let after = narrowing(symbols, resumed, f, "p");
+        let after = narrowing(door, resumed, f, "p");
         (before, after, upper(door, resumed, f, "p"))
     });
     assert_eq!(before, "kept maybe maybe");
@@ -225,16 +227,17 @@ fn binding_a_for_all_name_selects_the_overload_at_its_type() {
 /// How the use `LET name = <use>` in `shape` ranks its candidates, as `facts` holds it: open, by a
 /// recorded table, or selected.
 fn elimination(
-    symbols: &SymbolInterner,
+    door: &Door<'_, '_>,
     facts: &LoadFacts<'_>,
     shape: &BodyShape<'_>,
     name: &str,
 ) -> &'static str {
-    let Some(ExpressionPart::Expression(node)) = shape.rhs(slot(symbols, shape, name)) else {
+    let Some(ExpressionPart::Expression(node)) = shape.rhs(slot(door.symbols(), shape, name))
+    else {
         panic!("`{name}` is bound to a node");
     };
     let site = shape.site_of_node(node.reference());
-    match facts.use_statics(shape, site).narrowing {
+    match facts.use_statics(door.types, shape, site).narrowing {
         crate::scope::Narrowing::Kept(kept) => match kept.elimination {
             crate::scope::Elimination::Open => "open",
             crate::scope::Elimination::Table(_) => "table",
@@ -255,11 +258,11 @@ fn a_rigid_pair_left_open_at_the_load_is_ranked_by_its_settlement() {
                   LET p = (PICK z)\n  p\n)";
     let (before, after) = resumed(source, |door| {
         let symbols = door.symbols();
-        let f = quantified(door.load(), door.root());
-        let before = elimination(symbols, door.load(), f, "p");
+        let f = quantified(door);
+        let before = elimination(door, door.load(), f, "p");
         let binding = door.binding(&[(unknown(symbols, f, "Elt"), KType::NUMBER)]);
         let resumed = (door.resume(None, binding, false)).expect("the resumption refuses nothing");
-        (before, elimination(symbols, resumed, f, "p"))
+        (before, elimination(door, resumed, f, "p"))
     });
     assert_eq!((before, after), ("open", "table"));
 }
@@ -273,10 +276,10 @@ fn binding_a_module_parameter_closes_its_paths() {
     let (before, after) = resumed(&source, |door| {
         let symbols = door.symbols();
         let step = born(symbols, door.root(), "step");
-        let before = narrowing(symbols, door.load(), step, "p");
+        let before = narrowing(door, door.load(), step, "p");
         let binding = door.binding(&[(unknown(symbols, step, "m"), door.declared("Pinned"))]);
         let resumed = (door.resume(None, binding, false)).expect("the resumption refuses nothing");
-        (before, narrowing(symbols, resumed, step, "p"))
+        (before, narrowing(door, resumed, step, "p"))
     });
     assert_eq!(before, "kept maybe maybe");
     assert_eq!(after, "selected");
@@ -293,7 +296,7 @@ fn binding_a_module_binder_beside_a_name_keeps_its_paths() {
     );
     let resumed = resumed(&source, |door| {
         let symbols = door.symbols();
-        let f = quantified(door.load(), door.root());
+        let f = quantified(door);
         let binding = door.binding(&[
             (unknown(symbols, f, "Elt"), KType::NUMBER),
             (unknown(symbols, f, "m"), door.declared("Pinned")),
@@ -313,7 +316,7 @@ fn binding_a_name_a_type_binder_reads_before_a_path_resumes() {
          LET Both = :{{a :Elt b :(m.Carrier)}}\n  x\n)"
     );
     let (before, after) = resumed(&source, |door| {
-        let f = quantified(door.load(), door.root());
+        let f = quantified(door);
         let before = declares_closed(door, door.load(), f, "Both");
         let binding = door.binding(&[(unknown(door.symbols(), f, "Elt"), KType::NUMBER)]);
         let resumed = (door.resume(None, binding, false)).expect("the resumption refuses nothing");
@@ -332,7 +335,7 @@ fn binding_a_name_a_type_reads_before_a_path_finds_its_entry() {
          LET s :{{a :(Elt & Number) b :(m.Carrier)}} = {{a = x, b = m.zero}}\n  x\n)"
     );
     let resumed = resumed(&source, |door| {
-        let f = quantified(door.load(), door.root());
+        let f = quantified(door);
         let binding = door.binding(&[(unknown(door.symbols(), f, "Elt"), KType::NUMBER)]);
         door.resume(None, binding, false).map(|_| ())
     });
@@ -348,7 +351,7 @@ fn binding_a_name_no_fact_reads_re_runs_only_its_own() {
         "{PICK}EXPR FOR ALL #[Elt Key] #(WRAP x :Elt) -> Any = #(\n  LET p = (PICK x)\n  p\n)"
     );
     let (reran, waiting, outside) = resumed(&source, |door| {
-        let f = quantified(door.load(), door.root());
+        let f = quantified(door);
         let key = unknown(door.symbols(), f, "Key");
         let binding = door.binding(&[(key, KType::NUMBER)]);
         let resumed = (door.resume(None, binding, false)).expect("the resumption refuses nothing");
@@ -375,7 +378,7 @@ fn an_absorbed_unit_keeps_the_body_s_porous_exit() {
          LET e = (EVAL #(1) -> Any)\n  LET p = (PICK x)\n  p\n)"
     );
     let (loaded, resumed) = resumed(&source, |door| {
-        let f = quantified(door.load(), door.root());
+        let f = quantified(door);
         let binding = door.binding(&[(unknown(door.symbols(), f, "Elt"), KType::NUMBER)]);
         let resumed = (door.resume(None, binding, false)).expect("the resumption refuses nothing");
         let porous =
@@ -398,12 +401,12 @@ fn an_inner_callable_over_an_outer_name_settles_under_its_binding() {
     );
     let (before, after) = resumed(&source, |door| {
         let symbols = door.symbols();
-        let f = quantified(door.load(), door.root());
+        let f = quantified(door);
         let g = born(symbols, f, "g");
-        let before = narrowing(symbols, door.load(), g, "p");
+        let before = narrowing(door, door.load(), g, "p");
         let binding = door.binding(&[(unknown(symbols, f, "Elt"), KType::NUMBER)]);
         let resumed = (door.resume(None, binding, false)).expect("the resumption refuses nothing");
-        (before, narrowing(symbols, resumed, g, "p"))
+        (before, narrowing(door, resumed, g, "p"))
     });
     assert_eq!(before, "kept maybe maybe");
     assert_eq!(after, "selected");
@@ -420,12 +423,12 @@ fn an_inner_callable_inside_a_block_settles_under_its_binding() {
     );
     let (before, after) = resumed(&source, |door| {
         let symbols = door.symbols();
-        let f = quantified(door.load(), door.root());
+        let f = quantified(door);
         let (_, arm) = (f.nested_shapes().iter())
             .find(|(_, nested)| nested.kind() == ShapeKind::Block)
             .expect("the `MATCH` has an arm");
         let g = born(symbols, arm, "g");
-        let before = narrowing(symbols, door.load(), g, "p");
+        let before = narrowing(door, door.load(), g, "p");
         let binding = door.binding(&[(unknown(symbols, f, "Elt"), KType::NUMBER)]);
         let resumed = (door.resume(None, binding, false)).expect("the resumption refuses nothing");
         let arm_unit = (f.segment(), f.unit_of_statement(0));
@@ -433,7 +436,7 @@ fn an_inner_callable_inside_a_block_settles_under_its_binding() {
             (resumed.own_units().iter()).all(|(unit, _)| (unit.segment, unit.unit) != arm_unit),
             "the unit running the arm is absorbed"
         );
-        (before, narrowing(symbols, resumed, g, "p"))
+        (before, narrowing(door, resumed, g, "p"))
     });
     assert_eq!(before, "kept maybe maybe");
     assert_eq!(after, "selected");
@@ -447,7 +450,7 @@ fn the_agent_tier_grows_by_the_types_a_settlements_records_name() {
     let source = "LET Pt = :{x :Number}\n\
                   EXPR FOR ALL #[Elt] #(WRAP x :Elt) -> Any = #((LET l = [x]) (l))\n";
     let (grew, again, unresolved) = resumed(source, |door| {
-        let wrap = quantified(door.load(), door.root());
+        let wrap = quantified(door);
         let ask = crate::scheduler::Ask {
             body: wrap.segment(),
             bound: [crate::scheduler::Asked::Type {
@@ -479,7 +482,7 @@ fn the_agent_tier_grows_by_the_types_a_settlements_records_name() {
 fn a_binding_no_overload_admits_refuses_as_the_load_would() {
     let source = "EXPR FOR ALL #[Elt] #(WRAP x :Elt) -> Any = #(\n  LET y = (x + 1)\n  y\n)";
     let refused = resumed(source, |door| {
-        let f = quantified(door.load(), door.root());
+        let f = quantified(door);
         let binding = door.binding(&[(unknown(door.symbols(), f, "Elt"), KType::STR)]);
         door.resume(None, binding, false).map(|_| ())
     });
@@ -495,7 +498,7 @@ fn a_type_binder_over_a_bound_name_declares_closed() {
     let source = "EXPR FOR ALL #[Elt] #(WRAP x :Elt) -> Any = #(\n  \
                   NEWTYPE Box = :{v :Elt}\n  (Box {v = x})\n)";
     let (before, after) = resumed(source, |door| {
-        let f = quantified(door.load(), door.root());
+        let f = quantified(door);
         let before = declares_closed(door, door.load(), f, "Box");
         let binding = door.binding(&[(unknown(door.symbols(), f, "Elt"), KType::NUMBER)]);
         let resumed = (door.resume(None, binding, false)).expect("the resumption refuses nothing");
@@ -511,13 +514,13 @@ fn re_running_every_fact_settles_what_skipping_does() {
         format!("{PICK}EXPR FOR ALL #[Elt] #(WRAP x :Elt) -> Any = #(\n  LET p = (PICK x)\n  p\n)");
     let (skipping, everything) = resumed(&source, |door| {
         let symbols = door.symbols();
-        let f = quantified(door.load(), door.root());
+        let f = quantified(door);
         let binding = door.binding(&[(unknown(symbols, f, "Elt"), KType::NUMBER)]);
         let render = |everything| {
             let resumed =
                 (door.resume(None, binding, everything)).expect("the resumption refuses nothing");
             (
-                narrowing(symbols, resumed, f, "p"),
+                narrowing(door, resumed, f, "p"),
                 upper(door, resumed, f, "p"),
             )
         };
@@ -540,7 +543,7 @@ fn settled_in(facts: &LoadFacts<'_>, shape: &BodyShape<'_>, index: usize) -> usi
 fn a_check_a_binding_no_longer_settles_is_dropped() {
     let source = "EXPR FOR ALL #[Elt] #(WRAP x :Elt) -> Any = #(\n  LET s :Elt = x\n  s\n)";
     let (load, skipping, everything) = resumed(source, |door| {
-        let f = quantified(door.load(), door.root());
+        let f = quantified(door);
         let binding = door.binding(&[(unknown(door.symbols(), f, "Elt"), KType::NEVER)]);
         let settled = |everything| {
             let resumed =
@@ -559,7 +562,7 @@ fn a_binding_that_starves_a_refused_check_vacates_it() {
                   LET s0 = (x :! Key)\n  x\n)";
     let (half, whole) = resumed(source, |door| {
         let symbols = door.symbols();
-        let f = quantified(door.load(), door.root());
+        let f = quantified(door);
         let (elt, key) = (unknown(symbols, f, "Elt"), unknown(symbols, f, "Key"));
         let half = door.resume(None, door.binding(&[(key, KType::NEVER)]), false);
         let both = door.binding(&[(elt, KType::NEVER), (key, KType::NEVER)]);
@@ -582,7 +585,7 @@ fn a_resumption_extends_the_one_before_it() {
     );
     let (first, second) = resumed(&source, |door| {
         let symbols = door.symbols();
-        let f = quantified(door.load(), door.root());
+        let f = quantified(door);
         let (elt, key) = (unknown(symbols, f, "Elt"), unknown(symbols, f, "Key"));
         let once = door.binding(&[(elt, KType::NUMBER)]);
         let first = (door.resume(None, once, false)).expect("the resumption refuses nothing");
@@ -591,8 +594,8 @@ fn a_resumption_extends_the_one_before_it() {
             (door.resume(Some(first), both, false)).expect("the resumption refuses nothing");
         let render = |facts| {
             (
-                narrowing(symbols, facts, f, "p"),
-                narrowing(symbols, facts, f, "q"),
+                narrowing(door, facts, f, "p"),
+                narrowing(door, facts, f, "q"),
             )
         };
         (render(first), render(second))
@@ -618,17 +621,17 @@ fn a_resumption_interns_past_the_frozen_root() {
             !door.types.in_root(bound),
             "the bound type is the chain's own"
         );
-        let f = quantified(door.load(), door.root());
+        let f = quantified(door);
         let binding = door.binding(&[(unknown(door.symbols(), f, "Elt"), bound)]);
         let resumed = (door.resume(None, binding, false)).expect("the resumption refuses nothing");
         let p = slot(door.symbols(), f, "p");
         let bound_upper = matches!(
-            resumed.binder_type(f, p),
+            resumed.binder_type(door.types, f, p),
             Some(DeclaredType::Type(typed)) if typed.upper == bound.into()
         );
         let pair = slot(door.symbols(), f, "Pair");
         let adopted = matches!(
-            resumed.declared_type(f, pair),
+            resumed.declared_type(door.types, f, pair),
             Static::Closed(record) if !door.types.in_root(record) && door.types.resolves(record)
         );
         (bound_upper, adopted, tiers.frozen.len() == before)
@@ -646,7 +649,7 @@ fn a_binding_that_closes_a_registration_checks_its_overlap() {
                   OP #(+) OVER Elt = #(0)\n  x\n)";
     // The load leaves the registration rigid over `Elt`, so it loads.
     let refused = resumed(source, |door| {
-        let f = quantified(door.load(), door.root());
+        let f = quantified(door);
         let elt = unknown(door.symbols(), f, "Elt");
         door.resume(None, door.binding(&[(elt, KType::NUMBER)]), false)
             .map(|_| ())
@@ -667,7 +670,7 @@ fn a_binding_that_closes_a_cycle_unfolds_neither_call() {
                   EXPR #(LOOP y :Str) -> Any = #(y)\n  \
                   LET f = (FN :{z :Elt} -> Any = #(LOOP z))\n  f\n)";
     let (load, resumed) = resumed(source, |door| {
-        let f = quantified(door.load(), door.root());
+        let f = quantified(door);
         let body = born(door.symbols(), f, "f");
         let recursive = |facts: &LoadFacts<'_>| {
             let recursive = |shape: &BodyShape<'_>| {
@@ -711,7 +714,8 @@ fn an_eval_frame_settles_facts_waiting_on_its_dollar_names_in_its_activation() {
         let capture = (code.captures().iter())
             .position(|capture| door.symbols().display(capture.name.symbol()).to_string() == "r")
             .expect("the code captures `r`");
-        let loaded = (door.load().statement_type(code, 0)).expect("the load types `$r.zero`");
+        let loaded =
+            (door.load().statement_type(door.types, code, 0)).expect("the load types `$r.zero`");
         assert!(!loaded.is_exact(), "the load leaves `$r.zero` open");
         let own = door.bound(&[(
             Unknown {
@@ -723,7 +727,8 @@ fn an_eval_frame_settles_facts_waiting_on_its_dollar_names_in_its_activation() {
         let facts = (door.running)
             .activate::<Koan>(door.types, own, code.segment(), door.bump)
             .expect("the activation types the code");
-        let decided = (facts.statement_type(code, 0)).expect("the activation types `$r.zero`");
+        let decided =
+            (facts.statement_type(door.types, code, 0)).expect("the activation types `$r.zero`");
         assert_eq!(
             decided,
             crate::type_lattice::Interval::point(KType::NUMBER.into())
@@ -965,7 +970,7 @@ mod laws {
                 let name = format!("{path} {spelled}");
                 match named {
                     BinderSymbol::Value(_) => {
-                        let typed = match facts.binder_type(shape, at) {
+                        let typed = match facts.binder_type(self.types, shape, at) {
                             Some(DeclaredType::Type(typed)) => interval(typed, self.types, symbols),
                             Some(DeclaredType::Scheme(scheme)) => self.named(scheme),
                             None => "untyped".to_string(),
@@ -973,7 +978,7 @@ mod laws {
                         binders.push(format!("{name} = {typed}"));
                     }
                     BinderSymbol::Type(_) => {
-                        let typed = facts.declared_type(shape, at);
+                        let typed = facts.declared_type(self.types, shape, at);
                         binders.push(format!(
                             "{name} declares {}",
                             statically(
@@ -986,7 +991,7 @@ mod laws {
                     // A code shape's hole or mark is a capture, and holds no fact of its own.
                     BinderSymbol::Key(_) => {}
                     BinderSymbol::Registration(_) => {
-                        let typed = facts.registered_type(shape, at);
+                        let typed = facts.registered_type(self.types, shape, at);
                         binders.push(format!(
                             "{name} registers {}",
                             statically(
@@ -997,7 +1002,7 @@ mod laws {
                         ));
                     }
                 }
-                if let Some(tree) = facts.content(shape, at) {
+                if let Some(tree) = facts.content(self.types, shape, at) {
                     binders.push(format!("{name} holds a tree closed {}", tree.closed()));
                 }
             }
@@ -1005,7 +1010,7 @@ mod laws {
             out.extend(binders);
             // `SUBJECT`'s own type is a fact of the unit birthing it.
             if shape.kind() == ShapeKind::Callable && !path.is_empty() {
-                let typed = facts.callable_type(shape);
+                let typed = facts.callable_type(self.types, shape);
                 out.push(format!(
                     "{path} callable {}",
                     statically(
@@ -1018,7 +1023,7 @@ mod laws {
             let mut expressions: Vec<_> = shape.type_expressions().iter().collect();
             expressions.sort_by_key(|expression| expression.site);
             for (index, expression) in expressions.into_iter().enumerate() {
-                let typed = facts.typed_expression(shape, expression.site);
+                let typed = facts.typed_expression(self.types, shape, expression.site);
                 out.push(format!(
                     "{path} type {index} = {}",
                     statically(
@@ -1045,7 +1050,7 @@ mod laws {
             let statements =
                 (shape.body().iter().enumerate()).filter(|(index, _)| !skipped.contains(index));
             for (written, (index, statement)) in statements.enumerate() {
-                let typed = facts.statement_type(shape, index);
+                let typed = facts.statement_type(self.types, shape, index);
                 let typed = typed.map_or("untyped".to_string(), |typed| {
                     interval(typed, self.types, symbols)
                 });
@@ -1054,20 +1059,20 @@ mod laws {
                 each_part(statement, |part| sites.push(shape.site(part)));
                 let mut at = 0;
                 for site in sites.iter() {
-                    let Some(typed) = facts.value_type(shape, *site) else {
+                    let Some(typed) = facts.value_type(self.types, shape, *site) else {
                         continue;
                     };
                     let part = format!("{path} #{written}.{at}");
                     at += 1;
                     out.push(format!("{part} = {}", interval(typed, self.types, symbols)));
-                    match facts.instance_at(shape, *site) {
+                    match facts.instance_at(self.types, shape, *site) {
                         Some(InstanceRead::Solved(solution)) => {
                             out.push(format!("{part} instance {}", self.solution(solution)));
                         }
                         Some(InstanceRead::AsIs) => out.push(format!("{part} instance as is")),
                         None => {}
                     }
-                    let named = facts.named_contributions(shape, *site);
+                    let named = facts.named_contributions(self.types, shape, *site);
                     if !named.is_empty() {
                         let named: Vec<String> = (named.iter())
                             .map(|typed| {
@@ -1080,7 +1085,7 @@ mod laws {
                             .collect();
                         out.push(format!("{part} by name {named:?}"));
                     }
-                    if let Some(tree) = facts.view_tree(shape, *site) {
+                    if let Some(tree) = facts.view_tree(self.types, shape, *site) {
                         out.push(format!("{part} views a tree closed {}", tree.closed()));
                     }
                 }
@@ -1094,7 +1099,7 @@ mod laws {
                     let Some((_, list)) = shape.candidate_lists().get(site) else {
                         continue;
                     };
-                    let fixed = facts.use_statics(shape, site);
+                    let fixed = facts.use_statics(self.types, shape, site);
                     let contributions: Vec<String> = (fixed.contributions.iter())
                         .map(|typed| {
                             statically(
@@ -1108,7 +1113,7 @@ mod laws {
                         "{path} #{written} use {at}: {} from {contributions:?}",
                         narrowed(fixed.narrowing, list)
                     ));
-                    if let Some(points) = facts.selection(shape, site) {
+                    if let Some(points) = facts.selection(self.types, shape, site) {
                         let points: Vec<String> = (0..points.points.len())
                             .map(|at| {
                                 points
@@ -1556,7 +1561,7 @@ mod laws {
                             continue;
                         };
                         for (at, facts) in facts.iter().enumerate() {
-                            if let Some(entry) = facts.path(root, level).map(|(entry, _)| entry)
+                            if let Some(entry) = facts.path(door.types, root, level).map(|(entry, _)| entry)
                                 && (entry.root != id.root || entry.chain != id.chain || entry.label != id.label || entry.level != level)
                             {
                                 broken.push(format!("records {at} hold {entry:?} at the level the shape gives {id:?}"));
@@ -1685,7 +1690,8 @@ mod laws {
             let mut expressions: Vec<_> = shape.type_expressions().iter().collect();
             expressions.sort_by_key(|expression| expression.site);
             for (index, expression) in expressions.into_iter().enumerate() {
-                if let Static::Rigid { value, .. } = facts.typed_expression(shape, expression.site)
+                if let Static::Rigid { value, .. } =
+                    facts.typed_expression(door.types, shape, expression.site)
                     && let Some(read) = read(DeclaredType::Type(value))
                 {
                     out.push(format!("{path} type {index} = closed {read}"));
@@ -1693,7 +1699,7 @@ mod laws {
             }
             if shape.kind() == ShapeKind::Callable
                 && !path.is_empty()
-                && let Static::Rigid { value, .. } = facts.callable_type(shape)
+                && let Static::Rigid { value, .. } = facts.callable_type(door.types, shape)
                 && let Some(read) = read(value.ktype)
             {
                 out.push(format!("{path} callable closed {read}"));
@@ -1701,7 +1707,8 @@ mod laws {
             // A type binder's declared type is closed or unknown, never rigid: none to substitute.
             for at in (0..shape.slots()).map(|at| Slot(at as u32)) {
                 if let BinderSymbol::Registration(name) = shape.slot_name(at)
-                    && let Static::Rigid { value, .. } = facts.registered_type(shape, at)
+                    && let Static::Rigid { value, .. } =
+                        facts.registered_type(door.types, shape, at)
                     && let Some(read) = read(value.shape)
                 {
                     out.push(format!(
@@ -1734,7 +1741,7 @@ mod laws {
                 let vacuous = (shape.body().iter().enumerate()).any(|(index, statement)| {
                     let span = statement.source.span;
                     whole
-                        .statement_type(shape, index)
+                        .statement_type(door.types, shape, index)
                         .is_some_and(|typed| typed.upper == KType::NEVER.into())
                         && span.start <= at.start
                         && at.end <= span.end
@@ -1783,16 +1790,17 @@ mod laws {
         while let Some(shape) = shapes.pop() {
             shapes.extend(shape.nested_shapes().iter().map(|(_, nested)| *nested));
             for at in (0..shape.slots()).map(|at| Slot(at as u32)) {
-                if let (Some(DeclaredType::Type(was)), Some(DeclaredType::Type(is))) =
-                    (load.binder_type(shape, at), resumed.binder_type(shape, at))
-                {
+                if let (Some(DeclaredType::Type(was)), Some(DeclaredType::Type(is))) = (
+                    load.binder_type(door.types, shape, at),
+                    resumed.binder_type(door.types, shape, at),
+                ) {
                     broken.extend(outside(format!("binder {}", at.index()), was, is));
                 }
             }
             for index in 0..shape.body().len() {
                 if let (Some(was), Some(is)) = (
-                    load.statement_type(shape, index),
-                    resumed.statement_type(shape, index),
+                    load.statement_type(door.types, shape, index),
+                    resumed.statement_type(door.types, shape, index),
                 ) {
                     broken.extend(outside(format!("statement {index}"), was, is));
                 }
@@ -1800,7 +1808,9 @@ mod laws {
             // A use or a check in a statement that never completes never runs.
             let vacuous = |site: Site| {
                 (shape.body().iter().enumerate()).any(|(index, statement)| {
-                    resumed.statement_type(shape, index).is_some_and(never)
+                    resumed
+                        .statement_type(door.types, shape, index)
+                        .is_some_and(never)
                         && source_of(shape, statement, site).is_some()
                 })
             };
@@ -1814,8 +1824,8 @@ mod laws {
                 });
                 for site in sites {
                     if let (Some(was), Some(is)) = (
-                        load.value_type(shape, site),
-                        resumed.value_type(shape, site),
+                        load.value_type(door.types, shape, site),
+                        resumed.value_type(door.types, shape, site),
                     ) {
                         broken.extend(outside(format!("part {site:?}"), was, is));
                     }
@@ -1824,8 +1834,8 @@ mod laws {
                     }
                     if shape.candidate_lists().get(site).is_some()
                         && let Some(why) = widened(
-                            load.use_statics(shape, site).narrowing,
-                            resumed.use_statics(shape, site).narrowing,
+                            load.use_statics(door.types, shape, site).narrowing,
+                            resumed.use_statics(door.types, shape, site).narrowing,
                         )
                     {
                         broken.push(format!("use {site:?}: {why}"));

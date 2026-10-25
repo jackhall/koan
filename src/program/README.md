@@ -33,8 +33,7 @@ than a generic `cellgraph` type.
 - **The dependent**, `Running<'graph>`, is everything that names `'graph`:
   - the **graph**, by value. Reclaiming one of its recycling regions needs
     exclusive access, which a shared borrow of the owner cannot give.
-  - the graph's two **roots**: the build root the load ran in, and the run
-    root, [below](#the-top-level).
+  - the graph's **run root**, [below](#the-top-level).
   - the **program record**, [below](#the-program-record), in program storage,
     which holds the **type tiers** (`TypeTiers`): the frozen load and the
     agent tier, each laid down in an owner's bump rather than held by value,
@@ -81,16 +80,13 @@ and the value half unit by unit — and folds the records, lays the
 can intern into it and the interner's load table so a later name lands in its
 overlay, lays the agent tier in its own bump, and lays the record down beside the
 [output sinks](#faults-and-output) the embedder hands `load`. All of that runs
-as the **build root's** one step: the scheduler's
-[load door](../scheduler/README.md#the-drain) stands the graph up over two slab
-roots, the build root and the run root, enters the build root with the
-load, and then lays the build root's region header and its table, which the
-root-level [specializations](#specializations) fill. `load` takes the
-specialization bounds beside the slab cap: how many live children the build
-root's table holds, and how many every specialization's own holds
-([the build module](../build/README.md#references-between-the-trees)). The
-interpreter passes their defaults. A slab of two cells
-holds both. It returns a `Result`, and
+before the graph stands: the scheduler's
+[load door](../scheduler/README.md#the-drain) runs the load, then stands the
+graph up over one slab root, the run root, handing it the load's facts and
+the door its misses [settle](#settlements-and-activations) through. `load`
+takes the build arena's budget beside the slab cap
+([the scheduler](../scheduler/README.md#the-build-arena)); the interpreter
+passes its default. It returns a `Result`, and
 `LoadError` carries the parse error, or the rendering of the `ShapeError` that
 stopped it. A shape error borrows program storage and names symbols and types
 through the interner and the load's chain, all of which a refused builder drops with
@@ -149,12 +145,17 @@ a program's steps run over, with its three families:
   `Eval`, a quote's code, a record of the names its `EVAL` offers and the
   contract its declared return makes; `Evaluate`, a node, the view it is read
   through and the [contract](#frames-contracts-and-tails) it owes, if any; `Block`, a
-  synthesized block's shape and the view it sits in; `Inspect`, the view
-  the top level leaves at rest; and `Specialize`, the key a
-  [specialization](#specializations) enters itself under. An `Evaluate` and a
-  `Block` carry what their frame runs **within**: whether it
-  [routes](#caching-bodies), and the build cell it runs under. The family's `covariant!`
-  witness is what checks that an activation's view is covariant in its brand.
+  synthesized block's shape and the view it sits in; `Using`, a `USING` over
+  code composed at run time, which fills the code's holes under its
+  composition; and `Inspect`, the view the top level leaves at rest. A `Call`
+  also carries the request of the settlement its asker sought for it, which a
+  callable born in the frame records in its stamp, and a `Call` or an `Eval`
+  where its asker's decision memo rests. An `Evaluate` and a `Block` carry
+  what their frame runs **within**: whether it [routes](#caching-bodies), the
+  arena node it runs under and the stamp of its chain, the homes of its
+  decision memo, and, under a composition, the code's root. The family's
+  `covariant!` witness is what checks that an activation's view is covariant
+  in its brand.
 - **`KState`**, what a cell holds at a step and parks with: the birth on a
   first step, the body runner between units, or an evaluator's resumption.
 - the **scratch** family, the sites a refused tie named, one per evaluation the
@@ -180,7 +181,7 @@ graph priced.
 
 A top-level binding lives in the region of the **run root**: a storage-only
 slab cell taken at load, never entered, and released with the substrate. The
-slab holds the run root and the build root and nothing else, so a program
+slab holds the run root and nothing else, so a program
 with more statements than the slab cap runs to completion — a call subtree is tree cells and tenants under
 the root, a module activation is data, and a binding lives in the root.
 
@@ -313,10 +314,10 @@ statements have effects and no data dependency takes source order without
 interleaving. Per unit:
 
 - **A component of type binders** is bound to the handles the
-  [load's walk](../elaborate/README.md#the-type-channel-at-load) fixed for it when
-  they are closed, and otherwise declared through
-  [the elaborator's door](../elaborate/README.md#declarations), over the
-  activation, and bound in the same step.
+  [load's walk](../elaborate/README.md#the-type-channel-at-load) fixed for it,
+  or a layer the frame reads fixed under its binding — a nominal an
+  activation's walk declared, interned through the frame's chain — or raises
+  the refusal every run of it meets.
 - **A module binder's body runs inline.** Its activation is laid down in the
   running region, the enclosing body's place is kept in an `Outer` written
   beside it, and when the body's units are done the binder is tied over the
@@ -397,18 +398,17 @@ Each step picks one chain at its entry ([`run`](body.rs), and the evaluator's
 
 - the **caching chain** in a caching body, and in the own body of a caching
   frame that routes — a `Fresh` one, which holds its scratch for its life at
-  its first step, or a `Shares` one borrowing a specialization, which writes
+  its first step, or a `Shares` one running under a settlement, which writes
   its host's scratch. It reads the frozen load, the agent tier, the write
   home's region and the scratch, and writes the scratch;
 - the region chain in every other body.
 
 The `routes` bit of the `Within` on each evaluation and block the frame asks
 for ([`KBirth`](bundle.rs)) carries the frame's routing down, and the hand-off
-of the last statement clears it. Under `routes`, in a frame that borrows a
-specialization, an invariant view's operand and view, an invariant nominal's
-types and a warm composite's own memo are adopted into the agent tier, so the
-next hop hits them there. A `Fresh` frame that borrows none mints them into
-its own scratch, its warm tier and its cold tier at once.
+of the last statement clears it. A frame under a settlement under the root
+reads an invariant site's types where the settlement rested them, in the agent
+tier, and adopts nothing there; a frame under none, or under a composition,
+mints them into its scratch, its warm tier and its cold tier at once.
 
 A caching body asks for its blocks and its yielding statement with `Keeps`
 rather than `Forwards`, so a value leaves it only through an **exit**
@@ -423,38 +423,47 @@ there, handing over nothing for it, and marks what it walked settled, so a value
 the frame received or passes on is walked once
 ([type tiers](../../design/type-tiers.md#an-adoption-stops-at-a-settled-part)).
 
-### Specializations
+### Settlements and activations
 
-A call into a keyed frame, whatever its placement, hands the drain a `Seek`
-([`seek`](settle.rs)): the build cell the callee was born under, read off
-its closure bindings; the key, the callee's segment and the content digest of
-each argument at its keyed names, read by name
-([the build module](../build/README.md#keys-which-bindings-make-a-specialization));
-the binding, each keyed argument's carried type and, for a type value, the type
-it names, whose nodes the drain lays in the agent tier for a missed
-specialization
-([references between the trees](../build/README.md#references-between-the-trees));
-and the work a missed specialization runs, [`specialize`](settle.rs),
-which enlists the new cell in its parent's table and settles nothing until
-[the build arena](../../roadmap/gradual-build/build-arena.md) runs the walk
-there. The frame is born borrowing
-the specialization, and its warm tier is the agent tier, so every frame of
-that body under that binding finds its invariant types warm.
-A frame borrowing one routes whatever its placement: a `Fresh` frame holds its
-scratch, and a `Shares` frame writes its host's. Dispatch picks the door where
-it calls: a hop of the frame's own callee, from a frame that borrows a
-specialization, `tail_under` the frame's build cell; any other call
-`spawn_seeking` or `tail_seeking`, with a `Seek` where the body keys one; and
-an evaluation, a block or a hand-off `spawn` or `tail`. A frame borrows one exactly when the build cell it runs
-under is not the one its callee was born under
-([`called_function`](settle.rs) reads the callee's function).
+A call, whatever its placement, hands the drain a `Seek`
+([`seek`](settle.rs)): the arena node the callee was born under, read off its
+closure bindings, and, where the callee's body record lists keys and the
+asker can read load content at each, the key — the callee's base and segment
+and the content digest at each keyed name
+([the build module](../build/README.md#keys-which-bindings-make-a-settlement))
+— the image of the types that content carries, and what a miss settles. The
+request is laid as the birth's level. A miss runs [`settled`](settle.rs): the
+language's walk rooted at the callee's body over a layer on its parent's
+facts, its types adopted into the agent tier under the root and kept as terms
+under a composition, so every frame of that body under that binding finds its
+invariant types warm. A frame born under a settlement routes whatever its
+placement: a `Fresh` frame holds its scratch, and a `Shares` frame writes its
+host's. Dispatch picks the door where it calls: a hop of the frame's own
+callee, keyed, from a frame under a settlement its route marks a hop,
+`tail_under` the frame's arena node; any other call `spawn_seeking` or
+`tail_seeking`; an `EVAL` or a `USING` of composed code `spawn_composing`; and
+an evaluation, a block or a hand-off `spawn` or `tail`.
 
-A frame's runner takes the build cell it runs under at its first step, the
-specialization it borrows or else the build cell its callee was born under, and
-hands it, in its `Within`, to every evaluation and block it asks for, so a
-callable a tie or a lambda births in the frame, its blocks included, is born
-under it and seeks beneath it. The top level, a module's closure and an
-`EVAL`'s frame run under the build root.
+A frame's runner takes the arena node it runs under at its first step and
+hands it, with its stamp — the frame's level over its callee's — in its
+`Within`, to every evaluation and block it asks for, so a callable a tie or a
+lambda births in the frame, its blocks included, is born under it, seeks
+beneath it and replays its chain where it is gone. A call whose callee's
+arena node is no longer live replays the callee's stamp before the frame
+runs. The top level and a module's closure run under the root, and an `EVAL`
+of composed code under its composition.
+
+At each binding event whose names its arena node's facts leave unbound —
+its entry, a statement seam, a block's entry, an `EVAL`'s captures — the
+runner decides in the frame's **activation**
+([`activation_store`](activation_store.rs)): it reads the binding off its
+slots, walks the body over what it read below, relays the records into the
+frame's region and layers them on what every evaluation and block it asks for
+reads. It first looks the event up in its decision memo, and walks only where
+the memo holds no decision for those bindings
+([the build module](../build/README.md#activations)). A refusal the walk
+reaches, or one the frame's settlement kept, faults the frame worded as the
+load words it.
 
 ### Faults and output
 
@@ -502,14 +511,21 @@ since no value of those shares bytes with an argument, and every other return
 makes.
 
 **Running code.** [`eval`](body.rs) is what an evaluator asks for to run code
-under `EVAL`, beside `call`: a `Shares` frame running the code's shape, which
-was built where the program loaded, so nothing builds a shape at run time. The
+under `EVAL`, beside `call`: a `Shares` frame running the code's shape —
+a written quote's, built where the program loaded, or composed code's, built
+in its [composition](../build/README.md#where-facts-are-decided), which the
+drain finds by the code's syntax digest or builds over the copy the frame's
+first step hands it. A written quote's refusals are found before anything is
+spawned; composed code's, by its frame under the composition. The
 evaluator hands it the names the `EVAL` offers, read at the coordinates the
 shape recorded for its operand (`BodyShape::offers`), as a record. It refuses
-before anything is spawned, with a `CodeRefused`: `Shape` for code whose shape
-kept an error, and `Unbound` for the first name hole no `USING` filled, `\` name
-the `EVAL` does not offer, or keyworded hole some use in the code selects from
-alone. A keyworded hole nothing filled that every use of it can do without binds
+with a `CodeRefused`: `Shape` for code whose shape kept an error, `Unbound`
+for the first name hole no `USING` filled, `\` name the `EVAL` does not
+offer, or keyworded hole some use in the code selects from alone, and
+`QuantifiedRead` for a `$` name at composed code's entry bound to a
+quantified function and read other than as a call's head. An overlap the
+code's registrations make is a load fact of a written quote, reported here,
+and one waiting on a `$` name is checked in the frame's activation. A keyworded hole nothing filled that every use of it can do without binds
 the empty list of functions. That the operand is code at all is what the
 evaluator checks. The frame owes the type the `EVAL` declares, as a called
 frame owes its return ([frames](#frames-contracts-and-tails)), and reads

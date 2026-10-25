@@ -343,10 +343,7 @@ fn leaf<'step, 'graph, 'here>(
         ExpressionPart::SigiledTypeExpr(_) | ExpressionPart::RecordType(_) => {
             let writer = step.writer();
             let facts = at.view.facts();
-            let value = match facts.minted(
-                types,
-                facts.denoted(at.view.shape(), at.view.shape().site(part)),
-            ) {
+            let value = match facts.denoted(types, at.view.shape(), at.view.shape().site(part)) {
                 Ok(handle) => Value::Type(TypeValue::new(writer, handle, types)),
                 Err(refused) => {
                     program.error(writer, types, refused.display(program.symbols(), types))
@@ -403,9 +400,10 @@ fn ascribe<'step, 'graph, 'here>(
     };
     let writer = step.writer();
     let facts = at.view.facts();
-    let ascribed = match facts.minted(
+    let ascribed = match facts.denoted(
         types,
-        facts.denoted(at.view.shape(), at.view.shape().site(&ascribed.value)),
+        at.view.shape(),
+        at.view.shape().site(&ascribed.value),
     ) {
         Ok(ascribed) => ascribed,
         Err(refused) => {
@@ -443,7 +441,7 @@ fn ascribe<'step, 'graph, 'here>(
                 debug_assert!(
                     at.view
                         .facts()
-                        .view_tree(at.view.shape(), at.view.shape().site_of_node(node))
+                        .view_tree(types, at.view.shape(), at.view.shape().site_of_node(node))
                         .and_then(|tree| tree.digest())
                         .is_none_or(|digest| digest
                             == Value::Knotted(view).digest(types, &scratch)),
@@ -478,7 +476,7 @@ fn ascribe<'step, 'graph, 'here>(
         };
         return finish(step, at, raised.raise(program, writer, &at.types));
     }
-    let retype = facts.minted(types, facts.retype(at.view.shape(), site));
+    let retype = facts.retype(types, at.view.shape(), site);
     finish(
         step,
         at,
@@ -562,9 +560,10 @@ fn evaluated<'step, 'graph, 'here>(
         return finish(step, at, raised.raise(program, writer, &at.types));
     };
     let facts = at.view.facts();
-    let returns = match facts.minted(
+    let returns = match facts.denoted(
         types,
-        facts.denoted(at.view.shape(), at.view.shape().site(&declared.value)),
+        at.view.shape(),
+        at.view.shape().site(&declared.value),
     ) {
         Ok(returns) => returns,
         Err(refused) => {
@@ -742,7 +741,7 @@ fn call<'step, 'graph, 'here>(
     let mut arguments = BumpVec::with_capacity_in(operands.len(), &scratch);
     arguments.extend(operands.iter().map(Operand::ktype));
     let site = at.view.shape().site_of_node(node);
-    let fixed = (at.view.facts()).use_statics(at.view.shape(), site);
+    let fixed = (at.view.facts()).use_statics(&at.types, at.view.shape(), site);
     let contributed = match contributed(at, site, fixed.contributions, &scratch) {
         Ok(contributed) => contributed,
         Err(refused) => {
@@ -782,7 +781,7 @@ fn call<'step, 'graph, 'here>(
             }
             let site = at.view.shape().site_of_node(node);
             let facts = at.view.facts();
-            let points = (facts.minted(&at.types, facts.selection(at.view.shape(), site)))
+            let points = (facts.selection(&at.types, at.view.shape(), site))
                 .expect("a selected use records its points");
             select::chosen(at, coordinate, &points, &arguments, &contributed, &scratch)
         }
@@ -932,13 +931,11 @@ fn contributed<'x>(
     let (facts, shape) = (at.view.facts(), at.view.shape());
     let mut contributed = BumpVec::with_capacity_in(recorded.len(), scratch);
     for each in recorded {
-        contributed.push(
-            match facts.minted(&at.types, facts.at_run(shape, site, *each)) {
-                AtRun::Closed(closed) => Some(closed),
-                AtRun::Open => None,
-                AtRun::Refused(refused) => return Err(refused),
-            },
-        );
+        contributed.push(match facts.at_run(&at.types, shape, site, *each) {
+            AtRun::Closed(closed) => Some(closed),
+            AtRun::Open => None,
+            AtRun::Refused(refused) => return Err(refused),
+        });
     }
     Ok(contributed)
 }
@@ -994,7 +991,7 @@ fn apply<'step, 'graph, 'here>(
     let recorded = at
         .view
         .facts()
-        .named_contributions(at.view.shape(), argument_site);
+        .named_contributions(&at.types, at.view.shape(), argument_site);
     let [Operand::Value(head), Operand::Value(argument)] = operands[..] else {
         unreachable!("both parts of an application are evaluated")
     };
@@ -1079,6 +1076,8 @@ thread_local! {
     pub(crate) static DERIVED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     /// How many tail calls hopped under their frame's own settlement.
     pub(crate) static HOPPED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// The most bytes an asker's region had handed out at a call that sought a settlement.
+    pub(crate) static ASKER_BYTES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// Run the frame `call` asks for over `callee`: a hop owing `tails` where it keeps the contract,
@@ -1141,6 +1140,11 @@ fn called<'step, 'graph, 'here>(
         &at.types,
         &types,
     );
+    #[cfg(test)]
+    if seek.settlement.is_some() {
+        let bytes = step.writer().in_use();
+        ASKER_BYTES.with(|most| most.set(most.get().max(bytes)));
+    }
     let asked = step.spawn_seeking(request, seek);
     park(step, at, asked, FINISHING)
 }
@@ -1162,10 +1166,9 @@ fn carried_under_static<'step, 'graph, 'here>(
     };
     let facts = at.view.facts();
     let expected = match node {
-        Evaluated::Part(site) => facts.value_type(shape, site),
-        Evaluated::Statement(index) => facts.statement_type(shape, index as usize),
+        Evaluated::Part(site) => facts.value_type(&at.types, shape, site),
+        Evaluated::Statement(index) => facts.statement_type(&at.types, shape, index as usize),
     };
-    let expected = facts.minted(&at.types, expected);
     let Some(expected) = expected else {
         return;
     };
@@ -1219,7 +1222,7 @@ fn in_place<'step, 'graph, 'here>(
             let read = at.view.read(mention.coordinate);
             let facts = at.view.facts();
             let Some(InstanceRead::Solved(solution)) =
-                facts.minted(&at.types, facts.instance_at(shape, shape.site(part)))
+                facts.instance_at(&at.types, shape, shape.site(part))
             else {
                 return Some(read);
             };

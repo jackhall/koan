@@ -446,7 +446,10 @@ fn wraps_pick(source: &str) -> (Segment, Site, bool) {
             panic!("`p` is bound to a call");
         };
         let site = wrap.site_of_node(node.reference());
-        let narrowing = program.facts().use_statics(wrap, site).narrowing;
+        let narrowing = program
+            .facts()
+            .use_statics(&program.tiers().resting(), wrap, site)
+            .narrowing;
         (
             wrap.segment(),
             site,

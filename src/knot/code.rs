@@ -427,7 +427,7 @@ pub fn using<'graph, 'cell>(
         .code()
         .expect("`USING` fills the holes of a quote's code");
     let shape = node.shape(door);
-    if facts.typing_refusal(shape).is_some() {
+    if facts.typing_refusal(types, shape).is_some() {
         return Ok(code);
     }
     let resolved = |(name, link): &Binding<'graph, 'cell>| (*name, Link::Value(link.resolve(code)));

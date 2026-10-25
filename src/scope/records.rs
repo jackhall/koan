@@ -2,7 +2,9 @@
 //! over one load's own, and [`Facts`], what a step reads through its door, over a cell's layers and
 //! the load they rest on. Every reader takes the body's shape first, so no reader names where a
 //! fact is kept. A shape names its body by its segment alone, so a reader may hand in a shape
-//! borrowed for any lifetime.
+//! borrowed for any lifetime. A reader whose fact names a type takes the reading frame's chain
+//! before the shape and hands back the fact with every type it names resolving there, minted from
+//! its composition's term where the chain lacks it, so no read can skip the mint.
 //!
 //! It reads the one walk's records: one [`UnitFacts`] per unit the walk ran, each beside the
 //! frontier it gathered, one [`Closing`] per owning body, and the [`Folds`] the load lays per body
@@ -19,7 +21,7 @@
 use crate::memory::{BumpAllocator, BumpVec, Lays, collect, resident};
 use crate::parse::{ExpressionPart, ProgramNode};
 use crate::symbols::{BinderSymbol, Symbol};
-use crate::type_lattice::{DeclaredType, Interval, KType, Parametric, Term};
+use crate::type_lattice::{DeclaredType, Interval, KType, Parametric, Term, TypeDigest};
 use crate::values::{Chain, ContentDigest, Retype, Weight};
 
 use super::composition::Composition;
@@ -466,34 +468,6 @@ impl<'step> Facts<'step> {
         self.0.top
     }
 
-    /// `fact`, read off these facts, with every type it names resolving in `types`, the frame's
-    /// chain: each the chain lacks is minted from its term, found by digest in the composition's
-    /// table and then each settlement's. A frame mints only what it reads, once per tier the chain
-    /// interns in. Over the load and the settlements under the root, every type a fact names lies
-    /// in the root or the agent tier already.
-    pub fn minted<T: Named>(&self, types: &Chain<'_, '_, '_, '_>, fact: T) -> T {
-        let Some(composition) = self.0.composition else {
-            return fact;
-        };
-        fact.each_named(&mut |kt| {
-            if types.resolves(kt) {
-                return;
-            }
-            #[cfg(test)]
-            TERM_PROBES.with(|probes| probes.set(probes.get() + 1));
-            let digest = kt.digest();
-            let term = composition.terms().get(digest).or_else(|| {
-                std::iter::successors(self.0.top, |layer| layer.parent())
-                    .find_map(|layer| layer.terms().get(digest))
-            });
-            match term {
-                Some((_, term)) => types.mint(term),
-                None => debug_assert!(false, "a type a fact names has a term"),
-            }
-        });
-        fact
-    }
-
     /// Hand `each` every term a frame reading these facts mints so every type they name resolves
     /// in its chain, in the order a term's leaves resolve: the composition's, then each
     /// settlement's from the outermost. None over the load.
@@ -511,77 +485,6 @@ impl<'step> Facts<'step> {
         (settlements.iter())
             .flat_map(|layer| layer.terms().entries())
             .for_each(|(_, term)| each(term));
-    }
-
-    /// `fact`, a fact of `shape` read at `site` where the cell runs: closed, refused at every run,
-    /// or left open to the run's own door. A rigid fact never reaches the run — every variable the
-    /// load left open is bound in a layer the cell reads — save one over a path the load read off a
-    /// signature lacking its member, which every run refuses; any other is a bug, refused as the
-    /// load refuses a name with no binding.
-    pub fn at_run<C, R>(
-        &self,
-        shape: &BodyShape<'_>,
-        site: Site,
-        fact: Static<'step, C, R>,
-    ) -> AtRun<C> {
-        match fact {
-            Static::Closed(value) => AtRun::Closed(value),
-            Static::Unknown => AtRun::Open,
-            Static::Rigid { variables, .. } => AtRun::Refused(self.unbound(shape, site, variables)),
-        }
-    }
-
-    /// The type the type expression at `site` of `shape` denotes where the cell runs, or why every
-    /// run refuses it. The load, or a layer the cell reads, fixed it: one left open is a bug.
-    pub fn denoted(&self, shape: &BodyShape<'_>, site: Site) -> Result<KType, Elaboration> {
-        match self.at_run(shape, site, self.typed_expression(shape, site)) {
-            AtRun::Closed(closed) => Ok(closed),
-            AtRun::Refused(refused) => Err(refused),
-            AtRun::Open => {
-                debug_assert!(
-                    false,
-                    "the type at {site:?} of body {:?} is open where it runs",
-                    shape.segment()
-                );
-                Err(Elaboration::Unknown { site })
-            }
-        }
-    }
-
-    /// Why a rigid fact of `shape` over `variables`, read at `site`, refuses.
-    fn unbound(&self, shape: &BodyShape<'_>, site: Site, variables: &[Variable]) -> Elaboration {
-        let shapes = self.shapes();
-        let path = |root: Segment, level| self.path(shapes.shape_at(root), level);
-        for variable in variables {
-            if let Source::Path { root, level, .. } = variable.source
-                && let Some((entry, resolution)) = path(root, level)
-                && let Some(owner) = resolution.lacks
-            {
-                return Elaboration::NoSuchMember {
-                    owner: owner.into(),
-                    name: entry.label.symbol(),
-                    site,
-                };
-            }
-        }
-        #[cfg(test)]
-        rigid_at_run();
-        debug_assert!(
-            false,
-            "a rigid fact of body {:?} at {site:?} reached the run",
-            shape.segment()
-        );
-        let name = variables.iter().find_map(|variable| match variable.source {
-            Source::Type(at) => match shapes.follow(shape.segment(), at)? {
-                Lands::Binder { at, slot } => Some(shapes.shape_at(at).slot_name(slot).symbol()),
-                _ => None,
-            },
-            Source::Path { root, level, .. } => Some(path(root, level)?.0.label.symbol()),
-        });
-        match name {
-            Some(name) => Elaboration::Unbound { name, site },
-            None => Elaboration::Unknown { site },
-        }
     }
 
     /// The wording of the refusal the innermost settlement's walk reached, else the refusal of the
@@ -657,6 +560,18 @@ pub(crate) trait RecordSource<'a>: Copy {
 
     /// The closed tree whose identity is `digest`.
     fn tree_of(&self, digest: ContentDigest) -> Option<&'a Tree<'a>>;
+
+    /// Whether these records rest on a composition, whose facts may name a type only a term
+    /// makes in a reading frame's chain.
+    fn composed(&self) -> bool {
+        false
+    }
+
+    /// The term a layer laid for the type whose digest is `digest`: the composition's, then each
+    /// settlement's. None over the load.
+    fn term(&self, _digest: TypeDigest) -> Option<&'a Term<'a>> {
+        None
+    }
 }
 
 impl<'graph> RecordSource<'graph> for LoadRecords<'graph> {
@@ -701,6 +616,19 @@ impl<'graph> RecordSource<'graph> for LoadRecords<'graph> {
 }
 
 impl<'step> RecordSource<'step> for Layers<'step> {
+    fn composed(&self) -> bool {
+        self.composition.is_some()
+    }
+
+    fn term(&self, digest: TypeDigest) -> Option<&'step Term<'step>> {
+        let composition = self.composition?;
+        let term = composition.terms().get(digest).or_else(|| {
+            std::iter::successors(self.top, |layer| layer.parent())
+                .find_map(|layer| layer.terms().get(digest))
+        });
+        term.map(|(_, term)| term)
+    }
+
     fn shapes(&self) -> &'step Shapes<'step> {
         self.base.shapes()
     }
@@ -816,6 +744,14 @@ impl<'a, S: RecordSource<'a>> RecordSource<'a> for FactsOver<S> {
 
     fn tree_of(&self, digest: ContentDigest) -> Option<&'a Tree<'a>> {
         self.0.tree_of(digest)
+    }
+
+    fn composed(&self) -> bool {
+        self.0.composed()
+    }
+
+    fn term(&self, digest: TypeDigest) -> Option<&'a Term<'a>> {
+        self.0.term(digest)
     }
 }
 
@@ -1190,6 +1126,120 @@ impl<'graph> LoadFacts<'graph> {
     reason = "a source of records is the crate's own; outside it only the two aliases are named"
 )]
 impl<'a, S: RecordSource<'a>> FactsOver<S> {
+    /// `fact`, read off these records, with every type it names resolving in `types`, the reading
+    /// frame's chain: each the chain lacks is minted from its term ([`RecordSource::term`]). A frame
+    /// mints only what it reads, once per tier the chain interns in. Over the load and the
+    /// settlements under the root, every type a fact names lies in the root or the agent tier
+    /// already. Every reader of a fact naming a type reads through it, so none can skip it.
+    fn minted<T: Named>(&self, types: &Chain<'_, '_, '_, '_>, fact: T) -> T {
+        if !self.0.composed() {
+            return fact;
+        }
+        fact.each_named(&mut |kt| {
+            if types.resolves(kt) {
+                return;
+            }
+            #[cfg(test)]
+            TERM_PROBES.with(|probes| probes.set(probes.get() + 1));
+            match self.0.term(kt.digest()) {
+                Some(term) => types.mint(term),
+                None => debug_assert!(false, "a type a fact names has a term"),
+            }
+        });
+        fact
+    }
+
+    /// `fact`, a fact of `shape` read at `site` where the cell runs: closed, refused at every run,
+    /// or left open to the run's own door. A rigid fact never reaches the run — every variable the
+    /// load left open is bound in a layer the cell reads — save one over a path the load read off a
+    /// signature lacking its member, which every run refuses; any other is a bug, refused as the
+    /// load refuses a name with no binding.
+    pub fn at_run<C: Named, R>(
+        &self,
+        types: &Chain<'_, '_, '_, '_>,
+        shape: &BodyShape<'_>,
+        site: Site,
+        fact: Static<'a, C, R>,
+    ) -> AtRun<C> {
+        let read = match fact {
+            Static::Closed(value) => AtRun::Closed(value),
+            Static::Unknown => AtRun::Open,
+            Static::Rigid { variables, .. } => {
+                AtRun::Refused(self.unbound(types, shape, site, variables))
+            }
+        };
+        self.minted(types, read)
+    }
+
+    /// The type the type expression at `site` of `shape` denotes where the cell runs, or why every
+    /// run refuses it. The load, or a layer the cell reads, fixed it: one left open is a bug.
+    pub fn denoted(
+        &self,
+        types: &Chain<'_, '_, '_, '_>,
+        shape: &BodyShape<'_>,
+        site: Site,
+    ) -> Result<KType, Elaboration> {
+        match self.at_run(
+            types,
+            shape,
+            site,
+            self.typed_expression(types, shape, site),
+        ) {
+            AtRun::Closed(closed) => Ok(closed),
+            AtRun::Refused(refused) => Err(refused),
+            AtRun::Open => {
+                debug_assert!(
+                    false,
+                    "the type at {site:?} of body {:?} is open where it runs",
+                    shape.segment()
+                );
+                Err(Elaboration::Unknown { site })
+            }
+        }
+    }
+
+    /// Why a rigid fact of `shape` over `variables`, read at `site`, refuses.
+    fn unbound(
+        &self,
+        types: &Chain<'_, '_, '_, '_>,
+        shape: &BodyShape<'_>,
+        site: Site,
+        variables: &[Variable],
+    ) -> Elaboration {
+        let shapes = self.shapes();
+        let path = |root: Segment, level| self.path(types, shapes.shape_at(root), level);
+        for variable in variables {
+            if let Source::Path { root, level, .. } = variable.source
+                && let Some((entry, resolution)) = path(root, level)
+                && let Some(owner) = resolution.lacks
+            {
+                return Elaboration::NoSuchMember {
+                    owner: owner.into(),
+                    name: entry.label.symbol(),
+                    site,
+                };
+            }
+        }
+        #[cfg(test)]
+        rigid_at_run();
+        debug_assert!(
+            false,
+            "a rigid fact of body {:?} at {site:?} reached the run",
+            shape.segment()
+        );
+        let name = variables.iter().find_map(|variable| match variable.source {
+            Source::Type(at) => match shapes.follow(shape.segment(), at)? {
+                Lands::Binder { at, slot } => Some(shapes.shape_at(at).slot_name(slot).symbol()),
+                _ => None,
+            },
+            Source::Path { root, level, .. } => Some(path(root, level)?.0.label.symbol()),
+        });
+        match name {
+            Some(name) => Elaboration::Unbound { name, site },
+            None => Elaboration::Unknown { site },
+        }
+    }
+
     /// The shape table these are facts of.
     pub fn shapes(&self) -> &'a Shapes<'a> {
         self.0.shapes()
@@ -1277,34 +1327,68 @@ impl<'a, S: RecordSource<'a>> FactsOver<S> {
 
     /// What the load fixed for the type expression at `site` of `shape`: `Unknown` where it records
     /// none there.
-    pub fn typed_expression(&self, shape: &BodyShape<'_>, site: Site) -> StaticType<'a> {
-        (self.at_site(shape, site, |typed| typed.expressions)).unwrap_or(Static::Unknown)
+    pub fn typed_expression(
+        &self,
+        types: &Chain<'_, '_, '_, '_>,
+        shape: &BodyShape<'_>,
+        site: Site,
+    ) -> StaticType<'a> {
+        let typed = self.at_site(shape, site, |typed| typed.expressions);
+        self.minted(types, typed.unwrap_or(Static::Unknown))
     }
 
     /// What the load fixed for the type binder at `slot` of `shape`.
-    pub fn declared_type(&self, shape: &BodyShape<'_>, slot: Slot) -> StaticType<'a> {
-        (self.at_slot(shape, slot, |typed| typed.declared)).unwrap_or(Static::Unknown)
+    pub fn declared_type(
+        &self,
+        types: &Chain<'_, '_, '_, '_>,
+        shape: &BodyShape<'_>,
+        slot: Slot,
+    ) -> StaticType<'a> {
+        let declared = self.at_slot(shape, slot, |typed| typed.declared);
+        self.minted(types, declared.unwrap_or(Static::Unknown))
     }
 
     /// What the load fixed for the registration at `slot` of `shape`.
-    pub fn registered_type(&self, shape: &BodyShape<'_>, slot: Slot) -> StaticRegistered<'a> {
-        (self.at_slot(shape, slot, |typed| typed.registered)).unwrap_or(Static::Unknown)
+    pub fn registered_type(
+        &self,
+        types: &Chain<'_, '_, '_, '_>,
+        shape: &BodyShape<'_>,
+        slot: Slot,
+    ) -> StaticRegistered<'a> {
+        let registered = self.at_slot(shape, slot, |typed| typed.registered);
+        self.minted(types, registered.unwrap_or(Static::Unknown))
     }
 
     /// What the load fixed for the callable body `shape`'s type.
-    pub fn callable_type(&self, shape: &BodyShape<'_>) -> StaticCallable<'a> {
-        (self.born(shape.segment())).map_or(Static::Unknown, |born| born.callable)
+    pub fn callable_type(
+        &self,
+        types: &Chain<'_, '_, '_, '_>,
+        shape: &BodyShape<'_>,
+    ) -> StaticCallable<'a> {
+        let callable = (self.born(shape.segment())).map_or(Static::Unknown, |born| born.callable);
+        self.minted(types, callable)
     }
 
     /// The callable body `shape`'s own `FOR ALL` group as its body reads it, by group order.
-    pub fn group_levels(&self, shape: &BodyShape<'_>) -> &'a [Parametric] {
-        self.born(shape.segment()).map_or(&[], |born| born.levels)
+    pub fn group_levels(
+        &self,
+        types: &Chain<'_, '_, '_, '_>,
+        shape: &BodyShape<'_>,
+    ) -> &'a [Parametric] {
+        self.minted(
+            types,
+            self.born(shape.segment()).map_or(&[], |born| born.levels),
+        )
     }
 
     /// The solution the callable body `shape`'s `FOR ALL` is born instantiated at, where the load
     /// solved one.
-    pub fn born_instance(&self, shape: &BodyShape<'_>) -> Option<StaticInstance<'a>> {
-        self.born(shape.segment())?.instance
+    pub fn born_instance(
+        &self,
+        types: &Chain<'_, '_, '_, '_>,
+        shape: &BodyShape<'_>,
+    ) -> Option<StaticInstance<'a>> {
+        self.minted(types, self.born(shape.segment())?.instance)
     }
 
     /// Each lexical variable `shape` declares, by level, beside where its activation holds it.
@@ -1341,51 +1425,84 @@ impl<'a, S: RecordSource<'a>> FactsOver<S> {
     /// it to.
     pub fn path(
         &self,
+        types: &Chain<'_, '_, '_, '_>,
         root: &BodyShape<'_>,
         level: usize,
     ) -> Option<(PathEntry<'a>, Resolution<'a>)> {
         let (_, facts) = self.0.holding(Held::Path(root.segment(), level))?;
-        facts
+        let path = facts
             .paths
             .get((root.segment(), level))
-            .map(|(_, path)| *path)
+            .map(|(_, path)| *path);
+        self.minted(types, path)
     }
 
     /// The first registration of the quote's code `shape` that overlaps a builtin overload,
     /// reported when an `EVAL` runs it.
-    pub fn overlap(&self, shape: &BodyShape<'_>) -> Option<&'a ShapeError<'a>> {
-        (self.0.closing(shape.segment())).and_then(|(closing, _)| closing.overlap)
+    pub fn overlap(
+        &self,
+        types: &Chain<'_, '_, '_, '_>,
+        shape: &BodyShape<'_>,
+    ) -> Option<&'a ShapeError<'a>> {
+        let overlap = (self.0.closing(shape.segment())).and_then(|(closing, _)| closing.overlap);
+        self.minted(types, overlap)
     }
 
     /// Why the code shape `shape`'s code cannot be built or does not type, reported when an `EVAL`
     /// runs it.
-    pub fn typing_refusal(&self, shape: &BodyShape<'_>) -> Option<&'a ShapeError<'a>> {
+    pub fn typing_refusal(
+        &self,
+        types: &Chain<'_, '_, '_, '_>,
+        shape: &BodyShape<'_>,
+    ) -> Option<&'a ShapeError<'a>> {
         // A code shape the builder could not build holds its refusal itself.
-        (self.0.closing(shape.segment()))
+        let refusal = (self.0.closing(shape.segment()))
             .and_then(|(closing, _)| closing.refusal)
-            .or_else(|| self.at(shape).refusal())
+            .or_else(|| self.at(shape).refusal());
+        self.minted(types, refusal)
     }
 
     /// The static type of the part at `site` of `shape`, where the load typed one.
-    pub fn value_type(&self, shape: &BodyShape<'_>, site: Site) -> Option<Interval> {
-        self.at_site(shape, site, |typed| typed.parts)
+    pub fn value_type(
+        &self,
+        types: &Chain<'_, '_, '_, '_>,
+        shape: &BodyShape<'_>,
+        site: Site,
+    ) -> Option<Interval> {
+        self.minted(types, self.at_site(shape, site, |typed| typed.parts))
     }
 
     /// The static type of statement `index` of `shape`'s body.
-    pub fn statement_type(&self, shape: &BodyShape<'_>, index: usize) -> Option<Interval> {
+    pub fn statement_type(
+        &self,
+        types: &Chain<'_, '_, '_, '_>,
+        shape: &BodyShape<'_>,
+        index: usize,
+    ) -> Option<Interval> {
         let index = index as u32;
         let typed = self.typed_in(shape, self.0.shapes().running(shape.segment(), index))?;
-        typed.statements.get(index).map(|(_, typed)| *typed)
+        self.minted(types, typed.statements.get(index).map(|(_, typed)| *typed))
     }
 
     /// The static type of the binder at `slot` of `shape`.
-    pub fn binder_type(&self, shape: &BodyShape<'_>, slot: Slot) -> Option<DeclaredType<Interval>> {
-        self.at_slot(shape, slot, |typed| typed.binders)
+    pub fn binder_type(
+        &self,
+        types: &Chain<'_, '_, '_, '_>,
+        shape: &BodyShape<'_>,
+        slot: Slot,
+    ) -> Option<DeclaredType<Interval>> {
+        self.minted(types, self.at_slot(shape, slot, |typed| typed.binders))
     }
 
     /// What the load fixed about the keyworded use whose node sits at `site` of `shape`.
-    pub fn use_statics(&self, shape: &BodyShape<'_>, site: Site) -> UseStatics<'a> {
-        (self.at_site(shape, site, |typed| typed.uses)).unwrap_or(UseStatics::UNFIXED)
+    pub fn use_statics(
+        &self,
+        types: &Chain<'_, '_, '_, '_>,
+        shape: &BodyShape<'_>,
+        site: Site,
+    ) -> UseStatics<'a> {
+        let statics = self.at_site(shape, site, |typed| typed.uses);
+        self.minted(types, statics.unwrap_or(UseStatics::UNFIXED))
     }
 
     /// The route the load fixed for the tail call whose node sits at `site` of `shape`, where it
@@ -1396,14 +1513,23 @@ impl<'a, S: RecordSource<'a>> FactsOver<S> {
 
     /// What the load recorded a retype at `site` of `shape` re-stamps at, where it closed the
     /// declared type.
-    pub fn retype(&self, shape: &BodyShape<'_>, site: Site) -> Option<Retype> {
-        self.at_site(shape, site, |typed| typed.retypes)
+    pub fn retype(
+        &self,
+        types: &Chain<'_, '_, '_, '_>,
+        shape: &BodyShape<'_>,
+        site: Site,
+    ) -> Option<Retype> {
+        self.minted(types, self.at_site(shape, site, |typed| typed.retypes))
     }
 
     /// What a frame of the callable `shape` re-stamps its arguments and its value at, where the
     /// load closed their declared types.
-    pub fn retypes(&self, shape: &BodyShape<'_>) -> Retypes<'a> {
-        (self.0.closing(shape.segment())).map_or(Retypes::NONE, |(closing, _)| closing.retypes)
+    pub fn retypes(&self, types: &Chain<'_, '_, '_, '_>, shape: &BodyShape<'_>) -> Retypes<'a> {
+        let retypes = self.0.closing(shape.segment());
+        self.minted(
+            types,
+            retypes.map_or(Retypes::NONE, |(closing, _)| closing.retypes),
+        )
     }
 
     /// The class the load fixed for the frame body `shape`.
@@ -1434,8 +1560,13 @@ impl<'a, S: RecordSource<'a>> FactsOver<S> {
 
     /// The content tree of the view the `:|` at `site` of `shape` builds, where its signature is
     /// closed.
-    pub fn view_tree(&self, shape: &BodyShape<'_>, site: Site) -> Option<&'a Tree<'a>> {
-        self.at_site(shape, site, |typed| typed.trees)
+    pub fn view_tree(
+        &self,
+        types: &Chain<'_, '_, '_, '_>,
+        shape: &BodyShape<'_>,
+        site: Site,
+    ) -> Option<&'a Tree<'a>> {
+        self.minted(types, self.at_site(shape, site, |typed| typed.trees))
     }
 
     /// What the view the `:|` at `site` of `shape` builds carries for each keyworded member, where
@@ -1450,25 +1581,46 @@ impl<'a, S: RecordSource<'a>> FactsOver<S> {
     }
 
     /// What the load fixed where `shape` reads a quantified function at `site`.
-    pub fn instance_at(&self, shape: &BodyShape<'_>, site: Site) -> Option<InstanceRead<'a>> {
-        self.at_site(shape, site, |typed| typed.instances)
+    pub fn instance_at(
+        &self,
+        types: &Chain<'_, '_, '_, '_>,
+        shape: &BodyShape<'_>,
+        site: Site,
+    ) -> Option<InstanceRead<'a>> {
+        self.minted(types, self.at_site(shape, site, |typed| typed.instances))
     }
 
     /// The point each variable of the group of the candidate the keyworded use at `site` of
     /// `shape` selects solves to, by group index, where the load selected one.
-    pub fn selection(&self, shape: &BodyShape<'_>, site: Site) -> Option<Points<'a>> {
-        self.at_site(shape, site, |typed| typed.selections)
+    pub fn selection(
+        &self,
+        types: &Chain<'_, '_, '_, '_>,
+        shape: &BodyShape<'_>,
+        site: Site,
+    ) -> Option<Points<'a>> {
+        self.minted(types, self.at_site(shape, site, |typed| typed.selections))
     }
 
     /// The content tree of the module the binder at `slot` of `shape` holds, if the load read it.
-    pub fn content(&self, shape: &BodyShape<'_>, slot: Slot) -> Option<Tree<'a>> {
-        self.at_slot(shape, slot, |typed| typed.contents)
+    pub fn content(
+        &self,
+        types: &Chain<'_, '_, '_, '_>,
+        shape: &BodyShape<'_>,
+        slot: Slot,
+    ) -> Option<Tree<'a>> {
+        self.minted(types, self.at_slot(shape, slot, |typed| typed.contents))
     }
 
     /// What each parameter of the call by name whose argument sits at `site` of `shape` is solved
     /// from.
-    pub fn named_contributions(&self, shape: &BodyShape<'_>, site: Site) -> &'a [StaticType<'a>] {
-        (self.at_site(shape, site, |typed| typed.by_name)).unwrap_or(&[])
+    pub fn named_contributions(
+        &self,
+        types: &Chain<'_, '_, '_, '_>,
+        shape: &BodyShape<'_>,
+        site: Site,
+    ) -> &'a [StaticType<'a>] {
+        let named = self.at_site(shape, site, |typed| typed.by_name);
+        self.minted(types, named.unwrap_or(&[]))
     }
 
     /// The slots `shape` binds at a statement that some unit's frontier holds.

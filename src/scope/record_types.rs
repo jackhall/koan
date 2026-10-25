@@ -13,8 +13,8 @@ use super::records::{AtRun, Born, Closing, Retypes, Typed, UnitFacts};
 use super::shape::ShapeError;
 use super::tree::{KnotNode, Leaf, NodeCapture, Tree, Unfolded, Within};
 use super::typed::{
-    Callable, Elaboration, InstanceRead, PathEntry, Point, Points, Registered, Resolution,
-    Resolved, Static, StaticInstance, StaticType, UseStatics,
+    Callable, Elaboration, InstanceRead, Kept, Narrowing, PathEntry, Point, Points, Registered,
+    Resolution, Resolved, Static, StaticInstance, StaticType, UseStatics,
 };
 
 /// What the visitor hands each type to.
@@ -218,15 +218,8 @@ fn typed_types(typed: &Typed<'_>, each: &mut Each<'_>) {
             InstanceRead::AsIs => {}
         }
     }
-    // A use's narrowing names candidates and verdicts, no type.
     for (_, statics) in uses.iter() {
-        let UseStatics {
-            narrowing: _,
-            contributions,
-        } = statics;
-        for contribution in *contributions {
-            static_type(contribution, each);
-        }
+        statics.each_named(each);
     }
     for (_, points) in selections.iter() {
         points_types(points, each);
@@ -517,8 +510,8 @@ fn elaboration_types(error: &Elaboration, each: &mut Each<'_>) {
     }
 }
 
-/// A fact the run reads off its [`Facts`](super::Facts): every type it names, which
-/// [`minted`](super::FactsOver::minted) makes resolve in the frame's chain.
+/// A fact the run reads off its [`Facts`](super::Facts): every type it names, each of which the
+/// reader makes resolve in the frame's chain.
 pub trait Named {
     fn each_named(&self, each: &mut Each<'_>);
 }
@@ -537,6 +530,109 @@ impl Named for Retype {
             }
             Retype::Keeps => {}
         }
+    }
+}
+
+impl Named for Parametric {
+    fn each_named(&self, each: &mut Each<'_>) {
+        each((*self).into());
+    }
+}
+
+impl<C: Named, R: Named> Named for Static<'_, C, R> {
+    fn each_named(&self, each: &mut Each<'_>) {
+        match self {
+            Static::Unknown => {}
+            Static::Closed(closed) => closed.each_named(each),
+            Static::Rigid {
+                value,
+                variables: _,
+            } => value.each_named(each),
+        }
+    }
+}
+
+impl Named for UseStatics<'_> {
+    fn each_named(&self, each: &mut Each<'_>) {
+        let UseStatics {
+            narrowing,
+            contributions,
+        } = self;
+        // A kept list's *always* candidates solve to closed points; the rest names candidates,
+        // verdicts and a table of positions.
+        match narrowing {
+            Narrowing::Full | Narrowing::Selected(_) => {}
+            Narrowing::Kept(Kept {
+                entries: _,
+                points,
+                elimination: _,
+            }) => points.iter().for_each(|points| points_types(points, each)),
+        }
+        contributions.each_named(each);
+    }
+}
+
+impl Named for Retypes<'_> {
+    fn each_named(&self, each: &mut Each<'_>) {
+        let Retypes {
+            parameters,
+            returns,
+        } = self;
+        for (_, retype) in parameters.iter() {
+            retype.each_named(each);
+        }
+        returns.each_named(each);
+    }
+}
+
+impl Named for PathEntry<'_> {
+    fn each_named(&self, each: &mut Each<'_>) {
+        let PathEntry {
+            root: _,
+            chain: _,
+            label: _,
+            level: _,
+            through,
+        } = self;
+        through.each_named(each);
+    }
+}
+
+impl Named for Resolution<'_> {
+    fn each_named(&self, each: &mut Each<'_>) {
+        let Resolution {
+            tree,
+            resolved,
+            lacks,
+        } = self;
+        tree_types(tree, each);
+        lacks.each_named(each);
+        match resolved {
+            Resolved::Closed(ktype) => each((*ktype).into()),
+            Resolved::Class(_) => {}
+        }
+    }
+}
+
+impl<T: Named> Named for DeclaredType<T> {
+    fn each_named(&self, each: &mut Each<'_>) {
+        match self {
+            DeclaredType::Type(typed) => typed.each_named(each),
+            DeclaredType::Scheme(scheme) => each(DeclaredType::Scheme(*scheme)),
+        }
+    }
+}
+
+impl<T: Named> Named for [T] {
+    fn each_named(&self, each: &mut Each<'_>) {
+        self.iter().for_each(|named| named.each_named(each));
+    }
+}
+
+impl<A: Named, B: Named> Named for (A, B) {
+    fn each_named(&self, each: &mut Each<'_>) {
+        self.0.each_named(each);
+        self.1.each_named(each);
     }
 }
 

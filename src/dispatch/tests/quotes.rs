@@ -240,7 +240,10 @@ fn a_quote_reads_its_dollar_names_at_their_static_types() {
         // The code may be offered registrations at `_ + _`, so the builtin is kept beside them,
         // and admitted *always* where `$n`'s static type is `Number`.
         let always = (code.candidate_lists().iter()).any(|(site, _)| {
-            let Narrowing::Kept(kept) = facts.use_statics(code, *site).narrowing else {
+            let Narrowing::Kept(kept) = facts
+                .use_statics(&program.tiers().resting(), code, *site)
+                .narrowing
+            else {
                 return false;
             };
             (kept.entries.iter()).any(|(candidate, verdict)| {
@@ -248,11 +251,17 @@ fn a_quote_reads_its_dollar_names_at_their_static_types() {
             })
         });
         assert!(always, "`$n + 2`'s builtin is admitted at the load");
-        assert!(facts.typing_refusal(code).is_none());
+        assert!(
+            facts
+                .typing_refusal(&program.tiers().resting(), code)
+                .is_none()
+        );
     });
     let refused = "LET n = 1\nLET q = #(LET a :Str = $n)\nPRINT \"loaded\"\nEVAL q -> Any";
     super::statics::loaded(refused, |program| {
-        let refusal = program.facts().typing_refusal(code(program));
+        let refusal = program
+            .facts()
+            .typing_refusal(&program.tiers().resting(), code(program));
         assert!(refusal.is_some(), "`a :Str = $n` refuses the code");
     });
     assert_eq!(

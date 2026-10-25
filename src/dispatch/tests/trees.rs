@@ -23,7 +23,11 @@ fn statement_tree<'graph>(
 ) -> Tree<'graph> {
     operand(
         (program.facts())
-            .view_tree(shape, shape.site_of_node(&shape.body()[index]))
+            .view_tree(
+                &program.tiers().resting(),
+                shape,
+                shape.site_of_node(&shape.body()[index]),
+            )
             .expect("the statement is an opaque ascription"),
     )
 }
@@ -50,7 +54,11 @@ fn let_tree<'graph>(
     };
     operand(
         (program.facts())
-            .view_tree(shape, shape.site_of_node(node.reference()))
+            .view_tree(
+                &program.tiers().resting(),
+                shape,
+                shape.site_of_node(node.reference()),
+            )
             .expect("the right-hand side is an opaque ascription"),
     )
 }
@@ -186,7 +194,11 @@ fn ran<R>(
 fn view_digest(program: &Program<'_>, name: &str) -> String {
     let shape = program.shape();
     let tree = (program.facts())
-        .view_tree(shape, shape.site_of_node(let_node(program, shape, name)))
+        .view_tree(
+            &program.tiers().resting(),
+            shape,
+            shape.site_of_node(let_node(program, shape, name)),
+        )
         .expect("the right-hand side is an opaque ascription");
     let digest = tree.digest().unwrap_or_else(|| panic!("closed: {tree:?}"));
     format!("{digest:?}")
@@ -504,7 +516,11 @@ fn closed_identities_are_run_digests(source: &str, names: &[&str]) {
         (names.iter())
             .map(|name| {
                 let tree = (program.facts())
-                    .content(shape, slot(program, shape, name))
+                    .content(
+                        &program.tiers().resting(),
+                        shape,
+                        slot(program, shape, name),
+                    )
                     .unwrap_or_else(|| panic!("the load reads `{name}`'s content"));
                 let digest = tree
                     .digest()
@@ -552,8 +568,12 @@ fn the_load_finds_every_closed_module_tree_by_its_identity() {
         let shape = program.shape();
         let facts = program.facts();
         for name in ["asc", "desc"] {
-            let tree = (facts.content(shape, slot(program, shape, name)))
-                .unwrap_or_else(|| panic!("the load reads `{name}`'s content"));
+            let tree = (facts.content(
+                &program.tiers().resting(),
+                shape,
+                slot(program, shape, name),
+            ))
+            .unwrap_or_else(|| panic!("the load reads `{name}`'s content"));
             let digest = tree.digest().expect("a module of literals is closed");
             assert!(
                 facts

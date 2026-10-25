@@ -49,9 +49,14 @@ fn the_expression<'graph>(shape: &'graph BodyShape<'graph>) -> &'graph TypeExpre
 }
 
 /// What the load fixed for the one type expression `shape` records.
-fn only<'graph>(facts: &LoadFacts<'graph>, shape: &BodyShape<'_>) -> StaticType<'graph> {
+fn only<'graph>(program: &Program<'graph>, shape: &BodyShape<'_>) -> StaticType<'graph> {
+    let facts = program.facts();
     let shape = facts.shapes().shape_at(shape.segment());
-    facts.typed_expression(shape, the_expression(shape).site)
+    facts.typed_expression(
+        &program.tiers().resting(),
+        shape,
+        the_expression(shape).site,
+    )
 }
 
 /// The one nested shape of `kind` in `shape`.
@@ -146,7 +151,11 @@ fn a_closed_binder_is_typed_at_load() {
     loaded(source, |program| {
         let (facts, shape) = (program.facts(), program.shape());
         for name in ["Dist", "Ay", "Be"] {
-            let declared = closed(facts.declared_type(shape, type_slot(program, shape, name)));
+            let declared = closed(facts.declared_type(
+                &program.tiers().resting(),
+                shape,
+                type_slot(program, shape, name),
+            ));
             assert_eq!(rendered(program, declared), name);
         }
     });
@@ -157,7 +166,7 @@ fn a_value_position_type_is_closed() {
     loaded("LET t = :(LIST OF Number)", |program| {
         let bump = Bump::new();
         let types = reading(program.tiers(), &bump);
-        let typed = closed(only(program.facts(), program.shape()));
+        let typed = closed(only(program, program.shape()));
         assert_eq!(typed, types.list(KType::NUMBER));
     });
 }
@@ -170,15 +179,15 @@ fn a_for_all_name_is_its_lexical_variable() {
         let bump = Bump::new();
         let types = reading(program.tiers(), &bump);
         let held = lexical(program, 0, "Held");
-        let (value, levels) = rigid(only(facts, body));
+        let (value, levels) = rigid(only(program, body));
         assert_eq!(value, types.list(held));
         assert_eq!(levels, [0]);
         assert_eq!(
-            facts.group_levels(body),
+            facts.group_levels(&program.tiers().resting(), body),
             [held, lexical(program, 1, "Unused")],
             "a name no position reads is still a variable of the group"
         );
-        let Static::Closed(callable) = facts.callable_type(body) else {
+        let Static::Closed(callable) = facts.callable_type(&program.tiers().resting(), body) else {
             panic!("the callable's type is closed")
         };
         let (held, unused) = (type_name(program, "Held"), type_name(program, "Unused"));
@@ -186,7 +195,7 @@ fn a_for_all_name_is_its_lexical_variable() {
             callable.quantifier_map,
             FunctionGroupMap(&[(held, 0), (unused, 1)])
         );
-        let Static::Rigid { variables, .. } = only(facts, body) else {
+        let Static::Rigid { variables, .. } = only(program, body) else {
             unreachable!()
         };
         let slot = type_slot(program, body, "Held");
@@ -206,7 +215,10 @@ fn a_callable_records_where_its_for_all_names_live() {
         "EXPR FOR ALL #[Elt] #(ONLY x :Elt) -> Elt = #(x)",
         |program| {
             let (facts, body) = (program.facts(), registered(program));
-            assert_eq!(facts.group_levels(body), [lexical(program, 0, "Elt")]);
+            assert_eq!(
+                facts.group_levels(&program.tiers().resting(), body),
+                [lexical(program, 0, "Elt")]
+            );
             let slot = type_slot(program, body, "Elt");
             assert_eq!(facts.homes(body), [(0, Target::Local(slot))]);
         },
@@ -221,8 +233,8 @@ fn a_for_all_name_one_slot_reads_is_rigid_in_the_body() {
             let (facts, body) = (program.facts(), registered(program));
             let bump = Bump::new();
             let elt = lexical(program, 0, "Elt");
-            assert_eq!(facts.group_levels(body), [elt]);
-            let (value, levels) = rigid(only(facts, body));
+            assert_eq!(facts.group_levels(&program.tiers().resting(), body), [elt]);
+            let (value, levels) = rigid(only(program, body));
             assert_eq!(value, reading(program.tiers(), &bump).list(elt));
             assert_eq!(levels, [0]);
         },
@@ -234,9 +246,9 @@ fn a_type_parameter_is_a_rigid_variable() {
     loaded(
         "EXPR #(MAKESET Elt :Type) -> Any = #(:(LIST OF Elt))",
         |program| {
-            let (facts, body) = (program.facts(), registered(program));
+            let body = registered(program);
             let bump = Bump::new();
-            let (value, levels) = rigid(only(facts, body));
+            let (value, levels) = rigid(only(program, body));
             let elt = lexical(program, 0, "Elt");
             assert_eq!(value, reading(program.tiers(), &bump).list(elt));
             assert_eq!(levels, [0]);
@@ -251,7 +263,7 @@ fn an_outer_for_all_name_keeps_its_level_in_an_inner_body() {
     loaded(source, |program| {
         let inner = nested(registered(program), ShapeKind::Callable);
         let bump = Bump::new();
-        let (value, levels) = rigid(only(program.facts(), inner));
+        let (value, levels) = rigid(only(program, inner));
         let (ay, be) = (lexical(program, 0, "Ay"), lexical(program, 1, "Be"));
         assert_eq!(value, reading(program.tiers(), &bump).dict(ay, be));
         assert_eq!(levels, [0, 1]);
@@ -267,7 +279,12 @@ fn sibling_quantified_bodies_number_their_own_names_alike() {
     loaded(source, |program| {
         // Nested shapes sit in site order, which is program order.
         let levels: Vec<_> = (callables(registered(program)).iter())
-            .map(|body| program.facts().group_levels(body).to_vec())
+            .map(|body| {
+                program
+                    .facts()
+                    .group_levels(&program.tiers().resting(), body)
+                    .to_vec()
+            })
             .collect();
         let (ay, be) = (lexical(program, 1, "Ay"), lexical(program, 1, "Be"));
         assert_eq!(levels.len(), 2);
@@ -282,7 +299,7 @@ fn a_nested_quantified_callable_is_rigid_over_its_enclosing_names() {
     loaded(source, |program| {
         let facts = program.facts();
         let inner = nested(registered(program), ShapeKind::Callable);
-        let (value, levels) = match facts.callable_type(inner) {
+        let (value, levels) = match facts.callable_type(&program.tiers().resting(), inner) {
             Static::Rigid { value, variables } => (
                 value,
                 (variables.iter())
@@ -302,7 +319,10 @@ fn a_nested_quantified_callable_is_rigid_over_its_enclosing_names() {
         };
         let elt = lexical(program, 0, "Elt");
         assert!(params.iter().any(|(_, param)| param == elt));
-        assert_eq!(facts.group_levels(inner), [lexical(program, 1, "Tee")]);
+        assert_eq!(
+            facts.group_levels(&program.tiers().resting(), inner),
+            [lexical(program, 1, "Tee")]
+        );
     });
 }
 
@@ -313,8 +333,15 @@ fn a_bound_naming_a_run_bound_name_is_left_for_the_run() {
     loaded(source, |program| {
         let facts = program.facts();
         let inner = nested(registered(program), ShapeKind::Callable);
-        assert!(matches!(facts.callable_type(inner), Static::Unknown));
-        assert!(facts.group_levels(inner).is_empty());
+        assert!(matches!(
+            facts.callable_type(&program.tiers().resting(), inner),
+            Static::Unknown
+        ));
+        assert!(
+            facts
+                .group_levels(&program.tiers().resting(), inner)
+                .is_empty()
+        );
     });
 }
 
@@ -325,7 +352,7 @@ fn a_dollar_name_crossing_into_code_is_a_name_of_the_code_s_own() {
                   x\n)";
     loaded(source, |program| {
         let code = nested(registered(program), ShapeKind::Code);
-        let Static::Rigid { value, variables } = only(program.facts(), code) else {
+        let Static::Rigid { value, variables } = only(program, code) else {
             panic!("a rigid type")
         };
         let bump = Bump::new();
@@ -359,7 +386,9 @@ fn a_non_commuting_spelling_is_left_for_the_run() {
                   (:(Number & Str)))";
     loaded(source, |program| {
         let (facts, body) = (program.facts(), registered(program));
-        let typed = |expression: &TypeExpression<'_>| facts.typed_expression(body, expression.site);
+        let typed = |expression: &TypeExpression<'_>| {
+            facts.typed_expression(&program.tiers().resting(), body, expression.site)
+        };
         for statement in [0, 1, 3, 4] {
             let [expression] = written_in(body, statement)[..] else {
                 panic!("one expression in statement {statement}")
@@ -399,9 +428,13 @@ fn a_nominal_over_a_run_bound_type_is_declared_where_it_runs() {
     loaded(source, |program| {
         let (facts, body) = (program.facts(), registered(program));
         let slot = type_slot(program, body, "Boxed");
-        assert!(unknown(facts.declared_type(body, slot)));
+        assert!(unknown(facts.declared_type(
+            &program.tiers().resting(),
+            body,
+            slot
+        )));
         let bump = Bump::new();
-        let (value, levels) = rigid(only(facts, body));
+        let (value, levels) = rigid(only(program, body));
         let boxed = lexical(program, 1, "Boxed");
         assert_eq!(value, reading(program.tiers(), &bump).list(boxed));
         assert_eq!(levels, [1]);
@@ -421,7 +454,7 @@ fn a_callable_and_its_registration_are_typed_at_load() {
         };
         let body = birth(program, "near");
         let near = body;
-        let Static::Closed(callable) = facts.callable_type(body) else {
+        let Static::Closed(callable) = facts.callable_type(&program.tiers().resting(), body) else {
             panic!("the callable's type is closed")
         };
         let expected = types.function_type(&bump, &[(field("x"), KType::NUMBER)], KType::NUMBER);
@@ -431,7 +464,9 @@ fn a_callable_and_its_registration_are_typed_at_load() {
                 shape.births(registration.slot).map(BodyShape::segment) == Some(body.segment())
             })
             .expect("`near`'s registration");
-        let Static::Closed(registered) = facts.registered_type(shape, registration.slot) else {
+        let Static::Closed(registered) =
+            facts.registered_type(&program.tiers().resting(), shape, registration.slot)
+        else {
             panic!("the registration's shape is closed")
         };
         assert!(registered.quantifier_map.0.is_empty());
@@ -441,7 +476,9 @@ fn a_callable_and_its_registration_are_typed_at_load() {
             .find(|body| body.segment() != near.segment())
             .expect("`FUN` births its body");
         let inner = nested(f, ShapeKind::Callable);
-        let Static::Rigid { value, variables } = facts.callable_type(inner) else {
+        let Static::Rigid { value, variables } =
+            facts.callable_type(&program.tiers().resting(), inner)
+        else {
             panic!("a callable over a run-bound name is rigid")
         };
         let elt = lexical(program, 0, "Elt");
@@ -459,7 +496,6 @@ fn a_quote_s_holes_are_rigid_variables() {
                   LET q = #(PRINT :(LIST OF Tee))\n\
                   LET r = #(PRINT :(LIST OF $Alias))";
     loaded(source, |program| {
-        let facts = program.facts();
         let codes: Vec<_> = (program.shape().nested_shapes().iter())
             .filter(|(_, nested)| nested.kind() == ShapeKind::Code)
             .map(|(_, nested)| *nested)
@@ -475,10 +511,10 @@ fn a_quote_s_holes_are_rigid_variables() {
         };
         let bump = Bump::new();
         let types = reading(program.tiers(), &bump);
-        let (value, levels) = rigid(only(facts, hole));
+        let (value, levels) = rigid(only(program, hole));
         assert_eq!(value, types.list(lexical(program, 0, "Tee")));
         assert_eq!(levels, [0]);
-        assert_eq!(closed(only(facts, alias)), types.list(KType::NUMBER));
+        assert_eq!(closed(only(program, alias)), types.list(KType::NUMBER));
     });
 }
 
@@ -503,7 +539,9 @@ fn a_closed_type_that_does_not_elaborate_refuses_the_load() {
 fn a_refusal_in_a_quote_s_code_is_kept_for_its_eval() {
     loaded("LET q = #(PRINT :(Number.z))", |program| {
         let code = nested(program.shape(), ShapeKind::Code);
-        let refusal = program.facts().typing_refusal(code);
+        let refusal = program
+            .facts()
+            .typing_refusal(&program.tiers().resting(), code);
         assert!(matches!(
             refusal,
             Some(crate::scope::ShapeError::Type { .. })
@@ -556,14 +594,15 @@ fn an_enclosing_for_all_name_keeps_its_level_along_the_chain() {
         let bump = Bump::new();
         let types = reading(program.tiers(), &bump);
         let elt = lexical(program, 0, "Elt");
-        let (value, levels) = rigid(only(facts, inner));
+        let (value, levels) = rigid(only(program, inner));
         assert_eq!(
             value,
             types.list(elt),
             "read through the inner body's capture"
         );
         assert_eq!(levels, [0]);
-        let Static::Rigid { value, .. } = facts.callable_type(inner) else {
+        let Static::Rigid { value, .. } = facts.callable_type(&program.tiers().resting(), inner)
+        else {
             panic!("the inner callable's type is rigid")
         };
         let ktype = (value.ktype.as_type()).expect("the inner callable is unquantified");
@@ -576,7 +615,8 @@ fn an_enclosing_for_all_name_keeps_its_level_along_the_chain() {
 
 /// The one path variable among `variables`, which a shape on the chain `facts` holds reads: its
 /// entry.
-fn path_entry<'graph>(facts: &LoadFacts<'graph>, variables: &[Variable]) -> PathEntry<'graph> {
+fn path_entry<'graph>(program: &Program<'graph>, variables: &[Variable]) -> PathEntry<'graph> {
+    let facts = program.facts();
     let [
         Variable {
             source: Source::Path { root, level, .. },
@@ -587,20 +627,20 @@ fn path_entry<'graph>(facts: &LoadFacts<'graph>, variables: &[Variable]) -> Path
         panic!("one path variable, not {variables:?}")
     };
     let root = facts.shapes().shape_at(*root);
-    (facts.path(root, *level))
+    (facts.path(&program.tiers().resting(), root, *level))
         .map(|(entry, _)| entry)
         .expect("a path variable reads a minted entry")
 }
 
 /// The path variable `typed` is rigid over: its value, a lexical variable, and its entry.
 fn path<'graph>(
-    facts: &LoadFacts<'graph>,
+    program: &Program<'graph>,
     typed: StaticType<'graph>,
 ) -> (Parametric, PathEntry<'graph>) {
     let Static::Rigid { value, variables } = typed else {
         panic!("a rigid type, not {typed:?}")
     };
-    (value, path_entry(facts, variables))
+    (value, path_entry(program, variables))
 }
 
 /// Each path `shape`'s spellings read: its chain root and level.
@@ -625,7 +665,7 @@ fn a_path_through_a_module_name_is_one_variable_past_every_name_level() {
             let [expression] = written_in(shape, statement)[..] else {
                 panic!("one type expression in statement {statement}")
             };
-            let typed = facts.typed_expression(shape, expression.site);
+            let typed = facts.typed_expression(&program.tiers().resting(), shape, expression.site);
             assert_eq!(closed(typed), KType::NUMBER, "statement {statement}");
         }
         // `ints`'s own `Carrier` takes level 0; the paths start past it.
@@ -637,7 +677,10 @@ fn a_path_through_a_module_name_is_one_variable_past_every_name_level() {
         let [expression] = written_in(shape, 3)[..] else {
             panic!("one type expression in statement 3")
         };
-        let (value, entry) = path(facts, facts.typed_expression(shape, expression.site));
+        let (value, entry) = path(
+            program,
+            facts.typed_expression(&program.tiers().resting(), shape, expression.site),
+        );
         assert_eq!(value, lexical(program, 2, "Other"));
         assert!(entry.through.is_none(), "a binder with no declared type");
     });
@@ -652,10 +695,12 @@ fn a_path_through_a_parameter_reads_through_its_declared_application() {
         let facts = program.facts();
         let body = birth(program, "f");
         let inner = nested(body, ShapeKind::Callable);
-        let Static::Rigid { variables, .. } = facts.callable_type(inner) else {
+        let Static::Rigid { variables, .. } =
+            facts.callable_type(&program.tiers().resting(), inner)
+        else {
             panic!("`g`'s type is rigid over the path")
         };
-        let entry = path_entry(facts, variables);
+        let entry = path_entry(program, variables);
         assert!(
             entry.through.is_some(),
             "`Mapper` leaves `Carrier` unpinned, so the path reads through it"
@@ -686,7 +731,7 @@ fn a_path_through_an_annotated_binder_reads_after_the_binders() {
             panic!("one path read")
         };
         let root = facts.shapes().shape_at(root);
-        let entry = (facts.path(root, level))
+        let entry = (facts.path(&program.tiers().resting(), root, level))
             .map(|(entry, _)| entry)
             .expect("a minted entry");
         assert!(
@@ -703,7 +748,10 @@ fn a_type_binder_over_a_closed_path_declares_closed() {
     loaded(source, |program| {
         let (facts, shape) = (program.facts(), program.shape());
         let slot = type_slot(program, shape, "Elt");
-        assert_eq!(closed(facts.declared_type(shape, slot)), KType::NUMBER);
+        assert_eq!(
+            closed(facts.declared_type(&program.tiers().resting(), shape, slot)),
+            KType::NUMBER
+        );
         assert_eq!(path_reads(facts, shape).len(), 1);
     });
 }
@@ -795,7 +843,10 @@ fn sibling_bodies_numbering_their_names_alike_wait_on_distinct_unknowns() {
             panic!("two inner callables")
         };
         assert_eq!(
-            (facts.group_levels(g), facts.group_levels(h)),
+            (
+                facts.group_levels(&program.tiers().resting(), g),
+                facts.group_levels(&program.tiers().resting(), h)
+            ),
             (
                 &[lexical(program, 1, "Ay")][..],
                 &[lexical(program, 1, "Be")][..]

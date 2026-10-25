@@ -63,7 +63,10 @@ fn wraps_pick(source: &str) -> (Segment, Site, bool) {
             panic!("`p` is bound to a call");
         };
         let site = wrap.site_of_node(node.reference());
-        let narrowing = program.facts().use_statics(wrap, site).narrowing;
+        let narrowing = program
+            .facts()
+            .use_statics(&program.tiers().resting(), wrap, site)
+            .narrowing;
         (
             wrap.segment(),
             site,
@@ -191,7 +194,10 @@ fn a_statement_seam_decides_the_units_it_wakes_in_the_activation() {
             panic!("`p` is bound to a call");
         };
         let site = use_.site_of_node(node.reference());
-        let narrowing = program.facts().use_statics(use_, site).narrowing;
+        let narrowing = program
+            .facts()
+            .use_statics(&program.tiers().resting(), use_, site)
+            .narrowing;
         (
             use_.segment(),
             site,
@@ -262,7 +268,10 @@ fn a_module_body_reads_its_frames_entry_decisions() {
             panic!("`p` is bound to a call");
         };
         let site = body.site_of_node(node.reference());
-        let narrowing = program.facts().use_statics(body, site).narrowing;
+        let narrowing = program
+            .facts()
+            .use_statics(&program.tiers().resting(), body, site)
+            .narrowing;
         (
             body.segment(),
             site,
@@ -305,7 +314,10 @@ fn blocks_pick(source: &str) -> (Segment, Site, bool) {
             panic!("`p` is bound to a call");
         };
         let site = block.site_of_node(node.reference());
-        let narrowing = program.facts().use_statics(block, site).narrowing;
+        let narrowing = program
+            .facts()
+            .use_statics(&program.tiers().resting(), block, site)
+            .narrowing;
         (
             block.segment(),
             site,
@@ -401,7 +413,10 @@ fn gs_pick(source: &str) -> (Segment, Site, bool) {
         let g = callable(program, &["u"]);
         let statement = &g.body()[0];
         let site = g.site_of_node(statement);
-        let narrowing = program.facts().use_statics(g, site).narrowing;
+        let narrowing = program
+            .facts()
+            .use_statics(&program.tiers().resting(), g, site)
+            .narrowing;
         (
             g.segment(),
             site,
@@ -462,7 +477,10 @@ fn gs_last(source: &str, names: &[&str]) -> (Segment, Site, bool) {
         let g = callable(program, names);
         let statement = g.body().last().expect("`g` has a statement");
         let site = g.site_of_node(statement);
-        let narrowing = program.facts().use_statics(g, site).narrowing;
+        let narrowing = program
+            .facts()
+            .use_statics(&program.tiers().resting(), g, site)
+            .narrowing;
         (
             g.segment(),
             site,

@@ -408,8 +408,10 @@ pub(crate) fn composed<'a, 'graph, L: Language>(
     let refused = |display: std::fmt::Arguments<'_>| rendered(bump, &scratch, display);
     let refusal = match walked {
         Err(error) => Some(refused(format_args!("{}", error.display(symbols, &types)))),
-        Ok(()) => (facts.typing_refusal(root).or_else(|| facts.overlap(root)))
-            .map(|error| refused(format_args!("{}", error.display(symbols, &types)))),
+        Ok(()) => (facts
+            .typing_refusal(&types, root)
+            .or_else(|| facts.overlap(&types, root)))
+        .map(|error| refused(format_args!("{}", error.display(symbols, &types)))),
     };
     // Each type a frame under the composition reads, as a term where the agent tier lacks it.
     let resting = tiers.resting();

@@ -364,7 +364,7 @@ pub(super) fn run<'graph, 'here>(
             let name = label(operands[1]);
             let facts = at.view.facts();
             let site = at.view.shape().site_of_node(node);
-            let retype = facts.minted(&at.types, facts.retype(at.view.shape(), site));
+            let retype = facts.retype(&at.types, at.view.shape(), site);
             let Some(member) = layout::member(writer, value(0), (name, retype), types, scratch)
             else {
                 return raise(Raised::NoMember {
@@ -374,9 +374,10 @@ pub(super) fn run<'graph, 'here>(
             };
             // A quantified member is read at the instance the load solved at this site, or as it
             // is at a call's head.
-            match facts.minted(
+            match facts.instance_at(
                 &at.types,
-                facts.instance_at(at.view.shape(), at.view.shape().site_of_node(node)),
+                at.view.shape(),
+                at.view.shape().site_of_node(node),
             ) {
                 Some(InstanceRead::AsIs) => member,
                 // Through a header at a scheme: a header at its instance over the same member.

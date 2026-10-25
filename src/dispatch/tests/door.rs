@@ -21,11 +21,13 @@ fn facts_over_no_layers_answer_as_the_load_does() {
     loaded(SOURCE, |program| {
         let load = program.facts();
         let facts = Facts::of(load);
+        let types = program.tiers().resting();
         let same = |what: &str, left: String, right: String| {
             assert_eq!(left, right, "{what} reads alike through the door");
         };
         for shape in load.shapes().bodies() {
             let shape = *shape;
+            // A reader whose fact names a type reads it over the chain: `typed!` hands it one.
             macro_rules! alike {
                 ($reader:ident ( $($argument:expr),* )) => {
                     same(
@@ -35,9 +37,18 @@ fn facts_over_no_layers_answer_as_the_load_does() {
                     )
                 };
             }
-            alike!(callable_type());
-            alike!(group_levels());
-            alike!(born_instance());
+            macro_rules! typed {
+                ($reader:ident ( $($argument:expr),* )) => {
+                    same(
+                        stringify!($reader),
+                        format!("{:?}", load.$reader(&types, shape, $($argument),*)),
+                        format!("{:?}", facts.$reader(&types, shape, $($argument),*)),
+                    )
+                };
+            }
+            typed!(callable_type());
+            typed!(group_levels());
+            typed!(born_instance());
             alike!(homes());
             alike!(type_captures());
             alike!(capture_count());
@@ -45,30 +56,30 @@ fn facts_over_no_layers_answer_as_the_load_does() {
             alike!(class());
             alike!(caches());
             alike!(digested_count());
-            alike!(overlap());
-            alike!(typing_refusal());
+            typed!(overlap());
+            typed!(typing_refusal());
             for slot in (0..shape.slots()).map(|slot| Slot(slot as u32)) {
-                alike!(declared_type(slot));
-                alike!(registered_type(slot));
-                alike!(binder_type(slot));
-                alike!(content(slot));
+                typed!(declared_type(slot));
+                typed!(registered_type(slot));
+                typed!(binder_type(slot));
+                typed!(content(slot));
                 alike!(digested_index(slot));
             }
             for site in shape.sites().all() {
-                alike!(typed_expression(site));
-                alike!(value_type(site));
-                alike!(use_statics(site));
+                typed!(typed_expression(site));
+                typed!(value_type(site));
+                typed!(use_statics(site));
                 alike!(settled(site));
-                alike!(instance_at(site));
-                alike!(selection(site));
-                alike!(named_contributions(site));
+                typed!(instance_at(site));
+                typed!(selection(site));
+                typed!(named_contributions(site));
                 alike!(mint_at(site));
                 alike!(mints_at(site));
-                alike!(view_tree(site));
+                typed!(view_tree(site));
                 alike!(path_read(site));
             }
             for index in 0..shape.body().len() {
-                alike!(statement_type(index));
+                typed!(statement_type(index));
             }
         }
     });
