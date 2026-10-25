@@ -33,8 +33,8 @@
 //!
 //! Over static types naming lexical variables, [`Collector::reproducible`] reports whether a run,
 //! binding each variable, reproduces the solve: not where an admission read a variable through its
-//! ends, a variable's answer is a meet over one, or the solve fails at a verdict over one. A closed
-//! solve always is.
+//! ends or chose a declared union's member that a binding may change, a variable's answer is a meet
+//! over one, or the solve fails at a verdict over one. A closed solve always is.
 
 use crate::bump::{BumpAllocator, BumpVec};
 
@@ -520,8 +520,9 @@ impl<'s, 'run, T> Collector<'s, 'run, T> {
     /// the run does and then solving gives the solution so bound, and fails where this fails. A
     /// contribution handed whole to a cell binds member by member, a join of such keeps each beside
     /// the rest, and a verdict that holds over a variable holds at every binding. What may not: a
-    /// read through a variable's ends (`bound_read`), a meet over one, and a verdict that fails
-    /// over one.
+    /// read through a variable's ends (`bound_read`), a declared union's member chosen for a
+    /// carried variable or beside a carried member holding one, a meet over one, and a verdict
+    /// that fails over one.
     pub fn reproducible(&self, types: &TypeChain<'run, impl Habitat<'run>>) -> bool {
         !self.bound_read
             && (0..self.bounds.len()).all(|index| match self.answer(types, index) {
@@ -948,6 +949,15 @@ impl<'run, T> Lockstep<'run> for Admits<'_, '_, 'run, T> {
         // Covariant, the carried side lies under the declared one: every carried member must be
         // admitted by some declared member.
         for one in carried {
+            // Where a carried variable is admitted turns on its binding: `Never` reaches every
+            // member's variables, a union splits across members, and a member under a sibling is
+            // absorbed by it. So does where a sibling of a member holding one is admitted.
+            if declared.len() > 1
+                && one.contains_rigid()
+                && (carried.len() > 1 || one.view().rigid_bound().is_some())
+            {
+                self.collector.bound_read = true;
+            }
             if self.admit_one(types, scratch, declared, one, v, recurse) {
                 continue;
             }
