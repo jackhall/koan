@@ -1832,11 +1832,16 @@ proptest! {
         kept.extend_from_slice(&overloads);
         canonical_overloads(&types, scratch, &mut kept);
         // Canonical by subsumption, the same rule `union_of` applies to a union's members: no
-        // survivor lies below another, so no member promises only what a sibling already does.
+        // concrete survivor lies below another, so no member promises only what a sibling already
+        // does. The order is a partial order over concrete types alone, so a parametric member is
+        // kept and reduces nothing.
+        let concrete = |overload: &DeclaredType<Parametric>| types.enter(overload.raw()).is_concrete();
         for (index, one) in kept.iter().enumerate() {
             for (peer, other) in kept.iter().enumerate() {
                 prop_assert!(
-                    index == peer || !order::is_subtype_of(&types, scratch, other.raw(), one.raw()),
+                    index == peer
+                        || !(concrete(one) && concrete(other))
+                        || !order::is_subtype_of(&types, scratch, other.raw(), one.raw()),
                     "a canonical overload set kept a member below another",
                 );
             }

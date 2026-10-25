@@ -24,3 +24,4 @@ cc 2566334d4b206010c112cac614e5c3859f2e2abd59c91717152af093c367fe6e # shrinks to
 cc f5a8da62e86cc857b83efcc94d0706a072c588fc43e6d775af6d08592b3f11c2 # shrinks to a = Scheme(Scheme(0xd44c19272e475252db0386a868d5a13f)), b = Type(Parametric(0xb45f8d37d895d0971bcad5a74e8652a0))
 cc 4b1e9ca33b27cd10345aee522e14c519977d283e5d9f304f8e229950be9d24f4 # shrinks to a = Scheme(Scheme(0x6ad4f357e357be90da9388e370c729b7)), b = Scheme(Scheme(0xee701e907322da2fcacd66b0875a6ef3))
 cc ad9a7f2cc416ca51f7756592f90c4e1095ed14de329dd37a6673143dc582d1b5 # shrinks to (a, b) = (Handle(0x075eed3202873cd53ad81c1952b149bc), Handle(0x106f27e3c824d600a90eecd477cae166))
+cc d16eac061d472c0ce17ed8c9e26b7799643eb45ff8d338a5c54dd55770318b8e # shrinks to overloads = [Type(Parametric(0x305ce4b413fa93b07bb564c9f538129d)), Type(Parametric(0x13761655743bc2f67a6d3736fc00cf5d))]
