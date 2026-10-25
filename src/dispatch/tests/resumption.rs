@@ -450,10 +450,10 @@ fn the_agent_tier_grows_by_the_types_a_settlements_records_name() {
         let wrap = quantified(door.load(), door.root());
         let ask = crate::scheduler::Ask {
             body: wrap.segment(),
-            bound: [(
-                slot(door.symbols(), wrap, "Elt"),
-                crate::scheduler::Asked::Type(door.declared("Pt")),
-            )]
+            bound: [crate::scheduler::Asked::Type {
+                slot: slot(door.symbols(), wrap, "Elt"),
+                named: door.declared("Pt"),
+            }]
             .into_iter()
             .collect(),
         };
@@ -1217,18 +1217,19 @@ mod laws {
     fn ask(door: &Door<'_, '_>, bound: &Bound) -> crate::scheduler::Ask {
         let binding = bind(door, bound, false);
         let asked = (binding.entries().iter()).map(|(unknown, given)| {
-            let asked = match *given {
-                Bind::Type(typed) => crate::scheduler::Asked::Type(typed),
+            let Address::Slot(slot) = unknown.at else {
+                unreachable!("a binder's unknown is its slot")
+            };
+            match *given {
+                Bind::Type(named) => crate::scheduler::Asked::Type { slot, named },
                 Bind::Module { carried, tree } => crate::scheduler::Asked::Module {
+                    slot,
+                    composition: None,
                     carried,
                     content: tree.digest().expect("a module binds a closed tree"),
                     retyped: false,
                 },
-            };
-            let Address::Slot(slot) = unknown.at else {
-                unreachable!("a binder's unknown is its slot")
-            };
-            (slot, asked)
+            }
         });
         crate::scheduler::Ask {
             body: subject(door.root()).segment(),

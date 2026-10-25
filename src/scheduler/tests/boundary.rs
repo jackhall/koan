@@ -21,7 +21,8 @@ const PREFIXES: &[&str] = &[
 
 /// The owning types outside the tests: the buffer a step pushes its requests into, the drain's
 /// ready stack, the build arena's slots and free list, and the shared hold each settlement's facts
-/// keep on their parent's, and the arena keeps on a composition's. Each is the scheduler's runtime state, held beside the graph and never
+/// keep on their parent's and on the compositions they rest on or pin, and the arena keeps on a
+/// composition's. Each is the scheduler's runtime state, held beside the graph and never
 /// written into a region, so a value's no-drop-glue discipline does not reach them.
 const OWNING_ALLOWED: &[(&str, &str)] = &[
     ("src/scheduler/action.rs", "requests: Vec<Asked<'graph, B>>"),
@@ -33,6 +34,7 @@ const OWNING_ALLOWED: &[(&str, &str)] = &[
     ("src/scheduler/arena.rs", "Rc<Settled<'graph>>"),
     ("src/scheduler/arena.rs", "Rc<Composed<'graph>>"),
     ("src/scheduler/arena.rs", "Rc::new(facts)"),
+    ("src/scheduler/arena.rs", "Rc::clone(facts)"),
     ("src/scheduler/arena.rs", "free: Vec<u32>"),
     ("src/scheduler/arena.rs", "Vec::new()"),
 ];

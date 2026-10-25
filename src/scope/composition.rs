@@ -19,17 +19,25 @@ use crate::memory::{
 };
 use crate::parse::{ExpressionPart, KExpression, ProgramNode, copied};
 use crate::type_lattice::Term;
+use crate::values::ContentDigest;
 
 use super::records::{ComposedRoot, LoadFacts};
 use super::shape::{Located, Segment, ShapeKind};
 use super::shapes::Shapes;
+
+/// What composed code's copied syntax is laid in: program storage of its own, beside the syntax
+/// digest it was copied under.
+pub struct SyntaxOwner {
+    storage: ProgramStorage,
+    digest: ContentDigest,
+}
 
 self_cell!(
     /// Composed code's syntax, copied whole into program storage of its own: what a cell that
     /// bounces a miss hands the drain, and what the composition built from it keeps, its shapes
     /// and records laid in the same storage over the copy.
     pub struct ComposedSyntax {
-        owner: ProgramStorage,
+        owner: SyntaxOwner,
         #[covariant]
         dependent: ProgramNode,
     }
@@ -38,8 +46,12 @@ self_cell!(
 impl ComposedSyntax {
     /// `root`'s syntax copied into fresh storage.
     pub fn of(root: ComposedRoot<'_>) -> Self {
-        ComposedSyntax::new(program_storage(), |storage| {
-            copied(storage.brand(), root.syntax.reference())
+        let owner = SyntaxOwner {
+            storage: program_storage(),
+            digest: root.digest,
+        };
+        ComposedSyntax::new(owner, |owner| {
+            copied(owner.storage.brand(), root.syntax.reference())
         })
     }
 
@@ -48,14 +60,19 @@ impl ComposedSyntax {
         *self.borrow_dependent()
     }
 
+    /// Its syntax digest, which finds its composition.
+    pub fn digest(&self) -> ContentDigest {
+        self.borrow_owner().digest
+    }
+
     /// Its storage's brand, which what is built over the copy lays through.
     pub fn brand(&self) -> ProgramBrand<'_> {
-        self.borrow_owner().brand()
+        self.borrow_owner().storage.brand()
     }
 
     /// The bytes laid in its storage so far.
     pub fn allocated_bytes(&self) -> usize {
-        self.borrow_owner().allocated_bytes()
+        self.borrow_owner().storage.allocated_bytes()
     }
 }
 

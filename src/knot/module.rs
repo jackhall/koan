@@ -171,6 +171,12 @@ impl<'graph, 'cell> Module<'graph, 'cell> {
         self.content.body.map(|(_, closure)| closure)
     }
 
+    /// A body-born module's body's record, the root of the composed code it lies in on it: `None`
+    /// for a view.
+    pub fn body(&self) -> Option<&'cell BodyRef<'graph, 'cell>> {
+        self.content.body.map(|(body, _)| body.get())
+    }
+
     /// A body-born module's body and closure while no demand has computed its content.
     pub fn pending(
         &self,

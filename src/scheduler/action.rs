@@ -214,6 +214,9 @@ pub struct Step<
     arena: ArenaRef,
     /// The syntax digest of the composed code the cell's chain rests on, if not the load.
     composed: Option<ContentDigest>,
+    /// The composition a call's first step must rebuild, by syntax digest: see
+    /// [`wanting`](Self::wanting).
+    wanting: Option<ContentDigest>,
     spawns: &'a mut Spawns<'graph, B>,
     state: S::Of<StateAt<'graph, 'here, B>>,
     scratch: X::Of<Option<ScratchAt<'graph, 'here, 'scratch, B>>>,
@@ -258,7 +261,7 @@ where
         tiers: TypeTiers<'graph>,
         facts: Facts<'a>,
         provenance: &'a Provenance,
-        (arena, composed): (ArenaRef, Option<ContentDigest>),
+        (arena, composed, wanting): (ArenaRef, Option<ContentDigest>, Option<ContentDigest>),
         spawns: &'a mut Spawns<'graph, B>,
         state: StateAt<'graph, 'here, B>,
         scratch: Option<ScratchAt<'graph, 'here, 'scratch, B>>,
@@ -270,6 +273,7 @@ where
             provenance,
             arena,
             composed,
+            wanting,
             spawns,
             state,
             scratch,
@@ -301,6 +305,7 @@ where
             provenance,
             arena,
             composed,
+            wanting,
             spawns,
             state,
             scratch,
@@ -312,6 +317,7 @@ where
             provenance,
             arena,
             composed,
+            wanting,
             spawns,
             state: (),
             scratch,
@@ -344,6 +350,7 @@ where
             provenance,
             arena,
             composed,
+            wanting,
             spawns,
             state,
             scratch,
@@ -355,6 +362,7 @@ where
             provenance,
             arena,
             composed,
+            wanting,
             spawns,
             state,
             scratch: (),
@@ -452,6 +460,12 @@ where
     /// rests on: `None` for a chain on the load.
     pub fn composed(&self) -> Option<ContentDigest> {
         self.composed
+    }
+
+    /// At a call's first step, the composition a module its settlement binds was born of, by
+    /// syntax digest, which the miss found gone: the step [rebuilds](Self::rebuild) it.
+    pub fn wanting(&self) -> Option<ContentDigest> {
+        self.wanting
     }
 
     /// Whether this cell runs under a settlement: a call's frame the drain found or built one
@@ -705,6 +719,7 @@ where
             step,
             provenance: *self.provenance,
             arena: self.arena,
+            wanting: None,
             state: Rested::Awake(state),
         });
         if let Some(scratch) = scratch {
@@ -753,15 +768,37 @@ where
             Some(root.digest),
             "a bounce leaves another base"
         );
-        let placement = match self.context.lent_scratch() {
+        let placement = self.placement();
+        let compose = Compose::Owned(ComposedSyntax::of(root));
+        self.tail_lending(placement, work, Lending::Compose(compose))
+    }
+
+    /// Hand this cell's work, untouched, to a successor born under the arena node `seek` finds,
+    /// once the composition of `root`'s code is built over a copy of its syntax: the first step of
+    /// a call whose settlement binds a module of that code, which the miss found gone
+    /// ([`wanting`](Self::wanting)). The successor takes this cell's placement.
+    pub fn rebuild(
+        self,
+        work: Work<'graph, 'here, B>,
+        seek: Seek<'graph>,
+        root: ComposedRoot<'_>,
+    ) -> Action<'graph, B> {
+        debug_assert_eq!(
+            self.wanting,
+            Some(root.digest),
+            "a rebuild is what the miss wanted"
+        );
+        let placement = self.placement();
+        let syntax = ComposedSyntax::of(root);
+        self.tail_lending(placement, work, Lending::Pinning(seek, syntax))
+    }
+
+    /// The placement this cell was born at: a tree cell lent its parent's scratch, or a tenant.
+    fn placement(&self) -> Placement {
+        match self.context.lent_scratch() {
             Some(_) => Placement::Fresh,
             None => Placement::Shares,
-        };
-        let compose = Compose::Owned {
-            syntax: ComposedSyntax::of(root),
-            digest: root.digest,
-        };
-        self.tail_lending(placement, work, Lending::Compose(compose))
+        }
     }
 
     fn tail_lending(

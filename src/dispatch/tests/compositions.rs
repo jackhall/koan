@@ -330,3 +330,101 @@ fn a_composed_declared_nominal_is_minted_at_its_declaring_statement() {
     assert_eq!(composed, "Boxed([1, 2])");
     assert_eq!(tiers.agent, 0);
 }
+
+/// What one run of `source` left under `budget`: what it printed, the drain's tallies, and how
+/// many settlements lay under a composition and how many compositions some settlement pinned at
+/// its end.
+fn pinned(source: &str, budget: BuildBudget) -> (String, Tiers, (usize, usize)) {
+    WRITTEN.with(|written| written.borrow_mut().clear());
+    let mut substrate = CellSubstrate::load::<Koan>(source, "<test>", 4, budget, output())
+        .unwrap_or_else(|error| panic!("the program loads: {error}"));
+    TIERS.with(|tiers| tiers.set(Tiers::default()));
+    substrate
+        .with(|running| running.run())
+        .expect("the program runs");
+    let under = substrate.with(|running| running.scheduler().graph().under_compositions());
+    let printed = WRITTEN.with(|written| written.borrow().join("\n"));
+    (printed, TIERS.with(Cell::get), under)
+}
+
+/// `PEEK`'s code: a `SIG` and a function keyed on a module it reads as one.
+const PEEK: &str = "(SIG Hold FOR ALL #[Elt] = #[(VAL held :Elt)]) \
+                    (LET peek = (FN :{m :Hold} -> Any = #((LET v = (m :| Hold)) ({h = v.held}))))";
+
+/// A module composed from text the program never held, so only its composition computes its tree.
+const FRESH: &str = "LET m = (EVAL (COMPOSE \"#((MODULE m = ((LET held = 1))) (m))\") -> Any)\n";
+
+#[test]
+fn a_callable_born_in_composed_code_keys_a_settlement_under_its_composition() {
+    let (printed, tiers, (under, pins)) = pinned(
+        &format!(
+            "LET q = #({PEEK} (MODULE m = ((LET held = 1))) (PRINT (peek {{m = m}})) \
+             (PRINT (peek {{m = m}})))\nEVAL (COMPOSE q) -> Any"
+        ),
+        BuildBudget::default(),
+    );
+    assert_eq!(printed, "{h = Elt(1)}\n{h = Elt(1)}");
+    // The second call hits the settlement the first built, under the composition.
+    assert_eq!((tiers.sought, tiers.settled), (2, 1));
+    assert_eq!((under, pins), (1, 0));
+}
+
+#[test]
+fn a_settlement_under_a_composition_rests_nothing_in_the_agent_tier() {
+    let source = |eval: &str| {
+        format!(
+            "LET q = #({PEEK} (MODULE m = ((LET held = 1))) (PRINT (peek {{m = m}})))\n\
+             {eval} -> Any"
+        )
+    };
+    let (printed, tiers, _) = pinned(&source("EVAL (COMPOSE q)"), BuildBudget::default());
+    assert_eq!(printed, run(&source("EVAL q")));
+    assert_eq!(tiers.settled, 1);
+    assert_eq!((tiers.agent, tiers.relayed, tiers.rested), (0, 0, 0));
+}
+
+#[test]
+fn a_settlement_binding_a_module_another_composition_computed_pins_it() {
+    let (printed, tiers, (under, pins)) = pinned(
+        &format!(
+            "{FRESH}LET q = #({PEEK} (peek))\nLET peek = (EVAL (COMPOSE q) -> Any)\n\
+             PRINT (peek {{m = m}})\nPRINT (peek {{m = m}})"
+        ),
+        BuildBudget::default(),
+    );
+    assert_eq!(printed, "{h = Elt(1)}\n{h = Elt(1)}");
+    assert_eq!((tiers.sought, tiers.settled, tiers.agent), (2, 1, 0));
+    // The settlement lies under `peek`'s composition and pins `m`'s.
+    assert_eq!((under, pins), (1, 1));
+}
+
+#[test]
+fn a_pinned_composition_is_evicted_only_after_its_last_pinner() {
+    let (printed, tiers, (under, pins)) = pinned(
+        &format!(
+            "{FRESH}LET q = #({PEEK} (peek))\nLET peek = (EVAL (COMPOSE q) -> Any)\n\
+             PRINT (peek {{m = m}})\nPRINT (peek {{m = m}})\nLET p = #(PRINT 0)\n\
+             EVAL (COMPOSE p) -> Any"
+        ),
+        SMALLEST,
+    );
+    assert_eq!(printed, "{h = Elt(1)}\n{h = Elt(1)}\n0");
+    // `peek`'s miss evicts `m`'s composition, so the call rebuilds it from the module's root to pin
+    // it — a fourth composition, and like each, built over the syntax a bounce copied; while the
+    // settlement lives it stays, and the second call hits.
+    assert_eq!((tiers.settled, tiers.composed, tiers.bounced), (1, 4, 4));
+    // `p`'s miss evicts the settlement, then the composition it pinned, then `peek`'s.
+    assert_eq!(tiers.evicted, 4);
+    assert_eq!((under, pins), (0, 0));
+}
+
+#[test]
+fn a_written_callee_bound_to_a_composed_module_decides_in_its_activation() {
+    let (printed, tiers, _) = pinned(
+        &format!("{PRELUDE}{OUTER}{FRESH}PRINT (OUTER m)"),
+        BuildBudget::default(),
+    );
+    assert_eq!(printed, "7");
+    // Under the root a settlement binds load content alone: `m`'s tree lies in its composition.
+    assert_eq!((tiers.sought, tiers.settled, tiers.agent), (0, 0, 0));
+}

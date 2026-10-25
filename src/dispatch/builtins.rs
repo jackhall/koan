@@ -475,22 +475,32 @@ pub(super) fn run<'graph, 'here>(
             }
         }
         #[cfg(test)]
-        Native::Compose => compose(value(0), writer, types, scratch),
+        Native::Compose => compose(value(0), program, writer, types, scratch),
     }
 }
 
 /// `COMPOSE q`: code composed at run time over the syntax the quote's code `value` was written
 /// with, carried at its type, binding each `$` name as the quote does and each `$(…)` key to the
 /// list of the registrations the quote's use there reads. Holes a `USING` filled are dropped.
+///
+/// `COMPOSE "#(…)"`: code composed at run time over syntax the program never held, parsed from the
+/// quote the text writes into storage the test leaks, binding nothing: the one way a composition
+/// computes a fact the load did not.
 #[cfg(test)]
 fn compose<'graph, 'here>(
     value: KValue<'graph, 'here>,
+    program: &crate::program::Program<'graph>,
     writer: Writer<'here, '_>,
     types: &Chain<'_, 'here, '_, '_>,
     scratch: &Bump,
 ) -> KValue<'graph, 'here> {
     use crate::knot::composed_code;
     use crate::values::{Link, List};
+    if let Value::Str(text) = value {
+        let syntax = super::tests::quoted(text, program.symbols());
+        let ktype = types.code_needing(scratch, syntax.code_kind(), &[]);
+        return Value::Knotted(composed_code(writer, syntax, ktype, &[], types));
+    }
     let member = value.as_code().expect("`COMPOSE` is handed a quote's code");
     let code = member.code().expect("a code member holds code");
     let mut bound = BumpVec::new_in(scratch);

@@ -245,8 +245,9 @@ impl<'graph> Running<'graph> {
             self.program(),
             bump,
             Facts::of(load),
+            &[],
             ask,
-            &mut || {},
+            &mut |_: Option<&crate::values::Chain<'_, '_, '_, '_>>| {},
             &&(),
         )?;
         Some(Facts::under(load, Some(resident(bump, settled))))

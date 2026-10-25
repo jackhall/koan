@@ -13,15 +13,18 @@
 //! A keyed name holds **load content** where the load could have declared it: a type whose handle
 //! rests in the root, a type value naming one, or a module whose content digest names a closed tree
 //! the callee's chain holds: under the root, the load's index alone, checked here; under a
-//! settlement, resolved by the drain's miss through that settlement. Anything else is content the
-//! run produced, and a call keying any seeks nothing, or settles nothing. A miss runs [`settled`]:
-//! the language's walk rooted at the callee's body, over a layer on the settlement's parent, the
-//! binding's types rested only once its trees resolve, and the walk's types adopted into the agent
-//! tier once it ends. A callee born of
-//! code composed at run time seeks no settlement yet, and runs under its composition: its frame,
-//! born under the root where that composition is gone, bounces with a copy of the syntax its body
-//! record's root holds. A composition's miss runs [`composed`]: its code's shapes built alone over
-//! that copy and walked as the load walks the program's. See
+//! settlement or a composition, resolved by the drain's miss through that chain — and, under a
+//! composition, through the composition a module of other composed code was born of, which the
+//! settlement then pins. Anything else is content the run produced, and a call keying any seeks
+//! nothing, or settles nothing. A miss runs [`settled`]: the language's walk rooted at the callee's
+//! body, over a layer on the settlement's parent and its base's shapes, the binding's types rested
+//! only once its trees resolve. Under the root they rest in the agent tier, as the walk's types do
+//! once it ends; under a composition they rest in the walk's own chain, and the settlement keeps a
+//! term of each type its records name instead. A callee born of code composed at run time keys its
+//! settlements under its composition: its frame, born under the root where that composition is
+//! gone, bounces with a copy of the syntax its body record's root holds. A composition's miss runs
+//! [`composed`]: its code's shapes built alone over that copy and walked as the load walks the
+//! program's. See
 //! [build/README.md](../build/README.md).
 
 use std::fmt::Write as _;
@@ -96,10 +99,6 @@ fn settlement<'graph>(
     let (callee, arguments) = (*callee, *arguments);
     let function = called_function(callee)?;
     let body = function.body();
-    // A body of composed code lies in its composition's shapes, where nothing settles yet.
-    if body.root.is_some() {
-        return None;
-    }
     let keyed = body.keys?;
     let under_root = function.closure().build() == ArenaRef::ROOT;
     let scratch = Bump::new();
@@ -164,13 +163,19 @@ fn settlement<'graph>(
                 carried: kind.into(),
                 named: Some(solved),
             });
-            bound.push((slot, Asked::Type(solved)));
+            bound.push(Asked::Type {
+                slot,
+                named: solved,
+            });
             continue;
         }
         let argument = arguments.field(name.symbol(), types, &scratch)?.value();
         let digest = argument.digest(types, &scratch);
         let asked = match (argument.as_type(), argument.as_module()) {
-            (Some(named), _) if region.in_root(named.handle()) => Asked::Type(named.handle()),
+            (Some(named), _) if region.in_root(named.handle()) => Asked::Type {
+                slot,
+                named: named.handle(),
+            },
             // A module is load content where its bare member is: the type it is seen at retypes
             // the tree the load computed for it. Its tree resolves through the callee's chain —
             // the load alone under the root, and where the drain settles under a settlement.
@@ -191,18 +196,22 @@ fn settlement<'graph>(
                     named: None,
                 });
                 Asked::Module {
+                    slot,
                     carried,
                     content,
                     retyped: carried != own,
+                    composition: (member.module())
+                        .and_then(|module| module.body()?.root)
+                        .map(|root| root.digest),
                 }
             }
             _ => return None,
         };
         digests.push(digest);
         binding.push(KeyedTypes::of(&argument));
-        bound.push((slot, asked));
+        bound.push(asked);
     }
-    let key = key_of(body.segment, digests.into_iter());
+    let key = key_of(body.base, body.segment, digests.into_iter());
     let ask = Ask {
         body: body.segment,
         bound,
@@ -212,30 +221,44 @@ fn settlement<'graph>(
 
 /// What a miss settles for `ask` over `parent`, the layers below, laid in `bump`: `L`'s walk rooted
 /// at the asked body under the asked binding and `parent`'s, each record kept in a layer over
-/// `parent`. It interns through a chain of its own over the agent tier, laid in `bump` too, and
-/// adopts every type the records name into the agent tier. A refusal its walk reaches is kept
-/// worded as the load words it. `None` where a module the binding names has no tree in `parent`;
-/// otherwise `rest` rests the binding's types before the walk reads them.
+/// `parent`, over the shapes of `parent`'s base — the load's, or a composition's. It interns
+/// through a chain of its own over the agent tier, laid in `bump` too, and under the root adopts
+/// every type the records name into the agent tier. Under a composition it rests nothing there:
+/// the chain mints the terms of the layers below first, and the settlement keeps a term of each
+/// type its records name past the agent tier. A refusal its walk reaches is kept worded as the
+/// load words it. A module's tree is found in `parent`, the load, or a `pinned` composition:
+/// `None` where none holds it; otherwise `rest`, handed the walk's chain, rests the binding's
+/// types before the walk reads them: in the agent tier under the root, in that chain under a
+/// composition.
 pub(crate) fn settled<'a, 'graph, L: Language>(
     program: &Program<'graph>,
     bump: &'a Bump,
     parent: Facts<'a>,
+    pinned: &[&'a Composition<'a>],
     ask: &Ask,
-    rest: &mut dyn FnMut(),
+    rest: &mut dyn FnMut(Option<&Chain<'_, '_, '_, '_>>),
     _: &'a &'graph (),
 ) -> Option<Settlement<'a>> {
     let scratch = Bump::new();
-    let shapes = program.shapes();
+    let shapes = parent.shapes();
+    let composed = parent.composition().is_some();
+    let load: &'a crate::scope::LoadFacts<'a> = program.facts();
+    let tree_of = |content| {
+        (parent.tree_of(content))
+            .or_else(|| composed.then(|| load.tree_of(content)).flatten())
+            .or_else(|| pinned.iter().find_map(|pin| pin.facts().tree_of(content)))
+    };
     let mut staged = BumpVec::new_in(&scratch);
-    for (slot, asked) in &ask.bound {
+    for asked in &ask.bound {
         let bound = match *asked {
-            Asked::Type(named) => Bound::Type(named),
+            Asked::Type { named, .. } => Bound::Type(named),
             Asked::Module {
                 carried,
                 content,
                 retyped,
+                ..
             } => {
-                let tree = parent.tree_of(content)?;
+                let tree = tree_of(content)?;
                 Bound::Module {
                     carried,
                     tree: match retyped {
@@ -247,7 +270,7 @@ pub(crate) fn settled<'a, 'graph, L: Language>(
         };
         let unknown = Unknown {
             segment: ask.body,
-            at: Address::Slot(*slot),
+            at: Address::Slot(asked.slot()),
         };
         staged.push((unknown, bound));
     }
@@ -257,11 +280,16 @@ pub(crate) fn settled<'a, 'graph, L: Language>(
             staged.push(*below);
         }
     }
-    rest();
     let binding = Binding::laid(bump, &mut staged);
     let layer = Layer::new(bump, &scratch, parent, binding);
     let tiers = program.tiers();
     let types = tiers.settling(bump);
+    // Every type the layers below and the binding name resolves in the walk's chain before it
+    // reads them.
+    parent.each_term(&mut |term| {
+        types.mint(term);
+    });
+    rest(Some(&types));
     let walked = L::facts(
         shapes,
         program.builtins(),
@@ -275,14 +303,28 @@ pub(crate) fn settled<'a, 'graph, L: Language>(
         Ok(()) => {
             let resting = tiers.resting();
             let (units, closings) = layer.writes().sorted(&scratch);
-            let mut adopt = |kt| resting.adopt_from(&types, kt);
+            let mut named: BumpVec<'_, DeclaredType<Parametric>> = BumpVec::new_in(&scratch);
+            let mut name = |kt| named.push(kt);
             units
                 .iter()
-                .for_each(|(_, (facts, _))| facts.each_type(&mut adopt));
+                .for_each(|(_, (facts, _))| facts.each_type(&mut name));
             closings
                 .iter()
-                .for_each(|(_, (closing, _))| closing.each_type(&mut adopt));
-            Settlement::of(bump, &scratch, shapes, below, binding, layer.writes())
+                .for_each(|(_, (closing, _))| closing.each_type(&mut name));
+            let settlement = Settlement::of(bump, &scratch, shapes, below, binding, layer.writes());
+            if !composed {
+                named.iter().for_each(|kt| resting.adopt_from(&types, *kt));
+                return Some(settlement);
+            }
+            // A term of each type a frame under it reads that the agent tier lacks.
+            let mut exported: BumpBackedSet<'_, DeclaredType<Parametric>> = bump_set(&scratch);
+            let mut terms = BumpVec::new_in(&scratch);
+            for kt in named.iter() {
+                if !resting.resolves(*kt) && exported.insert(*kt) {
+                    terms.push(types.export(*kt, &resting, bump, &scratch));
+                }
+            }
+            settlement.termed(collect(bump, terms.iter().copied()))
         }
         Err(error) => {
             let mut text = Text(BumpVec::new_in(&scratch));

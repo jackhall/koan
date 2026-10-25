@@ -4,6 +4,10 @@
 //! its identity, each found as the load finds its own ([`records`](super::records)). The body's
 //! folds stay the load's, so a read of one falls to the load.
 //!
+//! A settlement under a composition rests nothing in the agent tier: beside its records it keeps a
+//! [`Term`] of each type they name that the root and the agent tier do not hold, which a frame
+//! under it mints, as one under the composition mints the composition's.
+//!
 //! A settlement whose walk reached a refusal keeps the refusal's wording instead of records, so a
 //! frame born under it faults as the load would, and a second ask refuses alike. The arena owns
 //! each settlement beside its parent; a step reads one only through [`Facts`](super::Facts), at
@@ -15,6 +19,7 @@
 //! arena node holds; it binds only the names its event bound, and a read of any other falls below.
 
 use crate::memory::{Bump, BumpAllocator, BumpVec, Lays, resident};
+use crate::type_lattice::Term;
 
 use super::facts::{Binding, Bound, Unknown};
 use super::records::Records;
@@ -28,6 +33,8 @@ pub struct Settlement<'a> {
     parent: Option<&'a Settlement<'a>>,
     records: Records<'a>,
     refusal: Option<&'a str>,
+    /// Empty under the root.
+    terms: &'a [Term<'a>],
 }
 
 impl<'a> Settlement<'a> {
@@ -46,6 +53,7 @@ impl<'a> Settlement<'a> {
             parent,
             records: Records::of(lay, scratch, shapes, None, binding, &units, &closings),
             refusal: None,
+            terms: &[],
         }
     }
 
@@ -55,6 +63,7 @@ impl<'a> Settlement<'a> {
             parent,
             records: Records::bare(parent.map_or(Binding::EMPTY, |parent| parent.binding())),
             refusal: None,
+            terms: &[],
         }
     }
 
@@ -68,7 +77,19 @@ impl<'a> Settlement<'a> {
             parent,
             records: Records::bare(binding),
             refusal: Some(refusal),
+            terms: &[],
         }
+    }
+
+    /// These facts beside `terms`, a term of each type their records name past the agent tier.
+    pub fn termed(self, terms: &'a [Term<'a>]) -> Self {
+        Settlement { terms, ..self }
+    }
+
+    /// A term of each type its records name that the root and the agent tier do not hold: empty
+    /// under the root.
+    pub fn terms(&self) -> &'a [Term<'a>] {
+        self.terms
     }
 
     /// The wording of the refusal its walk reached, if it reached one.

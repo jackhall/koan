@@ -19,7 +19,7 @@ use crate::memory::{
 };
 use crate::scheduler::action::{Action, Step, Use};
 use crate::scope::RegionHeader;
-use crate::values::{ArenaRef, TypeTiers};
+use crate::values::{ArenaRef, ContentDigest, TypeTiers};
 
 /// What a scheduler runs: the layer above it, as one bundle — the family a cell is born holding,
 /// the family it holds at a step and parks with, the family of what a parked cell keeps in its
@@ -119,6 +119,9 @@ where
     pub provenance: Provenance,
     /// The arena node the cell runs under, which the drain borrowed for it at its birth.
     pub arena: ArenaRef,
+    /// At a call's birth, the composition a module its settlement binds was born of, by syntax
+    /// digest, where the miss found it gone: the cell's first step bounces with its syntax.
+    pub wanting: Option<ContentDigest>,
     pub state: Rested<'graph, 'cell, B>,
 }
 

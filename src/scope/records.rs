@@ -19,7 +19,7 @@
 use crate::memory::{BumpAllocator, BumpVec, Lays, collect, resident};
 use crate::parse::{ExpressionPart, ProgramNode};
 use crate::symbols::BinderSymbol;
-use crate::type_lattice::{DeclaredType, Interval, KType, Parametric};
+use crate::type_lattice::{DeclaredType, Interval, KType, Parametric, Term};
 use crate::values::{ContentDigest, Weight};
 
 use super::composition::Composition;
@@ -418,6 +418,25 @@ impl<'step> Facts<'step> {
     /// The innermost settlement these facts read, if any.
     pub fn top(&self) -> Option<&'step Settlement<'step>> {
         self.0.top
+    }
+
+    /// Hand `each` every term a frame reading these facts mints so every type they name resolves
+    /// in its chain, in the order a term's leaves resolve: the composition's, then each
+    /// settlement's from the outermost. None over the load.
+    pub fn each_term(&self, each: &mut dyn FnMut(&'step Term<'step>)) {
+        let terms = |composition: &'step Composition<'step>| composition.terms();
+        self.0
+            .composition
+            .map_or(&[][..], terms)
+            .iter()
+            .for_each(&mut *each);
+        let mut settlements: smallvec::SmallVec<[&Settlement<'step>; 4]> =
+            std::iter::successors(self.0.top, |layer| layer.parent()).collect();
+        settlements.reverse();
+        settlements
+            .iter()
+            .flat_map(|layer| layer.terms())
+            .for_each(each);
     }
 
     /// The wording of the refusal the innermost settlement's walk reached, else the refusal of the

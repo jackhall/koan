@@ -72,7 +72,9 @@ use crate::type_lattice::{
     Collector, DeclaredType, DeclaredView, KType, Parametric, Record as TypeRecord, TypeNode,
     Variance, admits_with, display_name, substitute_quantified,
 };
-use crate::values::{ArenaRef, CALL_ONLY, Chain, Link, List, Record, TypeValue, Value};
+use crate::values::{
+    ArenaRef, CALL_ONLY, Chain, ContentDigest, Link, List, Record, TypeValue, Value,
+};
 
 use super::activation_store::bound_of;
 use super::bundle::{Handed, KBirth, KBundle, KState, Within};
@@ -200,6 +202,22 @@ type Taking<'a, 'graph, 'step, 'here, 'scratch, 'lent> =
 pub fn run<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'graph, KBundle> {
     let (step, state) = step.state();
     let (mut step, scratch) = step.scratch();
+    // A call whose settlement binds a module of composed code whose composition the miss found
+    // gone rebuilds it from the module's root and seeks again.
+    if let Some(wanted) = step.wanting()
+        && let KState::Born(birth) = &state
+        && let Some(root) = wanted_root(birth, wanted, &step.types())
+    {
+        let seek = super::settle::seek(birth, &step.types(), &step.types());
+        let KState::Born(birth) = state else {
+            unreachable!("matched above")
+        };
+        let work = crate::scheduler::Work {
+            step: run,
+            state: birth,
+        };
+        return step.rebuild(work, seek, root);
+    }
     // A frame of composed code born under the root — its composition was not live — bounces with
     // its syntax, which the drain builds the composition over.
     if let KState::Born(birth) = &state
@@ -262,6 +280,28 @@ fn composed_root<'graph>(birth: &KBirth<'graph, '_>) -> Option<ComposedRoot<'gra
         }
         _ => None,
     }
+}
+
+/// The root of the composed code a module the call `birth` binds at a keyed name was born of,
+/// where its syntax digest is `wanted`.
+fn wanted_root<'graph>(
+    birth: &KBirth<'graph, '_>,
+    wanted: ContentDigest,
+    types: &Chain<'_, '_, '_, '_>,
+) -> Option<ComposedRoot<'graph>> {
+    let KBirth::Call {
+        callee, arguments, ..
+    } = birth
+    else {
+        return None;
+    };
+    let scratch = Bump::new();
+    let keys = called_function(*callee)?.body().keys?;
+    keys.iter().find_map(|(_, name)| {
+        let argument = arguments.field(name.symbol(), types, &scratch)?.value();
+        let root = argument.knot_member()?.module()?.body()?.root?;
+        (root.digest == wanted).then_some(root)
+    })
 }
 
 /// The root of `body`, where it is code composed at run time.
@@ -496,15 +536,13 @@ fn ran<'graph, 'here, 'scratch>(
     perform(step, runner, types)
 }
 
-/// Mint into `types` each term of the composition a frame reading `facts` rests on, so every type
-/// its facts name resolves in the frame's chain: once per frame, its binding event.
+/// Mint into `types` each term of the composition a frame reading `facts` rests on and of each
+/// settlement under it, so every type its facts name resolves in the frame's chain: once per frame,
+/// its binding event.
 fn minted(facts: &Facts<'_>, types: &Chain<'_, '_, '_, '_>) {
-    for term in facts
-        .composition()
-        .map_or(&[][..], |composition| composition.terms())
-    {
+    facts.each_term(&mut |term| {
         types.mint(term);
-    }
+    });
 }
 
 /// A frame's or a block's entry event: each parameter, or a quote's code's capture, a unit beneath

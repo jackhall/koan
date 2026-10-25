@@ -19,6 +19,8 @@
 //! minted cell, so a second scheduler runs beside the first with nothing shared but the program
 //! text and the shapes in it.
 
+use smallvec::SmallVec;
+
 use crate::memory::{
     CellGraph, CellHandle, CreateError, Dormant, Erased, Lend, Operand, RedeemError,
     ReleaseAbsorption, ReleaseError, SlabHandle,
@@ -38,7 +40,7 @@ use crate::scope::HalfHeader;
 use crate::scope::{Facts, LoadFacts, RegionHeader};
 #[cfg(test)]
 use crate::type_lattice::Branch;
-use crate::values::{ArenaRef, BuildBudget, TypeTiers};
+use crate::values::{ArenaRef, BuildBudget, ContentDigest, TypeTiers};
 
 /// The graph of cells a drain runs over: `cellgraph`'s graph closed over the continuation family,
 /// the bundle's scratch family and the delivery bundle.
@@ -114,6 +116,13 @@ impl<'graph, B: StepBundle<'graph>> Graph<'graph, B> {
     #[cfg(test)]
     pub(crate) fn live_compositions(&self) -> usize {
         self.arena.compositions()
+    }
+
+    /// How many live settlements lie directly under a composition, and how many live compositions
+    /// some settlement pins.
+    #[cfg(test)]
+    pub(crate) fn under_compositions(&self) -> (usize, usize) {
+        self.arena.under_compositions()
     }
 
     /// How many live settlements lie directly under `parent`.
@@ -351,6 +360,7 @@ where
                     home: under,
                 },
                 arena: ArenaRef::ROOT,
+                wanting: None,
                 state,
             },
         )?;
@@ -453,19 +463,27 @@ where
         asker: ArenaRef,
     ) -> Result<CellHandle, DrainStalled> {
         let arena = &mut self.graph.arena;
-        let (under, missed) = match asked.lending {
-            Lending::Parent => (asker, false),
+        let (under, missed, wanting) = match asked.lending {
+            Lending::Parent => (asker, false, None),
             Lending::Call(seek) => self.seek(seek),
+            Lending::Pinning(seek, syntax) => {
+                let (_, built) = self.composed(Compose::Owned(syntax));
+                let (under, missed, wanting) = self.seek(seek);
+                (under, missed || built, wanting)
+            }
             Lending::Under(under) if arena.is_live(under) => {
                 arena.stamp(under);
-                (under, false)
+                (under, false, None)
             }
             Lending::Under(_) => {
                 #[cfg(test)]
                 tally(|tiers| tiers.cold_births += 1);
-                (ArenaRef::ROOT, false)
+                (ArenaRef::ROOT, false, None)
             }
-            Lending::Compose(root) => self.composed(root),
+            Lending::Compose(compose) => {
+                let (under, missed) = self.composed(compose);
+                (under, missed, None)
+            }
         };
         self.graph.arena.borrow(under);
         if missed {
@@ -480,23 +498,27 @@ where
                 step: asked.step,
                 provenance,
                 arena: under,
+                wanting,
                 state: Rested::Dormant(asked.state, born),
             },
         )
     }
 
-    /// The arena node a frame `seek` asks for runs under, and whether it was a miss: the parent
-    /// itself for a seek with no key; else the settlement under the parent the key names, stamped,
-    /// or built and its binding's image relayed into the agent tier. The root, cold, for a parent
-    /// that is no longer live.
-    fn seek(&mut self, seek: Seek<'graph>) -> (ArenaRef, bool) {
+    /// The arena node a frame `seek` asks for runs under, whether it was a miss, and the
+    /// composition its first step must rebuild: the parent itself for a seek with no key; else the
+    /// settlement under the parent the key names, stamped, or built — its binding's image relayed
+    /// into the agent tier under the root, nothing relayed under a composition. The root, cold, for
+    /// a parent that is no longer live. A miss under a composition binding a module of another
+    /// composed code pins that code's composition, where no layer below holds the module's tree;
+    /// where that composition is gone, the frame is born under the parent wanting it rebuilt.
+    fn seek(&mut self, seek: Seek<'graph>) -> (ArenaRef, bool, Option<ContentDigest>) {
         let Seek { parent, settlement } = seek;
         let Some((key, image, ask)) = settlement else {
             // A callee of composed code whose composition is gone is born under the root, and
             // bounces with its syntax.
             return match self.graph.arena.is_live(parent) {
-                true => (parent, false),
-                false => (ArenaRef::ROOT, false),
+                true => (parent, false, None),
+                false => (ArenaRef::ROOT, false, None),
             };
         };
         #[cfg(test)]
@@ -505,42 +527,86 @@ where
         if !arena.is_live(parent) {
             #[cfg(test)]
             tally(|tiers| tiers.cold_births += 1);
-            return (ArenaRef::ROOT, false);
+            return (ArenaRef::ROOT, false, None);
         }
+        let door = arena.door(parent);
+        let base = door.composition.map(|(digest, _)| digest);
         if let Some(found) = arena.find(parent, key) {
             #[cfg(debug_assertions)]
             assert!(
-                self.holds_binding(&image),
+                base.is_some() || self.holds_binding(&image),
                 "a hit's binding rests: its key digests the content its types are read from"
             );
             self.graph.arena.stamp(found);
-            return (found, false);
+            return (found, false, None);
         }
-        // The binding's types rest once it resolves, before its walk reads them.
+        // Under a composition, each module of other composed code no layer below holds the tree
+        // of pins its composition.
+        let mut pins = SmallVec::new();
+        if let Some(base) = base {
+            let below = match door.composition {
+                Some((_, composition)) => Facts::composed(composition, door.top),
+                None => Facts::under(self.graph.facts, door.top),
+            };
+            for asked in &ask.bound {
+                let super::seek::Asked::Module {
+                    content,
+                    composition: Some(composed),
+                    ..
+                } = *asked
+                else {
+                    continue;
+                };
+                if composed == base
+                    || below.tree_of(content).is_some()
+                    || self.graph.facts.tree_of(content).is_some()
+                {
+                    continue;
+                }
+                match arena.composition(composed) {
+                    Some(at) => {
+                        if !pins.contains(&at) {
+                            pins.push(at);
+                        }
+                    }
+                    None => return (parent, false, Some(composed)),
+                }
+            }
+        }
+        let pinned = arena.pinned(&pins);
+        // The binding's types rest once it resolves, before its walk reads them: in the agent tier
+        // under the root, and in the walk's own chain under a composition.
         let resting: crate::values::Chain<'graph, '_, 'graph, '_> = self.graph.tiers.resting();
         let before = resting.own_len();
         let mut relayed = before;
-        let mut rest = || {
-            image.relay(&resting);
-            relayed = resting.own_len();
+        let mut rest = |walk: Option<&crate::values::Chain<'_, '_, '_, '_>>| match (base, walk) {
+            (None, _) => {
+                image.relay(&resting);
+                relayed = resting.own_len();
+            }
+            (Some(_), Some(walk)) => image.relay(walk),
+            (Some(_), None) => {}
         };
         let settles = self.graph.settles;
         let Some(facts) = Settled::build(
-            arena.facts(parent).cloned(),
+            arena.under(parent),
+            pinned,
             self.graph.facts,
-            |bump, below, witness| settles.settle(bump, below, &ask, &mut rest, witness),
+            |bump, below, pinned, witness| {
+                settles.settle(bump, below, pinned, &ask, &mut rest, witness)
+            },
         ) else {
             debug_assert_eq!(relayed, before, "nothing rests for a settlement not built");
-            return (parent, false);
+            return (parent, false, None);
         };
-        let settled = self.graph.arena.insert(parent, key, facts);
+        let settled = self.graph.arena.insert(parent, key, facts, pins);
         #[cfg(test)]
         tally(|tiers| {
             tiers.settled += 1;
             tiers.relayed += relayed - before;
             tiers.rested += resting.own_len() - relayed;
         });
-        (settled, true)
+        (settled, true, None)
     }
 
     /// The composition `compose` asks for, and whether it was a miss: found by its syntax digest
@@ -549,17 +615,17 @@ where
     fn composed(&mut self, compose: Compose) -> (ArenaRef, bool) {
         let digest = match &compose {
             Compose::Find(digest) => *digest,
-            Compose::Owned { digest, .. } => {
+            Compose::Owned(syntax) => {
                 #[cfg(test)]
                 tally(|tiers| tiers.bounced += 1);
-                *digest
+                syntax.digest()
             }
         };
         if let Some(found) = self.graph.arena.composition(digest) {
             self.graph.arena.stamp(found);
             return (found, false);
         }
-        let Compose::Owned { syntax, .. } = compose else {
+        let Compose::Owned(syntax) = compose else {
             return (ArenaRef::ROOT, false);
         };
         let settles = self.graph.settles;
@@ -673,6 +739,7 @@ where
         step,
         provenance,
         arena,
+        wanting,
         state,
     } = context
         .continuation()
@@ -710,7 +777,7 @@ where
         tiers,
         facts,
         &provenance,
-        (arena, composed),
+        (arena, composed, wanting),
         spawns,
         state,
         scratch,
