@@ -32,10 +32,10 @@ use crate::scheduler::continuation::{
     StepBundle, Work,
 };
 use crate::scheduler::delivery::KDelivery;
-use crate::scheduler::seek::{Lending, Seek, Settles, Unsettled};
+use crate::scheduler::seek::{Compose, Lending, Seek, Settles, Unsettled};
 #[cfg(test)]
 use crate::scope::HalfHeader;
-use crate::scope::{ComposedRoot, Facts, LoadFacts, RegionHeader};
+use crate::scope::{Facts, LoadFacts, RegionHeader};
 #[cfg(test)]
 use crate::type_lattice::Branch;
 use crate::values::{ArenaRef, BuildBudget, TypeTiers};
@@ -187,6 +187,9 @@ pub(crate) struct Tiers {
     pub rested: usize,
     /// How many compositions a miss built: a count.
     pub composed: usize,
+    /// How many cells running composed code bounced with its syntax, their composition not live
+    /// at their birth: a count.
+    pub bounced: usize,
 }
 
 /// Add to one of the counts in [`TIERS`].
@@ -216,6 +219,7 @@ thread_local! {
             relayed: 0,
             rested: 0,
             composed: 0,
+            bounced: 0,
         })
     };
 }
@@ -486,17 +490,13 @@ where
     /// or built and its binding's image relayed into the agent tier. The root, cold, for a parent
     /// that is no longer live.
     fn seek(&mut self, seek: Seek<'graph>) -> (ArenaRef, bool) {
-        let Seek {
-            parent,
-            root,
-            settlement,
-        } = seek;
+        let Seek { parent, settlement } = seek;
         let Some((key, image, ask)) = settlement else {
-            // A callee of composed code runs under its composition, rebuilt where it is gone.
-            return match (self.graph.arena.is_live(parent), root) {
-                (true, _) => (parent, false),
-                (false, Some(root)) => self.composed(root),
-                (false, None) => (ArenaRef::ROOT, false),
+            // A callee of composed code whose composition is gone is born under the root, and
+            // bounces with its syntax.
+            return match self.graph.arena.is_live(parent) {
+                true => (parent, false),
+                false => (ArenaRef::ROOT, false),
             };
         };
         #[cfg(test)]
@@ -543,19 +543,32 @@ where
         (settled, true)
     }
 
-    /// The composition of the code `root` holds, and whether it was a miss: found by its syntax
-    /// digest and stamped, or built through the program's door.
-    fn composed(&mut self, root: ComposedRoot<'graph>) -> (ArenaRef, bool) {
-        if let Some(found) = self.graph.arena.composition(root.digest) {
+    /// The composition `compose` asks for, and whether it was a miss: found by its syntax digest
+    /// and stamped; built through the program's door over the syntax a bounce copied; or, with no
+    /// syntax in hand, the root, where the cell's first step bounces.
+    fn composed(&mut self, compose: Compose) -> (ArenaRef, bool) {
+        let digest = match &compose {
+            Compose::Find(digest) => *digest,
+            Compose::Owned { digest, .. } => {
+                #[cfg(test)]
+                tally(|tiers| tiers.bounced += 1);
+                *digest
+            }
+        };
+        if let Some(found) = self.graph.arena.composition(digest) {
             self.graph.arena.stamp(found);
             return (found, false);
         }
+        let Compose::Owned { syntax, .. } = compose else {
+            return (ArenaRef::ROOT, false);
+        };
         let settles = self.graph.settles;
-        let facts =
-            Composed::build(|brand, bump, witness| settles.compose(brand, bump, root, witness));
+        let facts = Composed::build(syntax, |syntax, bump, witness| {
+            settles.compose(syntax, bump, witness)
+        });
         #[cfg(test)]
         tally(|tiers| tiers.composed += 1);
-        (self.graph.arena.compose(root, facts), true)
+        (self.graph.arena.compose(digest, facts), true)
     }
 
     /// Whether the frozen load or the agent tier holds the node of every handle `image` carries,
@@ -688,8 +701,8 @@ where
     // The door reads the settlement the cell runs under, over the composition its chain rests on
     // or the load, borrowed from the arena for the step.
     let door = books.door(arena);
-    let (facts, root) = match door.composition {
-        Some((root, composition)) => (Facts::composed(composition, door.top), Some(root)),
+    let (facts, composed) = match door.composition {
+        Some((digest, composition)) => (Facts::composed(composition, door.top), Some(digest)),
         None => (Facts::under(load, door.top), None),
     };
     let step = step(Step::new(
@@ -697,7 +710,7 @@ where
         tiers,
         facts,
         &provenance,
-        (arena, root),
+        (arena, composed),
         spawns,
         state,
         scratch,

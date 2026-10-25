@@ -10,14 +10,17 @@
 //! settlement and parks for nothing. A frame with no key runs under the parent itself. A tail hop
 //! of the same callee under a live settlement stamps it too. A parent that is no longer live
 //! births the frame cold, under the root. An `EVAL` of code composed at run time runs under its
-//! composition, found by the code's syntax digest or built through the same door. Any other cell
-//! runs under what its asker runs under. See
+//! composition, found by the code's syntax digest. The books hold digests, not syntax, so a miss
+//! births the cell under the root, and its first step — holding the code value, or the callee whose
+//! body record carries its root — copies the syntax and bounces into itself with the copy
+//! ([`Compose::Owned`]), which the drain builds the composition over. Any other cell runs under
+//! what its asker runs under. See
 //! [build/README.md § Steps and the drain](../build/README.md#steps-and-the-drain).
 
 use smallvec::SmallVec;
 
-use crate::memory::{Bump, ProgramBrand};
-use crate::scope::{ComposedRoot, Composition, Facts, Segment, Settlement, Slot};
+use crate::memory::Bump;
+use crate::scope::{ComposedSyntax, Composition, Facts, Segment, Settlement, Slot};
 use crate::type_lattice::KType;
 use crate::values::{ArenaRef, BindingImage, ContentDigest, SettlementKey};
 
@@ -25,9 +28,6 @@ use crate::values::{ArenaRef, BindingImage, ContentDigest, SettlementKey};
 /// and the settlement under it the frame seeks, if any.
 pub struct Seek<'graph> {
     pub parent: ArenaRef,
-    /// The root of the code composed at run time the callee was born of: what rebuilds its
-    /// composition where `parent`, that composition, is gone.
-    pub root: Option<ComposedRoot<'graph>>,
     /// A keyed body's key under `parent`, its binding's image, and what a miss settles: `None` for
     /// a body that keys no settlement or a call whose content at a keyed name the asker could not
     /// read or the load does not hold, whose frame runs under `parent`.
@@ -68,14 +68,14 @@ pub trait Settles<'graph> {
         witness: &'a &'graph (),
     ) -> Option<Settlement<'a>>;
 
-    /// The composition of the code `root` holds, composed at run time: its shapes built alone and
-    /// walked with nothing bound, laid through `brand`, its walk interning through a chain laid
-    /// in `bump`, where a term of each type its facts name past the agent tier is laid too.
+    /// The composition of `syntax`, code composed at run time copied into storage of its own: its
+    /// shapes built alone over the copy and walked with nothing bound, laid in that storage, its
+    /// walk interning through a chain laid in `bump`, where a term of each type its facts name
+    /// past the agent tier is laid too.
     fn compose<'a>(
         &self,
-        brand: ProgramBrand<'a>,
+        syntax: &'a ComposedSyntax,
         bump: &'a Bump,
-        root: ComposedRoot<'graph>,
         witness: &'a &'graph (),
     ) -> Composition<'a>;
 }
@@ -98,9 +98,8 @@ impl<'graph> Settles<'graph> for Unsettled {
 
     fn compose<'a>(
         &self,
-        _: ProgramBrand<'a>,
+        _: &'a ComposedSyntax,
         _: &'a Bump,
-        _: ComposedRoot<'graph>,
         _: &'a &'graph (),
     ) -> Composition<'a> {
         unreachable!("a graph that runs no program runs no composed code")
@@ -116,6 +115,18 @@ pub(super) enum Lending<'graph> {
     /// The settlement an `ArenaRef` names, as a tail hop of the same callee runs under its
     /// frame's, stamped; the root, cold, where that one is no longer live.
     Under(ArenaRef),
-    /// The composition of the code `root` holds, found by its syntax digest and stamped, or built.
-    Compose(ComposedRoot<'graph>),
+    /// The composition of code composed at run time, found by its syntax digest and stamped, or
+    /// built over the syntax a bounce copied.
+    Compose(Compose),
+}
+
+/// What a cell running composed code asks of the drain: its composition by syntax digest — the
+/// root, where none is live, so the cell's first step bounces — or built over the syntax that
+/// bounce copied, where a sibling has not built it meanwhile.
+pub(super) enum Compose {
+    Find(ContentDigest),
+    Owned {
+        syntax: ComposedSyntax,
+        digest: ContentDigest,
+    },
 }

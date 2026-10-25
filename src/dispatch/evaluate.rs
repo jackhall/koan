@@ -209,7 +209,7 @@ fn evaluate_on<'graph, 'here, 'tier, 'reg>(
             let site = view.shape().site_of_body(node).expect("a `FN` has a body");
             let scratch = Bump::new();
             let writer = step.writer();
-            let written = program.written_under(view.facts(), step.composed_root());
+            let written = program.written_under(view.facts(), within.root);
             let value = match lambda(
                 writer,
                 &view,
@@ -610,7 +610,7 @@ fn evaluated<'step, 'graph, 'here>(
                 CodeBody::Written { .. } => None,
             });
             let asked = match composed {
-                Some(root) => step.spawn_composing(request, root),
+                Some(root) => step.spawn_composing(request, root.digest),
                 None => step.spawn(request),
             };
             park(step, at, asked, FINISHING)
@@ -1148,7 +1148,7 @@ fn in_place<'step, 'graph, 'here>(
         ExpressionPart::QuotedExpression(_) => Some(Value::Knotted(quote(
             writer,
             &at.view,
-            (at.program).written_under(at.view.facts(), step.composed_root()),
+            (at.program).written_under(at.view.facts(), at.within.root),
             part,
             types,
             scratch,

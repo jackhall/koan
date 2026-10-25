@@ -11,7 +11,7 @@ use crate::knot::{KActivationView, KValue, KnottedFamily};
 use crate::memory::{CrossedOperand, DropFree, Header, Writer, collect, covariant, reattachable};
 use crate::scheduler::{Born, MemoHome, StepBundle};
 use crate::scope::RegionHeader;
-use crate::scope::{Segment, Site};
+use crate::scope::{ComposedRoot, Segment, Site};
 use crate::symbols::Symbol;
 use crate::type_lattice::{DeclaredType, Halves, KType};
 use crate::values::{ArenaRef, ContentDigest, Half, TypeTiers, copy_severed};
@@ -63,7 +63,7 @@ pub enum KBirth<'graph, 'cell> {
         node: Evaluated,
         view: KActivationView<'graph, 'cell>,
         contract: Option<Contract>,
-        within: Within,
+        within: Within<'graph>,
     },
     /// A block — a synthesized block part's shape, or a `USING … SCOPE` body — run beside the
     /// view of the activation it sits in, its last statement's value its own; a `USING` body's
@@ -74,7 +74,7 @@ pub enum KBirth<'graph, 'cell> {
         segment: Segment,
         enclosing: KActivationView<'graph, 'cell>,
         module: Option<(KValue<'graph, 'cell>, Site)>,
-        within: Within,
+        within: Within<'graph>,
     },
     /// What the top level leaves at rest when it ends: its activation's view, for a later root
     /// work to read a top-level binding through.
@@ -88,22 +88,26 @@ pub enum KBirth<'graph, 'cell> {
 /// the own body of a routing caching frame, whose caching chain it then interns through and whose
 /// invariant sites it adopts into the agent tier under a settlement; the arena node its
 /// frame runs under, which a callable born in it is born under; where its frame's decision memo
-/// rests, which a block decides in; and the memo a frame it calls seeds its own from.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct Within {
+/// rests, which a block decides in; the memo a frame it calls seeds its own from; and the root of
+/// the composed code its frame runs, which a value born in it keeps — the books hold only its
+/// digest.
+#[derive(Clone, Copy, Debug)]
+pub struct Within<'graph> {
     pub routes: bool,
     pub build: ArenaRef,
     pub memo: Option<MemoHome>,
     pub inherit: Option<MemoHome>,
+    pub root: Option<ComposedRoot<'graph>>,
 }
 
-impl Within {
+impl Within<'_> {
     /// The top level's before its runner names its memo: no caching frame, and the root.
-    pub const TOP: Within = Within {
+    pub const TOP: Self = Within {
         routes: false,
         build: ArenaRef::ROOT,
         memo: None,
         inherit: None,
+        root: None,
     };
 
     /// What the evaluation a frame's tail hands its last statement runs within: it writes the

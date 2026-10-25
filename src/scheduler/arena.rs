@@ -7,8 +7,10 @@
 //! facts are a [`Settled`]: a bump holding them beside a shared hold on its parent's, which they
 //! read below them, so a step reads the chain through the newest alone, borrowed from the arena for
 //! the step. A composition is the facts of code composed at run time, a child of the root found
-//! by its syntax digest: a [`Composed`], its shapes and records in program storage of its own,
-//! which a step under it reads as its chain's base in place of the load. A run cell born under an arena node
+//! by its syntax digest: a [`Composed`], a copy of its syntax and the shapes and records built over
+//! it in program storage of its own, which a step under it reads as its chain's base in place of
+//! the load. The books hold the digest alone: the syntax a miss copies comes from the code value
+//! or callee that asked, through the cell that bounces it ([`ComposedSyntax`]). A run cell born under an arena node
 //! borrows it for its life, through the drain, so a borrowed arena node is never evicted. Each
 //! slot carries a generation, bumped when its arena node is evicted, so an [`ArenaRef`] held past
 //! an eviction names nothing rather than the slot's next tenant.
@@ -28,8 +30,8 @@ use std::rc::Rc;
 
 use self_cell::self_cell;
 
-use crate::memory::{Bump, ProgramBrand, ProgramStorage, program_storage};
-use crate::scope::{ComposedRoot, Composition, Facts, LoadFacts, Settlement};
+use crate::memory::Bump;
+use crate::scope::{ComposedSyntax, Composition, Facts, LoadFacts, Settlement};
 use crate::values::{ArenaRef, BuildBudget, ContentDigest, SettlementKey};
 
 /// A graph's arena nodes, their books, and the budget their unheld bytes stay within.
@@ -79,23 +81,24 @@ enum Kind<'graph> {
         facts: Rc<Settled<'graph>>,
     },
     Composition {
-        root: ComposedRoot<'graph>,
+        digest: ContentDigest,
         facts: Rc<Composed<'graph>>,
     },
 }
 
-/// What a step under an arena node reads facts through: the composition its chain rests on, if
-/// not the load, and the settlement it runs under, if any.
-pub(super) struct Door<'a, 'graph> {
-    pub composition: Option<(ComposedRoot<'graph>, &'a Composition<'a>)>,
+/// What a step under an arena node reads facts through: the composition its chain rests on, by
+/// its syntax digest, if not the load, and the settlement it runs under, if any.
+pub(super) struct Door<'a> {
+    pub composition: Option<(ContentDigest, &'a Composition<'a>)>,
     pub top: Option<&'a Settlement<'a>>,
 }
 
-/// What a composition's facts are laid in: program storage of its own, which its shapes and
-/// records rest in as the load's rest in the program's, and a bump its walk interns through and
-/// its terms are laid in. Its facts may read what lives at `'graph`, which outlives it.
+/// What a composition's facts are laid in: its syntax's own program storage, which its shapes and
+/// records rest in beside the copy, as the load's rest in the program's, and a bump its walk
+/// interns through and its terms are laid in. Its facts may read what lives at `'graph`, which
+/// outlives it.
 pub(super) struct ComposedOwner<'graph> {
-    storage: ProgramStorage,
+    syntax: ComposedSyntax,
     bump: Bump,
     graph: PhantomData<&'graph ()>,
 }
@@ -111,19 +114,18 @@ self_cell!(
 );
 
 impl<'graph> Composed<'graph> {
-    /// The facts `compose` lays in fresh storage, through its brand and beside its bump, handed
-    /// the witness that `'graph` outlives both.
+    /// The facts `compose` lays over `syntax`, in its storage and beside a fresh bump, handed the
+    /// witness that `'graph` outlives both.
     pub(super) fn build(
-        compose: impl for<'a> FnOnce(ProgramBrand<'a>, &'a Bump, &'a &'graph ()) -> Composition<'a>,
+        syntax: ComposedSyntax,
+        compose: impl for<'a> FnOnce(&'a ComposedSyntax, &'a Bump, &'a &'graph ()) -> Composition<'a>,
     ) -> Self {
         let owner = ComposedOwner {
-            storage: program_storage(),
+            syntax,
             bump: Bump::new(),
             graph: PhantomData,
         };
-        Composed::new(owner, |owner| {
-            compose(owner.storage.brand(), &owner.bump, &&())
-        })
+        Composed::new(owner, |owner| compose(&owner.syntax, &owner.bump, &&()))
     }
 
     /// The facts themselves.
@@ -134,7 +136,7 @@ impl<'graph> Composed<'graph> {
     /// What the facts weigh: their storage's bytes and their bump's.
     fn bytes(&self) -> usize {
         let owner = self.borrow_owner();
-        owner.storage.allocated_bytes() + owner.bump.allocated_bytes()
+        owner.syntax.allocated_bytes() + owner.bump.allocated_bytes()
     }
 }
 
@@ -242,7 +244,7 @@ impl<'graph> BuildArena<'graph> {
     }
 
     /// What a step under the live `at` reads: nothing past the load for the root.
-    pub(super) fn door(&self, at: ArenaRef) -> Door<'_, 'graph> {
+    pub(super) fn door(&self, at: ArenaRef) -> Door<'_> {
         match self.node(at).map(|node| &node.kind) {
             None => Door {
                 composition: None,
@@ -252,8 +254,8 @@ impl<'graph> BuildArena<'graph> {
                 composition: None,
                 top: Some(facts.facts()),
             },
-            Some(Kind::Composition { root, facts }) => Door {
-                composition: Some((*root, facts.facts())),
+            Some(Kind::Composition { digest, facts }) => Door {
+                composition: Some((*digest, facts.facts())),
                 top: None,
             },
         }
@@ -288,21 +290,14 @@ impl<'graph> BuildArena<'graph> {
         at
     }
 
-    /// A new composition of the code `root` holds, a child of the root holding `facts`, unheld
-    /// and stamped. Evicts nothing, as [`insert`](Self::insert) does not.
-    pub(super) fn compose(
-        &mut self,
-        root: ComposedRoot<'graph>,
-        facts: Composed<'graph>,
-    ) -> ArenaRef {
-        debug_assert!(
-            self.composition(root.digest).is_none(),
-            "a syntax composes once"
-        );
+    /// A new composition of the code whose syntax digest is `digest`, a child of the root holding
+    /// `facts`, unheld and stamped. Evicts nothing, as [`insert`](Self::insert) does not.
+    pub(super) fn compose(&mut self, digest: ContentDigest, facts: Composed<'graph>) -> ArenaRef {
+        debug_assert!(self.composition(digest).is_none(), "a syntax composes once");
         let bytes = facts.bytes();
         let facts = Rc::new(facts);
-        let at = self.laid(ArenaRef::ROOT, bytes, Kind::Composition { root, facts });
-        self.compositions.insert(root.digest, at);
+        let at = self.laid(ArenaRef::ROOT, bytes, Kind::Composition { digest, facts });
+        self.compositions.insert(digest, at);
         at
     }
 
@@ -436,7 +431,7 @@ impl<'graph> BuildArena<'graph> {
         self.total -= node.bytes;
         match node.kind {
             Kind::Settlement { key, .. } => self.children.remove(&(node.parent, key)),
-            Kind::Composition { root, .. } => self.compositions.remove(&root.digest),
+            Kind::Composition { digest, .. } => self.compositions.remove(&digest),
         };
         if let Some(parent) = self.node_mut(node.parent) {
             parent.children -= 1;

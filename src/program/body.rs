@@ -65,7 +65,7 @@ use crate::scheduler::{
 use crate::scope::{Activated, Entry, EventSite, MemoKey, extended};
 use crate::scope::{Address, Bound, RecordSource, Tree, Unknown};
 use crate::scope::{BodyShape, Component, Mint, Position, ShapeKind, Site, Slot, Unit, UnitWork};
-use crate::scope::{CaptureSource, ClosureBindings, Code, Facts, ShapeError};
+use crate::scope::{CaptureSource, ClosureBindings, Code, ComposedRoot, Facts, ShapeError};
 use crate::scope::{Coordinate, ParameterBinding, Static, Target};
 use crate::symbols::{BinderSymbol, Symbol, SymbolInterner, TypeSymbol};
 use crate::type_lattice::{
@@ -102,7 +102,7 @@ pub struct Runner<'graph, 'cell> {
     seen: u32,
     /// What the body runs within: what it hands each evaluation and block it asks for
     /// ([`KBirth::Evaluate`]), and the arena node a callable born in it is born under.
-    within: Within,
+    within: Within<'graph>,
     /// Where its binding events read and extend the decision memo.
     memo: Memo<'cell>,
 }
@@ -200,6 +200,21 @@ type Taking<'a, 'graph, 'step, 'here, 'scratch, 'lent> =
 pub fn run<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'graph, KBundle> {
     let (step, state) = step.state();
     let (mut step, scratch) = step.scratch();
+    // A frame of composed code born under the root — its composition was not live — bounces with
+    // its syntax, which the drain builds the composition over.
+    if let KState::Born(birth) = &state
+        && let Some(root) = composed_root(birth)
+        && step.composed() != Some(root.digest)
+    {
+        let KState::Born(birth) = state else {
+            unreachable!("matched above")
+        };
+        let work = crate::scheduler::Work {
+            step: run,
+            state: birth,
+        };
+        return step.bounce(work, root);
+    }
     let (code, facts) = step.door();
     let shape = match &state {
         KState::Born(KBirth::Call { callee, .. }) => {
@@ -234,6 +249,24 @@ pub fn run<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'g
     } else {
         let types = step.types();
         ran(step, state, scratch, false, &types)
+    }
+}
+
+/// The root of the composed code the frame `birth` runs: a call's callee born of it, or an
+/// `EVAL`'s code composed at run time. `None` for written code and any other birth.
+fn composed_root<'graph>(birth: &KBirth<'graph, '_>) -> Option<ComposedRoot<'graph>> {
+    match birth {
+        KBirth::Call { callee, .. } => called_function(*callee)?.body().root,
+        KBirth::Eval { code, .. } => composed_root_of(code.as_code()?.code()?.shaped()),
+        _ => None,
+    }
+}
+
+/// The root of `body`, where it is code composed at run time.
+fn composed_root_of(body: CodeBody<'_>) -> Option<ComposedRoot<'_>> {
+    match body {
+        CodeBody::Composed { root, .. } => Some(root),
+        CodeBody::Written { .. } => None,
     }
 }
 
@@ -315,6 +348,7 @@ fn ran<'graph, 'here, 'scratch>(
                         build: step.arena_ref(born_under(callee)),
                         memo: home,
                         inherit,
+                        root: called_function(callee).and_then(|function| function.body().root),
                     },
                     memo,
                     ..Runner::at(program, activation, Level::Frame, Some(contract))
@@ -334,6 +368,9 @@ fn ran<'graph, 'here, 'scratch>(
             contract,
             inherit,
         }) => {
+            let root = (code.as_code())
+                .and_then(|member| member.code())
+                .and_then(|node| composed_root_of(node.shaped()));
             // Composed code is checked here, under its composition: the refusal it reached, then
             // each name it reads, once the types its facts name resolve in this frame's chain.
             if let Some(refusal) = refused {
@@ -381,6 +418,7 @@ fn ran<'graph, 'here, 'scratch>(
                         within: Within {
                             build,
                             memo: home,
+                            root,
                             ..Within::TOP
                         },
                         memo,
@@ -664,7 +702,7 @@ pub fn block<'graph, 'here>(
     shape: &BodyShape<'_>,
     enclosing: KActivationView<'graph, 'here>,
     use_: Use,
-    within: Within,
+    within: Within<'graph>,
 ) -> Request<'graph, 'here, KBundle> {
     surfaced_block(program, shape, enclosing, None, use_, within)
 }
@@ -678,7 +716,7 @@ pub fn surfaced_block<'graph, 'here>(
     enclosing: KActivationView<'graph, 'here>,
     module: Option<(KValue<'graph, 'here>, Site)>,
     use_: Use,
-    within: Within,
+    within: Within<'graph>,
 ) -> Request<'graph, 'here, KBundle> {
     debug_assert_eq!(shape.kind(), ShapeKind::Block);
     Request {
@@ -897,7 +935,7 @@ impl<'graph, 'cell> Runner<'graph, 'cell> {
     /// What the runner hands an evaluation it asks for: what it runs within, and the memo a
     /// frame the evaluation calls seeds its own from — the runner's where it has read it, else
     /// the one the runner's would have been seeded from.
-    fn handing(&self) -> Within {
+    fn handing(&self) -> Within<'graph> {
         let inherit = match self.memo.read {
             Some(_) => self.memo.home,
             None => self.memo.inherit,
@@ -1678,7 +1716,7 @@ fn tied<'graph, 'here>(
 ) -> Result<(), Stopped<'here>> {
     let scratch = Bump::new();
     let reading = runner.reading(step);
-    let written = (runner.program).written_under(reading.facts(), step.composed_root());
+    let written = (runner.program).written_under(reading.facts(), runner.within.root);
     let tied = tie(
         step.writer(),
         &reading,
@@ -1985,7 +2023,7 @@ fn first_tie<'graph, 'here, 'scratch, 'lent>(
     let scratch = Bump::new();
     let mut missed: BumpVec<'_, Site> = BumpVec::new_in(&scratch);
     let reading = runner.reading(step);
-    let written = (runner.program).written_under(reading.facts(), step.composed_root());
+    let written = (runner.program).written_under(reading.facts(), runner.within.root);
     let tied = tie(
         step.writer(),
         &reading,
@@ -2132,7 +2170,7 @@ fn left<'graph, 'here>(
     let activation = outer.activation;
     let (code, facts) = step.door();
     let reading = activation.view().reading(&code, facts);
-    let written = (body.program).written_under(&facts, step.composed_root());
+    let written = (body.program).written_under(&facts, body.within.root);
     let knot = tie(
         step.writer(),
         &reading,

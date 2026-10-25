@@ -15,8 +15,8 @@ use crate::memory::{Bump, BumpAllocator, ProgramBrand, Writer};
 use crate::parse::{ParseError, ProgramNode};
 use crate::scheduler::{Ask, NativeStep, Settles, Work};
 use crate::scope::{
-    BodyShape, ComposedRoot, Composition, Facts, LoadFacts, Segment, Settlement, ShapeError,
-    Shapes, Site, Slot, Store, Written,
+    BodyShape, ComposedRoot, ComposedSyntax, Composition, Facts, LoadFacts, Segment, Settlement,
+    ShapeError, Shapes, Site, Slot, Store, Written,
 };
 use crate::symbols::{BinderSymbol, SymbolInterner};
 use crate::type_lattice::{
@@ -161,7 +161,7 @@ pub(super) type Compose<'graph> = for<'a> fn(
     &Program<'graph>,
     ProgramBrand<'a>,
     &'a Bump,
-    ProgramNode<'graph>,
+    ProgramNode<'a>,
     &'a &'graph (),
 ) -> Composition<'a>;
 
@@ -179,12 +179,11 @@ impl<'graph> Settles<'graph> for Program<'graph> {
 
     fn compose<'a>(
         &self,
-        brand: ProgramBrand<'a>,
+        syntax: &'a ComposedSyntax,
         bump: &'a Bump,
-        root: ComposedRoot<'graph>,
         witness: &'a &'graph (),
     ) -> Composition<'a> {
-        (self.compose)(self, brand, bump, root.syntax, witness)
+        (self.compose)(self, syntax.brand(), bump, syntax.syntax(), witness)
     }
 }
 
@@ -316,7 +315,7 @@ impl<'graph> Program<'graph> {
         node: Evaluated,
         view: KActivationView<'graph, 'here>,
         contract: Option<Contract>,
-        within: Within,
+        within: Within<'graph>,
     ) -> Work<'graph, 'here, KBundle> {
         Work {
             step: self.evaluator,

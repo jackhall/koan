@@ -18,9 +18,10 @@
 //! the language's walk rooted at the callee's body, over a layer on the settlement's parent, the
 //! binding's types rested only once its trees resolve, and the walk's types adopted into the agent
 //! tier once it ends. A callee born of
-//! code composed at run time seeks no settlement yet, and runs under its composition, which the
-//! seek's root rebuilds where it is gone. A composition's miss runs [`composed`]: its code's shapes
-//! built alone and walked as the load walks the program's. See
+//! code composed at run time seeks no settlement yet, and runs under its composition: its frame,
+//! born under the root where that composition is gone, bounces with a copy of the syntax its body
+//! record's root holds. A composition's miss runs [`composed`]: its code's shapes built alone over
+//! that copy and walked as the load walks the program's. See
 //! [build/README.md](../build/README.md).
 
 use std::fmt::Write as _;
@@ -68,7 +69,6 @@ pub fn seek<'graph>(
     };
     Seek {
         parent: function.map_or(ArenaRef::ROOT, |function| function.closure().build()),
-        root: function.and_then(|function| function.body().root),
         settlement: settlement(birth, types, region),
     }
 }
@@ -305,7 +305,7 @@ pub(crate) fn composed<'a, 'graph, L: Language>(
     program: &Program<'graph>,
     brand: ProgramBrand<'a>,
     bump: &'a Bump,
-    syntax: ProgramNode<'graph>,
+    syntax: ProgramNode<'a>,
     _: &'a &'graph (),
 ) -> Composition<'a> {
     let scratch = Bump::new();
@@ -357,7 +357,13 @@ pub(crate) fn composed<'a, 'graph, L: Language>(
         }
     }
     let quotes = quote_paths(writer, &scratch, shapes, syntax.reference());
-    Composition::new(facts, collect(bump, terms.iter().copied()), refusal, quotes)
+    Composition::new(
+        syntax,
+        facts,
+        collect(bump, terms.iter().copied()),
+        refusal,
+        quotes,
+    )
 }
 
 /// Text rendered into a scratch bump.

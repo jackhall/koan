@@ -12,17 +12,58 @@
 //! The arena owns one per syntax digest. A step under it reads it through [`Facts`](super::Facts),
 //! as the base of its chain in place of the load.
 
-use crate::memory::{BumpAllocator, BumpVec, Lays, collect};
-use crate::parse::{ExpressionPart, KExpression, ProgramNode};
+use self_cell::self_cell;
+
+use crate::memory::{
+    BumpAllocator, BumpVec, Lays, ProgramBrand, ProgramStorage, collect, program_storage,
+};
+use crate::parse::{ExpressionPart, KExpression, ProgramNode, copied};
 use crate::type_lattice::Term;
 
-use super::records::LoadFacts;
+use super::records::{ComposedRoot, LoadFacts};
 use super::shape::{Located, Segment, ShapeKind};
 use super::shapes::Shapes;
+
+self_cell!(
+    /// Composed code's syntax, copied whole into program storage of its own: what a cell that
+    /// bounces a miss hands the drain, and what the composition built from it keeps, its shapes
+    /// and records laid in the same storage over the copy.
+    pub struct ComposedSyntax {
+        owner: ProgramStorage,
+        #[covariant]
+        dependent: ProgramNode,
+    }
+);
+
+impl ComposedSyntax {
+    /// `root`'s syntax copied into fresh storage.
+    pub fn of(root: ComposedRoot<'_>) -> Self {
+        ComposedSyntax::new(program_storage(), |storage| {
+            copied(storage.brand(), root.syntax.reference())
+        })
+    }
+
+    /// The copy.
+    pub fn syntax(&self) -> ProgramNode<'_> {
+        *self.borrow_dependent()
+    }
+
+    /// Its storage's brand, which what is built over the copy lays through.
+    pub fn brand(&self) -> ProgramBrand<'_> {
+        self.borrow_owner().brand()
+    }
+
+    /// The bytes laid in its storage so far.
+    pub fn allocated_bytes(&self) -> usize {
+        self.borrow_owner().allocated_bytes()
+    }
+}
 
 /// One composition's facts: see the module documentation.
 #[derive(Clone, Copy)]
 pub struct Composition<'a> {
+    /// Its own copy of the root syntax, which its shapes are built over.
+    syntax: ProgramNode<'a>,
     facts: &'a LoadFacts<'a>,
     terms: &'a [Term<'a>],
     refusal: Option<&'a str>,
@@ -33,17 +74,24 @@ pub struct Composition<'a> {
 
 impl<'a> Composition<'a> {
     pub fn new(
+        syntax: ProgramNode<'a>,
         facts: &'a LoadFacts<'a>,
         terms: &'a [Term<'a>],
         refusal: Option<&'a str>,
         quotes: &'a [&'a [u32]],
     ) -> Self {
         Composition {
+            syntax,
             facts,
             terms,
             refusal,
             quotes,
         }
+    }
+
+    /// Its own copy of the root syntax.
+    pub fn syntax(&self) -> ProgramNode<'a> {
+        self.syntax
     }
 
     /// Its walk's facts over its own shapes.
@@ -62,8 +110,8 @@ impl<'a> Composition<'a> {
         self.refusal
     }
 
-    /// The syntax of the quote whose code shape is `segment`, inside `root`, the root syntax this
-    /// composition was built over.
+    /// The syntax of the quote whose code shape is `segment`, inside `root`, a root syntax equal
+    /// to this composition's: the paths are structural, so a value's own copy finds its quotes.
     pub fn quote_in<'g>(&self, root: ProgramNode<'g>, segment: Segment) -> ProgramNode<'g> {
         let path = self.quotes[segment.index() as usize];
         let (first, down) = path

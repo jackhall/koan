@@ -159,7 +159,7 @@ fn a_derived_type_under_a_composition_is_minted_once_per_binding_event() {
 }
 
 /// What one run of `source` under the smallest budget printed, with how many compositions it built.
-fn smallest(source: &str) -> (String, usize) {
+fn smallest(source: &str) -> (String, Tiers) {
     WRITTEN.with(|written| written.borrow_mut().clear());
     let mut substrate = CellSubstrate::load::<Koan>(source, "<test>", 4, SMALLEST, output())
         .unwrap_or_else(|error| panic!("the program loads: {error}"));
@@ -168,12 +168,12 @@ fn smallest(source: &str) -> (String, usize) {
         .with(|running| running.run())
         .expect("the program runs");
     let printed = WRITTEN.with(|written| written.borrow().join("\n"));
-    (printed, TIERS.with(Cell::get).composed)
+    (printed, TIERS.with(Cell::get))
 }
 
 #[test]
 fn a_composition_evicted_and_rebuilt_gives_its_functions_the_same_identity() {
-    let (printed, composed) = smallest(
+    let (printed, tiers) = smallest(
         "LET q = #(FN :{n :Number} -> Number = #(n + 1))
 LET p = #(PRINT 0)
 LET f = (EVAL (COMPOSE q) -> Any)
@@ -184,14 +184,14 @@ EVAL (COMPOSE p) -> Any
 PRINT (f {n = 1})",
     );
     // `p`'s miss evicts `q`'s composition, which `g`'s rebuilds; then `p`'s evicts it again, and
-    // the call of `f` rebuilds it from the root `f` keeps.
+    // the call of `f` rebuilds it from the root `f` keeps. Each miss bounces once with its syntax.
     assert_eq!(printed, "0\ntrue\n0\n2");
-    assert_eq!(composed, 5);
+    assert_eq!((tiers.composed, tiers.bounced), (5, 5));
 }
 
 #[test]
 fn a_quote_born_of_composed_code_runs_under_its_composition() {
-    let (printed, composed) = smallest(
+    let (printed, tiers) = smallest(
         "LET q = #((LET inner = #(PRINT 5)) (EVAL inner -> Any) (inner))
 LET p = #(PRINT 0)
 LET i = (EVAL (COMPOSE q) -> Any)
@@ -201,7 +201,7 @@ PRINT i",
     );
     // The quote keeps its syntax inside its root's, so it outlives its composition.
     assert_eq!(printed, "5\n0\n5\nPRINT 5");
-    assert_eq!(composed, 3);
+    assert_eq!(tiers.composed, 3);
 }
 
 #[test]

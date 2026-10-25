@@ -30,12 +30,13 @@ use crate::scheduler::continuation::{
     StateAt, StepBundle, Work,
 };
 use crate::scheduler::delivery::KDelivery;
-use crate::scheduler::seek::{Lending, Seek};
+use crate::scheduler::seek::{Compose, Lending, Seek};
 use crate::scope::{
-    Code, ComposedRoot, Entry, EntryFamily, Facts, HalfHeader, MemoFamily, MemoKey, RegionHeader,
+    Code, ComposedRoot, ComposedSyntax, Entry, EntryFamily, Facts, HalfHeader, MemoFamily, MemoKey,
+    RegionHeader,
 };
 use crate::type_lattice::Halves;
-use crate::values::{ArenaRef, Chain, Half, TypeTiers, Types};
+use crate::values::{ArenaRef, Chain, ContentDigest, Half, TypeTiers, Types};
 
 /// The raw context a step runs in: every door `cellgraph` hands one, over the bundle's families.
 /// Only a [`Step`] and the drain hold one.
@@ -64,11 +65,6 @@ pub struct Action<'graph, B: StepBundle<'graph>>(Kind<'graph, B>);
 
 /// What an [`Action`] turned out to be, read by the drain and by nothing else. Anything in
 /// `scheduler` can name a `Kind`; only this file can wrap one into an `Action`.
-#[expect(
-    clippy::large_enum_variant,
-    reason = "a tail carries what a miss settles or composes, as an unborn entry does; boxing it \
-              would allocate per hop"
-)]
 pub(super) enum Kind<'graph, B: StepBundle<'graph>> {
     /// Finished. The drain releases the cell, and when `completed` — the step's delivery filled the
     /// last slot of its consumer's receipt run — pushes that consumer, which is the only way a
@@ -216,8 +212,8 @@ pub struct Step<
     provenance: &'a Provenance,
     /// The arena node the cell runs under, which a park hands its successor.
     arena: ArenaRef,
-    /// The root of the composed code the cell's chain rests on, if not the load.
-    root: Option<ComposedRoot<'graph>>,
+    /// The syntax digest of the composed code the cell's chain rests on, if not the load.
+    composed: Option<ContentDigest>,
     spawns: &'a mut Spawns<'graph, B>,
     state: S::Of<StateAt<'graph, 'here, B>>,
     scratch: X::Of<Option<ScratchAt<'graph, 'here, 'scratch, B>>>,
@@ -262,7 +258,7 @@ where
         tiers: TypeTiers<'graph>,
         facts: Facts<'a>,
         provenance: &'a Provenance,
-        (arena, root): (ArenaRef, Option<ComposedRoot<'graph>>),
+        (arena, composed): (ArenaRef, Option<ContentDigest>),
         spawns: &'a mut Spawns<'graph, B>,
         state: StateAt<'graph, 'here, B>,
         scratch: Option<ScratchAt<'graph, 'here, 'scratch, B>>,
@@ -273,7 +269,7 @@ where
             facts,
             provenance,
             arena,
-            root,
+            composed,
             spawns,
             state,
             scratch,
@@ -304,7 +300,7 @@ where
             facts,
             provenance,
             arena,
-            root,
+            composed,
             spawns,
             state,
             scratch,
@@ -315,7 +311,7 @@ where
             facts,
             provenance,
             arena,
-            root,
+            composed,
             spawns,
             state: (),
             scratch,
@@ -347,7 +343,7 @@ where
             facts,
             provenance,
             arena,
-            root,
+            composed,
             spawns,
             state,
             scratch,
@@ -358,7 +354,7 @@ where
             facts,
             provenance,
             arena,
-            root,
+            composed,
             spawns,
             state,
             scratch: (),
@@ -452,10 +448,10 @@ where
         (Code::of(self.facts.shapes()), self.facts)
     }
 
-    /// The root of the code composed at run time whose composition this cell's chain rests on:
-    /// `None` for a chain on the load.
-    pub fn composed_root(&self) -> Option<ComposedRoot<'graph>> {
-        self.root
+    /// The syntax digest of the code composed at run time whose composition this cell's chain
+    /// rests on: `None` for a chain on the load.
+    pub fn composed(&self) -> Option<ContentDigest> {
+        self.composed
     }
 
     /// Whether this cell runs under a settlement: a call's frame the drain found or built one
@@ -470,7 +466,7 @@ where
     /// writer; `None` for a cell under the root, whose own scratch is its warm tier, and for a
     /// cell whose chain rests on a composition, which rests nothing in the agent tier.
     pub fn agent_types(&self) -> Option<Chain<'graph, 'here, 'graph, 'step>> {
-        (self.under_settlement() && self.root.is_none()).then(|| self.tiers.resting())
+        (self.under_settlement() && self.composed.is_none()).then(|| self.tiers.resting())
     }
 
     /// Ask for one child, and take back the slot of this step's run it will report to. The drain
@@ -493,15 +489,15 @@ where
         self.spawn_lending(request, Lending::Call(seek))
     }
 
-    /// [`spawn`](Self::spawn) an `EVAL`'s frame over code composed at run time, born under the
-    /// composition of its code, which the drain finds by its syntax digest or builds before the
-    /// child is born.
+    /// [`spawn`](Self::spawn) a frame over code composed at run time whose syntax digest is
+    /// `digest`, born under its composition where the drain finds it live, and under the root
+    /// otherwise, where its first step [bounces](Self::bounce).
     pub fn spawn_composing(
         &mut self,
         request: Request<'graph, 'here, B>,
-        root: ComposedRoot<'graph>,
+        digest: ContentDigest,
     ) -> Slot {
-        self.spawn_lending(request, Lending::Compose(root))
+        self.spawn_lending(request, Lending::Compose(Compose::Find(digest)))
     }
 
     fn spawn_lending(
@@ -745,6 +741,27 @@ where
         build: ArenaRef,
     ) -> Action<'graph, B> {
         self.tail_lending(placement, work, Lending::Under(build))
+    }
+
+    /// Hand this cell's work, untouched, to a successor born under the composition of `root`'s
+    /// code: the first step of a cell running composed code whose composition was not live, and
+    /// so was born under the root. The syntax is copied here, into storage the drain builds the
+    /// composition in, once; the successor takes this cell's placement.
+    pub fn bounce(self, work: Work<'graph, 'here, B>, root: ComposedRoot<'_>) -> Action<'graph, B> {
+        debug_assert_ne!(
+            self.composed,
+            Some(root.digest),
+            "a bounce leaves another base"
+        );
+        let placement = match self.context.lent_scratch() {
+            Some(_) => Placement::Fresh,
+            None => Placement::Shares,
+        };
+        let compose = Compose::Owned {
+            syntax: ComposedSyntax::of(root),
+            digest: root.digest,
+        };
+        self.tail_lending(placement, work, Lending::Compose(compose))
     }
 
     fn tail_lending(

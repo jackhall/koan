@@ -299,6 +299,17 @@ mod syntax {
                 syntax_digest(&left) == syntax_digest(&right)
             );
         }
+
+        /// A syntax copied into other storage is equal to it as code, and digests alike.
+        #[test]
+        fn a_copied_syntax_is_its_source_as_code(shape in parts_run()) {
+            let (program, other) = (program_storage(), program_storage());
+            let symbols = SymbolInterner::new();
+            let source = build(program.brand(), &shape, &symbols);
+            let copy = crate::parse::copied(other.brand(), &source);
+            prop_assert!(expression_equal(&source, &copy));
+            prop_assert_eq!(syntax_digest(&source), syntax_digest(&copy));
+        }
     }
 
     /// `-0` and `0` are one literal to code equality, so they are one to the digest.

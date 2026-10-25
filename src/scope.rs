@@ -59,7 +59,7 @@ pub(crate) use spelling::{PathSpelling, SpelledRoot, path_spelling};
 pub use activation::{Activation, ActivationView, Reading};
 pub use builtins::Builtins;
 pub use closure::ClosureBindings;
-pub use composition::{Composition, quote_paths};
+pub use composition::{ComposedSyntax, Composition, quote_paths};
 pub use facts::{Address, Binding, Bound, Cut, Frontier, Store, UnitId, Unknown};
 pub use groups::{BuiltinGroup, GroupFrame, is_equal, is_equality, is_unequal};
 pub use header::{HalfHeader, RegionHeader};

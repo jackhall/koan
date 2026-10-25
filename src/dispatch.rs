@@ -94,7 +94,7 @@ struct Evaluation<'step, 'graph, 'here, 'tier, 'reg, 'door> {
     code: Code<'step>,
     view: KReading<'step, 'graph, 'here>,
     contract: Option<Contract>,
-    within: Within,
+    within: Within<'graph>,
     birth: KBirth<'graph, 'here>,
     types: Chain<'tier, 'here, 'reg, 'door>,
 }
