@@ -445,7 +445,8 @@ fn ascribe<'step, 'graph, 'here>(
         {
             view::fill_at_view(value, slots, &at.view, types, &scratch);
         }
-        let raised = match view::ascribe(writer, value, ascribed, types, &scratch) {
+        let picks = (at.view.facts()).picks(at.view.shape(), at.view.shape().site_of_node(node));
+        let raised = match view::ascribe(writer, value, ascribed, picks, types, &scratch) {
             Ok(view) => {
                 if let Some(warm) = &warm {
                     adopt_value::<KnottedFamily>(

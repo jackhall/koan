@@ -368,6 +368,7 @@ pub fn coerce<'graph, 'cell>(
                 from,
                 nested.to,
                 content,
+                None,
                 cx.types,
                 cx.scratch,
             )

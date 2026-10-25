@@ -273,3 +273,18 @@ fn a_quantified_keyworded_member_returns_what_its_declared_shape_returns() {
         "{printed}"
     );
 }
+
+#[test]
+fn a_view_over_a_closed_tree_reads_its_picks() {
+    // The load sees all of `both`, so it records which of its overloads cover `PICK`, ranked:
+    // the view the run builds takes them by position and covers nothing itself.
+    use crate::knot::module::view::COVERED;
+    let source = "SIG Picks = #[(EXPR #(PICK x :Number) -> Str)]\n\
+                  MODULE both = ((EXPR #(PICK x :(Number | Str)) -> Str = #(\"a\")) \
+                  (EXPR #(PICK x :Number) -> Str = #(\"n\")) \
+                  (EXPR #(PICK x :Str) -> Str = #(\"s\")))\n\
+                  PRINT (USING (both :| Picks) SCOPE (PICK 1))";
+    COVERED.with(|covered| covered.set(0));
+    assert_eq!(run(source), "n");
+    assert_eq!(COVERED.with(std::cell::Cell::get), 0);
+}

@@ -12,9 +12,9 @@
 use crate::elaborate::schema_of;
 use crate::memory::BumpVec;
 use crate::scope::{
-    Address, BodyShape, Born, Cut, Frontier, InstanceRead, Narrowing, Points, Segment, ShapeKind,
-    Site, Slot, Static, StaticCallable, StaticInstance, StaticRegistered, StaticType, Store, Tree,
-    Typed, UnitFacts, UnitId, Unknown, UseStatics, in_body_of,
+    Address, BodyShape, Born, Cut, Frontier, InstanceRead, Narrowing, Pick, Points, Segment,
+    ShapeKind, Site, Slot, Static, StaticCallable, StaticInstance, StaticRegistered, StaticType,
+    Store, Tree, Typed, UnitFacts, UnitId, Unknown, UseStatics, in_body_of,
 };
 use crate::symbols::{BinderSymbol, Symbol};
 use crate::type_lattice::{DeclaredType, Interval, KType, Parametric, Side, TypeNode, Variable};
@@ -414,6 +414,14 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         let index = self.chain[level].trees.len();
         self.chain[level].trees.push((site, tree, tag));
         self.wrote(level, tag, Wrote::Tree(index));
+    }
+
+    /// Record the picks of the view the `:|` at `site` builds.
+    pub(super) fn record_picks(&mut self, level: usize, site: Site, picks: &'o [Pick<'o>]) {
+        let tag = self.innermost();
+        let index = self.chain[level].picks.len();
+        self.chain[level].picks.push((site, picks, tag));
+        self.wrote(level, tag, Wrote::Picks(index));
     }
 
     /// Record the content tree of the module binder at `slot` of the shape at `level`.

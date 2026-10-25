@@ -19,7 +19,9 @@ use std::hash::{Hash, Hasher};
 
 use crate::memory::{BumpAllocator, BumpVec, Lays, collect};
 use crate::symbols::{BinderSymbol, Symbol, SymbolInterner, TypeSymbol, ValueSymbol};
-use crate::type_lattice::{DeclaredType, KType, Parametric, Verdict, display_name};
+use crate::type_lattice::{
+    DeclaredType, KType, Parametric, TypeNode, Verdict, display_name, outranks,
+};
 use crate::values::{Chain, KnottedFamily, Value};
 
 use super::activation::Reading;
@@ -402,6 +404,16 @@ impl<'graph> Points<'graph> {
     }
 }
 
+/// What a view over a module whose content the load sees all of carries for one keyworded member
+/// of its signature: the module's registrations covering it, ranked first among themselves, by
+/// their positions in its registration run — so two overloads of one shape stay two.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Pick<'graph> {
+    /// The keyworded member, by its position among the signature's.
+    pub member: u16,
+    pub offered: &'graph [u32],
+}
+
 /// What the load fixed for an instance: the solution it is made at, in group order, and the
 /// instance's type — concrete where closed, parametric over the run's variables where the solution
 /// names a type a run binds. Unlike [`Static`], it has no unknown arm: the load fixes every
@@ -515,11 +527,37 @@ impl<'graph> Table<'graph> {
         })
     }
 
-    /// The candidate a call runs among those `admitted` names, by position: the class-by-class
-    /// elimination — at each class, a survivor another survivor strictly outranks there drops out
-    /// — then the lone survivor, else the first builtin among several in list order. `Err` with
-    /// the survivors' count where several survive and none is a builtin, or where none admitted.
-    pub fn decide(&self, admitted: u64) -> Result<usize, usize> {
+    /// The table of `shapes`, registered shapes under one key and one ranking, each pair's answer
+    /// read from the lattice's [`outranks`] through `types`, laid through `lay`; `builtin` says
+    /// which are builtins. `ranked` is told of each pair ranked. `None` past [`MOST`](Self::MOST).
+    pub fn ranked(
+        lay: impl Lays<'graph>,
+        types: &Chain<'_, '_, '_, '_>,
+        scratch: BumpAllocator<'_>,
+        shapes: &[DeclaredType<Parametric>],
+        builtin: impl Fn(usize) -> bool,
+        ranked: &mut dyn FnMut(),
+    ) -> Option<Self> {
+        // Only the ranking is read, which a scheme's body spells as a type's does.
+        let classes = shapes
+            .first()
+            .map_or(0, |shape| match shape.view(types).body {
+                TypeNode::ExpressionShape { classes, .. } => classes
+                    .iter()
+                    .max()
+                    .map_or(0, |highest| usize::from(highest) + 1),
+                _ => unreachable!("a registered shape is an expression shape"),
+            });
+        let mut outranks = |class, a: usize, b: usize| {
+            ranked();
+            outranks(types, scratch, shapes[a], shapes[b], class)
+        };
+        Self::laid(lay, shapes.len(), classes, &mut outranks, builtin)
+    }
+
+    /// Which of those `admitted` names, by position, survive the class-by-class elimination: at
+    /// each class, a survivor another survivor strictly outranks there drops out.
+    pub fn survivors(&self, admitted: u64) -> u64 {
         let len = usize::from(self.len);
         let mut survivors = admitted;
         for class in self.beats.chunks(len.max(1)) {
@@ -531,6 +569,14 @@ impl<'graph> Table<'graph> {
                 .fold(0u64, |mask, at| mask | class[at]);
             survivors &= !beaten;
         }
+        survivors
+    }
+
+    /// The candidate a call runs among those `admitted` names, by position: the lone
+    /// [survivor](Self::survivors), else the first builtin among several in list order. `Err` with
+    /// the survivors' count where several survive and none is a builtin, or where none admitted.
+    pub fn decide(&self, admitted: u64) -> Result<usize, usize> {
+        let survivors = self.survivors(admitted);
         match survivors.count_ones() {
             1 => Ok(survivors.trailing_zeros() as usize),
             count => match survivors & self.builtins {

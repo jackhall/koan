@@ -81,7 +81,7 @@ pub use tree::{Binder, Identity, KnotNode, Leaf, NodeCapture, Tree, Unfolded, Wi
 pub use typed::{
     BodyClass, Caching, Callable, Elaboration, ElaborationDisplay, Elimination, FunctionGroupMap,
     HandedTo, Handoff, InstanceRead, Kept, Mint, Narrowing, ParameterBinding, PathEntry, Paths,
-    Point, Points, Registered, Resolution, Resolved, Root, ShapeGroupMap, Source, Static,
+    Pick, Point, Points, Registered, Resolution, Resolved, Root, ShapeGroupMap, Source, Static,
     StaticCallable, StaticInstance, StaticRegistered, StaticType, Table, UseStatics, Variable,
     ViewSlots, solutions,
 };

@@ -157,6 +157,7 @@ fn typed_types(typed: &Typed<'_>, each: &mut Each<'_>) {
         selections,
         by_name,
         trees,
+        picks: _,
         contents,
         minting: _,
         throughs: _,

@@ -156,10 +156,10 @@ use crate::scope::{
     Address, BodyClass, BodyShape, Born, BuiltinIndex, Candidate, CandidateList, CaptureChain,
     CaptureSlot, CaptureSource, Closing, ComponentIndex, Coordinate, Cut, Elimination, Frontier,
     Identity, InstanceRead, Kept, Keyed, Lands, Leaf, Listed, NamedVariable, Narrowing, PathEntry,
-    Point, Points, Position, Resolution, Segment, ShapeError, ShapeKind, Shapes, Site, SiteDeps,
-    Slot, Source, Static, StaticInstance, StaticRegistered, StaticType, Store, SurfacedHead, Tree,
-    Typed, UnitFacts, UnitId, UnitIndex, UnitWork, Unknown, UseStatics, Variable as Located,
-    Within, follow, part_of, source_of,
+    Pick, Point, Points, Position, Resolution, Segment, ShapeError, ShapeKind, Shapes, Site,
+    SiteDeps, Slot, Source, Static, StaticInstance, StaticRegistered, StaticType, Store,
+    SurfacedHead, Tree, Typed, UnitFacts, UnitId, UnitIndex, UnitWork, Unknown, UseStatics,
+    Variable as Located, Within, follow, part_of, source_of,
 };
 use crate::source::SourceRef;
 use crate::symbols::{BinderSymbol, TypeSymbol};
@@ -417,6 +417,7 @@ enum Wrote {
     Instance(usize),
     Named(usize),
     Tree(usize),
+    Picks(usize),
     Content(usize),
 }
 
@@ -471,6 +472,7 @@ struct Level<'p, 'o, 'graph> {
     minted_within: bool,
     /// Each `:|` ascription's site, beside its operand's content tree.
     trees: BumpVec<'p, (Site, &'o Tree<'o>, Tag)>,
+    picks: BumpVec<'p, (Site, &'o [Pick<'o>], Tag)>,
     /// Each module binder's content tree, by slot: what a binding of it is read against.
     contents: BumpVec<'p, (Slot, Tree<'o>, Tag)>,
     /// Each path the shape spells whose declared application names a lexical variable, by its
@@ -786,6 +788,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             folded: 0,
             minted_within: false,
             trees: BumpVec::new_in(scratch),
+            picks: BumpVec::new_in(scratch),
             contents: BumpVec::new_in(scratch),
             throughs: bump_table(scratch),
             signature: None,
@@ -1199,6 +1202,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         let mut instances = BumpVec::new_in(scratch);
         let mut named = BumpVec::new_in(scratch);
         let mut trees = BumpVec::new_in(scratch);
+        let mut picks = BumpVec::new_in(scratch);
         let mut contents = BumpVec::new_in(scratch);
         for wrote in wrote.iter().copied() {
             match wrote {
@@ -1296,6 +1300,12 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                         trees.push((site, tree));
                     }
                 }
+                Wrote::Picks(index) => {
+                    let (site, picked, held) = at.picks[index];
+                    if ours(held) {
+                        picks.push((site, picked));
+                    }
+                }
                 Wrote::Content(index) => {
                     let (slot, tree, held) = at.contents[index];
                     if ours(held) {
@@ -1313,6 +1323,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         newest(&mut instances);
         newest(&mut named);
         newest(&mut trees);
+        newest(&mut picks);
         Typed {
             declared: keyed(lay, &declared),
             registered: keyed(lay, &registered),
@@ -1326,6 +1337,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             selections: keyed(lay, &selections),
             by_name: Keyed::sorted(lay, &mut named),
             trees: Keyed::sorted(lay, &mut trees),
+            picks: Keyed::sorted(lay, &mut picks),
             contents: Keyed::sorted(lay, &mut contents),
             minting,
             throughs: keyed(lay, &throughs),
@@ -1411,6 +1423,12 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             .extend(typed.minting.iter().map(|site| (*site, tag)));
         at.trees
             .extend(typed.trees.iter().map(|(site, tree)| (*site, *tree, tag)));
+        at.picks.extend(
+            typed
+                .picks
+                .iter()
+                .map(|(site, picked)| (*site, *picked, tag)),
+        );
         for (level, located) in typed.throughs.iter() {
             at.throughs.entry(*level).or_insert((*located, tag));
         }
@@ -3400,6 +3418,12 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                     };
                     if let Some(types_of) = types_of {
                         self.lay(&types_of, carried, site)?;
+                        if let Tree::Body { body, .. } = *tree
+                            && tree.closed()
+                            && let Some(picks) = self.picks(body, &types_of)
+                        {
+                            self.record_picks(level, site, picks);
+                        }
                     }
                 }
             }
@@ -3411,6 +3435,36 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             ascribed,
             at: node.source,
         })
+    }
+
+    /// What a view of `viewed`'s signature over the module the body `body` births carries for each
+    /// keyworded member, by its registrations' positions in its run: `None` where a registration's
+    /// shape is not closed, or the view's fit leaves the source's side unknown.
+    fn picks(&mut self, body: Segment, viewed: &ViewTypes<'_>) -> Option<&'o [Pick<'o>]> {
+        let (types, scratch) = (self.types, self.scratch);
+        let shape = self.shapes.shape_at(body);
+        // A module's registrations follow its named members in slot order.
+        let mut slots = BumpVec::new_in(scratch);
+        slots.extend(
+            shape
+                .registrations()
+                .iter()
+                .map(|registration| registration.slot),
+        );
+        slots.sort_unstable();
+        let mut registered = BumpVec::with_capacity_in(slots.len(), scratch);
+        for slot in slots.iter() {
+            match self.registered_cell(shape, *slot) {
+                Static::Closed(registration) => registered.push(registration.shape),
+                Static::Rigid { .. } | Static::Unknown => return None,
+            }
+        }
+        let picks = view::picks(viewed, &registered, types, scratch)?;
+        let lay = self.lay;
+        Some(lay.fill(picks.len(), |at| Pick {
+            member: picks[at].0,
+            offered: collect(lay, picks[at].1.iter().copied()),
+        }))
     }
 
     /// The view ascription `node` of the shape at `level`, its operand's static type `typed` and

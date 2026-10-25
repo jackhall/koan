@@ -19,7 +19,8 @@ use super::shape::ShapeError;
 use super::tree::{KnotNode, Leaf, NodeCapture, Tree, Unfolded, Within};
 use super::typed::{
     Callable, Elimination, FunctionGroupMap, InstanceRead, Kept, Narrowing, ParameterBinding,
-    PathEntry, Points, Registered, Resolution, ShapeGroupMap, Static, StaticInstance, UseStatics,
+    PathEntry, Pick, Points, Registered, Resolution, ShapeGroupMap, Static, StaticInstance,
+    UseStatics,
 };
 
 /// A copier laying records through `lay`, flattening frontiers under `binding` with a memo of
@@ -272,6 +273,7 @@ impl<'to, 'x, 'bind, L: Lays<'to>> Relay<'to, 'x, 'bind, L> {
             selections,
             by_name,
             trees,
+            picks,
             contents,
             minting,
             throughs,
@@ -305,6 +307,12 @@ impl<'to, 'x, 'bind, L: Lays<'to>> Relay<'to, 'x, 'bind, L> {
                     .fill(contributed.len(), |at| self.static_type(&contributed[at]))
             }),
             trees: self.keyed(*trees, |tree| resident(self.lay, self.tree(tree))),
+            picks: self.keyed(*picks, |picks| {
+                self.lay.fill(picks.len(), |at| Pick {
+                    member: picks[at].member,
+                    offered: self.copied(picks[at].offered),
+                })
+            }),
             contents: self.keyed(*contents, |tree| self.tree(tree)),
             minting: self.keyed_copied(*minting),
             throughs: self.keyed(*throughs, |variables| self.copied(variables)),

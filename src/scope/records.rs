@@ -31,7 +31,7 @@ use super::shape::{
 use super::shapes::Shapes;
 use super::tree::{Leaf, NodeCapture, Tree, closed_trees};
 use super::typed::{
-    BodyClass, Caching, Handoff, InstanceRead, Mint, PathEntry, Points, Resolution, Static,
+    BodyClass, Caching, Handoff, InstanceRead, Mint, PathEntry, Pick, Points, Resolution, Static,
     StaticCallable, StaticInstance, StaticRegistered, StaticType, UseStatics, Variable, ViewSlots,
 };
 
@@ -78,6 +78,9 @@ pub struct Typed<'a> {
     pub by_name: Keyed<'a, (Site, &'a [StaticType<'a>])>,
     /// Each `:|` at a closed signature, beside its view's content tree.
     pub trees: Keyed<'a, (Site, &'a Tree<'a>)>,
+    /// Each `:|` over a body-born module whose content is closed, beside its keyworded members'
+    /// picks.
+    pub picks: Keyed<'a, (Site, &'a [Pick<'a>])>,
     /// Each module binder's content tree, by slot, where the load read one.
     pub contents: Keyed<'a, (Slot, Tree<'a>)>,
     /// The body's own minting sites.
@@ -109,6 +112,7 @@ impl Typed<'_> {
         selections: Keyed::EMPTY,
         by_name: Keyed::EMPTY,
         trees: Keyed::EMPTY,
+        picks: Keyed::EMPTY,
         contents: Keyed::EMPTY,
         minting: Keyed::EMPTY,
         throughs: Keyed::EMPTY,
@@ -739,6 +743,7 @@ impl<'graph> LoadFacts<'graph> {
                 + size_of_val(typed.selections.entries())
                 + size_of_val(typed.by_name.entries())
                 + size_of_val(typed.trees.entries())
+                + size_of_val(typed.picks.entries())
                 + size_of_val(typed.minting.entries())
                 + size_of_val(typed.throughs.entries())
         };
@@ -1082,6 +1087,12 @@ impl<'a, S: RecordSource<'a>> FactsOver<S> {
         self.at_site(shape, site, |typed| typed.trees)
     }
 
+    /// What the view the `:|` at `site` of `shape` builds carries for each keyworded member, where
+    /// the load sees all of the body-born module it views.
+    pub fn picks(&self, shape: &BodyShape<'_>, site: Site) -> Option<&'a [Pick<'a>]> {
+        self.at_site(shape, site, |typed| typed.picks)
+    }
+
     /// Whether the load settled the ascription at `site` of `shape`.
     pub fn settled(&self, shape: &BodyShape<'_>, site: Site) -> bool {
         self.lists_site(shape, site, |typed| typed.settled)
@@ -1367,6 +1378,7 @@ impl Typed<'_> {
             .chain(self.selections.iter().map(|(site, _)| *site))
             .chain(self.by_name.iter().map(|(site, _)| *site))
             .chain(self.trees.iter().map(|(site, _)| *site))
+            .chain(self.picks.iter().map(|(site, _)| *site))
             .chain(self.minting.iter().copied());
         sites.for_each(|site| each(Held::Site(segment, site)));
         for (level, _) in self.throughs.iter() {

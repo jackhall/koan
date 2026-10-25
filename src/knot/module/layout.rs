@@ -10,6 +10,7 @@
 use crate::elaborate::{member_count, schema_member, schema_of, signature_member, type_members};
 use crate::knot::{KValue, Knotted};
 use crate::memory::{BumpAllocator, BumpVec, Writer};
+use crate::scope::Table;
 use crate::symbols::{BinderSymbol, KeySymbol};
 use crate::type_lattice::{
     DeclaredType, DispatchTokenElement, KType, Members, Parametric, TypeNode, satisfied_by,
@@ -136,27 +137,57 @@ pub fn functions_at<'graph, 'cell, 'x>(
     found
 }
 
-/// The overloads among `offered` that cover `declared`, a keyworded member's shape — each whose
-/// registered shape satisfies it — narrowed to those ranking first among themselves: the most
-/// specific, or every one where none ranks first. Ranking among overloads that all cover one shape
-/// does not depend on the arguments, so this is what every call through `declared` would pick.
+/// The overloads among `offered` that cover `declared`, a keyworded member's shape: those
+/// [`covered`] picks.
 pub fn covering<'graph, 'cell, 'x>(
     offered: &[KValue<'graph, 'cell>],
     declared: DeclaredType<KType>,
     types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'x>,
 ) -> BumpVec<'x, KValue<'graph, 'cell>> {
+    let mut shapes = BumpVec::with_capacity_in(offered.len(), scratch);
+    shapes.extend(
+        (offered.iter()).map(|function| {
+            registered_shape(*function).expect("a registration member is a function")
+        }),
+    );
+    let mut picked = BumpVec::new_in(scratch);
+    picked.extend((covered(&shapes, declared, types, scratch).iter()).map(|at| offered[*at]));
+    picked
+}
+
+/// The positions among `shapes`, registered shapes, of those covering `declared`, a keyworded
+/// member's shape — each that satisfies it — narrowed to those ranking first among themselves: the
+/// most specific, or every one where none ranks first. Ranking among overloads that all cover one
+/// shape does not depend on the arguments, so this is what every call through `declared` would
+/// pick.
+pub fn covered<'x>(
+    shapes: &[DeclaredType<KType>],
+    declared: DeclaredType<KType>,
+    types: &Chain<'_, '_, '_, '_>,
+    scratch: BumpAllocator<'x>,
+) -> BumpVec<'x, usize> {
     let mut covers = BumpVec::new_in(scratch);
-    let mut shapes = BumpVec::new_in(scratch);
-    for function in offered.iter().copied() {
-        let registered = registered_shape(function).expect("a registration member is a function");
-        if satisfied_by(types, scratch, declared, registered) {
-            covers.push(function);
-            shapes.push(DeclaredType::<Parametric>::from(registered));
+    let mut ranked = BumpVec::new_in(scratch);
+    for (at, registered) in shapes.iter().enumerate() {
+        if satisfied_by(types, scratch, declared, *registered) {
+            covers.push(at);
+            ranked.push(DeclaredType::<Parametric>::from(*registered));
         }
     }
     let mut picked = BumpVec::new_in(scratch);
-    picked.extend((select_by_class(types, scratch, &shapes).iter()).map(|index| covers[*index]));
+    // No registration is a builtin; more overloads than a table ranks fall to the lattice's own
+    // elimination.
+    match Table::ranked(scratch, types, scratch, &ranked, |_| false, &mut || {}) {
+        Some(table) => {
+            let survivors = table.survivors(u64::MAX >> (64 - covers.len().max(1)));
+            let kept = (0..covers.len()).filter(|at| survivors & 1 << at != 0);
+            picked.extend(kept.map(|at| covers[at]));
+        }
+        None => {
+            picked.extend((select_by_class(types, scratch, &ranked).iter()).map(|at| covers[*at]))
+        }
+    }
     picked
 }
 

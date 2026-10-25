@@ -32,9 +32,8 @@ use crate::scope::{Candidate, Coordinate, Elimination, IMPLICIT, Points, Table};
 use crate::scope::{ParameterBinding, Registered, ShapeGroupMap};
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::{
-    DeclaredType, KType, Parametric, TypeNode, Verdict, admit_by_class, outranks, satisfied_by,
-    scheme_slots, select_by_class, shape_slots, solving_slots, substitute_levels,
-    substitute_quantified,
+    DeclaredType, KType, Parametric, Verdict, admit_by_class, outranks, satisfied_by, scheme_slots,
+    select_by_class, shape_slots, solving_slots, substitute_levels, substitute_quantified,
 };
 use crate::values::{Chain, List, Record, TypeValue, Value};
 
@@ -191,21 +190,8 @@ pub(super) fn winner(
     }
 }
 
-/// How many classes `shape`'s ranking has: one past the highest.
-fn class_count(types: &Chain<'_, '_, '_, '_>, shape: DeclaredType<Parametric>) -> usize {
-    // Only the ranking is read, which a scheme's body spells as a type's does.
-    let TypeNode::ExpressionShape { classes, .. } = shape.view(types).body else {
-        unreachable!("a registered shape is an expression shape")
-    };
-    classes
-        .iter()
-        .max()
-        .map_or(0, |highest| usize::from(highest) + 1)
-}
-
-/// The elimination table of `shapes`, registered shapes under one key and one ranking, each pair's
-/// answer read from the lattice's [`outranks`] and laid through `lay`; `builtin` says which are
-/// builtins. `None` for more shapes than a table ranks.
+/// The elimination table of `shapes`, registered shapes under one key and one ranking, laid
+/// through `lay`; `builtin` says which are builtins. `None` for more shapes than a table ranks.
 pub(super) fn table<'l>(
     lay: impl Lays<'l>,
     types: &Chain<'_, '_, '_, '_>,
@@ -213,13 +199,11 @@ pub(super) fn table<'l>(
     shapes: &[DeclaredType<Parametric>],
     builtin: impl Fn(usize) -> bool,
 ) -> Option<Table<'l>> {
-    let classes = shapes.first().map_or(0, |shape| class_count(types, *shape));
-    let outranks = |class, a: usize, b: usize| {
-        #[cfg(test)]
-        RANKED.with(|ranked| ranked.set(ranked.get() + 1));
-        outranks(types, scratch, shapes[a], shapes[b], class)
-    };
-    Table::laid(lay, shapes.len(), classes, outranks, builtin)
+    #[cfg(test)]
+    let mut ranked = || RANKED.with(|ranked| ranked.set(ranked.get() + 1));
+    #[cfg(not(test))]
+    let mut ranked = || {};
+    Table::ranked(lay, types, scratch, shapes, builtin, &mut ranked)
 }
 
 #[cfg(test)]
