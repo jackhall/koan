@@ -49,6 +49,8 @@
 
 use std::fmt;
 
+use smallvec::SmallVec;
+
 use crate::elaborate::{declares_nominal, denoted, type_declarations};
 use crate::knot::body_activation;
 use crate::knot::module::coerce::{self, CoercionRefused};
@@ -60,12 +62,14 @@ use crate::knot::{
 use crate::memory::{Bump, BumpVec, Writer, resident};
 use crate::parse::ExpressionPart;
 use crate::scheduler::{
-    Action, MemoHome, Placement, Received, Request, Slot as Asked, Step, StepError, Taken, Use,
+    Action, MemoHome, Placement, Received, Replayed, Request, Seek, Slot as Asked, Step, StepError,
+    Taken, Use,
 };
 use crate::scope::{Activated, Entry, EventSite, MemoKey, extended};
 use crate::scope::{Address, Bound, RecordSource, Tree, Unknown};
 use crate::scope::{BodyShape, Component, Mint, Position, ShapeKind, Site, Slot, Unit, UnitWork};
 use crate::scope::{CaptureSource, ClosureBindings, Code, ComposedRoot, Facts, ShapeError};
+use crate::scope::{ComposedSyntax, Level as SettlementLevel, Stamp};
 use crate::scope::{Coordinate, ParameterBinding, Static, Target};
 use crate::symbols::{BinderSymbol, Symbol, SymbolInterner, TypeSymbol};
 use crate::type_lattice::{
@@ -73,7 +77,7 @@ use crate::type_lattice::{
     Variance, admits_with, display_name, substitute_quantified,
 };
 use crate::values::{
-    ArenaRef, CALL_ONLY, Chain, ContentDigest, Link, List, Record, TypeValue, Value,
+    ArenaRef, BindingImage, CALL_ONLY, Chain, ContentDigest, Link, List, Record, TypeValue, Value,
 };
 
 use super::activation_store::bound_of;
@@ -104,7 +108,7 @@ pub struct Runner<'graph, 'cell> {
     seen: u32,
     /// What the body runs within: what it hands each evaluation and block it asks for
     /// ([`KBirth::Evaluate`]), and the arena node a callable born in it is born under.
-    within: Within<'graph>,
+    within: Within<'graph, 'cell>,
     /// Where its binding events read and extend the decision memo.
     memo: Memo<'cell>,
 }
@@ -208,10 +212,11 @@ pub fn run<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'g
         && let KState::Born(birth) = &state
         && let Some(root) = wanted_root(birth, wanted, &step.types())
     {
-        let seek = super::settle::seek(birth, &step.types(), &step.types());
-        let KState::Born(birth) = state else {
+        let KState::Born(mut birth) = state else {
             unreachable!("matched above")
         };
+        let types = step.types();
+        let seek = super::settle::seek(&mut birth, step.writer(), &types, &types);
         let work = crate::scheduler::Work {
             step: run,
             state: birth,
@@ -232,6 +237,48 @@ pub fn run<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'g
             state: birth,
         };
         return step.bounce(work, root);
+    }
+    // A call whose callee's arena node is gone replays the chain of settlements its stamp
+    // records, so its frame is born warm where it would have been.
+    if let KState::Born(KBirth::Call {
+        program, callee, ..
+    }) = &state
+        && !step.replayed()
+        && let Some(function) = called_function(*callee)
+        && let Some(stamp) = function.closure().stamp()
+        && !step.arena_live(function.closure().build())
+    {
+        let types = step.types();
+        let tiers = program.tiers();
+        let levels: SmallVec<[Replayed<'graph>; 4]> = (stamp.levels().iter())
+            .map(|level| Replayed {
+                seek: Seek {
+                    parent: ArenaRef::ROOT,
+                    settlement: Some((
+                        level.key,
+                        BindingImage::of(level.keyed.iter().copied().collect(), tiers, &types),
+                        level.ask(),
+                    )),
+                },
+                pins: (level.modules.iter())
+                    .filter_map(|module| module.knot_member()?.module()?.body()?.root)
+                    .map(ComposedSyntax::of)
+                    .collect(),
+            })
+            .collect();
+        let KState::Born(mut birth) = state else {
+            unreachable!("matched above")
+        };
+        let own = super::settle::seek(&mut birth, step.writer(), &types, &types);
+        let own = Replayed {
+            seek: own,
+            pins: SmallVec::new(),
+        };
+        let work = crate::scheduler::Work {
+            step: run,
+            state: birth,
+        };
+        return step.replay(work, levels.into_iter().chain([own]));
     }
     let (code, facts) = step.door();
     let shape = match &state {
@@ -312,6 +359,23 @@ fn composed_root_of(body: CodeBody<'_>) -> Option<ComposedRoot<'_>> {
     }
 }
 
+/// The stamp of the chain of settlements a frame of `callee` runs under, which a callable born in
+/// it records: `level`, the request of the settlement the frame sought, over the callee's own
+/// stamp where the frame runs under that settlement; the callee's own where it runs under the
+/// arena node the callee was born under.
+fn stamped<'graph, 'here>(
+    step: &Taking<'_, 'graph, '_, 'here, '_, '_>,
+    callee: KValue<'graph, 'here>,
+    level: Option<&'here SettlementLevel<'here, Knotted<'graph, 'here>>>,
+) -> Option<Stamp<'here, Knotted<'graph, 'here>>> {
+    let below = called_function(callee).and_then(|function| function.closure().stamp());
+    let sought = step.under_settlement() && step.arena_ref(ArenaRef::ROOT) != born_under(callee);
+    match level.filter(|_| sought) {
+        Some(level) => Some(Stamp { level, below }),
+        None => below.copied(),
+    }
+}
+
 /// The arena node `callee`'s function was born under, behind every barrier: where a frame of it
 /// runs that the drain found no settlement of its own for.
 fn born_under(callee: KValue<'_, '_>) -> ArenaRef {
@@ -361,6 +425,7 @@ fn ran<'graph, 'here, 'scratch>(
             handed,
             owed,
             inherit,
+            level,
         }) => {
             minted(&facts, types);
             let home = Some(step.memo_home());
@@ -388,6 +453,7 @@ fn ran<'graph, 'here, 'scratch>(
                     within: Within {
                         routes,
                         build: step.arena_ref(born_under(callee)),
+                        stamp: stamped(&step, callee, level),
                         memo: home,
                         inherit,
                         root: called_function(callee).and_then(|function| function.body().root),
@@ -744,6 +810,7 @@ pub fn call<'graph, 'here>(
                 handed,
                 owed,
                 inherit,
+                level: None,
             },
         },
     }
@@ -757,7 +824,7 @@ pub fn block<'graph, 'here>(
     shape: &BodyShape<'_>,
     enclosing: KActivationView<'graph, 'here>,
     use_: Use,
-    within: Within<'graph>,
+    within: Within<'graph, 'here>,
 ) -> Request<'graph, 'here, KBundle> {
     surfaced_block(program, shape, enclosing, None, use_, within)
 }
@@ -771,7 +838,7 @@ pub fn surfaced_block<'graph, 'here>(
     enclosing: KActivationView<'graph, 'here>,
     module: Option<(KValue<'graph, 'here>, Site)>,
     use_: Use,
-    within: Within<'graph>,
+    within: Within<'graph, 'here>,
 ) -> Request<'graph, 'here, KBundle> {
     debug_assert_eq!(shape.kind(), ShapeKind::Block);
     Request {
@@ -1013,7 +1080,7 @@ impl<'graph, 'cell> Runner<'graph, 'cell> {
     /// What the runner hands an evaluation it asks for: what it runs within, and the memo a
     /// frame the evaluation calls seeds its own from — the runner's where it has read it, else
     /// the one the runner's would have been seeded from.
-    fn handing(&self) -> Within<'graph> {
+    fn handing(&self) -> Within<'graph, 'cell> {
         let inherit = match self.memo.read {
             Some(_) => self.memo.home,
             None => self.memo.inherit,
@@ -1689,7 +1756,7 @@ fn code_frame<'graph, 'here>(
         links.push(Link::Value(value));
     }
     // A quote's lexical chain of arena nodes is not placed, so its frame seeks from the root.
-    let closure = ClosureBindings::of(writer, &links, ArenaRef::ROOT, None);
+    let closure = ClosureBindings::of(writer, &links, (ArenaRef::ROOT, None), None);
     Some(resident(
         writer,
         KActivation::of_code(writer, shape, &facts, closure, program.builtins()),
@@ -1800,7 +1867,7 @@ fn tied<'graph, 'here>(
         &reading,
         written,
         component,
-        runner.within.build,
+        runner.within.born(),
         types,
         &scratch,
         &mut |site, _| {
@@ -2107,7 +2174,7 @@ fn first_tie<'graph, 'here, 'scratch, 'lent>(
         &reading,
         written,
         component,
-        runner.within.build,
+        runner.within.born(),
         types,
         &scratch,
         &mut |site, part| {
@@ -2254,7 +2321,7 @@ fn left<'graph, 'here>(
         &reading,
         written,
         reading.shape().component_of(outer.binder),
-        body.within.build,
+        body.within.born(),
         types,
         &scratch,
         &mut |_, _| Some(Supplied::Body(body.activation)),

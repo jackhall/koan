@@ -7,14 +7,14 @@
 //! runner's state may hold its activation, which binds and so is invariant. See
 //! [README.md § The bundle](README.md#the-bundle).
 
-use crate::knot::{KActivationView, KValue, KnottedFamily};
+use crate::knot::{KActivationView, KValue, Knotted, KnottedFamily};
 use crate::memory::{CrossedOperand, DropFree, Header, Writer, collect, covariant, reattachable};
 use crate::scheduler::{Born, MemoHome, StepBundle};
 use crate::scope::RegionHeader;
-use crate::scope::{ComposedRoot, Segment, Site};
+use crate::scope::{ComposedRoot, Level, Segment, Site, Stamp};
 use crate::symbols::Symbol;
 use crate::type_lattice::{DeclaredType, Halves, KType};
-use crate::values::{ArenaRef, ContentDigest, Half, TypeTiers, copy_severed};
+use crate::values::{ArenaRef, ContentDigest, Half, TypeTiers, Weight, copy_severed};
 
 use super::body::Runner;
 use super::record::{CallKind, Contract, Evaluated, Program};
@@ -34,7 +34,8 @@ pub enum KBirth<'graph, 'cell> {
     /// none. `handed` are the digest memos the caller hands on with arguments it passed bare.
     /// `owed` is the contract of the evaluation that tailed into this frame: `None` when the frame
     /// was spawned. `inherit` is where the asker's decision memo rests, which seeds the frame's
-    /// where its home holds none.
+    /// where its home holds none. `level` is the request of the settlement the asker sought for
+    /// the frame, which a callable born under it records in its stamp.
     Call {
         program: &'graph Program<'graph>,
         callee: KValue<'graph, 'cell>,
@@ -44,6 +45,7 @@ pub enum KBirth<'graph, 'cell> {
         handed: &'cell [Handed],
         owed: Option<Contract>,
         inherit: Option<MemoHome>,
+        level: Option<&'cell Level<'cell, Knotted<'graph, 'cell>>>,
     },
     /// An `EVAL`: the frame's first step lays the code's activation down over the bindings it
     /// carries and the names `offered`, a record of them by name, supplies — and `contract`, the
@@ -70,7 +72,7 @@ pub enum KBirth<'graph, 'cell> {
         node: Evaluated,
         view: KActivationView<'graph, 'cell>,
         contract: Option<Contract>,
-        within: Within<'graph>,
+        within: Within<'graph, 'cell>,
     },
     /// A block — a synthesized block part's shape, or a `USING … SCOPE` body — run beside the
     /// view of the activation it sits in, its last statement's value its own; a `USING` body's
@@ -81,7 +83,7 @@ pub enum KBirth<'graph, 'cell> {
         segment: Segment,
         enclosing: KActivationView<'graph, 'cell>,
         module: Option<(KValue<'graph, 'cell>, Site)>,
-        within: Within<'graph>,
+        within: Within<'graph, 'cell>,
     },
     /// What the top level leaves at rest when it ends: its activation's view, for a later root
     /// work to read a top-level binding through.
@@ -97,25 +99,33 @@ pub enum KBirth<'graph, 'cell> {
 /// frame runs under, which a callable born in it is born under; where its frame's decision memo
 /// rests, which a block decides in; the memo a frame it calls seeds its own from; and the root of
 /// the composed code its frame runs, which a value born in it keeps — the books hold only its
-/// digest.
-#[derive(Clone, Copy, Debug)]
-pub struct Within<'graph> {
+/// digest; and the stamp of the chain of settlements its frame's arena node closes, which a
+/// callable born in it keeps beside that node.
+#[derive(Clone, Copy)]
+pub struct Within<'graph, 'cell> {
     pub routes: bool,
     pub build: ArenaRef,
+    pub stamp: Option<Stamp<'cell, Knotted<'graph, 'cell>>>,
     pub memo: Option<MemoHome>,
     pub inherit: Option<MemoHome>,
     pub root: Option<ComposedRoot<'graph>>,
 }
 
-impl Within<'_> {
+impl<'graph, 'cell> Within<'graph, 'cell> {
     /// The top level's before its runner names its memo: no caching frame, and the root.
     pub const TOP: Self = Within {
         routes: false,
         build: ArenaRef::ROOT,
+        stamp: None,
         memo: None,
         inherit: None,
         root: None,
     };
+
+    /// Where a callable born in the body is born: the arena node, and the stamp of its chain.
+    pub fn born(&self) -> (ArenaRef, Option<Stamp<'cell, Knotted<'graph, 'cell>>>) {
+        (self.build, self.stamp)
+    }
 
     /// What the evaluation a frame's tail hands its last statement runs within: it writes the
     /// frame's parent, so it routes no more, and its frame's arena node stays.
@@ -134,10 +144,16 @@ impl<'graph, 'cell> KBirth<'graph, 'cell> {
     fn values(&self, out: &mut impl FnMut(&KValue<'graph, 'cell>)) {
         match self {
             KBirth::Call {
-                callee, arguments, ..
+                callee,
+                arguments,
+                level,
+                ..
             } => {
                 out(callee);
                 out(arguments);
+                (level.iter())
+                    .flat_map(|level| level.modules)
+                    .for_each(&mut *out);
             }
             KBirth::Eval { code, offered, .. } => {
                 out(code);
@@ -218,9 +234,12 @@ impl<'graph> StepBundle<'graph> for KBundle {
                 arguments,
                 contributed,
                 handed,
+                level,
                 ..
             } => {
-                callee.weight().plus(arguments.weight()).bytes()
+                let level =
+                    level.map_or(Weight::ZERO, |level| Stamp { level, below: None }.weight());
+                callee.weight().plus(arguments.weight()).plus(level).bytes()
                     + size_of_val(*contributed)
                     + size_of_val(*handed)
             }
@@ -274,6 +293,7 @@ impl<'graph> StepBundle<'graph> for KBundle {
                     handed,
                     owed,
                     inherit,
+                    level,
                 } => {
                     let types = tiers.chain(Halves::alone(Half::of(writer, header)));
                     let [callee, arguments] = copy_severed::<_, KnottedFamily, _, 2>(
@@ -282,6 +302,18 @@ impl<'graph> StepBundle<'graph> for KBundle {
                         view,
                         [&callee, &arguments],
                     );
+                    let level = level.map(|level| {
+                        let stamp = Stamp { level, below: None }.copied(writer, &mut |module| {
+                            let [module] = copy_severed::<_, KnottedFamily, _, 1>(
+                                writer,
+                                &types,
+                                view,
+                                [module],
+                            );
+                            module
+                        });
+                        stamp.level
+                    });
                     KBirth::Call {
                         program,
                         callee,
@@ -290,6 +322,7 @@ impl<'graph> StepBundle<'graph> for KBundle {
                         contributed: collect(writer, contributed.iter().copied()),
                         handed: collect(writer, handed.iter().copied()),
                         owed,
+                        level,
                         inherit,
                     }
                 }

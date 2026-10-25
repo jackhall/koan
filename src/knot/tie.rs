@@ -29,7 +29,7 @@ use std::cell::Cell;
 use crate::elaborate::denoted;
 use crate::memory::{BumpAllocator, BumpVec, Knot, KnotPlan, Writer};
 use crate::parse::ExpressionPart;
-use crate::scope::{BodyShape, Component, ShapeKind, Written};
+use crate::scope::{BodyShape, Component, ShapeKind, Stamp, Written};
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::{DeclaredType, KType, satisfied_by};
 use crate::values::{ArenaRef, Chain, Weight, retype_target};
@@ -60,7 +60,7 @@ pub fn tie<'graph, 'cell, 'x>(
     activation: &KReading<'_, 'graph, 'cell>,
     written: Written<'graph, '_>,
     component: &Component<'_>,
-    build: ArenaRef,
+    born: (ArenaRef, Option<Stamp<'cell, Knotted<'graph, 'cell>>>),
     types: &Chain<'_, 'cell, '_, '_>,
     scratch: BumpAllocator<'x>,
     eager: &mut Eager<'_, 'graph, 'cell>,
@@ -186,7 +186,7 @@ where
     let mut laid = BumpVec::with_capacity_in(functions.len(), scratch);
     for staged in functions.iter() {
         laid.push(staged.as_ref().map(|staged| {
-            let (closure, typing, weight) = staged.laid_down(writer, build);
+            let (closure, typing, weight) = staged.laid_down(writer, born);
             knot_weight = knot_weight.plus(weight);
             (closure, typing)
         }));

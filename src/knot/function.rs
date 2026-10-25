@@ -25,7 +25,7 @@ use crate::elaborate::{bound_path, callable_type};
 use crate::memory::{BumpAllocator, BumpVec, Edge, KnotPlan, Writer, resident};
 use crate::scope::{Activated, StaticInstance, solutions};
 use crate::scope::{
-    BodyAt, BodyRef, BodyShape, ClosureBindings, Registration, ShapeKind, Site, Written,
+    BodyAt, BodyRef, BodyShape, ClosureBindings, Registration, ShapeKind, Site, Stamp, Written,
 };
 use crate::scope::{Callable, FunctionGroupMap, ParameterBinding, Registered, ShapeGroupMap};
 use crate::symbols::{BinderSymbol, TypeSymbol};
@@ -332,7 +332,7 @@ impl<'graph, 'cell> Staged<'graph, 'cell, '_> {
     pub(super) fn laid_down(
         &self,
         writer: Writer<'cell, '_>,
-        build: ArenaRef,
+        born: (ArenaRef, Option<Stamp<'cell, Knotted<'graph, 'cell>>>),
     ) -> (
         &'cell ClosureBindings<'cell, Knotted<'graph, 'cell>>,
         Option<&'cell Typing<'graph, 'cell>>,
@@ -342,7 +342,7 @@ impl<'graph, 'cell> Staged<'graph, 'cell, '_> {
             BodyAt::Written(_) => None,
             BodyAt::Composed(body) => Some(body),
         };
-        let closure = ClosureBindings::of(writer, &self.captures, build, self.decided);
+        let closure = ClosureBindings::of(writer, &self.captures, born, self.decided);
         let typing = Typing::laid_down(
             writer,
             self.quantifier_map,
@@ -604,7 +604,7 @@ pub fn lambda<'graph, 'cell, 'x>(
     activation: &KReading<'_, 'graph, 'cell>,
     written: Written<'graph, '_>,
     site: Site,
-    build: ArenaRef,
+    born: (ArenaRef, Option<Stamp<'cell, Knotted<'graph, 'cell>>>),
     types: &Chain<'_, 'cell, '_, '_>,
     scratch: BumpAllocator<'x>,
 ) -> Result<Knotted<'graph, 'cell>, Untieable<'x>>
@@ -619,7 +619,7 @@ where
     let staged = staged(body, None, activation, written, types, scratch, |_| {
         unreachable!("only the tie births a callable that captures a fellow member")
     })?;
-    let (closure, typing, weight) = staged.laid_down(writer, build);
+    let (closure, typing, weight) = staged.laid_down(writer, born);
     let knot_weight = Weight::flat::<usize>()
         .plus(weight)
         .plus(Weight::flat::<Node<'graph, 'cell>>());
@@ -729,7 +729,10 @@ pub fn instance<'graph, 'cell>(
     let closure = ClosureBindings::of(
         writer,
         &links,
-        function.closure().build(),
+        (
+            function.closure().build(),
+            function.closure().stamp().copied(),
+        ),
         function.closure().decided(),
     );
     let map = function.quantifier_map();

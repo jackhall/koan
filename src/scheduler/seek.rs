@@ -13,7 +13,9 @@
 //! ([`Lending::Pinning`]). So a frame is born under its
 //! settlement and parks for nothing. A frame with no key runs under the parent itself. A tail hop
 //! of the same callee under a live settlement stamps it too. A parent that is no longer live
-//! births the frame cold, under the root. An `EVAL` of code composed at run time runs under its
+//! births the frame cold, under the root, where its first step replays its callee's stamp
+//! ([`Lending::Replay`]): each level found or settled under the one before, held until the frame
+//! borrows its own, so the frame is born warm. An `EVAL` of code composed at run time runs under its
 //! composition, found by the code's syntax digest. The books hold digests, not syntax, so a miss
 //! births the cell under the root, and its first step — holding the code value, or the callee whose
 //! body record carries its root — copies the syntax and bounces into itself with the copy
@@ -21,12 +23,11 @@
 //! what its asker runs under. See
 //! [build/README.md § Steps and the drain](../build/README.md#steps-and-the-drain).
 
-use smallvec::SmallVec;
-
 use crate::memory::Bump;
-use crate::scope::{ComposedSyntax, Composition, Facts, Segment, Settlement, Slot};
-use crate::type_lattice::KType;
+pub use crate::scope::{Ask, Asked};
+use crate::scope::{ComposedSyntax, Composition, Facts, Settlement};
 use crate::values::{ArenaRef, BindingImage, Chain, ContentDigest, SettlementKey};
+use smallvec::SmallVec;
 
 /// What an asker hands the drain to find a frame's arena node: the one the callee was born under,
 /// and the settlement under it the frame seeks, if any.
@@ -36,41 +37,6 @@ pub struct Seek<'graph> {
     /// a body that keys no settlement or a call whose content at a keyed name the asker could not
     /// read or the load does not hold, whose frame runs under `parent`.
     pub settlement: Option<(SettlementKey, BindingImage<'graph>, Ask)>,
-}
-
-/// What a miss settles: the callee's body, and what each name its key lists binds there.
-pub struct Ask {
-    pub body: Segment,
-    pub bound: SmallVec<[Asked; 1]>,
-}
-
-/// What the keyed name at `slot` binds: a type, or a module's carried type over the closed tree
-/// its bare member's content digest names, `retyped` where that type is not the member's own. A
-/// module born of code composed at run time names its composition by syntax digest, where a miss
-/// under a composition finds its tree if no layer below does, and pins it. The slot rides in each
-/// arm, in the padding the digests leave, so an ask stays small enough to hand on by value.
-#[derive(Clone, Copy, Debug)]
-pub enum Asked {
-    Type {
-        slot: Slot,
-        named: KType,
-    },
-    Module {
-        slot: Slot,
-        carried: KType,
-        content: ContentDigest,
-        retyped: bool,
-        composition: Option<ContentDigest>,
-    },
-}
-
-impl Asked {
-    /// The slot of the keyed name this binds.
-    pub fn slot(&self) -> Slot {
-        match *self {
-            Asked::Type { slot, .. } | Asked::Module { slot, .. } => slot,
-        }
-    }
 }
 
 /// The door a miss settles through, which the program hands the graph at load: it walks the
@@ -146,6 +112,17 @@ pub(super) enum Lending<'graph> {
     /// A call's frame, as [`Call`](Self::Call), once the composition a module its settlement binds
     /// was born of is found or built over the syntax its first step copied.
     Pinning(Seek<'graph>, ComposedSyntax),
+    /// A call's frame born warm: each level of its callee's stamp found or settled under the one
+    /// before, from the asker's arena node, the last its own seek.
+    Replay(Vec<Replayed<'graph>>),
+}
+
+/// One level of a replay: the seek of a settlement of a callee's chain, its parent the level
+/// before, beside a copy of the syntax of each composition it pins, which the drain finds by
+/// digest or builds before it seeks.
+pub struct Replayed<'graph> {
+    pub seek: Seek<'graph>,
+    pub pins: SmallVec<[ComposedSyntax; 1]>,
 }
 
 /// What a cell running composed code asks of the drain: its composition by syntax digest — the

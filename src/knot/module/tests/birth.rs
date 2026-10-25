@@ -259,7 +259,7 @@ fn a_module_member_with_no_body_supplied_is_eager_at_its_bodys_site() {
                 &fixture.reading_of(activation),
                 fixture.written(),
                 shape.component_of(slot),
-                crate::values::ArenaRef::ROOT,
+                (crate::values::ArenaRef::ROOT, None),
                 types,
                 fixture.scratch(),
                 &mut |_, _| None,

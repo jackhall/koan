@@ -317,7 +317,7 @@ impl<'graph> Program<'graph> {
         node: Evaluated,
         view: KActivationView<'graph, 'here>,
         contract: Option<Contract>,
-        within: Within<'graph>,
+        within: Within<'graph, 'here>,
     ) -> Work<'graph, 'here, KBundle> {
         Work {
             step: self.evaluator,

@@ -26,6 +26,7 @@ mod programs;
 mod quotes;
 mod rankings;
 mod repeats;
+mod replay;
 mod resumption;
 mod retypes;
 mod rules;

@@ -215,7 +215,7 @@ fn evaluate_on<'graph, 'here, 'tier, 'reg>(
                 &view,
                 written,
                 site,
-                within.build,
+                within.born(),
                 &at.types,
                 &scratch,
             ) {
@@ -1069,7 +1069,7 @@ fn called<'step, 'graph, 'here>(
     tails: Option<Contract>,
     call: impl Fn(Option<Contract>) -> Request<'graph, 'here, KBundle>,
 ) -> Action<'graph, KBundle> {
-    let request = call(tails);
+    let mut request = call(tails);
     // The frame's own callee, keyed, where the frame runs under a settlement: its arena node is
     // then not the one the callee was born under, which a frame born with none runs under.
     let same = callee.as_callable().is_some() && callee.as_callable() == at.view.callable();
@@ -1083,18 +1083,24 @@ fn called<'step, 'graph, 'here>(
     };
     if tails.is_some() {
         if same && keyed() {
+            // The hop runs under the frame's own settlement, so it keeps the frame's level.
+            if let KBirth::Call { level, .. } = &mut request.work.state {
+                *level = at.within.stamp.map(|stamp| stamp.level);
+            }
             let Request {
                 placement, work, ..
             } = request;
             return step.tail_under(placement, work, at.within.build);
         }
-        let seek = seek(&request.work.state, &at.types, &step.types());
+        let types = step.types();
+        let seek = seek(&mut request.work.state, step.writer(), &at.types, &types);
         let Request {
             placement, work, ..
         } = request;
         return step.tail_seeking(placement, work, seek);
     }
-    let seek = seek(&request.work.state, &at.types, &step.types());
+    let types = step.types();
+    let seek = seek(&mut request.work.state, step.writer(), &at.types, &types);
     let asked = step.spawn_seeking(request, seek);
     park(step, at, asked, FINISHING)
 }

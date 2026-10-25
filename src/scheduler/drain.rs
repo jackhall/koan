@@ -30,11 +30,11 @@ use crate::scheduler::action::{
 };
 use crate::scheduler::arena::{BuildArena, Composed, Settled};
 use crate::scheduler::continuation::{
-    Born, Continuation, ContinuationFamily, NativeStep, Provenance, Report, Rested, StateAt,
-    StepBundle, Work,
+    Arrival, Born, Continuation, ContinuationFamily, NativeStep, Provenance, Report, Rested,
+    StateAt, StepBundle, Work,
 };
 use crate::scheduler::delivery::KDelivery;
-use crate::scheduler::seek::{Compose, Lending, Seek, Settles, Unsettled};
+use crate::scheduler::seek::{Compose, Lending, Replayed, Seek, Settles, Unsettled};
 #[cfg(test)]
 use crate::scope::HalfHeader;
 use crate::scope::{Facts, LoadFacts, RegionHeader};
@@ -360,7 +360,7 @@ where
                     home: under,
                 },
                 arena: ArenaRef::ROOT,
-                wanting: None,
+                arrival: Arrival::Placed,
                 state,
             },
         )?;
@@ -463,9 +463,12 @@ where
         asker: ArenaRef,
     ) -> Result<CellHandle, DrainStalled> {
         let arena = &mut self.graph.arena;
+        let mut replayed = SmallVec::<[ArenaRef; 4]>::new();
+        let replaying = matches!(asked.lending, Lending::Replay(_));
         let (under, missed, wanting) = match asked.lending {
             Lending::Parent => (asker, false, None),
             Lending::Call(seek) => self.seek(seek),
+            Lending::Replay(levels) => self.replay(levels, asker, &mut replayed),
             Lending::Pinning(seek, syntax) => {
                 let (_, built) = self.composed(Compose::Owned(syntax));
                 let (under, missed, wanting) = self.seek(seek);
@@ -486,11 +489,20 @@ where
             }
         };
         self.graph.arena.borrow(under);
+        // A replay's levels are held until the frame borrows the last: its chain holds them since.
+        for level in replayed.iter().rev() {
+            self.graph.arena.release(*level);
+        }
         if missed {
             let _evicted = self.graph.arena.evict_to_budget();
             #[cfg(test)]
             tally(|tiers| tiers.evicted += _evicted);
         }
+        let arrival = match wanting {
+            Some(digest) => Arrival::Wanting(digest),
+            None if replaying => Arrival::Replayed,
+            None => Arrival::Placed,
+        };
         self.born(
             provenance.parent,
             asked.placement,
@@ -498,10 +510,47 @@ where
                 step: asked.step,
                 provenance,
                 arena: under,
-                wanting,
+                arrival,
                 state: Rested::Dormant(asked.state, born),
             },
         )
+    }
+
+    /// The arena node a frame born by a replay runs under, whether any level missed, and the
+    /// composition its first step must rebuild: each of `levels` found under the one before, or
+    /// settled there, from `base`, the asker's — its pins found or built first — and borrowed into
+    /// `held` until the frame borrows its own; the last is the frame's own seek. A level that
+    /// settles nothing ends the replay, and the frame is born where it stopped.
+    fn replay(
+        &mut self,
+        levels: Vec<Replayed<'graph>>,
+        base: ArenaRef,
+        held: &mut SmallVec<[ArenaRef; 4]>,
+    ) -> (ArenaRef, bool, Option<ContentDigest>) {
+        // The frame was counted cold where its own seek found its parent gone; it is born warm.
+        #[cfg(test)]
+        if levels
+            .last()
+            .is_some_and(|last| last.seek.settlement.is_some())
+        {
+            tally(|tiers| tiers.cold_births = tiers.cold_births.saturating_sub(1));
+        }
+        let (mut parent, mut missed) = (base, false);
+        let count = levels.len();
+        for (at, Replayed { seek, pins }) in levels.into_iter().enumerate() {
+            for syntax in pins {
+                missed |= self.composed(Compose::Owned(syntax)).1;
+            }
+            let (under, miss, wanting) = self.seek(Seek { parent, ..seek });
+            missed |= miss;
+            if at + 1 == count || wanting.is_some() || under == parent {
+                return (under, missed, wanting);
+            }
+            self.graph.arena.borrow(under);
+            held.push(under);
+            parent = under;
+        }
+        (parent, missed, None)
     }
 
     /// The arena node a frame `seek` asks for runs under, whether it was a miss, and the
@@ -739,7 +788,7 @@ where
         step,
         provenance,
         arena,
-        wanting,
+        arrival,
         state,
     } = context
         .continuation()
@@ -777,7 +826,8 @@ where
         tiers,
         facts,
         &provenance,
-        (arena, composed, wanting),
+        (arena, composed, arrival),
+        books,
         spawns,
         state,
         scratch,

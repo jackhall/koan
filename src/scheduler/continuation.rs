@@ -119,10 +119,21 @@ where
     pub provenance: Provenance,
     /// The arena node the cell runs under, which the drain borrowed for it at its birth.
     pub arena: ArenaRef,
-    /// At a call's birth, the composition a module its settlement binds was born of, by syntax
-    /// digest, where the miss found it gone: the cell's first step bounces with its syntax.
-    pub wanting: Option<ContentDigest>,
+    /// What the drain tells the cell's first step about how it placed it.
+    pub arrival: Arrival,
     pub state: Rested<'graph, 'cell, B>,
+}
+
+/// What a cell's birth tells its first step about how the drain placed it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum Arrival {
+    /// Placed as it asked, or a step past the first.
+    Placed,
+    /// A call whose settlement binds a module of composed code whose composition, by syntax digest,
+    /// the miss found gone: the first step bounces with its syntax.
+    Wanting(ContentDigest),
+    /// Born by a replay of its callee's stamp: it does not replay again.
+    Replayed,
 }
 
 /// How a continuation holds its state.

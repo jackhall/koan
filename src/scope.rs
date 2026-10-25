@@ -44,6 +44,7 @@ mod shape;
 mod shapes;
 mod signature;
 mod spelling;
+mod stamp;
 mod tree;
 mod typed;
 mod writes;
@@ -79,6 +80,7 @@ pub use shape::{
     in_body_of, part_of, selection_refused, source_of, spelled, view_refused,
 };
 pub use shapes::{BindSite, Code, Shapes};
+pub use stamp::{Ask, Asked, Level, Stamp};
 pub use tree::{Binder, Identity, KnotNode, Leaf, NodeCapture, Tree, Unfolded, Within};
 pub use typed::{
     BodyClass, Caching, Callable, Elaboration, ElaborationDisplay, Elimination, FunctionGroupMap,

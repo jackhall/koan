@@ -12,6 +12,10 @@
 //! callable's units under the names bound before its birth, so a call of it reads those layers
 //! first. They lie in the region the closure does, and a copy of the closure into another region
 //! lays them again there, its types made to resolve by the crossing beforehand.
+//!
+//! Beside its arena node a closure holds the [stamp](super::stamp) of the chain of settlements that
+//! node is the last of, by value, which a call replays where that node has been evicted. A copy
+//! lays the stamp's levels again too.
 
 use crate::memory::{BumpAllocator, BumpVec, Edge, Writer, collect, resident};
 use crate::values::{ArenaRef, Knotted, KnottedFamily, Link, Value, Weight};
@@ -19,14 +23,17 @@ use crate::values::{ArenaRef, Knotted, KnottedFamily, Link, Value, Weight};
 use super::activation::Reading;
 use super::settlement_facts::Activated;
 use super::shape::{BodyShape, CaptureSlot, CaptureSource};
+use super::stamp::Stamp;
 
 /// A callable's closure bindings, in capture-slot order, beside the arena node the callable was
-/// born under, where a call of it looks up its settlement, and what the activation it was born in
-/// had decided. Neither is content, so the closure's digest and equality read the slots alone.
+/// born under, where a call of it looks up its settlement, the stamp of the chain of settlements
+/// that node closes, and what the activation it was born in had decided. None of those is content,
+/// so the closure's digest and equality read the slots alone.
 #[derive(Clone, Copy)]
 pub struct ClosureBindings<'cell, X = crate::values::Nothing> {
     slots: &'cell [Link<'cell, X>],
     build: ArenaRef,
+    stamp: Option<Stamp<'cell, X>>,
     decided: Option<&'cell Activated<'cell>>,
 }
 
@@ -36,6 +43,7 @@ impl<'graph, 'cell, X: Knotted> ClosureBindings<'cell, X> {
         &ClosureBindings {
             slots: &[],
             build: ArenaRef::ROOT,
+            stamp: None,
             decided: None,
         }
     }
@@ -68,12 +76,12 @@ impl<'graph, 'cell, X: Knotted> ClosureBindings<'cell, X> {
         read
     }
 
-    /// A finished read laid down in `writer`'s region, born under the arena node `build` in an
-    /// activation that had `decided` what it had.
+    /// A finished read laid down in `writer`'s region, born under the arena node `build`, closing
+    /// the chain `stamp` records, in an activation that had `decided` what it had.
     pub fn of(
         writer: Writer<'cell, '_>,
         captures: &[Link<'cell, X>],
-        build: ArenaRef,
+        (build, stamp): (ArenaRef, Option<Stamp<'cell, X>>),
         decided: Option<&'cell Activated<'cell>>,
     ) -> &'cell ClosureBindings<'cell, X> {
         let slots = collect(writer, captures.iter().copied());
@@ -82,6 +90,7 @@ impl<'graph, 'cell, X: Knotted> ClosureBindings<'cell, X> {
             ClosureBindings {
                 slots,
                 build,
+                stamp,
                 decided,
             },
         )
@@ -92,17 +101,27 @@ impl<'graph, 'cell, X: Knotted> ClosureBindings<'cell, X> {
         self.build
     }
 
+    /// The stamp of the chain of settlements the callable was born under: `None` where that is the
+    /// root or a composition.
+    pub fn stamp(&self) -> Option<&Stamp<'cell, X>> {
+        self.stamp.as_ref()
+    }
+
     /// What the activation the callable was born in had decided.
     pub fn decided(&self) -> Option<&'cell Activated<'cell>> {
         self.decided
     }
 
-    /// Every value these bindings hold, in the order [`copied`](Self::copied) asks for them.
+    /// Every value these bindings hold, the stamp's modules after the slots, in the order
+    /// [`copied`](Self::copied) asks for them.
     pub fn held(&self, out: &mut dyn FnMut(Value<'cell, X>)) {
         for link in self.slots {
             if let Link::Value(value) = link {
                 out(*value);
             }
+        }
+        if let Some(stamp) = &self.stamp {
+            stamp.held(out);
         }
     }
 
@@ -116,11 +135,13 @@ impl<'graph, 'cell, X: Knotted> ClosureBindings<'cell, X> {
     ) -> &'to ClosureBindings<'to, Y> {
         let source = self.slots;
         let slots = writer.fill(source.len(), |at| source[at].copied(&mut copy));
+        let stamp = (self.stamp).map(|stamp| stamp.copied(writer, &mut copy));
         resident(
             writer,
             ClosureBindings {
                 slots,
                 build: self.build,
+                stamp,
                 decided: self.decided.map(|decided| decided.copied(writer)),
             },
         )
@@ -132,11 +153,11 @@ impl<'graph, 'cell, X: Knotted> ClosureBindings<'cell, X> {
         let decided = self
             .decided
             .map_or(Weight::flat::<()>(), |decided| decided.weight());
-        self.slots
-            .iter()
-            .fold(Weight::flat::<Self>().plus(decided), |weight, link| {
-                weight.plus(link.weight())
-            })
+        let stamp = self.stamp.map_or(Weight::ZERO, |stamp| stamp.weight());
+        self.slots.iter().fold(
+            Weight::flat::<Self>().plus(decided).plus(stamp),
+            |weight, link| weight.plus(link.weight()),
+        )
     }
 
     /// The binding at `slot`. Panics past the end, like a slice index.

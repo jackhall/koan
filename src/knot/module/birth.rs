@@ -39,7 +39,7 @@ pub fn body_activation<'graph, 'cell>(
     });
     // A module is never called, so its closure seeks no settlement. The module keeps it, to
     // compute its content from where a demand first reaches it.
-    let closure = ClosureBindings::of(writer, &captures, ArenaRef::ROOT, None);
+    let closure = ClosureBindings::of(writer, &captures, (ArenaRef::ROOT, None), None);
     Activation::of_module(
         writer,
         body,

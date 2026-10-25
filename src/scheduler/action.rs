@@ -25,12 +25,13 @@ use crate::memory::{
     Active, CellHandle, CrossedOperand, DeliverError, Delivered, Dormant, Erased, Header, Operand,
     Ready, ReattachableOverBoth, Receipt, Stale, StepContext, Writer,
 };
+use crate::scheduler::arena::BuildArena;
 use crate::scheduler::continuation::{
-    BirthAt, Born, Continuation, ContinuationFamily, NativeStep, Provenance, Report, Rested,
-    StateAt, StepBundle, Work,
+    Arrival, BirthAt, Born, Continuation, ContinuationFamily, NativeStep, Provenance, Report,
+    Rested, StateAt, StepBundle, Work,
 };
 use crate::scheduler::delivery::KDelivery;
-use crate::scheduler::seek::{Compose, Lending, Seek};
+use crate::scheduler::seek::{Compose, Lending, Replayed, Seek};
 use crate::scope::{
     Code, ComposedRoot, ComposedSyntax, Entry, EntryFamily, Facts, HalfHeader, MemoFamily, MemoKey,
     RegionHeader,
@@ -214,9 +215,10 @@ pub struct Step<
     arena: ArenaRef,
     /// The syntax digest of the composed code the cell's chain rests on, if not the load.
     composed: Option<ContentDigest>,
-    /// The composition a call's first step must rebuild, by syntax digest: see
-    /// [`wanting`](Self::wanting).
-    wanting: Option<ContentDigest>,
+    /// What the drain told the cell's first step about how it placed it.
+    arrival: Arrival,
+    /// The books the cell's arena node is kept in, which the step reads liveness from.
+    books: &'a BuildArena<'graph>,
     spawns: &'a mut Spawns<'graph, B>,
     state: S::Of<StateAt<'graph, 'here, B>>,
     scratch: X::Of<Option<ScratchAt<'graph, 'here, 'scratch, B>>>,
@@ -261,7 +263,8 @@ where
         tiers: TypeTiers<'graph>,
         facts: Facts<'a>,
         provenance: &'a Provenance,
-        (arena, composed, wanting): (ArenaRef, Option<ContentDigest>, Option<ContentDigest>),
+        (arena, composed, arrival): (ArenaRef, Option<ContentDigest>, Arrival),
+        books: &'a BuildArena<'graph>,
         spawns: &'a mut Spawns<'graph, B>,
         state: StateAt<'graph, 'here, B>,
         scratch: Option<ScratchAt<'graph, 'here, 'scratch, B>>,
@@ -273,7 +276,8 @@ where
             provenance,
             arena,
             composed,
-            wanting,
+            arrival,
+            books,
             spawns,
             state,
             scratch,
@@ -305,7 +309,8 @@ where
             provenance,
             arena,
             composed,
-            wanting,
+            arrival,
+            books,
             spawns,
             state,
             scratch,
@@ -317,7 +322,8 @@ where
             provenance,
             arena,
             composed,
-            wanting,
+            arrival,
+            books,
             spawns,
             state: (),
             scratch,
@@ -350,7 +356,8 @@ where
             provenance,
             arena,
             composed,
-            wanting,
+            arrival,
+            books,
             spawns,
             state,
             scratch,
@@ -362,7 +369,8 @@ where
             provenance,
             arena,
             composed,
-            wanting,
+            arrival,
+            books,
             spawns,
             state,
             scratch: (),
@@ -465,7 +473,22 @@ where
     /// At a call's first step, the composition a module its settlement binds was born of, by
     /// syntax digest, which the miss found gone: the step [rebuilds](Self::rebuild) it.
     pub fn wanting(&self) -> Option<ContentDigest> {
-        self.wanting
+        match self.arrival {
+            Arrival::Wanting(digest) => Some(digest),
+            Arrival::Placed | Arrival::Replayed => None,
+        }
+    }
+
+    /// Whether this cell was born by a replay of its callee's stamp, which it does not replay
+    /// again.
+    pub fn replayed(&self) -> bool {
+        self.arrival == Arrival::Replayed
+    }
+
+    /// Whether `at` names a live arena node: what a call reads before it replays a stamp. The
+    /// root always does.
+    pub fn arena_live(&self, at: ArenaRef) -> bool {
+        self.books.is_live(at)
     }
 
     /// Whether this cell runs under a settlement: a call's frame the drain found or built one
@@ -719,7 +742,7 @@ where
             step,
             provenance: *self.provenance,
             arena: self.arena,
-            wanting: None,
+            arrival: Arrival::Placed,
             state: Rested::Awake(state),
         });
         if let Some(scratch) = scratch {
@@ -784,13 +807,29 @@ where
         root: ComposedRoot<'_>,
     ) -> Action<'graph, B> {
         debug_assert_eq!(
-            self.wanting,
+            self.wanting(),
             Some(root.digest),
             "a rebuild is what the miss wanted"
         );
         let placement = self.placement();
         let syntax = ComposedSyntax::of(root);
         self.tail_lending(placement, work, Lending::Pinning(seek, syntax))
+    }
+
+    /// Hand this cell's work, untouched, to a successor born warm: the first step of a call whose
+    /// callee's arena node is gone, which replays its stamp. Each of `levels`, outermost first, is
+    /// found under the one before, or settled there, from this cell's own arena node — the root,
+    /// or the composition the callee was born of — and the last is the frame's own seek, under
+    /// the last level. The successor takes this cell's placement.
+    pub fn replay(
+        self,
+        work: Work<'graph, 'here, B>,
+        levels: impl IntoIterator<Item = Replayed<'graph>>,
+    ) -> Action<'graph, B> {
+        debug_assert!(!self.replayed(), "a replayed cell replays nothing");
+        let placement = self.placement();
+        let levels = levels.into_iter().collect();
+        self.tail_lending(placement, work, Lending::Replay(levels))
     }
 
     /// The placement this cell was born at: a tree cell lent its parent's scratch, or a tenant.
