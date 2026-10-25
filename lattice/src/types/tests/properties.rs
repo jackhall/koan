@@ -1900,6 +1900,23 @@ proptest! {
         prop_assert!(reads_alike(&world, &there, kt));
     }
 
+    /// A term mints back its type: exported from where it was built for a reader over the same
+    /// root, then minted into that reader, every generated type reads as it did, and the term
+    /// copied nothing the reader already resolved.
+    #[test]
+    fn a_minted_term_reads_as_its_source(kt in one()) {
+        let world = world();
+        let region = Bump::new();
+        let there = beside(&world, &region);
+        let (lay, scratch) = (Bump::new(), Bump::new());
+        let term = world.types.export(kt, &there, &lay, &scratch);
+        prop_assert_eq!(term.is_empty(), kt.raw().in_root());
+        there.mint(&term);
+        prop_assert!(reads_alike(&world, &there, kt));
+        // A reader that holds the type already is handed nothing to mint.
+        prop_assert!(world.types.export(kt, &there, &lay, &scratch).is_empty());
+    }
+
     /// A merge enters every node of its source: each then resolves without a link.
     #[test]
     fn a_merge_finds_every_source_entry(kt in one()) {
