@@ -41,6 +41,8 @@ pub use exit::Exit;
 pub use record::{
     CallKind, Contract, Evaluated, Language, LoadError, Outcome, Output, Program, kept,
 };
+#[cfg(test)]
+pub(crate) use settle::LEVELS;
 pub use settle::{called_function, seek};
 #[cfg(test)]
 pub(crate) use substrate::walked;
