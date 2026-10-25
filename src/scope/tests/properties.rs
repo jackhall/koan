@@ -237,6 +237,7 @@ fn follow(chain: &[&BodyShape<'_>], level: usize, coordinate: Coordinate) -> Fou
                 }
                 CaptureSource::Hole => Found::Hole,
                 CaptureSource::Offered => Found::Offered,
+                CaptureSource::Entry { .. } => unreachable!("only code built alone binds at entry"),
             }
         }
     }
@@ -477,6 +478,9 @@ fn check<'graph>(
                         target: Target::Local(_),
                     }) => assert!(!fellows.contains(&capture.name), "`{source}`"),
                     CaptureSource::Read(_) | CaptureSource::Hole | CaptureSource::Offered => {}
+                    CaptureSource::Entry { .. } => {
+                        unreachable!("only code built alone binds at entry")
+                    }
                 }
             }
         }

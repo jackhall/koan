@@ -862,7 +862,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                     CaptureSource::Read(coordinate) => {
                         NodeCapture::Tree(self.resolve(scope, coordinate, site)?)
                     }
-                    CaptureSource::Hole | CaptureSource::Offered => {
+                    CaptureSource::Hole | CaptureSource::Offered | CaptureSource::Entry { .. } => {
                         NodeCapture::Tree(Tree::Leaf(Leaf::Unnamed(site)))
                     }
                 };

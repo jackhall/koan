@@ -3907,7 +3907,9 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             Some(Lands::Builtin(index)) => (Landing::Builtin(index), None),
             Some(Lands::Binder { at, slot }) => (Landing::Slot { level: at, slot }, None),
             Some(Lands::Hole { at, .. }) => (Landing::Open { hole: true }, Some(at)),
-            Some(Lands::Offered { at, .. }) => (Landing::Open { hole: false }, Some(at)),
+            Some(Lands::Offered { at, .. } | Lands::Entry { at, .. }) => {
+                (Landing::Open { hole: false }, Some(at))
+            }
             None => (Landing::Open { hole: false }, None),
         };
         Followed {

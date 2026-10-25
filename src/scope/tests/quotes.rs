@@ -466,3 +466,149 @@ fn a_refused_code_hands_nothing_to_the_next_body() {
         },
     );
 }
+
+/// The shapes of the quote a `LET <name> = #(…)` statement at `statement` of `source` binds, built
+/// alone under the program's claims, as code composed at run time is.
+fn alone<R>(
+    source: &str,
+    statement: usize,
+    check: impl for<'f, 'graph> FnOnce(&Fixture<'f, 'graph>, &'graph crate::scope::Shapes<'graph>) -> R,
+) -> R {
+    with_fixture(|fixture| {
+        let lines = fixture.parse(source);
+        fixture.in_cell(|writer, _| {
+            let table: &Builtins = builtins(fixture, writer);
+            let program = crate::scope::Shapes::of_program(
+                fixture.program,
+                &lines,
+                table,
+                fixture.types,
+                fixture.symbols,
+                fixture.scratch(),
+            )
+            .unwrap_or_else(|_| panic!("`{source}` shapes"));
+            let ExpressionPart::QuotedExpression(syntax) = lines[statement].parts[3].value else {
+                panic!("a quote");
+            };
+            let claims = program.root().group_frame().claims();
+            let shapes = crate::scope::Shapes::of_code(
+                fixture.program,
+                syntax.reference(),
+                claims,
+                table,
+                fixture.types,
+                fixture.symbols,
+                fixture.scratch(),
+            );
+            check(fixture, shapes)
+        })
+    })
+}
+
+#[test]
+fn a_code_built_alone_numbers_its_segments_from_zero() {
+    let source =
+        "LET q = #((LET f = (FN :{} -> Number = #(1))) (LET g = (FN :{} -> Number = #(2))))";
+    alone(source, 0, |_, shapes| {
+        let root = shapes.root();
+        assert_eq!(root.kind(), ShapeKind::Code);
+        assert!(root.refusal().is_none());
+        // Two callables, then the root last.
+        assert_eq!(root.segment().0, 2);
+        for segment in 0..2 {
+            let shape = shapes.shape_at(crate::scope::Segment(segment));
+            assert_eq!(shape.segment().0, segment);
+            assert_eq!(shape.kind(), ShapeKind::Callable);
+        }
+    });
+    // Code that cannot be built keeps its refusal, and needs every `\` name it writes.
+    alone(
+        "LET q = #((LET x = 1) (LET x = 2) (PRINT \\w))",
+        0,
+        |fixture, shapes| {
+            let root = shapes.root();
+            assert!(root.refusal().is_some());
+            assert_eq!(root.segment().0, 0);
+            let w = value(fixture, "w");
+            assert_eq!(
+                root.code_type(),
+                fixture
+                    .types
+                    .code_needing(fixture.scratch(), KType::BLOCK, &[w])
+            );
+        },
+    );
+}
+
+#[test]
+fn a_root_dollar_name_is_an_entry_capture() {
+    alone(
+        "LET x = 1\nLET q = #(PRINT x $x \\x)",
+        1,
+        |fixture, shapes| {
+            let code = shapes.root();
+            let x = value(fixture, "x");
+            // Where the written quote reads the program's `x`, code built alone binds it at entry.
+            assert_eq!(
+                captures(code),
+                [
+                    hole(fixture, "PRINT _ _ _"),
+                    (x, None, CaptureSource::Hole),
+                    (x, Some(Mark::Written), CaptureSource::Entry { head: false }),
+                    (x, Some(Mark::Built), CaptureSource::Offered),
+                ]
+            );
+        },
+    );
+    // A `$` name read only at a call's head may be bound to a quantified function.
+    let source = "LET f = (FN :{n :Number} -> Number = #(n))\nLET q = #($f 1)";
+    alone(source, 1, |fixture, shapes| {
+        let f = value(fixture, "f");
+        assert_eq!(
+            captures(shapes.root()),
+            [(f, Some(Mark::Written), CaptureSource::Entry { head: true })]
+        );
+    });
+}
+
+#[test]
+fn a_root_dollar_spread_is_a_spread_capture() {
+    let source = "EXPR #(GREET x :Any) -> Any = #(x)\nLET q = #(PRINT $(GREET 1) $(PRINT 2))";
+    alone(source, 1, |fixture, shapes| {
+        let code = shapes.root();
+        let parts = code.body()[0].parts;
+        let ExpressionPart::MarkedUse(_, greet) = parts[1].value else {
+            panic!("a marked use");
+        };
+        let list = code
+            .candidates(code.site_of_node(greet.reference()))
+            .unwrap();
+        let greet_key = BinderSymbol::Key(fixture.symbols.key("GREET _").unwrap());
+        let at = code
+            .captures()
+            .iter()
+            .position(|capture| capture.name == greet_key)
+            .expect("the key is captured") as u32;
+        assert_eq!(
+            code.captures()[at as usize].source,
+            CaptureSource::Entry { head: true }
+        );
+        assert_eq!(
+            list.candidates,
+            [crate::scope::Candidate::Spread(captured(at))]
+        );
+        assert_eq!(list.classes, [0]);
+        // A builtin key lists its builtins beside its entry list.
+        let ExpressionPart::MarkedUse(_, print) = parts[2].value else {
+            panic!("a marked use");
+        };
+        let list = code
+            .candidates(code.site_of_node(print.reference()))
+            .unwrap();
+        assert!(matches!(
+            list.candidates.last(),
+            Some(crate::scope::Candidate::Spread(_))
+        ));
+        assert!(list.candidates.len() > 1);
+    });
+}

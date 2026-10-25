@@ -231,7 +231,8 @@ pub(super) fn staged<'graph, 'cell, 'x>(
         let link = match capture.source {
             CaptureSource::Read(coordinate) => Link::Value(activation.read(coordinate)),
             CaptureSource::Member { index, .. } => Link::Edge(edge(index)),
-            CaptureSource::Hole | CaptureSource::Offered => continue,
+            // A nested quote's `$` names read its encloser; only code built alone binds at entry.
+            CaptureSource::Hole | CaptureSource::Offered | CaptureSource::Entry { .. } => continue,
         };
         bound.push((capture.name, link));
     }

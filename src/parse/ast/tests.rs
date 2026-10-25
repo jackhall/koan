@@ -1,11 +1,14 @@
 //! AST laws: what a node's structural cache says about its parts run, and what its rendering is.
 //!
-//! Every property here builds nodes in fresh program storage per case, so each runs 64 cases.
+//! Every property here builds nodes in fresh program storage per case, so each runs 64 cases. The
+//! generator is shared: `values` states code equality's laws over the syntax it builds.
 
 use proptest::prelude::*;
 
 use crate::memory::{ProgramBrand, collect, program_storage};
-use crate::parse::{DispatchShape, ExpressionPart, KExpression, KLiteral, KeyElement, PartClass};
+use crate::parse::{
+    DispatchShape, ExpressionPart, KExpression, KLiteral, KeyElement, Mark, PartClass,
+};
 use crate::source::Spanned;
 use crate::symbols::{BinderSymbol, KeywordSymbol, SymbolInterner, TypeSymbol, ValueSymbol};
 
@@ -17,7 +20,7 @@ const TEXTS: &[&str] = &["", "hi", "a b"];
 /// structural equality of the parts they build, which is what makes it the oracle for that law:
 /// a number carries an integer, so two shapes compare exactly when their literals do.
 #[derive(Clone, Debug, PartialEq)]
-enum PartShape {
+pub(crate) enum PartShape {
     Keyword(String),
     Identifier(String),
     Type(String),
@@ -32,6 +35,8 @@ enum PartShape {
     List(Vec<PartShape>),
     Dict(Vec<(PartShape, PartShape)>),
     Record(Vec<(String, PartShape)>),
+    MarkedName(Mark, String),
+    MarkedUse(Mark, Vec<PartShape>),
 }
 
 fn keyword_spelling() -> impl Strategy<Value = String> {
@@ -46,8 +51,12 @@ fn type_spelling() -> impl Strategy<Value = String> {
     "[A-Z][a-z][A-Za-z]{0,3}".prop_map(String::from)
 }
 
+fn mark() -> impl Strategy<Value = Mark> {
+    prop_oneof![Just(Mark::Written), Just(Mark::Built)]
+}
+
 /// One part, to a bounded nesting depth.
-fn part_shape() -> impl Strategy<Value = PartShape> {
+pub(crate) fn part_shape() -> impl Strategy<Value = PartShape> {
     let leaf = prop_oneof![
         keyword_spelling().prop_map(PartShape::Keyword),
         value_spelling().prop_map(PartShape::Identifier),
@@ -56,6 +65,7 @@ fn part_shape() -> impl Strategy<Value = PartShape> {
         (0usize..TEXTS.len()).prop_map(PartShape::Text),
         any::<bool>().prop_map(PartShape::Boolean),
         Just(PartShape::Null),
+        (mark(), value_spelling()).prop_map(|(mark, name)| PartShape::MarkedName(mark, name)),
     ];
     leaf.prop_recursive(3, 16, 3, |inner| {
         prop_oneof![
@@ -65,14 +75,17 @@ fn part_shape() -> impl Strategy<Value = PartShape> {
             prop::collection::vec(inner.clone(), 1..3).prop_map(PartShape::Quote),
             prop::collection::vec(inner.clone(), 0..3).prop_map(PartShape::List),
             prop::collection::vec((inner.clone(), inner.clone()), 0..2).prop_map(PartShape::Dict),
-            prop::collection::vec((value_spelling(), inner), 0..2).prop_map(PartShape::Record),
+            prop::collection::vec((value_spelling(), inner.clone()), 0..2)
+                .prop_map(PartShape::Record),
+            (mark(), prop::collection::vec(inner, 1..3))
+                .prop_map(|(mark, items)| PartShape::MarkedUse(mark, items)),
         ]
     })
 }
 
 /// A run drawn from the whole part vocabulary, plus two shapes the vocabulary alone rarely spells:
 /// the `Slot (Keyword Slot)+` operator chain and a keyword-led builtin-like run.
-fn parts_run() -> impl Strategy<Value = Vec<PartShape>> {
+pub(crate) fn parts_run() -> impl Strategy<Value = Vec<PartShape>> {
     prop_oneof![
         3 => prop::collection::vec(part_shape(), 0..6),
         1 => chain_run(),
@@ -165,6 +178,14 @@ fn build_part<'a>(
                 )
             }),
         )),
+        PartShape::MarkedName(mark, name) => ExpressionPart::MarkedName(
+            *mark,
+            BinderSymbol::declared(name, symbols).expect("a value token by construction"),
+        ),
+        PartShape::MarkedUse(mark, items) => ExpressionPart::MarkedUse(
+            *mark,
+            brand.nested_node_from_iter(build_run(brand, items, symbols), crate::tests::source()),
+        ),
     }
 }
 
@@ -181,7 +202,7 @@ fn build_run<'a>(
 }
 
 /// The node `shapes` names, frozen through the construction door.
-fn build<'a>(
+pub(crate) fn build<'a>(
     brand: ProgramBrand<'a>,
     shapes: &[PartShape],
     symbols: &SymbolInterner,

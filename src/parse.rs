@@ -58,6 +58,8 @@ pub use builtin_shapes::{
 };
 
 pub(crate) use ast::RunIter;
+#[cfg(test)]
+pub(crate) use ast::tests as generated_syntax;
 pub(crate) use builtin_shapes::KEYWORDS;
 pub(crate) use builtin_shapes::binder::{
     DeclaredElement, OpArity, SlotLabel, bounded, declarator_parameters, declared_element,

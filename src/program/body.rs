@@ -665,6 +665,9 @@ pub enum CodeRefused<'graph> {
     /// A hole no `USING` filled — a name, or a key some use selects from alone — or a `\` name the
     /// `EVAL` does not offer: the first in the shape's capture order.
     Unbound(BinderSymbol),
+    /// A `$` name at the entry of code built alone, bound to a quantified function and read
+    /// somewhere other than a call's head.
+    QuantifiedRead(BinderSymbol),
 }
 
 impl<'graph> CodeRefused<'graph> {
@@ -699,6 +702,12 @@ impl fmt::Display for CodeRefusedDisplay<'_, '_, '_, '_, '_> {
             CodeRefused::Unbound(name) => {
                 write!(f, "unbound name '{}'", self.symbols.display(name.symbol()))
             }
+            CodeRefused::QuantifiedRead(name) => write!(
+                f,
+                "`{}` is quantified, so it is read only at the head of a call; wrap it in an \
+                 unquantified `FN` to pass it",
+                self.symbols.display(name.symbol())
+            ),
         }
     }
 }
@@ -738,6 +747,20 @@ pub fn eval<'step, 'graph, 'here>(
                     || matches!(capture.name, BinderSymbol::Key(key) if shape.required_holes().binary_search(&key).is_err())
             }
             CaptureSource::Offered => offers(capture.name),
+            CaptureSource::Entry { head } => {
+                match node
+                    .bound()
+                    .binary_search_by_key(&capture.name, |(name, _)| *name)
+                {
+                    // A quantified function is read only at a call's head, as the load refuses
+                    // a written `$` name read anywhere else.
+                    Ok(at) if !head && quantified(node.bound()[at].1.resolve(code)) => {
+                        return Err(CodeRefused::QuantifiedRead(capture.name));
+                    }
+                    // A key the value binds nothing at holds no function.
+                    found => found.is_ok() || matches!(capture.name, BinderSymbol::Key(_)),
+                }
+            }
         };
         if !bound {
             return Err(CodeRefused::Unbound(capture.name));
@@ -762,6 +785,12 @@ pub fn eval<'step, 'graph, 'here>(
             },
         },
     })
+}
+
+/// Whether `value` is a quantified function not made an instance: read only at a call's head.
+fn quantified(value: KValue<'_, '_>) -> bool {
+    (value.as_callable().and_then(|member| member.function()))
+        .is_some_and(|function| matches!(function.ktype(), DeclaredType::Scheme(_)))
 }
 
 /// The derived placement bit: `Fresh` when the return type is `Number`, `Bool` or `Null` — the
@@ -1465,6 +1494,13 @@ fn code_frame<'graph, 'here>(
             CaptureSource::Read(_) | CaptureSource::Member { .. } => {
                 find(node.bound(), capture.name)?
             }
+            CaptureSource::Entry { .. } => match find(node.bound(), capture.name) {
+                Some(value) => value,
+                None if matches!(capture.name, BinderSymbol::Key(_)) => {
+                    Value::List(List::new(writer, [].into_iter(), types, &bump))
+                }
+                None => return None,
+            },
             CaptureSource::Hole => match find(node.supplied(), capture.name) {
                 Some(value) => value,
                 None if matches!(capture.name, BinderSymbol::Key(_)) => {

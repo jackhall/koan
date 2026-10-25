@@ -153,6 +153,37 @@ pub(in crate::scope) fn program<'graph, X: Knotted>(
     ))
 }
 
+/// The shapes of code composed at run time, built alone: one code root drafted by a fresh builder,
+/// so its segments number from zero with the root last. Its claims chain to `claims`, the
+/// program's, so an operator a program `GROUP` claims is refused here as it is in a written quote
+/// that cannot see the group. Its `$` names and `$(…)` uses are captures at its entry, which the
+/// code value binds. Nothing is refused: code that cannot be built keeps its error as the root's
+/// refusal, for the `EVAL` that runs it.
+pub(in crate::scope) fn code<'c, X: Knotted>(
+    brand: ProgramBrand<'c>,
+    syntax: &KExpression<'c>,
+    claims: &'c Claims<'c>,
+    builtins: &Builtins<'_, X>,
+    types: &Chain<'c, 'c, 'c, '_>,
+    symbols: &SymbolInterner,
+    scratch: BumpAllocator<'_>,
+) -> &'c Shapes<'c> {
+    let frame = resident(brand.writer(), GroupFrame::new(&[], None, claims));
+    let mut builder = Builder::new(brand, scratch, builtins, types, symbols, claims, frame);
+    let draft = match builder.code_draft(Position::PARAMETER, syntax) {
+        Ok(mut draft) => {
+            draft.code_type = builder.code_type(&draft, syntax);
+            draft
+        }
+        Err(refusal) => builder.refused_root(syntax, refusal),
+    };
+    builder.seal(draft, &[]);
+    let writer = brand.writer();
+    let bodies = collect(writer, builder.sealed.iter().copied());
+    let parents = collect(writer, builder.parents.iter().copied());
+    resident(writer, Shapes::laid(writer, scratch, bodies, parents))
+}
+
 /// The parameters a node declares before any of its parts is read: a signature's or an `EXPR`
 /// head's names, a `FOR ALL` group's, and a parameterized union's family parameters. One walk,
 /// shared by the statement walk and the definition walk.
@@ -2197,17 +2228,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         let built = self.nested(|builder| builder.code_draft(entered_at, code));
         let child = match built {
             Ok(mut draft) => {
-                let mut offered = BumpVec::new_in(self.scratch);
-                offered.extend(
-                    draft
-                        .captures
-                        .iter()
-                        .filter(|capture| capture.source == CaptureSource::Offered)
-                        .map(|capture| capture.name),
-                );
-                draft.code_type = self
-                    .types
-                    .code_needing(self.scratch, code.code_kind(), &offered);
+                draft.code_type = self.code_type(&draft, code);
                 draft
             }
             Err(refusal) => self.refused_code(level, statement, entered_at, code, refusal)?,
@@ -2215,6 +2236,19 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         let site = self.site(level, part);
         self.chain[level].adopt(site, child);
         Ok(())
+    }
+
+    /// The carried type of `code` built as `draft`: its kind, needing each `\` name and `\(…)` key
+    /// it leaves open.
+    fn code_type(&self, draft: &Draft<'graph, 'x>, code: &KExpression<'graph>) -> KType {
+        let mut offered = BumpVec::new_in(self.scratch);
+        offered.extend(
+            (draft.captures.iter())
+                .filter(|capture| capture.source == CaptureSource::Offered)
+                .map(|capture| capture.name),
+        );
+        self.types
+            .code_needing(self.scratch, code.code_kind(), &offered)
     }
 
     /// [`enter_code`](Self::enter_code)'s draft, under the code's own claims and a frame holding
@@ -2280,17 +2314,56 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         let mut draft = self.chain.pop().expect("this draft was pushed above");
         draft.sites = Sites::EMPTY;
         resolved?;
+        draft.code_type = self.refused_type(code, &marks);
+        draft.refusal = Some(resident(self.brand.writer(), refusal));
+        Ok(draft)
+    }
+
+    /// The root draft of code built alone that could not be built: [`refused_code`]'s draft, with
+    /// no site where it is written to resolve its `$` marks at, since its value binds them.
+    ///
+    /// [`refused_code`]: Self::refused_code
+    fn refused_root(
+        &mut self,
+        code: &KExpression<'graph>,
+        refusal: ShapeError<'graph>,
+    ) -> Draft<'graph, 'x> {
+        let mut draft = self
+            .binders(ShapeKind::Code, Position::PARAMETER, 0, (&[], &[]), &[])
+            .expect("a draft binding nothing is never refused");
+        let writer = self.brand.writer();
+        let mut statements = BumpVec::new_in(self.scratch);
+        statements.extend(code.body_statements().map(|(node, _)| *node));
+        let statements = collect(writer, statements.iter().copied());
+        draft.sites = Sites::of(writer, self.scratch, statements);
+        let mut marks = BumpVec::new_in(self.scratch);
+        for statement in statements {
+            code_marks(&draft.sites, statement, &mut marks);
+        }
+        self.chain.push(draft);
+        self.digest_draft(0, statements);
+        let mut draft = self.chain.pop().expect("this draft was pushed above");
+        draft.sites = Sites::EMPTY;
+        draft.code_type = self.refused_type(code, &marks);
+        draft.refusal = Some(resident(writer, refusal));
+        draft
+    }
+
+    /// The carried type of refused code with `marks`: its kind, needing every `\` name and `\(…)`
+    /// key it writes, since which of them its own binders fill is unknown.
+    fn refused_type(
+        &self,
+        code: &KExpression<'graph>,
+        marks: &[(Mark, Marked<'graph>, Site)],
+    ) -> KType {
         let mut built = BumpVec::new_in(self.scratch);
         built.extend(marks.iter().filter_map(|(mark, marked, _)| match marked {
             _ if *mark != Mark::Built => None,
             Marked::Name(name) => self.builtins.lookup(*name).is_none().then_some(*name),
             Marked::Use(node) => Some(BinderSymbol::Key(self.spelled(node.cache().stored_key()))),
         }));
-        draft.code_type = self
-            .types
-            .code_needing(self.scratch, code.code_kind(), &built);
-        draft.refusal = Some(resident(self.brand.writer(), refusal));
-        Ok(draft)
+        self.types
+            .code_needing(self.scratch, code.code_kind(), &built)
     }
 
     /// Resolve each `$` mark of a refused code draft at `inner` where its quote is written, at
@@ -2600,6 +2673,25 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 candidates.push(Candidate::Spread(offered));
                 classes
             }
+            // Code built alone has no site where it is written: the builtins at the key, then the
+            // key bound at its entry to a list of functions, ranked as written.
+            (Some(Mark::Written), Some(0)) => {
+                let listing = Listing {
+                    level,
+                    reader,
+                    site: level,
+                    at,
+                    mark: None,
+                    closed: true,
+                };
+                let classes = self.listed(listing, elements, node.source, &mut candidates)?;
+                let open = BinderSymbol::Key(self.spelled(elements));
+                let entry = self
+                    .resolve(level, open, Some(Mark::Written), at, reader)
+                    .expect("code built alone binds a `$` key at its entry");
+                candidates.push(Candidate::Spread(entry));
+                classes
+            }
             (Some(Mark::Written), Some(code)) => {
                 let site = code - 1;
                 let written_at = self.chain[site].boundary();
@@ -2823,6 +2915,14 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             }
         };
         let (landing, read) = self.lands(level, coordinate, reader);
+        // A quantified function bound at composed code's entry is refused there unless every read
+        // of it is a call's head.
+        if let Lands::Entry { at, capture } = landing
+            && !head
+        {
+            self.chain[at].captures[capture.0 as usize].source =
+                CaptureSource::Entry { head: false };
+        }
         let rooted = match landing {
             Lands::Binder { at: landed, .. } => {
                 !(self.chain[landed + 1..=level].iter()).any(|draft| draft.kind == ShapeKind::Code)
@@ -2902,6 +3002,10 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 CaptureSource::Read(read)
             }
             (ShapeKind::Callable, _) => CaptureSource::Read(outer(self, mark)?),
+            // Code built alone, composed at run time: its value carries each `$` binding.
+            (ShapeKind::Code, Some(Mark::Written)) if level == 0 => {
+                CaptureSource::Entry { head: true }
+            }
             (ShapeKind::Code, Some(Mark::Written)) => CaptureSource::Read(outer(self, None)?),
             (ShapeKind::Code, Some(Mark::Built)) => CaptureSource::Offered,
             (ShapeKind::Code, None) => CaptureSource::Hole,
@@ -2964,14 +3068,14 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
 
     /// `name` as a diagnostic spells it — a registration by its key — where the module body at
     /// `level` may not capture it, read at `read` in the shape outside it. A body may capture a
-    /// binding of the program's top level, read where it lives; an open hole or `\` mark of a
-    /// quote's code it sits in, which the code's own filling binds before it runs, as a builtin
-    /// fills a keyworded hole; or one its `OVER` list names.
+    /// binding of the program's top level, read where it lives; an open hole, `\` mark or entry
+    /// binding of a quote's code it sits in, which the code's own filling binds before it runs, as
+    /// a builtin fills a keyworded hole; or one its `OVER` list names.
     fn unlisted(&self, level: usize, name: BinderSymbol, read: Coordinate) -> Option<BinderSymbol> {
         let landed = follow(self, level - 1, read, |_, _| ());
         let landed = match landed {
             Some(Lands::Binder { at, .. }) if self.is_top_level(at) => return None,
-            Some(Lands::Hole { .. } | Lands::Offered { .. }) => return None,
+            Some(Lands::Hole { .. } | Lands::Offered { .. } | Lands::Entry { .. }) => return None,
             Some(Lands::Binder { at, .. }) => Some(at),
             Some(Lands::Builtin(_)) | None => None,
         };

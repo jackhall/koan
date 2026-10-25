@@ -632,4 +632,4 @@ impl<'a> std::fmt::Debug for KExpression<'a> {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

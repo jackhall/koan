@@ -65,7 +65,7 @@ mod sites;
 pub use sites::{Located, Site, Sites};
 
 pub(crate) use build::IMPLICIT;
-pub(super) use build::program as build_program;
+pub(super) use build::{code as build_code, program as build_program};
 
 /// An index into an activation's slot run: value slots first, type slots after, registration slots
 /// last.
@@ -207,7 +207,8 @@ pub struct Mention {
 }
 
 /// Where a coordinate lands: a builtin, a binder of some body by its slot there, or an open
-/// capture of a quote's code — a hole its filling binds, or a `\` name its `EVAL` offers. A body is
+/// capture of a quote's code — a hole its filling binds, a `\` name its `EVAL` offers, or a `$`
+/// binding composed code carries to its entry. A body is
 /// named by `At`: its segment once the shapes are sealed, its level on a chain while one is walked.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Lands<At = Segment> {
@@ -215,6 +216,7 @@ pub enum Lands<At = Segment> {
     Binder { at: At, slot: Slot },
     Hole { at: At, capture: CaptureSlot },
     Offered { at: At, capture: CaptureSlot },
+    Entry { at: At, capture: CaptureSlot },
 }
 
 impl<At> Lands<At> {
@@ -231,6 +233,10 @@ impl<At> Lands<At> {
                 capture,
             },
             Lands::Offered { at, capture } => Lands::Offered {
+                at: rename(at),
+                capture,
+            },
+            Lands::Entry { at, capture } => Lands::Entry {
                 at: rename(at),
                 capture,
             },
@@ -282,6 +288,7 @@ pub fn follow<C: CaptureChain>(
             }
             CaptureSource::Hole => return Some(Lands::Hole { at, capture }),
             CaptureSource::Offered => return Some(Lands::Offered { at, capture }),
+            CaptureSource::Entry { .. } => return Some(Lands::Entry { at, capture }),
         }
     }
 }
@@ -468,6 +475,10 @@ pub enum CaptureSource {
     Hole,
     /// An open `\` mark of a code shape: the `EVAL` that runs the code offers it.
     Offered,
+    /// A `$` name or `$(…)` key at the root of code built alone, composed at run time: the code
+    /// value carries its binding, bound at its entry. `head` while every read of it is a call's
+    /// head, the one place a quantified function may be read.
+    Entry { head: bool },
 }
 
 /// A strongly connected component of a shape's bindings.

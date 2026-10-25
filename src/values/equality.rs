@@ -226,7 +226,7 @@ fn code_gate<'left, 'right, X: Knotted, Y: Knotted>(
 
 /// Quoted code as syntax: the same parts in the same order. A literal compares by what was written
 /// and a container literal order-sensitively, since it is syntax and not the value it would build.
-fn expression_equal(left: &KExpression<'_>, right: &KExpression<'_>) -> bool {
+pub(super) fn expression_equal(left: &KExpression<'_>, right: &KExpression<'_>) -> bool {
     left.parts.len() == right.parts.len()
         && left
             .parts

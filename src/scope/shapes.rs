@@ -16,6 +16,7 @@ use crate::values::{Chain, Knotted};
 
 use super::builtins::Builtins;
 use super::facts::{Address, UnitId, Unknown};
+use super::groups::Claims;
 use super::shape::{
     BodyShape, CaptureChain, CaptureSlot, CaptureSource, ComponentIndex, Coordinate, Lands, PathId,
     Position, Segment, ShapeError, ShapeKind, Site, Slot, Target, UnitIndex, follow,
@@ -128,6 +129,27 @@ impl<'graph> Shapes<'graph> {
         scratch: BumpAllocator<'_>,
     ) -> Result<&'graph Shapes<'graph>, ShapeError<'graph>> {
         super::shape::build_program(brand, statements, builtins, types, symbols, scratch)
+    }
+
+    /// The shapes of code composed at run time, built alone under the program's `claims`: see
+    /// [`build::code`](super::shape::build_code).
+    #[cfg_attr(
+        not(test),
+        expect(
+            dead_code,
+            reason = "a composition's miss builds its shapes here (P13)"
+        )
+    )]
+    pub(crate) fn of_code<X: Knotted>(
+        brand: ProgramBrand<'graph>,
+        syntax: &KExpression<'graph>,
+        claims: &'graph Claims<'graph>,
+        builtins: &Builtins<'_, X>,
+        types: &Chain<'graph, 'graph, 'graph, '_>,
+        symbols: &SymbolInterner,
+        scratch: BumpAllocator<'_>,
+    ) -> &'graph Shapes<'graph> {
+        super::shape::build_code(brand, syntax, claims, builtins, types, symbols, scratch)
     }
 
     /// The table over `bodies` and `parents`, its levels numbered along each chain.
