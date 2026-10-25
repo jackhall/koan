@@ -27,8 +27,8 @@
 //!
 //! **Eviction** runs after a miss: while the unheld bytes exceed the [`BuildBudget`], the unheld
 //! arena node with no children, no pinner and the oldest use goes. A parent is no candidate while
-//! it has a child, nor a composition while a settlement pins it, so eviction takes leaves first, and a linear scan is enough since the budget bounds the
-//! count. See [build/README.md § The store](../build/README.md#the-store).
+//! it has a child, nor a composition while a settlement pins it, so eviction takes leaves first.
+//! Each victim is found by a linear scan of the live arena nodes, held ones included. See [build/README.md § The store](../build/README.md#the-store).
 
 use std::collections::HashMap;
 use std::marker::PhantomData;
@@ -499,7 +499,9 @@ impl<'graph> BuildArena<'graph> {
     }
 
     /// Evict unheld leaves, least recently used first, until the unheld bytes are within the
-    /// budget, and return how many went.
+    /// budget, and return how many went. Each victim is found by a scan of every live arena node,
+    /// held ones included: a miss usually evicts one or none, and the live nodes are what the
+    /// budget keeps beside what live frames hold.
     pub(super) fn evict_to_budget(&mut self) -> usize {
         let mut evicted = 0;
         while self.total - self.held > self.budget.bytes.get() {

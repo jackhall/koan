@@ -43,7 +43,7 @@ use crate::scope::{
     Unknown, quote_paths,
 };
 use crate::symbols::BinderSymbol;
-use crate::type_lattice::{DeclaredType, KType, Parametric, TypeNode};
+use crate::type_lattice::{DeclaredType, KType, Parametric, Term, TypeDigest, TypeNode};
 use crate::values::digest::type_digest;
 use crate::values::{
     ArenaRef, BindingImage, Chain, KeyedTypes, Knotted as _, SettlementKey, Value, retype_target,
@@ -357,20 +357,11 @@ pub(crate) fn settled<'a, 'graph, L: Language>(
                 return Some(settlement);
             }
             // A term of each type a frame under it reads that the agent tier lacks.
-            let mut exported: BumpBackedSet<'_, DeclaredType<Parametric>> = bump_set(&scratch);
-            let mut terms = BumpVec::new_in(&scratch);
-            for kt in named.iter() {
-                if !resting.resolves(*kt) && exported.insert(*kt) {
-                    terms.push((kt.digest(), types.export(*kt, &resting, bump, &scratch)));
-                }
-            }
-            settlement.termed(Keyed::sorted(bump, &mut terms))
+            settlement.termed(exported(&types, &resting, &named, bump, &scratch))
         }
         Err(error) => {
-            let mut text = Text(BumpVec::new_in(&scratch));
-            write!(text, "{}", error.display(program.symbols(), &types))
-                .expect("a refusal renders");
-            let refusal = bump.alloc_str(std::str::from_utf8(&text.0).expect("rendered as UTF-8"));
+            let display = error.display(program.symbols(), &types);
+            let refusal = rendered(bump, &scratch, format_args!("{display}"));
             Settlement::refused(below, binding, refusal)
         }
     })
@@ -414,15 +405,11 @@ pub(crate) fn composed<'a, 'graph, L: Language>(
         writer,
         unfolded.folded(writer, fold(unfolded, writer, &scratch)),
     );
-    let rendered = |text: std::fmt::Arguments<'_>| {
-        let mut rendered = Text(BumpVec::new_in(&scratch));
-        rendered.write_fmt(text).expect("a refusal renders");
-        &*bump.alloc_str(std::str::from_utf8(&rendered.0).expect("rendered as UTF-8"))
-    };
+    let refused = |display: std::fmt::Arguments<'_>| rendered(bump, &scratch, display);
     let refusal = match walked {
-        Err(error) => Some(rendered(format_args!("{}", error.display(symbols, &types)))),
+        Err(error) => Some(refused(format_args!("{}", error.display(symbols, &types)))),
         Ok(()) => (facts.typing_refusal(root).or_else(|| facts.overlap(root)))
-            .map(|error| rendered(format_args!("{}", error.display(symbols, &types)))),
+            .map(|error| refused(format_args!("{}", error.display(symbols, &types)))),
     };
     // Each type a frame under the composition reads, as a term where the agent tier lacks it.
     let resting = tiers.resting();
@@ -431,24 +418,43 @@ pub(crate) fn composed<'a, 'graph, L: Language>(
         named.push(DeclaredType::from(shape.code_type()));
     }
     facts.each_type(&mut |kt| named.push(kt));
-    let mut exported: BumpBackedSet<'_, DeclaredType<Parametric>> = bump_set(&scratch);
-    let mut terms = BumpVec::new_in(&scratch);
-    for kt in named.iter() {
-        if !resting.resolves(*kt) && exported.insert(*kt) {
-            terms.push((kt.digest(), types.export(*kt, &resting, bump, &scratch)));
-        }
-    }
     let quotes = quote_paths(writer, &scratch, shapes, syntax.reference());
     Composition::new(
         syntax,
         facts,
-        Keyed::sorted(bump, &mut terms),
+        exported(&types, &resting, &named, bump, &scratch),
         refusal,
         quotes,
     )
 }
 
 /// Text rendered into a scratch bump.
+/// A term of each type in `named` that `resting` lacks, exported from `types` and laid in `bump`,
+/// by digest: what a frame under a composition mints so every type its facts name resolves.
+fn exported<'a>(
+    types: &Chain<'_, '_, '_, '_>,
+    resting: &Chain<'_, '_, '_, '_>,
+    named: &[DeclaredType<Parametric>],
+    bump: &'a Bump,
+    scratch: &Bump,
+) -> Keyed<'a, (TypeDigest, Term<'a>)> {
+    let mut exported: BumpBackedSet<'_, DeclaredType<Parametric>> = bump_set(scratch);
+    let mut terms = BumpVec::new_in(scratch);
+    for kt in named.iter() {
+        if !resting.resolves(*kt) && exported.insert(*kt) {
+            terms.push((kt.digest(), types.export(*kt, resting, bump, scratch)));
+        }
+    }
+    Keyed::sorted(bump, &mut terms)
+}
+
+/// `display` rendered into `bump`: a refusal kept worded as the load words it.
+fn rendered<'a>(bump: &'a Bump, scratch: &Bump, display: std::fmt::Arguments<'_>) -> &'a str {
+    let mut text = Text(BumpVec::new_in(scratch));
+    text.write_fmt(display).expect("a refusal renders");
+    bump.alloc_str(std::str::from_utf8(&text.0).expect("rendered as UTF-8"))
+}
+
 pub(super) struct Text<'x>(pub(super) BumpVec<'x, u8>);
 
 impl std::fmt::Write for Text<'_> {
