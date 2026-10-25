@@ -100,8 +100,6 @@ pub struct Typed<'a> {
     pub contents: Keyed<'a, (Slot, Tree<'a>)>,
     /// The body's own minting sites.
     pub minting: Keyed<'a, Site>,
-    /// Where the body reads each lexical variable of a path's `through`, by the path's level.
-    pub throughs: Keyed<'a, (usize, &'a [Variable])>,
     /// A `MODULE` or `GROUP` body's exact signature, where the walk typed one.
     pub signature: Option<KType>,
     /// What the unit's facts give the body's class, folded back in where a resumption absorbs
@@ -130,7 +128,6 @@ impl Typed<'_> {
         picks: Keyed::EMPTY,
         contents: Keyed::EMPTY,
         minting: Keyed::EMPTY,
-        throughs: Keyed::EMPTY,
         signature: None,
         exits: false,
         closed: 0,
@@ -978,7 +975,6 @@ pub(crate) struct Laid<'graph> {
 #[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
 pub(crate) enum Held {
     Site(Segment, Site),
-    Through(Segment, usize),
     /// A path entry, by its chain root and level.
     Path(Segment, usize),
 }
@@ -1020,7 +1016,6 @@ impl<'graph> LoadFacts<'graph> {
                 + size_of_val(typed.trees.entries())
                 + size_of_val(typed.picks.entries())
                 + size_of_val(typed.minting.entries())
-                + size_of_val(typed.throughs.entries())
         };
         (self.own_units().iter())
             .map(|(_, (facts, _))| {
@@ -1289,12 +1284,6 @@ impl<'a, S: RecordSource<'a>> FactsOver<S> {
             .paths
             .get((root.segment(), level))
             .map(|(_, path)| *path)
-    }
-
-    /// Where `shape` reads each lexical variable of the path at `level`'s `through`.
-    pub fn through_at(&self, shape: &BodyShape<'_>, level: usize) -> Option<&'a [Variable]> {
-        let held = Held::Through(shape.segment(), level);
-        self.fact(shape, held, |typed| typed.throughs, level)
     }
 
     /// The first registration of the quote's code `shape` that overlaps a builtin overload,
@@ -1682,8 +1671,5 @@ impl Typed<'_> {
             .chain(self.picks.iter().map(|(site, _)| *site))
             .chain(self.minting.iter().copied());
         sites.for_each(|site| each(Held::Site(segment, site)));
-        for (level, _) in self.throughs.iter() {
-            each(Held::Through(segment, *level));
-        }
     }
 }

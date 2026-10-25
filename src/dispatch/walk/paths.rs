@@ -237,20 +237,6 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         table.at(level)?.1
     }
 
-    /// The entry at `path_level` of the chain the shape at `level` sits on, its application read.
-    pub(super) fn entry_at(&mut self, level: usize, path_level: usize) -> Option<PathEntry<'o>> {
-        let table = self.table(level);
-        let index = path_level.checked_sub(self.paths[table].base)?;
-        self.read_through_of(level, index);
-        Some(
-            self.paths[self.table(level)]
-                .entries
-                .get(index)
-                .copied()??
-                .entry,
-        )
-    }
-
     /// The chain level of the root of the chain `level` sits on.
     pub(super) fn chain_root(&self, level: usize) -> usize {
         (0..=level)

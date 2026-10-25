@@ -259,9 +259,8 @@ pub struct PathEntry<'graph> {
     /// The path variable's level.
     pub level: usize,
     /// The application the path is read through: the module `chain` reaches is fitted to it, and
-    /// the path is what it fits `label` at. Over the chain's lexical variables; a shape reading the
-    /// path locates them in its record's `throughs`. `None` where the path reads the module's
-    /// own type member.
+    /// the path is what it fits `label` at. Over the chain's lexical variables, which a layer
+    /// binding them closes. `None` where the path reads the module's own type member.
     pub through: Option<Parametric>,
 }
 

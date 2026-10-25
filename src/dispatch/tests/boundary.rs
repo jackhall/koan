@@ -47,7 +47,6 @@ const FIELDS: &[&str] = &[
     "instances",
     "named",
     "trees",
-    "throughs",
     "minting",
     "signature",
 ];
@@ -121,7 +120,6 @@ const READ_ACCESSORS: &[&str] = &[
     "path_read",
     "path",
     "paths",
-    "through_at",
     "binder_type",
     "value_type",
     "refusal",

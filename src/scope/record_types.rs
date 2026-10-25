@@ -167,7 +167,6 @@ fn typed_types(typed: &Typed<'_>, each: &mut Each<'_>) {
         picks: _,
         contents,
         minting: _,
-        throughs: _,
         signature,
         exits: _,
         closed: _,

@@ -412,7 +412,6 @@ enum Wrote {
     Part(Site),
     Expression(Site),
     Selection(Site),
-    Through(usize),
     Settled(usize),
     Minting(usize),
     Instance(usize),
@@ -476,9 +475,6 @@ struct Level<'p, 'o, 'graph> {
     picks: BumpVec<'p, (Site, &'o [Pick<'o>], Tag)>,
     /// Each module binder's content tree, by slot: what a binding of it is read against.
     contents: BumpVec<'p, (Slot, Tree<'o>, Tag)>,
-    /// Each path the shape spells whose declared application names a lexical variable, by its
-    /// level, beside where the shape reads each variable.
-    throughs: BumpBackedMap<'p, usize, (&'o [Located], Tag)>,
     /// A `MODULE` or `GROUP` body's exact signature, where the walk typed one.
     signature: Option<KType>,
     /// The statement the walk is typing: where it looks for a part first.
@@ -791,7 +787,6 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             trees: BumpVec::new_in(scratch),
             picks: BumpVec::new_in(scratch),
             contents: BumpVec::new_in(scratch),
-            throughs: bump_table(scratch),
             signature: None,
             statement: 0,
             captures: None,
@@ -1197,7 +1192,6 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         let mut parts = BumpVec::new_in(scratch);
         let mut expressions = BumpVec::new_in(scratch);
         let mut selections = BumpVec::new_in(scratch);
-        let mut throughs = BumpVec::new_in(scratch);
         let mut settled = BumpVec::new_in(scratch);
         let mut minting = BumpVec::new_in(scratch);
         let mut instances = BumpVec::new_in(scratch);
@@ -1262,13 +1256,6 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                         && ours(*held)
                     {
                         selections.push((site, *points));
-                    }
-                }
-                Wrote::Through(path_level) => {
-                    if let Some((located, held)) = at.throughs.get(&path_level)
-                        && ours(*held)
-                    {
-                        throughs.push((path_level, *located));
                     }
                 }
                 Wrote::Settled(index) => {
@@ -1341,7 +1328,6 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             picks: Keyed::sorted(lay, &mut picks),
             contents: Keyed::sorted(lay, &mut contents),
             minting,
-            throughs: keyed(lay, &throughs),
             signature: at.signature,
             exits,
             closed,
@@ -1430,9 +1416,6 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 .iter()
                 .map(|(site, picked)| (*site, *picked, tag)),
         );
-        for (level, located) in typed.throughs.iter() {
-            at.throughs.entry(*level).or_insert((*located, tag));
-        }
         at.exits |= typed.exits;
         at.closed += typed.closed;
         at.folded += typed.folded;
@@ -1568,7 +1551,6 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             }
         }
         if !self.unfilled {
-            self.throughs(level, holds.spelled);
             self.contents(level, index)?;
         }
         Ok(())
@@ -2218,13 +2200,6 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 let (entry, at) = self
                     .reachable(level, variable)
                     .expect("a path variable a static type names has a root its shape reaches");
-                if let Some(through) = entry.through
-                    && self.types.concrete(through).is_none()
-                    && !self.has_through(level, entry.level)
-                {
-                    let through = self.located(level, &[through], used);
-                    self.record_through(level, entry.level, through);
-                }
                 located.push(Located {
                     level: variable,
                     source: Source::Path {
@@ -2300,50 +2275,6 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         // Declared where the callable is written, a path there may not be reachable here.
         let typed = retyped_to(self.types, declared.unwrap_or_else(|| KType::ANY.into()));
         DeclaredType::Type(self.sourced(level, typed))
-    }
-
-    /// Locate, for the shape at `level`, the lexical variables of each path its `statements`
-    /// spell whose declared application names any: where the run reads them to bind the path's
-    /// variable. A path whose application names another path is left unlocated, and its type is
-    /// read where it runs.
-    fn throughs(&mut self, level: usize, spelled: &[u32]) {
-        let shape = self.chain[level].shape;
-        for index in spelled.iter().map(|at| *at as usize) {
-            let Some(path_level) = self.shapes.path_level(shape.segment(), index) else {
-                continue;
-            };
-            let Some(entry) = self.entry_at(level, path_level) else {
-                continue;
-            };
-            let Some(through) = entry.through else {
-                continue;
-            };
-            if self.types.concrete(through).is_some() || self.has_through(level, entry.level) {
-                continue;
-            }
-            let mut paths = false;
-            read_through(
-                self.types,
-                self.scratch,
-                through,
-                Side::Above,
-                &mut |variable| {
-                    if let Variable::Lexical { level: at, .. } = variable {
-                        paths |= self.is_path(level, at);
-                    }
-                    None
-                },
-            );
-            if paths {
-                continue;
-            }
-            let spelled = &shape.spelled()[index];
-            let site = self.site(level, spelled.part);
-            let used = source_of(shape, &shape.body()[spelled.statement as usize], site)
-                .expect("a path is spelled in its statement");
-            let located = self.located(level, &[through], used);
-            self.record_through(level, entry.level, located);
-        }
     }
 
     /// Type a component's value binders: each callable it births at its declared type first, then

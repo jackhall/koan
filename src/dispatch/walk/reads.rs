@@ -386,28 +386,6 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         self.wrote(level, tag, Wrote::Selection(site));
     }
 
-    /// Whether the shape at `level` locates the lexical variables of the path at `path_level`'s
-    /// application already.
-    pub(super) fn has_through(&self, level: usize, path_level: usize) -> bool {
-        self.chain[level].throughs.contains_key(&path_level)
-    }
-
-    /// Record where the shape at `level` reads each lexical variable of the path at
-    /// `path_level`'s application.
-    pub(super) fn record_through(
-        &mut self,
-        level: usize,
-        path_level: usize,
-        located: &'o [crate::scope::Variable],
-    ) {
-        let tag = self.innermost();
-        self.chain[level]
-            .throughs
-            .entry(path_level)
-            .or_insert((located, tag));
-        self.wrote(level, tag, Wrote::Through(path_level));
-    }
-
     /// Record the content tree of the view the `:|` at `site` builds.
     pub(super) fn record_view_tree(&mut self, level: usize, site: Site, tree: &'o Tree<'o>) {
         let tag = self.innermost();
