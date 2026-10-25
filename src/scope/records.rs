@@ -886,6 +886,9 @@ pub struct BodyRef<'graph, 'a> {
     pub keys: Option<&'a [(Slot, BinderSymbol)]>,
     /// `None` for written code.
     pub root: Option<ComposedRoot<'graph>>,
+    /// Whether the body can birth a callable, which a call seeking a settlement of it lays a level
+    /// for.
+    pub births: bool,
 }
 
 /// The root of code composed at run time: its syntax, which lives in program storage until code
@@ -917,6 +920,7 @@ impl<'graph> BodyRef<'graph, '_> {
                 composes: collect(lay, self.composes.iter().copied()),
                 keys: self.keys.map(|keys| collect(lay, keys.iter().copied())),
                 root,
+                births: self.births,
             },
         )
     }
@@ -1097,6 +1101,7 @@ impl<'graph> LoadFacts<'graph> {
                         collect(lay, keys.iter().map(|slot| (*slot, shape.slot_name(*slot))))
                     }),
                     root: None,
+                    births: shape.births_callable(),
                 },
                 captures: collect(lay, layout.iter().map(|(_, coordinate)| *coordinate)),
                 folds,

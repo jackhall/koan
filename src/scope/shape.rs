@@ -626,6 +626,10 @@ pub struct BodyShape<'graph> {
     top_captures: &'graph [Option<Slot>],
     /// Each nested shape by its site, so in program order.
     nested: Keyed<'graph, (Site, &'graph BodyShape<'graph>)>,
+    /// Whether this body can birth a callable: a nested callable body, directly or through a
+    /// nested block or module body. A quote's callables are born by the `EVAL` that runs it, so a
+    /// quote counts for nothing.
+    births: bool,
     /// The `FN`, `EXPR` or `OP` node a callable's body sits in.
     form: Option<&'graph KExpression<'graph>>,
     /// Each binder's record, by slot.
@@ -920,6 +924,12 @@ impl<'graph> BodyShape<'graph> {
     /// Every nested shape beside its site, in program order.
     pub fn nested_shapes(&self) -> &'graph [(Site, &'graph BodyShape<'graph>)] {
         self.nested.entries()
+    }
+
+    /// Whether this body can birth a callable, through its blocks and module bodies but not its
+    /// quotes.
+    pub fn births_callable(&self) -> bool {
+        self.births
     }
 
     /// What this body is to the `MATCH` or `TRY` holding it: `Some` exactly for an arm.

@@ -3573,6 +3573,11 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             "a body's nested bodies take the segments before its own"
         );
         nested_starts.resize(draft.statements as usize + 1, nested.len() as u32);
+        let births = nested.iter().any(|(_, child)| match child.kind() {
+            ShapeKind::Callable => true,
+            ShapeKind::Block | ShapeKind::Module => child.births_callable(),
+            ShapeKind::Code | ShapeKind::Program => false,
+        });
         // A site is numbered in program order, so the children, drafted in program order, are
         // sorted already.
         let nested = Keyed::from_sorted(collect(writer, nested.iter().copied()));
@@ -3698,6 +3703,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 code: draft.code,
                 top_captures: collect(writer, draft.top_captures.iter().copied()),
                 nested,
+                births,
                 form: draft.form,
                 binders,
                 units: collect(writer, draft.units.iter().copied()),
