@@ -67,12 +67,13 @@ pub enum KBirth<'graph, 'cell> {
     },
     /// A block — a synthesized block part's shape, or a `USING … SCOPE` body — run beside the
     /// view of the activation it sits in, its last statement's value its own; a `USING` body's
-    /// parameters bound to what `module` surfaces. `within` as an evaluation's.
+    /// parameters bound to what `module` surfaces, beside the `USING`'s site in the enclosing body,
+    /// where the load recorded its picks. `within` as an evaluation's.
     Block {
         program: &'graph Program<'graph>,
         segment: Segment,
         enclosing: KActivationView<'graph, 'cell>,
-        module: Option<KValue<'graph, 'cell>>,
+        module: Option<(KValue<'graph, 'cell>, Site)>,
         within: Within,
     },
     /// What the top level leaves at rest when it ends: its activation's view, for a later root
@@ -132,7 +133,7 @@ impl<'graph, 'cell> KBirth<'graph, 'cell> {
                 out(offered);
             }
             KBirth::Block {
-                module: Some(module),
+                module: Some((module, _)),
                 ..
             } => out(module),
             _ => {}

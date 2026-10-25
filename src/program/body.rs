@@ -381,9 +381,10 @@ fn ran<'graph, 'here, 'scratch>(
             );
             // A `USING` body's parameters are the module's surfaced names, which its shape and the
             // module cannot disagree on: a refusal is an invariant break.
-            if let Some(module) = module {
+            if let Some((module, site)) = module {
                 let bump = Bump::new();
-                if surface(writer, module, activation, shape, types, &bump).is_err() {
+                let picks = facts.picks(code.shape(enclosing.segment()), site);
+                if surface(writer, module, picks, activation, shape, types, &bump).is_err() {
                     return step.failed(StepError::Refused);
                 }
             }
@@ -629,13 +630,13 @@ pub fn block<'graph, 'here>(
 }
 
 /// What an evaluator asks for to run `shape`, a `USING … SCOPE` body, inside `enclosing`, its
-/// parameters bound to what `module` surfaces: [`block`]'s request, the block entered on the
-/// module.
+/// parameters bound to what `module` surfaces, beside the `USING`'s site in `enclosing`'s body:
+/// [`block`]'s request, the block entered on the module.
 pub fn surfaced_block<'graph, 'here>(
     program: &'graph Program<'graph>,
     shape: &BodyShape<'_>,
     enclosing: KActivationView<'graph, 'here>,
-    module: Option<KValue<'graph, 'here>>,
+    module: Option<(KValue<'graph, 'here>, Site)>,
     use_: Use,
     within: Within,
 ) -> Request<'graph, 'here, KBundle> {

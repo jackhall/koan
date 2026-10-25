@@ -538,7 +538,7 @@ fn using<'step, 'graph, 'here>(
         program,
         body,
         at.view.view(),
-        Some(module),
+        Some((module, at.view.shape().site_of_node(node))),
         inside(at),
         at.within,
     );

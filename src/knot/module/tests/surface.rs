@@ -67,6 +67,7 @@ fn a_surfaced_name_reads_the_member_it_names() {
             surface(
                 writer,
                 Value::Knotted(m),
+                None,
                 block,
                 fixture.shape_of(block),
                 types,
@@ -116,6 +117,7 @@ USING m SCOPE (zero name)";
                 surface(
                     writer,
                     Value::Knotted(module(fixture, activation, "n")),
+                    None,
                     block,
                     fixture.shape_of(block),
                     types,
@@ -130,6 +132,7 @@ USING m SCOPE (zero name)";
                 surface(
                     writer,
                     Value::Knotted(module(fixture, activation, "o")),
+                    None,
                     block,
                     fixture.shape_of(block),
                     types,
@@ -169,6 +172,7 @@ USING m SCOPE (zero)";
                 surface(
                     writer,
                     Value::Knotted(f),
+                    None,
                     block,
                     fixture.shape_of(block),
                     types,
@@ -257,6 +261,7 @@ fn every_member_is_read_by_its_name() {
                 surface(
                     writer,
                     Value::Knotted(m),
+                    None,
                     block,
                     fixture.shape_of(block),
                     types,

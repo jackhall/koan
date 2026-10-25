@@ -141,12 +141,6 @@ pub fn fill_at_view<'graph, 'cell>(
 
 #[cfg(test)]
 thread_local! {
-    /// How many keyworded members a view's build picked the covering overloads of itself.
-    pub static COVERED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
-}
-
-#[cfg(test)]
-thread_local! {
     /// Whether [`fill_at_view`] checks the content it builds from memos against a fresh walk of
     /// the module's captures: the memo law.
     pub static CHECK_SLOT_MEMOS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
@@ -470,19 +464,15 @@ pub(super) fn build<'graph, 'tier, 'cell, 'x>(
         let functions = match picked {
             // What the load picked, by position in the source's registration run.
             Some(pick) => {
-                let registrations = layout::registrations(source, types, scratch);
-                let mut picked = BumpVec::with_capacity_in(pick.offered.len(), scratch);
-                picked.extend(pick.offered.iter().map(|at| registrations[*at as usize]));
+                let picked = layout::picked_of(source, pick, types, scratch);
                 debug_assert!(
                     {
                         let key = layout::key_of(declared, types);
-                        let offered = layout::functions_at(writer, source, key, types, scratch);
+                        let offered =
+                            layout::functions_at(writer, source, key, None, types, scratch);
                         let covered =
                             layout::covering(&offered, cx.source_side(declared), types, scratch);
-                        let shape = |function: &KValue<'_, '_>| layout::registered_shape(*function);
-                        covered.len() == picked.len()
-                            && (covered.iter().zip(picked.iter()))
-                                .all(|(covered, picked)| shape(covered) == shape(picked))
+                        layout::same_shapes(&covered, &picked)
                     },
                     "the load's picks are what the build would cover"
                 );
@@ -490,9 +480,9 @@ pub(super) fn build<'graph, 'tier, 'cell, 'x>(
             }
             None => {
                 #[cfg(test)]
-                COVERED.with(|covered| covered.set(covered.get() + 1));
+                layout::COVERED.with(|covered| covered.set(covered.get() + 1));
                 let key = layout::key_of(declared, types);
-                let offered = layout::functions_at(writer, source, key, types, scratch);
+                let offered = layout::functions_at(writer, source, key, None, types, scratch);
                 layout::covering(&offered, cx.source_side(declared), types, scratch)
             }
         };
@@ -523,25 +513,13 @@ pub fn picks<'x>(
     let from = viewed.from?;
     let mut picks = BumpVec::with_capacity_in(viewed.sig.keyworded.len(), scratch);
     for (member, declared) in viewed.sig.keyworded.iter().enumerate() {
-        let key = layout::key_of(*declared, types);
-        let mut at_key = BumpVec::new_in(scratch);
-        at_key.extend(
-            (0..registered.len()).filter(|at| layout::key_of(registered[*at], types) == key),
-        );
-        let mut shapes = BumpVec::with_capacity_in(at_key.len(), scratch);
-        shapes.extend(at_key.iter().map(|at| registered[*at]));
         let source_side = types.concrete_declared(substitute_parameters(
             types,
             scratch,
             *declared,
             from.bindings,
         ))?;
-        let mut offered = BumpVec::new_in(scratch);
-        offered.extend(
-            (layout::covered(&shapes, source_side, types, scratch).iter()).map(|at| {
-                u32::try_from(at_key[*at]).expect("a module has fewer than 2^32 members")
-            }),
-        );
+        let offered = layout::offered_at(registered, source_side, types, scratch);
         picks.push((u16::try_from(member).ok()?, offered));
     }
     Some(picks)

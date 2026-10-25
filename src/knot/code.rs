@@ -393,7 +393,7 @@ fn keyed<'graph, 'cell>(
     scratch: BumpAllocator<'_>,
     found: &mut BumpVec<'_, KValue<'graph, 'cell>>,
 ) -> Result<(), UsingRefused> {
-    for member in super::module::layout::functions_at(writer, source, key, types, scratch) {
+    for member in super::module::layout::functions_at(writer, source, key, None, types, scratch) {
         let registered = super::module::layout::registered_shape(member)
             .expect("a registration member is a function");
         // Only the ranking is read, which a scheme's body spells as a type's does.

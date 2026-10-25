@@ -144,6 +144,7 @@
 //! See [README.md § Static types](README.md#static-types).
 
 use crate::elaborate::{SignatureMember, declares_nominal, module_signature, signature_member};
+use crate::knot::module::layout;
 use crate::knot::module::view::{self, Ascription, ViewTypes, opaque_view_types};
 use crate::knot::{BuiltinFunction, KBuiltins};
 use crate::memory::{
@@ -3441,7 +3442,15 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     /// keyworded member, by its registrations' positions in its run: `None` where a registration's
     /// shape is not closed, or the view's fit leaves the source's side unknown.
     fn picks(&mut self, body: Segment, viewed: &ViewTypes<'_>) -> Option<&'o [Pick<'o>]> {
-        let (types, scratch) = (self.types, self.scratch);
+        let registered = self.registered_run(body)?;
+        let picks = view::picks(viewed, &registered, self.types, self.scratch)?;
+        Some(self.laid_picks(&picks))
+    }
+
+    /// The shapes the registrations of the module the body `body` births register at, in their
+    /// run's order: `None` where one is not closed.
+    fn registered_run(&mut self, body: Segment) -> Option<BumpVec<'p, DeclaredType<KType>>> {
+        let scratch = self.scratch;
         let shape = self.shapes.shape_at(body);
         // A module's registrations follow its named members in slot order.
         let mut slots = BumpVec::new_in(scratch);
@@ -3459,12 +3468,15 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 Static::Rigid { .. } | Static::Unknown => return None,
             }
         }
-        let picks = view::picks(viewed, &registered, types, scratch)?;
+        Some(registered)
+    }
+
+    fn laid_picks(&self, picks: &[(u16, BumpVec<'_, u32>)]) -> &'o [Pick<'o>] {
         let lay = self.lay;
-        Some(lay.fill(picks.len(), |at| Pick {
+        lay.fill(picks.len(), |at| Pick {
             member: picks[at].0,
             offered: collect(lay, picks[at].1.iter().copied()),
-        }))
+        })
     }
 
     /// The view ascription `node` of the shape at `level`, its operand's static type `typed` and
@@ -3614,6 +3626,21 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         let Some(body) = shape.site_of_body(node).and_then(|site| shape.nested(site)) else {
             return Ok(unknown());
         };
+        // A surfaced key through a header over a module the load sees all of offers the overloads
+        // the load picks here, by position.
+        if !body.registrations().is_empty()
+            && let Tree::Retyped {
+                carried, source, ..
+            } = self.tree(level, &operand.value)?
+            && let Tree::Body { body: module, .. } = *source
+            && source.closed()
+            && let Some(registered) = self.registered_run(module)
+            && let Some(picks) =
+                layout::header_picks(carried, &registered, self.types, self.scratch)
+        {
+            let picks = self.laid_picks(&picks);
+            self.record_picks(level, self.node_site(level, node), picks);
+        }
         let tag = self.innermost();
         Ok(self
             .block(level, body, Some((typed, tag)))?
