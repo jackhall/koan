@@ -60,6 +60,7 @@ mod handle;
 mod kind;
 mod lattice;
 mod node;
+mod numbering;
 mod operators;
 mod order;
 mod ranking;

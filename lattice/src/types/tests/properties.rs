@@ -16,6 +16,7 @@
 use proptest::prelude::*;
 use proptest::strategy::ValueTree;
 
+use super::RawSchemes;
 use super::raw::RawRegistry;
 use super::raw::ranking::{Verdict, admit_by_class, judge_by_class, solving_slots};
 use super::raw::shape::{keys_equal, shape_classes, shape_of};
@@ -28,7 +29,7 @@ use super::raw::unify::{admits, most_determined_first, ties};
 use super::raw::walk::{visit, visit_free_quantified};
 use super::raw::{lattice, order};
 use crate::bump::{Bump, BumpAllocator, BumpVec};
-use crate::symbols::TypeSymbol;
+use crate::symbols::{BinderSymbol, TypeSymbol};
 use crate::types::chain::TypeChain;
 use crate::types::handle::{DeclaredType, Handle, KType, Parametric, TypeHandle, wrap};
 use crate::types::kind::KKind;
@@ -50,7 +51,7 @@ use super::generators::{
     arb_arguments, arb_bounded_head_chain, arb_chain, arb_concrete, arb_fits_chain,
     arb_function_type, arb_instance_chain, arb_lexical, arb_opaque, arb_ordered_pair,
     arb_over_head_parameter, arb_own_instance, arb_shape_below, arb_shape_pair, arb_shape_type,
-    arb_signature, arb_signature_type, arb_wanted_instance, under_with,
+    arb_signature, arb_signature_type, arb_wanted_instance, under_with, with_scratch,
 };
 
 thread_local! {
@@ -606,6 +607,66 @@ proptest! {
     }
 }
 
+/// A function scheme's draw whose variables occur only inside unions: each variable's bound (`Number`
+/// or `Str`), and each position — the parameters, then the return — as a union of members, each a
+/// form over one or two variables. Beside it, a permutation of the declaration order.
+type SetOnly = (Vec<bool>, Vec<Vec<(u8, usize, usize)>>);
+
+fn set_only_scheme() -> BoxedStrategy<(SetOnly, Vec<usize>)> {
+    (2..=3usize)
+        .prop_flat_map(|arity| {
+            let member = (0..5u8, 0..arity, 0..arity);
+            let position = prop::collection::vec(member, 2..=4);
+            (
+                (
+                    prop::collection::vec(any::<bool>(), arity),
+                    prop::collection::vec(position, 2..=3),
+                ),
+                Just((0..arity).collect::<Vec<_>>()).prop_shuffle(),
+            )
+        })
+        .boxed()
+}
+
+/// [`set_only_scheme`]'s draw built with variable `i` declared at `permutation[i]`: a member is
+/// the variable itself (form 0), its list (1), `FN :{x :i} -> j` (2), `DICT OF i j` (3) or
+/// `:{x :i, y :j}` (4).
+fn set_only_build(world: &World, (bounds, positions): &SetOnly, permutation: &[usize]) -> Handle {
+    let types = &world.types;
+    let bound = |number: bool| if number { KType::NUMBER } else { KType::STR };
+    let vars: Vec<Handle> = (permutation.iter().zip(bounds))
+        .map(|(at, number)| types.quantified(*at, bound(*number)).raw())
+        .collect();
+    let mut declared = vec![KType::NUMBER; bounds.len()];
+    for (at, number) in permutation.iter().zip(bounds) {
+        declared[*at] = bound(*number);
+    }
+    let (x, y) = (world.binders[0], world.binders[1]);
+    with_scratch(|scratch| {
+        let mut built: Vec<Handle> = (positions.iter())
+            .map(|members| {
+                let members: Vec<Handle> = (members.iter())
+                    .map(|(form, i, j)| match form {
+                        0 => vars[*i],
+                        1 => types.list(vars[*i]),
+                        2 => types.function_type(scratch, &[(x, vars[*i])], vars[*j]),
+                        3 => types.dict(vars[*i], vars[*j]),
+                        _ => types.record(scratch, &[(x, vars[*i]), (y, vars[*j])]),
+                    })
+                    .collect();
+                types.union_of(scratch, &members)
+            })
+            .collect();
+        let ret = built.pop().expect("the return is the last position");
+        let params: Vec<(BinderSymbol, Handle)> =
+            world.binders.iter().copied().zip(built).collect();
+        let names = &world.type_names[..bounds.len()];
+        types
+            .function_scheme_raw(scratch, names, &declared, &params, ret)
+            .0
+    })
+}
+
 /// A drawn concrete type `b` beside the type [`under_with`] builds under it, holding a fresh
 /// carrier; a draw no move reaches is redrawn.
 fn widened_with_a_carrier() -> BoxedStrategy<(Handle, Handle)> {
@@ -876,6 +937,19 @@ proptest! {
             _ => unreachable!("a scheme's body is a function type or a shape"),
         };
         prop_assert_eq!(again.handle, a);
+    }
+
+    /// The same law where the group's variables meet only inside unions, so no ordered position
+    /// numbers them: declaring the variables in any order builds one handle.
+    #[test]
+    fn a_scheme_is_one_handle_whatever_order_declares_it((draw, permutation) in set_only_scheme()) {
+        let world = world();
+        let arity = permutation.len();
+        let unpermuted: Vec<usize> = (0..arity).collect();
+        prop_assert_eq!(
+            set_only_build(&world, &draw, &unpermuted),
+            set_only_build(&world, &draw, &permutation),
+        );
     }
 
     /// The function twin of [`a_shape_stores_the_bounds_its_occurrences_carry`].

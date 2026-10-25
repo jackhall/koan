@@ -59,6 +59,7 @@ use super::digest::{self, ComponentMember, TypeDigest, schema_content_digest};
 use super::handle::{DeclaredType, Handle, KType, Naming, Parametric, TypeHandle, wrap};
 use super::kind::KKind;
 use super::node::{ContentKey, Group, NodeSchema, TypeNode};
+use super::numbering;
 use super::order::{Dropped, is_subtype_of, unsubsumed};
 use super::record::Record;
 use super::run::{Elements, Run};
@@ -1181,7 +1182,7 @@ impl<'t, H: Habitat<'t>> TypeChain<'t, H> {
             return (body, &[]);
         }
         let positions = self.binder_positions(scratch, body);
-        let group = self.group_order(scratch, quantifiers, bounds, positions.iter().copied());
+        let group = self.group_order(scratch, quantifiers, bounds, &positions);
         let body = substitute_quantified(self, scratch, body, &group.bindings);
         debug_assert!(
             self.quantifier_indices_in_range(scratch, body, group.names.len()),
@@ -1201,43 +1202,41 @@ impl<'t, H: Habitat<'t>> TypeChain<'t, H> {
         (handle, group.quantifier_map)
     }
 
-    /// The positions a scheme's body binds, each with its polarity, in the order its group is
-    /// numbered over: a shape's slots in element order, or a function type's parameters in
-    /// symbol-sorted key order (a record's identity is order-blind, so the numbering must be too),
-    /// then the return.
+    /// The positions a scheme's body binds, in the order its group is numbered over: a shape's
+    /// slots in element order, or a function type's parameters in symbol-sorted key order (a
+    /// record's identity is order-blind, so the numbering must be too), then the return.
     fn binder_positions<'s>(
         &self,
         scratch: BumpAllocator<'s>,
         body: Linked<'t>,
-    ) -> BumpVec<'s, (Linked<'t>, Variance)> {
+    ) -> BumpVec<'s, Linked<'t>> {
         let mut positions = BumpVec::new_in(scratch);
         let ret = match body.view() {
             TypeNode::KFunction { params, ret } => {
                 let mut sorted = BumpVec::with_capacity_in(params.len(), scratch);
                 sorted.extend(params.iter());
                 sorted.sort_by_key(|(name, _)| name.symbol());
-                positions.extend(sorted.iter().map(|(_, kt)| (*kt, Variance::Contra)));
+                positions.extend(sorted.iter().map(|(_, kt)| *kt));
                 ret
             }
             TypeNode::ExpressionShape { elements, ret, .. } => {
                 positions.extend(elements.iter().filter_map(|element| match element {
-                    DispatchTokenElement::Slot(kt) => Some((kt, Variance::Contra)),
+                    DispatchTokenElement::Slot(kt) => Some(kt),
                     DispatchTokenElement::Keyword(_) => None,
                 }));
                 ret
             }
             _ => unreachable!("a scheme's body is a function type or a shape"),
         };
-        positions.push((ret, Variance::Co));
+        positions.push(ret);
         positions
     }
 
-    /// Number a scheme's variables over the `(type, variance)` positions it binds, walked in the
-    /// order given — the group order the scheme doors share.
+    /// Number a scheme's variables over the positions it binds, walked in the order given — the
+    /// group order the scheme doors share, read off the body alone ([`numbering`]).
     ///
-    /// The variables some position names come first, by first occurrence in the walked order; then
-    /// every variable no position names, in declaration order. No variable is dropped, so a call
-    /// solves each one, and two alpha-variants intern to one handle. The caller substitutes its own
+    /// No variable is dropped, so a call solves each one, and two alpha-variants intern to one
+    /// handle whatever order they declare their variables in. The caller substitutes its own
     /// positions through [`bindings`](GroupOrder::bindings) and interns the result —
     /// [`bind_group`](Self::bind_group) is that caller.
     fn group_order<'s>(
@@ -1245,16 +1244,10 @@ impl<'t, H: Habitat<'t>> TypeChain<'t, H> {
         scratch: BumpAllocator<'s>,
         quantifiers: &[TypeSymbol],
         bounds: &[KType],
-        positions: impl Iterator<Item = (Linked<'t>, Variance)>,
+        positions: &[Linked<'t>],
     ) -> GroupOrder<'s, 't> {
         let arity = quantifiers.len();
-        let census = self.quantifier_census(scratch, positions, arity);
-
-        let mut order = BumpVec::with_capacity_in(arity, scratch);
-        order.extend(0..arity);
-        // A stable sort, so the variables no position names (`first` is `usize::MAX`) keep their
-        // declaration order behind the rest.
-        order.sort_by_key(|index| census[*index].first);
+        let order = numbering::group_order(self, scratch, bounds, positions);
         let mut quantifier_map = BumpVec::with_capacity_in(arity, scratch);
         quantifier_map.resize(arity, 0);
         for (interned, declared) in order.iter().enumerate() {
@@ -1311,35 +1304,6 @@ impl<'t, H: Habitat<'t>> TypeChain<'t, H> {
                 ret,
             }
         })
-    }
-
-    /// Count each variable's free contravariant occurrences across the positions a scheme binds,
-    /// recording the visit order of its first occurrence. A nested scheme's own group shadows this
-    /// one, so the census skips it.
-    fn quantifier_census<'s>(
-        &self,
-        scratch: BumpAllocator<'s>,
-        positions: impl Iterator<Item = (Linked<'t>, Variance)>,
-        arity: usize,
-    ) -> BumpVec<'s, Occurrences> {
-        let mut census = BumpVec::with_capacity_in(arity, scratch);
-        census.resize(arity, Occurrences::default());
-        let mut seen = 0usize;
-        for (kt, position) in positions {
-            visit_free_quantified(scratch, kt, position, &mut |index, context| {
-                if let Some(record) = census.get_mut(index) {
-                    if record.first == usize::MAX {
-                        record.first = seen;
-                    }
-                    if context.variance() == Variance::Contra {
-                        record.contravariant += 1;
-                    }
-                    seen += 1;
-                }
-                Visit::Skip
-            });
-        }
-        census
     }
 
     // --- Unions ---
@@ -1517,11 +1481,15 @@ impl<'t, H: Habitat<'t>> TypeChain<'t, H> {
         arity: usize,
     ) -> bool {
         let kt = self.enter(kt.raw());
+        // A nested scheme's own group shadows these, so the walk skips it.
         kt.contains_quantified()
-            && self
-                .quantifier_census(scratch, std::iter::once((kt, Variance::Co)), arity)
-                .iter()
-                .any(|occurrences| occurrences.contravariant > 0)
+            && visit_free_quantified(scratch, kt, Variance::Co, &mut |index, context| {
+                if index < arity && context.variance() == Variance::Contra {
+                    Visit::Stop
+                } else {
+                    Visit::Skip
+                }
+            })
     }
 
     /// Whether every free `Quantified` position reachable from `kt` names an index below `arity` —
@@ -1640,24 +1608,6 @@ struct GroupOrder<'s, 't> {
     bindings: BumpVec<'s, Linked<'t>>,
     /// Declaration index → group index.
     quantifier_map: &'s [usize],
-}
-
-/// One variable's census entry while a scheme's group is being ordered.
-#[derive(Clone, Copy)]
-struct Occurrences {
-    contravariant: usize,
-    /// Visit sequence number of the first occurrence — the ordering key. `usize::MAX` until the
-    /// variable is met at all.
-    first: usize,
-}
-
-impl Default for Occurrences {
-    fn default() -> Self {
-        Occurrences {
-            contravariant: 0,
-            first: usize::MAX,
-        }
-    }
 }
 
 /// Member `index` of `component` as stored content.
