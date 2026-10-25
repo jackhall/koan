@@ -4,8 +4,8 @@
 //! callable's closure bindings, the builtin table, and the enclosing block's view — beside the
 //! callable the activation runs, a covariant view of one [`SlotArray`] over the shape's slots, and
 //! the digest memos of the slots the load marked digested
-//! ([`digest_memo`](Reading::digest_memo)): each empty until a `:|` or a call's hand-off
-//! fills it with the digest of the value its slot holds. It names its shape by segment alone, so
+//! ([`digest_memo`](Reading::digest_memo)): each empty until a `:|`, a call's hand-off or a
+//! binding event fills it with the digest of the value its slot holds. It names its shape by segment alone, so
 //! it crosses a park; a step reads the shape and the facts about it through a [`Reading`], the view
 //! beside the step's [`Code`] and [`Facts`].
 //! The [`Activation`] is that view beside the array itself, which is the door that binds. Nothing

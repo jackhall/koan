@@ -597,6 +597,7 @@ fn evaluated<'step, 'graph, 'here>(
         code,
         offered,
         returns,
+        at.within.inherit,
         Use::Forwards,
     ) {
         Ok(request) => {
@@ -832,6 +833,7 @@ fn call<'step, 'graph, 'here>(
                     &[],
                     handed,
                     owed,
+                    at.within.inherit,
                     Use::Forwards,
                 )
             };
@@ -1006,6 +1008,7 @@ fn apply<'step, 'graph, 'here>(
             contributed,
             handed,
             owed,
+            at.within.inherit,
             Use::Forwards,
         )
     };

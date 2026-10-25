@@ -11,13 +11,16 @@
 //! **No step names a place that is not its own.** No method takes or returns a handle, and none is
 //! a carrier door: a step holds values at its own brands and nothing else, and says what it needs —
 //! a child, a wait, a successor, a result — beside the hints that place it. An arena node reaches a
-//! step only as an opaque [`ArenaRef`], which the scheduler alone opens.
+//! step only as an opaque [`ArenaRef`], which the scheduler alone opens; the region a decision
+//! memo rests in, as an opaque [`MemoHome`] minted from a cell's own provenance, which names an
+//! ancestor of every cell it is handed to.
 //!
 //! Every arm of an `Action` carries no region borrow. `enter` quantifies a step's three brands per
 //! call, so a step's return type can name none of them: what crosses back out is a dormant carrier,
 //! a function pointer or a hint, and nothing else.
 
 use crate::knot::{KValue, KValueFamily};
+use crate::memory::Projects;
 use crate::memory::{
     Active, CellHandle, CrossedOperand, DeliverError, Delivered, Dormant, Erased, Header, Operand,
     Ready, ReattachableOverBoth, Receipt, Stale, StepContext, Writer,
@@ -28,7 +31,9 @@ use crate::scheduler::continuation::{
 };
 use crate::scheduler::delivery::KDelivery;
 use crate::scheduler::seek::{Lending, Seek};
-use crate::scope::{Code, Facts, RegionHeader};
+use crate::scope::{
+    Code, Entry, EntryFamily, Facts, HalfHeader, MemoFamily, MemoKey, RegionHeader,
+};
 use crate::type_lattice::Halves;
 use crate::values::{ArenaRef, Chain, Half, TypeTiers, Types};
 
@@ -484,6 +489,122 @@ where
         })
     }
 
+    /// Where this cell's decision memo rests: the region its result is built in, which outlives
+    /// every hop of its tail chain.
+    pub fn memo_home(&self) -> MemoHome {
+        MemoHome(self.provenance.home)
+    }
+
+    /// The entry `key` finds in the decision memo resting in `home`, pinned at `'here`, every type
+    /// its decisions name made to resolve in this cell's chain. A home holding no memo yet is
+    /// first seeded with `inherit`'s, by pointer: the memo of the cell that asked for this one.
+    /// `None` where neither holds the entry, a home has died, or the verdict would copy.
+    pub fn memo_entry(
+        &mut self,
+        home: MemoHome,
+        inherit: Option<MemoHome>,
+        key: MemoKey<'_>,
+    ) -> Option<&'here Entry<'here>> {
+        let tiers = self.tiers;
+        let memo = self.memo_read(home.0)?;
+        let seeded = match (inherit, self.context.read(&memo).value()) {
+            (Some(inherit), None) if inherit != home => {
+                let from = self.memo_read(inherit.0)?;
+                let operand = [Operand {
+                    carrier: &from,
+                    copy_bytes: usize::MAX,
+                }];
+                // Seeded by pointer: the inheriting home lies under it, so the pin is free.
+                let seeded = self.context.alloc_into::<MemoFamily, MemoFamily>(
+                    home.0,
+                    &operand,
+                    |writer, header, views| {
+                        let half = header.get_or_lay(|| RegionHeader::lay(writer));
+                        if let (
+                            None,
+                            CrossedOperand::Pinned {
+                                view: Some(memo),
+                                home,
+                                ..
+                            },
+                        ) = (half.memo(), &views[0])
+                        {
+                            let types = tiers.chain(Halves::alone(Half::of(writer, header)));
+                            home.read(|header, _| {
+                                (header.into_value().branch())
+                                    .map(|branch| types.link_or_merge(branch))
+                            });
+                            half.set_memo(memo, false);
+                        }
+                        Active::new(half.memo())
+                    },
+                );
+                seeded.ok()?
+            }
+            _ => memo,
+        };
+        self.context.alloc_here(
+            &[Operand {
+                carrier: &seeded,
+                copy_bytes: usize::MAX,
+            }],
+            |writer, header, views| {
+                let CrossedOperand::Pinned { view, home, .. } = &views[0] else {
+                    return None;
+                };
+                let entry = (*view)?.find(key)?;
+                let types = tiers.chain(Halves::alone(Half::of(writer, header)));
+                home.read(|header, _| {
+                    let branch = header.into_value().branch();
+                    entry.each_type(&mut |kt| types.adopt(branch, kt));
+                });
+                Some(entry)
+            },
+        )
+    }
+
+    /// Lay what `lay` builds in the decision memo resting in `home`, handed the home's writer, its
+    /// header and its chain over the graph's type tiers, and pin the entry it laid back at
+    /// `'here`. `None` where `lay` laid none, the home has died, or the verdict would copy.
+    pub fn memo_lay(
+        &mut self,
+        home: MemoHome,
+        lay: impl for<'cell> FnOnce(
+            Writer<'cell, '_>,
+            &'cell HalfHeader<'cell>,
+            &Types<'cell, '_>,
+        ) -> Option<&'cell Entry<'cell>>,
+    ) -> Option<&'here Entry<'here>> {
+        let tiers = self.tiers;
+        let laid = self
+            .context
+            .alloc_into::<EntryFamily, EntryFamily>(home.0, &[], |writer, header, _| {
+                let half = header.get_or_lay(|| RegionHeader::lay(writer));
+                let types = tiers.chain(Halves::alone(Half::of(writer, header)));
+                Active::new(lay(writer, half, &types))
+            })
+            .ok()?;
+        self.context.alloc_here(
+            &[Operand {
+                carrier: &laid,
+                copy_bytes: usize::MAX,
+            }],
+            |_, _, views| match &views[0] {
+                CrossedOperand::Pinned { view, .. } => *view,
+                _ => None,
+            },
+        )
+    }
+
+    /// The memo resting in `home`, as a carrier homed there.
+    fn memo_read(&mut self, home: CellHandle) -> Option<Ready<'graph, 'step, MemoFamily>> {
+        (self.context)
+            .alloc_into::<MemoFamily, MemoFamily>(home, &[], |_, header, _| {
+                Active::new(header.get().and_then(HalfHeader::memo))
+            })
+            .ok()
+    }
+
     /// The arena node this cell runs under, where it is a settlement, and `fallback` under the
     /// root.
     pub fn arena_ref(&self, fallback: ArenaRef) -> ArenaRef {
@@ -864,6 +985,12 @@ where
     /// What the cell runs, and what it is born holding, at the spawner's `'here`.
     pub work: Work<'graph, 'here, B>,
 }
+
+/// Where a decision memo rests: the region a cell's result is built in. Opaque and brand-free, so
+/// a birth may carry one; minted only by [`Step::memo_home`], from a cell's own provenance, and
+/// handed down to the cells it asks for, so it names an ancestor of each.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct MemoHome(CellHandle);
 
 /// One slot of the run a step is about to park on, handed back by [`Step::spawn`].
 ///

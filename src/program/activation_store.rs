@@ -9,33 +9,46 @@
 //! scratch bump; the [records copier](crate::scope::Activated) lays what it wrote in the frame's
 //! region, and it interns through the frame's own chain: the region's, or a caching frame's
 //! scratch, whose exit adopts what the records name as it adopts what its values reach. No arena
-//! byte is involved, and nothing reaches the agent tier.
+//! byte is involved, and nothing reaches the agent tier. What a walk decided, the body runner
+//! keeps in its frame's decision memo, so a later event over the same bindings walks nothing.
 
 use crate::build::Layer;
+use std::cell::Cell;
 use std::fmt::Write as _;
 
 use crate::memory::{Bump, BumpAllocator, BumpVec, Lays, Writer, collect, resident};
 use crate::scope::{Activated, Binding, Bound, Facts, RecordSource, Segment, Tree, Unknown};
-use crate::values::{Chain, Knotted, Value};
+use crate::values::{Chain, ContentDigest, Knotted, Value};
 
 use super::record::{Language, Program};
 use super::settle::Text;
 
 /// What a frame's slot holding `value` binds its unknown to: a type value its type, and a module
-/// value its carried type over its content, by digest. `None` for any other value.
+/// value its carried type over its content, by digest. `None` for any other value. The digest is
+/// read off `memo`, the slot's digest memo where the load marked it digested, and fills it where
+/// it is empty.
 pub fn bound_of<'o, X: Knotted>(
     lay: impl Lays<'o>,
     value: Value<'_, X>,
     types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
+    memo: Option<&Cell<Option<ContentDigest>>>,
 ) -> Option<Bound<'o>> {
     if let Some(named) = value.as_type() {
         return Some(Bound::Type(named.handle()));
     }
     value.as_module()?;
+    let digest = match memo.and_then(Cell::get) {
+        Some(digest) => digest,
+        None => {
+            let digest = value.digest(types, scratch);
+            memo.inspect(|memo| memo.set(Some(digest)));
+            digest
+        }
+    };
     Some(Bound::Module {
         carried: value.concrete_ktype(),
-        tree: resident(lay, Tree::Digest(value.digest(types, scratch))),
+        tree: resident(lay, Tree::Digest(digest)),
     })
 }
 
@@ -43,6 +56,10 @@ pub fn bound_of<'o, X: Knotted>(
 thread_local! {
     /// How many binding events walked: what a test reads to see a frame decide, or not.
     pub static DECIDED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// How many decisions a memo kept: what a test reads to see a home stop growing.
+    pub static KEPT: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Whether every binding event walks, reading no memo: the law's oracle.
+    pub static UNMEMOIZED: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// The walk a frame's binding event decides through, the language's monomorphized in:

@@ -34,6 +34,7 @@ mod facts;
 mod groups;
 mod header;
 mod keyed;
+mod memo;
 mod record_types;
 mod records;
 mod relay;
@@ -61,6 +62,7 @@ pub use facts::{Address, Binding, Bound, Cut, Frontier, Store, UnitId, Unknown};
 pub use groups::{BuiltinGroup, GroupFrame, is_equal, is_equality, is_unequal};
 pub use header::{HalfHeader, RegionHeader};
 pub use keyed::{Keyed, KeyedEntry};
+pub use memo::{DecisionMemo, Entry, EntryFamily, EventSite, MemoFamily, MemoKey, extended};
 pub use records::{
     BodyRef, Born, Closing, Deps, DepsGathering, Facts, FactsOver, Folds, Layers, LoadFacts,
     LoadRecords, NamedVariable, SiteDeps, Typed, UnitFacts, Written, tree_deps,

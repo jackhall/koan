@@ -23,7 +23,10 @@
 //! its entry or the statement binding it, and decides those units in its own activation
 //! ([`activation_store`](super::activation_store)), whose records every reading of its view
 //! layers innermost, over its enclosers'. An `EVAL` frame then reports the first registration of
-//! its code overlapping a builtin, as the load or its entry typed it.
+//! its code overlapping a builtin, as the load or its entry typed it. Each event first reads the
+//! [decision memo](crate::scope::DecisionMemo) resting in its frame's home, the region the frame's
+//! result is built in: a cell that ran the same body over the same bindings before, anywhere in
+//! the frame's tail chain or among the frames it was called from, decided what this one would.
 //!
 //! **A declared parameter is an ascription.** A frame binds each value parameter to its argument
 //! retyped to the parameter's declared type, with the call's solution substituted. So is an
@@ -56,8 +59,9 @@ use crate::knot::{
 use crate::memory::{Bump, BumpVec, Writer, resident};
 use crate::parse::ExpressionPart;
 use crate::scheduler::{
-    Action, Placement, Received, Request, Slot as Asked, Step, StepError, Taken, Use,
+    Action, MemoHome, Placement, Received, Request, Slot as Asked, Step, StepError, Taken, Use,
 };
+use crate::scope::{Activated, Entry, EventSite, MemoKey, extended};
 use crate::scope::{Address, Bound, RecordSource, Tree, Unknown};
 use crate::scope::{BodyShape, Component, Mint, Position, ShapeKind, Site, Slot, Unit, UnitWork};
 use crate::scope::{CaptureSource, ClosureBindings, Code, Facts, ShapeError};
@@ -98,6 +102,32 @@ pub struct Runner<'graph, 'cell> {
     /// What the body runs within: what it hands each evaluation and block it asks for
     /// ([`KBirth::Evaluate`]), and the arena node a callable born in it is born under.
     within: Within,
+    /// Where its binding events read and extend the decision memo.
+    memo: Memo<'cell>,
+}
+
+/// Where a runner's binding events read the decision memo: the home it rests in, `None` where the
+/// runner decides without one, and the home that seeds it where it holds none; then, once the
+/// first event has looked, the key it looked under and the entry that key found, and how many of
+/// that entry's decisions the events since have matched.
+#[derive(Clone, Copy)]
+struct Memo<'cell> {
+    home: Option<MemoHome>,
+    inherit: Option<MemoHome>,
+    read: Option<(MemoKey<'cell>, Option<&'cell Entry<'cell>>)>,
+    matched: u32,
+}
+
+impl Memo<'_> {
+    /// The memo of a runner whose frame's memo rests in `home`, seeded from `inherit`.
+    fn at(home: Option<MemoHome>, inherit: Option<MemoHome>) -> Self {
+        Memo {
+            home,
+            inherit,
+            read: None,
+            matched: 0,
+        }
+    }
 }
 
 /// Whether the runner performs the top level, a frame — a called body or the code an `EVAL` runs
@@ -230,7 +260,15 @@ fn ran<'graph, 'here, 'scratch>(
                 writer,
                 KActivation::of_program(writer, code.shapes().root(), &facts, program.builtins()),
             );
-            Runner::at(program, activation, Level::Top, None)
+            let home = Some(step.memo_home());
+            Runner {
+                within: Within {
+                    memo: home,
+                    ..Within::TOP
+                },
+                memo: Memo::at(home, None),
+                ..Runner::at(program, activation, Level::Top, None)
+            }
         }
         // A frame under a settlement whose walk refused raises the refusal as its fault, worded as
         // the load would word it with the binding declared.
@@ -247,63 +285,83 @@ fn ran<'graph, 'here, 'scratch>(
             contributed,
             handed,
             owed,
-        }) => match frame(
-            &step,
-            types,
-            program,
-            callee,
-            arguments,
-            kind,
-            contributed,
-            handed,
-            owed,
-        )
-        .and_then(|(activation, contract, barrier)| {
-            Ok((
-                decided_at_entry(&step, types, program, activation)?,
-                contract,
-                barrier,
-            ))
-        }) {
-            Ok((activation, contract, barrier)) => Runner {
-                barrier,
-                within: Within {
-                    routes,
-                    build: step.arena_ref(born_under(callee)),
+            inherit,
+        }) => {
+            let home = Some(step.memo_home());
+            let mut memo = Memo::at(home, inherit);
+            match frame(
+                &step,
+                types,
+                program,
+                callee,
+                arguments,
+                kind,
+                contributed,
+                handed,
+                owed,
+            )
+            .and_then(|(activation, contract, barrier)| {
+                Ok((
+                    decided_at_entry(&mut step, types, program, activation, &mut memo)?,
+                    contract,
+                    barrier,
+                ))
+            }) {
+                Ok((activation, contract, barrier)) => Runner {
+                    barrier,
+                    within: Within {
+                        routes,
+                        build: step.arena_ref(born_under(callee)),
+                        memo: home,
+                        inherit,
+                    },
+                    memo,
+                    ..Runner::at(program, activation, Level::Frame, Some(contract))
                 },
-                ..Runner::at(program, activation, Level::Frame, Some(contract))
-            },
-            // The message lies in the region, so the error value needs no adopt.
-            Err(message) => {
-                let region = step.types();
-                let error = program.error(step.writer(), &region, message);
-                return step.finish(error);
+                // The message lies in the region, so the error value needs no adopt.
+                Err(message) => {
+                    let region = step.types();
+                    let error = program.error(step.writer(), &region, message);
+                    return step.finish(error);
+                }
             }
-        },
+        }
         KState::Born(KBirth::Eval {
             program,
             code,
             offered,
             contract,
+            inherit,
         }) => match code_frame(&step, types, program, code, offered) {
-            Some(activation) => match decided_at_entry(&step, types, program, activation) {
-                Ok(activation) => {
-                    // The first registration overlapping a builtin, as the load or this entry
-                    // typed the code, faults the frame before any statement runs.
-                    let (code, facts) = step.door();
-                    let facts = facts.activated(activation.view().decided());
-                    if let Some(overlap) = facts.overlap(code.shape(activation.segment())) {
-                        let message = overlap.display(program.symbols(), types);
+            Some(activation) => {
+                let home = Some(step.memo_home());
+                let mut memo = Memo::at(home, inherit);
+                match decided_at_entry(&mut step, types, program, activation, &mut memo) {
+                    Ok(activation) => {
+                        // The first registration overlapping a builtin, as the load or this entry
+                        // typed the code, faults the frame before any statement runs.
+                        let (code, facts) = step.door();
+                        let facts = facts.activated(activation.view().decided());
+                        if let Some(overlap) = facts.overlap(code.shape(activation.segment())) {
+                            let message = overlap.display(program.symbols(), types);
+                            let error = program.error(step.writer(), &step.types(), message);
+                            return step.finish(error);
+                        }
+                        Runner {
+                            within: Within {
+                                memo: home,
+                                ..Within::TOP
+                            },
+                            memo,
+                            ..Runner::at(program, activation, Level::Frame, Some(contract))
+                        }
+                    }
+                    Err(message) => {
                         let error = program.error(step.writer(), &step.types(), message);
                         return step.finish(error);
                     }
-                    Runner::at(program, activation, Level::Frame, Some(contract))
                 }
-                Err(message) => {
-                    let error = program.error(step.writer(), &step.types(), message);
-                    return step.finish(error);
-                }
-            },
+            }
             None => return step.failed(StepError::Refused),
         },
         KState::Born(KBirth::Block {
@@ -329,15 +387,18 @@ fn ran<'graph, 'here, 'scratch>(
                     return step.failed(StepError::Refused);
                 }
             }
-            let activation = match decided_at_entry(&step, types, program, activation) {
-                Ok(activation) => activation,
-                Err(message) => {
-                    let error = program.error(step.writer(), &step.types(), message);
-                    return step.finish(error);
-                }
-            };
+            let mut memo = Memo::at(within.memo, within.inherit);
+            let activation =
+                match decided_at_entry(&mut step, types, program, activation, &mut memo) {
+                    Ok(activation) => activation,
+                    Err(message) => {
+                        let error = program.error(step.writer(), &step.types(), message);
+                        return step.finish(error);
+                    }
+                };
             Runner {
                 within,
+                memo,
                 ..Runner::at(program, activation, Level::Block, None)
             }
         }
@@ -361,10 +422,11 @@ fn ran<'graph, 'here, 'scratch>(
 /// without its keys, so each leaves open what the other binds. The walk wakes every unit whose
 /// record names a bound name, which is every unit one of them leaves open.
 fn decided_at_entry<'graph, 'here>(
-    step: &Taking<'_, 'graph, '_, 'here, '_, '_>,
+    step: &mut Taking<'_, 'graph, '_, 'here, '_, '_>,
     types: &Chain<'_, 'here, '_, '_>,
     program: &'graph Program<'graph>,
     activation: &'here KActivation<'graph, 'here>,
+    memo: &mut Memo<'here>,
 ) -> Result<&'here KActivation<'graph, 'here>, &'here str> {
     let (code, facts) = step.door();
     let below = activation.view().decided();
@@ -378,22 +440,27 @@ fn decided_at_entry<'graph, 'here>(
     }
     let scratch = Bump::new();
     let mut own = BumpVec::new_in(&scratch);
+    let reading = activation.view().reading(&code, facts);
     for at in waits.iter().copied() {
         let unknown = Unknown { segment, at };
         if facts.bound(unknown).is_some() {
             continue;
         }
         // A quote's code's capture holds the value its `EVAL` handed it.
-        let (held, name) = match at {
-            Address::Slot(slot) => (activation.bound(slot), shape.slot_name(slot)),
+        let (held, name, memo) = match at {
+            Address::Slot(slot) => (
+                activation.bound(slot),
+                shape.slot_name(slot),
+                reading.digest_memo(local(slot)),
+            ),
             Address::Capture(capture) => match activation.view().closure().get(capture) {
-                Link::Value(value) => (Some(value), shape.captures()[capture.index()].name),
+                Link::Value(value) => (Some(value), shape.captures()[capture.index()].name, None),
                 Link::Edge(_) => continue,
             },
         };
         // A type name binds a type, and a value name a module: a value name holding a type value
         // is no unknown.
-        let bound = held.and_then(|value| bound_of(&scratch, value, types, &scratch));
+        let bound = held.and_then(|value| bound_of(&scratch, value, types, &scratch, memo));
         own.extend(
             bound
                 .filter(|bound| match bound {
@@ -406,13 +473,99 @@ fn decided_at_entry<'graph, 'here>(
     if own.is_empty() && !rewakes {
         return Ok(activation);
     }
-    let writer = step.writer();
-    let activate = program.activate();
-    let decided = activate(program, writer, facts, types, below, &own, rewakes, segment)?;
-    Ok(resident(
-        writer,
-        activation.deciding(resident(writer, decided)),
-    ))
+    let site = EventSite::entry(segment);
+    let decided = decide(
+        step, types, program, memo, facts, below, &own, rewakes, site,
+    )?;
+    Ok(resident(step.writer(), activation.deciding(decided)))
+}
+
+/// The coordinate of the running activation's own `slot`.
+fn local(slot: Slot) -> Coordinate {
+    Coordinate::Activation {
+        hops: 0,
+        target: Target::Local(slot),
+    }
+}
+
+/// What the binding event at `site`, binding `own` over `facts`, which read `below`, decides
+/// ([`activated`](super::activation_store)): the decision `memo` holds for it, laid over `below`,
+/// or the walk's, which the memo then keeps. A refusal is not kept.
+#[allow(clippy::too_many_arguments)]
+fn decide<'graph, 'here>(
+    step: &mut Taking<'_, 'graph, '_, 'here, '_, '_>,
+    types: &Chain<'_, 'here, '_, '_>,
+    program: &'graph Program<'graph>,
+    memo: &mut Memo<'here>,
+    facts: Facts<'_>,
+    below: Option<&'here Activated<'here>>,
+    own: &[(Unknown, Bound<'_>)],
+    rewakes: bool,
+    site: EventSite,
+) -> Result<&'here Activated<'here>, &'here str> {
+    let segment = site.segment();
+    let walk = |step: &Taking<'_, 'graph, '_, 'here, '_, '_>| {
+        let writer = step.writer();
+        let decided =
+            (program.activate())(program, writer, facts, types, below, own, rewakes, segment)?;
+        Ok(resident(writer, decided))
+    };
+    #[cfg(test)]
+    if super::activation_store::UNMEMOIZED.with(std::cell::Cell::get) {
+        return walk(step);
+    }
+    let Some(home) = memo.home else {
+        return walk(step);
+    };
+    let (key, entry) = match memo.read {
+        Some(read) => read,
+        None => {
+            let key = MemoKey {
+                segment,
+                arena: step.arena_ref(ArenaRef::ROOT),
+                below,
+            };
+            let read = (key, step.memo_entry(home, memo.inherit, key));
+            memo.read = Some(read);
+            read
+        }
+    };
+    let held = entry.and_then(|entry| entry.decision(memo.matched));
+    if let Some(decision) = held.filter(|decision| decision.matches(site, own)) {
+        memo.matched += 1;
+        return Ok(resident(step.writer(), decision.over(below)));
+    }
+    let decided = walk(step)?;
+    let matched = memo.matched;
+    let laid = step.memo_lay(home, |writer, half, into| {
+        if !half.memo_room() {
+            return None;
+        }
+        let adopt = &mut |kt| into.adopt_from(types, kt);
+        let (laid, entry) = extended(
+            writer,
+            half.memo(),
+            key,
+            entry,
+            matched,
+            site,
+            decided,
+            adopt,
+        );
+        half.set_memo(laid, true);
+        Some(entry)
+    });
+    match laid {
+        Some(laid) => {
+            #[cfg(test)]
+            super::activation_store::KEPT.with(|kept| kept.set(kept.get() + 1));
+            memo.read = Some((key, Some(laid)));
+            memo.matched += 1;
+        }
+        // A memo that kept nothing holds no decision a later event of this cell could match.
+        None => memo.home = None,
+    }
+    Ok(decided)
 }
 
 /// What an evaluator asks for to call `callee` over `arguments`, a record of its parameters by name
@@ -421,6 +574,7 @@ fn decided_at_entry<'graph, 'here>(
 /// `types`, derives. `kind` says whether the arguments were admitted before the call or are checked
 /// by the frame, and `contributed` what a call by name solves each parameter from, per parameter in
 /// symbol order — empty, or `None` at a parameter, where the frame reads the carried type.
+/// `inherit` is where the asker's decision memo rests.
 #[allow(clippy::too_many_arguments)]
 pub fn call<'graph, 'here>(
     program: &'graph Program<'graph>,
@@ -431,6 +585,7 @@ pub fn call<'graph, 'here>(
     contributed: &'here [Option<KType>],
     handed: &'here [Handed],
     owed: Option<Contract>,
+    inherit: Option<MemoHome>,
     use_: Use,
 ) -> Request<'graph, 'here, KBundle> {
     // The return the caller sees: the value is retyped to it, a header's included.
@@ -454,6 +609,7 @@ pub fn call<'graph, 'here>(
                 contributed,
                 handed,
                 owed,
+                inherit,
             },
         },
     }
@@ -561,6 +717,7 @@ pub fn eval<'step, 'graph, 'here>(
     code: Knotted<'graph, 'here>,
     offered: KValue<'graph, 'here>,
     returns: KType,
+    inherit: Option<MemoHome>,
     use_: Use,
 ) -> Result<Request<'graph, 'here, KBundle>, CodeRefused<'step>> {
     let node = code.code().expect("an `EVAL` is handed a quote's code");
@@ -600,6 +757,7 @@ pub fn eval<'step, 'graph, 'here>(
                     retype: returns,
                     checked: false,
                 },
+                inherit,
             },
         },
     })
@@ -642,6 +800,21 @@ impl<'graph, 'cell> Runner<'graph, 'cell> {
             stage: Stage::Next,
             seen: 0,
             within: Within::TOP,
+            memo: Memo::at(None, None),
+        }
+    }
+
+    /// What the runner hands an evaluation it asks for: what it runs within, and the memo a
+    /// frame the evaluation calls seeds its own from — the runner's where it has read it, else
+    /// the one the runner's would have been seeded from.
+    fn handing(&self) -> Within {
+        let inherit = match self.memo.read {
+            Some(_) => self.memo.home,
+            None => self.memo.inherit,
+        };
+        Within {
+            inherit,
+            ..self.within
         }
     }
 
@@ -1513,7 +1686,7 @@ fn perform<'graph, 'here>(
     types: &Chain<'_, 'here, '_, '_>,
 ) -> Action<'graph, KBundle> {
     loop {
-        if let Err(stopped) = decided_at_seams(&step, types, &mut runner) {
+        if let Err(stopped) = decided_at_seams(&mut step, types, &mut runner) {
             return stop(step, runner, stopped);
         }
         let at = runner.reading(&step);
@@ -1557,7 +1730,7 @@ fn perform<'graph, 'here>(
                         node,
                         runner.activation.view(),
                         runner.contract,
-                        runner.within.handed_off(),
+                        runner.handing().handed_off(),
                     );
                     return step.tail(Placement::Shares, work);
                 }
@@ -1631,7 +1804,7 @@ fn perform<'graph, 'here>(
 /// its facts leave unbound, bound to what it holds and decided in its activation over what it and
 /// its enclosers decided before.
 fn decided_at_seams<'graph, 'here>(
-    step: &Taking<'_, 'graph, '_, 'here, '_, '_>,
+    step: &mut Taking<'_, 'graph, '_, 'here, '_, '_>,
     types: &Chain<'_, 'here, '_, '_>,
     runner: &mut Runner<'graph, 'here>,
 ) -> Result<(), Stopped<'here>> {
@@ -1667,30 +1840,20 @@ fn decided_at_seams<'graph, 'here>(
         if closed || facts.bound(unknown).is_some() {
             continue;
         }
+        let memo = at.digest_memo(local(*slot));
         let bound =
-            (view.bound(*slot)).and_then(|value| bound_of(&scratch, value, types, &scratch));
+            (view.bound(*slot)).and_then(|value| bound_of(&scratch, value, types, &scratch, memo));
         own.extend(bound.map(|bound| (unknown, bound)));
     }
     if own.is_empty() {
         return Ok(());
     }
-    let (program, writer) = (runner.program, step.writer());
-    let below = view.decided();
-    let decided = (program.activate())(
-        program,
-        writer,
-        facts,
-        types,
-        below,
-        &own,
-        false,
-        shape.segment(),
-    )
-    .map_err(Stopped::Raised)?;
-    runner.activation = resident(
-        writer,
-        runner.activation.deciding(resident(writer, decided)),
-    );
+    let (program, below) = (runner.program, view.decided());
+    let site = EventSite::seam(shape.segment(), to as u32);
+    let memo = &mut runner.memo;
+    let decided = decide(step, types, program, memo, facts, below, &own, false, site)
+        .map_err(Stopped::Raised)?;
+    runner.activation = resident(step.writer(), runner.activation.deciding(decided));
     Ok(())
 }
 
@@ -1703,7 +1866,7 @@ fn ask<'graph, 'here>(
 ) -> Asked {
     let work = runner
         .program
-        .evaluate(node, runner.activation.view(), None, runner.within);
+        .evaluate(node, runner.activation.view(), None, runner.handing());
     step.spawn(Request {
         placement: runner.placement(),
         use_,

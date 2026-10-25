@@ -84,7 +84,7 @@ fn bound_of<'o, X: Knotted>(
     types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
 ) -> Bound<'o> {
-    super::super::activation_store::bound_of(lay, value, types, scratch)
+    super::super::activation_store::bound_of(lay, value, types, scratch, None)
         .expect("a frame binds a type or a module")
 }
 

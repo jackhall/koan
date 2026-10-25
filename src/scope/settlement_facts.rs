@@ -194,6 +194,11 @@ impl<'a> Activated<'a> {
         weight
     }
 
+    /// `records`, a decision a memo kept, as an event over `below`.
+    pub(super) fn over(below: Option<&'a Activated<'a>>, records: Records<'a>) -> Self {
+        Activated { below, records }
+    }
+
     /// The event below this one, if any.
     pub(super) fn below(&self) -> Option<&'a Activated<'a>> {
         self.below

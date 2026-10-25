@@ -17,6 +17,7 @@ mod generic;
 mod instances;
 mod keys;
 mod lexical;
+mod memo;
 mod modules;
 mod narrowing;
 mod paths;

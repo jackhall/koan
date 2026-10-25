@@ -9,7 +9,7 @@
 
 use crate::knot::{KActivationView, KValue, KnottedFamily};
 use crate::memory::{CrossedOperand, DropFree, Header, Writer, collect, covariant, reattachable};
-use crate::scheduler::{Born, StepBundle};
+use crate::scheduler::{Born, MemoHome, StepBundle};
 use crate::scope::RegionHeader;
 use crate::scope::{Segment, Site};
 use crate::symbols::Symbol;
@@ -33,7 +33,8 @@ pub enum KBirth<'graph, 'cell> {
     /// recorded any, and from its argument's carried type where that entry is `None` or there are
     /// none. `handed` are the digest memos the caller hands on with arguments it passed bare.
     /// `owed` is the contract of the evaluation that tailed into this frame: `None` when the frame
-    /// was spawned.
+    /// was spawned. `inherit` is where the asker's decision memo rests, which seeds the frame's
+    /// where its home holds none.
     Call {
         program: &'graph Program<'graph>,
         callee: KValue<'graph, 'cell>,
@@ -42,15 +43,17 @@ pub enum KBirth<'graph, 'cell> {
         contributed: &'cell [Option<KType>],
         handed: &'cell [Handed],
         owed: Option<Contract>,
+        inherit: Option<MemoHome>,
     },
     /// An `EVAL`: the frame's first step lays the code's activation down over the bindings it
     /// carries and the names `offered`, a record of them by name, supplies — and `contract`, the
-    /// `EVAL`'s declared return, which the frame owes.
+    /// `EVAL`'s declared return, which the frame owes. `inherit` as a call's.
     Eval {
         program: &'graph Program<'graph>,
         code: KValue<'graph, 'cell>,
         offered: KValue<'graph, 'cell>,
         contract: Contract,
+        inherit: Option<MemoHome>,
     },
     /// An evaluation: what it evaluates, and the view of the activation it reads names through.
     /// A frame's tail hands its last statement over with the frame's `contract`, which the
@@ -82,19 +85,24 @@ pub enum KBirth<'graph, 'cell> {
 
 /// What a body runs within, handed to every evaluation and block it asks for: whether it runs in
 /// the own body of a routing caching frame, whose caching chain it then interns through and whose
-/// invariant sites it adopts into the agent tier under a settlement, and the arena node its
-/// frame runs under, which a callable born in it is born under.
+/// invariant sites it adopts into the agent tier under a settlement; the arena node its
+/// frame runs under, which a callable born in it is born under; where its frame's decision memo
+/// rests, which a block decides in; and the memo a frame it calls seeds its own from.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Within {
     pub routes: bool,
     pub build: ArenaRef,
+    pub memo: Option<MemoHome>,
+    pub inherit: Option<MemoHome>,
 }
 
 impl Within {
-    /// The top level's: no caching frame, and the root.
+    /// The top level's before its runner names its memo: no caching frame, and the root.
     pub const TOP: Within = Within {
         routes: false,
         build: ArenaRef::ROOT,
+        memo: None,
+        inherit: None,
     };
 
     /// What the evaluation a frame's tail hands its last statement runs within: it writes the
@@ -248,6 +256,7 @@ impl<'graph> StepBundle<'graph> for KBundle {
                     contributed,
                     handed,
                     owed,
+                    inherit,
                 } => {
                     let types = tiers.chain(Halves::alone(Half::of(writer, header)));
                     let [callee, arguments] = copy_severed::<_, KnottedFamily, _, 2>(
@@ -264,6 +273,7 @@ impl<'graph> StepBundle<'graph> for KBundle {
                         contributed: collect(writer, contributed.iter().copied()),
                         handed: collect(writer, handed.iter().copied()),
                         owed,
+                        inherit,
                     }
                 }
                 KBirth::Eval {
@@ -271,6 +281,7 @@ impl<'graph> StepBundle<'graph> for KBundle {
                     code,
                     offered,
                     contract,
+                    inherit,
                 } => {
                     let types = tiers.chain(Halves::alone(Half::of(writer, header)));
                     let [code, offered] = copy_severed::<_, KnottedFamily, _, 2>(
@@ -284,6 +295,7 @@ impl<'graph> StepBundle<'graph> for KBundle {
                         code,
                         offered,
                         contract,
+                        inherit,
                     }
                 }
                 // Only a forced copy reaches here with a view: a `Fresh` hop's successor, a sibling
