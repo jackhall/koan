@@ -56,7 +56,7 @@ mod tie;
 pub(crate) mod tests;
 
 pub use builtin::{BuiltinFunction, builtin};
-pub use code::{Code, UsingRefused, quote, using};
+pub use code::{Code, CodeBody, ComposedRoot, UsingRefused, composed_code, quote, using};
 #[cfg(test)]
 pub(crate) use function::INSTANTIATED;
 pub use function::{Function, barrier_instance, header_instance, instance, lambda};

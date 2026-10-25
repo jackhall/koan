@@ -1,7 +1,8 @@
-//! A quote's code as a knot node: the quote's body as written, the segment and code digest of the
-//! code shape the program built for it where it loads, its carried type, and the bindings its code
-//! carries — each `$` name's binding, and each hole a `USING` filled — both runs sorted by name. A
-//! reader that needs the shape reads it by segment through its step's door.
+//! A quote's code as a knot node: the quote's body as written, where its code shape was built —
+//! where the program loads, by segment, or for code composed at run time in its composition, under
+//! its root code value ([`CodeBody`]) — its content digest, its carried type, and the bindings its
+//! code carries — each `$` name's binding, and each hole a `USING` filled — both runs sorted by
+//! name. A reader that needs the shape reads it by segment through its step's door.
 //!
 //! A quote is born where it is evaluated through the quote door, [`quote`], as a one-node knot
 //! whose `$` names are read through the activation the quote sits in. A quote a data member holds
@@ -19,7 +20,7 @@ use crate::parse::{ExpressionPart, ProgramNode};
 use crate::scope::{self, BodyShape, CaptureSource, Facts, Segment, ShapeKind, Site, Written};
 use crate::symbols::{BinderSymbol, KeySymbol};
 use crate::type_lattice::{KType, TypeNode};
-use crate::values::digest::{DigestHasher, Tag};
+use crate::values::digest::{DigestHasher, Tag, syntax_digest};
 use crate::values::{Chain, CodeView, ContentDigest, Link, List, Seen, Value, Weight};
 
 use super::{KActivationView, KReading, KValue, Knotted, Node};
@@ -27,12 +28,34 @@ use super::{KActivationView, KReading, KValue, Knotted, Node};
 /// One name the code binds, beside its binding.
 pub type Binding<'graph, 'cell> = (BinderSymbol, Link<'cell, Knotted<'graph, 'cell>>);
 
+/// Where a quote's code was shaped.
+#[derive(Clone, Copy, Debug)]
+pub enum CodeBody<'graph> {
+    /// A quote the program writes: the segment of the code shape the load built for it.
+    Written { segment: Segment },
+    /// Code composed at run time: its root code value as composed, and the segment of this code's
+    /// shape among its composition's shapes — `None` for the root itself, which they name.
+    Composed {
+        root: ComposedRoot<'graph>,
+        segment: Option<Segment>,
+    },
+}
+
+/// The root of code composed at run time: its syntax, which lives in program storage until code
+/// splicing lays composed syntax in regions, and its syntax digest, which finds its composition.
+#[derive(Clone, Copy, Debug)]
+pub struct ComposedRoot<'graph> {
+    pub syntax: ProgramNode<'graph>,
+    pub digest: ContentDigest,
+}
+
 /// A quote's code: what one knot node points at, homed beside it for the reason
 /// [`Node::Coerced`] is.
 pub struct Code<'graph, 'cell> {
     body: ProgramNode<'graph>,
-    /// The code shape's segment, and its code digest, which its content covers.
-    segment: Segment,
+    shaped: CodeBody<'graph>,
+    /// What its content covers of its syntax: a written quote's code digest, as resolved where the
+    /// program loads; composed code's syntax digest.
     code: ContentDigest,
     ktype: KType,
     /// Each `$` name's binding, sorted by name.
@@ -50,9 +73,19 @@ impl<'graph, 'cell> Code<'graph, 'cell> {
         self.body
     }
 
+    /// Where this code was shaped.
+    pub fn shaped(&self) -> CodeBody<'graph> {
+        self.shaped
+    }
+
     /// The segment of the code shape the program built for this quote where it loads.
     pub fn segment(&self) -> Segment {
-        self.segment
+        match self.shaped {
+            CodeBody::Written { segment } => segment,
+            CodeBody::Composed { .. } => {
+                unreachable!("composed code is read through its composition")
+            }
+        }
     }
 
     /// The carried type: the code's kind, needing the `\` names no binder in the code fills, or the
@@ -142,7 +175,7 @@ impl<'graph, 'cell> Code<'graph, 'cell> {
         let supplied = run(self.supplied);
         Code {
             body: self.body,
-            segment: self.segment,
+            shaped: self.shaped,
             code: self.code,
             ktype: self.ktype,
             bound,
@@ -163,7 +196,7 @@ fn run_weight(run: &[Binding<'_, '_>]) -> Weight {
 /// A code node, read and not yet written.
 pub(super) struct Staged<'graph, 'cell, 'x> {
     pub body: ProgramNode<'graph>,
-    pub segment: Segment,
+    pub shaped: CodeBody<'graph>,
     pub code: ContentDigest,
     pub bound: BumpVec<'x, Binding<'graph, 'cell>>,
     /// The carried type: the code's own, or the annotation's retype its binder births it at.
@@ -193,7 +226,7 @@ impl<'graph, 'cell> Staged<'graph, 'cell, '_> {
             writer,
             Code {
                 body: self.body,
-                segment: self.segment,
+                shaped: self.shaped,
                 code: self.code,
                 ktype: self.ktype,
                 bound,
@@ -239,18 +272,22 @@ pub(super) fn staged<'graph, 'cell, 'x>(
     bound.sort_unstable_by_key(|(name, _)| *name);
     Staged {
         body,
-        segment: shape.segment(),
+        shaped: CodeBody::Written {
+            segment: shape.segment(),
+        },
         code: shape.code_digest(),
         bound,
         ktype: shape.code_type(),
     }
 }
 
-/// Lay `code` down as a one-node knot in `writer`'s region, its runs holding value words only.
+/// Lay code shaped as `shaped` down as a one-node knot in `writer`'s region, its content covering
+/// `code`, its runs holding value words only.
+#[allow(clippy::too_many_arguments)]
 fn one_node<'graph, 'cell>(
     writer: Writer<'cell, '_>,
     body: ProgramNode<'graph>,
-    shape: &BodyShape<'_>,
+    (shaped, code, ktype): (CodeBody<'graph>, ContentDigest, KType),
     bound: &[Binding<'graph, 'cell>],
     supplied: &[Binding<'graph, 'cell>],
     types: &Chain<'_, '_, '_, '_>,
@@ -267,9 +304,9 @@ fn one_node<'graph, 'cell>(
             writer,
             Code {
                 body,
-                segment: shape.segment(),
-                code: shape.code_digest(),
-                ktype: shape.code_type(),
+                shaped,
+                code,
+                ktype,
                 bound,
                 supplied,
                 knot_weight: Cell::new(knot_weight),
@@ -300,7 +337,27 @@ pub fn quote<'graph, 'cell>(
     let staged = staged(body, shape, activation, scratch, |_| {
         unreachable!("only the tie births a quote that reads a fellow member")
     });
-    one_node(writer, body, shape, &staged.bound, &[], types)
+    let written = (staged.shaped, staged.code, staged.ktype);
+    one_node(writer, body, written, &staged.bound, &[], types)
+}
+
+/// Code composed at run time from `syntax`, carried at `ktype`, `bound` holding each `$` binding
+/// sorted by name: a one-node knot in `writer`'s region, with no shape. Its content is its syntax
+/// digest over its bindings.
+pub fn composed_code<'graph, 'cell>(
+    writer: Writer<'cell, '_>,
+    syntax: ProgramNode<'graph>,
+    ktype: KType,
+    bound: &[Binding<'graph, 'cell>],
+    types: &Chain<'_, '_, '_, '_>,
+) -> Knotted<'graph, 'cell> {
+    let digest = syntax_digest(syntax.reference());
+    let root = ComposedRoot { syntax, digest };
+    let shaped = CodeBody::Composed {
+        root,
+        segment: None,
+    };
+    one_node(writer, syntax, (shaped, digest, ktype), bound, &[], types)
 }
 
 /// Why a `USING` refused to fill a code's holes.
@@ -375,7 +432,7 @@ pub fn using<'graph, 'cell>(
     Ok(one_node(
         writer,
         node.body(),
-        shape,
+        (node.shaped(), node.code, shape.code_type()),
         &bound,
         &supplied,
         types,

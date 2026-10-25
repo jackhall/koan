@@ -2,8 +2,8 @@
 //! module by its code as resolved over what it captures, and values that reach one another by the
 //! one knot they are tied into.
 
-use crate::program::tests::digest_back;
 use crate::program::tests::stores::frame_bound_back;
+use crate::program::tests::{digest_back, syntax_back};
 use std::cell::RefCell;
 
 use crate::program::{CellSubstrate, KBirth, KBundle, KState, Outcome};
@@ -273,5 +273,32 @@ fn a_frame_binds_a_type_value_and_a_module_value_by_its_content() {
     assert!(
         bound.starts_with("module ") && bound.ends_with(&format!(" {digest}")),
         "{bound} binds the module's digest {digest}"
+    );
+}
+
+/// A composed quote is shaped apart from the quote it was composed from, but its syntax digests as
+/// the written quote's does, and that digest is what finds its composition.
+#[test]
+fn a_composed_quote_and_its_written_quote_have_the_same_syntax_digest() {
+    let mut substrate = CellSubstrate::load::<Koan>(
+        "LET x = 1\nLET q = #(PRINT $x)\nLET c = (COMPOSE q)",
+        "<test>",
+        8,
+        BuildBudget::default(),
+        output(),
+    )
+    .unwrap_or_else(|error| panic!("the program loads: {error}"));
+    assert_eq!(
+        substrate.with(|running| running.run()),
+        Ok(Outcome::Completed)
+    );
+    let written = syntax_back(&mut substrate, "q");
+    let composed = syntax_back(&mut substrate, "c");
+    let digest = written.strip_prefix("written ").expect("q is written");
+    assert_eq!(composed, format!("composed {digest} None {digest}"));
+    // Their contents differ: a written quote's covers its code as resolved.
+    assert_ne!(
+        digest_back(&mut substrate, "q"),
+        digest_back(&mut substrate, "c")
     );
 }

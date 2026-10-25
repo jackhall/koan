@@ -65,11 +65,15 @@ pub(super) enum Native {
     /// `FROM`.
     Project,
     Using,
+    /// `COMPOSE q`, for tests alone: code composed at run time, the one producer until code
+    /// splicing ships.
+    #[cfg(test)]
+    Compose,
 }
 
 impl Native {
     /// Every native, at its discriminant.
-    const ALL: [Native; 21] = [
+    const ALL: &[Native] = &[
         Native::Print,
         Native::Add,
         Native::Subtract,
@@ -91,6 +95,8 @@ impl Native {
         Native::Variant,
         Native::Project,
         Native::Using,
+        #[cfg(test)]
+        Native::Compose,
     ];
 
     /// The native a builtin node's `id` names.
@@ -180,6 +186,12 @@ static OVERLOADS: &[Overload] = &[
         elements: &[Element::Keyword("&"), TYPES],
         returns: KType::ANY_TYPE,
         native: Native::MeetOf,
+    },
+    #[cfg(test)]
+    Overload {
+        elements: &[Element::Keyword("COMPOSE"), ANY],
+        returns: KType::ANY_CODE,
+        native: Native::Compose,
     },
 ];
 
@@ -462,7 +474,52 @@ pub(super) fn run<'graph, 'here>(
                 Err(UsingRefused::Ranking { key }) => raise(Raised::RankedTwice { key }),
             }
         }
+        #[cfg(test)]
+        Native::Compose => compose(value(0), writer, types, scratch),
     }
+}
+
+/// `COMPOSE q`: code composed at run time over the syntax the quote's code `value` was written
+/// with, carried at its type, binding each `$` name as the quote does and each `$(…)` key to the
+/// list of the registrations the quote's use there reads. Holes a `USING` filled are dropped.
+#[cfg(test)]
+fn compose<'graph, 'here>(
+    value: KValue<'graph, 'here>,
+    writer: Writer<'here, '_>,
+    types: &Chain<'_, 'here, '_, '_>,
+    scratch: &Bump,
+) -> KValue<'graph, 'here> {
+    use crate::knot::composed_code;
+    use crate::values::{Link, List};
+    let member = value.as_code().expect("`COMPOSE` is handed a quote's code");
+    let code = member.code().expect("a code member holds code");
+    let mut bound = BumpVec::new_in(scratch);
+    let mut keyed: BumpVec<'_, (crate::symbols::KeySymbol, KValue<'graph, 'here>)> =
+        BumpVec::new_in(scratch);
+    for (name, link) in code.bound() {
+        let value = link.resolve(member);
+        match name {
+            BinderSymbol::Registration(_) => {
+                let shape = layout::registered_shape(value).expect("a registration is a function");
+                keyed.push((layout::key_of(shape, types), value));
+            }
+            name => bound.push((*name, Link::Value(value))),
+        }
+    }
+    keyed.sort_by_key(|(key, _)| *key);
+    for run in keyed.chunk_by(|left, right| left.0 == right.0) {
+        let functions = run.iter().map(|(_, function)| *function);
+        let list = Value::List(List::of_candidates(writer, functions, types));
+        bound.push((BinderSymbol::Key(run[0].0), Link::Value(list)));
+    }
+    bound.sort_unstable_by_key(|(name, _)| *name);
+    Value::Knotted(composed_code(
+        writer,
+        code.body(),
+        code.ktype(),
+        &bound,
+        types,
+    ))
 }
 
 /// The elements of a list a slot admitted, read through its surface into `scratch`.
