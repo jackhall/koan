@@ -210,8 +210,8 @@ impl<'graph, 'cell> Function<'graph, 'cell, Knotted<'graph, 'cell>> {
 ///
 /// A call binds each type-parameter slot by the **name** its map pairs with a solution: a frame
 /// walks its callee's slots symbol-sorted, so a positional read would hand one variable another's
-/// solution. The node points at this record rather than holding it: a slice or a second type
-/// handle inline would widen every node in the program from 64 to 80 bytes.
+/// solution. The knot node points at this record rather than holding it: a slice or a second type
+/// handle inline would widen every knot node in the program from 64 to 80 bytes.
 #[derive(Clone, Copy)]
 pub struct Typing<'graph, 'cell> {
     quantifier_map: FunctionGroupMap<'cell>,

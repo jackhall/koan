@@ -56,21 +56,89 @@ EVAL (COMPOSE p) -> Any",
     assert_eq!((tiers.composed, live), (1, 1));
 }
 
+/// What one run of a loop composing code each hop left, under `budget`.
+#[derive(Debug, PartialEq, Eq)]
+struct Looped {
+    printed: String,
+    /// The most any step left in its region and its scratch.
+    region: usize,
+    scratch: usize,
+    /// How many compositions the run built and evicted.
+    composed: usize,
+    evicted: usize,
+    /// The unheld bytes of the arena at the run's end.
+    unheld: usize,
+    /// The nodes adoption laid and the bytes program storage grew by, over the run.
+    laid: usize,
+    storage: usize,
+}
+
+/// Run `source` under `budget`, metered as [`Looped`] says.
+fn looped(source: &str, budget: BuildBudget) -> Looped {
+    WRITTEN.with(|written| written.borrow_mut().clear());
+    let mut substrate = CellSubstrate::load::<Koan>(source, "<test>", 4, budget, output())
+        .unwrap_or_else(|error| panic!("the program loads: {error}"));
+    TIERS.with(|tiers| tiers.set(Tiers::default()));
+    let (laid, storage) = (ADOPT_LAID.with(Cell::get), substrate.storage_bytes());
+    substrate
+        .with(|running| running.run())
+        .expect("the program runs");
+    let tiers = TIERS.with(Cell::get);
+    Looped {
+        printed: WRITTEN.with(|written| written.borrow().join("\n")),
+        region: tiers.region,
+        scratch: tiers.scratch,
+        composed: tiers.composed,
+        evicted: tiers.evicted,
+        unheld: substrate.with(|running| running.scheduler().graph().unheld_bytes()),
+        laid: ADOPT_LAID.with(Cell::get) - laid,
+        storage: substrate.storage_bytes() - storage,
+    }
+}
+
 #[test]
 fn a_loop_composing_code_each_hop_holds_o1_compositions() {
-    let looping = |depth| {
-        let (printed, tiers, live) = composed(&program(
-            depth,
-            "LET q = #(1 + 1)
-EXPR #(LOOP link :Link) -> Number = #((EVAL (COMPOSE q) -> Any) (LOOP (ATTR link next)))
-EXPR #(LOOP end :Null) -> Number = #(7)
-PRINT (LOOP chain)",
-        ));
-        assert_eq!(printed, "7");
-        (tiers.composed, live)
+    // Three quotes composed each hop, under a budget of one and a half compositions: every `EVAL`
+    // misses, evicting the least recently used.
+    let quotes = "LET q = #(1 + 1)\nLET r = #(2 + 2)\nLET s = #(3 + 3)\n";
+    let one = looped(
+        &format!("{quotes}EVAL (COMPOSE q) -> Any"),
+        BuildBudget::default(),
+    );
+    let budget = BuildBudget {
+        bytes: std::num::NonZeroUsize::new(3 * one.unheld / 2).expect("a composition weighs"),
     };
-    assert_eq!(looping(4), (1, 1));
-    assert_eq!(looping(16), (1, 1));
+    let looping = |depth| {
+        looped(
+            &program(
+                depth,
+                &format!(
+                    "{quotes}EXPR #(LOOP link :Link) -> Number = #((EVAL (COMPOSE q) -> Any) \
+                     (EVAL (COMPOSE r) -> Any) (EVAL (COMPOSE s) -> Any) (LOOP (ATTR link next)))
+EXPR #(LOOP end :Null) -> Number = #(7)
+PRINT (LOOP chain)"
+                ),
+            ),
+            budget,
+        )
+    };
+    let (few, many) = (looping(4), looping(16));
+    for run in [&few, &many] {
+        assert_eq!(run.printed, "7");
+        // Eviction runs at a miss, while the new composition is held: once the run ends, that one
+        // lies unheld beside what the budget kept.
+        assert!(run.unheld <= budget.bytes.get() + one.unheld, "{run:?}");
+        assert_eq!(
+            run.storage, 0,
+            "a composition lays nothing in program storage"
+        );
+    }
+    // Every hop composes afresh: three misses a hop, each evicting.
+    assert_eq!((few.composed, many.composed), (12, 48));
+    assert!(many.evicted >= 45, "{many:?}");
+    // Region and scratch stay flat with depth, and no hop lays a node by adoption.
+    assert_eq!((few.region, few.scratch), (many.region, many.scratch));
+    assert_eq!(few.laid, many.laid);
 }
 
 #[test]
@@ -228,10 +296,11 @@ EVAL j -> Any"
 fn a_module_born_of_composed_code_reads_as_one_written() {
     let source = |eval: &str| {
         format!(
-            "LET q = #((MODULE m = ((LET x = 1) (LET y = 2))) m)\nLET m = ({eval} -> Any)\nPRINT m.y"
+            "LET q = #((MODULE m = ((LET x = 1) (LET y = 2))) (m))\nLET m = ({eval} -> Any)\nPRINT m.y"
         )
     };
-    assert_eq!(run(&source("EVAL (COMPOSE q)")), run(&source("EVAL q")));
+    assert_eq!(run(&source("EVAL q")), "2");
+    assert_eq!(run(&source("EVAL (COMPOSE q)")), "2");
 }
 
 #[test]

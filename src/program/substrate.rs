@@ -243,4 +243,11 @@ impl CellSubstrate {
     pub fn with<R>(&mut self, f: impl for<'graph> FnOnce(&mut Running<'graph>) -> R) -> R {
         self.0.with_dependent_mut(|_, running| f(running))
     }
+
+    /// The bytes laid in program storage so far: what a test reads to see a run lay nothing
+    /// there.
+    #[cfg(test)]
+    pub(crate) fn storage_bytes(&self) -> usize {
+        self.0.borrow_owner().storage.allocated_bytes()
+    }
 }
