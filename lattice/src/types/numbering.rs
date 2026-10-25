@@ -285,7 +285,7 @@ fn interchangeable<'t>(
         types.quantified_node(swapped, bounds[index])
     }));
     (positions.iter())
-        .all(|position| substitute_quantified(types, scratch, *position, &bindings) == *position)
+        .all(|position| substitute_quantified(types, scratch, position, &bindings) == *position)
 }
 
 /// What a finished numbering builds, as a sequence that reads no index: the bounds in group order,
