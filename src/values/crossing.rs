@@ -248,7 +248,12 @@ where
 {
     let scratch = Bump::new();
     let mut copying = Copying::<XF>::new(writer, types, source, &scratch);
-    values.map(|value| copying.value(value))
+    #[cfg(test)]
+    let before = writer.in_use();
+    let copies = values.map(|value| copying.value(value));
+    #[cfg(test)]
+    COPIED.with(|copied| copied.set(copied.get() + writer.in_use() - before));
+    copies
 }
 
 /// How many parts of a pinned value the habitat check reads: a pin is O(1) in a release build, so
@@ -549,6 +554,9 @@ thread_local! {
     pub static PARTS_ENTERED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
     /// How many parts an adoption's walk has skipped on their bits.
     pub static PARTS_SKIPPED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// How many bytes every deep copy has laid in its destination: what a test reads to see what
+    /// a loop copies per hop.
+    pub static COPIED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// One pending composite of the deep copy: the surface its children are read from, how many of

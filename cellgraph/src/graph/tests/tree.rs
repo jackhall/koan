@@ -276,6 +276,45 @@ fn an_upward_pin_pledges_the_home_and_every_intermediate() {
     assert!(graph.is_empty());
 }
 
+/// `region_used` counts the bytes a cell handed out and none of its chunk's slack, a splice brings
+/// the child's bump in whole, and `live_bytes` sums every region the graph holds.
+#[test]
+fn region_used_counts_what_a_cell_wrote_and_what_it_took_in() {
+    let mut graph: CellGraph<'static, Owned> = CellGraph::new(2, pin);
+    let root = graph.create(None).unwrap();
+    let home = graph.create_tree(root, None).unwrap();
+    assert_eq!(graph.region_used(root).unwrap(), 0);
+    assert_eq!(graph.live_bytes(), 0);
+    // A root that wrote lists a spliced bump rather than taking it over as its own.
+    graph
+        .enter(root, |context| drop(number_in(context, 1)))
+        .unwrap();
+
+    graph
+        .enter(home, |context| {
+            let value = number_in(context, 9);
+            context
+                .alloc_into::<Number, Number>(root, &[kept_operand(&value)], |writer, _, views| {
+                    Active::new(take(&views[0], writer))
+                })
+                .unwrap();
+        })
+        .unwrap();
+    let wrote = graph.region_used(home).unwrap();
+    assert!(wrote > 0 && wrote < graph.regions.tree_bytes(home.index()));
+    let root_wrote = graph.region_used(root).unwrap();
+    assert_eq!(graph.live_bytes(), wrote + root_wrote);
+
+    // The pledged home splices its whole bump into the root, slack included.
+    let home_bytes = graph.regions.tree_bytes(home.index());
+    graph.release_tree(home).unwrap();
+    assert_eq!(graph.region_used(root).unwrap(), root_wrote + home_bytes);
+    assert_eq!(graph.live_bytes(), root_wrote + home_bytes);
+
+    graph.release(root, ReleaseAbsorption::IntoHolder).unwrap();
+    assert!(graph.is_empty());
+}
+
 #[test]
 fn the_shallowest_pledge_wins_and_the_splice_price_is_marginal() {
     let (verdict, seen) = recording(|_| Verdict::Pin);

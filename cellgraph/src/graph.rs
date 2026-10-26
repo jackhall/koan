@@ -1536,6 +1536,37 @@ impl<
         self.cells.write_home(cell.into()).is_ok()
     }
 
+    /// Bytes a live cell's write home has handed out of its region, absorbed bumps included; a
+    /// tenant's are its host's. What a region weighs while it stays live, chunk slack aside.
+    pub fn region_used(&self, cell: impl Into<CellHandle>) -> Result<usize, Stale<CellHandle>> {
+        let home = self.cells.write_home(cell.into())?;
+        Ok(self.regions.region(home).used_bytes())
+    }
+
+    /// Bytes a live cell's write home has handed out of its scratch since its last reset; a
+    /// tenant's are its host's.
+    #[cfg(any(test, feature = "counters"))]
+    pub fn scratch_used(&self, cell: impl Into<CellHandle>) -> Result<usize, Stale<CellHandle>> {
+        let home = self.cells.write_home(cell.into())?;
+        Ok(self.regions.scratch_in_use(home))
+    }
+
+    /// Bytes every region the graph holds has handed out: each slab and tree cell not yet freed,
+    /// live or dead, absorbed bumps included, and the sealed tier's retained chunks.
+    #[cfg(any(test, feature = "counters"))]
+    pub fn live_bytes(&self) -> usize {
+        let slab = (self.cells.slots.iter().enumerate())
+            .filter(|(_, cell)| cell.state != SlabState::Free)
+            .map(|(slot, _)| {
+                self.regions
+                    .region(CellHome::Slab(slot as u32))
+                    .used_bytes()
+            });
+        let tree = (self.cells.trees.occupied())
+            .map(|index| self.regions.region(CellHome::Tree(index)).used_bytes());
+        slab.chain(tree).sum::<usize>() + self.cells.sealed.retained_bytes()
+    }
+
     /// Read a live slab or tree cell's region header between steps, under a brand this call
     /// quantifies: the closure receives the header and a witness that `'graph` outlives the brand,
     /// never a door, so nothing can be laid through it. `Ok(None)` when no header is laid. Refuses

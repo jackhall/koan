@@ -27,7 +27,7 @@ const PREFIXES: &[&str] = &[
 /// `Fresh` frame's asker hands the drain, which it keeps in the frame's continuation until the
 /// frame's first step takes it. Each is the scheduler's runtime state, held beside the graph or in
 /// a cell's continuation slot and never written into a region, so a value's no-drop-glue discipline
-/// does not reach them.
+/// does not reach them. Beside them, the hop samples a test build's drain keeps in a thread-local.
 const OWNING_ALLOWED: &[(&str, &str)] = &[
     ("src/scheduler/action.rs", "requests: Vec<Asked<'graph, B>>"),
     ("src/scheduler/action.rs", "Vec::new()"),
@@ -47,6 +47,7 @@ const OWNING_ALLOWED: &[(&str, &str)] = &[
     ("src/scheduler/action.rs", "Option<Box<Sought>>"),
     ("src/scheduler/drain.rs", "Option<Box<Sought>>"),
     ("src/scheduler/drain.rs", "Box::new(sought)"),
+    ("src/scheduler/drain.rs", "RefCell<Vec<HopSample>>"),
 ];
 
 /// The cellgraph doors no drain opens between steps: a peek into a cell's header, an entry beside

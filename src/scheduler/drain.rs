@@ -244,6 +244,32 @@ thread_local! {
     };
 }
 
+/// What every region held at one tail, sampled by the drain before it creates the successor: what
+/// a test reads to see a loop's memory hold flat across hops.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct HopSample {
+    /// The cell receiving the loop's result, which tells one loop's tails from another's.
+    pub host: CellHandle,
+    /// Bytes every region of the graph has handed out, absorbed bumps included.
+    pub live: usize,
+    /// Bytes the region of the cell receiving the loop's result has handed out.
+    pub host_region: usize,
+    /// Bytes that cell's scratch has handed out.
+    pub host_scratch: usize,
+    /// Bytes the tailing cell's own region has handed out; `0` for a tenant, which has none.
+    pub hop_region: usize,
+    /// The weight of the values the successor's birth threads.
+    pub threads: usize,
+}
+
+#[cfg(test)]
+thread_local! {
+    /// Every [`HopSample`] taken so far, in tail order. Tests reset it.
+    pub(crate) static HOPS: std::cell::RefCell<Vec<HopSample>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
 #[cfg(test)]
 thread_local! {
     /// The caching body the running step runs, by its shape's address: set by the step, taken by
@@ -420,12 +446,16 @@ where
                     }
                 }
                 Kind::Park => self.asked_by(cell, provenance, arena),
-                Kind::Tail(asked) => self.ready.push(Entry::Unborn {
-                    provenance,
-                    asked,
-                    asker: arena,
-                    release_after: Some(cell),
-                }),
+                Kind::Tail(asked) => {
+                    #[cfg(test)]
+                    self.sample_hop(cell, provenance.parent);
+                    self.ready.push(Entry::Unborn {
+                        provenance,
+                        asked,
+                        asker: arena,
+                        release_after: Some(cell),
+                    });
+                }
                 // Only a root work leaves: `leave` refuses a cell that reports to somebody.
                 Kind::Left(dormant) => {
                     self.retire(cell, arena)?;
@@ -795,6 +825,24 @@ where
         #[cfg(test)]
         self.census.retired();
         Ok(())
+    }
+
+    /// Push a [`HopSample`] for `cell`'s tail, its loop's result received by `host`.
+    #[cfg(test)]
+    fn sample_hop(&self, cell: CellHandle, host: CellHandle) {
+        let cells = &self.graph.cells;
+        let sample = HopSample {
+            host,
+            live: cells.live_bytes(),
+            host_region: cells.region_used(host).unwrap_or(0),
+            host_scratch: cells.scratch_used(host).unwrap_or(0),
+            hop_region: match cell {
+                CellHandle::Tree(_) => cells.region_used(cell).unwrap_or(0),
+                _ => 0,
+            },
+            threads: 0,
+        };
+        HOPS.with(|hops| hops.borrow_mut().push(sample));
     }
 
     /// The graph this drain runs over, to ask what is left in it.

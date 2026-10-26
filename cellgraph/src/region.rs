@@ -213,6 +213,12 @@ impl<'graph, H: HabitatHeader<'graph>> Region<'graph, H> {
         self.bump.allocated_bytes() + self.absorbed_bytes
     }
 
+    /// Bytes handed out, absorbed bumps included: [`allocated_bytes`](Self::allocated_bytes) less
+    /// what the live chunk has not yet handed out.
+    pub(crate) fn used_bytes(&self) -> usize {
+        self.allocated_bytes() - self.bump.chunk_capacity()
+    }
+
     /// Whether the region's own bump has handed out no byte: a cold bump, which owns no chunk, or a
     /// warm one whose chunk is whole. "Did this cell write?" is this reading and never
     /// `allocated_bytes() == 0`, which a warm bump fails with nothing written.
@@ -451,7 +457,7 @@ impl<'graph, H: HabitatHeader<'graph>> Regions<'graph, H> {
     }
 
     /// Bytes `home`'s scratch bump has handed out since its last reset.
-    #[cfg(test)]
+    #[cfg(any(test, feature = "counters"))]
     pub(crate) fn scratch_in_use(&self, home: CellHome) -> usize {
         let bump = self.scratch_bump(home);
         bump.allocated_bytes() - bump.chunk_capacity()
