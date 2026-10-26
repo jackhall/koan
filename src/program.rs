@@ -35,7 +35,8 @@ pub use body::{
     CodeRefused, Runner, block, call, eval, placement_of, run, surfaced_block, using_composed,
 };
 pub use bundle::{
-    FrameKept, Handed, KBirth, KBirthFamily, KBundle, KScratchFamily, KState, KStateFamily, Within,
+    FrameKept, Handed, KBirth, KBirthFamily, KBundle, KScratchFamily, KState, KStateFamily, Keeps,
+    Passing, Within,
 };
 pub use exit::Exit;
 pub use record::{

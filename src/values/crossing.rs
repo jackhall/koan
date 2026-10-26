@@ -183,6 +183,45 @@ pub fn cross_view_against<
     }
 }
 
+/// Crossed operands as values at the destination's brand, each as [`cross_view`] crosses it, each
+/// handed to `out` beside whether it was pinned — save that the first pinned operand's home branch
+/// is linked where the destination has laid no branch, so each merge after it stops at what that
+/// link reaches rather than entering every node of its home's.
+pub fn cross_views<
+    'graph,
+    'cell,
+    XF: KnottedFamily<'graph>,
+    H: Projects<'graph, Projection = BranchCell>,
+>(
+    writer: Writer<'cell, '_>,
+    types: &Chain<'cell, 'cell, '_, '_>,
+    views: &[CrossedOperand<'graph, 'cell, '_, ValueFamily<XF>, H>],
+    out: &mut impl FnMut(Value<'cell, XF::Closed<'cell>>, bool),
+) {
+    let mut linked = false;
+    for view in views {
+        match *view {
+            CrossedOperand::Pinned {
+                view: value, home, ..
+            } => {
+                home.read(|header, _| {
+                    if let Some(branch) = H::project(header.into_value()).get() {
+                        match linked {
+                            false => types.link_or_merge(branch),
+                            true => types.merge(branch),
+                        }
+                        linked = true;
+                    }
+                });
+                #[cfg(debug_assertions)]
+                check_pinned_habitat::<XF>(types, &value);
+                out(value, true);
+            }
+            CrossedOperand::Copied { .. } => out(cross_view(writer, types, view), false),
+        }
+    }
+}
+
 /// Values held inside a copied operand of another family — a birth that carries values — rebuilt
 /// through `writer`, all through one copy, so they share one copy of each knot they reach, every
 /// type they carry adopted into `types` from the operand's home branch. The operand is the proof:

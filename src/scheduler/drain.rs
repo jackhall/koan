@@ -10,6 +10,11 @@
 //! cell but to run a step: a `Fresh` cell borrows its parent's scratch and a `Shares` one is its
 //! host's tenant.
 //!
+//! A tail hop whose birth was laid as a skeleton beside the values it hands on wakes each value on
+//! its own, from the kept part it was handed through where that redeems, and builds the
+//! successor's birth in the successor's region over them ([`StepBundle::handings`]): nothing
+//! homed above the successor is copied, and nothing of the skeleton outlives its predecessor.
+//!
 //! A miss relays its binding's image into the agent tier, settles the body through the door the
 //! program handed the graph at load ([`Settles`]), and, once the frame borrows the settlement,
 //! evicts unheld settlements to the budget; nothing else evicts in a run. A step's door reads the
@@ -21,26 +26,29 @@
 
 use smallvec::SmallVec;
 
+use crate::knot::KValueFamily;
 use crate::memory::{
-    CellGraph, CellHandle, CreateError, CrossedOperand, Dormant, Erased, Lend, Operand, Ready,
-    RedeemError, ReleaseAbsorption, ReleaseError, SlabHandle,
+    Active, CellGraph, CellHandle, CreateError, CrossedOperand, Dormant, Erased, Lend, Operand,
+    Ready, RedeemError, ReleaseAbsorption, ReleaseError, SlabHandle,
 };
 use crate::scheduler::action::{
     Action, Asked, Context, Kind, Placement, Spawns, Step, StepError, Use,
 };
 use crate::scheduler::arena::{BuildArena, Composed, Settled};
 use crate::scheduler::continuation::{
-    Arrival, Born, Continuation, ContinuationFamily, NativeStep, Provenance, Report, Rested,
-    StateAt, StepBundle, Work,
+    Arrival, BirthAt, Born, Continuation, ContinuationFamily, NativeStep, Provenance, Report,
+    Rested, StateAt, StepBundle, Work,
 };
 use crate::scheduler::delivery::KDelivery;
+use crate::scheduler::kept::Kept;
 use crate::scheduler::seek::{Compose, Lending, Replayed, Seek, Settles, Sought, Unsettled};
 #[cfg(test)]
 use crate::scope::HalfHeader;
 use crate::scope::{Facts, LoadFacts, RegionHeader};
 #[cfg(test)]
 use crate::type_lattice::Branch;
-use crate::values::{ArenaRef, BuildBudget, ContentDigest, TypeTiers};
+use crate::type_lattice::Halves;
+use crate::values::{ArenaRef, BuildBudget, ContentDigest, Half, TypeTiers};
 
 /// The graph of cells a drain runs over: `cellgraph`'s graph closed over the continuation family,
 /// the bundle's scratch family and the delivery bundle.
@@ -268,6 +276,8 @@ thread_local! {
     /// Every [`HopSample`] taken so far, in tail order. Tests reset it.
     pub(crate) static HOPS: std::cell::RefCell<Vec<HopSample>> =
         const { std::cell::RefCell::new(Vec::new()) };
+    /// How many hops' successors built their birth over the values a skeleton handed on.
+    pub(crate) static SKELETONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 #[cfg(test)]
@@ -985,6 +995,11 @@ where
     Erased<'graph, B::Birth>: Copy,
 {
     let carrier = context.redeem(dormant)?;
+    if born == Born::Hop
+        && let Some(birth) = hopped::<B>(context, tiers, &carrier)
+    {
+        return Ok((B::born(birth?), None));
+    }
     let copy_bytes = B::weight(&context.read(&carrier).value());
     let (birth, pinned) = context.alloc_here(
         &[Operand {
@@ -997,6 +1012,103 @@ where
         },
     );
     Ok((B::born(birth), pinned.then_some(carrier)))
+}
+
+/// A hop's successor's birth, where its predecessor laid it as a skeleton beside the values it
+/// hands on ([`StepBundle::handings`]): each value crosses on its own, from the kept part it was
+/// handed through where that redeems — pinned free from an ancestor — and otherwise out of the
+/// skeleton; the successor keeps a carrier of each, at its home where it pinned and here where it
+/// was copied; and the birth is built here over them. `None` for a birth that crosses whole.
+fn hopped<'graph, 'step, 'here, 'scratch, 'lent, B: StepBundle<'graph>>(
+    context: &mut Context<'graph, 'step, 'here, 'scratch, 'lent, B>,
+    tiers: TypeTiers<'graph>,
+    carrier: &Ready<'graph, 'step, B::Birth>,
+) -> Option<Result<BirthAt<'graph, 'here, B>, RedeemError>>
+where
+    'graph: 'step + 'here + 'lent,
+    'here: 'scratch,
+    'lent: 'scratch,
+    Erased<'graph, B::Birth>: Copy,
+{
+    let mut handings: SmallVec<[Option<Ready<'graph, 'step, KValueFamily>>; 8]> = SmallVec::new();
+    let mut reused: SmallVec<[Option<Kept<'graph>>; 8]> = SmallVec::new();
+    let laid = {
+        let context = &*context;
+        let birth = context.read(carrier).value();
+        B::handings(&birth, &mut |index, kept| {
+            let from_kept = kept.and_then(|part| {
+                let kept = context.redeem(part.kept.0).ok()?;
+                if part.path.is_empty() {
+                    return Some(kept);
+                }
+                context.project::<KValueFamily, KValueFamily>(&kept, |value, _| {
+                    let mut at = value.value();
+                    for label in part.path {
+                        at = at.along(*label)?;
+                    }
+                    Some(Active::new(at))
+                })
+            });
+            reused.push(
+                kept.filter(|part| part.path.is_empty() && from_kept.is_some())
+                    .map(|part| part.kept),
+            );
+            handings.push(from_kept.or_else(|| {
+                context.project::<B::Birth, KValueFamily>(carrier, |birth, _| {
+                    B::handed(birth.value(), index).map(Active::new)
+                })
+            }));
+        })
+    };
+    if !laid {
+        return None;
+    }
+    let Some(handings): Option<SmallVec<[_; 8]>> = handings.into_iter().collect() else {
+        return Some(Err(RedeemError::Gone));
+    };
+    let operands: SmallVec<[Operand<'graph, '_, 'step, KValueFamily>; 8]> = (handings.iter())
+        .map(|handing| Operand {
+            carrier: handing,
+            copy_bytes: context
+                .read::<KValueFamily>(handing)
+                .value()
+                .weight()
+                .bytes(),
+        })
+        .collect();
+    // The kinds are named: the birth's `Copy` bound in scope would otherwise answer for them.
+    let crossed: SmallVec<[_; 8]> =
+        context.alloc_here::<_, KValueFamily>(&operands, |writer, header, views| {
+            let types = tiers.chain(Halves::alone(Half::of(writer, header)));
+            let mut crossed = SmallVec::new();
+            crate::values::cross_views(writer, &types, views, &mut |value, pinned| {
+                crossed.push((value, pinned));
+            });
+            crossed
+        });
+    let mut kept: SmallVec<[Kept<'graph>; 8]> = SmallVec::new();
+    for ((carrier, reused), (value, pinned)) in handings.iter().zip(&reused).zip(&crossed) {
+        kept.push(match (pinned, reused) {
+            (true, Some(reused)) => *reused,
+            (true, None) => Kept(context.keep(carrier.clone())),
+            (false, _) => {
+                let lifted = context.lift::<KValueFamily>(*value);
+                Kept(context.keep(lifted))
+            }
+        });
+    }
+    let values: SmallVec<[_; 8]> = crossed.iter().map(|(value, _)| *value).collect();
+    let copy_bytes = B::weight(&context.read(carrier).value());
+    let birth = context.alloc_here(
+        &[Operand {
+            carrier,
+            copy_bytes,
+        }],
+        |writer, header, views| B::hop(writer, header, &views[0], &values, &kept, tiers),
+    );
+    #[cfg(test)]
+    SKELETONS.with(|count| count.set(count.get() + 1));
+    Some(Ok(birth))
 }
 
 /// What a root work left at rest in its home when it ended by

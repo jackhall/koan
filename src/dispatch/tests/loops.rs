@@ -14,7 +14,7 @@
 use std::cell::Cell;
 
 use crate::program::activation_store::KEPT;
-use crate::scheduler::{HOPS, HopSample};
+use crate::scheduler::{HOPS, HopSample, SKELETONS};
 use crate::values::{BuildBudget, COPIED};
 
 /// The depths every loop runs at.
@@ -39,6 +39,12 @@ const HELPERS: &str = "EXPR #(TOUCH m :Counter) -> Number = #(1)\n\
 const WALK: &str = "EXPR #(NAME m :Counter link :Link) -> Str = \
                     #((LET t = (TOUCH m)) (NEXT m (ATTR link next)))\n\
                     EXPR #(NAME m :Counter end :Null) -> Str = #(\"done\")\n";
+
+/// The walk returning `Number`, whose hops are siblings that cross by a copy unless their
+/// arguments pin from where they rest.
+const WALK_NUMBER: &str = "EXPR #(NAME m :Counter link :Link) -> Number = \
+                           #((LET t = (TOUCH m)) (NEXT m (ATTR link next)))\n\
+                           EXPR #(NAME m :Counter end :Null) -> Number = #(0)\n";
 
 /// The record rebuild: hands on a record it builds whole from the one it was handed.
 const STEP: &str = "EXPR #(NAME m :Counter r :{count :Number} link :Link) -> Number = \
@@ -184,6 +190,25 @@ fn a_record_rebuilt_each_hop_holds_its_memory_flat_in_its_depth() {
 fn a_chain_walk_copies_no_part_of_the_chain() {
     for form in [Form::Selfward, Form::Mutual] {
         let per_hop = copied_per_hop(WALK, form, "ints chain");
+        assert!(
+            same_per_hop(&per_hop),
+            "{form:?}: {per_hop:?} bytes per hop"
+        );
+    }
+}
+
+#[test]
+fn a_hop_hands_on_its_received_arguments_without_copying_them() {
+    for form in [Form::Selfward, Form::Mutual] {
+        SKELETONS.with(|count| count.set(0));
+        let (looped, _) = looped(16, WALK_NUMBER, form, "ints chain");
+        assert_eq!(looped.printed, "0");
+        let skeletons = SKELETONS.with(Cell::get);
+        assert!(
+            skeletons >= 16,
+            "{form:?}: {skeletons} hops built over a skeleton"
+        );
+        let per_hop = copied_per_hop(WALK_NUMBER, form, "ints chain");
         assert!(
             same_per_hop(&per_hop),
             "{form:?}: {per_hop:?} bytes per hop"

@@ -57,13 +57,13 @@
 
 use crate::knot::module::view::{self, Ascription, Unascribable};
 use crate::knot::{CodeBody, KValue, Knotted, instance, lambda, quote, refused_construction};
-use crate::memory::{Active, Bump, BumpAllocator, BumpVec, Writer, collect};
+use crate::memory::{Active, Bump, BumpAllocator, BumpVec, Writer, collect, resident};
 use crate::parse::BuiltinShapeId;
 use crate::parse::Role;
 use crate::parse::{ExpressionPart, KExpression};
 use crate::program::{
-    CallKind, Contract, Evaluated, Exit, Handed, KBirth, KBundle, KState, block, called_function,
-    seek, surfaced_block,
+    CallKind, Contract, Evaluated, Exit, Handed, KBirth, KBundle, KState, Passing, block,
+    called_function, seek, surfaced_block,
 };
 use crate::scheduler::{
     Action, Held, KeptPart, Placement, Received, Request, Slot as Asked, Step, StepError, Taken,
@@ -893,7 +893,22 @@ fn call<'step, 'graph, 'here>(
                     _ => None,
                 },
             );
-            let call = |owed| {
+            // A call through a barrier never tails: its value crosses the barrier where its
+            // frame ends.
+            let hop = routed.is_some_and(|routed| routed.hop);
+            let named = match registered.parameters {
+                ParameterBinding::Named(names) => names,
+                ParameterBinding::Operands => &[],
+            };
+            let passing = tails.map(|_| {
+                let named =
+                    (named.iter().zip(&operands)).filter_map(|(name, operand)| match operand {
+                        Operand::Value(held) => Some((name.symbol(), *held)),
+                        Operand::Label(_) => None,
+                    });
+                passing(writer, at, named, hop)
+            });
+            let call = |owed: Option<Contract>| {
                 crate::program::call(
                     program,
                     &at.types,
@@ -904,12 +919,10 @@ fn call<'step, 'graph, 'here>(
                     handed,
                     owed,
                     at.within.inherit,
+                    owed.and(passing),
                     Use::Forwards,
                 )
             };
-            // A call through a barrier never tails: its value crosses the barrier where its
-            // frame ends.
-            let hop = routed.is_some_and(|routed| routed.hop);
             return called(step, at, callee, tails, hop, call);
         }
         Selection::NoOverload => Raised::NoOverload {
@@ -924,6 +937,30 @@ fn call<'step, 'graph, 'here>(
     };
     let error = raised.raise(program, writer, &at.types);
     finish(step, at, error)
+}
+
+/// What a tail call hands its successor through kept parts: each argument of `named`, by the name
+/// its parameter binds, that is held beside a kept part, and the frame's own callee, kept, where
+/// the call `hop`s into it.
+fn passing<'graph, 'here>(
+    writer: Writer<'here, '_>,
+    at: &Evaluation<'_, 'graph, 'here, '_, '_, '_>,
+    named: impl Iterator<Item = (Symbol, Held<'graph, 'here>)>,
+    hop: bool,
+) -> &'here Passing<'graph, 'here> {
+    let scratch = Bump::new();
+    let mut arguments = BumpVec::new_in(&scratch);
+    arguments.extend(named.filter_map(|(name, held)| Some((name, held.kept?))));
+    let callee = (at.within.kept)
+        .and_then(|kept| kept.callee)
+        .filter(|_| hop);
+    resident(
+        writer,
+        Passing {
+            callee,
+            arguments: collect(writer, arguments.iter().copied()),
+        },
+    )
 }
 
 /// The digest memos the call keyed by `site` hands its callee: each digested slot the load saw it
@@ -1014,35 +1051,54 @@ fn apply<'step, 'graph, 'here>(
     let program = at.program;
     let types = &at.types;
     let scratch = Bump::new();
-    let wanted = [Wanted::Evaluated(head), Wanted::Evaluated(argument)];
-    // A type name's application is a construction, built in the home its argument is asked into.
-    let use_ = match head {
-        ExpressionPart::Type(_) => built(at),
-        _ => Use::Keeps,
+    let argument_site = at.view.shape().site(argument);
+    // A call's record literal is laid here over its fields, each evaluated as a part of the call,
+    // so a tail hands each on through its own kept part. A type name's application is a
+    // construction, built in the home its argument is asked into.
+    let (literal, use_) = match (head, argument) {
+        (ExpressionPart::Type(_), _) => (None, built(at)),
+        (_, ExpressionPart::RecordLiteral(fields)) => (Some(&**fields), Use::Keeps),
+        _ => (None, Use::Keeps),
     };
+    let mut wanted = BumpVec::new_in(&scratch);
+    wanted.push(Wanted::Evaluated(head));
+    match literal {
+        Some(fields) => wanted.extend(fields.iter().map(|(_, value)| Wanted::Evaluated(value))),
+        None => wanted.push(Wanted::Evaluated(argument)),
+    }
     let operands = match gathered(&mut step, at, &wanted, use_, stage, &scratch) {
         Gathered::Ready(operands) => operands,
         other => return unready(step, at, other),
     };
-    let argument_site = at.view.shape().site(argument);
     let recorded = at
         .view
         .facts()
         .named_contributions(&at.types, at.view.shape(), argument_site);
-    let [
-        Operand::Value(Held { value: head, .. }),
-        Operand::Value(Held {
-            value: argument, ..
-        }),
-    ] = operands[..]
-    else {
-        unreachable!("both parts of an application are evaluated")
+    let held = |operand: &Operand<'graph, 'here>| match operand {
+        Operand::Value(held) => *held,
+        Operand::Label(_) => unreachable!("every part of an application is evaluated"),
+    };
+    let head = held(&operands[0]).value;
+    let fields = literal.map(|fields| {
+        let mut named = BumpVec::with_capacity_in(fields.len(), &scratch);
+        named.extend((fields.iter().map(|(name, _)| *name)).zip(operands[1..].iter().map(held)));
+        named
+    });
+    let argument = match &fields {
+        Some(fields) => {
+            let mut named = BumpVec::with_capacity_in(fields.len(), &scratch);
+            named.extend(fields.iter().map(|(name, held)| (*name, held.value)));
+            Held::bare(Value::Record(Record::new(
+                step.writer(),
+                &named,
+                types,
+                &scratch,
+            )))
+        }
+        None => held(&operands[1]),
     };
     if let Value::Type(_) = head {
-        let parts = [operands[0], operands[1]].map(|operand| match operand {
-            Operand::Value(held) => held,
-            Operand::Label(_) => unreachable!("both parts of an application are evaluated"),
-        });
+        let parts = [held(&operands[0]), argument];
         return finish_built(step, at, &parts, |writer, types, values| {
             let [Value::Type(head), argument] = values else {
                 unreachable!("a construction's head is a type")
@@ -1079,7 +1135,7 @@ fn apply<'step, 'graph, 'here>(
     });
     exits(&step, at, &scratch, |exit| {
         exit.value(&head);
-        exit.value(&argument);
+        exit.value(&argument.value);
         contributed.iter().flatten().for_each(|kt| exit.handle(*kt));
         tails.iter().for_each(|owed| exit.contract(owed));
     });
@@ -1087,7 +1143,33 @@ fn apply<'step, 'graph, 'here>(
         HandedTo::Field(name) => Some(name),
         HandedTo::Position(_) => None,
     });
-    let call = |owed| {
+    let hop = routed.is_some_and(|routed| routed.hop);
+    // A tail hands on each field of a literal through its own kept part, and each of a record
+    // held whole through the record's, the field's label appended.
+    let passing = tails.map(|_| match &fields {
+        Some(fields) => passing(
+            writer,
+            at,
+            fields.iter().map(|(name, held)| (name.symbol(), *held)),
+            hop,
+        ),
+        None => {
+            let names = (argument.value.stored_fields()).map_or(&[][..], |(names, _)| names);
+            let fields = names.iter().map(|name| {
+                let kept = argument.kept.map(|part| KeptPart {
+                    kept: part.kept,
+                    path: writer.fill(part.path.len() + 1, |at| {
+                        part.path.get(at).copied().unwrap_or(*name)
+                    }),
+                });
+                let value = (argument.value.along(*name)).expect("a record stores its fields");
+                (*name, Held { value, kept })
+            });
+            passing(writer, at, fields, hop)
+        }
+    });
+    let argument = argument.value;
+    let call = |owed: Option<Contract>| {
         crate::program::call(
             program,
             &at.types,
@@ -1098,10 +1180,10 @@ fn apply<'step, 'graph, 'here>(
             handed,
             owed,
             at.within.inherit,
+            owed.and(passing),
             Use::Forwards,
         )
     };
-    let hop = routed.is_some_and(|routed| routed.hop);
     called(step, at, head, tails, hop, call)
 }
 

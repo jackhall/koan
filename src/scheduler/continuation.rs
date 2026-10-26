@@ -13,11 +13,13 @@
 
 use std::marker::PhantomData;
 
+use crate::knot::KValue;
 use crate::memory::{
     CellHandle, Covariant, CrossedOperand, Dormant, DropFree, Header, Reattachable,
     ReattachableOverBoth, Writer, reattachable,
 };
 use crate::scheduler::action::{Action, Step, Use};
+use crate::scheduler::kept::{Kept, KeptPart};
 use crate::scheduler::seek::Sought;
 use crate::scope::RegionHeader;
 use crate::values::{ArenaRef, ContentDigest, TypeTiers};
@@ -63,6 +65,51 @@ pub trait StepBundle<'graph>: 'graph {
     fn born<'cell>(birth: BirthAt<'graph, 'cell, Self>) -> StateAt<'graph, 'cell, Self>
     where
         'graph: 'cell;
+
+    /// The values a tail hop hands its successor one by one, where its birth was laid as a skeleton
+    /// beside them: each handed to `out` by index, beside the kept part it crosses from where it has
+    /// one. `false` for a birth that crosses whole — every one by default.
+    fn handings<'cell>(
+        birth: &BirthAt<'graph, 'cell, Self>,
+        out: &mut impl FnMut(usize, Option<KeptPart<'graph, 'cell>>),
+    ) -> bool
+    where
+        'graph: 'cell,
+    {
+        let _ = (birth, out);
+        false
+    }
+
+    /// The value handing `index` of `birth` names, as the birth holds it.
+    fn handed<'cell>(
+        birth: BirthAt<'graph, 'cell, Self>,
+        index: usize,
+    ) -> Option<KValue<'graph, 'cell>>
+    where
+        'graph: 'cell,
+    {
+        let _ = (birth, index);
+        None
+    }
+
+    /// The successor's birth at its own brand, from `view`, the skeleton its predecessor laid,
+    /// and `handed`, each handing's value at the successor's brand beside the carrier `kept` keeps
+    /// of it at its home: what [`handings`](Self::handings) laid crosses as these, and nothing of
+    /// the skeleton's own values. Only a birth `handings` answers for reaches here.
+    fn hop<'cell>(
+        writer: Writer<'cell, '_>,
+        header: Header<'graph, 'cell, '_, RegionHeader>,
+        view: &CrossedOperand<'graph, 'cell, '_, Self::Birth, RegionHeader>,
+        handed: &[KValue<'graph, 'cell>],
+        kept: &[Kept<'graph>],
+        tiers: TypeTiers<'graph>,
+    ) -> BirthAt<'graph, 'cell, Self>
+    where
+        'graph: 'cell,
+    {
+        let _ = (handed, kept);
+        Self::cross(writer, header, view, Born::Hop, tiers)
+    }
 }
 
 /// A bundle's birth at one brand.

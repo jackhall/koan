@@ -309,6 +309,16 @@ impl<'cell, X: Knotted + 'cell> Value<'cell, X> {
         }
     }
 
+    /// A plain record's runs as stored: its field names in symbol order beside each field at its
+    /// own memo, whatever type the record is seen at — what a hop hands on field by field, each as
+    /// [`along`](Self::along) reads it. `None` for anything else.
+    pub fn stored_fields(&self) -> Option<(&'cell [Symbol], &'cell [Value<'cell, X>])> {
+        match self {
+            Value::Record(record) => Some((record.names(), record.cells())),
+            _ => None,
+        }
+    }
+
     /// The value restamped at `ktype`, a type a restamp of the same storage carried: what a value
     /// handed on through its true home re-lays where it lands. [`Seen::restamped`] at that type.
     pub fn restamped_at(

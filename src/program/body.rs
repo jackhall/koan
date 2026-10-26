@@ -88,7 +88,7 @@ use crate::values::{
 };
 
 use super::activation_store::bound_of;
-use super::bundle::{FrameKept, Handed, KBirth, KBundle, KState, Within};
+use super::bundle::{FrameKept, Handed, KBirth, KBundle, KState, Keeps, Passing, Within};
 use super::exit::Exit;
 use super::record::{CallKind, Contract, Evaluated, Program, rendered};
 use super::settle::called_function;
@@ -407,13 +407,14 @@ fn bare(callee: KValue<'_, '_>) -> bool {
 }
 
 /// The table a frame keeps its callee, its arguments and its binders' delivered values in, laid in
-/// its region with a carrier for the callee and for each parameter's argument: kept where the
-/// birth was pinned in, at its home, and here where the birth was copied in.
+/// its region with a carrier for the callee and for each parameter's argument: what `keeps` names,
+/// for a hop's successor, which built its birth over them; else kept where the birth was pinned
+/// in, at its home, and here where the birth was copied in.
 fn frame_kept<'graph, 'here>(
     step: &mut Taking<'_, 'graph, '_, 'here, '_, '_>,
     activation: &KActivation<'graph, 'here>,
-    callee: KValue<'graph, 'here>,
-    arguments: KValue<'graph, 'here>,
+    (callee, arguments): (KValue<'graph, 'here>, KValue<'graph, 'here>),
+    keeps: Option<&Keeps<'graph, '_>>,
 ) -> &'here FrameKept<'graph, 'here> {
     let (code, _) = step.door();
     let shape = code.shape(activation.view().segment());
@@ -428,19 +429,26 @@ fn frame_kept<'graph, 'here>(
             }
             _ => continue,
         };
-        let born = step.born_part(|birth, _| match birth.value() {
-            KBirth::Call { arguments, .. } => arguments.along(name).map(Active::new),
-            _ => None,
+        let handed = keeps.and_then(|keeps| {
+            let at = keeps.arguments.iter().find(|(handed, _)| *handed == name)?;
+            Some(at.1)
         });
-        let kept = born.or_else(|| Some(step.kept_here(arguments.along(name)?)));
+        let kept = handed.or_else(|| {
+            step.born_part(|birth, _| match birth.value() {
+                KBirth::Call { arguments, .. } => arguments.along(name).map(Active::new),
+                _ => None,
+            })
+        });
+        let kept = kept.or_else(|| Some(step.kept_here(arguments.along(name)?)));
         slots[slot.index()].set(kept);
     }
-    let callee = step
-        .born_part(|birth, _| match birth.value() {
+    let callee = keeps.map(|keeps| keeps.callee).unwrap_or_else(|| {
+        step.born_part(|birth, _| match birth.value() {
             KBirth::Call { callee, .. } => Some(Active::new(callee)),
             _ => None,
         })
-        .unwrap_or_else(|| step.kept_here(callee));
+        .unwrap_or_else(|| step.kept_here(callee))
+    });
     resident(
         step.writer(),
         FrameKept {
@@ -501,6 +509,7 @@ fn ran<'graph, 'here, 'scratch>(
                 handed,
                 owed,
                 inherit,
+                kept: keeps,
                 ..
             },
         ) => {
@@ -535,7 +544,7 @@ fn ran<'graph, 'here, 'scratch>(
                         inherit,
                         root: called_function(callee).and_then(|function| function.body().root),
                         kept: bare(callee)
-                            .then(|| frame_kept(&mut step, activation, callee, arguments)),
+                            .then(|| frame_kept(&mut step, activation, (callee, arguments), keeps)),
                     },
                     memo,
                     ..Runner::at(program, activation, Level::Frame, Some(contract))
@@ -855,6 +864,7 @@ pub fn call<'graph, 'here>(
     handed: &'here [Handed],
     owed: Option<Contract>,
     inherit: Option<MemoHome>,
+    passing: Option<&'here Passing<'graph, 'here>>,
     use_: Use,
 ) -> Request<'graph, 'here, KBundle> {
     // The return the caller sees: the value is retyped to it, a header's included.
@@ -880,6 +890,8 @@ pub fn call<'graph, 'here>(
                 owed,
                 inherit,
                 level: None,
+                passing,
+                kept: None,
             },
         },
     }

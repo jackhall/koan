@@ -526,6 +526,7 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'
                     &[],
                     owed,
                     None,
+                    None,
                     Use::Forwards,
                 )
             };
