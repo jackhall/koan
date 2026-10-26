@@ -614,7 +614,5 @@ module value by its digest tree. The two-program test,
   which build an `Error` from a fault and release its frames.
 - [A refused program stays loaded](../../roadmap/rewrite/refused-programs-stay-loaded.md)
   — a refused load kept, so its shape error renders on demand rather than once.
-- [Flat memory for a hop under its own settlement](../../roadmap/gradual-build/settled-hop-memory.md)
-  — the bytes a tail loop under its own settlement leaves per hop.
-- [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — the
-  bytes a `Shares` tail hop leaves in its host.
+- [Flat memory for a tail loop](../../roadmap/rewrite/tail-loop-memory.md)
+  — the bytes a tail loop leaves in its host per hop.

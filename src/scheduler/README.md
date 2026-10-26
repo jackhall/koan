@@ -236,15 +236,13 @@ delayed reclaim, and soundness rests on the substrate's brands either way.
 | `Fresh` | `create_tree_lent` | its own, reclaimed whole at death | a result placed operand-free crosses free |
 | `Shares` | `create_tenant` | none — the spawner's, at the spawner's own brand | an embedded argument crosses free, because nothing crosses |
 
-The same bit decides a tail hop. A `Fresh` hop draws a recycled region and the
-loop runs in memory independent of hop count; a `Shares` hop joins its
-predecessor's region, whose growth the result retains anyway. Bounded memory has
-a price the bit also carries: sibling tree cells are `Apart`, so a `Fresh` hop's
-state homed in its predecessor crosses by a forced copy, every hop, while state
-homed in the caller's frame or above is `Under` and free. A loop that threads a
-large state it built itself wants `Shares` whatever its return type says. A
-tenant's scratch is its host's, so a tenant writes its intermediates there while
-a result bound for storage is built in host storage from the start.
+The same bit places a tail hop: a `Fresh` hop is a sibling tree cell under the
+predecessor's parent, a `Shares` hop a co-tenant of its host. Sibling tree cells
+are `Apart`, so a `Fresh` hop's state homed in its predecessor crosses by a
+forced copy, every hop, while state homed in the caller's frame or above is
+`Under` and free. A tenant's scratch is its host's, so a tenant writes its
+intermediates there while a result bound for storage is built in host storage
+from the start.
 
 **`Use`** says what the spawner will do with the result, which only the spawner
 knows, and so where the result's **home** is.
@@ -559,3 +557,7 @@ observes it records in `tests/native.rs` for the test around it to read back.
 - [Setting the build budget](../../roadmap/gradual-build/bound-settings.md)
   — the budget as a setting a user names.
 - [Agents](../../roadmap/rewrite/agents.md) — an arena per agent.
+- [Flat memory for a tail loop](../../roadmap/rewrite/tail-loop-memory.md) —
+  the loop cell a tail loop threads its state through, one placement for a
+  hop, and a successor's birth built in its own region from one operand per
+  argument.

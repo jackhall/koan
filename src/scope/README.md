@@ -1343,3 +1343,6 @@ type outside the one error that lists names, and on a retired lifetime name.
   are spliced into a quote at once, and a kind for built code.
 - [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — `CLOSE
   OVER`, and a warning for an unmarked keyworded use in a quote.
+- [Flat memory for a tail loop](../../roadmap/rewrite/tail-loop-memory.md) —
+  the threaded set a body's shape seals: the binders and inline arguments its
+  last statement hands on.

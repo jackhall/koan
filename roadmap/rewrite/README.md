@@ -41,6 +41,7 @@ hand.
 - [Families as parameters](families-as-parameters.md)
 - [Recursion over run-time types](recursion-over-run-time-types.md)
 - [A refused program stays loaded](refused-programs-stay-loaded.md)
+- [Flat memory for a tail loop](tail-loop-memory.md)
 - [Yielding iterators](yielding-iterators.md)
 
 ## Unplanned work
@@ -120,21 +121,6 @@ as surprises, not scheduled.
   variant that belongs to another type or is dead. Splitting `ShapeError` into
   a build half and a load half rendered in dispatch waits on the refusal cell
   holding a type `scope` does not own.
-- **A `Shares` tail hop leaves its bytes in the host.** A tail recursion holds a
-  constant number of cells ([tails](../../src/program/README.md#frames-contracts-and-tails)),
-  but a hop placed `Shares` lays the next frame's activation and argument
-  record down in the region of the cell it shares, which reclaims nothing until
-  that cell finishes, so the recursion's memory still grows with its depth — and
-  the types a porous body builds with it, in the host's
-  [branch](../../lattice/src/types/identity.md#storage-a-root-and-its-branches);
-  a caching body's go to a scratch branch instead
-  ([where each body interns](../../design/type-tiers.md#where-each-body-interns)).
-  The hints
-  already separate a result's home from the frame's region, so a hop could place
-  its activation and temporaries `Fresh`, recycled per hop, and build only what
-  it returns into the home, keeping the scratch branch the successor was lent;
-  what is open is how a step tells result bytes from
-  temporaries before it finishes, which `Shares` sidesteps.
 - **No warning channel.** A program has no way to be told about something
   that is neither an error nor a value. The first case with nothing to report
   through is [dispatch](../../src/dispatch/README.md#the-overlap-check)'s: a user overload that is never selected,

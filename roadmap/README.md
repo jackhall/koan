@@ -37,7 +37,6 @@ subdirectory's README carries its own slice.
 - [Faults and call traces](conditionals/faults.md)
 - [Matching](conditionals/matching.md)
 - [A birth solved once](gradual-build/birth-solved-once.md)
-- [Flat memory for a hop under its own settlement](gradual-build/settled-hop-memory.md)
 - [Placing a verdict without probing](gradual-build/verdict-placement.md)
 - [Warm composed types](gradual-build/warm-composed-types.md)
 - [A container literal's element type](gradual-typing/container-literal-types.md)
@@ -49,5 +48,6 @@ subdirectory's README carries its own slice.
 - [Families as parameters](rewrite/families-as-parameters.md)
 - [Recursion over run-time types](rewrite/recursion-over-run-time-types.md)
 - [A refused program stays loaded](rewrite/refused-programs-stay-loaded.md)
+- [Flat memory for a tail loop](rewrite/tail-loop-memory.md)
 - [Yielding iterators](rewrite/yielding-iterators.md)
 
