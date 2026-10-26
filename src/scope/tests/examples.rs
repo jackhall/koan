@@ -1134,6 +1134,41 @@ LET f = (FN FOR ALL #[Elt] :{a :Number, b :Elt, c :Number} -> Any = #((LET u = b
     });
 }
 
+/// A callable's threaded set: the binders its last statement hands on that the frame built, each
+/// with what it was built over, less what the frame received — a parameter, or a binder bound bare
+/// to one — and the argument parts it hands on that are no name, no literal and no member read of
+/// a value received.
+#[test]
+fn a_callables_threaded_set_holds_what_its_frame_built_and_hands_on() {
+    let source = "\
+LET g = (FN :{a :Number, xs :Any} -> Any = #(a))
+LET f = (FN :{a :Number, xs :Any} -> Any = #((LET u = a) (LET v = [u]) (LET k = [v]) (LET r = xs) (LET w = [7]) (g {a = u, xs = {head = k, tail = r}})))
+LET h = (FN :{a :Number, xs :Any} -> Any = #(g {a = a, xs = (ATTR xs next)}))";
+    shaped(source, |fixture, lines, shape| {
+        let shape = shape.expect("the program shapes");
+        let body = nested_at(shape, &lines[1], 3, 5);
+        let slot = |name: &str| body.slot(value(fixture, name)).unwrap().0;
+        let mut expected = [slot("v"), slot("k")];
+        expected.sort_unstable();
+        assert_eq!(body.threaded(), &expected[..]);
+        let last = body.body().last().expect("the body has statements");
+        let ExpressionPart::RecordLiteral(fields) = &last.parts[1].value else {
+            panic!("the call's argument is a record literal");
+        };
+        assert_eq!(body.threaded_parts(), &[body.site(&fields[1].1)]);
+
+        let walker = nested_at(shape, &lines[2], 3, 5);
+        assert!(
+            walker.threaded().is_empty(),
+            "a walker builds nothing it hands on"
+        );
+        assert!(
+            walker.threaded_parts().is_empty(),
+            "a member read of a parameter is received"
+        );
+    });
+}
+
 /// Statements parsed last-first lay their nested bodies at addresses in another order: their sites,
 /// numbered in program order, and their segments come out alike either way.
 #[test]

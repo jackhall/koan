@@ -94,6 +94,7 @@ mod digest;
 mod locate;
 mod rewrite;
 mod surface;
+mod threaded;
 
 pub(in crate::scope) use locate::{each_part_within, part_within, source_within};
 
@@ -3605,6 +3606,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             }
         }));
         let spelled = self.spelled_paths(&draft, &chain);
+        let (threaded, threaded_parts) = threaded::threaded(&draft, around.len(), self.scratch);
         drop(chain);
         let mentions = Keyed::from_sorted(collect(writer, mentions.iter().copied()));
         let mut offers = draft.offers;
@@ -3712,6 +3714,8 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 holds,
                 nested_starts: collect(writer, nested_starts.iter().copied()),
                 last_reads,
+                threaded: collect(writer, threaded.iter().copied()),
+                threaded_parts: collect(writer, threaded_parts.iter().copied()),
                 arm: draft.arm,
                 code_type: draft.code_type,
                 refusal: draft.refusal,

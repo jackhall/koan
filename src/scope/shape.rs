@@ -646,6 +646,10 @@ pub struct BodyShape<'graph> {
     nested_starts: &'graph [u32],
     /// The slots a callable's or a code body's last statement reads, and every type slot, sorted.
     last_reads: &'graph [Slot],
+    /// The binders and the last statement's argument parts a tail call of this body hands on that
+    /// its frame built itself, each sorted; see [`threaded`](BodyShape::threaded).
+    threaded: &'graph [Slot],
+    threaded_parts: &'graph [Site],
     /// What this body is to the `MATCH` or `TRY` holding it, when it is an arm.
     arm: Option<Arm<'graph>>,
     /// A code shape's carried type: its code kind needing its open `\` marks. `Code` for every
@@ -905,6 +909,23 @@ impl<'graph> BodyShape<'graph> {
     /// them.
     pub fn last_reads(&self) -> &'graph [Slot] {
         self.last_reads
+    }
+
+    /// The binders a callable's or a code body's last statement hands on that its frame built
+    /// itself, sorted: the backward closure over its read edges from that statement's reads, type
+    /// slots, parameters and every binder bound bare to a value the frame received excluded. Empty
+    /// for any other kind. A frame asks for each one's value to be built where it outlives the hop
+    /// — in its loop's cell — so a tail call hands it on from there.
+    pub fn threaded(&self) -> &'graph [Slot] {
+        self.threaded
+    }
+
+    /// The last statement's argument parts a tail call of this body hands on that are no name and
+    /// no literal and not a value the frame received — a parameter's member read through the
+    /// builtin `ATTR` alone, say — sorted: what the frame's evaluation of that statement asks to be
+    /// built where it outlives the hop, as it asks for [`threaded`](Self::threaded) binders.
+    pub fn threaded_parts(&self) -> &'graph [Site] {
+        self.threaded_parts
     }
 
     /// The component `slot` belongs to, by index into [`components`](Self::components).
