@@ -383,7 +383,7 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'
                     contract,
                     crate::program::Within::TOP,
                 );
-                return step.tail(Placement::Shares, work);
+                return step.hand_off(work);
             }
             let asked = ask(
                 &mut step,
@@ -518,7 +518,6 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'
             let request = |owed| {
                 call(
                     program,
-                    types,
                     callee,
                     Value::Record(arguments),
                     CallKind::ByName,
@@ -535,7 +534,7 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'
                     .is_some_and(|function| contract.kept_by(types, function.ktype(), None))
             {
                 let request = request(Some(contract));
-                return step.tail(request.placement, request.work);
+                return step.tail(request.work);
             }
             let asked = step.spawn(request(None));
             park(step, asked, birth, 2)

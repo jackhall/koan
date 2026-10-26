@@ -74,7 +74,7 @@ use crate::scope::{
     InstanceRead, Located, Narrowing, Offer, ParameterBinding, ShapeKind, Site, StaticType,
 };
 use crate::symbols::{BinderSymbol, Symbol};
-use crate::type_lattice::{KType, Verdict};
+use crate::type_lattice::{KType, TypeNode, Verdict};
 #[cfg(debug_assertions)]
 use crate::type_lattice::{bound_above, lower_end_outside, satisfied_by};
 use crate::values::{Chain, Dict, Key, List, Record, Tagged, TypeValue, Value, satisfies};
@@ -906,12 +906,11 @@ fn call<'step, 'graph, 'here>(
                         Operand::Value(held) => Some((name.symbol(), *held)),
                         Operand::Label(_) => None,
                     });
-                passing(writer, at, named, hop)
+                passing(writer, at, arguments, named, hop)
             });
             let call = |owed: Option<Contract>| {
                 crate::program::call(
                     program,
-                    &at.types,
                     callee,
                     arguments,
                     CallKind::Keyworded,
@@ -939,26 +938,34 @@ fn call<'step, 'graph, 'here>(
     finish(step, at, error)
 }
 
-/// What a tail call hands its successor through kept parts: each argument of `named`, by the name
-/// its parameter binds, that is held beside a kept part, and the frame's own callee, kept, where
-/// the call `hop`s into it.
+/// What a tail call over the record `arguments` hands its successor through kept parts: each
+/// argument of `named`, by the name its parameter binds, that is held beside a kept part, the
+/// frame's own callee, kept, where the call `hop`s into it, and the record's field names as its
+/// type names them, in the record's order.
 fn passing<'graph, 'here>(
     writer: Writer<'here, '_>,
     at: &Evaluation<'_, 'graph, 'here, '_, '_, '_>,
+    arguments: KValue<'graph, 'here>,
     named: impl Iterator<Item = (Symbol, Held<'graph, 'here>)>,
     hop: bool,
 ) -> &'here Passing<'graph, 'here> {
     let scratch = Bump::new();
-    let mut arguments = BumpVec::new_in(&scratch);
-    arguments.extend(named.filter_map(|(name, held)| Some((name, held.kept?))));
+    let mut kept = BumpVec::new_in(&scratch);
+    kept.extend(named.filter_map(|(name, held)| Some((name, held.kept?))));
     let callee = (at.within.kept)
         .and_then(|kept| kept.callee)
         .filter(|_| hop);
+    let mut binders = BumpVec::new_in(&scratch);
+    if let TypeNode::Record { fields } = at.types.node(arguments.concrete_ktype()) {
+        binders.extend(fields.keys());
+    }
+    binders.sort_unstable_by_key(|binder| binder.symbol());
     resident(
         writer,
         Passing {
             callee,
-            arguments: collect(writer, arguments.iter().copied()),
+            arguments: collect(writer, kept.iter().copied()),
+            binders: collect(writer, binders.iter().copied()),
         },
     )
 }
@@ -1150,6 +1157,7 @@ fn apply<'step, 'graph, 'here>(
         Some(fields) => passing(
             writer,
             at,
+            argument.value,
             fields.iter().map(|(name, held)| (name.symbol(), *held)),
             hop,
         ),
@@ -1165,14 +1173,13 @@ fn apply<'step, 'graph, 'here>(
                 let value = (argument.value.along(*name)).expect("a record stores its fields");
                 (*name, Held { value, kept })
             });
-            passing(writer, at, fields, hop)
+            passing(writer, at, argument.value, fields, hop)
         }
     });
     let argument = argument.value;
     let call = |owed: Option<Contract>| {
         crate::program::call(
             program,
-            &at.types,
             head,
             argument,
             CallKind::ByName,
@@ -1247,22 +1254,14 @@ fn called<'step, 'graph, 'here>(
             if let KBirth::Call { level, .. } = &mut request.work.state {
                 *level = at.within.stamp.map(|stamp| stamp.level);
             }
-            let Request {
-                placement, work, ..
-            } = request;
-            return step.tail_under(placement, work, at.within.build);
+            return step.tail_under(request.work, at.within.build);
         }
         let types = step.types();
-        let lay = (request.placement == Placement::Shares).then(|| step.writer());
-        let seek = seek(&mut request.work.state, keys, lay, &at.types, &types);
-        let Request {
-            placement, work, ..
-        } = request;
-        return step.tail_seeking(placement, work, seek);
+        let seek = seek(&mut request.work.state, keys, &at.types, &types);
+        return step.tail_seeking(request.work, seek);
     }
     let types = step.types();
-    let lay = (request.placement == Placement::Shares).then(|| step.writer());
-    let seek = seek(&mut request.work.state, keys, lay, &at.types, &types);
+    let seek = seek(&mut request.work.state, keys, &at.types, &types);
     #[cfg(test)]
     {
         let bytes = step.writer().in_use();

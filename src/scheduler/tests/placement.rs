@@ -1,6 +1,6 @@
-//! The placement hint, inverted over one workload. It is a hint and never a contract, so both ways
-//! round compute the same thing; what it decides is what the memory does, and that shows in the
-//! process allocation count.
+//! A hop's placement over one workload: every hop is born in a region of its own, drawn back from
+//! the pool its predecessor returned, so a loop of hops costs the heap nothing per turn, and that
+//! shows in the process allocation count.
 
 use std::cell::Cell;
 
@@ -15,7 +15,7 @@ use crate::scheduler::{Action, Placement, Received, Scheduler, Step, StepError, 
 const MANY: usize = 4_000;
 
 /// A short run of the same loop, to read the long one against: what the hops cost is the
-/// difference over the difference, and it is that, not one reading, that the placement decides.
+/// difference over the difference.
 const FEW: usize = 100;
 
 /// What each turn writes into whichever region it is standing in.
@@ -38,16 +38,10 @@ fn start<'graph>(
     step.park(asked, finish, KValue::Null, None)
 }
 
-/// One turn: write a blob where this cell stands, then hand on or deliver.
-///
-/// The blob is built rather than carried, so what the placement decides is plain: a `Fresh`
-/// successor writes a region drawn back from the pool its predecessor returned, while a `Shares`
-/// successor writes its host's, which no turn of the loop ever returns.
-fn turn<'graph>(
-    step: Step<'_, 'graph, '_, '_, '_, '_, Native>,
-    placement: Placement,
-    next: TestStep<'graph>,
-) -> Action<'graph, Native> {
+/// One turn: write a blob where this cell stands, then hop on or deliver. The blob is built rather
+/// than carried, so the successor writes a region drawn back from the pool its predecessor
+/// returned.
+fn turn<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
     let written: KValue<'graph, '_> = crate::values::text(step.writer(), BLOB);
     let KValue::Str(text) = written else {
         return step.failed(StepError::Stale);
@@ -59,13 +53,10 @@ fn turn<'graph>(
         left
     });
     if left > 0 {
-        return step.tail(
-            placement,
-            Work {
-                step: next,
-                state: KValue::Null,
-            },
-        );
+        return step.tail(Work {
+            step: turn,
+            state: KValue::Null,
+        });
     }
     step.finish_fresh(move |_, _, _| Active::new(KValue::Number(length)))
 }
@@ -80,20 +71,8 @@ fn finish<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<
     step.done()
 }
 
-fn start_fresh<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
-    start(step, turn_fresh)
-}
-
-fn start_shares<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
-    start(step, turn_shares)
-}
-
-fn turn_fresh<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
-    turn(step, Placement::Fresh, turn_fresh)
-}
-
-fn turn_shares<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
-    turn(step, Placement::Shares, turn_shares)
+fn start_turning<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
+    start(step, turn)
 }
 
 /// What the workload computed, and what it cost the heap to compute it.
@@ -127,39 +106,17 @@ fn run(hops: usize, start: AnyStep) -> Run {
 }
 
 #[test]
-fn inverting_the_hint_changes_what_is_retained_and_no_value_the_program_computes() {
-    let fresh_few = run(FEW, start_fresh);
-    let fresh_many = run(MANY, start_fresh);
-    let shares_few = run(FEW, start_shares);
-    let shares_many = run(MANY, start_shares);
-
-    // The hint is never a contract: soundness rests on the substrate's brands either way, and the
-    // loop computes the same thing at either placement and at either length.
+fn a_loop_of_hops_costs_the_heap_nothing_per_turn() {
+    let few = run(FEW, start_turning);
+    let many = run(MANY, start_turning);
     let answer = [BLOB.len().to_string()];
-    assert_eq!(fresh_few.recorded, answer);
-    assert_eq!(fresh_many.recorded, answer);
-    assert_eq!(shares_few.recorded, answer);
-    assert_eq!(shares_many.recorded, answer);
-
+    assert_eq!(few.recorded, answer);
+    assert_eq!(many.recorded, answer);
     assert!(
-        fresh_many.allocations <= fresh_few.allocations,
-        "a sibling returns its region at each hand-off, so forty times the turns cost no more \
-         heap: {} allocations against {}",
-        fresh_many.allocations,
-        fresh_few.allocations
-    );
-    assert!(
-        shares_many.allocations > shares_few.allocations,
-        "a co-tenant writes its host's region, which no turn returns, so the same forty times \
-         costs more: {} allocations against {}",
-        shares_many.allocations,
-        shares_few.allocations
-    );
-    assert!(
-        shares_many.allocations > fresh_many.allocations,
-        "and so the one workload, hinted the other way round, retains what the first reclaimed: \
-         {} allocations against {}",
-        shares_many.allocations,
-        fresh_many.allocations
+        many.allocations <= few.allocations,
+        "a hop returns its region to the pool its successor draws from, so forty times the turns \
+         cost no more heap: {} allocations against {}",
+        many.allocations,
+        few.allocations
     );
 }

@@ -36,7 +36,7 @@ use crate::scheduler::continuation::{
 };
 use crate::scheduler::delivery::KDelivery;
 use crate::scheduler::kept::{Held, Kept, KeptPart};
-use crate::scheduler::seek::{Compose, Lending, Replayed, Seek, Sought};
+use crate::scheduler::seek::{Compose, Lending, Replayed, Requested, Seek};
 use crate::scope::{
     Code, ComposedRoot, ComposedSyntax, Entry, EntryFamily, Facts, HalfHeader, MemoFamily, MemoKey,
     RegionHeader,
@@ -69,6 +69,18 @@ type ScratchAt<'graph, 'here, 'scratch, B> =
 /// registered its run and stored both its successor and its scratch state.
 pub struct Action<'graph, B: StepBundle<'graph>>(Kind<'graph, B>);
 
+/// Where a tail's successor is born, and how its birth crosses.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum Tailing {
+    /// Under this cell, as its tree child: a frame handing its last statement to an evaluation,
+    /// which views the frame's activation from below it.
+    HandOff,
+    /// Beside this cell, under the parent its provenance names: a hop into a call's frame.
+    Hop,
+    /// Beside this cell, at its own placement: the same work born again elsewhere.
+    Rebirth,
+}
+
 /// What an [`Action`] turned out to be, read by the drain and by nothing else. Anything in
 /// `scheduler` can name a `Kind`; only this file can wrap one into an `Action`.
 #[expect(
@@ -85,10 +97,10 @@ pub(super) enum Kind<'graph, B: StepBundle<'graph>> {
     /// Parked on the receipt run the step registered, for the children it asked for. The drain
     /// pushes their requests and leaves this cell alone until the run completes.
     Park,
-    /// A tail call: the drain pushes the successor, and releases this cell once the successor's
-    /// first step has run. The successor inherits this cell's provenance verbatim, so the `Use` its
-    /// request carries is never read.
-    Tail(Asked<'graph, B>),
+    /// A tail call: the drain pushes the successor, born as [`Tailing`] says, and releases this
+    /// cell once the successor's first step has run. The successor inherits this cell's provenance
+    /// verbatim, so the `Use` its request carries is never read.
+    Tail(Asked<'graph, B>, Tailing),
     /// A root work's end that leaves a birth at rest in its home, for the graph's owner to resume a
     /// later root work from. The drain releases the cell and hands the carrier back out of `run`.
     Left(Dormant<'graph, B::Birth>),
@@ -229,7 +241,7 @@ pub struct Step<
     arrival: Arrival,
     /// The request a call's asker handed the drain, which the frame's first step lays a level
     /// from.
-    sought: Option<Box<Sought>>,
+    sought: Option<Box<Requested<'graph>>>,
     /// The books the cell's arena node is kept in, which the step reads liveness from.
     books: &'a BuildArena<'graph>,
     spawns: &'a mut Spawns<'graph, B>,
@@ -284,7 +296,7 @@ where
             ArenaRef,
             Option<ContentDigest>,
             Arrival,
-            Option<Box<Sought>>,
+            Option<Box<Requested<'graph>>>,
         ),
         books: &'a BuildArena<'graph>,
         spawns: &'a mut Spawns<'graph, B>,
@@ -526,7 +538,7 @@ where
 
     /// At a call's first step, the request its asker handed the drain, where the frame lays its
     /// own level; `None` past the first take and for every other cell.
-    pub fn sought(&mut self) -> Option<Box<Sought>> {
+    pub fn sought(&mut self) -> Option<Box<Requested<'graph>>> {
         self.sought.take()
     }
 
@@ -788,34 +800,38 @@ where
         Action(Kind::Park)
     }
 
-    /// Hand this cell's work to a successor at `placement`, which inherits its provenance verbatim.
-    /// The successor's birth is handed over at `'here` and put to rest here, as a spawn's is.
-    pub fn tail(self, placement: Placement, work: Work<'graph, 'here, B>) -> Action<'graph, B> {
-        self.tail_lending(placement, work, Lending::Parent)
+    /// Hand this frame's last statement to a successor born under this cell, as its tree child:
+    /// the evaluation, which views the frame's activation from below it, so the view pins free
+    /// and pledges nothing. It inherits this cell's provenance verbatim, so its value goes where
+    /// the frame's would have, and its own successor is born beside this cell. The birth is handed
+    /// over at `'here` and put to rest here, as a spawn's is.
+    pub fn hand_off(self, work: Work<'graph, 'here, B>) -> Action<'graph, B> {
+        self.tail_lending(Placement::Fresh, work, Lending::Parent, Tailing::HandOff)
+    }
+
+    /// Hand this cell's work to a successor born beside it, under the parent its provenance
+    /// names, in a region of its own, which inherits its provenance verbatim. The successor's birth
+    /// is handed over at `'here` and put to rest here, as a spawn's is.
+    pub fn tail(self, work: Work<'graph, 'here, B>) -> Action<'graph, B> {
+        self.tail_lending(Placement::Fresh, work, Lending::Parent, Tailing::Hop)
     }
 
     /// [`tail`](Self::tail) into a call's frame, born under the arena node `seek` finds, as
     /// [`spawn_seeking`](Self::spawn_seeking) asks for a child.
     pub fn tail_seeking(
         self,
-        placement: Placement,
         work: Work<'graph, 'here, B>,
         seek: Seek<'graph>,
     ) -> Action<'graph, B> {
-        self.tail_lending(placement, work, Lending::Call(seek))
+        self.tail_lending(Placement::Fresh, work, Lending::Call(seek), Tailing::Hop)
     }
 
     /// [`tail`](Self::tail) into a frame of the same callee as the frame running under `build`,
     /// born under that same settlement with no lookup — sound only for a callee whose name does
     /// not escape, so that every hop into it is a tail edge the load read; or cold, where that
     /// settlement is no longer live.
-    pub fn tail_under(
-        self,
-        placement: Placement,
-        work: Work<'graph, 'here, B>,
-        build: ArenaRef,
-    ) -> Action<'graph, B> {
-        self.tail_lending(placement, work, Lending::Under(build))
+    pub fn tail_under(self, work: Work<'graph, 'here, B>, build: ArenaRef) -> Action<'graph, B> {
+        self.tail_lending(Placement::Fresh, work, Lending::Under(build), Tailing::Hop)
     }
 
     /// Hand this cell's work, untouched, to a successor born under the composition of `root`'s
@@ -830,7 +846,7 @@ where
         );
         let placement = self.placement();
         let compose = Compose::Owned(ComposedSyntax::of(root));
-        self.tail_lending(placement, work, Lending::Compose(compose))
+        self.tail_lending(placement, work, Lending::Compose(compose), Tailing::Rebirth)
     }
 
     /// Hand this cell's work, untouched, to a successor born under the arena node `seek` finds,
@@ -850,7 +866,12 @@ where
         );
         let placement = self.placement();
         let syntax = ComposedSyntax::of(root);
-        self.tail_lending(placement, work, Lending::Pinning(seek, syntax))
+        self.tail_lending(
+            placement,
+            work,
+            Lending::Pinning(seek, syntax),
+            Tailing::Rebirth,
+        )
     }
 
     /// Hand this cell's work, untouched, to a successor born warm: the first step of a call whose
@@ -866,7 +887,7 @@ where
         debug_assert!(!self.replayed(), "a replayed cell replays nothing");
         let placement = self.placement();
         let levels = levels.into_iter().collect();
-        self.tail_lending(placement, work, Lending::Replay(levels))
+        self.tail_lending(placement, work, Lending::Replay(levels), Tailing::Rebirth)
     }
 
     /// The placement this cell was born at: a tree cell lent its parent's scratch, or a tenant.
@@ -882,19 +903,21 @@ where
         placement: Placement,
         work: Work<'graph, 'here, B>,
         lending: Lending<'graph>,
+        tailing: Tailing,
     ) -> Action<'graph, B> {
         if !self.spawns.is_empty() {
             return self.failed(StepError::Unparked);
         }
         let state = self.rest(work.state);
-        Action(Kind::Tail(Asked {
+        let asked = Asked {
             placement,
             // Never read: a successor reports under its predecessor's provenance.
             use_: Use::Reads,
             step: work.step,
             state,
             lending,
-        }))
+        };
+        Action(Kind::Tail(asked, tailing))
     }
 
     /// Finish with a result built by `build`, which takes no operands, and deliver it where the

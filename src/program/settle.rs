@@ -7,8 +7,8 @@
 //! name's is the call's solution at it, digested as the type value the frame binds: carried by a
 //! keyworded call, held by an instance, and solved here, on the asker's region, for a call by
 //! name. Where the callee's body can birth a callable, the request is laid as the frame's
-//! [level] — by a `Shares` frame's asker at the call, or by a `Fresh` frame's first step from the
-//! request the drain hands it back — which a callable born under the settlement records in its
+//! [level] — by the frame's first step, from the request the drain hands it back — which a
+//! callable born under the settlement records in its
 //! [stamp](crate::scope::Stamp), so a call of it replays the chain where it was evicted. A call
 //! past a header or a barrier of a body keyed on a `FOR ALL` name seeks no settlement, since its
 //! frame solves only once the arguments are retyped or have crossed, unless it calls an instance,
@@ -77,13 +77,11 @@ pub fn callee_keys<'here>(birth: &KBirth<'_, 'here>) -> Option<&'here [(Slot, Bi
 /// `keys`, the callee's as the caller read them ([`callee_keys`]), if the asker can read its
 /// content at every keyed name. `types` is the asker's evaluation chain, which reads the
 /// arguments; `region` its region's, where a call by name's solution is solved. Where the callee's
-/// body can birth a callable and the birth holds no level yet, the request is laid as its level
-/// through `lay` — a `Shares` frame's asker, whose region the frame writes — or, with no writer,
-/// handed back to the frame's first step to lay ([`level`]).
-pub fn seek<'graph, 'here>(
-    birth: &mut KBirth<'graph, 'here>,
+/// body can birth a callable and the birth holds no level yet, the request is handed back to the
+/// frame's first step, which lays it as its level in its own region ([`level`]).
+pub fn seek<'graph>(
+    birth: &mut KBirth<'graph, '_>,
     keys: Option<&[(Slot, BinderSymbol)]>,
-    lay: Option<Writer<'here, '_>>,
     types: &Chain<'_, '_, '_, '_>,
     region: &Chain<'_, '_, '_, '_>,
 ) -> Seek<'graph> {
@@ -99,15 +97,7 @@ pub fn seek<'graph, 'here>(
     let settlement = keys.and_then(|keys| settlement(birth, keys, types, region));
     let settlement = settlement.map(|sought| {
         if births && let KBirth::Call { level: None, .. } = birth {
-            match lay {
-                Some(writer) => {
-                    let laid = level(writer, birth, &sought, types);
-                    if let KBirth::Call { level, .. } = birth {
-                        *level = Some(laid);
-                    }
-                }
-                None => hands_back = true,
-            }
+            hands_back = true;
         }
         let tiers = program.expect("a keyed birth is a call").tiers();
         (BindingImage::of(sought.keyed.clone(), tiers, types), sought)
@@ -126,9 +116,8 @@ thread_local! {
 }
 
 /// The level of `sought`, the request of the call `birth`, laid through `writer`: the one function
-/// that lays a level. A `Shares` frame's asker lays it at the call ([`seek`]), and a `Fresh`
-/// frame's first step from the request the drain hands it back, each in the region the frame
-/// writes. It pins each keyed module of composed code other than the callee's own, whose root
+/// that lays a level, which a frame's first step calls from the request the drain hands it back,
+/// in its own region. It pins each keyed module of composed code other than the callee's own, whose root
 /// rebuilds that code's composition on a replay; `types` reads those arguments.
 pub fn level<'graph, 'here>(
     writer: Writer<'here, '_>,

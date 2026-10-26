@@ -20,7 +20,7 @@ use crate::memory::{
 };
 use crate::scheduler::action::{Action, Step, Use};
 use crate::scheduler::kept::{Kept, KeptPart};
-use crate::scheduler::seek::Sought;
+use crate::scheduler::seek::Requested;
 use crate::scope::RegionHeader;
 use crate::values::{ArenaRef, ContentDigest, TypeTiers};
 
@@ -171,7 +171,7 @@ where
     pub arrival: Arrival,
     /// The request a frame's asker handed the drain to give its first step: the frame lays its
     /// level from it.
-    pub sought: Option<Box<Sought>>,
+    pub sought: Option<Box<Requested<'graph>>>,
     pub state: Rested<'graph, 'cell, B>,
 }
 

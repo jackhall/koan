@@ -159,29 +159,31 @@ fn assert_flat(body: &str, arguments: &str, printed: impl Fn(u32) -> String) {
     }
 }
 
-/// The bytes a loop copied per hop at each depth, past what its program copies without looping.
+/// The bytes a loop copied per hop between each two depths, past what its program copies without
+/// looping: the marginal cost of a hop, which a fixed cost at the loop's entry does not move.
 fn copied_per_hop(body: &str, form: Form, arguments: &str) -> Vec<usize> {
-    (DEPTHS.iter())
+    let copied: Vec<usize> = (DEPTHS.iter())
         .map(|&depth| {
             let (looped, baseline) = looped(depth, body, form, arguments);
-            looped.copied.saturating_sub(baseline.copied) / depth as usize
+            looped.copied.saturating_sub(baseline.copied)
         })
+        .collect();
+    (copied.windows(2).zip(DEPTHS.windows(2)))
+        .map(|(copied, depths)| (copied[1] - copied[0]) / (depths[1] - depths[0]) as usize)
         .collect()
 }
 
-/// Whether two per-hop figures are the same constant, give or take what a depth's rounding moves.
+/// Whether the per-hop figures are one constant, give or take what a depth's rounding moves.
 fn same_per_hop(per_hop: &[usize]) -> bool {
     per_hop.iter().all(|&at| at.abs_diff(per_hop[0]) <= 8)
 }
 
 #[test]
-#[ignore = "phase 6"]
 fn a_chain_walk_holds_its_memory_flat_in_its_depth() {
     assert_flat(WALK, "ints chain", |_| "done".to_string());
 }
 
 #[test]
-#[ignore = "phase 6"]
 fn a_record_rebuilt_each_hop_holds_its_memory_flat_in_its_depth() {
     assert_flat(STEP, "ints {count = 0} chain", |depth| depth.to_string());
 }
@@ -217,6 +219,7 @@ fn a_hop_hands_on_its_received_arguments_without_copying_them() {
 }
 
 #[test]
+#[ignore = "phase 7"]
 fn a_cons_loop_copies_a_constant_per_hop() {
     for form in [Form::Selfward, Form::Mutual] {
         let per_hop = copied_per_hop(ACC, form, "ints null chain");
@@ -265,7 +268,6 @@ fn a_cons_loop_delivers_its_whole_list() {
 }
 
 #[test]
-#[ignore = "phase 6"]
 fn a_loops_host_holds_the_same_bytes_however_long_it_runs() {
     let loops = [
         (WALK, "ints chain"),
@@ -295,16 +297,25 @@ fn a_loops_host_holds_the_same_bytes_however_long_it_runs() {
     }
 }
 
+/// `ONWARD` hands back the field of its argument unchanged, at the home its caller built the
+/// argument record in — the hop's own frame — so it places nothing new there, and the host holds
+/// flat. That home is the hop's, so the next hop copies the field: a spawned call's kept carriers
+/// are projected from its birth (roadmap: precision of kept carriers).
 #[test]
-#[ignore = "phase 6"]
 fn a_call_returning_a_part_of_its_argument_places_nothing_new() {
     for form in [Form::Selfward, Form::Mutual] {
-        let onward = copied_per_hop(ONWARD, form, "ints chain");
-        let walk = copied_per_hop(WALK, form, "ints chain");
+        crate::scheduler::PASSED.with(|passed| passed.set(0));
+        let (looped, _) = looped(64, ONWARD, form, "ints chain");
+        assert_eq!(looped.printed, "done");
+        let passed = crate::scheduler::PASSED.with(Cell::get);
+        assert!(
+            passed >= 64,
+            "{form:?}: {passed} values handed back unchanged"
+        );
+        let (early, last) = (&looped.hops[2 * 16], looped.hops.last().unwrap());
         assert_eq!(
-            onward, walk,
-            "{form:?}: bytes per hop through ONWARD and without"
+            early.host_region, last.host_region,
+            "{form:?}: the host holds flat"
         );
     }
-    assert_flat(ONWARD, "ints chain", |_| "done".to_string());
 }

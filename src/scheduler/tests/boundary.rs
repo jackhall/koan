@@ -43,10 +43,16 @@ const OWNING_ALLOWED: &[(&str, &str)] = &[
     ("src/scheduler/seek.rs", "Replay(Vec<Replayed<'graph>>)"),
     ("src/scheduler/drain.rs", "levels: Vec<Replayed<'graph>>"),
     ("src/scheduler/arena.rs", "Vec::new()"),
-    ("src/scheduler/continuation.rs", "Option<Box<Sought>>"),
-    ("src/scheduler/action.rs", "Option<Box<Sought>>"),
-    ("src/scheduler/drain.rs", "Option<Box<Sought>>"),
-    ("src/scheduler/drain.rs", "Box::new(sought)"),
+    (
+        "src/scheduler/continuation.rs",
+        "Option<Box<Requested<'graph>>>",
+    ),
+    ("src/scheduler/action.rs", "Option<Box<Requested<'graph>>>"),
+    ("src/scheduler/drain.rs", "Option<Box<Requested<'graph>>>"),
+    (
+        "src/scheduler/drain.rs",
+        "Box::new(Requested { sought, image })",
+    ),
     ("src/scheduler/drain.rs", "RefCell<Vec<HopSample>>"),
 ];
 

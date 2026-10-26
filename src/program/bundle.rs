@@ -18,7 +18,7 @@ use crate::memory::{
 use crate::scheduler::{Born, Kept, KeptPart, MemoHome, StepBundle};
 use crate::scope::RegionHeader;
 use crate::scope::{ComposedRoot, Level, Segment, Site, Slot, Stamp};
-use crate::symbols::Symbol;
+use crate::symbols::{BinderSymbol, Symbol};
 use crate::type_lattice::{DeclaredType, Halves, KType};
 use crate::values::{
     ArenaRef, ContentDigest, Half, Record, TypeTiers, Value, Weight, copy_severed,
@@ -43,9 +43,9 @@ pub enum KBirth<'graph, 'cell> {
     /// `owed` is the contract of the evaluation that tailed into this frame: `None` when the frame
     /// was spawned. `inherit` is where the asker's decision memo rests, which seeds the frame's
     /// where its home holds none. `level` is the request of the settlement the frame seeks, which a
-    /// callable born under it records in its stamp: laid by a `Shares` frame's asker where the
-    /// callee's body can birth a callable, or kept by a hop under its frame's own settlement;
-    /// `None` for a `Fresh` frame, which lays its own from the request the drain hands it back.
+    /// callable born under it records in its stamp: kept by a hop under its frame's own
+    /// settlement; `None` for any other frame, which lays its own from the request the drain
+    /// hands it back.
     /// `passing` is what a tail hop hands its successor through kept parts, laid beside the
     /// skeleton the successor's birth is built from ([`Passing`]): `None` everywhere else, and
     /// once the successor has built its own. `kept` is what that successor keeps of its callee
@@ -132,13 +132,15 @@ pub struct Within<'graph, 'cell> {
 
 /// What a tail hop hands its successor through kept parts, laid beside the birth: each argument the
 /// birth's record holds that is a kept part, or a restamp of one, by name, and the frame's own
-/// callee, kept, where the hop is into it. The successor's birth is built in its own region, each
-/// of these crossing from its kept part and every other argument, and the callee where none is
-/// kept, out of the birth.
+/// callee, kept, where the hop is into it; and the record's field names as its type names them,
+/// in the record's order. The successor's birth is built in its own region, each of these crossing
+/// from its kept part and every other argument, and the callee where none is kept, out of the
+/// birth.
 #[derive(Clone, Copy)]
 pub struct Passing<'graph, 'cell> {
     pub callee: Option<Kept<'graph>>,
     pub arguments: &'cell [(Symbol, KeptPart<'graph, 'cell>)],
+    pub binders: &'cell [BinderSymbol],
 }
 
 /// What a hop's successor keeps of the callee and the arguments its birth holds, built beside the
@@ -187,8 +189,8 @@ impl<'graph, 'cell> Within<'graph, 'cell> {
         (self.build, self.stamp)
     }
 
-    /// What the evaluation a frame's tail hands its last statement runs within: it writes the
-    /// frame's parent, so it routes no more, and its frame's arena node stays.
+    /// What the evaluation a frame hands its last statement to runs within: its own region, under
+    /// the frame, so it routes no more, and its frame's arena node stays.
     pub fn handed_off(self) -> Self {
         Within {
             routes: false,
@@ -280,9 +282,8 @@ impl<'graph> StepBundle<'graph> for KBundle {
     type Scratch = KScratchFamily;
 
     /// A view is weighed at no bound, so the verdict never copies one: it is a borrow of another
-    /// cell's region. An evaluation, a block or an inspection is born under the cell it views,
-    /// where pinning it costs nothing, or is a frame's `Shares` tail, which pins the frame into the
-    /// ancestor its successor is a tenant of.
+    /// cell's region. An evaluation, a block or an inspection is born under the cell it views —
+    /// a frame's hand-off too — where pinning it costs nothing and pledges nothing.
     fn weight<'cell>(birth: &KBirth<'graph, 'cell>) -> usize
     where
         'graph: 'cell,
@@ -429,9 +430,8 @@ impl<'graph> StepBundle<'graph> for KBundle {
                         source,
                     }
                 }
-                // Only a forced copy reaches here with a view: a `Fresh` hop's successor, a sibling
-                // of the cell the view names. A view is born under the cell it views, or handed on
-                // by a `Shares` hop, whose successor is a tenant of an ancestor and pins it.
+                // Only a forced copy could reach here with a view, and a view is born under the
+                // cell it views, whose crossing pins.
                 KBirth::Evaluate { .. } | KBirth::Block { .. } | KBirth::Inspect { .. } => {
                     unreachable!("a birth holding a view is never copied")
                 }
@@ -492,10 +492,9 @@ impl<'graph> StepBundle<'graph> for KBundle {
         }
     }
 
-    /// The successor's call, built here: its arguments a record over the handed values under the
-    /// skeleton's names and record type, and its callee the last handed value, each restamped at
-    /// the type the skeleton held it at; what it keeps of each beside it; the rest of the skeleton
-    /// copied.
+    /// The successor's call, built here over the skeleton and the handed values ([`successor`]):
+    /// a pinned skeleton's home reaches the successor's branch, as a pinned birth's does, and a
+    /// type a copied one held a value at is adopted from its home where a restamp needs it.
     fn hop<'cell>(
         writer: Writer<'cell, '_>,
         header: Header<'graph, 'cell, '_, RegionHeader>,
@@ -508,9 +507,7 @@ impl<'graph> StepBundle<'graph> for KBundle {
         'graph: 'cell,
     {
         let types = tiers.chain(Halves::alone(Half::of(writer, header)));
-        // A pinned skeleton's home reaches the successor's branch, as a pinned birth's does; each
-        // type a copied one's values were held at is adopted from its home.
-        let (skeleton, level) = match view {
+        match view {
             CrossedOperand::Pinned { view, home, .. } => {
                 home.read(|header, _| {
                     (header.into_value().branch()).map(|branch| types.link_or_merge(branch))
@@ -518,119 +515,93 @@ impl<'graph> StepBundle<'graph> for KBundle {
                 let KBirth::Call { level, .. } = view else {
                     unreachable!("a skeleton is a call's")
                 };
-                (Skeleton::of(writer, view), *level)
+                successor(writer, &types, view, *level, (handed, kept), &|_| {})
             }
             CrossedOperand::Copied {
                 view: copied, home, ..
             } => {
-                let skeleton = Skeleton::of(writer, copied);
-                home.read(|header, _| {
-                    let branch = header.into_value().branch();
-                    for ktype in skeleton.types() {
-                        if !types.resolves(ktype) {
-                            types.adopt(branch, ktype);
-                        }
-                    }
-                });
                 let KBirth::Call { level, .. } = *copied else {
                     unreachable!("a skeleton is a call's")
                 };
-                (skeleton, copied_level(writer, &types, view, level))
+                let level = copied_level(writer, &types, view, level);
+                let adopt = |ktype: DeclaredType<KType>| {
+                    home.read(|header, _| types.adopt(header.into_value().branch(), ktype));
+                };
+                successor(writer, &types, copied, level, (handed, kept), &adopt)
             }
-        };
-        let held_at = |value: KValue<'graph, 'cell>, ktype: DeclaredType<KType>| match value.ktype()
-            == ktype
-        {
-            true => value,
-            false => value.restamped_at(writer, ktype, &types),
-        };
-        let count = skeleton.names.len();
-        let scratch = crate::memory::Bump::new();
-        let mut cells = crate::memory::BumpVec::with_capacity_in(count, &scratch);
-        cells.extend((0..count).map(|at| held_at(handed[at], skeleton.held_at[at])));
-        let record = Record::over(writer, skeleton.names, &cells, skeleton.record_at, &types);
-        let keeps = Keeps {
-            callee: kept[count],
-            arguments: writer.fill(count, |at| (skeleton.names[at], kept[at])),
-        };
-        KBirth::Call {
-            program: skeleton.program,
-            callee: held_at(handed[count], skeleton.callee_at),
-            arguments: Value::Record(record),
-            kind: skeleton.kind,
-            contributed: skeleton.contributed,
-            handed: skeleton.handed,
-            owed: skeleton.owed,
-            inherit: skeleton.inherit,
-            level,
-            passing: None,
-            kept: Some(resident(writer, keeps)),
         }
     }
 }
 
-/// What a hop's skeleton holds besides its values, laid in its successor's region: everything its
-/// successor's call copies as it is, the names of its argument record's fields, and the type it
-/// held each field, its record and its callee at.
-struct Skeleton<'graph, 'cell> {
-    program: &'graph Program<'graph>,
-    kind: CallKind,
-    contributed: &'cell [Option<KType>],
-    handed: &'cell [Handed],
-    owed: Option<Contract>,
-    inherit: Option<MemoHome>,
-    names: &'cell [Symbol],
-    held_at: &'cell [DeclaredType<KType>],
-    record_at: KType,
-    callee_at: DeclaredType<KType>,
-}
-
-impl<'graph, 'cell> Skeleton<'graph, 'cell> {
-    /// What `birth`, a skeleton laid beside the values a hop hands on, holds besides them, laid
-    /// through `writer`.
-    fn of(writer: Writer<'cell, '_>, birth: &KBirth<'graph, '_>) -> Self {
-        let KBirth::Call {
-            program,
-            callee,
-            arguments,
-            kind,
-            contributed,
-            handed,
-            owed,
-            inherit,
-            ..
-        } = birth
-        else {
-            unreachable!("a skeleton is a call")
-        };
-        let (names, cells) = (arguments.stored_fields())
-            .expect("a skeleton's arguments are a record, field by field");
-        Skeleton {
-            program,
-            kind: *kind,
-            contributed: collect(writer, contributed.iter().copied()),
-            handed: collect(writer, handed.iter().copied()),
-            owed: *owed,
-            inherit: *inherit,
-            names: collect(writer, names.iter().copied()),
-            held_at: collect(writer, cells.iter().map(Value::ktype)),
-            record_at: arguments
-                .ktype()
-                .as_type()
-                .expect("a record's type is no scheme"),
-            callee_at: callee.ktype(),
+/// A hop's successor's call, laid through `writer` over `skeleton`, the call its predecessor laid
+/// beside what it hands on, and `handed`, each handed value at the successor's brand beside the
+/// carrier `kept` keeps of it: its arguments a record over the handed values under the skeleton's
+/// names, and its callee the last handed value, each restamped at the type the skeleton held it
+/// at; what it keeps of each beside it; the rest of the skeleton copied. The record's type is
+/// interned over the handed values' types, which the successor resolves; a restamp's type its
+/// chain lacks is handed to `adopt` first.
+fn successor<'graph, 'cell>(
+    writer: Writer<'cell, '_>,
+    types: &crate::values::Chain<'cell, 'cell, '_, '_>,
+    skeleton: &KBirth<'graph, '_>,
+    level: Option<&'cell Level<'cell, Knotted<'graph, 'cell>>>,
+    (handed, kept): (&[KValue<'graph, 'cell>], &[Kept<'graph>]),
+    adopt: &dyn Fn(DeclaredType<KType>),
+) -> KBirth<'graph, 'cell> {
+    let KBirth::Call {
+        program,
+        callee,
+        arguments,
+        kind,
+        contributed,
+        handed: memos,
+        owed,
+        inherit,
+        passing: Some(passing),
+        ..
+    } = skeleton
+    else {
+        unreachable!("a skeleton is a call laid beside what it hands on")
+    };
+    let (_, cells) =
+        (arguments.stored_fields()).expect("a skeleton's arguments are a record, field by field");
+    let held_at = |value: KValue<'graph, 'cell>, ktype: DeclaredType<KType>| {
+        if ktype == value.ktype() {
+            return value;
         }
-    }
-
-    /// Every type the successor's call is laid at that its skeleton's home resolves.
-    fn types(&self) -> impl Iterator<Item = DeclaredType<KType>> + '_ {
-        let record = std::iter::once(DeclaredType::from(self.record_at));
-        (record.chain([self.callee_at])).chain(self.held_at.iter().copied())
+        if !types.resolves(ktype) {
+            adopt(ktype);
+        }
+        value.restamped_at(writer, ktype, types)
+    };
+    let count = passing.binders.len();
+    let scratch = crate::memory::Bump::new();
+    let mut fields = crate::memory::BumpVec::with_capacity_in(count, &scratch);
+    fields
+        .extend((0..count).map(|at| (passing.binders[at], held_at(handed[at], cells[at].ktype()))));
+    let record = Record::new(writer, &fields, types, &scratch);
+    let keeps = Keeps {
+        callee: kept[count],
+        arguments: writer.fill(count, |at| (passing.binders[at].symbol(), kept[at])),
+    };
+    KBirth::Call {
+        program,
+        callee: held_at(handed[count], callee.ktype()),
+        arguments: Value::Record(record),
+        kind: *kind,
+        contributed: collect(writer, contributed.iter().copied()),
+        handed: collect(writer, memos.iter().copied()),
+        owed: *owed,
+        inherit: *inherit,
+        level,
+        passing: None,
+        kept: Some(resident(writer, keeps)),
     }
 }
 
 /// `level`, a copied birth's, laid through `writer`: its modules copied through `view`, the
-/// birth's copied operand, as the birth's other values are.
+/// birth's copied operand, as the birth's other values are, and each type it names that `types`
+/// lacks adopted from the home it was copied out of.
 fn copied_level<'graph, 'cell, 'severed>(
     writer: Writer<'cell, '_>,
     types: &crate::values::Chain<'cell, 'cell, '_, '_>,
@@ -642,6 +613,13 @@ fn copied_level<'graph, 'cell, 'severed>(
             let [module] = copy_severed::<_, KnottedFamily, _, 1>(writer, types, view, [module]);
             module
         });
+        if let CrossedOperand::Copied { home, .. } = view {
+            stamp.each_type(&mut |ktype| {
+                if !types.resolves(ktype) {
+                    home.read(|header, _| types.adopt(header.into_value().branch(), ktype));
+                }
+            });
+        }
         stamp.level
     })
 }

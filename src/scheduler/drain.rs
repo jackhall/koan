@@ -32,7 +32,7 @@ use crate::memory::{
     Ready, RedeemError, ReleaseAbsorption, ReleaseError, SlabHandle,
 };
 use crate::scheduler::action::{
-    Action, Asked, Context, Kind, Placement, Spawns, Step, StepError, Use,
+    Action, Asked, Context, Kind, Placement, Spawns, Step, StepError, Tailing, Use,
 };
 use crate::scheduler::arena::{BuildArena, Composed, Settled};
 use crate::scheduler::continuation::{
@@ -41,7 +41,7 @@ use crate::scheduler::continuation::{
 };
 use crate::scheduler::delivery::KDelivery;
 use crate::scheduler::kept::Kept;
-use crate::scheduler::seek::{Compose, Lending, Replayed, Seek, Settles, Sought, Unsettled};
+use crate::scheduler::seek::{Compose, Lending, Replayed, Requested, Seek, Settles, Unsettled};
 #[cfg(test)]
 use crate::scope::HalfHeader;
 use crate::scope::{Facts, LoadFacts, RegionHeader};
@@ -310,7 +310,12 @@ pub struct Scheduler<'a, 'graph, B: StepBundle<'graph>> {
 /// Where the drain places a frame it seeks for: the arena node it runs under, whether placing it
 /// missed, the composition its first step must rebuild, and the request its first step lays a
 /// level from.
-type Placing = (ArenaRef, bool, Option<ContentDigest>, Option<Box<Sought>>);
+type Placing<'graph> = (
+    ArenaRef,
+    bool,
+    Option<ContentDigest>,
+    Option<Box<Requested<'graph>>>,
+);
 
 /// One entry of the ready stack.
 #[expect(
@@ -321,14 +326,18 @@ type Placing = (ArenaRef, bool, Option<ContentDigest>, Option<Box<Sought>>);
 enum Entry<'graph, B: StepBundle<'graph>> {
     /// A live cell with a step to run: a woken consumer, or a root work.
     Live(CellHandle),
-    /// A request not yet born: the provenance the drain filled for it, the request at rest, and
-    /// the arena node its asker runs under. `release_after` is a tail hop's predecessor, released
-    /// with its borrow of that arena node once this cell's first step has returned — the
-    /// successor wakes its state out of the predecessor's region, and borrows first.
+    /// A request not yet born: the provenance the drain filled for it, the request at rest, the
+    /// arena node its asker runs under, the cell it is born under and how its birth crosses.
+    /// `release_after` is a tail's predecessor, released with its borrow of that arena node once
+    /// this cell's first step has returned — the successor wakes its state out of the
+    /// predecessor's region, and borrows first. A frame released before the evaluation it handed
+    /// off to is dead but undisposed until that child disposes.
     Unborn {
         provenance: Provenance,
         asked: Asked<'graph, B>,
         asker: ArenaRef,
+        under: CellHandle,
+        born: Born,
         release_after: Option<CellHandle>,
     },
 }
@@ -425,14 +434,11 @@ where
                     provenance,
                     asked,
                     asker,
+                    under,
+                    born,
                     release_after,
                 } => {
-                    let born = if release_after.is_some() {
-                        Born::Hop
-                    } else {
-                        Born::Child
-                    };
-                    let cell = self.create(provenance, asked, born, asker)?;
+                    let cell = self.create(provenance, asked, (under, born), asker)?;
                     (cell, release_after.map(|predecessor| (predecessor, asker)))
                 }
             };
@@ -456,13 +462,20 @@ where
                     }
                 }
                 Kind::Park => self.asked_by(cell, provenance, arena),
-                Kind::Tail(asked) => {
+                Kind::Tail(asked, tailing) => {
                     #[cfg(test)]
                     self.sample_hop(cell, provenance.parent);
+                    // A hand-off is born under this cell; a hop or a rebirth beside it.
+                    let (under, born) = match tailing {
+                        Tailing::HandOff => (cell, Born::Child),
+                        Tailing::Hop | Tailing::Rebirth => (provenance.parent, Born::Hop),
+                    };
                     self.ready.push(Entry::Unborn {
                         provenance,
                         asked,
                         asker: arena,
+                        under,
+                        born,
                         release_after: Some(cell),
                     });
                 }
@@ -503,20 +516,21 @@ where
                 },
                 asked,
                 asker: arena,
+                under: cell,
+                born: Born::Child,
                 release_after: None,
             });
         }
     }
 
-    /// Give a request its cell, under the parent its provenance names, its birth crossing as
-    /// `born` says, running under the arena node its lending resolves to, which it borrows.
-    /// `asker` is the arena node the cell that asked runs under. A miss evicts to the budget once
-    /// the new cell borrows its settlement.
+    /// Give a request its cell, under `parent`, its birth crossing as `born` says, running under
+    /// the arena node its lending resolves to, which it borrows. `asker` is the arena node the cell
+    /// that asked runs under. A miss evicts to the budget once the new cell borrows its settlement.
     fn create(
         &mut self,
         provenance: Provenance,
         asked: Asked<'graph, B>,
-        born: Born,
+        (parent, born): (CellHandle, Born),
         asker: ArenaRef,
     ) -> Result<CellHandle, DrainStalled> {
         let arena = &mut self.graph.arena;
@@ -572,7 +586,7 @@ where
             None => Arrival::Placed,
         };
         self.born(
-            provenance.parent,
+            parent,
             asked.placement,
             Continuation {
                 step: asked.step,
@@ -596,7 +610,7 @@ where
         levels: Vec<Replayed<'graph>>,
         base: ArenaRef,
         held: &mut SmallVec<[ArenaRef; 4]>,
-    ) -> Placing {
+    ) -> Placing<'graph> {
         // The frame was counted cold where its own seek found its parent gone; it is born warm.
         #[cfg(test)]
         if levels
@@ -635,7 +649,7 @@ where
     /// binding a module of another composed code pins that code's composition, where no layer below
     /// holds the module's tree; where that composition is gone, the frame is born under the parent
     /// wanting it rebuilt.
-    fn seek(&mut self, seek: Seek<'graph>) -> Placing {
+    fn seek(&mut self, seek: Seek<'graph>) -> Placing<'graph> {
         let Seek {
             parent,
             settlement,
@@ -658,7 +672,7 @@ where
             tally(|tiers| tiers.cold_births += 1);
             return (ArenaRef::ROOT, false, None, None);
         }
-        let handed = |sought| hands_back.then(|| Box::new(sought));
+        let handed = |image, sought| hands_back.then(|| Box::new(Requested { sought, image }));
         let door = arena.door(parent);
         let base = door.composition.map(|(digest, _)| digest);
         if let Some(found) = arena.find(parent, key) {
@@ -668,7 +682,7 @@ where
                 "a hit's binding rests: its key digests the content its types are read from"
             );
             self.graph.arena.stamp(found);
-            return (found, false, None, handed(sought));
+            return (found, false, None, handed(image, sought));
         }
         // Under a composition, each module of other composed code no layer below holds the tree
         // of pins its composition.
@@ -718,14 +732,15 @@ where
             (Some(_), None) => {}
         };
         let settles = self.graph.settles;
-        let Some(facts) = Settled::build(
+        let built = Settled::build(
             arena.under(parent),
             pinned,
             self.graph.facts,
             |bump, below, pinned, witness| {
                 settles.settle(bump, below, pinned, &sought.ask, &mut rest, witness)
             },
-        ) else {
+        );
+        let Some(facts) = built else {
             debug_assert_eq!(relayed, before, "nothing rests for a settlement not built");
             return (parent, false, None, None);
         };
@@ -736,7 +751,7 @@ where
             tiers.relayed += relayed - before;
             tiers.rested += resting.own_len() - relayed;
         });
-        (settled, true, None, handed(sought))
+        (settled, true, None, handed(image, sought))
     }
 
     /// The composition `compose` asks for, and whether it was a miss: found by its syntax digest

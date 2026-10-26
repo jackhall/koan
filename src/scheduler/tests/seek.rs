@@ -240,7 +240,7 @@ fn a_missed_settlement_is_built_once_and_found_warm_by_the_next_birth() {
 /// Record the key of the request this frame's first step was handed back, and whether a second
 /// take reads none, then finish.
 fn handed<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
-    let first = step.sought().map(|sought| sought.key);
+    let first = step.sought().map(|requested| requested.sought.key);
     let again = step.sought().is_none();
     HANDED.with(|handed| handed.borrow_mut().push((first, again)));
     step.finish_fresh(|_, _, _| Active::new(KValue::Null))
@@ -643,7 +643,7 @@ fn hop<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph,
                 step: observe,
                 state,
             };
-            step.tail_under(Placement::Fresh, work, mine)
+            step.tail_under(work, mine)
         }
     }
 }
@@ -678,7 +678,7 @@ fn a_hop_of_the_same_callee_runs_under_its_frames_settlement_and_cold_once_it_is
             step: observe,
             state,
         };
-        step.tail_under(Placement::Fresh, work, builds()[0])
+        step.tail_under(work, builds()[0])
     }
     fn ask_hop<'graph>(
         mut step: Step<'_, 'graph, '_, '_, '_, '_, Native>,
@@ -715,7 +715,7 @@ fn hopper<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'gra
                 step: hopper,
                 state: next,
             };
-            step.tail_under(Placement::Fresh, work, mine)
+            step.tail_under(work, mine)
         }
         1 | 3 => {
             let key = if stage == 1.0 { 2 } else { 3 };
@@ -794,9 +794,8 @@ fn every_run_cell_born_under_a_settlement_carries_its_reference() {
 }
 
 #[test]
-fn a_shares_hop_of_the_same_callee_keeps_its_settlement() {
-    /// A `Shares` frame that hops, `Shares`, to a frame of the same callee under its own
-    /// settlement.
+fn a_tenants_hop_of_the_same_callee_keeps_its_settlement() {
+    /// A tenant frame that hops to a frame of the same callee under its own settlement.
     fn frame<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
         let (step, state) = step.state();
         let mine = step.arena_ref(ArenaRef::ROOT);
@@ -805,7 +804,7 @@ fn a_shares_hop_of_the_same_callee_keeps_its_settlement() {
             step: observe,
             state,
         };
-        step.tail_under(Placement::Shares, work, mine)
+        step.tail_under(work, mine)
     }
     fn start<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
         let request = shares(frame, Use::Reads, KValue::Null);
@@ -852,7 +851,7 @@ fn a_hand_off_successor_holds_its_frames_settlement_until_its_own_release() {
             step: miss_then_note,
             state: KValue::Null,
         };
-        step.tail(Placement::Fresh, work)
+        step.hand_off(work)
     }
     fn start<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
         let request = fresh(frame, Use::Reads, KValue::Null);

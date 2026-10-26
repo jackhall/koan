@@ -48,6 +48,14 @@ pub struct Seek<'graph> {
     pub hands_back: bool,
 }
 
+/// The request a frame's asker handed the drain, handed back to the frame's first step, which lays
+/// its level from it: the request, beside the image of the types its binding carries, which the
+/// frame relays into its own region so its level's types resolve there wherever its asker was.
+pub struct Requested<'graph> {
+    pub sought: Sought,
+    pub image: BindingImage<'graph>,
+}
+
 /// The door a miss settles through, which the program hands the graph at load: it walks the
 /// asked body under the asked binding over `parent`, the layers the new settlement rests on, and
 /// lays what it decides in `bump`. A module's tree is found in those layers, the load's, or a

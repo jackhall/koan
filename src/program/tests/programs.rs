@@ -379,21 +379,10 @@ fn a_call_whose_argument_does_not_fit_its_parameter_is_refused() {
 }
 
 #[test]
-fn a_quantified_return_places_as_shares() {
-    let arena = crate::memory::Bump::new();
-    let types = crate::values::tests::TestTypes::new(&arena).load();
-    assert_eq!(
-        crate::program::placement_of(types.quantified(0, crate::type_lattice::KType::ANY)),
-        crate::scheduler::Placement::Shares
-    );
-}
-
-#[test]
-fn a_quantified_return_shares_its_frame() {
-    // A quantified return places as `Shares`, so the frame forwards the argument rather than
-    // copying it: `r` reads back at the very address `xs` was built at. The list is long enough
-    // that copying it never costs less than pinning the calling evaluation's region, which holds
-    // the types the call builds and the request its settlement is sought with beside its own work.
+fn a_call_returning_its_argument_hands_back_its_storage() {
+    // The frame keeps the argument at the home it was handed from, so its value is handed back
+    // from there rather than copied: `r` reads back at the very address `xs` was built at, though
+    // the list is long enough that copying it would never cost less than pinning.
     let elements = (1..=64)
         .map(|n| n.to_string())
         .collect::<Vec<_>>()
@@ -455,21 +444,22 @@ fn a_lambda_reads_a_later_binding_when_it_is_born() {
 
 #[test]
 fn a_lambda_returned_from_a_frame_keeps_its_captures() {
-    // Each lambda is born as its frame's last statement, in its calling evaluation's region, and
-    // crosses into the root when that evaluation finishes. `constantly`'s region holds only what
-    // its lambda reaches and the types the call builds, so the lambda pins and the region splices
-    // in; `wasteful`'s also holds a long list the lambda never reaches, so the lambda's knot
-    // copies, its capture deep-copied, and the region is reclaimed. Each is called after, reading
-    // its capture where it now lies. The captures are long enough that copying either costs more
-    // than pinning a region of the call's own work and types, and the unreached list far longer.
-    let capture = |from: usize| {
-        (from..from + 8)
+    // Each lambda is born as its frame's last statement, in the region of the evaluation the frame
+    // hands it to, and crosses into the root when that evaluation finishes. `constantly`'s frame
+    // and evaluation hold only what its lambda reaches, the frame's own work and the types the
+    // call builds, so the lambda pins and both regions splice in; `wasteful`'s frame also holds a
+    // long list the lambda never reaches, so the lambda's knot copies, its capture deep-copied,
+    // and the regions are reclaimed. Each is called after, reading its capture where it now lies.
+    // `constantly`'s capture is long enough that copying it costs more than pinning those
+    // regions, and the unreached list far longer than `wasteful`'s.
+    let capture = |from: usize, count: usize| {
+        (from..from + count)
             .map(|n| n.to_string())
             .collect::<Vec<_>>()
             .join(" ")
     };
-    let (first, second) = (capture(1), capture(100));
-    let long = vec!["x"; 32].join(" ");
+    let (first, second) = (capture(1, 128), capture(1000, 8));
+    let long = vec!["x"; 512].join(" ");
     let source = format!(
         "LET constantly = (FN :{{x :Any}} -> Any = #(FN :{{y :Number}} -> Any = #(x)))\n\
          LET wasteful = (FN :{{x :Any}} -> Any = #((LET big = [{long}]) (FN :{{y :Number}} -> Any = #(x))))\n\

@@ -44,4 +44,4 @@ pub use continuation::{BirthAt, Born, NativeStep, StateAt, StepBundle, Work};
 pub(crate) use drain::{CACHING, HOPS, HopSample, LAID, SKELETONS, TIERS, Tiers};
 pub use drain::{DrainStalled, Graph, Resting, Scheduler};
 pub use kept::{Held, Kept, KeptPart};
-pub use seek::{Ask, Asked, Replayed, Seek, Settles, Sought};
+pub use seek::{Ask, Asked, Replayed, Requested, Seek, Settles, Sought};

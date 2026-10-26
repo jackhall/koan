@@ -154,11 +154,16 @@ fn a_keyed_call_each_hop_lays_no_level_in_its_asker() {
             (asker(true, 40), asker(true, 80)),
             (asker(false, 40), asker(false, 80)),
         );
-        // Both depths sit above the memo's budget, so a capped memo moves neither difference.
+        // Each hop's `PASS` is a frame of its own, so what it holds at the call is the same however
+        // deep the loop, and a keyed call lays nothing there the control does not.
         assert_eq!(
-            keyed.1 - control.1,
-            keyed.0 - control.0,
-            "births {births}: keyed {keyed:?}, control {control:?} at 40 and 80 hops"
+            keyed.0, keyed.1,
+            "births {births}: keyed {keyed:?} at 40 and 80 hops"
+        );
+        assert_eq!(control.0, control.1, "births {births}: control {control:?}");
+        assert!(
+            keyed.1 <= control.1,
+            "births {births}: keyed {keyed:?} lays no more than control {control:?}"
         );
     }
 }
