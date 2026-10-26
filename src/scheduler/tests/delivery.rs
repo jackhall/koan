@@ -13,7 +13,7 @@ use crate::scheduler::tests::native::{
     describe, fresh, record, recorded, reset, shares, where_text, work,
 };
 use crate::scheduler::{
-    Action, Placement, Received, Request, Scheduler, Step, StepError, Taken, Use,
+    Action, Held, Placement, Received, Request, Scheduler, Step, StepError, Taken, Use,
 };
 
 /// Which end a producer takes, encoded with the `Use` it is asked with into the number a test's
@@ -73,7 +73,7 @@ fn produce<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'gr
     };
     match code - code % 10 {
         FINISH_FRESH => step.finish_fresh(|writer, _, witness| seven(writer, witness)),
-        FINISH_IN_HOME => step.finish_in_home([], |writer, _, [], witness| seven(writer, witness)),
+        FINISH_IN_HOME => step.finish_in_home(&[], |writer, _, _, witness| seven(writer, witness)),
         _ => {
             let value = crate::values::text(step.writer(), "seven");
             record(format!("built {}", where_text(value)));
@@ -115,7 +115,7 @@ fn consume_shares<'graph>(
 fn record_received(received: Result<Received<'_, '_, '_>, StepError>) -> Result<(), StepError> {
     match received? {
         Received::Scratch(value) => record(format!("read scratch {}", where_text(value))),
-        Received::Here(value) => record(format!("read here {}", where_text(value))),
+        Received::Here(held) => record(format!("read here {}", where_text(held.value))),
     }
     Ok(())
 }
@@ -250,7 +250,7 @@ fn middle<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'gra
 fn middle_woken<'graph>(
     mut step: Step<'_, 'graph, '_, '_, '_, '_, Native>,
 ) -> Action<'graph, Native> {
-    let Some(Ok(Received::Here(value))) = step.results().next() else {
+    let Some(Ok(Received::Here(Held { value, .. }))) = step.results().next() else {
         return step.failed(StepError::Unredeemable);
     };
     record(format!("middle read here {}", where_text(value)));
@@ -265,7 +265,7 @@ fn grandparent_woken<'graph>(
         "marker {}",
         where_text(crate::values::text(step.writer(), "marker"))
     ));
-    let Some(Ok(Received::Here(value))) = step.results().next() else {
+    let Some(Ok(Received::Here(Held { value, .. }))) = step.results().next() else {
         return step.failed(StepError::Unredeemable);
     };
     record(format!("grandparent read here {}", describe(value)));

@@ -26,6 +26,7 @@ use crate::knot::{
 };
 use crate::memory::{Bump, BumpAllocator, BumpVec, Writer};
 use crate::parse::{BUILTIN_SHAPES, BuiltinShapeId, KExpression, ShapeElement};
+use crate::scheduler::Held;
 use crate::scope::{Builtins, InstanceRead};
 use crate::symbols::{BinderSymbol, KeywordSymbol, Symbol, SymbolInterner, TypeSymbol};
 use crate::type_lattice::{DispatchTokenElement, KType, TypeNode, builtin_types, meet};
@@ -445,7 +446,7 @@ pub(super) fn run<'graph, 'here>(
             names.extend(
                 listed(value(0), types, scratch)
                     .iter()
-                    .map(|name| label(Operand::Value(*name))),
+                    .map(|name| label(Operand::Value(Held::bare(*name)))),
             );
             let names = rules::distinct(&names, scratch);
             let mut projected = BumpVec::with_capacity_in(names.len(), scratch);
@@ -554,7 +555,9 @@ pub(super) fn listed<'graph, 'here, 'x>(
 fn label(operand: Operand<'_, '_>) -> BinderSymbol {
     match operand {
         Operand::Label(name) => name,
-        Operand::Value(value) => one_name(value).expect("a name slot admits one-name code alone"),
+        Operand::Value(held) => {
+            one_name(held.value).expect("a name slot admits one-name code alone")
+        }
     }
 }
 

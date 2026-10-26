@@ -27,7 +27,8 @@ use crate::program::{
     CallKind, Contract, Evaluated, KBirth, KBundle, KState, Language, Program, call, eval,
 };
 use crate::scheduler::{
-    Action, NativeStep, Placement, Received, Request, Slot as Asked, Step, StepError, Taken, Use,
+    Action, Held, NativeStep, Placement, Received, Request, Slot as Asked, Step, StepError, Taken,
+    Use,
 };
 use crate::scope::{BodyShape, Builtins, CaptureSlot, Code, Located, Offer, Position, Site, Slot};
 use crate::symbols::{KeywordSymbol, SymbolInterner, TypeSymbol, ValueSymbol};
@@ -207,9 +208,11 @@ fn truthy(value: &KValue<'_, '_>) -> bool {
 /// The value one received slot holds, wherever it was delivered.
 fn number(received: Received<'_, '_, '_>) -> Option<f64> {
     match received {
-        Received::Scratch(Value::Number(number)) | Received::Here(Value::Number(number)) => {
-            Some(number)
-        }
+        Received::Scratch(Value::Number(number))
+        | Received::Here(Held {
+            value: Value::Number(number),
+            ..
+        }) => Some(number),
         _ => None,
     }
 }
@@ -370,7 +373,7 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'
             };
             let holds = match condition {
                 Received::Scratch(value) => truthy(&value),
-                Received::Here(value) => truthy(&value),
+                Received::Here(held) => truthy(&held.value),
             };
             let branch = if holds { taken } else { other };
             if contract.is_some() {
@@ -448,7 +451,7 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'
             park(step, asked, birth, 3)
         }
         ([_, operand, _, _], 3) => {
-            let Some(Ok(Received::Here(code))) = step.results().next() else {
+            let Some(Ok(Received::Here(Held { value: code, .. }))) = step.results().next() else {
                 return step.failed(StepError::Unredeemable);
             };
             let Some(code) = code.as_code() else {
@@ -496,7 +499,10 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'
             park(step, asked, birth, 1)
         }
         ([head, _], 1) => {
-            let Some(Ok(Received::Here(argument))) = step.results().next() else {
+            let Some(Ok(Received::Here(Held {
+                value: argument, ..
+            }))) = step.results().next()
+            else {
                 return step.failed(StepError::Unredeemable);
             };
             let Some(callee) = read(&view, &head.value) else {
@@ -536,7 +542,7 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'
         (_, 2) => {
             let received = step.results().next();
             match received {
-                Some(Ok(Received::Here(value))) => {
+                Some(Ok(Received::Here(Held { value, .. }))) => {
                     let writer = step.writer();
                     step.finish(held(program, contract, writer, types, value))
                 }

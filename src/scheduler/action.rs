@@ -10,7 +10,9 @@
 //!
 //! **No step names a place that is not its own.** No method takes or returns a handle, and none is
 //! a carrier door: a step holds values at its own brands and nothing else, and says what it needs —
-//! a child, a wait, a successor, a result — beside the hints that place it. An arena node reaches a
+//! a child, a wait, a successor, a result — beside the hints that place it. What it keeps of a
+//! value at the value's true home is an opaque, brand-free [`Kept`](super::Kept), which only the
+//! veneer redeems: a finish hands such a value on from there ([`Step::finish`]). An arena node reaches a
 //! step only as an opaque [`ArenaRef`], which the scheduler alone opens; the region a decision
 //! memo rests in, as an opaque [`MemoHome`] minted from a cell's own provenance, which names an
 //! ancestor of every cell it is handed to.
@@ -18,6 +20,8 @@
 //! Every arm of an `Action` carries no region borrow. `enter` quantifies a step's three brands per
 //! call, so a step's return type can name none of them: what crosses back out is a dormant carrier,
 //! a function pointer or a hint, and nothing else.
+
+use smallvec::SmallVec;
 
 use crate::knot::{KValue, KValueFamily};
 use crate::memory::Projects;
@@ -31,6 +35,7 @@ use crate::scheduler::continuation::{
     Rested, StateAt, StepBundle, Work,
 };
 use crate::scheduler::delivery::KDelivery;
+use crate::scheduler::kept::{Held, Kept, KeptPart};
 use crate::scheduler::seek::{Compose, Lending, Replayed, Seek, Sought};
 use crate::scope::{
     Code, ComposedRoot, ComposedSyntax, Entry, EntryFamily, Facts, HalfHeader, MemoFamily, MemoKey,
@@ -228,6 +233,10 @@ pub struct Step<
     /// The books the cell's arena node is kept in, which the step reads liveness from.
     books: &'a BuildArena<'graph>,
     spawns: &'a mut Spawns<'graph, B>,
+    /// The carrier of the birth this cell woke from, at the birth's own home, where the birth was
+    /// pinned in: what [`born_part`](Self::born_part) projects. `None` past the first step, for a
+    /// root work, and where the birth was copied.
+    born: Option<Ready<'graph, 'step, B::Birth>>,
     state: S::Of<StateAt<'graph, 'here, B>>,
     scratch: X::Of<Option<ScratchAt<'graph, 'here, 'scratch, B>>>,
 }
@@ -263,8 +272,8 @@ where
     'lent: 'scratch,
 {
     /// The step the drain hands a cell's continuation, over its graph's type tiers, the provenance
-    /// and arena node it read off that same continuation, the buffer it cleared for this step, and
-    /// both slots the cell parked in.
+    /// and arena node it read off that same continuation, the buffer it cleared for this step, the
+    /// carrier of a birth it woke pinned, and both slots the cell parked in.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn new(
         context: &'a mut Context<'graph, 'step, 'here, 'scratch, 'lent, B>,
@@ -279,6 +288,7 @@ where
         ),
         books: &'a BuildArena<'graph>,
         spawns: &'a mut Spawns<'graph, B>,
+        born: Option<Ready<'graph, 'step, B::Birth>>,
         state: StateAt<'graph, 'here, B>,
         scratch: Option<ScratchAt<'graph, 'here, 'scratch, B>>,
     ) -> Self {
@@ -293,6 +303,7 @@ where
             sought,
             books,
             spawns,
+            born,
             state,
             scratch,
         }
@@ -327,6 +338,7 @@ where
             sought,
             books,
             spawns,
+            born,
             state,
             scratch,
         } = self;
@@ -341,6 +353,7 @@ where
             sought,
             books,
             spawns,
+            born,
             state: (),
             scratch,
         };
@@ -376,6 +389,7 @@ where
             sought,
             books,
             spawns,
+            born,
             state,
             scratch,
         } = self;
@@ -390,6 +404,7 @@ where
             sought,
             books,
             spawns,
+            born,
             state,
             scratch: (),
         };
@@ -721,9 +736,15 @@ where
         let count = context.receipt_count().unwrap_or(0);
         (0..count).map(move |slot| match context.receipt(slot) {
             Ok(Receipt::Value(value)) => Ok(Received::Scratch(value)),
-            Ok(Receipt::Carrier(Ok(carrier))) => Ok(Received::Here(crate::values::cross_here(
-                context, &carrier, tiers, check,
-            ))),
+            Ok(Receipt::Carrier(Ok(carrier))) => {
+                let (value, pinned) = crate::values::cross_here(context, &carrier, tiers, check);
+                // A pinned value is the carrier's own storage, so the carrier is where it rests.
+                let kept = pinned.then(|| KeptPart {
+                    kept: Kept(context.keep(carrier)),
+                    path: &[],
+                });
+                Ok(Received::Here(Held { value, kept }))
+            }
             _ => Err(StepError::Unredeemable),
         })
     }
@@ -930,32 +951,33 @@ where
     }
 
     /// Finish with a result built by `build` over `operands`, values this step holds, in this
-    /// cell's home, and deliver it as a carrier. Each operand reaches the build pinned or copied as
-    /// the verdict ruled, at the home's brand, its types made to resolve there over the graph's
-    /// type tiers; the build is handed the home's chain beside its writer. Every `Use` takes this
-    /// door: a build over operands never goes through scratch, where what it embeds could not
-    /// follow.
-    pub fn finish_in_home<const N: usize>(
+    /// cell's home, and deliver it as a carrier. Each operand crosses from its kept part where it
+    /// has one, and is lifted from this cell where it has none; each reaches the build pinned or
+    /// copied as the verdict ruled, at the home's brand, restamped at the type it is held at, its
+    /// types made to resolve there over the graph's type tiers; the build is handed the home's
+    /// chain beside its writer. Every `Use` takes this door: a build over operands never goes
+    /// through scratch, where what it embeds could not follow.
+    pub fn finish_in_home(
         self,
-        operands: [KValue<'graph, 'here>; N],
+        operands: &[Held<'graph, 'here>],
         build: impl for<'their> FnOnce(
             Writer<'their, '_>,
             &Types<'their, '_>,
-            [KValue<'graph, 'their>; N],
+            &[KValue<'graph, 'their>],
             &'their &'graph (),
         ) -> Active<'graph, 'their, KValueFamily>,
     ) -> Action<'graph, B> {
         self.finish_in_home_against(operands, None, build)
     }
 
-    fn finish_in_home_against<const N: usize>(
-        self,
-        operands: [KValue<'graph, 'here>; N],
+    fn finish_in_home_against(
+        mut self,
+        operands: &[Held<'graph, 'here>],
         check: Option<&Chain<'_, '_, '_, '_>>,
         build: impl for<'their> FnOnce(
             Writer<'their, '_>,
             &Types<'their, '_>,
-            [KValue<'graph, 'their>; N],
+            &[KValue<'graph, 'their>],
             &'their &'graph (),
         ) -> Active<'graph, 'their, KValueFamily>,
     ) -> Action<'graph, B> {
@@ -964,41 +986,145 @@ where
             Err(error) => return self.failed(error),
         };
         let tiers = self.tiers;
-        let weights = operands.map(|value| value.weight().bytes());
-        let lifted = operands.map(|value| self.context.lift::<KValueFamily>(value));
-        let crossing: [Operand<'graph, '_, 'step, KValueFamily>; N] =
-            std::array::from_fn(|index| Operand {
-                carrier: &lifted[index],
-                copy_bytes: weights[index],
-            });
+        let carriers: SmallVec<[_; 4]> = (operands.iter())
+            .map(|held| self.held_carrier(held))
+            .collect();
+        let held_at: SmallVec<[_; 4]> = operands.iter().map(|held| held.value.ktype()).collect();
+        let crossing: SmallVec<[_; 4]> = (carriers.iter().zip(operands))
+            .map(|(carrier, held)| Operand {
+                carrier,
+                copy_bytes: held.value.weight().bytes(),
+            })
+            .collect();
         let placed = self.context.alloc_into::<KValueFamily, KValueFamily>(
             self.provenance.home,
             &crossing,
             |writer, header, views| {
                 let types = tiers.chain(Halves::alone(Half::of(writer, header)));
-                let values = std::array::from_fn(|index| {
-                    crate::values::cross_view_against(writer, &types, &views[index], check)
-                });
-                build(writer, &types, values, &&())
+                let values: SmallVec<[_; 4]> = (views.iter().zip(&held_at))
+                    .map(|(view, held_at)| {
+                        let value = crate::values::cross_view_against(writer, &types, view, check);
+                        match value.ktype() == *held_at {
+                            true => value,
+                            false => value.restamped_at(writer, *held_at, &types),
+                        }
+                    })
+                    .collect();
+                build(writer, &types, &values, &&())
             },
         );
         self.file(report, placed)
     }
 
-    /// Finish with `value`, crossed into this cell's home at the verdict's price, its types made
-    /// to resolve there over the graph's type tiers, and deliver it as a carrier.
-    pub fn finish(self, value: KValue<'graph, 'here>) -> Action<'graph, B> {
-        self.finish_in_home([value], |_, _, [value], _| Active::new(value))
+    /// Finish with `value`, delivered as a carrier. A value held with a kept part whose home is
+    /// this cell's home or above it is handed on unchanged, at that home; any other crosses into
+    /// this cell's home at the verdict's price — from its kept part where it has one — restamped
+    /// there at the type it is held at, its types made to resolve there over the graph's type
+    /// tiers.
+    pub fn finish(self, value: impl Into<Held<'graph, 'here>>) -> Action<'graph, B> {
+        self.finish_against(value.into(), None)
     }
 
     /// [`finish`](Self::finish), a pinned value's debug check reading `check`: the chain of a
     /// caching body finishing a value that stays inside it, whose types lie in its scratch tiers.
     pub fn finish_with(
         self,
-        value: KValue<'graph, 'here>,
+        value: impl Into<Held<'graph, 'here>>,
         check: &Chain<'_, '_, '_, '_>,
     ) -> Action<'graph, B> {
-        self.finish_in_home_against([value], Some(check), |_, _, [value], _| Active::new(value))
+        self.finish_against(value.into(), Some(check))
+    }
+
+    fn finish_against(
+        mut self,
+        held: Held<'graph, 'here>,
+        check: Option<&Chain<'_, '_, '_, '_>>,
+    ) -> Action<'graph, B> {
+        if let Some(part) = held.kept
+            && let Some(carrier) = self.kept_carrier(part, &held.value)
+            && self.context.read(&carrier).value().ktype() == held.value.ktype()
+        {
+            let report = match self.report() {
+                Ok(report) => report,
+                Err(error) => return self.failed(error),
+            };
+            match self.context.pass_into(self.provenance.home, &carrier) {
+                Ok(Some(passed)) => {
+                    #[cfg(test)]
+                    PASSED.with(|count| count.set(count.get() + 1));
+                    return self.file(report, Ok(passed));
+                }
+                Ok(None) => {}
+                Err(stale) => return self.file(report, Err(stale)),
+            }
+        }
+        self.finish_in_home_against(&[held], check, |_, _, values, _| Active::new(values[0]))
+    }
+
+    /// Keep the part `part` picks out of the birth this cell woke from, at the birth's own home:
+    /// what a frame keeps of an argument it was handed. `None` where the birth was not pinned in —
+    /// a root work's, or one a hop copied — past the first step, and where `part` picks nothing.
+    pub fn born_part(
+        &mut self,
+        part: impl for<'c> FnOnce(
+            Active<'graph, 'c, B::Birth>,
+            &'c &'graph (),
+        ) -> Option<Active<'graph, 'c, KValueFamily>>,
+    ) -> Option<Kept<'graph>>
+    where
+        Erased<'graph, B::Birth>: Copy,
+    {
+        let born = self.born.as_ref()?;
+        let carrier = self.context.project::<B::Birth, KValueFamily>(born, part)?;
+        Some(Kept(self.context.keep(carrier)))
+    }
+
+    /// Keep `value`, which this cell holds at its own brand, here: what a cell keeps of a value it
+    /// was handed by a copy, or built.
+    pub fn kept_here(&mut self, value: KValue<'graph, 'here>) -> Kept<'graph> {
+        let carrier = self.context.lift::<KValueFamily>(value);
+        Kept(self.context.keep(carrier))
+    }
+
+    /// The carrier a held value crosses from: its kept part's, where it has one that redeems, and
+    /// otherwise the value lifted from this cell.
+    fn held_carrier(&mut self, held: &Held<'graph, 'here>) -> Ready<'graph, 'step, KValueFamily> {
+        match held
+            .kept
+            .and_then(|part| self.kept_carrier(part, &held.value))
+        {
+            Some(carrier) => carrier,
+            None => self.context.lift::<KValueFamily>(held.value),
+        }
+    }
+
+    /// `part`'s kept value redeemed into this step and projected along its path: the carrier of
+    /// `value`'s storage at its true home. `None` where it does not redeem or the path reaches
+    /// nothing.
+    fn kept_carrier(
+        &mut self,
+        part: KeptPart<'graph, '_>,
+        value: &KValue<'graph, 'here>,
+    ) -> Option<Ready<'graph, 'step, KValueFamily>> {
+        let carrier = self.context.redeem(part.kept.0).ok()?;
+        let path = part.path;
+        let carrier = match path {
+            [] => carrier,
+            path => self
+                .context
+                .project::<KValueFamily, KValueFamily>(&carrier, |value, _| {
+                    let mut at = value.value();
+                    for label in path {
+                        at = at.along(*label)?;
+                    }
+                    Some(Active::new(at))
+                })?,
+        };
+        debug_assert!(
+            self.context.read(&carrier).value().same_storage(value),
+            "a held value is the storage its kept part reaches, or a restamp of it"
+        );
+        Some(carrier)
     }
 
     /// End a root work by leaving `birth` at rest in its home — the cell it was born under — for
@@ -1087,6 +1213,12 @@ where
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    /// How many finishes handed a kept value on unchanged, at its own home.
+    pub(crate) static PASSED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// Where a spawned cell lives, from the one-bit hint its spawner supplies.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Placement {
@@ -1157,8 +1289,9 @@ where
     /// A scratch fill: built in this cell's scratch habitat by a child asked with
     /// [`Use::Reads`].
     Scratch(KValue<'graph, 'scratch>),
-    /// A carrier fill, redeemed and crossed to this cell's own brand.
-    Here(KValue<'graph, 'here>),
+    /// A carrier fill, redeemed and crossed to this cell's own brand, beside the carrier it came
+    /// in, kept, where it was pinned.
+    Here(Held<'graph, 'here>),
 }
 
 /// A request at rest: what the drain's buffer holds and a tail carries, the state already put to

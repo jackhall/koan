@@ -22,8 +22,8 @@
 use smallvec::SmallVec;
 
 use crate::memory::{
-    CellGraph, CellHandle, CreateError, Dormant, Erased, Lend, Operand, RedeemError,
-    ReleaseAbsorption, ReleaseError, SlabHandle,
+    CellGraph, CellHandle, CreateError, CrossedOperand, Dormant, Erased, Lend, Operand, Ready,
+    RedeemError, ReleaseAbsorption, ReleaseError, SlabHandle,
 };
 use crate::scheduler::action::{
     Action, Asked, Context, Kind, Placement, Spawns, Step, StepError, Use,
@@ -890,10 +890,10 @@ where
     // finishes, hops or fails leaves the scratch slot empty and its bump goes back at
     // this step's end.
     let scratch = context.scratch_state();
-    let state = match state {
-        Rested::Awake(state) => state,
+    let (state, carrier) = match state {
+        Rested::Awake(state) => (state, None),
         Rested::Dormant(dormant, born) => match wake::<B>(context, tiers, dormant, born) {
-            Ok(state) => state,
+            Ok(woken) => woken,
             Err(_) => {
                 return (Action::refused(StepError::Unredeemable), provenance, arena);
             }
@@ -921,6 +921,7 @@ where
         (arena, composed, arrival, sought),
         books,
         spawns,
+        carrier,
         state,
         scratch,
     ));
@@ -960,14 +961,23 @@ where
 }
 
 /// Wake a birth a spawn, a hop or a root work's `leave` put to rest: redeem it into this step and
-/// cross it to the executing cell's `'here` at the verdict's price — free for a child, whose spawner is above it,
-/// and for a tenant, which crosses nothing; copied for a tail hop's sibling, which is `Apart`.
+/// cross it to the executing cell's `'here` at the verdict's price — free for a child, whose
+/// spawner is above it, and for a tenant, which crosses nothing; copied for a tail hop's sibling,
+/// which is `Apart`. The redeemed carrier comes back beside the state where the birth was pinned,
+/// so the step can keep a part of it at its own home.
+#[allow(clippy::type_complexity)]
 fn wake<'graph, 'step, 'here, 'scratch, 'lent, B: StepBundle<'graph>>(
     context: &mut Context<'graph, 'step, 'here, 'scratch, 'lent, B>,
     tiers: TypeTiers<'graph>,
     dormant: Dormant<'graph, B::Birth>,
     born: Born,
-) -> Result<StateAt<'graph, 'here, B>, RedeemError>
+) -> Result<
+    (
+        StateAt<'graph, 'here, B>,
+        Option<Ready<'graph, 'step, B::Birth>>,
+    ),
+    RedeemError,
+>
 where
     'graph: 'step + 'here + 'lent,
     'here: 'scratch,
@@ -976,14 +986,17 @@ where
 {
     let carrier = context.redeem(dormant)?;
     let copy_bytes = B::weight(&context.read(&carrier).value());
-    let birth = context.alloc_here(
+    let (birth, pinned) = context.alloc_here(
         &[Operand {
             carrier: &carrier,
             copy_bytes,
         }],
-        |writer, header, views| B::cross(writer, header, &views[0], born, tiers),
+        |writer, header, views| {
+            let pinned = matches!(views[0], CrossedOperand::Pinned { .. });
+            (B::cross(writer, header, &views[0], born, tiers), pinned)
+        },
     );
-    Ok(B::born(birth))
+    Ok((B::born(birth), pinned.then_some(carrier)))
 }
 
 /// What a root work left at rest in its home when it ended by

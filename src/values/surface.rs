@@ -31,6 +31,10 @@ use super::{Chain, Key, Knotted, Link, Nothing, Retyped, Value, representation};
 /// type, and so is every type a holder names for a part. Only a callable is typed by a scheme.
 const SEEN: &str = "a value of a kind is seen at a type, never a scheme";
 
+/// A path of record field labels from a value down to one of its parts, each label read as
+/// [`Value::along`] reads it.
+pub type FieldPath<'cell> = &'cell [Symbol];
+
 /// A value beside the type a read sees it at: a quantified callable — a closure's capture, a
 /// candidate list's cell — at its scheme, every other value at a type.
 #[derive(Clone, Copy, Debug)]
@@ -287,6 +291,61 @@ impl<'cell, X: Knotted + 'cell> Value<'cell, X> {
         Seen::of(self)
             .seen_at(declared, types, scratch)
             .restamped(writer, types)
+    }
+
+    /// The part the record field `label` stores, read through every tagged payload first — a
+    /// knot's data node's included — at its own memo: the stored part a field read restamps.
+    /// Reads, never writes. `None` where nothing along the way is a record storing `label`.
+    pub fn along(self, label: Symbol) -> Option<Value<'cell, X>> {
+        let mut value = self;
+        loop {
+            match raw(value)?.1 {
+                Raw::Tagged(payload) => value = payload.get(0),
+                Raw::Record(names, cells) => {
+                    return Some(cells.get(names.binary_search(&label).ok()?));
+                }
+                Raw::List(_) | Raw::Dict(..) => return None,
+            }
+        }
+    }
+
+    /// The value restamped at `ktype`, a type a restamp of the same storage carried: what a value
+    /// handed on through its true home re-lays where it lands. [`Seen::restamped`] at that type.
+    pub fn restamped_at(
+        self,
+        writer: Writer<'cell, '_>,
+        ktype: DeclaredType<KType>,
+        types: &Chain<'_, 'cell, '_, '_>,
+    ) -> Value<'cell, X> {
+        Seen { value: self, ktype }.restamped(writer, types)
+    }
+
+    /// Whether `self` and `other` are one storage: the same scalar or resident, restamps of the
+    /// same runs, tagged values over one storage, or headers over one knot member. Never walks a
+    /// value.
+    pub fn same_storage(&self, other: &Value<'_, X>) -> bool {
+        let runs = |a: *const (), b: *const ()| std::ptr::eq(a, b);
+        match (self, other) {
+            (Value::Number(a), Value::Number(b)) => a.to_bits() == b.to_bits(),
+            (Value::Bool(a), Value::Bool(b)) => a == b,
+            (Value::Null, Value::Null) => true,
+            (Value::Str(a), Value::Str(b)) => runs(a.as_ptr().cast(), b.as_ptr().cast()),
+            (Value::Type(a), Value::Type(b)) => a.handle() == b.handle(),
+            (Value::List(a), Value::List(b)) => {
+                runs(a.cells().as_ptr().cast(), b.cells().as_ptr().cast())
+            }
+            (Value::Dict(a), Value::Dict(b)) => {
+                runs(a.cells().as_ptr().cast(), b.cells().as_ptr().cast())
+            }
+            (Value::Record(a), Value::Record(b)) => {
+                runs(a.cells().as_ptr().cast(), b.cells().as_ptr().cast())
+            }
+            (Value::Tagged(a), Value::Tagged(b)) => a.payload().same_storage(b.payload()),
+            _ => match (self.knot_member(), other.knot_member()) {
+                (Some(a), Some(b)) => a == b,
+                _ => false,
+            },
+        }
     }
 
     /// [`retyped`](Self::retyped) to `declared`, re-stamped by `retype` where the load recorded

@@ -80,7 +80,7 @@ pub use settlement::{ArenaRef, BindingImage, BuildBudget, KeyedTypes, Settlement
 #[cfg(test)]
 pub(crate) use surface::TARGETS;
 pub use surface::{
-    Retype, Seen, Surface, applications, fit_solution, pinned_at_fit, retype_target,
+    FieldPath, Retype, Seen, Surface, applications, fit_solution, pinned_at_fit, retype_target,
     retype_target_as, retyped_to, retypes_by_header, under, unknown,
 };
 pub use tagged::Tagged;

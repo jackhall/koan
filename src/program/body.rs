@@ -33,6 +33,12 @@
 //! annotated binder, `LET <name> <type> = <value>`: its value is checked against the type, unless
 //! the load settled it, and retyped to it before it is bound.
 //!
+//! **A frame keeps what it was handed.** Its first step lays a table in its region holding, at the
+//! true home of each, its callee and each parameter's argument; a binder whose evaluation delivered
+//! a value pinned at a home of its own keeps that carrier too. A name read of the frame's body reads
+//! the kept carrier beside the value, so the value crosses on from where it rests
+//! ([`FrameKept`]).
+//!
 //! **Frames end under a contract.** A called frame owes its caller a value satisfying its declared
 //! return, with its own type-parameter solution substituted, retyped to it; a miss is an error
 //! value. When the frame's last unit is a statement that binds nothing, the runner **tails** into
@@ -48,6 +54,7 @@
 //! the frame's contract. An invariant site's types rest in the agent tier already, rested by the
 //! settlement the frame runs under: a step lays nothing there.
 
+use std::cell::Cell;
 use std::fmt;
 
 use smallvec::SmallVec;
@@ -59,11 +66,11 @@ use crate::knot::{
     CodeBody, KActivation, KActivationView, KReading, KValue, Knotted, Supplied, Tied, Untieable,
     tie, using,
 };
-use crate::memory::{Bump, BumpVec, Writer, resident};
+use crate::memory::{Active, Bump, BumpVec, Writer, resident};
 use crate::parse::ExpressionPart;
 use crate::scheduler::{
-    Action, MemoHome, Placement, Received, Replayed, Request, Seek, Slot as Asked, Step, StepError,
-    Taken, Use,
+    Action, Held, MemoHome, Placement, Received, Replayed, Request, Seek, Slot as Asked, Step,
+    StepError, Taken, Use,
 };
 use crate::scope::{Activated, Entry, EventSite, MemoKey, extended};
 use crate::scope::{Address, AtRun, Bound, Tree, Unknown};
@@ -81,7 +88,7 @@ use crate::values::{
 };
 
 use super::activation_store::bound_of;
-use super::bundle::{Handed, KBirth, KBundle, KState, Within};
+use super::bundle::{FrameKept, Handed, KBirth, KBundle, KState, Within};
 use super::exit::Exit;
 use super::record::{CallKind, Contract, Evaluated, Program, rendered};
 use super::settle::called_function;
@@ -392,6 +399,58 @@ fn stamped<'graph, 'here>(
     level.map(|level| Stamp { level, below })
 }
 
+/// Whether a frame of `callee` binds each parameter to its argument's own field, retyped: no
+/// barrier stands before the function, and it shows the type its body was checked against.
+fn bare(callee: KValue<'_, '_>) -> bool {
+    (callee.as_callable())
+        .is_some_and(|node| node.coerced().is_none() && callee.ktype() == node.declared())
+}
+
+/// The table a frame keeps its callee, its arguments and its binders' delivered values in, laid in
+/// its region with a carrier for the callee and for each parameter's argument: kept where the
+/// birth was pinned in, at its home, and here where the birth was copied in.
+fn frame_kept<'graph, 'here>(
+    step: &mut Taking<'_, 'graph, '_, 'here, '_, '_>,
+    activation: &KActivation<'graph, 'here>,
+    callee: KValue<'graph, 'here>,
+    arguments: KValue<'graph, 'here>,
+) -> &'here FrameKept<'graph, 'here> {
+    let (code, _) = step.door();
+    let shape = code.shape(activation.view().segment());
+    let slots = step.writer().fill(shape.slots(), |_| Cell::new(None));
+    for slot in (0..shape.slots()).map(|slot| Slot(slot as u32)) {
+        let name = match shape.slot_name(slot) {
+            BinderSymbol::Value(name) if shape.position_of(slot) == Position::PARAMETER => {
+                name.symbol()
+            }
+            BinderSymbol::Type(name) if shape.position_of(slot) == Position::PARAMETER => {
+                name.symbol()
+            }
+            _ => continue,
+        };
+        let born = step.born_part(|birth, _| match birth.value() {
+            KBirth::Call { arguments, .. } => arguments.along(name).map(Active::new),
+            _ => None,
+        });
+        let kept = born.or_else(|| Some(step.kept_here(arguments.along(name)?)));
+        slots[slot.index()].set(kept);
+    }
+    let callee = step
+        .born_part(|birth, _| match birth.value() {
+            KBirth::Call { callee, .. } => Some(Active::new(callee)),
+            _ => None,
+        })
+        .unwrap_or_else(|| step.kept_here(callee));
+    resident(
+        step.writer(),
+        FrameKept {
+            segment: activation.view().segment(),
+            callee: Some(callee),
+            slots,
+        },
+    )
+}
+
 /// The arena node `callee`'s function was born under, behind every barrier: where a frame of it
 /// runs that the drain found no settlement of its own for.
 fn born_under(callee: KValue<'_, '_>) -> ArenaRef {
@@ -475,6 +534,8 @@ fn ran<'graph, 'here, 'scratch>(
                         memo: home,
                         inherit,
                         root: called_function(callee).and_then(|function| function.body().root),
+                        kept: bare(callee)
+                            .then(|| frame_kept(&mut step, activation, callee, arguments)),
                     },
                     memo,
                     ..Runner::at(program, activation, Level::Frame, Some(contract))
@@ -1151,6 +1212,20 @@ impl<'graph, 'cell> Runner<'graph, 'cell> {
         }
     }
 
+    /// Keep, in its frame's table, the kept part `held` names where it is a whole kept value bound
+    /// at `slot` of the frame's own body.
+    fn keep(&self, slot: Slot, held: Held<'graph, 'cell>) {
+        let (Some(table), Some(part)) = (self.within.kept, held.kept) else {
+            return;
+        };
+        if part.path.is_empty()
+            && self.outer.is_none()
+            && table.segment == self.activation.view().segment()
+        {
+            table.slots[slot.index()].set(Some(part.kept));
+        }
+    }
+
     /// The top level's activation, under every module body being run inline.
     fn outermost(&self) -> &'cell KActivation<'graph, 'cell> {
         let mut activation = self.activation;
@@ -1805,26 +1880,27 @@ fn woken<'graph, 'here, 'scratch, 'lent>(
             let received = step.results_with(types).next();
             let received = received.ok_or(StepError::Unredeemable)??;
             match received {
-                Received::Here(value) => runner.check(&value, types)?,
+                Received::Here(held) => runner.check(&held.value, types)?,
                 Received::Scratch(value) if caches => runner.check(&value, types)?,
                 Received::Scratch(value) => runner.check(&value, &step.scratch_types())?,
             }
             match unit.work {
                 UnitWork::Component(component) => {
-                    let Received::Here(value) = received else {
+                    let Received::Here(received) = received else {
                         unreachable!(
                             "a binding is asked for with `Keeps`, which never delivers to scratch"
                         )
                     };
                     let slot = shape.components()[component.index()].members[0];
-                    let value = held(step, types, runner, slot, value)?;
+                    let value = held(step, types, runner, slot, received.value)?;
                     runner.bind(unit, slot, value);
+                    runner.keep(slot, received.becoming(value));
                 }
                 UnitWork::Statement(_) => {
                     if runner.yields(unit)
-                        && let Received::Here(value) = received
+                        && let Received::Here(held) = received
                     {
-                        runner.result = Some(value);
+                        runner.result = Some(held.value);
                     }
                 }
             }
@@ -1842,11 +1918,11 @@ fn woken<'graph, 'here, 'scratch, 'lent>(
             let mut supplied: BumpVec<'_, (Site, KValue<'graph, 'here>)> =
                 BumpVec::with_capacity_in(sites.len(), &local);
             for (site, received) in sites.iter().zip(step.results_with(types)) {
-                let Received::Here(value) = received? else {
+                let Received::Here(held) = received? else {
                     unreachable!("an eager part is asked for with `Keeps`")
                 };
-                runner.check(&value, types)?;
-                supplied.push((*site, value));
+                runner.check(&held.value, types)?;
+                supplied.push((*site, held.value));
             }
             supplied.sort_unstable_by_key(|(site, _)| *site);
             let component = &shape.components()[component.index()];

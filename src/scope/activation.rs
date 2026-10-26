@@ -393,6 +393,23 @@ impl<'graph, 'cell, XF: KnottedFamily<'graph>> ActivationView<'graph, 'cell, XF>
     pub fn bound(&self, slot: Slot) -> Option<Value<'cell, XF::Closed<'cell>>> {
         self.slots.get(slot.index())
     }
+
+    /// The segment of the activation `at` reads a slot of, stepping out as
+    /// [`read`](ActivationView::read) does, beside that slot: `None` for a builtin and a capture.
+    pub fn landing(&self, at: Coordinate) -> Option<(Segment, Slot)> {
+        let Coordinate::Activation {
+            hops,
+            target: Target::Local(slot),
+        } = at
+        else {
+            return None;
+        };
+        let mut view = self;
+        for _ in 0..hops {
+            view = view.enclosing?;
+        }
+        Some((view.segment, slot))
+    }
 }
 
 /// An activation's view beside what the step reads it through: its shape, read through the step's

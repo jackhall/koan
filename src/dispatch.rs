@@ -48,7 +48,7 @@ use crate::knot::{KBuiltins, KReading, KValue};
 use crate::memory::{BumpAllocator, Writer};
 use crate::parse::{ExpressionPart, KExpression};
 use crate::program::{Contract, KBirth, KBundle, Language, Program, Within};
-use crate::scheduler::NativeStep;
+use crate::scheduler::{Held, NativeStep};
 use crate::scope::{Code, Segment, ShapeError, Shapes, Store};
 use crate::symbols::{BinderSymbol, SymbolInterner};
 use crate::type_lattice::KType;
@@ -99,11 +99,11 @@ struct Evaluation<'step, 'graph, 'here, 'tier, 'reg, 'door> {
     types: Chain<'tier, 'here, 'reg, 'door>,
 }
 
-/// What one of a call's operands came to: a value, or — an `ATTR` label written bare — the name
-/// it is written as.
+/// What one of a call's operands came to: a value, beside the kept part it is where it has one, or
+/// — an `ATTR` label written bare — the name it is written as.
 #[derive(Clone, Copy)]
 enum Operand<'graph, 'here> {
-    Value(KValue<'graph, 'here>),
+    Value(Held<'graph, 'here>),
     Label(BinderSymbol),
 }
 
@@ -112,7 +112,7 @@ impl<'graph, 'here> Operand<'graph, 'here> {
     /// of the name a bare label is.
     fn ktype(&self) -> KType {
         match self {
-            Operand::Value(value) => value.concrete_ktype(),
+            Operand::Value(held) => held.value.concrete_ktype(),
             Operand::Label(BinderSymbol::Type(_)) => KType::TYPE_NAME_TOKEN,
             Operand::Label(_) => KType::IDENTIFIER,
         }
@@ -120,7 +120,7 @@ impl<'graph, 'here> Operand<'graph, 'here> {
 
     fn value(&self) -> Option<KValue<'graph, 'here>> {
         match self {
-            Operand::Value(value) => Some(*value),
+            Operand::Value(held) => Some(held.value),
             Operand::Label(_) => None,
         }
     }

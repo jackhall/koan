@@ -87,7 +87,8 @@ where
 
 /// The own-cell crossing: `carrier`'s value made reachable at the executing cell's `'here`, where it
 /// may be embedded in what the step builds or captured by its continuation, its types made to
-/// resolve there over `tiers`.
+/// resolve there over `tiers` — beside whether it was pinned, so the value is the carrier's own
+/// storage, rather than a copy of it.
 pub fn cross_here<
     'graph,
     'step,
@@ -102,7 +103,7 @@ pub fn cross_here<
     carrier: &ValueCarrier<'graph, 'step, XF>,
     tiers: TypeTiers<'graph>,
     check: Option<&Chain<'_, '_, '_, '_>>,
-) -> Value<'here, XF::Closed<'here>>
+) -> (Value<'here, XF::Closed<'here>>, bool)
 where
     ValueFamily<XF>: Covariant<'graph>,
 {
@@ -114,7 +115,8 @@ where
         }],
         |writer, header, views| {
             let types = tiers.chain(Halves::alone(Half::of(writer, header)));
-            cross_view_against(writer, &types, &views[0], check)
+            let pinned = matches!(views[0], CrossedOperand::Pinned { .. });
+            (cross_view_against(writer, &types, &views[0], check), pinned)
         },
     )
 }

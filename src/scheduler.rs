@@ -26,12 +26,15 @@ mod arena;
 mod continuation;
 mod delivery;
 mod drain;
+mod kept;
 mod load;
 mod seek;
 
 #[cfg(test)]
 mod tests;
 
+#[cfg(test)]
+pub(crate) use action::PASSED;
 pub use action::{
     Action, Hold, Holding, MemoHome, Placement, Received, Request, Slot, Step, StepError, Taken,
     Use,
@@ -40,4 +43,5 @@ pub use continuation::{BirthAt, Born, NativeStep, StateAt, StepBundle, Work};
 #[cfg(test)]
 pub(crate) use drain::{CACHING, HOPS, HopSample, LAID, TIERS, Tiers};
 pub use drain::{DrainStalled, Graph, Resting, Scheduler};
+pub use kept::{Held, Kept, KeptPart};
 pub use seek::{Ask, Asked, Replayed, Seek, Settles, Sought};

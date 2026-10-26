@@ -7,11 +7,13 @@
 //! runner's state may hold its activation, which binds and so is invariant. See
 //! [README.md § The bundle](README.md#the-bundle).
 
+use std::cell::Cell;
+
 use crate::knot::{KActivationView, KValue, Knotted, KnottedFamily};
 use crate::memory::{CrossedOperand, DropFree, Header, Writer, collect, covariant, reattachable};
-use crate::scheduler::{Born, MemoHome, StepBundle};
+use crate::scheduler::{Born, Kept, MemoHome, StepBundle};
 use crate::scope::RegionHeader;
-use crate::scope::{ComposedRoot, Level, Segment, Site, Stamp};
+use crate::scope::{ComposedRoot, Level, Segment, Site, Slot, Stamp};
 use crate::symbols::Symbol;
 use crate::type_lattice::{DeclaredType, Halves, KType};
 use crate::values::{ArenaRef, ContentDigest, Half, TypeTiers, Weight, copy_severed};
@@ -100,9 +102,11 @@ pub enum KBirth<'graph, 'cell> {
 /// node its frame runs under, which a callable born in it is born under; where its frame's decision memo
 /// rests, which a block decides in; the memo a frame it calls seeds its own from; and the root of
 /// the composed code its frame runs, which a value born in it keeps — the books hold only its
-/// digest; and the stamp of the chain of settlements its frame's arena node closes, which a
+/// digest; the stamp of the chain of settlements its frame's arena node closes, which a
 /// callable born in it keeps beside that node — `None` for a frame under its own settlement whose
-/// body births no callable.
+/// body births no callable; and what its frame keeps of its arguments, callee and binders, which
+/// a name read of the frame's body reads beside the value — `None` outside a called frame, and for
+/// one called through a barrier.
 #[derive(Clone, Copy)]
 pub struct Within<'graph, 'cell> {
     pub routes: bool,
@@ -111,6 +115,27 @@ pub struct Within<'graph, 'cell> {
     pub memo: Option<MemoHome>,
     pub inherit: Option<MemoHome>,
     pub root: Option<ComposedRoot<'graph>>,
+    pub kept: Option<&'cell FrameKept<'graph, 'cell>>,
+}
+
+/// What a called frame keeps, in a table laid in its region by its first step: a carrier at rest
+/// at the true home of each argument, of its callee, and of each binder of its body whose
+/// evaluation delivered a value pinned at a home of its own — one cell per slot of its body's
+/// shape, empty where it keeps none. `segment` is the body's, which tells a name read landing in
+/// the frame's own activation from one landing in a block's.
+pub struct FrameKept<'graph, 'cell> {
+    pub segment: Segment,
+    pub callee: Option<Kept<'graph>>,
+    pub slots: &'cell [Cell<Option<Kept<'graph>>>],
+}
+
+impl<'graph> FrameKept<'graph, '_> {
+    /// What the frame keeps of the value bound at `slot` of its own body.
+    pub fn slot(&self, segment: Segment, slot: Slot) -> Option<Kept<'graph>> {
+        (segment == self.segment)
+            .then(|| self.slots.get(slot.index()).and_then(Cell::get))
+            .flatten()
+    }
 }
 
 impl<'graph, 'cell> Within<'graph, 'cell> {
@@ -122,6 +147,7 @@ impl<'graph, 'cell> Within<'graph, 'cell> {
         memo: None,
         inherit: None,
         root: None,
+        kept: None,
     };
 
     /// Where a callable born in the body is born: the arena node, and the stamp of its chain.

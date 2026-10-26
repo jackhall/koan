@@ -25,6 +25,9 @@
 //!
 //! A part the node needs is read in place when it is a literal, a name or a quote, and otherwise
 //! asked for — a tenant of this cell, kept — all at one park; the wake reads the same parts again.
+//! Each value is held beside the kept part it is where it has one ([`Held`]): a name its frame keeps
+//! a carrier of, a child's pinned result, and a field read over either, its label appended to the
+//! path. A value finished with a kept part crosses from its true home.
 //! An error value received from a part is this evaluation's value, unchanged. Born under a frame's
 //! [`Contract`], the evaluation owes the frame its value: a call whose callee's declared return
 //! satisfies the contract hops to the callee's frame, and every other value is held to the contract
@@ -61,7 +64,8 @@ use crate::program::{
     seek, surfaced_block,
 };
 use crate::scheduler::{
-    Action, Placement, Received, Request, Slot as Asked, Step, StepError, Taken, Use,
+    Action, Held, KeptPart, Placement, Received, Request, Slot as Asked, Step, StepError, Taken,
+    Use,
 };
 use crate::scope::{
     AtRun, BodyShape, Candidate, CandidateList, CandidateRoute, Elaboration, Elimination, HandedTo,
@@ -361,6 +365,33 @@ fn leaf<'step, 'graph, 'here>(
     }
 }
 
+/// `value`, what a field read of `operands` came to, beside the record operand's kept part
+/// extended by the field's label, where the record operand has one and `value` is the part the
+/// label reaches or a restamp of it.
+fn field_held<'graph, 'here>(
+    writer: Writer<'here, '_>,
+    operands: &[Operand<'graph, 'here>],
+    value: KValue<'graph, 'here>,
+) -> Held<'graph, 'here> {
+    let [Operand::Value(record), label] = operands else {
+        return Held::bare(value);
+    };
+    let label = match label {
+        Operand::Label(name) => name.symbol(),
+        Operand::Value(_) => return Held::bare(value),
+    };
+    let kept = record
+        .kept
+        .filter(|_| (record.value.along(label)).is_some_and(|stored| value.same_storage(&stored)));
+    let kept = kept.map(|part| KeptPart {
+        kept: part.kept,
+        path: writer.fill(part.path.len() + 1, |at| {
+            part.path.get(at).copied().unwrap_or(label)
+        }),
+    });
+    Held { value, kept }
+}
+
 /// A part read in place ([`in_place`]) as this evaluation's value: a literal, a name or a quote.
 fn read<'step, 'graph, 'here>(
     step: Taking<'_, 'graph, '_, 'here, '_, '_>,
@@ -395,9 +426,10 @@ fn ascribe<'step, 'graph, 'here>(
         Gathered::Ready(operands) => operands,
         other => return unready(step, at, other),
     };
-    let [Operand::Value(value)] = operands[..] else {
+    let [Operand::Value(operand)] = operands[..] else {
         unreachable!("an ascription's operand is evaluated")
     };
+    let value = operand.value;
     let writer = step.writer();
     let facts = at.view.facts();
     let ascribed = match facts.denoted(
@@ -477,11 +509,8 @@ fn ascribe<'step, 'graph, 'here>(
         return finish(step, at, raised.raise(program, writer, &at.types));
     }
     let retype = facts.retype(types, at.view.shape(), site);
-    finish(
-        step,
-        at,
-        value.retyped_as(writer, ascribed, retype, types, &scratch),
-    )
+    let retyped = value.retyped_as(writer, ascribed, retype, types, &scratch);
+    finish(step, at, operand.becoming(retyped))
 }
 
 /// `USING <module> SCOPE <body>`: the body run as a block whose parameters are bound to what the
@@ -502,7 +531,7 @@ fn using<'step, 'graph, 'here>(
         Gathered::Ready(operands) => operands,
         other => return unready(step, at, other),
     };
-    let [Operand::Value(module)] = operands[..] else {
+    let [Operand::Value(Held { value: module, .. })] = operands[..] else {
         unreachable!("a `USING`'s operand is evaluated")
     };
     // The shape surfaces only an operand it reads a module's declaration off.
@@ -549,7 +578,7 @@ fn evaluated<'step, 'graph, 'here>(
         Gathered::Ready(operands) => operands,
         other => return unready(step, at, other),
     };
-    let [Operand::Value(value)] = operands[..] else {
+    let [Operand::Value(Held { value, .. })] = operands[..] else {
         unreachable!("an `EVAL`'s operand is evaluated")
     };
     let writer = step.writer();
@@ -820,7 +849,11 @@ fn call<'step, 'graph, 'here>(
                 return park(step, at, asked, FINISHING);
             }
             let value = builtins::run(native, at, node, writer, &operands, &scratch);
-            return finish(step, at, value);
+            let held = match native {
+                Native::Field => field_held(writer, &operands, value),
+                _ => Held::bare(value),
+            };
+            return finish(step, at, held);
         }
         Selection::Function {
             callee,
@@ -992,7 +1025,13 @@ fn apply<'step, 'graph, 'here>(
         .view
         .facts()
         .named_contributions(&at.types, at.view.shape(), argument_site);
-    let [Operand::Value(head), Operand::Value(argument)] = operands[..] else {
+    let [
+        Operand::Value(Held { value: head, .. }),
+        Operand::Value(Held {
+            value: argument, ..
+        }),
+    ] = operands[..]
+    else {
         unreachable!("both parts of an application are evaluated")
     };
     let writer = step.writer();
@@ -1193,19 +1232,21 @@ fn in_place<'step, 'graph, 'here>(
     at: &Evaluation<'step, 'graph, 'here, '_, '_, '_>,
     part: &'step ExpressionPart<'step>,
     scratch: &Bump,
-) -> Option<KValue<'graph, 'here>> {
+) -> Option<Held<'graph, 'here>> {
     let writer = step.writer();
     let types = &at.types;
     match part {
-        ExpressionPart::Literal(_) => Value::lower_part(writer, part, types, scratch),
-        ExpressionPart::QuotedExpression(_) => Some(Value::Knotted(quote(
+        ExpressionPart::Literal(_) => {
+            Value::lower_part(writer, part, types, scratch).map(Held::bare)
+        }
+        ExpressionPart::QuotedExpression(_) => Some(Held::bare(Value::Knotted(quote(
             writer,
             &at.view,
             (at.program).written_under(at.view.facts(), at.within.root),
             part,
             types,
             scratch,
-        ))),
+        )))),
         _ => {
             let shape = at.view.shape();
             let mention = shape.mention(shape.site(part))?;
@@ -1214,7 +1255,13 @@ fn in_place<'step, 'graph, 'here>(
             let Some(InstanceRead::Solved(solution)) =
                 facts.instance_at(&at.types, shape, shape.site(part))
             else {
-                return Some(read);
+                // A name its frame keeps a carrier of reads beside it.
+                let kept = (at.within.kept).and_then(|table| {
+                    let (segment, slot) = at.view.landing(mention.coordinate)?;
+                    let kept = table.slot(segment, slot)?;
+                    Some(KeptPart { kept, path: &[] })
+                });
+                return Some(Held { value: read, kept });
             };
             let Value::Knotted(member) = read else {
                 unreachable!(
@@ -1222,9 +1269,9 @@ fn in_place<'step, 'graph, 'here>(
                      comes only from a module member read, which makes its own instance"
                 )
             };
-            Some(Value::Knotted(instance(
+            Some(Held::bare(Value::Knotted(instance(
                 writer, member, solution, types, scratch,
-            )))
+            ))))
         }
     }
 }
@@ -1264,11 +1311,11 @@ fn gathered<'step, 'x, 'graph, 'here>(
     let mut received = BumpVec::new_in(scratch);
     for result in step.results_with(&at.types) {
         match result {
-            Ok(Received::Here(value)) => {
-                if at.program.message(&value, &at.types).is_some() {
-                    return Gathered::Raised(value);
+            Ok(Received::Here(held)) => {
+                if at.program.message(&held.value, &at.types).is_some() {
+                    return Gathered::Raised(held.value);
                 }
-                received.push(value);
+                received.push(held);
             }
             Ok(Received::Scratch(_)) => {
                 unreachable!("a part is asked for with `Keeps`, which never delivers to scratch")
@@ -1342,21 +1389,23 @@ fn finishing<'step, 'graph, 'here>(
     }
 }
 
-/// Finish with `value`, held to the contract the evaluation was born under.
+/// Finish with `value`, held to the contract the evaluation was born under: through its kept part
+/// where the contract leaves it one storage.
 fn finish<'step, 'graph, 'here>(
     step: Taking<'_, 'graph, '_, 'here, '_, '_>,
     at: &Evaluation<'step, 'graph, 'here, '_, '_, '_>,
-    value: KValue<'graph, 'here>,
+    value: impl Into<Held<'graph, 'here>>,
 ) -> Action<'graph, KBundle> {
+    let held = value.into();
     #[cfg(debug_assertions)]
-    carried_under_static(at, &value);
-    let value = match at.contract {
-        Some(contract) => at
-            .program
-            .fulfilled(step.writer(), &at.types, value, contract),
-        None => value,
+    carried_under_static(at, &held.value);
+    let held = match at.contract {
+        Some(contract) => {
+            held.becoming((at.program).fulfilled(step.writer(), &at.types, held.value, contract))
+        }
+        None => held,
     };
-    delivered(step, at, value)
+    delivered(step, at, held)
 }
 
 /// Deliver `value` to the evaluation's asker. In a caching body a value owed a frame's contract
@@ -1365,17 +1414,18 @@ fn finish<'step, 'graph, 'here>(
 fn delivered<'step, 'graph, 'here>(
     step: Taking<'_, 'graph, '_, 'here, '_, '_>,
     at: &Evaluation<'step, 'graph, 'here, '_, '_, '_>,
-    value: KValue<'graph, 'here>,
+    value: impl Into<Held<'graph, 'here>>,
 ) -> Action<'graph, KBundle> {
+    let held = value.into();
     match (at.view.facts().caches(at.view.shape()), at.contract) {
         (true, Some(_)) => {
             // No step function's scratch reaches a delivery.
             let scratch = Bump::new();
-            exits(&step, at, &scratch, |exit| exit.value(&value));
-            step.finish(value)
+            exits(&step, at, &scratch, |exit| exit.value(&held.value));
+            step.finish(held)
         }
-        (true, None) => step.finish_with(value, &at.types),
-        (false, _) => step.finish(value),
+        (true, None) => step.finish_with(held, &at.types),
+        (false, _) => step.finish(held),
     }
 }
 
