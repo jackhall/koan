@@ -232,9 +232,9 @@ pub enum Born {
 /// inherits its receipt" means. The drain fills it and a step never sees it: a [`Step`] holds the
 /// cell's copy privately, to park under and to deliver to.
 ///
-/// Three cells play three roles a cell's birth once conflated: `parent` receives the result,
-/// `loop_cell` — else `parent` — is where a hop or a rebirth is born, and a frame's hand-off is
-/// born under the frame itself.
+/// Three cells play three roles in a tail loop: `parent` receives the result, `loop_cell` — else
+/// `parent` — is where a hop or a rebirth is born, and a frame's hand-off is born under the frame
+/// itself.
 #[derive(Clone, Copy)]
 pub(super) struct Provenance {
     /// The consumer this cell reports to — the cell it, or the first cell of its tail chain, was

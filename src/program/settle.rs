@@ -8,8 +8,8 @@
 //! keyworded call, held by an instance, and solved here, on the asker's region, for a call by
 //! name. Where the callee's body can birth a callable, the request is laid as the frame's
 //! [level] — by the frame's first step, from the request the drain hands it back — which a
-//! callable born under the settlement records in its
-//! [stamp](crate::scope::Stamp), so a call of it replays the chain where it was evicted. A call
+//! callable born under the settlement records in its [stamp](crate::scope::Stamp), so a call of
+//! it replays the chain where it was evicted. A call
 //! past a header or a barrier of a body keyed on a `FOR ALL` name seeks no settlement, since its
 //! frame solves only once the arguments are retyped or have crossed, unless it calls an instance,
 //! whose solution holds wherever it is called from.
@@ -117,8 +117,8 @@ thread_local! {
 
 /// The level of `sought`, the request of the call `birth`, laid through `writer`: the one function
 /// that lays a level, which a frame's first step calls from the request the drain hands it back,
-/// in its own region. It pins each keyed module of composed code other than the callee's own, whose root
-/// rebuilds that code's composition on a replay; `types` reads those arguments.
+/// in its own region. It pins each keyed module of composed code other than the callee's own,
+/// whose root rebuilds that code's composition on a replay; `types` reads those arguments.
 pub fn level<'graph, 'here>(
     writer: Writer<'here, '_>,
     birth: &KBirth<'graph, 'here>,

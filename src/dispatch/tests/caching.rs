@@ -124,16 +124,16 @@ fn assert_flat(what: &str, [few, middle, many]: [usize; 3]) {
     );
 }
 
-/// A Fresh loop over `ints`, passed on bare: its view's site is invariant.
+/// A `Number`-returning loop over `ints`, passed on bare: its view's site is invariant.
 const INVARIANT: &str = "EXPR #(COUNTDOWN m :Counter link :Link) -> Number = \
                          #((LET v = (m :| Counter)) (COUNTDOWN m (ATTR link next)))\n\
                          EXPR #(COUNTDOWN m :Counter end :Null) -> Number = #(7)\n";
 
-/// `PEEK`: a `Shares` caching helper viewing the module it is handed.
+/// `PEEK`: a `Str`-returning caching helper viewing the module it is handed.
 const PEEK: &str = "EXPR #(PEEK m :Holder) -> Str = #((LET v = (m :| Holder)) (\"x\"))\n";
 
-/// `DRIVE`, a `Shares` loop that mints nothing itself, so every hop is a tenant of one host, whose
-/// region would take each `PEEK`'s view were `PEEK` not caching.
+/// `DRIVE`, a `Str`-returning loop that mints nothing itself, each hop handing [`PEEK`] a module
+/// built over its link.
 fn hosted_peeks() -> String {
     format!(
         "{PEEK}EXPR #(DRIVE link :Link) -> Str = \
@@ -161,7 +161,7 @@ fn invariant_loop() -> String {
     format!("{INVARIANT}PRINT (COUNTDOWN ints chain)")
 }
 
-/// `PASS`, a `Shares` loop caching on its host's scratch and parking once a hop on `TOUCH`.
+/// `PASS`, a `Str`-returning caching loop parking once a hop on `TOUCH`.
 const PARKING_LOOP: &str = "EXPR #(TOUCH m :Counter) -> Number = #(1)\n\
                             EXPR #(PASS m :Counter link :Link) -> Str = \
                             #((LET v = (m :| Counter)) (LET t = (TOUCH m)) \
@@ -169,7 +169,8 @@ const PARKING_LOOP: &str = "EXPR #(TOUCH m :Counter) -> Number = #(1)\n\
                             EXPR #(PASS m :Counter end :Null) -> Str = #(\"done\")\n\
                             PRINT (PASS ints chain)";
 
-/// `name`, a `Fresh` loop viewing a new module over each link, holding `held`, written over `link`.
+/// `name`, a `Number`-returning loop viewing a new module over each link, holding `held`, written
+/// over `link`.
 fn varying(name: &str, held: &str) -> String {
     format!(
         "EXPR #({name} link :Link) -> Number = \
@@ -184,8 +185,8 @@ fn varying_loop() -> String {
     format!("{}PRINT (COUNTDOWN chain)", varying("COUNTDOWN", "link"))
 }
 
-/// A `Fresh` loop whose hops each call `PEEK`, a `Shares` caching helper viewing a module over the
-/// link it is handed.
+/// A `Number`-returning loop whose hops each call `PEEK`, a `Str`-returning caching helper viewing
+/// a module over the link it is handed.
 const HELPER_LOOP: &str = "EXPR #(PEEK link :Link) -> Str = \
                            #((MODULE m OVER #[link] = (LET held = link)) \
                            (LET v = (m :| Holder)) (\"x\"))\n\
@@ -196,7 +197,7 @@ const HELPER_LOOP: &str = "EXPR #(PEEK link :Link) -> Str = \
                            EXPR #(COUNTDOWN end :Null) -> Number = #(7)\n\
                            PRINT (COUNTDOWN chain)";
 
-/// `START`, `Shares`, hopping into the `Fresh` [`INVARIANT`] loop.
+/// `START`, returning `Number | Str`, hopping into the [`INVARIANT`] loop.
 const START: &str = "EXPR #(START m :Counter link :Link) -> :(Number | Str) = \
                      #((LET v = (m :| Counter)) (COUNTDOWN m link))\n";
 
@@ -205,7 +206,7 @@ fn mixed_chain() -> String {
     format!("{INVARIANT}{START}PRINT (START ints chain)")
 }
 
-/// [`wrapped_peeks`] with both bodies `Fresh`, `PEEK` viewing at an invariant site.
+/// [`wrapped_peeks`] with both bodies returning `Number`, `PEEK` viewing at an invariant site.
 const FRESH_WRAPPED: &str = "EXPR #(PEEK m :Holder) -> Number = #((LET v = (m :| Holder)) (1))\n\
                              EXPR #(WRAP m :Counter link :Link) -> Number = \
                              #((LET v = (m :| Counter)) (MODULE h OVER #[link] = (LET held = link)) \
@@ -643,17 +644,17 @@ fn a_module_surfaced_read_or_passed_on_digests_nothing() {
 }
 
 #[test]
-fn a_shares_call_with_new_content_each_call_holds_its_hosts_region_flat() {
+fn a_call_with_new_content_each_call_holds_its_hosts_region_flat() {
     let source = hosted_peeks();
     assert_eq!(caching(&source), 1, "`PEEK` caches");
     let [few, many] = at_ends(&source);
     assert_eq!((few.printed.as_str(), few.root), ("done", 0));
-    // The host's scratch grows with the loop, as its bytes do; its region does not.
+    // Each hop is a frame of its own, so the host's region holds flat.
     assert_eq!(few.tiers.region, many.tiers.region);
 }
 
 #[test]
-fn a_shares_loop_handing_a_keyed_shares_helper_a_module_over_its_link_holds_adoptions_flat() {
+fn a_loop_handing_a_keyed_helper_a_module_over_its_link_holds_adoptions_flat() {
     let source = wrapped_peeks();
     assert_eq!(caching(&source), 2, "`WRAP` and `PEEK` cache");
     let ran_adopting = |depth: u32| {
@@ -722,9 +723,9 @@ fn a_fresh_loop_over_an_invariant_module_holds_its_agent_tier_flat() {
 }
 
 #[test]
-fn a_shares_loop_parking_each_hop_holds_its_hosts_scratch_bytes_flat() {
-    // The parking keeps the host's scratch named across the loop: each hop reuses the receipt run
-    // the last released.
+fn a_loop_parking_each_hop_holds_its_hosts_scratch_bytes_flat() {
+    // Each hop parks once on `TOUCH`, reusing the receipt run the last released, so the scratch
+    // bytes hold flat.
     let source = PARKING_LOOP;
     assert_eq!(caching(source), 1);
     let [few, many] = at_ends(source);
@@ -767,7 +768,7 @@ fn a_mixed_placement_tail_chain_over_invariant_content_holds_flat() {
 
 #[test]
 fn a_loops_scratch_resets_once_its_value_is_delivered() {
-    // Two `Shares` loops over different content, each asked for by a `Fresh` frame's statement:
+    // Two `Str`-returning loops over different content, each asked for by a frame's statement:
     // the second starts on the scratch the first's delivery reset, so the two leave what one
     // leaves.
     let driving = |calls: &str| {
@@ -792,7 +793,7 @@ fn a_loops_scratch_resets_once_its_value_is_delivered() {
 
 #[test]
 fn two_loops_a_frame_asks_for_in_turn_leave_what_the_larger_leaves() {
-    // A `Fresh` frame asks for two loops in turn, over content of different types: the second
+    // A frame asks for two loops in turn, over content of different types: the second
     // starts on the scratch the first's delivery reset, so the two leave in it what the larger
     // leaves; where each keys a settlement of its own binding, the agent tier keeps both.
     let cases = [
@@ -1189,7 +1190,7 @@ fn a_parameter_keys_only_where_its_digest_is_constant_cost() {
 
 #[test]
 fn no_run_cell_interns_into_the_agent_tier() {
-    // An invariant view, a view in a `Shares` helper, a mixed tail chain, a nominal over a keyed
+    // An invariant view, a view in a `Str`-returning helper, a mixed tail chain, a nominal over a keyed
     // type binder and varying content: whatever settles, its settlement rests, and no step lays a
     // type in the agent tier.
     let boxed = String::from(
@@ -1198,7 +1199,7 @@ fn no_run_cell_interns_into_the_agent_tier() {
     );
     let sources = [
         invariant_loop(),
-        format!("{SHARES_INVARIANT}PRINT (COUNTDOWN ints chain)\n"),
+        format!("{STR_INVARIANT}PRINT (COUNTDOWN ints chain)\n"),
         hosted_peeks(),
         wrapped_peeks(),
         mixed_chain(),
@@ -1497,10 +1498,10 @@ fn a_call_over_a_list_keys_nothing_and_its_birth_costs_below_the_lists_length() 
 }
 
 #[test]
-fn a_shares_callees_callable_keys_under_its_own_chain_not_its_hosts() {
-    // `SHARE` returns no scalar, so it is a tenant of `OUTER`'s frame, and keys `m`, which `g`'s
-    // view waits on; the callable it births was born under `SHARE`'s settlement, a child of
-    // the root as `SHARE` itself was, so its settlement lies beneath `SHARE`'s, not `OUTER`'s.
+fn a_callees_callable_keys_under_its_own_chain_not_its_callers() {
+    // `SHARE` keys `m`, which `g`'s view waits on; the callable it births was born under
+    // `SHARE`'s settlement, a child of the root as `SHARE` itself was, so its settlement lies
+    // beneath `SHARE`'s, not `OUTER`'s.
     let source = "EXPR #(SHARE m :Counter) -> Any = \
                   #((LET g = (FN :{x :Number} -> Number = #((LET v = (m :| Counter)) (x)))) \
                   (g {x = 1}))\n\
@@ -1513,14 +1514,14 @@ fn a_shares_callees_callable_keys_under_its_own_chain_not_its_hosts() {
     assert_eq!((tiers.settled, table), (3, 2));
 }
 
-/// [`INVARIANT`] at `Shares`: the same loop, ending in a string.
-const SHARES_INVARIANT: &str = "EXPR #(COUNTDOWN m :Counter link :Link) -> Str = \
+/// [`INVARIANT`] returning `Str`: the same loop, ending in a string.
+const STR_INVARIANT: &str = "EXPR #(COUNTDOWN m :Counter link :Link) -> Str = \
                                 #((LET v = (m :| Counter)) (COUNTDOWN m (ATTR link next)))\n\
                                 EXPR #(COUNTDOWN m :Counter end :Null) -> Str = #(\"seven\")\n";
 
 #[test]
-fn a_shares_loop_seeks_its_settlement_once_and_a_second_park_finds_it_warm() {
-    let once = format!("{SHARES_INVARIANT}PRINT (COUNTDOWN ints chain)\n");
+fn a_str_loop_seeks_its_settlement_once_and_a_second_park_finds_it_warm() {
+    let once = format!("{STR_INVARIANT}PRINT (COUNTDOWN ints chain)\n");
     let [(alone, ..)] = runs(&once, 1, |_| {})[..] else {
         unreachable!()
     };
@@ -1561,7 +1562,7 @@ fn a_shares_loop_seeks_its_settlement_once_and_a_second_park_finds_it_warm() {
 }
 
 #[test]
-fn a_callable_born_in_a_shares_frame_keys_its_own_beneath_it() {
+fn a_callable_born_in_a_keyed_frame_keys_its_own_beneath_it() {
     let inner =
         "(LET g = (FN :{x :Number} -> Number = #((LET v = (m :| Counter)) (x)))) (g {x = 1})";
     for body in [inner.to_string(), format!("(USING empty SCOPE ({inner}))")] {
@@ -1582,9 +1583,9 @@ fn a_callable_born_in_a_shares_frame_keys_its_own_beneath_it() {
 }
 
 #[test]
-fn an_unkeyed_shares_callee_in_a_keyed_frame_keys_its_callables_under_its_own_birth() {
-    // `OUTER` is a keyed tenant; `SHARE`, whose `m :Any` keys nothing, runs under the root it
-    // was born under, so the callable it births keys there, not under `OUTER`'s settlement.
+fn an_unkeyed_callee_in_a_keyed_frame_keys_its_callables_under_its_own_birth() {
+    // `OUTER` is keyed; `SHARE`, whose `m :Any` keys nothing, runs under the root it was born
+    // under, so the callable it births keys there, not under `OUTER`'s settlement.
     let source = "EXPR #(SHARE m :Any) -> Any = \
                   #((LET g = (FN :{x :Number} -> Number = #((LET v = (m :| Counter)) (x)))) \
                   (g {x = 1}))\n\
@@ -1598,9 +1599,9 @@ fn an_unkeyed_shares_callee_in_a_keyed_frame_keys_its_callables_under_its_own_bi
 }
 
 #[test]
-fn a_keyed_shares_call_runs_beside_a_host_scratch_laid_before_it() {
-    // `VARY` caches but keys nothing, so it lays its host's scratch branch through the caching
-    // chain; the keyed loop asked for at the same park runs on a caching chain over it next.
+fn a_keyed_call_runs_beside_a_scratch_laid_before_it() {
+    // `VARY` caches but keys nothing, so it lays a scratch branch through the caching chain; the
+    // keyed loop asked for at the same park runs on a caching chain of its own next.
     let vary = "EXPR #(VARY link :Link) -> Str = \
                 #((MODULE m OVER #[link] = (LET held = link)) \
                 (LET seen = (m :| Holder)) (VARY (ATTR link next)))\n\
@@ -1612,7 +1613,7 @@ fn a_keyed_shares_call_runs_beside_a_host_scratch_laid_before_it() {
     );
     let printed = |calls: &str| {
         let [(_, _, ref printed)] =
-            runs(&format!("{SHARES_INVARIANT}{vary}PRINT {calls}"), 1, |_| {})[..]
+            runs(&format!("{STR_INVARIANT}{vary}PRINT {calls}"), 1, |_| {})[..]
         else {
             unreachable!()
         };

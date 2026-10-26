@@ -12,8 +12,8 @@
 //! a carrier door: a step holds values at its own brands and nothing else, and says what it needs —
 //! a child, a wait, a successor, a result — beside the hints that place it. What it keeps of a
 //! value at the value's true home is an opaque, brand-free [`Kept`](super::Kept), which only the
-//! veneer redeems: a finish hands such a value on from there ([`Step::finish`]). An arena node reaches a
-//! step only as an opaque [`ArenaRef`], which the scheduler alone opens; the region a decision
+//! veneer redeems: a finish hands such a value on from there ([`Step::finish`]). An arena node
+//! reaches a step only as an opaque [`ArenaRef`], which the scheduler alone opens; the region a decision
 //! memo rests in, as an opaque [`MemoHome`] minted from a cell's own provenance, which names an
 //! ancestor of every cell it is handed to.
 //!
@@ -1027,12 +1027,31 @@ where
             Ok(report) => report,
             Err(error) => return self.failed(error),
         };
+        let carriers = (operands.iter())
+            .map(|held| self.held_carrier(held))
+            .collect();
+        self.placed(report, operands, carriers, check, build)
+    }
+
+    /// Build what `build` builds over `operands`, crossing from `carriers`, one each, in this
+    /// cell's home, and file it in the slot `report` names: [`finish_in_home`](Self::finish_in_home)
+    /// once each operand's carrier is in hand.
+    fn placed(
+        self,
+        report: Report,
+        operands: &[Held<'graph, 'here>],
+        carriers: SmallVec<[Ready<'graph, 'step, KValueFamily>; 4]>,
+        check: Option<&Chain<'_, '_, '_, '_>>,
+        build: impl for<'their> FnOnce(
+            Writer<'their, '_>,
+            &Types<'their, '_>,
+            &[KValue<'graph, 'their>],
+            &'their &'graph (),
+        ) -> Active<'graph, 'their, KValueFamily>,
+    ) -> Action<'graph, B> {
         let tiers = self.tiers;
         // A type a restamp carries that only this cell's chain resolves is adopted from it.
         let own = self.types();
-        let carriers: SmallVec<[_; 4]> = (operands.iter())
-            .map(|held| self.held_carrier(held))
-            .collect();
         let held_at: SmallVec<[_; 4]> = operands.iter().map(|held| held.value.ktype()).collect();
         // A loop cell copies whatever a hop homes, at any price, so no hop is pledged into it.
         let threads = self.provenance.threads;
@@ -1093,14 +1112,18 @@ where
         held: Held<'graph, 'here>,
         check: Option<&Chain<'_, '_, '_, '_>>,
     ) -> Action<'graph, B> {
-        if let Some(part) = held.kept
-            && let Some(carrier) = self.kept_carrier(part, &held.value)
-            && self.context.read(&carrier).value().ktype() == held.value.ktype()
-        {
-            let report = match self.report() {
-                Ok(report) => report,
-                Err(error) => return self.failed(error),
-            };
+        let Some(carrier) = held
+            .kept
+            .and_then(|part| self.kept_carrier(part, &held.value))
+        else {
+            return self
+                .finish_in_home_against(&[held], check, |_, _, values, _| Active::new(values[0]));
+        };
+        let report = match self.report() {
+            Ok(report) => report,
+            Err(error) => return self.failed(error),
+        };
+        if self.context.read(&carrier).value().ktype() == held.value.ktype() {
             match self.context.pass_into(self.provenance.home, &carrier) {
                 Ok(Some(passed)) => {
                     #[cfg(test)]
@@ -1111,7 +1134,10 @@ where
                 Err(stale) => return self.file(report, Err(stale)),
             }
         }
-        self.finish_in_home_against(&[held], check, |_, _, values, _| Active::new(values[0]))
+        let carriers = SmallVec::from_elem(carrier, 1);
+        self.placed(report, &[held], carriers, check, |_, _, values, _| {
+            Active::new(values[0])
+        })
     }
 
     /// Keep the part `part` picks out of the birth this cell woke from, at the birth's own home:
@@ -1159,20 +1185,7 @@ where
         part: KeptPart<'graph, '_>,
         value: &KValue<'graph, 'here>,
     ) -> Option<Ready<'graph, 'step, KValueFamily>> {
-        let carrier = self.context.redeem(part.kept.0).ok()?;
-        let path = part.path;
-        let carrier = match path {
-            [] => carrier,
-            path => self
-                .context
-                .project::<KValueFamily, KValueFamily>(&carrier, |value, _| {
-                    let mut at = value.value();
-                    for label in path {
-                        at = at.along(*label)?;
-                    }
-                    Some(Active::new(at))
-                })?,
-        };
+        let carrier = part.redeemed(self.context)?;
         debug_assert!(
             self.context.read(&carrier).value().same_storage(value),
             "a held value is the storage its kept part reaches, or a restamp of it"

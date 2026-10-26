@@ -1127,10 +1127,11 @@ where
 /// A hop's successor's birth, where its predecessor laid it as a skeleton beside the values it
 /// hands on ([`StepBundle::handings`]): each value crosses on its own, from the kept part it was
 /// handed through where that redeems — pinned free from an ancestor — and otherwise out of the
-/// skeleton; one that does not pin is copied into the successor, save a threaded one under a loop
-/// cell, which is copied into `loop_cell` and pinned from there. The successor keeps a carrier of
-/// each, at its home where it pinned and here where it was copied, and the birth is built here
-/// over them. `None` for a birth that crosses whole.
+/// skeleton; one that does not pin is copied into the successor, save, under a loop cell, a
+/// threaded one or one handed through a kept part, which is copied into `loop_cell` and pinned from
+/// there. Threaded values cross first, so the successor's branch links the loop cell's. The
+/// successor keeps a carrier of each, at its home where it pinned and here where it was copied,
+/// and the birth is built here over them. `None` for a birth that crosses whole.
 fn hopped<'graph, 'step, 'here, 'scratch, 'lent, B: StepBundle<'graph>>(
     context: &mut Context<'graph, 'step, 'here, 'scratch, 'lent, B>,
     tiers: TypeTiers<'graph>,
@@ -1146,23 +1147,17 @@ where
     let mut handings: SmallVec<[Option<Ready<'graph, 'step, KValueFamily>>; 8]> = SmallVec::new();
     let mut reused: SmallVec<[Option<Kept<'graph>>; 8]> = SmallVec::new();
     let mut threaded: SmallVec<[bool; 8]> = SmallVec::new();
+    let mut threads_first: SmallVec<[bool; 8]> = SmallVec::new();
     let laid = {
         let context = &*context;
         let birth = context.read(carrier).value();
         B::handings(&birth, &mut |index, kept, threads| {
-            let from_kept = kept.and_then(|part| {
-                let kept = context.redeem(part.kept.0).ok()?;
-                if part.path.is_empty() {
-                    return Some(kept);
-                }
-                context.project::<KValueFamily, KValueFamily>(&kept, |value, _| {
-                    let mut at = value.value();
-                    for label in part.path {
-                        at = at.along(*label)?;
-                    }
-                    Some(Active::new(at))
-                })
-            });
+            let from_kept = kept.and_then(|part| part.redeemed(context));
+            // A value handed through a kept part rested where it outlives a hop — the loop cell,
+            // or a home above it — so one that does not pin rode an old loop cell: it is carried
+            // into the current one, as a threaded value is, rather than into the hop.
+            threaded.push((threads || from_kept.is_some()) && loop_cell.is_some());
+            threads_first.push(threads);
             reused.push(
                 kept.filter(|part| part.path.is_empty() && from_kept.is_some())
                     .map(|part| part.kept),
@@ -1172,7 +1167,6 @@ where
                     B::handed(birth.value(), index).map(Active::new)
                 })
             }));
-            threaded.push(threads && loop_cell.is_some());
         })
     };
     if !laid {
@@ -1181,8 +1175,14 @@ where
     let Some(mut handings): Option<SmallVec<[_; 8]>> = handings.into_iter().collect() else {
         return Some(Err(RedeemError::Gone));
     };
+    // What the loop threads crosses first: it rests in the loop cell, so the successor's branch
+    // links the loop cell's, and each merge after stops at what that link reaches.
+    let order: SmallVec<[usize; 8]> = (0..handings.len())
+        .filter(|at| threads_first[*at])
+        .chain((0..handings.len()).filter(|at| !threads_first[*at]))
+        .collect();
     let mut crossed: SmallVec<[_; 8]> =
-        crossed_here::<B>(context, tiers, &handings, &|index| !threaded[index]);
+        crossed_here::<B>(context, tiers, &handings, &order, &|index| !threaded[index]);
     // A threaded value that did not pin is copied into the loop cell, which outlives the hop, and
     // pinned from there.
     if let Some(loop_cell) = loop_cell {
@@ -1207,7 +1207,7 @@ where
             };
             handings[at] = homed;
             reused[at] = None;
-            crossed[at] = crossed_here::<B>(context, tiers, &handings[at..=at], &|_| true)[0];
+            crossed[at] = crossed_here::<B>(context, tiers, &handings, &[at], &|_| true)[at];
         }
     }
     let mut kept: SmallVec<[Kept<'graph>; 8]> = SmallVec::new();
@@ -1238,13 +1238,15 @@ where
     Some(Ok(birth))
 }
 
-/// `handings` crossed into this cell, each beside whether it pinned: one that does not pin is
-/// copied here where `copies` takes its index, and is `None` where it does not.
+/// The handings at `order`'s indices crossed into this cell in that order, each beside whether it
+/// pinned, by its index; any other index is `None` and unpinned. One that does not pin is copied
+/// here where `copies` takes its index, and is `None` where it does not.
 #[allow(clippy::type_complexity)]
 fn crossed_here<'graph, 'step, 'here, 'scratch, 'lent, B: StepBundle<'graph>>(
     context: &mut Context<'graph, 'step, 'here, 'scratch, 'lent, B>,
     tiers: TypeTiers<'graph>,
     handings: &[Ready<'graph, 'step, KValueFamily>],
+    order: &[usize],
     copies: &dyn Fn(usize) -> bool,
 ) -> SmallVec<[(Option<crate::knot::KValue<'graph, 'here>>, bool); 8]>
 where
@@ -1253,11 +1255,11 @@ where
     'lent: 'scratch,
     Erased<'graph, B::Birth>: Copy,
 {
-    let operands: SmallVec<[Operand<'graph, '_, 'step, KValueFamily>; 8]> = (handings.iter())
-        .map(|handing| Operand {
-            carrier: handing,
+    let operands: SmallVec<[Operand<'graph, '_, 'step, KValueFamily>; 8]> = (order.iter())
+        .map(|at| Operand {
+            carrier: &handings[*at],
             copy_bytes: context
-                .read::<KValueFamily>(handing)
+                .read::<KValueFamily>(&handings[*at])
                 .value()
                 .weight()
                 .bytes(),
@@ -1266,9 +1268,12 @@ where
     // The kinds are named: the birth's `Copy` bound in scope would otherwise answer for them.
     context.alloc_here::<_, KValueFamily>(&operands, |writer, header, views| {
         let types = tiers.chain(Halves::alone(Half::of(writer, header)));
-        let mut crossed = SmallVec::new();
-        crate::values::cross_views(writer, &types, views, copies, &mut |value, pinned| {
-            crossed.push((value, pinned));
+        let mut crossed: SmallVec<[_; 8]> = SmallVec::from_elem((None, false), handings.len());
+        let mut next = order.iter();
+        let copies = |crossing: usize| copies(order[crossing]);
+        crate::values::cross_views(writer, &types, views, &copies, &mut |value, pinned| {
+            let at = *next.next().expect("one crossing per index in order");
+            crossed[at] = (value, pinned);
         });
         crossed
     })

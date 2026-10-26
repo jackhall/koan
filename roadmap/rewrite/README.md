@@ -41,7 +41,6 @@ hand.
 - [Families as parameters](families-as-parameters.md)
 - [Recursion over run-time types](recursion-over-run-time-types.md)
 - [A refused program stays loaded](refused-programs-stay-loaded.md)
-- [Flat memory for a tail loop](tail-loop-memory.md)
 - [Yielding iterators](yielding-iterators.md)
 
 ## Unplanned work

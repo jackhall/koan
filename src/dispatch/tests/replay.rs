@@ -1,7 +1,7 @@
 //! The stamp and replay: a callable keeps the requests that built the chain of settlements it was
 //! born under, and a call of it whose arena node was evicted replays them, so its frame is born
-//! warm. A frame's level is laid once, and only where its callee's body can birth a callable: by a
-//! `Shares` frame's asker, or by a `Fresh` frame in its own region, never in its asker's.
+//! warm. A frame's level is laid once, and only where its callee's body can birth a callable: by
+//! the frame in its own region, never in its asker's.
 
 use std::cell::Cell;
 
@@ -115,8 +115,8 @@ fn a_closure_returned_from_its_frame_replays_after_the_frames_region_is_gone() {
     assert_eq!(tiers.cold_births, 0);
 }
 
-/// `PASS`, a `Shares` loop calling the `Fresh` `TOUCH` each hop, which keys on `m` where `keyed`
-/// and births a callable where `births`.
+/// `PASS`, a `Str`-returning loop calling the `Number`-returning `TOUCH` each hop, which keys on
+/// `m` where `keyed` and births a callable where `births`.
 fn touching(keyed: bool, births: bool) -> String {
     let view = if keyed {
         "(LET v = (m :| Counter)) "

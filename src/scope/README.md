@@ -454,6 +454,29 @@ A statement containing `EVAL` is ordered like any other: the code an `EVAL`
 runs reads no name of the body around it by symbol ([quotes](#quotes)), so its
 operand is its only mention.
 
+### The threaded set
+
+A callable's or a code body's shape seals, beside the slots its last statement
+reads, its **threaded set** ([threaded.rs](shape/build/threaded.rs)): what a
+tail call that statement makes hands on that the frame built itself, so the
+frame builds it where it outlives the hop
+([what a loop keeps](../program/README.md#frames-contracts-and-tails)).
+`BodyShape::threaded` lists the binders in the backward closure over the
+body's read edges from the last statement's reads, and
+`BodyShape::threaded_parts` the last statement's argument parts that are no
+name and no literal — a keyworded use's slots where some candidate is no
+builtin, or an application's argument, each field of a record literal written
+there. Both leave out what the frame **received**, which rests where it was
+handed from: a type slot, a parameter, a capture, a binder bound bare to a
+received value, and a member read of one through the builtin `ATTR` alone.
+Every other kind of body has an empty set.
+
+The set is static and composes without knowing the loop it runs in, which
+matters because the runtime tails more than the static
+[tail facts](#load-time-types) find. A member missed costs a copy at the hop,
+never safety; a member that need not be one stays in the loop's cell until it
+compacts.
+
 ## Three channels
 
 A value name and a type name are different key types, so the value channel and
@@ -1343,6 +1366,3 @@ type outside the one error that lists names, and on a retired lifetime name.
   are spliced into a quote at once, and a kind for built code.
 - [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — `CLOSE
   OVER`, and a warning for an unmarked keyworded use in a quote.
-- [Flat memory for a tail loop](../../roadmap/rewrite/tail-loop-memory.md) —
-  the threaded set a body's shape seals: the binders and inline arguments its
-  last statement hands on.

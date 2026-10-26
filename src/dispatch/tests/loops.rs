@@ -1,6 +1,6 @@
 //! A tail loop's memory: what every region holds at each tail of a loop stays flat in its depth,
 //! a hop copies only what it threads, and the host the loop delivers to holds the same bytes
-//! however long the loop runs ([roadmap](../../../roadmap/rewrite/tail-loop-memory.md)).
+//! however long the loop runs ([tail hops](../../scheduler/README.md#tail-hops)).
 //!
 //! Three loops over [`caching::program`](super::caching::program)'s chain: a walk, which threads
 //! nothing it built; a record rebuilt whole each hop; and a list consed onto each hop. Each body
@@ -13,7 +13,7 @@
 
 use std::cell::Cell;
 
-use crate::memory::SPLICES;
+use crate::memory::{FIRST_CHUNK, SPLICES};
 use crate::program::activation_store::KEPT;
 use crate::scheduler::{HOPS, HopSample, SKELETONS};
 use crate::values::{BuildBudget, COPIED};
@@ -26,7 +26,7 @@ const WARM: usize = 4;
 
 /// What a figure may move by between two depths without growing in them: a few of a bump's first
 /// chunks, which a region claims as its bytes double.
-const SLACK: usize = 4096;
+const SLACK: usize = FIRST_CHUNK;
 
 /// `TOUCH`, the callee each hop makes first, `ONWARD`, which hands back the link after the one it
 /// is handed, and `LEN`, which counts a consed list.
@@ -248,13 +248,18 @@ fn a_loop_pledges_none_of_its_hops() {
 
 /// Each hop builds its cell in the loop cell over the list it was handed, so it copies nothing
 /// of the list; the loop cell compacts as its bytes double, so what compactions copy comes to a
-/// constant per hop, amortized: no more per hop the deeper the loop runs.
+/// constant per hop, amortized: no more per hop the deeper the loop runs, give or take where the
+/// compactions fall.
 #[test]
 fn a_cons_loop_copies_a_constant_per_hop() {
     for form in [Form::Selfward, Form::Mutual] {
         let per_hop = copied_per_hop(ACC, form, "ints null chain");
         assert!(
-            per_hop.windows(2).all(|pair| pair[1] <= pair[0] + 8),
+            // Where compactions fall moves the figure a little; one growing with the list would
+            // multiply it by the depth's ratio.
+            per_hop
+                .windows(2)
+                .all(|pair| pair[1] <= pair[0] + pair[0] / 4),
             "{form:?}: {per_hop:?} bytes per hop"
         );
     }
@@ -274,7 +279,7 @@ fn a_cons_loop_holds_a_constant_times_what_it_threads() {
         for (at, sample) in hops.iter().enumerate() {
             let held = sample.live.saturating_sub(hops[0].live);
             assert!(
-                held <= 4 * sample.threads + 2 * hop_region + SLACK,
+                held <= 4 * sample.threads + hop_region + SLACK,
                 "{form:?}: at sample {at} the loop holds {held} B for {} B threaded",
                 sample.threads
             );
@@ -329,7 +334,8 @@ fn a_loops_host_holds_the_same_bytes_however_long_it_runs() {
 /// `ONWARD` hands back the field of its argument unchanged, at the home its caller built the
 /// argument record in — the hop's own frame — so it places nothing new there, and the host holds
 /// flat. That home is the hop's, so the next hop copies the field: a spawned call's kept carriers
-/// are projected from its birth (roadmap: precision of kept carriers).
+/// are projected from its birth
+/// ([precise kept carriers](../../../roadmap/rewrite/kept-carrier-precision.md)).
 #[test]
 fn a_call_returning_a_part_of_its_argument_places_nothing_new() {
     for form in [Form::Selfward, Form::Mutual] {
@@ -345,6 +351,45 @@ fn a_call_returning_a_part_of_its_argument_places_nothing_new() {
         assert_eq!(
             early.host_region, last.host_region,
             "{form:?}: the host holds flat"
+        );
+    }
+}
+
+/// A loop whose overloads pass on unchanged a list `xs` while they rebuild a record each hop, and
+/// `ENTRY`, whose tail call into it builds `xs`, of `length` numbers.
+fn kept_list(form: Form, length: usize) -> String {
+    let body = "EXPR #(NAME m :Counter xs :Any r :{count :Number} link :Link) -> Number = \
+                #((LET t = (TOUCH m)) (NEXT m xs {count = ((ATTR r count) + 1)} (ATTR link next)))\n\
+                EXPR #(NAME m :Counter xs :Any r :{count :Number} end :Null) -> Number = \
+                #(ATTR r count)\n";
+    let (defs, name) = defined(body, form);
+    let list = vec!["7"; length].join(" ");
+    format!(
+        "{defs}EXPR #(ENTRY m :Counter link :Link) -> Number = #({name} m [{list}] {{count = 0}} link)\n"
+    )
+}
+
+/// What a value the loop's first hop built and every hop after passes on unchanged costs per hop:
+/// it rests in the loop cell, so a compaction carries it into the fresh one, and no hop copies it
+/// into its own region. The per-hop copy does not grow with the value.
+#[test]
+fn a_value_passed_on_unchanged_rides_the_loop_cell_through_its_compactions() {
+    for form in [Form::Selfward, Form::Mutual] {
+        let per_hop = |length: usize| {
+            let defs = kept_list(form, length);
+            let copied = |depth: u32| {
+                let looped = measured(depth, &defs, "PRINT (ENTRY ints chain)\n");
+                assert_eq!(looped.printed, depth.to_string());
+                looped.copied - measured(depth, &defs, "PRINT 0\n").copied
+            };
+            (copied(256) - copied(64)) / (256 - 64)
+        };
+        // Copied every hop, 256 numbers would add some 6 KB a hop; what compactions carry adds
+        // a fraction of that, amortized.
+        let (short, long) = (per_hop(4), per_hop(256));
+        assert!(
+            long <= short + 256,
+            "{form:?}: {short} B per hop with 4 numbers, {long} with 256"
         );
     }
 }

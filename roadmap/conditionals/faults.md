@@ -58,6 +58,14 @@ per frame beneath the message.
   lost; whether a live frame's own callee folds into its count (`f ×1000`
   rather than `f` over `f ×999`); and whether runs of identical live lines from
   a recursion outside tail position collapse when rendered.
+- *A fault raised in a tail loop — open.* A located fault lives in the
+  faulting cell's region. A frame's last statement runs in a hand-off, a tree
+  cell under the frame, and a loop's hops are born under a loop cell that holds
+  what the loop threads
+  ([tail hops](../../src/scheduler/README.md#tail-hops)), so keeping the
+  frames a fault passes through keeps the hand-off, and the loop cell with it.
+  Undecided: whether the loop cell is kept whole or what the fault locates is
+  copied out of it.
 - *What a frame line names — open.* The old runtime named the callee by its
   type and the call as written; a keyworded call might instead name its bucket
   key.

@@ -2198,8 +2198,6 @@ impl<
         }
     }
 
-    /// A write home as a placement destination: the cell whose region takes the bytes, and the
-    /// slab slot whose relations the placement writes — the home itself, or a tree home's root.
     /// Whether `dest` is `home` or a tree cell under it, so `dest` dies before `home` does.
     fn at_or_under(&self, dest: CellHome, home: CellHome) -> bool {
         match (home, dest) {
@@ -2213,6 +2211,8 @@ impl<
         }
     }
 
+    /// A write home as a placement destination: the cell whose region takes the bytes, and the
+    /// slab slot whose relations the placement writes — the home itself, or a tree home's root.
     fn destination(&self, home: CellHome) -> Destination {
         Destination {
             mint_slot: match home {

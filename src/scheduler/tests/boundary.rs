@@ -24,7 +24,7 @@ const PREFIXES: &[&str] = &[
 /// ready stack, the build arena's slots and free list, and the shared hold each settlement's facts
 /// keep on their parent's and on the compositions they rest on or pin, and the arena keeps on a
 /// composition's; the levels of a replay a frame's first step hands the drain; and the request a
-/// `Fresh` frame's asker hands the drain, which it keeps in the frame's continuation until the
+/// frame's asker hands the drain, which it keeps in the frame's continuation until the
 /// frame's first step takes it. Each is the scheduler's runtime state, held beside the graph or in
 /// a cell's continuation slot and never written into a region, so a value's no-drop-glue discipline
 /// does not reach them. Beside them, the hop samples a test build's drain keeps in a thread-local.

@@ -331,8 +331,10 @@ impl<'cell, X: Knotted + 'cell> Value<'cell, X> {
     }
 
     /// Whether `self` and `other` are one storage: the same scalar or resident, restamps of the
-    /// same runs, tagged values over one storage, or headers over one knot member. Never walks a
-    /// value.
+    /// same runs, tagged values over one storage, or headers over one knot member. Runs compare by
+    /// address, so two containers of no cells answer `true` wherever their empty runs share one;
+    /// that is intended, since such a container holds no storage beside its header and either
+    /// stands for the other. Never walks a value.
     pub fn same_storage(&self, other: &Value<'_, X>) -> bool {
         let runs = |a: *const (), b: *const ()| std::ptr::eq(a, b);
         match (self, other) {

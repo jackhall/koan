@@ -185,3 +185,36 @@ fn a_data_node_restamps_under_one_header_over_its_bare_member() {
         })
     });
 }
+
+/// A restamp is one storage with what it restamps, and a field read along a label reaches the stored
+/// part a field read restamps; two lists of numbers are two storages.
+#[test]
+fn a_restamp_is_one_storage_with_what_it_restamps() {
+    with_fixture(|fixture| {
+        fixture.in_cell(pin, |context| {
+            let types = &fixture.tiers.of(context);
+            let writer = context.writer();
+            let (scratch, symbols) = (fixture.scratch(), fixture.symbols);
+            let x = BinderSymbol::declared("x", symbols).unwrap();
+            let y = BinderSymbol::declared("y", symbols).unwrap();
+            let fields = [(x, Value::Number(1.0)), (y, text(writer, "a"))];
+            let record = Value::Record(Record::new(writer, &fields, types, scratch));
+            let narrow = types.record(scratch, &[(x, KType::NUMBER)]);
+            let retyped = record.retyped(writer, narrow, types, scratch);
+            assert!(retyped.same_storage(&record));
+            let stored = record.along(y.symbol()).expect("the record stores `y`");
+            assert!(stored.same_storage(&fields[1].1));
+            let one = || {
+                Value::List(List::new(
+                    writer,
+                    [Value::Number(1.0)].into_iter(),
+                    types,
+                    scratch,
+                ))
+            };
+            let (first, second) = (one(), one());
+            assert!(first.same_storage(&first));
+            assert!(!first.same_storage(&second));
+        })
+    });
+}

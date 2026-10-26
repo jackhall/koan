@@ -433,6 +433,21 @@ they reach. Each takes a `CrossedOperand`, which only a priced placement
 mints — its arms are
 [non-exhaustive](../../cellgraph/README.md#the-crossing-verdict), so nothing
 outside `cellgraph` can build one — so every copy is one the graph priced.
+`cross_here` also reports whether its operand pinned, since a pinned value is
+the carrier's own storage. `cross_views` crosses several operands at once, as a
+hop's successor wakes the values handed to it one by one: it links the first
+pinned operand's home branch where the destination has laid none and merges
+the rest, so each merge stops at what that link reaches, and leaves uncopied a
+copied operand its caller will place elsewhere.
+
+**A part keeps its storage.** A value handed on from where it rests is read
+through doors that never write: `Value::along` reads the stored part a record
+field label reaches, through every tagged payload first, at the part's own
+memo, and `stored_fields` a plain record's runs as stored, whatever type the
+record is seen at. `same_storage` tells whether two values are one storage —
+the same scalar, restamps of one run, or headers over one knot member —
+without walking either, and `restamped_at` re-lays a value at the type a
+restamp of the same storage carried, where the value lands.
 
 A crossing door requires its family to be
 [`Covariant`](../../cellgraph/src/reattach.rs), which a generic `ValueFamily<XF>`

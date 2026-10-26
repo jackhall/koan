@@ -369,9 +369,8 @@ fn composed_root_of(body: CodeBody<'_>) -> Option<ComposedRoot<'_>> {
 /// settlement's level over the callee's own stamp: the level the birth holds, kept by a hop, or
 /// else one laid here, in the frame's region, from `sought`, the request the drain handed the
 /// frame's first step back, its binding's types relayed into that region first. A frame under its
-/// own
-/// settlement whose body births no callable has neither, and no stamp. Where the frame runs under
-/// the arena node its callee was born under, it is the callee's own stamp.
+/// own settlement whose body births no callable has neither, and no stamp. Where the frame runs
+/// under the arena node its callee was born under, it is the callee's own stamp.
 fn stamped<'graph, 'here>(
     step: &Taking<'_, 'graph, '_, 'here, '_, '_>,
     birth: &KBirth<'graph, 'here>,

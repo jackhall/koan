@@ -196,10 +196,9 @@ declared per call is classed alike by the type binders its declaration reads:
 - **varying**: any other tree — one with a leaf keyed on a binder inside the
   body, an action's result or an inline `MATCH`, on a parameter the loop
   rebinds, or on a parameter of any other declared type, whose digest costs
-  its size. Into the **cold tier**: the frame's own scratch under `Fresh`, held
-  for the frame's life and dropped with it, so each hop recycles it; and the
-  host's scratch under `Shares`, where it grows with the loop as the loop's
-  bytes do.
+  its size. Into the **cold tier**: the frame's own scratch, held for the
+  frame's life and dropped with it, so each hop recycles it; an `EVAL` or a
+  `USING` frame, a tenant, writes its host's.
 
 A composite site follows its children: warm where its static type reaches
 invariant carriers alone, cold otherwise, a type that reaches a carrier the
@@ -207,7 +206,7 @@ load cannot name included.
 
 A caching body runs every step on one chain over the frozen load, the agent
 tier, the region its writer lays into and the scratch it writes — its own
-under `Fresh`, its host's under `Shares`. A scratch chain holds the region
+for a called frame, its host's for a tenant. A scratch chain holds the region
 tier it reads between the agent tier and its own by value, so building one
 per step lays nothing; no branch holds that tier, since a habitat's door
 lives one step and a branch lives as long as its half. A type the body builds
@@ -271,21 +270,15 @@ holds that habitat's reset off until the registration that replaces it or the
 cell's death ([the cell](../cellgraph/README.md#the-cell)). So the host's
 scratch lives from the ask to the delivery, whatever the callee does in
 between, and resets at the first quiet step end after the evaluation wakes.
-Every `Shares` callee born under that park with no settlement is a tenant of
-the host, whose scratch is its own, so that scratch is its warm tier and its
-cold tier at once. A tail loop of `Shares` callees is therefore warm at its
-invariant sites, where the same carrier or per-call nominal minted each hop
-probes and hits, and the scratch grows by those sites' content once per park
-however long the loop runs. Two `Shares` calls asked at one park — the
-operands of one operator run, the parts of one tie — are warm to each other,
-and so are the statements of a `Shares` callee, since the asker's park holds
-across them; two calls from the host's own body in separate statements are
-cold, since that body replaces its own receipt between them, save a keyed
-callee's, warm through the agent tier. A `Fresh` caching frame holds its own
-scratch for its life, its warm and cold tier at once, and drops it with the
-frame. It reads no other cell's scratch, so a `Fresh` frame with no
-settlement is warm across its own statements alone, and each hop of a `Fresh` tail
-loop under such a binding mints its invariant sites afresh. A loop that parks
+The evaluations a body asks for are tenants of its cell and write its scratch,
+so the parts asked at one park — the operands of one operator run, the parts
+of one tie — are warm to each other. A called frame is a tree cell: a caching
+one holds its own scratch for its life, its warm and cold tier at once, and
+drops it with the frame. It reads no other cell's scratch, so a frame with no
+settlement is warm across its own statements alone, and each hop of a tail
+loop under such a binding mints its invariant sites afresh, into a scratch the
+next hop recycles, while a keyed callee is warm through the agent tier. A
+loop that parks
 once a hop lays no receipt run per hop: the scratch habitat keeps the runs
 its cells released, drained, on a free list a registration searches first
 fit, cleared at the reset. The cache needs no count of its own and no
@@ -309,12 +302,13 @@ its result, an argument at a frame birth or tail call, a called member's
 function type with its carrier, the types a call by name contributes to its
 callee's solve, the contract a tail call or an `EVAL` hands on, and a
 barrier's four handles, the type the caller sees, the declared slot type and
-the two substitutions — its types are adopted into the region. A `Fresh`
-caching frame that hands its last statement to the evaluator departs while
-that statement runs, and its scratch with it, so the binders that statement
-reads, which the load lists, and the frame's contract are adopted at the
-hand-off. The adopt reads the whole chain the body ran on, since a `Fresh`
-type's children may lie both in the agent tier and in the frame's scratch.
+the two substitutions — its types are adopted into the region. A caching
+frame that hands its last statement to the evaluator — a tree child of the
+frame, writing its own region — departs while that statement runs, and its
+scratch with it, so the binders that statement reads, which the load lists,
+and the frame's contract are adopted at the hand-off. The adopt reads the
+whole chain the body ran on, since a type's children may lie both in the agent
+tier and in the frame's scratch.
 A sealed exit carries no minted content, but it may carry a
 composite over root types the body built in a scratch tier. What lingers is
 bounded by what the body hands out, never by what it minted.

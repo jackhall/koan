@@ -82,6 +82,20 @@ and otherwise asked for — a `Shares` tenant of the evaluation's cell, kept —
 all at one park. **A fault is passed through**: an evaluation that receives
 one from a part finishes with it, unchanged, before doing anything else.
 
+**A value is held beside where it rests.** Each operand is a
+[`Held`](../scheduler/README.md#kept-and-held-values): the value, and the kept
+part it is where it has one — a name its frame
+[keeps](../program/README.md#frames-contracts-and-tails) a carrier of, a
+child's pinned result, and a builtin `ATTR` field read or a projection over
+either, the field's label appended to the path. A value finished with a kept
+part crosses on from its true home, so an evaluation that hands back a
+parameter, or a member of one, places nothing new. **A construction is built
+in its home**: a list, dict or record literal, and a type's application, is
+built in the evaluation's home over its parts, which it asks for forwarded —
+kept in a caching body — so it is never built in the evaluation only to be
+crossed whole, and the contract is applied there too. A caching body's
+construction that stays inside the body is built on the body's chain instead.
+
 ## The builtin table
 
 [`builtins::table`](builtins.rs) binds no value name. Its type names are the
@@ -971,7 +985,17 @@ the call hops into the frame's own body, a self tail edge of a body whose name
 does not escape, which then runs under the frame's own settlement with no
 lookup. The run reads the route, and decides at the call only what the load
 left open: a builtin, a surfaced or retyped head, a spread or a rigid
-candidate. Any other value it finishes with is held to the contract: checked against the callee's own return,
+candidate.
+
+A tail call lays a [skeleton](../program/README.md#frames-contracts-and-tails)
+beside its birth, naming each argument held beside a kept part, so the
+callee's frame builds its own argument record over values crossed from where
+they rest. A call by name gathers a record literal's fields as parts of the
+call itself, so each field is handed on through its own kept part. The
+evaluation asks each argument part of the frame body's
+[threaded set](../scope/README.md#the-threaded-set) with `Use::Threads`, so
+what the frame built and hands on is built in the loop's cell, and marks
+those arguments threaded in the skeleton. Any other value it finishes with is held to the contract: checked against the callee's own return,
 a miss naming it, and retyped to the contract's outermost return. A call through
 a view's barrier never tails: its value crosses the barrier where its frame
 ends.
@@ -1309,13 +1333,13 @@ literal content — passed on or returned as no exit, and each site's caching
 class over parameters, captures, locals, views of views, nominals and
 composites, a keyworded tail loop pairing its
 arguments by slot, and the tutorial's classes (an ignored measurement);
-[caching](tests/caching.rs) — caching bodies at run: `Shares`, `Fresh`, helper
-and mixed-placement loops holding their tiers flat across hops, warm verdicts,
+[caching](tests/caching.rs) — caching bodies at run: `Str`- and
+`Number`-returning, helper and mixed loops holding their tiers flat across hops, warm verdicts,
 a parking loop's scratch bytes flat, the scratch reset after a delivery
 while the agent tier keeps each loop's binding, the parameters each frame keys on and each shape's segment,
 a loop seeking its settlement once and a second caller finding it warm, a
 callable born in a frame or its block keying beneath the frame's
-settlement and a `Shares` callee's under its own chain, an evicted
+settlement and a callee's under its own chain, an evicted
 settlement rebuilt with the same answer, the allocations a birth keyed on
 a list costs, a table of what a loop hop's adoptions cost, counter by counter,
 over the suite's programs, every count held flat across three evenly spaced
@@ -1324,11 +1348,22 @@ member, a held frame's hand-off, a received list passed on without being
 entered, a loop passing on a member of a received chain adopting a hop at a
 time, a member of a received value reached through a call's result not entered
 whatever its length, and a loop handing a callee a module built over its link
-each hop, caching and flat, a `Fresh` callee viewing it at an invariant site
+each hop, caching and flat, a `Number`-returning callee viewing it at an invariant site
 included;
 [tail](tests/tail.rs), a keyworded tail
 recursion holding its cells constant, which is on the
 [Miri slate](../../observe/miri_slate.md), and a tail call reading its route;
+[kept](tests/kept.rs) — a frame handing back its parameter, a field of it and a
+binder bound bare to it unchanged, and a record a call returns built once in
+its caller's home; [loops](tests/loops.rs) — a tail loop's memory at 16, 64
+and 256 hops, each loop hopping under its frame's settlement and seeking one
+each hop: a chain walk and a record rebuilt whole each hop holding every
+region flat, a walk copying no part of its chain, a hop handing on its
+received arguments uncopied, no hop pledged, a cons loop copying a constant
+per hop, amortized, holding a constant times what it threads and delivering
+its whole list, the host's region, scratch and memo flat, a value passed on
+unchanged riding the loop cell through its compactions, and a call returning a
+part of its argument placing nothing new;
 [door](tests/door.rs) — facts over no layers answering as the load does;
 [activation](tests/activation.rs) — a frame bound to run content deciding its
 dependent units in its activation, at its entry, a statement seam, a block's

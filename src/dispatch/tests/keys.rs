@@ -251,7 +251,7 @@ fn sought(source: &str) -> (usize, usize, String) {
     (ran.tiers.sought, ran.tiers.settled, ran.printed)
 }
 
-/// `WRAP`, keyed on its `FOR ALL` name alone, at `Shares` and at `Fresh`.
+/// `WRAP`, keyed on its `FOR ALL` name alone, returning `Any` and returning `Number`.
 const WRAPS: [&str; 2] = [
     "EXPR FOR ALL #[Elt] #(WRAP x :Elt) -> Any = #((LET p = (PICK x)) (p))\n",
     "EXPR FOR ALL #[Elt] #(WRAP x :Elt) -> Number = #((LET p = (PICK x)) (1))\n",

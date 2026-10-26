@@ -48,6 +48,5 @@ subdirectory's README carries its own slice.
 - [Families as parameters](rewrite/families-as-parameters.md)
 - [Recursion over run-time types](rewrite/recursion-over-run-time-types.md)
 - [A refused program stays loaded](rewrite/refused-programs-stay-loaded.md)
-- [Flat memory for a tail loop](rewrite/tail-loop-memory.md)
 - [Yielding iterators](rewrite/yielding-iterators.md)
 

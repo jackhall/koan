@@ -7,10 +7,12 @@
 //! an ancestor, rather than rebuilt from the cell that read it. A [`Held`] value carries the kept
 //! part it is, or is a restamp of, where it has one; the veneer's finishes and the doors that pass
 //! a value on read it ([`Step::finish`](super::Step::finish)). See
-//! [README.md § What a step may name](README.md#what-a-step-may-name).
+//! [README.md § Kept and held values](README.md#kept-and-held-values).
 
 use crate::knot::{KValue, KValueFamily};
-use crate::memory::Dormant;
+use crate::memory::{Active, Dormant, Ready};
+use crate::scheduler::action::Context;
+use crate::scheduler::continuation::StepBundle;
 use crate::values::FieldPath;
 
 /// A value at rest at its true home: what a frame keeps of an argument, its callee or a binder's
@@ -34,6 +36,35 @@ pub struct KeptPart<'graph, 'cell> {
 pub struct Held<'graph, 'cell> {
     pub value: KValue<'graph, 'cell>,
     pub kept: Option<KeptPart<'graph, 'cell>>,
+}
+
+impl<'graph> KeptPart<'graph, '_> {
+    /// This part's kept value redeemed into the step `context` runs, and projected along its path,
+    /// each label read as [`Value::along`](crate::values::Value::along) reads it: the carrier of the
+    /// storage this part names, at its true home. `None` where it does not redeem or the path
+    /// reaches nothing.
+    pub(super) fn redeemed<'step, 'here, 'scratch, 'lent, B: StepBundle<'graph>>(
+        &self,
+        context: &Context<'graph, 'step, 'here, 'scratch, 'lent, B>,
+    ) -> Option<Ready<'graph, 'step, KValueFamily>>
+    where
+        'graph: 'step + 'here + 'lent,
+        'here: 'scratch,
+        'lent: 'scratch,
+    {
+        let carrier = context.redeem(self.kept.0).ok()?;
+        let path = self.path;
+        if path.is_empty() {
+            return Some(carrier);
+        }
+        context.project::<KValueFamily, KValueFamily>(&carrier, |value, _| {
+            let mut at = value.value();
+            for label in path {
+                at = at.along(*label)?;
+            }
+            Some(Active::new(at))
+        })
+    }
 }
 
 impl<'graph, 'cell> Held<'graph, 'cell> {

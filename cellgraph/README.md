@@ -491,6 +491,22 @@ on the read out, which re-anchors at the same `'cell`.
   tree cell the test is root identity. Anything else is `Unheld`; a home whose
   storage is gone entirely is `Gone`. Nothing could have read such a value, so
   nothing is lost by refusing it.
+- **`project(carrier, part)`** and **`pass_into(dest, carrier)`** are a step's
+  two doors over a carrier it holds that build nothing. `project` hands back a
+  carrier for the part `part` picks out of the carrier's value, at the same
+  reach and home, so a part can cross on its own as its whole value would —
+  pinned where that home is an ancestor of the destination, a forced copy into
+  a cousin — rather than rebuilt in the cell that read it. `part` is generic
+  over the brand it reads at, so what it returns derives from the value or from
+  `'graph` storage; a part borrowed from anywhere else does not compile.
+  `pass_into` hands a carrier on unchanged where the destination's write home
+  is the carrier's home or a tree cell under it, minting its reach there as a
+  pin would but neither rebuilding nor re-homing the value; anywhere else it
+  answers `None`, and the caller places the value through `alloc_into`.
+- **`region_used(cell)`** reads how many bytes a live cell's write home has
+  handed out of its region, absorbed bumps included and the live chunk's slack
+  left out — what a region weighs against its contents. `FIRST_CHUNK` is the
+  bytes a region's first chunk holds, within which growth is noise.
 - **`create_tree` / `release_tree`** are birth and death over the tree pool;
   `enter` is one door over all three kinds. See
   [src/tree/README.md](src/tree/README.md). `create_tree` lends the new cell its
@@ -828,7 +844,10 @@ machinery and not the `alloc_into` within it.
   allocator koan's own readings go through.
 - The `counters` feature, off by default, exposes what a dependent's tests
   read across the crate boundary, where `cfg(test)` does not reach: the bytes
-  a writer's bump has handed out (`Writer::in_use`).
+  a writer's bump has handed out (`Writer::in_use`), a cell's scratch in use
+  (`scratch_used`), the bytes every region the graph holds has handed out
+  (`live_bytes`), and how many tree cells have spliced into an ancestor they
+  pledged (`SPLICES`).
 - [tools/cellgraph_perf.py](../tools/cellgraph_perf.py) — the one command.
   `python3 tools/cellgraph_perf.py` sweeps the set and prints a delta against the
   newest recorded commit, which it rebuilds and runs beside HEAD so the time
