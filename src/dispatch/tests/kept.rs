@@ -7,10 +7,12 @@ use std::cell::Cell;
 use crate::scheduler::PASSED;
 use crate::values::{BuildBudget, COPIED};
 
-/// `SAME` returns its parameter, `ONWARD` a field of it, and `BOUND` a binder bound bare to it.
+/// `SAME` returns its parameter, `ONWARD` a field of it, and `BOUND` a binder bound bare to it;
+/// `MAKE` returns a record literal nesting another.
 const PASSING: &str = "EXPR #(SAME link :Link) -> Link = #(link)\n\
                        EXPR #(ONWARD link :Link) -> Any = #(ATTR link next)\n\
-                       EXPR #(BOUND link :Link) -> Link = #((LET held = link) (held))\n";
+                       EXPR #(BOUND link :Link) -> Link = #((LET held = link) (held))\n\
+                       EXPR #(MAKE x :Number) -> Any = #({count = x, inner = {deep = x}})\n";
 
 /// What `main` printed over a chain of 3 links, how many finishes handed a kept value on
 /// unchanged, and how many bytes copies laid.
@@ -47,5 +49,17 @@ fn a_binder_bound_bare_to_a_parameter_keeps_the_parameters_home() {
     assert!(
         passed >= 2,
         "the binding and the frame's value both hand `link` on"
+    );
+}
+
+#[test]
+fn a_record_a_call_returns_is_built_once_in_its_callers_home() {
+    let (printed, _, copied) = ran("PRINT (ATTR (ATTR (MAKE 1) inner) deep)\n");
+    let (expected, _, baseline) =
+        ran("PRINT (ATTR (ATTR {count = 1, inner = {deep = 1}} inner) deep)\n");
+    assert_eq!(printed, expected);
+    assert_eq!(
+        copied, baseline,
+        "neither record is copied out of the frame's evaluation"
     );
 }

@@ -986,6 +986,8 @@ where
             Err(error) => return self.failed(error),
         };
         let tiers = self.tiers;
+        // A type a restamp carries that only this cell's chain resolves is adopted from it.
+        let own = self.types();
         let carriers: SmallVec<[_; 4]> = (operands.iter())
             .map(|held| self.held_carrier(held))
             .collect();
@@ -1004,10 +1006,13 @@ where
                 let values: SmallVec<[_; 4]> = (views.iter().zip(&held_at))
                     .map(|(view, held_at)| {
                         let value = crate::values::cross_view_against(writer, &types, view, check);
-                        match value.ktype() == *held_at {
-                            true => value,
-                            false => value.restamped_at(writer, *held_at, &types),
+                        if value.ktype() == *held_at {
+                            return value;
                         }
+                        if !types.resolves(*held_at) && own.resolves(*held_at) {
+                            types.adopt_from(&own, *held_at);
+                        }
+                        value.restamped_at(writer, *held_at, &types)
                     })
                     .collect();
                 build(writer, &types, &values, &&())
