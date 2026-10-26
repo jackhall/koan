@@ -186,7 +186,8 @@ pub fn cross_view_against<
 /// Crossed operands as values at the destination's brand, each as [`cross_view`] crosses it, each
 /// handed to `out` beside whether it was pinned — save that the first pinned operand's home branch
 /// is linked where the destination has laid no branch, so each merge after it stops at what that
-/// link reaches rather than entering every node of its home's.
+/// link reaches rather than entering every node of its home's; and that a copied operand at an
+/// index `copies` refuses is not copied, and is handed to `out` as `None`.
 pub fn cross_views<
     'graph,
     'cell,
@@ -196,10 +197,11 @@ pub fn cross_views<
     writer: Writer<'cell, '_>,
     types: &Chain<'cell, 'cell, '_, '_>,
     views: &[CrossedOperand<'graph, 'cell, '_, ValueFamily<XF>, H>],
-    out: &mut impl FnMut(Value<'cell, XF::Closed<'cell>>, bool),
+    copies: &dyn Fn(usize) -> bool,
+    out: &mut impl FnMut(Option<Value<'cell, XF::Closed<'cell>>>, bool),
 ) {
     let mut linked = false;
-    for view in views {
+    for (index, view) in views.iter().enumerate() {
         match *view {
             CrossedOperand::Pinned {
                 view: value, home, ..
@@ -215,9 +217,12 @@ pub fn cross_views<
                 });
                 #[cfg(debug_assertions)]
                 check_pinned_habitat::<XF>(types, &value);
-                out(value, true);
+                out(Some(value), true);
             }
-            CrossedOperand::Copied { .. } => out(cross_view(writer, types, view), false),
+            CrossedOperand::Copied { .. } if copies(index) => {
+                out(Some(cross_view(writer, types, view)), false);
+            }
+            CrossedOperand::Copied { .. } => out(None, false),
         }
     }
 }

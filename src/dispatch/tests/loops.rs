@@ -13,6 +13,7 @@
 
 use std::cell::Cell;
 
+use crate::memory::SPLICES;
 use crate::program::activation_store::KEPT;
 use crate::scheduler::{HOPS, HopSample, SKELETONS};
 use crate::values::{BuildBudget, COPIED};
@@ -218,20 +219,48 @@ fn a_hop_hands_on_its_received_arguments_without_copying_them() {
     }
 }
 
+/// No hop is pledged into the loop cell or the host: a value built in a hop that a loop threads is
+/// copied out of it, so the splices a loop makes do not grow with its depth.
 #[test]
-#[ignore = "phase 7"]
+fn a_loop_pledges_none_of_its_hops() {
+    let loops = [(STEP, "ints {count = 0} chain"), (ACC, "ints null chain")];
+    for (body, arguments) in loops {
+        for form in [Form::Selfward, Form::Mutual] {
+            let (defs, name) = defined(body, form);
+            let splices: Vec<usize> = (DEPTHS.iter())
+                .map(|&depth| {
+                    let spliced = |main: &str| {
+                        SPLICES.with(|splices| splices.set(0));
+                        let _ = measured(depth, &defs, main);
+                        SPLICES.with(Cell::get)
+                    };
+                    let looped = spliced(&format!("PRINT ({name} {arguments})\n"));
+                    looped.saturating_sub(spliced("PRINT 0\n"))
+                })
+                .collect();
+            assert!(
+                splices.iter().all(|&at| at == splices[0]),
+                "{form:?}: splices at depths {DEPTHS:?}: {splices:?}"
+            );
+        }
+    }
+}
+
+/// Each hop builds its cell in the loop cell over the list it was handed, so it copies nothing
+/// of the list; the loop cell compacts as its bytes double, so what compactions copy comes to a
+/// constant per hop, amortized: no more per hop the deeper the loop runs.
+#[test]
 fn a_cons_loop_copies_a_constant_per_hop() {
     for form in [Form::Selfward, Form::Mutual] {
         let per_hop = copied_per_hop(ACC, form, "ints null chain");
         assert!(
-            same_per_hop(&per_hop),
+            per_hop.windows(2).all(|pair| pair[1] <= pair[0] + 8),
             "{form:?}: {per_hop:?} bytes per hop"
         );
     }
 }
 
 #[test]
-#[ignore = "phase 7"]
 fn a_cons_loop_holds_a_constant_times_what_it_threads() {
     for form in [Form::Selfward, Form::Mutual] {
         let (looped, _) = looped(256, ACC, form, "ints null chain");

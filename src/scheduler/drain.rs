@@ -15,6 +15,12 @@
 //! successor's birth in the successor's region over them ([`StepBundle::handings`]): nothing
 //! homed above the successor is copied, and nothing of the skeleton outlives its predecessor.
 //!
+//! A loop whose hops hand on values their frames built — their threaded set's — runs its hops
+//! under a **loop cell**: a tree cell under the loop's receiving cell, with no continuation, created
+//! at the first hop that threads, where those values are built and copied to, which every hop after
+//! is born under and so pins free. A hop compacts it into a fresh one once it holds twice its live
+//! bytes, and the loop's last cell releases it when it delivers.
+//!
 //! A miss relays its binding's image into the agent tier, settles the body through the door the
 //! program handed the graph at load ([`Settles`]), and, once the frame borrows the settlement,
 //! evicts unheld settlements to the budget; nothing else evicts in a run. A step's door reads the
@@ -28,8 +34,8 @@ use smallvec::SmallVec;
 
 use crate::knot::KValueFamily;
 use crate::memory::{
-    Active, CellGraph, CellHandle, CreateError, CrossedOperand, Dormant, Erased, Lend, Operand,
-    Ready, RedeemError, ReleaseAbsorption, ReleaseError, SlabHandle,
+    Active, CellGraph, CellHandle, CreateError, CrossedOperand, Dormant, Erased, FIRST_CHUNK, Lend,
+    Operand, Ready, RedeemError, ReleaseAbsorption, ReleaseError, SlabHandle,
 };
 use crate::scheduler::action::{
     Action, Asked, Context, Kind, Placement, Spawns, Step, StepError, Tailing, Use,
@@ -49,6 +55,10 @@ use crate::scope::{Facts, LoadFacts, RegionHeader};
 use crate::type_lattice::Branch;
 use crate::type_lattice::Halves;
 use crate::values::{ArenaRef, BuildBudget, ContentDigest, Half, TypeTiers};
+
+/// What a loop cell may hold past twice its live bytes before a hop compacts it: a region's first
+/// chunk, within which growth is noise.
+const COMPACTION_FLOOR: usize = FIRST_CHUNK;
 
 /// The graph of cells a drain runs over: `cellgraph`'s graph closed over the continuation family,
 /// the bundle's scratch family and the delivery bundle.
@@ -339,6 +349,8 @@ enum Entry<'graph, B: StepBundle<'graph>> {
         under: CellHandle,
         born: Born,
         release_after: Option<CellHandle>,
+        /// A loop cell the hop compacted away from, released after `release_after`.
+        release_loop: Option<CellHandle>,
     },
 }
 
@@ -419,6 +431,9 @@ where
                     parent: under,
                     report: None,
                     home: under,
+                    loop_cell: None,
+                    threads: false,
+                    loop_base: 0,
                 },
                 arena: ArenaRef::ROOT,
                 arrival: Arrival::Placed,
@@ -428,8 +443,8 @@ where
         )?;
         self.ready.push(Entry::Live(root));
         while let Some(entry) = self.ready.pop() {
-            let (cell, release_after) = match entry {
-                Entry::Live(cell) => (cell, None),
+            let (cell, release_after, release_loop) = match entry {
+                Entry::Live(cell) => (cell, None, None),
                 Entry::Unborn {
                     provenance,
                     asked,
@@ -437,20 +452,30 @@ where
                     under,
                     born,
                     release_after,
+                    release_loop,
                 } => {
                     let cell = self.create(provenance, asked, (under, born), asker)?;
-                    (cell, release_after.map(|predecessor| (predecessor, asker)))
+                    let release_after = release_after.map(|predecessor| (predecessor, asker));
+                    (cell, release_after, release_loop)
                 }
             };
             let (action, provenance, arena) = self.step(cell)?;
             // A hop's successor has woken what its predecessor kept, and borrows its arena node,
-            // so the predecessor can go.
+            // so the predecessor can go — and the loop cell it compacted away from after it.
             if let Some((predecessor, arena)) = release_after {
                 self.retire(predecessor, arena)?;
+            }
+            if let Some(old) = release_loop {
+                self.release_loop(old)?;
             }
             match action.kind() {
                 Kind::Finished { completed } => {
                     self.retire(cell, arena)?;
+                    // The loop's last cell has delivered: its loop cell's bytes reached the home
+                    // already, by a pledge or a copy.
+                    if let Some(loop_cell) = provenance.loop_cell {
+                        self.release_loop(loop_cell)?;
+                    }
                     // The consumer comes off the drain's own copy of the provenance, read straight
                     // off the continuation, so no step can name the cell that wakes.
                     if provenance.report.is_none() {
@@ -463,12 +488,20 @@ where
                 }
                 Kind::Park => self.asked_by(cell, provenance, arena),
                 Kind::Tail(asked, tailing) => {
-                    #[cfg(test)]
-                    self.sample_hop(cell, provenance.parent);
-                    // A hand-off is born under this cell; a hop or a rebirth beside it.
+                    let mut provenance = provenance;
+                    let mut release_loop = None;
+                    if let Tailing::Hop { threads } = tailing {
+                        release_loop = self.loop_for(&mut provenance, threads)?;
+                        #[cfg(test)]
+                        self.sample_hop(cell, provenance.parent, threads);
+                    }
+                    // A hand-off is born under this cell; a hop or a rebirth beside it, under its
+                    // loop cell where it has one.
                     let (under, born) = match tailing {
                         Tailing::HandOff => (cell, Born::Child),
-                        Tailing::Hop | Tailing::Rebirth => (provenance.parent, Born::Hop),
+                        Tailing::Hop { .. } | Tailing::Rebirth => {
+                            (provenance.loop_cell.unwrap_or(provenance.parent), Born::Hop)
+                        }
                     };
                     self.ready.push(Entry::Unborn {
                         provenance,
@@ -477,6 +510,7 @@ where
                         under,
                         born,
                         release_after: Some(cell),
+                        release_loop,
                     });
                 }
                 // Only a root work leaves: `leave` refuses a cell that reports to somebody.
@@ -491,6 +525,56 @@ where
         Err(DrainStalled::Unfinished)
     }
 
+    /// The loop cell a hop's successor is born under, set on `provenance`: a new one under the
+    /// loop's receiving cell at the first hop that threads, and a fresh one beside the current one
+    /// once its bytes pass twice its live bytes, or twice what the hop threads — a compaction, whose
+    /// threaded values the successor copies into the fresh cell — handing back the one it replaced
+    /// to release after the successor's first step. A loop cell's live bytes are read at the first
+    /// hop after it was filled, so its values' types weigh in as their values do; amortized, each
+    /// hop copies a constant.
+    fn loop_for(
+        &mut self,
+        provenance: &mut Provenance,
+        threads: Option<usize>,
+    ) -> Result<Option<CellHandle>, DrainStalled> {
+        let fresh = match (provenance.loop_cell, threads) {
+            (None, None) => return Ok(None),
+            (None, Some(_)) => None,
+            (Some(loop_cell), threads) => {
+                let used = (self.graph.cells.region_used(loop_cell))
+                    .map_err(|_| DrainStalled::Unreleasable)?;
+                if provenance.loop_base == 0 {
+                    provenance.loop_base = used.max(1);
+                    return Ok(None);
+                }
+                let live = provenance.loop_base.max(threads.unwrap_or(0));
+                if used <= 2 * live + COMPACTION_FLOOR {
+                    return Ok(None);
+                }
+                Some(loop_cell)
+            }
+        };
+        let created = (self.graph.cells)
+            .create_tree_lent(provenance.parent, Lend::ParentScratch, None)
+            .map_err(|_| DrainStalled::Unspawnable)?;
+        #[cfg(test)]
+        self.census.born();
+        provenance.loop_cell = Some(created.into());
+        provenance.loop_base = 0;
+        Ok(fresh)
+    }
+
+    /// Release a loop cell: it borrows no arena node, and runs nothing.
+    fn release_loop(&mut self, loop_cell: CellHandle) -> Result<(), DrainStalled> {
+        let CellHandle::Tree(handle) = loop_cell else {
+            return Err(DrainStalled::Unreleasable);
+        };
+        (self.graph.cells.release_tree(handle)).map_err(|_| DrainStalled::Unreleasable)?;
+        #[cfg(test)]
+        self.census.retired();
+        Ok(())
+    }
+
     /// Push every child the parked step asked for, so the first asked is on top. The cell itself
     /// is left alone: it is live, parked on the run it registered, and wakes when the last slot
     /// fills.
@@ -501,9 +585,13 @@ where
     fn asked_by(&mut self, cell: CellHandle, provenance: Provenance, arena: ArenaRef) {
         let Scheduler { ready, spawns, .. } = self;
         for (slot, asked) in spawns.take().rev() {
-            let home = match asked.use_ {
-                Use::Forwards => provenance.home,
-                Use::Reads | Use::Keeps => cell,
+            let (home, threads) = match asked.use_ {
+                Use::Forwards => (provenance.home, provenance.threads),
+                Use::Threads => match provenance.loop_cell {
+                    Some(loop_cell) => (loop_cell, true),
+                    None => (cell, false),
+                },
+                Use::Reads | Use::Keeps => (cell, false),
             };
             ready.push(Entry::Unborn {
                 provenance: Provenance {
@@ -513,12 +601,16 @@ where
                         use_: asked.use_,
                     }),
                     home,
+                    loop_cell: None,
+                    threads,
+                    loop_base: 0,
                 },
                 asked,
                 asker: arena,
                 under: cell,
                 born: Born::Child,
                 release_after: None,
+                release_loop: None,
             });
         }
     }
@@ -852,9 +944,10 @@ where
         Ok(())
     }
 
-    /// Push a [`HopSample`] for `cell`'s tail, its loop's result received by `host`.
+    /// Push a [`HopSample`] for `cell`'s tail, its loop's result received by `host`, its successor's
+    /// birth threading `threads`.
     #[cfg(test)]
-    fn sample_hop(&self, cell: CellHandle, host: CellHandle) {
+    fn sample_hop(&self, cell: CellHandle, host: CellHandle, threads: Option<usize>) {
         let cells = &self.graph.cells;
         let sample = HopSample {
             host,
@@ -865,7 +958,7 @@ where
                 CellHandle::Tree(_) => cells.region_used(cell).unwrap_or(0),
                 _ => 0,
             },
-            threads: 0,
+            threads: threads.unwrap_or(0),
         };
         HOPS.with(|hops| hops.borrow_mut().push(sample));
     }
@@ -917,12 +1010,14 @@ where
     let scratch = context.scratch_state();
     let (state, carrier) = match state {
         Rested::Awake(state) => (state, None),
-        Rested::Dormant(dormant, born) => match wake::<B>(context, tiers, dormant, born) {
-            Ok(woken) => woken,
-            Err(_) => {
-                return (Action::refused(StepError::Unredeemable), provenance, arena);
+        Rested::Dormant(dormant, born) => {
+            match wake::<B>(context, tiers, dormant, (born, provenance.loop_cell)) {
+                Ok(woken) => woken,
+                Err(_) => {
+                    return (Action::refused(StepError::Unredeemable), provenance, arena);
+                }
             }
-        },
+        }
     };
     #[cfg(test)]
     let before = (
@@ -995,7 +1090,7 @@ fn wake<'graph, 'step, 'here, 'scratch, 'lent, B: StepBundle<'graph>>(
     context: &mut Context<'graph, 'step, 'here, 'scratch, 'lent, B>,
     tiers: TypeTiers<'graph>,
     dormant: Dormant<'graph, B::Birth>,
-    born: Born,
+    (born, loop_cell): (Born, Option<CellHandle>),
 ) -> Result<
     (
         StateAt<'graph, 'here, B>,
@@ -1011,7 +1106,7 @@ where
 {
     let carrier = context.redeem(dormant)?;
     if born == Born::Hop
-        && let Some(birth) = hopped::<B>(context, tiers, &carrier)
+        && let Some(birth) = hopped::<B>(context, tiers, &carrier, loop_cell)
     {
         return Ok((B::born(birth?), None));
     }
@@ -1032,12 +1127,15 @@ where
 /// A hop's successor's birth, where its predecessor laid it as a skeleton beside the values it
 /// hands on ([`StepBundle::handings`]): each value crosses on its own, from the kept part it was
 /// handed through where that redeems — pinned free from an ancestor — and otherwise out of the
-/// skeleton; the successor keeps a carrier of each, at its home where it pinned and here where it
-/// was copied; and the birth is built here over them. `None` for a birth that crosses whole.
+/// skeleton; one that does not pin is copied into the successor, save a threaded one under a loop
+/// cell, which is copied into `loop_cell` and pinned from there. The successor keeps a carrier of
+/// each, at its home where it pinned and here where it was copied, and the birth is built here
+/// over them. `None` for a birth that crosses whole.
 fn hopped<'graph, 'step, 'here, 'scratch, 'lent, B: StepBundle<'graph>>(
     context: &mut Context<'graph, 'step, 'here, 'scratch, 'lent, B>,
     tiers: TypeTiers<'graph>,
     carrier: &Ready<'graph, 'step, B::Birth>,
+    loop_cell: Option<CellHandle>,
 ) -> Option<Result<BirthAt<'graph, 'here, B>, RedeemError>>
 where
     'graph: 'step + 'here + 'lent,
@@ -1047,10 +1145,11 @@ where
 {
     let mut handings: SmallVec<[Option<Ready<'graph, 'step, KValueFamily>>; 8]> = SmallVec::new();
     let mut reused: SmallVec<[Option<Kept<'graph>>; 8]> = SmallVec::new();
+    let mut threaded: SmallVec<[bool; 8]> = SmallVec::new();
     let laid = {
         let context = &*context;
         let birth = context.read(carrier).value();
-        B::handings(&birth, &mut |index, kept| {
+        B::handings(&birth, &mut |index, kept, threads| {
             let from_kept = kept.and_then(|part| {
                 let kept = context.redeem(part.kept.0).ok()?;
                 if part.path.is_empty() {
@@ -1073,46 +1172,59 @@ where
                     B::handed(birth.value(), index).map(Active::new)
                 })
             }));
+            threaded.push(threads && loop_cell.is_some());
         })
     };
     if !laid {
         return None;
     }
-    let Some(handings): Option<SmallVec<[_; 8]>> = handings.into_iter().collect() else {
+    let Some(mut handings): Option<SmallVec<[_; 8]>> = handings.into_iter().collect() else {
         return Some(Err(RedeemError::Gone));
     };
-    let operands: SmallVec<[Operand<'graph, '_, 'step, KValueFamily>; 8]> = (handings.iter())
-        .map(|handing| Operand {
-            carrier: handing,
-            copy_bytes: context
-                .read::<KValueFamily>(handing)
-                .value()
-                .weight()
-                .bytes(),
-        })
-        .collect();
-    // The kinds are named: the birth's `Copy` bound in scope would otherwise answer for them.
-    let crossed: SmallVec<[_; 8]> =
-        context.alloc_here::<_, KValueFamily>(&operands, |writer, header, views| {
-            let types = tiers.chain(Halves::alone(Half::of(writer, header)));
-            let mut crossed = SmallVec::new();
-            crate::values::cross_views(writer, &types, views, &mut |value, pinned| {
-                crossed.push((value, pinned));
-            });
-            crossed
-        });
+    let mut crossed: SmallVec<[_; 8]> =
+        crossed_here::<B>(context, tiers, &handings, &|index| !threaded[index]);
+    // A threaded value that did not pin is copied into the loop cell, which outlives the hop, and
+    // pinned from there.
+    if let Some(loop_cell) = loop_cell {
+        let waiting: SmallVec<[usize; 8]> = (0..handings.len())
+            .filter(|at| crossed[*at].0.is_none())
+            .collect();
+        for at in waiting {
+            let operand = [Operand {
+                carrier: &handings[at],
+                copy_bytes: 0,
+            }];
+            let homed = context.alloc_into::<KValueFamily, KValueFamily>(
+                loop_cell,
+                &operand,
+                |writer, header, views| {
+                    let types = tiers.chain(Halves::alone(Half::of(writer, header)));
+                    Active::new(crate::values::cross_view(writer, &types, &views[0]))
+                },
+            );
+            let Ok(homed) = homed else {
+                return Some(Err(RedeemError::Gone));
+            };
+            handings[at] = homed;
+            reused[at] = None;
+            crossed[at] = crossed_here::<B>(context, tiers, &handings[at..=at], &|_| true)[0];
+        }
+    }
     let mut kept: SmallVec<[Kept<'graph>; 8]> = SmallVec::new();
     for ((carrier, reused), (value, pinned)) in handings.iter().zip(&reused).zip(&crossed) {
+        let value = value.expect("every value has crossed");
         kept.push(match (pinned, reused) {
             (true, Some(reused)) => *reused,
             (true, None) => Kept(context.keep(carrier.clone())),
             (false, _) => {
-                let lifted = context.lift::<KValueFamily>(*value);
+                let lifted = context.lift::<KValueFamily>(value);
                 Kept(context.keep(lifted))
             }
         });
     }
-    let values: SmallVec<[_; 8]> = crossed.iter().map(|(value, _)| *value).collect();
+    let values: SmallVec<[_; 8]> = (crossed.iter())
+        .map(|(value, _)| value.expect("every value has crossed"))
+        .collect();
     let copy_bytes = B::weight(&context.read(carrier).value());
     let birth = context.alloc_here(
         &[Operand {
@@ -1124,6 +1236,42 @@ where
     #[cfg(test)]
     SKELETONS.with(|count| count.set(count.get() + 1));
     Some(Ok(birth))
+}
+
+/// `handings` crossed into this cell, each beside whether it pinned: one that does not pin is
+/// copied here where `copies` takes its index, and is `None` where it does not.
+#[allow(clippy::type_complexity)]
+fn crossed_here<'graph, 'step, 'here, 'scratch, 'lent, B: StepBundle<'graph>>(
+    context: &mut Context<'graph, 'step, 'here, 'scratch, 'lent, B>,
+    tiers: TypeTiers<'graph>,
+    handings: &[Ready<'graph, 'step, KValueFamily>],
+    copies: &dyn Fn(usize) -> bool,
+) -> SmallVec<[(Option<crate::knot::KValue<'graph, 'here>>, bool); 8]>
+where
+    'graph: 'step + 'here + 'lent,
+    'here: 'scratch,
+    'lent: 'scratch,
+    Erased<'graph, B::Birth>: Copy,
+{
+    let operands: SmallVec<[Operand<'graph, '_, 'step, KValueFamily>; 8]> = (handings.iter())
+        .map(|handing| Operand {
+            carrier: handing,
+            copy_bytes: context
+                .read::<KValueFamily>(handing)
+                .value()
+                .weight()
+                .bytes(),
+        })
+        .collect();
+    // The kinds are named: the birth's `Copy` bound in scope would otherwise answer for them.
+    context.alloc_here::<_, KValueFamily>(&operands, |writer, header, views| {
+        let types = tiers.chain(Halves::alone(Half::of(writer, header)));
+        let mut crossed = SmallVec::new();
+        crate::values::cross_views(writer, &types, views, copies, &mut |value, pinned| {
+            crossed.push((value, pinned));
+        });
+        crossed
+    })
 }
 
 /// What a root work left at rest in its home when it ended by

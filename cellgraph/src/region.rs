@@ -238,6 +238,10 @@ impl<'graph, H: HabitatHeader<'graph>> Region<'graph, H> {
     }
 }
 
+/// The bytes a region's first chunk holds: what a fresh bump claims at its first write, before it
+/// doubles. Growth within it is noise to an embedder weighing a region against its contents.
+pub const FIRST_CHUNK: usize = 448;
+
 /// What one table index holds for the cell that occupies it: both halves of its habitat, the
 /// region and the scratch bump beside it.
 ///

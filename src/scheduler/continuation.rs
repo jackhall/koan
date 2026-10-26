@@ -68,16 +68,26 @@ pub trait StepBundle<'graph>: 'graph {
 
     /// The values a tail hop hands its successor one by one, where its birth was laid as a skeleton
     /// beside them: each handed to `out` by index, beside the kept part it crosses from where it has
-    /// one. `false` for a birth that crosses whole — every one by default.
+    /// one and whether it threads. `false` for a birth that crosses whole — every one by default.
     fn handings<'cell>(
         birth: &BirthAt<'graph, 'cell, Self>,
-        out: &mut impl FnMut(usize, Option<KeptPart<'graph, 'cell>>),
+        out: &mut impl FnMut(usize, Option<KeptPart<'graph, 'cell>>, bool),
     ) -> bool
     where
         'graph: 'cell,
     {
         let _ = (birth, out);
         false
+    }
+
+    /// How much a tail hop's successor's birth threads: the weight of the values it hands on that
+    /// its predecessor built to outlive the hop, where it hands on any. `None` by default.
+    fn threads<'cell>(birth: &BirthAt<'graph, 'cell, Self>) -> Option<usize>
+    where
+        'graph: 'cell,
+    {
+        let _ = birth;
+        None
     }
 
     /// The value handing `index` of `birth` names, as the birth holds it.
@@ -215,23 +225,39 @@ pub enum Born {
     Left,
 }
 
-/// What a cell carries about itself for the drain's use: where it sits, where its result goes and
-/// what it is for, and where the result is built.
+/// What a cell carries about itself for the drain's use: where its result goes and what it is for,
+/// where the result is built, and the loop cell a tail loop it runs in threads its state through.
 ///
 /// Every field is brand-free, so it survives a tail hop verbatim — which is what "the successor
 /// inherits its receipt" means. The drain fills it and a step never sees it: a [`Step`] holds the
 /// cell's copy privately, to park under and to deliver to.
+///
+/// Three cells play three roles a cell's birth once conflated: `parent` receives the result,
+/// `loop_cell` — else `parent` — is where a hop or a rebirth is born, and a frame's hand-off is
+/// born under the frame itself.
 #[derive(Clone, Copy)]
 pub(super) struct Provenance {
-    /// The cell this one was born under — a tree parent or a tenant's host — which is also the
-    /// consumer it reports to and the place a successor is born beside. `cellgraph` exposes no
-    /// parent accessor, so a cell remembers its place here rather than in a table beside the graph.
+    /// The consumer this cell reports to — the cell it, or the first cell of its tail chain, was
+    /// born under: a tree parent or a tenant's host — and, with no loop cell, where a successor is
+    /// born. `cellgraph` exposes no parent accessor, so a cell remembers it here rather than in a
+    /// table beside the graph.
     pub parent: CellHandle,
     /// The slot of the parent's receipt run this cell fills and the `Use` it was asked with.
     /// `None` for a root work, which reports to nobody.
     pub report: Option<Report>,
     /// Where this cell's result is built.
     pub home: CellHandle,
+    /// The tree cell under `parent`, with no continuation, that a tail loop's hops are born under
+    /// and its threaded values are built in, which outlives each hop: set by the drain at the hop
+    /// that first threads, and inherited by every hop and hand-off after. `None` for a spawned
+    /// cell, and for a loop that threads nothing.
+    pub loop_cell: Option<CellHandle>,
+    /// Whether `home` is a loop cell: a value built there copies whatever is homed in a hop, at
+    /// any price, so no hop is pledged into it.
+    pub threads: bool,
+    /// The bytes `loop_cell` held at the first hop after it was filled — what its live values come
+    /// to, their types included — which a hop compacts it against; `0` until that hop reads it.
+    pub loop_base: usize,
 }
 
 /// One slot of one consumer's receipt run, and what the consumer will do with what fills it.

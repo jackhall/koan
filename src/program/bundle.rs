@@ -132,15 +132,17 @@ pub struct Within<'graph, 'cell> {
 
 /// What a tail hop hands its successor through kept parts, laid beside the birth: each argument the
 /// birth's record holds that is a kept part, or a restamp of one, by name, and the frame's own
-/// callee, kept, where the hop is into it; and the record's field names as its type names them,
-/// in the record's order. The successor's birth is built in its own region, each of these crossing
-/// from its kept part and every other argument, and the callee where none is kept, out of the
-/// birth.
+/// callee, kept, where the hop is into it; the record's field names as its type names them, in the
+/// record's order; and the arguments the frame built to outlive the hop — its threaded set's — by
+/// name. The successor's birth is built in its own region, each kept argument crossing from its
+/// kept part and every other one, and the callee where none is kept, out of the birth; a threaded
+/// one that does not pin is copied into the loop's cell first.
 #[derive(Clone, Copy)]
 pub struct Passing<'graph, 'cell> {
     pub callee: Option<Kept<'graph>>,
     pub arguments: &'cell [(Symbol, KeptPart<'graph, 'cell>)],
     pub binders: &'cell [BinderSymbol],
+    pub threaded: &'cell [Symbol],
 }
 
 /// What a hop's successor keeps of the callee and the arguments its birth holds, built beside the
@@ -450,7 +452,7 @@ impl<'graph> StepBundle<'graph> for KBundle {
     /// record's order, then its callee.
     fn handings<'cell>(
         birth: &KBirth<'graph, 'cell>,
-        out: &mut impl FnMut(usize, Option<KeptPart<'graph, 'cell>>),
+        out: &mut impl FnMut(usize, Option<KeptPart<'graph, 'cell>>, bool),
     ) -> bool
     where
         'graph: 'cell,
@@ -468,11 +470,42 @@ impl<'graph> StepBundle<'graph> for KBundle {
         };
         for (index, name) in names.iter().enumerate() {
             let kept = (passing.arguments.iter()).find(|(passed, _)| passed == name);
-            out(index, kept.map(|(_, part)| *part));
+            out(
+                index,
+                kept.map(|(_, part)| *part),
+                passing.threaded.contains(name),
+            );
         }
         let callee = passing.callee.map(|kept| KeptPart { kept, path: &[] });
-        out(names.len(), callee);
+        out(names.len(), callee, false);
         true
+    }
+
+    /// A call a tail laid a skeleton beside threads the weight of the arguments its frame built to
+    /// outlive the hop, where any is no number, bool, null or type value.
+    fn threads<'cell>(birth: &KBirth<'graph, 'cell>) -> Option<usize>
+    where
+        'graph: 'cell,
+    {
+        let KBirth::Call {
+            arguments,
+            passing: Some(passing),
+            ..
+        } = birth
+        else {
+            return None;
+        };
+        let (names, cells) = arguments.stored_fields()?;
+        let inline = |value: &KValue<'_, '_>| {
+            matches!(
+                value,
+                Value::Number(_) | Value::Bool(_) | Value::Null | Value::Type(_)
+            )
+        };
+        (names.iter().zip(cells))
+            .filter(|(name, value)| passing.threaded.contains(name) && !inline(value))
+            .map(|(_, value)| value.weight().bytes())
+            .reduce(|threads, weight| threads + weight)
     }
 
     fn handed<'cell>(birth: KBirth<'graph, 'cell>, index: usize) -> Option<KValue<'graph, 'cell>>

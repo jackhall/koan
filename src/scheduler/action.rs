@@ -75,8 +75,9 @@ pub(super) enum Tailing {
     /// Under this cell, as its tree child: a frame handing its last statement to an evaluation,
     /// which views the frame's activation from below it.
     HandOff,
-    /// Beside this cell, under the parent its provenance names: a hop into a call's frame.
-    Hop,
+    /// Beside this cell, under its loop cell or else the parent its provenance names: a hop into
+    /// a call's frame, beside how much its birth threads ([`StepBundle::threads`]).
+    Hop { threads: Option<usize> },
     /// Beside this cell, at its own placement: the same work born again elsewhere.
     Rebirth,
 }
@@ -813,7 +814,13 @@ where
     /// names, in a region of its own, which inherits its provenance verbatim. The successor's birth
     /// is handed over at `'here` and put to rest here, as a spawn's is.
     pub fn tail(self, work: Work<'graph, 'here, B>) -> Action<'graph, B> {
-        self.tail_lending(Placement::Fresh, work, Lending::Parent, Tailing::Hop)
+        let threads = B::threads(&work.state);
+        self.tail_lending(
+            Placement::Fresh,
+            work,
+            Lending::Parent,
+            Tailing::Hop { threads },
+        )
     }
 
     /// [`tail`](Self::tail) into a call's frame, born under the arena node `seek` finds, as
@@ -823,7 +830,13 @@ where
         work: Work<'graph, 'here, B>,
         seek: Seek<'graph>,
     ) -> Action<'graph, B> {
-        self.tail_lending(Placement::Fresh, work, Lending::Call(seek), Tailing::Hop)
+        let threads = B::threads(&work.state);
+        self.tail_lending(
+            Placement::Fresh,
+            work,
+            Lending::Call(seek),
+            Tailing::Hop { threads },
+        )
     }
 
     /// [`tail`](Self::tail) into a frame of the same callee as the frame running under `build`,
@@ -831,7 +844,13 @@ where
     /// not escape, so that every hop into it is a tail edge the load read; or cold, where that
     /// settlement is no longer live.
     pub fn tail_under(self, work: Work<'graph, 'here, B>, build: ArenaRef) -> Action<'graph, B> {
-        self.tail_lending(Placement::Fresh, work, Lending::Under(build), Tailing::Hop)
+        let threads = B::threads(&work.state);
+        self.tail_lending(
+            Placement::Fresh,
+            work,
+            Lending::Under(build),
+            Tailing::Hop { threads },
+        )
     }
 
     /// Hand this cell's work, untouched, to a successor born under the composition of `root`'s
@@ -1015,10 +1034,16 @@ where
             .map(|held| self.held_carrier(held))
             .collect();
         let held_at: SmallVec<[_; 4]> = operands.iter().map(|held| held.value.ktype()).collect();
+        // A loop cell copies whatever a hop homes, at any price, so no hop is pledged into it.
+        let threads = self.provenance.threads;
         let crossing: SmallVec<[_; 4]> = (carriers.iter().zip(operands))
             .map(|(carrier, held)| Operand {
                 carrier,
-                copy_bytes: held.value.weight().bytes(),
+                copy_bytes: if threads {
+                    0
+                } else {
+                    held.value.weight().bytes()
+                },
             })
             .collect();
         let placed = self.context.alloc_into::<KValueFamily, KValueFamily>(
@@ -1269,6 +1294,9 @@ pub enum Use {
     Keeps,
     /// Embed it in the spawner's own result: the home is the spawner's own home.
     Forwards,
+    /// Keep it in the loop: the home is the spawner's loop cell, else the spawner — a value a
+    /// frame's tail call hands on that the frame built, so it outlives the hop.
+    Threads,
 }
 
 /// What a step asks the drain for: a [`Work`] and two hints. Never a place and never a destination.

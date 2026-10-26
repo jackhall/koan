@@ -16,6 +16,9 @@ fn place(cell: CellHandle) -> Provenance {
         parent: cell,
         report: None,
         home: cell,
+        loop_cell: None,
+        threads: false,
+        loop_base: 0,
     }
 }
 

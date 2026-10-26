@@ -34,6 +34,8 @@ mod tree;
 
 pub use carrier::{Active, Ready};
 pub use dormant::Dormant;
+#[cfg(any(test, feature = "counters"))]
+pub use graph::SPLICES;
 pub use graph::{
     CellGraph, Config, CreateError, CreateLentError, CrossedOperand, DeliverError,
     EnterBesideError, EnterError, Operand, PeekError, Prices, Receipt, ReceiptError, RedeemError,
@@ -46,4 +48,4 @@ pub use lend::Lend;
 pub use once::{OnceRun, OnceView, Written};
 pub use reattach::{Covariant, DropFree, Erased, NoScratch, Reattachable, ReattachableOverBoth};
 pub use receipt::{Delivered, Delivery, NoDelivery};
-pub use region::{Prose, Run, Storage, ThinRun, Writer};
+pub use region::{FIRST_CHUNK, Prose, Run, Storage, ThinRun, Writer};

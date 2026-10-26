@@ -708,6 +708,13 @@ struct Destination {
     home: CellHome,
 }
 
+#[cfg(any(test, feature = "counters"))]
+thread_local! {
+    /// How many tree cells have spliced their region into the ancestor they pledged: what a
+    /// dependent's test reads to see a loop pledge none of its hops.
+    pub static SPLICES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// Where one operand's home stands relative to its destination — the classification
 /// [`classify_crossing`](CellGraph::classify_crossing) takes before any price is asked for, and
 /// the whole of the **ancestry rule** an operand homed in a tree cell is held to.
@@ -1768,6 +1775,10 @@ impl<
     /// — and the splice moves a `Bump` without moving a chunk byte.
     fn dispose_tree(&mut self, index: u32, regions: &mut Regions<'graph, H>, scratch: &Scratch) {
         let region = regions.take_tree(index);
+        #[cfg(any(test, feature = "counters"))]
+        if self.trees.pledge(index).is_some() {
+            SPLICES.with(|splices| splices.set(splices.get() + 1));
+        }
         let into = match self.trees.pledge(index) {
             None => {
                 regions.retire(region.into_bumps());

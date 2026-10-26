@@ -2162,11 +2162,15 @@ fn perform<'graph, 'here>(
         let Some(rhs) = shape.rhs(*slot) else {
             return step.failed(StepError::Refused);
         };
+        // A binder the frame's tail call hands on is built where it outlives the hop.
+        let threads = runner.level == Level::Frame
+            && runner.outer.is_none()
+            && shape.threaded().binary_search(slot).is_ok();
         let asked = ask(
             &mut step,
             &runner,
             Evaluated::Part(shape.site(rhs)),
-            Use::Keeps,
+            if threads { Use::Threads } else { Use::Keeps },
         );
         runner.stage = Stage::Evaluation;
         return step.park(asked, run, KState::Runner(runner), None);

@@ -29,7 +29,10 @@
 //! a carrier of, a child's pinned result, and a field read over either, its label appended to the
 //! path. A value finished with a kept part crosses from its true home. A construction — a list,
 //! dict or record literal, or a newtype's — is built in the evaluation's home over its parts, which
-//! it asks for forwarded, so it is never built here only to be crossed whole.
+//! it asks for forwarded, so it is never built here only to be crossed whole. A frame's hand-off
+//! asks for each part of the frame body's threaded set with `Threads`, so what its tail call hands
+//! on that the frame built is built in the loop's cell, and marks those arguments in the skeleton
+//! it lays.
 //! An error value received from a part is this evaluation's value, unchanged. Born under a frame's
 //! [`Contract`], the evaluation owes the frame its value: a call whose callee's declared return
 //! satisfies the contract hops to the callee's frame, and every other value is held to the contract
@@ -901,11 +904,14 @@ fn call<'step, 'graph, 'here>(
                 ParameterBinding::Operands => &[],
             };
             let passing = tails.map(|_| {
-                let named =
-                    (named.iter().zip(&operands)).filter_map(|(name, operand)| match operand {
-                        Operand::Value(held) => Some((name.symbol(), *held)),
-                        Operand::Label(_) => None,
-                    });
+                let named = (named.iter().zip(&operands).zip(wanted.iter())).filter_map(
+                    |((name, operand), wanted)| match (operand, wanted) {
+                        (Operand::Value(held), Wanted::Evaluated(part)) => {
+                            Some((name.symbol(), *held, threads(at, part)))
+                        }
+                        _ => None,
+                    },
+                );
                 passing(writer, at, arguments, named, hop)
             });
             let call = |owed: Option<Contract>| {
@@ -946,12 +952,16 @@ fn passing<'graph, 'here>(
     writer: Writer<'here, '_>,
     at: &Evaluation<'_, 'graph, 'here, '_, '_, '_>,
     arguments: KValue<'graph, 'here>,
-    named: impl Iterator<Item = (Symbol, Held<'graph, 'here>)>,
+    named: impl Iterator<Item = (Symbol, Held<'graph, 'here>, bool)>,
     hop: bool,
 ) -> &'here Passing<'graph, 'here> {
     let scratch = Bump::new();
     let mut kept = BumpVec::new_in(&scratch);
-    kept.extend(named.filter_map(|(name, held)| Some((name, held.kept?))));
+    let mut threaded = BumpVec::new_in(&scratch);
+    for (name, held, threads) in named {
+        kept.extend(held.kept.map(|part| (name, part)));
+        threaded.extend(threads.then_some(name));
+    }
     let callee = (at.within.kept)
         .and_then(|kept| kept.callee)
         .filter(|_| hop);
@@ -966,8 +976,29 @@ fn passing<'graph, 'here>(
             callee,
             arguments: collect(writer, kept.iter().copied()),
             binders: collect(writer, binders.iter().copied()),
+            threaded: collect(writer, threaded.iter().copied()),
         },
     )
+}
+
+/// Whether `part`, an argument a tail call hands on, is one its frame built to outlive the hop: a
+/// part of the frame body's threaded set, or a name landing on one of its threaded binders.
+fn threads(at: &Evaluation<'_, '_, '_, '_, '_, '_>, part: &ExpressionPart<'_>) -> bool {
+    let shape = at.view.shape();
+    if shape
+        .threaded_parts()
+        .binary_search(&shape.site(part))
+        .is_ok()
+    {
+        return true;
+    }
+    (part.is_name())
+        .then(|| shape.mention(shape.site(part)))
+        .flatten()
+        .and_then(|mention| at.view.landing(mention.coordinate))
+        .is_some_and(|(segment, slot)| {
+            segment == shape.segment() && shape.threaded().binary_search(&slot).is_ok()
+        })
 }
 
 /// The digest memos the call keyed by `site` hands its callee: each digested slot the load saw it
@@ -1058,7 +1089,7 @@ fn apply<'step, 'graph, 'here>(
     let program = at.program;
     let types = &at.types;
     let scratch = Bump::new();
-    let argument_site = at.view.shape().site(argument);
+    let (argument_part, argument_site) = (argument, at.view.shape().site(argument));
     // A call's record literal is laid here over its fields, each evaluated as a part of the call,
     // so a tail hands each on through its own kept part. A type name's application is a
     // construction, built in the home its argument is asked into.
@@ -1088,13 +1119,16 @@ fn apply<'step, 'graph, 'here>(
     let head = held(&operands[0]).value;
     let fields = literal.map(|fields| {
         let mut named = BumpVec::with_capacity_in(fields.len(), &scratch);
-        named.extend((fields.iter().map(|(name, _)| *name)).zip(operands[1..].iter().map(held)));
+        named.extend(
+            (fields.iter().zip(&operands[1..]))
+                .map(|((name, part), operand)| (*name, held(operand), threads(at, part))),
+        );
         named
     });
     let argument = match &fields {
         Some(fields) => {
             let mut named = BumpVec::with_capacity_in(fields.len(), &scratch);
-            named.extend(fields.iter().map(|(name, held)| (*name, held.value)));
+            named.extend(fields.iter().map(|(name, held, _)| (*name, held.value)));
             Held::bare(Value::Record(Record::new(
                 step.writer(),
                 &named,
@@ -1158,11 +1192,14 @@ fn apply<'step, 'graph, 'here>(
             writer,
             at,
             argument.value,
-            fields.iter().map(|(name, held)| (name.symbol(), *held)),
+            fields
+                .iter()
+                .map(|(name, held, threads)| (name.symbol(), *held, *threads)),
             hop,
         ),
         None => {
             let names = (argument.value.stored_fields()).map_or(&[][..], |(names, _)| names);
+            let threaded = threads(at, argument_part);
             let fields = names.iter().map(|name| {
                 let kept = argument.kept.map(|part| KeptPart {
                     kept: part.kept,
@@ -1171,7 +1208,7 @@ fn apply<'step, 'graph, 'here>(
                     }),
                 });
                 let value = (argument.value.along(*name)).expect("a record stores its fields");
-                (*name, Held { value, kept })
+                (*name, Held { value, kept }, threaded)
             });
             passing(writer, at, argument.value, fields, hop)
         }
@@ -1379,8 +1416,10 @@ fn built(at: &Evaluation<'_, '_, '_, '_, '_, '_>) -> Use {
     }
 }
 
-/// Ask for every wanted part not read in place, with `use_`, or — once they are in, or when none
-/// needed asking — every operand, in order. An error value among them is handed back alone.
+/// Ask for every wanted part not read in place, with `use_` — or, for a frame's hand-off, with
+/// `Threads` for a part of the frame body's threaded set, so it is built where it outlives the hop —
+/// or, once they are in, or when none needed asking, every operand, in order. An error value among
+/// them is handed back alone.
 fn gathered<'step, 'x, 'graph, 'here>(
     step: &mut Taking<'_, 'graph, '_, 'here, '_, '_>,
     at: &Evaluation<'step, 'graph, 'here, '_, '_, '_>,
@@ -1397,9 +1436,14 @@ fn gathered<'step, 'x, 'graph, 'here>(
             let Wanted::Evaluated(part) = wanted else {
                 unreachable!("only an evaluated part is asked for")
             };
+            let shape = at.view.shape();
+            let threads = at.contract.is_some()
+                && (shape.threaded_parts())
+                    .binary_search(&shape.site(part))
+                    .is_ok();
             asked = Some(step.spawn(Request {
                 placement: Placement::Shares,
-                use_,
+                use_: if threads { Use::Threads } else { use_ },
                 work: at.program.evaluate(
                     Evaluated::Part(at.view.shape().site(part)),
                     at.view.view(),

@@ -371,6 +371,18 @@ fn a_carrier_passes_on_only_at_or_under_its_home() {
     assert!(graph.is_empty());
 }
 
+/// A region's first chunk holds [`FIRST_CHUNK`] bytes: what a cell's first write claims.
+#[test]
+fn a_regions_first_chunk_holds_first_chunk_bytes() {
+    let mut graph: CellGraph<'static, Owned> = CellGraph::new(1, pin);
+    let root = graph.create(None).unwrap();
+    graph
+        .enter(root, |context| drop(number_in(context, 1)))
+        .unwrap();
+    assert_eq!(graph.region_bytes(root).unwrap(), crate::FIRST_CHUNK);
+    graph.release(root, ReleaseAbsorption::IntoHolder).unwrap();
+}
+
 /// `region_used` counts the bytes a cell handed out and none of its chunk's slack, a splice brings
 /// the child's bump in whole, and `live_bytes` sums every region the graph holds.
 #[test]

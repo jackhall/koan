@@ -36,6 +36,7 @@ fn code_of<'graph>(end: u32, use_: Use) -> KValue<'graph, 'graph> {
         Use::Reads => 0,
         Use::Keeps => 1,
         Use::Forwards => 2,
+        Use::Threads => unreachable!("no test producer threads"),
     };
     KValue::Number(f64::from(end + use_))
 }
