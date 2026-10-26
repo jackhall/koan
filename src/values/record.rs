@@ -59,22 +59,6 @@ impl<'cell, X: Knotted> Record<'cell, X> {
         Self::weighed(writer, names, cells, ktype, types)
     }
 
-    /// A record over `names`, sorted by symbol, and `cells` aligned with them, laid in `writer`'s
-    /// region under `ktype`, a type the caller knows they satisfy: a hop's successor's arguments,
-    /// over the values its predecessor handed it, at its predecessor's record's type.
-    pub fn over(
-        writer: Writer<'cell, '_>,
-        names: &[Symbol],
-        cells: &[Value<'cell, X>],
-        ktype: KType,
-        types: &Chain<'_, 'cell, '_, '_>,
-    ) -> &'cell Record<'cell, X> {
-        debug_assert_eq!(names.len(), cells.len(), "a record names each of its cells");
-        let names = writer.fill(names.len(), |at| names[at]);
-        let cells = writer.fill(cells.len(), |at| cells[at]);
-        Self::weighed(writer, names, cells, ktype, types)
-    }
-
     /// A record over sorted names and aligned value cells already resident in `writer`'s region
     /// under `ktype`, weighed as [`new`](Self::new) weighs them — a retyped data node's arm.
     pub(crate) fn weighed(
