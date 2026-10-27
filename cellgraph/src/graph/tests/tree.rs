@@ -12,7 +12,10 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use super::super::*;
-use super::{Borrowed, Number, Owned, number, number_here, one, operand_at, pin, state_of, take};
+use super::{
+    ANCHOR, Borrowed, Entry, Listing, Number, Owned, number, number_here, one, operand_at, pin,
+    state_of, take,
+};
 use crate::tree::TreeState;
 
 /// An operand the embedder will never copy: at a cost above anything a pin can price, a verdict
@@ -272,6 +275,149 @@ fn an_upward_pin_pledges_the_home_and_every_intermediate() {
     assert_eq!(graph.regions.tree_bytes(parent.index()), 0);
 
     graph.release_tree(parent).unwrap();
+    graph.release(root, ReleaseAbsorption::IntoHolder).unwrap();
+    assert!(graph.is_empty());
+}
+
+/// A carrier projected onto a field of a parent's value keeps the parent's home, so it pins into
+/// the parent's child and is forced to a copy into a cousin, exactly as the whole value would be.
+#[test]
+fn a_projected_carrier_crosses_as_its_whole_value_would() {
+    let mut graph: CellGraph<'static, Owned> = CellGraph::new(2, pin);
+    let root = graph.create(None).unwrap();
+    let parent = graph.create_tree(root, None).unwrap();
+    let child = graph.create_tree(parent, None).unwrap();
+    let cousin = graph.create_tree(root, None).unwrap();
+
+    let crossed = graph
+        .enter(parent, |context| {
+            let writer = context.writer();
+            let entry = one(
+                writer,
+                Entry {
+                    program: &ANCHOR,
+                    count: one(writer, 5),
+                },
+            );
+            let whole = context.lift::<Listing>(entry);
+            let count = context
+                .project::<Listing, Number>(&whole, |entry, _| {
+                    Some(Active::new(entry.value().count))
+                })
+                .expect("the field is there");
+            assert_eq!(*context.read(&count).value(), 5);
+            let mut crossed = Vec::new();
+            for into in [child, cousin] {
+                context
+                    .alloc_into::<Number, Number>(
+                        into,
+                        &[kept_operand(&count)],
+                        |writer, _, views| {
+                            crossed.push(match views[0] {
+                                CrossedOperand::Pinned { view, .. } => (true, *view),
+                                CrossedOperand::Copied { view, .. } => (false, *view),
+                            });
+                            Active::new(take(&views[0], writer))
+                        },
+                    )
+                    .unwrap();
+            }
+            crossed
+        })
+        .unwrap();
+    assert_eq!(crossed, [(true, 5), (false, 5)]);
+
+    for cell in [child, cousin, parent] {
+        graph.release_tree(cell).unwrap();
+    }
+    graph.release(root, ReleaseAbsorption::IntoHolder).unwrap();
+    assert!(graph.is_empty());
+}
+
+/// A carrier passes on unchanged into its home and a cell under it, and nowhere else.
+#[test]
+fn a_carrier_passes_on_only_at_or_under_its_home() {
+    let mut graph: CellGraph<'static, Owned> = CellGraph::new(2, pin);
+    let root = graph.create(None).unwrap();
+    let parent = graph.create_tree(root, None).unwrap();
+    let child = graph.create_tree(parent, None).unwrap();
+    let cousin = graph.create_tree(root, None).unwrap();
+
+    let passed = graph
+        .enter(parent, |context| {
+            let value = number_in(context, 9);
+            let mut passed = Vec::new();
+            for into in [
+                CellHandle::Tree(parent),
+                child.into(),
+                cousin.into(),
+                root.into(),
+            ] {
+                let kept = context.pass_into(into, &value).unwrap();
+                passed.push(kept.map(|kept| {
+                    assert_eq!(kept.home(), value.home(), "the home is kept");
+                    *context.read(&kept).value()
+                }));
+            }
+            passed
+        })
+        .unwrap();
+    assert_eq!(passed, [Some(9), Some(9), None, None]);
+
+    for cell in [child, cousin, parent] {
+        graph.release_tree(cell).unwrap();
+    }
+    graph.release(root, ReleaseAbsorption::IntoHolder).unwrap();
+    assert!(graph.is_empty());
+}
+
+/// A region's first chunk holds [`FIRST_CHUNK`] bytes: what a cell's first write claims.
+#[test]
+fn a_regions_first_chunk_holds_first_chunk_bytes() {
+    let mut graph: CellGraph<'static, Owned> = CellGraph::new(1, pin);
+    let root = graph.create(None).unwrap();
+    graph
+        .enter(root, |context| drop(number_in(context, 1)))
+        .unwrap();
+    assert_eq!(graph.region_bytes(root).unwrap(), crate::FIRST_CHUNK);
+    graph.release(root, ReleaseAbsorption::IntoHolder).unwrap();
+}
+
+/// `region_used` counts the bytes a cell handed out and none of its chunk's slack, a splice brings
+/// the child's bump in whole, and `live_bytes` sums every region the graph holds.
+#[test]
+fn region_used_counts_what_a_cell_wrote_and_what_it_took_in() {
+    let mut graph: CellGraph<'static, Owned> = CellGraph::new(2, pin);
+    let root = graph.create(None).unwrap();
+    let home = graph.create_tree(root, None).unwrap();
+    assert_eq!(graph.region_used(root).unwrap(), 0);
+    assert_eq!(graph.live_bytes(), 0);
+    // A root that wrote lists a spliced bump rather than taking it over as its own.
+    graph
+        .enter(root, |context| drop(number_in(context, 1)))
+        .unwrap();
+
+    graph
+        .enter(home, |context| {
+            let value = number_in(context, 9);
+            context
+                .alloc_into::<Number, Number>(root, &[kept_operand(&value)], |writer, _, views| {
+                    Active::new(take(&views[0], writer))
+                })
+                .unwrap();
+        })
+        .unwrap();
+    let wrote = graph.region_used(home).unwrap();
+    assert!(wrote > 0 && wrote < graph.regions.tree_bytes(home.index()));
+    let root_wrote = graph.region_used(root).unwrap();
+    assert_eq!(graph.live_bytes(), wrote + root_wrote);
+
+    // The pledged home splices its whole bump into the root, slack included.
+    let home_bytes = graph.regions.tree_bytes(home.index());
+    graph.release_tree(home).unwrap();
+    assert_eq!(graph.region_used(root).unwrap(), root_wrote + home_bytes);
+    assert_eq!(graph.live_bytes(), root_wrote + home_bytes);
+
     graph.release(root, ReleaseAbsorption::IntoHolder).unwrap();
     assert!(graph.is_empty());
 }

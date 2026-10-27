@@ -115,7 +115,11 @@ impl<'t, H: Habitat<'t>> TypeChain<'t, H> {
         self.adopt_in(&source, kt);
     }
 
-    fn adopt_in<'s>(&self, source: &impl Source<'s>, kt: impl Into<DeclaredType<Parametric>>) {
+    pub(super) fn adopt_in<'s>(
+        &self,
+        source: &impl Source<'s>,
+        kt: impl Into<DeclaredType<Parametric>>,
+    ) {
         let handle = kt.into().raw();
         #[cfg(any(test, feature = "counters"))]
         ADOPT_ASKED.with(|count| count.set(count.get() + 1));
@@ -150,29 +154,7 @@ impl<'t, H: Habitat<'t>> TypeChain<'t, H> {
             &mut |component| self.adopt_component(source, component),
         );
         let node = self.intern_laid(handle.digest(), || content);
-        match node.content() {
-            Content::Scheme { group, .. } => {
-                for bound in group.bounds {
-                    self.adopt_in(source, *bound);
-                }
-            }
-            Content::Signature { schema, .. } => {
-                let named = schema
-                    .parameters
-                    .iter()
-                    .chain(schema.manifest_members.iter());
-                for (_, kt) in named {
-                    self.adopt_in(source, *kt);
-                }
-                for (_, kt) in schema.value_slots.iter() {
-                    self.adopt_in(source, *kt);
-                }
-                for kt in schema.keyworded {
-                    self.adopt_in(source, *kt);
-                }
-            }
-            _ => {}
-        }
+        side_handles(node.content(), &mut |side| self.adopt_in(source, side));
         node
     }
 
@@ -202,25 +184,55 @@ impl<'t, H: Habitat<'t>> TypeChain<'t, H> {
             });
         }
         for member in relaid {
-            match member.schema {
-                NodeSchema::NewType(repr) => {
-                    self.adopt_in(source, repr);
-                }
-                NodeSchema::TypeConstructor {
-                    representation: Some(representation),
-                    ..
-                } => {
-                    self.adopt_in(source, representation);
-                }
-                NodeSchema::TypeConstructor { .. } => {}
-            }
+            schema_handles(member.schema, &mut |side| self.adopt_in(source, side));
         }
         component
     }
 }
 
+/// Each handle a side table of `content` holds — a group's bounds, a schema's members — which a
+/// transfer copies as it is and makes resolve once the node is laid.
+pub(super) fn side_handles(content: Content<'_>, each: &mut impl FnMut(DeclaredType<Parametric>)) {
+    match content {
+        Content::Scheme { group, .. } => {
+            for bound in group.bounds {
+                each((*bound).into());
+            }
+        }
+        Content::Signature { schema, .. } => {
+            let named = (schema.parameters.iter()).chain(schema.manifest_members.iter());
+            for (_, kt) in named {
+                each((*kt).into());
+            }
+            for (_, kt) in schema.value_slots.iter() {
+                each(*kt);
+            }
+            for kt in schema.keyworded {
+                each(*kt);
+            }
+        }
+        _ => {}
+    }
+}
+
+/// The handle a sealed member's schema holds, if any: a newtype's representation or a
+/// constructor's.
+pub(super) fn schema_handles(
+    schema: NodeSchema<'_>,
+    each: &mut impl FnMut(DeclaredType<Parametric>),
+) {
+    match schema {
+        NodeSchema::NewType(repr) => each(repr.into()),
+        NodeSchema::TypeConstructor {
+            representation: Some(representation),
+            ..
+        } => each(representation.into()),
+        NodeSchema::TypeConstructor { .. } => {}
+    }
+}
+
 /// Where an adopt reads a node it lacks: one branch and its links, or a whole chain.
-trait Source<'s> {
+pub(super) trait Source<'s> {
     fn reach(&self, handle: Handle) -> Option<Linked<'s>>;
 }
 

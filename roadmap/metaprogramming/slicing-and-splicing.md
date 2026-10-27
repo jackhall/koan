@@ -55,6 +55,11 @@ elements cost O(kn).
   copy of one copies its pending call and never forces it. Forcing inside a
   copy could fail, never finish, perform an effect wherever the value happens
   to cross, and cost what no weight measures.
+- *A view a tail loop threads — open.* `rest xs` is a view of root bytes made
+  in a hop; handed on as part of a loop's threaded state
+  ([tail hops](../../src/scheduler/README.md#tail-hops)), it would be copied
+  into the loop cell as a view struct whose target pins free. Recommended:
+  confirm that with a test when views land.
 - *Which structural transformations — open.* Slice and concatenation, and so
   splice. Reverse, interleave and zip also remap indices and run no code, and
   each widens the algebra views compose in: reverse needs a direction per run,

@@ -19,7 +19,7 @@ use crate::type_lattice::display_name;
 use crate::values::tests::parts;
 use crate::values::{Chain, Knotted as _, Link, Value};
 
-use crate::values::SpecBounds;
+use crate::values::BuildBudget;
 use evaluator::{Mini, record};
 
 thread_local! {
@@ -48,7 +48,7 @@ fn written() -> Vec<String> {
 /// `source` loaded over the miniature evaluator on a slab of `cap` cells.
 fn loaded(source: &str, cap: u32) -> CellSubstrate {
     written();
-    CellSubstrate::load::<Mini>(source, "<test>", cap, SpecBounds::default(), output())
+    CellSubstrate::load::<Mini>(source, "<test>", cap, BuildBudget::default(), output())
         .unwrap_or_else(|error| panic!("`{source}` loads: {error:?}"))
 }
 
@@ -126,6 +126,44 @@ pub(crate) fn digest_back(substrate: &mut CellSubstrate, name: &str) -> String {
             .expect("the inspection runs to completion")
     });
     evaluator::recorded().concat()
+}
+
+/// Where the top-level binding `name`, a quote's code, was shaped — `written`, or `composed` and
+/// its root's syntax digest — then its own syntax's digest, read as [`digest_back`] reads its
+/// digest.
+pub(crate) fn syntax_back(substrate: &mut CellSubstrate, name: &str) -> String {
+    evaluator::reset();
+    WANTED.with(|wanted| *wanted.borrow_mut() = vec![name.to_string()]);
+    substrate.with(|running| {
+        running
+            .inspect(syntaxing)
+            .expect("the inspection runs to completion")
+    });
+    evaluator::recorded().concat()
+}
+
+/// [`digesting`]'s sibling: it records how the wanted code was shaped, and its syntax digest.
+fn syntaxing<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'graph, KBundle> {
+    use crate::knot::CodeBody;
+    use crate::values::digest::syntax_digest;
+    let (step, state) = step.state();
+    let KState::Born(birth @ KBirth::Inspect { program, view }) = state else {
+        return step.failed(StepError::Refused);
+    };
+    let name = WANTED.with(|wanted| wanted.borrow()[0].clone());
+    let value = wanted(program, &view, &name);
+    let code = (value.as_code())
+        .and_then(|member| member.code())
+        .expect("the wanted binding is code");
+    let shaped = match code.shaped() {
+        CodeBody::Written { .. } => "written".to_string(),
+        CodeBody::Composed { root, segment } => format!("composed {:?} {segment:?}", root.digest),
+    };
+    record(format!(
+        "{shaped} {:?}",
+        syntax_digest(code.body().reference())
+    ));
+    step.leave(birth)
 }
 
 /// [`weighing`]'s sibling: it records the wanted binding's content digest.

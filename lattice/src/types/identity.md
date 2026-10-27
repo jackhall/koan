@@ -200,6 +200,16 @@ outliving its destination.
   type's children lie in several of them, as a caching body's do when its
   value leaves it
   ([type tiers](../../../design/type-tiers.md#the-scratch-branch-as-a-cache)).
+- A **term** carries a type past the chain that interned it. `TypeChain::export`
+  writes a [`Term`](term.rs), a plain-data copy of the type nodes a type
+  reaches that a named reader lacks — each keeping its source's handle and
+  content, its children by reference to the term's own copies, and every type
+  node the reader resolves itself a stub holding its handle alone — and
+  `TypeChain::mint` lays it in any chain over the same root through the
+  transfer an adopt takes, the term standing in as the source. So one descent
+  re-lays a type wherever it goes, and a minted type keeps its handle. A term
+  is `Copy`, covariant and drop-free, so it may rest where no type may: no
+  chain resolves a handle through it.
 
 Each node is a [`StoredNode`](stored.rs) laid alone in its tier: its handle —
 the digest under its flags — then 32 B of content, 48 B in all. The content names each child — and each

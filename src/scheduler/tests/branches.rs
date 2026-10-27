@@ -47,15 +47,15 @@ enum Shape {
     TreeFresh,
     /// To a `Fresh` child, which lays a list of it and hops `Fresh` with that, homed in itself.
     TreeFreshCopied,
-    /// To a `Fresh` child, which lays a list of it and hops `Shares` with that.
-    TreeShares,
-    /// To a tenant, which lays a list of it in its host and hops `Shares` with that.
-    TenantShares,
+    /// To a `Fresh` child, which lays a list of it and hands that off to a successor born under it.
+    TreeHandOff,
+    /// To a tenant, which lays a list of it in its host and hands that off.
+    TenantHandOff,
     /// To a `Fresh` child asked to keep its result, which hands the list back up.
     KeptResult,
-    /// To a `Fresh` child, which lays a list of it and hops `Shares` to a tenant of this level; the
-    /// tenant lays a list of that in this level's region and hops `Fresh` to the next such child.
-    /// After the last, it reports this level's reach steps rather than a branch length.
+    /// To a `Fresh` child, which lays a list of it and hands that off; the successor lays a list of
+    /// that in its own region and hops to the next such child of this level. After the last, it
+    /// reports its own branch's reach steps rather than a branch length.
     Cycle,
 }
 
@@ -89,8 +89,11 @@ fn run(cells: u32, start: AnyStep) -> Vec<String> {
     reset();
     HANDED.with(|handed| handed.set(KType::NUMBER));
     let type_region = Bump::new();
-    let mut graph: TestGraph<'_> =
-        TestGraph::new(cells, crate::values::tests::seeded_tiers(&type_region));
+    let mut graph: TestGraph<'_> = TestGraph::new(
+        cells,
+        crate::values::tests::seeded_tiers(&type_region),
+        Default::default(),
+    );
     let root = graph.root().expect("a fresh slab admits a root");
     Scheduler::over(&mut graph)
         .run(work(start, KValue::Null), root, Placement::Fresh)
@@ -246,8 +249,8 @@ fn hand_down<'graph>(
         Shape::TenantFresh => (shares(hop_fresh, Use::Reads, list), wake),
         Shape::TreeFresh => (fresh(hop_fresh, Use::Reads, list), wake),
         Shape::TreeFreshCopied => (fresh(wrap_and_hop_fresh, Use::Reads, list), wake),
-        Shape::TreeShares => (fresh(wrap_and_hop_shares, Use::Reads, list), wake),
-        Shape::TenantShares => (shares(wrap_and_hop_shares, Use::Reads, list), wake),
+        Shape::TreeHandOff => (fresh(wrap_and_hand_off, Use::Reads, list), wake),
+        Shape::TenantHandOff => (shares(wrap_and_hand_off, Use::Reads, list), wake),
         // The deepest level is never the root work, so its own wake is `relay`'s.
         Shape::KeptResult => (
             fresh(hand_back, Use::Keeps, list),
@@ -259,58 +262,70 @@ fn hand_down<'graph>(
     step.park(asked, wake, KValue::Null, None)
 }
 
-/// Hop `Fresh` with the state to [`measures`].
+/// Hop with the state to [`measures`].
 fn hop_fresh<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
     let (step, state) = step.state();
-    step.tail(
-        Placement::Fresh,
-        Work {
-            step: measures,
-            state,
-        },
-    )
+    step.tail(Work {
+        step: measures,
+        state,
+    })
 }
 
-/// Lay a list of the state and hop with it as `placement` says, to `next`.
+/// How a cell hands a list it laid on: by a hop beside it, or by a hand-off under it.
+#[derive(Clone, Copy)]
+enum Tail {
+    Hop,
+    HandOff,
+}
+
+/// Lay a list of the state and hand it on as `tail` says, to `next`.
 fn wrap_and_tail<'graph>(
     step: Step<'_, 'graph, '_, '_, '_, '_, Native>,
-    placement: Placement,
+    tail: Tail,
     next: TestStep<'graph>,
 ) -> Action<'graph, Native> {
     let (step, state) = step.state();
     let types = step.types();
     let list = crate::values::List::new(step.writer(), [state].into_iter(), &types, &Bump::new());
-    let state = KValue::List(list);
-    step.tail(placement, Work { step: next, state })
+    let work = Work {
+        step: next,
+        state: KValue::List(list),
+    };
+    match tail {
+        Tail::Hop => step.tail(work),
+        Tail::HandOff => step.hand_off(work),
+    }
 }
 
-/// Lay a list of the state and hop `Fresh` with it to [`measures`].
+/// Lay a list of the state and hop with it to [`measures`].
 fn wrap_and_hop_fresh<'graph>(
     step: Step<'_, 'graph, '_, '_, '_, '_, Native>,
 ) -> Action<'graph, Native> {
-    wrap_and_tail(step, Placement::Fresh, measures)
+    wrap_and_tail(step, Tail::Hop, measures)
 }
 
-/// Lay a list of the state and hop `Shares` with it to [`measures`].
-fn wrap_and_hop_shares<'graph>(
+/// Lay a list of the state and hand it off to [`measures`].
+fn wrap_and_hand_off<'graph>(
     step: Step<'_, 'graph, '_, '_, '_, '_, Native>,
 ) -> Action<'graph, Native> {
-    wrap_and_tail(step, Placement::Shares, measures)
+    wrap_and_tail(step, Tail::HandOff, measures)
 }
 
-/// A cycle's frame: lay a list of the state and hop `Shares` to a tenant of the level, whose
-/// branch the hop merges this frame's into.
+/// A cycle's frame: lay a list of the state and hand it off to a successor under this frame,
+/// whose birth links this frame's branch.
 fn cycle_frame<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
     FRAMES.with(|frames| frames.set(frames.get() + 1));
-    wrap_and_tail(step, Placement::Shares, cycle_tenant)
+    wrap_and_tail(step, Tail::HandOff, cycle_successor)
 }
 
-/// A cycle's tenant of the level: lay a list of the state in the level's region and hop `Fresh`
-/// to the next frame, whose birth links the level's branch; after the last frame, report the
-/// level's reach steps before the result crosses back.
-fn cycle_tenant<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
+/// A cycle's hand-off: lay a list of the state in its own region and hop to the next frame, beside
+/// the frame it was handed off from; after the last frame, report its own reach steps before the
+/// result crosses back.
+fn cycle_successor<'graph>(
+    step: Step<'_, 'graph, '_, '_, '_, '_, Native>,
+) -> Action<'graph, Native> {
     if FRAMES.with(Cell::get) < CYCLE_FRAMES {
-        return wrap_and_tail(step, Placement::Fresh, cycle_frame);
+        return wrap_and_tail(step, Tail::Hop, cycle_frame);
     }
     record(reach_steps(&step).to_string());
     step.finish_fresh(|_, _, _| Active::new(KValue::Null))
@@ -355,8 +370,8 @@ fn each_way_a_deep_cell_hands_a_value_on_costs_the_same_however_deep() {
         Shape::TenantFresh,
         Shape::TreeFresh,
         Shape::TreeFreshCopied,
-        Shape::TreeShares,
-        Shape::TenantShares,
+        Shape::TreeHandOff,
+        Shape::TenantHandOff,
         Shape::KeptResult,
     ] {
         let near = handed_under(shallow, shape);
@@ -369,19 +384,19 @@ fn each_way_a_deep_cell_hands_a_value_on_costs_the_same_however_deep() {
     }
 }
 
-/// Each frame's `Shares` hop merges the frame's branch, which links the level's, into the level's:
-/// two reach steps, at any depth. Each tenant's list lies in the level's region, so the next
-/// frame's birth links the level's branch and merges nothing.
+/// Each frame's hand-off links the frame's branch, and each hop copies a list homed in the
+/// hand-off, a sibling's descendant, into the next frame: the last hand-off checks as many steps
+/// at any depth of the level the cycle runs under.
 #[test]
 fn a_tail_cycle_checks_as_many_steps_however_deep_its_host() {
     let (shallow, deep) = if cfg!(miri) { (2, 3) } else { (4, 16) };
-    for depth in [shallow, deep] {
-        assert_eq!(
-            handed_under(depth, Shape::Cycle),
-            [(2 * CYCLE_FRAMES).to_string()],
-            "a cycle under a host {depth} levels deep"
-        );
-    }
+    let near = handed_under(shallow, Shape::Cycle);
+    assert_eq!(near.len(), 1, "the last hand-off reported once");
+    assert_eq!(
+        handed_under(deep, Shape::Cycle),
+        near,
+        "a cycle checks as many steps under a host {deep} levels deep as under one {shallow}"
+    );
 }
 
 /// The tenant: hop `Fresh` with the list. The successor is a new cell, which has laid no branch,
@@ -392,7 +407,7 @@ fn hops<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph
         step: arrives,
         state,
     };
-    step.tail(Placement::Fresh, work)
+    step.tail(work)
 }
 
 /// The hop's successor, whose birth passed the habitat check.
@@ -455,13 +470,13 @@ fn a_shares_chain_lays_in_the_hosts_scratch_and_leaves_its_region() {
 }
 
 /// A `Fresh` child holding its scratch and running on its caching chain: it borrows no
-/// specialization, so it has no agent chain, and a type in its region and one in its own scratch
-/// both resolve, a list of each laid in its scratch while the region does not grow.
+/// settlement, and a type in its region and one in its own scratch both resolve, a list of each
+/// laid in its scratch while the region does not grow.
 fn reading<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
     assert!(step.hold_scratch(), "a tree cell holds its own scratch");
     assert!(
-        step.agent_types().is_none(),
-        "a frame with no specialization has no agent chain"
+        !step.under_settlement(),
+        "a frame with no settlement runs under the root"
     );
     let in_region = step.types().list(step.types().list(KType::NUMBER));
     let in_scratch = step.scratch_types().list(KType::BOOL);

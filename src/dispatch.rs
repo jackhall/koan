@@ -44,12 +44,12 @@ mod walk;
 #[cfg(test)]
 mod tests;
 
-use crate::knot::{KActivationView, KBuiltins, KValue};
+use crate::knot::{KBuiltins, KReading, KValue};
 use crate::memory::{BumpAllocator, Writer};
 use crate::parse::{ExpressionPart, KExpression};
 use crate::program::{Contract, KBirth, KBundle, Language, Program, Within};
-use crate::scheduler::NativeStep;
-use crate::scope::{ShapeError, Shapes, Store};
+use crate::scheduler::{Held, NativeStep};
+use crate::scope::{Code, Segment, ShapeError, Shapes, Store};
 use crate::symbols::{BinderSymbol, SymbolInterner};
 use crate::type_lattice::KType;
 use crate::values::Chain;
@@ -78,29 +78,32 @@ impl Language for Koan {
         store: &S,
         types: &Chain<'tier, '_, '_, '_>,
         scratch: BumpAllocator<'_>,
+        at: Segment,
     ) -> Result<(), ShapeError<'o>> {
-        walk::walk(shapes, builtins, store, types, scratch)
+        walk::walk(shapes, builtins, store, types, scratch, at)
     }
 }
 
-/// What one evaluation is born over: the program, the view it reads names through, the contract
+/// What one evaluation is born over: the program, the view it reads names through beside the
+/// step's door, the contract
 /// it owes a frame it finishes, what it runs [within](KBirth::Evaluate), and the birth it parks with
 /// — beside the chain the step reads and interns types through, built at the step's entry and
 /// never parked.
-struct Evaluation<'graph, 'here, 'tier, 'reg, 'door> {
+struct Evaluation<'step, 'graph, 'here, 'tier, 'reg, 'door> {
     program: &'graph Program<'graph>,
-    view: KActivationView<'graph, 'here>,
+    code: Code<'step>,
+    view: KReading<'step, 'graph, 'here>,
     contract: Option<Contract>,
-    within: Within,
+    within: Within<'graph, 'here>,
     birth: KBirth<'graph, 'here>,
     types: Chain<'tier, 'here, 'reg, 'door>,
 }
 
-/// What one of a call's operands came to: a value, or — an `ATTR` label written bare — the name
-/// it is written as.
+/// What one of a call's operands came to: a value, beside the kept part it is where it has one, or
+/// — an `ATTR` label written bare — the name it is written as.
 #[derive(Clone, Copy)]
 enum Operand<'graph, 'here> {
-    Value(KValue<'graph, 'here>),
+    Value(Held<'graph, 'here>),
     Label(BinderSymbol),
 }
 
@@ -109,7 +112,7 @@ impl<'graph, 'here> Operand<'graph, 'here> {
     /// of the name a bare label is.
     fn ktype(&self) -> KType {
         match self {
-            Operand::Value(value) => value.concrete_ktype(),
+            Operand::Value(held) => held.value.concrete_ktype(),
             Operand::Label(BinderSymbol::Type(_)) => KType::TYPE_NAME_TOKEN,
             Operand::Label(_) => KType::IDENTIFIER,
         }
@@ -117,7 +120,7 @@ impl<'graph, 'here> Operand<'graph, 'here> {
 
     fn value(&self) -> Option<KValue<'graph, 'here>> {
         match self {
-            Operand::Value(value) => Some(*value),
+            Operand::Value(held) => Some(held.value),
             Operand::Label(_) => None,
         }
     }

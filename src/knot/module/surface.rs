@@ -14,7 +14,7 @@
 
 use crate::knot::{KActivation, KValue, Knotted};
 use crate::memory::{BumpAllocator, BumpVec, Writer};
-use crate::scope::{Position, ShapeKind, Slot};
+use crate::scope::{BodyShape, Pick, Position, ShapeKind, Slot};
 use crate::symbols::BinderSymbol;
 use crate::values::{Chain, List, Value};
 
@@ -35,22 +35,25 @@ pub enum Unsurfaceable {
     Unnamed { name: BinderSymbol },
 }
 
-/// Bind each surfaced parameter of `block` to the member of `module` it names, read at the type
-/// `module`'s carried signature declares it ([`layout::member`]), and each surfaced key to the list
-/// of the functions `module` offers there, laid down through `writer`. A refusal binds nothing.
+/// Bind each surfaced parameter of `block`, whose shape is `shape`, to the member of `module` it
+/// names, read at the type `module`'s carried signature declares it ([`layout::member`]), and each
+/// surfaced key to the list of the functions `module` offers there, by `picks` where the load
+/// recorded them, laid down through `writer`. A refusal binds nothing.
 pub fn surface<'graph, 'cell>(
     writer: Writer<'cell, '_>,
     module: KValue<'graph, 'cell>,
+    picks: Option<&[Pick<'_>]>,
     block: &KActivation<'graph, 'cell>,
+    shape: &BodyShape<'_>,
     types: &Chain<'_, 'cell, '_, '_>,
     scratch: BumpAllocator<'_>,
 ) -> Result<(), Unsurfaceable> {
-    debug_assert_eq!(block.shape().kind(), ShapeKind::Block);
+    debug_assert_eq!(shape.kind(), ShapeKind::Block);
+    debug_assert_eq!(shape.segment(), block.segment());
     let carried = (module.knot_member())
         .and_then(Knotted::module)
         .and_then(|_| module.ktype().as_type())
         .ok_or(Unsurfaceable::NotAModule)?;
-    let shape = block.shape();
 
     // Staged first: a refusal binds nothing, so nothing is written until the whole walk agrees.
     let mut bindings = BumpVec::new_in(scratch);
@@ -69,12 +72,12 @@ pub fn surface<'graph, 'cell>(
                 .registration(slot)
                 .expect("a registration parameter is a surfaced key")
                 .key;
-            let functions = layout::functions_at(writer, module, key, types, scratch);
+            let functions = layout::functions_at(writer, module, key, picks, types, scratch);
             let list = List::of_candidates(writer, functions.iter().copied(), types);
             bindings.push((slot, Value::List(list)));
             continue;
         }
-        let member = layout::member(writer, module, name, types, scratch)
+        let member = layout::member(writer, module, (name, None), types, scratch)
             .ok_or(Unsurfaceable::Unnamed { name })?;
         named += 1;
         bindings.push((slot, member));

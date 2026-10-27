@@ -7,15 +7,12 @@ the caller already holds.
 the same answer more than once:
 
 - **A call by name keyed on a `FOR ALL` name.** `seek`
-  ([`specialize.rs`](../../src/program/specialize.rs)) runs `admitted` over
-  the arguments to solve the group whose solution the specialization key
+  ([`settle.rs`](../../src/program/settle.rs)) runs `admitted` over
+  the arguments to solve the group whose solution the settlement key
   digests, and the frame's birth in [`body.rs`](../../src/program/body.rs)
   runs `admitted` again over the same arguments, since `KBirth::Call`
   ([`bundle.rs`](../../src/program/bundle.rs)) carries `contributed` but no
   solution.
-- **A frame's keyed route.** `called` ([`evaluate.rs`](../../src/dispatch/evaluate.rs))
-  reads `specialization_keys` in its `keyed()` check and `seek` reads it again
-  for the same callee.
 - **A body's caching bit.** `caches(shape)` is re-read from the body's folds in
   `run`, in `woken`, per yielding unit in `perform`, and in `ended`
   ([`body.rs`](../../src/program/body.rs)), though it is fixed for the
@@ -31,7 +28,6 @@ the same answer more than once:
 
 - A call by name keyed on a `FOR ALL` name solves its group once between the
   asker and the frame's birth.
-- One call reads a callee's specialization keys once.
 - A runner reads its body's caching bit once.
 - A callable's birth writes `Born` once and instantiates its type once,
   deciding each parameter's digestibility from the callable type in hand.
@@ -42,21 +38,15 @@ the same answer more than once:
 - *Carrying the solution — open.* `KBirth::Call` gains the solved group, set
   by `seek` and read by the birth in place of `admitted`; or `seek` returns
   it inside the `Seek` the drain hands back to the frame's birth; or the
-  build arena's frame request, which carries the binding's types as an
-  image, carries the solution with them. The first two touch `KBirth` and
-  `Seek` before the arena rewrites both. Recommended: the request's image.
+  request's binding image ([`BindingImage`](../../src/values/settlement.rs)),
+  which carries the binding's types, carries the solution with them.
+  Recommended: the request's image.
 - *The caching bit — open.* A `bool` on `Runner`, set when the runner is
   built; or a field of the activation, which every runner of a body shares.
   Recommended: on `Runner`.
 
 ## Dependencies
 
-[The build arena](build-arena.md) replaces `seek`, the route `called` decides,
-and the request a missed specialization's frame is born from.
-
-**Requires:**
-
-- [The build arena](build-arena.md) — its frame request and recorded route
-  are where the solution and the keys are read once.
+**Requires:** none.
 
 **Unblocks:** none.

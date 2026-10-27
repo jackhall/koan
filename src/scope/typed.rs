@@ -17,12 +17,13 @@
 use std::fmt;
 use std::hash::{Hash, Hasher};
 
-use crate::memory::{BumpAllocator, BumpVec};
+use crate::memory::{BumpAllocator, BumpVec, Lays, collect};
 use crate::symbols::{BinderSymbol, Symbol, SymbolInterner, TypeSymbol, ValueSymbol};
-use crate::type_lattice::{DeclaredType, KType, Parametric, Verdict, display_name};
-use crate::values::{Chain, KnottedFamily, Value};
+use crate::type_lattice::{
+    DeclaredType, KType, Parametric, TypeNode, Verdict, display_name, outranks,
+};
+use crate::values::Chain;
 
-use super::activation::ActivationView;
 use super::keyed::Keyed;
 use super::shape::{Candidate, Coordinate, Segment, Site, Slot};
 use super::tree::{Binder, Tree};
@@ -138,6 +139,9 @@ pub enum Elaboration {
     /// The load-time reader cannot know the type at `site` before the program runs: the load
     /// pass's cue to leave it for the run, never reported.
     Unknown { site: Site },
+    /// A type at `site` reads the name `name`, which no layer the run reads binds: what a rigid
+    /// fact reaching the run refuses as, worded as the load words a name with no binding.
+    Unbound { name: Symbol, site: Site },
 }
 
 impl Elaboration {
@@ -151,7 +155,8 @@ impl Elaboration {
             | Elaboration::Quantified { site }
             | Elaboration::MeetOverVariable { site }
             | Elaboration::TiedUnion { site, .. }
-            | Elaboration::Unknown { site } => *site,
+            | Elaboration::Unknown { site }
+            | Elaboration::Unbound { site, .. } => *site,
         }
     }
 
@@ -207,6 +212,11 @@ impl fmt::Display for ElaborationDisplay<'_, '_, '_, '_> {
                 display_name(*b, self.types, self.symbols)
             ),
             Elaboration::Unknown { .. } => f.write_str("this type is known only where it runs"),
+            Elaboration::Unbound { name, .. } => write!(
+                f,
+                "`{}` names no binding visible here",
+                self.symbols.display(*name)
+            ),
         }
     }
 }
@@ -249,9 +259,8 @@ pub struct PathEntry<'graph> {
     /// The path variable's level.
     pub level: usize,
     /// The application the path is read through: the module `chain` reaches is fitted to it, and
-    /// the path is what it fits `label` at. Over the chain's lexical variables; a shape reading the
-    /// path locates them in its record's `throughs`. `None` where the path reads the module's
-    /// own type member.
+    /// the path is what it fits `label` at. Over the chain's lexical variables, which a layer
+    /// binding them closes. `None` where the path reads the module's own type member.
     pub through: Option<Parametric>,
 }
 
@@ -289,6 +298,9 @@ impl fmt::Debug for PathEntry<'_> {
 pub struct Resolution<'graph> {
     pub tree: Tree<'graph>,
     pub resolved: Resolved,
+    /// The signature the root holds at every run, where the path reads no type member off it:
+    /// every run refuses the path.
+    pub lacks: Option<KType>,
 }
 
 impl Resolution<'_> {
@@ -338,16 +350,87 @@ pub enum Static<'graph, C, R = C> {
 /// What the load fixed for a type: concrete where closed, parametric over the run's variables.
 pub type StaticType<'graph> = Static<'graph, KType, Parametric>;
 
-/// What the load fixed for an instance's solution, in group order: concrete where closed,
-/// parametric over the run's variables where it names a type a run binds. Unlike [`Static`], it
-/// has no unknown arm: the load fixes every instance's solution.
+/// What one variable of a selected candidate's group solves to at every run of its call.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Point {
+    /// The same type at every run.
+    Closed(KType),
+    /// A type over the run's lexical variables, read through its [`Points`]' variables: the load's
+    /// record alone, since the layer binding them closes it before any run reads it.
+    Rigid(Parametric),
+    /// The type the argument at this slot carries: the variable is the slot's whole type, its own
+    /// class's, which no other slot of the class names, and the argument contributes nothing.
+    Carried(u16),
+}
+
+/// The points a selected candidate's group solves to, in group order, beside where the run reads
+/// the lexical variables a rigid one names.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Points<'graph> {
+    pub points: &'graph [Point],
+    pub variables: &'graph [Variable],
+}
+
+impl<'graph> Points<'graph> {
+    /// The points of a group of no variables.
+    pub const NONE: Points<'static> = Points {
+        points: &[],
+        variables: &[],
+    };
+
+    /// The variable at `at`'s closed point, where it has one.
+    pub fn closed(&self, at: usize) -> Option<KType> {
+        match self.points.get(at)? {
+            Point::Closed(point) => Some(*point),
+            Point::Rigid(_) | Point::Carried(_) => None,
+        }
+    }
+
+    /// The solution where the call runs over operands carrying `arguments`: a closed point as it
+    /// is, and a carried one its argument's type. `None` where an argument is missing, or a point
+    /// is rigid, which no run reads.
+    pub fn solved<'x>(
+        &self,
+        scratch: BumpAllocator<'x>,
+        arguments: &[KType],
+    ) -> Option<BumpVec<'x, KType>> {
+        let mut solved = BumpVec::with_capacity_in(self.points.len(), scratch);
+        for point in self.points {
+            solved.push(match point {
+                Point::Closed(point) => *point,
+                Point::Rigid(_) => return None,
+                Point::Carried(slot) => *arguments.get(usize::from(*slot))?,
+            });
+        }
+        Some(solved)
+    }
+}
+
+/// What a view over a module whose content the load sees all of carries for one keyworded member
+/// of its signature: the module's registrations covering it, ranked first among themselves, by
+/// their positions in its registration run — so two overloads of one shape stay two.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Pick<'graph> {
+    /// The keyworded member, by its position among the signature's.
+    pub member: u16,
+    pub offered: &'graph [u32],
+}
+
+/// What the load fixed for an instance: the solution it is made at, in group order, and the
+/// instance's type — concrete where closed, parametric over the run's variables where the solution
+/// names a type a run binds. Unlike [`Static`], it has no unknown arm: the load fixes every
+/// instance it records.
 #[derive(Clone, Copy, Debug)]
-pub enum StaticSolution<'graph> {
+pub enum StaticInstance<'graph> {
     /// The same at every run.
-    Closed(&'graph [KType]),
-    /// Over rigid variables the run supplies, each read at its coordinate.
+    Closed {
+        solution: &'graph [KType],
+        ktype: KType,
+    },
+    /// Over rigid variables the run supplies, each read at its coordinate: one list for both.
     Rigid {
-        value: &'graph [Parametric],
+        solution: &'graph [Parametric],
+        ktype: Parametric,
         variables: &'graph [Variable],
     },
 }
@@ -357,7 +440,7 @@ pub enum StaticSolution<'graph> {
 /// group.
 #[derive(Clone, Copy, Debug)]
 pub enum InstanceRead<'graph> {
-    Solved(StaticSolution<'graph>),
+    Solved(StaticInstance<'graph>),
     AsIs,
 }
 
@@ -374,11 +457,145 @@ pub type StaticRegistered<'graph> =
 pub enum Narrowing<'graph> {
     /// Every candidate on the list, each *maybe*: a call admits them all.
     Full,
-    /// The candidates a call selects among, in list order, each beside its verdict — *always* or
-    /// *maybe*, never *never*: a *maybe* one is admitted, an *always* one taken as admitted.
-    Kept(&'graph [(Candidate, Verdict)]),
+    /// The candidates a call selects among, and how they rank.
+    Kept(&'graph Kept<'graph>),
     /// The one candidate the load selected: always a [`Candidate::One`], read at this coordinate.
     Selected(Coordinate),
+}
+
+/// The candidates a call selects among, in list order, each beside its verdict — *always* or
+/// *maybe*, never *never*: a *maybe* one is admitted, an *always* one taken as admitted — and how
+/// those that admit rank.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Kept<'graph> {
+    pub entries: &'graph [(Candidate, Verdict)],
+    /// Beside each entry, the points an *always* one's group solves to: [`Points::NONE`] for a
+    /// *maybe* one and one of no group.
+    pub points: &'graph [Points<'graph>],
+    pub elimination: Elimination<'graph>,
+}
+
+/// How a kept list's candidates rank: read off a table the load recorded, or ranked at the call.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Elimination<'graph> {
+    /// Ranked at the call: a spread, a shape the load cannot read, a rigid one, or a list of more
+    /// than [`Table::MOST`] candidates.
+    Open,
+    Table(Table<'graph>),
+}
+
+/// The elimination table of a kept list of closed shapes: at each class, which of the list's
+/// candidates each one strictly outranks there, beside which are builtins. No single rank order
+/// exists — three candidates may beat each other in a cycle pair by pair — so each class keeps
+/// every pair's answer, by position in the list.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Table<'graph> {
+    /// `beats[class * len + at]`: the positions the candidate at `at` strictly outranks at `class`.
+    beats: &'graph [u64],
+    builtins: u64,
+    len: u16,
+}
+
+impl<'graph> Table<'graph> {
+    /// The longest list a table ranks: one bit per candidate.
+    pub const MOST: usize = 64;
+
+    /// The table of `len` candidates over `classes` classes, `outranks(class, a, b)` answering
+    /// whether the candidate at `a` strictly outranks the one at `b` there, laid through `lay`;
+    /// `builtin(at)` says which are builtins. `None` past [`MOST`](Self::MOST).
+    pub fn laid(
+        lay: impl Lays<'graph>,
+        len: usize,
+        classes: usize,
+        mut outranks: impl FnMut(u16, usize, usize) -> bool,
+        builtin: impl Fn(usize) -> bool,
+    ) -> Option<Self> {
+        if len > Self::MOST {
+            return None;
+        }
+        let beats = lay.fill(classes * len, |at| {
+            let class = u16::try_from(at / len).expect("a shape has fewer than 65536 slots");
+            let a = at % len;
+            ((0..len).filter(|b| *b != a && outranks(class, a, *b)))
+                .fold(0, |mask, b| mask | 1 << b)
+        });
+        let builtins = (0..len)
+            .filter(|at| builtin(*at))
+            .fold(0u64, |mask, at| mask | 1 << at);
+        Some(Table {
+            beats,
+            builtins,
+            len: len as u16,
+        })
+    }
+
+    /// The table of `shapes`, registered shapes under one key and one ranking, each pair's answer
+    /// read from the lattice's [`outranks`] through `types`, laid through `lay`; `builtin` says
+    /// which are builtins. `ranked` is told of each pair ranked. `None` past [`MOST`](Self::MOST).
+    pub fn ranked(
+        lay: impl Lays<'graph>,
+        types: &Chain<'_, '_, '_, '_>,
+        scratch: BumpAllocator<'_>,
+        shapes: &[DeclaredType<Parametric>],
+        builtin: impl Fn(usize) -> bool,
+        ranked: &mut dyn FnMut(),
+    ) -> Option<Self> {
+        // Only the ranking is read, which a scheme's body spells as a type's does.
+        let classes = shapes
+            .first()
+            .map_or(0, |shape| match shape.view(types).body {
+                TypeNode::ExpressionShape { classes, .. } => classes
+                    .iter()
+                    .max()
+                    .map_or(0, |highest| usize::from(highest) + 1),
+                _ => unreachable!("a registered shape is an expression shape"),
+            });
+        let mut outranks = |class, a: usize, b: usize| {
+            ranked();
+            outranks(types, scratch, shapes[a], shapes[b], class)
+        };
+        Self::laid(lay, shapes.len(), classes, &mut outranks, builtin)
+    }
+
+    /// Which of those `admitted` names, by position, survive the class-by-class elimination: at
+    /// each class, a survivor another survivor strictly outranks there drops out.
+    pub fn survivors(&self, admitted: u64) -> u64 {
+        let len = usize::from(self.len);
+        let mut survivors = admitted;
+        for class in self.beats.chunks(len.max(1)) {
+            if survivors.count_ones() <= 1 {
+                break;
+            }
+            let beaten = (0..len)
+                .filter(|at| survivors & 1 << at != 0)
+                .fold(0u64, |mask, at| mask | class[at]);
+            survivors &= !beaten;
+        }
+        survivors
+    }
+
+    /// The candidate a call runs among those `admitted` names, by position: the lone
+    /// [survivor](Self::survivors), else the first builtin among several in list order. `Err` with
+    /// the survivors' count where several survive and none is a builtin, or where none admitted.
+    pub fn decide(&self, admitted: u64) -> Result<usize, usize> {
+        let survivors = self.survivors(admitted);
+        match survivors.count_ones() {
+            1 => Ok(survivors.trailing_zeros() as usize),
+            count => match survivors & self.builtins {
+                0 => Err(count as usize),
+                builtins => Ok(builtins.trailing_zeros() as usize),
+            },
+        }
+    }
+
+    /// This table laid again through `lay`.
+    pub fn relaid<'to>(&self, lay: impl Lays<'to>) -> Table<'to> {
+        Table {
+            beats: collect(lay, self.beats.iter().copied()),
+            builtins: self.builtins,
+            len: self.len,
+        }
+    }
 }
 
 /// What the load fixed about one keyworded use: which candidates a call selects among, and what
@@ -404,6 +621,25 @@ impl UseStatics<'_> {
     }
 }
 
+/// How a call in its frame body's tail position routes its frame, as the walk fixed it: per
+/// candidate, in the order the call reads them — one for a selected use or a call by name.
+/// Written only at a tail call of a callable body whose callee the load knows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Route<'graph> {
+    pub per: &'graph [CandidateRoute],
+}
+
+/// One candidate's route from a tail call.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct CandidateRoute {
+    /// Whether the candidate's return keeps the frame's contract, where the frame's return and the
+    /// candidate's solution are closed: `None` where the call decides.
+    pub kept: Option<bool>,
+    /// Whether the call is a self tail edge of a body whose name does not escape: a hop that keeps
+    /// the frame's settlement where its body keys one.
+    pub hop: bool,
+}
+
 /// What the load fixed about a frame body's minted types — the program's, a callable's or a quote's
 /// code's: whether one can leave it, and how many sites it and the blocks and module bodies it runs
 /// mint at run — every minting site but a view over a closed content tree, whose types the load
@@ -425,18 +661,16 @@ pub enum BodyClass {
 pub enum Mint {
     /// Over a closed content tree: the same content at every run, its types in the root.
     Closed,
-    /// The same content at every frame of one binding: interned into the warm tier — the agent
-    /// tier, where the frame borrows a specialization — and into the cold tier where it borrows
-    /// none.
+    /// The same content at every frame of one binding: rested in the agent tier by the
+    /// settlement the frame runs under, and interned into the cold tier where it runs under none.
     Invariant,
     /// Content that may differ per hop: interned into the cold tier.
     Varying,
 }
 
-/// What the load fixed about where a body's types intern at run: whether its frame caches, how
-/// each of its own minting sites is classed, and which of its composite sites — list, dict and
-/// record literals and constructions — build values whose own types are warm. On a callable's own
-/// record it also says which of its parameters may key its specialization.
+/// What the load fixed about where a body's types intern at run: whether its frame caches and how
+/// each of its own minting sites is classed. On a callable's own record it also says which of its
+/// parameters may key its settlement.
 #[derive(Clone, Copy, Debug)]
 pub struct Caching<'graph> {
     /// Whether the frame body this shape runs in caches: its own class for a callable or a quote's
@@ -444,13 +678,11 @@ pub struct Caching<'graph> {
     pub caches: bool,
     /// Each of the shape's own minting sites, sorted by site, beside its class.
     pub mints: Keyed<'graph, (Site, Mint)>,
-    /// Each composite site whose parts the load classed invariant, sorted.
-    pub warm: Keyed<'graph, Site>,
     /// On a caching frame body's own record, when it or a block or module body it runs has an
     /// invariant minting site or an invariant composite site: the frame's parameter slots those
     /// sites read, sorted, which may be none. Each is a parameter whose arguments digest at a
     /// constant cost: one declared under `Module` or as a type value, or a type binder. A call to
-    /// the frame seeks the specialization these slots' arguments key. `None` on every other
+    /// the frame seeks the settlement these slots' arguments key. `None` on every other
     /// record.
     pub invariant: Option<&'graph [Slot]>,
 }
@@ -480,46 +712,7 @@ pub enum HandedTo {
     Position(u32),
 }
 
-/// How the run binds a path variable: the type a path's entry reads through the module at a
-/// coordinate of the view a value is solved against. The elaborator's `bound_path` is the one
-/// reader, passed in from above.
-pub type Paths<'f, 'graph> = &'f dyn Fn(Coordinate, PathEntry<'graph>) -> Option<KType>;
-
-/// What each of `variables` reads through `view`, as the bindings a substitution takes: an entry
-/// per level up to the largest, each variable's the handle of the type its coordinate holds — or,
-/// for a path variable, the type `paths` reads through its root — and `Never` where no variable is
-/// listed: a gap no free variable of the rigid value names. A path the load resolved closed is that
-/// type, with no read. `None` when a coordinate holds anything but a type, or a path reads none.
-pub fn solutions<'graph, 'x, XF: KnottedFamily<'graph>>(
-    variables: &[Variable],
-    view: &ActivationView<'graph, '_, XF>,
-    scratch: BumpAllocator<'x>,
-    paths: Paths<'_, 'graph>,
-) -> Option<BumpVec<'x, KType>> {
-    let len = variables.iter().map(|variable| variable.level + 1).max();
-    let mut bindings = BumpVec::with_capacity_in(len.unwrap_or(0), scratch);
-    bindings.resize(len.unwrap_or(0), KType::NEVER);
-    for variable in variables {
-        bindings[variable.level] = match variable.source {
-            Source::Type(at) => match view.read(at) {
-                Value::Type(value) => value.handle(),
-                _ => return None,
-            },
-            Source::Path { at, root, level } => {
-                let load = view.load();
-                let root = load.shapes().shape_at(root);
-                let (entry, resolution) = load.path(root, level)?;
-                match resolution.closed() {
-                    Some(closed) => closed,
-                    None => paths(at?, entry)?,
-                }
-            }
-        };
-    }
-    Some(bindings)
-}
-
-impl<'graph, C, R> Static<'graph, C, R> {
+impl<C, R> Static<'_, C, R> {
     /// Whether the value is rigid over a path variable.
     pub fn over_paths(&self) -> bool {
         match self {
@@ -527,27 +720,6 @@ impl<'graph, C, R> Static<'graph, C, R> {
                 .iter()
                 .any(|variable| matches!(variable.source, Source::Path { .. })),
             _ => false,
-        }
-    }
-
-    /// The value where it runs, read through `view`: a closed value as it is, and a rigid one with
-    /// its variables replaced by what their coordinates read, through `substitute`. `None` for an
-    /// unknown value, where a variable's coordinate holds no type, and where `substitute` finds no
-    /// concrete value.
-    pub fn solved<'x, XF: KnottedFamily<'graph>>(
-        self,
-        view: &ActivationView<'graph, '_, XF>,
-        scratch: BumpAllocator<'x>,
-        paths: Paths<'_, 'graph>,
-        substitute: impl FnOnce(R, &[KType]) -> Option<C>,
-    ) -> Option<C> {
-        match self {
-            Static::Unknown => None,
-            Static::Closed(value) => Some(value),
-            Static::Rigid { value, variables } => {
-                let bindings = solutions(variables, view, scratch, paths)?;
-                substitute(value, &bindings)
-            }
         }
     }
 }

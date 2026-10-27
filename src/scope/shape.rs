@@ -6,9 +6,9 @@
 //! each entry at its slot — every mention with its class and coordinate, each bucket declaration's
 //! ranking and the ranking each registration carries, each keyworded use's candidate list,
 //! the capture layout a callable's closure bindings are born through, the strongly connected
-//! components of the body's bindings, the shapes nested in it — found by site, walked in program
-//! order, since a site is an address — the form node a callable's body sits in, and the order its
-//! units run in. What it knows of each binder — the body it births, a `LET` binder's right-hand
+//! components of the body's bindings, the shapes nested in it — found by site, which numbers them
+//! in program order ([`sites`]) — the form node a callable's body sits in, and the order its units
+//! run in. What it knows of each binder — the body it births, a `LET` binder's right-hand
 //! side and annotation, a type binder's declaration node, the registration bound there — is one
 //! record per slot. [`build`] is the one builder every kind goes through.
 //!
@@ -60,9 +60,12 @@ use super::keyed::{Keyed, KeyedEntry};
 use super::typed::{Elaboration, Root, Static, StaticCallable};
 
 mod build;
+mod sites;
+
+pub use sites::{Located, Site, Sites};
 
 pub(crate) use build::IMPLICIT;
-pub(super) use build::program as build_program;
+pub(super) use build::{code as build_code, program as build_program};
 
 /// An index into an activation's slot run: value slots first, type slots after, registration slots
 /// last.
@@ -75,7 +78,7 @@ pub struct CaptureSlot(pub(crate) u32);
 
 /// A body's index among the shapes one load builds, assigned in the order the shapes are sealed:
 /// distinct per shape, the same in every load of one source text, and unrelated to where the shape
-/// lies in memory. A specialization's key names its callee's body by it.
+/// lies in memory. A settlement's key names its callee's body by it.
 ///
 /// A body's nested bodies take the indices before its own, in program order, so its index exceeds
 /// every body's it encloses, and along one chain indices fall from the root inward. A frontier's
@@ -184,41 +187,6 @@ pub enum MentionClass {
     Deferred,
 }
 
-/// The identity of one part in program storage — its address, which is what a reader holding the
-/// part can recompute.
-#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
-pub struct Site(usize);
-
-impl Site {
-    pub fn of(part: &ExpressionPart<'_>) -> Site {
-        Site(std::ptr::from_ref(part) as usize)
-    }
-
-    /// The site of a whole node — its parts run's address, which every copy of the node shares.
-    pub fn of_node(node: &KExpression<'_>) -> Site {
-        Site(node.parts.as_ptr() as usize)
-    }
-
-    /// The site of `form`'s body part — where the shape enclosing `form` records the body nested in
-    /// it — or `None` for a node whose builtin shape declares no body.
-    pub fn of_body(form: &KExpression<'_>) -> Option<Site> {
-        let shape = form.cache().builtin_shape()?;
-        shape
-            .roles()
-            .zip(form.parts)
-            .find(|(role, _)| matches!(role, Role::Body(_)))
-            .map(|(_, part)| Site::of(&part.value))
-    }
-}
-
-impl KeyedEntry for Site {
-    type Key = Site;
-
-    fn key(&self) -> Site {
-        *self
-    }
-}
-
 /// One identifier or type-name occurrence a body reads.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Mention {
@@ -239,7 +207,8 @@ pub struct Mention {
 }
 
 /// Where a coordinate lands: a builtin, a binder of some body by its slot there, or an open
-/// capture of a quote's code — a hole its filling binds, or a `\` name its `EVAL` offers. A body is
+/// capture of a quote's code — a hole its filling binds, a `\` name its `EVAL` offers, or a `$`
+/// binding composed code carries to its entry. A body is
 /// named by `At`: its segment once the shapes are sealed, its level on a chain while one is walked.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Lands<At = Segment> {
@@ -247,6 +216,7 @@ pub enum Lands<At = Segment> {
     Binder { at: At, slot: Slot },
     Hole { at: At, capture: CaptureSlot },
     Offered { at: At, capture: CaptureSlot },
+    Entry { at: At, capture: CaptureSlot },
 }
 
 impl<At> Lands<At> {
@@ -263,6 +233,10 @@ impl<At> Lands<At> {
                 capture,
             },
             Lands::Offered { at, capture } => Lands::Offered {
+                at: rename(at),
+                capture,
+            },
+            Lands::Entry { at, capture } => Lands::Entry {
                 at: rename(at),
                 capture,
             },
@@ -314,6 +288,7 @@ pub fn follow<C: CaptureChain>(
             }
             CaptureSource::Hole => return Some(Lands::Hole { at, capture }),
             CaptureSource::Offered => return Some(Lands::Offered { at, capture }),
+            CaptureSource::Entry { .. } => return Some(Lands::Entry { at, capture }),
         }
     }
 }
@@ -500,6 +475,10 @@ pub enum CaptureSource {
     Hole,
     /// An open `\` mark of a code shape: the `EVAL` that runs the code offers it.
     Offered,
+    /// A `$` name or `$(…)` key at the root of code built alone, composed at run time: the code
+    /// value carries its binding, bound at its entry. `head` while every read of it is a call's
+    /// head, the one place a quantified function may be read.
+    Entry { head: bool },
 }
 
 /// A strongly connected component of a shape's bindings.
@@ -582,9 +561,6 @@ pub struct TypeExpression<'graph> {
     /// The statement it is written in, by index into [`BodyShape::body`] — where a refusal about it
     /// is located.
     pub statement: u32,
-    /// Its place among the body's type expressions in program order, which a pass that mints
-    /// anything per expression walks them in: a site is an address, whose order says nothing.
-    pub order: u32,
     /// For a guard: the site of its arm set, and its place among the arms in written order.
     pub guard: Option<(Site, u32)>,
 }
@@ -621,8 +597,10 @@ pub struct BodyShape<'graph> {
     /// Each declared name at its slot, beside the position it writes at.
     names: Channels<'graph, Position>,
     /// This body's own statements, rewritten — the run every reader takes them from, and the one
-    /// every part address this shape records lies inside.
+    /// every site this shape records lies inside.
     body: &'graph [KExpression<'graph>],
+    /// Each part and node `body` holds, by site.
+    sites: Sites<'graph>,
     /// The operator groups the shapes enclosing this body hold, this body's own included.
     group_frame: &'graph GroupFrame<'graph>,
     /// The groups this body itself holds: a `GROUP`'s own group, or the groups a `USING … SCOPE`
@@ -646,10 +624,12 @@ pub struct BodyShape<'graph> {
     /// Each capture's top-level slot, where it reads the program's top level, parallel to
     /// `captures`.
     top_captures: &'graph [Option<Slot>],
+    /// Each nested shape by its site, so in program order.
     nested: Keyed<'graph, (Site, &'graph BodyShape<'graph>)>,
-    /// `nested`'s entries in program order: a site is an address, so the keyed order can differ
-    /// between two loads of one program, and a walk over it would too.
-    nested_order: &'graph [(Site, &'graph BodyShape<'graph>)],
+    /// Whether this body can birth a callable: a nested callable body, directly or through a
+    /// nested block or module body. A quote's callables are born by the `EVAL` that runs it, so a
+    /// quote counts for nothing.
+    births: bool,
     /// The `FN`, `EXPR` or `OP` node a callable's body sits in.
     form: Option<&'graph KExpression<'graph>>,
     /// Each binder's record, by slot.
@@ -666,6 +646,10 @@ pub struct BodyShape<'graph> {
     nested_starts: &'graph [u32],
     /// The slots a callable's or a code body's last statement reads, and every type slot, sorted.
     last_reads: &'graph [Slot],
+    /// The binders and the last statement's argument parts a tail call of this body hands on that
+    /// its frame built itself, each sorted; see [`threaded`](BodyShape::threaded).
+    threaded: &'graph [Slot],
+    threaded_parts: &'graph [Site],
     /// What this body is to the `MATCH` or `TRY` holding it, when it is an arm.
     arm: Option<Arm<'graph>>,
     /// A code shape's carried type: its code kind needing its open `\` marks. `Code` for every
@@ -759,10 +743,41 @@ impl<'graph> BodyShape<'graph> {
     }
 
     /// This body's statements, **rewritten**: every operator run in them is already chained, and
-    /// every site this shape records is an address inside this run. A reader takes a body's
+    /// every site this shape records names a part or node inside this run. A reader takes a body's
     /// statements from here and never from the parse.
     pub fn body(&self) -> &'graph [KExpression<'graph>] {
         self.body
+    }
+
+    /// Each part and node this body's statements hold, by site.
+    pub fn sites(&self) -> &Sites<'graph> {
+        &self.sites
+    }
+
+    /// What `site` names: a part, or a whole node.
+    pub fn located(&self, site: Site) -> Located<'graph> {
+        self.sites.located(site)
+    }
+
+    /// The site of `part`, which this body's statements hold.
+    pub fn site(&self, part: &ExpressionPart<'_>) -> Site {
+        self.sites.site(part)
+    }
+
+    /// The site of a whole node this body's statements hold.
+    pub fn site_of_node(&self, node: &KExpression<'_>) -> Site {
+        self.sites.site_of_node(node)
+    }
+
+    /// The site of `form`'s body part — where this shape, which holds `form`, records the body
+    /// nested in it — or `None` for a node whose builtin shape declares no body.
+    pub fn site_of_body(&self, form: &KExpression<'_>) -> Option<Site> {
+        let shape = form.cache().builtin_shape()?;
+        shape
+            .roles()
+            .zip(form.parts)
+            .find(|(role, _)| matches!(role, Role::Body(_)))
+            .map(|(_, part)| self.site(&part.value))
     }
 
     /// The operator-group frame this body was built under — what decides which groups an operator
@@ -884,7 +899,7 @@ impl<'graph> BodyShape<'graph> {
     /// statement births or runs inline.
     pub fn nested_in(&self, index: usize) -> &'graph [(Site, &'graph BodyShape<'graph>)] {
         let (start, end) = (self.nested_starts[index], self.nested_starts[index + 1]);
-        &self.nested_order[start as usize..end as usize]
+        &self.nested.entries()[start as usize..end as usize]
     }
 
     /// The slots a callable's or a code body's last statement reads — directly, through a nested
@@ -894,6 +909,23 @@ impl<'graph> BodyShape<'graph> {
     /// them.
     pub fn last_reads(&self) -> &'graph [Slot] {
         self.last_reads
+    }
+
+    /// The binders a callable's or a code body's last statement hands on that its frame built
+    /// itself, sorted: the backward closure over its read edges from that statement's reads, type
+    /// slots, parameters and every binder bound bare to a value the frame received excluded. Empty
+    /// for any other kind. A frame asks for each one's value to be built where it outlives the hop
+    /// — in its loop's cell — so a tail call hands it on from there.
+    pub fn threaded(&self) -> &'graph [Slot] {
+        self.threaded
+    }
+
+    /// The last statement's argument parts a tail call of this body hands on that are no name and
+    /// no literal and not a value the frame received — a parameter's member read through the
+    /// builtin `ATTR` alone, say — sorted: what the frame's evaluation of that statement asks to be
+    /// built where it outlives the hop, as it asks for [`threaded`](Self::threaded) binders.
+    pub fn threaded_parts(&self) -> &'graph [Site] {
+        self.threaded_parts
     }
 
     /// The component `slot` belongs to, by index into [`components`](Self::components).
@@ -912,7 +944,13 @@ impl<'graph> BodyShape<'graph> {
 
     /// Every nested shape beside its site, in program order.
     pub fn nested_shapes(&self) -> &'graph [(Site, &'graph BodyShape<'graph>)] {
-        self.nested_order
+        self.nested.entries()
+    }
+
+    /// Whether this body can birth a callable, through its blocks and module bodies but not its
+    /// quotes.
+    pub fn births_callable(&self) -> bool {
+        self.births
     }
 
     /// What this body is to the `MATCH` or `TRY` holding it: `Some` exactly for an arm.
@@ -1051,10 +1089,10 @@ impl<'graph> BodyShape<'graph> {
     }
 }
 
-/// Where the part at `site` within `node` is written: its own span, else the nearest spanned part's
-/// or node's around it. `None` when `node` does not hold the part.
-pub fn source_of(node: &KExpression<'_>, site: Site) -> Option<SourceRef> {
-    build::source_within(node, site)
+/// Where the part at `site` of `shape` within `node` is written: its own span, else the nearest
+/// spanned part's or node's around it. `None` when `node` does not hold the part.
+pub fn source_of(shape: &BodyShape<'_>, node: &KExpression<'_>, site: Site) -> Option<SourceRef> {
+    build::source_within(node, shape.sites.address(site))
 }
 
 /// Call `visit` on every part within `node`, at any depth, in written order.
@@ -1062,9 +1100,13 @@ pub fn each_part<'a>(node: &'a KExpression<'a>, mut visit: impl FnMut(&'a Expres
     build::each_part_within(node, &mut visit)
 }
 
-/// The part at `site` within `node`, at any depth. `None` when `node` does not hold it.
-pub fn part_of<'a>(node: &'a KExpression<'a>, site: Site) -> Option<&'a ExpressionPart<'a>> {
-    build::part_within(node, site)
+/// The part at `site` of `shape` within `node`, at any depth. `None` when `node` does not hold it.
+pub fn part_of<'a>(
+    shape: &BodyShape<'_>,
+    node: &'a KExpression<'a>,
+    site: Site,
+) -> Option<&'a ExpressionPart<'a>> {
+    build::part_within(node, shape.sites.address(site))
 }
 
 /// `name` read through `mark` at `at` over one body's declared names and captures: a local visible

@@ -15,19 +15,50 @@ const PREFIXES: &[&str] = &[
     "crate::tests::allocation_count",
     "crate::tests::boundary",
     "crate::tests::case_share",
+    "crate::tests::composed_syntax",
     "crate::type_lattice",
     "crate::values",
 ];
 
-/// The owning types outside the tests: the buffer a step pushes its requests into, and the drain's
-/// ready stack. Each is the scheduler's runtime state, held beside the graph and never written into
-/// a region, so a value's no-drop-glue discipline does not reach them.
+/// The owning types outside the tests: the buffer a step pushes its requests into, the drain's
+/// ready stack, the build arena's slots and free list, and the shared hold each settlement's facts
+/// keep on their parent's and on the compositions they rest on or pin, and the arena keeps on a
+/// composition's; the levels of a replay a frame's first step hands the drain; and the request a
+/// frame's asker hands the drain, which it keeps in the frame's continuation until the
+/// frame's first step takes it. Each is the scheduler's runtime state, held beside the graph or in
+/// a cell's continuation slot and never written into a region, so a value's no-drop-glue discipline
+/// does not reach them. Beside them, the hop samples a test build's drain keeps in a thread-local.
 const OWNING_ALLOWED: &[(&str, &str)] = &[
     ("src/scheduler/action.rs", "requests: Vec<Asked<'graph, B>>"),
     ("src/scheduler/action.rs", "Vec::new()"),
     ("src/scheduler/drain.rs", "ready: Vec<Entry<'graph, B>>"),
     ("src/scheduler/drain.rs", "Vec::new()"),
+    ("src/scheduler/arena.rs", "slots: Vec<Slot<'graph>>"),
+    ("src/scheduler/arena.rs", "use std::rc::Rc;"),
+    ("src/scheduler/arena.rs", "Rc<Settled<'graph>>"),
+    ("src/scheduler/arena.rs", "Rc<Composed<'graph>>"),
+    ("src/scheduler/arena.rs", "Rc::new(facts)"),
+    ("src/scheduler/arena.rs", "Rc::clone(facts)"),
+    ("src/scheduler/arena.rs", "free: Vec<u32>"),
+    ("src/scheduler/seek.rs", "Replay(Vec<Replayed<'graph>>)"),
+    ("src/scheduler/drain.rs", "levels: Vec<Replayed<'graph>>"),
+    ("src/scheduler/arena.rs", "Vec::new()"),
+    (
+        "src/scheduler/continuation.rs",
+        "Option<Box<Requested<'graph>>>",
+    ),
+    ("src/scheduler/action.rs", "Option<Box<Requested<'graph>>>"),
+    ("src/scheduler/drain.rs", "Option<Box<Requested<'graph>>>"),
+    (
+        "src/scheduler/drain.rs",
+        "Box::new(Requested { sought, image })",
+    ),
+    ("src/scheduler/drain.rs", "RefCell<Vec<HopSample>>"),
 ];
+
+/// The cellgraph doors no drain opens between steps: a peek into a cell's header, an entry beside
+/// another cell, and a lend naming a cell.
+const BETWEEN_STEPS: &[&str] = &["peek", "enter_beside", "create_tenant_lent", "Lend::Named"];
 
 /// What no public method of `Step` may spell: a handle, a carrier door, or a carrier.
 const STEP_MAY_NOT_NAME: &[&str] = &[
@@ -50,11 +81,11 @@ fn scheduler_names_only_the_layers_below_it_holds_no_heap_and_spells_the_stack_l
     crate::tests::boundary::holds("scheduler", PREFIXES, OWNING_ALLOWED);
 }
 
-/// Only the scheduler and `values` open a `BuildRef` or make one from a handle: every other module
-/// holds and passes the token, so a step can hand the drain only a build cell the scheduler named to
-/// it.
+/// Only the scheduler and `values` open an `ArenaRef` or make one from a slot: every other module
+/// holds and passes the token, so a step can hand the drain only an arena node the scheduler named
+/// to it.
 #[test]
-fn only_the_scheduler_and_values_open_a_build_ref() {
+fn only_the_scheduler_and_values_open_an_arena_ref() {
     let source = std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/src"));
     let mut files = Vec::new();
     crate::tests::boundary::collect_sources(&source, &mut files);
@@ -68,13 +99,39 @@ fn only_the_scheduler_and_values_open_a_build_ref() {
         .filter(|file| {
             let text = std::fs::read_to_string(file).expect("a source file reads");
             let code = crate::tests::boundary::strip_comments_and_strings(&text);
-            code.contains("BuildRef::of") || code.contains(".opened()")
+            code.contains("ArenaRef::of") || code.contains(".opened()")
         })
         .collect();
     assert!(files.len() > 100, "the walk found the crate's sources");
     assert!(
         offenders.is_empty(),
-        "a module outside the scheduler opens a `BuildRef`: {offenders:?}"
+        "a module outside the scheduler opens an `ArenaRef`: {offenders:?}"
+    );
+}
+
+/// The drain keeps settlements as books beside the cell graph, so between steps it reaches no cell
+/// but through a birth or a release: every `Fresh` cell borrows its parent's scratch and every
+/// `Shares` one is its host's tenant.
+#[test]
+fn the_drain_opens_no_cellgraph_door_between_steps() {
+    let root = std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/src/scheduler"));
+    let mut files = vec![root.with_extension("rs")];
+    crate::tests::boundary::collect_sources(&root, &mut files);
+    let offenders: Vec<_> = (files.iter())
+        .filter(|file| !file.components().any(|part| part.as_os_str() == "tests"))
+        .flat_map(|file| {
+            let text = std::fs::read_to_string(file).expect("a source file reads");
+            let code = crate::tests::boundary::strip_comments_and_strings(&text);
+            (BETWEEN_STEPS.iter())
+                .filter(|door| code.contains(*door))
+                .map(|door| format!("{}: {door}", file.display()))
+                .collect::<Vec<_>>()
+        })
+        .collect();
+    assert!(files.len() > 5, "the walk found the scheduler's sources");
+    assert!(
+        offenders.is_empty(),
+        "the scheduler opens a cellgraph door between steps: {offenders:?}"
     );
 }
 

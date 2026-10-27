@@ -122,8 +122,11 @@ A contribution handed whole to a variable's cell binds member by member, a join
 keeps a variable beside the rest, and a verdict that holds over a variable holds
 at every binding, so the collector disqualifies only three things: an admission
 that read a variable through its ends (a carried rigid variable filling a
-position through its bound, or a bound split across a declared union's members,
-or a verdict over one that fails), a variable answered by a meet over a
+position through its bound, a bound split across a declared union's members, a
+declared union's member chosen for a carried variable, or for a sibling of a
+carried member holding one, which its binding may change — `Never` reaches
+every member, a union splits across them, a member under a sibling is
+absorbed — or a verdict over one that fails), a variable answered by a meet over a
 contribution holding one, and a solve failing at a verdict over one. So
 `LIST OF Elt` over `LIST OF Outer` solves `Elt` to `LIST OF Outer`
 reproducibly, while `LIST OF Elt` over an `Outer` bounded by `LIST OF Number`

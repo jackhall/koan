@@ -233,6 +233,11 @@ impl<'run> StoredNode<'run> {
         }
     }
 
+    /// `content` under `handle` as another chain laid it: a copy keeps its source's handle.
+    pub(super) fn copied(handle: Handle, content: Content<'run>) -> Self {
+        StoredNode { handle, content }
+    }
+
     /// The digest the node is interned under.
     pub(super) fn digest(&self) -> TypeDigest {
         self.handle.digest()

@@ -1,44 +1,64 @@
 //! The drain: the loop that runs one root work to its end over a ready stack, and the graph it runs
 //! over.
 //!
-//! The graph holds two slab roots when the [load door](super::load) stood it up: the run root every
-//! root work is born under, and the build root whose region holds the root-level specialization
-//! table. Before a call's frame is born the drain resolves what it borrows: the specialization its
-//! asker's [`Seek`] finds or builds with one synchronous step, or, born cold, its parent's scratch
-//! for a `Fresh` frame and nothing for a `Shares` one. Any other cell borrows what its parent reads.
+//! The graph holds the run cells and, beside them, the [build arena](super::arena) of the
+//! settlements frames run under; no settlement is a cell. Before a cell is born the drain resolves
+//! the arena node it runs under: for a call's frame, what its asker's [`Seek`] finds or builds,
+//! and for any other cell, what its asker runs under. The drain borrows that arena node for the
+//! cell's life, from its birth to its release, so a held settlement is never evicted, and a tail
+//! hop's successor borrows its frame's before the frame is released. Between steps it opens no
+//! cell but to run a step: a `Fresh` cell borrows its parent's scratch and a `Shares` one is its
+//! host's tenant.
 //!
-//! A miss enters the new specialization beside its asker, and the entry lays the binding's nodes
-//! from the asker's region into the specialization's branch before its step runs, so the branch
-//! holds them by value.
+//! A tail hop whose birth was laid as a skeleton beside the values it hands on wakes each value on
+//! its own, from the kept part it was handed through where that redeems, and builds the
+//! successor's birth in the successor's region over them ([`StepBundle::handings`]): nothing
+//! homed above the successor is copied, and nothing of the skeleton outlives its predecessor.
 //!
-//! The drain keeps every build cell's books: it stamps a hit's entry and a hop's, fills a new
-//! child's entry and sets its home. A miss on a full table releases the least recently born child
-//! with its subtree, leaf first, before the new child is created; nothing else releases a
-//! specialization in a run. A released specialization a frame still borrows waits dead but
-//! undisposed until its last borrower disposes.
+//! A loop whose hops hand on values their frames built — their threaded set's — runs its hops
+//! under a **loop cell**: a tree cell under the loop's receiving cell, with no continuation, created
+//! at the first hop that threads, where those values are built and copied to, which every hop after
+//! is born under and so pins free. A hop compacts it into a fresh one once it holds twice its live
+//! bytes, and the loop's last cell releases it when it delivers.
+//!
+//! A miss relays its binding's image into the agent tier, settles the body through the door the
+//! program handed the graph at load ([`Settles`]), and, once the frame borrows the settlement,
+//! evicts unheld settlements to the budget; nothing else evicts in a run. A step's door reads the
+//! settlement its cell runs under over the load.
 //!
 //! Every field here is one scheduler's own. There is no static, no thread-local and no lazily
 //! minted cell, so a second scheduler runs beside the first with nothing shared but the program
 //! text and the shapes in it.
 
+use smallvec::SmallVec;
+
+use crate::knot::KValueFamily;
 use crate::memory::{
-    CellGraph, CellHandle, CreateError, Dormant, Erased, Lend, Operand, RedeemError,
-    ReleaseAbsorption, ReleaseError, SlabHandle, TreeHandle,
+    Active, CellGraph, CellHandle, CreateError, CrossedOperand, Dormant, Erased, FIRST_CHUNK, Lend,
+    Operand, Ready, RedeemError, ReleaseAbsorption, ReleaseError, SlabHandle,
 };
 use crate::scheduler::action::{
-    Action, Asked, Context, Kind, Placement, Spawns, Step, StepError, Use,
+    Action, Asked, Context, Kind, Placement, Spawns, Step, StepError, Tailing, Use,
 };
+use crate::scheduler::arena::{BuildArena, Composed, Settled};
 use crate::scheduler::continuation::{
-    Born, Continuation, ContinuationFamily, NativeStep, Provenance, Report, Rested, StateAt,
-    StepBundle, Work,
+    Arrival, BirthAt, Born, Continuation, ContinuationFamily, NativeStep, Provenance, Report,
+    Rested, StateAt, StepBundle, Work,
 };
 use crate::scheduler::delivery::KDelivery;
-use crate::scheduler::seek::{Lending, Seek};
+use crate::scheduler::kept::Kept;
+use crate::scheduler::seek::{Compose, Lending, Replayed, Requested, Seek, Settles, Unsettled};
 #[cfg(test)]
 use crate::scope::HalfHeader;
-use crate::scope::RegionHeader;
+use crate::scope::{Facts, LoadFacts, RegionHeader};
+#[cfg(test)]
 use crate::type_lattice::Branch;
-use crate::values::{Chain, Decision, SpecBinding, SpecHome, TypeTiers};
+use crate::type_lattice::Halves;
+use crate::values::{ArenaRef, BuildBudget, ContentDigest, Half, TypeTiers};
+
+/// What a loop cell may hold past twice its live bytes before a hop compacts it: a region's first
+/// chunk, within which growth is noise.
+const COMPACTION_FLOOR: usize = FIRST_CHUNK;
 
 /// The graph of cells a drain runs over: `cellgraph`'s graph closed over the continuation family,
 /// the bundle's scratch family and the delivery bundle.
@@ -48,33 +68,38 @@ use crate::values::{Chain, Decision, SpecBinding, SpecHome, TypeTiers};
 /// reaches every other cell only through a [`Scheduler`] over it.
 ///
 /// It holds the type tiers every step's chain reads first, so a step and a crossing take it
-/// from the graph they run over rather than from a program or a static.
+/// from the graph they run over rather than from a program or a static, the load's facts every
+/// step's door reads beneath its cell's layers, and the build arena its frames run under.
 pub struct Graph<'graph, B: StepBundle<'graph>> {
     cells: CellGraph<'graph, ContinuationFamily<B>, B::Scratch, KDelivery, RegionHeader>,
     tiers: TypeTiers<'graph>,
-    /// The build tree's core cell, whose region holds the root-level specialization table: `Some`
-    /// for a graph the [load door](Graph::load) stood up, `None` for one [`new`](Graph::new) made,
-    /// whose every frame is born cold.
-    build_root: Option<SlabHandle>,
+    facts: &'graph LoadFacts<'graph>,
+    arena: BuildArena<'graph>,
+    /// The door a miss settles through.
+    settles: &'graph dyn Settles<'graph>,
 }
 
 impl<'graph, B: StepBundle<'graph>> Graph<'graph, B> {
     /// A graph over a slab of `cap` cells, under koan's own crossing verdict, its steps' types read
-    /// over `tiers`.
-    pub fn new(cap: u32, tiers: TypeTiers<'graph>) -> Self {
-        Graph::assemble(CellGraph::new(cap, crate::values::verdict), tiers, None)
+    /// over `tiers`, its unheld settlements within `budget`, over a load of no bodies.
+    pub fn new(cap: u32, tiers: TypeTiers<'graph>, budget: BuildBudget) -> Self {
+        Graph::over(cap, tiers, (&LoadFacts::EMPTY, &Unsettled), budget)
     }
 
-    /// A graph over `cells`, its steps' types read over `tiers`, its build root `build_root`.
-    pub(super) fn assemble(
-        cells: CellGraph<'graph, ContinuationFamily<B>, B::Scratch, KDelivery, RegionHeader>,
+    /// A graph as [`new`](Self::new) stands one, its steps' facts read over `facts`, its misses
+    /// settled through `settles`.
+    pub(super) fn over(
+        cap: u32,
         tiers: TypeTiers<'graph>,
-        build_root: Option<SlabHandle>,
+        (facts, settles): (&'graph LoadFacts<'graph>, &'graph dyn Settles<'graph>),
+        budget: BuildBudget,
     ) -> Self {
         Graph {
-            cells,
+            cells: CellGraph::new(cap, crate::values::verdict),
             tiers,
-            build_root,
+            facts,
+            arena: BuildArena::new(budget),
+            settles,
         }
     }
 
@@ -99,62 +124,54 @@ impl<'graph, B: StepBundle<'graph>> Graph<'graph, B> {
         self.cells.is_live(cell)
     }
 
-    /// How many entries the specialization table in `cell`'s region header names, live or stale:
-    /// `None` where no header is laid, `0` where the header has no table.
+    /// How many settlements are live.
     #[cfg(test)]
-    pub(crate) fn table_len(
-        &self,
-        cell: impl Into<CellHandle>,
-    ) -> Result<Option<usize>, crate::memory::PeekError> {
-        self.cells.peek(cell, |header, _| {
-            header.into_value().table().map_or(0, |table| table.len())
-        })
+    pub(crate) fn live_settlements(&self) -> usize {
+        self.arena.len()
     }
 
-    /// The live children the specialization table in `cell`'s region header names: `0` for a
-    /// cell with no table or none live.
+    /// How many compositions are live.
     #[cfg(test)]
-    pub(crate) fn live_children(&self, cell: impl Into<CellHandle>) -> usize {
-        let cells = &self.cells;
-        let live = cells.peek(cell, |header, _| {
-            (header.into_value().table())
-                .map_or(0, |table| table.live(|spec| cells.is_live(spec)).count())
-        });
-        live.ok().flatten().unwrap_or(0)
+    pub(crate) fn live_compositions(&self) -> usize {
+        self.arena.compositions()
     }
 
-    /// Every live specialization of the build tree, under the build root's table and each live
-    /// child's in turn.
+    /// How many live settlements lie directly under a composition, and how many live compositions
+    /// some settlement pins.
     #[cfg(test)]
-    pub(crate) fn live_specializations(&self) -> usize {
-        let mut pending = std::vec::Vec::new();
-        if let Some(root) = self.build_root {
-            self.children_of(root.into(), &mut pending);
-        }
-        let mut live = 0;
-        while let Some(spec) = pending.pop() {
-            live += 1;
-            self.children_of(spec.into(), &mut pending);
-        }
-        live
+    pub(crate) fn under_compositions(&self) -> (usize, usize) {
+        self.arena.under_compositions()
     }
 
-    /// Push each live child `cell`'s table names onto `children`.
+    /// How many live settlements lie directly under `parent`.
     #[cfg(test)]
-    fn children_of(&self, cell: CellHandle, children: &mut std::vec::Vec<TreeHandle>) {
-        let cells = &self.cells;
-        let _ = cells.peek(cell, |header, _| {
-            if let Some(table) = header.into_value().table() {
-                children.extend(table.live(|spec| cells.is_live(spec)));
-            }
-        });
+    pub(crate) fn children_of(&self, parent: ArenaRef) -> usize {
+        self.arena.children_of(parent)
     }
 
-    /// Whether the specialization `build` names has no undisposed child: `None` for the build
-    /// root, or a specialization that is not live.
+    /// Whether `at` names a live settlement.
     #[cfg(test)]
-    pub(crate) fn is_childless(&self, build: crate::values::BuildRef) -> Option<bool> {
-        self.cells.is_childless(build.opened()?).ok()
+    pub(crate) fn is_settled(&self, at: ArenaRef) -> bool {
+        at != ArenaRef::ROOT && self.arena.is_live(at)
+    }
+
+    /// What the live settlement `at` weighs against the budget: what a test that forces eviction
+    /// sizes its budget by.
+    #[cfg(test)]
+    pub(crate) fn settlement_bytes(&self, at: ArenaRef) -> Option<usize> {
+        self.arena.bytes_of(at)
+    }
+
+    /// How many run cells borrow the live settlement `at`.
+    #[cfg(test)]
+    pub(crate) fn borrowers(&self, at: ArenaRef) -> Option<usize> {
+        self.arena.borrowers(at)
+    }
+
+    /// The bytes of live settlements no run cell holds.
+    #[cfg(test)]
+    pub(crate) fn unheld_bytes(&self) -> usize {
+        self.arena.unheld_bytes()
     }
 
     /// The graph itself, for a test that drives the raw slot doors a step never reaches.
@@ -167,8 +184,8 @@ impl<'graph, B: StepBundle<'graph>> Graph<'graph, B> {
 }
 
 /// The most any step has left in each of its cell's type tiers, and how many frames sought and
-/// built a specialization: what a test reads to see a loop's tiers hold flat across hops and its
-/// specialization found once.
+/// built a settlement: what a test reads to see a loop's tiers hold flat across hops and its
+/// settlement found once.
 #[cfg(test)]
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub(crate) struct Tiers {
@@ -182,17 +199,32 @@ pub(crate) struct Tiers {
     pub agent_verdicts: usize,
     /// Bytes the scratch bump has handed out.
     pub scratch_bytes: usize,
-    /// How many frames sought a specialization: a count, not a high-water mark.
+    /// How many frames sought a settlement: a count, not a high-water mark.
     pub sought: usize,
     /// How many of those built one on a miss: a count.
-    pub specialized: usize,
-    /// How many specializations a miss or a test released, descendants included: a count.
+    pub settled: usize,
+    /// How many settlements a miss evicted: a count.
     pub evicted: usize,
-    /// How many frames were born cold because the build cell their seek or hop named is dead: a
+    /// How many frames were born cold because the arena node their seek or hop named is dead: a
     /// count.
     pub cold_births: usize,
-    /// Nodes the drain laid into the agent tier from new specializations' askers' branches: a count.
+    /// Nodes the drain laid into the agent tier from new settlements' askers' branches: a count.
     pub relayed: usize,
+    /// Nodes new settlements' records named that their walks laid into the agent tier: a count.
+    pub rested: usize,
+    /// Nodes run steps laid into the agent tier, waking their state included: a count, which a
+    /// settlement's resting leaves at nothing.
+    pub stepped: usize,
+    /// How many compositions a miss built: a count.
+    pub composed: usize,
+    /// How many cells running composed code bounced with its syntax, their composition not live
+    /// at their birth: a count.
+    pub bounced: usize,
+    /// The most bytes of live settlements and compositions no run cell held once a miss had
+    /// evicted: a high-water mark.
+    pub unheld: usize,
+    /// The most settlements live at once at a birth: a high-water mark.
+    pub live: usize,
 }
 
 /// Add to one of the counts in [`TIERS`].
@@ -216,21 +248,50 @@ thread_local! {
             agent_verdicts: 0,
             scratch_bytes: 0,
             sought: 0,
-            specialized: 0,
+            settled: 0,
             evicted: 0,
             cold_births: 0,
             relayed: 0,
+            rested: 0,
+            stepped: 0,
+            composed: 0,
+            bounced: 0,
+            unheld: 0,
+            live: 0,
         })
     };
 }
 
+/// What every region held at one tail, sampled by the drain before it creates the successor: what
+/// a test reads to see a loop's memory hold flat across hops.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct HopSample {
+    /// The cell receiving the loop's result, which tells one loop's tails from another's.
+    pub host: CellHandle,
+    /// Bytes every region of the graph has handed out, absorbed bumps included.
+    pub live: usize,
+    /// Bytes the region of the cell receiving the loop's result has handed out.
+    pub host_region: usize,
+    /// Bytes that cell's scratch has handed out.
+    pub host_scratch: usize,
+    /// Bytes the tailing cell's own region has handed out; `0` for a tenant, which has none.
+    pub hop_region: usize,
+    /// The weight of the values the successor's birth threads.
+    pub threads: usize,
+}
+
 #[cfg(test)]
 thread_local! {
-    /// A specialization the drain evicts before its next step, for a test whose step cannot reach
-    /// [`Scheduler::evict`]: set by the step, taken by the drain. A refused eviction panics.
-    pub(crate) static EVICT_BEFORE_STEP: std::cell::Cell<Option<crate::values::BuildRef>> =
-        const { std::cell::Cell::new(None) };
+    /// Every [`HopSample`] taken so far, in tail order. Tests reset it.
+    pub(crate) static HOPS: std::cell::RefCell<Vec<HopSample>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+    /// How many hops' successors built their birth over the values a skeleton handed on.
+    pub(crate) static SKELETONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
 
+#[cfg(test)]
+thread_local! {
     /// The caching body the running step runs, by its shape's address: set by the step, taken by
     /// the drain as the step returns.
     pub(crate) static CACHING: std::cell::Cell<Option<usize>> = const { std::cell::Cell::new(None) };
@@ -239,34 +300,6 @@ thread_local! {
     /// and in the agent tier. Tests reset it.
     pub(crate) static LAID: std::cell::RefCell<std::collections::BTreeMap<usize, (usize, usize)>> =
         const { std::cell::RefCell::new(std::collections::BTreeMap::new()) };
-
-    /// A specialization whose children the drain logs to [`WATCH_LOG`] before each step it runs.
-    pub(crate) static WATCHED: std::cell::Cell<Option<crate::values::BuildRef>> =
-        const { std::cell::Cell::new(None) };
-
-    /// What the drain saw of [`WATCHED`], interleaved with what the test's steps log as they run.
-    pub(crate) static WATCH_LOG: std::cell::RefCell<std::vec::Vec<Watched>> =
-        const { std::cell::RefCell::new(std::vec::Vec::new()) };
-}
-
-/// One line of [`WATCH_LOG`].
-#[cfg(test)]
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(crate) enum Watched {
-    /// Whether the watched specialization had no undisposed child, logged before a step.
-    Childless(bool),
-    /// A test step, named as it starts.
-    Step(&'static str),
-}
-
-/// What a new cell borrows, as the drain resolved it from its asker's [`Lending`].
-enum Borrows {
-    /// What its parent reads: a tree cell its parent's scratch, a tenant a copy of its parent's
-    /// lend.
-    Parent,
-    /// A call's frame: the specialization it found, or, `None`, what a cold frame borrows: its
-    /// parent's scratch for a tree cell, nothing for a tenant.
-    Call(Option<CellHandle>),
 }
 
 /// The drain: a ready stack and a request buffer, made per call over a graph it borrows.
@@ -284,17 +317,40 @@ pub struct Scheduler<'a, 'graph, B: StepBundle<'graph>> {
     census: Census,
 }
 
+/// Where the drain places a frame it seeks for: the arena node it runs under, whether placing it
+/// missed, the composition its first step must rebuild, and the request its first step lays a
+/// level from.
+type Placing<'graph> = (
+    ArenaRef,
+    bool,
+    Option<ContentDigest>,
+    Option<Box<Requested<'graph>>>,
+);
+
 /// One entry of the ready stack.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "an unborn request carries what a miss settles; boxing it would allocate per call, \
+              and the stack holds only the unborn siblings along one path"
+)]
 enum Entry<'graph, B: StepBundle<'graph>> {
     /// A live cell with a step to run: a woken consumer, or a root work.
     Live(CellHandle),
-    /// A request not yet born: the provenance the drain filled for it and the request at rest.
-    /// `release_after` is a tail hop's predecessor, released once this cell's first step has
-    /// returned — the successor wakes its state out of the predecessor's region.
+    /// A request not yet born: the provenance the drain filled for it, the request at rest, the
+    /// arena node its asker runs under, the cell it is born under and how its birth crosses.
+    /// `release_after` is a tail's predecessor, released with its borrow of that arena node once
+    /// this cell's first step has returned — the successor wakes its state out of the
+    /// predecessor's region, and borrows first. A frame released before the evaluation it handed
+    /// off to is dead but undisposed until that child disposes.
     Unborn {
         provenance: Provenance,
         asked: Asked<'graph, B>,
+        asker: ArenaRef,
+        under: CellHandle,
+        born: Born,
         release_after: Option<CellHandle>,
+        /// A loop cell the hop compacted away from, released after `release_after`.
+        release_loop: Option<CellHandle>,
     },
 }
 
@@ -369,80 +425,98 @@ where
         let root = self.born(
             under,
             placement,
-            Borrows::Parent,
             Continuation {
                 step,
                 provenance: Provenance {
                     parent: under,
                     report: None,
                     home: under,
+                    loop_cell: None,
+                    threads: false,
+                    loop_base: 0,
                 },
+                arena: ArenaRef::ROOT,
+                arrival: Arrival::Placed,
+                sought: None,
                 state,
             },
         )?;
         self.ready.push(Entry::Live(root));
         while let Some(entry) = self.ready.pop() {
-            let (cell, release_after) = match entry {
-                Entry::Live(cell) => (cell, None),
+            let (cell, release_after, release_loop) = match entry {
+                Entry::Live(cell) => (cell, None, None),
                 Entry::Unborn {
                     provenance,
                     asked,
+                    asker,
+                    under,
+                    born,
                     release_after,
+                    release_loop,
                 } => {
-                    let born = if release_after.is_some() {
-                        Born::Hop
-                    } else {
-                        Born::Child
-                    };
-                    // The cell whose region holds the request's birth: a hop's predecessor, else
-                    // the cell that asked.
-                    let asker = release_after.unwrap_or(provenance.parent);
-                    (self.create(provenance, asked, born, asker)?, release_after)
+                    let cell = self.create(provenance, asked, (under, born), asker)?;
+                    let release_after = release_after.map(|predecessor| (predecessor, asker));
+                    (cell, release_after, release_loop)
                 }
             };
-            #[cfg(test)]
-            if let Some(spec) = EVICT_BEFORE_STEP.take() {
-                self.evict(spec).expect("the test's specialization evicts");
+            let (action, provenance, arena) = self.step(cell)?;
+            // A hop's successor has woken what its predecessor kept, and borrows its arena node,
+            // so the predecessor can go — and the loop cell it compacted away from after it.
+            if let Some((predecessor, arena)) = release_after {
+                self.retire(predecessor, arena)?;
             }
-            #[cfg(test)]
-            if let Some(watched) = WATCHED.get() {
-                let childless = self.graph.is_childless(watched) == Some(true);
-                WATCH_LOG.with(|log| log.borrow_mut().push(Watched::Childless(childless)));
-            }
-            let (action, provenance) = self.step(cell)?;
-            // A hop's successor has woken what its predecessor kept, so the predecessor can go.
-            if let Some(predecessor) = release_after {
-                self.retire(predecessor)?;
+            if let Some(old) = release_loop {
+                self.release_loop(old)?;
             }
             match action.kind() {
                 Kind::Finished { completed } => {
-                    self.retire(cell)?;
+                    self.retire(cell, arena)?;
+                    // The loop's last cell has delivered: its loop cell's bytes reached the home
+                    // already, by a pledge or a copy.
+                    if let Some(loop_cell) = provenance.loop_cell {
+                        self.release_loop(loop_cell)?;
+                    }
                     // The consumer comes off the drain's own copy of the provenance, read straight
                     // off the continuation, so no step can name the cell that wakes.
                     if provenance.report.is_none() {
                         debug_assert!(self.ready.is_empty(), "the root work ended last");
-                        #[cfg(test)]
-                        self.no_lend_cycle();
                         return Ok(None);
                     }
                     if completed {
                         self.ready.push(Entry::Live(provenance.parent));
                     }
                 }
-                Kind::Park => self.asked_by(cell, provenance),
-                Kind::Tail(asked) => self.ready.push(Entry::Unborn {
-                    provenance,
-                    asked,
-                    release_after: Some(cell),
-                }),
-                // Only the drain's own entry of a specialization runs one.
-                Kind::Quiesced => unreachable!("a specialization is never on the ready stack"),
+                Kind::Park => self.asked_by(cell, provenance, arena),
+                Kind::Tail(asked, tailing) => {
+                    let mut provenance = provenance;
+                    let mut release_loop = None;
+                    if let Tailing::Hop { threads } = tailing {
+                        release_loop = self.loop_for(&mut provenance, threads)?;
+                        #[cfg(test)]
+                        self.sample_hop(cell, provenance.parent, threads);
+                    }
+                    // A hand-off is born under this cell; a hop or a rebirth beside it, under its
+                    // loop cell where it has one.
+                    let (under, born) = match tailing {
+                        Tailing::HandOff => (cell, Born::Child),
+                        Tailing::Hop { .. } | Tailing::Rebirth => {
+                            (provenance.loop_cell.unwrap_or(provenance.parent), Born::Hop)
+                        }
+                    };
+                    self.ready.push(Entry::Unborn {
+                        provenance,
+                        asked,
+                        asker: arena,
+                        under,
+                        born,
+                        release_after: Some(cell),
+                        release_loop,
+                    });
+                }
                 // Only a root work leaves: `leave` refuses a cell that reports to somebody.
                 Kind::Left(dormant) => {
-                    self.retire(cell)?;
+                    self.retire(cell, arena)?;
                     debug_assert!(self.ready.is_empty(), "the root work ended last");
-                    #[cfg(test)]
-                    self.no_lend_cycle();
                     return Ok(Some(Resting(dormant)));
                 }
                 Kind::Failed(error) => return Err(DrainStalled::Step(error)),
@@ -451,19 +525,73 @@ where
         Err(DrainStalled::Unfinished)
     }
 
+    /// The loop cell a hop's successor is born under, set on `provenance`: a new one under the
+    /// loop's receiving cell at the first hop that threads, and a fresh one beside the current one
+    /// once its bytes pass twice its live bytes, or twice what the hop threads — a compaction, whose
+    /// threaded values the successor copies into the fresh cell — handing back the one it replaced
+    /// to release after the successor's first step. A loop cell's live bytes are read at the first
+    /// hop after it was filled, so its values' types weigh in as their values do; amortized, each
+    /// hop copies a constant.
+    fn loop_for(
+        &mut self,
+        provenance: &mut Provenance,
+        threads: Option<usize>,
+    ) -> Result<Option<CellHandle>, DrainStalled> {
+        let fresh = match (provenance.loop_cell, threads) {
+            (None, None) => return Ok(None),
+            (None, Some(_)) => None,
+            (Some(loop_cell), threads) => {
+                let used = (self.graph.cells.region_used(loop_cell))
+                    .map_err(|_| DrainStalled::Unreleasable)?;
+                if provenance.loop_base == 0 {
+                    provenance.loop_base = used.max(1);
+                    return Ok(None);
+                }
+                let live = provenance.loop_base.max(threads.unwrap_or(0));
+                if used <= 2 * live + COMPACTION_FLOOR {
+                    return Ok(None);
+                }
+                Some(loop_cell)
+            }
+        };
+        let created = (self.graph.cells)
+            .create_tree_lent(provenance.parent, Lend::ParentScratch, None)
+            .map_err(|_| DrainStalled::Unspawnable)?;
+        #[cfg(test)]
+        self.census.born();
+        provenance.loop_cell = Some(created.into());
+        provenance.loop_base = 0;
+        Ok(fresh)
+    }
+
+    /// Release a loop cell: it borrows no arena node, and runs nothing.
+    fn release_loop(&mut self, loop_cell: CellHandle) -> Result<(), DrainStalled> {
+        let CellHandle::Tree(handle) = loop_cell else {
+            return Err(DrainStalled::Unreleasable);
+        };
+        (self.graph.cells.release_tree(handle)).map_err(|_| DrainStalled::Unreleasable)?;
+        #[cfg(test)]
+        self.census.retired();
+        Ok(())
+    }
+
     /// Push every child the parked step asked for, so the first asked is on top. The cell itself
     /// is left alone: it is live, parked on the run it registered, and wakes when the last slot
     /// fills.
     ///
     /// A child is born under the cell that asked for it and reports to the slot it was pushed at,
     /// so no step can name a destination that is not its spawner's; its home is the spawner, or
-    /// under `Forwards` the spawner's own home.
-    fn asked_by(&mut self, cell: CellHandle, provenance: Provenance) {
+    /// under `Forwards` the spawner's own home. `arena` is what the spawner runs under.
+    fn asked_by(&mut self, cell: CellHandle, provenance: Provenance, arena: ArenaRef) {
         let Scheduler { ready, spawns, .. } = self;
         for (slot, asked) in spawns.take().rev() {
-            let home = match asked.use_ {
-                Use::Forwards => provenance.home,
-                Use::Reads | Use::Keeps => cell,
+            let (home, threads) = match asked.use_ {
+                Use::Forwards => (provenance.home, provenance.threads),
+                Use::Threads => match provenance.loop_cell {
+                    Some(loop_cell) => (loop_cell, true),
+                    None => (cell, false),
+                },
+                Use::Reads | Use::Keeps => (cell, false),
             };
             ready.push(Entry::Unborn {
                 provenance: Provenance {
@@ -473,313 +601,321 @@ where
                         use_: asked.use_,
                     }),
                     home,
+                    loop_cell: None,
+                    threads,
+                    loop_base: 0,
                 },
                 asked,
+                asker: arena,
+                under: cell,
+                born: Born::Child,
                 release_after: None,
+                release_loop: None,
             });
         }
     }
 
-    /// Give a request its cell, under the parent its provenance names, its birth crossing as
-    /// `born` says, borrowing what its lending resolves to. `asker` is the cell whose region holds
-    /// the birth, which a missed specialization reads its binding's nodes from.
+    /// Give a request its cell, under `parent`, its birth crossing as `born` says, running under
+    /// the arena node its lending resolves to, which it borrows. `asker` is the arena node the cell
+    /// that asked runs under. A miss evicts to the budget once the new cell borrows its settlement.
     fn create(
         &mut self,
         provenance: Provenance,
         asked: Asked<'graph, B>,
-        born: Born,
-        asker: CellHandle,
+        (parent, born): (CellHandle, Born),
+        asker: ArenaRef,
     ) -> Result<CellHandle, DrainStalled> {
-        let borrows = match asked.lending {
-            Lending::Parent => Borrows::Parent,
-            Lending::Call(None) => Borrows::Call(None),
-            Lending::Call(Some(seek)) => Borrows::Call(self.seek(seek, asker)?),
-            Lending::Under(build) => Borrows::Call(match build.opened() {
-                None => None,
-                Some(spec) if self.graph.cells.is_live(spec) => {
-                    self.stamp_hop(spec);
-                    Some(spec.into())
-                }
-                Some(_) => {
-                    #[cfg(test)]
-                    tally(|tiers| tiers.cold_births += 1);
-                    None
-                }
-            }),
+        let arena = &mut self.graph.arena;
+        let mut replayed = SmallVec::<[ArenaRef; 4]>::new();
+        let replaying = matches!(asked.lending, Lending::Replay(_));
+        let (under, missed, wanting, sought) = match asked.lending {
+            Lending::Parent => (asker, false, None, None),
+            Lending::Call(seek) => self.seek(seek),
+            Lending::Replay(levels) => self.replay(levels, asker, &mut replayed),
+            Lending::Pinning(seek, syntax) => {
+                let (_, built) = self.composed(Compose::Owned(syntax));
+                let (under, missed, wanting, sought) = self.seek(seek);
+                (under, missed || built, wanting, sought)
+            }
+            Lending::Under(under) if arena.is_live(under) => {
+                arena.stamp(under);
+                (under, false, None, None)
+            }
+            Lending::Under(_) => {
+                #[cfg(test)]
+                tally(|tiers| tiers.cold_births += 1);
+                (ArenaRef::ROOT, false, None, None)
+            }
+            Lending::Compose(compose) => {
+                let (under, missed) = self.composed(compose);
+                (under, missed, None, None)
+            }
+        };
+        self.graph.arena.borrow(under);
+        // A replay's levels are held until the frame borrows the last: its chain holds them since.
+        for level in replayed.iter().rev() {
+            self.graph.arena.release(*level);
+        }
+        if missed {
+            let _evicted = self.graph.arena.evict_to_budget();
+            #[cfg(test)]
+            {
+                let unheld = self.graph.arena.unheld_bytes();
+                tally(|tiers| {
+                    tiers.evicted += _evicted;
+                    tiers.unheld = tiers.unheld.max(unheld);
+                });
+            }
+        }
+        #[cfg(test)]
+        {
+            let live = self.graph.arena.len();
+            tally(|tiers| tiers.live = tiers.live.max(live));
+        }
+        let arrival = match wanting {
+            Some(digest) => Arrival::Wanting(digest),
+            None if replaying => Arrival::Replayed,
+            None => Arrival::Placed,
         };
         self.born(
-            provenance.parent,
+            parent,
             asked.placement,
-            borrows,
             Continuation {
                 step: asked.step,
                 provenance,
+                arena: under,
+                arrival,
+                sought,
                 state: Rested::Dormant(asked.state, born),
             },
         )
     }
 
-    /// The specialization a frame `seek` asks for borrows: the one the parent's table names under
-    /// the key, if it is live, its entry stamped; or else one created under the parent and stepped
-    /// at once beside `asker`, laying the binding's nodes first, before anything else runs, and
-    /// entered in the table. A full table first releases its least recently born child with its
-    /// subtree, and the new child takes its entry. `None` for a parent that is not live, or a
-    /// graph with no build root, whose frame is born cold.
-    fn seek(
+    /// The arena node a frame born by a replay runs under, whether any level missed, the
+    /// composition its first step must rebuild, and the request its first step lays a level from:
+    /// each of `levels` found under the one before, or settled there, from `base`, the asker's —
+    /// its pins found or built first — and borrowed into `held` until the frame borrows its own;
+    /// the last is the frame's own seek. A level that settles nothing ends the replay, and the
+    /// frame is born where it stopped, with no request.
+    fn replay(
         &mut self,
-        seek: Seek<'graph, B>,
-        asker: CellHandle,
-    ) -> Result<Option<CellHandle>, DrainStalled> {
+        levels: Vec<Replayed<'graph>>,
+        base: ArenaRef,
+        held: &mut SmallVec<[ArenaRef; 4]>,
+    ) -> Placing<'graph> {
+        // The frame was counted cold where its own seek found its parent gone; it is born warm.
         #[cfg(test)]
-        tally(|tiers| tiers.sought += 1);
+        if levels
+            .last()
+            .is_some_and(|last| last.seek.settlement.is_some())
+        {
+            tally(|tiers| tiers.cold_births = tiers.cold_births.saturating_sub(1));
+        }
+        let (mut parent, mut missed) = (base, false);
+        let count = levels.len();
+        for (at, Replayed { seek, pins }) in levels.into_iter().enumerate() {
+            for syntax in pins {
+                missed |= self.composed(Compose::Owned(syntax)).1;
+            }
+            let (under, miss, wanting, sought) = self.seek(Seek { parent, ..seek });
+            missed |= miss;
+            if at + 1 == count {
+                return (under, missed, wanting, sought);
+            }
+            if wanting.is_some() || under == parent {
+                return (under, missed, wanting, None);
+            }
+            self.graph.arena.borrow(under);
+            held.push(under);
+            parent = under;
+        }
+        (parent, missed, None, None)
+    }
+
+    /// The arena node a frame `seek` asks for runs under, whether it was a miss, the composition
+    /// its first step must rebuild, and — where the seek hands it back and the frame runs under the
+    /// settlement it sought — the request its first step lays a level from: the parent itself for a
+    /// seek with no key; else the settlement under the parent the key names, stamped, or built —
+    /// its binding's image relayed into the agent tier under the root, nothing relayed under a
+    /// composition. The root, cold, for a parent that is no longer live. A miss under a composition
+    /// binding a module of another composed code pins that code's composition, where no layer below
+    /// holds the module's tree; where that composition is gone, the frame is born under the parent
+    /// wanting it rebuilt.
+    fn seek(&mut self, seek: Seek<'graph>) -> Placing<'graph> {
         let Seek {
             parent,
-            key,
-            binding,
-            work,
+            settlement,
+            hands_back,
         } = seek;
-        let parent: CellHandle = match (parent.opened(), self.graph.build_root) {
-            (Some(spec), _) => spec.into(),
-            (None, Some(root)) => root.into(),
-            (None, None) => return Ok(None),
+        let Some((image, sought)) = settlement else {
+            // A callee of composed code whose composition is gone is born under the root, and
+            // bounces with its syntax.
+            return match self.graph.arena.is_live(parent) {
+                true => (parent, false, None, None),
+                false => (ArenaRef::ROOT, false, None, None),
+            };
         };
-        let cells = &self.graph.cells;
-        let decided = cells.peek(parent, |header, _| {
-            let table = header.into_value().table()?;
-            Some(table.decide(key, |spec| cells.is_live(spec)))
-        });
-        let decision = match decided {
-            Ok(decision) => decision.flatten(),
-            Err(_) => {
-                #[cfg(test)]
-                tally(|tiers| tiers.cold_births += 1);
-                return Ok(None);
+        let key = sought.key;
+        #[cfg(test)]
+        tally(|tiers| tiers.sought += 1);
+        let arena = &mut self.graph.arena;
+        if !arena.is_live(parent) {
+            #[cfg(test)]
+            tally(|tiers| tiers.cold_births += 1);
+            return (ArenaRef::ROOT, false, None, None);
+        }
+        let handed = |image, sought| hands_back.then(|| Box::new(Requested { sought, image }));
+        let door = arena.door(parent);
+        let base = door.composition.map(|(digest, _)| digest);
+        if let Some(found) = arena.find(parent, key) {
+            #[cfg(debug_assertions)]
+            assert!(
+                base.is_some() || self.holds_binding(&image),
+                "a hit's binding rests: its key digests the content its types are read from"
+            );
+            self.graph.arena.stamp(found);
+            return (found, false, None, handed(image, sought));
+        }
+        // Under a composition, each module of other composed code no layer below holds the tree
+        // of pins its composition.
+        let mut pins = SmallVec::new();
+        if let Some(base) = base {
+            let below = match door.composition {
+                Some((_, composition)) => Facts::composed(composition, door.top),
+                None => Facts::under(self.graph.facts, door.top),
+            };
+            for asked in &sought.ask.bound {
+                let super::seek::Asked::Module {
+                    content,
+                    composition: Some(composed),
+                    ..
+                } = *asked
+                else {
+                    continue;
+                };
+                if composed == base
+                    || below.tree_of(content).is_some()
+                    || self.graph.facts.tree_of(content).is_some()
+                {
+                    continue;
+                }
+                match arena.composition(composed) {
+                    Some(at) => {
+                        if !pins.contains(&at) {
+                            pins.push(at);
+                        }
+                    }
+                    None => return (parent, false, Some(composed), None),
+                }
             }
+        }
+        let pinned = arena.pinned(&pins);
+        // The binding's types rest once it resolves, before its walk reads them: in the agent tier
+        // under the root, and in the walk's own chain under a composition.
+        let resting: crate::values::Chain<'graph, '_, 'graph, '_> = self.graph.tiers.resting();
+        let before = resting.own_len();
+        let mut relayed = before;
+        let mut rest = |walk: Option<&crate::values::Chain<'_, '_, '_, '_>>| match (base, walk) {
+            (None, _) => {
+                image.relay(&resting);
+                relayed = resting.own_len();
+            }
+            (Some(_), Some(walk)) => image.relay(walk),
+            (Some(_), None) => {}
         };
-        // A loaded graph's build cells all hold a table: the load door lays the root's, and
-        // `enlist` a specialization's.
-        debug_assert!(decision.is_some(), "a live build cell holds a table");
-        let index = match decision {
-            None => return Ok(None),
-            Some(Decision::Hit(spec)) => {
-                #[cfg(debug_assertions)]
-                assert!(
-                    self.holds_binding(&binding),
-                    "a hit's specialization holds its binding's nodes: its key digests the \
-                     content they are read from"
-                );
-                return Ok(Some(spec.into()));
-            }
-            Some(Decision::Fill(index)) => index,
-            Some(Decision::Evict(index, victim)) => {
-                self.release_subtree(victim)?;
-                index
-            }
-        };
-        // A specialization reports to nobody and is entered here, never from the ready stack. Its
-        // step seeks nothing (`enlist` refuses a cell that asked for children), so the entry
-        // `decide` chose is still free when the step returns.
-        let continuation = Continuation {
-            step: work.step,
-            provenance: Provenance {
-                parent,
-                report: None,
-                home: parent,
+        let settles = self.graph.settles;
+        let built = Settled::build(
+            arena.under(parent),
+            pinned,
+            self.graph.facts,
+            |bump, below, pinned, witness| {
+                settles.settle(bump, below, pinned, &sought.ask, &mut rest, witness)
             },
-            state: Rested::Awake(B::born(work.state)),
+        );
+        let Some(facts) = built else {
+            debug_assert_eq!(relayed, before, "nothing rests for a settlement not built");
+            return (parent, false, None, None);
         };
-        let spec = (self.graph.cells)
-            .create_tree_lent(parent, Lend::Named(parent), Some(continuation))
-            .map_err(|_| DrainStalled::Unspawnable)?;
+        let settled = self.graph.arena.insert(parent, key, facts, pins);
         #[cfg(test)]
-        tally(|tiers| tiers.specialized += 1);
-        let (action, _) = self.step_beside(spec.into(), asker, &binding)?;
-        match action.kind() {
-            Kind::Quiesced => {
-                let cells = &self.graph.cells;
-                let entered = cells.peek(parent, |header, _| {
-                    let table = header.into_value().table()?;
-                    table.fill(index, key, spec);
-                    Some(())
-                });
-                let homed = cells.peek(spec, |header, _| {
-                    header.into_value().set_home(SpecHome { me: spec, parent })
-                });
-                debug_assert!(
-                    matches!((entered, homed), (Ok(Some(Some(()))), Ok(Some(())))),
-                    "the parent's table and the specialization's header stand"
-                );
-                Ok(Some(spec.into()))
-            }
-            Kind::Failed(error) => Err(DrainStalled::Step(error)),
-            _ => Err(DrainStalled::Step(StepError::Refused)),
-        }
+        tally(|tiers| {
+            tiers.settled += 1;
+            tiers.relayed += relayed - before;
+            tiers.rested += resting.own_len() - relayed;
+        });
+        (settled, true, None, handed(image, sought))
     }
 
-    /// Whether the frozen load or the agent tier holds the node of every handle `binding` carries,
-    /// as a specialization's seed laid them. Lays nothing. `adopt` lays children before parents,
-    /// so a found handle's children are there too.
+    /// The composition `compose` asks for, and whether it was a miss: found by its syntax digest
+    /// and stamped; built through the program's door over the syntax a bounce copied; or, with no
+    /// syntax in hand, the root, where the cell's first step bounces.
+    fn composed(&mut self, compose: Compose) -> (ArenaRef, bool) {
+        let digest = match &compose {
+            Compose::Find(digest) => *digest,
+            Compose::Owned(syntax) => {
+                #[cfg(test)]
+                tally(|tiers| tiers.bounced += 1);
+                syntax.digest()
+            }
+        };
+        if let Some(found) = self.graph.arena.composition(digest) {
+            self.graph.arena.stamp(found);
+            return (found, false);
+        }
+        let Compose::Owned(syntax) = compose else {
+            return (ArenaRef::ROOT, false);
+        };
+        let settles = self.graph.settles;
+        let facts = Composed::build(syntax, |syntax, bump, witness| {
+            settles.compose(syntax, bump, witness)
+        });
+        #[cfg(test)]
+        tally(|tiers| tiers.composed += 1);
+        (self.graph.arena.compose(digest, facts), true)
+    }
+
+    /// Whether the frozen load or the agent tier holds the node of every handle `image` carries,
+    /// as the miss that built its settlement relayed them. Lays nothing.
     #[cfg(debug_assertions)]
-    fn holds_binding(&self, binding: &SpecBinding) -> bool {
-        let tiers = self.graph.tiers;
-        let resting = crate::type_lattice::TypeChain::resting(tiers.frozen, tiers.agent);
-        binding.handles().all(|kt| resting.resolves(kt))
+    fn holds_binding(&self, image: &crate::values::BindingImage<'_>) -> bool {
+        let resting: crate::values::Chain<'graph, '_, 'graph, '_> = self.graph.tiers.resting();
+        image.handles().all(|kt| resting.resolves(kt))
     }
 
-    /// Stamp the entry of the live specialization `spec` in its parent's table: a hop of the same
-    /// callee under it is a birth, as a seek that finds it is.
-    fn stamp_hop(&self, spec: TreeHandle) {
-        let cells = &self.graph.cells;
-        let home = cells.peek(spec, |header, _| header.into_value().home());
-        let Ok(Some(Some(home))) = home else {
-            debug_assert!(false, "a live specialization has a home");
-            return;
-        };
-        let stamped = cells.peek(home.parent, |header, _| {
-            header
-                .into_value()
-                .table()
-                .is_some_and(|table| table.stamp(spec))
-        });
-        // An entry is rekeyed only when its handle is stale, or it names the victim a miss
-        // releases, so a live specialization's entry stands.
-        debug_assert_eq!(
-            stamped,
-            Ok(Some(true)),
-            "a live specialization has an entry"
-        );
-    }
-
-    /// Release the live specialization `top` and every live specialization beneath it, leaf
-    /// first, and return how many: descend from `top` through live children to a specialization
-    /// with none, release it, and start again. A released child's entry goes stale, so each
-    /// descent finds a new leaf; the drain lays nothing and grows no call stack.
-    fn release_subtree(&mut self, top: TreeHandle) -> Result<usize, DrainStalled> {
-        let mut released = 0;
-        while self.graph.cells.is_live(top) {
-            let mut leaf = top;
-            while let Some(child) = self.live_child(leaf.into()) {
-                leaf = child;
-            }
-            (self.graph.cells.release_tree(leaf)).map_err(|_| DrainStalled::Unreleasable)?;
-            released += 1;
-        }
-        #[cfg(test)]
-        tally(|tiers| tiers.evicted += released);
-        Ok(released)
-    }
-
-    /// A live child the table of the build cell `cell` names, if any.
-    fn live_child(&self, cell: CellHandle) -> Option<TreeHandle> {
-        let cells = &self.graph.cells;
-        let found = cells.peek(cell, |header, _| {
-            (header.into_value().table())?
-                .live(|child| cells.is_live(child))
-                .next()
-        });
-        found.ok().flatten().flatten()
-    }
-
-    /// Evict the specialization `spec` names, with its subtree, leaf first: refused for the build
-    /// root and a specialization that is not live. Each waits dead but undisposed until its last
-    /// borrower disposes, and its entry goes stale until the next miss on its key rebuilds it. A
-    /// test drives this; in a run only a miss evicts.
-    #[cfg(test)]
-    pub(crate) fn evict(&mut self, spec: crate::values::BuildRef) -> Result<(), DrainStalled> {
-        let spec = spec.opened().ok_or(DrainStalled::Unreleasable)?;
-        if !self.graph.cells.is_live(spec) {
-            return Err(DrainStalled::Unreleasable);
-        }
-        self.release_subtree(spec).map(|_| ())
-    }
-
-    /// Evict every live specialization, as a test's teardown does before it releases the roots.
-    #[cfg(test)]
-    pub(crate) fn evict_every(&mut self) {
-        let Some(root) = self.graph.build_root else {
-            return;
-        };
-        while let Some(child) = self.live_child(root.into()) {
-            self.release_subtree(child)
-                .expect("a live specialization releases");
-        }
-    }
-
-    /// The law every test run checks as its root work ends: koan's lends close no wait cycle
-    /// ([`CellGraph::lend_cycle`]). A run cell never waits on a specialization, so a host's
-    /// scratch holding a specialization's count is never what that specialization waits on.
-    #[cfg(test)]
-    fn no_lend_cycle(&self) {
-        assert_eq!(
-            self.graph.cells.lend_cycle(),
-            None,
-            "a lend cycle leaks its cells"
-        );
-    }
-
-    /// Enter one cell, wake its state, and run the step its continuation names.
-    fn step(&mut self, cell: CellHandle) -> Result<(Action<'graph, B>, Provenance), DrainStalled> {
+    /// Enter one cell, wake its state, and run the step its continuation names. Hands back the
+    /// provenance and arena node it read off the continuation.
+    fn step(
+        &mut self,
+        cell: CellHandle,
+    ) -> Result<(Action<'graph, B>, Provenance, ArenaRef), DrainStalled> {
         self.spawns.clear();
         // `enter` borrows the graph exclusively and the step borrows the buffer, so the two are
         // taken as separate fields rather than through `self`.
         let Scheduler { graph, spawns, .. } = self;
-        let tiers = graph.tiers;
+        let (tiers, facts, books) = (graph.tiers, graph.facts, &graph.arena);
         (graph.cells)
-            .enter(cell, |context| run_step::<B>(context, tiers, spawns, None))
-            .map_err(|_| DrainStalled::Unenterable)
-    }
-
-    /// Enter the new specialization `spec` beside `asker` and run its one step, laying the node of
-    /// every handle `binding` carries into the agent tier first: read from the region branch of the
-    /// asker's write home, where the request's birth rests and so where every type its arguments
-    /// carry resolves; insert-if-absent, a load handle at a bit test. The read sits at a brand of
-    /// its own, so the agent tier keeps no reference into the run tree: a copy by value, made while
-    /// the asker is between steps. An empty binding opens no read.
-    fn step_beside(
-        &mut self,
-        spec: CellHandle,
-        asker: CellHandle,
-        binding: &SpecBinding,
-    ) -> Result<(Action<'graph, B>, Provenance), DrainStalled> {
-        if binding.is_empty() {
-            return self.step(spec);
-        }
-        self.spawns.clear();
-        let Scheduler { graph, spawns, .. } = self;
-        let tiers = graph.tiers;
-        (graph.cells)
-            .enter_beside(spec, asker, |context, read, _| {
-                let source = read.and_then(|header| header.into_value().branch());
-                run_step::<B>(context, tiers, spawns, Some((source, binding)))
+            .enter(cell, |context| {
+                run_step::<B>(context, tiers, (facts, books), spawns)
             })
             .map_err(|_| DrainStalled::Unenterable)
     }
 
-    /// One cell born under another, through the door its placement names, borrowing what
-    /// `borrows` says.
+    /// One cell born under another, through the door its placement names: a `Fresh` cell
+    /// borrowing its parent's scratch, a `Shares` one its host's tenant.
     fn born(
         &mut self,
         under: CellHandle,
         placement: Placement,
-        borrows: Borrows,
         continuation: Continuation<'graph, 'graph, B>,
     ) -> Result<CellHandle, DrainStalled> {
         let cells = &mut self.graph.cells;
         let continuation = Some(continuation);
-        let born = match (placement, borrows) {
-            (Placement::Fresh, Borrows::Call(Some(spec))) => cells
-                .create_tree_lent(under, Lend::Named(spec), continuation)
-                .map(CellHandle::from)
-                .map_err(|_| ()),
-            (Placement::Fresh, Borrows::Parent | Borrows::Call(None)) => cells
+        let born = match placement {
+            Placement::Fresh => cells
                 .create_tree_lent(under, Lend::ParentScratch, continuation)
                 .map(CellHandle::from)
                 .map_err(|_| ()),
-            (Placement::Shares, Borrows::Call(spec)) => cells
-                .create_tenant_lent(under, spec.map(Lend::Named), continuation)
-                .map(CellHandle::from)
-                .map_err(|_| ()),
-            (Placement::Shares, Borrows::Parent) => cells
+            Placement::Shares => cells
                 .create_tenant(under, continuation)
                 .map(CellHandle::from)
                 .map_err(|_| ()),
@@ -790,10 +926,10 @@ where
         Ok(born)
     }
 
-    /// Release a finished cell by its kind. Its step has already filled its consumer's receipt, so
-    /// nothing is in flight at the death. The drain runs no slab cell — a slab cell is a root — so
-    /// one here is refused.
-    fn retire(&mut self, cell: CellHandle) -> Result<(), DrainStalled> {
+    /// Release a finished cell by its kind, and its borrow of `arena`, the arena node it ran
+    /// under. Its step has already filled its consumer's receipt, so nothing is in flight at the
+    /// death. The drain runs no slab cell — a slab cell is a root — so one here is refused.
+    fn retire(&mut self, cell: CellHandle, arena: ArenaRef) -> Result<(), DrainStalled> {
         let released = match cell {
             CellHandle::Slab(_) => false,
             CellHandle::Tree(handle) => self.graph.cells.release_tree(handle).is_ok(),
@@ -802,9 +938,29 @@ where
         if !released {
             return Err(DrainStalled::Unreleasable);
         }
+        self.graph.arena.release(arena);
         #[cfg(test)]
         self.census.retired();
         Ok(())
+    }
+
+    /// Push a [`HopSample`] for `cell`'s tail, its loop's result received by `host`, its successor's
+    /// birth threading `threads`.
+    #[cfg(test)]
+    fn sample_hop(&self, cell: CellHandle, host: CellHandle, threads: Option<usize>) {
+        let cells = &self.graph.cells;
+        let sample = HopSample {
+            host,
+            live: cells.live_bytes(),
+            host_region: cells.region_used(host).unwrap_or(0),
+            host_scratch: cells.scratch_used(host).unwrap_or(0),
+            hop_region: match cell {
+                CellHandle::Tree(_) => cells.region_used(cell).unwrap_or(0),
+                _ => 0,
+            },
+            threads: threads.unwrap_or(0),
+        };
+        HOPS.with(|hops| hops.borrow_mut().push(sample));
     }
 
     /// The graph this drain runs over, to ask what is left in it.
@@ -821,15 +977,14 @@ where
     }
 }
 
-/// One step of `cell`'s continuation, inside its entry: wake its state, seed its branch where
-/// the entry was opened beside an asker (`seed`: the asker's region branch and the binding whose
-/// nodes it lays), run the step function, and tally.
+/// One step of `cell`'s continuation, inside its entry: wake its state, run the step function,
+/// and tally.
 fn run_step<'graph, 'step, 'here, 'scratch, 'lent, B: StepBundle<'graph>>(
     context: &mut Context<'graph, 'step, 'here, 'scratch, 'lent, B>,
     tiers: TypeTiers<'graph>,
+    (load, books): (&'graph LoadFacts<'graph>, &BuildArena<'graph>),
     spawns: &mut Spawns<'graph, B>,
-    seed: Option<(Option<&Branch<'_>>, &SpecBinding)>,
-) -> (Action<'graph, B>, Provenance)
+) -> (Action<'graph, B>, Provenance, ArenaRef)
 where
     'graph: 'step + 'here + 'lent,
     'here: 'scratch,
@@ -839,36 +994,31 @@ where
     let Continuation {
         step,
         provenance,
+        arena,
+        arrival,
+        sought,
         state,
     } = context
         .continuation()
         .expect("a ready cell carries a continuation");
+    #[cfg(test)]
+    let agent_before = tiers.agent.len();
     // Both slots come off here, so the step is handed what it parked in each and
     // reaches neither door itself. Only a park stores them back, so a step that
     // finishes, hops or fails leaves the scratch slot empty and its bump goes back at
     // this step's end.
     let scratch = context.scratch_state();
-    let state = match state {
-        Rested::Awake(state) => state,
-        Rested::Dormant(dormant, born) => match wake::<B>(context, tiers, dormant, born) {
-            Ok(state) => state,
-            Err(_) => {
-                return (Action::refused(StepError::Unredeemable), provenance);
+    let (state, carrier) = match state {
+        Rested::Awake(state) => (state, None),
+        Rested::Dormant(dormant, born) => {
+            match wake::<B>(context, tiers, dormant, (born, provenance.loop_cell)) {
+                Ok(woken) => woken,
+                Err(_) => {
+                    return (Action::refused(StepError::Unredeemable), provenance, arena);
+                }
             }
-        },
-    };
-    // A specialization's state is awake, so nothing above precedes its seeding. Its binding rests
-    // in the agent tier, which every frame under the specialization reads.
-    if let Some((source, binding)) = seed {
-        let types: Chain<'graph, 'here, 'graph, 'step> = tiers.resting();
-        #[cfg(test)]
-        let before = types.own_len();
-        for kt in binding.handles() {
-            types.adopt(source, kt);
         }
-        #[cfg(test)]
-        tally(|tiers| tiers.relayed += types.own_len() - before);
-    }
+    };
     #[cfg(test)]
     let before = (
         (context.scratch_header().get())
@@ -876,11 +1026,22 @@ where
             .map_or(0, Branch::len),
         tiers.agent.len(),
     );
+    // The door reads the settlement the cell runs under, over the composition its chain rests on
+    // or the load, borrowed from the arena for the step.
+    let door = books.door(arena);
+    let (facts, composed) = match door.composition {
+        Some((digest, composition)) => (Facts::composed(composition, door.top), Some(digest)),
+        None => (Facts::under(load, door.top), None),
+    };
     let step = step(Step::new(
         context,
         tiers,
+        facts,
         &provenance,
+        (arena, composed, arrival, sought),
+        books,
         spawns,
+        carrier,
         state,
         scratch,
     ));
@@ -888,6 +1049,7 @@ where
     {
         let len = |branch: Option<&Branch<'_>>| branch.map_or(0, Branch::len);
         let agent = tiers.agent;
+        tally(|tiers| tiers.stepped += agent.len() - agent_before);
         if let Some(shape) = CACHING.take() {
             let scratch = len(context.scratch_header().get().and_then(HalfHeader::branch))
                 .saturating_sub(before.0);
@@ -915,18 +1077,27 @@ where
             });
         });
     }
-    (step, provenance)
+    (step, provenance, arena)
 }
 
 /// Wake a birth a spawn, a hop or a root work's `leave` put to rest: redeem it into this step and
-/// cross it to the executing cell's `'here` at the verdict's price — free for a child, whose spawner is above it,
-/// and for a tenant, which crosses nothing; copied for a tail hop's sibling, which is `Apart`.
+/// cross it to the executing cell's `'here` at the verdict's price — free for a child, whose
+/// spawner is above it, and for a tenant, which crosses nothing; copied for a tail hop's sibling,
+/// which is `Apart`. The redeemed carrier comes back beside the state where the birth was pinned,
+/// so the step can keep a part of it at its own home.
+#[allow(clippy::type_complexity)]
 fn wake<'graph, 'step, 'here, 'scratch, 'lent, B: StepBundle<'graph>>(
     context: &mut Context<'graph, 'step, 'here, 'scratch, 'lent, B>,
     tiers: TypeTiers<'graph>,
     dormant: Dormant<'graph, B::Birth>,
-    born: Born,
-) -> Result<StateAt<'graph, 'here, B>, RedeemError>
+    (born, loop_cell): (Born, Option<CellHandle>),
+) -> Result<
+    (
+        StateAt<'graph, 'here, B>,
+        Option<Ready<'graph, 'step, B::Birth>>,
+    ),
+    RedeemError,
+>
 where
     'graph: 'step + 'here + 'lent,
     'here: 'scratch,
@@ -934,15 +1105,178 @@ where
     Erased<'graph, B::Birth>: Copy,
 {
     let carrier = context.redeem(dormant)?;
+    if born == Born::Hop
+        && let Some(birth) = hopped::<B>(context, tiers, &carrier, loop_cell)
+    {
+        return Ok((B::born(birth?), None));
+    }
     let copy_bytes = B::weight(&context.read(&carrier).value());
-    let birth = context.alloc_here(
+    let (birth, pinned) = context.alloc_here(
         &[Operand {
             carrier: &carrier,
             copy_bytes,
         }],
-        |writer, header, views| B::cross(writer, header, &views[0], born, tiers),
+        |writer, header, views| {
+            let pinned = matches!(views[0], CrossedOperand::Pinned { .. });
+            (B::cross(writer, header, &views[0], born, tiers), pinned)
+        },
     );
-    Ok(B::born(birth))
+    Ok((B::born(birth), pinned.then_some(carrier)))
+}
+
+/// A hop's successor's birth, where its predecessor laid it as a skeleton beside the values it
+/// hands on ([`StepBundle::handings`]): each value crosses on its own, from the kept part it was
+/// handed through where that redeems — pinned free from an ancestor — and otherwise out of the
+/// skeleton; one that does not pin is copied into the successor, save, under a loop cell, a
+/// threaded one or one handed through a kept part, which is copied into `loop_cell` and pinned from
+/// there. Threaded values cross first, so the successor's branch links the loop cell's. The
+/// successor keeps a carrier of each, at its home where it pinned and here where it was copied,
+/// and the birth is built here over them. `None` for a birth that crosses whole.
+fn hopped<'graph, 'step, 'here, 'scratch, 'lent, B: StepBundle<'graph>>(
+    context: &mut Context<'graph, 'step, 'here, 'scratch, 'lent, B>,
+    tiers: TypeTiers<'graph>,
+    carrier: &Ready<'graph, 'step, B::Birth>,
+    loop_cell: Option<CellHandle>,
+) -> Option<Result<BirthAt<'graph, 'here, B>, RedeemError>>
+where
+    'graph: 'step + 'here + 'lent,
+    'here: 'scratch,
+    'lent: 'scratch,
+    Erased<'graph, B::Birth>: Copy,
+{
+    let mut handings: SmallVec<[Option<Ready<'graph, 'step, KValueFamily>>; 8]> = SmallVec::new();
+    let mut reused: SmallVec<[Option<Kept<'graph>>; 8]> = SmallVec::new();
+    let mut threaded: SmallVec<[bool; 8]> = SmallVec::new();
+    let mut threads_first: SmallVec<[bool; 8]> = SmallVec::new();
+    let laid = {
+        let context = &*context;
+        let birth = context.read(carrier).value();
+        B::handings(&birth, &mut |index, kept, threads| {
+            let from_kept = kept.and_then(|part| part.redeemed(context));
+            // A value handed through a kept part rested where it outlives a hop — the loop cell,
+            // or a home above it — so one that does not pin rode an old loop cell: it is carried
+            // into the current one, as a threaded value is, rather than into the hop.
+            threaded.push((threads || from_kept.is_some()) && loop_cell.is_some());
+            threads_first.push(threads);
+            reused.push(
+                kept.filter(|part| part.path.is_empty() && from_kept.is_some())
+                    .map(|part| part.kept),
+            );
+            handings.push(from_kept.or_else(|| {
+                context.project::<B::Birth, KValueFamily>(carrier, |birth, _| {
+                    B::handed(birth.value(), index).map(Active::new)
+                })
+            }));
+        })
+    };
+    if !laid {
+        return None;
+    }
+    let Some(mut handings): Option<SmallVec<[_; 8]>> = handings.into_iter().collect() else {
+        return Some(Err(RedeemError::Gone));
+    };
+    // What the loop threads crosses first: it rests in the loop cell, so the successor's branch
+    // links the loop cell's, and each merge after stops at what that link reaches.
+    let order: SmallVec<[usize; 8]> = (0..handings.len())
+        .filter(|at| threads_first[*at])
+        .chain((0..handings.len()).filter(|at| !threads_first[*at]))
+        .collect();
+    let mut crossed: SmallVec<[_; 8]> =
+        crossed_here::<B>(context, tiers, &handings, &order, &|index| !threaded[index]);
+    // A threaded value that did not pin is copied into the loop cell, which outlives the hop, and
+    // pinned from there.
+    if let Some(loop_cell) = loop_cell {
+        let waiting: SmallVec<[usize; 8]> = (0..handings.len())
+            .filter(|at| crossed[*at].0.is_none())
+            .collect();
+        for at in waiting {
+            let operand = [Operand {
+                carrier: &handings[at],
+                copy_bytes: 0,
+            }];
+            let homed = context.alloc_into::<KValueFamily, KValueFamily>(
+                loop_cell,
+                &operand,
+                |writer, header, views| {
+                    let types = tiers.chain(Halves::alone(Half::of(writer, header)));
+                    Active::new(crate::values::cross_view(writer, &types, &views[0]))
+                },
+            );
+            let Ok(homed) = homed else {
+                return Some(Err(RedeemError::Gone));
+            };
+            handings[at] = homed;
+            reused[at] = None;
+            crossed[at] = crossed_here::<B>(context, tiers, &handings, &[at], &|_| true)[at];
+        }
+    }
+    let mut kept: SmallVec<[Kept<'graph>; 8]> = SmallVec::new();
+    for ((carrier, reused), (value, pinned)) in handings.iter().zip(&reused).zip(&crossed) {
+        let value = value.expect("every value has crossed");
+        kept.push(match (pinned, reused) {
+            (true, Some(reused)) => *reused,
+            (true, None) => Kept(context.keep(carrier.clone())),
+            (false, _) => {
+                let lifted = context.lift::<KValueFamily>(value);
+                Kept(context.keep(lifted))
+            }
+        });
+    }
+    let values: SmallVec<[_; 8]> = (crossed.iter())
+        .map(|(value, _)| value.expect("every value has crossed"))
+        .collect();
+    let copy_bytes = B::weight(&context.read(carrier).value());
+    let birth = context.alloc_here(
+        &[Operand {
+            carrier,
+            copy_bytes,
+        }],
+        |writer, header, views| B::hop(writer, header, &views[0], &values, &kept, tiers),
+    );
+    #[cfg(test)]
+    SKELETONS.with(|count| count.set(count.get() + 1));
+    Some(Ok(birth))
+}
+
+/// The handings at `order`'s indices crossed into this cell in that order, each beside whether it
+/// pinned, by its index; any other index is `None` and unpinned. One that does not pin is copied
+/// here where `copies` takes its index, and is `None` where it does not.
+#[allow(clippy::type_complexity)]
+fn crossed_here<'graph, 'step, 'here, 'scratch, 'lent, B: StepBundle<'graph>>(
+    context: &mut Context<'graph, 'step, 'here, 'scratch, 'lent, B>,
+    tiers: TypeTiers<'graph>,
+    handings: &[Ready<'graph, 'step, KValueFamily>],
+    order: &[usize],
+    copies: &dyn Fn(usize) -> bool,
+) -> SmallVec<[(Option<crate::knot::KValue<'graph, 'here>>, bool); 8]>
+where
+    'graph: 'step + 'here + 'lent,
+    'here: 'scratch,
+    'lent: 'scratch,
+    Erased<'graph, B::Birth>: Copy,
+{
+    let operands: SmallVec<[Operand<'graph, '_, 'step, KValueFamily>; 8]> = (order.iter())
+        .map(|at| Operand {
+            carrier: &handings[*at],
+            copy_bytes: context
+                .read::<KValueFamily>(&handings[*at])
+                .value()
+                .weight()
+                .bytes(),
+        })
+        .collect();
+    // The kinds are named: the birth's `Copy` bound in scope would otherwise answer for them.
+    context.alloc_here::<_, KValueFamily>(&operands, |writer, header, views| {
+        let types = tiers.chain(Halves::alone(Half::of(writer, header)));
+        let mut crossed: SmallVec<[_; 8]> = SmallVec::from_elem((None, false), handings.len());
+        let mut next = order.iter();
+        let copies = |crossing: usize| copies(order[crossing]);
+        crate::values::cross_views(writer, &types, views, &copies, &mut |value, pinned| {
+            let at = *next.next().expect("one crossing per index in order");
+            crossed[at] = (value, pinned);
+        });
+        crossed
+    })
 }
 
 /// What a root work left at rest in its home when it ended by

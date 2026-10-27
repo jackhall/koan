@@ -36,7 +36,9 @@
 //! A use left with none refuses the load. A *maybe* an *always* one outranks at class 0, both
 //! closed, drops too. Where no *maybe* is left, a lone candidate, or the one closed candidates rank
 //! first, is **selected** and runs without admitting; where they rank none first, the load refuses
-//! the certain ambiguity. A builtin candidate is judged through its native's [type rule](super::rules)
+//! the certain ambiguity. Where every candidate kept is one closed function, the load records how
+//! they rank, a table of each pair's answer at each class, so a call ranks nothing; a rigid one is
+//! ranked where a settlement or the call closes it. A builtin candidate is judged through its native's [type rule](super::rules)
 //! too: an argument whose lower end lies outside the type the rule needs drops it, and a use whose
 //! last candidate a need dropped is refused in the native's words. A builtin's call is the return
 //! its rule gives — `FROM`'s the projection of its record and `ATTR`'s the named field's type. An
@@ -45,11 +47,16 @@
 //! quantified candidate's return is read through its group's intervals. A call whose callee and
 //! solve the load knows exactly — a selected registration, or a call by name of an exact callee —
 //! is exactly the return its frame retypes to; a call in tail position never finishes, and is
-//! typed as any other. A callable body whose static type meets its declared return at `Never`
+//! typed as any other. A callable body's tail call is recorded with its **route**: per candidate,
+//! whether its return keeps the frame's contract where both are closed, and whether it is a self
+//! tail edge of a body whose name does not escape. A callable body whose static type meets its declared return at `Never`
 //! refuses the load too, as does an ascription whose operand's static type meets its type at
 //! `Never`; one whose operand's static upper end lies under its type is **settled**, and the run
 //! checks nothing. An annotated binder, `LET <name> <type> = <value>`, is held to its type as an
-//! ascription holds its operand, settled by its type part's site.
+//! ascription holds its operand, settled by its type part's site. Where the type is closed, the
+//! walk records what the retype re-stamps at ([`Retype`]) by that site, as it does for a module
+//! member read over an exact module and, in a callable's closing, for each parameter and its
+//! return: the run re-stamps by the record and computes no target.
 //!
 //! A call by name of an exact callee is judged as a keyworded use of its lone candidate: the
 //! callee's parameters laid out as one class, in symbol order, and its argument's static type laid
@@ -63,8 +70,8 @@
 //! typed before its statements, so an `EVAL` finds it typed. It is typed twice: once for its records,
 //! where an unmarked key's hole is a candidate the load cannot read, since a `USING` may fill it;
 //! and once as a traced `EVAL` runs it, unfilled, the hole holding nothing — which fixes nothing.
-//! Inside a quote's code a refusal is kept in the code's closing record, and the `EVAL` running it
-//! reports it.
+//! Inside a quote's code a refusal, and the first registration overlapping a builtin, is kept in
+//! the code's closing record, and the `EVAL` running it reports it.
 //!
 //! A `MODULE` or `GROUP` binder's body is typed where its binder is, since it runs inline, and the
 //! binder is exactly the signature the run ties where every member is exact ([`module_signature`]),
@@ -142,19 +149,24 @@
 //! See [README.md § Static types](README.md#static-types).
 
 use crate::elaborate::{SignatureMember, declares_nominal, module_signature, signature_member};
+use crate::knot::module::layout;
 use crate::knot::module::view::{self, Ascription, ViewTypes, opaque_view_types};
 use crate::knot::{BuiltinFunction, KBuiltins};
-use crate::memory::{BumpAllocator, BumpBackedMap, BumpVec, Lays, bump_table, collect, resident};
+use crate::memory::{
+    BumpAllocator, BumpBackedMap, BumpBackedSet, BumpVec, Lays, bump_set, bump_table, collect,
+    resident,
+};
 use crate::parse::BuiltinShapeId;
 use crate::parse::{ExpressionPart, KExpression, KLiteral};
+use crate::program::kept;
 use crate::scope::{
-    Address, BodyClass, BodyShape, Born, BuiltinIndex, Candidate, CandidateList, CaptureChain,
-    CaptureSlot, CaptureSource, Closing, ComponentIndex, Coordinate, Cut, Frontier, InstanceRead,
-    Keyed, Lands, Leaf, Listed, NamedVariable, Narrowing, PathEntry, Position, Print, Resolution,
-    Segment, ShapeError, ShapeKind, Shapes, Site, SiteDeps, Slot, Source, Static, StaticRegistered,
-    StaticSolution, StaticType, Store, SurfacedHead, Tree, Typed, UnitFacts, UnitId, UnitIndex,
-    UnitTable, UnitWork, Unknown, UseStatics, Variable as Located, Within, follow, part_of,
-    source_of,
+    Address, BodyClass, BodyShape, Born, BuiltinIndex, Candidate, CandidateList, CandidateRoute,
+    CaptureChain, CaptureSlot, CaptureSource, Closing, ComponentIndex, Coordinate, Cut,
+    Elimination, Frontier, Identity, InstanceRead, Kept, Keyed, Lands, Leaf, Listed, NamedVariable,
+    Narrowing, PathEntry, Pick, Point, Points, Position, Resolution, Retypes, Route, Segment,
+    ShapeError, ShapeKind, Shapes, Site, SiteDeps, Slot, Source, Static, StaticInstance,
+    StaticRegistered, StaticType, Store, SurfacedHead, Tree, Typed, UnitFacts, UnitId, UnitIndex,
+    UnitWork, Unknown, UseStatics, Variable as Located, Within, follow, part_of, source_of,
 };
 use crate::source::SourceRef;
 use crate::symbols::{BinderSymbol, TypeSymbol};
@@ -166,7 +178,7 @@ use crate::type_lattice::{
     solving_slots,
 };
 use crate::values::{
-    Chain, ConstructionRefused, Value, construction, dict_type, list_type, pinned_at_fit,
+    Chain, ConstructionRefused, Retype, Value, construction, dict_type, list_type, pinned_at_fit,
     record_type, retype_target, retyped_to, under, unknown,
 };
 
@@ -187,17 +199,26 @@ use super::one_name;
 use super::rules::{self, Given, Lacks, member_read};
 use super::select;
 
-/// Walk every body of `shapes` into `store`, interning through `types`: the language's load, or a
-/// resumption under the store's binding. A refusal of written code stops the walk, worded by the
-/// store.
+/// Walk the body at `at` of `shapes`, and every body nested in it, into `store`, interning through
+/// `types`: the language's load at the root, or a resumption under the store's binding. A refusal
+/// of written code stops the walk, worded by the store.
+///
+/// A walk rooted below the program first stands the chain around `at` as the whole walk would hold
+/// it there: each enclosing body's level, holding the records of its units up to the one birthing
+/// the next, each entered as the whole walk enters it. Those units are read from the store, never
+/// re-run: a binding below them wakes none of them. So the walk costs the chain's prefix and `at`'s
+/// subtree, never the whole program. A block or module body at `at` is walked as its encloser's
+/// unit would walk it, over what the standing encloser says a `USING` holding it surfaces.
 pub(super) fn walk<'graph: 'o, 'tier: 'o, 'o, S: Store<'o>>(
     shapes: &'graph Shapes<'graph>,
     builtins: &'graph KBuiltins<'graph, 'graph>,
     store: &S,
     types: &Chain<'tier, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
+    at: Segment,
 ) -> Result<(), ShapeError<'o>> {
-    let count = shapes.bodies().len();
+    #[cfg(test)]
+    let _walking = crate::elaborate::Walking::enter();
     let mut pass = Pass {
         shapes,
         builtins,
@@ -207,17 +228,17 @@ pub(super) fn walk<'graph: 'o, 'tier: 'o, 'o, S: Store<'o>>(
         lay: store.lay(),
         chain: BumpVec::new_in(scratch),
         units: BumpVec::new_in(scratch),
-        started: UnitTable::new(shapes, scratch),
+        started: bump_table(scratch),
         open: BumpVec::new_in(scratch),
         scopes: std::cell::Cell::new(BumpVec::new_in(scratch)),
-        walked: scratch.alloc_slice_fill_with(count, |_| false),
+        walked: bump_set(scratch),
         demand: Demand {
-            marks: scratch.alloc_slice_fill_with(count, |_| None),
+            marks: bump_table(scratch),
             stack: BumpVec::new_in(scratch),
             next: 0,
             pending: BumpVec::new_in(scratch),
         },
-        composed: scratch.alloc_slice_fill_with(count, |_| BumpVec::new_in(scratch)),
+        composed: bump_set(scratch),
         unfilled: false,
         unnarrowed: unnarrowed_now(),
         trees: bump_table(scratch),
@@ -237,7 +258,14 @@ pub(super) fn walk<'graph: 'o, 'tier: 'o, 'o, S: Store<'o>>(
         open_path: None,
         components: BumpVec::new_in(scratch),
     };
-    pass.body(None, shapes.root())
+    let parent = pass.stand_chain(at);
+    let shape = shapes.shape_at(at);
+    match (shape.kind(), parent) {
+        (ShapeKind::Block | ShapeKind::Module, Some(parent)) => pass.inline_root(parent, shape)?,
+        _ => pass.body(parent, shape)?,
+    }
+    pass.finish_rooted();
+    Ok(())
 }
 
 /// A binder's static type: a type's interval, or a quantified callable's scheme.
@@ -341,9 +369,9 @@ struct UnitState<'p, 'o> {
     id: UnitId,
     /// Once it ends: its record's frontier. While it runs, its gathering is the walk's.
     frontier: Option<Frontier<'o>>,
-    /// What its record keeps beside its owner's own facts: each inline body it ran, laid as the
-    /// body leaves the chain; each callable or quote's code it births; each path it resolved first
-    /// on its chain; what the folds read.
+    /// What its record keeps beside its body's own facts: the signature of each module body it
+    /// ran; each callable or quote's code it births; each path it resolved first on its chain;
+    /// what the folds read.
     typed: BumpVec<'p, (Segment, Typed<'o>)>,
     born: BumpVec<'p, (Segment, Born<'o>)>,
     paths: BumpVec<'p, ((Segment, usize), (PathEntry<'o>, Resolution<'o>))>,
@@ -392,12 +420,14 @@ enum Wrote {
     Part(Site),
     Expression(Site),
     Selection(Site),
-    Through(usize),
     Settled(usize),
     Minting(usize),
     Instance(usize),
     Named(usize),
+    Route(usize),
+    Retype(usize),
     Tree(usize),
+    Picks(usize),
     Content(usize),
 }
 
@@ -429,7 +459,7 @@ struct Level<'p, 'o, 'graph> {
     uses: BumpVec<'p, (UseStatics<'o>, Option<Tag>)>,
     /// Each keyworded use the walk selected a candidate at, by its node's site, beside the closed
     /// point each variable of the candidate's group solves to there, by group index.
-    selections: BumpBackedMap<'p, Site, (&'o [Option<KType>], Tag)>,
+    selections: BumpBackedMap<'p, Site, (Points<'o>, Tag)>,
     /// Each `:!` whose operand's static upper end lies under its type, and each annotated binder's
     /// type part whose value's does.
     settled: BumpVec<'p, (Site, Tag)>,
@@ -438,6 +468,10 @@ struct Level<'p, 'o, 'graph> {
     /// Each call by name's contributions, by its argument part's site: per parameter in symbol
     /// order.
     named: BumpVec<'p, (Site, &'o [StaticType<'o>], Tag)>,
+    /// Each tail call's route, by its node's site.
+    routes: BumpVec<'p, (Site, Route<'o>, Tag)>,
+    /// Each retype to a closed declared type, by its settled site or member read's node site.
+    retypes: BumpVec<'p, (Site, Retype, Tag)>,
     /// Whether a porous value leaves the shape: through its return, or an argument of a call it
     /// makes into a frame. A block's and a module body's are folded into the shape enclosing them.
     exits: bool,
@@ -452,11 +486,9 @@ struct Level<'p, 'o, 'graph> {
     minted_within: bool,
     /// Each `:|` ascription's site, beside its operand's content tree.
     trees: BumpVec<'p, (Site, &'o Tree<'o>, Tag)>,
+    picks: BumpVec<'p, (Site, &'o [Pick<'o>], Tag)>,
     /// Each module binder's content tree, by slot: what a binding of it is read against.
     contents: BumpVec<'p, (Slot, Tree<'o>, Tag)>,
-    /// Each path the shape spells whose declared application names a lexical variable, by its
-    /// level, beside where the shape reads each variable.
-    throughs: BumpBackedMap<'p, usize, (&'o [Located], Tag)>,
     /// A `MODULE` or `GROUP` body's exact signature, where the walk typed one.
     signature: Option<KType>,
     /// The statement the walk is typing: where it looks for a part first.
@@ -467,33 +499,6 @@ struct Level<'p, 'o, 'graph> {
 }
 
 impl Level<'_, '_, '_> {
-    /// Where every fact this level holds sits, whichever unit wrote it: what an inline body lays
-    /// whole as it leaves the chain.
-    fn everything<'x>(&self, scratch: BumpAllocator<'x>) -> BumpVec<'x, Wrote> {
-        let mut wrote = BumpVec::new_in(scratch);
-        for index in 0..self.shape.slots() {
-            let slot = Slot(index as u32);
-            wrote.extend([
-                Wrote::Declared(slot),
-                Wrote::Registered(slot),
-                Wrote::Binder(slot),
-            ]);
-        }
-        wrote.extend((0..self.statements.len()).map(Wrote::Statement));
-        wrote.extend((0..self.uses.len()).map(Wrote::Use));
-        wrote.extend(self.parts.keys().map(|site| Wrote::Part(*site)));
-        wrote.extend(self.expressions.keys().map(|site| Wrote::Expression(*site)));
-        wrote.extend(self.selections.keys().map(|site| Wrote::Selection(*site)));
-        wrote.extend(self.throughs.keys().map(|level| Wrote::Through(*level)));
-        wrote.extend((0..self.settled.len()).map(Wrote::Settled));
-        wrote.extend((0..self.minting.len()).map(Wrote::Minting));
-        wrote.extend((0..self.instances.len()).map(Wrote::Instance));
-        wrote.extend((0..self.named.len()).map(Wrote::Named));
-        wrote.extend((0..self.trees.len()).map(Wrote::Tree));
-        wrote.extend((0..self.contents.len()).map(Wrote::Content));
-        wrote
-    }
-
     /// The sites this shape and the blocks and module bodies it runs mint at at run: every minting
     /// site but a view over a closed content tree.
     fn run_mints(&self) -> u32 {
@@ -506,7 +511,7 @@ impl Level<'_, '_, '_> {
 /// walked in.
 struct Demand<'p, 'o> {
     /// Each callable's mark, by segment, once the walk enters it.
-    marks: &'p mut [Option<Mark>],
+    marks: BumpBackedMap<'p, Segment, Mark>,
     /// Each callable entered and not yet in a finished component, innermost last.
     stack: BumpVec<'p, Segment>,
     next: u32,
@@ -537,17 +542,17 @@ struct Pass<'p, 'o, 'x, 'graph, 'tier, 'pair, 'reg, S: Store<'o>> {
     /// Every unit the walk ran or absorbed, and every closing, by tag.
     units: BumpVec<'p, UnitState<'p, 'o>>,
     /// The tag of each unit the walk ran or absorbed, by id: the newest where it has two.
-    started: UnitTable<'p, Tag>,
+    started: BumpBackedMap<'p, UnitId, Tag>,
     /// The units running, innermost last, beside each one's gathering: every unknown and ended
     /// frontier its facts read so far, unsorted until its frontier lays it.
     open: BumpVec<'p, Tag>,
     scopes: std::cell::Cell<BumpVec<'p, Gathering<'p, 'o>>>,
     /// Each owning body the walk has entered, by segment.
-    walked: &'p mut [bool],
+    walked: BumpBackedSet<'p, Segment>,
     demand: Demand<'p, 'o>,
-    /// The levels of the type captures each body composes so far, by segment: a lexical variable a
-    /// contribution or a solution names, read from inside the body and homed outside it.
-    composed: &'p mut [BumpVec<'p, usize>],
+    /// The levels of the type captures each body composes so far, beside its segment: a lexical
+    /// variable a contribution or a solution names, read from inside the body and homed outside it.
+    composed: BumpBackedSet<'p, (Segment, usize)>,
     /// Whether the walk is typing a quote's code as a traced `EVAL` runs it, no hole filled: it
     /// fixes nothing.
     unfilled: bool,
@@ -564,24 +569,25 @@ struct Pass<'p, 'o, 'x, 'graph, 'tier, 'pair, 'reg, S: Store<'o>> {
     binders: BumpBackedMap<'p, (usize, Slot, Option<usize>), (Tree<'o>, Tag)>,
     /// What shaped the binder tree being built besides the program's text.
     shaped: trees::Shaped,
-    /// What each view over a closed tree binds, by its print: a chain of views reads each once.
-    views: BumpBackedMap<'p, Print, (Option<ViewTypes<'o>>, Tag)>,
-    /// What each opaque view's fit solves, by its application and its source's print, beside the
+    /// What each view over a closed tree binds, by its identity: a chain of views reads each once.
+    views: BumpBackedMap<'p, Identity, (Option<ViewTypes<'o>>, Tag)>,
+    /// What each opaque view's fit solves, by its application and its source's identity, beside the
     /// type its source carries: a `:|` fits its source, and reads that type, once.
-    view_trees: BumpBackedMap<'p, (KType, Print), trees::Fitted>,
+    view_trees: BumpBackedMap<'p, (KType, Identity), trees::Fitted>,
     /// What each read of a value a lay may reach twice yields, so a chain of views reads each
     /// member once.
-    steps: BumpBackedMap<'p, (views::Identity, views::Step), Option<views::Carried<'o>>>,
+    steps: BumpBackedMap<'p, (views::ViewIdentity, views::Step), Option<views::Carried<'o>>>,
     /// Each value a view rebuilt, by what it was rebuilt from.
     rebuilds: BumpBackedMap<'p, views::Rebuild, views::Carried<'o>>,
     /// The modules each rebuilt union of cells' signatures may be, cell by cell.
-    modules: BumpBackedMap<'p, views::Identity, &'p [views::Carried<'o>]>,
+    modules: BumpBackedMap<'p, views::ViewIdentity, &'p [views::Carried<'o>]>,
     /// Each declared type a view reads either side, by its two sides' handles.
     sides: BumpBackedMap<'p, (DeclaredType<Parametric>, KType, KType), views::Sides>,
     /// The path table of each chain being typed, outermost first.
     paths: BumpVec<'p, paths::ChainPaths<'p, 'o, 'graph>>,
-    /// Each composite site's dependencies, by its site: a part that is one takes its class.
-    composites: BumpBackedMap<'p, Site, caching::Reads<'o>>,
+    /// Each composite site's dependencies, by its body's segment and its site: a part that is one
+    /// takes its class.
+    composites: BumpBackedMap<'p, (Segment, Site), caching::Reads<'o>>,
     /// Each `MODULE` or `GROUP` body the walk typed, by address: whether it, or a block or module
     /// body it runs, holds a minting site.
     module_mints: BumpBackedMap<'p, usize, bool>,
@@ -787,14 +793,16 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             settled: BumpVec::new_in(scratch),
             instances: BumpVec::new_in(scratch),
             named: BumpVec::new_in(scratch),
+            routes: BumpVec::new_in(scratch),
+            retypes: BumpVec::new_in(scratch),
             exits: false,
             minting: BumpVec::new_in(scratch),
             closed: 0,
             folded: 0,
             minted_within: false,
             trees: BumpVec::new_in(scratch),
+            picks: BumpVec::new_in(scratch),
             contents: BumpVec::new_in(scratch),
-            throughs: bump_table(scratch),
             signature: None,
             statement: 0,
             captures: None,
@@ -811,7 +819,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         shape: &'graph BodyShape<'graph>,
     ) -> Result<(), ShapeError<'o>> {
         let segment = shape.segment();
-        if std::mem::replace(&mut self.walked[segment.index() as usize], true) {
+        if !self.walked.insert(segment) {
             return Ok(());
         }
         let code = shape.kind() == ShapeKind::Code;
@@ -831,8 +839,15 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             true => Err(*shape
                 .refusal()
                 .expect("a refused code shape holds its refusal")),
-            false => self.units_of(level).and_then(|_| self.closing(level)),
+            false => self.units_of(level, None).and_then(|_| self.closing(level)),
         };
+        // A quote's code keeps its first overlap for the `EVAL` running it to report.
+        let walked = walked.map(|(mut closing, tag)| {
+            if code {
+                closing.overlap = self.overlap_in(shape);
+            }
+            (closing, tag)
+        });
         if roots_chain {
             self.close_paths(shape);
         }
@@ -854,6 +869,8 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                     recursive: false,
                     ran: None,
                     refusal: Some(resident(self.lay, error)),
+                    overlap: None,
+                    retypes: Retypes::NONE,
                 };
                 (refused, Frontier::EMPTY)
             }
@@ -870,17 +887,164 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         Ok(())
     }
 
-    /// Run the entry and each unit of the owning body at `level`, each callable a unit births
-    /// walked right after it.
-    fn units_of(&mut self, level: usize) -> Result<(), ShapeError<'o>> {
+    /// Stand the chain of bodies around `at`, from the program down, as the whole walk holds it when
+    /// it reaches `at`: the chain level `at` is nested in, `None` at the program.
+    fn stand_chain(&mut self, at: Segment) -> Option<usize> {
+        let mut around = BumpVec::new_in(self.scratch);
+        let mut child = at;
+        while let Some((parent, statement)) = self.shapes.parent(child) {
+            around.push((parent, statement));
+            child = parent;
+        }
+        for (segment, statement) in around.into_iter().rev() {
+            let shape = self.shape_at(segment);
+            let inline = matches!(shape.kind(), ShapeKind::Block | ShapeKind::Module);
+            if !inline {
+                self.walked.insert(segment);
+            }
+            if shape.kind() == ShapeKind::Callable {
+                self.enter(segment);
+            }
+            let roots_chain = self.chain.is_empty() || shape.kind() == ShapeKind::Code;
+            self.push(shape, roots_chain);
+            if roots_chain {
+                self.open_paths(shape);
+            }
+            let level = self.chain.len() - 1;
+            let birth = shape.unit_of_statement(statement as usize);
+            let units =
+                (shape.units().iter().enumerate()).map(|(index, _)| UnitIndex::of_run(index));
+            for index in [UnitIndex::ENTRY].into_iter().chain(units) {
+                self.absorb_standing(level, index);
+                if index == birth {
+                    break;
+                }
+            }
+        }
+        self.chain.len().checked_sub(1)
+    }
+
+    /// Walk each callable born inside the inline bodies the statements `statements` of the shape at
+    /// `level` run, where their unit was absorbed: the walk did not run it, so it did not reach
+    /// them, and a binding may wake their units still.
+    fn absorbed_births(
+        &mut self,
+        level: usize,
+        statements: impl Iterator<Item = usize>,
+    ) -> Result<(), ShapeError<'o>> {
         let shape = self.chain[level].shape;
-        self.unit(level, UnitIndex::ENTRY, |pass| pass.entry(level, None))?;
+        for index in statements {
+            for (_, nested) in shape.nested_in(index) {
+                if !matches!(nested.kind(), ShapeKind::Block | ShapeKind::Module) {
+                    continue;
+                }
+                // Its units' frontiers are cut into the absorbed unit's, so none wakes: each is
+                // absorbed, and the callables they birth walked.
+                self.push(nested, false);
+                let at = self.chain.len() - 1;
+                self.units_of(at, None)?;
+                self.chain.pop();
+            }
+        }
+        Ok(())
+    }
+
+    /// Walk the inline body `shape`, the root of a walk, nested in the standing shape at `level`: its
+    /// units, its entry over what the encloser's absorbed facts say a `USING` holding it surfaces.
+    fn inline_root(
+        &mut self,
+        level: usize,
+        shape: &'graph BodyShape<'graph>,
+    ) -> Result<(), ShapeError<'o>> {
+        let surfacing = self.surfacing_of(level, shape);
+        self.push(shape, false);
+        let at = self.chain.len() - 1;
+        self.units_of(at, surfacing)?;
+        self.chain.pop();
+        Ok(())
+    }
+
+    /// The static type of the operand of the `USING … SCOPE` whose body is `block`, as the shape at
+    /// `level` holding it has it, beside the unit that fixed it: `None` for any other inline body.
+    fn surfacing_of(&self, level: usize, block: &BodyShape<'graph>) -> Option<(Interval, Tag)> {
+        let shape = self.chain[level].shape;
+        let (_, statement) = self.shapes.parent(block.segment())?;
+        let holding = &shape.body()[statement as usize];
+        let surfaces = |node: &'graph KExpression<'graph>| {
+            matches!(of_node(shape, node), Form::Using(_))
+                && (shape.site_of_body(node).and_then(|site| shape.nested(site)))
+                    .is_some_and(|body| body.segment() == block.segment())
+        };
+        let mut using = surfaces(holding).then_some(holding);
+        crate::scope::each_part(holding, |part| {
+            if let ExpressionPart::Expression(node) = part
+                && surfaces(node)
+            {
+                using = Some(node);
+            }
+        });
+        let [_, operand, _, _] = using?.parts else {
+            unreachable!("a `USING … SCOPE` has its keyword, its module, `SCOPE` and a body")
+        };
+        let site = self.site(level, &operand.value);
+        self.chain[level].parts.get(&site).copied()
+    }
+
+    /// Absorb the unit `index` of the owning body at chain level `level`, which a walk rooted below
+    /// it stands.
+    fn absorb_standing(&mut self, level: usize, index: UnitIndex) {
+        let id = UnitId {
+            segment: self.chain[level].shape.segment(),
+            unit: index,
+        };
+        let (facts, frontier) = (self.store.fact(id)).expect("the store holds the chain's records");
+        debug_assert!(
+            !self.store.wakes(frontier),
+            "a binding below the chain wakes none of its units"
+        );
+        self.absorb(level, id, facts, frontier);
+    }
+
+    /// Write the closings a rooted walk left pending: each of a component reaching a callable on the
+    /// chain around the walk's root, which the walk never finishes. Such a component holds that
+    /// callable too, so it is recursive.
+    fn finish_rooted(&mut self) {
+        for (segment, mut closing, frontier) in
+            std::mem::replace(&mut self.demand.pending, BumpVec::new_in(self.scratch))
+        {
+            closing.recursive = true;
+            closing.summary = Some(None);
+            self.write_closing(segment, closing, frontier);
+        }
+    }
+
+    /// The first registration of the quote's code `shape`, or of a body nested in it short of
+    /// another quote's code, that overlaps a builtin overload, each as the walk typed it.
+    fn overlap_in(&self, shape: &'graph BodyShape<'graph>) -> Option<&'o ShapeError<'o>> {
+        let typed = |body: &BodyShape<'graph>, slot| self.registered_cell(body, slot);
+        let overlaps =
+            super::check::overlaps_through(shape, &typed, self.builtins, self.types, self.scratch);
+        overlaps.err().map(|error| resident(self.lay, error))
+    }
+
+    /// Run the entry and each unit of the body at `level`, each callable a unit births walked
+    /// right after it: an inline body's entry over what it is `surfacing`.
+    fn units_of(
+        &mut self,
+        level: usize,
+        surfacing: Option<(Interval, Tag)>,
+    ) -> Result<(), ShapeError<'o>> {
+        let shape = self.chain[level].shape;
+        self.unit(level, UnitIndex::ENTRY, |pass| pass.entry(level, surfacing))?;
         for (index, unit) in shape.units().iter().enumerate() {
             let at = UnitIndex::of_run(index);
             // Collected outside the unit: one the store absorbs runs no steps but births its
             // callables.
             let nests = self.unit_statements(shape, unit.work);
-            self.unit(level, at, |pass| pass.steps(level, at, unit.work, nests))?;
+            let ran = self.unit(level, at, |pass| pass.steps(level, at, unit.work, nests))?;
+            if !ran {
+                self.absorbed_births(level, nests.statements.iter().copied())?;
+            }
             for born in nests.callables {
                 self.body(Some(level), born)?;
             }
@@ -932,33 +1096,37 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
 
     /// Run `run` as the unit `index` of the owning body at `level`, inside a gathering of its own,
     /// and write its record; or absorb the record the store holds where its binding does not wake
-    /// it. The unfilled typing of a quote's code keeps no record: its reads go to the closing
-    /// gathering it runs in.
+    /// it. Whether it ran. The unfilled typing of a quote's code keeps no record: its reads go to
+    /// the closing gathering it runs in.
     fn unit(
         &mut self,
         level: usize,
         index: UnitIndex,
         run: impl FnOnce(&mut Self) -> Result<(), ShapeError<'o>>,
-    ) -> Result<(), ShapeError<'o>> {
+    ) -> Result<bool, ShapeError<'o>> {
         if self.unfilled {
-            return run(self);
+            return run(self).map(|()| true);
         }
         let id = UnitId {
             segment: self.chain[level].shape.segment(),
             unit: index,
         };
+        #[cfg(test)]
+        if let Some(visit) = VISIT.with(std::cell::Cell::get) {
+            visit(id);
+        }
         if let Some((facts, frontier)) = self.store.fact(id)
             && !self.store.wakes(frontier)
         {
             self.absorb(level, id, facts, frontier);
-            return Ok(());
+            return Ok(false);
         }
         let tag = self.open_unit(id, false);
         run(self)?;
         let frontier = self.end(tag);
         let facts = self.record(level, tag);
         self.store.write(id, facts, frontier);
-        Ok(())
+        Ok(true)
     }
 
     /// Open a gathering for `id`, a unit or — `closing` — a body's closing.
@@ -967,7 +1135,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         let tag = Tag(self.units.len() as u32);
         self.units.push(UnitState::new(id, None, scratch));
         if !closing {
-            self.started.set(id, tag);
+            self.started.insert(id, tag);
         }
         self.open.push(tag);
         let mut scopes = self.scopes.replace(BumpVec::new_in(scratch));
@@ -1005,7 +1173,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     /// own facts the unit fixed, beside what the unit kept as it ran.
     fn record(&mut self, level: usize, tag: Tag) -> &'o UnitFacts<'o> {
         let lay = self.lay;
-        let own = self.typed(level, Some(tag));
+        let own = self.typed(level, tag);
         let state = &mut self.units[tag.0 as usize];
         let mut typed = BumpVec::with_capacity_in(state.typed.len() + 1, self.scratch);
         typed.push((self.chain[level].shape.segment(), own));
@@ -1020,32 +1188,18 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         resident(lay, facts)
     }
 
-    /// The facts of the shape at `level` the unit `tag` fixed, laid down, from where it wrote them:
-    /// every fact the level holds where `tag` is `None`. The writes sort by kind, then by key, so
-    /// each table keyed as its writes are comes out sorted.
-    fn typed(&mut self, level: usize, tag: Option<Tag>) -> Typed<'o> {
+    /// The facts of the shape at `level` the unit `tag` fixed, laid down, from where it wrote them.
+    /// The writes sort by kind, then by key, so each table keyed as its writes are comes out
+    /// sorted.
+    fn typed(&mut self, level: usize, tag: Tag) -> Typed<'o> {
         let (lay, scratch) = (self.lay, self.scratch);
-        let mut wrote = match tag {
-            Some(tag) => std::mem::replace(
-                &mut self.units[tag.0 as usize].wrote,
-                BumpVec::new_in(scratch),
-            ),
-            None => self.chain[level].everything(scratch),
-        };
+        let unit = &mut self.units[tag.0 as usize];
+        let mut wrote = std::mem::replace(&mut unit.wrote, BumpVec::new_in(scratch));
         wrote.sort_unstable();
         wrote.dedup();
-        let (exits, closed, folded) = match tag {
-            Some(tag) => {
-                let unit = &self.units[tag.0 as usize];
-                (unit.exits, unit.closed, unit.folded)
-            }
-            None => {
-                let at = &self.chain[level];
-                (at.exits, at.closed, at.folded)
-            }
-        };
+        let (exits, closed, folded) = (unit.exits, unit.closed, unit.folded);
         let at = &self.chain[level];
-        let ours = |held: Tag| tag.is_none_or(|tag| tag == held);
+        let ours = |held: Tag| held == tag;
         let lists = at.shape.candidate_lists();
         let mut declared = BumpVec::new_in(scratch);
         let mut registered = BumpVec::new_in(scratch);
@@ -1055,12 +1209,14 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         let mut parts = BumpVec::new_in(scratch);
         let mut expressions = BumpVec::new_in(scratch);
         let mut selections = BumpVec::new_in(scratch);
-        let mut throughs = BumpVec::new_in(scratch);
         let mut settled = BumpVec::new_in(scratch);
         let mut minting = BumpVec::new_in(scratch);
         let mut instances = BumpVec::new_in(scratch);
         let mut named = BumpVec::new_in(scratch);
+        let mut routes = BumpVec::new_in(scratch);
+        let mut retypes = BumpVec::new_in(scratch);
         let mut trees = BumpVec::new_in(scratch);
+        let mut picks = BumpVec::new_in(scratch);
         let mut contents = BumpVec::new_in(scratch);
         for wrote in wrote.iter().copied() {
             match wrote {
@@ -1121,13 +1277,6 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                         selections.push((site, *points));
                     }
                 }
-                Wrote::Through(path_level) => {
-                    if let Some((located, held)) = at.throughs.get(&path_level)
-                        && ours(*held)
-                    {
-                        throughs.push((path_level, *located));
-                    }
-                }
                 Wrote::Settled(index) => {
                     let (site, held) = at.settled[index];
                     if ours(held) {
@@ -1152,10 +1301,28 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                         named.push((site, read));
                     }
                 }
+                Wrote::Route(index) => {
+                    let (site, route, held) = at.routes[index];
+                    if ours(held) {
+                        routes.push((site, route));
+                    }
+                }
+                Wrote::Retype(index) => {
+                    let (site, retype, held) = at.retypes[index];
+                    if ours(held) {
+                        retypes.push((site, retype));
+                    }
+                }
                 Wrote::Tree(index) => {
                     let (site, tree, held) = at.trees[index];
                     if ours(held) {
                         trees.push((site, tree));
+                    }
+                }
+                Wrote::Picks(index) => {
+                    let (site, picked, held) = at.picks[index];
+                    if ours(held) {
+                        picks.push((site, picked));
                     }
                 }
                 Wrote::Content(index) => {
@@ -1174,7 +1341,10 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         let (settled, minting) = (sites(&mut settled), sites(&mut minting));
         newest(&mut instances);
         newest(&mut named);
+        newest(&mut routes);
+        newest(&mut retypes);
         newest(&mut trees);
+        newest(&mut picks);
         Typed {
             declared: keyed(lay, &declared),
             registered: keyed(lay, &registered),
@@ -1187,10 +1357,12 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             uses: Keyed::sorted(lay, &mut uses),
             selections: keyed(lay, &selections),
             by_name: Keyed::sorted(lay, &mut named),
+            routes: Keyed::sorted(lay, &mut routes),
+            retypes: Keyed::sorted(lay, &mut retypes),
             trees: Keyed::sorted(lay, &mut trees),
+            picks: Keyed::sorted(lay, &mut picks),
             contents: Keyed::sorted(lay, &mut contents),
             minting,
-            throughs: keyed(lay, &throughs),
             signature: at.signature,
             exits,
             closed,
@@ -1212,7 +1384,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         let tag = Tag(self.units.len() as u32);
         self.units
             .push(UnitState::new(id, Some(frontier), self.scratch));
-        self.started.set(id, tag);
+        self.started.insert(id, tag);
         let segment = self.chain[level].shape.segment();
         if let Some((_, typed)) = facts.typed.get(segment) {
             self.restore(level, typed, tag);
@@ -1269,16 +1441,38 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         );
         at.named
             .extend(typed.by_name.iter().map(|(site, read)| (*site, *read, tag)));
+        at.routes.extend(
+            typed
+                .routes
+                .iter()
+                .map(|(site, route)| (*site, *route, tag)),
+        );
+        at.retypes.extend(
+            typed
+                .retypes
+                .iter()
+                .map(|(site, retype)| (*site, *retype, tag)),
+        );
         at.minting
             .extend(typed.minting.iter().map(|site| (*site, tag)));
         at.trees
             .extend(typed.trees.iter().map(|(site, tree)| (*site, *tree, tag)));
-        for (level, located) in typed.throughs.iter() {
-            at.throughs.entry(*level).or_insert((*located, tag));
-        }
+        at.picks.extend(
+            typed
+                .picks
+                .iter()
+                .map(|(site, picked)| (*site, *picked, tag)),
+        );
         at.exits |= typed.exits;
         at.closed += typed.closed;
         at.folded += typed.folded;
+        // A module binder's content tree stands with its unit, its body typed when it was.
+        let shape = address(at.shape);
+        for (slot, tree) in typed.contents.iter() {
+            self.binders
+                .entry((shape, *slot, None))
+                .or_insert((*tree, tag));
+        }
     }
 
     /// The unit running, whose record keeps what the walk fixes now: none while an unfilled
@@ -1393,7 +1587,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         // A block its value statics did not reach — an arm a builtin's rule reads no further than
         // its value — is typed on its own, inside the unit.
         for nested in nests.blocks {
-            if !self.walked[nested.segment().index() as usize] {
+            if !self.walked.contains(&nested.segment()) {
                 self.block(level, nested, None)?;
             }
         }
@@ -1404,7 +1598,6 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             }
         }
         if !self.unfilled {
-            self.throughs(level, holds.spelled);
             self.contents(level, index)?;
         }
         Ok(())
@@ -1423,7 +1616,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 continue;
             }
             let site = match (shape.rhs(slot), shape.birth_site(slot)) {
-                (Some(rhs), _) => Site::of(rhs),
+                (Some(rhs), _) => self.site(level, rhs),
                 (None, Some(born)) => born,
                 (None, None) => continue,
             };
@@ -1435,9 +1628,10 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
 
     /// Type the inline body `nested` — an arm, a block, a `USING … SCOPE` body over what it is
     /// `surfacing`, a `MODULE` or `GROUP` body — inside the unit running it, nested in the shape at
-    /// `level`: its entry and its units through the same steps, each callable a sub-unit births
-    /// walked right after it. Its facts land in the running unit's record. Its last statement's
-    /// static type.
+    /// `level`: its entry and its units, each in a record of its own, each callable a unit births
+    /// walked right after it. The running unit reads each of their frontiers, cut at it, so it
+    /// wakes wherever one of them would on a name bound outside `nested`, and keeps the body's
+    /// signature. What `finish` makes of it.
     fn inline<T>(
         &mut self,
         level: usize,
@@ -1447,17 +1641,29 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     ) -> Result<(T, Level<'p, 'o, 'graph>), ShapeError<'o>> {
         self.push(nested, false);
         let at = level + 1;
-        let finished = match self.inline_units(at, surfacing) {
+        let finished = match self.units_of(at, surfacing) {
             Ok(()) => finish(self, at),
             Err(error) => Err(error),
         };
         if finished.is_ok() && !self.unfilled {
-            let typed = self.typed(at, None);
-            self.keep_inline(nested.segment(), typed);
+            let units =
+                (nested.units().iter().enumerate()).map(|(index, _)| UnitIndex::of_run(index));
+            for unit in [UnitIndex::ENTRY].into_iter().chain(units) {
+                let id = UnitId {
+                    segment: nested.segment(),
+                    unit,
+                };
+                if let Some(tag) = self.started.get(&id) {
+                    self.gather(*tag);
+                }
+            }
+            if let Some(signature) = self.chain[at].signature {
+                self.keep_signature(nested.segment(), signature);
+            }
         }
         let popped = self.chain.pop().expect("the body was pushed");
         self.leave(nested);
-        self.walked[nested.segment().index() as usize] = true;
+        self.walked.insert(nested.segment());
         finished.map(|finished| (finished, popped))
     }
 
@@ -1475,31 +1681,19 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         Ok(last)
     }
 
-    /// The entry and units of the inline body at `level`.
-    fn inline_units(
-        &mut self,
-        level: usize,
-        surfacing: Option<(Interval, Tag)>,
-    ) -> Result<(), ShapeError<'o>> {
-        let shape = self.chain[level].shape;
-        self.entry(level, surfacing)?;
-        for (index, unit) in shape.units().iter().enumerate() {
-            let nests = self.unit_statements(shape, unit.work);
-            self.steps(level, UnitIndex::of_run(index), unit.work, nests)?;
-            for born in nests.callables {
-                self.body(Some(level), born)?;
-            }
-        }
-        Ok(())
-    }
-
-    /// Keep `typed`, the facts of the inline body `segment` just typed, in the unit running it: the
-    /// newest typing of a body the unit types twice stands.
-    fn keep_inline(&mut self, segment: Segment, typed: Typed<'o>) {
+    /// Keep `signature`, the exact signature of the `MODULE` or `GROUP` body `segment` just typed,
+    /// in the unit running it: the newest typing of a body the unit types twice stands.
+    fn keep_signature(&mut self, segment: Segment, signature: KType) {
         let tag = self.innermost();
         let held = &mut self.units[tag.0 as usize].typed;
         held.retain(|(each, _)| *each != segment);
-        held.push((segment, typed));
+        held.push((
+            segment,
+            Typed {
+                signature: Some(signature),
+                ..Typed::EMPTY
+            },
+        ));
     }
 
     /// The tag of the innermost unit running.
@@ -1595,10 +1789,9 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         at.exits |= inner.exits;
         at.folded += inner.run_mints();
         at.minted_within |= inner.minted_within || !inner.minting.is_empty();
-        // Folded into an owning body, the mints are the running unit's; into another inline body,
-        // they fold on with it.
-        let owning = !matches!(at.shape.kind(), ShapeKind::Block | ShapeKind::Module);
-        if owning && let Some(unit) = self.fixing() {
+        // The unit running `inner` is the shape's own, which a resumption absorbing it folds back.
+        if let Some(unit) = self.fixing() {
+            unit.exits |= inner.exits;
             unit.folded += inner.run_mints();
         }
     }
@@ -1679,7 +1872,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             return self.holds_nothing_minted(
                 level,
                 form,
-                Written::Node(Site::of_node(node)),
+                Written::Node(self.node_site(level, node)),
                 last,
             );
         };
@@ -1687,7 +1880,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             && body.kind() == ShapeKind::Module
         {
             let scope = trees::Scope::Chain(level);
-            let tree = self.slot_tree(scope, slot, Site::of_node(node))?;
+            let tree = self.slot_tree(scope, slot, self.node_site(level, node))?;
             return Ok(!self.reaches_minted(level, &tree));
         }
         match (shape.rhs(slot), shape.annotation(slot)) {
@@ -1723,8 +1916,37 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             recursive: false,
             ran: None,
             refusal: None,
+            overlap: None,
+            retypes: self.retypes(level),
         };
         Ok((closing, tag))
+    }
+
+    /// What a frame of the callable body at `level` re-stamps each argument and its value at, where
+    /// the walk closes the declared type of each.
+    fn retypes(&self, level: usize) -> Retypes<'o> {
+        let (shape, types) = (self.chain[level].shape, self.types);
+        if shape.kind() != ShapeKind::Callable {
+            return Retypes::NONE;
+        }
+        let closed = |part| {
+            let declared = self.in_body(level, part)?;
+            Some(Retype::of(types, types.concrete(declared)?))
+        };
+        let mut parameters = BumpVec::new_in(self.scratch);
+        parameters.extend((0..shape.slots() as u32).map(Slot).filter_map(|slot| {
+            if shape.position_of(slot) != Position::PARAMETER {
+                return None;
+            }
+            let BinderSymbol::Value(name) = shape.slot_name(slot) else {
+                return None;
+            };
+            Some((name.symbol(), closed(Part::Parameter(name.symbol()))?))
+        }));
+        Retypes {
+            parameters: collect(self.lay, parameters.iter().copied()),
+            returns: closed(Part::Return),
+        }
     }
 
     /// The quote's code `code`'s last statement's static type as a traced `EVAL` runs it: typed a
@@ -1736,7 +1958,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         self.push(code, true);
         let level = self.chain.len() - 1;
         self.open_paths(code);
-        let walked = self.units_of(level);
+        let walked = self.units_of(level, None);
         let last = self.last_statement(level);
         self.close_paths(code);
         self.unwind(open);
@@ -1755,12 +1977,15 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     /// Enter the callable `segment` on the demand stack.
     fn enter(&mut self, segment: Segment) {
         let demand = &mut self.demand;
-        demand.marks[segment.index() as usize] = Some(Mark {
-            index: demand.next,
-            low: demand.next,
-            on_stack: true,
-            self_edge: false,
-        });
+        demand.marks.insert(
+            segment,
+            Mark {
+                index: demand.next,
+                low: demand.next,
+                on_stack: true,
+                self_edge: false,
+            },
+        );
         demand.stack.push(segment);
         demand.next += 1;
     }
@@ -1770,7 +1995,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     /// or of one that calls itself, is recursive: none of its bodies keeps a summary.
     fn finish(&mut self, segment: Segment, closing: Closing<'o>, frontier: Frontier<'o>) {
         self.demand.pending.push((segment, closing, frontier));
-        let mark = self.demand.marks[segment.index() as usize].expect("a callable entered");
+        let mark = self.demand.marks[&segment];
         if mark.low != mark.index {
             return;
         }
@@ -1781,7 +2006,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         members.extend(self.demand.stack.drain(at..));
         let recursive = members.len() > 1 || mark.self_edge;
         for member in members.iter() {
-            if let Some(mark) = &mut self.demand.marks[member.index() as usize] {
+            if let Some(mark) = self.demand.marks.get_mut(member) {
                 mark.on_stack = false;
             }
             let held = (self.demand.pending.iter())
@@ -1807,11 +2032,14 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     fn kept_call(&mut self, callee: &'graph BodyShape<'graph>) -> Result<bool, ShapeError<'o>> {
         let segment = callee.segment();
         let on_stack = |pass: &Self| {
-            pass.demand.marks[segment.index() as usize].is_some_and(|mark| mark.on_stack)
+            pass.demand
+                .marks
+                .get(&segment)
+                .is_some_and(|mark| mark.on_stack)
         };
         let reaches = |pass: &mut Self, low: u32| {
             if let Some(caller) = pass.caller()
-                && let Some(mark) = &mut pass.demand.marks[caller.index() as usize]
+                && let Some(mark) = pass.demand.marks.get_mut(&caller)
             {
                 mark.low = mark.low.min(low);
                 if caller == segment {
@@ -1820,20 +2048,16 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             }
         };
         if on_stack(self) {
-            let index = self.demand.marks[segment.index() as usize]
-                .expect("a callable on the stack is marked")
-                .index;
+            let index = self.demand.marks[&segment].index;
             reaches(self, index);
             return Ok(false);
         }
-        if !self.walked[segment.index() as usize] {
+        if !self.walked.contains(&segment) {
             if self.unfilled || !self.typed_on_demand(callee)? {
                 return Ok(false);
             }
             if on_stack(self) {
-                let low = self.demand.marks[segment.index() as usize]
-                    .expect("a callable on the stack is marked")
-                    .low;
+                let low = self.demand.marks[&segment].low;
                 reaches(self, low);
                 return Ok(false);
             }
@@ -1889,10 +2113,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 return;
             }
             if matches!(shape.kind(), ShapeKind::Callable | ShapeKind::Module) {
-                let composed = &mut self.composed[shape.segment().index() as usize];
-                if !composed.contains(&variable) {
-                    composed.push(variable);
-                }
+                self.composed.insert((shape.segment(), variable));
             }
             let name = BinderSymbol::Type(name);
             if shape.kind() == ShapeKind::Module
@@ -1935,25 +2156,96 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     /// The solution `solution` of an instance site in the shape at `level`, as its cell records it:
     /// closed where every entry is concrete, and otherwise beside where the site reads each lexical
     /// variable an entry names.
-    fn solution(
+    /// The point each variable of `judgement`'s group solves to at every run of the call at `at`
+    /// in the shape at `level`, whose arguments contribute `contributions`: closed where its
+    /// interval is exactly a closed type, rigid where it is exactly one over the run's lexical
+    /// variables — which the layer binding them closes before any run reads it — and the carried
+    /// type where the variable is the whole type of one slot, which [`judge_by_class`] admits as
+    /// *always* at the variable's bound, and that slot's argument contributes nothing. `None` where
+    /// a variable has none of the three.
+    fn points(
+        &mut self,
+        level: usize,
+        judgement: &Judgement<'_>,
+        contributions: &[StaticType<'o>],
+        at: SourceRef,
+    ) -> Option<Points<'o>> {
+        let (types, scratch) = (self.types, self.scratch);
+        let Some(DeclaredType::Scheme(scheme)) = judgement.known.shape() else {
+            return Some(Points::NONE);
+        };
+        let intervals = judgement.intervals?;
+        let mut slots = BumpVec::new_in(scratch);
+        slots.extend(scheme_slots(scheme, types));
+        let mut points = BumpVec::with_capacity_in(intervals.len(), scratch);
+        let mut rigid = BumpVec::new_in(scratch);
+        for (variable, interval) in intervals.iter().enumerate() {
+            points.push(match exact(types, *interval) {
+                Some(point) => Point::Closed(point),
+                None if interval.is_exact() => {
+                    rigid.push(interval.upper);
+                    Point::Rigid(interval.upper)
+                }
+                None => {
+                    let bare = |slot: &Parametric| {
+                        matches!(types.node(*slot),
+                            TypeNode::Quantified { index, .. } if index == variable)
+                    };
+                    let mut bares = (0..slots.len()).filter(|slot| bare(&slots[*slot]));
+                    let (Some(slot), None) = (bares.next(), bares.next()) else {
+                        return None;
+                    };
+                    if contributions
+                        .get(slot)
+                        .is_some_and(|contributed| !matches!(contributed, Static::Unknown))
+                    {
+                        return None;
+                    }
+                    Point::Carried(u16::try_from(slot).ok()?)
+                }
+            });
+        }
+        let variables = match rigid.is_empty() {
+            true => &[][..],
+            false => self.located(level, &rigid, at),
+        };
+        Some(Points {
+            points: collect(self.lay, points.iter().copied()),
+            variables,
+        })
+    }
+
+    /// The instance made at `solution` of type `ktype`, at `at` in the shape at `level`: closed
+    /// where both are, and otherwise rigid over the lexical variables they name, located once.
+    fn instance(
         &mut self,
         level: usize,
         solution: &[Parametric],
+        ktype: Parametric,
         at: SourceRef,
-    ) -> StaticSolution<'o> {
+    ) -> StaticInstance<'o> {
         let types = self.types;
         let mut closed = BumpVec::with_capacity_in(solution.len(), self.scratch);
         closed.extend(solution.iter().map_while(|each| types.concrete(*each)));
-        if closed.len() == solution.len() {
-            return StaticSolution::Closed(collect(self.lay, closed.iter().copied()));
+        if closed.len() == solution.len()
+            && let Some(ktype) = types.concrete(ktype)
+        {
+            return StaticInstance::Closed {
+                solution: collect(self.lay, closed.iter().copied()),
+                ktype,
+            };
         }
-        let variables = self.located(level, solution, at);
+        let mut named = BumpVec::with_capacity_in(solution.len() + 1, self.scratch);
+        named.extend(solution.iter().copied());
+        named.push(ktype);
+        let variables = self.located(level, &named, at);
         assert!(
             !variables.is_empty(),
-            "an instance's solution names no variable but its chain's lexical ones"
+            "an instance names no variable but its chain's lexical ones"
         );
-        StaticSolution::Rigid {
-            value: collect(self.lay, solution.iter().copied()),
+        StaticInstance::Rigid {
+            solution: collect(self.lay, solution.iter().copied()),
+            ktype,
             variables,
         }
     }
@@ -1983,13 +2275,6 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 let (entry, at) = self
                     .reachable(level, variable)
                     .expect("a path variable a static type names has a root its shape reaches");
-                if let Some(through) = entry.through
-                    && self.types.concrete(through).is_none()
-                    && !self.has_through(level, entry.level)
-                {
-                    let through = self.located(level, &[through], used);
-                    self.record_through(level, entry.level, through);
-                }
                 located.push(Located {
                     level: variable,
                     source: Source::Path {
@@ -2067,50 +2352,6 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         DeclaredType::Type(self.sourced(level, typed))
     }
 
-    /// Locate, for the shape at `level`, the lexical variables of each path its `statements`
-    /// spell whose declared application names any: where the run reads them to bind the path's
-    /// variable. A path whose application names another path is left unlocated, and its type is
-    /// read where it runs.
-    fn throughs(&mut self, level: usize, spelled: &[u32]) {
-        let shape = self.chain[level].shape;
-        for index in spelled.iter().map(|at| *at as usize) {
-            let Some(path_level) = self.shapes.path_level(shape.segment(), index) else {
-                continue;
-            };
-            let Some(entry) = self.entry_at(level, path_level) else {
-                continue;
-            };
-            let Some(through) = entry.through else {
-                continue;
-            };
-            if self.types.concrete(through).is_some() || self.has_through(level, entry.level) {
-                continue;
-            }
-            let mut paths = false;
-            read_through(
-                self.types,
-                self.scratch,
-                through,
-                Side::Above,
-                &mut |variable| {
-                    if let Variable::Lexical { level: at, .. } = variable {
-                        paths |= self.is_path(level, at);
-                    }
-                    None
-                },
-            );
-            if paths {
-                continue;
-            }
-            let spelled = &shape.spelled()[index];
-            let site = Site::of(spelled.part);
-            let used = source_of(&shape.body()[spelled.statement as usize], site)
-                .expect("a path is spelled in its statement");
-            let located = self.located(level, &[through], used);
-            self.record_through(level, entry.level, located);
-        }
-    }
-
     /// Type a component's value binders: each callable it births at its declared type first, then
     /// every other member seeded ([`seed`](Self::seed)) and typed against its fellows' seeds
     /// ([`members`](Self::members)), so no member's type depends on the order the members are
@@ -2125,8 +2366,8 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             let closed = (component.members.iter())
                 .all(|member| matches!(self.declared_cell(shape, *member), Static::Closed(_)));
             if nominal && !closed {
-                self.record_minting(level, Site::of_node(first));
-                self.record_nominal(level, Site::of_node(first), component.members);
+                self.record_minting(level, self.node_site(level, first));
+                self.record_nominal(level, self.node_site(level, first), component.members);
             }
             return Ok(());
         }
@@ -2298,7 +2539,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         };
         let (typed, solution) = self.instantiate(scheme, wanted, statement.source)?;
         if !self.unfilled {
-            let solution = self.solution(level, solution, statement.source);
+            let solution = self.instance(level, solution, typed.upper, statement.source);
             self.fix_born_instance(body, solution);
         }
         Ok(DeclaredType::Type(typed))
@@ -2346,8 +2587,19 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     /// Where the part at `site` of the shape at `level` is written.
     fn source(&self, level: usize, site: Site) -> SourceRef {
         let statement = self.statement_holding(level, site);
-        source_of(&self.chain[level].shape.body()[statement], site)
+        let shape = self.chain[level].shape;
+        source_of(shape, &shape.body()[statement], site)
             .expect("a part lies in its shape's statements")
+    }
+
+    /// The site of `part` in the shape at `level`.
+    pub(super) fn site(&self, level: usize, part: &ExpressionPart<'_>) -> Site {
+        self.chain[level].shape.site(part)
+    }
+
+    /// The site of `node` in the shape at `level`.
+    pub(super) fn node_site(&self, level: usize, node: &KExpression<'_>) -> Site {
+        self.chain[level].shape.site_of_node(node)
     }
 
     /// The statement of the shape at `level` holding the part at `site`: the one the walk is
@@ -2357,12 +2609,14 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         let body = at.shape.body();
         if body
             .get(at.statement)
-            .is_some_and(|node| part_of(node, site).is_some())
+            .is_some_and(|node| part_of(at.shape, node, site).is_some())
         {
             return at.statement;
         }
-        (body.iter().position(|node| part_of(node, site).is_some()))
-            .expect("a part lies in its shape's statements")
+        (body
+            .iter()
+            .position(|node| part_of(at.shape, node, site).is_some()))
+        .expect("a part lies in its shape's statements")
     }
 
     /// The instance site `part` of the shape at `level` is, through one-part parentheses: a name
@@ -2376,20 +2630,21 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         let shape = self.chain[level].shape;
         Ok(match of_part(shape, part) {
             Form::Name(leaf) => {
-                let Some(mention) = shape.mention(Site::of(leaf)) else {
+                let Some(mention) = shape.mention(shape.site(leaf)) else {
                     return Ok(None);
                 };
                 match self.read_declared(level, mention.coordinate) {
                     DeclaredType::Scheme(scheme) => Some((
                         Instanced::Name(leaf),
                         scheme,
-                        self.source(level, Site::of(leaf)),
+                        self.source(level, self.site(level, leaf)),
                     )),
                     DeclaredType::Type(_) => None,
                 }
             }
             Form::Lambda(node) => {
-                let Some(body) = Site::of_body(node).and_then(|site| shape.nested(site)) else {
+                let Some(body) = shape.site_of_body(node).and_then(|site| shape.nested(site))
+                else {
                     return Ok(None);
                 };
                 match self.callable(level, body) {
@@ -2472,15 +2727,19 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         }
         let (typed, solution) = self.instantiate(scheme, wanted, node.source)?;
         if !self.unfilled {
-            let solution = self.solution(level, solution, node.source);
-            self.record_instance_read(level, Site::of_node(node), InstanceRead::Solved(solution));
+            let solution = self.instance(level, solution, typed.upper, node.source);
+            self.record_instance_read(
+                level,
+                self.node_site(level, node),
+                InstanceRead::Solved(solution),
+            );
         }
         Ok(typed)
     }
 
     /// [`peeked`](Self::peeked) through the level's memo: each part is peeked once.
     fn peek(&mut self, level: usize, part: &'graph ExpressionPart<'graph>) -> Option<Interval> {
-        let (site, gathering) = (Site::of(part), self.open.last().copied());
+        let (site, gathering) = (self.site(level, part), self.open.last().copied());
         if let Some((peeked, noted)) = self.chain[level].peeks.get(&site) {
             debug_assert_eq!(
                 *noted, gathering,
@@ -2502,7 +2761,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         let shape = self.chain[level].shape;
         match of_part(shape, part) {
             Form::Name(leaf) => {
-                let mention = shape.mention(Site::of(leaf))?;
+                let mention = shape.mention(shape.site(leaf))?;
                 self.read_declared(level, mention.coordinate).as_type()
             }
             Form::Member { operand, label, .. } => {
@@ -2908,8 +3167,8 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         let shape = self.chain[level].shape;
         let form = of_part(shape, part);
         let typed = self.form(level, form, wanted)?;
-        let typed = self.viewed_tree(level, form, Written::Part(Site::of(part)), typed)?;
-        self.record_part(level, Site::of(part), typed);
+        let typed = self.viewed_tree(level, form, Written::Part(self.site(level, part)), typed)?;
+        self.record_part(level, self.site(level, part), typed);
         Ok(typed)
     }
 
@@ -2923,7 +3182,12 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         let shape = self.chain[level].shape;
         let form = of_node(shape, node);
         let typed = self.form(level, form, wanted)?;
-        self.viewed_tree(level, form, Written::Node(Site::of_node(node)), typed)
+        self.viewed_tree(
+            level,
+            form,
+            Written::Node(self.node_site(level, node)),
+            typed,
+        )
     }
 
     /// `typed`, the static type of a call, ascription or member read at `site` of the shape at
@@ -2951,7 +3215,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         let named = match written {
             Written::Part(site) => (0..shape.slots() as u32)
                 .map(Slot)
-                .find(|slot| (shape.rhs(*slot)).is_some_and(|part| Site::of(part) == site)),
+                .find(|slot| (shape.rhs(*slot)).is_some_and(|part| self.site(level, part) == site)),
             Written::Node(_) => None,
         };
         let tree = self.tree_form(trees::Scope::Chain(level), form, written, named)?;
@@ -2989,20 +3253,24 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             Form::Leaf(part) => self.leaf(level, part, wanted)?,
             Form::Name(part) => self.name(level, part, wanted)?,
             Form::Block(nested) => self.block(level, nested, None)?.unwrap_or_else(unknown),
-            Form::Lambda(node) => match Site::of_body(node).and_then(|site| shape.nested(site)) {
-                Some(body) => match self.callable(level, body) {
-                    DeclaredType::Type(typed) => typed,
-                    DeclaredType::Scheme(scheme) => {
-                        let (typed, solution) = self.instantiate(scheme, wanted, node.source)?;
-                        if !self.unfilled {
-                            let solution = self.solution(level, solution, node.source);
-                            self.fix_born_instance(body, solution);
+            Form::Lambda(node) => {
+                match shape.site_of_body(node).and_then(|site| shape.nested(site)) {
+                    Some(body) => match self.callable(level, body) {
+                        DeclaredType::Type(typed) => typed,
+                        DeclaredType::Scheme(scheme) => {
+                            let (typed, solution) =
+                                self.instantiate(scheme, wanted, node.source)?;
+                            if !self.unfilled {
+                                let solution =
+                                    self.instance(level, solution, typed.upper, node.source);
+                                self.fix_born_instance(body, solution);
+                            }
+                            typed
                         }
-                        typed
-                    }
-                },
-                None => unknown(),
-            },
+                    },
+                    None => unknown(),
+                }
+            }
             Form::Declaration => Interval::point(KType::NULL.into()),
             Form::Ascribe(node, mode) => self.ascribe(level, node, mode)?,
             Form::Eval(node) => self.eval(level, node)?,
@@ -3020,7 +3288,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                     None => {
                         let typed = self.narrow(level, node, list)?;
                         // An operand `peeked` cannot read is typed by the read's use.
-                        let site = Site::of(operand);
+                        let site = self.site(level, operand);
                         let operand_type = (peeked.is_none())
                             .then(|| self.part_type(level, site))
                             .flatten()
@@ -3055,9 +3323,9 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         let shape = self.chain[level].shape;
         let read = match of_part(shape, head) {
             Form::Name(name) => shape
-                .mention(Site::of(name))
+                .mention(self.site(level, name))
                 .map(|mention| self.read_declared(level, mention.coordinate)),
-            Form::Lambda(node) => Site::of_body(node)
+            Form::Lambda(node) => (shape.site_of_body(node))
                 .and_then(|site| shape.nested(site))
                 .map(|body| self.callable(level, body)),
             // A member read at a call's head is read as it is, a quantified member by its scheme:
@@ -3069,7 +3337,11 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 label,
             } => {
                 if !self.unfilled {
-                    self.record_instance_read(level, Site::of_node(node), InstanceRead::AsIs);
+                    self.record_instance_read(
+                        level,
+                        self.node_site(level, node),
+                        InstanceRead::AsIs,
+                    );
                 }
                 let peeked = self.peek(level, operand);
                 match self.peeked_member_scheme(level, operand, peeked, label)? {
@@ -3077,7 +3349,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                     // A scheme over a parameter the load cannot name: the run solves the call.
                     Some((_, Some(_))) => {
                         let typed = self.narrow(level, node, list)?;
-                        self.record_part(level, Site::of(head), typed);
+                        self.record_part(level, self.site(level, head), typed);
                         return Ok(DeclaredType::Type(unknown()));
                     }
                     // An operand read only by typing it: the head is read as it is, as `part`
@@ -3086,9 +3358,13 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                         let typed = self.narrow(level, node, list)?;
                         let typed = self.read_through_paths(level, operand, label, typed)?;
                         let form = of_part(self.chain[level].shape, head);
-                        let typed =
-                            self.viewed_tree(level, form, Written::Part(Site::of(head)), typed)?;
-                        self.record_part(level, Site::of(head), typed);
+                        let typed = self.viewed_tree(
+                            level,
+                            form,
+                            Written::Part(self.site(level, head)),
+                            typed,
+                        )?;
+                        self.record_part(level, self.site(level, head), typed);
                         return Ok(DeclaredType::Type(typed));
                     }
                     None => None,
@@ -3119,10 +3395,10 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         let typed = self.part_at(level, &operand_part.value, declared)?;
         if mode == Ascription::Opaque {
             // An opaque view hides each unpinned head parameter behind a carrier it mints.
-            self.record_minting(level, Site::of_node(node));
+            self.record_minting(level, self.node_site(level, node));
             let tree = self.tree(level, &operand_part.value)?;
             let tree = resident(self.lay, tree);
-            let site = Site::of_node(node);
+            let site = self.node_site(level, node);
             if tree.closed() {
                 self.chain[level].closed += 1;
                 if let Some(unit) = self.fixing() {
@@ -3157,16 +3433,63 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                     };
                     if let Some(types_of) = types_of {
                         self.lay(&types_of, carried, site)?;
+                        if let Tree::Body { body, .. } = *tree
+                            && tree.closed()
+                            && let Some(picks) = self.picks(body, &types_of)
+                        {
+                            self.record_picks(level, site, picks);
+                        }
                     }
                 }
             }
             return self.viewed(level, node, typed, declared);
         }
-        let held = self.held(level, typed, &ascribed.value, Site::of_node(node));
+        let held = self.held(level, typed, &ascribed.value, self.node_site(level, node));
         held.map_err(|(value, ascribed)| ShapeError::AscriptionNeverSatisfied {
             value,
             ascribed,
             at: node.source,
+        })
+    }
+
+    /// What a view of `viewed`'s signature over the module the body `body` births carries for each
+    /// keyworded member, by its registrations' positions in its run: `None` where a registration's
+    /// shape is not closed, or the view's fit leaves the source's side unknown.
+    fn picks(&mut self, body: Segment, viewed: &ViewTypes<'_>) -> Option<&'o [Pick<'o>]> {
+        let registered = self.registered_run(body)?;
+        let picks = view::picks(viewed, &registered, self.types, self.scratch)?;
+        Some(self.laid_picks(&picks))
+    }
+
+    /// The shapes the registrations of the module the body `body` births register at, in their
+    /// run's order: `None` where one is not closed.
+    fn registered_run(&mut self, body: Segment) -> Option<BumpVec<'p, DeclaredType<KType>>> {
+        let scratch = self.scratch;
+        let shape = self.shapes.shape_at(body);
+        // A module's registrations follow its named members in slot order.
+        let mut slots = BumpVec::new_in(scratch);
+        slots.extend(
+            shape
+                .registrations()
+                .iter()
+                .map(|registration| registration.slot),
+        );
+        slots.sort_unstable();
+        let mut registered = BumpVec::with_capacity_in(slots.len(), scratch);
+        for slot in slots.iter() {
+            match self.registered_cell(shape, *slot) {
+                Static::Closed(registration) => registered.push(registration.shape),
+                Static::Rigid { .. } | Static::Unknown => return None,
+            }
+        }
+        Some(registered)
+    }
+
+    fn laid_picks(&self, picks: &[(u16, BumpVec<'_, u32>)]) -> &'o [Pick<'o>] {
+        let lay = self.lay;
+        lay.fill(picks.len(), |at| Pick {
+            member: picks[at].0,
+            offered: collect(lay, picks[at].1.iter().copied()),
         })
     }
 
@@ -3220,7 +3543,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             return Ok(under(declared));
         }
         if fits(types, scratch, typed.upper, declared) {
-            self.record_settled(level, Site::of_node(node));
+            self.record_settled(level, self.node_site(level, node));
         }
         if let Some(exact) = exact(types, typed)
             && !fits(types, scratch, exact, declared)
@@ -3243,7 +3566,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         annotation: &'graph ExpressionPart<'graph>,
         typed: Interval,
     ) -> Result<Interval, ShapeError<'o>> {
-        let held = self.held(level, typed, annotation, Site::of(annotation));
+        let held = self.held(level, typed, annotation, self.site(level, annotation));
         held.map_err(|(value, annotated)| {
             let shape = self.chain[level].shape;
             let statement = shape.position_of(member).statement_index();
@@ -3257,7 +3580,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
 
     /// A value of the static type `typed` held to the type part `part`: that type, exactly where
     /// the retype makes it so ([`retyped_to`]), and settled at `site` where `typed`'s upper end
-    /// lies under it. Where the two meet at `Never`, both read through their bounds. A module exact
+    /// lies under it. Where the type is closed, what the retype re-stamps at is recorded at `site`. Where the two meet at `Never`, both read through their bounds. A module exact
     /// at a closed type is exactly what the run retypes it to, pinned by the run's own
     /// [`pinned_at_fit`], and refused where it fits a signature type not at all.
     fn held(
@@ -3297,7 +3620,11 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 .as_type()
                 .expect("a module's type is a type");
             self.lay_carried(carried);
+            self.record_retype(level, site, Retype::Point(carried));
             return Ok(Interval::point(carried.into()));
+        }
+        if let Some(closed) = types.concrete(declared) {
+            self.record_retype(level, site, Retype::of(types, closed));
         }
         Ok(retyped_to(types, declared))
     }
@@ -3314,9 +3641,24 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         };
         let typed = self.part(level, &operand.value)?;
         let shape = self.chain[level].shape;
-        let Some(body) = Site::of_body(node).and_then(|site| shape.nested(site)) else {
+        let Some(body) = shape.site_of_body(node).and_then(|site| shape.nested(site)) else {
             return Ok(unknown());
         };
+        // A surfaced key through a header over a module the load sees all of offers the overloads
+        // the load picks here, by position.
+        if !body.registrations().is_empty()
+            && let Tree::Retyped {
+                carried, source, ..
+            } = self.tree(level, &operand.value)?
+            && let Tree::Body { body: module, .. } = *source
+            && source.closed()
+            && let Some(registered) = self.registered_run(module)
+            && let Some(picks) =
+                layout::header_picks(carried, &registered, self.types, self.scratch)
+        {
+            let picks = self.laid_picks(&picks);
+            self.record_picks(level, self.node_site(level, node), picks);
+        }
         let tag = self.innermost();
         Ok(self
             .block(level, body, Some((typed, tag)))?
@@ -3369,7 +3711,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
 
     /// The type the type part `part` of the shape at `level` denotes, where the load knows it.
     fn declared(&self, level: usize, part: &'graph ExpressionPart<'graph>) -> Option<Parametric> {
-        let typed = self.type_cell(self.chain[level].shape, Site::of(part));
+        let typed = self.type_cell(self.chain[level].shape, self.site(level, part));
         match self.resolved_type(level, typed) {
             Static::Closed(handle) => Some(handle.into()),
             Static::Rigid { value: handle, .. } => Some(handle),
@@ -3394,10 +3736,10 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             ExpressionPart::Literal(KLiteral::Boolean(_)) => Interval::point(KType::BOOL.into()),
             ExpressionPart::Literal(KLiteral::Null) => Interval::point(KType::NULL.into()),
             ExpressionPart::QuotedExpression(_) => shape
-                .nested(Site::of(part))
+                .nested(self.site(level, part))
                 .map_or_else(unknown, |code| Interval::point(code.code_type().into())),
             ExpressionPart::SigiledTypeExpr(_) | ExpressionPart::RecordType(_) => {
-                match self.resolved_type(level, self.type_cell(shape, Site::of(part))) {
+                match self.resolved_type(level, self.type_cell(shape, shape.site(part))) {
                     Static::Closed(handle) => {
                         Interval::point(KType::of_kind(handle.kind_of(types)).into())
                     }
@@ -3415,7 +3757,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 }
                 self.record_composite(
                     level,
-                    Site::of(part),
+                    self.site(level, part),
                     items.iter().zip(typed.iter().copied()),
                 );
                 Interval {
@@ -3436,7 +3778,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 let each = pairs.iter().zip(typed.iter());
                 self.record_composite(
                     level,
-                    Site::of(part),
+                    self.site(level, part),
                     each.flat_map(|((key, value), (k, v))| [(key, *k), (value, *v)]),
                 );
                 Interval {
@@ -3465,7 +3807,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 let each = fields.iter().zip(typed.iter());
                 self.record_composite(
                     level,
-                    Site::of(part),
+                    self.site(level, part),
                     each.map(|((_, value), (_, typed))| (value, *typed)),
                 );
                 Interval {
@@ -3488,7 +3830,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         part: &'graph ExpressionPart<'graph>,
         wanted: Option<Parametric>,
     ) -> Result<Interval, ShapeError<'o>> {
-        let site = Site::of(part);
+        let site = self.site(level, part);
         let Some(mention) = self.chain[level].shape.mention(site) else {
             return Ok(unknown());
         };
@@ -3498,7 +3840,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 let at = self.source(level, site);
                 let (typed, solution) = self.instantiate(scheme, wanted, at)?;
                 if !self.unfilled {
-                    let solution = self.solution(level, solution, at);
+                    let solution = self.instance(level, solution, typed.upper, at);
                     self.record_instance_read(level, site, InstanceRead::Solved(solution));
                 }
                 typed
@@ -3509,7 +3851,8 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     /// The static type of what `coordinate`, read in the shape at `level`, holds, a quantified
     /// callable's its scheme. A capture along the chain reads its source's, each path variable
     /// there no path of whose class this shape reaches read through its bounds; one crossing into a
-    /// quote's code reads it through its bounds.
+    /// quote's code reads it through its bounds, or exactly the type the binding binds the code's
+    /// capture to.
     fn read_declared(&self, level: usize, coordinate: Coordinate) -> Bound {
         let Followed {
             landing,
@@ -3518,6 +3861,19 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         } = self.follow(level, coordinate);
         if let Some(entered) = entered {
             self.note(&[entered]);
+            // A capture the binding binds holds what its `EVAL` handed it, as a bound parameter
+            // does: exactly the type it binds.
+            if let Some(bound) = self.binds(entered)
+                && let Address::Capture(capture) = entered.at
+            {
+                let code = self.shape_at(entered.segment);
+                return DeclaredType::Type(match code.captures()[capture.0 as usize].name {
+                    BinderSymbol::Type(_) => {
+                        Interval::point(KType::of_kind(bound.kind_of(self.types)).into())
+                    }
+                    _ => Interval::point(bound.into()),
+                });
+            }
         }
         let read = match landing {
             Landing::Builtin(index) => {
@@ -3569,7 +3925,9 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             Some(Lands::Builtin(index)) => (Landing::Builtin(index), None),
             Some(Lands::Binder { at, slot }) => (Landing::Slot { level: at, slot }, None),
             Some(Lands::Hole { at, .. }) => (Landing::Open { hole: true }, Some(at)),
-            Some(Lands::Offered { at, .. }) => (Landing::Open { hole: false }, Some(at)),
+            Some(Lands::Offered { at, .. } | Lands::Entry { at, .. }) => {
+                (Landing::Open { hole: false }, Some(at))
+            }
             None => (Landing::Open { hole: false }, None),
         };
         Followed {
@@ -3614,11 +3972,12 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 .unwrap_or_else(|_| KType::NEVER.into());
             self.record_composite(
                 level,
-                Site::of_node(node),
+                self.node_site(level, node),
                 [(argument, payload)].into_iter(),
             );
             return Ok(Interval { lower, upper });
         }
+        self.route_by_name(level, node, callee);
         match self.callee(callee) {
             Some(callee) => self.called(level, callee, argument, node),
             None => {
@@ -3783,7 +4142,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         };
         if !self.unfilled && (contributions.iter()).any(|each| !matches!(each, Static::Unknown)) {
             let recorded = collect(self.lay, contributions.iter().copied());
-            self.record_named(level, Site::of(argument), recorded);
+            self.record_named(level, self.site(level, argument), recorded);
         }
         let (types, scratch) = (self.types, self.scratch);
         let minted_free = self.minted_free_fields(level, callee.names, argument, whole)?;
@@ -3879,7 +4238,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             .any(|typed| typed.upper == KType::NEVER.into())
         {
             let never = Interval::point(KType::NEVER.into());
-            self.record_part(level, Site::of(argument), never);
+            self.record_part(level, self.site(level, argument), never);
             return Ok(None);
         }
         let mut arguments = BumpVec::with_capacity_in(callee.names.len(), scratch);
@@ -3927,7 +4286,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             lower: ends(|each| each.lower),
             upper: ends(|each| each.upper),
         };
-        self.record_part(level, Site::of(argument), payload);
+        self.record_part(level, self.site(level, argument), payload);
         Ok(Some((payload.upper, arguments.leak(), contributions)))
     }
 
@@ -3991,7 +4350,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         let shape = self.chain[level].shape;
         match head {
             ExpressionPart::Type(_) => {
-                let coordinate = shape.mention(Site::of(head))?.coordinate;
+                let coordinate = shape.mention(shape.site(head))?.coordinate;
                 if let Coordinate::Builtin(index) = coordinate {
                     return match self.builtins.get(index) {
                         Value::Type(value) => Some(value.handle()),
@@ -4007,7 +4366,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 }
             }
             ExpressionPart::SigiledTypeExpr(_) | ExpressionPart::RecordType(_) => {
-                match self.type_cell(shape, Site::of(head)) {
+                match self.type_cell(shape, shape.site(head)) {
                     Static::Closed(handle) => Some(handle),
                     _ => None,
                 }
@@ -4085,7 +4444,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         let shape = self.chain[level].shape;
         let index = shape
             .candidate_lists()
-            .position(Site::of_node(node))
+            .position(self.node_site(level, node))
             .expect("a keyworded use's candidate list is recorded at its node");
         // A use one of whose arguments never arrives never runs its call.
         if arguments
@@ -4188,6 +4547,9 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             if let Some(builtin) = builtin.filter(|_| verdict != Verdict::Never) {
                 let native = Native::of(builtin.id());
                 let typed = rules::typed(native, builtin.ktype(), given_here, types, scratch);
+                if native == Native::ModuleMember {
+                    self.member_retype(level, node, given_here);
+                }
                 if let Some((slot, lacks)) = typed.dropped {
                     verdict = Verdict::Never;
                     dropped = dropped.or(Some((given_here[slot].typed.lower, lacks)));
@@ -4274,74 +4636,121 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 if judgement.verdict == Verdict::Maybe
                     && select::never_runs(types, scratch, maybe.into(), always()))
         }));
-        let judged = left;
+        let mut judged = left;
 
+        // Where every candidate kept is one closed function, how they rank is the same at every
+        // run: the table of each pair's answer, in scratch until a kept list records it. A rigid
+        // one is ranked at the call, whose binding closes it, and a spread — a surfaced key's,
+        // typed by its head — at the call that knows its functions.
+        let mut shapes: BumpVec<'_, DeclaredType<Parametric>> =
+            BumpVec::with_capacity_in(judged.len(), scratch);
+        shapes.extend(judged.iter().map_while(|judgement| {
+            match (judgement.candidate, judgement.known) {
+                (Candidate::One(_), Known::Closed(registered)) => {
+                    Some(DeclaredType::from(registered))
+                }
+                _ => None,
+            }
+        }));
+        let closed = shapes.len() == judged.len();
+        let builtin = |at: usize| self.builtin(judged[at].candidate).is_some();
+        // A lone candidate ranks against nothing.
+        let table = (closed && judged.len() > 1)
+            .then(|| select::table(scratch, types, scratch, &shapes, builtin))
+            .flatten();
         if judged
             .iter()
             .all(|judgement| judgement.verdict == Verdict::Always)
         {
-            let chosen = match judged[..] {
-                [only] => Some(only),
-                _ if judged
-                    .iter()
-                    .all(|judgement| matches!(judgement.known, Known::Closed(_))) =>
-                {
-                    let mut shapes: BumpVec<'_, DeclaredType<Parametric>> =
-                        BumpVec::with_capacity_in(judged.len(), scratch);
-                    shapes.extend(judged.iter().map(|judgement| match judgement.known {
-                        Known::Closed(registered) => DeclaredType::<Parametric>::from(registered),
-                        _ => unreachable!("every candidate is closed"),
-                    }));
+            let decided = match (&judged[..], table) {
+                ([_], _) => Some(Ok(0)),
+                (_, Some(table)) => Some(table.decide(u64::MAX >> (64 - judged.len()))),
+                // More than a table ranks: the lattice's own elimination.
+                _ if closed => {
                     let survivors = select_by_class(types, scratch, &shapes);
-                    let builtin =
-                        |survivor: usize| self.builtin(judged[survivor].candidate).is_some();
-                    match select::winner(&survivors, builtin) {
-                        Ok(survivor) => Some(judged[survivor]),
-                        Err(count) => {
-                            return Err(ShapeError::Ambiguous {
-                                key: list.elements,
-                                arguments: uppers(),
-                                count,
-                                at: node.source,
-                            });
-                        }
-                    }
+                    Some(select::winner(&survivors, builtin))
                 }
                 // Several, a rigid one among them: ranked at the call.
                 _ => None,
             };
-            if let Some(chosen) = chosen {
+            let chosen = match decided {
+                Some(Ok(survivor)) => Some(judged[survivor]),
+                Some(Err(count)) => {
+                    return Err(ShapeError::Ambiguous {
+                        key: list.elements,
+                        arguments: uppers(),
+                        count,
+                        at: node.source,
+                    });
+                }
+                None => None,
+            };
+            // A candidate whose group has a variable with no point is left to solve at the call.
+            let chosen = chosen.and_then(|chosen| {
+                let points = self.points(level, &chosen, &contributions, node.source)?;
+                Some((chosen, points))
+            });
+            if let Some((chosen, points)) = chosen {
                 let Candidate::One(coordinate) = chosen.candidate else {
                     unreachable!("an always candidate is no spread");
                 };
                 self.use_exits(level, arguments, minted_free, &sites, &[chosen]);
                 self.made(level, node, list, &sites, &[chosen])?;
                 if !self.unfilled {
-                    let mut points = BumpVec::new_in(scratch);
-                    points.extend(
-                        (chosen.intervals.unwrap_or(&[]).iter())
-                            .map(|interval| exact(types, *interval)),
-                    );
-                    let points = collect(self.lay, points.iter().copied());
-                    self.record_selection(level, Site::of_node(node), points);
+                    self.record_selection(level, self.node_site(level, node), points);
                 }
                 self.set_narrowing(level, index, Narrowing::Selected(coordinate));
+                self.route_use(level, node, &[(chosen, Some(points))]);
                 return Ok(self.candidate_return(chosen));
             }
         }
+        // An *always* candidate whose group has a variable with no point is admitted at the call.
+        let mut points = BumpVec::with_capacity_in(judged.len(), scratch);
+        for judgement in judged.iter_mut() {
+            let solved = match judgement.verdict {
+                Verdict::Always => self.points(level, judgement, &contributions, node.source),
+                _ => Some(Points::NONE),
+            };
+            points.push(solved.unwrap_or(Points::NONE));
+            if solved.is_none() {
+                judgement.verdict = Verdict::Maybe;
+            }
+        }
         if judged.len() < list.candidates.len()
+            || table.is_some()
             || judged
                 .iter()
                 .any(|judgement| judgement.verdict == Verdict::Always)
         {
-            let kept = collect(
+            let entries = collect(
                 self.lay,
                 judged
                     .iter()
                     .map(|judgement| (judgement.candidate, judgement.verdict)),
             );
+            let points = collect(self.lay, points.iter().copied());
+            let elimination = match table {
+                Some(table) => Elimination::Table(table.relaid(self.lay)),
+                None => Elimination::Open,
+            };
+            let kept = resident(
+                self.lay,
+                Kept {
+                    entries,
+                    points,
+                    elimination,
+                },
+            );
             self.set_narrowing(level, index, Narrowing::Kept(kept));
         }
+        let mut routed = BumpVec::with_capacity_in(judged.len(), scratch);
+        routed.extend(
+            (judged.iter().zip(points.iter())).map(|(judgement, points)| {
+                let solved = judgement.verdict == Verdict::Always;
+                (*judgement, solved.then_some(*points))
+            }),
+        );
+        self.route_use(level, node, &routed);
         self.use_exits(level, arguments, minted_free, &sites, &judged);
         self.made(level, node, list, &sites, &judged)?;
         // A lone closed signature head, with no hole skipped, is the only list that may admit, and
@@ -4360,6 +4769,120 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             returns.push(self.candidate_return(*judgement).upper);
         }
         Ok(under(types.union_of(scratch, &returns)))
+    }
+
+    /// Record what the member read `node`, given `given`, re-stamps the member at, where its module
+    /// operand is exact and the value member's declared type closed: the run reads the member
+    /// there.
+    fn member_retype(&mut self, level: usize, node: &KExpression<'graph>, given: &[Given<'_>]) {
+        let (types, scratch) = (self.types, self.scratch);
+        let [module, label] = given else {
+            return;
+        };
+        let (Some([name @ BinderSymbol::Value(_)]), Some(exact)) =
+            (label.names, exact(types, module.typed))
+        else {
+            return;
+        };
+        let declared = signature_member(types, scratch, exact.into(), *name)
+            .and_then(|read| read.declared.as_type())
+            .and_then(|declared| types.concrete(declared));
+        if let Some(declared) = declared
+            && !self.unfilled
+        {
+            self.record_retype(
+                level,
+                self.node_site(level, node),
+                Retype::of(types, declared),
+            );
+        }
+    }
+
+    /// The return of the callable body at `level`, as the contract its frame owes holds it, where
+    /// `node` is the body's tail call: `Some(None)` where that return is open.
+    fn tail_returns(&self, level: usize, node: &KExpression<'graph>) -> Option<Option<KType>> {
+        let shape = self.chain[level].shape;
+        if self.unfilled || shape.kind() != ShapeKind::Callable {
+            return None;
+        }
+        let tail = self.shapes.tail_call(shape)?;
+        if !std::ptr::eq(tail, node) {
+            return None;
+        }
+        let returns = self.in_body(level, Part::Return);
+        Some(returns.and_then(|returns| self.types.concrete(returns)))
+    }
+
+    /// Record the route of the keyworded use `node` where it is the tail call of the callable body
+    /// at `level`: per candidate the call reads, in its order — each judged, beside the closed
+    /// points an *always* one's group solves to — whether its return keeps the frame's contract,
+    /// where the frame's return and its solution are closed, and whether it hops into the frame's
+    /// own body. A builtin's call, a surfaced head's and a spread's are decided at the call.
+    fn route_use(
+        &mut self,
+        level: usize,
+        node: &KExpression<'graph>,
+        judged: &[(Judgement<'_>, Option<Points<'_>>)],
+    ) {
+        let Some(returns) = self.tail_returns(level, node) else {
+            return;
+        };
+        let (shape, types, scratch) = (self.chain[level].shape, self.types, self.scratch);
+        let per = self.lay.fill(judged.len(), |at| {
+            let (judgement, points) = judged[at];
+            let Candidate::One(coordinate) = judgement.candidate else {
+                return CandidateRoute {
+                    kept: None,
+                    hop: false,
+                };
+            };
+            let decided = judgement.ruled.is_none() && !judgement.surfaced && !judgement.retyped;
+            let kept = match (returns, judgement.known) {
+                (Some(returns), Known::Closed(callee)) if decided => {
+                    let solution = match callee {
+                        DeclaredType::Type(_) => Some(BumpVec::new_in(scratch)),
+                        DeclaredType::Scheme(_) => points.and_then(|points| {
+                            let mut solved =
+                                BumpVec::with_capacity_in(points.points.len(), scratch);
+                            for at in 0..points.points.len() {
+                                solved.push(points.closed(at)?);
+                            }
+                            Some(solved)
+                        }),
+                    };
+                    solution.map(|solution| kept(types, returns, callee, Some(&solution)))
+                }
+                _ => None,
+            };
+            CandidateRoute {
+                kept,
+                hop: self.shapes.hops_at(shape, coordinate),
+            }
+        });
+        self.record_route(level, self.node_site(level, node), Route { per });
+    }
+
+    /// Record the route of the call by name `node` of a callee whose static type is `head` where it
+    /// is the tail call of the callable body at `level`: whether an exact callee's return keeps the
+    /// frame's contract, where both are closed, and whether it hops into the frame's own body.
+    fn route_by_name(&mut self, level: usize, node: &KExpression<'graph>, head: Bound) {
+        let Some(returns) = self.tail_returns(level, node) else {
+            return;
+        };
+        let (shape, types) = (self.chain[level].shape, self.types);
+        let callee = match head {
+            DeclaredType::Type(head) if head.is_exact() => {
+                types.concrete(head.upper).map(DeclaredType::Type)
+            }
+            DeclaredType::Type(_) => None,
+            DeclaredType::Scheme(scheme) => Some(DeclaredType::Scheme(scheme)),
+        };
+        let kept = returns
+            .zip(callee)
+            .map(|(returns, callee)| kept(types, returns, callee, None));
+        let hop = self.shapes.hops_by_name(shape, &node.parts[0].value);
+        let per = self.lay.fill(1, |_| CandidateRoute { kept, hop });
+        self.record_route(level, self.node_site(level, node), Route { per });
     }
 
     /// Mark the shape at `level` porous where the keyworded use whose arguments are typed
@@ -4426,7 +4949,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     /// ([type tiers](../../design/type-tiers.md#two-classes-of-body)). Read once per part, through
     /// the level's memo.
     fn received(&mut self, level: usize, part: &'graph ExpressionPart<'graph>) -> bool {
-        let site = Site::of(part);
+        let site = self.site(level, part);
         if let Some(received) = self.chain[level].received.get(&site) {
             return *received;
         }
@@ -4449,7 +4972,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             }
             _ => return false,
         };
-        let Some(mention) = shape.mention(Site::of(name)) else {
+        let Some(mention) = shape.mention(shape.site(name)) else {
             return false;
         };
         let frame = self.frame_level(level);
@@ -4471,7 +4994,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         shape.rhs(slot).is_some_and(|rhs| {
             rhs.is_name()
                 && shape
-                    .mention(Site::of(rhs))
+                    .mention(shape.site(rhs))
                     .is_some_and(|mention| !mention.fellow)
                 && self.received(at, rhs)
         })
@@ -4479,7 +5002,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
 
     /// The static type the pass recorded for `part` of the shape at `level`, where it typed it.
     fn typed_part(&self, level: usize, part: &'graph ExpressionPart<'graph>) -> Option<Interval> {
-        self.part_type(level, Site::of(part))
+        self.part_type(level, self.site(level, part))
     }
 
     /// Whether the value `form`, written as `written` in the shape at `level` and of the static
@@ -4526,7 +5049,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         typed: Interval,
     ) -> Result<bool, ShapeError<'o>> {
         let form = of_part(self.chain[level].shape, part);
-        self.holds_nothing_minted(level, form, Written::Part(Site::of(part)), typed)
+        self.holds_nothing_minted(level, form, Written::Part(self.site(level, part)), typed)
     }
 
     /// Whether the content tree `tree`, read in the shape at `level`, reaches content its frame
@@ -4649,16 +5172,18 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     /// part's static type, and its solution by its site or in its body's born-instance cell.
     fn record_instance(&mut self, level: usize, site: &InstanceArgument<'graph>, made: Made<'_>) {
         let (typed, solution) = made;
-        self.record_part(level, Site::of(site.part), typed);
+        self.record_part(level, self.site(level, site.part), typed);
         if self.unfilled {
             return;
         }
-        let solution = self.solution(level, solution, site.at);
+        let solution = self.instance(level, solution, typed.upper, site.at);
         let read = InstanceRead::Solved(solution);
         match site.instanced {
-            Instanced::Name(leaf) => self.record_instance_read(level, Site::of(leaf), read),
+            Instanced::Name(leaf) => self.record_instance_read(level, self.site(level, leaf), read),
             Instanced::Literal(body) => self.fix_born_instance(body, solution),
-            Instanced::Member(node) => self.record_instance_read(level, Site::of_node(node), read),
+            Instanced::Member(node) => {
+                self.record_instance_read(level, self.node_site(level, node), read)
+            }
         }
     }
 
@@ -4721,13 +5246,13 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     ) -> Option<&'graph BodyShape<'graph>> {
         let shape = self.chain[level].shape;
         match operand {
-            ExpressionPart::QuotedExpression(_) => shape.nested(Site::of(operand)),
+            ExpressionPart::QuotedExpression(_) => shape.nested(shape.site(operand)),
             ExpressionPart::Identifier(_) => {
-                let coordinate = shape.mention(Site::of(operand))?.coordinate;
+                let coordinate = shape.mention(shape.site(operand))?.coordinate;
                 let (at, slot) = self.landed_slot(level, coordinate)?;
                 let holder = self.chain[at].shape;
                 match holder.rhs(slot)? {
-                    rhs @ ExpressionPart::QuotedExpression(_) => holder.nested(Site::of(rhs)),
+                    rhs @ ExpressionPart::QuotedExpression(_) => holder.nested(holder.site(rhs)),
                     _ => None,
                 }
             }
@@ -4939,6 +5464,19 @@ pub(super) struct LoadCounts {
 thread_local! {
     /// What the loads on this thread did since [`counted`] last began.
     static COUNTS: std::cell::Cell<LoadCounts> = std::cell::Cell::new(LoadCounts::default());
+    /// What each unit the walks on this thread run or absorb in their own order
+    /// ([`unit`](Pass::unit)) is handed to, while [`visiting`] runs: not the chain a rooted walk
+    /// stands.
+    static VISIT: std::cell::Cell<Option<fn(UnitId)>> = const { std::cell::Cell::new(None) };
+}
+
+/// Run `walk`, handing `visit` each unit it runs or absorbs in its own order.
+#[cfg(test)]
+pub(super) fn visiting<R>(visit: fn(UnitId), walk: impl FnOnce() -> R) -> R {
+    VISIT.with(|held| held.set(Some(visit)));
+    let read = walk();
+    VISIT.with(|held| held.set(None));
+    read
 }
 
 /// Add to one of the load's counts.

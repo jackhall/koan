@@ -1,19 +1,22 @@
 //! The **shape table**: every shape one load builds, by [`Segment`], beside where each sits in the
 //! body enclosing it. It is laid once, where the root's shape is built, and every fact of the text
 //! that spans bodies — where an unknown binds, the levels a chain numbers its type names at, the
-//! layout a closure carries — is read through it, so no shape needs a pointer to any other.
+//! layout a closure carries — is read through it, so no shape needs a pointer to any other. A step
+//! reads it through [`Code`], built per step at the step's own lifetime, so what a cell parks names a
+//! segment or a site rather than a shape.
 //!
 //! See [README.md § Load-time types](README.md#load-time-types).
 
 use crate::memory::{
     BumpAllocator, BumpBackedMap, BumpVec, ProgramBrand, Writer, bump_table, collect,
 };
-use crate::parse::{KExpression, Role};
+use crate::parse::{ExpressionPart, KExpression, Role};
 use crate::symbols::{BinderSymbol, SymbolInterner};
 use crate::values::{Chain, Knotted};
 
 use super::builtins::Builtins;
 use super::facts::{Address, UnitId, Unknown};
+use super::groups::Claims;
 use super::shape::{
     BodyShape, CaptureChain, CaptureSlot, CaptureSource, ComponentIndex, Coordinate, Lands, PathId,
     Position, Segment, ShapeError, ShapeKind, Site, Slot, Target, UnitIndex, follow,
@@ -26,6 +29,38 @@ mod tails;
 
 use memos::Memos;
 use tails::Tails;
+
+/// What a step reads shapes through, at the step's own lifetime `'step`: the shape table of the base
+/// its cell's chain rests on. Built per step from the cell's arena reference; what crosses a park
+/// holds a segment or a site instead, so keeping one past the step does not compile:
+///
+/// ```compile_fail
+/// use koan::memory::{Writer, resident};
+/// use koan::scope::Code;
+///
+/// fn keep<'here>(writer: Writer<'here, '_>, code: Code<'_>) -> &'here Code<'here> {
+///     resident(writer, code)
+/// }
+/// ```
+#[derive(Clone, Copy)]
+pub struct Code<'step>(&'step Shapes<'step>);
+
+impl<'step> Code<'step> {
+    /// The code `shapes` holds.
+    pub fn of(shapes: &'step Shapes<'step>) -> Self {
+        Code(shapes)
+    }
+
+    /// The shape at `segment`.
+    pub fn shape(&self, segment: Segment) -> &'step BodyShape<'step> {
+        self.0.shape_at(segment)
+    }
+
+    /// The shape table itself.
+    pub fn shapes(&self) -> &'step Shapes<'step> {
+        self.0
+    }
+}
 
 /// Every shape one load built, by segment, and each one's place in its encloser.
 #[derive(Clone, Copy)]
@@ -75,6 +110,15 @@ impl Levels<'_> {
 }
 
 impl<'graph> Shapes<'graph> {
+    /// The table of a load that built no shape.
+    pub const EMPTY: Self = Shapes {
+        bodies: &[],
+        parents: &[],
+        levels: &[],
+        tails: &[],
+        memos: &[],
+    };
+
     /// The shapes of a program's top-level statements and of every body nested in them.
     pub fn of_program<X: Knotted>(
         brand: ProgramBrand<'graph>,
@@ -85,6 +129,20 @@ impl<'graph> Shapes<'graph> {
         scratch: BumpAllocator<'_>,
     ) -> Result<&'graph Shapes<'graph>, ShapeError<'graph>> {
         super::shape::build_program(brand, statements, builtins, types, symbols, scratch)
+    }
+
+    /// The shapes of code composed at run time, built alone under the program's `claims`: see
+    /// [`build::code`](super::shape::build_code).
+    pub(crate) fn of_code<X: Knotted>(
+        brand: ProgramBrand<'graph>,
+        syntax: &KExpression<'graph>,
+        claims: &'graph Claims<'graph>,
+        builtins: &Builtins<'_, X>,
+        types: &Chain<'graph, 'graph, 'graph, '_>,
+        symbols: &SymbolInterner,
+        scratch: BumpAllocator<'_>,
+    ) -> &'graph Shapes<'graph> {
+        super::shape::build_code(brand, syntax, claims, builtins, types, symbols, scratch)
     }
 
     /// The table over `bodies` and `parents`, its levels numbered along each chain.
@@ -178,20 +236,12 @@ impl<'graph> Shapes<'graph> {
         }
     }
 
-    /// The unit of the owning body around `segment` that runs statement `statement` of it: an
-    /// inline body runs in the unit running the statement of its encloser that holds it.
+    /// The unit of `segment` that runs its statement `statement`. An inline body's units keep
+    /// records of their own, as an owning body's do.
     pub fn running(&self, segment: Segment, statement: u32) -> UnitId {
-        let shape = self.shape_at(segment);
-        match shape.kind() {
-            ShapeKind::Program | ShapeKind::Callable | ShapeKind::Code => UnitId {
-                segment,
-                unit: shape.unit_of_statement(statement as usize),
-            },
-            ShapeKind::Block | ShapeKind::Module => {
-                let (parent, statement) =
-                    (self.parent(segment)).expect("an inline body has an encloser");
-                self.running(parent, statement)
-            }
+        UnitId {
+            segment,
+            unit: self.shape_at(segment).unit_of_statement(statement as usize),
         }
     }
 
@@ -202,18 +252,11 @@ impl<'graph> Shapes<'graph> {
         Some(self.running(parent, statement))
     }
 
-    /// The unit whose record holds the facts of the slot `slot` of `segment`: the unit binding it
-    /// in an owning body, the unit running an inline body.
+    /// The unit whose record holds the facts of the slot `slot` of `segment`: the unit binding it.
     pub fn slot_unit(&self, segment: Segment, slot: Slot) -> UnitId {
-        let shape = self.shape_at(segment);
-        match shape.kind() {
-            ShapeKind::Program | ShapeKind::Callable | ShapeKind::Code => UnitId {
-                segment,
-                unit: shape.unit_of_slot(slot),
-            },
-            ShapeKind::Block | ShapeKind::Module => {
-                (self.birth_unit(segment)).expect("an inline body has an encloser")
-            }
+        UnitId {
+            segment,
+            unit: self.shape_at(segment).unit_of_slot(slot),
         }
     }
 
@@ -259,10 +302,10 @@ pub struct BindSite {
 }
 
 impl Shapes<'_> {
-    /// Where `unknown` binds. A callable's parameter, `FOR ALL` name or `:Type` parameter and a
-    /// quote's code's capture bind at that body's entry; a local or a type binder at the unit that
-    /// binds it; and a block's parameter — a `USING … SCOPE` block's surfaced name, an arm's `it` —
-    /// at the unit of the body enclosing the block that holds it, since the block is entered there.
+    /// Where `unknown` binds. A callable's parameter, `FOR ALL` name or `:Type` parameter, a
+    /// block's parameter — a `USING … SCOPE` block's surfaced name, an arm's `it` — and a quote's
+    /// code's capture bind at that body's entry; a local or a type binder at the unit that binds
+    /// it.
     pub fn bind_site(&self, unknown: Unknown) -> BindSite {
         let segment = unknown.segment;
         let declaring = self.shape_at(segment);
@@ -275,17 +318,9 @@ impl Shapes<'_> {
             Address::Capture(_) => return at(segment, UnitIndex::ENTRY),
             Address::Slot(slot) => slot,
         };
-        if declaring.position_of(slot) != Position::PARAMETER {
-            return at(segment, declaring.unit_of_slot(slot));
-        }
-        match (declaring.kind(), self.parent(segment)) {
-            (ShapeKind::Block, Some((encloser, statement))) => {
-                let unit = self
-                    .shape_at(encloser)
-                    .unit_of_statement(statement as usize);
-                at(encloser, unit)
-            }
-            _ => at(segment, UnitIndex::ENTRY),
+        match declaring.position_of(slot) == Position::PARAMETER {
+            true => at(segment, UnitIndex::ENTRY),
+            false => at(segment, declaring.unit_of_slot(slot)),
         }
     }
 }
@@ -596,6 +631,32 @@ impl Shapes<'_> {
 }
 
 impl<'graph> Shapes<'graph> {
+    /// The node of the tail call `shape`'s last statement makes, where `shape` is a callable or a
+    /// quote's code and the statement is a call by name or a keyworded use.
+    pub fn tail_call(
+        &self,
+        shape: &'graph BodyShape<'graph>,
+    ) -> Option<&'graph KExpression<'graph>> {
+        tails::tail_call(shape)
+    }
+
+    /// Whether a tail call of the callable `shape` whose callee is `callee` hops into the frame's
+    /// own body: a self tail edge of a body whose name does not escape.
+    fn hops(&self, shape: &BodyShape<'graph>, callee: Option<&BodyShape<'graph>>) -> bool {
+        callee.is_some_and(|callee| callee.segment() == shape.segment())
+            && !self.escapes(shape.segment())
+    }
+
+    /// [`hops`](Self::hops) for a call by name of `head` in `shape`.
+    pub fn hops_by_name(&self, shape: &BodyShape<'graph>, head: &ExpressionPart<'_>) -> bool {
+        self.hops(shape, tails::head_callable(self, shape, head))
+    }
+
+    /// [`hops`](Self::hops) for a keyworded use's candidate at `coordinate` in `shape`.
+    pub fn hops_at(&self, shape: &BodyShape<'graph>, coordinate: Coordinate) -> bool {
+        self.hops(shape, tails::candidate_callable(self, shape, coordinate))
+    }
+
     /// How many of `segment`'s slots keep a digest memo.
     pub fn digested_count(&self, segment: Segment) -> usize {
         self.memos[segment.index() as usize].digested.len()

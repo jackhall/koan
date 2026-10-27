@@ -13,7 +13,7 @@ use super::super::Koan;
 use super::classes::tutorial_snippets;
 use super::statics::loaded;
 use super::{WRITTEN, output};
-use crate::values::SpecBounds;
+use crate::values::{ArenaRef, BuildBudget};
 
 /// `SIG Counter`, whose head parameter an opaque view hides, `MODULE ints` and `MODULE words`,
 /// which fit it at different carriers, `Link`, a chain a loop walks to the `null` at its end, and
@@ -29,7 +29,7 @@ pub(super) const PRELUDE: &str = "SIG Counter FOR ALL #[Carrier] = \
                        MODULE empty = (LET unused = 0)\n";
 
 /// What one run left: the most any step left in each tier, how many nodes the run added to the
-/// root, what it printed, and how many specializations were live at its end.
+/// root, what it printed, and how many settlements were live at its end.
 #[derive(Debug, PartialEq, Eq)]
 pub(super) struct Ran {
     pub(super) tiers: Tiers,
@@ -53,14 +53,14 @@ pub(super) fn program(depth: u32, source: &str) -> String {
 
 /// Run [`program`] at `depth` over `source`.
 fn ran(depth: u32, source: &str) -> Ran {
-    ran_under(depth, source, SpecBounds::default())
+    ran_under(depth, source, BuildBudget::default())
 }
 
-/// Run [`program`] at `depth` over `source`, its specialization tables `bounds` long.
-pub(super) fn ran_under(depth: u32, source: &str, bounds: SpecBounds) -> Ran {
+/// Run [`program`] at `depth` over `source`, its unheld settlements within `budget`.
+pub(super) fn ran_under(depth: u32, source: &str, budget: BuildBudget) -> Ran {
     let program = program(depth, source);
     WRITTEN.with(|written| written.borrow_mut().clear());
-    let mut substrate = CellSubstrate::load::<Koan>(&program, "<test>", 2, bounds, output())
+    let mut substrate = CellSubstrate::load::<Koan>(&program, "<test>", 2, budget, output())
         .unwrap_or_else(|error| panic!("the program loads: {error}"));
     let before = substrate.with(|running| running.program().tiers().frozen.len());
     TIERS.with(|tiers| tiers.set(Tiers::default()));
@@ -68,7 +68,7 @@ pub(super) fn ran_under(depth: u32, source: &str, bounds: SpecBounds) -> Ran {
         .with(|running| running.run())
         .expect("the program runs");
     let after = substrate.with(|running| running.program().tiers().frozen.len());
-    let live = substrate.with(|running| running.scheduler().graph().live_specializations());
+    let live = substrate.with(|running| running.scheduler().graph().live_settlements());
     Ran {
         tiers: TIERS.with(Cell::get),
         root: after - before,
@@ -124,16 +124,16 @@ fn assert_flat(what: &str, [few, middle, many]: [usize; 3]) {
     );
 }
 
-/// A Fresh loop over `ints`, passed on bare: its view's site is invariant.
+/// A `Number`-returning loop over `ints`, passed on bare: its view's site is invariant.
 const INVARIANT: &str = "EXPR #(COUNTDOWN m :Counter link :Link) -> Number = \
                          #((LET v = (m :| Counter)) (COUNTDOWN m (ATTR link next)))\n\
                          EXPR #(COUNTDOWN m :Counter end :Null) -> Number = #(7)\n";
 
-/// `PEEK`: a `Shares` caching helper viewing the module it is handed.
+/// `PEEK`: a `Str`-returning caching helper viewing the module it is handed.
 const PEEK: &str = "EXPR #(PEEK m :Holder) -> Str = #((LET v = (m :| Holder)) (\"x\"))\n";
 
-/// `DRIVE`, a `Shares` loop that mints nothing itself, so every hop is a tenant of one host, whose
-/// region would take each `PEEK`'s view were `PEEK` not caching.
+/// `DRIVE`, a `Str`-returning loop that mints nothing itself, each hop handing [`PEEK`] a module
+/// built over its link.
 fn hosted_peeks() -> String {
     format!(
         "{PEEK}EXPR #(DRIVE link :Link) -> Str = \
@@ -161,7 +161,7 @@ fn invariant_loop() -> String {
     format!("{INVARIANT}PRINT (COUNTDOWN ints chain)")
 }
 
-/// `PASS`, a `Shares` loop caching on its host's scratch and parking once a hop on `TOUCH`.
+/// `PASS`, a `Str`-returning caching loop parking once a hop on `TOUCH`.
 const PARKING_LOOP: &str = "EXPR #(TOUCH m :Counter) -> Number = #(1)\n\
                             EXPR #(PASS m :Counter link :Link) -> Str = \
                             #((LET v = (m :| Counter)) (LET t = (TOUCH m)) \
@@ -169,7 +169,8 @@ const PARKING_LOOP: &str = "EXPR #(TOUCH m :Counter) -> Number = #(1)\n\
                             EXPR #(PASS m :Counter end :Null) -> Str = #(\"done\")\n\
                             PRINT (PASS ints chain)";
 
-/// `name`, a `Fresh` loop viewing a new module over each link, holding `held`, written over `link`.
+/// `name`, a `Number`-returning loop viewing a new module over each link, holding `held`, written
+/// over `link`.
 fn varying(name: &str, held: &str) -> String {
     format!(
         "EXPR #({name} link :Link) -> Number = \
@@ -184,8 +185,8 @@ fn varying_loop() -> String {
     format!("{}PRINT (COUNTDOWN chain)", varying("COUNTDOWN", "link"))
 }
 
-/// A `Fresh` loop whose hops each call `PEEK`, a `Shares` caching helper viewing a module over the
-/// link it is handed.
+/// A `Number`-returning loop whose hops each call `PEEK`, a `Str`-returning caching helper viewing
+/// a module over the link it is handed.
 const HELPER_LOOP: &str = "EXPR #(PEEK link :Link) -> Str = \
                            #((MODULE m OVER #[link] = (LET held = link)) \
                            (LET v = (m :| Holder)) (\"x\"))\n\
@@ -196,7 +197,7 @@ const HELPER_LOOP: &str = "EXPR #(PEEK link :Link) -> Str = \
                            EXPR #(COUNTDOWN end :Null) -> Number = #(7)\n\
                            PRINT (COUNTDOWN chain)";
 
-/// `START`, `Shares`, hopping into the `Fresh` [`INVARIANT`] loop.
+/// `START`, returning `Number | Str`, hopping into the [`INVARIANT`] loop.
 const START: &str = "EXPR #(START m :Counter link :Link) -> :(Number | Str) = \
                      #((LET v = (m :| Counter)) (COUNTDOWN m link))\n";
 
@@ -205,7 +206,7 @@ fn mixed_chain() -> String {
     format!("{INVARIANT}{START}PRINT (START ints chain)")
 }
 
-/// [`wrapped_peeks`] with both bodies `Fresh`, `PEEK` viewing at an invariant site.
+/// [`wrapped_peeks`] with both bodies returning `Number`, `PEEK` viewing at an invariant site.
 const FRESH_WRAPPED: &str = "EXPR #(PEEK m :Holder) -> Number = #((LET v = (m :| Holder)) (1))\n\
                              EXPR #(WRAP m :Counter link :Link) -> Number = \
                              #((LET v = (m :| Counter)) (MODULE h OVER #[link] = (LET held = link)) \
@@ -263,8 +264,6 @@ struct Adoptions {
     adopted: usize,
     /// Walks into a region, at an exit.
     exits: usize,
-    /// Walks into a warm tier, at an invariant site.
-    warm: usize,
     /// Parts the walks entered.
     entered: usize,
     /// Parts the walks skipped on their bits.
@@ -275,7 +274,7 @@ impl Adoptions {
     /// Zero every counter.
     fn reset() {
         use crate::type_lattice::{ADOPT_ASKED, ADOPT_HITS, ADOPT_LAID, ADOPT_PROBES};
-        use crate::values::{ADOPTED, EXIT_WALKS, PARTS_ENTERED, PARTS_SKIPPED, WARM_WALKS};
+        use crate::values::{ADOPTED, EXIT_WALKS, PARTS_ENTERED, PARTS_SKIPPED};
         let counters = [
             &ADOPT_ASKED,
             &ADOPT_PROBES,
@@ -283,7 +282,6 @@ impl Adoptions {
             &ADOPT_LAID,
             &ADOPTED,
             &EXIT_WALKS,
-            &WARM_WALKS,
             &PARTS_ENTERED,
             &PARTS_SKIPPED,
         ];
@@ -295,7 +293,7 @@ impl Adoptions {
     /// Every counter as it stands.
     fn read() -> Self {
         use crate::type_lattice::{ADOPT_ASKED, ADOPT_HITS, ADOPT_LAID, ADOPT_PROBES};
-        use crate::values::{ADOPTED, EXIT_WALKS, PARTS_ENTERED, PARTS_SKIPPED, WARM_WALKS};
+        use crate::values::{ADOPTED, EXIT_WALKS, PARTS_ENTERED, PARTS_SKIPPED};
         Adoptions {
             asked: ADOPT_ASKED.get(),
             probes: ADOPT_PROBES.get(),
@@ -303,14 +301,13 @@ impl Adoptions {
             laid: ADOPT_LAID.get(),
             adopted: ADOPTED.get(),
             exits: EXIT_WALKS.get(),
-            warm: WARM_WALKS.get(),
             entered: PARTS_ENTERED.get(),
             skipped: PARTS_SKIPPED.get(),
         }
     }
 
     /// The counters in table order, each named.
-    fn named(self) -> [(&'static str, usize); 9] {
+    fn named(self) -> [(&'static str, usize); 8] {
         [
             ("asked", self.asked),
             ("probes", self.probes),
@@ -318,7 +315,6 @@ impl Adoptions {
             ("laid", self.laid),
             ("adopted", self.adopted),
             ("exits", self.exits),
-            ("warm", self.warm),
             ("entered", self.entered),
             ("skipped", self.skipped),
         ]
@@ -367,8 +363,8 @@ fn digesting(depth: u32, source: &str) -> (Ran, Digested) {
 }
 
 /// Across the caching suite's programs, what a loop hop's adoptions cost, printed as a table of each
-/// counter per hop: flat in depth, a root handle adopted at no lookup, no node laid where no hop
-/// builds a specialization, and every hop's walks stopping at a part on its bits.
+/// counter per hop: flat in depth, a root handle adopted at no lookup, a constant laid per hop where
+/// no hop builds a settlement, and every hop's walks stopping at a part on its bits.
 #[test]
 fn a_hops_adoptions_hold_flat_in_depth() {
     let programs = [
@@ -387,7 +383,7 @@ fn a_hops_adoptions_hold_flat_in_depth() {
     let hops = (ENDS[1] - ENDS[0]) as usize;
     let per_hop = |delta: usize| format!("{:.1}", delta as f64 / hops as f64);
     let header = Adoptions::read().named().map(|(name, _)| name).join(" | ");
-    eprintln!("| program | {header} | specialized |");
+    eprintln!("| program | {header} | settled |");
     for (name, source) in programs {
         let runs = DEPTHS.map(|depth| adopting(depth, &source));
         let counts = runs.each_ref().map(|(_, adoptions)| adoptions.named());
@@ -398,36 +394,35 @@ fn a_hops_adoptions_hold_flat_in_depth() {
                 counts.map(|named| named[at].1),
             );
         }
-        let specialized = runs.each_ref().map(|(ran, _)| ran.tiers.specialized);
-        assert_flat(&format!("{name}: specialized"), specialized);
+        let settled = runs.each_ref().map(|(ran, _)| ran.tiers.settled);
+        assert_flat(&format!("{name}: settled"), settled);
         let deltas = (counts[0].into_iter().zip(counts[2]))
             .map(|((counter, few), (_, many))| (counter, many - few))
             .collect::<BTreeMap<_, _>>();
-        let specialized = specialized[2] - specialized[0];
+        let settled = settled[2] - settled[0];
         let row = (counts[0].iter())
             .map(|(counter, _)| per_hop(deltas[counter]))
             .collect::<Vec<_>>()
             .join(" | ");
-        eprintln!("| {name} | {row} | {} |", per_hop(specialized));
+        eprintln!("| {name} | {row} | {} |", per_hop(settled));
         assert!(
             deltas["probes"] < deltas["asked"],
             "{name}: each hop adopts root handles at no lookup, {} probes of {}",
             deltas["probes"],
             deltas["asked"]
         );
-        if specialized == 0 {
-            assert_eq!(
-                deltas["laid"], 0,
-                "{name}: a hop borrowing nothing new lays no node"
-            );
-            assert_eq!(
-                deltas["hits"], deltas["probes"],
-                "{name}: a hop borrowing nothing new hits at every probe"
+        // Every hop is a frame in a region of its own, so what an exit adopts there it adopts
+        // afresh each hop: a constant per hop, which `assert_flat` holds above.
+        if settled == 0 {
+            assert!(
+                deltas["laid"] <= 2 * hops,
+                "{name}: a hop borrowing nothing new lays a constant: {} nodes over {hops} hops",
+                deltas["laid"]
             );
         }
         assert!(
-            deltas["skipped"] > 0,
-            "{name}: each hop's walks stop at a part on its bits"
+            deltas["entered"] == 0 || deltas["skipped"] > 0,
+            "{name}: each hop's walks enter nothing, or stop at a part on its bits"
         );
     }
 }
@@ -516,10 +511,10 @@ fn handoffs(program: &Program<'_>) -> usize {
     let mut handed = 0;
     for shape in shapes {
         for statement in shape.body() {
-            let mut sites = vec![crate::scope::Site::of_node(statement)];
+            let mut sites = vec![shape.site_of_node(statement)];
             crate::scope::each_part(statement, |part| {
                 if let crate::parse::ExpressionPart::Expression(node) = part {
-                    sites.push(crate::scope::Site::of_node(node.reference()));
+                    sites.push(shape.site_of_node(node.reference()));
                 }
             });
             handed += (sites.into_iter())
@@ -649,17 +644,17 @@ fn a_module_surfaced_read_or_passed_on_digests_nothing() {
 }
 
 #[test]
-fn a_shares_call_with_new_content_each_call_holds_its_hosts_region_flat() {
+fn a_call_with_new_content_each_call_holds_its_hosts_region_flat() {
     let source = hosted_peeks();
     assert_eq!(caching(&source), 1, "`PEEK` caches");
     let [few, many] = at_ends(&source);
     assert_eq!((few.printed.as_str(), few.root), ("done", 0));
-    // The host's scratch grows with the loop, as its bytes do; its region does not.
+    // Each hop is a frame of its own, so the host's region holds flat.
     assert_eq!(few.tiers.region, many.tiers.region);
 }
 
 #[test]
-fn a_shares_loop_handing_a_keyed_shares_helper_a_module_over_its_link_holds_adoptions_flat() {
+fn a_loop_handing_a_keyed_helper_a_module_over_its_link_holds_adoptions_flat() {
     let source = wrapped_peeks();
     assert_eq!(caching(&source), 2, "`WRAP` and `PEEK` cache");
     let ran_adopting = |depth: u32| {
@@ -670,22 +665,21 @@ fn a_shares_loop_handing_a_keyed_shares_helper_a_module_over_its_link_holds_adop
     let runs = DEPTHS.map(ran_adopting);
     let [(few, few_adopted), _, (many, _)] = &runs;
     assert_eq!((few.printed.as_str(), few.root), ("done", 0));
-    // `PEEK` keys on the module it is handed, so it borrows a specialization of its own each hop,
-    // and `WRAP` one across the loop; the region holds flat. The agent tier grows by each `PEEK`
-    // binding, run content, until the build rewrite keys a build cell on load content alone
-    // (roadmap/gradual-build/build-rewrite.md).
-    for ((ran, _), depth) in runs.iter().zip(DEPTHS) {
-        assert_eq!(ran.tiers.specialized, depth as usize + 1);
+    // `PEEK` keys on a module built over each hop's link, content the run produced, so it seeks
+    // nothing; `WRAP` settles once across the loop. The region and the agent tier hold flat.
+    for (ran, _) in runs.iter() {
+        assert_eq!(ran.tiers.settled, 1);
     }
     assert_eq!(few.tiers.region, many.tiers.region);
+    assert_eq!(few.tiers.agent, many.tiers.agent);
     assert!(*few_adopted > 0, "the loop's exits adopt");
     assert_flat("adoptions", runs.each_ref().map(|(_, adopted)| *adopted));
 }
 
 #[test]
 fn a_fresh_loop_handing_a_fresh_helper_a_module_over_its_link_holds_adoptions_flat() {
-    // `PEEK` adopts the module it views into the warm tier at an invariant site, which stops at
-    // the link the module holds, settled by the exit that handed it on.
+    // `PEEK` views the module it is handed at an invariant site, whose types its settlement rests;
+    // an exit's adoption stops at the link the module holds, settled by the exit that handed it on.
     let source = FRESH_WRAPPED;
     assert_eq!(caching(source), 2, "`WRAP` and `PEEK` cache");
     let ran_adopting = |depth: u32| {
@@ -720,7 +714,7 @@ fn a_fresh_loop_over_an_invariant_module_holds_its_agent_tier_flat() {
     assert_eq!(caching(&source), 1);
     let [few, many] = at_ends(&source);
     assert_eq!(few.printed, "7");
-    assert!(few.tiers.agent > 0, "the view's types are adopted warm");
+    assert!(few.tiers.agent > 0, "the settlement rests the view's types");
     assert!(
         few.tiers.agent_verdicts > 0,
         "the view's verdicts are recorded warm, once across hops"
@@ -729,9 +723,9 @@ fn a_fresh_loop_over_an_invariant_module_holds_its_agent_tier_flat() {
 }
 
 #[test]
-fn a_shares_loop_parking_each_hop_holds_its_hosts_scratch_bytes_flat() {
-    // The parking keeps the host's scratch named across the loop: each hop reuses the receipt run
-    // the last released.
+fn a_loop_parking_each_hop_holds_its_hosts_scratch_bytes_flat() {
+    // Each hop parks once on `TOUCH`, reusing the receipt run the last released, so the scratch
+    // bytes hold flat.
     let source = PARKING_LOOP;
     assert_eq!(caching(source), 1);
     let [few, many] = at_ends(source);
@@ -752,16 +746,13 @@ fn a_fresh_loop_over_varying_content_holds_the_lattice_flat() {
 #[test]
 fn a_fresh_loop_calling_a_helper_over_its_link_keys_nothing_and_holds_flat() {
     // The helper's parameter is a record, whose digest costs its size, so it keys nothing: its
-    // view routes cold, and no hop seeks or builds a specialization.
+    // view routes cold, and no hop seeks or builds a settlement.
     let source = HELPER_LOOP;
     assert_eq!(caching(source), 2);
     let [few, many] = at_ends(source);
     assert_eq!(few.printed, "7");
     for ran in [&few, &many] {
-        assert_eq!(
-            (ran.tiers.sought, ran.tiers.specialized, ran.live),
-            (0, 0, 0)
-        );
+        assert_eq!((ran.tiers.sought, ran.tiers.settled, ran.live), (0, 0, 0));
     }
     assert_eq!(few, many);
 }
@@ -777,7 +768,7 @@ fn a_mixed_placement_tail_chain_over_invariant_content_holds_flat() {
 
 #[test]
 fn a_loops_scratch_resets_once_its_value_is_delivered() {
-    // Two `Shares` loops over different content, each asked for by a `Fresh` frame's statement:
+    // Two `Str`-returning loops over different content, each asked for by a frame's statement:
     // the second starts on the scratch the first's delivery reset, so the two leave what one
     // leaves.
     let driving = |calls: &str| {
@@ -802,9 +793,9 @@ fn a_loops_scratch_resets_once_its_value_is_delivered() {
 
 #[test]
 fn two_loops_a_frame_asks_for_in_turn_leave_what_the_larger_leaves() {
-    // A `Fresh` frame asks for two loops in turn, over content of different types: the second
+    // A frame asks for two loops in turn, over content of different types: the second
     // starts on the scratch the first's delivery reset, so the two leave in it what the larger
-    // leaves; where each keys a specialization of its own binding, the agent tier keeps both.
+    // leaves; where each keys a settlement of its own binding, the agent tier keeps both.
     let cases = [
         (
             INVARIANT.to_string(),
@@ -944,7 +935,7 @@ fn a_barrier_called_caching_frame_keeps_its_blocks_value() {
 /// load.
 fn laid(program: &str) -> Vec<(&'static str, usize, usize)> {
     let Ok(mut substrate) =
-        CellSubstrate::load::<Koan>(program, "<measured>", 2, SpecBounds::default(), output())
+        CellSubstrate::load::<Koan>(program, "<measured>", 2, BuildBudget::default(), output())
     else {
         return Vec::new();
     };
@@ -1041,7 +1032,7 @@ fn a_tail_edge_into_an_untyped_registration_pairs_by_its_written_slots() {
             })
             .expect("the looping `SPIN`");
         assert!(matches!(
-            facts.registered_type(drive, registration),
+            facts.registered_type(&program.tiers().resting(), drive, registration),
             crate::scope::Static::Unknown
         ));
         let spin = drive.births(registration).expect("`SPIN`'s body");
@@ -1071,7 +1062,7 @@ const KEYED: &str = "EXPR #(OUTER m :Counter) -> Number = \
                      LET plain = (FN :{x :Number} -> Number = #(x))\n";
 
 /// Each shape's slot names, beside its kind and the parameters its record keys a
-/// specialization on, by name.
+/// settlement on, by name.
 fn keyed(source: &str) -> Vec<(ShapeKind, Vec<String>, Option<Vec<String>>)> {
     loaded(source, |program| {
         let mut shapes = Vec::new();
@@ -1133,7 +1124,7 @@ fn a_caching_frame_keys_on_the_parameters_its_invariant_sites_read() {
         (shapes.iter())
             .filter(|(kind, _, _)| *kind != ShapeKind::Callable)
             .all(|(_, _, invariant)| invariant.is_none()),
-        "only a frame body's record keys a specialization"
+        "only a frame body's record keys a settlement"
     );
 }
 
@@ -1198,6 +1189,38 @@ fn a_parameter_keys_only_where_its_digest_is_constant_cost() {
 }
 
 #[test]
+fn no_run_cell_interns_into_the_agent_tier() {
+    // An invariant view, a view in a `Str`-returning helper, a mixed tail chain, a nominal over a keyed
+    // type binder and varying content: whatever settles, its settlement rests, and no step lays a
+    // type in the agent tier.
+    let boxed = String::from(
+        "EXPR #(BOXED Elt :Type) -> Number = #((NEWTYPE Box = :{v :Elt}) (1))\n\
+         PRINT (BOXED Number)\nPRINT (BOXED Number)",
+    );
+    let sources = [
+        invariant_loop(),
+        format!("{STR_INVARIANT}PRINT (COUNTDOWN ints chain)\n"),
+        hosted_peeks(),
+        wrapped_peeks(),
+        mixed_chain(),
+        varying_loop(),
+        boxed,
+    ];
+    let mut settled = 0;
+    for source in &sources {
+        let [(tiers, ..)] = runs(source, 1, |_| {})[..] else {
+            unreachable!()
+        };
+        assert_eq!(
+            tiers.stepped, 0,
+            "a step laid a type in the agent tier in\n{source}"
+        );
+        settled += tiers.settled;
+    }
+    assert!(settled > 0, "some program settles");
+}
+
+#[test]
 fn every_shape_of_a_load_has_its_own_segment_and_every_load_the_same() {
     let source = format!("{PRELUDE}{INVARIANT}{KEYED}LET q = #(1)\n");
     let segments = || {
@@ -1227,16 +1250,17 @@ fn every_shape_of_a_load_has_its_own_segment_and_every_load_the_same() {
     assert_eq!(segments(), first, "a second load assigns the same segments");
 }
 
-/// What one load of `source` at depth 1 leaves after each run: the tiers, what the build root's
-/// table holds, and what it printed; `between` runs on the loaded program between the runs.
+/// What one load of `source` at depth 1 leaves after each run: the tiers, how many settlements lie
+/// directly under the root, and what it printed; `between` runs on the loaded program between the
+/// runs.
 pub(super) fn runs(
     source: &str,
     count: usize,
     between: impl Fn(&mut crate::program::Running<'_>),
-) -> Vec<(Tiers, Option<usize>, String)> {
+) -> Vec<(Tiers, usize, String)> {
     let program = program(1, source);
     let mut substrate =
-        CellSubstrate::load::<Koan>(&program, "<test>", 2, SpecBounds::default(), output())
+        CellSubstrate::load::<Koan>(&program, "<test>", 2, BuildBudget::default(), output())
             .unwrap_or_else(|error| panic!("the program loads: {error}"));
     (0..count)
         .map(|_| {
@@ -1246,10 +1270,9 @@ pub(super) fn runs(
                 .with(|running| running.run())
                 .expect("the program runs");
             let table = substrate.with(|running| {
-                let build = running.roots().build;
-                let table = running.scheduler().graph().table_len(build);
+                let table = running.scheduler().graph().children_of(ArenaRef::ROOT);
                 between(running);
-                table.expect("the build root is live")
+                table
             });
             let printed = WRITTEN.with(|written| written.borrow().join("\n"));
             (TIERS.with(Cell::get), table, printed)
@@ -1258,13 +1281,13 @@ pub(super) fn runs(
 }
 
 #[test]
-fn a_loop_seeks_its_specialization_once_and_a_second_caller_finds_it_warm() {
+fn a_loop_seeks_its_settlement_once_and_a_second_caller_finds_it_warm() {
     let once = format!("{INVARIANT}PRINT (COUNTDOWN ints chain)\n");
     let [(alone, ..)] = runs(&once, 1, |_| {})[..] else {
         unreachable!()
     };
     assert_eq!(
-        (alone.sought, alone.specialized),
+        (alone.sought, alone.settled),
         (1, 1),
         "one seek for the whole loop"
     );
@@ -1274,34 +1297,31 @@ fn a_loop_seeks_its_specialization_once_and_a_second_caller_finds_it_warm() {
     };
     assert_eq!(printed, "7\n7");
     assert_eq!(
-        (both.sought, both.specialized),
+        (both.sought, both.settled),
         (2, 1),
         "the second caller builds nothing"
     );
-    assert_eq!(table, Some(1));
-    let warm = |source: &str| -> usize {
-        laid(&program(1, source))
-            .iter()
-            .map(|(_, _, warm)| warm)
-            .sum()
-    };
-    let warm_once = warm(&once);
-    assert!(warm_once > 0, "the loop's view is adopted warm");
+    assert_eq!(table, 1);
+    assert!(alone.rested > 0, "the settlement rests the loop's view");
     assert_eq!(
-        warm(&twice),
-        warm_once,
+        (alone.stepped, both.stepped),
+        (0, 0),
+        "no step lays a type in the agent tier"
+    );
+    assert_eq!(
+        both.agent, alone.agent,
         "the second caller finds every warm type laid"
     );
     let [(apart, table, _)] = runs(&format!("{once}PRINT (COUNTDOWN words chain)"), 1, |_| {})[..]
     else {
         unreachable!()
     };
-    assert_eq!(apart.specialized, 2, "two bindings, two specializations");
-    assert_eq!(table, Some(2));
+    assert_eq!(apart.settled, 2, "two bindings, two settlements");
+    assert_eq!(table, 2);
 }
 
 #[test]
-fn a_callable_born_under_a_specialization_keys_its_own_beneath_it() {
+fn a_callable_born_under_a_settlement_keys_its_own_beneath_it() {
     let inner =
         "(LET g = (FN :{x :Number} -> Number = #((LET v = (m :| Counter)) (x)))) (g {x = 1})";
     for body in [inner.to_string(), format!("(USING empty SCOPE ({inner}))")] {
@@ -1314,80 +1334,58 @@ fn a_callable_born_under_a_specialization_keys_its_own_beneath_it() {
         };
         assert_eq!(printed, "1", "{body}");
         assert_eq!(
-            (tiers.specialized, table),
-            (2, Some(1)),
-            "`g`'s specialization is a child of `OUTER`'s, not of the root: {body}"
+            (tiers.settled, table),
+            (2, 1),
+            "`g`'s settlement is a child of `OUTER`'s, not of the root: {body}"
         );
     }
 }
 
 #[test]
-fn an_evicted_specialization_is_rebuilt_on_the_next_miss_with_the_same_answer() {
+fn an_evicted_settlement_is_rebuilt_on_the_next_miss_with_the_same_answer() {
     let source = format!(
         "{INVARIANT}PRINT (COUNTDOWN ints chain)\nPRINT (COUNTDOWN words chain)\n\
          PRINT (COUNTDOWN ints chain)"
     );
-    let one = NonZeroUsize::MIN;
-    let tight = ran_under(
-        DEPTHS[0],
-        &source,
-        SpecBounds {
-            root: one,
-            nested: one,
-        },
-    );
+    let tight = ran_under(DEPTHS[0], &source, SMALLEST);
     assert_eq!(tight.printed, "7\n7\n7");
     assert_eq!(
-        (tight.tiers.specialized, tight.tiers.evicted),
+        (tight.tiers.settled, tight.tiers.evicted),
         (3, 2),
         "`words` evicts `ints`, and `ints` again evicts `words`"
     );
     let roomy = ran(DEPTHS[0], &source);
     assert_eq!(roomy.printed, tight.printed);
-    assert_eq!((roomy.tiers.specialized, roomy.tiers.evicted), (2, 0));
+    assert_eq!((roomy.tiers.settled, roomy.tiers.evicted), (2, 0));
 }
 
-/// Bounds of `root` and `nested`.
-pub(super) fn bounds(root: usize, nested: usize) -> SpecBounds {
-    SpecBounds {
-        root: NonZeroUsize::new(root).expect("a bound is not zero"),
-        nested: NonZeroUsize::new(nested).expect("a bound is not zero"),
-    }
-}
+/// The smallest budget: every miss evicts every settlement no cell holds.
+pub(super) const SMALLEST: BuildBudget = BuildBudget {
+    bytes: NonZeroUsize::MIN,
+};
 
 #[test]
-fn a_loop_handing_a_keyed_helper_a_new_module_each_hop_holds_its_specializations_flat() {
-    // `PEEK` keys on a new module each hop and `WRAP` on `ints` across the loop, both under the
-    // root: each `PEEK` miss evicts the last `PEEK`, never `WRAP`, whose hops are newer births.
+fn a_helper_keyed_on_a_module_built_each_hop_seeks_nothing_and_its_loop_settles_once() {
+    // `PEEK` keys on a module built over each hop's link: content the run produced, which no load
+    // could declare, so it seeks nothing and runs under its callee's arena node, the root. `WRAP`
+    // keys on `ints`, load content, and settles once across the loop.
     let source = wrapped_peeks();
-    let [few, many] = ENDS.map(|depth| ran_under(depth, &source, bounds(2, 2)));
-    for (ran, depth) in [(&few, ENDS[0]), (&many, ENDS[1])] {
-        let depth = depth as usize;
+    let [few, many] = ENDS.map(|depth| ran_under(depth, &source, SMALLEST));
+    for ran in [&few, &many] {
         assert_eq!(ran.printed, "done");
         assert_eq!(
-            (
-                ran.tiers.specialized,
-                ran.tiers.evicted,
-                ran.tiers.cold_births
-            ),
-            (depth + 1, depth - 1, 0),
+            (ran.tiers.settled, ran.tiers.evicted, ran.tiers.cold_births),
+            (1, 0, 0),
             "every `WRAP` hop runs warm"
         );
-        assert_eq!(ran.live, 2);
+        assert_eq!(ran.live, 1);
     }
-    // The agent tier grows by each `PEEK` binding, run content, until the build rewrite keys a
-    // build cell on load content alone (roadmap/gradual-build/build-rewrite.md).
     assert_eq!(few.tiers.region, many.tiers.region);
-    // `ENDS` stops at the root's default bound, so an operator run past it shows the bound biting.
-    let bound = SpecBounds::default().root.get();
-    let depth = bound + 4;
-    let past = ran(depth as u32, &source);
-    assert_eq!(past.printed, "done");
-    assert_eq!((past.tiers.specialized, past.live), (depth + 1, bound));
+    assert_eq!(few.tiers.agent, many.tiers.agent, "no `PEEK` binding rests");
 }
 
 #[test]
-fn a_loop_whose_keyed_frame_calls_a_keyed_callable_holds_its_specializations_flat() {
+fn a_frame_keyed_on_a_module_built_each_hop_seeks_nothing_and_its_callable_settles_once() {
     let source = "EXPR #(OUTER m :Holder) -> Number = \
                   #((LET w = (m :| Holder)) \
                   (LET g = (FN :{x :Number} -> Number = #((LET v = (m :| Holder)) (x)))) \
@@ -1418,41 +1416,35 @@ fn a_loop_whose_keyed_frame_calls_a_keyed_callable_holds_its_specializations_fla
         None,
         "`DRIVE` keys on nothing"
     );
-    // Each hop builds an `OUTER` under the root and a `g` beneath it; a miss on the root's full
-    // table releases the oldest `OUTER` with its `g`.
-    let [few, many] = ENDS.map(|depth| ran_under(depth, source, bounds(2, 2)));
-    for (ran, depth) in [(&few, ENDS[0]), (&many, ENDS[1])] {
-        let depth = depth as usize;
+    // `OUTER` keys on a module built over each hop's link, content the run produced, so it seeks
+    // nothing and runs under the root; `g`, born under the root, settles there once, and every
+    // later hop's `g` finds it.
+    let [few, many] = ENDS.map(|depth| ran_under(depth, source, SMALLEST));
+    for ran in [&few, &many] {
         assert_eq!(ran.printed, "7");
-        assert_eq!(
-            (ran.tiers.specialized, ran.tiers.evicted, ran.live),
-            (2 * depth, 2 * depth - 4, 4)
-        );
+        assert_eq!((ran.tiers.settled, ran.tiers.evicted, ran.live), (1, 0, 1));
     }
-    // `OUTER` keys on a module built over each hop's link, so the agent tier grows by each
-    // binding, run content, until the build rewrite keys a build cell on load content alone
-    // (roadmap/gradual-build/build-rewrite.md).
     assert_eq!(few.tiers.region, many.tiers.region);
 }
 
 #[test]
-fn a_frame_under_an_evicted_specialization_is_born_cold_with_the_same_answer() {
-    // `SWEEP`'s first `PEEK` miss evicts `OUTER`'s specialization while `OUTER` runs, so `g`, born
-    // under it, is born cold.
-    let source = format!(
-        "{PEEK}EXPR #(SWEEP link :Link) -> Str = \
-         #((MODULE h OVER #[link] = (LET held = link)) (LET seen = (PEEK h)) \
-         (SWEEP (ATTR link next)))\n\
-         EXPR #(SWEEP end :Null) -> Str = #(\"done\")\n\
-         EXPR #(OUTER m :Counter) -> Number = #((LET w = (m :| Counter)) \
-         (LET g = (FN :{{x :Number}} -> Number = #((LET v = (m :| Counter)) (x)))) \
-         (LET swept = (SWEEP chain)) (g {{x = 1}}))\n\
-         PRINT (OUTER ints)"
-    );
-    let tight = ran_under(2, &source, bounds(1, 1));
+fn a_settlement_its_frame_holds_outlives_every_miss_the_frame_waits_on() {
+    // Each hop of `SWEEP` calls `TOUCH` on `ints`, then on `words`: past the smallest budget,
+    // each miss evicts the other's settlement, which no cell holds, while `OUTER`'s frame holds its
+    // own, so `g`, born under it, runs warm.
+    let source = "EXPR #(TOUCH m :Counter) -> Str = #((LET v = (m :| Counter)) (\"x\"))\n\
+                  EXPR #(SWEEP link :Link) -> Str = \
+                  #((LET a = (TOUCH ints)) (LET b = (TOUCH words)) (SWEEP (ATTR link next)))\n\
+                  EXPR #(SWEEP end :Null) -> Str = #(\"done\")\n\
+                  EXPR #(OUTER m :Counter) -> Number = #((LET w = (m :| Counter)) \
+                  (LET g = (FN :{x :Number} -> Number = #((LET v = (m :| Counter)) (x)))) \
+                  (LET swept = (SWEEP chain)) (g {x = 1}))\n\
+                  PRINT (OUTER ints)";
+    let tight = ran_under(2, source, SMALLEST);
     assert_eq!(tight.printed, "1");
-    assert_eq!(tight.tiers.cold_births, 1, "`g` alone is born cold");
-    let roomy = ran(2, &source);
+    assert!(tight.tiers.evicted > 0, "the misses evict");
+    assert_eq!(tight.tiers.cold_births, 0, "no frame is born cold");
+    let roomy = ran(2, source);
     assert_eq!(roomy.printed, "1");
     assert_eq!(roomy.tiers.cold_births, 0);
 }
@@ -1460,7 +1452,7 @@ fn a_frame_under_an_evicted_specialization_is_born_cold_with_the_same_answer() {
 /// The allocations one run of `source` makes.
 fn allocations(source: &str) -> u64 {
     let mut substrate =
-        CellSubstrate::load::<Koan>(source, "<test>", 2, SpecBounds::default(), output())
+        CellSubstrate::load::<Koan>(source, "<test>", 2, BuildBudget::default(), output())
             .unwrap_or_else(|error| panic!("the program loads: {error}"));
     let before = crate::tests::allocation_count();
     substrate
@@ -1471,7 +1463,7 @@ fn allocations(source: &str) -> u64 {
 
 #[test]
 fn a_call_over_a_list_keys_nothing_and_its_birth_costs_below_the_lists_length() {
-    // `TAKE`'s parameter is `Any`, so it keys nothing: no call seeks a specialization, and the view
+    // `TAKE`'s parameter is `Any`, so it keys nothing: no call seeks a settlement, and the view
     // of the module born over the list routes cold.
     let source = |list: &str, count: usize| {
         let mut source = format!(
@@ -1495,7 +1487,7 @@ fn a_call_over_a_list_keys_nothing_and_its_birth_costs_below_the_lists_length() 
         TIERS.with(|tiers| tiers.set(Tiers::default()));
         let cost = (allocations(&source(&list, 4)) - allocations(&source(&list, 1))) / 3;
         let tiers = TIERS.with(Cell::get);
-        assert_eq!((tiers.sought, tiers.specialized), (0, 0));
+        assert_eq!((tiers.sought, tiers.settled), (0, 0));
         cost
     };
     let (short, long) = (per_birth(1), per_birth(64));
@@ -1506,10 +1498,10 @@ fn a_call_over_a_list_keys_nothing_and_its_birth_costs_below_the_lists_length() 
 }
 
 #[test]
-fn a_shares_callees_callable_keys_under_its_own_chain_not_its_hosts() {
-    // `SHARE` returns no scalar, so it is a tenant of `OUTER`'s frame, and keys `m`, which `g`'s
-    // view waits on; the callable it births was born under `SHARE`'s specialization, a child of
-    // the root as `SHARE` itself was, so its specialization lies beneath `SHARE`'s, not `OUTER`'s.
+fn a_callees_callable_keys_under_its_own_chain_not_its_callers() {
+    // `SHARE` keys `m`, which `g`'s view waits on; the callable it births was born under
+    // `SHARE`'s settlement, a child of the root as `SHARE` itself was, so its settlement lies
+    // beneath `SHARE`'s, not `OUTER`'s.
     let source = "EXPR #(SHARE m :Counter) -> Any = \
                   #((LET g = (FN :{x :Number} -> Number = #((LET v = (m :| Counter)) (x)))) \
                   (g {x = 1}))\n\
@@ -1519,22 +1511,22 @@ fn a_shares_callees_callable_keys_under_its_own_chain_not_its_hosts() {
         unreachable!()
     };
     assert_eq!(printed, "2");
-    assert_eq!((tiers.specialized, table), (3, Some(2)));
+    assert_eq!((tiers.settled, table), (3, 2));
 }
 
-/// [`INVARIANT`] at `Shares`: the same loop, ending in a string.
-const SHARES_INVARIANT: &str = "EXPR #(COUNTDOWN m :Counter link :Link) -> Str = \
+/// [`INVARIANT`] returning `Str`: the same loop, ending in a string.
+const STR_INVARIANT: &str = "EXPR #(COUNTDOWN m :Counter link :Link) -> Str = \
                                 #((LET v = (m :| Counter)) (COUNTDOWN m (ATTR link next)))\n\
                                 EXPR #(COUNTDOWN m :Counter end :Null) -> Str = #(\"seven\")\n";
 
 #[test]
-fn a_shares_loop_seeks_its_specialization_once_and_a_second_park_finds_it_warm() {
-    let once = format!("{SHARES_INVARIANT}PRINT (COUNTDOWN ints chain)\n");
+fn a_str_loop_seeks_its_settlement_once_and_a_second_park_finds_it_warm() {
+    let once = format!("{STR_INVARIANT}PRINT (COUNTDOWN ints chain)\n");
     let [(alone, ..)] = runs(&once, 1, |_| {})[..] else {
         unreachable!()
     };
     assert_eq!(
-        (alone.sought, alone.specialized),
+        (alone.sought, alone.settled),
         (1, 1),
         "one seek for the whole loop"
     );
@@ -1544,22 +1536,19 @@ fn a_shares_loop_seeks_its_specialization_once_and_a_second_park_finds_it_warm()
     };
     assert_eq!(printed, "seven\nseven");
     assert_eq!(
-        (both.sought, both.specialized),
+        (both.sought, both.settled),
         (2, 1),
         "the second park builds nothing"
     );
-    assert_eq!(table, Some(1));
-    let warm = |source: &str| -> usize {
-        laid(&program(1, source))
-            .iter()
-            .map(|(_, _, warm)| warm)
-            .sum()
-    };
-    let warm_once = warm(&once);
-    assert!(warm_once > 0, "the loop's view is adopted warm");
+    assert_eq!(table, 1);
+    assert!(alone.rested > 0, "the settlement rests the loop's view");
     assert_eq!(
-        warm(&twice),
-        warm_once,
+        (alone.stepped, both.stepped),
+        (0, 0),
+        "no step lays a type in the agent tier"
+    );
+    assert_eq!(
+        both.agent, alone.agent,
         "the second park finds every warm type laid"
     );
     assert!(
@@ -1573,7 +1562,7 @@ fn a_shares_loop_seeks_its_specialization_once_and_a_second_park_finds_it_warm()
 }
 
 #[test]
-fn a_callable_born_in_a_shares_frame_keys_its_own_beneath_it() {
+fn a_callable_born_in_a_keyed_frame_keys_its_own_beneath_it() {
     let inner =
         "(LET g = (FN :{x :Number} -> Number = #((LET v = (m :| Counter)) (x)))) (g {x = 1})";
     for body in [inner.to_string(), format!("(USING empty SCOPE ({inner}))")] {
@@ -1586,18 +1575,17 @@ fn a_callable_born_in_a_shares_frame_keys_its_own_beneath_it() {
         };
         assert_eq!(printed, "1", "{body}");
         assert_eq!(
-            (tiers.specialized, table),
-            (2, Some(1)),
-            "`g`'s specialization is a child of `OUTER`'s, not of the root: {body}"
+            (tiers.settled, table),
+            (2, 1),
+            "`g`'s settlement is a child of `OUTER`'s, not of the root: {body}"
         );
     }
 }
 
 #[test]
-fn an_unkeyed_shares_callee_in_a_keyed_frame_keys_its_callables_under_its_own_birth() {
-    // `OUTER` is a keyed tenant; `SHARE`, whose `m :Any` keys nothing, borrows nothing, so the
-    // callable it births keys under the root `SHARE` was born under, not under `OUTER`'s
-    // specialization.
+fn an_unkeyed_callee_in_a_keyed_frame_keys_its_callables_under_its_own_birth() {
+    // `OUTER` is keyed; `SHARE`, whose `m :Any` keys nothing, runs under the root it was born
+    // under, so the callable it births keys there, not under `OUTER`'s settlement.
     let source = "EXPR #(SHARE m :Any) -> Any = \
                   #((LET g = (FN :{x :Number} -> Number = #((LET v = (m :| Counter)) (x)))) \
                   (g {x = 1}))\n\
@@ -1607,13 +1595,13 @@ fn an_unkeyed_shares_callee_in_a_keyed_frame_keys_its_callables_under_its_own_bi
         unreachable!()
     };
     assert_eq!(printed, "2");
-    assert_eq!((tiers.specialized, table), (2, Some(2)));
+    assert_eq!((tiers.settled, table), (2, 2));
 }
 
 #[test]
-fn a_keyed_shares_call_runs_beside_a_host_scratch_laid_before_it() {
-    // `VARY` caches but keys nothing, so it lays its host's scratch branch through the caching
-    // chain; the keyed loop asked for at the same park runs on a caching chain over it next.
+fn a_keyed_call_runs_beside_a_scratch_laid_before_it() {
+    // `VARY` caches but keys nothing, so it lays a scratch branch through the caching chain; the
+    // keyed loop asked for at the same park runs on a caching chain of its own next.
     let vary = "EXPR #(VARY link :Link) -> Str = \
                 #((MODULE m OVER #[link] = (LET held = link)) \
                 (LET seen = (m :| Holder)) (VARY (ATTR link next)))\n\
@@ -1625,7 +1613,7 @@ fn a_keyed_shares_call_runs_beside_a_host_scratch_laid_before_it() {
     );
     let printed = |calls: &str| {
         let [(_, _, ref printed)] =
-            runs(&format!("{SHARES_INVARIANT}{vary}PRINT {calls}"), 1, |_| {})[..]
+            runs(&format!("{STR_INVARIANT}{vary}PRINT {calls}"), 1, |_| {})[..]
         else {
             unreachable!()
         };
@@ -1651,11 +1639,12 @@ const BOXED: &str = "EXPR #(BOXED Elt :Type) -> Number = #((NEWTYPE Box = :{v :E
                      #((LET r = (HOP :{a :Elt b :Elt})) (r))\n";
 
 #[test]
-fn a_type_composed_at_run_reaches_the_specialization_it_keys_by_value() {
-    // Each asker keys its own `Elt`, which its statement's call reads, and `HOP` keys the
-    // record it is handed: one specialization per keyed frame, and the record relayed into the
-    // agent tier once, where every specialization keyed on it reads it.
-    for (asker, keyed, relayed) in [("ASK", 2, 1), ("HOPPING", 3, 1)] {
+fn a_type_composed_at_run_keys_no_settlement_and_its_asker_settles_once() {
+    // Each asker keys its own `Elt`, load content the root holds, so its image relays nothing, and
+    // settles once. The record it composes from `Elt` is content the run produced, whose handle is
+    // not the root's, so the call it is handed to, by a child or by a tail hop, seeks nothing. What
+    // the asker's settlement's records name rests in the agent tier once.
+    for asker in ["ASK", "HOPPING"] {
         let once = ran(DEPTHS[0], &format!("{BOXED}PRINT ({asker} Number)\n"));
         let twice = ran(
             DEPTHS[0],
@@ -1663,27 +1652,21 @@ fn a_type_composed_at_run_reaches_the_specialization_it_keys_by_value() {
         );
         assert_eq!((once.printed.as_str(), twice.printed.as_str()), ("1", "1"));
         assert_eq!(
-            (
-                once.tiers.sought,
-                once.tiers.specialized,
-                once.tiers.relayed
-            ),
-            (keyed, keyed, relayed),
-            "`{asker}`'s composed record is laid by value"
+            (once.tiers.sought, once.tiers.settled, once.tiers.relayed),
+            (1, 1, 0),
+            "`{asker}` settles alone"
         );
+        assert!(once.tiers.rested > 0, "`{asker}`'s records name the record");
         assert_eq!(
-            (
-                twice.tiers.sought,
-                twice.tiers.specialized,
-                twice.tiers.relayed
-            ),
-            (2 * keyed, keyed, relayed),
-            "`{asker}`'s second call hits, and a hit relays nothing"
+            (twice.tiers.sought, twice.tiers.settled, twice.tiers.rested),
+            (2, 1, once.tiers.rested),
+            "`{asker}`'s second call hits, and a hit rests nothing"
         );
     }
     assert_eq!(
         ran(DEPTHS[0], &invariant_loop()).tiers.relayed,
-        0,
-        "a written module's types are the root's"
+        1,
+        "a written module's types are the root's: only the application its parameter's retype \
+         stamps, which the frame binds it at, is relayed"
     );
 }

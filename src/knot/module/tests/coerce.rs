@@ -45,7 +45,7 @@ fn every_slot_that_names_the_carrier_is_born_at_it() {
             let activation = fixture.run(writer, types, &lines, &[]);
             let m = module(fixture, activation, "m");
             let bag = declared(fixture, activation, "Bag");
-            let view = ascribe(writer, Value::Knotted(m), bag, types, scratch)
+            let view = ascribe(writer, Value::Knotted(m), bag, None, types, scratch)
                 .unwrap_or_else(|error| panic!("`m` satisfies `Bag`: {error:?}"));
             let read = |name| member(fixture, view, name, types, scratch);
 
@@ -153,7 +153,7 @@ fn a_function_member_is_born_behind_a_barrier() {
             let m = module(fixture, activation, "m");
             let bag = declared(fixture, activation, "Bag");
             let source_step = member(fixture, m, "step", types, scratch);
-            let view = ascribe(writer, Value::Knotted(m), bag, types, scratch)
+            let view = ascribe(writer, Value::Knotted(m), bag, None, types, scratch)
                 .unwrap_or_else(|error| panic!("`m` satisfies `Bag`: {error:?}"));
 
             let Value::Type(carrier) = member(fixture, view, "Carrier", types, scratch) else {
@@ -214,7 +214,7 @@ MODULE m = ((LET Carrier = Number) (LET one = 1) \
             let m = module(fixture, activation, "m");
             let outer = declared(fixture, activation, "Outer");
             let source_inner = member(fixture, m, "inner", types, scratch);
-            let view = ascribe(writer, Value::Knotted(m), outer, types, scratch)
+            let view = ascribe(writer, Value::Knotted(m), outer, None, types, scratch)
                 .unwrap_or_else(|error| panic!("`m` satisfies `Outer`: {error:?}"));
 
             let (Value::Knotted(before), Value::Knotted(after)) =
@@ -375,7 +375,7 @@ MODULE m = ((LET Carrier = Any) (LET ring = [1 spin]) \
             let bag = declared(fixture, activation, "Bag");
             assert!(
                 matches!(
-                    ascribe(writer, Value::Knotted(m), bag, types, scratch),
+                    ascribe(writer, Value::Knotted(m), bag, None, types, scratch),
                     Err(Unascribable::Coercion {
                         refused: CoercionRefused::Unsupported(_),
                         ..
@@ -405,7 +405,7 @@ fn a_union_member_naming_a_hidden_parameter_takes_the_value_whatever_the_union_s
             let activation = fixture.run(writer, types, &lines, &[]);
             let m = module(fixture, activation, "m");
             let either = declared(fixture, activation, "Either");
-            let view = ascribe(writer, Value::Knotted(m), either, types, scratch)
+            let view = ascribe(writer, Value::Knotted(m), either, None, types, scratch)
                 .unwrap_or_else(|error| panic!("`m` satisfies `Either`: {error:?}"));
             let Value::Type(carrier) = member(fixture, view, "Carrier", types, scratch) else {
                 panic!("`Carrier` is a type member");
@@ -417,7 +417,7 @@ fn a_union_member_naming_a_hidden_parameter_takes_the_value_whatever_the_union_s
             );
 
             let twins = declared(fixture, activation, "Twins");
-            let refused = ascribe(writer, Value::Knotted(m), twins, types, scratch);
+            let refused = ascribe(writer, Value::Knotted(m), twins, None, types, scratch);
             assert!(
                 matches!(
                     refused,

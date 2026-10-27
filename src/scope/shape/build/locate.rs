@@ -2,9 +2,9 @@
 //! carries a span, else at the nearest spanned part or node around it. A container's items carry
 //! no span of their own, so an error about one points at the container.
 //!
-//! The walk records a part by its [`Site`], its address, so the part is found again by searching
-//! the statement being walked for that address. Only the error path searches: a shape that builds
-//! locates nothing.
+//! The walk records a part by its [`Site`], which its shape's table resolves to an address, so the
+//! part is found again by searching the statement being walked for that address. Only the error
+//! path searches: a shape that builds locates nothing.
 
 use crate::parse::{ExpressionPart, KExpression};
 use crate::source::SourceRef;
@@ -17,29 +17,30 @@ impl Builder<'_, '_, '_> {
     /// points. Valid while the draft at `level` is on the chain, since the part is searched for in
     /// the statement that draft holds.
     pub(super) fn part_source(&self, level: usize, statement: u32, site: Site) -> SourceRef {
-        let node = &self.chain[level].nodes[statement as usize];
-        let found = source_within(node, site);
+        let draft = &self.chain[level];
+        let node = &draft.nodes[statement as usize];
+        let found = source_within(node, draft.sites.address(site));
         debug_assert!(found.is_some(), "a part the walk met lies in its statement");
         found.unwrap_or(node.source)
     }
 }
 
-/// The source of the part at `site` within `node`: its own span in `node`'s file, else the nearest
-/// spanned part's or node's around it. `None` when `node` does not hold the part.
-pub(in crate::scope) fn source_within(node: &KExpression<'_>, site: Site) -> Option<SourceRef> {
+/// The source of the part at `address` within `node`: its own span in `node`'s file, else the
+/// nearest spanned part's or node's around it. `None` when `node` does not hold the part.
+pub(in crate::scope) fn source_within(node: &KExpression<'_>, address: usize) -> Option<SourceRef> {
     node.parts.iter().find_map(|part| {
         let here = part.span.map_or(node.source, |span| SourceRef {
             span,
             file: node.source.file,
         });
-        within_part(&part.value, here, site)
+        within_part(&part.value, here, address)
     })
 }
 
 /// [`source_within`] for one part located at `here`. A nested node's own source is nearer than
 /// `here`; a container's items carry none, so they are located at `here`.
-fn within_part(part: &ExpressionPart<'_>, here: SourceRef, site: Site) -> Option<SourceRef> {
-    if Site::of(part) == site {
+fn within_part(part: &ExpressionPart<'_>, here: SourceRef, address: usize) -> Option<SourceRef> {
+    if std::ptr::from_ref(part).addr() == address {
         return Some(here);
     }
     match part {
@@ -47,16 +48,16 @@ fn within_part(part: &ExpressionPart<'_>, here: SourceRef, site: Site) -> Option
         | ExpressionPart::SigiledTypeExpr(node)
         | ExpressionPart::RecordType(node)
         | ExpressionPart::QuotedExpression(node)
-        | ExpressionPart::MarkedUse(_, node) => source_within(node.reference(), site),
-        ExpressionPart::ListLiteral(items) => {
-            items.iter().find_map(|item| within_part(item, here, site))
-        }
+        | ExpressionPart::MarkedUse(_, node) => source_within(node.reference(), address),
+        ExpressionPart::ListLiteral(items) => items
+            .iter()
+            .find_map(|item| within_part(item, here, address)),
         ExpressionPart::DictLiteral(pairs) => pairs.iter().find_map(|(key, value)| {
-            within_part(key, here, site).or_else(|| within_part(value, here, site))
+            within_part(key, here, address).or_else(|| within_part(value, here, address))
         }),
         ExpressionPart::RecordLiteral(fields) => fields
             .iter()
-            .find_map(|(_, value)| within_part(value, here, site)),
+            .find_map(|(_, value)| within_part(value, here, address)),
         ExpressionPart::Keyword(_)
         | ExpressionPart::Identifier(_)
         | ExpressionPart::Type(_)
@@ -65,19 +66,20 @@ fn within_part(part: &ExpressionPart<'_>, here: SourceRef, site: Site) -> Option
     }
 }
 
-/// The part at `site` within `node`, at any depth. `None` when `node` does not hold it.
+/// The part at `address` within `node`, at any depth. `None` when `node` does not hold
+/// it.
 pub(in crate::scope) fn part_within<'a>(
     node: &'a KExpression<'a>,
-    site: Site,
+    address: usize,
 ) -> Option<&'a ExpressionPart<'a>> {
     node.parts
         .iter()
-        .find_map(|part| part_in(&part.value, site))
+        .find_map(|part| part_in(&part.value, address))
 }
 
 /// [`part_within`] for one part.
-fn part_in<'a>(part: &'a ExpressionPart<'a>, site: Site) -> Option<&'a ExpressionPart<'a>> {
-    if Site::of(part) == site {
+fn part_in<'a>(part: &'a ExpressionPart<'a>, address: usize) -> Option<&'a ExpressionPart<'a>> {
+    if std::ptr::from_ref(part).addr() == address {
         return Some(part);
     }
     match part {
@@ -85,13 +87,13 @@ fn part_in<'a>(part: &'a ExpressionPart<'a>, site: Site) -> Option<&'a Expressio
         | ExpressionPart::SigiledTypeExpr(node)
         | ExpressionPart::RecordType(node)
         | ExpressionPart::QuotedExpression(node)
-        | ExpressionPart::MarkedUse(_, node) => part_within(node.reference(), site),
-        ExpressionPart::ListLiteral(items) => items.iter().find_map(|item| part_in(item, site)),
+        | ExpressionPart::MarkedUse(_, node) => part_within(node.reference(), address),
+        ExpressionPart::ListLiteral(items) => items.iter().find_map(|item| part_in(item, address)),
         ExpressionPart::DictLiteral(pairs) => pairs
             .iter()
-            .find_map(|(key, value)| part_in(key, site).or_else(|| part_in(value, site))),
+            .find_map(|(key, value)| part_in(key, address).or_else(|| part_in(value, address))),
         ExpressionPart::RecordLiteral(fields) => {
-            fields.iter().find_map(|(_, value)| part_in(value, site))
+            fields.iter().find_map(|(_, value)| part_in(value, address))
         }
         ExpressionPart::Keyword(_)
         | ExpressionPart::Identifier(_)

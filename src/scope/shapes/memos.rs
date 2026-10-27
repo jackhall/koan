@@ -73,7 +73,7 @@ pub(super) fn memos<'graph, 'x>(
                 return;
             };
             if let Some(slots) = view_slots(shapes, shape, &operand.value, scratch, &mut digested) {
-                viewed.push((Site::of_node(node), slots));
+                viewed.push((shape.site_of_node(node), slots));
             }
         });
         views.push(viewed);
@@ -186,7 +186,7 @@ fn handed<'x>(
         )
     };
     let mut handed = BumpVec::new_in(scratch);
-    let site = match shape.candidates(Site::of_node(node)) {
+    let site = match shape.candidates(shape.site_of_node(node)) {
         // A builtin runs no frame to keep a memo in.
         Some(list)
             if (list.candidates.iter())
@@ -203,7 +203,7 @@ fn handed<'x>(
                     });
                 }
             }
-            Site::of_node(node)
+            shape.site_of_node(node)
         }
         None => {
             let Some((_, argument)) = by_name_parts(node) else {
@@ -220,7 +220,7 @@ fn handed<'x>(
                     });
                 }
             }
-            Site::of(argument)
+            shape.site(argument)
         }
     };
     if !handed.is_empty() {
@@ -232,7 +232,7 @@ fn handed<'x>(
 /// and the slot.
 fn local_read<'p>(shape: &BodyShape<'_>, part: &'p ExpressionPart<'p>) -> Option<(u32, Slot)> {
     let name = name_of(shape, part)?;
-    match shape.mention(Site::of(name))?.coordinate {
+    match shape.mention(shape.site(name))?.coordinate {
         Coordinate::Activation {
             hops,
             target: Target::Local(slot),
@@ -252,7 +252,7 @@ pub(super) fn own_nodes<'graph>(
         part: &'graph ExpressionPart<'graph>,
         visit: &mut dyn FnMut(&'graph KExpression<'graph>),
     ) {
-        if shape.nested(Site::of(part)).is_some() {
+        if shape.nested(shape.site(part)).is_some() {
             return;
         }
         match part {

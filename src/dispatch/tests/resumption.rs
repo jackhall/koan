@@ -12,7 +12,7 @@ use crate::scope::{
 use crate::symbols::{BinderSymbol, SymbolInterner};
 use crate::type_lattice::{DeclaredType, KType, display_name};
 use crate::values::tests::reading;
-use crate::values::{Chain, SpecBounds};
+use crate::values::{BuildBudget, Chain};
 
 use super::statics::rendered;
 use super::{Koan, output};
@@ -66,11 +66,11 @@ impl<'d, 'graph: 'd> Door<'d, 'graph> {
     fn module(&self, name: &str) -> Bound<'d> {
         let (root, load) = (self.root(), self.load());
         let at = slot(self.symbols(), root, name);
-        let Some(DeclaredType::Type(typed)) = load.binder_type(root, at) else {
+        let Some(DeclaredType::Type(typed)) = load.binder_type(self.types, root, at) else {
             panic!("`{name}` is typed");
         };
         let tree = load
-            .content(root, at)
+            .content(self.types, root, at)
             .expect("the load reads the module's tree");
         assert!(
             typed.is_exact() && tree.closed(),
@@ -98,9 +98,9 @@ impl<'d, 'graph: 'd> Door<'d, 'graph> {
     /// The type `name` declares at the top level, closed.
     fn declared(&self, name: &str) -> KType {
         let root = self.root();
-        let Static::Closed(typed) = self
-            .load()
-            .declared_type(root, slot(self.symbols(), root, name))
+        let Static::Closed(typed) =
+            self.load()
+                .declared_type(self.types, root, slot(self.symbols(), root, name))
         else {
             panic!("`{name}` declares closed");
         };
@@ -111,7 +111,7 @@ impl<'d, 'graph: 'd> Door<'d, 'graph> {
 /// Load `source` and hand `check` the door its resumptions go through.
 fn resumed<R>(source: &str, check: impl for<'d, 'graph> FnOnce(&Door<'d, 'graph>) -> R) -> R {
     let mut substrate =
-        CellSubstrate::load::<Koan>(source, "<test>", 8, SpecBounds::default(), output())
+        CellSubstrate::load::<Koan>(source, "<test>", 8, BuildBudget::default(), output())
             .unwrap_or_else(|error| panic!("the program loads: {error}"));
     substrate.with(|running| {
         let bump = Bump::new();
@@ -145,12 +145,10 @@ fn unknown(symbols: &SymbolInterner, shape: &BodyShape<'_>, name: &str) -> Unkno
 }
 
 /// The one quantified callable body the top level registers.
-fn quantified<'graph>(
-    facts: &LoadFacts<'graph>,
-    root: &'graph BodyShape<'graph>,
-) -> &'graph BodyShape<'graph> {
-    let mut found = (root.nested_shapes().iter()).filter(|(_, nested)| {
-        nested.kind() == ShapeKind::Callable && !facts.group_levels(nested).is_empty()
+fn quantified<'graph>(door: &Door<'_, 'graph>) -> &'graph BodyShape<'graph> {
+    let mut found = (door.root().nested_shapes().iter()).filter(|(_, nested)| {
+        nested.kind() == ShapeKind::Callable
+            && !door.load().group_levels(door.types, nested).is_empty()
     });
     let (_, body) = found.next().expect("a quantified registration");
     body
@@ -169,17 +167,18 @@ fn born<'graph>(
 
 /// The narrowing of the use `LET name = <use>` in `shape`, as `facts` holds it.
 fn narrowing(
-    symbols: &SymbolInterner,
+    door: &Door<'_, '_>,
     facts: &LoadFacts<'_>,
     shape: &BodyShape<'_>,
     name: &str,
 ) -> String {
-    let Some(ExpressionPart::Expression(node)) = shape.rhs(slot(symbols, shape, name)) else {
+    let Some(ExpressionPart::Expression(node)) = shape.rhs(slot(door.symbols(), shape, name))
+    else {
         panic!("`{name}` is bound to a node");
     };
     rendered(
         facts
-            .use_statics(shape, Site::of_node(node.reference()))
+            .use_statics(door.types, shape, shape.site_of_node(node.reference()))
             .narrowing,
     )
 }
@@ -187,7 +186,7 @@ fn narrowing(
 /// The upper end of the binder `name` of `shape`, as `facts` holds it, rendered.
 fn upper(door: &Door<'_, '_>, facts: &LoadFacts<'_>, shape: &BodyShape<'_>, name: &str) -> String {
     let at = slot(door.symbols(), shape, name);
-    let Some(DeclaredType::Type(typed)) = facts.binder_type(shape, at) else {
+    let Some(DeclaredType::Type(typed)) = facts.binder_type(door.types, shape, at) else {
         panic!("`{name}` is typed, and no scheme");
     };
     display_name(typed.upper, door.types, door.symbols()).to_string()
@@ -201,7 +200,10 @@ fn declares_closed(
     name: &str,
 ) -> bool {
     let at = slot(door.symbols(), shape, name);
-    matches!(facts.declared_type(shape, at), Static::Closed(_))
+    matches!(
+        facts.declared_type(door.types, shape, at),
+        Static::Closed(_)
+    )
 }
 
 #[test]
@@ -210,16 +212,59 @@ fn binding_a_for_all_name_selects_the_overload_at_its_type() {
         format!("{PICK}EXPR FOR ALL #[Elt] #(WRAP x :Elt) -> Any = #(\n  LET p = (PICK x)\n  p\n)");
     let (before, after, typed) = resumed(&source, |door| {
         let symbols = door.symbols();
-        let f = quantified(door.load(), door.root());
-        let before = narrowing(symbols, door.load(), f, "p");
+        let f = quantified(door);
+        let before = narrowing(door, door.load(), f, "p");
         let binding = door.binding(&[(unknown(symbols, f, "Elt"), KType::NUMBER)]);
         let resumed = (door.resume(None, binding, false)).expect("the resumption refuses nothing");
-        let after = narrowing(symbols, resumed, f, "p");
+        let after = narrowing(door, resumed, f, "p");
         (before, after, upper(door, resumed, f, "p"))
     });
-    assert_eq!(before, "full");
+    assert_eq!(before, "kept maybe maybe");
     assert_eq!(after, "selected");
     assert_eq!(typed, "Str", "the `Number` overload returns `Str`");
+}
+
+/// How the use `LET name = <use>` in `shape` ranks its candidates, as `facts` holds it: open, by a
+/// recorded table, or selected.
+fn elimination(
+    door: &Door<'_, '_>,
+    facts: &LoadFacts<'_>,
+    shape: &BodyShape<'_>,
+    name: &str,
+) -> &'static str {
+    let Some(ExpressionPart::Expression(node)) = shape.rhs(slot(door.symbols(), shape, name))
+    else {
+        panic!("`{name}` is bound to a node");
+    };
+    let site = shape.site_of_node(node.reference());
+    match facts.use_statics(door.types, shape, site).narrowing {
+        crate::scope::Narrowing::Kept(kept) => match kept.elimination {
+            crate::scope::Elimination::Open => "open",
+            crate::scope::Elimination::Table(_) => "table",
+        },
+        crate::scope::Narrowing::Full => "open",
+        crate::scope::Narrowing::Selected(_) => "selected",
+    }
+}
+
+#[test]
+fn a_rigid_pair_left_open_at_the_load_is_ranked_by_its_settlement() {
+    // `PICK y :Elt` is rigid at the load, where ranking it beside `PICK y :Str` would read `Elt`
+    // through its bound: the load leaves the pair open. Bound to `Number`, both are closed, and
+    // the resumption records their table.
+    let source = "EXPR FOR ALL #[Elt] #(WRAP x :Elt z :Any) -> Any = #(\n  \
+                  EXPR #(PICK y :Elt) -> Str = #(\"e\")\n  \
+                  EXPR #(PICK y :Str) -> Number = #(1)\n  \
+                  LET p = (PICK z)\n  p\n)";
+    let (before, after) = resumed(source, |door| {
+        let symbols = door.symbols();
+        let f = quantified(door);
+        let before = elimination(door, door.load(), f, "p");
+        let binding = door.binding(&[(unknown(symbols, f, "Elt"), KType::NUMBER)]);
+        let resumed = (door.resume(None, binding, false)).expect("the resumption refuses nothing");
+        (before, elimination(door, resumed, f, "p"))
+    });
+    assert_eq!((before, after), ("open", "table"));
 }
 
 #[test]
@@ -231,12 +276,12 @@ fn binding_a_module_parameter_closes_its_paths() {
     let (before, after) = resumed(&source, |door| {
         let symbols = door.symbols();
         let step = born(symbols, door.root(), "step");
-        let before = narrowing(symbols, door.load(), step, "p");
+        let before = narrowing(door, door.load(), step, "p");
         let binding = door.binding(&[(unknown(symbols, step, "m"), door.declared("Pinned"))]);
         let resumed = (door.resume(None, binding, false)).expect("the resumption refuses nothing");
-        (before, narrowing(symbols, resumed, step, "p"))
+        (before, narrowing(door, resumed, step, "p"))
     });
-    assert_eq!(before, "full");
+    assert_eq!(before, "kept maybe maybe");
     assert_eq!(after, "selected");
 }
 
@@ -251,7 +296,7 @@ fn binding_a_module_binder_beside_a_name_keeps_its_paths() {
     );
     let resumed = resumed(&source, |door| {
         let symbols = door.symbols();
-        let f = quantified(door.load(), door.root());
+        let f = quantified(door);
         let binding = door.binding(&[
             (unknown(symbols, f, "Elt"), KType::NUMBER),
             (unknown(symbols, f, "m"), door.declared("Pinned")),
@@ -271,7 +316,7 @@ fn binding_a_name_a_type_binder_reads_before_a_path_resumes() {
          LET Both = :{{a :Elt b :(m.Carrier)}}\n  x\n)"
     );
     let (before, after) = resumed(&source, |door| {
-        let f = quantified(door.load(), door.root());
+        let f = quantified(door);
         let before = declares_closed(door, door.load(), f, "Both");
         let binding = door.binding(&[(unknown(door.symbols(), f, "Elt"), KType::NUMBER)]);
         let resumed = (door.resume(None, binding, false)).expect("the resumption refuses nothing");
@@ -290,7 +335,7 @@ fn binding_a_name_a_type_reads_before_a_path_finds_its_entry() {
          LET s :{{a :(Elt & Number) b :(m.Carrier)}} = {{a = x, b = m.zero}}\n  x\n)"
     );
     let resumed = resumed(&source, |door| {
-        let f = quantified(door.load(), door.root());
+        let f = quantified(door);
         let binding = door.binding(&[(unknown(door.symbols(), f, "Elt"), KType::NUMBER)]);
         door.resume(None, binding, false).map(|_| ())
     });
@@ -306,7 +351,7 @@ fn binding_a_name_no_fact_reads_re_runs_only_its_own() {
         "{PICK}EXPR FOR ALL #[Elt Key] #(WRAP x :Elt) -> Any = #(\n  LET p = (PICK x)\n  p\n)"
     );
     let (reran, waiting, outside) = resumed(&source, |door| {
-        let f = quantified(door.load(), door.root());
+        let f = quantified(door);
         let key = unknown(door.symbols(), f, "Key");
         let binding = door.binding(&[(key, KType::NUMBER)]);
         let resumed = (door.resume(None, binding, false)).expect("the resumption refuses nothing");
@@ -333,7 +378,7 @@ fn an_absorbed_unit_keeps_the_body_s_porous_exit() {
          LET e = (EVAL #(1) -> Any)\n  LET p = (PICK x)\n  p\n)"
     );
     let (loaded, resumed) = resumed(&source, |door| {
-        let f = quantified(door.load(), door.root());
+        let f = quantified(door);
         let binding = door.binding(&[(unknown(door.symbols(), f, "Elt"), KType::NUMBER)]);
         let resumed = (door.resume(None, binding, false)).expect("the resumption refuses nothing");
         let porous =
@@ -356,22 +401,88 @@ fn an_inner_callable_over_an_outer_name_settles_under_its_binding() {
     );
     let (before, after) = resumed(&source, |door| {
         let symbols = door.symbols();
-        let f = quantified(door.load(), door.root());
+        let f = quantified(door);
         let g = born(symbols, f, "g");
-        let before = narrowing(symbols, door.load(), g, "p");
+        let before = narrowing(door, door.load(), g, "p");
         let binding = door.binding(&[(unknown(symbols, f, "Elt"), KType::NUMBER)]);
         let resumed = (door.resume(None, binding, false)).expect("the resumption refuses nothing");
-        (before, narrowing(symbols, resumed, g, "p"))
+        (before, narrowing(door, resumed, g, "p"))
     });
-    assert_eq!(before, "full");
+    assert_eq!(before, "kept maybe maybe");
     assert_eq!(after, "selected");
+}
+
+/// A callable born inside a block keeps its own records: a binding its body reads re-runs it even
+/// where the unit running the block reads nothing the binding binds, and is absorbed.
+#[test]
+fn an_inner_callable_inside_a_block_settles_under_its_binding() {
+    let source = format!(
+        "{PICK}EXPR FOR ALL #[Elt] #(WRAP x :Elt) -> Any = #(\n  \
+         MATCH 1 -> :Any WITH #{{Number: ((LET g = (FN :{{y :Number}} -> Any = #(\
+         (LET p = (PICK x)) (p)))) (g))}}\n)"
+    );
+    let (before, after) = resumed(&source, |door| {
+        let symbols = door.symbols();
+        let f = quantified(door);
+        let (_, arm) = (f.nested_shapes().iter())
+            .find(|(_, nested)| nested.kind() == ShapeKind::Block)
+            .expect("the `MATCH` has an arm");
+        let g = born(symbols, arm, "g");
+        let before = narrowing(door, door.load(), g, "p");
+        let binding = door.binding(&[(unknown(symbols, f, "Elt"), KType::NUMBER)]);
+        let resumed = (door.resume(None, binding, false)).expect("the resumption refuses nothing");
+        let arm_unit = (f.segment(), f.unit_of_statement(0));
+        assert!(
+            (resumed.own_units().iter()).all(|(unit, _)| (unit.segment, unit.unit) != arm_unit),
+            "the unit running the arm is absorbed"
+        );
+        (before, narrowing(door, resumed, g, "p"))
+    });
+    assert_eq!(before, "kept maybe maybe");
+    assert_eq!(after, "selected");
+}
+
+/// A settlement rests in the agent tier what its records name, adopted from the chain its walk
+/// interned through: each such type resolves there once the miss ends, and a second settlement
+/// under the same binding adds nothing.
+#[test]
+fn the_agent_tier_grows_by_the_types_a_settlements_records_name() {
+    let source = "LET Pt = :{x :Number}\n\
+                  EXPR FOR ALL #[Elt] #(WRAP x :Elt) -> Any = #((LET l = [x]) (l))\n";
+    let (grew, again, unresolved) = resumed(source, |door| {
+        let wrap = quantified(door);
+        let ask = crate::scheduler::Ask {
+            body: wrap.segment(),
+            bound: [crate::scheduler::Asked::Type {
+                slot: slot(door.symbols(), wrap, "Elt"),
+                named: door.declared("Pt"),
+            }]
+            .into_iter()
+            .collect(),
+        };
+        let agent = door.running.program().tiers().agent;
+        let before = agent.len();
+        let facts = (door.running.settle::<Koan>(&ask, door.bump)).expect("`Pt` is a type");
+        let grew = agent.len() - before;
+        let resting = door.running.program().tiers().resting();
+        let mut unresolved = 0;
+        (facts.top().expect("a settlement")).each_type(&mut |kt| {
+            unresolved += usize::from(!resting.resolves(kt));
+        });
+        let before = agent.len();
+        door.running.settle::<Koan>(&ask, door.bump);
+        (grew, agent.len() - before, unresolved)
+    });
+    assert!(grew > 0, "`[x]` at `Pt` is a type the root lacks");
+    assert_eq!(unresolved, 0, "every type the records name rests");
+    assert_eq!(again, 0, "a type rests once");
 }
 
 #[test]
 fn a_binding_no_overload_admits_refuses_as_the_load_would() {
     let source = "EXPR FOR ALL #[Elt] #(WRAP x :Elt) -> Any = #(\n  LET y = (x + 1)\n  y\n)";
     let refused = resumed(source, |door| {
-        let f = quantified(door.load(), door.root());
+        let f = quantified(door);
         let binding = door.binding(&[(unknown(door.symbols(), f, "Elt"), KType::STR)]);
         door.resume(None, binding, false).map(|_| ())
     });
@@ -387,7 +498,7 @@ fn a_type_binder_over_a_bound_name_declares_closed() {
     let source = "EXPR FOR ALL #[Elt] #(WRAP x :Elt) -> Any = #(\n  \
                   NEWTYPE Box = :{v :Elt}\n  (Box {v = x})\n)";
     let (before, after) = resumed(source, |door| {
-        let f = quantified(door.load(), door.root());
+        let f = quantified(door);
         let before = declares_closed(door, door.load(), f, "Box");
         let binding = door.binding(&[(unknown(door.symbols(), f, "Elt"), KType::NUMBER)]);
         let resumed = (door.resume(None, binding, false)).expect("the resumption refuses nothing");
@@ -403,13 +514,13 @@ fn re_running_every_fact_settles_what_skipping_does() {
         format!("{PICK}EXPR FOR ALL #[Elt] #(WRAP x :Elt) -> Any = #(\n  LET p = (PICK x)\n  p\n)");
     let (skipping, everything) = resumed(&source, |door| {
         let symbols = door.symbols();
-        let f = quantified(door.load(), door.root());
+        let f = quantified(door);
         let binding = door.binding(&[(unknown(symbols, f, "Elt"), KType::NUMBER)]);
         let render = |everything| {
             let resumed =
                 (door.resume(None, binding, everything)).expect("the resumption refuses nothing");
             (
-                narrowing(symbols, resumed, f, "p"),
+                narrowing(door, resumed, f, "p"),
                 upper(door, resumed, f, "p"),
             )
         };
@@ -421,8 +532,8 @@ fn re_running_every_fact_settles_what_skipping_does() {
 /// The settled sites of `shape`'s statement `index`, as `facts` holds them.
 fn settled_in(facts: &LoadFacts<'_>, shape: &BodyShape<'_>, index: usize) -> usize {
     let mut sites = Vec::new();
-    crate::scope::each_part(&shape.body()[index], |part| sites.push(Site::of(part)));
-    sites.push(Site::of_node(&shape.body()[index]));
+    crate::scope::each_part(&shape.body()[index], |part| sites.push(shape.site(part)));
+    sites.push(shape.site_of_node(&shape.body()[index]));
     (sites.into_iter())
         .filter(|site| facts.settled(shape, *site))
         .count()
@@ -432,7 +543,7 @@ fn settled_in(facts: &LoadFacts<'_>, shape: &BodyShape<'_>, index: usize) -> usi
 fn a_check_a_binding_no_longer_settles_is_dropped() {
     let source = "EXPR FOR ALL #[Elt] #(WRAP x :Elt) -> Any = #(\n  LET s :Elt = x\n  s\n)";
     let (load, skipping, everything) = resumed(source, |door| {
-        let f = quantified(door.load(), door.root());
+        let f = quantified(door);
         let binding = door.binding(&[(unknown(door.symbols(), f, "Elt"), KType::NEVER)]);
         let settled = |everything| {
             let resumed =
@@ -451,7 +562,7 @@ fn a_binding_that_starves_a_refused_check_vacates_it() {
                   LET s0 = (x :! Key)\n  x\n)";
     let (half, whole) = resumed(source, |door| {
         let symbols = door.symbols();
-        let f = quantified(door.load(), door.root());
+        let f = quantified(door);
         let (elt, key) = (unknown(symbols, f, "Elt"), unknown(symbols, f, "Key"));
         let half = door.resume(None, door.binding(&[(key, KType::NEVER)]), false);
         let both = door.binding(&[(elt, KType::NEVER), (key, KType::NEVER)]);
@@ -474,7 +585,7 @@ fn a_resumption_extends_the_one_before_it() {
     );
     let (first, second) = resumed(&source, |door| {
         let symbols = door.symbols();
-        let f = quantified(door.load(), door.root());
+        let f = quantified(door);
         let (elt, key) = (unknown(symbols, f, "Elt"), unknown(symbols, f, "Key"));
         let once = door.binding(&[(elt, KType::NUMBER)]);
         let first = (door.resume(None, once, false)).expect("the resumption refuses nothing");
@@ -483,13 +594,16 @@ fn a_resumption_extends_the_one_before_it() {
             (door.resume(Some(first), both, false)).expect("the resumption refuses nothing");
         let render = |facts| {
             (
-                narrowing(symbols, facts, f, "p"),
-                narrowing(symbols, facts, f, "q"),
+                narrowing(door, facts, f, "p"),
+                narrowing(door, facts, f, "q"),
             )
         };
         (render(first), render(second))
     });
-    assert_eq!(first, ("selected".to_string(), "full".to_string()));
+    assert_eq!(
+        first,
+        ("selected".to_string(), "kept maybe maybe".to_string())
+    );
     assert_eq!(second, ("selected".to_string(), "selected".to_string()));
 }
 
@@ -507,17 +621,17 @@ fn a_resumption_interns_past_the_frozen_root() {
             !door.types.in_root(bound),
             "the bound type is the chain's own"
         );
-        let f = quantified(door.load(), door.root());
+        let f = quantified(door);
         let binding = door.binding(&[(unknown(door.symbols(), f, "Elt"), bound)]);
         let resumed = (door.resume(None, binding, false)).expect("the resumption refuses nothing");
         let p = slot(door.symbols(), f, "p");
         let bound_upper = matches!(
-            resumed.binder_type(f, p),
+            resumed.binder_type(door.types, f, p),
             Some(DeclaredType::Type(typed)) if typed.upper == bound.into()
         );
         let pair = slot(door.symbols(), f, "Pair");
         let adopted = matches!(
-            resumed.declared_type(f, pair),
+            resumed.declared_type(door.types, f, pair),
             Static::Closed(record) if !door.types.in_root(record) && door.types.resolves(record)
         );
         (bound_upper, adopted, tiers.frozen.len() == before)
@@ -535,7 +649,7 @@ fn a_binding_that_closes_a_registration_checks_its_overlap() {
                   OP #(+) OVER Elt = #(0)\n  x\n)";
     // The load leaves the registration rigid over `Elt`, so it loads.
     let refused = resumed(source, |door| {
-        let f = quantified(door.load(), door.root());
+        let f = quantified(door);
         let elt = unknown(door.symbols(), f, "Elt");
         door.resume(None, door.binding(&[(elt, KType::NUMBER)]), false)
             .map(|_| ())
@@ -556,7 +670,7 @@ fn a_binding_that_closes_a_cycle_unfolds_neither_call() {
                   EXPR #(LOOP y :Str) -> Any = #(y)\n  \
                   LET f = (FN :{z :Elt} -> Any = #(LOOP z))\n  f\n)";
     let (load, resumed) = resumed(source, |door| {
-        let f = quantified(door.load(), door.root());
+        let f = quantified(door);
         let body = born(door.symbols(), f, "f");
         let recursive = |facts: &LoadFacts<'_>| {
             let recursive = |shape: &BodyShape<'_>| {
@@ -584,6 +698,44 @@ fn a_binding_that_closes_a_cycle_unfolds_neither_call() {
     );
 }
 
+/// A quote's code read under a binding of its `$` capture decides what reads it: binding `$r` to
+/// `ints` in the code's activation types `$r.zero` exactly, which the load leaves open.
+#[test]
+fn an_eval_frame_settles_facts_waiting_on_its_dollar_names_in_its_activation() {
+    let source = "SIG Counter FOR ALL #[Carrier] = \
+                  #[(VAL zero :Carrier) (VAL succ :(FN :{x :Carrier} -> Carrier))]\n\
+                  MODULE ints = ((LET zero = 0) \
+                  (LET succ = (FN :{x :Number} -> Number = #(x + 1))))\n\
+                  EXPR #(USE r :Counter) -> Any = #(EVAL #($r.zero) -> Any)\n";
+    resumed(source, |door| {
+        let code = (door.running.program().shapes().bodies().iter())
+            .find(|shape| shape.kind() == ShapeKind::Code)
+            .expect("the program quotes code");
+        let capture = (code.captures().iter())
+            .position(|capture| door.symbols().display(capture.name.symbol()).to_string() == "r")
+            .expect("the code captures `r`");
+        let loaded =
+            (door.load().statement_type(door.types, code, 0)).expect("the load types `$r.zero`");
+        assert!(!loaded.is_exact(), "the load leaves `$r.zero` open");
+        let own = door.bound(&[(
+            Unknown {
+                segment: code.segment(),
+                at: Address::Capture(crate::scope::CaptureSlot(capture as u32)),
+            },
+            door.module("ints"),
+        )]);
+        let facts = (door.running)
+            .activate::<Koan>(door.types, own, code.segment(), door.bump)
+            .expect("the activation types the code");
+        let decided =
+            (facts.statement_type(door.types, code, 0)).expect("the activation types `$r.zero`");
+        assert_eq!(
+            decided,
+            crate::type_lattice::Interval::point(KType::NUMBER.into())
+        );
+    });
+}
+
 /// `SUBJECT`'s body: the last callable the top level births.
 fn subject<'graph>(root: &'graph BodyShape<'graph>) -> &'graph BodyShape<'graph> {
     (root.nested_shapes().iter().rev())
@@ -597,7 +749,7 @@ fn node_of(symbols: &SymbolInterner, shape: &BodyShape<'_>, name: &str) -> Site 
     let Some(ExpressionPart::Expression(node)) = shape.rhs(slot(symbols, shape, name)) else {
         panic!("`{name}` is bound to a node");
     };
-    Site::of_node(node.reference())
+    shape.site_of_node(node.reference())
 }
 
 /// A module unknown binds to a closed content tree, so a view over a bound module parameter is
@@ -663,9 +815,9 @@ mod laws {
     use crate::program::tests::stores::framed;
     use crate::program::{CellSubstrate, LoadError};
     use crate::scope::{
-        Address, BodyClass, BodyShape, Bound as Bind, CandidateList, InstanceRead, LoadFacts,
-        Narrowing, ShapeError, ShapeKind, Site, Slot, Static, StaticSolution, Target, Tree,
-        Unknown, each_part, source_of,
+        Address, BodyClass, BodyShape, Bound as Bind, CandidateList, FactsOver, InstanceRead,
+        LoadFacts, Narrowing, RecordSource, ShapeError, ShapeKind, Site, Slot, Static,
+        StaticInstance, Target, Tree, Unknown, each_part, source_of,
     };
     use crate::symbols::{BinderSymbol, SymbolInterner};
     use crate::type_lattice::{
@@ -673,7 +825,7 @@ mod laws {
         read_through,
     };
     use crate::values::tests::reading;
-    use crate::values::{Chain, SpecBounds};
+    use crate::values::{BuildBudget, Chain};
 
     use super::super::generate::{Bound, Resumable, resumable};
     use super::super::{Koan, output};
@@ -759,20 +911,24 @@ mod laws {
         };
         match narrowing {
             Narrowing::Full => "full".to_string(),
-            Narrowing::Kept(kept) => kept.iter().fold("kept".to_string(), |text, (at, verdict)| {
-                let at = match at {
-                    crate::scope::Candidate::One(coordinate) => index(*coordinate),
-                    crate::scope::Candidate::Spread(_) => usize::MAX,
-                };
-                format!("{text} {at}:{verdict:?}")
-            }),
+            Narrowing::Kept(kept) => {
+                kept.entries
+                    .iter()
+                    .fold("kept".to_string(), |text, (at, verdict)| {
+                        let at = match at {
+                            crate::scope::Candidate::One(coordinate) => index(*coordinate),
+                            crate::scope::Candidate::Spread(_) => usize::MAX,
+                        };
+                        format!("{text} {at}:{verdict:?}")
+                    })
+            }
             Narrowing::Selected(coordinate) => format!("selected {}", index(coordinate)),
         }
     }
 
     /// What the load fixed of a facts' reader: the chain its types render through.
-    struct Reader<'read, 'facts, 'tier, 'pair, 'reg, 'door> {
-        facts: &'read LoadFacts<'facts>,
+    struct Reader<'read, 'tier, 'pair, 'reg, 'door, S> {
+        facts: &'read FactsOver<S>,
         types: &'read Chain<'tier, 'pair, 'reg, 'door>,
         symbols: &'read SymbolInterner,
         /// The names a binding binds: a restart drops them from the shape or binds them anew, so
@@ -780,21 +936,21 @@ mod laws {
         bound: &'read [&'read str],
     }
 
-    impl Reader<'_, '_, '_, '_, '_, '_> {
+    impl<'f, S: RecordSource<'f>> Reader<'_, '_, '_, '_, '_, S> {
         fn named(&self, typed: impl Into<DeclaredType<Parametric>>) -> String {
             display_name(typed, self.types, self.symbols).to_string()
         }
 
-        fn solution(&self, solution: StaticSolution<'_>) -> String {
+        fn solution(&self, solution: StaticInstance<'_>) -> String {
             match solution {
-                StaticSolution::Closed(points) => {
+                StaticInstance::Closed { solution, .. } => {
                     let points: Vec<String> =
-                        points.iter().map(|point| self.named(*point)).collect();
+                        solution.iter().map(|point| self.named(*point)).collect();
                     format!("closed {points:?}")
                 }
-                StaticSolution::Rigid { value, .. } => {
+                StaticInstance::Rigid { solution, .. } => {
                     let points: Vec<String> =
-                        value.iter().map(|point| self.named(*point)).collect();
+                        solution.iter().map(|point| self.named(*point)).collect();
                     format!("rigid {points:?}")
                 }
             }
@@ -814,7 +970,7 @@ mod laws {
                 let name = format!("{path} {spelled}");
                 match named {
                     BinderSymbol::Value(_) => {
-                        let typed = match facts.binder_type(shape, at) {
+                        let typed = match facts.binder_type(self.types, shape, at) {
                             Some(DeclaredType::Type(typed)) => interval(typed, self.types, symbols),
                             Some(DeclaredType::Scheme(scheme)) => self.named(scheme),
                             None => "untyped".to_string(),
@@ -822,7 +978,7 @@ mod laws {
                         binders.push(format!("{name} = {typed}"));
                     }
                     BinderSymbol::Type(_) => {
-                        let typed = facts.declared_type(shape, at);
+                        let typed = facts.declared_type(self.types, shape, at);
                         binders.push(format!(
                             "{name} declares {}",
                             statically(
@@ -835,7 +991,7 @@ mod laws {
                     // A code shape's hole or mark is a capture, and holds no fact of its own.
                     BinderSymbol::Key(_) => {}
                     BinderSymbol::Registration(_) => {
-                        let typed = facts.registered_type(shape, at);
+                        let typed = facts.registered_type(self.types, shape, at);
                         binders.push(format!(
                             "{name} registers {}",
                             statically(
@@ -846,7 +1002,7 @@ mod laws {
                         ));
                     }
                 }
-                if let Some(tree) = facts.content(shape, at) {
+                if let Some(tree) = facts.content(self.types, shape, at) {
                     binders.push(format!("{name} holds a tree closed {}", tree.closed()));
                 }
             }
@@ -854,7 +1010,7 @@ mod laws {
             out.extend(binders);
             // `SUBJECT`'s own type is a fact of the unit birthing it.
             if shape.kind() == ShapeKind::Callable && !path.is_empty() {
-                let typed = facts.callable_type(shape);
+                let typed = facts.callable_type(self.types, shape);
                 out.push(format!(
                     "{path} callable {}",
                     statically(
@@ -865,9 +1021,9 @@ mod laws {
                 ));
             }
             let mut expressions: Vec<_> = shape.type_expressions().iter().collect();
-            expressions.sort_by_key(|expression| expression.order);
+            expressions.sort_by_key(|expression| expression.site);
             for (index, expression) in expressions.into_iter().enumerate() {
-                let typed = facts.typed_expression(shape, expression.site);
+                let typed = facts.typed_expression(self.types, shape, expression.site);
                 out.push(format!(
                     "{path} type {index} = {}",
                     statically(
@@ -894,29 +1050,29 @@ mod laws {
             let statements =
                 (shape.body().iter().enumerate()).filter(|(index, _)| !skipped.contains(index));
             for (written, (index, statement)) in statements.enumerate() {
-                let typed = facts.statement_type(shape, index);
+                let typed = facts.statement_type(self.types, shape, index);
                 let typed = typed.map_or("untyped".to_string(), |typed| {
                     interval(typed, self.types, symbols)
                 });
                 out.push(format!("{path} #{written} = {typed}"));
                 let mut sites = Vec::new();
-                each_part(statement, |part| sites.push(Site::of(part)));
+                each_part(statement, |part| sites.push(shape.site(part)));
                 let mut at = 0;
                 for site in sites.iter() {
-                    let Some(typed) = facts.value_type(shape, *site) else {
+                    let Some(typed) = facts.value_type(self.types, shape, *site) else {
                         continue;
                     };
                     let part = format!("{path} #{written}.{at}");
                     at += 1;
                     out.push(format!("{part} = {}", interval(typed, self.types, symbols)));
-                    match facts.instance_at(shape, *site) {
+                    match facts.instance_at(self.types, shape, *site) {
                         Some(InstanceRead::Solved(solution)) => {
                             out.push(format!("{part} instance {}", self.solution(solution)));
                         }
                         Some(InstanceRead::AsIs) => out.push(format!("{part} instance as is")),
                         None => {}
                     }
-                    let named = facts.named_contributions(shape, *site);
+                    let named = facts.named_contributions(self.types, shape, *site);
                     if !named.is_empty() {
                         let named: Vec<String> = (named.iter())
                             .map(|typed| {
@@ -929,21 +1085,21 @@ mod laws {
                             .collect();
                         out.push(format!("{part} by name {named:?}"));
                     }
-                    if let Some(tree) = facts.view_tree(shape, *site) {
+                    if let Some(tree) = facts.view_tree(self.types, shape, *site) {
                         out.push(format!("{part} views a tree closed {}", tree.closed()));
                     }
                 }
-                let mut uses = vec![Site::of_node(statement)];
+                let mut uses = vec![shape.site_of_node(statement)];
                 each_part(statement, |part| {
                     if let ExpressionPart::Expression(node) = part {
-                        uses.push(Site::of_node(node.reference()));
+                        uses.push(shape.site_of_node(node.reference()));
                     }
                 });
                 for (at, site) in uses.into_iter().enumerate() {
                     let Some((_, list)) = shape.candidate_lists().get(site) else {
                         continue;
                     };
-                    let fixed = facts.use_statics(shape, site);
+                    let fixed = facts.use_statics(self.types, shape, site);
                     let contributions: Vec<String> = (fixed.contributions.iter())
                         .map(|typed| {
                             statically(
@@ -957,10 +1113,12 @@ mod laws {
                         "{path} #{written} use {at}: {} from {contributions:?}",
                         narrowed(fixed.narrowing, list)
                     ));
-                    if let Some(points) = facts.selection(shape, site) {
-                        let points: Vec<String> = (points.iter())
-                            .map(|point| {
-                                point.map_or("open".to_string(), |point| self.named(point))
+                    if let Some(points) = facts.selection(self.types, shape, site) {
+                        let points: Vec<String> = (0..points.points.len())
+                            .map(|at| {
+                                points
+                                    .closed(at)
+                                    .map_or("open".to_string(), |point| self.named(point))
                             })
                             .collect();
                         out.push(format!("{path} #{written} use {at} solves {points:?}"));
@@ -992,6 +1150,16 @@ mod laws {
     /// Every fact of `SUBJECT`'s body as `facts` holds them, but of the binders `leave` names.
     fn render_facts(
         facts: &LoadFacts<'_>,
+        types: &Chain<'_, '_, '_, '_>,
+        symbols: &SymbolInterner,
+        leave: &[String],
+    ) -> Vec<String> {
+        render_over(facts, types, symbols, leave)
+    }
+
+    /// [`render_facts`] over any source of records.
+    fn render_over<'f, S: RecordSource<'f>>(
+        facts: &FactsOver<S>,
         types: &Chain<'_, '_, '_, '_>,
         symbols: &SymbolInterner,
         leave: &[String],
@@ -1049,10 +1217,73 @@ mod laws {
         })
     }
 
+    /// What `bound` asks a miss to settle at `SUBJECT`'s body: each type it binds, and each module
+    /// at the exact type it carries over the digest of the tree the load read for it.
+    fn ask(door: &Door<'_, '_>, bound: &Bound) -> crate::scheduler::Ask {
+        let binding = bind(door, bound, false);
+        let asked = (binding.entries().iter()).map(|(unknown, given)| {
+            let Address::Slot(slot) = unknown.at else {
+                unreachable!("a binder's unknown is its slot")
+            };
+            match *given {
+                Bind::Type(named) => crate::scheduler::Asked::Type { slot, named },
+                Bind::Module { carried, tree } => crate::scheduler::Asked::Module {
+                    slot,
+                    composition: None,
+                    carried,
+                    content: tree.digest().expect("a module binds a closed tree"),
+                    retyped: false,
+                },
+            }
+        });
+        crate::scheduler::Ask {
+            body: subject(door.root()).segment(),
+            bound: asked.collect(),
+        }
+    }
+
+    /// What settling `case`'s `SUBJECT` under its binding renders, as a frame under the
+    /// settlement reads it, or the refusal it keeps.
+    fn settled_rendered(case: &Resumable) -> Result<Vec<String>, String> {
+        resumed(&case.render(), |door| {
+            let facts = (door.running)
+                .settle::<Koan>(&ask(door, &case.bound), door.bump)
+                .expect("every module the case binds has a tree in the load");
+            match facts.refusal() {
+                Some(refusal) => Err(unlocated(refusal)),
+                None => Ok(render_over(
+                    &facts,
+                    door.types,
+                    door.symbols(),
+                    &left_out(&case.bound),
+                )),
+            }
+        })
+    }
+
+    /// What `SUBJECT`'s frame decides in its activation under the binding, a module bound by its
+    /// digest or by its tree, rendered as [`settled_rendered`] renders a settlement, or its
+    /// refusal.
+    fn activated_rendered(case: &Resumable, by_digest: bool) -> Result<Vec<String>, String> {
+        resumed(&case.render(), |door| {
+            let own = bind(door, &case.bound, by_digest);
+            let at = subject(door.root()).segment();
+            match (door.running).activate::<Koan>(door.types, own, at, door.bump) {
+                Ok(facts) => Ok(render_over(
+                    &facts,
+                    door.types,
+                    door.symbols(),
+                    &left_out(&case.bound),
+                )),
+                Err(refusal) => Err(unlocated(refusal)),
+            }
+        })
+    }
+
     /// What a plain load of `source` renders, or its refusal, but of the binders `bound` names.
     fn loaded_rendered(source: &str, bound: &Bound) -> Result<Vec<String>, String> {
         let loaded =
-            CellSubstrate::load::<Koan>(source, "<test>", 8, SpecBounds::default(), output());
+            CellSubstrate::load::<Koan>(source, "<test>", 8, BuildBudget::default(), output());
         let mut substrate = match loaded {
             Ok(substrate) => substrate,
             Err(LoadError::Shape { rendered }) => return Err(unlocated(&rendered)),
@@ -1085,6 +1316,17 @@ mod laws {
                 None => return false,
             }
         }
+    }
+
+    thread_local! {
+        /// Each unit a rooted resumption visited, in order.
+        static VISITED: std::cell::RefCell<Vec<crate::scope::UnitId>> =
+            const { std::cell::RefCell::new(Vec::new()) };
+    }
+
+    /// Note that a walk visited `unit`.
+    fn visited(unit: crate::scope::UnitId) {
+        VISITED.with(|visited| visited.borrow_mut().push(unit));
     }
 
     proptest! {
@@ -1186,12 +1428,13 @@ mod laws {
             }
         }
 
-        /// 8. Three stores give equal facts under one binding: a load's store binding it from the
-        /// start, a layer over the load, and a frame whose slots hold what it binds — read off the
-        /// top level once the program has run, each module bound by its digest, as a frame binds
-        /// one — render alike, refusals included.
+        /// 8. Every store gives equal facts under one binding: a load's store binding it from the
+        /// start, a layer over the load, a settlement over the load binding each module by the tree
+        /// the load read for it, and a frame whose slots hold what it binds — read off the top
+        /// level once the program has run, each module bound by its digest, as a frame binds one —
+        /// render alike, refusals included.
         #[test]
-        fn three_stores_give_equal_facts(case in resumable()) {
+        fn every_store_gives_equal_facts(case in resumable()) {
             let unlocate = |error: ShapeError<'_>, door: &Door<'_, '_>| unlocated(&error.display(door.symbols(), door.types).to_string());
             let stores = resumed(&case.render(), |door| {
                 // The load's store and a layer agree under a structural binding too.
@@ -1207,8 +1450,14 @@ mod laws {
             for (reloaded, layered) in &stores {
                 prop_assert_eq!(reloaded, layered, "in\n{}", case.render());
             }
-            let [(_, layered), _] = stores;
-            let mut substrate = CellSubstrate::load::<Koan>(&case.render(), "<test>", 8, SpecBounds::default(), output())
+            let [(_, layered), (_, structural)] = stores;
+            // A settlement binds a module by the tree the load read for it, as the structural layer
+            // does.
+            prop_assert_eq!(&settled_rendered(&case), &structural, "in\n{}", case.render());
+            // A frame's activation binds a module by its digest, as the layer does, and reads its
+            // records again from the frame's region.
+            prop_assert_eq!(&activated_rendered(&case, true), &layered, "in\n{}", case.render());
+            let mut substrate = CellSubstrate::load::<Koan>(&case.render(), "<test>", 8, BuildBudget::default(), output())
                 .expect("the program loads");
             let framed = substrate.with(|running| {
                 running.run().expect("the program runs");
@@ -1225,6 +1474,70 @@ mod laws {
             });
             let framed = framed.map_err(|error| unlocated(&error));
             prop_assert_eq!(&layered, &framed, "in\n{}", case.render());
+        }
+
+        /// 12. A settlement holds the facts a load with its binding declared computes: settling
+        /// `SUBJECT` under the binding renders every fact of its body as the restart does,
+        /// refusals worded alike.
+        #[test]
+        fn a_settlement_holds_the_facts_a_load_with_its_binding_declared_computes(case in resumable()) {
+            let restart = case.restart(&case.bound);
+            prop_assert_eq!(settled_rendered(&case), loaded_rendered(&restart, &case.bound), "in\n{}\nrestarted as\n{}", case.render(), restart);
+        }
+
+        /// 13. An activation equals a restart with its bindings declared: deciding `SUBJECT`'s
+        /// entry in its frame's activation renders every fact of its body as the restart does,
+        /// refusals worded alike.
+        #[test]
+        fn an_activation_equals_a_restart_with_its_bindings_declared(case in resumable()) {
+            let restart = case.restart(&case.bound);
+            prop_assert_eq!(activated_rendered(&case, false), loaded_rendered(&restart, &case.bound), "in\n{}\nrestarted as\n{}", case.render(), restart);
+        }
+
+        /// 10. A rooted resumption is the program's on its bodies: resuming from `SUBJECT`'s body
+        /// down renders every fact of it as resuming the whole program does, refusals included.
+        #[test]
+        fn a_rooted_resumption_equals_the_programs_resumption_on_its_bodies(case in resumable()) {
+            let (rooted, whole) = resumed(&case.render(), |door| {
+                let binding = binding(door, &case.bound);
+                let at = subject(door.root()).segment();
+                let render = |facts: Result<&LoadFacts<'_>, ShapeError<'_>>| match facts {
+                    Ok(facts) => Ok(rendered(door, facts, &case.bound)),
+                    Err(error) => Err(error.display(door.symbols(), door.types).to_string()),
+                };
+                (
+                    render((door.running).resume_at::<Koan>(door.types, binding, at, door.bump)),
+                    render((door.running).resume::<Koan>(door.types, None, binding, false, door.bump)),
+                )
+            });
+            prop_assert_eq!(rooted, whole, "in\n{}", case.render());
+        }
+
+        /// 11. A rooted resumption visits no unit outside its subtree: each unit it runs or
+        /// absorbs in its own order is one of an owning body at or below `SUBJECT`'s, each once,
+        /// and it reads the chain around it whole.
+        #[test]
+        fn a_rooted_resumption_visits_no_unit_outside_its_subtree_and_chain_prefix(case in resumable()) {
+            let outside = resumed(&case.render(), |door| {
+                let binding = binding(door, &case.bound);
+                let at = subject(door.root()).segment();
+                VISITED.with(|visited| visited.borrow_mut().clear());
+                let _ = crate::dispatch::walk::visiting(visited, || {
+                    (door.running).resume_at::<Koan>(door.types, binding, at, door.bump)
+                });
+                let visited = VISITED.with(|visited| visited.take());
+                let mut seen = std::collections::HashSet::new();
+                let entry = crate::scope::UnitId { segment: at, unit: crate::scope::UnitIndex::ENTRY };
+                let mut outside: Vec<_> = (visited.iter())
+                    .filter(|unit| !on_chain(door, unit.segment, at) || !seen.insert(**unit))
+                    .map(|unit| format!("{unit:?}"))
+                    .collect();
+                if !visited.contains(&entry) {
+                    outside.push("not `SUBJECT`'s entry".to_string());
+                }
+                outside
+            });
+            prop_assert!(outside.is_empty(), "{:?} visited past the subtree in\n{}", outside, case.render());
         }
 
         /// 9. Levels and path identities depend on the shape alone: every path entry a record
@@ -1248,7 +1561,7 @@ mod laws {
                             continue;
                         };
                         for (at, facts) in facts.iter().enumerate() {
-                            if let Some(entry) = facts.path(root, level).map(|(entry, _)| entry)
+                            if let Some(entry) = facts.path(door.types, root, level).map(|(entry, _)| entry)
                                 && (entry.root != id.root || entry.chain != id.chain || entry.label != id.label || entry.level != level)
                             {
                                 broken.push(format!("records {at} hold {entry:?} at the level the shape gives {id:?}"));
@@ -1267,7 +1580,7 @@ mod laws {
         fn a_body_sealed_at_the_load_is_sealed_in_every_restart(case in resumable()) {
             let sealed = resumed(&case.render(), |door| classes(door, door.load()));
             let restart = case.restart(&case.bound);
-            let Ok(mut substrate) = CellSubstrate::load::<Koan>(&restart, "<test>", 8, SpecBounds::default(), output()) else {
+            let Ok(mut substrate) = CellSubstrate::load::<Koan>(&restart, "<test>", 8, BuildBudget::default(), output()) else {
                 return Ok(());
             };
             let restarted = substrate.with(|running| {
@@ -1288,7 +1601,7 @@ mod laws {
     }
 
     /// Whether each frame body of `SUBJECT`'s subtree is sealed, by path: each step a nested
-    /// body's place in program order, never its site, an address.
+    /// body's place in program order.
     fn classes(door: &Door<'_, '_>, facts: &LoadFacts<'_>) -> Vec<(String, bool)> {
         fn walk(
             facts: &LoadFacts<'_>,
@@ -1375,9 +1688,10 @@ mod laws {
                 shapes.push((nested, format!("{path}/{index}")));
             }
             let mut expressions: Vec<_> = shape.type_expressions().iter().collect();
-            expressions.sort_by_key(|expression| expression.order);
+            expressions.sort_by_key(|expression| expression.site);
             for (index, expression) in expressions.into_iter().enumerate() {
-                if let Static::Rigid { value, .. } = facts.typed_expression(shape, expression.site)
+                if let Static::Rigid { value, .. } =
+                    facts.typed_expression(door.types, shape, expression.site)
                     && let Some(read) = read(DeclaredType::Type(value))
                 {
                     out.push(format!("{path} type {index} = closed {read}"));
@@ -1385,7 +1699,7 @@ mod laws {
             }
             if shape.kind() == ShapeKind::Callable
                 && !path.is_empty()
-                && let Static::Rigid { value, .. } = facts.callable_type(shape)
+                && let Static::Rigid { value, .. } = facts.callable_type(door.types, shape)
                 && let Some(read) = read(value.ktype)
             {
                 out.push(format!("{path} callable closed {read}"));
@@ -1393,7 +1707,8 @@ mod laws {
             // A type binder's declared type is closed or unknown, never rigid: none to substitute.
             for at in (0..shape.slots()).map(|at| Slot(at as u32)) {
                 if let BinderSymbol::Registration(name) = shape.slot_name(at)
-                    && let Static::Rigid { value, .. } = facts.registered_type(shape, at)
+                    && let Static::Rigid { value, .. } =
+                        facts.registered_type(door.types, shape, at)
                     && let Some(read) = read(value.shape)
                 {
                     out.push(format!(
@@ -1426,7 +1741,7 @@ mod laws {
                 let vacuous = (shape.body().iter().enumerate()).any(|(index, statement)| {
                     let span = statement.source.span;
                     whole
-                        .statement_type(shape, index)
+                        .statement_type(door.types, shape, index)
                         .is_some_and(|typed| typed.upper == KType::NEVER.into())
                         && span.start <= at.start
                         && at.end <= span.end
@@ -1475,16 +1790,17 @@ mod laws {
         while let Some(shape) = shapes.pop() {
             shapes.extend(shape.nested_shapes().iter().map(|(_, nested)| *nested));
             for at in (0..shape.slots()).map(|at| Slot(at as u32)) {
-                if let (Some(DeclaredType::Type(was)), Some(DeclaredType::Type(is))) =
-                    (load.binder_type(shape, at), resumed.binder_type(shape, at))
-                {
+                if let (Some(DeclaredType::Type(was)), Some(DeclaredType::Type(is))) = (
+                    load.binder_type(door.types, shape, at),
+                    resumed.binder_type(door.types, shape, at),
+                ) {
                     broken.extend(outside(format!("binder {}", at.index()), was, is));
                 }
             }
             for index in 0..shape.body().len() {
                 if let (Some(was), Some(is)) = (
-                    load.statement_type(shape, index),
-                    resumed.statement_type(shape, index),
+                    load.statement_type(door.types, shape, index),
+                    resumed.statement_type(door.types, shape, index),
                 ) {
                     broken.extend(outside(format!("statement {index}"), was, is));
                 }
@@ -1492,22 +1808,24 @@ mod laws {
             // A use or a check in a statement that never completes never runs.
             let vacuous = |site: Site| {
                 (shape.body().iter().enumerate()).any(|(index, statement)| {
-                    resumed.statement_type(shape, index).is_some_and(never)
-                        && source_of(statement, site).is_some()
+                    resumed
+                        .statement_type(door.types, shape, index)
+                        .is_some_and(never)
+                        && source_of(shape, statement, site).is_some()
                 })
             };
             for statement in shape.body() {
-                let mut sites = vec![Site::of_node(statement)];
+                let mut sites = vec![shape.site_of_node(statement)];
                 each_part(statement, |part| {
-                    sites.push(Site::of(part));
+                    sites.push(shape.site(part));
                     if let ExpressionPart::Expression(node) = part {
-                        sites.push(Site::of_node(node.reference()));
+                        sites.push(shape.site_of_node(node.reference()));
                     }
                 });
                 for site in sites {
                     if let (Some(was), Some(is)) = (
-                        load.value_type(shape, site),
-                        resumed.value_type(shape, site),
+                        load.value_type(door.types, shape, site),
+                        resumed.value_type(door.types, shape, site),
                     ) {
                         broken.extend(outside(format!("part {site:?}"), was, is));
                     }
@@ -1516,8 +1834,8 @@ mod laws {
                     }
                     if shape.candidate_lists().get(site).is_some()
                         && let Some(why) = widened(
-                            load.use_statics(shape, site).narrowing,
-                            resumed.use_statics(shape, site).narrowing,
+                            load.use_statics(door.types, shape, site).narrowing,
+                            resumed.use_statics(door.types, shape, site).narrowing,
                         )
                     {
                         broken.push(format!("use {site:?}: {why}"));
@@ -1539,7 +1857,8 @@ mod laws {
             match narrowing {
                 Narrowing::Full => None,
                 Narrowing::Kept(kept) => Some(
-                    kept.iter()
+                    kept.entries
+                        .iter()
                         .map(|(at, verdict)| (*at, Some(*verdict)))
                         .collect(),
                 ),

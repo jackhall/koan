@@ -15,6 +15,7 @@ mod quoted_uses;
 mod quotes;
 mod rewrite;
 mod shapes;
+mod sites;
 mod typed;
 mod units;
 
@@ -97,7 +98,7 @@ impl Knotted for Probe {
 
     fn resolve<'a>(&self) -> Resolved<'a, Self> {
         Resolved::Function {
-            identity: self.0 as usize,
+            identity: crate::values::FunctionIdentity::Builtin(self.0 as usize),
             instance: &[],
             closure: &[],
             composes: &[],

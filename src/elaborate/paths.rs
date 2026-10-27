@@ -5,17 +5,13 @@
 //! parameter is what the module fits that application at: the solution *fits* gives, as the view
 //! door's does — the pin, where the application pins the label. Every other path reads the
 //! module's own type member. The load records
-//! the application once per path, as [`declared_through`] reads it off the root's declared type;
-//! the run binds a path variable through [`path_binding`], and the run's elaborator reads a path
-//! written in a type it left unknown through the same function.
+//! the application once per path, as [`declared_through`] reads it off the root's declared type,
+//! and resolves the path through [`path_binding`] wherever a layer knows the module exactly.
 
-use crate::memory::{Bump, BumpAllocator, BumpVec};
-use crate::scope::{ActivationView, Coordinate, PathEntry, solutions};
+use crate::memory::{BumpAllocator, BumpVec};
 use crate::symbols::{BinderSymbol, TypeSymbol, ValueSymbol};
-use crate::type_lattice::{
-    DeclaredType, KType, Parametric, TypeNode, fits_application, member, substitute_levels,
-};
-use crate::values::{Chain, KnottedFamily};
+use crate::type_lattice::{DeclaredType, KType, Parametric, TypeNode, fits_application, member};
+use crate::values::Chain;
 
 use super::members::{SignatureMember, schema_of, signature_member};
 
@@ -78,39 +74,6 @@ pub fn path_binding(
     };
     let solution = fits_application(types, scratch, inner, signature, &pins).ok()?;
     types.concrete(member(solution, label)?)
-}
-
-/// The type a path entry binds to, read through the module at `at` of `view`: its `through`
-/// solved where `view`'s shape locates its variables, then [`path_binding`]. What [`solutions`] is
-/// handed to bind a path variable the load did not resolve closed.
-pub fn bound_path<'graph, XF: KnottedFamily<'graph>>(
-    view: &ActivationView<'graph, '_, XF>,
-    types: &Chain<'_, '_, '_, '_>,
-    at: Coordinate,
-    entry: PathEntry<'graph>,
-) -> Option<KType> {
-    let held = view.read(at);
-    held.as_module()?;
-    let scratch = Bump::new();
-    let through = match entry.through {
-        None => None,
-        Some(through) => Some(match types.concrete(through) {
-            Some(closed) => closed,
-            None => {
-                let located = view.load().through_at(view.shape(), entry.level)?;
-                let bindings = solutions(located, view, &scratch, &|_, _| None)?;
-                types.concrete(substitute_levels(types, &scratch, through, &bindings))?
-            }
-        }),
-    };
-    path_binding(
-        types,
-        &scratch,
-        held.concrete_ktype(),
-        entry.chain,
-        entry.label,
-        through,
-    )
 }
 
 /// The signature of the module a module of signature `signature` holds through the value members

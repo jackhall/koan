@@ -7,8 +7,8 @@ What a program's text decides, written out once and read back by every run.
 shape, runs [the one walk](../../src/build/README.md#the-one-walk) and its
 folds, and stands the graph up, all inside one process, and
 nothing of that work outlives the process: program storage, the frozen type
-root and the specializations [the build tree](../../src/build/README.md)
-settled under each observed binding are released when it exits. A program
+root and the settlements [the build](../../src/build/README.md) settled under
+each observed binding in the build arena are released when it exits. A program
 run twice loads twice, and a warm tier a long run built is
 cold again at the next start. Nothing in the process has a form outside it:
 a reference into program storage or a region is a native `&'graph T` or
@@ -18,30 +18,30 @@ a reference into program storage or a region is a native `&'graph T` or
 name nothing in another process. What is already stable across processes is
 every *key*: a type is its content digest and the lattice's tables hash by
 that digest's own word ([`slot_hash`](../../lattice/src/types/tiers.rs)), a
-specialization is keyed by content digests, and a body by a segment index
+settlement is keyed by content digests, and a body by a segment index
 the shape builder assigns the same way in every load of one text. Nothing
 turns the things those keys name into an image, and nothing resumes from one.
 
 **Acceptance criteria.**
 
 - A build of a program writes an **image**: program storage, the type root and
-  every cell of the build tree at quiescence, each region laid out as one
-  contiguous range, with every reference serialized as a pair — the ordinal
-  of the region's cell in the image, the offset into that range — and every
-  handle as its cell's ordinal. The image carries the source text's digest.
+  every live arena node, each bump laid out as one contiguous range, with
+  every reference serialized as a pair — the ordinal of its storage in the
+  image, the offset into that range — and every handle as its arena node's
+  ordinal. The image carries the source text's digest.
 - A run started from an image lays each region back as one chunk, relocates
   every serialized reference and handle, and steps the top-level run cell
   without parsing, building a shape or running the load's walk; a test
   observes that the walk does not run and that the program's output equals a cold
   run's.
-- A specialization in the image is hit by the first call under its binding in
+- A settlement in the image is hit by the first call under its binding in
   a run started from it; a test observes that the binding's warm tier is not
   rebuilt.
-- The image closes over itself: every serialized reference names a cell in
-  the image, so the build tree's rule that no build cell holds a handle to a
-  run cell is what makes the image complete.
+- The image closes over itself: every serialized reference names storage in
+  the image, so the build's rule that no arena node holds a handle to a run
+  cell is what makes the image complete.
 - Relocation is a property of the types laid, enforced where drop-freeness is
-  today: a value laid in program storage or in a build cell's region
+  today: a value laid in program storage or in an arena node's bump
   implements the relocation walk the `Writer` requires, as its lay verbs
   require `!needs_drop` ([`Writer`](../../cellgraph/src/region.rs)) — and a
   Rust function pointer, such as a
@@ -53,14 +53,14 @@ turns the things those keys name into an image, and nothing resumes from one.
 **Directions.**
 
 - *The serialized reference — decided.* A reference is `(cell ordinal,
-  offset)` and a handle is a cell ordinal, computed when the image is written
-  by walking each region's chunks and assigning them consecutive ranges. Live
+  offset)` and a handle is an arena node's ordinal, computed when the image is
+  written by walking each bump's chunks and assigning them consecutive ranges. Live
   references stay native `&'cell T`: an offset-based pointer at run time
   would trade the brand-and-lifetime discipline every region read rests on
   for an indirection on every read, to save work that happens once per
   image.
 - *What the image holds — decided.* Program storage, the type root and the
-  build tree, and never a run cell: the build tree is by design what the text
+  build arena, and never a run cell: the arena is by design what the text
   decides, and the program's values are the run's. A table in the image
   hashes by a content word — a `DigestTable`, the tiers' `slot_hash` — never
   by a process-seeded hasher; a seeded `hashbrown` table is rebuilt at load or
@@ -69,10 +69,10 @@ turns the things those keys name into an image, and nothing resumes from one.
   time — open.* A build could also step run cells whose inputs are known and
   hold those that read input, a file or the network, so a constant-folded
   value and every error that does not depend on an input surface before the
-  program runs. (a) Out of this item's scope: the image is the build tree, and
+  program runs. (a) Out of this item's scope: the image is the build arena, and
   partial evaluation of the run is an item of its own once the image exists.
   (b) In scope, with the set of held cells enumerated here. Recommended: (a);
-  what the text decides already has a tree, and what a run decides does not
+  what the text decides already has a home, and what a run decides does not
   yet have a representation that outlives it.
 - *What an editor reads — open.* A site's static type and a keyworded use's
   selected overload are in the image. (a) An editor reads them from the
@@ -88,7 +88,7 @@ turns the things those keys name into an image, and nothing resumes from one.
 
 ## Dependencies
 
-**Requires:** none — the [build tree](../../src/build/README.md) it serializes
-stands.
+**Requires:** none — the [build arena](../../src/scheduler/README.md#the-build-arena)
+it serializes stands.
 
 **Unblocks:** none — a leaf.

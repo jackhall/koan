@@ -1,9 +1,10 @@
-//! The build module's tests: a specialization's key, the keys fold, the load's store, and the import
-//! boundary.
+//! The build module's tests: a settlement's key, the keys fold, the load's store, the wake memo,
+//! and the import boundary.
 
 mod boundary;
 mod folds;
 mod load;
+mod wake;
 
 use crate::scope::Segment;
 use crate::values::ContentDigest;
@@ -18,8 +19,13 @@ fn digest(at: usize) -> ContentDigest {
 
 #[test]
 fn a_key_is_equal_for_equal_inputs_and_tells_segments_and_bindings_apart() {
-    let key =
-        |segment, digests: &[usize]| key_of(Segment(segment), digests.iter().map(|at| digest(*at)));
+    let key = |segment, digests: &[usize]| {
+        key_of(
+            digest(0),
+            Segment(segment),
+            digests.iter().map(|at| digest(*at)),
+        )
+    };
     assert_eq!(key(3, &[1, 2]), key(3, &[1, 2]));
     assert_ne!(
         key(3, &[1, 2]),
@@ -33,4 +39,9 @@ fn a_key_is_equal_for_equal_inputs_and_tells_segments_and_bindings_apart() {
     );
     assert_ne!(key(3, &[1]), key(3, &[1, 1]));
     assert_ne!(key(3, &[]), key(4, &[]));
+    assert_ne!(
+        key(3, &[1]),
+        key_of(digest(9), Segment(3), [digest(1)].into_iter()),
+        "bases with equal segments differ"
+    );
 }

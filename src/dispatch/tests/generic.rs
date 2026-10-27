@@ -5,7 +5,7 @@
 use crate::memory::Bump;
 use crate::parse::{ExpressionPart, KExpression};
 use crate::program::Program;
-use crate::scope::{BodyShape, ShapeKind, Site, Static};
+use crate::scope::{BodyShape, Narrowing, ShapeKind, Static};
 use crate::type_lattice::{DeclaredType, Interval, KType, Parametric, shape_slots};
 use crate::values::tests::reading;
 
@@ -41,7 +41,11 @@ pub(super) fn expressed<'graph>(
 fn statement(program: &Program<'_>, shape: &BodyShape<'_>, index: usize) -> String {
     rendered(
         (program.facts())
-            .use_statics(shape, Site::of_node(&shape.body()[index]))
+            .use_statics(
+                &program.tiers().resting(),
+                shape,
+                shape.site_of_node(&shape.body()[index]),
+            )
             .narrowing,
     )
 }
@@ -111,11 +115,14 @@ fn typing_a_quote_s_code_a_second_time_interns_no_type() {
 fn an_overload_over_an_enclosing_name_is_rigid_and_selected_without_a_solve() {
     loaded(OUTER, |program| {
         let outer = expressed(program, program.shape(), "OUTER");
-        let registered =
-            match (program.facts()).registered_type(outer, outer.registrations()[0].slot) {
-                Static::Rigid { value, .. } => value.shape,
-                _ => panic!("`INNER` is rigid over `Elt`"),
-            };
+        let registered = match (program.facts()).registered_type(
+            &program.tiers().resting(),
+            outer,
+            outer.registrations()[0].slot,
+        ) {
+            Static::Rigid { value, .. } => value.shape,
+            _ => panic!("`INNER` is rigid over `Elt`"),
+        };
         let bump = Bump::new();
         let types = &reading(program.tiers(), &bump);
         let DeclaredType::Type(registered) = registered else {
@@ -266,7 +273,7 @@ fn a_candidate_over_a_variable_outside_code_is_unknown_in_it() {
                 rendered(
                     program
                         .facts()
-                        .use_statics(code, Site::of_node(greet))
+                        .use_statics(&program.tiers().resting(), code, code.site_of_node(greet))
                         .narrowing
                 ),
                 "full",
@@ -284,7 +291,7 @@ fn eval_is_its_declared_type() {
         assert_eq!(let_narrowing(program, program.shape(), "m"), "selected");
         assert_eq!(
             (program.facts())
-                .statement_type(code(program.shape()), 0)
+                .statement_type(&program.tiers().resting(), code(program.shape()), 0)
                 .map(|typed| typed.upper),
             Some(Parametric::from(KType::ANY)),
             "the code's own cell keeps the hole a `USING` may fill"
@@ -378,6 +385,39 @@ fn a_call_admits_only_its_maybe_candidates() {
 }
 
 #[test]
+fn a_kept_list_s_points_are_types_its_records_name() {
+    // `exact` keeps the list open; `apart` always admits, its `First` solved to `Number | Str`,
+    // which no fact names whole but this point: a settlement rests it and a composition exports
+    // its term only if the records name it.
+    let source = "EXPR FOR ALL #[First Second] #(PAIR x :(LIST OF First) WITH y :Second) -> Str = \
+                  #(\"apart\")\n\
+                  EXPR #(PAIR x :(LIST OF Any) WITH y :Bool) -> Str = #(\"exact\")\n\
+                  EXPR #(USE e :(Str | Bool)) -> Str = #(PAIR [1, \"a\"] WITH e)";
+    loaded(source, |program| {
+        let (facts, types) = (program.facts(), program.tiers().resting());
+        let body = expressed(program, program.shape(), "USE");
+        let statics = facts.use_statics(&types, body, body.site_of_node(&body.body()[0]));
+        let Narrowing::Kept(kept) = statics.narrowing else {
+            panic!(
+                "the use keeps its candidates, not {}",
+                rendered(statics.narrowing)
+            )
+        };
+        let points: Vec<KType> = (kept.points.iter())
+            .flat_map(|points| (0..points.points.len()).filter_map(|at| points.closed(at)))
+            .collect();
+        let mut named = Vec::new();
+        facts.each_type(&mut |typed| named.push(typed));
+        let scratch = Bump::new();
+        let union = types.union_of(&scratch, &[KType::NUMBER, KType::STR]);
+        assert!(points.contains(&union), "{points:?}");
+        for point in points {
+            assert!(named.contains(&point.into()), "the records name {point:?}");
+        }
+    });
+}
+
+#[test]
 fn an_overload_over_a_bounded_enclosing_name_is_not_selected_for_a_literal() {
     let source = "EXPR FOR ALL #{Elt: Number} #(OUTER x :Elt) -> Elt = #(\n  \
                   EXPR #(INNER y :Elt) -> Elt = #(y)\n  \
@@ -400,7 +440,8 @@ fn several_always_candidates_one_rigid_are_ranked_at_the_call() {
     assert_eq!(last_in(source, "OUTER"), "kept always always");
     assert_eq!(
         run(&format!("{source}\nPRINT (OUTER 1)")),
-        "error: ambiguous call of `INNER _`: 2 overloads admit (Number) and none ranks first"
+        "error: <test>:4:3: ambiguous call of `INNER _`: 2 overloads admit (Number) and none \
+         ranks first"
     );
 }
 
@@ -567,4 +608,61 @@ fn members_no_argument_admits_both_of_or_taken_whole_do_not_tie() {
         "[Any, Any]",
         "a parameter's own parameter takes its union whole"
     );
+}
+
+/// Run `source`, counting the candidates its calls admitted and the solutions they read off the
+/// load's points.
+fn solving(source: &str) -> (String, usize, usize) {
+    use crate::dispatch::select::{ADMITTED, POINTED};
+    ADMITTED.with(|admitted| admitted.set(0));
+    POINTED.with(|pointed| pointed.set(0));
+    let printed = run(source);
+    (
+        printed,
+        ADMITTED.with(std::cell::Cell::get),
+        POINTED.with(std::cell::Cell::get),
+    )
+}
+
+#[test]
+fn a_selected_candidates_group_is_solved_once_at_the_load() {
+    // `ONLY 1` solves `Elt` to `Number` at the load; `ONLY r.v`, whose argument the load knows
+    // only as `Any`, solves it to the type the argument carries. Neither call admits.
+    let only = "EXPR FOR ALL #[Elt] #(ONLY x :Elt) -> Elt = #(x)\n\
+                LET r = ({v = 1} :! :{v :Any})\n";
+    for call in ["ONLY 1", "ONLY r.v"] {
+        let (printed, admitted, pointed) = solving(&format!("{only}PRINT ({call})"));
+        assert_eq!(printed, "1", "{call}");
+        assert_eq!((admitted, pointed), (0, 1), "{call}");
+    }
+}
+
+proptest::proptest! {
+    #![proptest_config(proptest::prelude::ProptestConfig {
+        cases: crate::tests::case_share(1, 4),
+        ..proptest::prelude::ProptestConfig::default()
+    })]
+
+    /// The load's points are the call's solution: wherever a call reads its group's solution off
+    /// them, admitting the candidate over its arguments solves to the same, which every such call
+    /// checks.
+    #[test]
+    fn recorded_points_solve_as_admission_does(program in super::generate::dispatched()) {
+        let rendered = program.render();
+        let _ = run(&rendered.source);
+    }
+}
+
+#[test]
+fn an_instance_type_is_read_and_never_instantiated_at_the_run() {
+    // `lib.pick` is wanted at `Number` where `f` is bound, and at `Str` where it is handed to
+    // `APPLY`: the load records each instance's type beside its solution, and the run reads it.
+    use crate::knot::INSTANTIATED;
+    let source = "MODULE lib = (LET pick = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(x)))\n\
+                  LET f :(FN :{x :Number} -> Number) = lib.pick\n\
+                  EXPR #(APPLY g :(FN :{x :Str} -> Str)) -> Str = #(g {x = \"s\"})\n\
+                  PRINT (f {x = 1})\nPRINT (APPLY lib.pick)";
+    INSTANTIATED.with(|count| count.set(0));
+    assert_eq!(run(source), "1\ns");
+    assert_eq!(INSTANTIATED.with(std::cell::Cell::get), 0);
 }

@@ -11,16 +11,20 @@ use std::cell::Cell;
 use std::fmt;
 
 use crate::knot::{KActivationView, KBuiltins, KValue};
-use crate::memory::{Bump, BumpAllocator, Writer};
-use crate::parse::{ExpressionPart, KExpression, ParseError};
-use crate::scheduler::{NativeStep, Work};
-use crate::scope::{BodyShape, LoadFacts, ShapeError, Shapes, Slot, Store};
+use crate::memory::{Bump, BumpAllocator, ProgramBrand, Writer};
+use crate::parse::{ParseError, ProgramNode};
+use crate::scheduler::{Ask, NativeStep, Settles, Work};
+use crate::scope::{
+    BodyShape, ComposedRoot, ComposedSyntax, Composition, Facts, LoadFacts, Segment, Settlement,
+    ShapeError, Shapes, Site, Slot, Store, Written,
+};
 use crate::symbols::{BinderSymbol, SymbolInterner};
 use crate::type_lattice::{
     DeclaredType, KType, TypeNode, display_name, satisfied_by, substitute_quantified,
 };
-use crate::values::{Chain, Record, Tagged, TypeTiers, Value, satisfies};
+use crate::values::{Chain, Record, Retype, Tagged, TypeTiers, Value, satisfies};
 
+use super::activation_store::Activate;
 use super::bundle::{KBirth, KBundle, Within};
 
 /// What the layer above `program` supplies: the builtin table a shape resolves builtin names
@@ -43,18 +47,20 @@ pub trait Language {
     /// value delivered where the drain says.
     fn evaluator<'graph>() -> NativeStep<'graph, KBundle>;
 
-    /// Run the language's one walk over `shapes`, keeping every record it computes in `store` and
-    /// interning through `types`: what the load decides, and what a resumption re-decides under
-    /// the store's binding. Runs nothing by default, so the run elaborates where it reads, as it
-    /// does wherever the load leaves a fact unknown.
+    /// Run the language's one walk over the body at `at` of `shapes` and every body nested in it,
+    /// keeping every record it computes in `store` and interning through `types`: what the load
+    /// decides at the root, and what a resumption re-decides under the store's binding. Runs
+    /// nothing by default, so the run elaborates where it reads, as it does wherever the load
+    /// leaves a fact unknown.
     fn facts<'graph: 'o, 'tier: 'o, 'o, S: Store<'o>>(
         shapes: &'graph Shapes<'graph>,
         builtins: &'graph KBuiltins<'graph, 'graph>,
         store: &S,
         types: &Chain<'tier, '_, '_, '_>,
         scratch: BumpAllocator<'_>,
+        at: Segment,
     ) -> Result<(), ShapeError<'o>> {
-        let _ = (shapes, builtins, store, types, scratch);
+        let _ = (shapes, builtins, store, types, scratch, at);
         Ok(())
     }
 }
@@ -85,6 +91,8 @@ pub struct Contract {
     /// The return the value is retyped to: the outermost frame's in a chain of tail hops, since
     /// that frame's caller asked for it.
     pub retype: KType,
+    /// What a retype to `retype` re-stamps the value at, where the load recorded it.
+    pub restamp: Option<Retype>,
     /// Whether the value must satisfy `retype` too: a callee called past the type it shows, where
     /// either is quantified, so the order does not promise the node's return lies under the shown
     /// one.
@@ -92,33 +100,44 @@ pub struct Contract {
 }
 
 impl Contract {
-    /// Whether a call of a callable of type `callee` — a function type or an expression shape —
-    /// returns a type satisfying this contract, its group solved to `solution`, so the evaluation
-    /// owing the contract can hop to the callee's frame. With no solution, as a call by name has
-    /// before its frame solves, a quantified callee keeps nothing. The one answer for every call.
+    /// Whether a call of a callable of type `callee` keeps this contract ([`kept`]).
     pub fn kept_by(
         self,
         types: &Chain<'_, '_, '_, '_>,
         callee: DeclaredType<KType>,
         solution: Option<&[KType]>,
     ) -> bool {
-        let scratch = Bump::new();
-        let solution = match (callee, solution) {
-            (DeclaredType::Type(_), _) => &[][..],
-            (DeclaredType::Scheme(_), Some(solution)) => solution,
-            (DeclaredType::Scheme(_), None) => return false,
-        };
-        let (TypeNode::KFunction { ret, .. } | TypeNode::ExpressionShape { ret, .. }) =
-            callee.view(types).body
-        else {
-            return false;
-        };
-        // A run-time solution is concrete, and a scheme holds only its own group's variables.
-        let ret = substitute_quantified(types, &scratch, ret, solution);
-        types
-            .concrete(ret)
-            .is_some_and(|ret| satisfied_by(types, &scratch, self.returns, ret))
+        kept(types, self.returns, callee, solution)
     }
+}
+
+/// Whether a call of a callable of type `callee` — a function type or an expression shape —
+/// returns a type satisfying `returns`, a frame's contract, its group solved to `solution`, so the
+/// evaluation owing the contract can hop to the callee's frame. With no solution, as a call by name
+/// has before its frame solves, a quantified callee keeps nothing. The one answer for every call,
+/// whether the load's walk or the call reads it.
+pub fn kept(
+    types: &Chain<'_, '_, '_, '_>,
+    returns: KType,
+    callee: DeclaredType<KType>,
+    solution: Option<&[KType]>,
+) -> bool {
+    let scratch = Bump::new();
+    let solution = match (callee, solution) {
+        (DeclaredType::Type(_), _) => &[][..],
+        (DeclaredType::Scheme(_), Some(solution)) => solution,
+        (DeclaredType::Scheme(_), None) => return false,
+    };
+    let (TypeNode::KFunction { ret, .. } | TypeNode::ExpressionShape { ret, .. }) =
+        callee.view(types).body
+    else {
+        return false;
+    };
+    // A run-time solution is concrete, and a scheme holds only its own group's variables.
+    let ret = substitute_quantified(types, &scratch, ret, solution);
+    types
+        .concrete(ret)
+        .is_some_and(|ret| satisfied_by(types, &scratch, returns, ret))
 }
 
 /// How a call reached its callee. A keyworded call's arguments were admitted by the selection that
@@ -130,26 +149,74 @@ pub enum CallKind {
     ByName,
 }
 
-/// What the body runner hands an evaluator: a whole statement, or one part of one.
-#[derive(Clone, Copy, Debug)]
-pub enum Evaluated<'graph> {
-    Statement(&'graph KExpression<'graph>),
-    Part(&'graph ExpressionPart<'graph>),
+/// What the body runner hands an evaluator: a whole statement, by its index into the body, or one
+/// part of one, by its site. Plain data, so it crosses a park; the evaluator reads the node off the
+/// shape its view binds.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Evaluated {
+    Statement(u32),
+    Part(Site),
+}
+
+/// The walk a miss settles through, the language's monomorphized in: [`settled`](super::settle).
+pub(super) type Settle<'graph> = for<'a> fn(
+    &Program<'graph>,
+    &'a Bump,
+    Facts<'a>,
+    &[&'a Composition<'a>],
+    &Ask,
+    &mut dyn FnMut(Option<&Chain<'_, '_, '_, '_>>),
+    &'a &'graph (),
+) -> Option<Settlement<'a>>;
+
+/// The miss a composition is built through, the language's monomorphized in:
+/// [`composed`](super::settle::composed).
+pub(super) type Compose<'graph> = for<'a> fn(
+    &Program<'graph>,
+    ProgramBrand<'a>,
+    &'a Bump,
+    ProgramNode<'a>,
+    &'a &'graph (),
+) -> Composition<'a>;
+
+impl<'graph> Settles<'graph> for Program<'graph> {
+    fn settle<'a>(
+        &self,
+        bump: &'a Bump,
+        parent: Facts<'a>,
+        pinned: &[&'a Composition<'a>],
+        ask: &Ask,
+        rest: &mut dyn FnMut(Option<&Chain<'_, '_, '_, '_>>),
+        witness: &'a &'graph (),
+    ) -> Option<Settlement<'a>> {
+        (self.settle)(self, bump, parent, pinned, ask, rest, witness)
+    }
+
+    fn compose<'a>(
+        &self,
+        syntax: &'a ComposedSyntax,
+        bump: &'a Bump,
+        witness: &'a &'graph (),
+    ) -> Composition<'a> {
+        (self.compose)(self, syntax.brand(), bump, syntax.syntax(), witness)
+    }
 }
 
 /// A loaded program's facts, laid down in program storage: its shape, its builtin table, the tiers
 /// of the types the load built and the interner its names live in, the step that evaluates a
-/// node, the sinks it writes to, the builtin `Error` type, and whether its last run ended uncaught.
-/// `Copy` and without drop glue, so it rests in program storage beside the table it names.
+/// node and the walk a miss settles through, the sinks it writes to, the builtin `Error` type, and
+/// whether its last run ended uncaught. `Copy` and without drop glue, so it rests in program
+/// storage beside the table it names; it is the door the graph settles a miss through.
 #[derive(Clone, Copy)]
 pub struct Program<'graph> {
     facts: &'graph LoadFacts<'graph>,
     builtins: &'graph KBuiltins<'graph, 'graph>,
-    /// What tests read types over; the run reads the graph's own.
-    #[cfg(test)]
     tiers: TypeTiers<'graph>,
     symbols: &'graph SymbolInterner,
     evaluator: NativeStep<'graph, KBundle>,
+    settle: Settle<'graph>,
+    compose: Compose<'graph>,
+    activate: Activate<'graph>,
     output: Output,
     error: KType,
     /// Set by the top level when a unit receives an error value; laid down in program storage, and
@@ -165,23 +232,33 @@ impl<'graph> Program<'graph> {
         tiers: TypeTiers<'graph>,
         error: KType,
         symbols: &'graph SymbolInterner,
-        evaluator: NativeStep<'graph, KBundle>,
+        (evaluator, settle, compose, activate): (
+            NativeStep<'graph, KBundle>,
+            Settle<'graph>,
+            Compose<'graph>,
+            Activate<'graph>,
+        ),
         output: Output,
         uncaught: &'graph Cell<bool>,
     ) -> Self {
-        #[cfg(not(test))]
-        let _ = tiers;
         Program {
             facts,
             builtins,
-            #[cfg(test)]
             tiers,
             symbols,
             evaluator,
+            settle,
+            compose,
+            activate,
             output,
             error,
             uncaught,
         }
+    }
+
+    /// The walk a frame's binding event decides through.
+    pub(super) fn activate(&self) -> Activate<'graph> {
+        self.activate
     }
 
     /// The top level's shape.
@@ -190,14 +267,31 @@ impl<'graph> Program<'graph> {
     }
 
     /// Every shape the load built, by segment.
-    #[cfg(test)]
     pub fn shapes(&self) -> &'graph Shapes<'graph> {
         self.facts.shapes()
     }
 
-    /// What the load decided about every body.
+    /// What the load decided about every body. A step reads facts through its door instead.
     pub fn facts(&self) -> &'graph LoadFacts<'graph> {
         self.facts
+    }
+
+    /// The program's written code: what a value born of it keeps.
+    pub fn written(&self) -> Written<'graph, 'graph> {
+        Written::of(self.facts)
+    }
+
+    /// The code a value born in a cell reading `facts` is born of: the program's, or the code
+    /// composed at run time rooted at `root` whose composition the cell's chain rests on.
+    pub fn written_under<'step>(
+        &self,
+        facts: &Facts<'step>,
+        root: Option<ComposedRoot<'graph>>,
+    ) -> Written<'graph, 'step> {
+        match (facts.composition(), root) {
+            (Some(composition), Some(root)) => Written::of(self.facts).composed(root, composition),
+            _ => Written::of(self.facts),
+        }
     }
 
     pub fn builtins(&self) -> &'graph KBuiltins<'graph, 'graph> {
@@ -205,8 +299,7 @@ impl<'graph> Program<'graph> {
     }
 
     /// The tiers of the types the load built: what the program's graph hands every step's chain to
-    /// read first, and what a reader outside a step reads over.
-    #[cfg(test)]
+    /// read first, and what a seek's binding image and a reader outside a step read over.
     pub fn tiers(&self) -> TypeTiers<'graph> {
         self.tiers
     }
@@ -234,10 +327,10 @@ impl<'graph> Program<'graph> {
     /// names an expression shape. `within` is [`KBirth::Evaluate`]'s.
     pub fn evaluate<'here>(
         &'graph self,
-        node: Evaluated<'graph>,
+        node: Evaluated,
         view: KActivationView<'graph, 'here>,
         contract: Option<Contract>,
-        within: Within,
+        within: Within<'graph, 'here>,
     ) -> Work<'graph, 'here, KBundle> {
         Work {
             step: self.evaluator,
@@ -307,7 +400,7 @@ impl<'graph> Program<'graph> {
             _ => contract.returns,
         };
         if satisfies(returns, &value, types, &scratch) {
-            return value.retyped(writer, contract.retype, types, &scratch);
+            return value.retyped_as(writer, contract.retype, contract.restamp, types, &scratch);
         }
         let name = |handle: DeclaredType<KType>| display_name(handle, types, self.symbols);
         let (value, returns) = (name(value.ktype()), name(returns.into()));
@@ -330,13 +423,14 @@ impl<'graph> Program<'graph> {
 
     /// `value`, bound by `LET <name> <type> = …`, held to `annotation`: an error value passes
     /// unchanged, a value satisfying it — `settled` where the load showed it always does — is
-    /// retyped to it, and anything else is the error naming the miss.
+    /// retyped to it, by the load's record of the retype where it holds one, and anything else is
+    /// the error naming the miss.
     pub fn annotated<'cell>(
         &self,
         writer: Writer<'cell, '_>,
         types: &Chain<'_, 'cell, '_, '_>,
         value: KValue<'graph, 'cell>,
-        annotation: KType,
+        (annotation, retype): (KType, Option<Retype>),
         settled: bool,
     ) -> KValue<'graph, 'cell> {
         if self.message(&value, types).is_some() {
@@ -348,7 +442,7 @@ impl<'graph> Program<'graph> {
             "a settled annotation always holds"
         );
         if settled || satisfies(annotation, &value, types, &scratch) {
-            return value.retyped(writer, annotation, types, &scratch);
+            return value.retyped_as(writer, annotation, retype, types, &scratch);
         }
         let name = |handle: DeclaredType<KType>| display_name(handle, types, self.symbols);
         self.error(

@@ -260,6 +260,78 @@ mod reproducible {
         assert!(!collector.reproducible(&world.types));
     }
 
+    /// A solve of `declared` over `carried` under `bounds`, and whether a run reproduces it.
+    fn solve_over(
+        world: &World<'_>,
+        bounds: &[KType],
+        declared: Handle,
+        carried: Handle,
+    ) -> (Vec<Handle>, bool) {
+        let mut collector = Collector::<Handle>::new(&world.types, world.region, bounds);
+        admits(
+            &world.types,
+            world.region,
+            declared,
+            carried,
+            Variance::Co,
+            &mut collector,
+        )
+        .expect("admitted");
+        let solution = collector.solve(&world.types).expect("solved");
+        (solution.to_vec(), collector.reproducible(&world.types))
+    }
+
+    /// `(LIST OF Elt) | Item` over `(LIST OF Number) | Outer` solves `Item` to `Outer`; at
+    /// `Outer = Never` the run's union is `LIST OF Number`, and `Item` takes its bound.
+    #[test]
+    fn a_member_a_binding_may_absorb_is_not_reproducible() {
+        let bump = Bump::new();
+        let world = World::new(&bump);
+        let elt = world.types.quantified(0, KType::ANY).raw();
+        let item = world.types.quantified(1, KType::STR).raw();
+        let declared = world.union(&[world.types.list(elt), item]);
+        let numbers = world.types.list(KType::NUMBER.raw());
+        let bounds = [KType::ANY, KType::STR];
+        let outer = outer(&world, KType::STR);
+        let (statics, reproducible) =
+            solve_over(&world, &bounds, declared, world.union(&[numbers, outer]));
+        assert_eq!(statics, [KType::NUMBER.raw(), outer]);
+        let (run, _) = solve_over(&world, &bounds, declared, numbers);
+        assert_eq!(run, [KType::NUMBER.raw(), KType::STR.raw()]);
+        assert!(!reproducible);
+    }
+
+    /// `Number | Elt` over an `Outer` under `Number` admits through `Number`, leaving `Elt` at its
+    /// bound; at `Outer = Never` the run reaches `Elt` too.
+    #[test]
+    fn a_member_chosen_for_a_variable_is_not_reproducible() {
+        let bump = Bump::new();
+        let world = World::new(&bump);
+        let elt = world.types.quantified(0, KType::ANY).raw();
+        let declared = world.union(&[KType::NUMBER.raw(), elt]);
+        let bounds = [KType::ANY];
+        let (statics, reproducible) =
+            solve_over(&world, &bounds, declared, outer(&world, KType::NUMBER));
+        assert_eq!(statics, [KType::ANY.raw()]);
+        let (run, _) = solve_over(&world, &bounds, declared, Handle::NEVER);
+        assert_eq!(run, [Handle::NEVER]);
+        assert!(!reproducible);
+    }
+
+    /// A member holding a variable alone in the carried union routes the same at every binding.
+    #[test]
+    fn a_lone_member_holding_a_variable_is_reproducible() {
+        let bump = Bump::new();
+        let world = World::new(&bump);
+        let elt = world.types.quantified(0, KType::ANY).raw();
+        let item = world.types.quantified(1, KType::STR).raw();
+        let declared = world.union(&[world.types.list(elt), item]);
+        let list_of_outer = world.types.list(outer(&world, KType::ANY));
+        let (_, reproducible) =
+            solve_over(&world, &[KType::ANY, KType::STR], declared, list_of_outer);
+        assert!(reproducible);
+    }
+
     #[test]
     fn a_meet_over_a_variable_is_not_reproducible() {
         let bump = Bump::new();

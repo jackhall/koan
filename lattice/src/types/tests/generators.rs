@@ -1701,7 +1701,8 @@ const FRESH_KEY: ContentKey = ContentKey(u128::MAX);
 /// it; a signature, or an application of one, pins an unpinned head parameter at it; a function's
 /// or shape's first parameter or slot not typed `Any` widens to a union with it; and otherwise a
 /// list, dict, union, family application, or function or shape return is rebuilt over a child the
-/// move reaches. `None` where no move does — the porosity law's targeted draw.
+/// move reaches, a union's only where no other member absorbs it. `None` where no move does — the
+/// porosity law's targeted draw.
 pub fn under_with(world: &World, scratch: BumpAllocator<'_>, b: Handle) -> Option<Handle> {
     let types = &world.types;
     let name = world.type_names[0];
@@ -1802,13 +1803,14 @@ pub fn under_with(world: &World, scratch: BumpAllocator<'_>, b: Handle) -> Optio
             None => types.dict(under_with(world, scratch, key)?, value),
         },
         TypeNode::Union { members } => {
-            let mut members = members.iter().collect::<Vec<_>>();
-            let (chosen, under) = members
-                .iter()
-                .enumerate()
-                .find_map(|(at, member)| Some((at, under_with(world, scratch, *member)?)))?;
-            members[chosen] = under;
-            types.union_of(scratch, &members)
+            let members = members.iter().collect::<Vec<_>>();
+            // A member's move another member absorbs loses its carrier: try the next.
+            (0..members.len()).find_map(|at| {
+                let mut moved = members.clone();
+                moved[at] = under_with(world, scratch, members[at])?;
+                let union = types.union_of(scratch, &moved);
+                types.contains_carrier(union).then_some(union)
+            })?
         }
         TypeNode::ConstructorApply {
             constructor,

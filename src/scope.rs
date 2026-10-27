@@ -30,15 +30,21 @@ mod activation;
 mod builtins;
 mod channels;
 mod closure;
+mod composition;
 mod facts;
 mod groups;
 mod header;
 mod keyed;
+mod memo;
+mod record_types;
 mod records;
+mod relay;
+mod settlement_facts;
 mod shape;
 mod shapes;
 mod signature;
 mod spelling;
+mod stamp;
 mod tree;
 mod typed;
 mod writes;
@@ -46,35 +52,45 @@ mod writes;
 #[cfg(test)]
 pub(crate) mod tests;
 
+pub(crate) use records::RecordSource;
+#[cfg(test)]
+pub(crate) use records::{RIGID_AT_RUN, TERM_PROBES, rigid_at_run};
 pub(crate) use shape::IMPLICIT;
 pub(crate) use signature::pair_label;
 pub(crate) use spelling::{PathSpelling, SpelledRoot, path_spelling};
 
-pub use activation::{Activation, ActivationView};
+pub use activation::{Activation, ActivationView, Reading};
 pub use builtins::Builtins;
 pub use closure::ClosureBindings;
+pub use composition::{ComposedSyntax, Composition, quote_paths};
 pub use facts::{Address, Binding, Bound, Cut, Frontier, Store, UnitId, Unknown};
 pub use groups::{BuiltinGroup, GroupFrame, is_equal, is_equality, is_unequal};
 pub use header::{HalfHeader, RegionHeader};
 pub use keyed::{Keyed, KeyedEntry};
+pub use memo::{DecisionMemo, Entry, EntryFamily, EventSite, MemoFamily, MemoKey, extended};
+pub use record_types::Named;
 pub use records::{
-    Body, Born, Closing, Deps, DepsGathering, Folds, LoadFacts, NamedVariable, SiteDeps, Typed,
-    UnitFacts, tree_deps,
+    AtRun, BodyAt, BodyRef, Born, Closing, ComposedRoot, Deps, DepsGathering, Facts, FactsOver,
+    Folds, Layers, LoadFacts, LoadRecords, NamedVariable, Retypes, SiteDeps, Typed, UnitFacts,
+    Written, tree_deps,
 };
+pub use settlement_facts::{Activated, Settlement};
 pub use shape::{
     Arm, BodyShape, BuiltinIndex, Candidate, CandidateList, CaptureChain, CaptureSlot,
-    CaptureSource, CaptureSpec, Component, ComponentIndex, Coordinate, Lands, Listed, Mention,
-    MentionClass, Offer, PathId, Position, QuotedPart, Ranking, Registration, Segment, ShapeError,
-    ShapeKind, Site, Slot, SpelledPath, SurfacedHead, Target, TopLevel, TypeExpression, Unit,
-    UnitHolds, UnitIndex, UnitWork, ViewRefused, Which, each_part, follow, in_body_of, part_of,
-    selection_refused, source_of, spelled, view_refused,
+    CaptureSource, CaptureSpec, Component, ComponentIndex, Coordinate, Lands, Listed, Located,
+    Mention, MentionClass, Offer, PathId, Position, QuotedPart, Ranking, Registration, Segment,
+    ShapeError, ShapeKind, Site, Sites, Slot, SpelledPath, SurfacedHead, Target, TopLevel,
+    TypeExpression, Unit, UnitHolds, UnitIndex, UnitWork, ViewRefused, Which, each_part, follow,
+    in_body_of, part_of, selection_refused, source_of, spelled, view_refused,
 };
-pub use shapes::{BindSite, Shapes};
-pub use tree::{Binder, KnotNode, Leaf, NodeCapture, Print, Tree, Unfolded, Within};
+pub use shapes::{BindSite, Code, Shapes};
+pub use stamp::{Ask, Asked, Level, Sought, Stamp};
+pub use tree::{Binder, Identity, KnotNode, Leaf, NodeCapture, Tree, Unfolded, Within};
 pub use typed::{
-    BodyClass, Caching, Callable, Elaboration, ElaborationDisplay, FunctionGroupMap, HandedTo,
-    Handoff, InstanceRead, Mint, Narrowing, ParameterBinding, PathEntry, Paths, Registered,
-    Resolution, Resolved, Root, ShapeGroupMap, Source, Static, StaticCallable, StaticRegistered,
-    StaticSolution, StaticType, UseStatics, Variable, ViewSlots, solutions,
+    BodyClass, Caching, Callable, CandidateRoute, Elaboration, ElaborationDisplay, Elimination,
+    FunctionGroupMap, HandedTo, Handoff, InstanceRead, Kept, Mint, Narrowing, ParameterBinding,
+    PathEntry, Pick, Point, Points, Registered, Resolution, Resolved, Root, Route, ShapeGroupMap,
+    Source, Static, StaticCallable, StaticInstance, StaticRegistered, StaticType, Table,
+    UseStatics, Variable, ViewSlots,
 };
-pub use writes::{UnitTable, Writes};
+pub use writes::{KeyedWrites, Writes};

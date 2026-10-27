@@ -6,3 +6,4 @@
 # everyone who runs the test benefits from these saved cases.
 cc 2dfe92b396ad888b8840c7e21042b7b33d1f2fd4e226f2ce130c6fc094ca7ac7 # shrinks to (value, spelled) = ("#(y)", "Name")
 cc 82b0505c5ac49fc3ec39ec9ad7b8e5ce658712b1543e98313040014377e896d6 # shrinks to (desc, value) = (Number, "1")
+cc bced7a66849cd94b59c886c5d16058b1a88e83795aff4d3be74eb8cfca37bc71 # shrinks to (value, spelled) = ("Number", "Type")

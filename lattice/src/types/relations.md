@@ -198,11 +198,21 @@ shape alike.
 **A scheme keeps every variable it declares.** Both doors that mint one —
 [`shape_scheme`](chain.rs) and [`function_scheme`](chain.rs) — intern the
 plain body first, its `Quantified` positions indexed in declaration order. Then
-they number the group over the body's positions: first the variables some
-position names, by first occurrence, a shape walking its slots in element order
-and a function its parameters in **symbol-sorted key order** — a record's
-identity is order-blind, so the numbering must be too — and then the return;
-then every variable no position names, in declared order. The body is
+they number the group off the body alone ([numbering.rs](numbering.rs)), so
+two schemes that differ only in their variables' names or declaration order
+are one handle. A variable is numbered at its first occurrence in a walk that
+reads only what is ordered: a shape's slots in element order, a function's
+parameters in **symbol-sorted key order** — a record's identity is
+order-blind, so the numbering must be too — then the return, a record's
+fields and an application's arguments and pins by name. A union or a meet is a
+set whose canonical order depends on the indices of the variables inside it,
+so the walk defers each one; a deferred set's members are then ordered by a
+key that reads no index, numbered variables at their numbers and every other
+at one placeholder per bound, and walked in rounds while some key is unique.
+Members a round leaves tied are settled by a search: each variable of the
+first tie is numbered next in turn and the least result kept, one branch per
+class of variables a swap leaves the scheme unchanged under, so a symmetric
+tie takes one. A variable no position names comes last, by bound. The body is
 substituted into that order, and the scheme interned over it. No variable is
 dropped, so a call solves each one: under
 `EXPR FOR ALL #[Elt] #(KIND x :Elt) -> Type = #(Elt)`, `KIND 1` binds `Elt` to

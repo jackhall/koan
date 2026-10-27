@@ -6,7 +6,7 @@ use crate::parse::BuiltinShapeId;
 use crate::parse::{ExpressionPart, KExpression, KeyElement};
 use crate::scope::{
     BodyShape, Builtins, Candidate, CandidateList, CaptureSource, Coordinate, Position, ShapeError,
-    ShapeKind, Site, Slot, Target, Which,
+    ShapeKind, Slot, Target, Which,
 };
 use crate::symbols::{BinderSymbol, KeywordSymbol};
 
@@ -82,7 +82,7 @@ fn candidates<'graph>(
     node: &KExpression<'graph>,
 ) -> &'graph CandidateList<'graph> {
     shape
-        .candidates(Site::of_node(node))
+        .candidates(shape.site_of_node(node))
         .expect("a keyworded use has a candidate list")
 }
 
@@ -317,7 +317,9 @@ fn a_block_reads_an_outer_registration_and_keeps_its_own() {
         let ExpressionPart::DictLiteral(arms) = &shape.body()[1].parts[5].value else {
             panic!("an arm set");
         };
-        let arm = shape.nested(Site::of(&arms[0].1)).expect("the arm's block");
+        let arm = shape
+            .nested(shape.site(&arms[0].1))
+            .expect("the arm's block");
         let list = candidates(arm, &arm.body()[0]);
         assert_eq!(list.candidates, [local(1, registration)]);
     });
@@ -481,7 +483,7 @@ fn a_keyworded_node_in_a_type_expression_is_no_use() {
         };
         assert!(
             shape
-                .candidates(Site::of_node(written.reference()))
+                .candidates(shape.site_of_node(written.reference()))
                 .is_none()
         );
     });

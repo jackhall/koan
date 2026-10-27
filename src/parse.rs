@@ -28,6 +28,7 @@ mod ast;
 mod atom;
 mod brace;
 mod builtin_shapes;
+mod copy;
 mod depth;
 mod error;
 mod lower;
@@ -39,6 +40,7 @@ use crate::memory::ProgramBrand;
 use crate::source::{self, CurrentFileGuard, FileId, SourceFile};
 use crate::symbols::SymbolInterner;
 
+pub use copy::copied;
 pub use depth::MAX_SYNTAX_DEPTH;
 pub use error::ParseError;
 
@@ -58,6 +60,8 @@ pub use builtin_shapes::{
 };
 
 pub(crate) use ast::RunIter;
+#[cfg(test)]
+pub(crate) use ast::tests as generated_syntax;
 pub(crate) use builtin_shapes::KEYWORDS;
 pub(crate) use builtin_shapes::binder::{
     DeclaredElement, OpArity, SlotLabel, bounded, declarator_parameters, declared_element,

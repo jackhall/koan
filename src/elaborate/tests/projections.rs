@@ -4,7 +4,7 @@
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::{KType, Parametric};
 
-use super::super::callable_type;
+use super::super::signature::callable_type;
 use super::{brought, declared};
 use crate::scope::Elaboration;
 
@@ -83,7 +83,7 @@ fn a_slot_typed_by_a_field_reads_its_declared_type() {
                 .birth("label")
                 .form()
                 .expect("a callable body sits in a form");
-            let callable = callable_type(form, program.activation, types, scratch, None)
+            let callable = callable_type(form, &program.reading, types, scratch, None)
                 .expect("the definition elaborates");
             let v = BinderSymbol::classify("v").unwrap();
             assert_eq!(

@@ -13,7 +13,7 @@ use crate::scheduler::tests::native::{
     describe, fresh, record, recorded, reset, shares, where_text, work,
 };
 use crate::scheduler::{
-    Action, Placement, Received, Request, Scheduler, Step, StepError, Taken, Use,
+    Action, Held, Placement, Received, Request, Scheduler, Step, StepError, Taken, Use,
 };
 
 /// Which end a producer takes, encoded with the `Use` it is asked with into the number a test's
@@ -36,6 +36,7 @@ fn code_of<'graph>(end: u32, use_: Use) -> KValue<'graph, 'graph> {
         Use::Reads => 0,
         Use::Keeps => 1,
         Use::Forwards => 2,
+        Use::Threads => unreachable!("no test producer threads"),
     };
     KValue::Number(f64::from(end + use_))
 }
@@ -73,7 +74,7 @@ fn produce<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'gr
     };
     match code - code % 10 {
         FINISH_FRESH => step.finish_fresh(|writer, _, witness| seven(writer, witness)),
-        FINISH_IN_HOME => step.finish_in_home([], |writer, _, [], witness| seven(writer, witness)),
+        FINISH_IN_HOME => step.finish_in_home(&[], |writer, _, _, witness| seven(writer, witness)),
         _ => {
             let value = crate::values::text(step.writer(), "seven");
             record(format!("built {}", where_text(value)));
@@ -115,7 +116,7 @@ fn consume_shares<'graph>(
 fn record_received(received: Result<Received<'_, '_, '_>, StepError>) -> Result<(), StepError> {
     match received? {
         Received::Scratch(value) => record(format!("read scratch {}", where_text(value))),
-        Received::Here(value) => record(format!("read here {}", where_text(value))),
+        Received::Here(held) => record(format!("read here {}", where_text(held.value))),
     }
     Ok(())
 }
@@ -135,8 +136,11 @@ fn read_back<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Acti
 fn one_call(end: u32, use_: Use, consumer: AnyStep) -> Vec<String> {
     reset();
     let type_region = Bump::new();
-    let mut graph: TestGraph<'_> =
-        TestGraph::new(4, crate::values::tests::seeded_tiers(&type_region));
+    let mut graph: TestGraph<'_> = TestGraph::new(
+        4,
+        crate::values::tests::seeded_tiers(&type_region),
+        Default::default(),
+    );
     let root = graph.root().expect("a fresh slab admits a root");
     let mut scheduler = Scheduler::over(&mut graph);
     scheduler
@@ -247,7 +251,7 @@ fn middle<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'gra
 fn middle_woken<'graph>(
     mut step: Step<'_, 'graph, '_, '_, '_, '_, Native>,
 ) -> Action<'graph, Native> {
-    let Some(Ok(Received::Here(value))) = step.results().next() else {
+    let Some(Ok(Received::Here(Held { value, .. }))) = step.results().next() else {
         return step.failed(StepError::Unredeemable);
     };
     record(format!("middle read here {}", where_text(value)));
@@ -262,7 +266,7 @@ fn grandparent_woken<'graph>(
         "marker {}",
         where_text(crate::values::text(step.writer(), "marker"))
     ));
-    let Some(Ok(Received::Here(value))) = step.results().next() else {
+    let Some(Ok(Received::Here(Held { value, .. }))) = step.results().next() else {
         return step.failed(StepError::Unredeemable);
     };
     record(format!("grandparent read here {}", describe(value)));
@@ -284,8 +288,11 @@ fn address(entry: &str) -> usize {
 fn forwards(end: u32) {
     reset();
     let type_region = Bump::new();
-    let mut graph: TestGraph<'_> =
-        TestGraph::new(4, crate::values::tests::seeded_tiers(&type_region));
+    let mut graph: TestGraph<'_> = TestGraph::new(
+        4,
+        crate::values::tests::seeded_tiers(&type_region),
+        Default::default(),
+    );
     let root = graph.root().expect("a fresh slab admits a root");
     let mut scheduler = Scheduler::over(&mut graph);
     scheduler
@@ -341,8 +348,11 @@ fn a_build_in_home_forwarded_is_built_in_the_spawners_home() {
 fn a_finished_value_forwarded_reaches_the_spawners_home() {
     reset();
     let type_region = Bump::new();
-    let mut graph: TestGraph<'_> =
-        TestGraph::new(4, crate::values::tests::seeded_tiers(&type_region));
+    let mut graph: TestGraph<'_> = TestGraph::new(
+        4,
+        crate::values::tests::seeded_tiers(&type_region),
+        Default::default(),
+    );
     let root = graph.root().expect("a fresh slab admits a root");
     let mut scheduler = Scheduler::over(&mut graph);
     scheduler
@@ -419,8 +429,11 @@ fn drain_the_run<'graph>(
 fn a_consumer_parked_on_three_producers_wakes_once_when_the_last_slot_fills() {
     reset();
     let type_region = Bump::new();
-    let mut graph: TestGraph<'_> =
-        TestGraph::new(4, crate::values::tests::seeded_tiers(&type_region));
+    let mut graph: TestGraph<'_> = TestGraph::new(
+        4,
+        crate::values::tests::seeded_tiers(&type_region),
+        Default::default(),
+    );
     let root = graph.root().expect("a fresh slab admits a root");
     let mut scheduler = Scheduler::over(&mut graph);
     scheduler

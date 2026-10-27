@@ -82,6 +82,20 @@ and otherwise asked for — a `Shares` tenant of the evaluation's cell, kept —
 all at one park. **A fault is passed through**: an evaluation that receives
 one from a part finishes with it, unchanged, before doing anything else.
 
+**A value is held beside where it rests.** Each operand is a
+[`Held`](../scheduler/README.md#kept-and-held-values): the value, and the kept
+part it is where it has one — a name its frame
+[keeps](../program/README.md#frames-contracts-and-tails) a carrier of, a
+child's pinned result, and a builtin `ATTR` field read or a projection over
+either, the field's label appended to the path. A value finished with a kept
+part crosses on from its true home, so an evaluation that hands back a
+parameter, or a member of one, places nothing new. **A construction is built
+in its home**: a list, dict or record literal, and a type's application, is
+built in the evaluation's home over its parts, which it asks for forwarded —
+kept in a caching body — so it is never built in the evaluation only to be
+crossed whole, and the contract is applied there too. A caching body's
+construction that stays inside the body is built on the body's chain instead.
+
 ## The builtin table
 
 [`builtins::table`](builtins.rs) binds no value name. Its type names are the
@@ -158,9 +172,12 @@ label's the code kind of its name. [`select`](select.rs) then:
    where the load recorded one; a spread
    candidate, a list a `USING` or an `EVAL` supplied, contributes each function
    in it;
-2. **ranks** the admitting candidates by the lattice's per-class verdicts, which
-   the registry records the first time a pair meets, so dispatch compares no
-   slot types of its own;
+2. **ranks** the admitting candidates by elimination class by class: off the
+   elimination table the load recorded for a list of closed candidates, which
+   keeps each pair's answer at each class, or, for a list the load left open —
+   a rigid or a spread candidate — off a table built at the call from the
+   lattice's per-class verdicts, which the registry records the first time a
+   pair meets, so dispatch compares no slot types of its own;
 3. runs a **lone survivor**; where several survive, a **builtin** among them
    wins, and otherwise the call is an **ambiguity** error, whichever scopes the
    survivors were declared in — no scope shadows another's overload. No
@@ -185,10 +202,13 @@ win `select_by_class` eliminates by).
 A use left with no *maybe* candidate is ranked there when it holds one
 candidate or every one is closed. Its winner is selected, and the call runs it
 without admitting or ranking ([`chosen`](select.rs)), a quantified candidate
-still solving its group, as step 1 solves it; a use none of whose candidates
-ranks first refuses the load as an ambiguity. Any other call admits its *maybe*
-candidates, takes each *always* one as admitted, ranks as above, and chooses
-what selection over the full list would. Several rigid candidates are ranked at
+reading the **points** the load solved its group to — closed, rigid over the
+run's lexical variables, or an argument's carried type — rather than solving
+again; a use none of whose candidates ranks first refuses the load as an
+ambiguity. Any other call admits its *maybe* candidates, takes each *always*
+one as admitted, its points read as a selected one's are, ranks as above, and
+chooses what selection over the full list would: a law holds every subset of
+a recorded table to the lattice's own elimination. Several rigid candidates are ranked at
 the call: a relation between shapes over a lexical variable holds at every run,
 but its absence need not — `INNER y :Elt` strictly outranks `INNER y :Number`
 over a rigid `Elt` bounded by `Number`, and ties with it where `Elt` is
@@ -605,11 +625,14 @@ ambiguous call of `PICK _`: 2 overloads admit (Number) and none ranks first
 ```
 
 An instance argument is listed at its scheme, since no instance of it is made.
-The unit's record keeps the candidate selected, or each candidate kept beside
-its verdict, in one entry per use beside the use's contributions (above), which
-the call reads by its node's site (`LoadFacts::use_statics`); a use the load
-narrowed nothing at and recorded no contributions for has no record, and the
-call selects over its whole list from the carried types.
+The unit's record keeps the candidate selected with its points, or each
+candidate kept beside its verdict and points with the list's elimination
+table, in one entry per use beside the use's contributions (above), which the
+call reads by its expression node's site (`Facts::use_statics`); a use the load narrowed
+nothing at and recorded no contributions for has no record, and the call
+selects over its whole list from the carried types. An instance site's type is
+recorded too, closed or rigid over the run's variables, and the run reads it
+rather than instantiating.
 
 **The return check.** A callable body whose static type — its last statement's
 — meets its declared return at `Never` refuses the load
@@ -654,6 +677,15 @@ One whose operand's upper end [fits](../../lattice/src/types/relations.md#the-re
 its type is **settled**: every value the run carries there satisfies it, so the
 run retypes without checking. *Fits* is rigid-aware, so an operand typed by a lexical variable settles an
 ascription to that variable. The record keeps each settled ascription by site.
+
+**Retypes.** Where the load closes a retype's declared type — at a `:!`, an
+annotated binder, a knot annotation, a member read over an exact module, each
+closed parameter and the return of a callable — it records what the retype
+re-stamps a value at (`values::Retype`): the declared type itself, the value's
+own type, or, for a union's members or a module's fit, the declared type the
+re-stamp computes against, since that target turns on the type the value
+carries. The run re-stamps by the record; debug builds check it against the
+computed target.
 
 An annotated binder, `LET <name> <type> = <value>`, is held to its type the same
 way, refused `ShapeError::AnnotationNeverSatisfied` at its statement and settled
@@ -818,14 +850,14 @@ site at a closed signature records its view's tree in its unit's record, keyed
 on its source's bare member and what the fit solves, which
 `LoadFacts::view_tree` reads back.
 
-**Where the run reads a path.** No value carries a path variable. The run binds
-one where it substitutes a load-time type (`elaborate::bound_path`): a closed path at its
-type, and any other by reading the module at the root's coordinate, walking its
-member chain and reading the label — through *fits* against the root's declared
-application where that application names the label a head parameter, as the
-view door fits, and as the module's own type member otherwise. A declared
-application naming lexical variables is located per reading shape and solved
-there. The walk adds no capture for a path: a use
+**Where the run reads a path.** No value carries a path variable, and the run
+resolves none: every path a frame reads is decided closed in some layer of its
+facts — the load, a settlement or the frame's
+[activation](../build/README.md#activations) — once its root's binding is
+known, through the same `elaborate::path_binding` the load reads, and the run
+reads the closed type off the record, as it reads every type a type expression
+denotes. A law holds the run's read door never to yield a rigid fact. The walk
+adds no capture for a path: a use
 records a path variable at a path of its class whose root the reading shape
 reaches through its blocks and builder captures, and a static type read across a
 callable or module boundary reads each path variable no reachable path stands
@@ -900,12 +932,11 @@ Each body gets a caching record, which [the folds](../build/README.md#the-folds)
 lay over the walk's records once it ends. It classes every minting site
 **closed**, **invariant** or **varying** by the leaves of its content tree — a
 nominal declared per call by the type binders its declaration reads — and
-marks every composite site warm whose parts read invariant views alone: the
-sites whose fact closes under the frame's binding, settled by its
-specialization's resumption. A caching frame
+the sites whose fact closes under the frame's binding are settled by its
+settlement's walk, which rests their types in the agent tier. A caching frame
 body's own record also lists the parameters its invariant sites read, its
 blocks' and module bodies' included, which key its
-[specialization](../build/README.md#keys-which-bindings-make-a-specialization)
+[settlement](../build/README.md#keys-which-bindings-make-a-settlement)
 beside the names the units beneath it seamed at an entry wait on, a
 parameter's own type aside:
 none where they read captures alone, and no list at all where it has no
@@ -920,7 +951,7 @@ arguments paired with the callee's parameters by field and a keyworded use's
 with the registration's written slot names. A callable whose
 name is read as a value, or which is born in a `MODULE` or `GROUP` body or
 written in place, **escapes**: it may be called from anywhere, so its
-parameters are varying, and a hop of it into itself seeks its specialization
+parameters are varying, and a hop of it into itself seeks its settlement
 rather than borrowing its predecessor's.
 A parameter keys where it is a type binder, or declared closed under `Module`
 or as a type value, whose every argument digests at a constant cost, which the
@@ -947,21 +978,40 @@ satisfies the contract — or calls an unquantified function by name whose retur
 does, the one answer [`Contract::kept_by`](../program/record.rs) gives both — it hands its cell to the callee's frame by a tail rather than spawning
 it, handing the frame the contract it owes, so a keyworded self-call in tail
 position holds a constant number of cells however deep it recurses, and a chain
-of tail hops returns at the outermost declared return. Any other value it
-finishes with is held to the contract: checked against the callee's own return,
+of tail hops returns at the outermost declared return. The load records each
+callable's tail call's **route**: per candidate, whether it keeps the frame's
+contract, where the frame's return and the candidate are closed, and whether
+the call hops into the frame's own body, a self tail edge of a body whose name
+does not escape, which then runs under the frame's own settlement with no
+lookup. The run reads the route, and decides at the call only what the load
+left open: a builtin, a surfaced or retyped head, a spread or a rigid
+candidate.
+
+A tail call lays a [skeleton](../program/README.md#frames-contracts-and-tails)
+beside its birth, naming each argument held beside a kept part, so the
+callee's frame builds its own argument record over values crossed from where
+they rest. A call by name gathers a record literal's fields as parts of the
+call itself, so each field is handed on through its own kept part. The
+evaluation asks each argument part of the frame body's
+[threaded set](../scope/README.md#the-threaded-set) with `Use::Threads`, so
+what the frame built and hands on is built in the loop's cell, and marks
+those arguments threaded in the skeleton. Any other value it finishes with is held to the contract: checked against the callee's own return,
 a miss naming it, and retyped to the contract's outermost return. A call through
 a view's barrier never tails: its value crosses the barrier where its frame
 ends.
 
 ## Running code
 
-`EVAL <code> -> <Type>` checks the code's shape for overlaps, as a loaded program's is —
-its types were fixed where the program loaded, the quote's code included — and
-asks the program's `EVAL` door for a frame running it over what the `EVAL`
-offers: each name its operand's `NEEDING` list names, read where the `EVAL` is
-written, and each bucket key as the list of functions a use at the key written
-there would list, builtins included. A refusal — an overlap, the code shape's
-own error or its typing refusal, an unbound name or a required keyworded hole —
+`EVAL <code> -> <Type>` asks the program's `EVAL` door for a frame running the
+code over what the `EVAL` offers: each name its operand's `NEEDING` list
+names, read where the `EVAL` is written, and each bucket key as the list of
+functions a use at the key written there would list, builtins included. A
+written quote's types and its overlap check were fixed where the program
+loaded, the quote's code included; code composed at run time has them in its
+composition, found by the code's syntax digest; and the facts waiting on a
+`$` name or a `\` mark are decided at the frame's entry, in its activation,
+an overlap among them included. A refusal — an overlap, the code shape's own
+error or its typing refusal, an unbound name or a required keyworded hole —
 is a fault.
 The frame owes `<Type>` — the type the type part denotes, read as an
 ascription's is — as a called frame owes its return: its value is checked
@@ -1039,7 +1089,9 @@ takes, since the builtin would win every such call and the overload would be
 dead there. [`check::overlap`](check.rs) runs where a registration is typed:
 in the load's walk, as a fact of the unit binding the registration — re-run
 under a binding that closes a rigid one — over every body short of a quote's
-code, and over a quote's code where an `EVAL` runs it. It reads each
+code, and over a quote's code once its units close, recorded for the `EVAL`
+that runs it to report; composed code's is its composition's, and one a `$`
+name's binding closes is checked in the `EVAL` frame's activation. It reads each
 registration's
 [load-time](../elaborate/README.md#the-type-channel-at-load) expression shape: a
 closed, unquantified one at a key with builtin overloads — whatever declared
@@ -1281,14 +1333,14 @@ literal content — passed on or returned as no exit, and each site's caching
 class over parameters, captures, locals, views of views, nominals and
 composites, a keyworded tail loop pairing its
 arguments by slot, and the tutorial's classes (an ignored measurement);
-[caching](tests/caching.rs) — caching bodies at run: `Shares`, `Fresh`, helper
-and mixed-placement loops holding their tiers flat across hops, warm verdicts,
+[caching](tests/caching.rs) — caching bodies at run: `Str`- and
+`Number`-returning, helper and mixed loops holding their tiers flat across hops, warm verdicts,
 a parking loop's scratch bytes flat, the scratch reset after a delivery
 while the agent tier keeps each loop's binding, the parameters each frame keys on and each shape's segment,
-a loop seeking its specialization once and a second caller finding it warm, a
+a loop seeking its settlement once and a second caller finding it warm, a
 callable born in a frame or its block keying beneath the frame's
-specialization and a `Shares` callee's under its own chain, an evicted
-specialization rebuilt with the same answer, the allocations a birth keyed on
+settlement and a callee's under its own chain, an evicted
+settlement rebuilt with the same answer, the allocations a birth keyed on
 a list costs, a table of what a loop hop's adoptions cost, counter by counter,
 over the suite's programs, every count held flat across three evenly spaced
 depths, and each exit — a retyped value, a closure, a quote, a knot
@@ -1296,11 +1348,44 @@ member, a held frame's hand-off, a received list passed on without being
 entered, a loop passing on a member of a received chain adopting a hop at a
 time, a member of a received value reached through a call's result not entered
 whatever its length, and a loop handing a callee a module built over its link
-each hop, caching and flat, a `Fresh` callee viewing it at an invariant site
+each hop, caching and flat, a `Number`-returning callee viewing it at an invariant site
 included;
-and [tail](tests/tail.rs), a keyworded tail
+[tail](tests/tail.rs), a keyworded tail
 recursion holding its cells constant, which is on the
-[Miri slate](../../observe/miri_slate.md). Every runnable
+[Miri slate](../../observe/miri_slate.md), and a tail call reading its route;
+[kept](tests/kept.rs) — a frame handing back its parameter, a field of it and a
+binder bound bare to it unchanged, and a record a call returns built once in
+its caller's home; [loops](tests/loops.rs) — a tail loop's memory at 16, 64
+and 256 hops, each loop hopping under its frame's settlement and seeking one
+each hop: a chain walk and a record rebuilt whole each hop holding every
+region flat, a walk copying no part of its chain, a hop handing on its
+received arguments uncopied, no hop pledged, a cons loop copying a constant
+per hop, amortized, holding a constant times what it threads and delivering
+its whole list, the host's region, scratch and memo flat, a value passed on
+unchanged riding the loop cell through its compactions, and a call returning a
+part of its argument placing nothing new;
+[door](tests/door.rs) — facts over no layers answering as the load does;
+[activation](tests/activation.rs) — a frame bound to run content deciding its
+dependent units in its activation, at its entry, a statement seam, a block's
+entry and an `EVAL`'s captures, a callable reading its encloser's decisions,
+the agent tier growing by nothing for run content, a loop calling a keyed
+callee on load content holding one settlement, and no type expression
+elaborated at the run; [memo](tests/memo.rs) — a decision memo hit by a fresh
+loop, an alternating statement, mutual tail and nested recursion, another
+settlement and captures, the heap flat, and the law that a memoized activation
+equals one decided from scratch; [compositions](tests/compositions.rs) — an
+`EVAL` of composed code running as its written quote does, a second hitting
+its composition, a loop composing code each hop holding O(1) compositions, an
+evicted composition rebuilt with its functions' identity kept, a derived type
+minted once per binding event and no term probed unread, a refusal worded as
+the load words it, nothing rested in the agent tier, settlements under a
+composition and the pins they take; [replay](tests/replay.rs) — a call
+through a stale handle rebuilding its chain, borrowing every level it reaches
+and the composition its chain pins, born warm, a non-keying callable borrowing
+the settlement its handle names, and the stamp no part of a closure's content,
+one of them on the [Miri slate](../../observe/miri_slate.md); and
+[bounds](tests/bounds.rs) — build memory no frame holds within the budget, and
+what frames hold linear in distinct arena nodes, not nesting depth. Every runnable
 tutorial snippet is checked against its shown output by
 `tools/verify_snippets.py` through the binary.
 

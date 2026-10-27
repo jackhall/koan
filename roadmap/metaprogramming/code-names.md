@@ -28,8 +28,9 @@ and a `SIG` has no member for code.
 
 - *A code naming channel — decided.* A name class of its own, marked by a sigil
   since case is spent, holding only code. A sigiled parameter binds per call as
-  a type parameter does: a quote's shape travels with its value, so running
-  code needs nothing from the shape that runs it, and only building a new shape
+  a type parameter does: a quote's code travels with its value and its shape
+  is found or built where it runs, so running code needs nothing from the
+  shape that runs it, and only building a new shape
   from code needs the code where the shape is built. Elaboration may evaluate
   code, as a subdispatch does, provided that code is deterministic, since what
   elaboration builds is interned. A `VAL` code member is sealed as a value is

@@ -1,12 +1,13 @@
-//! Type expressions elaborated into lattice handles, where the program loads and, for what the load
-//! leaves unknown, where they are read.
+//! Type expressions elaborated into lattice handles: where the program loads and, for what the load
+//! leaves unknown, in the walk a settlement or a frame's activation runs under the binding that
+//! closes it. The run elaborates none.
 //!
 //! A type expression is syntax in program storage; its type names are mentions the shape builder
-//! already resolved to coordinates. [`type_expression`] turns one into a [`KType`] by reading each
-//! name through a [`Reads`] and building lattice nodes over what it reads. [`callable_type`] reads
+//! already resolved to coordinates. [`type_expression`](expression::type_expression) turns one into a [`KType`] by reading each
+//! name through a [`Reads`] and building lattice nodes over what it reads. [`callable_type`](signature::callable_type) reads
 //! a callable's function type off the builtin shape node its body sits in and — born for a
 //! registration — what the registration's bucket holds: the expression shape ranked by the
-//! registration's classes, and how a keyworded call binds its slots. [`type_declarations`] takes a
+//! registration's classes, and how a keyworded call binds its slots. [`type_declarations`](declaration::type_declarations) takes a
 //! whole component of type binders and hands back one handle per member, sealing a group of
 //! mutually recursive declarations in one window. [`builtin_shape_types`] interns a builtin
 //! bucket's own overloads — the `static` slot types of a
@@ -16,7 +17,7 @@
 //!
 //! The load's walk runs each of those doors unit by unit through the type half ([`unit`]): a
 //! reader that reads no activation, over a [`TypeContext`] the walk implements, which fixes each
-//! fact closed, rigid over the names a run binds, or unknown. Everything else reads through an
+//! fact closed, rigid over the names a run binds, or unknown. [`self_signature`] alone reads an
 //! activation, where a type binding holds a [`TypeValue`](crate::values::TypeValue).
 //!
 //! Elaborated: a bare type name, `LIST OF Elem`, `MAP Key -> Val`, `FN :{…} -> Ret`,
@@ -51,17 +52,58 @@ mod unit;
 mod tests;
 
 pub use builtin::{builtin_error, builtin_result, builtin_shape_types};
-pub use declaration::{declares_nominal, type_declarations};
-pub use expression::{declared_field, type_expression};
+pub use declaration::declares_nominal;
+pub use expression::declared_field;
 pub use members::{
     SignatureMember, applied_member, member_count, schema_member, schema_of, signature_member,
     type_members, value_count,
 };
 pub use module::{module_signature, self_signature};
-pub use paths::{bound_path, declared_through, path_binding};
-pub use reads::{Reads, TypeAt, denoted};
-pub use signature::callable_type;
+pub use paths::{declared_through, path_binding};
+pub use reads::{Reads, TypeAt};
 pub use unit::{
     Mode, Reader, Signatures, Tools, TypeContext, callable, declarations, expression, guards,
     own_levels, registration,
 };
+
+#[cfg(test)]
+thread_local! {
+    /// How many walks this thread is inside: a type expression elaborated outside every walk is
+    /// the run's, which elaborates none.
+    static WALKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Type expressions elaborated inside a walk, then outside every walk. Tests reset it.
+    pub(crate) static ELABORATED: std::cell::Cell<(usize, usize)> =
+        const { std::cell::Cell::new((0, 0)) };
+}
+
+/// A walk this thread is inside, for as long as it is held.
+#[cfg(test)]
+pub(crate) struct Walking;
+
+#[cfg(test)]
+impl Walking {
+    pub(crate) fn enter() -> Self {
+        WALKS.with(|walks| walks.set(walks.get() + 1));
+        Walking
+    }
+}
+
+#[cfg(test)]
+impl Drop for Walking {
+    fn drop(&mut self) {
+        WALKS.with(|walks| walks.set(walks.get() - 1));
+    }
+}
+
+/// Count one type expression elaborated, inside a walk or outside every walk.
+#[cfg(test)]
+fn elaborated() {
+    let walking = WALKS.with(std::cell::Cell::get) > 0;
+    ELABORATED.with(|counts| {
+        let (inside, outside) = counts.get();
+        counts.set(match walking {
+            true => (inside + 1, outside),
+            false => (inside, outside + 1),
+        });
+    });
+}

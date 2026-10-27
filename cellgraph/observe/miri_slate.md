@@ -23,7 +23,7 @@ documentation, kept current by hand, for a manual run per
 
 ## The slate
 
-66 tests, grouped by the unsafe site each pins down. Names below are the exact
+70 tests, grouped by the unsafe site each pins down. Names below are the exact
 test identifiers; pass them after `--` in the Miri command, or run the whole lib
 binary:
 
@@ -135,6 +135,11 @@ and deep-copied through the writer, while a pinned one is embedded, so both re-a
 build. The seventh carries two lifetimes through a keep and a redeem across a home that sealed: the
 value nests a borrow of heap storage outside the graph under a region borrow, and what Miri checks
 is that the retype moves the region borrow and leaves the `'graph` one naming the same live bytes.
+The last two run the doors over a carrier that build nothing: `project` re-anchors a carrier's value
+through `Active::anchored` and hands back a carrier of one of its parts at the same reach and home,
+which then pins into a child and is copied into a cousin; `pass_into` hands a carrier on unchanged,
+minting its reach into a destination at or under its home and refusing every other. What Miri checks
+is that the projected part and the passed carrier still name live storage wherever they are read.
 
 - `graph::tests::values::push_completes_a_value_built_into_the_consumer_is_read_in_its_own_step`
 - `graph::tests::values::pull_completes_after_the_producer_seals`
@@ -143,6 +148,8 @@ is that the retype moves the region borrow and leaves the `'graph` one naming th
 - `graph::tests::values::redeem_refuses_once_the_storage_is_gone`
 - `graph::tests::prices::a_copied_view_is_readable_and_a_pinned_one_embeddable`
 - `graph::tests::values::a_graph_borrow_in_a_kept_value_redeems_after_its_home_seals`
+- `graph::tests::tree::a_projected_carrier_crosses_as_its_whole_value_would`
+- `graph::tests::tree::a_carrier_passes_on_only_at_or_under_its_home`
 
 **The own-region brand** ([src/region.rs](../src/region.rs), [src/graph.rs](../src/graph.rs)) —
 the same `retype` primitive at the two places that re-anchor at `'here`, the shared borrow of the

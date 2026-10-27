@@ -10,8 +10,7 @@ edge into the body. An argument built over invariant leaves — a set built
 from an invariant list, a module rebuilt over an invariant capture — has the
 same content from the second round on, so the site would mint one carrier at
 the first round and hit it after, yet the rule calls it varying and lays it
-cold: a `Fresh` loop re-lays it and recomputes its verdicts each hop, and a
-`Shares` loop grows its scratch by it each hop.
+cold: a loop re-lays it and recomputes its verdicts each hop.
 
 **Acceptance criteria.**
 
@@ -23,7 +22,7 @@ cold: a `Fresh` loop re-lays it and recomputes its verdicts each hop, and a
   invariant parameter, and by one where the rebuilt module is over the
   parameter itself, which stays varying.
 - A body whose name escapes as a value keeps every parameter varying.
-- A test runs a `Fresh` tail loop over such a rebuilt module and holds the
+- A test runs a tail loop over such a rebuilt module and holds the
   scratch's node count constant across iterations after the first.
 
 **Directions.**

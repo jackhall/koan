@@ -26,7 +26,8 @@ use crate::knot::{
 };
 use crate::memory::{Bump, BumpAllocator, BumpVec, Writer};
 use crate::parse::{BUILTIN_SHAPES, BuiltinShapeId, KExpression, ShapeElement};
-use crate::scope::{Builtins, InstanceRead, Site};
+use crate::scheduler::Held;
+use crate::scope::{Builtins, InstanceRead};
 use crate::symbols::{BinderSymbol, KeywordSymbol, Symbol, SymbolInterner, TypeSymbol};
 use crate::type_lattice::{DispatchTokenElement, KType, TypeNode, builtin_types, meet};
 use crate::values::{Chain, Circular, Seen, TypeValue, Value, record_type};
@@ -65,11 +66,15 @@ pub(super) enum Native {
     /// `FROM`.
     Project,
     Using,
+    /// `COMPOSE q`, for tests alone: code composed at run time, the one producer until code
+    /// splicing ships.
+    #[cfg(test)]
+    Compose,
 }
 
 impl Native {
     /// Every native, at its discriminant.
-    const ALL: [Native; 21] = [
+    const ALL: &[Native] = &[
         Native::Print,
         Native::Add,
         Native::Subtract,
@@ -91,6 +96,8 @@ impl Native {
         Native::Variant,
         Native::Project,
         Native::Using,
+        #[cfg(test)]
+        Native::Compose,
     ];
 
     /// The native a builtin node's `id` names.
@@ -181,6 +188,12 @@ static OVERLOADS: &[Overload] = &[
         returns: KType::ANY_TYPE,
         native: Native::MeetOf,
     },
+    #[cfg(test)]
+    Overload {
+        elements: &[Element::Keyword("COMPOSE"), ANY],
+        returns: KType::ANY_CODE,
+        native: Native::Compose,
+    },
 ];
 
 /// The natives of a builtin expression shape's overloads, in overload order; empty for a shape
@@ -266,8 +279,8 @@ pub(super) fn table<'graph>(
 /// `at`, building in `writer`'s region and taking transients from `scratch`.
 pub(super) fn run<'graph, 'here>(
     native: Native,
-    at: &Evaluation<'graph, 'here, '_, '_, '_>,
-    node: &'graph KExpression<'graph>,
+    at: &Evaluation<'_, 'graph, 'here, '_, '_, '_>,
+    node: &KExpression<'_>,
     writer: Writer<'here, '_>,
     operands: &[Operand<'graph, 'here>],
     scratch: &Bump,
@@ -350,7 +363,11 @@ pub(super) fn run<'graph, 'here>(
                 "a module slot admits modules alone"
             );
             let name = label(operands[1]);
-            let Some(member) = layout::member(writer, value(0), name, types, scratch) else {
+            let facts = at.view.facts();
+            let site = at.view.shape().site_of_node(node);
+            let retype = facts.retype(&at.types, at.view.shape(), site);
+            let Some(member) = layout::member(writer, value(0), (name, retype), types, scratch)
+            else {
                 return raise(Raised::NoMember {
                     of: value(0).concrete_ktype(),
                     member: name.symbol(),
@@ -358,27 +375,27 @@ pub(super) fn run<'graph, 'here>(
             };
             // A quantified member is read at the instance the load solved at this site, or as it
             // is at a call's head.
-            match at
-                .view
-                .load()
-                .instance_at(at.view.shape(), Site::of_node(node))
-            {
+            match facts.instance_at(
+                &at.types,
+                at.view.shape(),
+                at.view.shape().site_of_node(node),
+            ) {
                 Some(InstanceRead::AsIs) => member,
                 // Through a header at a scheme: a header at its instance over the same member.
                 Some(InstanceRead::Solved(solution))
                     if let Value::Retyped(header) = member
                         && header.ktype().as_scheme().is_some() =>
                 {
-                    header_instance(writer, header, solution, &at.view, types, scratch)
+                    header_instance(writer, header, solution, types, scratch)
                 }
                 Some(InstanceRead::Solved(solution)) => match member.as_callable() {
-                    Some(function) if function.function().is_some() => Value::Knotted(instance(
-                        writer, function, solution, &at.view, types, scratch,
-                    )),
+                    Some(function) if function.function().is_some() => {
+                        Value::Knotted(instance(writer, function, solution, types, scratch))
+                    }
                     // Behind an opaque view's barrier: a barrier at the instance.
-                    Some(barrier) if barrier.coerced().is_some() => Value::Knotted(
-                        barrier_instance(writer, barrier, solution, &at.view, types, scratch),
-                    ),
+                    Some(barrier) if barrier.coerced().is_some() => {
+                        Value::Knotted(barrier_instance(writer, barrier, solution, types, scratch))
+                    }
                     _ => raise(Raised::BarrierInstance {
                         name: name.symbol(),
                     }),
@@ -429,7 +446,7 @@ pub(super) fn run<'graph, 'here>(
             names.extend(
                 listed(value(0), types, scratch)
                     .iter()
-                    .map(|name| label(Operand::Value(*name))),
+                    .map(|name| label(Operand::Value(Held::bare(*name)))),
             );
             let names = rules::distinct(&names, scratch);
             let mut projected = BumpVec::with_capacity_in(names.len(), scratch);
@@ -449,12 +466,75 @@ pub(super) fn run<'graph, 'here>(
         }
         Native::Using => {
             let code = value(0).as_code().expect("a `Code` slot admits code alone");
-            match using(writer, at.view.load(), code, value(1), types, scratch) {
+            match using(
+                writer,
+                &at.code,
+                at.view.facts(),
+                code,
+                value(1),
+                types,
+                scratch,
+            ) {
                 Ok(filled) => Value::Knotted(filled),
                 Err(UsingRefused::Ranking { key }) => raise(Raised::RankedTwice { key }),
             }
         }
+        #[cfg(test)]
+        Native::Compose => compose(value(0), program, writer, types, scratch),
     }
+}
+
+/// `COMPOSE q`: code composed at run time over the syntax the quote's code `value` was written
+/// with, carried at its type, binding each `$` name as the quote does and each `$(…)` key to the
+/// list of the registrations the quote's use there reads. Holes a `USING` filled are dropped.
+///
+/// `COMPOSE "#(…)"`: code composed at run time over syntax the program never held, parsed from the
+/// quote the text writes into storage the test leaks, binding nothing: the one way a composition
+/// computes a fact the load did not.
+#[cfg(test)]
+fn compose<'graph, 'here>(
+    value: KValue<'graph, 'here>,
+    program: &crate::program::Program<'graph>,
+    writer: Writer<'here, '_>,
+    types: &Chain<'_, 'here, '_, '_>,
+    scratch: &Bump,
+) -> KValue<'graph, 'here> {
+    use crate::knot::composed_code;
+    use crate::values::{Link, List};
+    if let Value::Str(text) = value {
+        let syntax = super::tests::quoted(text, program.symbols());
+        let ktype = types.code_needing(scratch, syntax.code_kind(), &[]);
+        return Value::Knotted(composed_code(writer, syntax, ktype, &[], types));
+    }
+    let member = value.as_code().expect("`COMPOSE` is handed a quote's code");
+    let code = member.code().expect("a code member holds code");
+    let mut bound = BumpVec::new_in(scratch);
+    let mut keyed: BumpVec<'_, (crate::symbols::KeySymbol, KValue<'graph, 'here>)> =
+        BumpVec::new_in(scratch);
+    for (name, link) in code.bound() {
+        let value = link.resolve(member);
+        match name {
+            BinderSymbol::Registration(_) => {
+                let shape = layout::registered_shape(value).expect("a registration is a function");
+                keyed.push((layout::key_of(shape, types), value));
+            }
+            name => bound.push((*name, Link::Value(value))),
+        }
+    }
+    keyed.sort_by_key(|(key, _)| *key);
+    for run in keyed.chunk_by(|left, right| left.0 == right.0) {
+        let functions = run.iter().map(|(_, function)| *function);
+        let list = Value::List(List::of_candidates(writer, functions, types));
+        bound.push((BinderSymbol::Key(run[0].0), Link::Value(list)));
+    }
+    bound.sort_unstable_by_key(|(name, _)| *name);
+    Value::Knotted(composed_code(
+        writer,
+        code.body(),
+        code.ktype(),
+        &bound,
+        types,
+    ))
 }
 
 /// The elements of a list a slot admitted, read through its surface into `scratch`.
@@ -475,7 +555,9 @@ pub(super) fn listed<'graph, 'here, 'x>(
 fn label(operand: Operand<'_, '_>) -> BinderSymbol {
     match operand {
         Operand::Label(name) => name,
-        Operand::Value(value) => one_name(value).expect("a name slot admits one-name code alone"),
+        Operand::Value(held) => {
+            one_name(held.value).expect("a name slot admits one-name code alone")
+        }
     }
 }
 

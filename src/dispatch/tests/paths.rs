@@ -301,7 +301,7 @@ fn each_open_path_reads_back_its_tree() {
         let (root, facts) = (program.shape(), program.facts());
         let levels = 0..program.shapes().path_base(root.segment()) + 64;
         let mut trees = levels.filter_map(|level| {
-            let (entry, resolution) = facts.path(root, level)?;
+            let (entry, resolution) = facts.path(&program.tiers().resting(), root, level)?;
             match resolution.resolved {
                 Resolved::Class(_) => Some((entry.label, resolution.tree)),
                 Resolved::Closed(_) => None,
@@ -469,7 +469,8 @@ proptest! {
 
     /// The load's verdict on two paths through drawn modules, views and functor calls holds at
     /// every run: where it selects `SAME` over two `zero` members the run prints one, where it
-    /// refuses the use the run faults there, and otherwise the run is the unnarrowed one.
+    /// refuses the use the run faults there — at the load, or at the decision over a binder its
+    /// paths are rooted at — and otherwise the run is the unnarrowed one.
     #[test]
     fn a_load_verdict_on_two_paths_holds_at_the_run(program in functors()) {
         let (source, line) = program.render();
@@ -489,11 +490,26 @@ proptest! {
                 whole,
                 source
             );
+        } else if let Some(located) = narrowed.strip_prefix(&format!("error: <test>:{line}:")) {
+            // The decision at a binder the paths are rooted at refused the use, worded as the
+            // load words it: the unnarrowed run raises the same at the use.
+            let message = located.split_once(": ").map_or(located, |(_, message)| message);
+            prop_assert_eq!(&whole, &format!("error: {message}"), "in\n{}", source);
         } else {
             prop_assert_eq!(&narrowed, &whole, "in\n{}", source);
             if narrowing(&source, "s") == "selected" {
                 prop_assert!(!narrowed.starts_with("error: "), "{}\nin\n{}", narrowed, source);
             }
         }
+    }
+
+    /// The door law: whatever paths and functor calls the load leaves open, no rigid fact or point
+    /// reaches the run's door; each is closed in some layer first.
+    #[test]
+    fn the_door_never_yields_rigid_at_the_run(program in functors()) {
+        crate::scope::RIGID_AT_RUN.with(|count| count.set(0));
+        let (source, _) = program.render();
+        let _ = run(&source);
+        prop_assert_eq!(crate::scope::RIGID_AT_RUN.with(std::cell::Cell::get), 0, "in\n{}", source);
     }
 }

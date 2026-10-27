@@ -1,21 +1,21 @@
-//! The region header: what a koan graph keeps per habitat half, one record for the run tree and
-//! the build tree alike ([the build module's design](../build/README.md#references-between-the-trees)).
+//! The region header: what a koan graph keeps per habitat half.
 //!
 //! A half's branch of the type lattice rests here, laid by the first door that interns into the
-//! half. A build cell's region also keeps the fixed table of its specializations, laid with the
-//! cell, and a specialization's region its home, which the drain sets once the cell has enlisted.
-//! A frame reads them through the region it borrows, so what it reads of the program's shape stays
-//! shared in program storage.
-//!
-//! The record is `scope`'s, so it can hold what `scope` names; `values` reads the branch alone,
-//! through the projection [`RegionHeader`] implements ([`Projects`]), and names no other member.
+//! half, beside the [decision memo](super::memo) of the cells whose results are built in it. The
+//! record is `scope`'s, so it can hold what `scope` names; `values` reads the branch through the
+//! projection [`RegionHeader`] implements ([`Projects`]).
 
 use std::cell::Cell;
-use std::num::NonZeroUsize;
 
-use crate::memory::{LaysRuns, Projects, Writer, reattachable};
+use crate::memory::{Projects, Writer, reattachable};
 use crate::type_lattice::Branch;
-use crate::values::{BranchCell, BranchSlot, SpecHome, SpecTable};
+use crate::values::{BranchCell, BranchSlot};
+
+use super::memo::DecisionMemo;
+
+/// How many entries one half lays in its decision memo before it only reads it: a chain that
+/// misses at every hop stops growing the region its results are built in.
+const MEMO_BUDGET: u32 = 32;
 
 /// The header family a koan graph keeps per habitat half: a [`HalfHeader`].
 pub struct RegionHeader;
@@ -31,8 +31,8 @@ impl<'graph> Projects<'graph> for RegionHeader {
     {
         &writer.fill(1, |_| HalfHeader {
             branch: Cell::new(None),
-            table: Cell::new(None),
-            home: Cell::new(None),
+            memo: Cell::new(None),
+            memo_laid: Cell::new(0),
         })[0]
     }
 
@@ -44,12 +44,12 @@ impl<'graph> Projects<'graph> for RegionHeader {
     }
 }
 
-/// What a habitat half keeps in its header: its branch of the type lattice; for a build cell's
-/// region, the table of its specializations; and for a specialization's region, its home.
+/// What a habitat half keeps in its header: its branch of the type lattice, and the decision memo
+/// of the cells whose results are built in it, beside how many entries it has laid.
 pub struct HalfHeader<'cell> {
     branch: Cell<Option<&'cell Branch<'cell>>>,
-    table: Cell<Option<&'cell SpecTable<'cell>>>,
-    home: Cell<Option<SpecHome>>,
+    memo: Cell<Option<&'cell DecisionMemo<'cell>>>,
+    memo_laid: Cell<u32>,
 }
 
 impl<'cell> HalfHeader<'cell> {
@@ -58,34 +58,19 @@ impl<'cell> HalfHeader<'cell> {
         self.branch.get()
     }
 
-    /// The half's specialization table, for a build cell's region.
-    pub fn table(&self) -> Option<&'cell SpecTable<'cell>> {
-        self.table.get()
+    /// The decision memo of the cells whose results are built in this half, once one has decided.
+    pub fn memo(&self) -> Option<&'cell DecisionMemo<'cell>> {
+        self.memo.get()
     }
 
-    /// Lay the half's specialization table through `lay`, `length` entries long, its children's
-    /// tables `nested` long. A header that has a table keeps it, and the call returns it.
-    pub fn lay_table(
-        &self,
-        lay: impl LaysRuns<'cell>,
-        length: NonZeroUsize,
-        nested: NonZeroUsize,
-    ) -> &'cell SpecTable<'cell> {
-        if let Some(table) = self.table.get() {
-            return table;
-        }
-        let table = SpecTable::lay(lay, length, nested);
-        self.table.set(Some(table));
-        table
+    /// Whether the half may lay another memo entry.
+    pub fn memo_room(&self) -> bool {
+        self.memo_laid.get() < MEMO_BUDGET
     }
 
-    /// The specialization whose region this header is, and its parent, once the drain has set it.
-    pub fn home(&self) -> Option<SpecHome> {
-        self.home.get()
-    }
-
-    /// Record that this header's region is the specialization `home` names.
-    pub fn set_home(&self, home: SpecHome) {
-        self.home.set(Some(home));
+    /// Make `memo` the half's: one it `laid` an entry into, or one seeded from another half's.
+    pub fn set_memo(&self, memo: &'cell DecisionMemo<'cell>, laid: bool) {
+        self.memo.set(Some(memo));
+        self.memo_laid.set(self.memo_laid.get() + u32::from(laid));
     }
 }

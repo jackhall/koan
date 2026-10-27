@@ -24,69 +24,71 @@
 //! rule an ordinary construction goes through too, before anything is written.
 
 use crate::memory::{BumpAllocator, BumpVec, KnotPlan, Writer, strongly_connected_components};
-use crate::parse::{ExpressionPart, KExpression, KLiteral, ProgramNode};
+use crate::parse::{ExpressionPart, KExpression, KLiteral};
 use crate::scope::{BodyShape, CaptureSource, Component, Coordinate, ShapeKind, Site, Target};
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::{DeclaredType, KType, satisfied_by};
 use crate::values::{
-    CALL_ONLY, Chain, Circular, ConstructionRefused, Dict, Key, Link, List, Record, Tagged,
+    CALL_ONLY, Chain, Circular, ConstructionRefused, Dict, Key, Link, List, Record, Retype, Tagged,
     TypeValue, Value, construction, dict_type, kept_entries, list_type, part_ktype, record_type,
-    retype_target, solves_identity,
+    retype_target_as, solves_identity,
 };
 
-use super::{Eager, KActivationView, KValue, Knotted, Supplied, Untieable};
+use super::{Eager, KReading, KValue, Knotted, Supplied, Untieable};
 
 /// One part of a data member's right-hand side, read and not yet written.
-pub(super) enum Staged<'graph, 'cell, 'x> {
+pub(super) enum Staged<'step, 'graph, 'cell, 'x> {
     /// A scalar or string literal, lowered where it is written.
-    Literal(&'graph ExpressionPart<'graph>),
+    Literal(&'step ExpressionPart<'step>),
     Value(KValue<'graph, 'cell>),
     /// The knot node at this index.
     Edge(u32),
-    List(BumpVec<'x, Staged<'graph, 'cell, 'x>>),
+    List(BumpVec<'x, Staged<'step, 'graph, 'cell, 'x>>),
     /// Entries in written order, each key kept only at its last occurrence.
-    Dict(BumpVec<'x, (Key<'cell>, Staged<'graph, 'cell, 'x>)>),
-    Record(BumpVec<'x, (BinderSymbol, Staged<'graph, 'cell, 'x>)>),
+    Dict(BumpVec<'x, (Key<'x>, Staged<'step, 'graph, 'cell, 'x>)>),
+    Record(BumpVec<'x, (BinderSymbol, Staged<'step, 'graph, 'cell, 'x>)>),
     /// A nominal construction at `site`.
     Tagged {
         head: &'cell TypeValue,
         site: Site,
-        payload: &'x Staged<'graph, 'cell, 'x>,
+        payload: &'x Staged<'step, 'graph, 'cell, 'x>,
     },
     /// A `FN` that captures a fellow member: a function node of this knot, running `body`. Only
     /// ever a node's shape, reached through an edge.
-    Function(&'graph BodyShape<'graph>),
+    Function(&'step BodyShape<'step>),
     /// A quote whose `$` name reads a fellow member: a code node of this knot over code shape
-    /// `shape`. Only ever a node's shape — a member's own, or one reached through an edge.
+    /// `shape`, the quote at `site` of the activation's shape. Only ever a node's shape — a
+    /// member's own, or one reached through an edge.
     Code {
-        body: ProgramNode<'graph>,
-        shape: &'graph BodyShape<'graph>,
+        site: Site,
+        shape: &'step BodyShape<'step>,
     },
 }
 
 /// A staged data node: the member whose right-hand side holds it, and its constructor.
-pub(super) struct Node<'graph, 'cell, 'x> {
+pub(super) struct Node<'step, 'graph, 'cell, 'x> {
     pub owner: u32,
-    pub shape: Staged<'graph, 'cell, 'x>,
+    pub shape: Staged<'step, 'graph, 'cell, 'x>,
 }
 
 /// Every knot node by index: `None` for a function member, otherwise a data node or a function node
 /// a data member holds.
-pub(super) type Nodes<'graph, 'cell, 'x> = BumpVec<'x, Option<Node<'graph, 'cell, 'x>>>;
+pub(super) type Nodes<'step, 'graph, 'cell, 'x> =
+    BumpVec<'x, Option<Node<'step, 'graph, 'cell, 'x>>>;
 
-impl<'graph> Node<'graph, '_, '_> {
+impl<'step> Node<'step, '_, '_, '_> {
     /// The callable body this node runs, if it is a function node.
-    pub(super) fn function(&self) -> Option<&'graph BodyShape<'graph>> {
+    pub(super) fn function(&self) -> Option<&'step BodyShape<'step>> {
         match self.shape {
             Staged::Function(body) => Some(body),
             _ => None,
         }
     }
 
-    /// The quote and its code shape, if this is a code node.
-    pub(super) fn code(&self) -> Option<(ProgramNode<'graph>, &'graph BodyShape<'graph>)> {
+    /// The quote's site and its code shape, if this is a code node.
+    pub(super) fn code(&self) -> Option<(Site, &'step BodyShape<'step>)> {
         match self.shape {
-            Staged::Code { body, shape } => Some((body, shape)),
+            Staged::Code { site, shape } => Some((site, shape)),
             _ => None,
         }
     }
@@ -95,10 +97,10 @@ impl<'graph> Node<'graph, '_, '_> {
 /// The node a data member's right-hand side is rooted at, through one-part groups: a list, dict or
 /// record literal, a nominal construction, or a quote whose `$` name reads a fellow member. `None`
 /// for anything else.
-pub(super) fn root<'graph>(
-    shape: &BodyShape<'graph>,
-    part: &'graph ExpressionPart<'graph>,
-) -> Option<&'graph ExpressionPart<'graph>> {
+pub(super) fn root<'step>(
+    shape: &BodyShape<'step>,
+    part: &'step ExpressionPart<'step>,
+) -> Option<&'step ExpressionPart<'step>> {
     match part {
         ExpressionPart::ListLiteral(_)
         | ExpressionPart::DictLiteral(_)
@@ -117,18 +119,15 @@ pub(super) fn root<'graph>(
 
 /// A nominal construction's head and payload: a formless two-part node whose head is a type name
 /// the shape reads.
-fn construction_parts<'graph>(
-    shape: &BodyShape<'graph>,
-    node: &'graph KExpression<'graph>,
-) -> Option<(
-    &'graph ExpressionPart<'graph>,
-    &'graph ExpressionPart<'graph>,
-)> {
+fn construction_parts<'step>(
+    shape: &BodyShape<'step>,
+    node: &'step KExpression<'step>,
+) -> Option<(&'step ExpressionPart<'step>, &'step ExpressionPart<'step>)> {
     match node.parts {
         [head, payload]
             if node.cache().builtin_shape().is_none()
                 && matches!(head.value, ExpressionPart::Type(_))
-                && shape.mention(Site::of(&head.value)).is_some() =>
+                && shape.mention(shape.site(&head.value)).is_some() =>
         {
             Some((&head.value, &payload.value))
         }
@@ -139,11 +138,11 @@ fn construction_parts<'graph>(
 /// The body of `node` when it is a callable that captures a fellow member — a node of the knot
 /// being tied. A capture is a `Member` source exactly when it names a fellow of the component its
 /// statement's binder sits in, which is the component the walk is tying.
-fn fellow_lambda<'graph>(
-    shape: &BodyShape<'graph>,
-    node: &KExpression<'graph>,
-) -> Option<&'graph BodyShape<'graph>> {
-    let body = shape.nested(Site::of_body(node)?)?;
+fn fellow_lambda<'step>(
+    shape: &BodyShape<'step>,
+    node: &KExpression<'step>,
+) -> Option<&'step BodyShape<'step>> {
+    let body = shape.nested(shape.site_of_body(node)?)?;
     let fellow = body
         .captures()
         .iter()
@@ -151,30 +150,31 @@ fn fellow_lambda<'graph>(
     (body.kind() == ShapeKind::Callable && fellow).then_some(body)
 }
 
-/// The quote `part` and its code shape when a `$` name in it reads a fellow member — a node of the
-/// knot being tied, as [`fellow_lambda`]'s callable is.
-fn fellow_quote<'graph>(
-    shape: &BodyShape<'graph>,
-    part: &ExpressionPart<'graph>,
-) -> Option<(ProgramNode<'graph>, &'graph BodyShape<'graph>)> {
-    let ExpressionPart::QuotedExpression(body) = part else {
+/// The quote `part`'s site and its code shape when a `$` name in it reads a fellow member — a node
+/// of the knot being tied, as [`fellow_lambda`]'s callable is.
+fn fellow_quote<'step>(
+    shape: &BodyShape<'step>,
+    part: &ExpressionPart<'step>,
+) -> Option<(Site, &'step BodyShape<'step>)> {
+    let ExpressionPart::QuotedExpression(_) = part else {
         return None;
     };
-    let code = shape.nested(Site::of(part))?;
+    let site = shape.site(part);
+    let code = shape.nested(site)?;
     let fellow = code
         .captures()
         .iter()
         .any(|capture| matches!(capture.source, CaptureSource::Member { .. }));
-    (code.kind() == ShapeKind::Code && fellow).then_some((*body, code))
+    (code.kind() == ShapeKind::Code && fellow).then_some((site, code))
 }
 
 /// The walk over data members' right-hand sides.
-pub(super) struct Stager<'stage, 'graph, 'cell> {
-    activation: &'stage KActivationView<'graph, 'cell>,
-    component: &'stage Component<'graph>,
+pub(super) struct Stager<'stage, 'step, 'graph, 'cell> {
+    activation: &'stage KReading<'step, 'graph, 'cell>,
+    component: &'stage Component<'step>,
     scratch: BumpAllocator<'stage>,
     eager: &'stage mut Eager<'stage, 'graph, 'cell>,
-    nodes: Nodes<'graph, 'cell, 'stage>,
+    nodes: Nodes<'step, 'graph, 'cell, 'stage>,
     /// The member whose right-hand side is being walked.
     owner: u32,
     /// The first part the caller had not evaluated. The walk goes on past it on a placeholder, so
@@ -182,19 +182,19 @@ pub(super) struct Stager<'stage, 'graph, 'cell> {
     refused: Option<Untieable<'static>>,
 }
 
-impl<'stage, 'graph, 'cell> Stager<'stage, 'graph, 'cell> {
+impl<'stage, 'step, 'graph, 'cell> Stager<'stage, 'step, 'graph, 'cell> {
     /// Stage each member whose root is `Some`, into a node run whose first `roots.len()` indices
     /// are the members.
     ///
     /// Every part only the caller can evaluate is asked of `eager` before the staging is refused on
     /// the first it could not answer, so one refusal names them all by the sites `eager` saw.
     pub(super) fn nodes(
-        activation: &'stage KActivationView<'graph, 'cell>,
-        component: &'stage Component<'graph>,
-        roots: &[Option<&'graph ExpressionPart<'graph>>],
+        activation: &'stage KReading<'step, 'graph, 'cell>,
+        component: &'stage Component<'step>,
+        roots: &[Option<&'step ExpressionPart<'step>>],
         scratch: BumpAllocator<'stage>,
         eager: &'stage mut Eager<'stage, 'graph, 'cell>,
-    ) -> Result<Nodes<'graph, 'cell, 'stage>, Untieable<'static>> {
+    ) -> Result<Nodes<'step, 'graph, 'cell, 'stage>, Untieable<'static>> {
         let mut nodes = BumpVec::with_capacity_in(roots.len(), scratch);
         nodes.extend(roots.iter().map(|_| None));
         let mut stager = Stager {
@@ -218,7 +218,7 @@ impl<'stage, 'graph, 'cell> Stager<'stage, 'graph, 'cell> {
 
     fn roots(
         &mut self,
-        roots: &[Option<&'graph ExpressionPart<'graph>>],
+        roots: &[Option<&'step ExpressionPart<'step>>],
     ) -> Result<(), Untieable<'static>> {
         for (index, root) in roots.iter().enumerate() {
             let Some(root) = root else { continue };
@@ -246,18 +246,18 @@ impl<'stage, 'graph, 'cell> Stager<'stage, 'graph, 'cell> {
     /// `part` staged; at a member's `root`, a constructor is returned as the member's own node.
     fn part(
         &mut self,
-        part: &'graph ExpressionPart<'graph>,
+        part: &'step ExpressionPart<'step>,
         root: bool,
-    ) -> Result<Staged<'graph, 'cell, 'stage>, Untieable<'static>> {
+    ) -> Result<Staged<'step, 'graph, 'cell, 'stage>, Untieable<'static>> {
         let shape = self.activation.shape();
         let scratch = self.scratch;
         let staged = match part {
             ExpressionPart::Literal(_) => return Ok(Staged::Literal(part)),
             ExpressionPart::QuotedExpression(_) => {
-                let Some((body, shape)) = fellow_quote(shape, part) else {
+                let Some((site, shape)) = fellow_quote(shape, part) else {
                     return self.evaluate(part);
                 };
-                let staged = Staged::Code { body, shape };
+                let staged = Staged::Code { site, shape };
                 if root {
                     return Ok(staged);
                 }
@@ -272,7 +272,7 @@ impl<'stage, 'graph, 'cell> Stager<'stage, 'graph, 'cell> {
                 unreachable!("the shape builder refuses a mark outside a quote value")
             }
             ExpressionPart::Identifier(_) | ExpressionPart::Type(_) => {
-                return match shape.mention(Site::of(part)) {
+                return match shape.mention(shape.site(part)) {
                     Some(mention) => self.read(mention.name, mention.coordinate),
                     None => self.evaluate(part),
                 };
@@ -296,14 +296,14 @@ impl<'stage, 'graph, 'cell> Stager<'stage, 'graph, 'cell> {
                     return self.evaluate(part);
                 };
                 let mention = shape
-                    .mention(Site::of(head))
+                    .mention(shape.site(head))
                     .expect("a construction head is read");
                 let head = match self.read(mention.name, mention.coordinate)? {
                     Staged::Value(Value::Type(head)) => head,
                     Staged::Value(other) => {
                         return Err(Untieable::Construction {
                             name: self.name(),
-                            site: Site::of(part),
+                            site: shape.site(part),
                             refused: ConstructionRefused::NotConstructible(other.concrete_ktype()),
                         });
                     }
@@ -314,7 +314,7 @@ impl<'stage, 'graph, 'cell> Stager<'stage, 'graph, 'cell> {
                 let payload = self.part(payload, false)?;
                 Staged::Tagged {
                     head,
-                    site: Site::of(part),
+                    site: shape.site(part),
                     payload: scratch.alloc(payload),
                 }
             }
@@ -367,7 +367,7 @@ impl<'stage, 'graph, 'cell> Stager<'stage, 'graph, 'cell> {
         &self,
         name: BinderSymbol,
         coordinate: Coordinate,
-    ) -> Result<Staged<'graph, 'cell, 'stage>, Untieable<'static>> {
+    ) -> Result<Staged<'step, 'graph, 'cell, 'stage>, Untieable<'static>> {
         if let Coordinate::Activation {
             hops: 0,
             target: Target::Local(slot),
@@ -383,9 +383,9 @@ impl<'stage, 'graph, 'cell> Stager<'stage, 'graph, 'cell> {
     /// A part only the caller can evaluate.
     fn evaluate(
         &mut self,
-        part: &'graph ExpressionPart<'graph>,
-    ) -> Result<Staged<'graph, 'cell, 'stage>, Untieable<'static>> {
-        let site = Site::of(part);
+        part: &'step ExpressionPart<'step>,
+    ) -> Result<Staged<'step, 'graph, 'cell, 'stage>, Untieable<'static>> {
+        let site = self.activation.shape().site(part);
         match (self.eager)(site, Some(part)) {
             Some(Supplied::Value(value)) => Ok(Staged::Value(value)),
             Some(Supplied::Body(_)) => unreachable!("a data member's part is a value"),
@@ -399,9 +399,9 @@ impl<'stage, 'graph, 'cell> Stager<'stage, 'graph, 'cell> {
     /// A dict key: a scalar literal as lowering builds it, else the value the caller evaluates.
     fn key(
         &mut self,
-        part: &'graph ExpressionPart<'graph>,
-    ) -> Result<Key<'cell>, Untieable<'static>> {
-        let site = Site::of(part);
+        part: &'step ExpressionPart<'step>,
+    ) -> Result<Key<'stage>, Untieable<'static>> {
+        let site = self.activation.shape().site(part);
         let key = match part {
             ExpressionPart::Literal(KLiteral::String(literal)) => Ok(Key::str(literal)),
             ExpressionPart::Literal(KLiteral::Number(number)) => Key::number(*number),
@@ -424,9 +424,9 @@ impl<'stage, 'graph, 'cell> Stager<'stage, 'graph, 'cell> {
 }
 
 /// Visit a staged constructor's direct children: list items, dict and record values, a payload.
-fn each_child<'a, 'graph, 'cell, 'x>(
-    staged: &'a Staged<'graph, 'cell, 'x>,
-    mut visit: impl FnMut(&'a Staged<'graph, 'cell, 'x>),
+fn each_child<'a, 'step, 'graph, 'cell, 'x>(
+    staged: &'a Staged<'step, 'graph, 'cell, 'x>,
+    mut visit: impl FnMut(&'a Staged<'step, 'graph, 'cell, 'x>),
 ) {
     match staged {
         Staged::List(items) => items.iter().for_each(visit),
@@ -443,7 +443,7 @@ fn each_child<'a, 'graph, 'cell, 'x>(
 
 /// Whether a staged node's memo is derived from its cells: a container, or a construction whose
 /// head solves its identity from its payload. Any other tagged node is a cut.
-fn is_derived(staged: &Staged<'_, '_, '_>, types: &Chain<'_, '_, '_, '_>) -> bool {
+fn is_derived(staged: &Staged<'_, '_, '_, '_>, types: &Chain<'_, '_, '_, '_>) -> bool {
     match staged {
         Staged::List(_) | Staged::Dict(_) | Staged::Record(_) => true,
         Staged::Tagged { head, .. } => solves_identity(types, head.handle()),
@@ -452,13 +452,14 @@ fn is_derived(staged: &Staged<'_, '_, '_>, types: &Chain<'_, '_, '_, '_>) -> boo
 }
 
 /// Every node's memo: `memos[i]` is `Some` for a function node on entry, and on success every
-/// node's memo is `Some`. Member `i`'s root is born at `annotations[i]`'s retype of its memo, set
+/// node's memo is `Some`. Member `i`'s root is born at `annotations[i]`'s retype of its memo, by
+/// `retypes[i]` where the load recorded it, set
 /// before any fellow derives its own over an edge into it. A cycle of derived nodes refuses with the members holding it, and a
 /// construction the rule refuses while its memo is derived refuses as it would at the check.
 pub(super) fn memos<'x>(
-    nodes: &Nodes<'_, '_, '_>,
+    nodes: &Nodes<'_, '_, '_, '_>,
     memos: &mut [Option<DeclaredType<KType>>],
-    annotations: &[Option<KType>],
+    (annotations, retypes): (&[Option<KType>], &[Option<Retype>]),
     names: &dyn Fn(u32) -> BinderSymbol,
     types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'x>,
@@ -467,13 +468,14 @@ pub(super) fn memos<'x>(
     // not, the slot's annotation faults as at the top level.
     let annotated = |index: usize, memo: KType| match annotations.get(index).copied().flatten() {
         Some(annotation) if satisfied_by(types, scratch, annotation, memo) => {
-            retype_target(types, scratch, memo.into(), annotation)
+            let retype = retypes.get(index).copied().flatten();
+            retype_target_as(types, scratch, memo.into(), annotation, retype)
                 .as_type()
                 .expect("a data node's memo is concrete")
         }
         _ => memo,
     };
-    let derived = |node: &Option<Node<'_, '_, '_>>| {
+    let derived = |node: &Option<Node<'_, '_, '_, '_>>| {
         node.as_ref()
             .is_some_and(|node| is_derived(&node.shape, types))
     };
@@ -544,7 +546,7 @@ pub(super) fn memos<'x>(
 /// memo, which is derived first. A construction through a family takes the application the rule
 /// solves, and one the rule refuses comes back with its site.
 fn staged_type(
-    staged: &Staged<'_, '_, '_>,
+    staged: &Staged<'_, '_, '_, '_>,
     memos: &[Option<DeclaredType<KType>>],
     types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
@@ -597,14 +599,14 @@ fn staged_type(
 /// Check every construction the nodes hold — a tagged node over its payload's memo, and every
 /// ordinary construction below — in node order, depth first.
 pub(super) fn check(
-    nodes: &Nodes<'_, '_, '_>,
+    nodes: &Nodes<'_, '_, '_, '_>,
     memos: &[Option<DeclaredType<KType>>],
     names: &dyn Fn(u32) -> BinderSymbol,
     types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
 ) -> Result<(), Untieable<'static>> {
     fn walk(
-        staged: &Staged<'_, '_, '_>,
+        staged: &Staged<'_, '_, '_, '_>,
         memos: &[Option<DeclaredType<KType>>],
         name: BinderSymbol,
         types: &Chain<'_, '_, '_, '_>,
@@ -642,7 +644,7 @@ pub(super) fn check(
 /// A checked staged part laid down as a value in `writer`'s region.
 fn write<'graph, 'cell>(
     writer: Writer<'cell, '_>,
-    staged: &Staged<'graph, 'cell, '_>,
+    staged: &Staged<'_, 'graph, 'cell, '_>,
     types: &Chain<'_, 'cell, '_, '_>,
     scratch: BumpAllocator<'_>,
 ) -> KValue<'graph, 'cell> {
@@ -681,7 +683,7 @@ fn write<'graph, 'cell>(
 /// A node's cell: an edge through `plan`, or a staged value written.
 fn link<'graph, 'cell>(
     writer: Writer<'cell, '_>,
-    staged: &Staged<'graph, 'cell, '_>,
+    staged: &Staged<'_, 'graph, 'cell, '_>,
     plan: &KnotPlan,
     types: &Chain<'_, 'cell, '_, '_>,
     scratch: BumpAllocator<'_>,
@@ -698,7 +700,7 @@ fn link<'graph, 'cell>(
 /// A checked data node laid down in `writer`'s region under its memo.
 pub(super) fn lay_down<'graph, 'cell>(
     writer: Writer<'cell, '_>,
-    node: &Node<'graph, 'cell, '_>,
+    node: &Node<'_, 'graph, 'cell, '_>,
     memo: KType,
     plan: &KnotPlan,
     types: &Chain<'_, 'cell, '_, '_>,

@@ -1620,7 +1620,7 @@ fn a_resumable_program_renders_as_source_that_loads() {
             &source,
             "<test>",
             8,
-            crate::values::SpecBounds::default(),
+            crate::values::BuildBudget::default(),
             super::output(),
         );
         assert!(

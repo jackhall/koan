@@ -217,3 +217,56 @@ fn retyped_code_evaluates_and_fills_as_its_syntax() {
     );
     assert_eq!(run(&filled), "name\n1");
 }
+
+/// What running `source` printed, beside how many retype targets the run computed rather than read
+/// off the load's records.
+fn computed_targets(source: &str) -> (String, usize) {
+    use crate::program::CellSubstrate;
+    use crate::values::{BuildBudget, TARGETS};
+    super::WRITTEN.with(|written| written.borrow_mut().clear());
+    let mut substrate = CellSubstrate::load::<super::super::Koan>(
+        source,
+        "<test>",
+        8,
+        BuildBudget::default(),
+        super::output(),
+    )
+    .unwrap_or_else(|error| panic!("the program loads: {error}"));
+    TARGETS.with(|targets| targets.set(0));
+    substrate
+        .with(|running| running.run())
+        .expect("the program runs");
+    let printed = super::WRITTEN.with(|written| written.borrow().join("\n"));
+    (printed, TARGETS.with(std::cell::Cell::get))
+}
+
+#[test]
+fn a_closed_retype_target_is_read_and_never_computed() {
+    // Each site retypes a value of a kind to a closed type above its own — an ascription, a `LET`
+    // annotation, a parameter, a frame's return, a module's annotated member and its read — and
+    // re-stamps by what the load recorded there.
+    let sites = [
+        ("LET b = ([1 2] :! (LIST OF Any))\nPRINT b", "[1, 2]"),
+        ("LET a :(LIST OF Any) = [2]\nPRINT a", "[2]"),
+        (
+            "LET f = (FN :{x :(LIST OF Any)} -> Any = #(x))\nPRINT (f {x = [1]})",
+            "[1]",
+        ),
+        (
+            "LET f = (FN :{x :Any} -> (LIST OF Any) = #([1]))\nPRINT (f {x = 1})",
+            "[1]",
+        ),
+        (
+            "MODULE m = ((LET held :(LIST OF Any) = [3]))\nLET d = m.held\nPRINT d",
+            "[3]",
+        ),
+    ];
+    for (site, printed) in sites {
+        assert_eq!(computed_targets(site), (printed.to_string(), 0), "{site}");
+    }
+    // A union's members are taken at the value's kind where it runs.
+    let union = "LET u = ([1] :! ((LIST OF Any) | Str))\nPRINT u";
+    let (printed, computed) = computed_targets(union);
+    assert_eq!(printed, "[1]");
+    assert!(computed > 0);
+}

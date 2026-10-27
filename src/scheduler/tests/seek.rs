@@ -1,114 +1,160 @@
-//! Seeking a specialization: the drain finds a frame's specialization in its parent's table before
-//! the frame is born, or builds it first with one synchronous step, and the frame borrows it,
-//! whatever its placement: a `Fresh` frame as its tree cell's lend, a `Shares` one as its tenant's.
-//! A missed specialization's branch holds its binding's nodes, copied from the asker's region, so a
-//! frame finds them after the asker is gone.
+//! Seeking a settlement: the drain finds a frame's settlement in the build arena before the frame
+//! is born, or builds it first, and the frame runs under it, whatever its placement. A missed
+//! settlement's binding image is relayed into the agent tier, so a frame finds its nodes after the
+//! asker is gone. Every run cell borrows the arena node it runs under from its birth to its
+//! release, so a miss past the budget evicts only settlements no cell holds.
 
 use std::cell::RefCell;
 use std::num::NonZeroUsize;
 
+use smallvec::smallvec;
+
 use crate::knot::KValue;
-use crate::memory::{Active, Bump};
-use crate::scheduler::tests::bundle::{Native, TestGraph, TestStep};
+use crate::memory::{Active, Bump, SlabHandle};
+use crate::scheduler::seek::{Settles, Unsettled};
+use crate::scheduler::tests::bundle::{AnyStep, Native, TestGraph};
 use crate::scheduler::tests::native::{fresh, shares, work};
 use crate::scheduler::{
-    Action, EVICT_BEFORE_STEP, Placement, Scheduler, Seek, Step, StepError, TIERS, Tiers, Use,
-    WATCH_LOG, WATCHED, Watched, Work,
+    Action, Ask, Placement, Scheduler, Seek, Sought, Step, StepError, TIERS, Taken, Tiers, Use,
+    Work,
 };
 use crate::type_lattice::{KType, TypeNode};
 use crate::values::digest::{DigestHasher, Tag};
-use crate::values::{BuildRef, KeyedTypes, SpecBinding, SpecBounds, SpecKey};
+use crate::values::{ArenaRef, BindingImage, BuildBudget, KeyedTypes, SettlementKey};
 
 thread_local! {
-    /// The build cell each observing step ran under, in the order they ran.
-    static BUILDS: RefCell<Vec<BuildRef>> = const { RefCell::new(Vec::new()) };
-    /// A type a frame laid in the agent tier before it parked, to read again once it wakes.
-    static LAID: std::cell::Cell<KType> = const { std::cell::Cell::new(KType::NUMBER) };
-    /// The keys a [`sequence`] seeks, in order: each under the sequence's own build cell where
+    /// The arena node each observing step ran under, in the order they ran.
+    static BUILDS: RefCell<Vec<ArenaRef>> = const { RefCell::new(Vec::new()) };
+    /// The keys a [`sequence`] seeks, in order: each under the sequence's own arena node where
     /// the flag is set, else under the root.
     static SEQUENCE: RefCell<Vec<(usize, bool)>> = const { RefCell::new(Vec::new()) };
-    /// What [`specialized`] read as a [`sequence`] woke from each of its seeks.
+    /// What [`settled`] read as a [`sequence`] woke from each of its seeks.
     static COUNTS: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
-    /// The build cell each [`read_lent`] frame found through its lend, in the order they ran.
-    static LENT: RefCell<Vec<BuildRef>> = const { RefCell::new(Vec::new()) };
     /// The type a [`minting`] asker laid in its own region, which its seek's binding carries.
     static BOUND: std::cell::Cell<KType> = const { std::cell::Cell::new(KType::NUMBER) };
+    /// How many settlements had been evicted each time [`noted`] ran.
+    static EVICTED_THEN: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
+    /// The key of the request each [`handed`] frame's first step was handed back, in the order
+    /// they ran, then what a second take read.
+    static HANDED: RefCell<Vec<(Option<SettlementKey>, bool)>> = const { RefCell::new(Vec::new()) };
 }
 
-fn builds() -> Vec<BuildRef> {
+fn builds() -> Vec<ArenaRef> {
     BUILDS.with(|builds| builds.borrow().clone())
+}
+
+fn push_build(at: ArenaRef) {
+    BUILDS.with(|builds| builds.borrow_mut().push(at));
 }
 
 fn reset() {
     BUILDS.with(|builds| builds.borrow_mut().clear());
     COUNTS.with(|counts| counts.borrow_mut().clear());
-    WATCHED.set(None);
-    WATCH_LOG.with(|log| log.borrow_mut().clear());
+    EVICTED_THEN.with(|evicted| evicted.borrow_mut().clear());
+    HANDED.with(|handed| handed.borrow_mut().clear());
 }
 
-/// Log that the step `name` started, after whatever the drain logged of the watched cell.
-fn log(name: &'static str) {
-    WATCH_LOG.with(|log| log.borrow_mut().push(Watched::Step(name)));
-}
-
-/// What the drain logged of the watched cell just before the step `name` started.
-fn before(name: &'static str) -> Watched {
-    WATCH_LOG.with(|log| {
-        let log = log.borrow();
-        let at = (log.iter())
-            .position(|line| *line == Watched::Step(name))
-            .unwrap_or_else(|| panic!("`{name}` ran: {log:?}"));
-        log[at - 1]
-    })
-}
-
-/// How many specializations the drains on this thread have evicted, and how many frames were born
+/// How many settlements the drains on this thread have evicted, and how many frames were born
 /// cold, since the last [`fresh_tally`].
 fn evicted_and_cold() -> (usize, usize) {
     TIERS.with(|tiers| (tiers.get().evicted, tiers.get().cold_births))
 }
 
-/// Bounds of `root` and `nested`.
-fn bounds(root: usize, nested: usize) -> SpecBounds {
-    SpecBounds {
-        root: NonZeroUsize::new(root).expect("a bound is not zero"),
-        nested: NonZeroUsize::new(nested).expect("a bound is not zero"),
-    }
+/// How many settlements the drains on this thread have built since the last [`fresh_tally`].
+fn settled() -> usize {
+    TIERS.with(|tiers| tiers.get().settled)
 }
 
-/// How many specializations the drains on this thread have built since the last [`fresh_tally`].
-fn specialized() -> usize {
-    TIERS.with(|tiers| tiers.get().specialized)
+/// How many nodes the drains on this thread have relayed into the agent tier for new settlements
+/// since the last [`fresh_tally`].
+fn relayed() -> usize {
+    TIERS.with(|tiers| tiers.get().relayed)
 }
 
-/// Start the tally [`specialized`] reads over.
+/// Start the tallies over.
 fn fresh_tally() {
     TIERS.with(|tiers| tiers.set(Tiers::default()));
 }
 
 /// The key a test names by `at`.
-fn key(at: usize) -> SpecKey {
-    SpecKey(DigestHasher::new(Tag::Number).count(at).finished())
+fn key(at: usize) -> SettlementKey {
+    SettlementKey(DigestHasher::new(Tag::Number).count(at).finished())
 }
 
-/// A specialization's step: enlist.
-fn specialize<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
-    step.enlist()
-}
-
-/// A seek for the specialization keyed `at` under `parent`.
-fn seek<'graph>(at: usize, parent: BuildRef) -> Seek<'graph, Native> {
-    Seek {
-        parent,
-        key: key(at),
-        binding: SpecBinding::default(),
-        work: work(specialize, KValue::Null),
+/// What a test's miss settles: nothing, since the graph runs no program.
+fn ask() -> Ask {
+    Ask {
+        body: crate::scope::Segment(0),
+        bound: smallvec::SmallVec::new(),
     }
 }
 
-/// Record the build cell this frame runs under, and finish.
+/// The request for the settlement keyed `at`, its binding carrying `keyed`.
+fn sought(at: usize, keyed: smallvec::SmallVec<[KeyedTypes; 1]>) -> Sought {
+    Sought {
+        key: key(at),
+        ask: ask(),
+        keyed,
+    }
+}
+
+/// A seek for the settlement keyed `at` under `parent`, its binding carrying no type, handing its
+/// request back to the frame where `hands_back` is set.
+fn seek_handing<'graph>(at: usize, parent: ArenaRef, hands_back: bool) -> Seek<'graph> {
+    Seek {
+        parent,
+        settlement: Some((
+            BindingImage::default(),
+            sought(at, smallvec::SmallVec::new()),
+        )),
+        hands_back,
+    }
+}
+
+/// A seek for the settlement keyed `at` under `parent`, its binding carrying no type.
+fn seek<'graph>(at: usize, parent: ArenaRef) -> Seek<'graph> {
+    seek_handing(at, parent, false)
+}
+
+/// A budget of `bytes`.
+fn budget(bytes: usize) -> BuildBudget {
+    BuildBudget {
+        bytes: NonZeroUsize::new(bytes).expect("a budget is not zero"),
+    }
+}
+
+/// The smallest budget: every miss evicts every settlement no cell holds.
+fn smallest() -> BuildBudget {
+    BuildBudget {
+        bytes: NonZeroUsize::MIN,
+    }
+}
+
+/// A graph stood up by the load door under `budget`, and its run root.
+fn loaded(type_region: &Bump, budget: BuildBudget) -> (TestGraph<'_>, SlabHandle) {
+    let (graph, run, ()) = TestGraph::load(1, budget, || {
+        Ok::<_, ()>((
+            crate::values::tests::seeded_tiers(type_region),
+            (
+                &crate::scope::LoadFacts::EMPTY,
+                &Unsettled as &dyn Settles<'_>,
+            ),
+            (),
+        ))
+    })
+    .expect("the load succeeds");
+    (graph, run)
+}
+
+/// Release the run root and check the graph is empty.
+fn torn_down(mut graph: TestGraph<'_>, run: SlabHandle) {
+    graph.release_root(run).expect("the run root releases");
+    assert!(graph.is_empty(), "the run leaves no cell behind");
+}
+
+/// Record the arena node this frame runs under, and finish.
 fn observe<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
-    BUILDS.with(|builds| builds.borrow_mut().push(step.build_ref(BuildRef::ROOT)));
+    push_build(step.arena_ref(ArenaRef::ROOT));
     step.finish_fresh(|_, _, _| Active::new(KValue::Null))
 }
 
@@ -117,170 +163,223 @@ fn finished<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'g
     step.done()
 }
 
+/// Deliver once the children are in.
+fn deliver<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
+    step.finish_fresh(|_, _, _| Active::new(KValue::Null))
+}
+
 /// Ask for two frames seeking the keys the state names: `1` and `1`, or `1` and `2`.
 fn seek_two<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
     let (mut step, state) = step.state();
     let KValue::Number(second) = state else {
         return step.failed(StepError::Refused);
     };
-    let first = seek(1, BuildRef::ROOT);
-    step.spawn_seeking(fresh(observe, Use::Reads, KValue::Null), Some(first));
-    let second = seek(second as usize, BuildRef::ROOT);
-    let asked = step.spawn_seeking(fresh(observe, Use::Reads, KValue::Null), Some(second));
+    step.spawn_seeking(
+        fresh(observe, Use::Reads, KValue::Null),
+        seek(1, ArenaRef::ROOT),
+    );
+    let second = seek(second as usize, ArenaRef::ROOT);
+    let asked = step.spawn_seeking(fresh(observe, Use::Reads, KValue::Null), second);
     step.park(asked, finished, KValue::Null, None)
 }
 
-/// A graph stood up by the load door under `bounds`, its build root's header and table laid.
-fn loaded(type_region: &Bump, bounds: SpecBounds) -> (TestGraph<'_>, crate::scheduler::Roots) {
-    let (graph, roots, ()) = TestGraph::load(2, bounds, || {
-        Ok::<_, ()>((crate::values::tests::seeded_tiers(type_region), ()))
-    })
-    .expect("the load succeeds");
-    (graph, roots)
-}
-
-#[test]
-fn a_missed_specialization_is_built_once_and_found_warm_by_the_next_birth() {
+/// Run `start` over a graph loaded under `budget`, then tear it down; hand back the bytes of the
+/// first arena node it recorded.
+fn run_loaded(start: AnyStep, budget: BuildBudget) -> Option<usize> {
     reset();
     fresh_tally();
     let type_region = Bump::new();
-    let (mut graph, roots) = loaded(&type_region, SpecBounds::default());
+    let (mut graph, run) = loaded(&type_region, budget);
+    Scheduler::over(&mut graph)
+        .run(work(start, KValue::Null), run, Placement::Fresh)
+        .expect("the root work ends");
+    let bytes = (builds().first()).and_then(|first| graph.settlement_bytes(*first));
+    torn_down(graph, run);
+    bytes
+}
+
+/// What one settlement weighs: every settlement in these tests weighs the same.
+fn settlement_bytes() -> usize {
+    fn start<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
+        let request = fresh(observe, Use::Reads, KValue::Null);
+        let asked = step.spawn_seeking(request, seek(1, ArenaRef::ROOT));
+        step.park(asked, finished, KValue::Null, None)
+    }
+    run_loaded(start, BuildBudget::default()).expect("the frame ran under its settlement")
+}
+
+#[test]
+fn a_missed_settlement_is_built_once_and_found_warm_by_the_next_birth() {
+    reset();
+    fresh_tally();
+    let type_region = Bump::new();
+    let (mut graph, run) = loaded(&type_region, BuildBudget::default());
     let mut scheduler = Scheduler::over(&mut graph);
     scheduler
-        .run(
-            work(seek_two, KValue::Number(1.0)),
-            roots.run,
-            Placement::Fresh,
-        )
+        .run(work(seek_two, KValue::Number(1.0)), run, Placement::Fresh)
         .expect("the root work ends");
     let [first, second] = builds()[..] else {
         panic!("two frames ran: {:?}", builds())
     };
-    assert_ne!(
-        first,
-        BuildRef::ROOT,
-        "the frame borrows its specialization"
-    );
+    assert_ne!(first, ArenaRef::ROOT, "the frame runs under its settlement");
     assert_eq!(
         first, second,
-        "the second birth finds the first's specialization"
+        "the second birth finds the first's settlement"
     );
-    assert_eq!(specialized(), 1);
+    assert_eq!(settled(), 1);
     assert_eq!(
         scheduler.peak_live_cells(),
         2,
-        "a specialization is no cell of the run, and no frame parked for it"
+        "a settlement is no cell of the run, and no frame parked for it"
     );
-    assert_eq!(scheduler.graph().table_len(roots.build), Ok(Some(1)));
+    assert_eq!(scheduler.graph().live_settlements(), 1);
+    drop(scheduler);
+    torn_down(graph, run);
 }
 
-/// Record the build cell this frame runs under, read through its lend, and finish.
-fn read_lent<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
-    LENT.with(|lent| lent.borrow_mut().push(step.build_ref(BuildRef::ROOT)));
+/// Record the key of the request this frame's first step was handed back, and whether a second
+/// take reads none, then finish.
+fn handed<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
+    let first = step.sought().map(|requested| requested.sought.key);
+    let again = step.sought().is_none();
+    HANDED.with(|handed| handed.borrow_mut().push((first, again)));
     step.finish_fresh(|_, _, _| Active::new(KValue::Null))
 }
 
-/// Ask for two frames under one key and a third that seeks none.
-fn seek_lent<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
-    let (mut step, _) = step.state();
-    for _ in 0..2 {
-        let seek = Seek {
-            parent: BuildRef::ROOT,
-            key: key(1),
-            binding: SpecBinding::default(),
-            work: work(specialize, KValue::Null),
-        };
-        step.spawn_seeking(fresh(read_lent, Use::Reads, KValue::Null), Some(seek));
+/// A seek handing its request back gives the frame's first step that request, on the miss that
+/// builds its settlement and on the hit that finds it; one that does not hands nothing.
+#[test]
+fn a_seek_handing_its_request_back_gives_the_frame_s_first_step_its_request() {
+    fn start<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
+        for hands_back in [true, true, false] {
+            let request = fresh(handed, Use::Reads, KValue::Null);
+            step.spawn_seeking(request, seek_handing(1, ArenaRef::ROOT, hands_back));
+        }
+        let asked = step.spawn(fresh(handed, Use::Reads, KValue::Null));
+        step.park(asked, finished, KValue::Null, None)
     }
-    let asked = step.spawn_seeking(fresh(read_lent, Use::Reads, KValue::Null), None);
-    step.park(asked, finished, KValue::Null, None)
+    run_loaded(start, BuildBudget::default());
+    let read = HANDED.with(|handed| handed.borrow().clone());
+    assert_eq!(
+        read,
+        [
+            (Some(key(1)), true),
+            (Some(key(1)), true),
+            (None, true),
+            (None, true)
+        ],
+        "the miss's frame and the hit's are handed the request; the others are not"
+    );
+    assert_eq!(settled(), 1, "the second seek hits the first's settlement");
+}
+
+/// A replay hands back only its last level's request, the frame's own: each level before it is a
+/// settlement the frame's chain rests on, whose level a stamp already holds.
+#[test]
+fn a_replay_hands_the_frame_back_only_its_own_level_s_request() {
+    fn replaying<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
+        let levels = [1, 2].map(|at| crate::scheduler::Replayed {
+            seek: seek_handing(at, ArenaRef::ROOT, true),
+            pins: smallvec::SmallVec::new(),
+        });
+        let work = Work {
+            step: handed,
+            state: KValue::Null,
+        };
+        step.replay(work, levels)
+    }
+    fn start<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
+        let asked = step.spawn(fresh(replaying, Use::Reads, KValue::Null));
+        step.park(asked, finished, KValue::Null, None)
+    }
+    run_loaded(start, BuildBudget::default());
+    let read = HANDED.with(|handed| handed.borrow().clone());
+    assert_eq!(read, [(Some(key(2)), true)]);
+    assert_eq!(settled(), 2, "each level settles under the one before");
 }
 
 #[test]
-fn two_frames_under_one_key_borrow_one_specialization_through_their_lend() {
+fn two_bindings_give_two_settlements_under_one_parent() {
     reset();
-    LENT.with(|lent| lent.borrow_mut().clear());
+    fresh_tally();
     let type_region = Bump::new();
-    let (mut graph, roots) = loaded(&type_region, SpecBounds::default());
+    let (mut graph, run) = loaded(&type_region, BuildBudget::default());
     Scheduler::over(&mut graph)
-        .run(work(seek_lent, KValue::Null), roots.run, Placement::Fresh)
+        .run(work(seek_two, KValue::Number(2.0)), run, Placement::Fresh)
         .expect("the root work ends");
-    let seen = LENT.with(|lent| lent.borrow().clone());
-    let [first, second, none] = seen[..] else {
-        panic!("three frames read: {seen:?}")
+    let [first, second] = builds()[..] else {
+        panic!("two frames ran: {:?}", builds())
     };
-    assert_ne!(first, BuildRef::ROOT, "a frame borrows its specialization");
+    assert_ne!(first, second);
+    assert_eq!(settled(), 2);
+    assert_eq!(graph.live_settlements(), 2);
+    torn_down(graph, run);
+}
+
+#[test]
+fn a_call_keying_no_settlement_runs_under_its_callees_arena_node() {
+    /// Under a frame keyed 1: a call keying nothing whose callee was born under the root, one
+    /// whose callee was born under this frame's settlement, and a plain child.
+    fn frame<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
+        let (mut step, _) = step.state();
+        let mine = step.arena_ref(ArenaRef::ROOT);
+        for parent in [ArenaRef::ROOT, mine] {
+            let unkeyed = Seek {
+                parent,
+                settlement: None,
+                hands_back: false,
+            };
+            step.spawn_seeking(shares(observe, Use::Reads, KValue::Null), unkeyed);
+        }
+        let asked = step.spawn(fresh(observe, Use::Reads, KValue::Null));
+        step.park(asked, deliver, KValue::Null, None)
+    }
+    fn start<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
+        let request = fresh(frame, Use::Reads, KValue::Null);
+        let asked = step.spawn_seeking(request, seek(1, ArenaRef::ROOT));
+        step.park(asked, finished, KValue::Null, None)
+    }
+    run_loaded(start, BuildBudget::default());
+    let [under_root, under_mine, plain] = builds()[..] else {
+        panic!("three frames ran: {:?}", builds())
+    };
+    assert_eq!(under_root, ArenaRef::ROOT);
+    assert_ne!(under_mine, ArenaRef::ROOT);
     assert_eq!(
-        second, first,
-        "a second frame under the key borrows the same one"
+        plain, under_mine,
+        "a plain child runs under its asker's settlement"
     );
-    assert_eq!(none, BuildRef::ROOT, "a frame that seeks none borrows none");
+    assert_eq!(settled(), 1);
 }
 
-/// How many nodes the drains on this thread have laid into the agent tier for new specializations
-/// since the last [`fresh_tally`].
-fn relayed() -> usize {
-    TIERS.with(|tiers| tiers.get().relayed)
-}
-
-/// A seek for the specialization keyed `at` under the build root, its binding carrying `bound`,
-/// built by `specialize`.
+/// A seek for the settlement keyed `at` under the root, its binding carrying `bound`, imaged from
+/// `step`'s region.
 fn seek_bound<'graph>(
+    step: &Step<'_, 'graph, '_, '_, '_, '_, Native, Taken>,
     at: usize,
     bound: KType,
-    specialize: TestStep<'graph>,
-) -> Seek<'graph, Native> {
-    let mut binding = SpecBinding::default();
-    binding.push(KeyedTypes {
+) -> Seek<'graph> {
+    let keyed = smallvec![KeyedTypes {
         carried: bound.into(),
         named: None,
-    });
+    }];
+    let image = BindingImage::of(keyed.clone(), step.tiers(), &step.types());
     Seek {
-        parent: BuildRef::ROOT,
-        key: key(at),
-        binding,
-        work: work(specialize, KValue::Null),
+        parent: ArenaRef::ROOT,
+        settlement: Some((image, sought(at, keyed))),
+        hands_back: false,
     }
 }
 
-/// A specialization's step over a binding the asker minted: its own chain resolves the binding's
-/// type through the agent tier before it lays anything, and its region lays no branch; then it
-/// enlists.
-fn holding<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
-    {
-        let types = step.types();
-        let bound = BOUND.get();
-        assert!(!types.in_root(bound));
-        assert!(
-            types.resolves(bound),
-            "the drain laid the binding's node before the step"
-        );
-        assert_eq!(
-            types.own_len(),
-            0,
-            "the specialization's region lays no branch"
-        );
-    }
-    step.enlist()
-}
-
-/// A specialization's step over a binding of root types: its branch holds nothing.
-fn holding_root<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
-    {
-        let types = step.types();
-        assert!(types.resolves(KType::NUMBER));
-        assert_eq!(types.own_len(), 0, "a root handle lays nothing");
-    }
-    step.enlist()
-}
-
-/// A frame that reads its binding's type, a list of a list of `Bool`, through the agent chain, and
-/// finishes.
+/// A frame under its settlement that reads its binding's type, a list of a list of `Bool`, through
+/// the agent chain, and finishes.
 fn reading<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
     {
-        let warm = step
-            .agent_types()
-            .expect("the frame borrows its specialization");
+        assert!(
+            step.under_settlement(),
+            "the frame runs under its settlement"
+        );
+        let warm = step.tiers().resting();
         let bound = BOUND.get();
         assert!(
             warm.resolves(bound),
@@ -297,13 +396,8 @@ fn reading<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'gr
     step.finish_fresh(|_, _, _| Active::new(KValue::Null))
 }
 
-/// Finish with nothing, so the asker wakes.
-fn report<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
-    step.finish_fresh(|_, _, _| Active::new(KValue::Null))
-}
-
-/// An asker that mints a type in its own region and seeks a specialization over it, for a
-/// `Fresh` frame.
+/// An asker that mints a type in its own region and seeks a settlement over it, for a `Fresh`
+/// frame.
 fn minting<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
     let (mut step, _) = step.state();
     let bound = {
@@ -316,17 +410,17 @@ fn minting<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'gr
         bound
     };
     BOUND.set(bound);
-    let seek = seek_bound(7, bound, holding);
-    let asked = step.spawn_seeking(fresh(reading, Use::Reads, KValue::Null), Some(seek));
-    step.park(asked, report, KValue::Null, None)
+    let seek = seek_bound(&step, 7, bound);
+    let asked = step.spawn_seeking(fresh(reading, Use::Reads, KValue::Null), seek);
+    step.park(asked, deliver, KValue::Null, None)
 }
 
-/// An asker that mints nothing and seeks the same specialization, for a `Shares` frame: a hit.
+/// An asker that mints nothing and seeks the same settlement, for a `Shares` frame: a hit.
 fn rehitting<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
     let (mut step, _) = step.state();
-    let seek = seek_bound(7, BOUND.get(), holding);
-    let asked = step.spawn_seeking(shares(reading, Use::Reads, KValue::Null), Some(seek));
-    step.park(asked, report, KValue::Null, None)
+    let seek = seek_bound(&step, 7, BOUND.get());
+    let asked = step.spawn_seeking(shares(reading, Use::Reads, KValue::Null), seek);
+    step.park(asked, deliver, KValue::Null, None)
 }
 
 /// Ask for a minting asker, and once it is gone, where the state is `2`, a rehitting one.
@@ -351,26 +445,26 @@ fn rehit_after<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action
     step.park(asked, finished, KValue::Null, None)
 }
 
-/// Run [`mint_then_rehit`] over a fresh graph from `state`, and read the specializations built
-/// and the nodes relayed.
+/// Run [`mint_then_rehit`] over a fresh graph from `state`, and read the settlements built and
+/// the nodes relayed.
 fn run_minting(state: f64) -> (usize, usize) {
     reset();
     fresh_tally();
     let type_region = Bump::new();
-    let (mut graph, roots) = loaded(&type_region, SpecBounds::default());
+    let (mut graph, run) = loaded(&type_region, BuildBudget::default());
     Scheduler::over(&mut graph)
         .run(
             work(mint_then_rehit, KValue::Number(state)),
-            roots.run,
+            run,
             Placement::Fresh,
         )
         .expect("the root work ends");
-    (specialized(), relayed())
+    torn_down(graph, run);
+    (settled(), relayed())
 }
 
 #[test]
-fn a_missed_specialization_holds_its_bindings_nodes_and_a_frame_reads_them_after_the_asker_is_gone()
-{
+fn a_missed_settlement_relays_its_bindings_nodes_and_a_frame_reads_them_after_the_asker_is_gone() {
     let once = run_minting(1.0);
     assert_eq!(
         once,
@@ -384,99 +478,30 @@ fn a_missed_specialization_holds_its_bindings_nodes_and_a_frame_reads_them_after
     );
 }
 
-/// Seek a specialization over a binding of `Number` alone.
-fn seek_root_bound<'graph>(
-    step: Step<'_, 'graph, '_, '_, '_, '_, Native>,
-) -> Action<'graph, Native> {
-    let (mut step, _) = step.state();
-    let seek = seek_bound(8, KType::NUMBER, holding_root);
-    let asked = step.spawn_seeking(fresh(observe, Use::Reads, KValue::Null), Some(seek));
-    step.park(asked, finished, KValue::Null, None)
-}
-
 #[test]
-fn a_binding_of_root_types_lays_nothing_in_its_specialization() {
-    reset();
-    fresh_tally();
-    let type_region = Bump::new();
-    let (mut graph, roots) = loaded(&type_region, SpecBounds::default());
-    Scheduler::over(&mut graph)
-        .run(
-            work(seek_root_bound, KValue::Null),
-            roots.run,
-            Placement::Fresh,
-        )
-        .expect("the root work ends");
-    assert_eq!((specialized(), relayed()), (1, 0));
+fn a_binding_of_root_types_relays_nothing() {
+    fn start<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
+        let (mut step, _) = step.state();
+        let seek = seek_bound(&step, 8, KType::NUMBER);
+        let asked = step.spawn_seeking(fresh(observe, Use::Reads, KValue::Null), seek);
+        step.park(asked, finished, KValue::Null, None)
+    }
+    run_loaded(start, BuildBudget::default());
+    assert_eq!((settled(), relayed()), (1, 0));
 }
 
-#[test]
-fn two_bindings_give_two_specializations_under_one_parent() {
-    reset();
-    fresh_tally();
-    let type_region = Bump::new();
-    let (mut graph, roots) = loaded(&type_region, SpecBounds::default());
-    let mut scheduler = Scheduler::over(&mut graph);
-    scheduler
-        .run(
-            work(seek_two, KValue::Number(2.0)),
-            roots.run,
-            Placement::Fresh,
-        )
-        .expect("the root work ends");
-    let [first, second] = builds()[..] else {
-        panic!("two frames ran: {:?}", builds())
-    };
-    assert_ne!(first, second);
-    assert_eq!(specialized(), 2);
-    assert_eq!(scheduler.graph().table_len(roots.build), Ok(Some(2)));
-}
-
-#[test]
-fn a_graph_with_no_build_root_births_every_seeking_frame_cold() {
-    reset();
-    fresh_tally();
-    let type_region = Bump::new();
-    let mut graph = TestGraph::new(1, crate::values::tests::seeded_tiers(&type_region));
-    let root = graph.root().expect("a fresh slab admits a root");
-    let mut scheduler = Scheduler::over(&mut graph);
-    scheduler
-        .run(work(seek_two, KValue::Number(1.0)), root, Placement::Fresh)
-        .expect("the root work ends");
-    assert_eq!(builds(), [BuildRef::ROOT, BuildRef::ROOT]);
-    assert_eq!(specialized(), 0);
-}
-
-/// Deliver once the children are in.
-fn deliver<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
-    step.finish_fresh(|_, _, _| Active::new(KValue::Null))
-}
-
-/// Seek, as a frame of a callee keyed on the stashed build cell, under the build cell stashed
-/// first.
-fn seek_under_stashed<'graph>(
-    mut step: Step<'_, 'graph, '_, '_, '_, '_, Native>,
-) -> Action<'graph, Native> {
-    let parent = builds()[0];
-    let asked = step.spawn_seeking(
-        fresh(observe, Use::Reads, KValue::Null),
-        Some(seek(2, parent)),
-    );
-    step.park(asked, finished, KValue::Null, None)
-}
-
-/// Record this frame's build cell, then seek the [`SEQUENCE`] one key at a time: ask for one
+/// Record this frame's arena node, then seek the [`SEQUENCE`] one key at a time: ask for one
 /// observing frame, park on it, and ask for the next when woken. Deliver once the last is in.
 fn sequence<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
     let (mut step, state) = step.state();
     let KValue::Number(at) = state else {
         return step.failed(StepError::Refused);
     };
-    let (at, mine) = (at as usize, step.build_ref(BuildRef::ROOT));
+    let (at, mine) = (at as usize, step.arena_ref(ArenaRef::ROOT));
     if at == 0 {
-        BUILDS.with(|builds| builds.borrow_mut().push(mine));
+        push_build(mine);
     } else {
-        COUNTS.with(|counts| counts.borrow_mut().push(specialized()));
+        COUNTS.with(|counts| counts.borrow_mut().push(settled()));
         // Take the last seek's result, so the slot is free for the next.
         step.results().for_each(drop);
     }
@@ -484,69 +509,51 @@ fn sequence<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'g
     else {
         return step.finish_fresh(|_, _, _| Active::new(KValue::Null));
     };
-    let parent = if under_mine { mine } else { BuildRef::ROOT };
-    let asked = step.spawn_seeking(
-        fresh(observe, Use::Reads, KValue::Null),
-        Some(seek(key, parent)),
-    );
+    let parent = if under_mine { mine } else { ArenaRef::ROOT };
+    let asked = step.spawn_seeking(fresh(observe, Use::Reads, KValue::Null), seek(key, parent));
     step.park(asked, sequence, KValue::Number((at + 1) as f64), None)
 }
 
-/// Run a [`sequence`] of `keys` as a root work's child, seeking `under` for it where given.
+/// Run a [`sequence`] of `keys` as a root work's child, itself a frame keyed 1 where `keyed`.
 fn run_sequence(
     scheduler: &mut Scheduler<'_, '_, Native>,
-    run: crate::memory::SlabHandle,
+    run: SlabHandle,
     keys: &[(usize, bool)],
-    under: Option<usize>,
+    keyed: bool,
 ) {
     fn plain<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
         let asked = step.spawn(fresh(sequence, Use::Reads, KValue::Number(0.0)));
         step.park(asked, finished, KValue::Null, None)
     }
-    fn keyed<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
+    fn keyed_one<'graph>(
+        mut step: Step<'_, 'graph, '_, '_, '_, '_, Native>,
+    ) -> Action<'graph, Native> {
         let request = fresh(sequence, Use::Reads, KValue::Number(0.0));
-        let asked = step.spawn_seeking(request, Some(seek(1, BuildRef::ROOT)));
+        let asked = step.spawn_seeking(request, seek(1, ArenaRef::ROOT));
         step.park(asked, finished, KValue::Null, None)
     }
     reset();
     SEQUENCE.with(|sequence| *sequence.borrow_mut() = keys.to_vec());
-    let start = match under {
-        None => plain,
-        Some(1) => keyed,
-        Some(other) => panic!("a sequence runs under key 1 or the root, not {other}"),
-    };
+    let start = if keyed { keyed_one } else { plain };
     scheduler
         .run(work(start, KValue::Null), run, Placement::Fresh)
         .expect("the root work ends");
 }
 
-/// Whether the specialization `build` names is live.
-fn live(scheduler: &Scheduler<'_, '_, Native>, build: BuildRef) -> bool {
-    scheduler
-        .graph()
-        .is_live(build.opened().expect("a specialization"))
-}
-
-/// Evict every specialization, release both roots, and check the graph is empty.
-fn torn_down(mut graph: TestGraph<'_>, roots: crate::scheduler::Roots) {
-    Scheduler::over(&mut graph).evict_every();
-    graph
-        .release_root(roots.run)
-        .expect("the run root releases");
-    graph
-        .release_root(roots.build)
-        .expect("the build root releases");
-    assert!(graph.is_empty(), "the run leaves no cell behind");
+/// Whether `at` names a live settlement.
+fn live(scheduler: &Scheduler<'_, '_, Native>, at: ArenaRef) -> bool {
+    scheduler.graph().is_settled(at)
 }
 
 #[test]
-fn a_parent_past_its_bound_releases_its_least_recently_born_child() {
+fn a_miss_past_the_budget_evicts_the_least_recently_used_unheld_settlement() {
+    let two = budget(2 * settlement_bytes());
     fresh_tally();
     let type_region = Bump::new();
-    let (mut graph, roots) = loaded(&type_region, bounds(3, 2));
+    let (mut graph, run) = loaded(&type_region, two);
     let mut scheduler = Scheduler::over(&mut graph);
     let under_root = [1, 2, 3, 1, 4, 2].map(|key| (key, false));
-    run_sequence(&mut scheduler, roots.run, &under_root, None);
+    run_sequence(&mut scheduler, run, &under_root, false);
     assert_eq!(
         COUNTS.with(|counts| counts.borrow().clone()),
         [1, 2, 3, 3, 4, 5]
@@ -557,506 +564,365 @@ fn a_parent_past_its_bound_releases_its_least_recently_born_child() {
     assert_eq!(again, one, "key 1 is a hit");
     assert!(
         !live(&scheduler, two),
-        "key 4 evicts key 2, born before key 1's hit and key 3"
+        "key 4 evicts key 2, used before key 1's hit and key 3"
     );
     assert!(!live(&scheduler, three), "key 2 then evicts key 3");
-    assert!([one, four, rebuilt].iter().all(|b| live(&scheduler, *b)));
-    assert_ne!(rebuilt, two);
+    assert!([one, four, rebuilt].iter().all(|at| live(&scheduler, *at)));
+    assert_ne!(rebuilt, two, "a stale handle names nothing");
     assert_eq!(evicted_and_cold(), (2, 0));
-    assert_eq!(scheduler.graph().live_children(roots.build), 3);
-    // Under key 1's specialization the nested bound holds.
-    let nested = [10, 11, 12].map(|key| (key, true));
-    run_sequence(&mut scheduler, roots.run, &nested, Some(1));
-    let [mine, ten, ..] = builds()[..] else {
-        panic!("four frames ran: {:?}", builds())
-    };
-    assert_eq!(mine, one);
-    assert!(!live(&scheduler, ten), "key 12 evicts key 10");
-    assert_eq!(evicted_and_cold(), (3, 0));
+    assert_eq!(scheduler.graph().live_settlements(), 3);
     assert_eq!(
-        scheduler
-            .graph()
-            .live_children(mine.opened().expect("a specialization")),
-        2
+        scheduler.graph().unheld_bytes(),
+        3 * scheduler.graph().settlement_bytes(one).unwrap(),
+        "the last miss's settlement turned unheld when its frame ended"
     );
-    assert_eq!(scheduler.graph().live_specializations(), 5);
     drop(scheduler);
-    torn_down(graph, roots);
+    torn_down(graph, run);
 }
 
 #[test]
-fn a_miss_releases_its_victims_subtree_leaf_first() {
+fn a_parent_goes_after_its_child_and_a_seek_under_it_then_runs_cold() {
     fresh_tally();
     let type_region = Bump::new();
-    let (mut graph, roots) = loaded(&type_region, bounds(1, 1));
+    let (mut graph, run) = loaded(&type_region, smallest());
     let mut scheduler = Scheduler::over(&mut graph);
-    run_sequence(&mut scheduler, roots.run, &[(2, true)], Some(1));
+    run_sequence(&mut scheduler, run, &[(2, true)], true);
     let [outer, inner] = builds()[..] else {
         panic!("two frames ran: {:?}", builds())
     };
-    assert_ne!(outer, BuildRef::ROOT);
+    assert_ne!(outer, ArenaRef::ROOT);
     assert_ne!(
         inner, outer,
-        "a binding under a specialization keys a child of it"
+        "a binding under a settlement keys a child of it"
     );
-    assert_eq!(scheduler.graph().live_specializations(), 2);
-    run_sequence(&mut scheduler, roots.run, &[(3, false)], None);
+    assert_eq!(
+        scheduler.graph().live_settlements(),
+        2,
+        "neither is evicted while a frame holds it"
+    );
+    run_sequence(&mut scheduler, run, &[(3, false)], false);
     assert!(
         !live(&scheduler, outer) && !live(&scheduler, inner),
-        "key 3 evicts key 1 with its child"
+        "key 3's miss evicts the child, then its parent"
     );
     assert_eq!(evicted_and_cold(), (2, 0));
-    assert_eq!(scheduler.graph().live_specializations(), 1);
     // A seek under the evicted parent births its frame cold.
+    fn under_outer<'graph>(
+        mut step: Step<'_, 'graph, '_, '_, '_, '_, Native>,
+    ) -> Action<'graph, Native> {
+        let parent = builds()[0];
+        let asked = step.spawn_seeking(fresh(observe, Use::Reads, KValue::Null), seek(2, parent));
+        step.park(asked, finished, KValue::Null, None)
+    }
     reset();
-    BUILDS.with(|builds| builds.borrow_mut().push(outer));
+    push_build(outer);
     scheduler
-        .run(
-            work(seek_under_stashed, KValue::Null),
-            roots.run,
-            Placement::Fresh,
-        )
+        .run(work(under_outer, KValue::Null), run, Placement::Fresh)
         .expect("the root work ends");
-    assert_eq!(builds()[1], BuildRef::ROOT);
+    assert_eq!(builds()[1], ArenaRef::ROOT);
     assert_eq!(evicted_and_cold(), (2, 1));
-    // A test's eviction of a specialization with a child releases both.
-    run_sequence(&mut scheduler, roots.run, &[(2, true)], Some(1));
-    let [outer, inner] = builds()[..] else {
-        panic!("two frames ran: {:?}", builds())
-    };
-    scheduler
-        .evict(outer)
-        .expect("a live specialization evicts");
-    assert!(!live(&scheduler, outer) && !live(&scheduler, inner));
-    assert_eq!(scheduler.graph().live_specializations(), 0);
     drop(scheduler);
-    torn_down(graph, roots);
+    torn_down(graph, run);
 }
 
-/// Seek key 1, and from inside it hop to a frame of the same callee under the same specialization.
+/// Seek key 1, and from inside it hop to a frame of the same callee under the same settlement.
 fn hop<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
     let (mut step, state) = step.state();
     match state {
         KValue::Number(_) => {
             let asked = step.spawn_seeking(
                 fresh(hop, Use::Reads, KValue::Null),
-                Some(seek(1, BuildRef::ROOT)),
+                seek(1, ArenaRef::ROOT),
             );
             step.park(asked, finished, KValue::Null, None)
         }
         _ => {
-            let mine = step.build_ref(BuildRef::ROOT);
-            BUILDS.with(|builds| builds.borrow_mut().push(mine));
-            step.tail_under(
-                Placement::Fresh,
-                Work {
-                    step: observe,
-                    state,
-                },
-                mine,
-            )
+            let mine = step.arena_ref(ArenaRef::ROOT);
+            push_build(mine);
+            let work = Work {
+                step: observe,
+                state,
+            };
+            step.tail_under(work, mine)
         }
     }
 }
 
-/// Hop under the build cell stashed first, as a frame whose specialization was evicted would.
-fn hop_under_stashed<'graph>(
-    step: Step<'_, 'graph, '_, '_, '_, '_, Native>,
-) -> Action<'graph, Native> {
-    let (step, state) = step.state();
-    let stashed = builds()[0];
-    step.tail_under(
-        Placement::Fresh,
-        Work {
-            step: observe,
-            state,
-        },
-        stashed,
-    )
-}
-
-/// Ask for one frame that hops under the stashed build cell.
-fn ask_hop<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
-    let asked = step.spawn(fresh(hop_under_stashed, Use::Reads, KValue::Null));
-    step.park(asked, finished, KValue::Null, None)
-}
-
 #[test]
-fn a_hop_of_the_same_callee_borrows_its_frames_specialization_and_runs_cold_once_it_is_gone() {
+fn a_hop_of_the_same_callee_runs_under_its_frames_settlement_and_cold_once_it_is_gone() {
     reset();
     fresh_tally();
     let type_region = Bump::new();
-    let (mut graph, roots) = loaded(&type_region, SpecBounds::default());
+    let (mut graph, run) = loaded(&type_region, smallest());
     let mut scheduler = Scheduler::over(&mut graph);
     scheduler
-        .run(work(hop, KValue::Number(1.0)), roots.run, Placement::Fresh)
+        .run(work(hop, KValue::Number(1.0)), run, Placement::Fresh)
         .expect("the root work ends");
     let [frame, successor] = builds()[..] else {
         panic!("two frames ran: {:?}", builds())
     };
-    assert_ne!(frame, BuildRef::ROOT);
+    assert_ne!(frame, ArenaRef::ROOT);
     assert_eq!(
         successor, frame,
-        "the successor borrows its predecessor's specialization"
+        "the successor runs under its predecessor's settlement"
     );
-    assert_eq!(specialized(), 1, "a hop looks nothing up");
-    scheduler.evict(frame).expect("the leaf evicts");
+    assert_eq!(settled(), 1, "a hop looks nothing up");
+    // Another key's miss evicts the frame's settlement, which nothing holds now.
+    run_sequence(&mut scheduler, run, &[(2, false)], false);
+    assert!(!live(&scheduler, frame));
+    fn hop_under_stashed<'graph>(
+        step: Step<'_, 'graph, '_, '_, '_, '_, Native>,
+    ) -> Action<'graph, Native> {
+        let (step, state) = step.state();
+        let work = Work {
+            step: observe,
+            state,
+        };
+        step.tail_under(work, builds()[0])
+    }
+    fn ask_hop<'graph>(
+        mut step: Step<'_, 'graph, '_, '_, '_, '_, Native>,
+    ) -> Action<'graph, Native> {
+        let asked = step.spawn(fresh(hop_under_stashed, Use::Reads, KValue::Null));
+        step.park(asked, finished, KValue::Null, None)
+    }
     reset();
-    BUILDS.with(|builds| builds.borrow_mut().push(frame));
+    push_build(frame);
     scheduler
-        .run(work(ask_hop, KValue::Null), roots.run, Placement::Fresh)
-        .expect("a hop after its specialization's eviction still runs");
-    assert_eq!(builds()[1], BuildRef::ROOT);
+        .run(work(ask_hop, KValue::Null), run, Placement::Fresh)
+        .expect("a hop after its settlement's eviction still runs");
+    assert_eq!(builds()[1], ArenaRef::ROOT);
     assert_eq!(evicted_and_cold(), (1, 1));
+    drop(scheduler);
+    torn_down(graph, run);
 }
 
-/// A frame keyed 1 that hops under its own specialization, seeks key 2, hops again, and seeks key
-/// 3, by stage.
+/// A frame keyed 1 that hops under its own settlement, seeks key 2, hops again, and seeks key 3,
+/// by stage.
 fn hopper<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
     let (mut step, state) = step.state();
     let KValue::Number(stage) = state else {
         return step.failed(StepError::Refused);
     };
-    let mine = step.build_ref(BuildRef::ROOT);
+    let mine = step.arena_ref(ArenaRef::ROOT);
     let next = KValue::Number(stage + 1.0);
     match stage as usize {
-        0 => {
-            BUILDS.with(|builds| builds.borrow_mut().push(mine));
+        0 | 2 => {
+            if stage == 0.0 {
+                push_build(mine);
+            }
             let work = Work {
                 step: hopper,
                 state: next,
             };
-            step.tail_under(Placement::Fresh, work, mine)
+            step.tail_under(work, mine)
         }
         1 | 3 => {
             let key = if stage == 1.0 { 2 } else { 3 };
-            let asked = step.spawn_seeking(
-                fresh(observe, Use::Reads, KValue::Null),
-                Some(seek(key, BuildRef::ROOT)),
-            );
+            let request = fresh(observe, Use::Reads, KValue::Null);
+            let asked = step.spawn_seeking(request, seek(key, ArenaRef::ROOT));
             step.park(asked, hopper, next, None)
         }
-        2 => step.tail_under(
-            Placement::Fresh,
-            Work {
-                step: hopper,
-                state: next,
-            },
-            mine,
-        ),
         _ => {
-            BUILDS.with(|builds| builds.borrow_mut().push(mine));
+            push_build(mine);
             step.finish_fresh(|_, _, _| Active::new(KValue::Null))
         }
     }
 }
 
 #[test]
-fn a_hop_is_a_birth_and_keeps_its_loops_specialization() {
+fn a_loop_of_hops_holds_its_settlement_through_every_miss() {
     fn start<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
         let request = fresh(hopper, Use::Reads, KValue::Number(0.0));
-        let asked = step.spawn_seeking(request, Some(seek(1, BuildRef::ROOT)));
+        let asked = step.spawn_seeking(request, seek(1, ArenaRef::ROOT));
         step.park(asked, finished, KValue::Null, None)
     }
     reset();
     fresh_tally();
     let type_region = Bump::new();
-    let (mut graph, roots) = loaded(&type_region, bounds(2, 1));
+    let (mut graph, run) = loaded(&type_region, smallest());
     let mut scheduler = Scheduler::over(&mut graph);
     scheduler
-        .run(work(start, KValue::Null), roots.run, Placement::Fresh)
+        .run(work(start, KValue::Null), run, Placement::Fresh)
         .expect("the root work ends");
     let [frame, two, three, last] = builds()[..] else {
         panic!("four frames ran: {:?}", builds())
     };
     assert_eq!(last, frame, "every hop runs warm");
-    assert!(
-        live(&scheduler, frame),
-        "two hops are newer births than key 2's"
-    );
+    assert!(live(&scheduler, frame), "a hop's successor holds it");
     assert!(!live(&scheduler, two), "key 3 evicts key 2");
-    assert!(live(&scheduler, three));
-    assert_eq!((specialized(), evicted_and_cold()), (3, (1, 0)));
+    assert!(live(&scheduler, three), "nothing missed after key 3");
+    assert_eq!((settled(), evicted_and_cold()), (3, (1, 0)));
     drop(scheduler);
-    torn_down(graph, roots);
+    torn_down(graph, run);
 }
 
-/// Run `start` as a root work over a loaded graph, then tear it down to an empty graph.
-fn run_loaded(start: crate::scheduler::tests::bundle::AnyStep) {
-    reset();
-    fresh_tally();
-    let type_region = Bump::new();
-    let (mut graph, roots) = loaded(&type_region, SpecBounds::default());
-    let mut scheduler = Scheduler::over(&mut graph);
-    scheduler
-        .run(work(start, KValue::Null), roots.run, Placement::Fresh)
-        .expect("the root work ends");
-    drop(scheduler);
-    torn_down(graph, roots);
-}
-
-/// Record the build cell this frame runs under, then ask for a child copying this frame's lend
-/// and deliver once it is in.
+/// Record the arena node this frame runs under, then ask for an evaluation (`Fresh`) and a block
+/// (`Shares`) asked for plainly, and deliver once they are in.
 fn observe_and_ask<'graph>(
     step: Step<'_, 'graph, '_, '_, '_, '_, Native>,
 ) -> Action<'graph, Native> {
     let (mut step, _) = step.state();
-    BUILDS.with(|builds| builds.borrow_mut().push(step.build_ref(BuildRef::ROOT)));
+    push_build(step.arena_ref(ArenaRef::ROOT));
+    step.spawn(fresh(observe, Use::Reads, KValue::Null));
     let asked = step.spawn(shares(observe, Use::Reads, KValue::Null));
     step.park(asked, deliver, KValue::Null, None)
 }
 
 #[test]
-fn a_shares_frame_seeking_borrows_its_specialization_and_its_children_copy_it() {
+fn every_run_cell_born_under_a_settlement_carries_its_reference() {
     fn start<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
+        let request = fresh(observe_and_ask, Use::Reads, KValue::Null);
+        step.spawn_seeking(request, seek(1, ArenaRef::ROOT));
         let request = shares(observe_and_ask, Use::Reads, KValue::Null);
-        step.spawn_seeking(request, Some(seek(1, BuildRef::ROOT)));
-        let request = shares(observe, Use::Reads, KValue::Null);
-        let asked = step.spawn_seeking(request, Some(seek(1, BuildRef::ROOT)));
+        let asked = step.spawn_seeking(request, seek(1, ArenaRef::ROOT));
         step.park(asked, finished, KValue::Null, None)
     }
-    run_loaded(start);
-    let [first, child, second] = builds()[..] else {
-        panic!("three frames ran: {:?}", builds())
-    };
-    assert_ne!(
-        first,
-        BuildRef::ROOT,
-        "the tenant borrows its specialization"
-    );
+    run_loaded(start, BuildBudget::default());
+    let seen = builds();
     assert_eq!(
-        child, first,
-        "a tenant asked for plainly copies its asker's lend"
+        seen.len(),
+        6,
+        "two frames and their four children ran: {seen:?}"
     );
-    assert_eq!(
-        second, first,
-        "the second tenant finds the first's specialization"
+    assert_ne!(seen[0], ArenaRef::ROOT, "a frame runs under its settlement");
+    assert!(
+        seen.iter().all(|at| *at == seen[0]),
+        "both placements find one settlement, and an evaluation and a block run under it"
     );
-    assert_eq!(specialized(), 1);
+    assert_eq!(settled(), 1);
 }
 
 #[test]
-fn a_shares_call_seeking_nothing_runs_under_its_fallback() {
-    /// Under a frame borrowing a specialization: a `Shares` call seeking nothing, then a `Shares`
-    /// child copying the frame's lend.
-    fn frame<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
-        let (mut step, _) = step.state();
-        step.spawn_seeking(shares(observe, Use::Reads, KValue::Null), None);
-        let asked = step.spawn(shares(observe, Use::Reads, KValue::Null));
-        step.park(asked, deliver, KValue::Null, None)
-    }
-    fn start<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
-        let request = fresh(frame, Use::Reads, KValue::Null);
-        let asked = step.spawn_seeking(request, Some(seek(1, BuildRef::ROOT)));
-        step.park(asked, finished, KValue::Null, None)
-    }
-    run_loaded(start);
-    let [cold, copied] = builds()[..] else {
-        panic!("two frames ran: {:?}", builds())
-    };
-    assert_eq!(
-        cold,
-        BuildRef::ROOT,
-        "a call seeking nothing borrows nothing"
-    );
-    assert_ne!(
-        copied,
-        BuildRef::ROOT,
-        "a plain child copies the frame's lend"
-    );
-}
-
-#[test]
-fn a_shares_hop_of_the_same_callee_keeps_its_lend() {
-    /// A `Shares` frame that hops, `Shares`, to a frame of the same callee under its own
-    /// specialization.
+fn a_tenants_hop_of_the_same_callee_keeps_its_settlement() {
+    /// A tenant frame that hops to a frame of the same callee under its own settlement.
     fn frame<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
         let (step, state) = step.state();
-        let mine = step.build_ref(BuildRef::ROOT);
-        BUILDS.with(|builds| builds.borrow_mut().push(mine));
+        let mine = step.arena_ref(ArenaRef::ROOT);
+        push_build(mine);
         let work = Work {
             step: observe,
             state,
         };
-        step.tail_under(Placement::Shares, work, mine)
+        step.tail_under(work, mine)
     }
     fn start<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
         let request = shares(frame, Use::Reads, KValue::Null);
-        let asked = step.spawn_seeking(request, Some(seek(1, BuildRef::ROOT)));
+        let asked = step.spawn_seeking(request, seek(1, ArenaRef::ROOT));
         step.park(asked, finished, KValue::Null, None)
     }
-    run_loaded(start);
+    run_loaded(start, BuildBudget::default());
     let [frame, successor] = builds()[..] else {
         panic!("two frames ran: {:?}", builds())
     };
-    assert_ne!(frame, BuildRef::ROOT);
+    assert_ne!(frame, ArenaRef::ROOT);
     assert_eq!(
         successor, frame,
-        "the successor borrows its predecessor's specialization"
+        "the successor runs under its predecessor's settlement"
     );
-    assert_eq!(specialized(), 1, "a hop looks nothing up");
+    assert_eq!(settled(), 1, "a hop looks nothing up");
 }
 
-/// A keyed frame: lay a type in the agent tier, ask for its specialization's eviction before the
-/// next step, and park on a child.
-fn evicted<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
-    log("frame");
-    let (mut step, _) = step.state();
-    let warm = step
-        .agent_types()
-        .expect("the frame borrows its specialization");
-    let laid = warm.list(warm.list(KType::BOOL));
-    LAID.with(|slot| slot.set(laid));
-    let mine = step.build_ref(BuildRef::ROOT);
-    assert_ne!(mine, BuildRef::ROOT, "the frame borrows its specialization");
-    EVICT_BEFORE_STEP.set(Some(mine));
-    let asked = step.spawn(fresh(observe, Use::Reads, KValue::Null));
-    step.park(asked, woken, KValue::Null, None)
+/// Ask for an [`observe`] frame seeking key 2 under the root — a miss past the smallest budget —
+/// and, once it is in, note the evictions so far.
+fn miss_then_note<'graph>(
+    mut step: Step<'_, 'graph, '_, '_, '_, '_, Native>,
+) -> Action<'graph, Native> {
+    let request = fresh(observe, Use::Reads, KValue::Null);
+    let asked = step.spawn_seeking(request, seek(2, ArenaRef::ROOT));
+    step.park(asked, noted, KValue::Null, None)
 }
 
-/// Wake after the eviction and read the type laid before it, through the agent chain and the
-/// caching chain, then finish.
-fn woken<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
-    log("frame woken");
-    let laid = LAID.with(std::cell::Cell::get);
-    let warm = step
-        .agent_types()
-        .expect("the frame still borrows its specialization");
-    let before = warm.own_len();
-    assert_eq!(
-        warm.list(laid),
-        warm.list(laid),
-        "the agent tier still reads"
-    );
-    let chain = step.caching_types();
-    let _ = chain.list(laid);
-    assert_eq!(
-        warm.own_len(),
-        before + 1,
-        "the list of the laid type lays once"
-    );
-    BUILDS.with(|builds| builds.borrow_mut().push(step.build_ref(BuildRef::ROOT)));
+/// [`miss_then_note`]'s second step: note the evictions so far, and record this cell's arena node.
+fn noted<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
+    let evicted = TIERS.with(|tiers| tiers.get().evicted);
+    EVICTED_THEN.with(|then| then.borrow_mut().push(evicted));
+    push_build(step.arena_ref(ArenaRef::ROOT));
     step.finish_fresh(|_, _, _| Active::new(KValue::Null))
-}
-
-/// A frame keyed 0 under the root, the host: watch its specialization, and ask for an [`evicted`]
-/// frame keyed 1 under it, `Fresh` for a state of `0` and `Shares` for `1`.
-fn host<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
-    log("host");
-    let (mut step, state) = step.state();
-    let KValue::Number(placement) = state else {
-        return step.failed(StepError::Refused);
-    };
-    let mine = step.build_ref(BuildRef::ROOT);
-    WATCHED.set(Some(mine));
-    let request = if placement == 0.0 {
-        fresh(evicted, Use::Reads, KValue::Null)
-    } else {
-        shares(evicted, Use::Reads, KValue::Null)
-    };
-    let asked = step.spawn_seeking(request, Some(seek(1, mine)));
-    step.park(asked, host_woken, state, None)
-}
-
-/// The host, its frame ended: under a `Fresh` frame, seek key 1 again; under a `Shares` one, ask
-/// for a plain child [`plain`].
-fn host_woken<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
-    log("host woken");
-    let (mut step, state) = step.state();
-    step.results().for_each(drop);
-    let asked = if matches!(state, KValue::Number(0.0)) {
-        let mine = step.build_ref(BuildRef::ROOT);
-        step.spawn_seeking(
-            fresh(observe, Use::Reads, KValue::Null),
-            Some(seek(1, mine)),
-        )
-    } else {
-        step.spawn(fresh(plain, Use::Reads, KValue::Null))
-    };
-    step.park(asked, deliver, KValue::Null, None)
-}
-
-/// A plain child that logs its step.
-fn plain<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
-    log("plain");
-    step.finish_fresh(|_, _, _| Active::new(KValue::Null))
-}
-
-/// Run a [`host`] keyed 0 under the root, its frame `Fresh` for `placement` `0` and `Shares` for
-/// `1`, then tear the graph down.
-fn run_host(placement: f64) {
-    fn fresh_host<'graph>(
-        mut step: Step<'_, 'graph, '_, '_, '_, '_, Native>,
-    ) -> Action<'graph, Native> {
-        let request = fresh(host, Use::Reads, KValue::Number(0.0));
-        let asked = step.spawn_seeking(request, Some(seek(0, BuildRef::ROOT)));
-        step.park(asked, finished, KValue::Null, None)
-    }
-    fn shares_host<'graph>(
-        mut step: Step<'_, 'graph, '_, '_, '_, '_, Native>,
-    ) -> Action<'graph, Native> {
-        let request = fresh(host, Use::Reads, KValue::Number(1.0));
-        let asked = step.spawn_seeking(request, Some(seek(0, BuildRef::ROOT)));
-        step.park(asked, finished, KValue::Null, None)
-    }
-    run_loaded(if placement == 0.0 {
-        fresh_host
-    } else {
-        shares_host
-    });
-    assert_eq!(EVICT_BEFORE_STEP.get(), None, "the drain evicted it");
 }
 
 #[test]
-fn an_evicted_specialization_runs_its_fresh_frame_to_its_end_and_disposes_with_it() {
-    run_host(0.0);
-    let [child, frame, rebuilt] = builds()[..] else {
+fn a_hand_off_successor_holds_its_frames_settlement_until_its_own_release() {
+    /// A frame keyed 1 that records its settlement and hands off to [`miss_then_note`].
+    fn frame<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
+        let (step, _) = step.state();
+        push_build(step.arena_ref(ArenaRef::ROOT));
+        let work = Work {
+            step: miss_then_note,
+            state: KValue::Null,
+        };
+        step.hand_off(work)
+    }
+    fn start<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
+        let request = fresh(frame, Use::Reads, KValue::Null);
+        let asked = step.spawn_seeking(request, seek(1, ArenaRef::ROOT));
+        step.park(asked, finished, KValue::Null, None)
+    }
+    reset();
+    fresh_tally();
+    let type_region = Bump::new();
+    let (mut graph, run) = loaded(&type_region, smallest());
+    let mut scheduler = Scheduler::over(&mut graph);
+    scheduler
+        .run(work(start, KValue::Null), run, Placement::Fresh)
+        .expect("the root work ends");
+    let [frame, _two, successor] = builds()[..] else {
         panic!("three frames ran: {:?}", builds())
     };
-    assert_eq!(child, BuildRef::ROOT);
-    assert_ne!(
-        frame,
-        BuildRef::ROOT,
-        "the evicted specialization is still the frame's"
+    assert_ne!(frame, ArenaRef::ROOT);
+    assert_eq!(
+        successor, frame,
+        "the successor runs under its frame's settlement"
     );
     assert_eq!(
-        before("frame woken"),
-        Watched::Childless(false),
-        "the frame still borrows the evicted specialization"
+        EVICTED_THEN.with(|then| then.borrow().clone()),
+        [0],
+        "the miss in the successor's life evicted nothing: the successor held the settlement"
     );
-    assert_eq!(
-        before("host woken"),
-        Watched::Childless(true),
-        "the frame's release disposes it"
+    assert!(
+        live(&scheduler, frame),
+        "nothing missed after the successor's release"
     );
-    assert_ne!(rebuilt, frame, "the next miss builds a fresh one");
-    assert_eq!(specialized(), 3);
+    run_sequence(&mut scheduler, run, &[(3, false)], false);
+    assert!(
+        !live(&scheduler, frame),
+        "the next miss evicts it, held by no cell"
+    );
+    drop(scheduler);
+    torn_down(graph, run);
 }
 
 #[test]
-fn an_evicted_specialization_a_shares_frame_borrowed_waits_on_its_hosts_scratch() {
-    run_host(1.0);
-    let [child, frame] = builds()[..] else {
+fn a_tenants_count_runs_from_its_creation_to_its_release() {
+    fn start<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
+        let request = shares(miss_then_note, Use::Reads, KValue::Null);
+        let asked = step.spawn_seeking(request, seek(1, ArenaRef::ROOT));
+        step.park(asked, finished, KValue::Null, None)
+    }
+    reset();
+    fresh_tally();
+    let type_region = Bump::new();
+    let (mut graph, run) = loaded(&type_region, smallest());
+    let mut scheduler = Scheduler::over(&mut graph);
+    scheduler
+        .run(work(start, KValue::Null), run, Placement::Fresh)
+        .expect("the root work ends");
+    let [_two, tenant] = builds()[..] else {
         panic!("two frames ran: {:?}", builds())
     };
+    assert_ne!(tenant, ArenaRef::ROOT);
     assert_eq!(
-        child,
-        BuildRef::ROOT,
-        "the frame's tree child borrows its host's scratch"
-    );
-    assert_ne!(
-        frame,
-        BuildRef::ROOT,
-        "the evicted specialization is still the frame's"
+        EVICTED_THEN.with(|then| then.borrow().clone()),
+        [0],
+        "a miss while the tenant lived evicted nothing"
     );
     assert_eq!(
-        before("host woken"),
-        Watched::Childless(false),
-        "the host's scratch holds it past the frame's release"
+        scheduler.graph().borrowers(tenant),
+        Some(0),
+        "its release dropped its count"
     );
-    assert_eq!(
-        before("plain"),
-        Watched::Childless(true),
-        "it disposes once the host's scratch resets"
-    );
+    run_sequence(&mut scheduler, run, &[(3, false)], false);
+    assert!(!live(&scheduler, tenant));
+    drop(scheduler);
+    torn_down(graph, run);
 }

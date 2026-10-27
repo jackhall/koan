@@ -2,9 +2,9 @@
 //! never names where a fact rests ([the store](../../build/README.md#the-store)).
 //!
 //! A fact the walk fixed rests in its shape's level while the shape is on the chain, beside the
-//! unit that fixed it; an inline body's facts rest in the record of the unit that ran it once the
-//! body leaves the chain; a callable's or a quote's code's birth facts in its birth unit's; a
-//! body's closing facts in its closing record. A read gathers what the fact waits on, at unit
+//! unit that fixed it, and once it leaves the chain in that unit's record, an inline body's as an
+//! owning body's; a module body's signature in the record of the unit that ran it; a callable's or
+//! a quote's code's birth facts in its birth unit's; a body's closing facts in its closing record. A read gathers what the fact waits on, at unit
 //! grain: nothing for a fact of the unit running, the gathering so far of a unit still running
 //! around it, and a read of the frontier of one that ended, cut to the chain. Only an unknown of a
 //! shape on the chain is gathered, and one the binding binds is closed.
@@ -12,13 +12,14 @@
 use crate::elaborate::schema_of;
 use crate::memory::BumpVec;
 use crate::scope::{
-    Address, BodyShape, Born, Cut, Frontier, InstanceRead, Narrowing, Segment, ShapeKind, Site,
-    Slot, Static, StaticCallable, StaticRegistered, StaticSolution, StaticType, Store, Tree, Typed,
-    UnitFacts, UnitId, Unknown, UseStatics, in_body_of,
+    Address, BodyShape, Born, Cut, Frontier, InstanceRead, Narrowing, Pick, Points, Route, Segment,
+    ShapeKind, Site, Slot, Static, StaticCallable, StaticInstance, StaticRegistered, StaticType,
+    Store, Tree, Typed, UnitFacts, UnitId, Unknown, UseStatics, in_body_of,
 };
 use crate::symbols::{BinderSymbol, Symbol};
 use crate::type_lattice::{DeclaredType, Interval, KType, Parametric, Side, TypeNode, Variable};
 use crate::type_lattice::{bound_above, read_through};
+use crate::values::Retype;
 
 use super::{Bound, Pass, Tag, Wrote};
 
@@ -202,7 +203,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
 
     /// The state of `unit` in this walk, where it ran or absorbed it.
     fn state_of(&self, unit: UnitId) -> Option<(Tag, &super::UnitState<'p, 'o>)> {
-        let tag = self.started.get(unit)?;
+        let tag = *self.started.get(&unit)?;
         Some((tag, &self.units[tag.0 as usize]))
     }
 
@@ -219,8 +220,8 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         facts.born.get(body).map(|(_, born)| *born)
     }
 
-    /// Read `read` off the facts of `segment`, an inline body off the chain, as the unit that ran
-    /// it keeps them, its frontier gathered.
+    /// Read `read` off the facts the unit that ran `segment`, an inline body off the chain, keeps
+    /// of it — its signature — its frontier gathered.
     pub(super) fn inline_facts<R>(
         &self,
         segment: Segment,
@@ -237,8 +238,8 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         facts.typed.get(segment).map(|(_, typed)| read(typed))
     }
 
-    /// Read `read` off the facts of `segment`, an owning body off the chain, that `unit` of it
-    /// fixed.
+    /// Read `read` off the facts of `segment`, a body off the chain, that `unit` of it fixed, its
+    /// frontier gathered.
     fn owner_facts<R>(
         &self,
         segment: Segment,
@@ -256,10 +257,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         slot: Slot,
         read: impl FnOnce(&Typed<'o>) -> R,
     ) -> Option<R> {
-        match self.shape_at(segment).kind() {
-            ShapeKind::Block | ShapeKind::Module => self.inline_facts(segment, read),
-            _ => self.owner_facts(segment, self.shapes.slot_unit(segment, slot), read),
-        }
+        self.owner_facts(segment, self.shapes.slot_unit(segment, slot), read)
     }
 
     /// The static type of the binder at `slot` of the shape at `level`, as the walk has it now,
@@ -276,7 +274,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     }
 
     /// Log that the unit `tag` wrote at `wrote` in the shape at `level`, where that shape is the
-    /// unit's own owning body: its record lays what it wrote. An inline body lays itself whole.
+    /// unit's own body: its record lays what it wrote.
     fn wrote(&mut self, level: usize, tag: Tag, wrote: Wrote) {
         let segment = self.chain[level].shape.segment();
         let state = &mut self.units[tag.0 as usize];
@@ -370,9 +368,9 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         self.wrote(level, tag, Wrote::Use(index));
     }
 
-    /// The closed point each variable of the candidate selected at the use at `site` of the shape
-    /// at `level` solves to, where the walk selected one there.
-    pub(super) fn selection_at(&self, level: usize, site: Site) -> Option<&'o [Option<KType>]> {
+    /// The point each variable of the candidate selected at the use at `site` of the shape at
+    /// `level` solves to, where the walk selected one there.
+    pub(super) fn selection_at(&self, level: usize, site: Site) -> Option<Points<'o>> {
         let at = &self.chain[level];
         if let Some(index) = at.shape.candidate_lists().position(site)
             && let (_, Some(tag)) = at.uses[index]
@@ -383,37 +381,10 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     }
 
     /// Record the points the candidate selected at the use at `site` solves to.
-    pub(super) fn record_selection(
-        &mut self,
-        level: usize,
-        site: Site,
-        points: &'o [Option<KType>],
-    ) {
+    pub(super) fn record_selection(&mut self, level: usize, site: Site, points: Points<'o>) {
         let tag = self.innermost();
         self.chain[level].selections.insert(site, (points, tag));
         self.wrote(level, tag, Wrote::Selection(site));
-    }
-
-    /// Whether the shape at `level` locates the lexical variables of the path at `path_level`'s
-    /// application already.
-    pub(super) fn has_through(&self, level: usize, path_level: usize) -> bool {
-        self.chain[level].throughs.contains_key(&path_level)
-    }
-
-    /// Record where the shape at `level` reads each lexical variable of the path at
-    /// `path_level`'s application.
-    pub(super) fn record_through(
-        &mut self,
-        level: usize,
-        path_level: usize,
-        located: &'o [crate::scope::Variable],
-    ) {
-        let tag = self.innermost();
-        self.chain[level]
-            .throughs
-            .entry(path_level)
-            .or_insert((located, tag));
-        self.wrote(level, tag, Wrote::Through(path_level));
     }
 
     /// Record the content tree of the view the `:|` at `site` builds.
@@ -422,6 +393,14 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         let index = self.chain[level].trees.len();
         self.chain[level].trees.push((site, tree, tag));
         self.wrote(level, tag, Wrote::Tree(index));
+    }
+
+    /// Record the picks of the view the `:|` at `site` builds.
+    pub(super) fn record_picks(&mut self, level: usize, site: Site, picks: &'o [Pick<'o>]) {
+        let tag = self.innermost();
+        let index = self.chain[level].picks.len();
+        self.chain[level].picks.push((site, picks, tag));
+        self.wrote(level, tag, Wrote::Picks(index));
     }
 
     /// Record the content tree of the module binder at `slot` of the shape at `level`.
@@ -474,6 +453,22 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         self.wrote(level, tag, Wrote::Named(index));
     }
 
+    /// Record what the retype at `site` re-stamps at.
+    pub(super) fn record_retype(&mut self, level: usize, site: Site, retype: Retype) {
+        let tag = self.innermost();
+        let index = self.chain[level].retypes.len();
+        self.chain[level].retypes.push((site, retype, tag));
+        self.wrote(level, tag, Wrote::Retype(index));
+    }
+
+    /// Record the route of the tail call whose node sits at `site`.
+    pub(super) fn record_route(&mut self, level: usize, site: Site, route: Route<'o>) {
+        let tag = self.innermost();
+        let index = self.chain[level].routes.len();
+        self.chain[level].routes.push((site, route, tag));
+        self.wrote(level, tag, Wrote::Route(index));
+    }
+
     /// The type the walk fixed for the type expression at `site` of `shape`.
     pub(super) fn type_cell(&self, shape: &BodyShape<'graph>, site: Site) -> StaticType<'o> {
         let segment = shape.segment();
@@ -491,12 +486,9 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             .ok()
             .map(|at| expressions[at].statement);
         let read = |facts: &Typed<'o>| facts.expressions.get(site).map(|(_, typed)| *typed);
-        let typed = match shape.kind() {
-            ShapeKind::Block | ShapeKind::Module => self.inline_facts(segment, read),
-            _ => statement.and_then(|statement| {
-                self.owner_facts(segment, self.shapes.running(segment, statement), read)
-            }),
-        };
+        let typed = statement.and_then(|statement| {
+            self.owner_facts(segment, self.shapes.running(segment, statement), read)
+        });
         typed.flatten().unwrap_or(Static::Unknown)
     }
 
@@ -664,7 +656,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     }
 
     /// The solution the callable body `body` is born instantiated at, where the walk fixed one.
-    pub(super) fn born_instance(&self, body: &BodyShape<'graph>) -> Option<StaticSolution<'o>> {
+    pub(super) fn born_instance(&self, body: &BodyShape<'graph>) -> Option<StaticInstance<'o>> {
         self.born(body.segment())?.instance
     }
 
@@ -672,7 +664,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     pub(super) fn fix_born_instance(
         &mut self,
         body: &'graph BodyShape<'graph>,
-        solution: StaticSolution<'o>,
+        solution: StaticInstance<'o>,
     ) {
         let segment = body.segment();
         let born = self.born(segment).unwrap_or(Born {
@@ -717,13 +709,13 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     pub(super) fn has_closed(&self, body: &BodyShape<'graph>) -> bool {
         let segment = body.segment();
         self.store.close(segment).is_some_and(|(_, frontier)| {
-            self.walked[segment.index() as usize] || !self.store.wakes(frontier)
+            self.walked.contains(&segment) || !self.store.wakes(frontier)
         })
     }
 
     /// Whether the walk has walked `nested`, or need not: a quote's code the shape refused is left.
     pub(super) fn done(&self, nested: &BodyShape<'graph>) -> bool {
-        self.walked[nested.segment().index() as usize]
+        self.walked.contains(&nested.segment())
             || (nested.kind() == ShapeKind::Code && nested.refusal().is_some())
     }
 
@@ -790,8 +782,8 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     /// one a contribution or a solution read from inside it names, homed outside it.
     pub(super) fn composes_type(&self, body: &BodyShape<'graph>, index: usize) -> bool {
         let layout = self.shapes.layout(body.segment());
-        layout.get(index).is_some_and(|(level, _)| {
-            self.composed[body.segment().index() as usize].contains(level)
-        })
+        layout
+            .get(index)
+            .is_some_and(|(level, _)| self.composed.contains(&(body.segment(), *level)))
     }
 }

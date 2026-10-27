@@ -60,6 +60,7 @@ mod handle;
 mod kind;
 mod lattice;
 mod node;
+mod numbering;
 mod operators;
 mod order;
 mod ranking;
@@ -72,6 +73,7 @@ mod sig_relations;
 mod signatures;
 mod stored;
 mod substitute;
+mod term;
 mod tiers;
 mod transfer;
 mod typed;
@@ -107,6 +109,7 @@ pub use shape::{
 };
 pub use sig_relations::{FitsFailure, InstanceFailure};
 pub use substitute::Side;
+pub use term::Term;
 pub use tiers::{Agent, Branch, Frozen, Habitat, Halves, Own, RegionRead, RootBuilder};
 #[cfg(any(test, feature = "counters"))]
 pub use transfer::{ADOPT_ASKED, ADOPT_HITS, ADOPT_LAID, ADOPT_PROBES};

@@ -43,4 +43,18 @@ proptest! {
             );
         }
     }
+    /// The door law over drawn overloads: no rigid fact or point the load left reaches the run's
+    /// door.
+    #[test]
+    fn the_door_never_yields_rigid_at_the_run(program in dispatched()) {
+        crate::scope::RIGID_AT_RUN.with(|count| count.set(0));
+        let rendered = program.render();
+        let _ = run(&rendered.source);
+        prop_assert_eq!(
+            crate::scope::RIGID_AT_RUN.with(std::cell::Cell::get),
+            0,
+            "in\n{}",
+            rendered.source
+        );
+    }
 }

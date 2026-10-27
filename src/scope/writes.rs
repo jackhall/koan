@@ -1,13 +1,13 @@
 //! The **writes** one walk makes into its [`Store`](super::Store): each unit's record and each
-//! owning body's closing record, beside its frontier. Every unit the walk can run is known from the
-//! shape table, so the table is dense: one cell per unit, numbered by segment, then by unit. A write
-//! sets its cell once, a read costs one index, and nothing needs a lock or a map. Each store keeps
-//! one, and lays it into a [`LoadFacts`] once its walk returns. The walk keeps a [`UnitTable`] of
-//! its own over the same cells, to find the state of a unit it ran.
+//! owning body's closing record, beside its frontier. The load writes every unit the shape table
+//! holds, so its [`Writes`] are dense: one cell per unit, numbered by segment, then by unit. A write
+//! sets its cell once, a read costs one index, and nothing needs a lock or a map. A layer writes the
+//! few units its binding wakes, so its [`KeyedWrites`] are a table keyed by unit, sized by what it
+//! wrote. Each store keeps one, and lays it into a [`LoadFacts`] once its walk returns.
 
 use std::cell::Cell;
 
-use crate::memory::{BumpAllocator, BumpVec, Lays};
+use crate::memory::{BumpAllocator, BumpBackedMap, BumpVec, Lays, bump_table};
 
 use super::facts::{Binding, Frontier, UnitId};
 use super::records::{Closing, LoadFacts, UnitFacts};
@@ -20,8 +20,14 @@ type Unit<'o> = (&'o UnitFacts<'o>, Frontier<'o>);
 /// An owning body's closing record beside its frontier.
 type Close<'o> = (&'o Closing<'o>, Frontier<'o>);
 
+/// One walk's writes sorted by id: its units, then its closings.
+type Sorted<'x, 'o> = (
+    BumpVec<'x, (UnitId, Unit<'o>)>,
+    BumpVec<'x, (Segment, Close<'o>)>,
+);
+
 /// One cell per unit of a shape table, numbered by segment, then by unit: set once, read by index.
-pub struct UnitTable<'p, T> {
+struct UnitTable<'p, T> {
     /// Where each segment's units start in `cells`: its entry, then each of its run units.
     starts: &'p [u32],
     cells: &'p [Cell<Option<T>>],
@@ -29,7 +35,7 @@ pub struct UnitTable<'p, T> {
 
 impl<'p, T: Copy> UnitTable<'p, T> {
     /// Every cell empty, over every unit of `shapes`.
-    pub fn new(shapes: &Shapes<'_>, scratch: BumpAllocator<'p>) -> Self {
+    fn new(shapes: &Shapes<'_>, scratch: BumpAllocator<'p>) -> Self {
         let bodies = shapes.bodies();
         let mut next = 0;
         let starts = scratch.alloc_slice_fill_with(bodies.len(), |at| {
@@ -49,17 +55,17 @@ impl<'p, T: Copy> UnitTable<'p, T> {
     }
 
     /// `unit`'s cell, where it is set.
-    pub fn get(&self, unit: UnitId) -> Option<T> {
+    fn get(&self, unit: UnitId) -> Option<T> {
         self.cell(unit).get()
     }
 
     /// Set `unit`'s cell.
-    pub fn set(&self, unit: UnitId, value: T) {
+    fn set(&self, unit: UnitId, value: T) {
         self.cell(unit).set(Some(value));
     }
 
     /// Every set cell, by unit id.
-    pub fn each(&self, shapes: &Shapes<'_>, mut each: impl FnMut(UnitId, T)) {
+    fn each(&self, shapes: &Shapes<'_>, mut each: impl FnMut(UnitId, T)) {
         for (at, shape) in shapes.bodies().iter().enumerate() {
             let start = self.starts[at] as usize;
             let cells = &self.cells[start..=start + shape.units().len()];
@@ -136,5 +142,85 @@ impl<'o, 'p> Writes<'o, 'p> {
             }
         }
         LoadFacts::of_records(lay, scratch, self.shapes, base, binding, &units, &closings)
+    }
+}
+
+/// One walk's writes keyed by unit and by body, in the walk's scratch: a layer's, which writes only
+/// the units its binding wakes. Each table is taken out while a read or a write holds it.
+pub struct KeyedWrites<'o, 'p> {
+    scratch: BumpAllocator<'p>,
+    units: Cell<BumpBackedMap<'p, UnitId, Unit<'o>>>,
+    closings: Cell<BumpBackedMap<'p, Segment, Close<'o>>>,
+}
+
+impl<'o, 'p> KeyedWrites<'o, 'p> {
+    /// No writes yet.
+    pub fn new(scratch: BumpAllocator<'p>) -> Self {
+        KeyedWrites {
+            scratch,
+            units: Cell::new(bump_table(scratch)),
+            closings: Cell::new(bump_table(scratch)),
+        }
+    }
+
+    /// `read` of the unit table, which it holds meanwhile.
+    fn units<R>(&self, read: impl FnOnce(&mut BumpBackedMap<'p, UnitId, Unit<'o>>) -> R) -> R {
+        let mut units = self.units.replace(bump_table(self.scratch));
+        let read = read(&mut units);
+        self.units.set(units);
+        read
+    }
+
+    /// `read` of the closing table, which it holds meanwhile.
+    fn closings<R>(&self, read: impl FnOnce(&mut BumpBackedMap<'p, Segment, Close<'o>>) -> R) -> R {
+        let mut closings = self.closings.replace(bump_table(self.scratch));
+        let read = read(&mut closings);
+        self.closings.set(closings);
+        read
+    }
+
+    /// The record this walk wrote for `unit`, where it wrote one.
+    pub fn unit(&self, unit: UnitId) -> Option<Unit<'o>> {
+        self.units(|units| units.get(&unit).copied())
+    }
+
+    /// The closing record this walk wrote for the owning body `body`, where it wrote one.
+    pub fn closing(&self, body: Segment) -> Option<Close<'o>> {
+        self.closings(|closings| closings.get(&body).copied())
+    }
+
+    pub fn write(&self, unit: UnitId, facts: &'o UnitFacts<'o>, frontier: Frontier<'o>) {
+        let held = self.units(|units| units.insert(unit, (facts, frontier)));
+        debug_assert!(held.is_none(), "a walk runs each unit once");
+    }
+
+    pub fn write_close(&self, body: Segment, closing: &'o Closing<'o>, frontier: Frontier<'o>) {
+        let held = self.closings(|closings| closings.insert(body, (closing, frontier)));
+        debug_assert!(held.is_none(), "a walk closes each body once");
+    }
+
+    /// Every write, sorted by id: the units, then the closings.
+    pub fn sorted<'x>(&self, scratch: BumpAllocator<'x>) -> Sorted<'x, 'o> {
+        let mut units = BumpVec::new_in(scratch);
+        self.units(|held| units.extend(held.iter().map(|(unit, record)| (*unit, *record))));
+        units.sort_unstable_by_key(|(unit, _)| *unit);
+        let mut closings = BumpVec::new_in(scratch);
+        self.closings(|held| closings.extend(held.iter().map(|(body, record)| (*body, *record))));
+        closings.sort_unstable_by_key(|(body, _)| *body);
+        (units, closings)
+    }
+
+    /// Every write, laid through `lay` as the facts of a walk over `shapes` and `base` under
+    /// `binding`, not yet folded.
+    pub fn laid(
+        &self,
+        lay: impl Lays<'o>,
+        scratch: BumpAllocator<'_>,
+        shapes: &'o Shapes<'o>,
+        base: Option<&'o LoadFacts<'o>>,
+        binding: Binding<'o>,
+    ) -> LoadFacts<'o> {
+        let (units, closings) = self.sorted(scratch);
+        LoadFacts::of_records(lay, scratch, shapes, base, binding, &units, &closings)
     }
 }

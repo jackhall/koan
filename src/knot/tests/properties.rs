@@ -19,7 +19,7 @@ use proptest::prelude::*;
 use crate::memory::{CellGraph, Edge, ReleaseAbsorption, Writer, resident};
 use crate::parse::ExpressionPart;
 use crate::scope::{
-    BodyShape, CaptureSlot, CaptureSource, Component, Coordinate, ShapeKind, Site, Slot, Target,
+    BodyShape, CaptureSlot, CaptureSource, Component, Coordinate, ShapeKind, Slot, Target,
 };
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::KType;
@@ -50,7 +50,7 @@ fn rebuilt<'graph>(original: KValue<'graph, '_>, copied: KValue<'graph, '_>) -> 
     match (original, copied) {
         (Value::Knotted(original), Value::Knotted(copied)) => {
             let bodies = match (original.function(), copied.function()) {
-                (Some(original), Some(copied)) => ptr::eq(original.shape(), copied.shape()),
+                (Some(original), Some(copied)) => ptr::eq(original.body(), copied.body()),
                 (None, None) => true,
                 _ => false,
             };
@@ -108,7 +108,7 @@ fn planned_items<'graph>(
         .map(|item| match item {
             ExpressionPart::Identifier(_) | ExpressionPart::Type(_) => {
                 let mention = shape
-                    .mention(Site::of(item))
+                    .mention(shape.site(item))
                     .expect("a name item is a read");
                 match mention.coordinate {
                     Coordinate::Activation {
@@ -120,7 +120,7 @@ fn planned_items<'graph>(
                     coordinate => Item::Read(coordinate),
                 }
             }
-            ExpressionPart::Expression(node) => Site::of_body(node.reference())
+            ExpressionPart::Expression(node) => (shape.site_of_body(node.reference()))
                 .and_then(|site| shape.nested(site))
                 .filter(|body| {
                     body.kind() == ShapeKind::Callable
@@ -138,14 +138,15 @@ fn planned_items<'graph>(
 /// Whether `function`'s closure follows `body`'s capture layout: an edge for each fellow member,
 /// the word `activation` reads for any other builder capture, then the load's type captures.
 fn follows_layout<'graph, 'cell>(
+    fixture: &Fixture<'_, 'graph>,
     function: &crate::knot::Function<'graph, 'cell, Knotted<'graph, 'cell>>,
     body: &BodyShape<'graph>,
     activation: &KActivation<'graph, 'cell>,
 ) {
-    assert!(ptr::eq(function.shape(), body));
+    assert_eq!(function.body().segment, body.segment());
     assert_eq!(
         function.closure().len(),
-        activation.load().capture_count(body)
+        fixture.facts().capture_count(body)
     );
     for (at, spec) in body.captures().iter().enumerate() {
         match (spec.source, function.closure().get(CaptureSlot(at as u32))) {
@@ -205,7 +206,7 @@ fn run<'graph, 'cell>(
     next: &mut f64,
     tied: &mut Vec<Knotted<'graph, 'cell>>,
 ) {
-    let shape = activation.shape();
+    let shape = fixture.shape_of(activation);
     let mut born: Vec<(Slot, Knotted<'graph, 'cell>)> = Vec::new();
     // The function nodes past a knot's members: lambdas a data member holds.
     let mut lambdas_born: Vec<Knotted<'graph, 'cell>> = Vec::new();
@@ -231,9 +232,10 @@ fn run<'graph, 'cell>(
         }
         let outcome = tie(
             writer,
-            activation,
+            &fixture.reading_of(activation),
+            fixture.written(),
             component,
-            crate::values::BuildRef::ROOT,
+            (crate::values::ArenaRef::ROOT, None),
             types,
             fixture.scratch(),
             &mut |_, _| Some(Supplied::Value(Value::Null)),
@@ -318,7 +320,7 @@ fn run<'graph, 'cell>(
                             let node = member.sibling(*edge);
                             let function =
                                 node.function().expect("a lambda item is a function node");
-                            follows_layout(function, body, activation);
+                            follows_layout(fixture, function, body, activation);
                         }
                         (Item::Evaluated, Link::Value(Value::Null)) => {}
                         (_, _) => panic!("a data cell does not follow its planned item"),
@@ -327,7 +329,7 @@ fn run<'graph, 'cell>(
                 continue;
             };
             let function = member.function().expect("a birth is a function node");
-            follows_layout(function, body, activation);
+            follows_layout(fixture, function, body, activation);
         }
         for (slot, member) in &born[born.len() - component.members.len()..] {
             activation
@@ -338,7 +340,7 @@ fn run<'graph, 'cell>(
 
     for (_, nested) in shape.nested_shapes() {
         let nested_activation = match nested.kind() {
-            ShapeKind::Block => KActivation::of_block(writer, nested, activation),
+            ShapeKind::Block => KActivation::of_block(writer, nested, &fixture.facts(), activation),
             ShapeKind::Callable => {
                 let Some(callable) = born
                     .iter()
@@ -347,7 +349,7 @@ fn run<'graph, 'cell>(
                     .find(|member| {
                         member
                             .function()
-                            .is_some_and(|function| ptr::eq(function.shape(), *nested))
+                            .is_some_and(|function| function.body().segment == nested.segment())
                     })
                 else {
                     // A function value no tie births: the door's.
@@ -357,7 +359,7 @@ fn run<'graph, 'cell>(
                 KActivation::of_callable(
                     writer,
                     nested,
-                    activation.load(),
+                    &fixture.facts(),
                     *callable,
                     function.closure(),
                     activation.builtins(),
@@ -426,7 +428,12 @@ proptest! {
                     let writer = context.writer();
                     let activation = resident(
                         writer,
-                        KActivation::of_program(writer, lines.shape, lines.load, fixture.builtins()),
+                        KActivation::of_program(
+                            writer,
+                            lines.shape,
+                            &fixture.facts(),
+                            fixture.builtins(),
+                        ),
                     );
                     let mut tied = Vec::new();
                     run(fixture, writer, types, activation, &mut 0.0, &mut tied);

@@ -10,27 +10,39 @@
 //!
 //! **No step names a place that is not its own.** No method takes or returns a handle, and none is
 //! a carrier door: a step holds values at its own brands and nothing else, and says what it needs —
-//! a child, a wait, a successor, a result — beside the hints that place it. A build cell reaches a
-//! step only as an opaque [`BuildRef`], which the scheduler alone opens.
+//! a child, a wait, a successor, a result — beside the hints that place it. What it keeps of a
+//! value at the value's true home is an opaque, brand-free [`Kept`](super::Kept), which only the
+//! veneer redeems: a finish hands such a value on from there ([`Step::finish`]). An arena node
+//! reaches a step only as an opaque [`ArenaRef`], which the scheduler alone opens; the region a decision
+//! memo rests in, as an opaque [`MemoHome`] minted from a cell's own provenance, which names an
+//! ancestor of every cell it is handed to.
 //!
 //! Every arm of an `Action` carries no region borrow. `enter` quantifies a step's three brands per
 //! call, so a step's return type can name none of them: what crosses back out is a dormant carrier,
 //! a function pointer or a hint, and nothing else.
 
+use smallvec::SmallVec;
+
 use crate::knot::{KValue, KValueFamily};
+use crate::memory::Projects;
 use crate::memory::{
     Active, CellHandle, CrossedOperand, DeliverError, Delivered, Dormant, Erased, Header, Operand,
-    Projects as _, Ready, ReattachableOverBoth, Receipt, Stale, StepContext, Writer,
+    Ready, ReattachableOverBoth, Receipt, Stale, StepContext, Writer,
 };
+use crate::scheduler::arena::BuildArena;
 use crate::scheduler::continuation::{
-    BirthAt, Born, Continuation, ContinuationFamily, NativeStep, Provenance, Report, Rested,
-    StateAt, StepBundle, Work,
+    Arrival, BirthAt, Born, Continuation, ContinuationFamily, NativeStep, Provenance, Report,
+    Rested, StateAt, StepBundle, Work,
 };
 use crate::scheduler::delivery::KDelivery;
-use crate::scheduler::seek::{Lending, Seek};
-use crate::scope::RegionHeader;
+use crate::scheduler::kept::{Held, Kept, KeptPart};
+use crate::scheduler::seek::{Compose, Lending, Replayed, Requested, Seek};
+use crate::scope::{
+    Code, ComposedRoot, ComposedSyntax, Entry, EntryFamily, Facts, HalfHeader, MemoFamily, MemoKey,
+    RegionHeader,
+};
 use crate::type_lattice::Halves;
-use crate::values::{BuildRef, Chain, Half, TypeTiers, Types};
+use crate::values::{ArenaRef, Chain, ContentDigest, Half, TypeTiers, Types};
 
 /// The raw context a step runs in: every door `cellgraph` hands one, over the bundle's families.
 /// Only a [`Step`] and the drain hold one.
@@ -57,8 +69,26 @@ type ScratchAt<'graph, 'here, 'scratch, B> =
 /// registered its run and stored both its successor and its scratch state.
 pub struct Action<'graph, B: StepBundle<'graph>>(Kind<'graph, B>);
 
+/// Where a tail's successor is born, and how its birth crosses.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub(super) enum Tailing {
+    /// Under this cell, as its tree child: a frame handing its last statement to an evaluation,
+    /// which views the frame's activation from below it.
+    HandOff,
+    /// Beside this cell, under its loop cell or else the parent its provenance names: a hop into
+    /// a call's frame, beside how much its birth threads ([`StepBundle::threads`]).
+    Hop { threads: Option<usize> },
+    /// Beside this cell, at its own placement: the same work born again elsewhere.
+    Rebirth,
+}
+
 /// What an [`Action`] turned out to be, read by the drain and by nothing else. Anything in
 /// `scheduler` can name a `Kind`; only this file can wrap one into an `Action`.
+#[expect(
+    clippy::large_enum_variant,
+    reason = "a tail's request carries what a miss settles and the request a frame lays its level \
+              from; boxing it would allocate per tail call, and an action lives one step"
+)]
 pub(super) enum Kind<'graph, B: StepBundle<'graph>> {
     /// Finished. The drain releases the cell, and when `completed` — the step's delivery filled the
     /// last slot of its consumer's receipt run — pushes that consumer, which is the only way a
@@ -68,19 +98,15 @@ pub(super) enum Kind<'graph, B: StepBundle<'graph>> {
     /// Parked on the receipt run the step registered, for the children it asked for. The drain
     /// pushes their requests and leaves this cell alone until the run completes.
     Park,
-    /// A tail call: the drain pushes the successor, and releases this cell once the successor's
-    /// first step has run. The successor inherits this cell's provenance verbatim, so the `Use` its
-    /// request carries is never read.
-    Tail(Asked<'graph, B>),
+    /// A tail call: the drain pushes the successor, born as [`Tailing`] says, and releases this
+    /// cell once the successor's first step has run. The successor inherits this cell's provenance
+    /// verbatim, so the `Use` its request carries is never read.
+    Tail(Asked<'graph, B>, Tailing),
     /// A root work's end that leaves a birth at rest in its home, for the graph's owner to resume a
     /// later root work from. The drain releases the cell and hands the carrier back out of `run`.
     Left(Dormant<'graph, B::Birth>),
     /// The step could not proceed. The drain abandons the work.
     Failed(StepError),
-    /// A specialization's step has entered itself in its parent's table and stays alive with no
-    /// continuation, reporting to nobody. Only the drain's own synchronous entry of a
-    /// specialization sees it.
-    Quiesced,
 }
 
 impl<'graph, B: StepBundle<'graph>> Action<'graph, B> {
@@ -205,8 +231,25 @@ pub struct Step<
     context: &'a mut Context<'graph, 'step, 'here, 'scratch, 'lent, B>,
     /// The type tiers of the graph this step runs over, which every chain it builds reads first.
     tiers: TypeTiers<'graph>,
+    /// What the cell's door reads: the settlement it runs under, if any, over the load.
+    facts: Facts<'a>,
     provenance: &'a Provenance,
+    /// The arena node the cell runs under, which a park hands its successor.
+    arena: ArenaRef,
+    /// The syntax digest of the composed code the cell's chain rests on, if not the load.
+    composed: Option<ContentDigest>,
+    /// What the drain told the cell's first step about how it placed it.
+    arrival: Arrival,
+    /// The request a call's asker handed the drain, which the frame's first step lays a level
+    /// from.
+    sought: Option<Box<Requested<'graph>>>,
+    /// The books the cell's arena node is kept in, which the step reads liveness from.
+    books: &'a BuildArena<'graph>,
     spawns: &'a mut Spawns<'graph, B>,
+    /// The carrier of the birth this cell woke from, at the birth's own home, where the birth was
+    /// pinned in: what [`born_part`](Self::born_part) projects. `None` past the first step, for a
+    /// root work, and where the birth was copied.
+    born: Option<Ready<'graph, 'step, B::Birth>>,
     state: S::Of<StateAt<'graph, 'here, B>>,
     scratch: X::Of<Option<ScratchAt<'graph, 'here, 'scratch, B>>>,
 }
@@ -242,21 +285,38 @@ where
     'lent: 'scratch,
 {
     /// The step the drain hands a cell's continuation, over its graph's type tiers, the provenance
-    /// it read off that same continuation, the buffer it cleared for this step, and both slots the
-    /// cell parked in.
+    /// and arena node it read off that same continuation, the buffer it cleared for this step, the
+    /// carrier of a birth it woke pinned, and both slots the cell parked in.
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn new(
         context: &'a mut Context<'graph, 'step, 'here, 'scratch, 'lent, B>,
         tiers: TypeTiers<'graph>,
+        facts: Facts<'a>,
         provenance: &'a Provenance,
+        (arena, composed, arrival, sought): (
+            ArenaRef,
+            Option<ContentDigest>,
+            Arrival,
+            Option<Box<Requested<'graph>>>,
+        ),
+        books: &'a BuildArena<'graph>,
         spawns: &'a mut Spawns<'graph, B>,
+        born: Option<Ready<'graph, 'step, B::Birth>>,
         state: StateAt<'graph, 'here, B>,
         scratch: Option<ScratchAt<'graph, 'here, 'scratch, B>>,
     ) -> Self {
         Step {
             context,
             tiers,
+            facts,
             provenance,
+            arena,
+            composed,
+            arrival,
+            sought,
+            books,
             spawns,
+            born,
             state,
             scratch,
         }
@@ -283,16 +343,30 @@ where
         let Step {
             context,
             tiers,
+            facts,
             provenance,
+            arena,
+            composed,
+            arrival,
+            sought,
+            books,
             spawns,
+            born,
             state,
             scratch,
         } = self;
         let step = Step {
             context,
             tiers,
+            facts,
             provenance,
+            arena,
+            composed,
+            arrival,
+            sought,
+            books,
             spawns,
+            born,
             state: (),
             scratch,
         };
@@ -320,16 +394,30 @@ where
         let Step {
             context,
             tiers,
+            facts,
             provenance,
+            arena,
+            composed,
+            arrival,
+            sought,
+            books,
             spawns,
+            born,
             state,
             scratch,
         } = self;
         let step = Step {
             context,
             tiers,
+            facts,
             provenance,
+            arena,
+            composed,
+            arrival,
+            sought,
+            books,
             spawns,
+            born,
             state,
             scratch: (),
         };
@@ -394,20 +482,71 @@ where
         self.context.hold_scratch()
     }
 
-    /// Whether this cell borrows a specialization: a region rather than a scratch, which in a run
-    /// cell is a call's frame the drain found one for, or an evaluation or block copying its lend.
-    pub fn borrows_specialization(&self) -> bool {
-        self.context.lent_region().is_some()
+    /// The type tiers of the graph this step runs over, for a test that builds a seek's image.
+    #[cfg(test)]
+    pub(crate) fn tiers(&self) -> TypeTiers<'graph> {
+        self.tiers
     }
 
-    /// The agent chain, the warm tier of a cell that borrows a specialization: the frozen load,
-    /// then the agent tier, which it writes and which outlives every hop born under the
-    /// specialization. What an invariant site's types are adopted into, so the next hop finds them.
-    /// Paired to the region writer; `None` for a cell that borrows no specialization, whose own
-    /// scratch is its warm tier.
-    pub fn agent_types(&self) -> Option<Chain<'graph, 'here, 'graph, 'step>> {
-        self.context.lent_region()?;
-        Some(self.tiers.resting())
+    /// What this step reads shapes and facts through, at the step's own borrow: the code and the
+    /// facts of the base the cell's chain rests on, beneath the settlement it runs under. Neither
+    /// can be kept past the step, so what a cell parks names a segment, a site or a digest
+    /// instead.
+    ///
+    /// ```compile_fail
+    /// use koan::memory::resident;
+    /// use koan::program::KBundle;
+    /// use koan::scheduler::{Action, Step};
+    /// use koan::scope::Facts;
+    ///
+    /// fn keep<'graph, 'here>(
+    ///     step: Step<'_, 'graph, '_, 'here, '_, '_, KBundle>,
+    /// ) -> &'here Facts<'here> {
+    ///     let (_, facts) = step.door();
+    ///     resident(step.writer(), facts)
+    /// }
+    /// ```
+    pub fn door(&self) -> (Code<'a>, Facts<'a>) {
+        (Code::of(self.facts.shapes()), self.facts)
+    }
+
+    /// The syntax digest of the code composed at run time whose composition this cell's chain
+    /// rests on: `None` for a chain on the load.
+    pub fn composed(&self) -> Option<ContentDigest> {
+        self.composed
+    }
+
+    /// At a call's first step, the composition a module its settlement binds was born of, by
+    /// syntax digest, which the miss found gone: the step [rebuilds](Self::rebuild) it.
+    pub fn wanting(&self) -> Option<ContentDigest> {
+        match self.arrival {
+            Arrival::Wanting(digest) => Some(digest),
+            Arrival::Placed | Arrival::Replayed => None,
+        }
+    }
+
+    /// Whether this cell was born by a replay of its callee's stamp, which it does not replay
+    /// again.
+    pub fn replayed(&self) -> bool {
+        self.arrival == Arrival::Replayed
+    }
+
+    /// Whether `at` names a live arena node: what a call reads before it replays a stamp. The
+    /// root always does.
+    pub fn arena_live(&self, at: ArenaRef) -> bool {
+        self.books.is_live(at)
+    }
+
+    /// At a call's first step, the request its asker handed the drain, where the frame lays its
+    /// own level; `None` past the first take and for every other cell.
+    pub fn sought(&mut self) -> Option<Box<Requested<'graph>>> {
+        self.sought.take()
+    }
+
+    /// Whether this cell runs under a settlement: a call's frame the drain found or built one
+    /// for, or a cell its asker's runs under.
+    pub fn under_settlement(&self) -> bool {
+        self.arena != ArenaRef::ROOT
     }
 
     /// Ask for one child, and take back the slot of this step's run it will report to. The drain
@@ -419,22 +558,32 @@ where
         self.spawn_lending(request, Lending::Parent)
     }
 
-    /// [`spawn`](Self::spawn) a call's frame, born borrowing the specialization `seek` finds: the
-    /// drain looks it up, or builds it, before the child is born. With no `seek`, or none found,
-    /// the frame is born cold: a `Fresh` frame borrowing this cell's scratch, a `Shares` one
-    /// borrowing nothing, so it never reads this cell's specialization as its own.
+    /// [`spawn`](Self::spawn) a call's frame, born under the arena node `seek` finds: the drain
+    /// looks its settlement up, or builds it, before the child is born, so it never runs under
+    /// this cell's settlement unless the seek names it.
     pub fn spawn_seeking(
         &mut self,
         request: Request<'graph, 'here, B>,
-        seek: Option<Seek<'graph, B>>,
+        seek: Seek<'graph>,
     ) -> Slot {
         self.spawn_lending(request, Lending::Call(seek))
+    }
+
+    /// [`spawn`](Self::spawn) a frame over code composed at run time whose syntax digest is
+    /// `digest`, born under its composition where the drain finds it live, and under the root
+    /// otherwise, where its first step [bounces](Self::bounce).
+    pub fn spawn_composing(
+        &mut self,
+        request: Request<'graph, 'here, B>,
+        digest: ContentDigest,
+    ) -> Slot {
+        self.spawn_lending(request, Lending::Compose(Compose::Find(digest)))
     }
 
     fn spawn_lending(
         &mut self,
         request: Request<'graph, 'here, B>,
-        lending: Lending<'graph, B>,
+        lending: Lending<'graph>,
     ) -> Slot {
         let state = self.rest(request.work.state);
         self.spawns.push(Asked {
@@ -446,12 +595,130 @@ where
         })
     }
 
-    /// The build cell this cell's frame runs under: the specialization whose region it borrows,
-    /// where it was born borrowing one, and `fallback` otherwise.
-    pub fn build_ref(&self, fallback: BuildRef) -> BuildRef {
-        (self.context.lent_region())
-            .and_then(|(_, header)| header.get()?.home())
-            .map_or(fallback, |home| BuildRef::of(home.me))
+    /// Where this cell's decision memo rests: the region its result is built in, which outlives
+    /// every hop of its tail chain.
+    pub fn memo_home(&self) -> MemoHome {
+        MemoHome(self.provenance.home)
+    }
+
+    /// The entry `key` finds in the decision memo resting in `home`, pinned at `'here`, every type
+    /// its decisions name made to resolve in this cell's chain. A home holding no memo yet is
+    /// first seeded with `inherit`'s, by pointer: the memo of the cell that asked for this one.
+    /// `None` where neither holds the entry, a home has died, or the verdict would copy.
+    pub fn memo_entry(
+        &mut self,
+        home: MemoHome,
+        inherit: Option<MemoHome>,
+        key: MemoKey<'_>,
+    ) -> Option<&'here Entry<'here>> {
+        let tiers = self.tiers;
+        let memo = self.memo_read(home.0)?;
+        let seeded = match (inherit, self.context.read(&memo).value()) {
+            (Some(inherit), None) if inherit != home => {
+                let from = self.memo_read(inherit.0)?;
+                let operand = [Operand {
+                    carrier: &from,
+                    copy_bytes: usize::MAX,
+                }];
+                // Seeded by pointer: the inheriting home lies under it, so the pin is free.
+                let seeded = self.context.alloc_into::<MemoFamily, MemoFamily>(
+                    home.0,
+                    &operand,
+                    |writer, header, views| {
+                        let half = header.get_or_lay(|| RegionHeader::lay(writer));
+                        if let (
+                            None,
+                            CrossedOperand::Pinned {
+                                view: Some(memo),
+                                home,
+                                ..
+                            },
+                        ) = (half.memo(), &views[0])
+                        {
+                            let types = tiers.chain(Halves::alone(Half::of(writer, header)));
+                            home.read(|header, _| {
+                                (header.into_value().branch())
+                                    .map(|branch| types.link_or_merge(branch))
+                            });
+                            half.set_memo(memo, false);
+                        }
+                        Active::new(half.memo())
+                    },
+                );
+                seeded.ok()?
+            }
+            _ => memo,
+        };
+        self.context.alloc_here(
+            &[Operand {
+                carrier: &seeded,
+                copy_bytes: usize::MAX,
+            }],
+            |writer, header, views| {
+                let CrossedOperand::Pinned { view, home, .. } = &views[0] else {
+                    return None;
+                };
+                let entry = (*view)?.find(key)?;
+                let types = tiers.chain(Halves::alone(Half::of(writer, header)));
+                home.read(|header, _| {
+                    let branch = header.into_value().branch();
+                    entry.each_type(&mut |kt| types.adopt(branch, kt));
+                });
+                Some(entry)
+            },
+        )
+    }
+
+    /// Lay what `lay` builds in the decision memo resting in `home`, handed the home's writer, its
+    /// header and its chain over the graph's type tiers, and pin the entry it laid back at
+    /// `'here`. `None` where `lay` laid none, the home has died, or the verdict would copy.
+    pub fn memo_lay(
+        &mut self,
+        home: MemoHome,
+        lay: impl for<'cell> FnOnce(
+            Writer<'cell, '_>,
+            &'cell HalfHeader<'cell>,
+            &Types<'cell, '_>,
+        ) -> Option<&'cell Entry<'cell>>,
+    ) -> Option<&'here Entry<'here>> {
+        let tiers = self.tiers;
+        let laid = self
+            .context
+            .alloc_into::<EntryFamily, EntryFamily>(home.0, &[], |writer, header, _| {
+                let half = header.get_or_lay(|| RegionHeader::lay(writer));
+                let types = tiers.chain(Halves::alone(Half::of(writer, header)));
+                Active::new(lay(writer, half, &types))
+            })
+            .ok()?;
+        self.context.alloc_here(
+            &[Operand {
+                carrier: &laid,
+                copy_bytes: usize::MAX,
+            }],
+            |_, _, views| match &views[0] {
+                CrossedOperand::Pinned { view, .. } => *view,
+                _ => None,
+            },
+        )
+    }
+
+    /// The memo resting in `home`, as a carrier homed there.
+    fn memo_read(&mut self, home: CellHandle) -> Option<Ready<'graph, 'step, MemoFamily>> {
+        (self.context)
+            .alloc_into::<MemoFamily, MemoFamily>(home, &[], |_, header, _| {
+                Active::new(header.get().and_then(HalfHeader::memo))
+            })
+            .ok()
+    }
+
+    /// The arena node this cell runs under, where it is a settlement, and `fallback` under the
+    /// root.
+    pub fn arena_ref(&self, fallback: ArenaRef) -> ArenaRef {
+        if self.under_settlement() {
+            self.arena
+        } else {
+            fallback
+        }
     }
 
     /// The results of the children this cell parked on, in the order it asked for them: a scratch
@@ -482,9 +749,15 @@ where
         let count = context.receipt_count().unwrap_or(0);
         (0..count).map(move |slot| match context.receipt(slot) {
             Ok(Receipt::Value(value)) => Ok(Received::Scratch(value)),
-            Ok(Receipt::Carrier(Ok(carrier))) => Ok(Received::Here(crate::values::cross_here(
-                context, &carrier, tiers, check,
-            ))),
+            Ok(Receipt::Carrier(Ok(carrier))) => {
+                let (value, pinned) = crate::values::cross_here(context, &carrier, tiers, check);
+                // A pinned value is the carrier's own storage, so the carrier is where it rests.
+                let kept = pinned.then(|| KeptPart {
+                    kept: Kept(context.keep(carrier)),
+                    path: &[],
+                });
+                Ok(Received::Here(Held { value, kept }))
+            }
             _ => Err(StepError::Unredeemable),
         })
     }
@@ -517,6 +790,9 @@ where
         self.context.store_successor(Continuation {
             step,
             provenance: *self.provenance,
+            arena: self.arena,
+            arrival: Arrival::Placed,
+            sought: None,
             state: Rested::Awake(state),
         });
         if let Some(scratch) = scratch {
@@ -525,80 +801,142 @@ where
         Action(Kind::Park)
     }
 
-    /// Hand this cell's work to a successor at `placement`, which inherits its provenance verbatim.
-    /// The successor's birth is handed over at `'here` and put to rest here, as a spawn's is.
-    pub fn tail(self, placement: Placement, work: Work<'graph, 'here, B>) -> Action<'graph, B> {
-        self.tail_lending(placement, work, Lending::Parent)
+    /// Hand this frame's last statement to a successor born under this cell, as its tree child:
+    /// the evaluation, which views the frame's activation from below it, so the view pins free
+    /// and pledges nothing. It inherits this cell's provenance verbatim, so its value goes where
+    /// the frame's would have, and its own successor is born beside this cell. The birth is handed
+    /// over at `'here` and put to rest here, as a spawn's is.
+    pub fn hand_off(self, work: Work<'graph, 'here, B>) -> Action<'graph, B> {
+        self.tail_lending(Placement::Fresh, work, Lending::Parent, Tailing::HandOff)
     }
 
-    /// [`tail`](Self::tail) into a call's frame, born borrowing the specialization `seek` finds,
-    /// or cold, as [`spawn_seeking`](Self::spawn_seeking) asks for a child.
+    /// Hand this cell's work to a successor born beside it, under the parent its provenance
+    /// names, in a region of its own, which inherits its provenance verbatim. The successor's birth
+    /// is handed over at `'here` and put to rest here, as a spawn's is.
+    pub fn tail(self, work: Work<'graph, 'here, B>) -> Action<'graph, B> {
+        let threads = B::threads(&work.state);
+        self.tail_lending(
+            Placement::Fresh,
+            work,
+            Lending::Parent,
+            Tailing::Hop { threads },
+        )
+    }
+
+    /// [`tail`](Self::tail) into a call's frame, born under the arena node `seek` finds, as
+    /// [`spawn_seeking`](Self::spawn_seeking) asks for a child.
     pub fn tail_seeking(
         self,
-        placement: Placement,
         work: Work<'graph, 'here, B>,
-        seek: Option<Seek<'graph, B>>,
+        seek: Seek<'graph>,
     ) -> Action<'graph, B> {
-        self.tail_lending(placement, work, Lending::Call(seek))
+        let threads = B::threads(&work.state);
+        self.tail_lending(
+            Placement::Fresh,
+            work,
+            Lending::Call(seek),
+            Tailing::Hop { threads },
+        )
     }
 
     /// [`tail`](Self::tail) into a frame of the same callee as the frame running under `build`,
-    /// born borrowing that same specialization with no lookup — sound only for a callee whose name
-    /// does not escape, so that every hop into it is a tail edge the load read; or cold, where that
-    /// specialization is no longer live.
-    pub fn tail_under(
+    /// born under that same settlement with no lookup — sound only for a callee whose name does
+    /// not escape, so that every hop into it is a tail edge the load read; or cold, where that
+    /// settlement is no longer live.
+    pub fn tail_under(self, work: Work<'graph, 'here, B>, build: ArenaRef) -> Action<'graph, B> {
+        let threads = B::threads(&work.state);
+        self.tail_lending(
+            Placement::Fresh,
+            work,
+            Lending::Under(build),
+            Tailing::Hop { threads },
+        )
+    }
+
+    /// Hand this cell's work, untouched, to a successor born under the composition of `root`'s
+    /// code: the first step of a cell running composed code whose composition was not live, and
+    /// so was born under the root. The syntax is copied here, into storage the drain builds the
+    /// composition in, once; the successor takes this cell's placement.
+    pub fn bounce(self, work: Work<'graph, 'here, B>, root: ComposedRoot<'_>) -> Action<'graph, B> {
+        debug_assert_ne!(
+            self.composed,
+            Some(root.digest),
+            "a bounce leaves another base"
+        );
+        let placement = self.placement();
+        let compose = Compose::Owned(ComposedSyntax::of(root));
+        self.tail_lending(placement, work, Lending::Compose(compose), Tailing::Rebirth)
+    }
+
+    /// Hand this cell's work, untouched, to a successor born under the arena node `seek` finds,
+    /// once the composition of `root`'s code is built over a copy of its syntax: the first step of
+    /// a call whose settlement binds a module of that code, which the miss found gone
+    /// ([`wanting`](Self::wanting)). The successor takes this cell's placement.
+    pub fn rebuild(
         self,
-        placement: Placement,
         work: Work<'graph, 'here, B>,
-        build: BuildRef,
+        seek: Seek<'graph>,
+        root: ComposedRoot<'_>,
     ) -> Action<'graph, B> {
-        self.tail_lending(placement, work, Lending::Under(build))
+        debug_assert_eq!(
+            self.wanting(),
+            Some(root.digest),
+            "a rebuild is what the miss wanted"
+        );
+        let placement = self.placement();
+        let syntax = ComposedSyntax::of(root);
+        self.tail_lending(
+            placement,
+            work,
+            Lending::Pinning(seek, syntax),
+            Tailing::Rebirth,
+        )
+    }
+
+    /// Hand this cell's work, untouched, to a successor born warm: the first step of a call whose
+    /// callee's arena node is gone, which replays its stamp. Each of `levels`, outermost first, is
+    /// found under the one before, or settled there, from this cell's own arena node — the root,
+    /// or the composition the callee was born of — and the last is the frame's own seek, under
+    /// the last level. The successor takes this cell's placement.
+    pub fn replay(
+        self,
+        work: Work<'graph, 'here, B>,
+        levels: impl IntoIterator<Item = Replayed<'graph>>,
+    ) -> Action<'graph, B> {
+        debug_assert!(!self.replayed(), "a replayed cell replays nothing");
+        let placement = self.placement();
+        let levels = levels.into_iter().collect();
+        self.tail_lending(placement, work, Lending::Replay(levels), Tailing::Rebirth)
+    }
+
+    /// The placement this cell was born at: a tree cell lent its parent's scratch, or a tenant.
+    fn placement(&self) -> Placement {
+        match self.context.lent_scratch() {
+            Some(_) => Placement::Fresh,
+            None => Placement::Shares,
+        }
     }
 
     fn tail_lending(
         mut self,
         placement: Placement,
         work: Work<'graph, 'here, B>,
-        lending: Lending<'graph, B>,
+        lending: Lending<'graph>,
+        tailing: Tailing,
     ) -> Action<'graph, B> {
         if !self.spawns.is_empty() {
             return self.failed(StepError::Unparked);
         }
         let state = self.rest(work.state);
-        Action(Kind::Tail(Asked {
+        let asked = Asked {
             placement,
             // Never read: a successor reports under its predecessor's provenance.
             use_: Use::Reads,
             step: work.step,
             state,
             lending,
-        }))
-    }
-
-    /// End a specialization's step: lay this cell's own header and its table, as long as the
-    /// nested bound its parent's table records. The drain enters the cell in its parent's table
-    /// and sets its home once the step returns. The cell stays alive with no continuation.
-    /// Refused for a cell that asked for children, one that is no tree cell, one that borrows no
-    /// region, and one whose lent region holds no table.
-    pub fn enlist(self) -> Action<'graph, B> {
-        if !self.spawns.is_empty() {
-            return self.failed(StepError::Unparked);
-        }
-        let (CellHandle::Tree(_), Some((_, lent_header))) =
-            (self.context.cell(), self.context.lent_region())
-        else {
-            return self.failed(StepError::Refused);
         };
-        let Some(nested) = (lent_header.get())
-            .and_then(|header| header.table())
-            .map(|table| table.nested())
-        else {
-            return self.failed(StepError::Refused);
-        };
-        let half = Half::of(self.writer(), self.header());
-        let header = (self.header()).get_or_lay(|| RegionHeader::lay(self.writer()));
-        header.lay_table(half, nested, nested);
-        Action(Kind::Quiesced)
+        Action(Kind::Tail(asked, tailing))
     }
 
     /// Finish with a result built by `build`, which takes no operands, and deliver it where the
@@ -655,32 +993,33 @@ where
     }
 
     /// Finish with a result built by `build` over `operands`, values this step holds, in this
-    /// cell's home, and deliver it as a carrier. Each operand reaches the build pinned or copied as
-    /// the verdict ruled, at the home's brand, its types made to resolve there over the graph's
-    /// type tiers; the build is handed the home's chain beside its writer. Every `Use` takes this
-    /// door: a build over operands never goes through scratch, where what it embeds could not
-    /// follow.
-    pub fn finish_in_home<const N: usize>(
+    /// cell's home, and deliver it as a carrier. Each operand crosses from its kept part where it
+    /// has one, and is lifted from this cell where it has none; each reaches the build pinned or
+    /// copied as the verdict ruled, at the home's brand, restamped at the type it is held at, its
+    /// types made to resolve there over the graph's type tiers; the build is handed the home's
+    /// chain beside its writer. Every `Use` takes this door: a build over operands never goes
+    /// through scratch, where what it embeds could not follow.
+    pub fn finish_in_home(
         self,
-        operands: [KValue<'graph, 'here>; N],
+        operands: &[Held<'graph, 'here>],
         build: impl for<'their> FnOnce(
             Writer<'their, '_>,
             &Types<'their, '_>,
-            [KValue<'graph, 'their>; N],
+            &[KValue<'graph, 'their>],
             &'their &'graph (),
         ) -> Active<'graph, 'their, KValueFamily>,
     ) -> Action<'graph, B> {
         self.finish_in_home_against(operands, None, build)
     }
 
-    fn finish_in_home_against<const N: usize>(
-        self,
-        operands: [KValue<'graph, 'here>; N],
+    fn finish_in_home_against(
+        mut self,
+        operands: &[Held<'graph, 'here>],
         check: Option<&Chain<'_, '_, '_, '_>>,
         build: impl for<'their> FnOnce(
             Writer<'their, '_>,
             &Types<'their, '_>,
-            [KValue<'graph, 'their>; N],
+            &[KValue<'graph, 'their>],
             &'their &'graph (),
         ) -> Active<'graph, 'their, KValueFamily>,
     ) -> Action<'graph, B> {
@@ -688,42 +1027,170 @@ where
             Ok(report) => report,
             Err(error) => return self.failed(error),
         };
+        let carriers = (operands.iter())
+            .map(|held| self.held_carrier(held))
+            .collect();
+        self.placed(report, operands, carriers, check, build)
+    }
+
+    /// Build what `build` builds over `operands`, crossing from `carriers`, one each, in this
+    /// cell's home, and file it in the slot `report` names: [`finish_in_home`](Self::finish_in_home)
+    /// once each operand's carrier is in hand.
+    fn placed(
+        self,
+        report: Report,
+        operands: &[Held<'graph, 'here>],
+        carriers: SmallVec<[Ready<'graph, 'step, KValueFamily>; 4]>,
+        check: Option<&Chain<'_, '_, '_, '_>>,
+        build: impl for<'their> FnOnce(
+            Writer<'their, '_>,
+            &Types<'their, '_>,
+            &[KValue<'graph, 'their>],
+            &'their &'graph (),
+        ) -> Active<'graph, 'their, KValueFamily>,
+    ) -> Action<'graph, B> {
         let tiers = self.tiers;
-        let weights = operands.map(|value| value.weight().bytes());
-        let lifted = operands.map(|value| self.context.lift::<KValueFamily>(value));
-        let crossing: [Operand<'graph, '_, 'step, KValueFamily>; N] =
-            std::array::from_fn(|index| Operand {
-                carrier: &lifted[index],
-                copy_bytes: weights[index],
-            });
+        // A type a restamp carries that only this cell's chain resolves is adopted from it.
+        let own = self.types();
+        let held_at: SmallVec<[_; 4]> = operands.iter().map(|held| held.value.ktype()).collect();
+        // A loop cell copies whatever a hop homes, at any price, so no hop is pledged into it.
+        let threads = self.provenance.threads;
+        let crossing: SmallVec<[_; 4]> = (carriers.iter().zip(operands))
+            .map(|(carrier, held)| Operand {
+                carrier,
+                copy_bytes: if threads {
+                    0
+                } else {
+                    held.value.weight().bytes()
+                },
+            })
+            .collect();
         let placed = self.context.alloc_into::<KValueFamily, KValueFamily>(
             self.provenance.home,
             &crossing,
             |writer, header, views| {
                 let types = tiers.chain(Halves::alone(Half::of(writer, header)));
-                let values = std::array::from_fn(|index| {
-                    crate::values::cross_view_against(writer, &types, &views[index], check)
-                });
-                build(writer, &types, values, &&())
+                let values: SmallVec<[_; 4]> = (views.iter().zip(&held_at))
+                    .map(|(view, held_at)| {
+                        let value = crate::values::cross_view_against(writer, &types, view, check);
+                        if value.ktype() == *held_at {
+                            return value;
+                        }
+                        if !types.resolves(*held_at) && own.resolves(*held_at) {
+                            types.adopt_from(&own, *held_at);
+                        }
+                        value.restamped_at(writer, *held_at, &types)
+                    })
+                    .collect();
+                build(writer, &types, &values, &&())
             },
         );
         self.file(report, placed)
     }
 
-    /// Finish with `value`, crossed into this cell's home at the verdict's price, its types made
-    /// to resolve there over the graph's type tiers, and deliver it as a carrier.
-    pub fn finish(self, value: KValue<'graph, 'here>) -> Action<'graph, B> {
-        self.finish_in_home([value], |_, _, [value], _| Active::new(value))
+    /// Finish with `value`, delivered as a carrier. A value held with a kept part whose home is
+    /// this cell's home or above it is handed on unchanged, at that home; any other crosses into
+    /// this cell's home at the verdict's price — from its kept part where it has one — restamped
+    /// there at the type it is held at, its types made to resolve there over the graph's type
+    /// tiers.
+    pub fn finish(self, value: impl Into<Held<'graph, 'here>>) -> Action<'graph, B> {
+        self.finish_against(value.into(), None)
     }
 
     /// [`finish`](Self::finish), a pinned value's debug check reading `check`: the chain of a
     /// caching body finishing a value that stays inside it, whose types lie in its scratch tiers.
     pub fn finish_with(
         self,
-        value: KValue<'graph, 'here>,
+        value: impl Into<Held<'graph, 'here>>,
         check: &Chain<'_, '_, '_, '_>,
     ) -> Action<'graph, B> {
-        self.finish_in_home_against([value], Some(check), |_, _, [value], _| Active::new(value))
+        self.finish_against(value.into(), Some(check))
+    }
+
+    fn finish_against(
+        mut self,
+        held: Held<'graph, 'here>,
+        check: Option<&Chain<'_, '_, '_, '_>>,
+    ) -> Action<'graph, B> {
+        let Some(carrier) = held
+            .kept
+            .and_then(|part| self.kept_carrier(part, &held.value))
+        else {
+            return self
+                .finish_in_home_against(&[held], check, |_, _, values, _| Active::new(values[0]));
+        };
+        let report = match self.report() {
+            Ok(report) => report,
+            Err(error) => return self.failed(error),
+        };
+        if self.context.read(&carrier).value().ktype() == held.value.ktype() {
+            match self.context.pass_into(self.provenance.home, &carrier) {
+                Ok(Some(passed)) => {
+                    #[cfg(test)]
+                    PASSED.with(|count| count.set(count.get() + 1));
+                    return self.file(report, Ok(passed));
+                }
+                Ok(None) => {}
+                Err(stale) => return self.file(report, Err(stale)),
+            }
+        }
+        let carriers = SmallVec::from_elem(carrier, 1);
+        self.placed(report, &[held], carriers, check, |_, _, values, _| {
+            Active::new(values[0])
+        })
+    }
+
+    /// Keep the part `part` picks out of the birth this cell woke from, at the birth's own home:
+    /// what a frame keeps of an argument it was handed. `None` where the birth was not pinned in —
+    /// a root work's, or one a hop copied — past the first step, and where `part` picks nothing.
+    pub fn born_part(
+        &mut self,
+        part: impl for<'c> FnOnce(
+            Active<'graph, 'c, B::Birth>,
+            &'c &'graph (),
+        ) -> Option<Active<'graph, 'c, KValueFamily>>,
+    ) -> Option<Kept<'graph>>
+    where
+        Erased<'graph, B::Birth>: Copy,
+    {
+        let born = self.born.as_ref()?;
+        let carrier = self.context.project::<B::Birth, KValueFamily>(born, part)?;
+        Some(Kept(self.context.keep(carrier)))
+    }
+
+    /// Keep `value`, which this cell holds at its own brand, here: what a cell keeps of a value it
+    /// was handed by a copy, or built.
+    pub fn kept_here(&mut self, value: KValue<'graph, 'here>) -> Kept<'graph> {
+        let carrier = self.context.lift::<KValueFamily>(value);
+        Kept(self.context.keep(carrier))
+    }
+
+    /// The carrier a held value crosses from: its kept part's, where it has one that redeems, and
+    /// otherwise the value lifted from this cell.
+    fn held_carrier(&mut self, held: &Held<'graph, 'here>) -> Ready<'graph, 'step, KValueFamily> {
+        match held
+            .kept
+            .and_then(|part| self.kept_carrier(part, &held.value))
+        {
+            Some(carrier) => carrier,
+            None => self.context.lift::<KValueFamily>(held.value),
+        }
+    }
+
+    /// `part`'s kept value redeemed into this step and projected along its path: the carrier of
+    /// `value`'s storage at its true home. `None` where it does not redeem or the path reaches
+    /// nothing.
+    fn kept_carrier(
+        &mut self,
+        part: KeptPart<'graph, '_>,
+        value: &KValue<'graph, 'here>,
+    ) -> Option<Ready<'graph, 'step, KValueFamily>> {
+        let carrier = part.redeemed(self.context)?;
+        debug_assert!(
+            self.context.read(&carrier).value().same_storage(value),
+            "a held value is the storage its kept part reaches, or a restamp of it"
+        );
+        Some(carrier)
     }
 
     /// End a root work by leaving `birth` at rest in its home — the cell it was born under — for
@@ -812,6 +1279,12 @@ where
     }
 }
 
+#[cfg(test)]
+thread_local! {
+    /// How many finishes handed a kept value on unchanged, at its own home.
+    pub(crate) static PASSED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// Where a spawned cell lives, from the one-bit hint its spawner supplies.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Placement {
@@ -834,6 +1307,9 @@ pub enum Use {
     Keeps,
     /// Embed it in the spawner's own result: the home is the spawner's own home.
     Forwards,
+    /// Keep it in the loop: the home is the spawner's loop cell, else the spawner — a value a
+    /// frame's tail call hands on that the frame built, so it outlives the hop.
+    Threads,
 }
 
 /// What a step asks the drain for: a [`Work`] and two hints. Never a place and never a destination.
@@ -849,6 +1325,12 @@ where
     /// What the cell runs, and what it is born holding, at the spawner's `'here`.
     pub work: Work<'graph, 'here, B>,
 }
+
+/// Where a decision memo rests: the region a cell's result is built in. Opaque and brand-free, so
+/// a birth may carry one; minted only by [`Step::memo_home`], from a cell's own provenance, and
+/// handed down to the cells it asks for, so it names an ancestor of each.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct MemoHome(CellHandle);
 
 /// One slot of the run a step is about to park on, handed back by [`Step::spawn`].
 ///
@@ -876,8 +1358,9 @@ where
     /// A scratch fill: built in this cell's scratch habitat by a child asked with
     /// [`Use::Reads`].
     Scratch(KValue<'graph, 'scratch>),
-    /// A carrier fill, redeemed and crossed to this cell's own brand.
-    Here(KValue<'graph, 'here>),
+    /// A carrier fill, redeemed and crossed to this cell's own brand, beside the carrier it came
+    /// in, kept, where it was pinned.
+    Here(Held<'graph, 'here>),
 }
 
 /// A request at rest: what the drain's buffer holds and a tail carries, the state already put to
@@ -888,7 +1371,7 @@ pub(super) struct Asked<'graph, B: StepBundle<'graph>> {
     pub step: NativeStep<'graph, B>,
     pub state: Dormant<'graph, B::Birth>,
     /// What the cell borrows, which the drain resolves at its creation.
-    pub lending: Lending<'graph, B>,
+    pub lending: Lending<'graph>,
 }
 
 /// The drain's own buffer of requests, reached by a step only through [`Step::spawn`] and emptied

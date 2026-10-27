@@ -16,6 +16,7 @@
 use proptest::prelude::*;
 use proptest::strategy::ValueTree;
 
+use super::RawSchemes;
 use super::raw::RawRegistry;
 use super::raw::ranking::{Verdict, admit_by_class, judge_by_class, solving_slots};
 use super::raw::shape::{keys_equal, shape_classes, shape_of};
@@ -28,7 +29,7 @@ use super::raw::unify::{admits, most_determined_first, ties};
 use super::raw::walk::{visit, visit_free_quantified};
 use super::raw::{lattice, order};
 use crate::bump::{Bump, BumpAllocator, BumpVec};
-use crate::symbols::TypeSymbol;
+use crate::symbols::{BinderSymbol, TypeSymbol};
 use crate::types::chain::TypeChain;
 use crate::types::handle::{DeclaredType, Handle, KType, Parametric, TypeHandle, wrap};
 use crate::types::kind::KKind;
@@ -50,7 +51,7 @@ use super::generators::{
     arb_arguments, arb_bounded_head_chain, arb_chain, arb_concrete, arb_fits_chain,
     arb_function_type, arb_instance_chain, arb_lexical, arb_opaque, arb_ordered_pair,
     arb_over_head_parameter, arb_own_instance, arb_shape_below, arb_shape_pair, arb_shape_type,
-    arb_signature, arb_signature_type, arb_wanted_instance, under_with,
+    arb_signature, arb_signature_type, arb_wanted_instance, under_with, with_scratch,
 };
 
 thread_local! {
@@ -606,6 +607,91 @@ proptest! {
     }
 }
 
+/// A symmetric tie settles without a search: eight variables under one bound, met only in one
+/// union, take one branch rather than 8!, and a rebuild finds the same handle.
+#[test]
+fn a_symmetric_group_numbers_without_a_search() {
+    let world = world();
+    let types = &world.types;
+    let names: Vec<TypeSymbol> = (0..8)
+        .map(|index| {
+            TypeSymbol::declared(&format!("Same{index}"), &world.symbols).expect("a Type token")
+        })
+        .collect();
+    let bounds = vec![KType::NUMBER; names.len()];
+    let build = |indices: &mut dyn Iterator<Item = usize>| {
+        with_scratch(|scratch| {
+            let vars: Vec<Handle> = indices
+                .map(|index| types.quantified(index, KType::NUMBER).raw())
+                .collect();
+            let union = types.union_of(scratch, &vars);
+            let params = [(world.binders[0], union)];
+            (types.function_scheme_raw(scratch, &names, &bounds, &params, KType::NULL.raw())).0
+        })
+    };
+    assert_eq!(build(&mut (0..8)), build(&mut (0..8).rev()));
+}
+
+/// A function scheme's draw whose variables occur only inside unions: each variable's bound (`Number`
+/// or `Str`), and each position — the parameters, then the return — as a union of members, each a
+/// form over one or two variables. Beside it, a permutation of the declaration order.
+type SetOnly = (Vec<bool>, Vec<Vec<(u8, usize, usize)>>);
+
+fn set_only_scheme() -> BoxedStrategy<(SetOnly, Vec<usize>)> {
+    (2..=3usize)
+        .prop_flat_map(|arity| {
+            let member = (0..5u8, 0..arity, 0..arity);
+            let position = prop::collection::vec(member, 2..=4);
+            (
+                (
+                    prop::collection::vec(any::<bool>(), arity),
+                    prop::collection::vec(position, 2..=3),
+                ),
+                Just((0..arity).collect::<Vec<_>>()).prop_shuffle(),
+            )
+        })
+        .boxed()
+}
+
+/// [`set_only_scheme`]'s draw built with variable `i` declared at `permutation[i]`: a member is
+/// the variable itself (form 0), its list (1), `FN :{x :i} -> j` (2), `DICT OF i j` (3) or
+/// `:{x :i, y :j}` (4).
+fn set_only_build(world: &World, (bounds, positions): &SetOnly, permutation: &[usize]) -> Handle {
+    let types = &world.types;
+    let bound = |number: bool| if number { KType::NUMBER } else { KType::STR };
+    let vars: Vec<Handle> = (permutation.iter().zip(bounds))
+        .map(|(at, number)| types.quantified(*at, bound(*number)).raw())
+        .collect();
+    let mut declared = vec![KType::NUMBER; bounds.len()];
+    for (at, number) in permutation.iter().zip(bounds) {
+        declared[*at] = bound(*number);
+    }
+    let (x, y) = (world.binders[0], world.binders[1]);
+    with_scratch(|scratch| {
+        let mut built: Vec<Handle> = (positions.iter())
+            .map(|members| {
+                let members: Vec<Handle> = (members.iter())
+                    .map(|(form, i, j)| match form {
+                        0 => vars[*i],
+                        1 => types.list(vars[*i]),
+                        2 => types.function_type(scratch, &[(x, vars[*i])], vars[*j]),
+                        3 => types.dict(vars[*i], vars[*j]),
+                        _ => types.record(scratch, &[(x, vars[*i]), (y, vars[*j])]),
+                    })
+                    .collect();
+                types.union_of(scratch, &members)
+            })
+            .collect();
+        let ret = built.pop().expect("the return is the last position");
+        let params: Vec<(BinderSymbol, Handle)> =
+            world.binders.iter().copied().zip(built).collect();
+        let names = &world.type_names[..bounds.len()];
+        types
+            .function_scheme_raw(scratch, names, &declared, &params, ret)
+            .0
+    })
+}
+
 /// A drawn concrete type `b` beside the type [`under_with`] builds under it, holding a fresh
 /// carrier; a draw no move reaches is redrawn.
 fn widened_with_a_carrier() -> BoxedStrategy<(Handle, Handle)> {
@@ -876,6 +962,19 @@ proptest! {
             _ => unreachable!("a scheme's body is a function type or a shape"),
         };
         prop_assert_eq!(again.handle, a);
+    }
+
+    /// The same law where the group's variables meet only inside unions, so no ordered position
+    /// numbers them: declaring the variables in any order builds one handle.
+    #[test]
+    fn a_scheme_is_one_handle_whatever_order_declares_it((draw, permutation) in set_only_scheme()) {
+        let world = world();
+        let arity = permutation.len();
+        let unpermuted: Vec<usize> = (0..arity).collect();
+        prop_assert_eq!(
+            set_only_build(&world, &draw, &unpermuted),
+            set_only_build(&world, &draw, &permutation),
+        );
     }
 
     /// The function twin of [`a_shape_stores_the_bounds_its_occurrences_carry`].
@@ -1832,11 +1931,16 @@ proptest! {
         kept.extend_from_slice(&overloads);
         canonical_overloads(&types, scratch, &mut kept);
         // Canonical by subsumption, the same rule `union_of` applies to a union's members: no
-        // survivor lies below another, so no member promises only what a sibling already does.
+        // concrete survivor lies below another, so no member promises only what a sibling already
+        // does. The order is a partial order over concrete types alone, so a parametric member is
+        // kept and reduces nothing.
+        let concrete = |overload: &DeclaredType<Parametric>| types.enter(overload.raw()).is_concrete();
         for (index, one) in kept.iter().enumerate() {
             for (peer, other) in kept.iter().enumerate() {
                 prop_assert!(
-                    index == peer || !order::is_subtype_of(&types, scratch, other.raw(), one.raw()),
+                    index == peer
+                        || !(concrete(one) && concrete(other))
+                        || !order::is_subtype_of(&types, scratch, other.raw(), one.raw()),
                     "a canonical overload set kept a member below another",
                 );
             }
@@ -1898,6 +2002,23 @@ proptest! {
         let there = beside(&world, &region);
         there.adopt(world.branch(), kt);
         prop_assert!(reads_alike(&world, &there, kt));
+    }
+
+    /// A term mints back its type: exported from where it was built for a reader over the same
+    /// root, then minted into that reader, every generated type reads as it did, and the term
+    /// copied nothing the reader already resolved.
+    #[test]
+    fn a_minted_term_reads_as_its_source(kt in one()) {
+        let world = world();
+        let region = Bump::new();
+        let there = beside(&world, &region);
+        let (lay, scratch) = (Bump::new(), Bump::new());
+        let term = world.types.export(kt, &there, &lay, &scratch);
+        prop_assert_eq!(term.is_empty(), kt.raw().in_root());
+        there.mint(&term);
+        prop_assert!(reads_alike(&world, &there, kt));
+        // A reader that holds the type already is handed nothing to mint.
+        prop_assert!(world.types.export(kt, &there, &lay, &scratch).is_empty());
     }
 
     /// A merge enters every node of its source: each then resolves without a link.

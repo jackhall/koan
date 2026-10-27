@@ -385,7 +385,7 @@ fn a_later_slot_reads_an_earlier_lexical_solution_at_its_ends() {
     );
     assert_eq!(
         run(&source),
-        "paired\nerror: no overload of `PAIR _ WITH _` admits (Number, Str)"
+        "paired\nerror: <test>:2:50: no overload of `PAIR _ WITH _` admits (Number, Str)"
     );
 }
 

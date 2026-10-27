@@ -249,3 +249,76 @@ fn a_part_shared_many_times_over_is_digested_once_per_demand() {
         })
     });
 }
+
+mod syntax {
+    //! The syntax digest keys code exactly as code equality compares it.
+
+    use proptest::prelude::*;
+
+    use crate::memory::program_storage;
+    use crate::parse::generated_syntax::{PartShape, build, part_shape, parts_run};
+    use crate::symbols::SymbolInterner;
+    use crate::values::digest::syntax_digest;
+    use crate::values::equality::expression_equal;
+
+    use super::super::with_fixture;
+
+    /// Two syntaxes: equal, one part apart, or drawn apart.
+    fn pair() -> impl Strategy<Value = (Vec<PartShape>, Vec<PartShape>)> {
+        (
+            parts_run(),
+            parts_run(),
+            part_shape(),
+            any::<prop::sample::Index>(),
+            0..3u8,
+        )
+            .prop_map(|(left, other, part, at, mode)| match mode {
+                0 => (left.clone(), left),
+                1 if !left.is_empty() => {
+                    let mut right = left.clone();
+                    right[at.index(left.len())] = part;
+                    (left, right)
+                }
+                _ => (left, other),
+            })
+    }
+
+    proptest! {
+        // Each case builds its syntax in fresh program storage.
+        #![proptest_config(ProptestConfig::with_cases(64))]
+
+        /// Two syntaxes are equal as code exactly where their syntax digests are equal.
+        #[test]
+        fn syntax_is_equal_as_code_exactly_where_its_digest_is((left, right) in pair()) {
+            let program = program_storage();
+            let brand = program.brand();
+            let symbols = SymbolInterner::new();
+            let (left, right) = (build(brand, &left, &symbols), build(brand, &right, &symbols));
+            prop_assert_eq!(
+                expression_equal(&left, &right),
+                syntax_digest(&left) == syntax_digest(&right)
+            );
+        }
+
+        /// A syntax copied into other storage is equal to it as code, and digests alike.
+        #[test]
+        fn a_copied_syntax_is_its_source_as_code(shape in parts_run()) {
+            let (program, other) = (program_storage(), program_storage());
+            let symbols = SymbolInterner::new();
+            let source = build(program.brand(), &shape, &symbols);
+            let copy = crate::parse::copied(other.brand(), &source);
+            prop_assert!(expression_equal(&source, &copy));
+            prop_assert_eq!(syntax_digest(&source), syntax_digest(&copy));
+        }
+    }
+
+    /// `-0` and `0` are one literal to code equality, so they are one to the digest.
+    #[test]
+    fn a_negative_zero_literal_digests_as_zero() {
+        with_fixture(|fixture| {
+            let (zero, negative) = (fixture.parse("PRINT 0"), fixture.parse("PRINT -0"));
+            assert!(expression_equal(&zero, &negative));
+            assert_eq!(syntax_digest(&zero), syntax_digest(&negative));
+        });
+    }
+}

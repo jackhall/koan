@@ -19,6 +19,7 @@ use crate::type_lattice::KType;
 use super::records::{Closing, UnitFacts};
 use super::shape::{CaptureSlot, Segment, Slot, UnitIndex};
 use super::tree::Tree;
+use super::typed::PathEntry;
 
 /// Where a body's activation holds an unknown: a slot, or — for a name a quote's code is run
 /// with — a capture.
@@ -268,7 +269,7 @@ impl<'a> Binding<'a> {
 /// Where one walk keeps its records, and what it binds: the walk reads and writes
 /// every unit's record through it, and never names where they rest
 /// ([the store](../build/README.md#the-store)). The load's store keeps the load's
-/// records; a test's store layers a resumption's over them.
+/// records; a layer keeps a resumption's over the facts it extends.
 pub trait Store<'o> {
     /// Where every record a unit keeps is laid.
     type Lay: Lays<'o> + Copy;
@@ -286,6 +287,12 @@ pub trait Store<'o> {
 
     /// Whether a record whose frontier is `frontier` re-runs under this store's binding.
     fn wakes(&self, frontier: Frontier<'_>) -> bool;
+
+    /// Hand `each` every path entry of the chain `root` roots that the records this store extends
+    /// hold, an entry perhaps more than once: a path keeps its level across the walks of one chain.
+    fn base_paths(&self, root: Segment, each: &mut dyn FnMut(PathEntry<'o>)) {
+        let _ = (root, each);
+    }
 
     fn write(&self, unit: UnitId, facts: &'o UnitFacts<'o>, frontier: Frontier<'o>);
 

@@ -159,4 +159,46 @@ Each `Succ` branch prints `tick` and recurses on `it` — the wrapped predecesso
 — until `COUNTDOWN` reaches `Zero`. The recursive call is in tail position, so
 this runs in constant stack space no matter how deep the count.
 
+A loop written this way also keeps very little memory while it runs. What it
+holds on to is what its tail call hands to the next round: the arguments of
+that call, and whatever those values reach. Everything else a round builds —
+its bindings, the values it only inspected, the results of the helpers it
+called along the way — is dropped when the next round starts. A loop that only
+walks a structure therefore runs in the same memory however long the structure
+is, and a loop that builds an accumulator holds the accumulator and little
+more:
+
+```koan
+UNION Nat = #{Zero: Null, Succ: Nat}
+EXPR #(COUNTDOWN n :Nat) -> Str = #(
+  MATCH (n) OVER Nat -> :Str WITH #{
+    Zero: (PRINT "liftoff")
+    Succ: ((PRINT "tick") (COUNTDOWN it))
+  }
+)
+EXPR #(DOUBLE n :Nat acc :Nat) -> Nat = #(
+  MATCH (n) OVER Nat -> :Nat WITH #{
+    Zero: (acc)
+    Succ: (DOUBLE it (Nat.Succ (Nat.Succ acc)))
+  }
+)
+LET zero = (Nat.Zero null)
+LET two = (Nat.Succ (Nat.Succ zero))
+COUNTDOWN (DOUBLE two zero)
+```
+
+```text
+tick
+tick
+tick
+tick
+liftoff
+```
+
+Each round of `DOUBLE` hands on `it`, the part of the count still to walk, and
+the accumulator, two `Succ` layers deeper than the one it was handed. Those are
+what the loop keeps: the count it walks, which already existed, and the
+accumulator, which grows with the answer it is building. Nothing else from
+earlier rounds survives.
+
 Next: [Records](07-records.md).

@@ -23,14 +23,17 @@ mod families;
 mod lambda;
 mod properties;
 
-use crate::elaborate::type_declarations;
+use std::cell::{Cell, RefCell};
+
 use crate::memory::{
     Bump, BumpAllocator, CellGraph, NoDelivery, NoScratch, Prices, ProgramBrand, ReleaseAbsorption,
     StepContext, Verdict, Writer, program_storage, reattachable, resident,
 };
 use crate::parse::{BodyKind, Role};
 use crate::parse::{ExpressionPart, KExpression, parse};
-use crate::scope::{BodyShape, Builtins, Component, LoadFacts, Position, Slot};
+use crate::scope::{
+    BodyShape, Builtins, Code, Component, Facts, LoadFacts, Position, Slot, Static, Written,
+};
 use crate::symbols::{BinderSymbol, SymbolInterner, TypeSymbol, ValueSymbol};
 use crate::type_lattice::KType;
 use crate::values::tests::TestHeader;
@@ -38,7 +41,7 @@ use crate::values::tests::TestTypes;
 use crate::values::{Chain, Circular, Knotted as _, Link, TypeValue, Types, Value};
 
 use super::module::body_activation;
-use super::{KActivation, KValue, Knotted, Supplied, quote, tie};
+use super::{KActivation, KReading, KValue, Knotted, Supplied, quote, tie};
 
 /// A continuation family for a graph whose cells only store.
 pub(crate) struct Step;
@@ -62,6 +65,11 @@ pub(crate) struct Fixture<'f, 'graph> {
     /// The builtin table every program is shaped and activated over, laid in program storage by
     /// the load, as a program's is.
     loaded: &'graph Builtins<'graph, Knotted<'graph, 'graph>>,
+    /// The facts of the program the fixture last parsed or ran, which a reading reads through.
+    load: Cell<Option<&'graph LoadFacts<'graph>>>,
+    /// The facts of each program the fixture ran, by the address of its activation: a test may
+    /// run several programs and read each one's activation after the last ran.
+    runs: RefCell<Vec<(usize, &'graph LoadFacts<'graph>)>>,
 }
 
 /// A program the load shaped: its parsed lines, and the shape [`Fixture::parse`] built over them
@@ -99,6 +107,8 @@ pub(crate) fn with_fixture<R>(test: impl for<'f, 'graph> FnOnce(&Fixture<'f, 'gr
         symbols: &symbols,
         scratch: &scratch,
         loaded,
+        load: Cell::new(None),
+        runs: RefCell::new(Vec::new()),
     })
 }
 
@@ -107,10 +117,16 @@ impl<'graph> Fixture<'_, 'graph> {
         self.scratch
     }
 
-    /// Every top-level line of `source`, parsed into program storage and shaped through the
-    /// load's chain over the fixture's builtins — the load's work, done before any cell's chain
-    /// freezes the root.
+    /// Every top-level line of `source`, parsed into program storage, shaped through the load's
+    /// chain over the fixture's builtins and walked — the load's work, done before any cell's
+    /// chain freezes the root.
     pub fn parse(&self, source: &str) -> Parsed<'graph> {
+        self.parsed(source)
+            .unwrap_or_else(|refused| panic!("`{source}` loads: {refused}"))
+    }
+
+    /// [`parse`](Self::parse), handing back the load's refusal, rendered.
+    pub fn parsed(&self, source: &str) -> Result<Parsed<'graph>, String> {
         let lines = parse(self.program, self.symbols, source)
             .unwrap_or_else(|error| panic!("`{source}` parses: {error:?}"));
         let shapes = crate::scope::Shapes::of_program(
@@ -121,19 +137,23 @@ impl<'graph> Fixture<'_, 'graph> {
             self.symbols,
             self.scratch,
         )
-        .unwrap_or_else(|error| {
-            panic!(
-                "the program shapes: {}",
-                error.display(self.symbols, self.types)
-            )
-        });
+        .map_err(|error| error.display(self.symbols, self.types).to_string())?;
         let writer = self.program.writer();
-        let load = resident(writer, LoadFacts::unwalked(writer, shapes));
-        Parsed {
+        // The load's walk, as a program's: every fact a tie reads is the walk's.
+        let load = crate::tests::walked(
+            shapes,
+            self.loaded,
+            self.types,
+            writer,
+            self.scratch,
+            self.symbols,
+        )?;
+        self.load.set(Some(load));
+        Ok(Parsed {
             lines,
             shape: shapes.root(),
             load,
-        }
+        })
     }
 
     /// Run `step` in one cell of a graph built under `verdict`.
@@ -156,6 +176,51 @@ impl<'graph> Fixture<'_, 'graph> {
     /// The builtin table every program is shaped and activated over.
     pub fn builtins(&self) -> &'graph Builtins<'graph, Knotted<'graph, 'graph>> {
         self.loaded
+    }
+
+    /// The facts of the program the fixture last parsed or ran.
+    fn load(&self) -> &'graph LoadFacts<'graph> {
+        self.load.get().expect("a test parses its program first")
+    }
+
+    /// The facts of the program `activation` runs: its own where the fixture ran it, else the
+    /// program the fixture last parsed or ran.
+    fn load_of(&self, activation: &KActivation<'graph, '_>) -> &'graph LoadFacts<'graph> {
+        let address = std::ptr::from_ref(activation).addr();
+        (self.runs.borrow().iter())
+            .find(|(at, _)| *at == address)
+            .map_or_else(|| self.load(), |(_, load)| *load)
+    }
+
+    /// What a step reads facts through, over the program the fixture last parsed.
+    pub fn facts(&self) -> Facts<'graph> {
+        Facts::of(self.load())
+    }
+
+    /// What a step reads shapes through, over the program the fixture last parsed.
+    pub fn code(&self) -> Code<'graph> {
+        Code::of(self.load().shapes())
+    }
+
+    /// The written code of the program the fixture last parsed.
+    pub fn written(&self) -> Written<'graph, 'graph> {
+        Written::of(self.load())
+    }
+
+    /// `activation` read through the door of the program it runs.
+    pub fn reading_of<'cell>(
+        &self,
+        activation: &KActivation<'graph, 'cell>,
+    ) -> KReading<'cell, 'graph, 'cell> {
+        let load = self.load_of(activation);
+        (activation.view()).reading(&Code::of(load.shapes()), Facts::of(load))
+    }
+
+    /// The shape whose slots `activation` binds.
+    pub fn shape_of(&self, activation: &KActivation<'graph, '_>) -> &'graph BodyShape<'graph> {
+        self.load_of(activation)
+            .shapes()
+            .shape_at(activation.segment())
     }
 
     pub fn name(&self, text: &str) -> BinderSymbol {
@@ -186,13 +251,16 @@ impl<'graph> Fixture<'_, 'graph> {
         leave: &[&str],
     ) -> &'cell KActivation<'graph, 'cell> {
         let shape = parsed.shape;
+        self.load.set(Some(parsed.load));
         let activation = resident(
             writer,
-            KActivation::of_program(writer, shape, parsed.load, builtins),
+            KActivation::of_program(writer, shape, &Facts::of(parsed.load), builtins),
         );
+        let address = std::ptr::from_ref(activation).addr();
+        self.runs.borrow_mut().push((address, parsed.load));
         let left: Vec<BinderSymbol> = leave.iter().map(|name| self.name(name)).collect();
         // A reader takes a body's statements from its shape, never from the parse: the shape owns
-        // them rewritten, and every site it records is an address inside them.
+        // them rewritten, and every site it records names a part inside them.
         let statements: Vec<&KExpression<'graph>> = shape.body().iter().collect();
         for component in in_unit_order(shape) {
             let names = component.members.iter().map(|slot| shape.slot_name(*slot));
@@ -217,16 +285,22 @@ impl<'graph> Fixture<'_, 'graph> {
         statements: &[&KExpression<'graph>],
         component: &Component<'graph>,
     ) {
-        let shape = activation.shape();
+        let shape = self.shape_of(activation);
         let declares_types = component
             .members
             .iter()
             .any(|slot| matches!(shape.slot_name(*slot), BinderSymbol::Type(_)));
         if declares_types {
-            let handles = type_declarations(component, activation, types, self.scratch)
-                .expect("the component declares its types");
+            // The handles the load fixed, as a program binds them.
+            let reading = self.reading_of(activation);
+            let handles = (component.members.iter()).map(|slot| {
+                match reading.facts().declared_type(types, shape, *slot) {
+                    Static::Closed(handle) => handle,
+                    _ => panic!("the load fixed every declaration a fixture runs"),
+                }
+            });
             for (slot, handle) in component.members.iter().zip(handles) {
-                let value = Value::Type(TypeValue::new(writer, *handle, types));
+                let value = Value::Type(TypeValue::new(writer, handle, types));
                 activation.bind(*slot, value).expect("an empty slot binds");
             }
             return;
@@ -246,9 +320,10 @@ impl<'graph> Fixture<'_, 'graph> {
         if component.cyclic || births {
             let knot = tie(
                 writer,
-                activation,
+                &self.reading_of(activation),
+                self.written(),
                 component,
-                crate::values::BuildRef::ROOT,
+                (crate::values::ArenaRef::ROOT, None),
                 types,
                 self.scratch,
                 &mut |_, _| None,
@@ -272,7 +347,8 @@ impl<'graph> Fixture<'_, 'graph> {
             let value = match rhs.value {
                 ExpressionPart::QuotedExpression(_) => Some(Value::Knotted(quote(
                     writer,
-                    activation,
+                    &self.reading_of(activation),
+                    self.written(),
                     &rhs.value,
                     types,
                     self.scratch,
@@ -296,7 +372,7 @@ impl<'graph> Fixture<'_, 'graph> {
         component: &Component<'graph>,
         slot: Slot,
     ) {
-        let shape = activation.shape();
+        let shape = self.shape_of(activation);
         let statement = self
             .statement_of(shape, slot)
             .expect("a module binder binds a statement");
@@ -305,16 +381,17 @@ impl<'graph> Fixture<'_, 'graph> {
             body_node.body_statements().map(|(node, _)| node).collect();
         let body = resident(
             writer,
-            body_activation(writer, activation, slot, self.scratch),
+            body_activation(writer, &self.reading_of(activation), slot, self.scratch),
         );
-        for inner_component in in_unit_order(body.shape()) {
+        for inner_component in in_unit_order(self.shape_of(body)) {
             self.bring_in(writer, types, body, &inner, inner_component);
         }
         let knot = tie(
             writer,
-            activation,
+            &self.reading_of(activation),
+            self.written(),
             component,
-            crate::values::BuildRef::ROOT,
+            (crate::values::ArenaRef::ROOT, None),
             types,
             self.scratch,
             &mut |_, _| Some(Supplied::Body(body)),
@@ -403,7 +480,7 @@ pub(crate) fn bound<'graph, 'cell>(
     activation: &KActivation<'graph, 'cell>,
     name: &str,
 ) -> KValue<'graph, 'cell> {
-    let shape = activation.shape();
+    let shape = fixture.shape_of(activation);
     let (slot, _) = shape.slot(fixture.name(name)).expect("a declared binder");
     activation.read(crate::scope::Coordinate::Activation {
         hops: 0,
@@ -441,7 +518,7 @@ pub(crate) fn registered<'graph, 'cell>(
     activation: &KActivation<'graph, 'cell>,
     name: &str,
 ) -> Knotted<'graph, 'cell> {
-    let shape = activation.shape();
+    let shape = fixture.shape_of(activation);
     let (slot, _) = shape.slot(fixture.name(name)).expect("a declared binder");
     let body = shape.births(slot).expect("the binder births a body");
     let registration = shape
@@ -470,8 +547,8 @@ pub(crate) fn at_key<'graph, 'cell>(
     text: &str,
 ) -> Knotted<'graph, 'cell> {
     let key = fixture.symbols.key(text).expect("a key");
-    let registration = activation
-        .shape()
+    let registration = fixture
+        .shape_of(activation)
         .registrations()
         .iter()
         .find(|registration| registration.key == key)

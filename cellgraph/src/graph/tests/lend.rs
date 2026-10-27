@@ -86,11 +86,6 @@ pub(super) fn disposed(graph: &Graph, cell: TreeHandle) -> bool {
     ) || graph.cells.trees.occupant(cell.index()) != cell
 }
 
-/// The scratch bytes `cell`'s bump holds.
-fn scratch_in_use(graph: &Graph, cell: SlabHandle) -> usize {
-    graph.regions.scratch_in_use(CellHome::Slab(cell.slot()))
-}
-
 #[test]
 fn a_lenders_count_drops_at_its_borrowers_disposal_not_its_release() {
     let mut graph = new_graph(1);
@@ -142,7 +137,7 @@ fn a_dead_borrowers_scratch_holds_its_lenders_scratch_until_its_disposal() {
     graph.release_tree(parent).unwrap();
     graph.enter(root, |_| ()).unwrap();
     assert!(
-        scratch_in_use(&graph, root) > 0,
+        graph.scratch_used(root).unwrap() > 0,
         "the dead parent still holds the root's reset off"
     );
     let read = graph
@@ -155,7 +150,7 @@ fn a_dead_borrowers_scratch_holds_its_lenders_scratch_until_its_disposal() {
 
     graph.release_tree(child).unwrap();
     graph.enter(root, |_| ()).unwrap();
-    assert_eq!(scratch_in_use(&graph, root), 0);
+    assert_eq!(graph.scratch_used(root).unwrap(), 0);
 
     graph.release(root, ReleaseAbsorption::IntoHolder).unwrap();
     assert!(graph.is_empty());

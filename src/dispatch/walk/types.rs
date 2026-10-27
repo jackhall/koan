@@ -5,7 +5,7 @@
 //!
 //! A registration closed and unquantified is checked against the builtin overloads at its key
 //! where it is typed ([`overlap`](super::super::check::overlap)), outside a quote's code, whose
-//! `EVAL` checks its own.
+//! closing record keeps its first overlap for the `EVAL` running it to report.
 
 use crate::elaborate::{self, Signatures, Tools, TypeContext};
 use crate::memory::{BumpVec, collect};

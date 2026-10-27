@@ -47,7 +47,6 @@ const FIELDS: &[&str] = &[
     "instances",
     "named",
     "trees",
-    "throughs",
     "minting",
     "signature",
 ];
@@ -89,7 +88,7 @@ const READERS: &[&str] = &[
     "src/dispatch/evaluate.rs",
     "src/dispatch/builtins.rs",
     "src/program/body.rs",
-    "src/program/specialize.rs",
+    "src/program/settle.rs",
     "src/knot.rs",
     "src/knot/function.rs",
     "src/knot/code.rs",
@@ -121,7 +120,6 @@ const READ_ACCESSORS: &[&str] = &[
     "path_read",
     "path",
     "paths",
-    "through_at",
     "binder_type",
     "value_type",
     "refusal",
@@ -139,7 +137,6 @@ const READ_ACCESSORS: &[&str] = &[
     "named_contributions",
     "settled",
     "shape_at",
-    "specialization_keys",
     "statement_type",
     "use_statics",
     "view_slots",
@@ -154,7 +151,7 @@ fn the_run_reads_every_load_fact_through_the_read_door() {
     let accessors = READ_ACCESSORS;
     // The walk tells a read through the door from one on a shape.
     let door =
-        "at.view.load().caches(shape)\n(program.facts())\n    .caches(shape)\nfacts.caches(a)";
+        "at.view.facts().caches(shape)\n(program.facts())\n    .caches(shape)\nfacts.caches(a)";
     assert!(fact_reads(door, accessors).is_empty());
     assert_eq!(fact_reads("view.shape().caches()", accessors).len(), 1);
     assert_eq!(fact_reads("(f(shape)).caches()", accessors).len(), 1);

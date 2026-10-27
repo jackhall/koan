@@ -5,7 +5,7 @@ use crate::parse::BuiltinShapeId;
 use crate::parse::{ExpressionPart, KExpression};
 use crate::scope::{
     BodyShape, Builtins, CaptureSource, Coordinate, MentionClass, Position, ShapeError, ShapeKind,
-    Site, Slot, Target, TopLevel,
+    Slot, Target, TopLevel,
 };
 use crate::symbols::BinderSymbol;
 
@@ -67,7 +67,7 @@ fn nested_at<'graph>(
         panic!("part {index} is a parenthesized node");
     };
     shape
-        .nested(crate::scope::Site::of(&node.parts[body].value))
+        .nested(shape.site(&node.parts[body].value))
         .expect("the body has a shape")
 }
 
@@ -221,7 +221,7 @@ fn an_arm_binds_it_and_its_names_are_gone_after_it() {
             };
             let (_, arm_part) = &pairs[0];
             let arm = shape
-                .nested(crate::scope::Site::of(arm_part))
+                .nested(shape.site(arm_part))
                 .expect("the arm has a shape");
             assert_eq!(arm.kind(), ShapeKind::Block);
             assert_eq!(arm.entered_at(), Position::statement(1));
@@ -407,7 +407,7 @@ fn a_signature_type_is_an_eager_mention_of_the_enclosing_shape() {
         |fixture, lines, shape| {
             let shape = shape.expect("a quantifier names nothing in the enclosing shape");
             let body = shape
-                .nested(crate::scope::Site::of(&lines[0].parts[8].value))
+                .nested(shape.site(&lines[0].parts[8].value))
                 .expect("the body has a shape");
             let elt = BinderSymbol::Type(type_name("Elt", fixture.symbols));
             assert_eq!(
@@ -426,7 +426,7 @@ fn a_quantifier_read_in_its_body_is_a_mention_of_the_body_parameter() {
         |fixture, lines, shape| {
             let shape = shape.expect("the body reads its own type parameter");
             let body = shape
-                .nested(crate::scope::Site::of(&lines[0].parts[8].value))
+                .nested(shape.site(&lines[0].parts[8].value))
                 .expect("the body has a shape");
             let elt = BinderSymbol::Type(type_name("Elt", fixture.symbols));
             let (slot, _) = body.slot(elt).expect("the quantifier is a body parameter");
@@ -945,13 +945,13 @@ fn a_lambdas_body_is_found_by_its_forms_body_site() {
         let shape = shape.expect("the program shapes");
         let node = shape.body()[1].statement_spine();
         let body = shape
-            .nested(Site::of_body(node).expect("a `FN` has a body"))
+            .nested(shape.site_of_body(node).expect("a `FN` has a body"))
             .expect("the body has a shape");
         assert_eq!(body.kind(), ShapeKind::Callable);
         // The shape keeps a resident copy of the node, over the same parts.
         let form = body.form().expect("a `FN` records its form");
         assert!(std::ptr::eq(form.parts, node.parts));
-        assert_eq!(Site::of_body(&shape.body()[0]), None);
+        assert_eq!(shape.site_of_body(&shape.body()[0]), None);
     });
 }
 
@@ -1134,8 +1134,43 @@ LET f = (FN FOR ALL #[Elt] :{a :Number, b :Elt, c :Number} -> Any = #((LET u = b
     });
 }
 
-/// A site is an address, so statements parsed last-first lay their nested bodies' sites in another
-/// order: the nested shapes are walked, and their segments numbered, alike either way.
+/// A callable's threaded set: the binders its last statement hands on that the frame built, each
+/// with what it was built over, less what the frame received — a parameter, or a binder bound bare
+/// to one — and the argument parts it hands on that are no name, no literal and no member read of
+/// a value received.
+#[test]
+fn a_callables_threaded_set_holds_what_its_frame_built_and_hands_on() {
+    let source = "\
+LET g = (FN :{a :Number, xs :Any} -> Any = #(a))
+LET f = (FN :{a :Number, xs :Any} -> Any = #((LET u = a) (LET v = [u]) (LET k = [v]) (LET r = xs) (LET w = [7]) (g {a = u, xs = {head = k, tail = r}})))
+LET h = (FN :{a :Number, xs :Any} -> Any = #(g {a = a, xs = (ATTR xs next)}))";
+    shaped(source, |fixture, lines, shape| {
+        let shape = shape.expect("the program shapes");
+        let body = nested_at(shape, &lines[1], 3, 5);
+        let slot = |name: &str| body.slot(value(fixture, name)).unwrap().0;
+        let mut expected = [slot("v"), slot("k")];
+        expected.sort_unstable();
+        assert_eq!(body.threaded(), &expected[..]);
+        let last = body.body().last().expect("the body has statements");
+        let ExpressionPart::RecordLiteral(fields) = &last.parts[1].value else {
+            panic!("the call's argument is a record literal");
+        };
+        assert_eq!(body.threaded_parts(), &[body.site(&fields[1].1)]);
+
+        let walker = nested_at(shape, &lines[2], 3, 5);
+        assert!(
+            walker.threaded().is_empty(),
+            "a walker builds nothing it hands on"
+        );
+        assert!(
+            walker.threaded_parts().is_empty(),
+            "a member read of a parameter is received"
+        );
+    });
+}
+
+/// Statements parsed last-first lay their nested bodies at addresses in another order: their sites,
+/// numbered in program order, and their segments come out alike either way.
 #[test]
 fn nested_shapes_follow_program_order_not_address() {
     let statements = [
@@ -1172,7 +1207,7 @@ fn nested_shapes_follow_program_order_not_address() {
                 let nested: Vec<_> = (shape.nested_shapes().iter())
                     .map(|(_, nested)| (nested.kind(), nested.segment(), nested.code_digest()))
                     .collect();
-                // Each nested shape's rank by address, in program order.
+                // Each nested shape's rank by site, in program order.
                 let sites: Vec<_> = (shape.nested_shapes().iter())
                     .map(|(site, _)| *site)
                     .collect();
@@ -1184,7 +1219,8 @@ fn nested_shapes_follow_program_order_not_address() {
         })
     };
     let ((forward, ranks), (backward, reranked)) = (walked(false), walked(true));
-    assert_ne!(ranks, reranked, "the two parse orders lay the sites apart");
+    assert!(ranks.is_sorted(), "sites follow program order");
+    assert_eq!(ranks, reranked, "the parse order changes no site");
     let segments: Vec<_> = forward.2.iter().map(|(_, segment, _)| segment.0).collect();
     assert!(segments.is_sorted(), "segments follow program order");
     assert_eq!(forward, backward, "address order changes nothing");

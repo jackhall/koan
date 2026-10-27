@@ -27,8 +27,8 @@ use crate::elaborate::{SignatureMember, applied_member, path_binding, signature_
 use crate::memory::{BumpBackedMap, BumpVec, bump_hash_table, bump_table, collect};
 use crate::parse::ExpressionPart;
 use crate::scope::{
-    Binder, BodyShape, Callable, CaptureSlot, CaptureSource, Coordinate, Leaf, PathEntry, Position,
-    Print, Registered, Resolution, Resolved, Root, Segment, ShapeError, ShapeKind, Site, Source,
+    Binder, BodyShape, Callable, CaptureSlot, CaptureSource, Coordinate, Identity, Leaf, PathEntry,
+    Position, Registered, Resolution, Resolved, Root, Segment, ShapeError, ShapeKind, Site, Source,
     SpelledRoot, Static, StaticCallable, StaticRegistered, StaticType, Store, Target, Tree,
     Variable as Located, part_of, path_spelling, source_of,
 };
@@ -62,9 +62,9 @@ pub(super) struct ChainPaths<'p, 'o, 'graph> {
     entries: BumpVec<'p, Option<Entry<'o>>>,
     /// Each entry's index in `entries`, by root, chain and label.
     found: Found<'p>,
-    /// Each class's representative's level, by the label, application and tree print its paths
+    /// Each class's representative's level, by the label, application and tree identity its paths
     /// share.
-    classes: BumpBackedMap<'p, (TypeSymbol, Option<Parametric>, Print), usize>,
+    classes: BumpBackedMap<'p, (TypeSymbol, Option<Parametric>, Identity), usize>,
     /// Each path resolved to a class, by the class's representative's level, then its own.
     members: BumpVec<'p, (usize, usize)>,
     /// Each entry being resolved, by level.
@@ -144,6 +144,29 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 });
             }
         }
+        // A path the records this walk extends hold keeps its level: only a path new to this walk
+        // mints past them.
+        self.store.base_paths(segment, &mut |entry| {
+            let Some(at) = entry.level.checked_sub(base) else {
+                return;
+            };
+            if entries.len() <= at {
+                entries.resize(at + 1, None);
+            }
+            if entries[at].is_some() {
+                return;
+            }
+            entries[at] = Some(Entry {
+                entry,
+                through: true,
+                resolution: None,
+            });
+            let hash = PathEntry::hash_of(entry.root, entry.chain, entry.label);
+            found.insert_unique(hash, at, |held: &usize| {
+                let held = entries[*held].expect("an indexed entry is held").entry;
+                PathEntry::hash_of(held.root, held.chain, held.label)
+            });
+        });
         let table: ChainPaths<'p, 'o, 'graph> = ChainPaths {
             root,
             base,
@@ -195,9 +218,9 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             });
         }
         if let Resolved::Class(rep) = resolution.resolved {
-            let print = resolution.tree.print();
-            if !matches!(print, Print::Unnamed) {
-                let key = (entry.label, entry.through, print);
+            let identity = resolution.tree.identity();
+            if !matches!(identity, Identity::Unnamed) {
+                let key = (entry.label, entry.through, identity);
                 table.classes.entry(key).or_insert(rep);
             }
             let at = (table.members).partition_point(|member| *member < (rep, entry.level));
@@ -212,20 +235,6 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             .rev()
             .find(|table| table.root.segment() == root)?;
         table.at(level)?.1
-    }
-
-    /// The entry at `path_level` of the chain the shape at `level` sits on, its application read.
-    pub(super) fn entry_at(&mut self, level: usize, path_level: usize) -> Option<PathEntry<'o>> {
-        let table = self.table(level);
-        let index = path_level.checked_sub(self.paths[table].base)?;
-        self.read_through_of(level, index);
-        Some(
-            self.paths[self.table(level)]
-                .entries
-                .get(index)
-                .copied()??
-                .entry,
-        )
     }
 
     /// The chain level of the root of the chain `level` sits on.
@@ -344,7 +353,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             );
         }
         let annotation = shape.annotation(binder.slot)?;
-        match self.type_cell(shape, Site::of(annotation)) {
+        match self.type_cell(shape, shape.site(annotation)) {
             Static::Closed(handle) => Some(handle.into()),
             Static::Rigid { value, .. } => Some(value),
             Static::Unknown => None,
@@ -374,7 +383,9 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         // A root written in place is typed where its path resolves, its own types first.
         if let Some(SpelledRoot::Inline(written)) = spelling {
             let holds = |site: Site| match written {
-                ExpressionPart::Expression(node) => part_of(node.reference(), site).is_some(),
+                ExpressionPart::Expression(node) => {
+                    part_of(shape, node.reference(), site).is_some()
+                }
                 _ => false,
             };
             // Its own types sit in its statement, so among its unit's, in program order.
@@ -470,6 +481,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                         Resolution {
                             tree: leaf,
                             resolved,
+                            lacks: None,
                         },
                         None,
                     ));
@@ -479,7 +491,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 let shape = self.chain[level].shape;
                 let statement = statement as usize;
                 let node = &shape.body()[statement];
-                match part_of(node, site) {
+                match part_of(shape, node, site) {
                     Some(part) => {
                         let was = std::mem::replace(&mut self.chain[level].statement, statement);
                         let typed = match self.part_type(level, site) {
@@ -488,7 +500,8 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                         };
                         let tree = self.tree(level, part)?;
                         self.chain[level].statement = was;
-                        let at = source_of(node, site).expect("the part lies in its statement");
+                        let at =
+                            (source_of(shape, node, site)).expect("the part lies in its statement");
                         (tree, exact(types, typed), site, Some(at))
                     }
                     None => (Tree::Leaf(Leaf::Unnamed(site)), None, site, None),
@@ -535,11 +548,23 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             }
             _ => None,
         };
-        let resolved = match pinned.or(closed).or_else(bound) {
-            Some(closed) => Resolved::Closed(closed),
-            None => Resolved::Class(self.class_of(level, entry, tree)),
+        let (resolved, lacks) = match pinned.or(closed).or_else(bound) {
+            Some(closed) => (Resolved::Closed(closed), None),
+            // A root of an exact signature through a known application that reads no type here
+            // reads none at any run.
+            None => (
+                Resolved::Class(self.class_of(level, entry, tree)),
+                held.filter(|_| through.is_some()),
+            ),
         };
-        Ok((Resolution { tree, resolved }, at))
+        Ok((
+            Resolution {
+                tree,
+                resolved,
+                lacks,
+            },
+            at,
+        ))
     }
 
     /// The tree, exact signature and a site of the binder `binder` a path's root names, read from
@@ -559,8 +584,8 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         let shape = self.chain[home].shape;
         let statement = shape.position_of(binder.slot).statement_index();
         let Some(site) = statement
-            .map(|index| Site::of_node(&shape.body()[index]))
-            .or_else(|| shape.body().first().map(Site::of_node))
+            .map(|index| shape.site_of_node(&shape.body()[index]))
+            .or_else(|| shape.body().first().map(|node| shape.site_of_node(node)))
         else {
             return Ok(None);
         };
@@ -568,9 +593,17 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             true => self.leaf_on(Scope::Chain(home), binder.slot)?,
             false => self.slot_tree(Scope::Chain(home), binder.slot, site)?,
         };
-        let held = match self.binder_at(home, binder.slot) {
-            DeclaredType::Type(typed) => exact(self.types, typed),
-            DeclaredType::Scheme(_) => None,
+        // A module binder the binding binds is exactly the type it carries. One it leaves unbound
+        // over open content is what the path waits on, whatever its static type.
+        let unknown = self.unknown_at(home, binder.slot);
+        let bound = self.binds(unknown);
+        if bound.is_none() && !tree.closed() {
+            self.note(&[unknown]);
+        }
+        let held = match (bound, self.binder_at(home, binder.slot)) {
+            (Some(carried), _) => Some(carried),
+            (None, DeclaredType::Type(typed)) => exact(self.types, typed),
+            (None, DeclaredType::Scheme(_)) => None,
         };
         Ok(Some((tree, held, site)))
     }
@@ -581,11 +614,11 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         let table = self.table(level);
         let table = &mut self.paths[table];
         // A tree holding a leaf no binder names is like no other.
-        match tree.print() {
-            Print::Unnamed => entry.level,
-            print => *table
+        match tree.identity() {
+            Identity::Unnamed => entry.level,
+            identity => *table
                 .classes
-                .entry((entry.label, entry.through, print))
+                .entry((entry.label, entry.through, identity))
                 .or_insert(entry.level),
         }
     }
@@ -987,7 +1020,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         let (root, chain) = match self.name_chain(level, operand) {
             Some((binder, chain)) => (Root::Binder(binder), chain),
             None => {
-                let site = Site::of(operand);
+                let site = self.site(level, operand);
                 let statement = self.statement_holding(level, site) as u32;
                 (
                     Root::Inline { site, statement },
@@ -1017,7 +1050,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         if !matches!(label, BinderSymbol::Value(_)) || typed.upper == KType::NEVER.into() {
             return Ok(typed);
         }
-        let site = Site::of(operand);
+        let site = self.site(level, operand);
         let Some(operand_type) = self.part_type(level, site) else {
             return Ok(typed);
         };
@@ -1054,7 +1087,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         let shape = self.chain[level].shape;
         match super::of_part(shape, part) {
             super::Form::Name(name) => {
-                let mention = shape.mention(Site::of(name))?;
+                let mention = shape.mention(shape.site(name))?;
                 let (home, slot) = self.landed_slot(level, mention.coordinate)?;
                 let binder = Binder {
                     body: self.chain[home].shape.segment(),

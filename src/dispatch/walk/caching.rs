@@ -136,7 +136,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                     parts.extend(fields.iter().map(|(_, value)| value));
                 }
                 _ => {
-                    let Some(mention) = shape.mention(Site::of(part)) else {
+                    let Some(mention) = shape.mention(shape.site(part)) else {
                         continue;
                     };
                     let landed = self.landed_slot(level, mention.coordinate);
@@ -199,7 +199,8 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             deps: deps.laid(self.lay),
             pending,
         };
-        self.composites.insert(site, reads);
+        let segment = self.chain[level].shape.segment();
+        self.composites.insert((segment, site), reads);
         self.record_site(level, site, false, reads);
     }
 
@@ -213,11 +214,12 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         part: &'graph ExpressionPart<'graph>,
         typed: Interval,
     ) -> Reads<'o> {
-        let site = match of_part(self.chain[level].shape, part) {
-            Form::Apply(node) => Site::of_node(node),
-            _ => Site::of(part),
+        let shape = self.chain[level].shape;
+        let site = match of_part(shape, part) {
+            Form::Apply(node) => shape.site_of_node(node),
+            _ => shape.site(part),
         };
-        if let Some(reads) = self.composites.get(&site) {
+        if let Some(reads) = self.composites.get(&(shape.segment(), site)) {
             return *reads;
         }
         let (types, scratch) = (self.types, self.scratch);

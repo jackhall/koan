@@ -240,19 +240,28 @@ fn a_quote_reads_its_dollar_names_at_their_static_types() {
         // The code may be offered registrations at `_ + _`, so the builtin is kept beside them,
         // and admitted *always* where `$n`'s static type is `Number`.
         let always = (code.candidate_lists().iter()).any(|(site, _)| {
-            let Narrowing::Kept(kept) = facts.use_statics(code, *site).narrowing else {
+            let Narrowing::Kept(kept) = facts
+                .use_statics(&program.tiers().resting(), code, *site)
+                .narrowing
+            else {
                 return false;
             };
-            (kept.iter()).any(|(candidate, verdict)| {
+            (kept.entries.iter()).any(|(candidate, verdict)| {
                 matches!(candidate, Candidate::One(_)) && *verdict == Verdict::Always
             })
         });
         assert!(always, "`$n + 2`'s builtin is admitted at the load");
-        assert!(facts.typing_refusal(code).is_none());
+        assert!(
+            facts
+                .typing_refusal(&program.tiers().resting(), code)
+                .is_none()
+        );
     });
     let refused = "LET n = 1\nLET q = #(LET a :Str = $n)\nPRINT \"loaded\"\nEVAL q -> Any";
     super::statics::loaded(refused, |program| {
-        let refusal = program.facts().typing_refusal(code(program));
+        let refusal = program
+            .facts()
+            .typing_refusal(&program.tiers().resting(), code(program));
         assert!(refusal.is_some(), "`a :Str = $n` refuses the code");
     });
     assert_eq!(
@@ -260,4 +269,30 @@ fn a_quote_reads_its_dollar_names_at_their_static_types() {
         "loaded\nerror: <test>:2:10: this value is Number, which can never satisfy its annotation Str",
         "the `EVAL` reports the code's refusal"
     );
+}
+
+/// The load finds a written quote's overlap and an `EVAL` of it reports what the load found: the
+/// run checks no registration the load did not.
+#[test]
+fn an_eval_of_a_written_quote_runs_no_overlap_check() {
+    use crate::program::CellSubstrate;
+    use crate::values::BuildBudget;
+
+    let source = "LET q = #((OP #(+) OVER Number = #(0)) (1 + 2))\nEVAL q -> Any\nEVAL q -> Any";
+    let checks = || super::super::check::CHECKS.with(|checks| checks.get());
+    let before = checks();
+    let loaded = CellSubstrate::load::<super::Koan>(
+        source,
+        "<test>",
+        8,
+        BuildBudget::default(),
+        super::output(),
+    );
+    assert!(loaded.is_ok(), "the program loads");
+    let at_load = checks() - before;
+    assert!(at_load > 0, "the load checks the quote's registration");
+    let before = checks();
+    let printed = run(source);
+    assert!(printed.ends_with("already takes"), "{printed}");
+    assert_eq!(checks() - before, at_load, "the run checks nothing");
 }

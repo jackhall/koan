@@ -5,7 +5,7 @@
 use crate::parse::BuiltinShapeId;
 use crate::parse::Heads;
 use crate::parse::{ExpressionPart, KExpression};
-use crate::scope::{BodyShape, Builtins, Position, QuotedPart, ShapeError, ShapeKind, Site};
+use crate::scope::{BodyShape, Builtins, Position, QuotedPart, ShapeError, ShapeKind};
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::KType;
 
@@ -62,7 +62,7 @@ fn lambda_body<'graph>(
 ) -> &'graph BodyShape<'graph> {
     let lambda = node(&line.parts[3].value);
     shape
-        .nested(Site::of_body(lambda).expect("a lambda has a body"))
+        .nested(shape.site_of_body(lambda).expect("a lambda has a body"))
         .expect("the body has a shape")
 }
 
@@ -78,7 +78,7 @@ fn arms<'graph>(
     pairs
         .iter()
         .map(|(guard, arm)| {
-            let arm_shape = shape.nested(Site::of(arm)).expect("an arm has a shape");
+            let arm_shape = shape.nested(shape.site(arm)).expect("an arm has a shape");
             (guard, arm_shape)
         })
         .collect()
@@ -307,7 +307,11 @@ fn a_heads_names_and_a_groups_names_are_the_bodys() {
         |fixture, lines, shape| {
             let shape = shape.expect("the program shapes");
             let body = shape
-                .nested(Site::of_body(&lines[0]).expect("a definition has a body"))
+                .nested(
+                    shape
+                        .site_of_body(&lines[0])
+                        .expect("a definition has a body"),
+                )
                 .expect("the body has a shape");
             let (_, at) = body
                 .slot(BinderSymbol::Value(value_name("v", fixture.symbols)))

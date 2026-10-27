@@ -1,44 +1,39 @@
-//! The load door: a graph stands up over its build root and its run root, the load runs once in
-//! the build root, and both roots release to an empty graph.
+//! The load door: the load runs before the graph stands, and the graph holds one slab root, its run
+//! root, which releases to an empty graph.
 
 use crate::memory::Bump;
 use crate::scheduler::Graph;
+use crate::scheduler::seek::{Settles, Unsettled};
 use crate::scheduler::tests::bundle::Native;
-use crate::values::SpecBounds;
+use crate::scope::LoadFacts;
+use crate::values::BuildBudget;
 
 #[test]
-fn the_load_stands_two_roots_and_lays_the_build_roots_header() {
+fn the_graph_holds_one_slab_root() {
     let type_region = Bump::new();
-    let (mut graph, roots, out) = Graph::<'_, Native>::load(2, SpecBounds::default(), || {
-        Ok::<_, ()>((crate::values::tests::seeded_tiers(&type_region), 7))
+    let (mut graph, run, out) = Graph::<'_, Native>::load(1, BuildBudget::default(), || {
+        Ok::<_, ()>((
+            crate::values::tests::seeded_tiers(&type_region),
+            (&LoadFacts::EMPTY, &Unsettled as &dyn Settles<'_>),
+            7,
+        ))
     })
     .expect("the load succeeds");
     assert_eq!(out, 7, "the load's own result comes back");
-    assert_ne!(roots.build, roots.run);
-    assert!(graph.is_live(roots.build) && graph.is_live(roots.run));
-    assert_eq!(
-        graph.table_len(roots.build),
-        Ok(Some(0)),
-        "the build root's header is laid, with no specialization in its table"
+    assert!(graph.is_live(run));
+    assert!(
+        graph.root().is_err(),
+        "a slab of one holds the run root alone"
     );
-    assert_eq!(
-        graph.table_len(roots.run),
-        Ok(None),
-        "the run root lays nothing"
-    );
-    graph
-        .release_root(roots.run)
-        .expect("the run root releases");
-    graph
-        .release_root(roots.build)
-        .expect("the build root releases");
+    assert_eq!(graph.live_settlements(), 0);
+    graph.release_root(run).expect("the run root releases");
     assert!(graph.is_empty());
 }
 
 #[test]
 fn a_refused_load_hands_its_refusal_back() {
-    let refused = Graph::<'_, Native>::load(2, SpecBounds::default(), || {
-        Err::<(crate::values::TypeTiers<'_>, ()), _>("refused")
+    let refused = Graph::<'_, Native>::load(1, BuildBudget::default(), || {
+        Err::<(_, (&LoadFacts<'_>, &dyn Settles<'_>), ()), _>("refused")
     });
     assert_eq!(refused.err(), Some("refused"));
 }

@@ -10,12 +10,10 @@ use crate::memory::{
     Bump, BumpAllocator, ProgramBrand, ProgramStorage, SlabHandle, program_storage, resident,
 };
 use crate::parse::parse_with_path;
-use crate::scheduler::{
-    DrainStalled, Graph, NativeStep, Placement, Resting, Roots, Scheduler, Work,
-};
+use crate::scheduler::{DrainStalled, Graph, NativeStep, Placement, Resting, Scheduler, Work};
 use crate::symbols::SymbolInterner;
 use crate::type_lattice::{Agent, Halves, RootBuilder};
-use crate::values::{Chain, Half, SpecBounds, TypeTiers, Types};
+use crate::values::{BuildBudget, Chain, Half, TypeTiers, Types};
 
 use super::body;
 use super::bundle::{KBirth, KBundle};
@@ -42,12 +40,12 @@ struct Owner {
 }
 
 /// Everything that names `'graph`: the graph by value, since reclaiming a region needs exclusive
-/// access, and its two roots — the build root the load ran in, and the run root every root work is
-/// born under and the top level's bindings live in; the program record in program storage, holding the type tiers, so what a step
-/// reads is a `'graph` borrow; and what the top level left at rest when it last ran.
+/// access, and its run root, which every root work is born under and the top level's bindings
+/// live in; the program record in program storage, holding the type tiers, so what a step reads
+/// is a `'graph` borrow; and what the top level left at rest when it last ran.
 pub struct Running<'graph> {
     graph: Graph<'graph, KBundle>,
-    roots: Roots,
+    root: SlabHandle,
     brand: ProgramBrand<'graph>,
     symbols: &'graph SymbolInterner,
     program: &'graph Program<'graph>,
@@ -73,8 +71,7 @@ impl<'graph> Running<'graph> {
         };
         let uncaught = self.program.uncaught();
         uncaught.set(false);
-        self.resting =
-            Scheduler::over(&mut self.graph).run(work, self.roots.run, Placement::Shares)?;
+        self.resting = Scheduler::over(&mut self.graph).run(work, self.root, Placement::Shares)?;
         Ok(if uncaught.get() {
             Outcome::Uncaught
         } else {
@@ -88,12 +85,8 @@ impl<'graph> Running<'graph> {
     /// [`DrainStalled::Unfinished`] before the program has run.
     pub fn inspect(&mut self, step: NativeStep<'graph, KBundle>) -> Result<(), DrainStalled> {
         let resting = self.resting.ok_or(DrainStalled::Unfinished)?;
-        self.resting = Scheduler::over(&mut self.graph).resume(
-            step,
-            resting,
-            self.roots.run,
-            Placement::Shares,
-        )?;
+        self.resting =
+            Scheduler::over(&mut self.graph).resume(step, resting, self.root, Placement::Shares)?;
         Ok(())
     }
 
@@ -106,12 +99,7 @@ impl<'graph> Running<'graph> {
     /// releases, so every root work is born under it and a result built there outlives the drain
     /// that built it.
     pub fn root(&self) -> SlabHandle {
-        self.roots.run
-    }
-
-    /// The graph's two slab roots: the build root the load ran in, and the run root.
-    pub fn roots(&self) -> Roots {
-        self.roots
+        self.root
     }
 
     /// The program storage this substrate's AST and program record rest in.
@@ -138,7 +126,7 @@ pub struct CellSubstrate(Joined);
 
 /// The load's one walk over `shapes`: every record the language's walk computes, laid in program
 /// storage through `writer`, beside the folds the load lays over them.
-fn walked<'graph, L: Language>(
+pub(crate) fn walked<'graph, L: Language>(
     shapes: &'graph crate::scope::Shapes<'graph>,
     builtins: &'graph KBuiltins<'graph, 'graph>,
     types: &Chain<'graph, 'graph, 'graph, '_>,
@@ -146,7 +134,14 @@ fn walked<'graph, L: Language>(
     scratch: BumpAllocator<'_>,
 ) -> Result<&'graph crate::scope::LoadFacts<'graph>, crate::scope::ShapeError<'graph>> {
     let store = crate::build::LoadStore::new(writer, scratch, shapes, crate::scope::Binding::EMPTY);
-    L::facts(shapes, builtins, &store, types, scratch)?;
+    L::facts(
+        shapes,
+        builtins,
+        &store,
+        types,
+        scratch,
+        shapes.root().segment(),
+    )?;
     let unfolded = resident(writer, store.facts(scratch));
     let folds = crate::build::fold(unfolded, writer, scratch);
     Ok(resident(writer, unfolded.folded(writer, folds)))
@@ -154,11 +149,10 @@ fn walked<'graph, L: Language>(
 
 impl CellSubstrate {
     /// Parse `source` into fresh program storage and stand the program up beside it, over a slab of
-    /// `cap` cells, two of which are its build root and its run root: `language`'s builtin table at
-    /// `'graph`, the program's shape over it and checked by the language, and the [`Program`]
-    /// record writing to `output`, all written by the build root's one step. `cap` is at least two.
-    /// `bounds` sets how many live children the build root's specialization table and every
-    /// specialization's own table hold.
+    /// `cap` cells, one of which is its run root: `language`'s builtin table at `'graph`, the
+    /// program's shape over it and checked by the language, and the [`Program`] record writing to
+    /// `output`, all written by the load before the graph stands. `cap` is at least one. `budget`
+    /// bounds the bytes of the settlements no run cell holds.
     ///
     /// The load builds its types through one chain over a root builder, and freezes it when the
     /// load ends, so no step can intern into it: a step's types rest in the agent tier laid beside
@@ -169,7 +163,7 @@ impl CellSubstrate {
         source: &str,
         path: &str,
         cap: u32,
-        bounds: SpecBounds,
+        budget: BuildBudget,
         output: Output,
     ) -> Result<Self, LoadError> {
         let owner = Owner {
@@ -182,10 +176,8 @@ impl CellSubstrate {
             let brand = owner.storage.brand();
             let parsed =
                 parse_with_path(brand, &owner.symbols, source, path).map_err(LoadError::Parse)?;
-            // The load is the build root's one step: what it writes rests in program storage and
-            // the owner's registry. The load door lays the build root's header and its table, which
-            // the root-level specializations fill.
-            let (graph, roots, program) = Graph::load(cap, bounds, || {
+            // What the load writes rests in program storage and the owner's registry.
+            let (graph, root, program) = Graph::load(cap, budget, || {
                 // Everything the root owns is laid in the owner's registry arena, which releases it
                 // whole. The load's chain never leaves the load: its end freezes the root.
                 let builder = RootBuilder::in_region(&owner.registry);
@@ -222,16 +214,21 @@ impl CellSubstrate {
                         tiers,
                         error,
                         &owner.symbols,
-                        L::evaluator(),
+                        (
+                            L::evaluator(),
+                            super::settle::settled::<L>,
+                            super::settle::composed::<L>,
+                            super::activation_store::activated_in::<L>,
+                        ),
                         output,
                         &writer.fill(1, |_| Cell::new(false))[0],
                     ),
                 );
-                Ok((tiers, program))
+                Ok((tiers, (walked, program), program))
             })?;
             Ok(Running {
                 graph,
-                roots,
+                root,
                 brand,
                 symbols: &owner.symbols,
                 program,
@@ -245,5 +242,12 @@ impl CellSubstrate {
     /// so what one call leaves in the graph or the types' root the next call finds.
     pub fn with<R>(&mut self, f: impl for<'graph> FnOnce(&mut Running<'graph>) -> R) -> R {
         self.0.with_dependent_mut(|_, running| f(running))
+    }
+
+    /// The bytes laid in program storage so far: what a test reads to see a run lay nothing
+    /// there.
+    #[cfg(test)]
+    pub(crate) fn storage_bytes(&self) -> usize {
+        self.0.borrow_owner().storage.allocated_bytes()
     }
 }

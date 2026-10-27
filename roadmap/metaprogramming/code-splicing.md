@@ -1,7 +1,7 @@
 # Code splicing
 
-Code taken apart and put together, and the shape such code runs in, laid down
-where the code lives.
+Code taken apart and put together, and the shape such code runs in, found
+where the code runs.
 
 **Problem.** No koan operation takes a fragment out of a quote or splices code
 into one, so every code value is a quote the program wrote. A quote's code
@@ -28,14 +28,11 @@ exists only at run time to live.
   holds `LET x = 4` has `x` a hole.
 - A fragment taken out of a quote holds each fellow knot member it names as
   that member's value word, and no code value outside a knot holds an edge.
-- Code composed at run time has its shape built once per code value in a
-  composed-code cell: a tree cell under the build root
-  ([the build module](../../src/build/README.md)), counted by the value's
-  home run cell and released when the count reaches zero, so an `EVAL` of
+- Code composed at run time has its shape in a composition of
+  [the build arena](../../src/scheduler/README.md#the-build-arena), found by the code's
+  syntax digest at each `EVAL` and rebuilt after an eviction, so an `EVAL` of
   composed code evaluated in a loop grows neither program storage nor the
-  build root. A shape read from a cell's region rather than from program
-  storage is what this asks of `scope`: a shape generic over its storage
-  brand.
+  agent tier.
 - Code composed at run time has its shape typed by
   [the load's walk](../../src/build/README.md#the-one-walk) before
   an `EVAL` runs it, so the overlap check reads every closed registration in it,
@@ -86,19 +83,25 @@ exists only at run time to live.
   alone: holes bind to binders in the code and to the builtin table, `$` names
   carry their bindings, and `\` marks are the shape's parameters, which the
   `EVAL` supplies. A written quote's is built where the program loads
-  ([building code](../../src/scope/README.md#building-code)); composed code's is built once and kept where
-  the code value lives, as invisible as a view, and code keeps its syntactic kind
+  ([building code](../../src/scope/README.md#building-code)); composed code's is found or built where
+  it runs, as invisible as a view, and code keeps its syntactic kind
   ([the code family](../../lattice/src/types/vocabulary.md#the-code-family)). Code
   becomes a callable as the body of an `FN` ([quotes and functions](../../src/scope/README.md#quotes-and-functions)).
-- *A composed body's segment and build cell* — open. A specialization's key
-  names its callee's body by the segment index the load's shape builder
-  assigns in seal order ([keys](../../src/build/README.md#keys-which-bindings-make-a-specialization)),
-  so a composed body's shapes need indices that never collide with the
-  load's. An `EVAL` frame runs under the build root, so a callable born in
-  composed code keys under the root whatever encloses the `EVAL`.
-  Recommended: continue the count past the load's last index, kept on the
-  `Program` record, and seek an `EVAL` frame's specialization under the
-  composed-code cell.
+- *A composed body's segment and settlement — decided.* Segments number per
+  shape, and a key digests the code's syntax digest beside the segment
+  ([keys](../../src/build/README.md#keys-which-bindings-make-a-settlement)),
+  so no count runs past the load's. A callable born in composed code keys a
+  settlement under the code's composition, whatever encloses the `EVAL`, and
+  that settlement rests nothing in the agent tier; the callable carries its
+  code's syntax beside the composition's digest and its segment, and the
+  requests that built its chain, so a call after an eviction rebuilds rather
+  than is born cold
+  ([the build module](../../src/build/README.md#references-between-frames-and-the-arena)).
+- *The shape's storage — decided.* A shape in a composition's bump is read
+  at the step's own lifetime through the frame's arena reference, and what
+  crosses a park holds a segment, a site index or a digest, so `BodyShape`
+  needs no brand of its own
+  ([the build module](../../src/build/README.md#references-between-frames-and-the-arena)).
 
 ## Dependencies
 

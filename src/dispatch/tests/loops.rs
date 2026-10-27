@@ -1,0 +1,395 @@
+//! A tail loop's memory: what every region holds at each tail of a loop stays flat in its depth,
+//! a hop copies only what it threads, and the host the loop delivers to holds the same bytes
+//! however long the loop runs ([tail hops](../../scheduler/README.md#tail-hops)).
+//!
+//! Three loops over [`caching::program`](super::caching::program)'s chain: a walk, which threads
+//! nothing it built; a record rebuilt whole each hop; and a list consed onto each hop. Each body
+//! first calls `TOUCH`, a callee whose own body tails, and each loop runs in a self-hopping form,
+//! which hops under its frame's settlement, and a mutual form, which seeks one each hop. The
+//! drain samples every region at each tail ([`HOPS`]); what a copy lays is counted in
+//! [`COPIED`], and what a hop lays in the host's decision memo in `KEPT`. Each figure a run
+//! counts outside its samples is taken against a run of the same program that prints `0` instead
+//! of looping, so building the chain is not billed to the loop.
+
+use std::cell::Cell;
+
+use crate::memory::{FIRST_CHUNK, SPLICES};
+use crate::program::activation_store::KEPT;
+use crate::scheduler::{HOPS, HopSample, SKELETONS};
+use crate::values::{BuildBudget, COPIED};
+
+/// The depths every loop runs at.
+const DEPTHS: [u32; 3] = [16, 64, 256];
+
+/// The samples skipped before a loop is warm: its first settlement and its first chunks.
+const WARM: usize = 4;
+
+/// What a figure may move by between two depths without growing in them: a few of a bump's first
+/// chunks, which a region claims as its bytes double.
+const SLACK: usize = FIRST_CHUNK;
+
+/// `TOUCH`, the callee each hop makes first, `ONWARD`, which hands back the link after the one it
+/// is handed, and `LEN`, which counts a consed list.
+const HELPERS: &str = "EXPR #(TOUCH m :Counter) -> Number = #(1)\n\
+                       EXPR #(ONWARD link :Link) -> Any = #(ATTR link next)\n\
+                       EXPR #(LEN n :Number xs :{head :Number, tail :Any}) -> Number = \
+                       #(LEN (n + 1) (ATTR xs tail))\n\
+                       EXPR #(LEN n :Number end :Null) -> Number = #(n)\n";
+
+/// The walk: hands on the next link of the chain it was handed.
+const WALK: &str = "EXPR #(NAME m :Counter link :Link) -> Str = \
+                    #((LET t = (TOUCH m)) (NEXT m (ATTR link next)))\n\
+                    EXPR #(NAME m :Counter end :Null) -> Str = #(\"done\")\n";
+
+/// The walk returning `Number`, whose hops are siblings that cross by a copy unless their
+/// arguments pin from where they rest.
+const WALK_NUMBER: &str = "EXPR #(NAME m :Counter link :Link) -> Number = \
+                           #((LET t = (TOUCH m)) (NEXT m (ATTR link next)))\n\
+                           EXPR #(NAME m :Counter end :Null) -> Number = #(0)\n";
+
+/// The record rebuild: hands on a record it builds whole from the one it was handed.
+const STEP: &str = "EXPR #(NAME m :Counter r :{count :Number} link :Link) -> Number = \
+                    #((LET t = (TOUCH m)) (NEXT m {count = ((ATTR r count) + 1)} (ATTR link next)))\n\
+                    EXPR #(NAME m :Counter r :{count :Number} end :Null) -> Number = \
+                    #(ATTR r count)\n";
+
+/// The cons loop: hands on the list it was handed with one more cell in front.
+const ACC: &str = "EXPR #(NAME m :Counter acc :Any link :Link) -> Any = \
+                   #((LET t = (TOUCH m)) (NEXT m {head = 1, tail = acc} (ATTR link next)))\n\
+                   EXPR #(NAME m :Counter acc :Any end :Null) -> Any = #(ATTR acc head)\n";
+
+/// The walk through a helper that returns a part of its argument: `ONWARD` hands back the next
+/// link, which the hop hands on.
+const ONWARD: &str = "EXPR #(NAME m :Counter link :Link) -> Str = \
+                      #((LET t = (TOUCH m)) (LET n = (ONWARD link)) (NEXT m n))\n\
+                      EXPR #(NAME m :Counter end :Null) -> Str = #(\"done\")\n";
+
+/// How a loop hops: into itself, under its frame's settlement, or between two callees, seeking
+/// one each hop.
+#[derive(Clone, Copy, Debug)]
+enum Form {
+    Selfward,
+    Mutual,
+}
+
+/// `body`'s overloads named for `form`, and the name a call starts the loop at.
+fn defined(body: &str, form: Form) -> (String, &'static str) {
+    let named = |name: &str, next: &str| body.replace("NAME", name).replace("NEXT", next);
+    match form {
+        Form::Selfward => (named("LOOP", "LOOP"), "LOOP"),
+        Form::Mutual => (named("PING", "PONG") + &named("PONG", "PING"), "PING"),
+    }
+}
+
+/// What one run counted.
+struct Measured {
+    printed: String,
+    /// The samples of the loop's own tails, warm-up skipped.
+    hops: Vec<HopSample>,
+    copied: usize,
+    kept: usize,
+    hopped: usize,
+}
+
+/// Run `defs` and `main` over a chain of `depth` links, counting from zero.
+fn measured(depth: u32, defs: &str, main: &str) -> Measured {
+    use crate::dispatch::evaluate::HOPPED;
+    HOPS.with(|hops| hops.borrow_mut().clear());
+    COPIED.with(|copied| copied.set(0));
+    KEPT.with(|kept| kept.set(0));
+    HOPPED.with(|hopped| hopped.set(0));
+    let source = format!("{HELPERS}{defs}{main}");
+    let printed = super::caching::ran_under(depth, &source, BuildBudget::default()).printed;
+    let samples = HOPS.with(|hops| hops.take());
+    // The loop's own tails are the ones its host receives: more than any callee's.
+    let host = (samples.iter())
+        .max_by_key(|sample| {
+            samples
+                .iter()
+                .filter(|other| other.host == sample.host)
+                .count()
+        })
+        .map(|sample| sample.host);
+    let hops = (samples.into_iter())
+        .filter(|sample| Some(sample.host) == host)
+        .skip(WARM)
+        .collect();
+    Measured {
+        printed,
+        hops,
+        copied: COPIED.with(Cell::get),
+        kept: KEPT.with(Cell::get),
+        hopped: HOPPED.with(Cell::get),
+    }
+}
+
+/// [`measured`] over `body` in `form`, started by `start` (the loop's name prepended to its
+/// arguments), beside the figures the same program counts printing `0` instead.
+fn looped(depth: u32, body: &str, form: Form, arguments: &str) -> (Measured, Measured) {
+    let (defs, name) = defined(body, form);
+    let looped = measured(depth, &defs, &format!("PRINT ({name} {arguments})\n"));
+    let baseline = measured(depth, &defs, "PRINT 0\n");
+    (looped, baseline)
+}
+
+/// How far `live` spread over a run's samples.
+fn spread(hops: &[HopSample]) -> usize {
+    let live = hops.iter().map(|sample| sample.live);
+    live.clone().max().unwrap_or(0) - live.min().unwrap_or(0)
+}
+
+/// Every form of `body` at every depth: what it printed checked against `printed`, and the spread
+/// of its live bytes flat in the depth.
+fn assert_flat(body: &str, arguments: &str, printed: impl Fn(u32) -> String) {
+    for form in [Form::Selfward, Form::Mutual] {
+        let spreads: Vec<usize> = (DEPTHS.iter())
+            .map(|&depth| {
+                let (looped, _) = looped(depth, body, form, arguments);
+                assert_eq!(looped.printed, printed(depth), "{form:?} at {depth}");
+                match form {
+                    Form::Selfward => assert!(looped.hopped > 0, "a selfward hop stays under"),
+                    Form::Mutual => assert_eq!(looped.hopped, 0, "a mutual hop seeks"),
+                }
+                spread(&looped.hops)
+            })
+            .collect();
+        assert!(
+            spreads[2] <= spreads[0] + SLACK,
+            "{form:?}: live bytes spread {spreads:?} over depths {DEPTHS:?}"
+        );
+    }
+}
+
+/// The bytes a loop copied per hop between each two depths, past what its program copies without
+/// looping: the marginal cost of a hop, which a fixed cost at the loop's entry does not move.
+fn copied_per_hop(body: &str, form: Form, arguments: &str) -> Vec<usize> {
+    let copied: Vec<usize> = (DEPTHS.iter())
+        .map(|&depth| {
+            let (looped, baseline) = looped(depth, body, form, arguments);
+            looped.copied.saturating_sub(baseline.copied)
+        })
+        .collect();
+    (copied.windows(2).zip(DEPTHS.windows(2)))
+        .map(|(copied, depths)| (copied[1] - copied[0]) / (depths[1] - depths[0]) as usize)
+        .collect()
+}
+
+/// Whether the per-hop figures are one constant, give or take what a depth's rounding moves.
+fn same_per_hop(per_hop: &[usize]) -> bool {
+    per_hop.iter().all(|&at| at.abs_diff(per_hop[0]) <= 8)
+}
+
+#[test]
+fn a_chain_walk_holds_its_memory_flat_in_its_depth() {
+    assert_flat(WALK, "ints chain", |_| "done".to_string());
+}
+
+#[test]
+fn a_record_rebuilt_each_hop_holds_its_memory_flat_in_its_depth() {
+    assert_flat(STEP, "ints {count = 0} chain", |depth| depth.to_string());
+}
+
+#[test]
+fn a_chain_walk_copies_no_part_of_the_chain() {
+    for form in [Form::Selfward, Form::Mutual] {
+        let per_hop = copied_per_hop(WALK, form, "ints chain");
+        assert!(
+            same_per_hop(&per_hop),
+            "{form:?}: {per_hop:?} bytes per hop"
+        );
+    }
+}
+
+#[test]
+fn a_hop_hands_on_its_received_arguments_without_copying_them() {
+    for form in [Form::Selfward, Form::Mutual] {
+        SKELETONS.with(|count| count.set(0));
+        let (looped, _) = looped(16, WALK_NUMBER, form, "ints chain");
+        assert_eq!(looped.printed, "0");
+        let skeletons = SKELETONS.with(Cell::get);
+        assert!(
+            skeletons >= 16,
+            "{form:?}: {skeletons} hops built over a skeleton"
+        );
+        let per_hop = copied_per_hop(WALK_NUMBER, form, "ints chain");
+        assert!(
+            same_per_hop(&per_hop),
+            "{form:?}: {per_hop:?} bytes per hop"
+        );
+    }
+}
+
+/// No hop is pledged into the loop cell or the host: a value built in a hop that a loop threads is
+/// copied out of it, so the splices a loop makes do not grow with its depth.
+#[test]
+fn a_loop_pledges_none_of_its_hops() {
+    let loops = [(STEP, "ints {count = 0} chain"), (ACC, "ints null chain")];
+    for (body, arguments) in loops {
+        for form in [Form::Selfward, Form::Mutual] {
+            let (defs, name) = defined(body, form);
+            let splices: Vec<usize> = (DEPTHS.iter())
+                .map(|&depth| {
+                    let spliced = |main: &str| {
+                        SPLICES.with(|splices| splices.set(0));
+                        let _ = measured(depth, &defs, main);
+                        SPLICES.with(Cell::get)
+                    };
+                    let looped = spliced(&format!("PRINT ({name} {arguments})\n"));
+                    looped.saturating_sub(spliced("PRINT 0\n"))
+                })
+                .collect();
+            assert!(
+                splices.iter().all(|&at| at == splices[0]),
+                "{form:?}: splices at depths {DEPTHS:?}: {splices:?}"
+            );
+        }
+    }
+}
+
+/// Each hop builds its cell in the loop cell over the list it was handed, so it copies nothing
+/// of the list; the loop cell compacts as its bytes double, so what compactions copy comes to a
+/// constant per hop, amortized: no more per hop the deeper the loop runs, give or take where the
+/// compactions fall.
+#[test]
+fn a_cons_loop_copies_a_constant_per_hop() {
+    for form in [Form::Selfward, Form::Mutual] {
+        let per_hop = copied_per_hop(ACC, form, "ints null chain");
+        assert!(
+            // Where compactions fall moves the figure a little; one growing with the list would
+            // multiply it by the depth's ratio.
+            per_hop
+                .windows(2)
+                .all(|pair| pair[1] <= pair[0] + pair[0] / 4),
+            "{form:?}: {per_hop:?} bytes per hop"
+        );
+    }
+}
+
+#[test]
+fn a_cons_loop_holds_a_constant_times_what_it_threads() {
+    for form in [Form::Selfward, Form::Mutual] {
+        let (looped, _) = looped(256, ACC, form, "ints null chain");
+        assert_eq!(looped.printed, "1");
+        let hops = &looped.hops;
+        let hop_region = hops
+            .iter()
+            .map(|sample| sample.hop_region)
+            .max()
+            .unwrap_or(0);
+        for (at, sample) in hops.iter().enumerate() {
+            let held = sample.live.saturating_sub(hops[0].live);
+            assert!(
+                held <= 4 * sample.threads + hop_region + SLACK,
+                "{form:?}: at sample {at} the loop holds {held} B for {} B threaded",
+                sample.threads
+            );
+        }
+    }
+}
+
+#[test]
+fn a_cons_loop_delivers_its_whole_list() {
+    let body = ACC.replace("#(ATTR acc head)", "#(acc)");
+    for form in [Form::Selfward, Form::Mutual] {
+        let (defs, name) = defined(&body, form);
+        let ran = measured(
+            256,
+            &defs,
+            &format!("PRINT (LEN 0 ({name} ints null chain))\n"),
+        );
+        assert_eq!(ran.printed, "256", "{form:?}");
+    }
+}
+
+#[test]
+fn a_loops_host_holds_the_same_bytes_however_long_it_runs() {
+    let loops = [
+        (WALK, "ints chain"),
+        (STEP, "ints {count = 0} chain"),
+        (ACC, "ints null chain"),
+    ];
+    for (body, arguments) in loops {
+        for form in [Form::Selfward, Form::Mutual] {
+            let (looped, _) = looped(256, body, form, arguments);
+            let (early, last) = (&looped.hops[2 * 16], looped.hops.last().unwrap());
+            assert_eq!(
+                (early.host_region, early.host_scratch),
+                (last.host_region, last.host_scratch),
+                "{form:?}: the host's region and scratch over hops 16 to 256"
+            );
+            let laid: Vec<usize> = (DEPTHS.iter())
+                .map(|&depth| {
+                    let (looped, baseline) = self::looped(depth, body, form, arguments);
+                    looped.kept.saturating_sub(baseline.kept)
+                })
+                .collect();
+            assert!(
+                laid.iter().all(|&at| at == laid[0]),
+                "{form:?}: memo entries laid at depths {DEPTHS:?}: {laid:?}"
+            );
+        }
+    }
+}
+
+/// `ONWARD` hands back the field of its argument unchanged, at the home its caller built the
+/// argument record in — the hop's own frame — so it places nothing new there, and the host holds
+/// flat. That home is the hop's, so the next hop copies the field: a spawned call's kept carriers
+/// are projected from its birth
+/// ([precise kept carriers](../../../roadmap/rewrite/kept-carrier-precision.md)).
+#[test]
+fn a_call_returning_a_part_of_its_argument_places_nothing_new() {
+    for form in [Form::Selfward, Form::Mutual] {
+        crate::scheduler::PASSED.with(|passed| passed.set(0));
+        let (looped, _) = looped(64, ONWARD, form, "ints chain");
+        assert_eq!(looped.printed, "done");
+        let passed = crate::scheduler::PASSED.with(Cell::get);
+        assert!(
+            passed >= 64,
+            "{form:?}: {passed} values handed back unchanged"
+        );
+        let (early, last) = (&looped.hops[2 * 16], looped.hops.last().unwrap());
+        assert_eq!(
+            early.host_region, last.host_region,
+            "{form:?}: the host holds flat"
+        );
+    }
+}
+
+/// A loop whose overloads pass on unchanged a list `xs` while they rebuild a record each hop, and
+/// `ENTRY`, whose tail call into it builds `xs`, of `length` numbers.
+fn kept_list(form: Form, length: usize) -> String {
+    let body = "EXPR #(NAME m :Counter xs :Any r :{count :Number} link :Link) -> Number = \
+                #((LET t = (TOUCH m)) (NEXT m xs {count = ((ATTR r count) + 1)} (ATTR link next)))\n\
+                EXPR #(NAME m :Counter xs :Any r :{count :Number} end :Null) -> Number = \
+                #(ATTR r count)\n";
+    let (defs, name) = defined(body, form);
+    let list = vec!["7"; length].join(" ");
+    format!(
+        "{defs}EXPR #(ENTRY m :Counter link :Link) -> Number = #({name} m [{list}] {{count = 0}} link)\n"
+    )
+}
+
+/// What a value the loop's first hop built and every hop after passes on unchanged costs per hop:
+/// it rests in the loop cell, so a compaction carries it into the fresh one, and no hop copies it
+/// into its own region. The per-hop copy does not grow with the value.
+#[test]
+fn a_value_passed_on_unchanged_rides_the_loop_cell_through_its_compactions() {
+    for form in [Form::Selfward, Form::Mutual] {
+        let per_hop = |length: usize| {
+            let defs = kept_list(form, length);
+            let copied = |depth: u32| {
+                let looped = measured(depth, &defs, "PRINT (ENTRY ints chain)\n");
+                assert_eq!(looped.printed, depth.to_string());
+                looped.copied - measured(depth, &defs, "PRINT 0\n").copied
+            };
+            (copied(256) - copied(64)) / (256 - 64)
+        };
+        // Copied every hop, 256 numbers would add some 6 KB a hop; what compactions carry adds
+        // a fraction of that, amortized.
+        let (short, long) = (per_hop(4), per_hop(256));
+        assert!(
+            long <= short + 256,
+            "{form:?}: {short} B per hop with 4 numbers, {long} with 256"
+        );
+    }
+}

@@ -9,7 +9,7 @@ use std::process::ExitCode;
 
 use koan::dispatch::Koan;
 use koan::program::{CellSubstrate, Outcome, Output, STACK_BYTES};
-use koan::values::SpecBounds;
+use koan::values::BuildBudget;
 
 // The dhat attribution profiler owns the global allocator outright: it wraps the system
 // allocator and records a backtrace per allocation. Otherwise the binary runs on the system
@@ -66,7 +66,7 @@ fn load_and_run(source: &str, path: &str) -> ExitCode {
         },
     };
     let mut substrate =
-        match CellSubstrate::load::<Koan>(source, path, CELLS, SpecBounds::default(), output) {
+        match CellSubstrate::load::<Koan>(source, path, CELLS, BuildBudget::default(), output) {
             Ok(substrate) => substrate,
             Err(error) => {
                 eprintln!("error: {error}");

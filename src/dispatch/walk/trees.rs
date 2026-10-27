@@ -31,9 +31,9 @@ use crate::elaborate::signature_member;
 use crate::memory::{BumpBackedMap, BumpVec, bump_table, collect, resident};
 use crate::parse::{ExpressionPart, KExpression};
 use crate::scope::{
-    Binder, BodyShape, CaptureSlot, CaptureSource, Coordinate, KnotNode, Leaf, Narrowing,
-    NodeCapture, ParameterBinding, Position, Print, Segment, ShapeError, ShapeKind, Shapes, Site,
-    Slot, Static, StaticCallable, StaticSolution, Store, Target, Tree, Unfolded, Within,
+    Binder, BodyShape, CaptureSlot, CaptureSource, Coordinate, Identity, KnotNode, Leaf, Narrowing,
+    NodeCapture, ParameterBinding, Position, Segment, ShapeError, ShapeKind, Shapes, Site, Slot,
+    Static, StaticCallable, StaticInstance, Store, Target, Tree, Unfolded, Within,
 };
 use crate::symbols::{BinderSymbol, ValueSymbol};
 use crate::type_lattice::{KType, TypeNode};
@@ -165,9 +165,9 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         let scope = Scope::Chain(level);
         let node = &shape.body()[last];
         let tree = match last_binder(shape) {
-            Some(slot) => self.slot_tree(scope, slot, Site::of_node(node))?,
+            Some(slot) => self.slot_tree(scope, slot, shape.site_of_node(node))?,
             None => {
-                let written = Written::Node(Site::of_node(node));
+                let written = Written::Node(shape.site_of_node(node));
                 self.tree_form(scope, of_node(shape, node), written, None)?
             }
         };
@@ -186,7 +186,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         self.tree_form(
             scope,
             of_part(shape, part),
-            Written::Part(Site::of(part)),
+            Written::Part(shape.site(part)),
             named,
         )
     }
@@ -238,7 +238,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         let shape = self.scope_shape(scope);
         let site = written.site();
         Ok(match form {
-            Form::Name(name) => Settled(match shape.mention(Site::of(name)) {
+            Form::Name(name) => Settled(match shape.mention(shape.site(name)) {
                 Some(mention) => self.resolve(scope, mention.coordinate, site)?,
                 None => self.fallback(scope, named, site)?,
             }),
@@ -255,7 +255,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 let [operand, _, ascribed] = node.parts else {
                     unreachable!("an ascription has an operand, its keyword and a type")
                 };
-                let typed = self.type_cell(shape, Site::of(&ascribed.value));
+                let typed = self.type_cell(shape, shape.site(&ascribed.value));
                 match self.resolved_type(self.scope_level(scope), typed) {
                     Static::Closed(application) => {
                         let source = self.tree_in(scope, &operand.value, None)?;
@@ -279,13 +279,15 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                     _ => Provisional(self.fallback(scope, named, site)?),
                 }
             }
-            Form::Lambda(node) => match Site::of_body(node).and_then(|body| shape.nested(body)) {
-                Some(body) => match self.knot(scope, &[(body, false)], 0, site)? {
-                    Some(knot) => Settled(knot),
-                    None => Provisional(self.fallback(scope, named, site)?),
-                },
-                None => Settled(self.fallback(scope, named, site)?),
-            },
+            Form::Lambda(node) => {
+                match shape.site_of_body(node).and_then(|body| shape.nested(body)) {
+                    Some(body) => match self.knot(scope, &[(body, false)], 0, site)? {
+                        Some(knot) => Settled(knot),
+                        None => Provisional(self.fallback(scope, named, site)?),
+                    },
+                    None => Settled(self.fallback(scope, named, site)?),
+                }
+            }
             Form::Call(node, _) => match scope {
                 Scope::Chain(level) => match self.keyworded(level, node)? {
                     Some(unfolded) => Settled(unfolded),
@@ -378,7 +380,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         if let Ok(tree) = tree
             && !provisional
             && cut >= depth
-            && tree.print() != Print::Unnamed
+            && tree.identity() != Identity::Unnamed
         {
             let tag = self.innermost();
             self.binders.insert((key.0, slot, under), (tree, tag));
@@ -512,7 +514,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                         Some(first) => self.builder_captures(
                             Scope::Chain(level - 1),
                             shape,
-                            Site::of_node(first),
+                            shape.site_of_node(first),
                         )?,
                         None => &[][..],
                     };
@@ -732,7 +734,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     }
 
     /// [`view_tree`](Self::view_tree) beside the type `source` carries, where the load knows it:
-    /// its fit is memoized by `application` and the source's print, and a closed view's
+    /// its fit is memoized by `application` and the source's identity, and a closed view's
     /// [`view_of`](Self::view_of) seeded from the same fit.
     pub(super) fn view_tree_held(
         &mut self,
@@ -740,7 +742,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         source: Tree<'o>,
         site: Site,
     ) -> Read<'o, (Tree<'o>, Option<KType>)> {
-        let key = (application, source.print());
+        let key = (application, source.identity());
         let (from, held, seed) = match self.view_trees.get(&key).copied() {
             Some((from, held, tag)) => {
                 self.gather(tag);
@@ -761,14 +763,14 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                     fit.and_then(|(_, viewed)| viewed),
                 );
                 let tag = self.innermost();
-                // A leaf no binder names is keyed on its site, which the print does not tell apart.
-                if key.1 != Print::Unnamed {
+                // A leaf no binder names is keyed on its site, which the identity does not tell apart.
+                if key.1 != Identity::Unnamed {
                     self.view_trees.insert(key, (from, held, tag));
                 }
                 (from, held, viewed.map(|viewed| (viewed, tag)))
             }
         };
-        // Built over this source itself, which another of its print may not be.
+        // Built over this source itself, which another of its identity may not be.
         let tree = Tree::view(
             Operator::Opaque,
             application,
@@ -776,8 +778,8 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             from,
         );
         // A closed view's source is closed, so its fit read what the view binds too.
-        if let (print @ Print::Closed(_), Some((viewed, tag))) = (tree.print(), seed) {
-            self.views.entry(print).or_insert((Some(viewed), tag));
+        if let (identity @ Identity::Closed(_), Some((viewed, tag))) = (tree.identity(), seed) {
+            self.views.entry(identity).or_insert((Some(viewed), tag));
         }
         Ok((tree, held))
     }
@@ -860,7 +862,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                     CaptureSource::Read(coordinate) => {
                         NodeCapture::Tree(self.resolve(scope, coordinate, site)?)
                     }
-                    CaptureSource::Hole | CaptureSource::Offered => {
+                    CaptureSource::Hole | CaptureSource::Offered | CaptureSource::Entry { .. } => {
                         NodeCapture::Tree(Tree::Leaf(Leaf::Unnamed(site)))
                     }
                 };
@@ -884,8 +886,8 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     /// quantified. `None` where the load cannot say.
     fn born_at(&self, body: &'graph BodyShape<'graph>, keeps_scheme: bool) -> Option<&'o [KType]> {
         match self.born_instance(body) {
-            Some(StaticSolution::Closed(solution)) => Some(solution),
-            Some(StaticSolution::Rigid { .. }) => None,
+            Some(StaticInstance::Closed { solution, .. }) => Some(solution),
+            Some(StaticInstance::Rigid { .. }) => None,
             None => match self.callable_of(body) {
                 Static::Closed(callable) if callable.ktype.as_type().is_some() => Some(&[]),
                 Static::Rigid { value, .. } if value.ktype.as_type().is_some() => Some(&[]),
@@ -904,7 +906,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         node: &'graph KExpression<'graph>,
     ) -> Read<'o, Option<Tree<'o>>> {
         let shape = self.chain[level].shape;
-        let Some(index) = shape.candidate_lists().position(Site::of_node(node)) else {
+        let Some(index) = shape.candidate_lists().position(shape.site_of_node(node)) else {
             return Ok(None);
         };
         let Narrowing::Selected(coordinate) = self.use_at(level, index).narrowing else {
@@ -932,15 +934,14 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         // Each `FOR ALL` variable at the closed point the pass solved it to at this use.
         let mut solution = BumpVec::new_in(self.scratch);
         if !registered.quantifier_map.is_empty() {
-            let site = Site::of_node(node);
+            let site = shape.site_of_node(node);
             let Some(points) = self.selection_at(level, site) else {
                 return Ok(None);
             };
             for (name, at) in registered.quantifier_map.iter() {
-                let (Some(point), Some((variable, _))) = (
-                    points.get(at).copied().flatten(),
-                    callee.slot(BinderSymbol::Type(name)),
-                ) else {
+                let (Some(point), Some((variable, _))) =
+                    (points.closed(at), callee.slot(BinderSymbol::Type(name)))
+                else {
                     return Ok(None);
                 };
                 solution.push((variable, point));
@@ -957,7 +958,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             };
             arguments.push((parameter, self.tree(level, part)?));
         }
-        self.unfold(callee, &arguments, &solution, Site::of_node(node))
+        self.unfold(callee, &arguments, &solution, shape.site_of_node(node))
     }
 
     /// The tree of the call by name `node` of the shape at `level`, unfolded where its head's tree
@@ -992,7 +993,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             }
             arguments.push((parameter, self.tree(level, value)?));
         }
-        self.unfold(callee, &arguments, &[], Site::of_node(node))
+        self.unfold(callee, &arguments, &[], self.node_site(level, node))
     }
 
     /// `callee`'s summary with `arguments` and `solution` substituted, for a call at `site`:
@@ -1079,21 +1080,21 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     /// `tree`, a summary of `call`'s callee, with the call substituted: each parameter's leaf by
     /// its argument's tree read through the leaf's chain, each `FOR ALL` variable's by its point,
     /// and every other leaf of the callee's body keyed on the call. `done` holds each subtree
-    /// substituted for this call already, by print, so a subtree shared across the summary is
+    /// substituted for this call already, by identity, so a subtree shared across the summary is
     /// substituted once.
     fn substituted(
         &mut self,
         tree: Tree<'o>,
         call: &Unfolded<'o>,
         site: Site,
-        done: &mut BumpBackedMap<'p, Print, Tree<'o>>,
+        done: &mut BumpBackedMap<'p, Identity, Tree<'o>>,
     ) -> Read<'o, Tree<'o>> {
-        let print = tree.print();
+        let identity = tree.identity();
         // A closed tree holds no leaf to substitute.
-        if let Print::Closed(_) = print {
+        if let Identity::Closed(_) = identity {
             return Ok(tree);
         }
-        if let Some(substituted) = done.get(&print) {
+        if let Some(substituted) = done.get(&identity) {
             return Ok(*substituted);
         }
         let substituted = match tree {
@@ -1149,8 +1150,8 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 ..
             }) => self.substituted_leaf(binder, chain, within, call, site, done)?,
         };
-        if print != Print::Unnamed {
-            done.insert(print, substituted);
+        if identity != Identity::Unnamed {
+            done.insert(identity, substituted);
         }
         Ok(substituted)
     }
@@ -1164,7 +1165,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         within: Option<&'o Within<'o>>,
         call: &Unfolded<'o>,
         site: Site,
-        done: &mut BumpBackedMap<'p, Print, Tree<'o>>,
+        done: &mut BumpBackedMap<'p, Identity, Tree<'o>>,
     ) -> Read<'o, Tree<'o>> {
         if binder.body == call.callee {
             let callee = self.shape_at(call.callee);
@@ -1223,7 +1224,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         captures: &'o [(u32, Tree<'o>)],
         call: &Unfolded<'o>,
         site: Site,
-        done: &mut BumpBackedMap<'p, Print, Tree<'o>>,
+        done: &mut BumpBackedMap<'p, Identity, Tree<'o>>,
     ) -> Read<'o, &'o [(u32, Tree<'o>)]> {
         let mut substituted = BumpVec::with_capacity_in(captures.len(), self.scratch);
         for (slot, tree) in captures {

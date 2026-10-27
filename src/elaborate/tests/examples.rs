@@ -3,7 +3,7 @@
 
 use crate::memory::BumpAllocator;
 use crate::parse::{ExpressionPart, KExpression};
-use crate::scope::{BodyShape, Position, Site, Slot, Which};
+use crate::scope::{BodyShape, Position, Slot, Which};
 use crate::symbols::{BinderSymbol, KeywordSymbol, SymbolInterner};
 use crate::type_lattice::{
     DeclaredType, DispatchTokenElement, KType, RecursiveGroupWindow, RelativeSchema, Scheme,
@@ -11,7 +11,8 @@ use crate::type_lattice::{
 };
 use crate::values::{Chain, Value};
 
-use super::super::{callable_type, type_expression};
+use super::super::expression::type_expression;
+use super::super::signature::callable_type;
 use super::{Held, Program, nulls, scalars, with_program};
 use crate::scope::{Elaboration, ParameterBinding, ShapeGroupMap};
 
@@ -26,7 +27,7 @@ fn rhs<'graph>(line: &KExpression<'graph>) -> &'graph ExpressionPart<'graph> {
 fn elaborated(program: &Program<'_, '_, '_>, line: usize) -> Result<KType, Elaboration> {
     type_expression(
         rhs(&program.lines[line]),
-        program.activation,
+        &program.reading,
         program.types,
         program.scratch,
     )
@@ -182,7 +183,7 @@ LET Applied = :(Number AS Wrap)";
             assert_eq!(
                 elaborated(&program, 2),
                 Err(Elaboration::Unsupported {
-                    site: Site::of(rhs(&program.lines[2])),
+                    site: program.reading.shape().site(rhs(&program.lines[2])),
                 })
             );
         },
@@ -385,15 +386,15 @@ LET negate = UNARY OP #(~) OVER Number -> Number = #(operands)";
                 .expect("a definition has a body")
                 .value;
             program
-                .activation
+                .reading
                 .shape()
-                .nested(Site::of(body))
+                .nested(program.reading.shape().site(body))
                 .expect("a bare definition's body is shaped")
         };
         let callable = |body| {
             let form = BodyShape::form(body).expect("a callable body sits in a form");
             let registration = Some(program.registration(body));
-            let callable = callable_type(form, program.activation, types, scratch, registration)
+            let callable = callable_type(form, &program.reading, types, scratch, registration)
                 .expect("the definition elaborates");
             (
                 callable.ktype,
@@ -485,13 +486,18 @@ LET which = (FN FOR ALL #{Unused: Value, Held: Any} :{x :(LIST OF Held)} -> Held
     with_program(source, with_value, nulls, |program| {
         let (types, scratch) = (program.types, program.scratch);
         let twice = program
-            .activation
+            .reading
             .shape()
-            .nested(Site::of(&program.lines[2].parts[8].value))
+            .nested(
+                program
+                    .reading
+                    .shape()
+                    .site(&program.lines[2].parts[8].value),
+            )
             .expect("the definition births a body");
         for body in [program.birth("lambda"), program.birth("id"), twice] {
             let form = body.form().expect("a callable body sits in a form");
-            let ktype = callable_type(form, program.activation, types, scratch, None)
+            let ktype = callable_type(form, &program.reading, types, scratch, None)
                 .expect("it elaborates")
                 .ktype;
             let scheme = ktype.as_scheme().expect("a `FOR ALL` callable is a scheme");
@@ -499,7 +505,7 @@ LET which = (FN FOR ALL #{Unused: Value, Held: Any} :{x :(LIST OF Held)} -> Held
         }
         let form = program.birth("which").form().expect("a form");
         let which =
-            callable_type(form, program.activation, types, scratch, None).expect("it elaborates");
+            callable_type(form, &program.reading, types, scratch, None).expect("it elaborates");
         assert_eq!(
             which.quantifier_map.iter().collect::<Vec<_>>(),
             vec![
@@ -561,20 +567,20 @@ fn a_unary_operator_at_its_binary_key_packs_its_slots_into_operands() {
     let source = "UNARY OP #(~) OVER Number -> Number = #(operands)";
     with_program(source, scalars, nulls, |program| {
         let (types, scratch, symbols) = (program.types, program.scratch, program.symbols);
-        let shape = program.activation.shape();
+        let shape = program.reading.shape();
         let body = &program.lines[0]
             .parts
             .last()
             .expect("a definition has a body")
             .value;
-        let body = shape.nested(Site::of(body)).expect("the body is shaped");
+        let body = shape.nested(shape.site(body)).expect("the body is shaped");
         let bridge = shape
             .registrations()
             .iter()
             .find(|registration| registration.which == Which::Binary)
             .expect("a unary operator registers under a binary key too");
         let form = body.form().expect("a callable body sits in a form");
-        let registered = callable_type(form, program.activation, types, scratch, Some(bridge))
+        let registered = callable_type(form, &program.reading, types, scratch, Some(bridge))
             .expect("the operator elaborates")
             .registered
             .expect("born for its registration");

@@ -5,7 +5,7 @@
 
 use crate::parse::ExpressionPart;
 use crate::program::Program;
-use crate::scope::{BodyShape, Site};
+use crate::scope::BodyShape;
 use crate::type_lattice::display_name;
 
 use super::run;
@@ -35,7 +35,7 @@ fn settled(program: &Program<'_>, name: &str) -> bool {
     };
     program
         .facts()
-        .settled(shape, Site::of_node(node.reference()))
+        .settled(shape, shape.site_of_node(node.reference()))
 }
 
 /// The `WHICH` overloads each test dispatches the retyped value through.
@@ -93,12 +93,13 @@ fn a_module_ascribed_no_signature_is_held_to_it_as_a_value() {
         run("MODULE m = (LET x = 1)\nPRINT (m :| Any)"),
         "load: <test>:2:7: Any is no signature"
     );
-    // A type the load cannot read faults at run.
+    // A type the load cannot read faults at run, as `VIEW`'s settlement at `Elt := Number` words
+    // it.
     assert_eq!(
         run("MODULE m = (LET x = 1)\n\
              EXPR FOR ALL #[Elt] #(VIEW x :Elt) -> Any = #(m :| Elt)\n\
              PRINT (VIEW 1)"),
-        "error: Number is no signature"
+        "error: <test>:2:46: Number is no signature"
     );
 }
 
@@ -382,7 +383,7 @@ fn a_call_in_tail_position_is_typed_as_any_call() {
     loaded(&source, |program| {
         let top = program.shape();
         let tail = (program.facts())
-            .statement_type(body(program, top, "outer"), 0)
+            .statement_type(&program.tiers().resting(), body(program, top, "outer"), 0)
             .expect("the load typed the tail");
         let render = |handle| {
             display_name(

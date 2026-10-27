@@ -9,13 +9,16 @@ pub const WIDTH: usize = 1;
 
 pub use cellgraph::{
     Active, CellHandle, Config, Covariant, CreateError, CreateLentError, CrossedOperand,
-    DeliverError, Delivered, Delivery, Dormant, DropFree, EnterError, Erased, HabitatHeader,
-    Header, HomeHeader, Lend, NoDelivery, NoHeader, NoScratch, OnceRun, OnceView, PeekError,
-    Prices, Projected, ProjectionAt, Projects, Prose, Reattachable, ReattachableOverBoth,
-    ReceiptError, RedeemError, RegisterError, ReleaseAbsorption, ReleaseError, ReleaseTenantError,
-    ReleaseTreeError, Run, SlabHandle, Stale, Storage, TenantHandle, ThinRun, TreeHandle, Verdict,
-    Writer, covariant, reattachable,
+    DeliverError, Delivered, Delivery, Dormant, DropFree, EnterError, Erased, FIRST_CHUNK,
+    HabitatHeader, Header, HomeHeader, Lend, NoDelivery, NoHeader, NoScratch, OnceRun, OnceView,
+    PeekError, Prices, Projected, ProjectionAt, Projects, Prose, Reattachable,
+    ReattachableOverBoth, ReceiptError, RedeemError, RegisterError, ReleaseAbsorption,
+    ReleaseError, ReleaseTenantError, ReleaseTreeError, Run, SlabHandle, Stale, Storage,
+    TenantHandle, ThinRun, TreeHandle, Verdict, Writer, covariant, reattachable,
 };
+
+#[cfg(test)]
+pub use cellgraph::SPLICES;
 
 /// A carrier at rest in the region hosting it, branded by that region's `'home`; `'graph` is the
 /// storage outliving the graph its value may borrow.

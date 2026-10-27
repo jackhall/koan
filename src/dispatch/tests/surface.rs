@@ -7,7 +7,7 @@ use crate::program::{CellSubstrate, Outcome};
 
 use super::super::Koan;
 use super::{output, run};
-use crate::values::SpecBounds;
+use crate::values::BuildBudget;
 
 /// A function handing back its argument at `Any`, so the load no longer knows the argument's type
 /// and a read the load would refuse reaches the operator run.
@@ -169,7 +169,7 @@ fn a_projection_reads_only_the_fields_the_type_names() {
 fn a_projection_shares_its_records_runs() {
     let source = "LET r = {x = 1, y = \"a\"}\nLET p = (#[x] FROM r)";
     let mut substrate =
-        CellSubstrate::load::<Koan>(source, "<test>", 8, SpecBounds::default(), output()).unwrap();
+        CellSubstrate::load::<Koan>(source, "<test>", 8, BuildBudget::default(), output()).unwrap();
     assert_eq!(
         substrate.with(|running| running.run()),
         Ok(Outcome::Completed)

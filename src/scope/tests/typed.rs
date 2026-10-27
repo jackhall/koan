@@ -5,8 +5,8 @@
 
 use crate::parse::ExpressionPart;
 use crate::scope::{
-    Binding, BodyShape, Born, Bound, Builtins, Closing, Folds, PathEntry, Resolution, Site,
-    SiteDeps, StaticType, Tree, Typed, UnitFacts, source_of,
+    Binding, BodyShape, Born, Bound, Builtins, Closing, Folds, PathEntry, Resolution, SiteDeps,
+    StaticType, Tree, Typed, UnitFacts, source_of,
 };
 
 use super::{builtins, with_fixture};
@@ -163,7 +163,7 @@ fn the_builder_records_each_path_a_type_spells() {
                 .map(|spelled| {
                     (shape.body().iter())
                         .position(|statement| {
-                            source_of(statement, Site::of(spelled.part)).is_some()
+                            source_of(shape, statement, shape.site(spelled.part)).is_some()
                         })
                         .expect("a spelling sits in a statement")
                 })

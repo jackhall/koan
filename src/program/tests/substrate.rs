@@ -5,7 +5,7 @@ use crate::scheduler::{Action, DrainStalled, Placement, Step, StepError, Work};
 
 use super::evaluator::Mini;
 use super::{loaded, output, read_back, run_and_read};
-use crate::values::SpecBounds;
+use crate::values::BuildBudget;
 
 /// Two programs, loaded by a helper that hands each substrate back.
 fn two() -> (CellSubstrate, CellSubstrate) {
@@ -31,7 +31,7 @@ fn two_programs_run_and_are_read_back_in_a_separate_call() {
 #[test]
 fn load_reports_a_parse_error_and_a_shape_error() {
     assert!(matches!(
-        CellSubstrate::load::<Mini>("foo[2]", "<test>", 2, SpecBounds::default(), output()),
+        CellSubstrate::load::<Mini>("foo[2]", "<test>", 2, BuildBudget::default(), output()),
         Err(LoadError::Parse(_))
     ));
     assert!(matches!(
@@ -39,7 +39,7 @@ fn load_reports_a_parse_error_and_a_shape_error() {
             "LET a = nowhere",
             "<test>",
             2,
-            SpecBounds::default(),
+            BuildBudget::default(),
             output()
         ),
         Err(LoadError::Shape { .. })
@@ -60,7 +60,7 @@ fn a_refused_load_renders_its_shape_error_alone() {
     ] {
         // The substrate, and with it the interner and registry, is gone once `load` returns.
         let Err(error) =
-            CellSubstrate::load::<Mini>(source, "main.koan", 2, SpecBounds::default(), output())
+            CellSubstrate::load::<Mini>(source, "main.koan", 2, BuildBudget::default(), output())
         else {
             panic!("`{source}` is refused");
         };

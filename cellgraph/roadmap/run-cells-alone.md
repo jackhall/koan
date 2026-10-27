@@ -1,31 +1,24 @@
 # Run cells alone
 
-Cellgraph's surface once no build cell is a cell.
+Cellgraph's surface now that no build cell is a cell.
 
-**Problem.** Cellgraph grew doors for one embedder's one tree, each with one
-caller or none: `enter_beside`, `peek`, `is_childless`, the named and copied
-lends of [`lend.rs`](../src/lend.rs), counted tenant lends with their
-`held`/`unheld` books, [`lend_cycle`](../src/graph/lend_cycle.rs),
-`Projects`/`Projected`, and the `'lent` brand that gives `StepContext` ten
-parameters ([`graph.rs`](../src/graph.rs)). `peek` is documented as a read for
-a drain, yet koan writes header cells through it; `peek` refuses a tenant
-while `enter_beside` maps one to its host, resolving the entered cell's write
-home once itself and again in `begin`; a `Fresh` koan frame still takes a
-counted lend of its parent's scratch that no chain reads
-([the drain](../../src/scheduler/drain.rs)). Koan's header family carries a
-table, a home and settled facts on every run cell for a build cell that
-[the build arena](../../roadmap/gradual-build/build-arena.md) moves out of the
-graph.
+**Problem.** Cellgraph grew doors for one embedder's build tree, which koan
+now keeps outside the graph in
+[its build arena](../../src/scheduler/README.md#the-build-arena):
+`enter_beside`, `peek` and `is_childless` have no koan caller, and the named
+and copied lends of [`lend.rs`](../src/lend.rs), counted tenant lends with
+their `held`/`unheld` books, [`lend_cycle`](../src/graph/lend_cycle.rs),
+and the `'lent` brand that gives `StepContext` ten
+parameters ([`graph.rs`](../src/graph.rs)) remain. A `Fresh` koan frame still
+takes a counted lend of its parent's scratch that no chain reads
+([the drain](../../src/scheduler/drain.rs)).
 
 **Acceptance criteria.**
 
 - Cellgraph's public surface holds no `enter_beside`, `peek`, `is_childless`,
   `Lend`, `Lent` or `'lent`, no counted tenant lend, no `held`/`unheld`
-  books, no `lend_cycle` and no `Projects`/`Projected`, and
+  books and no `lend_cycle`, and
   [`tests/surface.rs`](../tests/surface.rs) names what remains.
-- Koan's header family holds a half's type branch alone; no run cell's header
-  carries a table, a home or settled facts.
-- The graph holds one slab cell, the run root; the load is no cellgraph work.
 - `StepContext` and koan's `Step` carry no `'lent`; a `Fresh` frame takes no
   lend; a tenant's release passes no count to its host's scratch, and the
   Miri slate tests that pinned those passes go with them.
@@ -36,14 +29,12 @@ graph.
 
 - *A tenant's own scratch — decided.* Not needed: a tenant borrows nothing,
   so nothing is counted on its host's scratch and no lend outlives a release.
-- *Order — decided.* After the arena ships, since koan's frames reach their
-  build cells through the arena's own reference.
+- *The header projection — decided.* `Projects`/`Projected` stay: koan's
+  [region header](../../src/scope/header.rs) holds a half's decision memo
+  beside its type branch, and `values` reads the branch through the projection.
 
 ## Dependencies
 
-**Requires:**
-
-- [The build arena](../../roadmap/gradual-build/build-arena.md) — the build
-  leaves the cell graph before its doors go.
+**Requires:** none.
 
 **Unblocks:** none — a leaf.

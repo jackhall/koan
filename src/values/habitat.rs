@@ -9,7 +9,7 @@
 //! value beside the projected header door of the same half, so a value door that takes both at one
 //! brand interns its type into the branch of the habitat it lays the value in. During the load the
 //! chain writes the root builder instead ([`Half::Load`]), and the agent chain writes the agent
-//! tier ([`Half::Agent`]): where a specialization's binding and an invariant site's types rest, so
+//! tier ([`Half::Agent`]): where a settlement's binding and an invariant site's types rest, so
 //! every later frame of the program finds them.
 //!
 //! `memory` names no type tier, so the habitat a chain writes is assembled here, where values pair
@@ -19,7 +19,7 @@
 use std::cell::Cell;
 use std::marker::PhantomData;
 
-use crate::memory::{Header, LaysRuns, Projected, Projects, Writer, reattachable};
+use crate::memory::{Bump, Header, LaysRuns, Projected, Projects, Writer, reattachable};
 use crate::type_lattice::{Agent, Branch, Frozen, Habitat, Halves, Own, RootBuilder, TypeChain};
 
 /// The two tiers every chain of the program's one agent reads above its own halves: the frozen
@@ -49,6 +49,22 @@ impl<'graph> TypeTiers<'graph> {
         'graph: 'reg,
     {
         TypeChain::scratch(self.frozen, self.agent, region, half)
+    }
+
+    /// A chain over the tiers that interns into a tier of its own, laid in `bump`: what a
+    /// settlement's walk interns through, the types its records name adopted into the agent tier
+    /// once it ends.
+    pub fn settling<'tier, 'pair, 'door>(
+        self,
+        bump: &'tier Bump,
+    ) -> Chain<'tier, 'pair, 'tier, 'door>
+    where
+        'graph: 'tier,
+    {
+        self.chain(Halves::alone(Half::Agent(
+            Agent::in_region(bump),
+            PhantomData,
+        )))
     }
 
     /// The agent chain: the frozen load, then the agent tier, which it writes. Paired to the writer

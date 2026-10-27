@@ -1,6 +1,7 @@
-//! A tail hop: a cell hands its work to a successor and dies, and a loop of them runs in bounded
-//! memory. Once at each placement, because what the hand-off costs is exactly what the placement
-//! decides — a forced copy between siblings, nothing at all between co-tenants.
+//! A tail hop: a cell hands its work to a successor born beside it and dies, and a loop of them runs
+//! in bounded memory. Once with the loop's head a tree child of its caller and once a tenant of it:
+//! every hop is a sibling in a region of its own, so the carried value is pinned free where it
+//! rests above the successor and copied into a recycled region where it rests in the predecessor.
 
 use std::cell::Cell;
 
@@ -44,15 +45,10 @@ fn start<'graph>(
 /// One turn of the loop: take the carried value, and either hop again or deliver.
 ///
 /// The first turn has nothing to take and builds the value instead, so the same step is both the
-/// head of the loop and every hop of it. What the veneer's wake cost is the placement's whole
-/// story: a sibling is `Apart` from the cell that kept the value, so it arrives by a forced copy
-/// into this cell's own region; a co-tenant writes the same host, so the same wake pins what is
-/// already at its `'here`.
-fn turn<'graph>(
-    step: Step<'_, 'graph, '_, '_, '_, '_, Native>,
-    placement: Placement,
-    next: TestStep<'graph>,
-) -> Action<'graph, Native> {
+/// head of the loop and every hop of it. A sibling is `Apart` from the cell that kept the value, so
+/// it arrives by a forced copy into this cell's own region; a value a tenant head built in its
+/// host, the successor's parent, the wake pins.
+fn turn<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
     let (step, state) = step.state();
     let carried = match state {
         KValue::Null => crate::values::text(step.writer(), CARRIED),
@@ -66,13 +62,10 @@ fn turn<'graph>(
     if left == 0 {
         return deliver(step, carried);
     }
-    step.tail(
-        placement,
-        Work {
-            step: next,
-            state: carried,
-        },
-    )
+    step.tail(Work {
+        step: turn,
+        state: carried,
+    })
 }
 
 /// The last turn: fill the slot the loop's head was born against. Every hop carried the same
@@ -102,19 +95,11 @@ fn finish<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<
 }
 
 fn start_fresh<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
-    start(step, Placement::Fresh, turn_fresh)
+    start(step, Placement::Fresh, turn)
 }
 
 fn start_shares<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
-    start(step, Placement::Shares, turn_shares)
-}
-
-fn turn_fresh<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
-    turn(step, Placement::Fresh, turn_fresh)
-}
-
-fn turn_shares<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
-    turn(step, Placement::Shares, turn_shares)
+    start(step, Placement::Shares, turn)
 }
 
 /// What one run of the loop leaves behind: what it recorded, the most cells it held live at once,
@@ -131,8 +116,11 @@ fn run(hops: usize, start: AnyStep) -> Run {
     reset();
     REMAINING.with(|remaining| remaining.set(hops));
     let type_region = Bump::new();
-    let mut graph: TestGraph<'_> =
-        TestGraph::new(1, crate::values::tests::seeded_tiers(&type_region));
+    let mut graph: TestGraph<'_> = TestGraph::new(
+        1,
+        crate::values::tests::seeded_tiers(&type_region),
+        Default::default(),
+    );
     let root = graph.root().expect("a fresh slab admits a root");
     let mut scheduler = Scheduler::over(&mut graph);
     let before = crate::tests::allocation_count();
@@ -172,7 +160,7 @@ fn a_fresh_loop_of_ten_thousand_hops_runs_in_three_cells_and_a_flat_heap() {
 }
 
 #[test]
-fn a_shares_loop_of_ten_thousand_hops_copies_nothing_into_its_host() {
+fn a_loop_headed_by_a_tenant_hops_in_three_cells_and_a_flat_heap() {
     let few = run(FEW, start_shares);
     let many = run(MANY, start_shares);
 
@@ -181,20 +169,20 @@ fn a_shares_loop_of_ten_thousand_hops_copies_nothing_into_its_host() {
     assert_eq!(many.peak, PEAK, "a hop releases its predecessor");
     assert!(
         many.allocations <= few.allocations,
-        "a co-tenant's crossing pins, so a hop writes nothing: {} allocations against {} for a \
-         hundredth of the hops",
+        "every hop past the tenant head is a sibling in a recycled region: {} allocations \
+         against {} for a hundredth of the hops",
         many.allocations,
         few.allocations
     );
 }
 
-/// The hand-off at its minimal shape, both ways round: three hops, and the carried bytes read
-/// back at the end.
+/// The hop at its minimal shape, under both heads: three hops, and the carried bytes read back at
+/// the end.
 ///
 /// The long loops above read the heap; this one reads the memory. A successor redeems out of a
-/// region the drain reclaims in the round that follows, and — at `Fresh` — hands straight back out
-/// of the pool to the hop after it, so every byte the loop carries is written into a region that
-/// was somebody else's a moment ago.
+/// region the drain reclaims in the round that follows, and hands straight back out of the pool
+/// to the hop after it, so every byte the loop carries is written into a region that was somebody
+/// else's a moment ago.
 #[test]
 fn a_hand_off_redeems_out_of_the_region_the_drain_reclaims_next() {
     let fresh = run(3, start_fresh);

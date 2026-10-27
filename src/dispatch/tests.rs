@@ -1,20 +1,27 @@
 //! Dispatch's suites, over programs run end to end: each is loaded under [`Koan`], run, and read
 //! back as what it wrote to either sink.
 
+mod activation;
 mod annotation;
 mod ascription;
 mod boundary;
+mod bounds;
 mod caching;
 mod classes;
+mod compositions;
 mod contributions;
 mod digests;
+mod door;
 mod frontiers;
 mod functions;
 mod generate;
 mod generic;
 mod instances;
+mod kept;
 mod keys;
 mod lexical;
+mod loops;
+mod memo;
 mod modules;
 mod narrowing;
 mod paths;
@@ -22,6 +29,7 @@ mod programs;
 mod quotes;
 mod rankings;
 mod repeats;
+mod replay;
 mod resumption;
 mod retypes;
 mod rules;
@@ -41,7 +49,7 @@ use crate::program::{CellSubstrate, Outcome, Output};
 
 use super::Koan;
 use super::walk::{LoadCounts, counted};
-use crate::values::SpecBounds;
+use crate::values::BuildBudget;
 
 thread_local! {
     /// Every line written to either sink since the last [`run`], in order.
@@ -64,7 +72,7 @@ fn output() -> Output {
 fn run(source: &str) -> String {
     WRITTEN.with(|written| written.borrow_mut().clear());
     let mut substrate =
-        match CellSubstrate::load::<Koan>(source, "<test>", 8, SpecBounds::default(), output()) {
+        match CellSubstrate::load::<Koan>(source, "<test>", 8, BuildBudget::default(), output()) {
             Ok(substrate) => substrate,
             Err(error) => return format!("load: {error}"),
         };
@@ -80,7 +88,7 @@ fn run(source: &str) -> String {
 fn load_counts(source: &str) -> LoadCounts {
     let (refused, counts) = counted(|| {
         let loaded =
-            CellSubstrate::load::<Koan>(source, "<test>", 8, SpecBounds::default(), output());
+            CellSubstrate::load::<Koan>(source, "<test>", 8, BuildBudget::default(), output());
         loaded.err().map(|error| error.to_string())
     });
     if let Some(error) = refused {
@@ -99,4 +107,26 @@ fn assert_linear(what: &str, count: impl Fn(usize) -> usize) {
         second <= first + first / 8,
         "{what} grow faster than linearly: {at8} at 8, {at16} at 16, {at24} at 24"
     );
+}
+
+/// The syntax of the one quote `text` writes, parsed into program storage leaked for the test, so
+/// it outlives every graph: what `COMPOSE` over text composes.
+pub(super) fn quoted(
+    text: &str,
+    symbols: &crate::symbols::SymbolInterner,
+) -> crate::parse::ProgramNode<'static> {
+    use crate::parse::ExpressionPart;
+    let storage = Box::leak(Box::new(crate::memory::program_storage()));
+    let parsed = crate::parse::parse(storage.brand(), symbols, text)
+        .expect("`COMPOSE` is handed text that parses");
+    let [quote] = &parsed[..] else {
+        panic!("`COMPOSE` is handed one quote's text")
+    };
+    let [part] = quote.parts else {
+        panic!("`COMPOSE` is handed one quote's text")
+    };
+    let ExpressionPart::QuotedExpression(syntax) = part.value else {
+        panic!("`COMPOSE` is handed a quote's text")
+    };
+    syntax
 }

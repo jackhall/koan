@@ -6,3 +6,6 @@
 # everyone who runs the test benefits from these saved cases.
 cc 6d0572a22ca295fb42e98bea01e1b1379b013453fec0c5ec6521e687d576ca71 # shrinks to program = Functors { modules: [(0, 1), (0, 1)], bindings: [Module(0), Wrap(Module(0))], pair: (1, 1) }
 cc 88158d7d32bf7bd905df3615b8d5ddab8a087c02b778c07673b4f38a4e875ae1 # shrinks to program = Functors { modules: [(0, 1), (0, 1)], bindings: [Wrap(Module(0)), Wrap(Module(0))], pair: (0, 0) }
+cc 141d20de8475fcc94151b7d77904d41976484e49f75fa0d3c5038ac76b70ec13 # shrinks to program = Functors { modules: [(0, 1), (0, 1)], bindings: [Wrap(Module(0)), Module(0)], pair: (2, 1) }
+cc e151cc99e99dc4347b92c161c69e5256fefd5c4ba982d686d6daeb2051f3fb51 # shrinks to program = Functors { modules: [(0, 1), (0, 1)], bindings: [Module(0), Wrap(Module(0))], pair: (1, 0) }
+cc c11d276d2bdebf15e868bbd47c318593076f4b6621a0b8fb9538e7fe464e08de # shrinks to program = Functors { modules: [(0, 1), (0, 1)], bindings: [Build(Module(0)), Opaque(0)], pair: (1, 0) }

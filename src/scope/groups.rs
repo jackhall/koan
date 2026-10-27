@@ -293,6 +293,11 @@ impl<'graph> GroupFrame<'graph> {
         }
     }
 
+    /// The claims the code this frame is in makes, chained to the claims around it.
+    pub(crate) fn claims(&self) -> &'graph Claims<'graph> {
+        self.claims
+    }
+
     /// The held group covering `symbol`, walking outward. `None` when no enclosing body holds one.
     pub fn visible(&self, symbol: KeywordSymbol) -> Option<&'graph DeclaredGroup<'graph>> {
         let mut frame = Some(self);

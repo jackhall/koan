@@ -42,7 +42,7 @@ mod record;
 mod render;
 mod retyped;
 mod settled;
-mod specialization;
+mod settlement;
 mod surface;
 mod tagged;
 mod type_value;
@@ -56,12 +56,12 @@ pub use admission::{
     ConstructionRefused, SealRefused, admits, admits_part, construction, dict_type, list_type,
     part_ktype, record_type, representation, satisfies, sealing, solves_identity,
 };
-pub use circular::{Circular, CodeView, Resolved};
+pub use circular::{Circular, CodeView, FunctionIdentity, Resolved};
 #[cfg(test)]
-pub use crossing::{ADOPTED, EXIT_WALKS, PARTS_ENTERED, PARTS_SKIPPED, WARM_WALKS};
+pub use crossing::{ADOPTED, COPIED, EXIT_WALKS, PARTS_ENTERED, PARTS_SKIPPED};
 pub use crossing::{
-    COPY_RATIO, Destination, adopt_value, copy_severed, cross, cross_here, cross_view,
-    cross_view_against, verdict,
+    COPY_RATIO, adopt_value, copy_severed, cross, cross_here, cross_view, cross_view_against,
+    cross_views, verdict,
 };
 #[cfg(debug_assertions)]
 pub use crossing::{check_habitat, check_pinned_habitat};
@@ -76,13 +76,12 @@ pub use list::List;
 pub use record::Record;
 pub use retyped::Retyped;
 pub(crate) use settled::stamp_knot;
-pub use specialization::{
-    BuildRef, Decision, KeyedTypes, SpecBinding, SpecBounds, SpecEntry, SpecHome, SpecKey,
-    SpecTable,
-};
+pub use settlement::{ArenaRef, BindingImage, BuildBudget, KeyedTypes, SettlementKey};
+#[cfg(test)]
+pub(crate) use surface::TARGETS;
 pub use surface::{
-    Seen, Surface, applications, fit_solution, pinned_at_fit, retype_target, retyped_to,
-    retypes_by_header, under, unknown,
+    FieldPath, Retype, Seen, Surface, applications, fit_solution, pinned_at_fit, retype_target,
+    retype_target_as, retyped_to, retypes_by_header, under, unknown,
 };
 pub use tagged::Tagged;
 pub use type_value::TypeValue;

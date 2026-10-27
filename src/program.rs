@@ -20,21 +20,29 @@
 //!
 //! See [program/README.md](program/README.md).
 
+pub(crate) mod activation_store;
 mod body;
 mod bundle;
 mod exit;
 mod record;
-mod specialize;
+mod settle;
 mod substrate;
 
 #[cfg(test)]
 pub(crate) mod tests;
 
-pub use body::{CodeRefused, Runner, block, call, eval, placement_of, run, surfaced_block};
+pub use body::{CodeRefused, Runner, block, call, eval, run, surfaced_block, using_composed};
 pub use bundle::{
-    Handed, KBirth, KBirthFamily, KBundle, KScratchFamily, KState, KStateFamily, Within,
+    FrameKept, Handed, KBirth, KBirthFamily, KBundle, KScratchFamily, KState, KStateFamily, Keeps,
+    Passing, Within,
 };
 pub use exit::Exit;
-pub use record::{CallKind, Contract, Evaluated, Language, LoadError, Outcome, Output, Program};
-pub use specialize::{called_function, seek, specialize};
+pub use record::{
+    CallKind, Contract, Evaluated, Language, LoadError, Outcome, Output, Program, kept,
+};
+#[cfg(test)]
+pub(crate) use settle::LEVELS;
+pub use settle::{called_function, seek};
+#[cfg(test)]
+pub(crate) use substrate::walked;
 pub use substrate::{CellSubstrate, Running, STACK_BYTES};

@@ -27,7 +27,7 @@ to: each is bound once per program, so it stands for its value, and the load
 knows it without running anything.
 
 Values are immutable, so a value's digest is a fact about it. It is computed
-on demand, when a view or a specialization's key asks for it, and composed
+on demand, when a view or a settlement's key asks for it, and composed
 from its parts' digests, as a type's digest is composed from its children's;
 one demand digests a part shared many times over once. A module's content is
 computed where a view or a key first reaches the module and kept on the

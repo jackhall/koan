@@ -23,11 +23,12 @@ const SOURCE: &str = "LET f = (FN :{x :Number, n :Number} -> Any = #(\n  \
 fn keyed_flat(
     shapes: &Shapes<'_>,
     frontiers: &[(Segment, UnitIndex, Frontier<'_>)],
-    keyable: &dyn Fn(Segment, Slot) -> bool,
-) -> Vec<(Segment, Slot)> {
+    keyable: &dyn Fn(Segment, Address) -> bool,
+    entered: &[ShapeKind],
+) -> Vec<(Segment, Address)> {
     let mut named = Vec::new();
     for (segment, unit, frontier) in frontiers {
-        if *unit == UnitIndex::ENTRY && shapes.shape_at(*segment).kind() == ShapeKind::Callable {
+        if *unit == UnitIndex::ENTRY && entered.contains(&shapes.shape_at(*segment).kind()) {
             continue;
         }
         let unknowns = frontier.unknowns();
@@ -38,20 +39,16 @@ fn keyed_flat(
         else {
             continue;
         };
-        if seam.unit != UnitIndex::ENTRY
-            || shapes.shape_at(seam.segment).kind() != ShapeKind::Callable
+        if seam.unit != UnitIndex::ENTRY || !entered.contains(&shapes.shape_at(seam.segment).kind())
         {
             continue;
         }
         for unknown in unknowns {
-            let Address::Slot(slot) = unknown.at else {
-                continue;
-            };
-            if shapes.shape_at(unknown.segment).kind() == ShapeKind::Callable
+            if entered.contains(&shapes.shape_at(unknown.segment).kind())
                 && shapes.encloses(unknown.segment, *segment)
-                && keyable(unknown.segment, slot)
+                && keyable(unknown.segment, unknown.at)
             {
-                named.push((unknown.segment, slot));
+                named.push((unknown.segment, unknown.at));
             }
         }
     }
@@ -113,9 +110,17 @@ proptest! {
                 };
                 laid.push((body.segment(), unit, frontier));
             }
-            let keyable = |segment: Segment, slot: Slot| !(segment.index() + slot.0).is_multiple_of(3);
-            let memoized = keyed_names(shapes, &laid, &scratch, &keyable);
-            assert_eq!(memoized.to_vec(), keyed_flat(shapes, &laid, &keyable));
+            let keyable = |segment: Segment, at: Address| match at {
+                Address::Slot(slot) => !(segment.index() + slot.0).is_multiple_of(3),
+                Address::Capture(capture) => capture.0.is_multiple_of(2),
+            };
+            for entered in [
+                &[ShapeKind::Callable][..],
+                &[ShapeKind::Callable, ShapeKind::Block, ShapeKind::Code],
+            ] {
+                let memoized = keyed_names(shapes, &laid, &scratch, &keyable, entered);
+                assert_eq!(memoized.to_vec(), keyed_flat(shapes, &laid, &keyable, entered));
+            }
         });
     }
 }

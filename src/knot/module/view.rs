@@ -19,7 +19,9 @@
 //! at the member's key that cover the member read under the source's bindings, narrowed to the
 //! most specific ([`layout::covering`], the pick a header makes), each
 //! [coerced](super::coerce::coerce) as any member is — behind a barrier where the view reads the
-//! member otherwise — and retyped to the member's shape the view shows.
+//! member otherwise — and retyped to the member's shape the view shows. Over a body-born module the
+//! load sees all of, it recorded that pick by registration position ([`picks`]), and the build
+//! takes it.
 //!
 //! No carrier is made at a *nested* boundary. A slot declared at an application whose pins name
 //! the outer signature's parameters is re-viewed against it read under the outer view's bindings,
@@ -38,12 +40,12 @@
 //! one fit. [`nested_types`] is the same half of a nested re-view, which the load lays wherever it
 //! knows what a nested module carries (`dispatch/walk/views.rs`).
 
-use crate::knot::{KActivationView, KValue, Knotted, composed};
+use crate::knot::{KReading, KValue, Knotted, composed};
 use crate::memory::{BumpAllocator, BumpVec, Writer};
-use crate::scope::ViewSlots;
+use crate::scope::{Pick, ViewSlots};
 use crate::symbols::{BinderSymbol, TypeSymbol, ValueSymbol};
 use crate::type_lattice::{
-    ContentKey, FitsFailure, KType, Members, SchemaDraft, SigSchema, TypeNode,
+    ContentKey, DeclaredType, FitsFailure, KType, Members, SchemaDraft, SigSchema, TypeNode,
     member as bound_member, substitute_parameters,
 };
 use crate::values::{Chain, ContentDigest, Digests, TypeValue, Value, fit_solution};
@@ -92,8 +94,8 @@ pub fn takes(types: &Chain<'_, '_, '_, '_>, ascribed: KType) -> bool {
 /// value its slot does. Any other capture is digested through one demand opened for them all.
 pub fn fill_at_view<'graph, 'cell>(
     source: KValue<'graph, 'cell>,
-    slots: ViewSlots<'graph>,
-    view: &KActivationView<'graph, 'cell>,
+    slots: ViewSlots<'_>,
+    view: &KReading<'_, 'graph, 'cell>,
     types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
 ) {
@@ -105,7 +107,7 @@ pub fn fill_at_view<'graph, 'cell>(
     };
     // The memos are placed for the captures of the body the load read; any other module's
     // content is left to the view's own walk.
-    if body.shape.segment() != slots.body {
+    if body.segment != slots.body {
         return;
     }
     let mut memo = None;
@@ -122,7 +124,7 @@ pub fn fill_at_view<'graph, 'cell>(
         }
         (index, digest)
     });
-    let content = ModuleContent::body(body.shape.code_digest(), captures);
+    let content = ModuleContent::body(body.code, captures);
     #[cfg(test)]
     if CHECK_SLOT_MEMOS.get() {
         let mut fresh = Digests::new(types, scratch);
@@ -130,7 +132,7 @@ pub fn fill_at_view<'graph, 'cell>(
             composed(body, closure.links()).map(|(index, link)| (index, link.digest(&mut fresh)));
         assert_eq!(
             content,
-            ModuleContent::body(body.shape.code_digest(), walked),
+            ModuleContent::body(body.code, walked),
             "a slot's memo holds the digest of the value its capture holds"
         );
     }
@@ -146,12 +148,14 @@ thread_local! {
 
 /// `source` seen as `signature` under `:|`, as a module of its own. The source's signature is the
 /// type it carries — a header's application, or a bare module's own — and the view is keyed on
-/// its bare member, so two sources over one module that fit alike build one view. A refusal writes
+/// its bare member, so two sources over one module that fit alike build one view. `picks` are
+/// what the load recorded for a body-born source it saw all of ([`picks`]). A refusal writes
 /// nothing but what a partial coercion walk had already laid down, which nothing names.
 pub fn ascribe<'graph, 'tier: 'x, 'cell, 'x>(
     writer: Writer<'cell, '_>,
     source: KValue<'graph, 'cell>,
     signature: KType,
+    picks: Option<&[Pick<'_>]>,
     types: &Chain<'tier, 'cell, '_, '_>,
     scratch: BumpAllocator<'x>,
 ) -> Result<Knotted<'graph, 'cell>, Unascribable<'tier, 'x>> {
@@ -185,6 +189,7 @@ pub fn ascribe<'graph, 'tier: 'x, 'cell, 'x>(
         from,
         viewed.to,
         content,
+        picks,
         types,
         scratch,
     )
@@ -398,6 +403,7 @@ fn applied<'run: 'x, 'x>(
 
 /// Build the view's member run in layout order and lay the node down, its content `content`. `from`
 /// and `to` are what the source and the view bind the signature's head parameters to, interned.
+/// `picks`, where the load recorded them, are each keyworded member's covering registrations.
 ///
 /// Two callers: an ascription, and a nested signature slot inside one
 /// ([`coerce`](super::coerce::coerce)), which passes the enclosing substitutions unchanged —
@@ -412,6 +418,7 @@ pub(super) fn build<'graph, 'tier, 'cell, 'x>(
     from: Substitution<'tier>,
     to: Substitution<'tier>,
     content: ModuleContent,
+    picks: Option<&[Pick<'_>]>,
     types: &Chain<'tier, 'cell, '_, '_>,
     scratch: BumpAllocator<'x>,
 ) -> Result<Knotted<'graph, 'cell>, Unascribable<'tier, 'x>> {
@@ -430,8 +437,14 @@ pub(super) fn build<'graph, 'tier, 'cell, 'x>(
     // Value members first, in the signature's own order — which is layout order, since both
     // schemas' value tables hold the same names symbol-sorted.
     for (name, declared) in sig.value_slots.iter().copied() {
-        let held = layout::member(writer, source, BinderSymbol::Value(name), types, scratch)
-            .expect("satisfaction admitted the member, so the source holds it");
+        let held = layout::member(
+            writer,
+            source,
+            (BinderSymbol::Value(name), None),
+            types,
+            scratch,
+        )
+        .expect("satisfaction admitted the member, so the source holds it");
         let member = coerce(&cx, held, declared)
             .map_err(|refused| Unascribable::Coercion { name, refused })?;
         members.push(member);
@@ -450,11 +463,36 @@ pub(super) fn build<'graph, 'tier, 'cell, 'x>(
     // Then, per keyworded member, the source's overloads covering it read under `from` — the pick a
     // header makes — each behind a barrier where the view reads the member otherwise, and retyped
     // to the member's shape the view shows.
-    for declared in sig.keyworded.iter().copied() {
-        let key = layout::key_of(declared, types);
-        let offered = layout::functions_at(writer, source, key, types, scratch);
+    for (member, declared) in sig.keyworded.iter().copied().enumerate() {
         let shown = cx.view_side(declared);
-        for function in layout::covering(&offered, cx.source_side(declared), types, scratch) {
+        let picked =
+            picks.and_then(|picks| picks.iter().find(|pick| usize::from(pick.member) == member));
+        let functions = match picked {
+            // What the load picked, by position in the source's registration run.
+            Some(pick) => {
+                let picked = layout::picked_of(source, pick, types, scratch);
+                debug_assert!(
+                    {
+                        let key = layout::key_of(declared, types);
+                        let offered =
+                            layout::functions_at(writer, source, key, None, types, scratch);
+                        let covered =
+                            layout::covering(&offered, cx.source_side(declared), types, scratch);
+                        layout::same_shapes(&covered, &picked)
+                    },
+                    "the load's picks are what the build would cover"
+                );
+                picked
+            }
+            None => {
+                #[cfg(test)]
+                layout::COVERED.with(|covered| covered.set(covered.get() + 1));
+                let key = layout::key_of(declared, types);
+                let offered = layout::functions_at(writer, source, key, None, types, scratch);
+                layout::covering(&offered, cx.source_side(declared), types, scratch)
+            }
+        };
+        for function in functions {
             let member = coerce(&cx, function, declared)
                 .expect("a registration member is a function, which a barrier takes");
             members.push(layout::retyped_at_shape(
@@ -466,6 +504,31 @@ pub(super) fn build<'graph, 'tier, 'cell, 'x>(
         Module::tie(writer, view, &members, Born::View(content), types),
         0,
     ))
+}
+
+/// What a view of `viewed`'s signature, over a body-born module whose registrations register at
+/// `registered` in their run's order, carries for each keyworded member: [`build`]'s pick, the
+/// registrations covering the member read under the source's bindings, by position. The load
+/// records it where it sees all of the module, and the build takes it in place of its own.
+pub fn picks<'x>(
+    viewed: &ViewTypes<'_>,
+    registered: &[DeclaredType<KType>],
+    types: &Chain<'_, '_, '_, '_>,
+    scratch: BumpAllocator<'x>,
+) -> Option<BumpVec<'x, (u16, BumpVec<'x, u32>)>> {
+    let from = viewed.from?;
+    let mut picks = BumpVec::with_capacity_in(viewed.sig.keyworded.len(), scratch);
+    for (member, declared) in viewed.sig.keyworded.iter().enumerate() {
+        let source_side = types.concrete_declared(substitute_parameters(
+            types,
+            scratch,
+            *declared,
+            from.bindings,
+        ))?;
+        let offered = layout::offered_at(registered, source_side, types, scratch);
+        picks.push((u16::try_from(member).ok()?, offered));
+    }
+    Some(picks)
 }
 
 /// The view's bindings under `:|`: a carrier per head parameter of `sig` that `pins` leaves

@@ -5,7 +5,7 @@ use std::cell::Cell;
 use crate::memory::{Bump, CellGraph, ReleaseAbsorption};
 use crate::type_lattice::KType;
 use crate::values::{
-    ADOPTED, Destination, Knotted as _, MemoBits, PARTS_ENTERED, Retyped, Value, adopt_value, cross,
+    ADOPTED, Knotted as _, MemoBits, PARTS_ENTERED, Retyped, Value, adopt_value, cross,
 };
 
 use super::super::{KValueFamily, Knotted, KnottedFamily};
@@ -19,14 +19,18 @@ fn a_knots_bits_sit_on_its_root_node() {
 LET g = (FN :{x :Number} -> Number = #(f {x = x}))",
         );
         fixture.in_cell(pin, |context| {
-            // Born through a paired chain, the knot starts with no bit set.
+            // Born of the load's types, every memo it reaches is the root's; nothing has settled it.
             let types = &fixture.tiers.paired(context);
             let activation = fixture.run(context.writer(), types, &lines, &[]);
             let knot = callable(fixture, activation, "f").member().knot();
             assert_eq!(knot.len(), 2);
             let (root, other) = (Knotted::of(knot, 0), Knotted::of(knot, 1));
             let bytes = root.weight();
-            assert_eq!(root.bits(), MemoBits::NONE);
+            let born = MemoBits {
+                root_closed: true,
+                settled: false,
+            };
+            assert_eq!(root.bits(), born);
             other.set_bits(MemoBits::BOTH);
             for member in [root, other] {
                 assert_eq!(member.bits(), MemoBits::BOTH);
@@ -107,8 +111,7 @@ fn an_exit_hands_over_a_headers_memo_and_stops_at_its_settled_member() {
             let exited = |value: Value<'_, _>| {
                 ADOPTED.with(|adopted| adopted.set(0));
                 PARTS_ENTERED.with(|entered| entered.set(0));
-                let into = Destination::Region(types);
-                adopt_value::<KnottedFamily>(into, types, &value, &Bump::new());
+                adopt_value::<KnottedFamily>(types, types, &value, &Bump::new());
                 (ADOPTED.with(Cell::get), PARTS_ENTERED.with(Cell::get))
             };
             let header = Retyped::of(writer, f, KType::ANY.into());

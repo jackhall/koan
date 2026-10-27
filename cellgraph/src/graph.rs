@@ -708,6 +708,13 @@ struct Destination {
     home: CellHome,
 }
 
+#[cfg(any(test, feature = "counters"))]
+thread_local! {
+    /// How many tree cells have spliced their region into the ancestor they pledged: what a
+    /// dependent's test reads to see a loop pledge none of its hops.
+    pub static SPLICES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
 /// Where one operand's home stands relative to its destination — the classification
 /// [`classify_crossing`](CellGraph::classify_crossing) takes before any price is asked for, and
 /// the whole of the **ancestry rule** an operand homed in a tree cell is held to.
@@ -1536,6 +1543,37 @@ impl<
         self.cells.write_home(cell.into()).is_ok()
     }
 
+    /// Bytes a live cell's write home has handed out of its region, absorbed bumps included; a
+    /// tenant's are its host's. What a region weighs while it stays live, chunk slack aside.
+    pub fn region_used(&self, cell: impl Into<CellHandle>) -> Result<usize, Stale<CellHandle>> {
+        let home = self.cells.write_home(cell.into())?;
+        Ok(self.regions.region(home).used_bytes())
+    }
+
+    /// Bytes a live cell's write home has handed out of its scratch since its last reset; a
+    /// tenant's are its host's.
+    #[cfg(any(test, feature = "counters"))]
+    pub fn scratch_used(&self, cell: impl Into<CellHandle>) -> Result<usize, Stale<CellHandle>> {
+        let home = self.cells.write_home(cell.into())?;
+        Ok(self.regions.scratch_in_use(home))
+    }
+
+    /// Bytes every region the graph holds has handed out: each slab and tree cell not yet freed,
+    /// live or dead, absorbed bumps included, and the sealed tier's retained chunks.
+    #[cfg(any(test, feature = "counters"))]
+    pub fn live_bytes(&self) -> usize {
+        let slab = (self.cells.slots.iter().enumerate())
+            .filter(|(_, cell)| cell.state != SlabState::Free)
+            .map(|(slot, _)| {
+                self.regions
+                    .region(CellHome::Slab(slot as u32))
+                    .used_bytes()
+            });
+        let tree = (self.cells.trees.occupied())
+            .map(|index| self.regions.region(CellHome::Tree(index)).used_bytes());
+        slab.chain(tree).sum::<usize>() + self.cells.sealed.retained_bytes()
+    }
+
     /// Read a live slab or tree cell's region header between steps, under a brand this call
     /// quantifies: the closure receives the header and a witness that `'graph` outlives the brand,
     /// never a door, so nothing can be laid through it. `Ok(None)` when no header is laid. Refuses
@@ -1737,6 +1775,10 @@ impl<
     /// — and the splice moves a `Bump` without moving a chunk byte.
     fn dispose_tree(&mut self, index: u32, regions: &mut Regions<'graph, H>, scratch: &Scratch) {
         let region = regions.take_tree(index);
+        #[cfg(any(test, feature = "counters"))]
+        if self.trees.pledge(index).is_some() {
+            SPLICES.with(|splices| splices.set(splices.get() + 1));
+        }
         let into = match self.trees.pledge(index) {
             None => {
                 regions.retire(region.into_bumps());
@@ -2153,6 +2195,19 @@ impl<
         self.step_slots_mut(cell).set_receipts(Some(run));
         if !named && matches!(cell, CellHandle::Tenant(_)) {
             self.tenancy_mut(home).scratch_tenants += 1;
+        }
+    }
+
+    /// Whether `dest` is `home` or a tree cell under it, so `dest` dies before `home` does.
+    fn at_or_under(&self, dest: CellHome, home: CellHome) -> bool {
+        match (home, dest) {
+            (CellHome::Slab(home), CellHome::Slab(dest)) => home == dest,
+            (CellHome::Slab(home), CellHome::Tree(dest)) => self.trees.root(dest) == home,
+            (CellHome::Tree(_), CellHome::Slab(_)) => false,
+            (CellHome::Tree(home), CellHome::Tree(dest)) => {
+                self.trees.root(dest) == self.trees.root(home)
+                    && self.trees.ancestry(home, dest) == Ancestry::Under
+            }
         }
     }
 
@@ -5290,6 +5345,77 @@ where
         // The view is a short borrow of a home that may outlive this cell, which `T: Covariant`
         // makes sound: its form can hand a `'cell` borrow out and never take one in.
         Active::anchored(carrier.erased())
+    }
+
+    /// A carrier for the part `part` picks out of `carrier`'s value, at the same reach and home:
+    /// what a step holds of a field of a value it was handed, so the field can cross on its own
+    /// without being rebuilt in the cell that read it. `None` where `part` picks nothing.
+    ///
+    /// `part` is generic over the brand it reads at, so what it returns derives from the value or
+    /// from `'graph` storage: the carrier's reach covers it, and its home holds it or outlives what
+    /// holds it. A part borrowed from anywhere else does not compile:
+    ///
+    /// ```compile_fail
+    /// use cellgraph::{Active, CellGraph, DropFree, Verdict, covariant, reattachable};
+    /// struct Work;
+    /// reattachable!(Work => String);
+    /// struct Number;
+    /// reattachable!(Number => &'cell u32);
+    /// covariant!(Number);
+    /// impl DropFree for Number {}
+    ///
+    /// let mut graph: CellGraph<'static, Work> = CellGraph::new(1, |_| Verdict::Pin);
+    /// let cell = graph.create(None).unwrap();
+    /// graph
+    ///     .enter(cell, |context| {
+    ///         let value = context.lift::<Number>(&context.writer().fill(1, |_| 41u32)[0]);
+    ///         let local = 7u32;
+    ///         context.project::<Number, Number>(&value, |_, _| Some(Active::new(&local)));
+    ///     })
+    ///     .unwrap();
+    /// ```
+    pub fn project<T, U>(
+        &self,
+        carrier: &Ready<'graph, 'step, T, W>,
+        part: impl for<'c> FnOnce(
+            Active<'graph, 'c, T>,
+            &'c &'graph (),
+        ) -> Option<Active<'graph, 'c, U>>,
+    ) -> Option<Ready<'graph, 'step, U, W>>
+    where
+        T: Reattachable<'graph> + Covariant<'graph> + DropFree,
+        U: Reattachable<'graph> + DropFree,
+        Erased<'graph, T>: Copy,
+    {
+        // The value is anchored as `read` anchors it: its referents are live for the whole step.
+        let picked = part(Active::anchored(carrier.erased()), &&())?;
+        Some(Ready::new(
+            picked.into_erased(),
+            carrier.reach().clone(),
+            carrier.home(),
+        ))
+    }
+
+    /// Hand `carrier` on to `dest` unchanged, its home kept, where `dest`'s write home is the
+    /// carrier's home or lies under it: its reach is minted into the destination, as a pinning
+    /// placement mints it, but the value is neither rebuilt nor re-homed. `Ok(None)` for any other
+    /// destination, which the caller places through [`alloc_into`](Self::alloc_into) instead.
+    /// Refused for a destination that is not live.
+    pub fn pass_into<V>(
+        &mut self,
+        dest: impl Into<CellHandle>,
+        carrier: &Ready<'graph, 'step, V, W>,
+    ) -> Result<Option<Ready<'graph, 'step, V, W>>, Stale<CellHandle>>
+    where
+        V: Reattachable<'graph> + DropFree,
+        Erased<'graph, V>: Copy,
+    {
+        let dest = self.cells.destination(self.cells.write_home(dest.into())?);
+        if !self.cells.at_or_under(dest.home, carrier.home()) {
+            return Ok(None);
+        }
+        self.cells.mint(dest.mint_slot, carrier.reach());
+        Ok(Some(carrier.clone()))
     }
 }
 

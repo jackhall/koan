@@ -32,7 +32,7 @@
 //! a copy of the knot keeps it. That over-distinction is sound: a digest keys what is equal by
 //! content, and keying two equal things apart costs only a key.
 //!
-//! A digest is computed on demand — by a view, or by a specialization's key — and kept only by a
+//! A digest is computed on demand — by a view, or by a settlement's key — and kept only by a
 //! module, as its content, and by a slot the load marks digested, beside its value; a value no
 //! demand reaches never pays for one. A demand walks what the value reaches through one
 //! [`Digests`] memo over the demand's scratch, so a part shared many times over, and a knot met
@@ -44,7 +44,7 @@
 use std::hash::{Hash, Hasher};
 
 use crate::memory::{BumpAllocator, BumpBackedMap, BumpVec, Edge, bump_table};
-use crate::parse::KLiteral;
+use crate::parse::{ExpressionPart, KExpression, KLiteral};
 use crate::type_lattice::{DeclaredType, KType};
 
 use super::surface::Parts;
@@ -128,8 +128,10 @@ pub enum Tag {
     /// What the load cannot see of a module's content, keyed on its binder: a load-time key, never
     /// a value's digest.
     Leaf = 0x30,
-    /// A specialization's key: a body's segment index and the argument digests it is keyed on.
-    Specialization = 0x31,
+    /// A settlement's key: a body's segment index and the argument digests it is keyed on.
+    Settlement = 0x31,
+    /// Code as lowered syntax: what code equality compares, spans and caches left out.
+    Syntax = 0x32,
 }
 
 /// The one hasher every digest is computed through: a tag first, then payload, then each part's
@@ -604,6 +606,79 @@ pub fn literal_digest(literal: &KLiteral<'_>) -> ContentDigest {
         KLiteral::Null => DigestHasher::new(Tag::Null).finished(),
         KLiteral::String(text) => str_digest(text),
     }
+}
+
+/// Code's digest as lowered syntax, equal exactly where [code equality](super::equality) calls two
+/// syntaxes equal: an expression its part count, then each part's own tag and payload — a symbol
+/// by its bits, a marked part by its mark, a nested expression and a container by their parts in
+/// written order, a literal as [`literal_digest`] hashes it but for a zero, whose sign equality
+/// ignores. Spans, sources and the structural cache are left out. Parsed syntax nests no deeper
+/// than [`MAX_SYNTAX_DEPTH`](crate::parse::MAX_SYNTAX_DEPTH), so the recursion is bounded.
+pub fn syntax_digest(code: &KExpression<'_>) -> ContentDigest {
+    let mut hasher = DigestHasher::new(Tag::Syntax);
+    syntax_expression(&mut hasher, code);
+    hasher.finished()
+}
+
+fn syntax_expression(hasher: &mut DigestHasher, expression: &KExpression<'_>) {
+    hasher.count(expression.parts.len());
+    for part in expression.parts {
+        syntax_part(hasher, &part.value);
+    }
+}
+
+fn syntax_part(hasher: &mut DigestHasher, part: &ExpressionPart<'_>) {
+    use ExpressionPart as Part;
+    match part {
+        Part::Keyword(symbol) => hasher.tag(Tag::Keyword).feed(symbol),
+        Part::Identifier(symbol) => hasher.tag(Tag::Open).feed(symbol),
+        Part::Type(symbol) => hasher.tag(Tag::Type).feed(symbol.symbol()),
+        Part::MarkedName(mark, name) => hasher.tag(Tag::Mark).feed(mark).feed(name),
+        Part::MarkedUse(mark, use_) => {
+            hasher.tag(Tag::Use).feed(mark);
+            syntax_expression(hasher, use_);
+            hasher
+        }
+        Part::Expression(node)
+        | Part::SigiledTypeExpr(node)
+        | Part::RecordType(node)
+        | Part::QuotedExpression(node) => {
+            // Which grouping wraps the expression, as the variant's own index.
+            let grouping = match part {
+                Part::Expression(_) => 0u8,
+                Part::SigiledTypeExpr(_) => 1,
+                Part::RecordType(_) => 2,
+                _ => 3,
+            };
+            hasher.tag(Tag::Group).feed(grouping);
+            syntax_expression(hasher, node);
+            hasher
+        }
+        Part::ListLiteral(items) => {
+            hasher.tag(Tag::List).count(items.len());
+            items.iter().for_each(|item| syntax_part(hasher, item));
+            hasher
+        }
+        Part::DictLiteral(pairs) => {
+            hasher.tag(Tag::Dict).count(pairs.len());
+            for (key, value) in pairs.iter() {
+                syntax_part(hasher, key);
+                syntax_part(hasher, value);
+            }
+            hasher
+        }
+        Part::RecordLiteral(fields) => {
+            hasher.tag(Tag::Record).count(fields.len());
+            for (name, value) in fields.iter() {
+                hasher.feed(name);
+                syntax_part(hasher, value);
+            }
+            hasher
+        }
+        // `-0` and `0` are one literal to equality, so both hash as `0`; a literal is never NaN.
+        Part::Literal(KLiteral::Number(number)) => hasher.digest(number_digest(number + 0.0)),
+        Part::Literal(literal) => hasher.digest(literal_digest(literal)),
+    };
 }
 
 /// A type value's digest, from the handle of the type it names and the kind it carries: its own

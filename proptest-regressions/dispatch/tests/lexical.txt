@@ -7,3 +7,4 @@
 cc 15cef2b0f8942df3e18efeb1c08d7a8c9124dbf498888b22a6c4aa39f9f3048f # shrinks to case = Lexical { wide: false, bound: (Number, "1"), over: Outer, instance: false, contexts: [Module] }
 cc 0dbb62b8f2636cc9fee8191bb8edca0a0dfd30bcef01993413d2292b93e58cd5 # shrinks to case = Lexical { wide: false, bound: (Number, "1"), over: Outer, instance: false, contexts: [Code, Module, Hoist] }
 cc 1c1f52db08f062774e8254aa700fa78f93c25566dcee8183c50d2a58430ddd83 # shrinks to case = Lexical { wide: false, bound: (Number, "1"), over: Outer, instance: false, contexts: [Code] }
+cc 3373d10ea5b9390ca837e5b3773bdc85c8dda086f1b46f12348ffd938f149f50 # shrinks to case = Lexical { wide: true, bound: (Union(List(Number), Number), "[]"), over: List(OrNull(Outer)), instance: false, contexts: [Fn] }

@@ -1,7 +1,7 @@
 //! Entering a `USING … SCOPE` block, and each member read by its name.
 
 use crate::knot::KActivation;
-use crate::knot::tests::{pin, with_fixture};
+use crate::knot::tests::{Fixture, pin, with_fixture};
 use crate::memory::{Writer, resident};
 use crate::scope::{Activation, BodyShape, Coordinate, ShapeKind, Slot, Target};
 use crate::type_lattice::KType;
@@ -37,11 +37,15 @@ fn local(slot: Slot) -> Coordinate {
 
 /// The block of `enclosing`'s shape, activated with every slot empty.
 fn entered<'graph, 'cell>(
+    fixture: &Fixture<'_, 'graph>,
     writer: Writer<'cell, '_>,
     enclosing: &'cell KActivation<'graph, 'cell>,
 ) -> &'cell KActivation<'graph, 'cell> {
-    let block = only_block(enclosing.shape());
-    resident(writer, Activation::of_block(writer, block, enclosing))
+    let block = only_block(fixture.shape_of(enclosing));
+    resident(
+        writer,
+        Activation::of_block(writer, block, &fixture.facts(), enclosing),
+    )
 }
 
 const PROGRAM: &str = "\
@@ -58,14 +62,25 @@ fn a_surfaced_name_reads_the_member_it_names() {
             let writer = context.writer();
             let activation = fixture.run(writer, types, &lines, &[]);
             let m = module(fixture, activation, "m");
-            let block = entered(writer, activation);
+            let block = entered(fixture, writer, activation);
 
-            surface(writer, Value::Knotted(m), block, types, scratch)
-                .expect("the block's parameters are `m`'s members");
+            surface(
+                writer,
+                Value::Knotted(m),
+                None,
+                block,
+                fixture.shape_of(block),
+                types,
+                scratch,
+            )
+            .expect("the block's parameters are `m`'s members");
 
             let read = |name: &str| {
                 let name = fixture.name(name);
-                let (slot, _) = block.shape().slot(name).expect("a surfaced parameter");
+                let (slot, _) = fixture
+                    .shape_of(block)
+                    .slot(name)
+                    .expect("a surfaced parameter");
                 block.read(local(slot))
             };
             assert!(matches!(read("zero"), Value::Number(zero) if zero == 0.0));
@@ -96,13 +111,15 @@ USING m SCOPE (zero name)";
             let types = &fixture.tiers.of(context);
             let writer = context.writer();
             let activation = fixture.run(writer, types, &lines, &[]);
-            let block = entered(writer, activation);
+            let block = entered(fixture, writer, activation);
 
             assert_eq!(
                 surface(
                     writer,
                     Value::Knotted(module(fixture, activation, "n")),
+                    None,
                     block,
+                    fixture.shape_of(block),
                     types,
                     scratch
                 ),
@@ -115,7 +132,9 @@ USING m SCOPE (zero name)";
                 surface(
                     writer,
                     Value::Knotted(module(fixture, activation, "o")),
+                    None,
                     block,
+                    fixture.shape_of(block),
                     types,
                     scratch
                 ),
@@ -124,7 +143,7 @@ USING m SCOPE (zero name)";
                 }),
             );
             // A slot takes a bind exactly when it was empty.
-            for slot in 0..block.shape().slots() {
+            for slot in 0..fixture.shape_of(block).slots() {
                 assert!(
                     block.bind(Slot(slot as u32), Value::Null).is_ok(),
                     "a refusal binds nothing"
@@ -148,9 +167,17 @@ USING m SCOPE (zero)";
             let writer = context.writer();
             let activation = fixture.run(writer, types, &lines, &[]);
             let f = crate::knot::tests::callable(fixture, activation, "f");
-            let block = entered(writer, activation);
+            let block = entered(fixture, writer, activation);
             assert_eq!(
-                surface(writer, Value::Knotted(f), block, types, scratch),
+                surface(
+                    writer,
+                    Value::Knotted(f),
+                    None,
+                    block,
+                    fixture.shape_of(block),
+                    types,
+                    scratch
+                ),
                 Err(Unsurfaceable::NotAModule)
             );
         })
@@ -230,15 +257,27 @@ fn every_member_is_read_by_its_name() {
                 let writer = context.writer();
                 let activation = fixture.run(writer, types, &lines, &[]);
                 let m = module(fixture, activation, "m");
-                let block = entered(writer, activation);
-                surface(writer, Value::Knotted(m), block, types, scratch)
-                    .expect("the block's parameters are `m`'s members");
+                let block = entered(fixture, writer, activation);
+                surface(
+                    writer,
+                    Value::Knotted(m),
+                    None,
+                    block,
+                    fixture.shape_of(block),
+                    types,
+                    scratch,
+                )
+                .expect("the block's parameters are `m`'s members");
                 for (text, bound) in bound {
                     let name = fixture.name(text);
-                    let member = layout::member(writer, Value::Knotted(m), name, types, scratch)
-                        .expect("a member");
+                    let member =
+                        layout::member(writer, Value::Knotted(m), (name, None), types, scratch)
+                            .expect("a member");
                     assert!(holds(member, *bound), "`{source}`: `{text}` is {bound:?}");
-                    let (slot, _) = block.shape().slot(name).expect("a surfaced parameter");
+                    let (slot, _) = fixture
+                        .shape_of(block)
+                        .slot(name)
+                        .expect("a surfaced parameter");
                     assert!(
                         holds(block.read(local(slot)), *bound),
                         "`{source}`: the block's `{text}` is {bound:?}"
