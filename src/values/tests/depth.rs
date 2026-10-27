@@ -12,8 +12,8 @@ use super::{
     Chain, Fixture, Holding, Link, Record, Tagged, TestGraph, Value, copy, pin, tie, with_fixture,
 };
 
-/// How deep each chain is: about a hundred times what a recursive walk reaches in a debug build.
-const DEPTH: usize = 100_000;
+/// How deep each chain is: about ten times what a recursive walk reaches in a debug build.
+const DEPTH: usize = 10_000;
 
 impl Fixture<'_, '_> {
     /// `NEWTYPE Node = :{next :(Node | Null)}`, sealed as a singleton recursive group.

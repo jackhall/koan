@@ -112,6 +112,23 @@ impl World {
     }
 }
 
+/// [`World::grounds`], interned in `types`.
+fn grounds_in(types: &TypeChain<'static, WorldHalf>) -> Vec<KType> {
+    vec![
+        KType::NUMBER,
+        KType::STR,
+        KType::ANY,
+        KType::ANY_VALUE,
+        KType::ANY_CODE,
+        KType::of_kind(KKind::AnyType),
+        KType::LIST_OF_ANY,
+        KType::of_kind(KKind::ProperType),
+        // A bound spanning two members, which the order, a union's canonical form, the meet and
+        // the unifier each read whole.
+        with_scratch(|scratch| types.union_of(scratch, &[KType::NUMBER, KType::STR])),
+    ]
+}
+
 /// How many generated types a world's root is seeded with before its laws draw.
 const SEEDED: usize = 256;
 
@@ -130,6 +147,8 @@ pub struct World {
     pub type_names: Rc<Vec<TypeSymbol>>,
     pub keywords: Rc<Vec<KeywordSymbol>>,
     pub values: Rc<Vec<ValueSymbol>>,
+    /// [`World::grounds`], interned once in `types` rather than at every draw that reads them.
+    grounds: Rc<Vec<KType>>,
 }
 
 impl World {
@@ -144,8 +163,10 @@ impl World {
             |text: &str| ValueSymbol::declared(text, &symbols).expect("a value token");
         let arena = leaked_arena();
         let builder = RootBuilder::in_region(arena);
+        let types = Rc::new(TypeChain::building(WorldHalf::Building(builder)));
         let seeding = World {
-            types: Rc::new(TypeChain::building(WorldHalf::Building(builder))),
+            grounds: Rc::new(grounds_in(&types)),
+            types,
             // Read by no seeding draw; the frozen load replaces it below.
             frozen: Frozen::seeded(arena),
             binders: Rc::new(vec![
@@ -171,12 +192,14 @@ impl World {
         }
         drop(pool);
         let frozen = builder.freeze();
+        let types = Rc::new(TypeChain::new(
+            frozen,
+            Agent::in_region(arena),
+            WorldHalf::Branch(BumpHalf::new(arena)),
+        ));
         World {
-            types: Rc::new(TypeChain::new(
-                frozen,
-                Agent::in_region(arena),
-                WorldHalf::Branch(BumpHalf::new(arena)),
-            )),
+            grounds: Rc::new(grounds_in(&types)),
+            types,
             frozen,
             ..seeding
         }
@@ -185,19 +208,7 @@ impl World {
     /// Types with no free variable in them — what a rigid variable's bound is drawn from, so
     /// nothing above a bound is itself rigid.
     fn grounds(&self) -> Vec<KType> {
-        vec![
-            KType::NUMBER,
-            KType::STR,
-            KType::ANY,
-            KType::ANY_VALUE,
-            KType::ANY_CODE,
-            KType::of_kind(KKind::AnyType),
-            KType::LIST_OF_ANY,
-            KType::of_kind(KKind::ProperType),
-            // A bound spanning two members, which the order, a union's canonical form, the meet
-            // and the unifier each read whole.
-            with_scratch(|scratch| self.types.union_of(scratch, &[KType::NUMBER, KType::STR])),
-        ]
+        self.grounds.as_ref().clone()
     }
 
     /// What a quantifier is bound to: the argument pool, plus a list and a function alone — a
@@ -437,15 +448,17 @@ fn arb_type_in(
     if depth == 0 {
         return leaf;
     }
-    let inner = || {
-        arb_type_in(
-            world.clone(),
-            depth - 1,
-            bound.clone(),
-            members.clone(),
-            vocabulary,
-        )
-    };
+    // One subtree strategy, shared by every arm that recurses: a strategy is immutable, so the
+    // arms draw exactly what copies of their own would, and the tree is built once per level
+    // rather than once per arm — which, compounded over the depth, dominated each draw.
+    let child = arb_type_in(
+        world.clone(),
+        depth - 1,
+        bound.clone(),
+        members.clone(),
+        vocabulary,
+    );
+    let inner = || child.clone();
     let (list_world, dict_world) = (world.clone(), world.clone());
     let (record_world, function_world) = (world.clone(), world.clone());
     let (union_world, apply_world) = (world.clone(), world.clone());
@@ -460,6 +473,7 @@ fn arb_type_in(
         members.clone(),
         Vocabulary::CONCRETE,
     );
+    let family = arb_family(family_world, depth);
     prop_oneof![
         6 => leaf,
         2 => inner().prop_map(move |element| list_world.types.list(element)),
@@ -485,8 +499,8 @@ fn arb_type_in(
         3 => arb_shape(shape_world, depth, shape_members, vocabulary),
         2 => arb_signature_type(sig_world, depth).prop_map(KType::raw),
         1 => arb_sealed_member(group_world, depth).prop_map(KType::raw),
-        1 => arb_family(family_world.clone(), depth).prop_map(KType::raw),
-        1 => (arb_family(family_world, depth), inner()).prop_map(move |(family, argument)| {
+        1 => family.clone().prop_map(KType::raw),
+        1 => (family, inner()).prop_map(move |(family, argument)| {
             let parameter = BinderSymbol::Type(applied_world.type_names[0]);
             with_scratch(|scratch| {
                 applied_world
