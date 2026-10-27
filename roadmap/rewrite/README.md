@@ -57,11 +57,6 @@ as surprises, not scheduled.
   of their own needs an effect analysis koan does not have, and is an effects
   item's to add: effects chained through a monad form a buffer that can be
   reordered by source span.
-- **The overlap check skips quantified registrations.** The load-time
-  [overlap check](../../src/dispatch/README.md#the-overlap-check) types only a
-  registration that binds no `FOR ALL` group, so
-  `EXPR FOR ALL #[Elt] #(x :Elt + y :Elt) -> Str` loads beside the builtin `+`,
-  which wins every call the two share.
 - **Every consumer writes its own descent.** An
   [`ExpressionPart`](../../src/parse/ast.rs) is walked by five descents in the
   shape builder (`part_marks`, `walk_part`, `walk_definition_part`,
@@ -126,17 +121,6 @@ as surprises, not scheduled.
   because at its instantiated operand type a builtin is chosen first. The second is a
   keyworded use written unmarked in a quote ([holes](../../src/scope/README.md#holes-and-marks)), whose key has registrations
   visible where it is written that the quote will not see.
-- **A type value's static type is only its kind.** The load types a type
-  value at the kind of the type it denotes, never at that type
-  ([static types](../../src/dispatch/README.md#static-types)), so once a type
-  passes through a name or a call no builtin's type rule can tell `Number` from
-  `Str`: `ATTR` over a type (`Point.y` read as a value) and `|` and `&` over
-  type values type their values no better than their declared kinds, and `:!`
-  and `EVAL <code> -> <Type>` read their written types through node readings of
-  their own rather than as operands of a builtin overload. A singleton static
-  type for a type value — the type whose one value is the type value `Number` —
-  would carry the denoted type through ordinary static typing. It is a
-  [type lattice](../../lattice/src/types/README.md) change.
 - **`CLOSE OVER` limits what an `EVAL` can see.** The scope builder reports
   `CLOSE` and `CLOSE OVER` unsupported; which item gives them their rewrite
   home is undecided.
@@ -156,95 +140,6 @@ as surprises, not scheduled.
   `knot.members().nth(index)`, O(n) per call, so binding a component's k
   members is O(k²). The knot has no index→member door, since an edge is minted
   only by a `KnotPlan`.
-- **A cyclic data value cannot cross an opaque view's barrier.** The
-  [coercion walk](../../src/knot/module/README.md#members-are-born-coerced) rebuilds
-  a container cell by cell, but a container that is a knot's data node is a knot
-  member rather than a container word, so the arm has nothing to rebuild and
-  refuses `Unsupported`. Rebuilding a cycle through a barrier would have to
-  re-tie the knot under the view's types, which nothing does.
-- **A dict's keys cross an opaque view's barrier unsealed.** The
-  [coercion walk](../../src/knot/module/coerce.rs) leaves a dict's keys
-  untouched while it restamps the dict at `MAP <carrier> -> …`, so a key read
-  back from the view carries the source's scalar type rather than the carrier
-  its dict type names.
-- **A member read through a signature leaving a head parameter unpinned is at
-  most its declared type.** A module retyped to `Counter` is re-stamped at
-  `Counter` pinned at what *fits* solves each parameter to, which each run
-  computes afresh, and two pins of one parameter are unordered, so over
-  `h :Counter` the load reads `h.zero` at most `Carrier`
-  ([static types](../../src/dispatch/README.md#static-types)), and exact only
-  where it knows the module's signature and pins it with the run's own
-  function. Carrying a pin over a path variable in a static type would make it
-  exact; that is a [type lattice](../../lattice/src/types/README.md) change,
-  blocked as paths are on how a pin is read through its bounds (below).
-- **A keyworded member through a view returns at most its declared return at
-  load.** Through a header, a lone closed head of the carried signature is
-  exactly its return under the call's solve
-  ([static types](../../src/dispatch/README.md#static-types)); through a `:|`
-  view the load reads the call at most the head's return, quantified or not,
-  though the run retypes the barrier's value to it. So with `v = (m :| Viewed)`
-  and `m`'s `GET` returning a field `Viewed`'s head hides,
-  `USING v SCOPE (ATTR (GET 1) y)` loads and faults `has no field y` at the run
-  where the same read through a header refuses the load.
-- **Whether `Module` and `Code` should re-stamp.** Every type that is one type
-  re-stamps a value at itself, `Type` included, but `Module` and `Code`, the
-  types every module and every quote satisfies, re-stamp nothing
-  ([the type memo](../../src/values/README.md#the-type-memo-and-satisfies)).
-  Were `Module` to re-stamp, a `-> Module` functor would hide all of its
-  result's members. A quantifier does not stand in: a `FOR ALL #{Out: Module}`
-  name only the return reads is solved to its bound, `Module`, so `-> Out`
-  would hide them too. Each such functor would declare its result's signature
-  or return `Any`. Undecided.
-- **A pin is read through its bounds covariantly, and ordered invariantly.**
-  The [type lattice](../../lattice/src/types/README.md)'s `read_through` and
-  `bound_above` read a variable a `SignatureApply` pin names through its bounds
-  as at a covariant position, while the order (`application_under`) compares
-  two pins of one parameter invariantly, so `S WITH {Elt = Elt}` read above is
-  `S WITH {Elt = Any}`, which is no upper bound of it. A static type holding
-  such a pin therefore overshoots what the run carries:
-  `EXPR #(READER Elt :Type) -> Any = #(FN :{p :(Mapper WITH {Elt = Elt})} -> Any = #(1))`,
-  called as `((READER Number) {p = two})` over the `Mapper` and `two` of the
-  dispatch test `a_path_reads_through_every_pin_of_its_declared_application`,
-  panics the debug check that the carried type lies within the load-time static
-  type.
-  [`signature_member`](../../src/elaborate/members.rs) reads pins through
-  `bound_above` too. [Paths](../../src/dispatch/README.md#paths) work around it
-  by never storing a pin over a path variable. Reading a pin's variable as the
-  order does is a lattice change, a flagged exception needing an OK.
-- **A quantified callable cannot take a parameter at an application over its
-  own group.** Under `EXPR FOR ALL #[Elt] #(USE x :Elt p :(Mapper WITH {Elt = Elt})) -> Any`,
-  `USE 1 two` is refused with no overload admitting it, though `two` fits
-  `Mapper WITH {Elt = Number}`, over the same `Mapper` and `two`. Why the
-  solve fails is not yet diagnosed.
-- **An opaque view faults on a nested slot pinned to a type over its
-  parameter.** Under `SIG Deep FOR ALL #[Depth] = #[(VAL v :Depth)]` and
-  `SIG Outer FOR ALL #[Carrier] = #[(VAL zero :Carrier) (VAL deep :(Deep WITH {Depth = (LIST OF Carrier)}))]`,
-  `ints :| Outer` over `MODULE ints = ((LET zero = 0) (LET deep = d))` with
-  `MODULE d = ((LET v = [1]))` loads, then the run faults with "member deep
-  cannot take its view's type: its module does not fit its view". A pin
-  `(Carrier | Str)` faults alike; a bare `Carrier` and a `:!` run.
-- **A quote reading a view's quantified member loads, then faults.** Over the
-  `Mapper` and `nums` of the dispatch test
-  `a_quantified_member_through_a_module_is_instanced_where_the_load_names_its_parameters`,
-  `LET m = (nums :| Mapper)` then
-  `EVAL #(LET go :(FN :{x :Number, y :Number} -> Number) = $m.apply) -> Any`
-  loads, and the run faults with "member apply is quantified, and no type was
-  known to instantiate it at": the load neither instances the member nor refuses
-  it as `UnpinnedMember`.
-- **A family cannot state its variance.** Every type-constructor family is
-  covariant in its parameters, so a
-  [parameterized union](../../src/elaborate/README.md#families) placing a
-  parameter inside a function type's parameter list is refused. Admitting one needs either a
-  variance annotation on the declarator or inference over its variants, and
-  an order whose application arm reads each parameter's variance.
-- **A nominal over a run-bound type is declared per call.** A `NEWTYPE` or
-  `UNION` whose definition names a type a run binds — `NEWTYPE Box = :{v :Elt}`
-  in a `FOR ALL #[Elt]` body — has no load-time handle
-  ([the type channel at load](../../src/elaborate/README.md#the-type-channel-at-load)):
-  a sealed group is a leaf substitution never enters, and a nominal's identity
-  is its name and schema, so each call's `Box` is a different type. It is declared through the activation
-  each time its unit runs. A lattice door that substitutes into a sealed group
-  and re-seals it would give the same handle from one load-time declaration.
 - **A cycle through a family construction has no cut.** A construction through
   a [family](../../src/values/README.md#what-a-value-is) solves its type from its payload, so the
   [tie](../../src/knot/README.md#the-tie) derives it like a container, and a
@@ -273,6 +168,13 @@ as surprises, not scheduled.
   of one knot weighs that knot twice, though a crossing copies it once. The
   verdict then leans toward pinning. A memoized weight cannot see sharing below
   it without a set of knots per composite.
+- **A knot copied whole keeps a tagged payload's hidden fields.** A copy lays
+  down only what a value's type names ([crossing](../../src/values/README.md#crossing)),
+  but a knot seen at its own memo is re-tied cell for cell. A tagged data node's
+  memo is its identity, and its payload may be wider than the representation:
+  after `LET c = (Point {x = 1, y = 2, z = c})`, a copy of `c` still lays down
+  `z`. No read sees it, since the door hides it, but it counts in the copy's
+  weight, and so in the copy-or-pin verdict.
 - **Whether a cell parks in two slots or one is worth a second look once koan
   has steps.** [The substrate](../../cellgraph/README.md#the-contract-four-embedder-types)
   keeps one slot per habitat, chosen before any production step parked state:

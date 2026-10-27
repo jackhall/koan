@@ -507,7 +507,7 @@ variable. A type binder is closed or unknown,
 never rigid: its readers across a callable boundary could not reach the
 coordinates its variables are read at, and a sealed nominal is a leaf
 substitution never enters, so a `NEWTYPE` over a `FOR ALL` name is a different
-type each call ([unplanned work](../../roadmap/rewrite/README.md#unplanned-work)).
+type each call ([unplanned work](../../roadmap/gradual-typing/README.md#unplanned-work)).
 The declaration door therefore reads through the load-time reader in a mode that
 answers every run-bound name *unknown*.
 
@@ -664,6 +664,8 @@ every fact through its `TypeContext`.
 - [Families as parameters](../../roadmap/rewrite/families-as-parameters.md) —
   higher-kinded head parameters, and a constructor application leaving a
   parameter unpinned.
-- [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — a family's
-  variance, which no declaration states, a nominal over a run-bound type
-  declared per call, and a pin read through its bounds.
+- [A pin over a variable](../../roadmap/gradual-typing/pins-over-variables.md)
+  — a pin's variable read through its bounds as the order compares pins.
+- [Unplanned work](../../roadmap/gradual-typing/README.md#unplanned-work) — a
+  family's variance, which no declaration states, and a nominal over a
+  run-bound type declared per call.

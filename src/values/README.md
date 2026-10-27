@@ -780,8 +780,11 @@ knots as deep as the chain of newtypes digests beside it.
   the lazy transformations that run koan code.
 - [Recursion over run-time types](../../roadmap/rewrite/recursion-over-run-time-types.md)
   — the lattice walks over a value's carried type, as deep as the value.
-- [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — whether
-  `Module` and `Code` re-stamp a value.
+- [Gradual typing's unplanned work](../../roadmap/gradual-typing/README.md#unplanned-work)
+  — whether `Module` and `Code` re-stamp a value.
+- [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — a value's
+  weight counting a knot once per reference, and a copied knot keeping a tagged
+  payload's hidden fields.
 - [A digest memo on every value](../../roadmap/gradual-build/value-digest-memos.md)
   — a value's digest kept on the value, so a chain a loop views a new module
   over each hop is walked once.

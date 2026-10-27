@@ -330,6 +330,6 @@ open a module and call through a barrier are
 
 ## Open work
 
-- [Unplanned work](../../../roadmap/rewrite/README.md#unplanned-work) — a cyclic
-  data member coerced through a barrier, and a dict's keys crossing a barrier
-  unsealed.
+- [What a barrier rebuilds](../../../roadmap/gradual-typing/barrier-coercion.md)
+  — a nested slot pinned to a type over the enclosing parameter, a cyclic data
+  member and a dict's keys, each coerced through a barrier.

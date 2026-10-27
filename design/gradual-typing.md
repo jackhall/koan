@@ -225,4 +225,8 @@ changes what a reader sees and which overload runs.
 - [Gradual typing](../roadmap/gradual-typing/README.md) — the project's open
   items.
 - [A container literal's element type](../roadmap/gradual-typing/container-literal-types.md)
+- [Dependent signatures](../roadmap/gradual-typing/dependent-signatures.md)
 - [A nested projection](../roadmap/gradual-typing/nested-projection.md)
+- [A pin over a variable](../roadmap/gradual-typing/pins-over-variables.md)
+- [What a barrier rebuilds](../roadmap/gradual-typing/barrier-coercion.md)
+- [A carried union at a contravariant position](../roadmap/gradual-typing/contravariant-union-solve.md)

@@ -300,7 +300,7 @@ fixed:
   `BOX "s"` exactly `LIST OF Str`, each use solving the head's `Elt` afresh.
   Through a `:|` view the call is at most the head's return, though the run
   retypes it there too
-  ([unplanned work](../../roadmap/rewrite/README.md#unplanned-work)).
+  ([unplanned work](../../roadmap/gradual-typing/README.md#unplanned-work)).
   A surfaced key is a spread over every function the module offers there, so
   its verdict is at most *maybe*, and *never* only where one body definition or
   one closed signature head is the whole of the key;
@@ -873,7 +873,7 @@ member (`elaborate::applied_member`). No static type holds an application
 pinning a parameter to a path: the lattice reads a pin through its bounds
 covariantly where the order compares pins invariantly, so such a type read
 through its bounds would be no upper end
-([unplanned work](../../roadmap/rewrite/README.md#unplanned-work)).
+([a pin over a variable](../../roadmap/gradual-typing/pins-over-variables.md)).
 
 **Closed views at load.** At a `:|` site over a closed tree the walk calls the
 view door's type half,
@@ -1405,10 +1405,12 @@ tutorial snippet is checked against its shown output by
   and `Result`.
 - [Invariance around a tail cycle](../../roadmap/gradual-build/cycle-invariance.md)
   — an argument built over invariant leaves classed invariant.
-- [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — the
-  overlap check skipping a quantified registration, a warning for an overload
-  never selected, a pin read through its bounds, a member read exact through a
-  signature leaving a head parameter unpinned, a keyworded member through a
-  view at most its return at load, a quantified callable's
-  parameter at an application over its own group, and a quote reading a view's
-  quantified member.
+- [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — a
+  warning for an overload never selected.
+- [A pin over a variable](../../roadmap/gradual-typing/pins-over-variables.md)
+  — a static type pinning a parameter to a path, so a member read through a
+  signature leaving a head parameter unpinned is exact, and a quantified
+  callable's parameter at an application over its own group.
+- [Gradual typing's unplanned work](../../roadmap/gradual-typing/README.md#unplanned-work)
+  — the overlap check skipping a quantified registration, and a keyworded
+  member through a view at most its return at load.

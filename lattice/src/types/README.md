@@ -151,6 +151,11 @@ never a bundle — the lattice knows about types and symbols and nothing else.
 - [Recursion over run-time types](../../../roadmap/rewrite/recursion-over-run-time-types.md)
   — every structural walk, relation and rendering over types as deep as a
   run-time value's carried type.
-- [Unplanned work](../../../roadmap/rewrite/README.md#unplanned-work) — a
-  singleton static type for a type value, and anonymous structural recursion
-  in types.
+- [A pin over a variable](../../../roadmap/gradual-typing/pins-over-variables.md)
+  — a pin's variable read through its bounds as the order compares pins.
+- [A carried union at a contravariant position](../../../roadmap/gradual-typing/contravariant-union-solve.md)
+  — a solve over an argument's union blind to its member order.
+- [Unplanned work](../../../roadmap/rewrite/README.md#unplanned-work) —
+  anonymous structural recursion in types.
+- [Gradual typing's unplanned work](../../../roadmap/gradual-typing/README.md#unplanned-work)
+  — a singleton static type for a type value.
