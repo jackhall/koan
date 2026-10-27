@@ -247,15 +247,16 @@ pub(super) fn table<'graph>(
     let mut overloads = BumpVec::new_in(scratch);
     for overload in OVERLOADS {
         let keyword = |text| KeywordSymbol::declared(text, symbols).expect("an operator keyword");
-        let key = symbols.record_key(overload.elements.iter().map(|element| match element {
-            Element::Keyword(text) => Some(keyword(*text)),
-            Element::Slot(_) => None,
-        }));
         let mut elements = BumpVec::with_capacity_in(overload.elements.len(), scratch);
         elements.extend(overload.elements.iter().map(|element| match element {
             Element::Keyword(text) => DispatchTokenElement::Keyword(keyword(*text)),
             Element::Slot(Takes::Is(slot)) => DispatchTokenElement::Slot(*slot),
             Element::Slot(Takes::ListOf(item)) => DispatchTokenElement::Slot(types.list(*item)),
+        }));
+        // The key reads the keywords back off `elements`: each is a digest, minted once.
+        let key = symbols.record_key(elements.iter().map(|element| match element {
+            DispatchTokenElement::Keyword(keyword) => Some(*keyword),
+            DispatchTokenElement::Slot(_) => None,
         }));
         let shape = types.shape_type(&elements, &[], overload.returns);
         let function = builtin(writer, shape, overload.native as u32);

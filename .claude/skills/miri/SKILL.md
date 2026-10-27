@@ -80,6 +80,20 @@ Miri is fast enough to run in the foreground. A warm incremental slate is ~2 min
 3. **No polling, no watchers.** A synchronous run returns the summary when Miri exits — there is nothing to poll. Never spawn a `sleep N; <check>` loop, a `BashOutput` poll loop, or a separate watcher process.
 4. **Run Miri invocations back-to-back, not interleaved with non-Miri builds.** Miri's target dir is separate from the regular `cargo` target dir, but switching back and forth thrashes the file cache. Plan your work: bulk baseline run, then per-test triage runs in sequence, then a final bulk verification — one continuous chain.
 
+## Profiling a slow test
+
+When a slate test is slow, [`tools/miri_profile.py`](../../../tools/miri_profile.py) profiles one
+test under the slate's flags and charges the interpreter's wall time to koan's modules:
+
+```
+python3 tools/miri_profile.py run <test-fragment>             # by module; --by function | std
+python3 tools/miri_profile.py run <test-fragment> --flags=-Zmiri-disable-stacked-borrows
+python3 tools/miri_profile.py compare <profile-a> <profile-b>   # what the flag changed
+```
+
+Profiles land in `scratch/miri-profiles/`. Don't judge Miri speed by libtest's `--report-time`:
+under isolation it reads Miri's virtual clock, which counts basic blocks, not seconds.
+
 ## Triage workflow (when leaks are reported)
 
 The triage pattern documented in past audit work:

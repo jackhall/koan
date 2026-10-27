@@ -1,6 +1,11 @@
 //! Flat token stream over the source. Each non-blank line opens with a [`Token::Line`] carrying
 //! its indentation; every other token records whether whitespace preceded it, which is all the
 //! reader needs to compute [`Item::glued`](crate::Item::glued). Blank lines produce nothing.
+//!
+//! The scan reads the source a byte at a time and carves each token's text off the front of what is
+//! left ([`Rest`]), never out of the whole source. Under Miri's tree borrows, a slice taken from the
+//! whole source is checked against every token slice still alive, which makes lexing cubic in the
+//! source's length there; one carved from the rest overlaps none of them.
 
 use crate::{Error, ErrorKind, Kind, Span};
 
@@ -51,9 +56,46 @@ fn is_break(c: char) -> bool {
     c.is_whitespace() || matches!(c, '(' | ')' | '[' | ']' | '{' | '}' | ',' | '\'' | '"')
 }
 
+/// What is left of the source past the last token text carved from it.
+struct Rest<'s> {
+    text: &'s str,
+    /// Where `text` starts in the source.
+    at: usize,
+}
+
+impl<'s> Rest<'s> {
+    /// The source from `start` to `end`, split off the front of what is left. `start` is at or past
+    /// the last carve's end.
+    fn carve(&mut self, start: usize, end: usize) -> &'s str {
+        let (_, from) = self.text.split_at(start - self.at);
+        let (carved, tail) = from.split_at(end - start);
+        (self.text, self.at) = (tail, end);
+        carved
+    }
+
+    /// The source from `start` to `end`, left in place. `start` is at or past the last carve's end.
+    fn peek(&self, start: usize, end: usize) -> &'s str {
+        &self.text[start - self.at..end - self.at]
+    }
+
+    /// The char at `pos`, a char boundary short of the source's end and at or past the last carve's
+    /// end: the byte there when it is ASCII.
+    fn char_at(&self, bytes: &[u8], pos: usize) -> char {
+        match bytes[pos] {
+            byte if byte.is_ascii() => byte as char,
+            _ => (self.text[pos - self.at..].chars().next())
+                .expect("pos < len and pos is a char boundary"),
+        }
+    }
+}
+
 pub(crate) fn lex(source: &str) -> Result<Vec<Token<'_>>, Error> {
     let bytes = source.as_bytes();
     let len = bytes.len();
+    let mut rest = Rest {
+        text: source,
+        at: 0,
+    };
     let mut out = Vec::new();
     let mut pos = 0;
     let mut spaced = true;
@@ -69,8 +111,11 @@ pub(crate) fn lex(source: &str) -> Result<Vec<Token<'_>>, Error> {
                 }
                 pos += 1;
             }
-            let line_end = source[pos..].find('\n').map_or(len, |n| pos + n);
-            if source[pos..line_end].trim().is_empty() {
+            let mut line_end = pos;
+            while line_end < len && bytes[line_end] != b'\n' {
+                line_end += 1;
+            }
+            if rest.peek(pos, line_end).trim().is_empty() {
                 pos = (line_end + 1).min(len);
                 continue;
             }
@@ -83,10 +128,7 @@ pub(crate) fn lex(source: &str) -> Result<Vec<Token<'_>>, Error> {
             spaced = true;
         }
 
-        let c = source[pos..]
-            .chars()
-            .next()
-            .expect("pos < len and pos is a char boundary");
+        let c = rest.char_at(bytes, pos);
         match c {
             '\n' => {
                 at_line_start = true;
@@ -150,7 +192,7 @@ pub(crate) fn lex(source: &str) -> Result<Vec<Token<'_>>, Error> {
                 }
                 out.push(Token::Str {
                     quote: c,
-                    body: &source[start + 1..p],
+                    body: rest.carve(start + 1, p),
                     span: span(start, p + 1),
                     spaced,
                 });
@@ -159,13 +201,15 @@ pub(crate) fn lex(source: &str) -> Result<Vec<Token<'_>>, Error> {
             }
             _ => {
                 let start = pos;
-                while let Some(c) = source[pos..].chars().next()
-                    && !is_break(c)
-                {
+                while pos < len {
+                    let c = rest.char_at(bytes, pos);
+                    if is_break(c) {
+                        break;
+                    }
                     pos += c.len_utf8();
                 }
                 out.push(Token::Atom {
-                    text: &source[start..pos],
+                    text: rest.carve(start, pos),
                     span: span(start, pos),
                     spaced,
                 });

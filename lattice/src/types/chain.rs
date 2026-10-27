@@ -296,30 +296,51 @@ impl<'t, H: Habitat<'t>> TypeChain<'t, H> {
 
     /// Intern every constant node, so a fixed handle always resolves. `scratch` serves the doors
     /// that sort or flatten.
+    ///
+    /// A constant whose content needs no canonicalizing is laid under its fixed handle's literal
+    /// digest instead of a recomputed one, sparing every root some thirty digests:
+    /// `constants_match_freshly_interned_nodes` recomputes each literal from its node, so the two
+    /// cannot drift. The unions, the empty signature and the empty record go through their doors,
+    /// which canonicalize what they digest.
     pub(super) fn seed_constants(&self, scratch: BumpAllocator<'_>) {
-        for leaf in [
-            TypeNode::Number,
-            TypeNode::Str,
-            TypeNode::Bool,
-            TypeNode::Null,
-            TypeNode::Identifier,
-            TypeNode::Symbol,
-            TypeNode::TypeNameToken,
-            TypeNode::Expression,
-            TypeNode::SigiledTypeExpr,
-            TypeNode::RecordType,
-            TypeNode::Literal,
-            TypeNode::Block,
-            TypeNode::Declaration,
-            TypeNode::Binder,
-            TypeNode::Name,
-            TypeNode::Keyword,
-            TypeNode::Any,
-            TypeNode::AnyValue,
-            TypeNode::AnyCode,
-            TypeNode::Never,
+        let lay = |constant: KType, node: TypeNode<'t, Linked<'t>>| {
+            self.intern_digested(constant.digest(), || node);
+        };
+        let list = |constant, element: Handle| {
+            lay(
+                constant,
+                TypeNode::List {
+                    element: element.linked(self),
+                },
+            );
+        };
+        let dict = |constant, key: Handle, value: Handle| {
+            let (key, value) = (key.linked(self), value.linked(self));
+            lay(constant, TypeNode::Dict { key, value });
+        };
+        for (constant, leaf) in [
+            (KType::NUMBER, TypeNode::Number),
+            (KType::STR, TypeNode::Str),
+            (KType::BOOL, TypeNode::Bool),
+            (KType::NULL, TypeNode::Null),
+            (KType::IDENTIFIER, TypeNode::Identifier),
+            (KType::SYMBOL, TypeNode::Symbol),
+            (KType::TYPE_NAME_TOKEN, TypeNode::TypeNameToken),
+            (KType::EXPRESSION, TypeNode::Expression),
+            (KType::SIGILED_TYPE_EXPR, TypeNode::SigiledTypeExpr),
+            (KType::RECORD_TYPE, TypeNode::RecordType),
+            (KType::LITERAL, TypeNode::Literal),
+            (KType::BLOCK, TypeNode::Block),
+            (KType::DECLARATION, TypeNode::Declaration),
+            (KType::BINDER, TypeNode::Binder),
+            (KType::NAME, TypeNode::Name),
+            (KType::KEYWORD, TypeNode::Keyword),
+            (KType::ANY, TypeNode::Any),
+            (KType::ANY_VALUE, TypeNode::AnyValue),
+            (KType::ANY_CODE, TypeNode::AnyCode),
+            (KType::NEVER, TypeNode::Never),
         ] {
-            self.intern(scratch, leaf);
+            lay(constant, leaf);
         }
         for kind in [
             KKind::ProperType,
@@ -328,10 +349,10 @@ impl<'t, H: Habitat<'t>> TypeChain<'t, H> {
             KKind::NewType,
             KKind::TypeConstructor,
         ] {
-            self.intern(scratch, TypeNode::OfKind(kind));
+            lay(KType::of_kind(kind), TypeNode::OfKind(kind));
         }
-        self.list(Handle::ANY);
-        self.dict(Handle::ANY, Handle::ANY);
+        list(KType::LIST_OF_ANY, Handle::ANY);
+        dict(KType::DICT_ANY_ANY, Handle::ANY, Handle::ANY);
         self.intern_schema(SigSchema::EMPTY);
         let type_code = self.union_of(
             scratch,
@@ -341,12 +362,12 @@ impl<'t, H: Habitat<'t>> TypeChain<'t, H> {
                 Handle::RECORD_TYPE,
             ],
         );
-        self.list(Handle::NAME);
-        self.list(Handle::EXPRESSION);
-        self.list(Handle::DECLARATION);
-        self.dict(Handle::NAME, Handle::BLOCK);
-        self.dict(Handle::NAME, type_code);
-        self.dict(type_code, Handle::BLOCK);
+        list(KType::LIST_OF_NAME, Handle::NAME);
+        list(KType::LIST_OF_EXPRESSION, Handle::EXPRESSION);
+        list(KType::LIST_OF_DECLARATION, Handle::DECLARATION);
+        dict(KType::DICT_NAME_BLOCK, Handle::NAME, Handle::BLOCK);
+        dict(KType::DICT_NAME_TYPE_CODE, Handle::NAME, type_code);
+        dict(KType::DICT_TYPE_CODE_BLOCK, type_code, Handle::BLOCK);
         self.union_of(
             scratch,
             &[Handle::LIST_OF_NAME, Handle::DICT_NAME_TYPE_CODE],
@@ -356,9 +377,10 @@ impl<'t, H: Habitat<'t>> TypeChain<'t, H> {
 
     // --- Content: interning and node reads ---
 
-    /// Intern `node` and return its node. Interning the same content twice yields one node. The
-    /// generic door: its slices are stored as handed in, so they must already live at least as
-    /// long as the half.
+    /// `test`-only: intern `node` and return its node. Interning the same content twice yields one
+    /// node. The generic door the laws re-intern a read node through: its slices are stored as
+    /// handed in, so they must already live at least as long as the half.
+    #[cfg(test)]
     pub(super) fn intern(
         &self,
         scratch: BumpAllocator<'_>,
