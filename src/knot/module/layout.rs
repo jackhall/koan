@@ -79,6 +79,31 @@ pub fn member<'graph, 'cell>(
     Some(seen.restamped(writer, types))
 }
 
+/// Where `module`'s node stores `value`, a member a read of it came to or a restamp of one: the
+/// index of its member run a kept path's member segment names. `None` for anything that is no
+/// module, and a value it stores no member of.
+pub fn member_slot<'graph, 'cell>(
+    module: KValue<'graph, 'cell>,
+    value: KValue<'graph, 'cell>,
+) -> Option<usize> {
+    let members = module.knot_member()?.module()?.members();
+    members.iter().position(|member| value.same_storage(member))
+}
+
+/// The member `module`'s node stores at `index`, at its own memo: what a kept path's member
+/// segment reaches. `None` past the run, and for anything that is no module.
+pub fn stored_member<'graph, 'cell>(
+    module: KValue<'graph, 'cell>,
+    index: usize,
+) -> Option<KValue<'graph, 'cell>> {
+    module
+        .knot_member()?
+        .module()?
+        .members()
+        .get(index)
+        .copied()
+}
+
 /// How many named members a module carrying `carried` shows: each name an application `carried`
 /// holds declares, once.
 pub fn named_count(

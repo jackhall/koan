@@ -64,6 +64,17 @@ const ONWARD: &str = "EXPR #(NAME m :Counter link :Link) -> Str = \
                       #((LET t = (TOUCH m)) (LET n = (ONWARD link)) (NEXT m n))\n\
                       EXPR #(NAME m :Counter end :Null) -> Str = #(\"done\")\n";
 
+/// A loop that hands on `PASSED`, which a test replaces with a value read from outside the loop,
+/// unchanged each hop.
+const PASS: &str = "EXPR #(NAME m :Counter xs :Any link :Link) -> Number = \
+                    #((LET t = (TOUCH m)) (NEXT m PASSED (ATTR link next)))\n\
+                    EXPR #(NAME m :Counter xs :Any end :Null) -> Number = #(0)\n";
+
+/// A list of `length` numbers, written out.
+fn numbers(length: usize) -> String {
+    format!("[{}]", vec!["7"; length].join(" "))
+}
+
 /// How a loop hops: into itself, under its frame's settlement, or between two callees, seeking
 /// one each hop.
 #[derive(Clone, Copy, Debug)]
@@ -123,10 +134,18 @@ fn measured(depth: u32, defs: &str, main: &str) -> Measured {
     }
 }
 
-/// [`measured`] over `body` in `form`, started by `start` (the loop's name prepended to its
-/// arguments), beside the figures the same program counts printing `0` instead.
-fn looped(depth: u32, body: &str, form: Form, arguments: &str) -> (Measured, Measured) {
-    let (defs, name) = defined(body, form);
+/// [`measured`] over `prelude`'s top-level definitions and `body` in `form`, started by `start`
+/// (the loop's name prepended to its arguments), beside the figures the same program counts
+/// printing `0` instead.
+fn looped(
+    depth: u32,
+    prelude: &str,
+    body: &str,
+    form: Form,
+    arguments: &str,
+) -> (Measured, Measured) {
+    let (defined, name) = defined(body, form);
+    let defs = format!("{prelude}{defined}");
     let looped = measured(depth, &defs, &format!("PRINT ({name} {arguments})\n"));
     let baseline = measured(depth, &defs, "PRINT 0\n");
     (looped, baseline)
@@ -144,7 +163,7 @@ fn assert_flat(body: &str, arguments: &str, printed: impl Fn(u32) -> String) {
     for form in [Form::Selfward, Form::Mutual] {
         let spreads: Vec<usize> = (DEPTHS.iter())
             .map(|&depth| {
-                let (looped, _) = looped(depth, body, form, arguments);
+                let (looped, _) = looped(depth, "", body, form, arguments);
                 assert_eq!(looped.printed, printed(depth), "{form:?} at {depth}");
                 match form {
                     Form::Selfward => assert!(looped.hopped > 0, "a selfward hop stays under"),
@@ -162,10 +181,10 @@ fn assert_flat(body: &str, arguments: &str, printed: impl Fn(u32) -> String) {
 
 /// The bytes a loop copied per hop between each two depths, past what its program copies without
 /// looping: the marginal cost of a hop, which a fixed cost at the loop's entry does not move.
-fn copied_per_hop(body: &str, form: Form, arguments: &str) -> Vec<usize> {
+fn copied_per_hop(prelude: &str, body: &str, form: Form, arguments: &str) -> Vec<usize> {
     let copied: Vec<usize> = (DEPTHS.iter())
         .map(|&depth| {
-            let (looped, baseline) = looped(depth, body, form, arguments);
+            let (looped, baseline) = looped(depth, prelude, body, form, arguments);
             looped.copied.saturating_sub(baseline.copied)
         })
         .collect();
@@ -192,7 +211,7 @@ fn a_record_rebuilt_each_hop_holds_its_memory_flat_in_its_depth() {
 #[test]
 fn a_chain_walk_copies_no_part_of_the_chain() {
     for form in [Form::Selfward, Form::Mutual] {
-        let per_hop = copied_per_hop(WALK, form, "ints chain");
+        let per_hop = copied_per_hop("", WALK, form, "ints chain");
         assert!(
             same_per_hop(&per_hop),
             "{form:?}: {per_hop:?} bytes per hop"
@@ -204,14 +223,14 @@ fn a_chain_walk_copies_no_part_of_the_chain() {
 fn a_hop_hands_on_its_received_arguments_without_copying_them() {
     for form in [Form::Selfward, Form::Mutual] {
         SKELETONS.with(|count| count.set(0));
-        let (looped, _) = looped(16, WALK_NUMBER, form, "ints chain");
+        let (looped, _) = looped(16, "", WALK_NUMBER, form, "ints chain");
         assert_eq!(looped.printed, "0");
         let skeletons = SKELETONS.with(Cell::get);
         assert!(
             skeletons >= 16,
             "{form:?}: {skeletons} hops built over a skeleton"
         );
-        let per_hop = copied_per_hop(WALK_NUMBER, form, "ints chain");
+        let per_hop = copied_per_hop("", WALK_NUMBER, form, "ints chain");
         assert!(
             same_per_hop(&per_hop),
             "{form:?}: {per_hop:?} bytes per hop"
@@ -253,7 +272,7 @@ fn a_loop_pledges_none_of_its_hops() {
 #[test]
 fn a_cons_loop_copies_a_constant_per_hop() {
     for form in [Form::Selfward, Form::Mutual] {
-        let per_hop = copied_per_hop(ACC, form, "ints null chain");
+        let per_hop = copied_per_hop("", ACC, form, "ints null chain");
         assert!(
             // Where compactions fall moves the figure a little; one growing with the list would
             // multiply it by the depth's ratio.
@@ -268,7 +287,7 @@ fn a_cons_loop_copies_a_constant_per_hop() {
 #[test]
 fn a_cons_loop_holds_a_constant_times_what_it_threads() {
     for form in [Form::Selfward, Form::Mutual] {
-        let (looped, _) = looped(256, ACC, form, "ints null chain");
+        let (looped, _) = looped(256, "", ACC, form, "ints null chain");
         assert_eq!(looped.printed, "1");
         let hops = &looped.hops;
         let hop_region = hops
@@ -303,14 +322,24 @@ fn a_cons_loop_delivers_its_whole_list() {
 
 #[test]
 fn a_loops_host_holds_the_same_bytes_however_long_it_runs() {
+    let pass_big = PASS.replace("PASSED", "big");
+    let pass_member = PASS.replace("PASSED", "(ATTR store data)");
+    let (big, store) = (
+        format!("LET big = {}\n", numbers(4)),
+        format!("MODULE store = (LET data = {})\n", numbers(4)),
+    );
+    // The last three re-keep, every hop, a carrier of a part homed in the host.
     let loops = [
-        (WALK, "ints chain"),
-        (STEP, "ints {count = 0} chain"),
-        (ACC, "ints null chain"),
+        ("", WALK, "ints chain"),
+        ("", STEP, "ints {count = 0} chain"),
+        ("", ACC, "ints null chain"),
+        (big.as_str(), pass_big.as_str(), "ints null chain"),
+        (store.as_str(), pass_member.as_str(), "ints null chain"),
+        ("", ONWARD, "ints chain"),
     ];
-    for (body, arguments) in loops {
+    for (prelude, body, arguments) in loops {
         for form in [Form::Selfward, Form::Mutual] {
-            let (looped, _) = looped(256, body, form, arguments);
+            let (looped, _) = looped(256, prelude, body, form, arguments);
             let (early, last) = (&looped.hops[2 * 16], looped.hops.last().unwrap());
             assert_eq!(
                 (early.host_region, early.host_scratch),
@@ -319,7 +348,7 @@ fn a_loops_host_holds_the_same_bytes_however_long_it_runs() {
             );
             let laid: Vec<usize> = (DEPTHS.iter())
                 .map(|&depth| {
-                    let (looped, baseline) = self::looped(depth, body, form, arguments);
+                    let (looped, baseline) = self::looped(depth, prelude, body, form, arguments);
                     looped.kept.saturating_sub(baseline.kept)
                 })
                 .collect();
@@ -333,14 +362,12 @@ fn a_loops_host_holds_the_same_bytes_however_long_it_runs() {
 
 /// `ONWARD` hands back the field of its argument unchanged, at the home its caller built the
 /// argument record in — the hop's own frame — so it places nothing new there, and the host holds
-/// flat. That home is the hop's, so the next hop copies the field: a spawned call's kept carriers
-/// are projected from its birth
-/// ([precise kept carriers](../../../roadmap/rewrite/kept-carrier-precision.md)).
+/// flat.
 #[test]
 fn a_call_returning_a_part_of_its_argument_places_nothing_new() {
     for form in [Form::Selfward, Form::Mutual] {
         crate::scheduler::PASSED.with(|passed| passed.set(0));
-        let (looped, _) = looped(64, ONWARD, form, "ints chain");
+        let (looped, _) = looped(64, "", ONWARD, form, "ints chain");
         assert_eq!(looped.printed, "done");
         let passed = crate::scheduler::PASSED.with(Cell::get);
         assert!(
@@ -363,10 +390,21 @@ fn kept_list(form: Form, length: usize) -> String {
                 EXPR #(NAME m :Counter xs :Any r :{count :Number} end :Null) -> Number = \
                 #(ATTR r count)\n";
     let (defs, name) = defined(body, form);
-    let list = vec!["7"; length].join(" ");
+    let list = numbers(length);
     format!(
-        "{defs}EXPR #(ENTRY m :Counter link :Link) -> Number = #({name} m [{list}] {{count = 0}} link)\n"
+        "{defs}EXPR #(ENTRY m :Counter link :Link) -> Number = #({name} m {list} {{count = 0}} link)\n"
     )
+}
+
+/// The bytes `defs` and `main` copied per hop between 64 and 256 links, past what `defs` copies
+/// printing `0`, each run checked against `printed` at its depth.
+fn copied_per_hop_of(defs: &str, main: &str, printed: impl Fn(u32) -> String) -> usize {
+    let copied = |depth: u32| {
+        let looped = measured(depth, defs, main);
+        assert_eq!(looped.printed, printed(depth));
+        looped.copied - measured(depth, defs, "PRINT 0\n").copied
+    };
+    (copied(256) - copied(64)) / (256 - 64)
 }
 
 /// What a value the loop's first hop built and every hop after passes on unchanged costs per hop:
@@ -377,12 +415,9 @@ fn a_value_passed_on_unchanged_rides_the_loop_cell_through_its_compactions() {
     for form in [Form::Selfward, Form::Mutual] {
         let per_hop = |length: usize| {
             let defs = kept_list(form, length);
-            let copied = |depth: u32| {
-                let looped = measured(depth, &defs, "PRINT (ENTRY ints chain)\n");
-                assert_eq!(looped.printed, depth.to_string());
-                looped.copied - measured(depth, &defs, "PRINT 0\n").copied
-            };
-            (copied(256) - copied(64)) / (256 - 64)
+            copied_per_hop_of(&defs, "PRINT (ENTRY ints chain)\n", |depth| {
+                depth.to_string()
+            })
         };
         // Copied every hop, 256 numbers would add some 6 KB a hop; what compactions carry adds
         // a fraction of that, amortized.
@@ -392,4 +427,136 @@ fn a_value_passed_on_unchanged_rides_the_loop_cell_through_its_compactions() {
             "{form:?}: {short} B per hop with 4 numbers, {long} with 256"
         );
     }
+}
+
+/// Whether two per-hop figures are the same, give or take what a depth's rounding moves.
+fn same_figures(short: &[usize], long: &[usize]) -> bool {
+    short.iter().zip(long).all(|(a, b)| a.abs_diff(*b) <= 8)
+}
+
+/// `PASS` handing on `passed`, which `prelude(length)` defines over `length` numbers: the bytes
+/// it copies per hop with 4 numbers and with 256.
+fn passing_per_hop(
+    prelude: impl Fn(usize) -> String,
+    passed: &str,
+    form: Form,
+) -> (Vec<usize>, Vec<usize>) {
+    let body = PASS.replace("PASSED", passed);
+    let at = |length| copied_per_hop(&prelude(length), &body, form, "ints null chain");
+    (at(4), at(256))
+}
+
+/// A capture is a part of the frame's kept callee, and a top-level name a capture: a loop hands
+/// it on where it rests.
+#[test]
+fn a_loop_hands_on_a_top_level_name_without_copying_it() {
+    for form in [Form::Selfward, Form::Mutual] {
+        let big = |length| format!("LET big = {}\n", numbers(length));
+        let (short, long) = passing_per_hop(big, "big", form);
+        assert!(
+            same_figures(&short, &long),
+            "{form:?}: {short:?} B per hop with 4 numbers, {long:?} with 256"
+        );
+    }
+}
+
+/// A module member read is held beside the module's kept part, one member segment down.
+#[test]
+fn a_loop_hands_on_a_module_member_without_copying_it() {
+    for form in [Form::Selfward, Form::Mutual] {
+        let store = |length| format!("MODULE store = (LET data = {})\n", numbers(length));
+        let (short, long) = passing_per_hop(store, "(ATTR store data)", form);
+        assert!(
+            same_figures(&short, &long),
+            "{form:?}: {short:?} B per hop with 4 numbers, {long:?} with 256"
+        );
+    }
+}
+
+/// `INNER`, tied in `OUTER`'s body, captures `OUTER`'s parameter `ys` and hands it on each hop;
+/// `OUTER` reaches it through `enter`, a spawn or a tail.
+fn outer(enter: &str) -> String {
+    format!(
+        "EXPR #(OUTER m :Counter ys :Any link :Link) -> Number = #(\
+         (EXPR #(INNER m :Counter zs :Any l :Link) -> Number = \
+         #((LET t = (TOUCH m)) (INNER m ys (ATTR l next)))) \
+         (EXPR #(INNER m :Counter zs :Any end :Null) -> Number = #(0)) {enter})\n"
+    )
+}
+
+/// The bytes `defs` copies per hop, `OUTER` handed 4 numbers and 256.
+fn outer_per_hop(defs: &str) -> (usize, usize) {
+    let at = |length| {
+        let main = format!("PRINT (OUTER ints {} chain)\n", numbers(length));
+        copied_per_hop_of(defs, &main, |_| "0".to_string())
+    };
+    (at(4), at(256))
+}
+
+#[test]
+fn a_loop_hands_on_its_enclosing_frames_capture_without_copying_it() {
+    let entries = [
+        ("spawned", "(LET r = (INNER m null link)) (r)"),
+        ("tailed", "(INNER m null link)"),
+    ];
+    for (entry, enter) in entries {
+        let (short, long) = outer_per_hop(&outer(enter));
+        assert!(
+            short.abs_diff(long) <= 8,
+            "{entry}: {short} B per hop with 4 numbers, {long} with 256"
+        );
+    }
+}
+
+/// A helper the frame ties and tails into is its callee's knot, tied in the frame's region: the
+/// tail copies it into the loop cell once, not each hop.
+#[test]
+fn a_tied_helper_a_frame_tails_into_is_copied_once() {
+    let defs = "EXPR #(OUTER m :Counter ys :Any link :Link) -> Number = #(\
+                (EXPR #(INNER m :Counter l :Link) -> Number = \
+                #((LET t = (TOUCH m)) (LET u = ys) (INNER m (ATTR l next)))) \
+                (EXPR #(INNER m :Counter end :Null) -> Number = #(0)) (INNER m link))\n";
+    let (short, long) = outer_per_hop(defs);
+    assert!(
+        short.abs_diff(long) <= 8,
+        "{short} B per hop with 4 numbers, {long} with 256"
+    );
+}
+
+/// A mutual hop's callee is a capture of its predecessor's callee, so it is handed on where it
+/// rests, as a hop into itself hands on its own.
+#[test]
+fn a_mutual_loop_copies_none_of_its_callees() {
+    let big = format!("LET big = {}\n", numbers(4));
+    let pass = PASS.replace("PASSED", "big");
+    let loops = [
+        ("", WALK_NUMBER, "ints chain"),
+        (big.as_str(), pass.as_str(), "ints null chain"),
+    ];
+    for (prelude, body, arguments) in loops {
+        let selfward = copied_per_hop(prelude, body, Form::Selfward, arguments);
+        let mutual = copied_per_hop(prelude, body, Form::Mutual, arguments);
+        assert!(
+            same_figures(&selfward, &mutual),
+            "{selfward:?} B per hop selfward, {mutual:?} mutual"
+        );
+    }
+}
+
+/// A spawned frame keeps its argument at the home its caller kept it, so `ONWARD` hands back a
+/// field homed where the chain rests, and the hop hands it on without copying it.
+#[test]
+fn a_chain_walk_through_a_helper_copies_no_part_of_the_chain() {
+    for form in [Form::Selfward, Form::Mutual] {
+        let per_hop = copied_per_hop("", ONWARD, form, "ints chain");
+        assert!(
+            same_per_hop(&per_hop),
+            "{form:?}: {per_hop:?} bytes per hop"
+        );
+    }
+}
+
+#[test]
+fn a_chain_walk_through_a_helper_holds_its_memory_flat_in_its_depth() {
+    assert_flat(ONWARD, "ints chain", |_| "done".to_string());
 }

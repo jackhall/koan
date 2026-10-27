@@ -171,7 +171,7 @@ previous step parked, and exposes:
 - `arena_ref`, the arena node the cell runs under;
 - `sought`, at a call's first step, the request the drain hands back for the
   frame to lay its level from ([below](#the-build-arena)), taken once;
-- `born_part` and `kept_here`, which keep a value at its true home
+- `kept_here`, which keeps a value the cell holds at the cell itself
   ([below](#kept-and-held-values));
 - the ends — `park`, `hand_off`, `tail`, `tail_seeking`, `tail_under`,
   `bounce`, `rebuild`, `replay`, `finish_fresh`, `finish_in_home`, `finish`,
@@ -235,12 +235,27 @@ So a step that crossed a value on by lifting it would pin or copy from its
 own cell, never from where the value rests. A **kept** value
 ([kept.rs](kept.rs)) is the fix: an opaque, brand-free `Kept`, a carrier put
 to rest at the value's true home, which only the veneer redeems. A step makes
-one two ways: `born_part` projects a part of the birth the cell woke from,
-where the birth was pinned in, keeping it at the birth's own home; and
-`kept_here` keeps a value the cell holds — one it was handed by a copy, or
-built — at the cell itself. A `KeptPart` is a kept value and a path of record
-field labels down to one of its parts, projected through cellgraph's
-`project`.
+one itself only with `kept_here`, which keeps a value the cell holds — one it
+was handed by a copy, or built — at the cell itself. A `KeptPart` is a kept
+value and a path of segments down to one of its parts, projected through
+cellgraph's `project`. Each segment is one step down: a record field's label,
+read as `Value::along` reads it; a function's capture slot, read as
+`Value::captured` reads it, an edge resolved to the fellow member of the knot
+it names; or a module's member slot, which `values` sees as opaque and the
+knot reads (`layout::stored_member`).
+
+**The wake keeps what every call hands on.** The bundle lays every call's
+birth beside the kept part of each value it hands on, the callee among them
+(`StepBundle::handings`), and the wake keeps each at its true home, so a
+frame's first step finds what it keeps of its callee and arguments beside its
+birth and projects nothing out of it. A hop's successor crosses each value on
+its own ([tail hops](#tail-hops)). A spawned child's spawner is above it, and
+so is every home a value it is handed is kept at, so the child pins its birth
+whole: the wake keeps each value from the kept part it was handed through
+where that redeems, and otherwise projects it out of the birth and keeps it at
+the birth's home, and hands what it kept to the bundle beside the pinned birth
+(`StepBundle::keeping`). A birth crossed by a copy is other storage than what
+was kept, so its frame keeps afresh.
 
 Every value an evaluation holds is a `Held`: the value, and the kept part it
 is, or is a restamp of, where it has one. A pinned child result arrives held
@@ -460,7 +475,9 @@ successor, and otherwise out of the skeleton. A value that does not pin is
 copied into the successor — save, under a loop cell, a threaded one or one
 handed through a kept part, which is copied into the loop cell and pinned from
 there, so a value an earlier hop left in a loop cell rides each compaction into
-the fresh one rather than into every hop after it. Threaded values cross
+the fresh one rather than into every hop after it. A callee handed on bare
+threads, so the loop's frames keep it, and every capture read through it, in
+the loop cell. Threaded values cross
 first, so the successor's type branch links the loop cell's and every later
 merge stops at what that link reaches, rather than entering a node per value
 the loop has built. The successor keeps a carrier of each — at its home where
@@ -476,8 +493,8 @@ values are built in. What it holds pins into each hop free, by ancestry. The
 drain makes it at the first hop that threads (`Tailing::Hop` carrying the
 weight its birth threads, `StepBundle::threads`) when the provenance names
 none; the first frame's threaded values are copied into it once, there. A loop
-that threads nothing — a walker, a scalar loop — gets none, and its hops stay
-siblings under its parent. Every hop and hand-off inherits the loop cell; a
+that threads nothing and hands every callee through a kept part — a walker, a
+scalar loop — gets none, and its hops stay siblings under its parent. Every hop and hand-off inherits the loop cell; a
 spawned cell never does.
 
 **Compaction.** A loop cell gains what each hop threads and keeps what earlier

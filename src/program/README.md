@@ -149,11 +149,11 @@ a program's steps run over, with its three families:
   code composed at run time, which fills the code's holes under its
   composition; and `Inspect`, the view the top level leaves at rest. A `Call`
   also carries, for a hop under its frame's own settlement, the level of that
-  settlement, which a callable born in the frame records in its stamp; for a
-  hop's skeleton, what it hands on through kept parts (`Passing`); and, once
-  its successor has built its own, what that successor keeps of its callee and
-  arguments (`Keeps`) — beside, in a `Call` or an `Eval`, where its asker's
-  decision memo rests. An `Evaluate` and a `Block` carry
+  settlement, which a callable born in the frame records in its stamp; what
+  the call hands its frame through kept parts (`Passing`), which every call
+  lays; and, once the wake has kept each of those values, what the frame keeps
+  of its callee and arguments (`Keeps`) — beside, in a `Call` or an `Eval`,
+  where its asker's decision memo rests. An `Evaluate` and a `Block` carry
   what their frame runs **within**: whether it [routes](#caching-bodies), the
   arena node it runs under and the stamp of its chain, the homes of its
   decision memo, under a composition the code's root, and the table of what
@@ -401,23 +401,34 @@ Number ``). A block never tails, and nor does a frame called through a barrier.
 **A frame keeps what it was handed.** A frame called with no barrier before its
 callee lays a table in its region at its first step (`FrameKept`): a
 [kept](../scheduler/README.md#kept-and-held-values) carrier at the true home of
-its callee and of each parameter's argument — projected from the birth it woke
-from where that was pinned in, taken from its birth's `Keeps` for a hop's
-successor, and kept in the frame where its birth was copied — and of each
-binder whose evaluation delivered a value pinned at a home of its own. A name read of the frame's body that lands on a slot the
-table fills is held beside that carrier, so a frame that returns its
-parameter, a binder bound bare to one, or a field of either hands it back from
-where it rests rather than copying it into its caller.
+its callee and of each parameter's argument — taken from the `Keeps` the wake
+laid beside its birth, and kept in the frame where its birth was copied — and
+of each binder whose evaluation delivered a value pinned at a home of its own.
+A name read of the frame's body that lands on a slot the table fills is held
+beside that carrier. Every name a callable body reads from outside it, a
+top-level name included, is a
+[capture](../knot/README.md#closure-bindings-and-edges) of its callee, so a
+read that lands on one is held beside the kept callee, one capture segment
+down, and a module member read beside its module's kept part, one member
+segment down. So a frame that returns its parameter, a binder bound bare to
+one, a top-level name, a module's member, or a field of any of them hands it
+back from where it rests rather than copying it into its caller.
 
-**A tail hands on a skeleton.** A tail call lays a `Passing` beside its birth:
-the arguments held beside a kept part, by name, the frame's own callee where
-the hop is into it, the argument record's field names, and which arguments
-the frame built to outlive the hop. A call by name gathers a record literal's
-fields itself, so each is handed through its own kept part. The successor's
-first step crosses each value on its own, rebuilds the argument record in its
-own region over them, each restamped at the type the skeleton held it at, and
-keeps a carrier of each (`Keeps`); the skeleton and the predecessor's record
-die with the hop ([the scheduler](../scheduler/README.md#tail-hops)).
+**Every call hands on a skeleton.** A call lays a `Passing` beside its birth:
+the arguments held beside a kept part, by name, the callee through the kept
+part it was read through, the argument record's field names, and, for a tail,
+which arguments the frame built to outlive the hop. A call by name gathers a
+record literal's fields itself, so each is handed through its own kept part.
+The wake keeps each value at its true home
+([the scheduler](../scheduler/README.md#kept-and-held-values)). A spawned
+frame's spawner is above it, so its birth pins whole, and it keeps each value
+from the kept part it was handed through, or from the birth where it has none:
+a helper that returns a part of its argument hands back a value homed where
+its caller's argument rests, not in the calling frame. A hop's successor
+crosses each value on its own, rebuilds the argument record in its own region
+over them, each restamped at the type the skeleton held it at, and keeps a
+carrier of each; the skeleton and the predecessor's record die with the hop
+([tail hops](../scheduler/README.md#tail-hops)).
 
 **What a loop keeps.** A binder of the frame body's
 [threaded set](../scope/README.md#the-threaded-set), and each argument part of its
@@ -425,9 +436,12 @@ last statement in it, is asked for with `Use::Threads`, so it is built in the
 loop's cell where the frame's provenance names one: what a tail call hands on
 that the frame built outlives the hop, built over what it reaches where that
 rests, and everything else the frame and its hand-off build is reclaimed at
-the next hop. A loop's memory is therefore a constant times what its latest
-hop threads, plus one hop's region; a loop that threads nothing builds no loop
-cell at all.
+the next hop. A callee a tail hands on bare — a function the frame tied, an
+instance the call made, a spread candidate — threads too: it is copied into
+the loop cell once, and the loop's frames keep it, and every capture read
+through it, there. A loop's memory is therefore a constant times what its
+latest hop threads, plus one hop's region; a loop that threads nothing and
+hands every callee through a kept part builds no loop cell at all.
 
 ### Caching bodies
 
@@ -656,6 +670,6 @@ module value by its digest tree. The two-program test,
   which build an `Error` from a fault and release its frames.
 - [A refused program stays loaded](../../roadmap/rewrite/refused-programs-stay-loaded.md)
   — a refused load kept, so its shape error renders on demand rather than once.
-- [Precise kept carriers](../../roadmap/rewrite/kept-carrier-precision.md) —
-  a capture, and a part of its argument a spawned call hands back, handed on
-  from where they rest rather than copied each hop.
+- [One cell per frame](../../roadmap/rewrite/one-cell-per-frame.md) — a
+  called body run in its frame's own cell, parking only on a spawned frame,
+  with no hand-off.

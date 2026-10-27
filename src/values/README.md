@@ -444,7 +444,12 @@ copied operand its caller will place elsewhere.
 through doors that never write: `Value::along` reads the stored part a record
 field label reaches, through every tagged payload first, at the part's own
 memo, and `stored_fields` a plain record's runs as stored, whatever type the
-record is seen at. `same_storage` tells whether two values are one storage —
+record is seen at. `Value::captured` reads the value a function's capture slot
+holds, as an activation of it reads that capture: a value word as itself, an
+edge as the fellow member of the knot it names. Those are two of a kept
+path's steps (`PathSegment`): a label and a capture slot; the third, a
+module's member slot, is the knot's to read, since a module is opaque here.
+`same_storage` tells whether two values are one storage —
 the same scalar, restamps of one run, or headers over one knot member —
 without walking either, and `restamped_at` re-lays a value at the type a
 restamp of the same storage carried, where the value lands.

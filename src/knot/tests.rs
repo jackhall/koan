@@ -16,6 +16,7 @@
 mod birth;
 mod bits;
 mod boundary;
+mod captures;
 mod code;
 mod copy;
 mod equality;

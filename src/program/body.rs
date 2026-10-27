@@ -66,7 +66,7 @@ use crate::knot::{
     CodeBody, KActivation, KActivationView, KReading, KValue, Knotted, Supplied, Tied, Untieable,
     tie, using,
 };
-use crate::memory::{Active, Bump, BumpVec, Writer, resident};
+use crate::memory::{Bump, BumpVec, Writer, resident};
 use crate::parse::ExpressionPart;
 use crate::scheduler::{
     Action, Held, MemoHome, Placement, Received, Replayed, Request, Requested, Seek, Slot as Asked,
@@ -408,8 +408,8 @@ fn bare(callee: KValue<'_, '_>) -> bool {
 
 /// The table a frame keeps its callee, its arguments and its binders' delivered values in, laid in
 /// its region with a carrier for the callee and for each parameter's argument: what `keeps` names,
-/// for a hop's successor, which built its birth over them; else kept where the birth was pinned
-/// in, at its home, and here where the birth was copied in.
+/// which the wake laid beside every call's birth from what its caller handed on; kept here only
+/// where the birth was copied in, which keeps afresh.
 fn frame_kept<'graph, 'here>(
     step: &mut Taking<'_, 'graph, '_, 'here, '_, '_>,
     activation: &KActivation<'graph, 'here>,
@@ -433,22 +433,10 @@ fn frame_kept<'graph, 'here>(
             let at = keeps.arguments.iter().find(|(handed, _)| *handed == name)?;
             Some(at.1)
         });
-        let kept = handed.or_else(|| {
-            step.born_part(|birth, _| match birth.value() {
-                KBirth::Call { arguments, .. } => arguments.along(name).map(Active::new),
-                _ => None,
-            })
-        });
-        let kept = kept.or_else(|| Some(step.kept_here(arguments.along(name)?)));
+        let kept = handed.or_else(|| Some(step.kept_here(arguments.along(name)?)));
         slots[slot.index()].set(kept);
     }
-    let callee = keeps.map(|keeps| keeps.callee).unwrap_or_else(|| {
-        step.born_part(|birth, _| match birth.value() {
-            KBirth::Call { callee, .. } => Some(Active::new(callee)),
-            _ => None,
-        })
-        .unwrap_or_else(|| step.kept_here(callee))
-    });
+    let callee = keeps.map_or_else(|| step.kept_here(callee), |keeps| keeps.callee);
     resident(
         step.writer(),
         FrameKept {

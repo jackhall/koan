@@ -246,10 +246,6 @@ pub struct Step<
     /// The books the cell's arena node is kept in, which the step reads liveness from.
     books: &'a BuildArena<'graph>,
     spawns: &'a mut Spawns<'graph, B>,
-    /// The carrier of the birth this cell woke from, at the birth's own home, where the birth was
-    /// pinned in: what [`born_part`](Self::born_part) projects. `None` past the first step, for a
-    /// root work, and where the birth was copied.
-    born: Option<Ready<'graph, 'step, B::Birth>>,
     state: S::Of<StateAt<'graph, 'here, B>>,
     scratch: X::Of<Option<ScratchAt<'graph, 'here, 'scratch, B>>>,
 }
@@ -301,7 +297,6 @@ where
         ),
         books: &'a BuildArena<'graph>,
         spawns: &'a mut Spawns<'graph, B>,
-        born: Option<Ready<'graph, 'step, B::Birth>>,
         state: StateAt<'graph, 'here, B>,
         scratch: Option<ScratchAt<'graph, 'here, 'scratch, B>>,
     ) -> Self {
@@ -316,7 +311,6 @@ where
             sought,
             books,
             spawns,
-            born,
             state,
             scratch,
         }
@@ -351,7 +345,6 @@ where
             sought,
             books,
             spawns,
-            born,
             state,
             scratch,
         } = self;
@@ -366,7 +359,6 @@ where
             sought,
             books,
             spawns,
-            born,
             state: (),
             scratch,
         };
@@ -402,7 +394,6 @@ where
             sought,
             books,
             spawns,
-            born,
             state,
             scratch,
         } = self;
@@ -417,7 +408,6 @@ where
             sought,
             books,
             spawns,
-            born,
             state,
             scratch: (),
         };
@@ -1138,24 +1128,6 @@ where
         self.placed(report, &[held], carriers, check, |_, _, values, _| {
             Active::new(values[0])
         })
-    }
-
-    /// Keep the part `part` picks out of the birth this cell woke from, at the birth's own home:
-    /// what a frame keeps of an argument it was handed. `None` where the birth was not pinned in —
-    /// a root work's, or one a hop copied — past the first step, and where `part` picks nothing.
-    pub fn born_part(
-        &mut self,
-        part: impl for<'c> FnOnce(
-            Active<'graph, 'c, B::Birth>,
-            &'c &'graph (),
-        ) -> Option<Active<'graph, 'c, KValueFamily>>,
-    ) -> Option<Kept<'graph>>
-    where
-        Erased<'graph, B::Birth>: Copy,
-    {
-        let born = self.born.as_ref()?;
-        let carrier = self.context.project::<B::Birth, KValueFamily>(born, part)?;
-        Some(Kept(self.context.keep(carrier)))
     }
 
     /// Keep `value`, which this cell holds at its own brand, here: what a cell keeps of a value it

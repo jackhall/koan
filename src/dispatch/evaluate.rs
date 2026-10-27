@@ -26,8 +26,10 @@
 //! A part the node needs is read in place when it is a literal, a name or a quote, and otherwise
 //! asked for — a tenant of this cell, kept — all at one park; the wake reads the same parts again.
 //! Each value is held beside the kept part it is where it has one ([`Held`]): a name its frame keeps
-//! a carrier of, a child's pinned result, and a field read over either, its label appended to the
-//! path. A value finished with a kept part crosses from its true home. A construction — a list,
+//! a carrier of, a capture of the frame's callee as that part of its kept callee, a child's pinned
+//! result, and a field or module member read over any of them, its label or slot appended to the
+//! path. A value finished with a kept part crosses from its true home, and every call hands its
+//! callee and arguments on through theirs ([`Passing`]). A construction — a list,
 //! dict or record literal, or a newtype's — is built in the evaluation's home over its parts, which
 //! it asks for forwarded, so it is never built here only to be crossed whole. A frame's hand-off
 //! asks for each part of the frame body's threaded set with `Threads`, so what its tail call hands
@@ -58,6 +60,7 @@
 //! static type; the narrowing law (`tests/narrowing.rs`) is what holds a narrowed call to full
 //! selection.
 
+use crate::knot::module::layout;
 use crate::knot::module::view::{self, Ascription, Unascribable};
 use crate::knot::{CodeBody, KValue, Knotted, instance, lambda, quote, refused_construction};
 use crate::memory::{Active, Bump, BumpAllocator, BumpVec, Writer, collect, resident};
@@ -73,14 +76,17 @@ use crate::scheduler::{
     Use,
 };
 use crate::scope::{
-    AtRun, BodyShape, Candidate, CandidateList, CandidateRoute, Elaboration, Elimination, HandedTo,
-    InstanceRead, Located, Narrowing, Offer, ParameterBinding, ShapeKind, Site, StaticType,
+    AtRun, BodyShape, Candidate, CandidateList, CandidateRoute, Coordinate, Elaboration,
+    Elimination, HandedTo, InstanceRead, Located, Narrowing, Offer, ParameterBinding, ShapeKind,
+    Site, StaticType,
 };
 use crate::symbols::{BinderSymbol, Symbol};
 use crate::type_lattice::{KType, TypeNode, Verdict};
 #[cfg(debug_assertions)]
 use crate::type_lattice::{bound_above, lower_end_outside, satisfied_by};
-use crate::values::{Chain, Dict, Key, List, Record, Tagged, TypeValue, Value, satisfies};
+use crate::values::{
+    Chain, Dict, Key, List, PathSegment, Record, Tagged, TypeValue, Value, satisfies,
+};
 
 use super::builtins::{self, Native};
 use super::errors::Raised;
@@ -388,11 +394,24 @@ fn field_held<'graph, 'here>(
     let kept = record
         .kept
         .filter(|_| (record.value.along(label)).is_some_and(|stored| value.same_storage(&stored)));
-    let kept = kept.map(|part| KeptPart {
-        kept: part.kept,
-        path: writer.fill(part.path.len() + 1, |at| {
-            part.path.get(at).copied().unwrap_or(label)
-        }),
+    let kept = kept.map(|part| part.extended(writer, PathSegment::Label(label)));
+    Held { value, kept }
+}
+
+/// `value`, what a module member read of `operands` came to, beside the module operand's kept part
+/// extended by the slot its node stores `value`'s storage at, where the module operand has one and
+/// stores it.
+fn member_held<'graph, 'here>(
+    writer: Writer<'here, '_>,
+    operands: &[Operand<'graph, 'here>],
+    value: KValue<'graph, 'here>,
+) -> Held<'graph, 'here> {
+    let [Operand::Value(module), _] = operands else {
+        return Held::bare(value);
+    };
+    let kept = module.kept.and_then(|part| {
+        let slot = layout::member_slot(module.value, value)?;
+        Some(part.extended(writer, PathSegment::Member(slot as u32)))
     });
     Held { value, kept }
 }
@@ -851,6 +870,7 @@ fn call<'step, 'graph, 'here>(
             let value = builtins::run(native, at, node, writer, &operands, &scratch);
             let held = match (native, operands.get(1)) {
                 (Native::Field, _) => field_held(writer, &operands, value),
+                (Native::ModuleMember, _) => member_held(writer, &operands, value),
                 // A projection restamps its record, sharing its runs.
                 (Native::Project, Some(Operand::Value(record))) => record.becoming(value),
                 _ => Held::bare(value),
@@ -859,6 +879,7 @@ fn call<'step, 'graph, 'here>(
         }
         Selection::Function {
             callee,
+            coordinate,
             registered,
             solution,
             position,
@@ -903,17 +924,17 @@ fn call<'step, 'graph, 'here>(
                 ParameterBinding::Named(names) => names,
                 ParameterBinding::Operands => &[],
             };
-            let passing = tails.map(|_| {
-                let named = (named.iter().zip(&operands).zip(wanted.iter())).filter_map(
-                    |((name, operand), wanted)| match (operand, wanted) {
-                        (Operand::Value(held), Wanted::Evaluated(part)) => {
-                            Some((name.symbol(), *held, threads(at, part)))
-                        }
-                        _ => None,
-                    },
-                );
-                passing(writer, at, arguments, named, hop)
-            });
+            // Every call hands on what it holds beside a kept part; only a tail threads.
+            let named = (named.iter().zip(&operands).zip(wanted.iter())).filter_map(
+                |((name, operand), wanted)| match (operand, wanted) {
+                    (Operand::Value(held), Wanted::Evaluated(part)) => {
+                        Some((name.symbol(), *held, tails.is_some() && threads(at, part)))
+                    }
+                    _ => None,
+                },
+            );
+            let kept_callee = coordinate.and_then(|read| kept_read(at, writer, read));
+            let passing = passing(writer, at, arguments, named, kept_callee);
             let call = |owed: Option<Contract>| {
                 crate::program::call(
                     program,
@@ -924,7 +945,7 @@ fn call<'step, 'graph, 'here>(
                     handed,
                     owed,
                     at.within.inherit,
-                    owed.and(passing),
+                    Some(passing),
                     Use::Forwards,
                 )
             };
@@ -944,16 +965,16 @@ fn call<'step, 'graph, 'here>(
     finish(step, at, error)
 }
 
-/// What a tail call over the record `arguments` hands its successor through kept parts: each
+/// What a call over the record `arguments` hands its frame through kept parts: each
 /// argument of `named`, by the name its parameter binds, that is held beside a kept part, the
-/// frame's own callee, kept, where the call `hop`s into it, and the record's field names as its
-/// type names them, in the record's order.
+/// callee, through the kept part it was read through, and the record's field names as its type
+/// names them, in the record's order.
 fn passing<'graph, 'here>(
     writer: Writer<'here, '_>,
     at: &Evaluation<'_, 'graph, 'here, '_, '_, '_>,
     arguments: KValue<'graph, 'here>,
     named: impl Iterator<Item = (Symbol, Held<'graph, 'here>, bool)>,
-    hop: bool,
+    callee: Option<KeptPart<'graph, 'here>>,
 ) -> &'here Passing<'graph, 'here> {
     let scratch = Bump::new();
     let mut kept = BumpVec::new_in(&scratch);
@@ -962,9 +983,6 @@ fn passing<'graph, 'here>(
         kept.extend(held.kept.map(|part| (name, part)));
         threaded.extend(threads.then_some(name));
     }
-    let callee = (at.within.kept)
-        .and_then(|kept| kept.callee)
-        .filter(|_| hop);
     let mut binders = BumpVec::new_in(&scratch);
     if let TypeNode::Record { fields } = at.types.node(arguments.concrete_ktype()) {
         binders.extend(fields.keys());
@@ -1116,7 +1134,10 @@ fn apply<'step, 'graph, 'here>(
         Operand::Value(held) => *held,
         Operand::Label(_) => unreachable!("every part of an application is evaluated"),
     };
-    let head = held(&operands[0]).value;
+    let Held {
+        value: head,
+        kept: head_kept,
+    } = held(&operands[0]);
     let fields = literal.map(|fields| {
         let mut named = BumpVec::with_capacity_in(fields.len(), &scratch);
         named.extend(
@@ -1185,34 +1206,31 @@ fn apply<'step, 'graph, 'here>(
         HandedTo::Position(_) => None,
     });
     let hop = routed.is_some_and(|routed| routed.hop);
-    // A tail hands on each field of a literal through its own kept part, and each of a record
-    // held whole through the record's, the field's label appended.
-    let passing = tails.map(|_| match &fields {
+    // A call hands on each field of a literal through its own kept part, and each of a record
+    // held whole through the record's, the field's label appended; only a tail threads.
+    let tail = tails.is_some();
+    let passing = match &fields {
         Some(fields) => passing(
             writer,
             at,
             argument.value,
             fields
                 .iter()
-                .map(|(name, held, threads)| (name.symbol(), *held, *threads)),
-            hop,
+                .map(|(name, held, threads)| (name.symbol(), *held, tail && *threads)),
+            head_kept,
         ),
         None => {
             let names = (argument.value.stored_fields()).map_or(&[][..], |(names, _)| names);
-            let threaded = threads(at, argument_part);
+            let threaded = tail && threads(at, argument_part);
             let fields = names.iter().map(|name| {
-                let kept = argument.kept.map(|part| KeptPart {
-                    kept: part.kept,
-                    path: writer.fill(part.path.len() + 1, |at| {
-                        part.path.get(at).copied().unwrap_or(*name)
-                    }),
-                });
+                let kept =
+                    (argument.kept).map(|part| part.extended(writer, PathSegment::Label(*name)));
                 let value = (argument.value.along(*name)).expect("a record stores its fields");
                 (*name, Held { value, kept }, threaded)
             });
-            passing(writer, at, argument.value, fields, hop)
+            passing(writer, at, argument.value, fields, head_kept)
         }
-    });
+    };
     let argument = argument.value;
     let call = |owed: Option<Contract>| {
         crate::program::call(
@@ -1224,7 +1242,7 @@ fn apply<'step, 'graph, 'here>(
             handed,
             owed,
             at.within.inherit,
-            owed.and(passing),
+            Some(passing),
             Use::Forwards,
         )
     };
@@ -1386,12 +1404,7 @@ fn in_place<'step, 'graph, 'here>(
             let Some(InstanceRead::Solved(solution)) =
                 facts.instance_at(&at.types, shape, shape.site(part))
             else {
-                // A name its frame keeps a carrier of reads beside it.
-                let kept = (at.within.kept).and_then(|table| {
-                    let (segment, slot) = at.view.landing(mention.coordinate)?;
-                    let kept = table.slot(segment, slot)?;
-                    Some(KeptPart { kept, path: &[] })
-                });
+                let kept = kept_read(at, writer, mention.coordinate);
                 return Some(Held { value: read, kept });
             };
             let Value::Knotted(member) = read else {
@@ -1405,6 +1418,23 @@ fn in_place<'step, 'graph, 'here>(
             ))))
         }
     }
+}
+
+/// What the frame keeps of the value a read at `coordinate` reads: a slot of its own body whole,
+/// or a capture of its callee as that part of the kept callee. `None` outside a called frame, and
+/// for a read it keeps nothing of.
+fn kept_read<'graph, 'here>(
+    at: &Evaluation<'_, 'graph, 'here, '_, '_, '_>,
+    writer: Writer<'here, '_>,
+    coordinate: Coordinate,
+) -> Option<KeptPart<'graph, 'here>> {
+    let table = at.within.kept?;
+    if let Some((segment, slot)) = at.view.landing(coordinate) {
+        let kept = table.slot(segment, slot)?;
+        return Some(KeptPart { kept, path: &[] });
+    }
+    let (segment, slot) = at.view.capture_landing(coordinate)?;
+    table.capture(writer, segment, slot)
 }
 
 /// How an evaluation asks for the parts of a construction it builds in its home: forwarded, so

@@ -66,9 +66,10 @@ pub trait StepBundle<'graph>: 'graph {
     where
         'graph: 'cell;
 
-    /// The values a tail hop hands its successor one by one, where its birth was laid as a skeleton
-    /// beside them: each handed to `out` by index, beside the kept part it crosses from where it has
-    /// one and whether it threads. `false` for a birth that crosses whole — every one by default.
+    /// The values a call hands its frame one by one, where its birth was laid beside them: each
+    /// handed to `out` by index, beside the kept part it crosses from where it has one and whether
+    /// it threads. A hop's successor crosses each on its own; a spawned child keeps each. `false`
+    /// for a birth that hands nothing on — every one by default.
     fn handings<'cell>(
         birth: &BirthAt<'graph, 'cell, Self>,
         out: &mut impl FnMut(usize, Option<KeptPart<'graph, 'cell>>, bool),
@@ -100,6 +101,21 @@ pub trait StepBundle<'graph>: 'graph {
     {
         let _ = (birth, index);
         None
+    }
+
+    /// `birth`, pinned whole into a spawned child, beside what the child keeps of each value it
+    /// hands on — `kept`, in [`handings`](Self::handings)' order — laid through `writer`. The
+    /// default hands `birth` back unchanged.
+    fn keeping<'cell>(
+        writer: Writer<'cell, '_>,
+        birth: BirthAt<'graph, 'cell, Self>,
+        kept: &[Kept<'graph>],
+    ) -> BirthAt<'graph, 'cell, Self>
+    where
+        'graph: 'cell,
+    {
+        let _ = (writer, kept);
+        birth
     }
 
     /// The successor's birth at its own brand, from `view`, the skeleton its predecessor laid,

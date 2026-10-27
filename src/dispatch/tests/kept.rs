@@ -8,8 +8,13 @@ use crate::scheduler::PASSED;
 use crate::values::{BuildBudget, COPIED};
 
 /// `SAME` returns its parameter, `ONWARD` a field of it, and `BOUND` a binder bound bare to it;
-/// `MAKE` returns a record literal nesting another.
-const PASSING: &str = "EXPR #(SAME link :Link) -> Link = #(link)\n\
+/// `MAKE` returns a record literal nesting another; `BIG` returns a top-level name, and `DATA` a
+/// module's member.
+const PASSING: &str = "LET big = [1 2 3]\n\
+                       MODULE store = (LET data = [1 2 3])\n\
+                       EXPR #(BIG x :Number) -> Any = #(big)\n\
+                       EXPR #(DATA x :Number) -> Any = #(ATTR store data)\n\
+                       EXPR #(SAME link :Link) -> Link = #(link)\n\
                        EXPR #(ONWARD link :Link) -> Any = #(ATTR link next)\n\
                        EXPR #(BOUND link :Link) -> Link = #((LET held = link) (held))\n\
                        EXPR #(MAKE x :Number) -> Any = #({count = x, inner = {deep = x}})\n";
@@ -62,4 +67,22 @@ fn a_record_a_call_returns_is_built_once_in_its_callers_home() {
         copied, baseline,
         "neither record is copied out of the frame's evaluation"
     );
+}
+
+#[test]
+fn a_frame_hands_a_top_level_name_back_unchanged() {
+    let (printed, passed, copied) = ran("PRINT (BIG 1)\n");
+    let (expected, _, baseline) = ran("PRINT big\n");
+    assert_eq!(printed, expected);
+    assert!(passed > 0, "`BIG` hands `big` on at its home");
+    assert_eq!(copied, baseline, "nothing of `big` is copied");
+}
+
+#[test]
+fn a_frame_hands_a_module_member_back_unchanged() {
+    let (printed, passed, copied) = ran("PRINT (DATA 1)\n");
+    let (expected, _, baseline) = ran("PRINT (ATTR store data)\n");
+    assert_eq!(printed, expected);
+    assert!(passed > 0, "`DATA` hands `data` on at its home");
+    assert_eq!(copied, baseline, "nothing of `data` is copied");
 }

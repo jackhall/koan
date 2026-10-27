@@ -86,10 +86,14 @@ one from a part finishes with it, unchanged, before doing anything else.
 [`Held`](../scheduler/README.md#kept-and-held-values): the value, and the kept
 part it is where it has one — a name its frame
 [keeps](../program/README.md#frames-contracts-and-tails) a carrier of, a
-child's pinned result, and a builtin `ATTR` field read or a projection over
-either, the field's label appended to the path. A value finished with a kept
-part crosses on from its true home, so an evaluation that hands back a
-parameter, or a member of one, places nothing new. **A construction is built
+capture of the frame's callee as that part of its kept callee, a child's
+pinned result, and a builtin `ATTR` field or module member read or a
+projection over any of them, the field's label or the member's slot appended
+to the path. A value finished with a kept part crosses on from its true home,
+so an evaluation that hands back a parameter, a top-level name, or a member
+of either, places nothing new. A keyworded call's selection reports where it
+read its callee, so the callee is held as any name read is, and every call
+hands its callee and arguments on through their kept parts. **A construction is built
 in its home**: a list, dict or record literal, and a type's application, is
 built in the evaluation's home over its parts, which it asks for forwarded —
 kept in a caching body — so it is never built in the evaluation only to be
@@ -987,15 +991,17 @@ lookup. The run reads the route, and decides at the call only what the load
 left open: a builtin, a surfaced or retyped head, a spread or a rigid
 candidate.
 
-A tail call lays a [skeleton](../program/README.md#frames-contracts-and-tails)
-beside its birth, naming each argument held beside a kept part, so the
-callee's frame builds its own argument record over values crossed from where
-they rest. A call by name gathers a record literal's fields as parts of the
-call itself, so each field is handed on through its own kept part. The
-evaluation asks each argument part of the frame body's
+Every call lays a [skeleton](../program/README.md#frames-contracts-and-tails)
+beside its birth, naming each argument held beside a kept part and the callee
+through the kept part it was read through — a spread candidate's function
+stays bare — so the callee's frame keeps each value where it rests, and a
+hop's successor builds its own argument record over values crossed from
+there. A call by name gathers a record literal's fields as parts of the call
+itself, so each field is handed on through its own kept part. The evaluation
+asks each argument part of the frame body's
 [threaded set](../scope/README.md#the-threaded-set) with `Use::Threads`, so
-what the frame built and hands on is built in the loop's cell, and marks
-those arguments threaded in the skeleton. Any other value it finishes with is held to the contract: checked against the callee's own return,
+what the frame built and hands on is built in the loop's cell, and a tail
+marks those arguments threaded in the skeleton. Any other value it finishes with is held to the contract: checked against the callee's own return,
 a miss naming it, and retyped to the contract's outermost return. A call through
 a view's barrier never tails: its value crosses the barrier where its frame
 ends.

@@ -2,12 +2,12 @@
 //! scratch habitat across a park.
 //!
 //! A **birth** crosses — a spawn or a tail hands it from one cell to another at the verdict's price
-//! — so its family is covariant. A tail's call is laid as a skeleton beside what it hands through
-//! kept parts ([`Passing`]): its successor builds its own call over each value, crossed on its own,
-//! and keeps a carrier of each ([`Keeps`]). The **parked state** never crosses: a park stores it in the cell's
-//! own continuation and the wake hands it back at the same cell's brand, which is why the body
-//! runner's state may hold its activation, which binds and so is invariant. See
-//! [README.md § The bundle](README.md#the-bundle).
+//! — so its family is covariant. Every call is laid beside what it hands through kept parts
+//! ([`Passing`]), and its frame keeps a carrier of each ([`Keeps`]): a tail's successor builds its
+//! own call over each value, crossed on its own, and a spawned child pins its birth whole. The
+//! **parked state** never crosses: a park stores it in the cell's own continuation and the wake
+//! hands it back at the same cell's brand, which is why the body runner's state may hold its
+//! activation, which binds and so is invariant. See [README.md § The bundle](README.md#the-bundle).
 
 use std::cell::Cell;
 
@@ -17,11 +17,11 @@ use crate::memory::{
 };
 use crate::scheduler::{Born, Kept, KeptPart, MemoHome, StepBundle};
 use crate::scope::RegionHeader;
-use crate::scope::{ComposedRoot, Level, Segment, Site, Slot, Stamp};
+use crate::scope::{CaptureSlot, ComposedRoot, Level, Segment, Site, Slot, Stamp};
 use crate::symbols::{BinderSymbol, Symbol};
 use crate::type_lattice::{DeclaredType, Halves, KType};
 use crate::values::{
-    ArenaRef, ContentDigest, Half, Record, TypeTiers, Value, Weight, copy_severed,
+    ArenaRef, ContentDigest, Half, PathSegment, Record, TypeTiers, Value, Weight, copy_severed,
 };
 
 use super::body::Runner;
@@ -46,10 +46,10 @@ pub enum KBirth<'graph, 'cell> {
     /// callable born under it records in its stamp: kept by a hop under its frame's own
     /// settlement; `None` for any other frame, which lays its own from the request the drain
     /// hands it back.
-    /// `passing` is what a tail hop hands its successor through kept parts, laid beside the
-    /// skeleton the successor's birth is built from ([`Passing`]): `None` everywhere else, and
-    /// once the successor has built its own. `kept` is what that successor keeps of its callee
-    /// and arguments ([`Keeps`]): `None` for a spawned frame, which keeps what its birth holds.
+    /// `passing` is what the call hands its frame through kept parts, laid beside the birth
+    /// ([`Passing`]): every call lays it, and the wake keeps each value it names and sets it to
+    /// `None`, beside `kept`, what the frame keeps of its callee and arguments ([`Keeps`]). A
+    /// copied birth has neither, and keeps afresh.
     Call {
         program: &'graph Program<'graph>,
         callee: KValue<'graph, 'cell>,
@@ -130,16 +130,18 @@ pub struct Within<'graph, 'cell> {
     pub kept: Option<&'cell FrameKept<'graph, 'cell>>,
 }
 
-/// What a tail hop hands its successor through kept parts, laid beside the birth: each argument the
-/// birth's record holds that is a kept part, or a restamp of one, by name, and the frame's own
-/// callee, kept, where the hop is into it; the record's field names as its type names them, in the
-/// record's order; and the arguments the frame built to outlive the hop — its threaded set's — by
-/// name. The successor's birth is built in its own region, each kept argument crossing from its
-/// kept part and every other one, and the callee where none is kept, out of the birth; a threaded
-/// one that does not pin is copied into the loop's cell first.
+/// What a call hands its frame through kept parts, laid beside the birth: each argument the birth's
+/// record holds that is a kept part, or a restamp of one, by name, and the callee, through the kept
+/// part it was read through, where it has one; the record's field names as its type names them, in
+/// the record's order; and, for a tail, the arguments the frame built to outlive the hop — its
+/// threaded set's — by name. A hop's successor's birth is built in its own region, each kept value
+/// crossing from its kept part and every other one out of the birth; a threaded one that does not
+/// pin is copied into the loop's cell first, and so is a callee handed on bare, which threads. A
+/// spawned child pins its birth whole and keeps each value from its kept part, or from the birth
+/// where it has none.
 #[derive(Clone, Copy)]
 pub struct Passing<'graph, 'cell> {
-    pub callee: Option<Kept<'graph>>,
+    pub callee: Option<KeptPart<'graph, 'cell>>,
     pub arguments: &'cell [(Symbol, KeptPart<'graph, 'cell>)],
     pub binders: &'cell [BinderSymbol],
     pub threaded: &'cell [Symbol],
@@ -171,6 +173,20 @@ impl<'graph> FrameKept<'graph, '_> {
         (segment == self.segment)
             .then(|| self.slots.get(slot.index()).and_then(Cell::get))
             .flatten()
+    }
+
+    /// What the frame keeps of the value its callee captures at `slot`, read in the frame's own
+    /// body: the part of its kept callee that capture slot reaches, the path laid through
+    /// `writer`. `None` in any other segment, and where the frame keeps no callee.
+    pub fn capture<'cell>(
+        &self,
+        writer: Writer<'cell, '_>,
+        segment: Segment,
+        slot: CaptureSlot,
+    ) -> Option<KeptPart<'graph, 'cell>> {
+        let kept = self.callee.filter(|_| segment == self.segment)?;
+        let path = writer.fill(1, |_| PathSegment::Capture(slot.index() as u32));
+        Some(KeptPart { kept, path })
     }
 }
 
@@ -297,6 +313,7 @@ impl<'graph> StepBundle<'graph> for KBundle {
                 arguments,
                 contributed,
                 handed,
+                owed,
                 level,
                 passing,
                 kept,
@@ -304,13 +321,17 @@ impl<'graph> StepBundle<'graph> for KBundle {
             } => {
                 let level =
                     level.map_or(Weight::ZERO, |level| Stamp { level, below: None }.weight());
-                // A skeleton's values cross on their own, so the skeleton is what it holds besides.
-                let values = match passing {
-                    Some(Passing {
-                        callee: Some(_), ..
-                    }) => Weight::ZERO,
-                    Some(_) => callee.weight(),
-                    None => callee.weight().plus(arguments.weight()),
+                // A tail's skeleton's values cross on their own, so the skeleton is what it holds
+                // besides; a spawned call's birth crosses whole.
+                let values = match (owed, passing) {
+                    (
+                        Some(_),
+                        Some(Passing {
+                            callee: Some(_), ..
+                        }),
+                    ) => Weight::ZERO,
+                    (Some(_), Some(_)) => callee.weight(),
+                    _ => callee.weight().plus(arguments.weight()),
                 };
                 values.plus(level).bytes()
                     + size_of_val(*contributed)
@@ -459,6 +480,7 @@ impl<'graph> StepBundle<'graph> for KBundle {
     {
         let KBirth::Call {
             arguments,
+            owed,
             passing: Some(passing),
             ..
         } = birth
@@ -476,18 +498,24 @@ impl<'graph> StepBundle<'graph> for KBundle {
                 passing.threaded.contains(name),
             );
         }
-        let callee = passing.callee.map(|kept| KeptPart { kept, path: &[] });
-        out(names.len(), callee, false);
+        // A tail's callee handed on bare threads: the loop's frames keep it in the loop cell.
+        out(
+            names.len(),
+            passing.callee,
+            owed.is_some() && passing.callee.is_none(),
+        );
         true
     }
 
     /// A call a tail laid a skeleton beside threads the weight of the arguments its frame built to
-    /// outlive the hop, where any is no number, bool, null or type value.
+    /// outlive the hop, where any is no number, bool, null or type value, and of its callee, where
+    /// it hands that on bare.
     fn threads<'cell>(birth: &KBirth<'graph, 'cell>) -> Option<usize>
     where
         'graph: 'cell,
     {
         let KBirth::Call {
+            callee,
             arguments,
             passing: Some(passing),
             ..
@@ -502,9 +530,12 @@ impl<'graph> StepBundle<'graph> for KBundle {
                 Value::Number(_) | Value::Bool(_) | Value::Null | Value::Type(_)
             )
         };
+        let bare = passing.callee.is_none().then_some(callee);
         (names.iter().zip(cells))
             .filter(|(name, value)| passing.threaded.contains(name) && !inline(value))
-            .map(|(_, value)| value.weight().bytes())
+            .map(|(_, value)| value)
+            .chain(bare)
+            .map(|value| value.weight().bytes())
             .reduce(|threads, weight| threads + weight)
     }
 
@@ -522,6 +553,46 @@ impl<'graph> StepBundle<'graph> for KBundle {
         match cells.get(index) {
             Some(value) => Some(*value),
             None => (index == cells.len()).then_some(callee),
+        }
+    }
+
+    /// A spawned call keeps what it was handed beside its birth, which no longer hands it on.
+    fn keeping<'cell>(
+        writer: Writer<'cell, '_>,
+        birth: KBirth<'graph, 'cell>,
+        kept: &[Kept<'graph>],
+    ) -> KBirth<'graph, 'cell>
+    where
+        'graph: 'cell,
+    {
+        let KBirth::Call {
+            program,
+            callee,
+            arguments,
+            kind,
+            contributed,
+            handed,
+            owed,
+            inherit,
+            level,
+            passing: Some(passing),
+            kept: None,
+        } = birth
+        else {
+            return birth;
+        };
+        KBirth::Call {
+            program,
+            callee,
+            arguments,
+            kind,
+            contributed,
+            handed,
+            owed,
+            inherit,
+            level,
+            passing: None,
+            kept: Some(keeps(writer, passing, kept)),
         }
     }
 
@@ -613,10 +684,6 @@ fn successor<'graph, 'cell>(
     fields
         .extend((0..count).map(|at| (passing.binders[at], held_at(handed[at], cells[at].ktype()))));
     let record = Record::new(writer, &fields, types, &scratch);
-    let keeps = Keeps {
-        callee: kept[count],
-        arguments: writer.fill(count, |at| (passing.binders[at].symbol(), kept[at])),
-    };
     KBirth::Call {
         program,
         callee: held_at(handed[count], callee.ktype()),
@@ -628,8 +695,24 @@ fn successor<'graph, 'cell>(
         inherit: *inherit,
         level,
         passing: None,
-        kept: Some(resident(writer, keeps)),
+        kept: Some(keeps(writer, passing, kept)),
     }
+}
+
+/// What a frame keeps of the callee and the arguments `passing` hands it, laid through `writer`:
+/// `kept`, a carrier of each handed value in [`handings`](KBundle::handings)' order, the
+/// arguments by name.
+fn keeps<'graph, 'cell>(
+    writer: Writer<'cell, '_>,
+    passing: &Passing<'graph, '_>,
+    kept: &[Kept<'graph>],
+) -> &'cell Keeps<'graph, 'cell> {
+    let count = passing.binders.len();
+    let keeps = Keeps {
+        callee: kept[count],
+        arguments: writer.fill(count, |at| (passing.binders[at].symbol(), kept[at])),
+    };
+    resident(writer, keeps)
 }
 
 /// `level`, a copied birth's, laid through `writer`: its modules copied through `view`, the

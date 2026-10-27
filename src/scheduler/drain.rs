@@ -13,7 +13,9 @@
 //! A tail hop whose birth was laid as a skeleton beside the values it hands on wakes each value on
 //! its own, from the kept part it was handed through where that redeems, and builds the
 //! successor's birth in the successor's region over them ([`StepBundle::handings`]): nothing
-//! homed above the successor is copied, and nothing of the skeleton outlives its predecessor.
+//! homed above the successor is copied, and nothing of the skeleton outlives its predecessor. A
+//! spawned child pins its birth whole and keeps each value it is handed from its kept part, or out
+//! of the birth where it has none ([`StepBundle::keeping`]).
 //!
 //! A loop whose hops hand on values their frames built — their threaded set's — runs its hops
 //! under a **loop cell**: a tree cell under the loop's receiving cell, with no continuation, created
@@ -1008,8 +1010,8 @@ where
     // finishes, hops or fails leaves the scratch slot empty and its bump goes back at
     // this step's end.
     let scratch = context.scratch_state();
-    let (state, carrier) = match state {
-        Rested::Awake(state) => (state, None),
+    let state = match state {
+        Rested::Awake(state) => state,
         Rested::Dormant(dormant, born) => {
             match wake::<B>(context, tiers, dormant, (born, provenance.loop_cell)) {
                 Ok(woken) => woken,
@@ -1041,7 +1043,6 @@ where
         (arena, composed, arrival, sought),
         books,
         spawns,
-        carrier,
         state,
         scratch,
     ));
@@ -1083,21 +1084,14 @@ where
 /// Wake a birth a spawn, a hop or a root work's `leave` put to rest: redeem it into this step and
 /// cross it to the executing cell's `'here` at the verdict's price — free for a child, whose
 /// spawner is above it, and for a tenant, which crosses nothing; copied for a tail hop's sibling,
-/// which is `Apart`. The redeemed carrier comes back beside the state where the birth was pinned,
-/// so the step can keep a part of it at its own home.
-#[allow(clippy::type_complexity)]
+/// which is `Apart`. A hop's successor crosses each value it is handed on its own ([`hopped`]); a
+/// child pins its birth whole and keeps each value it is handed beside it ([`spawned`]).
 fn wake<'graph, 'step, 'here, 'scratch, 'lent, B: StepBundle<'graph>>(
     context: &mut Context<'graph, 'step, 'here, 'scratch, 'lent, B>,
     tiers: TypeTiers<'graph>,
     dormant: Dormant<'graph, B::Birth>,
     (born, loop_cell): (Born, Option<CellHandle>),
-) -> Result<
-    (
-        StateAt<'graph, 'here, B>,
-        Option<Ready<'graph, 'step, B::Birth>>,
-    ),
-    RedeemError,
->
+) -> Result<StateAt<'graph, 'here, B>, RedeemError>
 where
     'graph: 'step + 'here + 'lent,
     'here: 'scratch,
@@ -1105,23 +1099,89 @@ where
     Erased<'graph, B::Birth>: Copy,
 {
     let carrier = context.redeem(dormant)?;
-    if born == Born::Hop
-        && let Some(birth) = hopped::<B>(context, tiers, &carrier, loop_cell)
-    {
-        return Ok((B::born(birth?), None));
-    }
+    let kept = match born {
+        Born::Hop => match hopped::<B>(context, tiers, &carrier, loop_cell) {
+            Some(birth) => return Ok(B::born(birth?)),
+            None => None,
+        },
+        Born::Child => spawned::<B>(context, &carrier),
+        Born::Left => None,
+    };
     let copy_bytes = B::weight(&context.read(&carrier).value());
-    let (birth, pinned) = context.alloc_here(
+    let birth = context.alloc_here(
         &[Operand {
             carrier: &carrier,
             copy_bytes,
         }],
         |writer, header, views| {
-            let pinned = matches!(views[0], CrossedOperand::Pinned { .. });
-            (B::cross(writer, header, &views[0], born, tiers), pinned)
+            let birth = B::cross(writer, header, &views[0], born, tiers);
+            match (&kept, &views[0]) {
+                (Some(kept), CrossedOperand::Pinned { .. }) => B::keeping(writer, birth, kept),
+                // A copied birth is other storage than what was kept: it keeps afresh.
+                _ => {
+                    debug_assert!(kept.is_none(), "a spawned child's birth pins");
+                    birth
+                }
+            }
         },
     );
-    Ok((B::born(birth), pinned.then_some(carrier)))
+    Ok(B::born(birth))
+}
+
+/// What a spawned child keeps of each value its birth hands on, where its spawner laid the birth
+/// beside them ([`StepBundle::handings`]): the kept part each was handed through where that
+/// redeems, and otherwise the value projected out of the birth, kept at the birth's home. Every
+/// such home is the spawner or above it, and the spawner is above the child, so the birth itself
+/// pins whole. `None` for a birth that hands nothing on, and where a value is gone.
+fn spawned<'graph, 'step, 'here, 'scratch, 'lent, B: StepBundle<'graph>>(
+    context: &mut Context<'graph, 'step, 'here, 'scratch, 'lent, B>,
+    carrier: &Ready<'graph, 'step, B::Birth>,
+) -> Option<SmallVec<[Kept<'graph>; 8]>>
+where
+    'graph: 'step + 'here + 'lent,
+    'here: 'scratch,
+    'lent: 'scratch,
+    Erased<'graph, B::Birth>: Copy,
+{
+    let mut parts: SmallVec<[Option<Ready<'graph, 'step, KValueFamily>>; 8]> = SmallVec::new();
+    let mut reused: SmallVec<[Option<Kept<'graph>>; 8]> = SmallVec::new();
+    let laid = {
+        let context = &*context;
+        let birth = context.read(carrier).value();
+        B::handings(&birth, &mut |index, kept, _| {
+            let from_kept = kept.and_then(|part| part.redeemed(context));
+            #[cfg(debug_assertions)]
+            if let Some(redeemed) = &from_kept {
+                let held = B::handed(context.read(carrier).value(), index);
+                debug_assert!(
+                    held.is_some_and(
+                        |held| held.same_storage(&context.read::<KValueFamily>(redeemed).value())
+                    ),
+                    "a kept part names the storage the birth holds"
+                );
+            }
+            reused.push(
+                kept.filter(|part| part.path.is_empty() && from_kept.is_some())
+                    .map(|part| part.kept),
+            );
+            parts.push(from_kept.or_else(|| {
+                context.project::<B::Birth, KValueFamily>(carrier, |birth, _| {
+                    B::handed(birth.value(), index).map(Active::new)
+                })
+            }));
+        })
+    };
+    if !laid {
+        return None;
+    }
+    let mut kept = SmallVec::new();
+    for (part, reused) in parts.into_iter().zip(reused) {
+        kept.push(match reused {
+            Some(reused) => reused,
+            None => Kept(context.keep(part?)),
+        });
+    }
+    Some(kept)
 }
 
 /// A hop's successor's birth, where its predecessor laid it as a skeleton beside the values it

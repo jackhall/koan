@@ -31,9 +31,18 @@ use super::{Chain, Key, Knotted, Link, Nothing, Retyped, Value, representation};
 /// type, and so is every type a holder names for a part. Only a callable is typed by a scheme.
 const SEEN: &str = "a value of a kind is seen at a type, never a scheme";
 
-/// A path of record field labels from a value down to one of its parts, each label read as
-/// [`Value::along`] reads it.
-pub type FieldPath<'cell> = &'cell [Symbol];
+/// One step from a value down to one of its parts: a record field's label, read as
+/// [`Value::along`] reads it; a capture slot of a function, read as [`Value::captured`] reads it;
+/// or a member slot of a module, which `values` sees as opaque and the knot reads.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum PathSegment {
+    Label(Symbol),
+    Capture(u32),
+    Member(u32),
+}
+
+/// A path of segments from a value down to one of its parts.
+pub type PartPath<'cell> = &'cell [PathSegment];
 
 /// A value beside the type a read sees it at: a quantified callable — a closure's capture, a
 /// candidate list's cell — at its scheme, every other value at a type.
@@ -307,6 +316,17 @@ impl<'cell, X: Knotted + 'cell> Value<'cell, X> {
                 Raw::List(_) | Raw::Dict(..) => return None,
             }
         }
+    }
+
+    /// The value capture slot `slot` of the function this value is holds — a value word, or the
+    /// fellow member of its knot an edge names — as an activation of it reads that capture.
+    /// `None` for a value that is no function, and past its closure run.
+    pub fn captured(self, slot: u32) -> Option<Value<'cell, X>> {
+        let member = self.knot_member()?;
+        let Resolved::Function { closure, .. } = member.resolve() else {
+            return None;
+        };
+        Some(closure.get(slot as usize)?.resolve(member))
     }
 
     /// A plain record's runs as stored: its field names in symbol order beside each field at its

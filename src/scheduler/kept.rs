@@ -9,22 +9,24 @@
 //! a value on read it ([`Step::finish`](super::Step::finish)). See
 //! [README.md § Kept and held values](README.md#kept-and-held-values).
 
+use crate::knot::module::layout;
 use crate::knot::{KValue, KValueFamily};
-use crate::memory::{Active, Dormant, Ready};
+use crate::memory::{Active, Dormant, Ready, Writer};
 use crate::scheduler::action::Context;
 use crate::scheduler::continuation::StepBundle;
-use crate::values::FieldPath;
+use crate::values::{PartPath, PathSegment};
 
 /// A value at rest at its true home: what a frame keeps of an argument, its callee or a binder's
 /// delivered value. Opaque and brand-free; only the veneer redeems one.
 #[derive(Clone, Copy)]
 pub struct Kept<'graph>(pub(super) Dormant<'graph, KValueFamily>);
 
-/// A kept value, or the part of it a path of record field labels reaches.
+/// A kept value, or the part of it a path of segments reaches: a record field, a function's
+/// capture or a module's member at each step.
 #[derive(Clone, Copy)]
 pub struct KeptPart<'graph, 'cell> {
     pub kept: Kept<'graph>,
-    pub path: FieldPath<'cell>,
+    pub path: PartPath<'cell>,
 }
 
 /// A value a step holds, beside the kept part it is, or is a restamp of, where it has one.
@@ -40,9 +42,10 @@ pub struct Held<'graph, 'cell> {
 
 impl<'graph> KeptPart<'graph, '_> {
     /// This part's kept value redeemed into the step `context` runs, and projected along its path,
-    /// each label read as [`Value::along`](crate::values::Value::along) reads it: the carrier of the
-    /// storage this part names, at its true home. `None` where it does not redeem or the path
-    /// reaches nothing.
+    /// each segment read as [`Value::along`](crate::values::Value::along),
+    /// [`Value::captured`](crate::values::Value::captured) or [`layout::stored_member`] reads it:
+    /// the carrier of the storage this part names, at its true home. `None` where it does not
+    /// redeem or the path reaches nothing.
     pub(super) fn redeemed<'step, 'here, 'scratch, 'lent, B: StepBundle<'graph>>(
         &self,
         context: &Context<'graph, 'step, 'here, 'scratch, 'lent, B>,
@@ -59,11 +62,28 @@ impl<'graph> KeptPart<'graph, '_> {
         }
         context.project::<KValueFamily, KValueFamily>(&carrier, |value, _| {
             let mut at = value.value();
-            for label in path {
-                at = at.along(*label)?;
+            for segment in path {
+                at = match *segment {
+                    PathSegment::Label(label) => at.along(label)?,
+                    PathSegment::Capture(slot) => at.captured(slot)?,
+                    PathSegment::Member(slot) => layout::stored_member(at, slot as usize)?,
+                };
             }
             Some(Active::new(at))
         })
+    }
+}
+
+impl<'graph, 'cell> KeptPart<'graph, 'cell> {
+    /// This part, one segment further down, the path laid through `writer`.
+    pub fn extended(self, writer: Writer<'cell, '_>, segment: PathSegment) -> Self {
+        let path = self.path;
+        KeptPart {
+            kept: self.kept,
+            path: writer.fill(path.len() + 1, |at| {
+                path.get(at).copied().unwrap_or(segment)
+            }),
+        }
     }
 }
 

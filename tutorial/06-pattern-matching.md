@@ -199,6 +199,9 @@ Each round of `DOUBLE` hands on `it`, the part of the count still to walk, and
 the accumulator, two `Succ` layers deeper than the one it was handed. Those are
 what the loop keeps: the count it walks, which already existed, and the
 accumulator, which grows with the answer it is building. Nothing else from
-earlier rounds survives.
+earlier rounds survives. A value the loop reads from outside it — a top-level
+binding, a member of a module, a parameter of the function the loop is defined
+in — is handed on from where it already rests, so passing it along every round
+costs nothing however large it is.
 
 Next: [Records](07-records.md).

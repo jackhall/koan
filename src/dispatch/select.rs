@@ -45,6 +45,9 @@ pub(super) enum Selection<'x, 'graph, 'here> {
     /// group order — empty for an unquantified one.
     Function {
         callee: KValue<'graph, 'here>,
+        /// Where the callee was read, which a frame may keep it beside: `None` for a function a
+        /// spread candidate held.
+        coordinate: Option<Coordinate>,
         registered: Registered<'here, KType>,
         solution: &'x [KType],
         /// The chosen candidate's position among those the call selected among, where its route
@@ -60,6 +63,7 @@ pub(super) enum Selection<'x, 'graph, 'here> {
 #[derive(Clone, Copy)]
 struct Admitted<'x, 'graph, 'here> {
     callee: KValue<'graph, 'here>,
+    coordinate: Option<Coordinate>,
     shape: DeclaredType<KType>,
     solution: &'x [KType],
     position: usize,
@@ -82,7 +86,10 @@ pub(super) fn selected<'x, 'graph, 'here>(
     let types = &at.types;
     let mut admitted: BumpVec<'_, Admitted<'x, 'graph, 'here>> = BumpVec::new_in(scratch);
     let mut positions = 0u64;
-    let mut consider = |callee: KValue<'graph, 'here>, verdict: Verdict, position: usize| {
+    let mut consider = |callee: KValue<'graph, 'here>,
+                        coordinate: Option<Coordinate>,
+                        verdict: Verdict,
+                        position: usize| {
         let Some(shape) = registered_shape(callee) else {
             return;
         };
@@ -110,6 +117,7 @@ pub(super) fn selected<'x, 'graph, 'here>(
                 positions |= 1 << position.min(63);
                 admitted.push(Admitted {
                     callee,
+                    coordinate,
                     shape,
                     solution,
                     position,
@@ -120,7 +128,12 @@ pub(super) fn selected<'x, 'graph, 'here>(
     };
     for (position, (candidate, verdict)) in candidates.into_iter().enumerate() {
         match candidate {
-            Candidate::One(coordinate) => consider(at.view.read(coordinate), verdict, position),
+            Candidate::One(coordinate) => consider(
+                at.view.read(coordinate),
+                Some(coordinate),
+                verdict,
+                position,
+            ),
             Candidate::Spread(coordinate) => {
                 let spread = at.view.read(coordinate);
                 if let (Some(_), Some(functions)) =
@@ -128,7 +141,7 @@ pub(super) fn selected<'x, 'graph, 'here>(
                 {
                     for at in 0..functions.len() {
                         let function = functions.child(at, types, scratch).value();
-                        consider(function, Verdict::Maybe, position);
+                        consider(function, None, Verdict::Maybe, position);
                     }
                 }
             }
@@ -173,6 +186,7 @@ pub(super) fn selected<'x, 'graph, 'here>(
     }
     Selection::Function {
         callee: chosen.callee,
+        coordinate: chosen.coordinate,
         registered: registration(chosen.callee)
             .expect("a candidate with a shape is a builtin or a registration's function"),
         solution: chosen.solution,
@@ -329,6 +343,7 @@ pub(super) fn chosen<'x, 'graph, 'here>(
     };
     Selection::Function {
         callee,
+        coordinate: Some(coordinate),
         registered,
         solution,
         position: 0,

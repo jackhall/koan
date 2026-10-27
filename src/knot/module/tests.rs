@@ -5,6 +5,7 @@
 mod birth;
 mod coerce;
 mod coerced;
+mod layout;
 mod surface;
 mod view;
 

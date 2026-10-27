@@ -696,3 +696,6 @@ and the scheduler hands a step its door and no more.
   — the types a settlement under a composition derives, kept warm.
 - [A birth solved once](../../roadmap/gradual-build/birth-solved-once.md) —
   a call by name keyed on a `FOR ALL` name solving its group once.
+- [Settling traceable bindings at load](../../roadmap/gradual-build/load-time-settlement.md)
+  — a keyed call whose sites the load can trace settled at load, leaving the
+  arena compositions alone.

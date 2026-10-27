@@ -34,7 +34,7 @@ use super::builtins::Builtins;
 use super::closure::ClosureBindings;
 use super::records::Facts;
 use super::settlement_facts::Activated;
-use super::shape::{BodyShape, Coordinate, Segment, ShapeKind, Slot, Target};
+use super::shape::{BodyShape, CaptureSlot, Coordinate, Segment, ShapeKind, Slot, Target};
 use super::shapes::Code;
 
 /// The read half of one body's bindings for one call or one block entry: what an evaluation is
@@ -400,6 +400,24 @@ impl<'graph, 'cell, XF: KnottedFamily<'graph>> ActivationView<'graph, 'cell, XF>
         let Coordinate::Activation {
             hops,
             target: Target::Local(slot),
+        } = at
+        else {
+            return None;
+        };
+        let mut view = self;
+        for _ in 0..hops {
+            view = view.enclosing?;
+        }
+        Some((view.segment, slot))
+    }
+
+    /// The segment of the activation a capture read at `at` lands in, stepping out as
+    /// [`read`](ActivationView::read) does, beside its capture slot: `None` for a builtin and a
+    /// slot.
+    pub fn capture_landing(&self, at: Coordinate) -> Option<(Segment, CaptureSlot)> {
+        let Coordinate::Activation {
+            hops,
+            target: Target::Capture(slot),
         } = at
         else {
             return None;
