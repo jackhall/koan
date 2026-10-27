@@ -303,9 +303,9 @@ in a tenant's storage and crossed into the callee's birth.
 [src/values/habitat.rs](../src/values/habitat.rs)) — a half's header, laid by the first door that
 interns into it, its branch written through `Cell`s and read by a later chain over the same half.
 
-- `a_keyed_shares_call_runs_beside_a_host_scratch_laid_before_it`
-  a host's scratch branch laid by an unkeyed tenant's caching chain, then read by a keyed tenant's
-  caching chain over the host's region and the agent tier.
+- `a_keyed_call_runs_beside_a_scratch_laid_before_it`
+  a scratch branch laid by an unkeyed call's caching chain, then read at the same park by a keyed
+  loop's caching chain of its own.
 
 **Build arena** ([src/scheduler/arena.rs](../src/scheduler/arena.rs)) — each settlement's facts
 are `self_cell`'s dependent, laid in its owner's bump and reading its parent's facts and the
