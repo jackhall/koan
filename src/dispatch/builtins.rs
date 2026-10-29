@@ -1,12 +1,14 @@
 //! The builtin table dispatch loads a program over, and the natives its overloads run.
 //!
-//! The table binds no value name. Its type names are the lattice's builtin types and `Error`. Its
+//! The table binds no value name. Its type names are the lattice's builtin types, `Error` and
+//! `Result`. Its
 //! overloads are function values: each a [`builtin`] node over the expression shape it is
 //! registered at, whose `id` is its [`Native`], held at its bucket key in the table's overload
 //! run, where every keyworded use at the key lists it first among its candidates.
 //!
 //! The library is `PRINT`; `+ - * /` over `Number`; `< <= > >=` over `Number`, returning `Bool`;
-//! `AND` and `NOT` over `Bool`; `==` over `Any`; `|` and `&` over types, as the infix pair and the
+//! `AND` and `NOT` over `Bool`; `==` over `Any`; `LENGTH` over a list, a dict or a string, counting
+//! its elements, entries or code points; `|` and `&` over types, as the infix pair and the
 //! unary list form an operator run of them is rewritten to; and each overload of the builtin
 //! expression shapes whose slots dispatch evaluates — `ATTR`, `FROM` and `USING` — typed
 //! as their [`BUILTIN_SHAPES`] entry types it. Every overload ranks its slots in written order.
@@ -19,7 +21,7 @@
 //! fields it names. `ATTR` over a module reads the member at its layout index, a quantified one
 //! made into the instance the load solved at the read.
 
-use crate::elaborate::{builtin_error, builtin_shape_types, declared_field};
+use crate::elaborate::{builtin_error, builtin_result, builtin_shape_types, declared_field};
 use crate::knot::module::layout;
 use crate::knot::{
     KBuiltins, KValue, UsingRefused, barrier_instance, builtin, header_instance, instance, using,
@@ -66,6 +68,8 @@ pub(super) enum Native {
     /// `FROM`.
     Project,
     Using,
+    /// `LENGTH` over a list, a dict or a string.
+    Length,
     /// `COMPOSE q`, for tests alone: code composed at run time, the one producer until code
     /// splicing ships.
     #[cfg(test)]
@@ -96,6 +100,7 @@ impl Native {
         Native::Variant,
         Native::Project,
         Native::Using,
+        Native::Length,
         #[cfg(test)]
         Native::Compose,
     ];
@@ -188,6 +193,30 @@ static OVERLOADS: &[Overload] = &[
         returns: KType::ANY_TYPE,
         native: Native::MeetOf,
     },
+    Overload {
+        elements: &[
+            Element::Keyword("LENGTH"),
+            Element::Slot(Takes::Is(KType::LIST_OF_ANY)),
+        ],
+        returns: KType::NUMBER,
+        native: Native::Length,
+    },
+    Overload {
+        elements: &[
+            Element::Keyword("LENGTH"),
+            Element::Slot(Takes::Is(KType::DICT_ANY_ANY)),
+        ],
+        returns: KType::NUMBER,
+        native: Native::Length,
+    },
+    Overload {
+        elements: &[
+            Element::Keyword("LENGTH"),
+            Element::Slot(Takes::Is(KType::STR)),
+        ],
+        returns: KType::NUMBER,
+        native: Native::Length,
+    },
     #[cfg(test)]
     Overload {
         elements: &[Element::Keyword("COMPOSE"), ANY],
@@ -227,6 +256,18 @@ const _: () = {
     }
 };
 
+/// The builtin `Result` the table binds: what every read answers.
+pub(super) fn result_type(builtins: &KBuiltins<'_, '_>) -> KType {
+    let result = TypeSymbol::classify("Result").expect("a Type token");
+    let index =
+        (builtins.lookup(BinderSymbol::Type(result))).expect("the builtin table binds `Result`");
+    builtins
+        .get(index)
+        .as_type()
+        .expect("`Result` names a type")
+        .handle()
+}
+
 /// Lay the builtin table down in program storage, through `writer`.
 pub(super) fn table<'graph>(
     writer: Writer<'graph, '_>,
@@ -242,6 +283,10 @@ pub(super) fn table<'graph>(
     names.push((
         TypeSymbol::declared("Error", symbols).expect("a Type token"),
         type_value(builtin_error(types, symbols, scratch)),
+    ));
+    names.push((
+        TypeSymbol::declared("Result", symbols).expect("a Type token"),
+        type_value(builtin_result(types, symbols, scratch)),
     ));
 
     let mut overloads = BumpVec::new_in(scratch);
@@ -479,6 +524,16 @@ pub(super) fn run<'graph, 'here>(
                 Ok(filled) => Value::Knotted(filled),
                 Err(UsingRefused::Ranking { key }) => raise(Raised::RankedTwice { key }),
             }
+        }
+        // A list's or a dict's count is its memo, a view's included; a string counts code points.
+        Native::Length => {
+            let count = match value(0).as_text() {
+                Some(text) => text.len(),
+                None => (value(0).surface(types, scratch))
+                    .expect("a list or dict slot admits containers alone")
+                    .len(),
+            };
+            Value::Number(count as f64)
         }
         #[cfg(test)]
         Native::Compose => compose(value(0), program, writer, types, scratch),

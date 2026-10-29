@@ -314,7 +314,7 @@ fn a_seal_is_read_through_nowhere_outside_its_view() {
                 assert!(!equal(sealed(carrier), five));
                 assert!(!equal(five, sealed(carrier)));
                 assert_eq!(
-                    Key::of(&sealed(carrier)),
+                    Key::of(&sealed(carrier), writer),
                     Err(KeyRejected::NotAScalar(carrier))
                 );
             }

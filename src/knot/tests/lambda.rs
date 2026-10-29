@@ -31,7 +31,7 @@ fn item_lambda<'graph>(
     else {
         panic!("the statement binds a list literal");
     };
-    &items[item]
+    items[item].part()
 }
 
 /// The body shape of the `FN` node `part` is.
@@ -174,7 +174,7 @@ fn a_lambda_capturing_its_binder_is_a_node_of_its_knot() {
                 panic!("`a` is a list node");
             };
             assert_eq!(a.member().knot().len(), 2);
-            let lambda = follow(a, list.cells()[0]);
+            let lambda = follow(a, list.link(0));
             let function = lambda.function().expect("the item is a function node");
             let shape = fixture.shape_of(activation);
             assert_eq!(
@@ -202,7 +202,7 @@ fn a_lambda_capturing_a_fellow_function_is_a_node_of_the_knot() {
                 panic!("`a` is a list node");
             };
             assert_eq!(a.member().knot().len(), 3);
-            let lambda = follow(a, list.cells()[0]);
+            let lambda = follow(a, list.link(0));
             assert!(lambda != a && lambda != f);
             let function = lambda.function().expect("the item is a function node");
             assert!(follow(lambda, function.closure().get(CaptureSlot(0))) == f);
@@ -225,7 +225,7 @@ fn a_lambda_below_a_nested_constructor_makes_its_path_anonymous() {
             let (_, Circular::List(list)) = circular(Value::Knotted(inner)) else {
                 panic!("`inner` is an anonymous list node");
             };
-            let lambda = follow(inner, list.cells()[0]);
+            let lambda = follow(inner, list.link(0));
             let function = lambda.function().expect("the item is a function node");
             assert!(follow(lambda, function.closure().get(CaptureSlot(0))) == a);
             let Link::Value(Value::List(plain)) =

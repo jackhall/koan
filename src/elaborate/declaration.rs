@@ -507,7 +507,9 @@ fn signature_type<'graph, 'h, R: Reads<'graph> + ?Sized>(
     let mut returning: BumpVec<'_, (KeywordSymbol, Site)> = BumpVec::new_in(scratch);
 
     for member in body.iter() {
-        let node = quoted_body(member).ok_or(unsupported)?.statement_spine();
+        let node = (member.as_part().and_then(quoted_body))
+            .ok_or(unsupported)?
+            .statement_spine();
         let member = Elaborator {
             reader: elaborator.reader,
             types,
@@ -685,7 +687,9 @@ fn group_members<'graph, 'x, R: Reads<'graph> + ?Sized>(
     };
     let mut members: BumpVec<'x, KeywordSymbol> = BumpVec::new_in(scratch);
     for head in heads.iter() {
-        let head = quoted_body(head).ok_or(unsupported)?.statement_spine();
+        let head = (head.as_part().and_then(quoted_body))
+            .ok_or(unsupported)?
+            .statement_spine();
         let form = head.cache().builtin_shape().ok_or(unsupported)?;
         let returns = match form.id {
             BuiltinShapeId::OperatorHead => false,

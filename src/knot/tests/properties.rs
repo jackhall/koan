@@ -105,6 +105,7 @@ fn planned_items<'graph>(
     };
     items
         .iter()
+        .map(|item| item.part())
         .map(|item| match item {
             ExpressionPart::Identifier(_) | ExpressionPart::Type(_) => {
                 let mention = shape
@@ -173,7 +174,7 @@ fn links<'graph, 'cell>(
             .map(|at| function.closure().get(CaptureSlot(at as u32)))
             .collect(),
         None => match Value::Knotted(member).as_circular() {
-            Some((_, Circular::List(list))) => list.cells().to_vec(),
+            Some((_, Circular::List(list))) => list.links().collect(),
             _ => panic!("a planned data node is a list"),
         },
     }
@@ -307,17 +308,17 @@ fn run<'graph, 'cell>(
                 };
                 let items = planned_items(shape, component, *slot);
                 assert_eq!(list.len(), items.len());
-                for (cell, item) in list.cells().iter().zip(items) {
+                for (cell, item) in list.links().zip(items) {
                     match (item, cell) {
                         (Item::Fellow(index), Link::Edge(edge)) => assert_eq!(edge.index(), index),
                         (Item::Read(coordinate), Link::Value(value)) => {
                             let enclosing = activation.read(coordinate);
-                            assert!(same(*value, enclosing), "a read cell is the enclosing word");
+                            assert!(same(value, enclosing), "a read cell is the enclosing word");
                         }
                         (Item::Function(body), Link::Edge(edge)) => {
                             assert_eq!(edge.index() as usize, next_lambda);
                             next_lambda += 1;
-                            let node = member.sibling(*edge);
+                            let node = member.sibling(edge);
                             let function =
                                 node.function().expect("a lambda item is a function node");
                             follows_layout(fixture, function, body, activation);

@@ -302,8 +302,8 @@ fn opened<'cell, X: Knotted + 'cell>(
             else {
                 return false;
             };
-            for (at, cell) in list.cells().iter().enumerate() {
-                enter(at, *cell, old, new);
+            for (at, cell) in list.elements().enumerate() {
+                enter(at, cell, old, new);
             }
             false
         }
@@ -420,7 +420,7 @@ fn rebuilt<'cell, X: Knotted + 'cell>(
         Value::List(list) => {
             let cells = collect(
                 writer,
-                list.cells().iter().enumerate().map(|(at, c)| cell(at, *c)),
+                list.elements().enumerate().map(|(at, c)| cell(at, c)),
             );
             let ktype = narrowed(types, scratch, list.ktype(), old);
             Value::List(List::weighed(writer, cells, ktype, types))

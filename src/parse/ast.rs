@@ -61,7 +61,7 @@ pub enum ExpressionPart<'a> {
     /// structurally (the elaborator folds it straight to a record `KType`); there is no
     /// internal type-constructor builtin behind it.
     RecordType(ProgramNode<'a>),
-    ListLiteral(&'a [ExpressionPart<'a>]),
+    ListLiteral(&'a [ListItem<'a>]),
     DictLiteral(&'a [(ExpressionPart<'a>, ExpressionPart<'a>)]),
     /// Anonymous record literal (`{x = 1, y = "a"}`) — identifier-keyed `=` pairs. The
     /// brace frame routes here when the first pair separator is `=`; `:` pairs stay a
@@ -112,6 +112,40 @@ impl Mark {
 /// slots are computed one at a time is an iterator, and staging it through an owned `Vec` first
 /// would pay a heap allocation and a second copy for bytes the region was going to hold anyway.
 pub(crate) type RunIter<I> = <I as IntoIterator>::IntoIter;
+
+/// An item of a list literal: a part, or `..part`, a list whose elements are spread into the
+/// literal one level deep. A spread is a list item and nothing else, so no other part holds one; a
+/// consumer that means something by an item matches both arms.
+#[derive(Debug, Clone, Copy)]
+pub enum ListItem<'a> {
+    Part(ExpressionPart<'a>),
+    Spread(ExpressionPart<'a>),
+}
+
+impl<'a> ListItem<'a> {
+    /// The part the item is, or spreads: what a consumer reading both alike reads.
+    pub fn part(&self) -> &ExpressionPart<'a> {
+        match self {
+            ListItem::Part(part) | ListItem::Spread(part) => part,
+        }
+    }
+
+    /// The same item over `part`: a part, or a spread of it.
+    pub fn with(&self, part: ExpressionPart<'a>) -> ListItem<'a> {
+        match self {
+            ListItem::Part(_) => ListItem::Part(part),
+            ListItem::Spread(_) => ListItem::Spread(part),
+        }
+    }
+
+    /// The part the item is, where it spreads nothing.
+    pub fn as_part(&self) -> Option<&ExpressionPart<'a>> {
+        match self {
+            ListItem::Part(part) => Some(part),
+            ListItem::Spread(_) => None,
+        }
+    }
+}
 
 impl<'a> ExpressionPart<'a> {
     /// The structural family this part belongs to — what dispatch-shape classification reads.
@@ -246,7 +280,10 @@ impl<'a> ExpressionPart<'a> {
                     if index > 0 {
                         f.write_str(" ")?;
                     }
-                    item.write_summary(f, symbols)?;
+                    if let ListItem::Spread(_) = item {
+                        f.write_str("..")?;
+                    }
+                    item.part().write_summary(f, symbols)?;
                 }
                 f.write_str("]")
             }

@@ -36,7 +36,7 @@ fn a_nested_family_construction_takes_its_solved_application() {
             let (_, Circular::List(list)) = circular(bound(fixture, activation, "a")) else {
                 panic!("`a` is a list node");
             };
-            let Link::Value(Value::Tagged(tagged)) = list.cells()[0] else {
+            let Link::Value(Value::Tagged(tagged)) = list.link(0) else {
                 panic!("the construction is an ordinary tagged value");
             };
             assert_eq!(

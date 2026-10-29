@@ -26,7 +26,7 @@
 //! than [`MAX_SYNTAX_DEPTH`](crate::parse::MAX_SYNTAX_DEPTH).
 
 use crate::memory::{BumpAllocator, BumpBackedSet, BumpVec, bump_set};
-use crate::parse::{ExpressionPart, KExpression, KLiteral};
+use crate::parse::{ExpressionPart, KExpression, KLiteral, ListItem};
 use crate::type_lattice::{DeclaredType, KType, satisfied_by};
 
 use super::circular::{CodeView, Resolved};
@@ -157,7 +157,11 @@ fn pair_equal<'left, 'right, X: Knotted, Y: Knotted>(
                 (Value::Number(left), Value::Number(right)) => left == right,
                 (Value::Bool(left), Value::Bool(right)) => left == right,
                 (Value::Null, Value::Null) => true,
-                (Value::Str(left), Value::Str(right)) => left == right,
+                (left, right)
+                    if let (Some(left), Some(right)) = (left.as_text(), right.as_text()) =>
+                {
+                    left == right
+                }
                 (Value::Type(left), Value::Type(right)) => left.handle() == right.handle(),
                 _ => false,
             },
@@ -259,7 +263,13 @@ fn part_equal(left: &ExpressionPart<'_>, right: &ExpressionPart<'_>) -> bool {
                 && left
                     .iter()
                     .zip(right.iter())
-                    .all(|(left, right)| part_equal(left, right))
+                    .all(|(left, right)| match (left, right) {
+                        (ListItem::Part(left), ListItem::Part(right))
+                        | (ListItem::Spread(left), ListItem::Spread(right)) => {
+                            part_equal(left, right)
+                        }
+                        _ => false,
+                    })
         }
         (Part::DictLiteral(left), Part::DictLiteral(right)) => {
             left.len() == right.len()

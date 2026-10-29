@@ -84,7 +84,8 @@ use crate::type_lattice::{
     Variance, admits_with, display_name, substitute_quantified,
 };
 use crate::values::{
-    ArenaRef, BindingImage, CALL_ONLY, Chain, ContentDigest, Link, List, Record, TypeValue, Value,
+    ArenaRef, BindingImage, CALL_ONLY, Chain, ContentDigest, Link, List, Record, Text, TypeValue,
+    Value,
 };
 
 use super::activation_store::bound_of;
@@ -181,7 +182,7 @@ struct Outer<'graph, 'cell> {
 /// Why a unit could not go on: the program raised an error value with this message, or an
 /// invariant broke.
 enum Stopped<'a> {
-    Raised(&'a str),
+    Raised(Text<'a>),
     Broken(StepError),
 }
 
@@ -1919,10 +1920,10 @@ fn untied<'graph, 'here>(
     error: &Untieable<'_>,
 ) -> Stopped<'here> {
     let program = runner.program;
-    Stopped::Raised(rendered(
+    Stopped::Raised(Text::Flat(rendered(
         step.writer(),
         error.display(program.symbols(), types),
-    ))
+    )))
 }
 
 /// Tie `component` again with `supplied` answering every eager part it names by site, and bind
@@ -2218,7 +2219,7 @@ fn decided_at_seams<'graph, 'here>(
     let site = EventSite::seam(shape.segment(), to as u32);
     let memo = &mut runner.memo;
     let decided = decide(step, types, program, memo, facts, below, &own, false, site)
-        .map_err(Stopped::Raised)?;
+        .map_err(|message| Stopped::Raised(Text::Flat(message)))?;
     runner.activation = resident(step.writer(), runner.activation.deciding(decided));
     Ok(())
 }
@@ -2307,7 +2308,7 @@ fn declared<'graph, 'here>(
             AtRun::Closed(handle) => handle,
             AtRun::Refused(refused) => {
                 let refused = refused.display(program.symbols(), types);
-                return Err(Stopped::Raised(rendered(writer, refused)));
+                return Err(Stopped::Raised(Text::Flat(rendered(writer, refused))));
             }
             AtRun::Open => unreachable!("a type binder's declaration is fixed where it runs"),
         };

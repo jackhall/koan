@@ -648,7 +648,7 @@ fn check_part(part: &ExpressionPart<'_>, span: Span, source: &str, symbols: &Sym
         ExpressionPart::ListLiteral(items) => {
             assert!(text.starts_with('[') && text.ends_with(']'), "got {text:?}");
             for item in *items {
-                check_nested(item, span, source, symbols);
+                check_nested(item.part(), span, source, symbols);
             }
         }
         ExpressionPart::DictLiteral(pairs) => {
@@ -730,7 +730,7 @@ fn part_symbols(part: &ExpressionPart<'_>, out: &mut Vec<Symbol>) {
         | ExpressionPart::MarkedUse(_, node) => node_symbols(node, out),
         ExpressionPart::ListLiteral(items) => {
             for item in *items {
-                part_symbols(item, out);
+                part_symbols(item.part(), out);
             }
         }
         ExpressionPart::DictLiteral(pairs) => {

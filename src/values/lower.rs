@@ -25,7 +25,10 @@ impl<'cell, X: Knotted> Value<'cell, X> {
 fn lowers(part: &ExpressionPart<'_>) -> bool {
     match part {
         ExpressionPart::Literal(_) => true,
-        ExpressionPart::ListLiteral(items) => items.iter().all(lowers),
+        // A spread needs its list's value.
+        ExpressionPart::ListLiteral(items) => {
+            items.iter().all(|item| item.as_part().is_some_and(lowers))
+        }
         ExpressionPart::DictLiteral(pairs) => pairs.iter().all(|(key, value)| {
             let scalar = match key {
                 ExpressionPart::Literal(KLiteral::Number(number)) => !number.is_nan(),
@@ -61,7 +64,11 @@ fn lower<'cell, X: Knotted>(
         ExpressionPart::Literal(KLiteral::Null) => Value::Null,
         ExpressionPart::ListLiteral(items) => {
             let mut cells = BumpVec::with_capacity_in(items.len(), scratch);
-            cells.extend(items.iter().map(|item| lower(writer, item, types, scratch)));
+            cells.extend(
+                items
+                    .iter()
+                    .map(|item| lower(writer, item.part(), types, scratch)),
+            );
             Value::List(List::new(writer, cells.iter().copied(), types, scratch))
         }
         ExpressionPart::DictLiteral(pairs) => {

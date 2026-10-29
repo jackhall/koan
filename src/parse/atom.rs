@@ -557,7 +557,8 @@ mod tests {
             ExpressionPart::Literal(KLiteral::Boolean(b)) => format!("b({})", b),
             ExpressionPart::Literal(KLiteral::Null) => "null".to_string(),
             ExpressionPart::ListLiteral(items) => {
-                let inner: Vec<String> = items.iter().map(|p| describe(p, symbols)).collect();
+                let inner: Vec<String> =
+                    items.iter().map(|p| describe(p.part(), symbols)).collect();
                 format!("L[{}]", inner.join(" "))
             }
             ExpressionPart::DictLiteral(pairs) => {

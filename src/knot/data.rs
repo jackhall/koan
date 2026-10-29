@@ -10,7 +10,9 @@
 //! evaluator by site. Every constructor on the path from a member's root to a fellow mention or
 //! such a `FN` or quote is an anonymous node of the same knot; that node, the function node and the
 //! code node are indexed after the members in the order the walk meets them, and the cell that held
-//! each holds an edge. A nested constructor with no edge below it stays an ordinary value.
+//! each holds an edge. A nested constructor with no edge below it stays an ordinary value. A list
+//! item `..x` is staged as a spread of its source: an edge to a fellow list node, or a list value;
+//! a spread of anything else refuses the tie.
 //!
 //! **Memos** follow the nominal cut. A function's memo is its signature type, a code node's its
 //! carried type and a tagged node's the head it names, all known before the knot exists. A *derived* node's memo is read
@@ -22,16 +24,21 @@
 //!
 //! **Constructions** are checked by [`values::construction`](crate::values::construction), the one
 //! rule an ordinary construction goes through too, before anything is written.
+//!
+//! **Spreads.** A spread contributes its source's element type to its list's memo, and its edge is
+//! an edge between derived nodes, so a cycle of spreads is a cycle of derived nodes, refused. A list
+//! node that spreads is laid as a view ([`List::linked_pieces`]) after every fellow it spreads, its
+//! own runs' edges resolved through the member that reads it.
 
 use crate::memory::{BumpAllocator, BumpVec, KnotPlan, Writer, strongly_connected_components};
-use crate::parse::{ExpressionPart, KExpression, KLiteral};
+use crate::parse::{ExpressionPart, KExpression, KLiteral, ListItem};
 use crate::scope::{BodyShape, CaptureSource, Component, Coordinate, ShapeKind, Site, Target};
 use crate::symbols::BinderSymbol;
-use crate::type_lattice::{DeclaredType, KType, satisfied_by};
+use crate::type_lattice::{DeclaredType, KType, TypeNode, satisfied_by};
 use crate::values::{
-    CALL_ONLY, Chain, Circular, ConstructionRefused, Dict, Key, Link, List, Record, Retype, Tagged,
-    TypeValue, Value, construction, dict_type, held_in, kept_entries, list_type, part_ktype,
-    record_type, retype_target_as, solves_identity,
+    CALL_ONLY, Chain, Circular, ConstructionRefused, Dict, Key, Link, LinkedPiece, List, Piece,
+    Record, Retype, Tagged, TypeValue, Value, construction, dict_type, held_in, kept_entries,
+    list_type, part_ktype, record_type, retype_target_as, solves_identity,
 };
 
 use super::{Eager, KReading, KValue, Knotted, Supplied, Untieable};
@@ -43,7 +50,14 @@ pub(super) enum Staged<'step, 'graph, 'cell, 'x> {
     Value(KValue<'graph, 'cell>),
     /// The knot node at this index.
     Edge(u32),
+    /// A list's items, each a part or a [`Spread`](Staged::Spread).
     List(BumpVec<'x, Staged<'step, 'graph, 'cell, 'x>>),
+    /// A list item `..source`, at `site`: an edge to a fellow list node, or a list value. Only
+    /// ever a list's item.
+    Spread {
+        site: Site,
+        source: &'x Staged<'step, 'graph, 'cell, 'x>,
+    },
     /// Entries in written order, each key kept only at its last occurrence.
     Dict(BumpVec<'x, (Key<'x>, Staged<'step, 'graph, 'cell, 'x>)>),
     Record(BumpVec<'x, (BinderSymbol, Staged<'step, 'graph, 'cell, 'x>)>),
@@ -213,6 +227,35 @@ impl<'stage, 'step, 'graph, 'cell> Stager<'stage, 'step, 'graph, 'cell> {
             return Err(refused);
         }
         staged?;
+        let names = |owner: u32| {
+            activation
+                .shape()
+                .slot_name(component.members[owner as usize])
+        };
+        // A spread's edge names a list node alone: not a function or code node, nor a node of
+        // another constructor.
+        for node in stager.nodes.iter().flatten() {
+            let Staged::List(items) = &node.shape else {
+                continue;
+            };
+            for item in items.iter() {
+                if let Staged::Spread { site, source } = item
+                    && let Staged::Edge(target) = source
+                    && !matches!(
+                        stager.nodes[*target as usize],
+                        Some(Node {
+                            shape: Staged::List(_),
+                            ..
+                        })
+                    )
+                {
+                    return Err(Untieable::NotAList {
+                        name: names(node.owner),
+                        site: *site,
+                    });
+                }
+            }
+        }
         Ok(stager.nodes)
     }
 
@@ -321,7 +364,18 @@ impl<'stage, 'step, 'graph, 'cell> Stager<'stage, 'step, 'graph, 'cell> {
             ExpressionPart::ListLiteral(items) => {
                 let mut staged = BumpVec::with_capacity_in(items.len(), scratch);
                 for item in items.iter() {
-                    staged.push(self.part(item, false)?);
+                    let part = self.part(item.part(), false)?;
+                    staged.push(match item {
+                        ListItem::Part(_) => part,
+                        ListItem::Spread(source) => {
+                            let site = shape.site(source);
+                            self.spreadable(site, &part)?;
+                            Staged::Spread {
+                                site,
+                                source: scratch.alloc(part),
+                            }
+                        }
+                    });
                 }
                 Staged::List(staged)
             }
@@ -360,6 +414,31 @@ impl<'stage, 'step, 'graph, 'cell> Stager<'stage, 'step, 'graph, 'cell> {
             shape: staged,
         }));
         Ok(Staged::Edge(index))
+    }
+
+    /// Refuse a spread's staged `source` at `site` where it is no list: a value or a constructor of
+    /// another kind. An edge is checked once every member is staged ([`nodes`](Self::nodes)).
+    fn spreadable(
+        &self,
+        site: Site,
+        source: &Staged<'step, 'graph, 'cell, 'stage>,
+    ) -> Result<(), Untieable<'static>> {
+        let listed = match source {
+            Staged::Value(value) => {
+                matches!(value, Value::List(_))
+                    || matches!(value.as_circular(), Some((_, Circular::List(_))))
+            }
+            // An edge is checked once every member is staged.
+            Staged::List(_) | Staged::Edge(_) => true,
+            _ => false,
+        };
+        match listed {
+            true => Ok(()),
+            false => Err(Untieable::NotAList {
+                name: self.name(),
+                site,
+            }),
+        }
     }
 
     /// A mention read: an edge for a member of the component, the activation's word otherwise.
@@ -407,7 +486,7 @@ impl<'stage, 'step, 'graph, 'cell> Stager<'stage, 'step, 'graph, 'cell> {
             ExpressionPart::Literal(KLiteral::Number(number)) => Key::number(*number),
             ExpressionPart::Literal(KLiteral::Boolean(flag)) => Ok(Key::bool(*flag)),
             _ => match (self.eager)(site, Some(part)) {
-                Some(Supplied::Value(value)) => Key::of(&value),
+                Some(Supplied::Value(value)) => Key::of(&value, self.scratch),
                 Some(Supplied::Body(_)) => unreachable!("a dict key is a value"),
                 None => {
                     self.unevaluated(site);
@@ -429,13 +508,18 @@ fn each_child<'a, 'step, 'graph, 'cell, 'x>(
     mut visit: impl FnMut(&'a Staged<'step, 'graph, 'cell, 'x>),
 ) {
     match staged {
-        Staged::List(items) => items.iter().for_each(visit),
+        // A spread's source is the list's child, the spread no constructor.
+        Staged::List(items) => items.iter().for_each(|item| match item {
+            Staged::Spread { source, .. } => visit(source),
+            item => visit(item),
+        }),
         Staged::Dict(entries) => entries.iter().for_each(|(_, value)| visit(value)),
         Staged::Record(fields) => fields.iter().for_each(|(_, value)| visit(value)),
         Staged::Tagged { payload, .. } => visit(payload),
         Staged::Literal(_)
         | Staged::Value(_)
         | Staged::Edge(_)
+        | Staged::Spread { .. }
         | Staged::Function(_)
         | Staged::Code { .. } => {}
     }
@@ -560,10 +644,19 @@ fn staged_type(
             .expect("a referent's memo is derived first")
             .as_type()
             .expect(CALL_ONLY),
+        // A spread stands for its source's elements by their element type.
         Staged::List(items) => {
             let mut cells = BumpVec::with_capacity_in(items.len(), scratch);
             for item in items.iter() {
-                cells.push(of(item)?);
+                cells.push(match item {
+                    Staged::Spread { source, .. } => match types.node(of(source)?) {
+                        TypeNode::List { element } => element,
+                        _ => unreachable!(
+                            "a spread's source is a list: the staging refuses any other"
+                        ),
+                    },
+                    item => of(item)?,
+                });
             }
             list_type(types, scratch, cells.iter().copied())
         }
@@ -590,6 +683,7 @@ fn staged_type(
                 .map_err(|refused| (*site, refused))?
         }
         Staged::Tagged { head, .. } => head.handle(),
+        Staged::Spread { .. } => unreachable!("a spread is only a list's item"),
         Staged::Function(_) | Staged::Code { .. } => {
             unreachable!("a function or a quote sits only at a node, whose memo is its own")
         }
@@ -655,6 +749,20 @@ fn write<'graph, 'cell>(
         }
         Staged::Value(value) => *value,
         Staged::Edge(_) => unreachable!("an edge sits only directly in a node"),
+        Staged::List(items) if items.iter().any(spread) => {
+            let mut cells = BumpVec::with_capacity_in(items.len(), scratch);
+            cells.extend(items.iter().map(|item| match item {
+                Staged::Spread { source, .. } => value(source),
+                item => value(item),
+            }));
+            let pieces = pieces(
+                items,
+                scratch,
+                |run| Piece::Items(&cells[run]),
+                |at| Piece::Spread(cells[at]),
+            );
+            Value::List(List::concatenated(writer, &pieces, types, scratch))
+        }
         Staged::List(items) => {
             let mut cells = BumpVec::with_capacity_in(items.len(), scratch);
             cells.extend(items.iter().map(value));
@@ -674,10 +782,41 @@ fn write<'graph, 'cell>(
             Tagged::construct(writer, head, value(payload), types, scratch)
                 .expect("every construction is checked before the first write"),
         ),
+        Staged::Spread { .. } => unreachable!("a spread is only a list's item"),
         Staged::Function(_) | Staged::Code { .. } => {
             unreachable!("a function or a quote sits only at a node, reached through an edge")
         }
     }
+}
+
+/// Whether a list item is a spread.
+fn spread(item: &Staged<'_, '_, '_, '_>) -> bool {
+    matches!(item, Staged::Spread { .. })
+}
+
+/// A list's items as the pieces of a concatenation, in `scratch`: each run of items between two
+/// spreads by its range, through `items`, and each spread by its index, through `spread`.
+fn pieces<'x, P>(
+    staged: &[Staged<'_, '_, '_, '_>],
+    scratch: BumpAllocator<'x>,
+    mut items: impl FnMut(std::ops::Range<usize>) -> P,
+    mut spread: impl FnMut(usize) -> P,
+) -> BumpVec<'x, P> {
+    let mut pieces = BumpVec::new_in(scratch);
+    let mut run = 0;
+    for (at, item) in staged.iter().enumerate() {
+        if self::spread(item) {
+            if run < at {
+                pieces.push(items(run..at));
+            }
+            pieces.push(spread(at));
+            run = at + 1;
+        }
+    }
+    if run < staged.len() {
+        pieces.push(items(run..staged.len()));
+    }
+    pieces
 }
 
 /// A node's cell: an edge through `plan`, or a staged value written.
@@ -697,26 +836,57 @@ fn link<'graph, 'cell>(
     }
 }
 
-/// A checked data node laid down in `writer`'s region under its memo.
+/// A data node laid down: its node, beside whether its cells may hide a field, which a fellow
+/// spreading it reads.
+pub(super) type Laid<'graph, 'cell> = (Circular<'cell, Knotted<'graph, 'cell>>, bool);
+
+/// A checked data node laid down in `writer`'s region under its memo, every fellow it spreads
+/// laid already in `laid`.
 pub(super) fn lay_down<'graph, 'cell>(
     writer: Writer<'cell, '_>,
     node: &Node<'_, 'graph, 'cell, '_>,
     memo: KType,
-    plan: &KnotPlan,
+    (plan, laid): (&KnotPlan, &[Option<Laid<'graph, 'cell>>]),
     types: &Chain<'_, 'cell, '_, '_>,
     scratch: BumpAllocator<'_>,
-) -> Circular<'cell, Knotted<'graph, 'cell>> {
+) -> Laid<'graph, 'cell> {
     let cell = |staged| link(writer, staged, plan, types, scratch);
     // A list's or dict's value cell is held at its view under the node's memo.
     let held = |staged| match cell(staged) {
         Link::Value(value) => Link::Value(held_in(writer, types, scratch, value, memo)),
         edge => edge,
     };
-    match &node.shape {
+    let circular = match &node.shape {
         Staged::List(items) => {
             let mut cells = BumpVec::with_capacity_in(items.len(), scratch);
-            cells.extend(items.iter().map(held));
-            Circular::List(List::linked(writer, &cells, memo))
+            // A spread's place holds nothing: the pieces read the runs between spreads alone.
+            cells.extend(items.iter().map(|item| match item {
+                Staged::Spread { .. } => Link::Value(Value::Null),
+                item => held(item),
+            }));
+            let pieces = pieces(
+                items,
+                scratch,
+                |run| LinkedPiece::Items(&cells[run]),
+                |at| {
+                    let Staged::Spread { source, .. } = &items[at] else {
+                        unreachable!("a piece's index is a spread's")
+                    };
+                    match source {
+                        Staged::Edge(target) => match laid[*target as usize] {
+                            Some((Circular::List(fellow), hides)) => {
+                                LinkedPiece::Fellow(fellow, hides)
+                            }
+                            _ => unreachable!(
+                                "a spread fellow is a list node, laid before its spreader"
+                            ),
+                        },
+                        source => LinkedPiece::Spread(write(writer, source, types, scratch)),
+                    }
+                },
+            );
+            let (list, hides) = List::linked_pieces(writer, &pieces, memo, types, scratch);
+            return (Circular::List(list), hides);
         }
         Staged::Dict(entries) => {
             let mut cells = BumpVec::with_capacity_in(entries.len(), scratch);
@@ -734,7 +904,51 @@ pub(super) fn lay_down<'graph, 'cell>(
         Staged::Literal(_)
         | Staged::Value(_)
         | Staged::Edge(_)
+        | Staged::Spread { .. }
         | Staged::Function(_)
         | Staged::Code { .. } => unreachable!("a data node is a constructor"),
+    };
+    // A dict, record or tagged node is never spread, so whether it hides goes unread.
+    (circular, true)
+}
+
+/// The order data nodes are laid in: every list node a node spreads before it. The spreads are
+/// acyclic, since a cycle of them is a cycle of derived nodes, refused before.
+pub(super) fn lay_order<'x>(
+    nodes: &Nodes<'_, '_, '_, '_>,
+    scratch: BumpAllocator<'x>,
+) -> BumpVec<'x, usize> {
+    fn visit(
+        nodes: &Nodes<'_, '_, '_, '_>,
+        index: usize,
+        seen: &mut [bool],
+        order: &mut BumpVec<'_, usize>,
+    ) {
+        if std::mem::replace(&mut seen[index], true) {
+            return;
+        }
+        if let Some(Node {
+            shape: Staged::List(items),
+            ..
+        }) = &nodes[index]
+        {
+            for item in items.iter() {
+                if let Staged::Spread {
+                    source: Staged::Edge(target),
+                    ..
+                } = item
+                {
+                    visit(nodes, *target as usize, seen, order);
+                }
+            }
+        }
+        order.push(index);
     }
+    let mut seen = BumpVec::with_capacity_in(nodes.len(), scratch);
+    seen.resize(nodes.len(), false);
+    let mut order = BumpVec::with_capacity_in(nodes.len(), scratch);
+    for index in 0..nodes.len() {
+        visit(nodes, index, &mut seen, &mut order);
+    }
+    order
 }

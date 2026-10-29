@@ -84,6 +84,16 @@ the link in each section to the relevant chapter.
 | `<Sig> WITH {<Param> = <Type>}`                  | An application: pin some of a signature's head parameters. |
 | `:(<Sig> & <Sig>)`                               | The meet of two signatures: a module fits it when it fits both. |
 
+## Reading collections — see [2](02-values-and-types.md#reading-lists-dictionaries-and-strings)
+
+| Form                          | Meaning                                            |
+|-------------------------------|----------------------------------------------------|
+| `<list> <index>`, `<string> <index>` | Read the element or code point at a zero-based index: `Result.Ok` of it, or `Result.Error` of the index. |
+| `<dict> <key>`                | Look a key up: `Result.Ok` of its value, or `Result.Error` of the key. |
+| `<list> {from = <i>, to = <j>}` | A slice of a list or a string, `from` up to but not including `to`; either bound may be left out. Backward when `to` is below `from` or is `-1`. `Result.Error` of the first bound out of range. |
+| `LENGTH <value>`              | A list's elements, a dict's entries or a string's code points, counted. |
+| `[..<list> <element> ...]`    | Spread a list's elements into a list literal; `..(<expr>)` spreads a parenthesized expression's. |
+
 ## Type expressions — see [2](02-values-and-types.md)
 
 | Form                          | Meaning                                            |

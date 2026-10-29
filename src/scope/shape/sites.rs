@@ -192,7 +192,9 @@ impl<'graph> Numbering<'graph, '_> {
             | ExpressionPart::RecordType(node)
             | ExpressionPart::QuotedExpression(node)
             | ExpressionPart::MarkedUse(_, node) => self.node(node.reference()),
-            ExpressionPart::ListLiteral(items) => items.iter().for_each(|item| self.part(item)),
+            ExpressionPart::ListLiteral(items) => {
+                items.iter().for_each(|item| self.part(item.part()))
+            }
             ExpressionPart::DictLiteral(pairs) => {
                 for (key, value) in pairs.iter() {
                     self.part(key);

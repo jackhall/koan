@@ -33,7 +33,7 @@ use crate::type_lattice::{
 use super::circular::{Circular, Resolved};
 use super::fill::filled_against;
 use super::hiding::unhidden;
-use super::{Chain, Key, Knotted, Link, Nothing, Retyped, Value, representation};
+use super::{Chain, Key, Knotted, Link, List, Nothing, Retyped, Value, representation};
 
 /// Why the type a container, a tagged value or a data node is seen at is concrete: its memo is a
 /// type, and so is every type a holder names for a part. Only a callable is typed by a scheme.
@@ -380,10 +380,9 @@ impl<'cell, X: Knotted + 'cell> Value<'cell, X> {
             (Value::Bool(a), Value::Bool(b)) => a == b,
             (Value::Null, Value::Null) => true,
             (Value::Str(a), Value::Str(b)) => runs(a.as_ptr().cast(), b.as_ptr().cast()),
+            (Value::StrView(a), Value::StrView(b)) => std::ptr::eq(*a, *b),
             (Value::Type(a), Value::Type(b)) => a.handle() == b.handle(),
-            (Value::List(a), Value::List(b)) => {
-                runs(a.cells().as_ptr().cast(), b.cells().as_ptr().cast())
-            }
+            (Value::List(a), Value::List(b)) => a.same_run(b),
             (Value::Dict(a), Value::Dict(b)) => {
                 runs(a.cells().as_ptr().cast(), b.cells().as_ptr().cast())
             }
@@ -572,6 +571,14 @@ impl<'x, 'a, X: Knotted + 'a> Surface<'x, 'a, X> {
         }
     }
 
+    /// Where a dict holds `key`, in key order; `None` where it holds none. O(log n).
+    pub fn key_index(&self, key: &Key<'_>) -> Option<usize> {
+        match self.parts {
+            Parts::Dict { keys, .. } => keys.binary_search_by(|probe| probe.cmp(key)).ok(),
+            _ => unreachable!("only a dict keys its parts"),
+        }
+    }
+
     /// The data node it is, when it is one.
     pub(super) fn node(&self) -> Option<X> {
         self.node
@@ -589,11 +596,15 @@ fn held_at(names: &[Symbol], name: Symbol) -> usize {
         .expect("a record holds every field its type names at a type other than `Null`")
 }
 
-/// A run of cells read as values: plain words, or links resolved through their holder.
+/// A run of cells read as values: plain words, links resolved through their holder, or a plain
+/// list's elements, flat or a view, read through the list.
 #[derive(Clone, Copy)]
 pub(super) enum Cells<'a, X> {
     Plain(&'a [Value<'a, X>]),
     Linked(&'a [Link<'a, X>], X),
+    List(&'a List<'a, X>),
+    /// A knot's list, flat or a view, read through its member.
+    Knotted(&'a List<'a, X, Link<'a, X>>, X),
 }
 
 impl<'a, X: Knotted> Cells<'a, X> {
@@ -601,6 +612,8 @@ impl<'a, X: Knotted> Cells<'a, X> {
         match self {
             Cells::Plain(cells) => cells.len(),
             Cells::Linked(cells, _) => cells.len(),
+            Cells::List(list) => list.len(),
+            Cells::Knotted(list, _) => list.len(),
         }
     }
 
@@ -608,17 +621,23 @@ impl<'a, X: Knotted> Cells<'a, X> {
         match self {
             Cells::Plain(cells) => cells[at],
             Cells::Linked(cells, holder) => cells[at].resolve(holder),
+            Cells::List(list) => list.get(at),
+            Cells::Knotted(list, holder) => list.link(at).resolve(holder),
         }
     }
 
-    /// The edge the cell at `at` holds, if it holds one.
+    /// The edge the cell at `at` holds, if it holds one. A plain list's element never is one.
     fn edge(self, at: usize) -> Option<Edge> {
         match self {
             Cells::Linked(cells, _) => match cells[at] {
                 Link::Edge(edge) => Some(edge),
                 Link::Value(_) => None,
             },
-            Cells::Plain(_) => None,
+            Cells::Knotted(list, _) => match list.link(at) {
+                Link::Edge(edge) => Some(edge),
+                Link::Value(_) => None,
+            },
+            Cells::Plain(_) | Cells::List(_) => None,
         }
     }
 }
@@ -635,7 +654,7 @@ enum Raw<'a, X> {
 /// type and every knot member but a data node.
 fn raw<'a, X: Knotted + 'a>(value: Value<'a, X>) -> Option<(Option<X>, Raw<'a, X>)> {
     let plain = match value {
-        Value::List(list) => Raw::List(Cells::Plain(list.cells())),
+        Value::List(list) => Raw::List(Cells::List(list)),
         Value::Dict(dict) => Raw::Dict(dict.keys(), Cells::Plain(dict.cells())),
         Value::Record(record) => Raw::Record(record.names(), Cells::Plain(record.cells())),
         Value::Tagged(tagged) => Raw::Tagged(Cells::Plain(std::slice::from_ref(tagged.payload()))),
@@ -645,7 +664,7 @@ fn raw<'a, X: Knotted + 'a>(value: Value<'a, X>) -> Option<(Option<X>, Raw<'a, X
                 return None;
             };
             let linked = match node {
-                Circular::List(list) => Raw::List(Cells::Linked(list.cells(), member)),
+                Circular::List(list) => Raw::List(Cells::Knotted(list, member)),
                 Circular::Dict(dict) => Raw::Dict(dict.keys(), Cells::Linked(dict.cells(), member)),
                 Circular::Record(record) => {
                     Raw::Record(record.names(), Cells::Linked(record.cells(), member))
@@ -676,6 +695,8 @@ pub(super) fn raw_parts<'a, X: Knotted + 'a>(
         return;
     };
     let cells = match raw {
+        // A view's elements are walked in order, rather than found one by one.
+        Raw::List(Cells::List(list)) => return list.elements().for_each(out),
         Raw::List(cells) | Raw::Dict(_, cells) | Raw::Record(_, cells) | Raw::Tagged(cells) => {
             cells
         }

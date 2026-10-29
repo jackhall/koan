@@ -173,7 +173,11 @@ impl<'cell, X: Knotted> Circular<'cell, X> {
             }
         };
         match *self {
-            Circular::List(list) => links(list.cells()),
+            Circular::List(list) => list.links().for_each(|link| {
+                if let Link::Value(value) = link {
+                    out(value);
+                }
+            }),
             Circular::Dict(dict) => links(dict.cells()),
             Circular::Record(record) => links(record.cells()),
             Circular::Tagged(tagged) => links(std::slice::from_ref(tagged.payload())),
@@ -189,16 +193,7 @@ impl<'cell, X: Knotted> Circular<'cell, X> {
     ) -> Circular<'to, Y> {
         let mut copy = |value: &Value<'cell, X>| copy(value);
         match *self {
-            Circular::List(list) => {
-                let source = list.cells();
-                let cells = writer.fill(source.len(), |at| source[at].copied(&mut copy));
-                Circular::List(List::from_run(
-                    writer,
-                    cells,
-                    list.ktype(),
-                    list.weight().without_bits(),
-                ))
-            }
+            Circular::List(list) => Circular::List(list.copied(writer, &mut copy)),
             Circular::Dict(dict) => {
                 let (source_keys, source) = (dict.keys(), dict.cells());
                 let keys = writer.fill(source_keys.len(), |at| source_keys[at].rehomed(writer));

@@ -20,8 +20,9 @@
 //!   among the candidates [the load](super::statics) kept, or what the load selected: a builtin's
 //!   native, or a registration's function in a frame; a member read `ATTR <operand> <label>` with
 //!   its label bare is one, which the load reads as a possible instance site;
-//! - an **application** `(head argument)`: a construction when the head is a type, and otherwise a
-//!   call by name of the head over the argument record.
+//! - an **application** `(head argument)`: a construction when the head is a type, a read when it is
+//!   a list, a dict or a string ([`lookup`](super::lookup)), and otherwise a call by name of the
+//!   head over the argument record.
 //!
 //! A part the node needs is read in place when it is a literal, a name or a quote, and otherwise
 //! asked for — a tenant of this cell, kept — all at one park; the wake reads the same parts again.
@@ -30,7 +31,7 @@
 //! result, and a field or module member read over any of them, its label or slot appended to the
 //! path. A value finished with a kept part crosses from its true home, and every call hands its
 //! callee and arguments on through theirs ([`Passing`]). A construction — a list,
-//! dict or record literal, or a newtype's — is built in the evaluation's home over its parts, which
+//! dict or record literal, a newtype's, or a read — is built in the evaluation's home over its parts, which
 //! it asks for forwarded, so it is never built here only to be crossed whole. A frame's hand-off
 //! asks for each part of the frame body's threaded set with `Threads`, so what its tail call hands
 //! on that the frame built is built in the loop's cell, and marks those arguments in the skeleton
@@ -66,7 +67,7 @@ use crate::knot::{CodeBody, KValue, Knotted, instance, lambda, quote, refused_co
 use crate::memory::{Active, Bump, BumpAllocator, BumpVec, Writer, collect, resident};
 use crate::parse::BuiltinShapeId;
 use crate::parse::Role;
-use crate::parse::{ExpressionPart, KExpression};
+use crate::parse::{ExpressionPart, KExpression, ListItem};
 use crate::program::{
     CallKind, Contract, Evaluated, Exit, Handed, KBirth, KBundle, KState, Passing, block,
     called_function, seek, surfaced_block,
@@ -85,11 +86,13 @@ use crate::type_lattice::{KType, TypeNode, Verdict};
 #[cfg(debug_assertions)]
 use crate::type_lattice::{bound_above, lower_end_outside, satisfied_by};
 use crate::values::{
-    Chain, Dict, Key, List, PathSegment, Record, Tagged, TypeValue, Value, satisfies,
+    Chain, Circular, Dict, Key, List, PathSegment, Piece, Record, Tagged, TypeValue, Value,
+    satisfies,
 };
 
 use super::builtins::{self, Native};
 use super::errors::Raised;
+use super::lookup;
 use super::select::{self, Selection};
 use super::{Evaluation, Operand};
 
@@ -699,6 +702,60 @@ fn offered<'step, 'graph, 'here>(
     Value::Record(Record::new(writer, &fields, types, scratch))
 }
 
+/// A list literal with a spread among its items, over its items' and spread lists' values `parts`:
+/// a view concatenating each spread list and the runs of items between them, built in the home as
+/// any literal is. A spread of what is no list is an error value.
+fn spread<'step, 'graph, 'here>(
+    step: Taking<'_, 'graph, '_, 'here, '_, '_>,
+    at: &Evaluation<'step, 'graph, 'here, '_, '_, '_>,
+    part: &'step ExpressionPart<'step>,
+    items: &'step [ListItem<'step>],
+    parts: &[Held<'graph, 'here>],
+) -> Action<'graph, KBundle> {
+    let listed = |value: KValue<'_, '_>| {
+        matches!(value, Value::List(_))
+            || matches!(value.as_circular(), Some((_, Circular::List(_))))
+    };
+    let spread = items
+        .iter()
+        .zip(parts)
+        .find(|(item, held)| matches!(item, ListItem::Spread(_)) && !listed(held.value));
+    if let Some((_, held)) = spread {
+        let value = held.value.concrete_ktype();
+        let error = Raised::NotAList { value }.raise(at.program, step.writer(), &at.types);
+        return finish(step, at, error);
+    }
+    let shape = at.view.shape();
+    let decided = (at.view.facts())
+        .value_type(&at.types, shape, shape.site(part))
+        .filter(|typed| typed.is_exact())
+        .and_then(|typed| at.types.concrete(typed.upper));
+    finish_built(step, at, parts, |writer, types, values| {
+        let scratch = Bump::new();
+        // Each spread is a piece, and so is each run of items between two.
+        let mut pieces = BumpVec::new_in(&scratch);
+        let mut run = 0;
+        for (at, item) in items.iter().enumerate() {
+            if let ListItem::Spread(_) = item {
+                if run < at {
+                    pieces.push(Piece::Items(&values[run..at]));
+                }
+                pieces.push(Piece::Spread(values[at]));
+                run = at + 1;
+            }
+        }
+        if run < values.len() {
+            pieces.push(Piece::Items(&values[run..]));
+        }
+        let list = List::concatenated(writer, &pieces, types, &scratch);
+        debug_assert!(
+            decided.is_none_or(|ktype| !types.resolves(ktype) || ktype == list.ktype()),
+            "the load decides a spread literal's type as the run derives it"
+        );
+        Value::List(list)
+    })
+}
+
 /// A list, dict or record literal: lowered whole when every part is a literal, and otherwise built
 /// from its parts' values.
 fn container<'step, 'graph, 'here>(
@@ -717,7 +774,7 @@ fn container<'step, 'graph, 'here>(
     let mut wanted = BumpVec::new_in(&scratch);
     match part {
         ExpressionPart::ListLiteral(items) => {
-            wanted.extend(items.iter().map(Wanted::Evaluated));
+            wanted.extend(items.iter().map(|item| Wanted::Evaluated(item.part())));
         }
         ExpressionPart::DictLiteral(pairs) => {
             for (key, value) in pairs.iter() {
@@ -739,10 +796,15 @@ fn container<'step, 'graph, 'here>(
         Operand::Label(_) => unreachable!("a container's parts are evaluated"),
     }));
     if let ExpressionPart::DictLiteral(_) = part
-        && let Some(rejected) = (parts.chunks(2)).find_map(|pair| Key::of(&pair[0].value).err())
+        && let Some(rejected) = (parts.chunks(2)).find_map(|pair| Key::admits(&pair[0].value).err())
     {
         let error = Raised::NotAKey { rejected }.raise(at.program, step.writer(), &at.types);
         return finish(step, at, error);
+    }
+    if let ExpressionPart::ListLiteral(items) = part
+        && items.iter().any(|item| item.as_part().is_none())
+    {
+        return spread(step, at, part, items, &parts);
     }
     // The load typed a list or dict literal whose elements are exact by the fill the run would
     // compute, so the run stamps that type rather than merging its cells' types again.
@@ -775,7 +837,8 @@ fn container<'step, 'graph, 'here>(
             ExpressionPart::DictLiteral(_) => {
                 let mut entries = BumpVec::with_capacity_in(values.len() / 2, &scratch);
                 for pair in values.chunks(2) {
-                    let key = Key::of(&pair[0]).expect("a dict literal's keys were checked");
+                    let key =
+                        Key::of(&pair[0], writer).expect("a dict literal's keys were checked");
                     entries.push((key, pair[1]));
                 }
                 Value::Dict(match decided {
@@ -1119,8 +1182,9 @@ pub(super) fn slots<'step, 'x>(
     wanted
 }
 
-/// `(head argument)`, the node `node`: a construction when the head is a type, and otherwise a call
-/// by name of the head over the argument record.
+/// `(head argument)`, the node `node`: a construction when the head is a type, a read when it is a
+/// list, a dict or a string ([lookup.rs](super::lookup)), and otherwise a call by name of the head
+/// over the argument record.
 fn apply<'step, 'graph, 'here>(
     mut step: Taking<'_, 'graph, '_, 'here, '_, '_>,
     at: &Evaluation<'step, 'graph, 'here, '_, '_, '_>,
@@ -1198,6 +1262,17 @@ fn apply<'step, 'graph, 'here>(
                     refused_construction(&refused, program.symbols(), types),
                 ),
             }
+        });
+    }
+    // A list, a dict or a string at the head is read by its argument, built in the home as a
+    // construction is.
+    if lookup::readable(head) {
+        let parts = [held(&operands[0]), argument];
+        return finish_built(step, at, &parts, |writer, types, values| {
+            let [head, argument] = values else {
+                unreachable!("a read is its head and its argument")
+            };
+            lookup::read(program, writer, types, *head, *argument, &Bump::new())
         });
     }
     let writer = step.writer();

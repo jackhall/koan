@@ -306,7 +306,9 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
             return Err(());
         };
         for member in members.iter() {
-            let line = quoted_body(member).ok_or(())?.statement_spine();
+            let line = (member.as_part().and_then(quoted_body))
+                .ok_or(())?
+                .statement_spine();
             match line.cache().builtin_shape().map(|shape| shape.id) {
                 Some(BuiltinShapeId::LetValue) => {
                     out.names.push(

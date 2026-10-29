@@ -350,3 +350,38 @@ fn a_comma_may_follow_a_closer() {
     );
     assert!(top("#{Some: :{r :Number}, None: Null}").is_ok());
 }
+
+// --- Spread items ---
+
+#[test]
+fn a_spread_is_a_list_literal_s_item() {
+    let spread = tree("[..xs 3]").unwrap();
+    assert_eq!(spread, "[L[..t(xs) n(3)]]");
+    let group = tree("[..(f x) ..ys]").unwrap();
+    assert_eq!(group.matches("..").count(), 2, "got {group}");
+    assert_ne!(tree("[..xs]").unwrap(), tree("[xs]").unwrap());
+}
+
+#[test]
+fn a_spread_anywhere_but_a_list_literal_s_item_is_refused() {
+    let item = "`..` spreads a list only as an item of a list literal";
+    for source in [
+        "f ..xs",
+        "MOVE ..xs TO b",
+        "{a: ..xs}",
+        "#[..xs]",
+        "#(MOVE ..xs TO b)",
+    ] {
+        let error = top(source).unwrap_err();
+        assert!(error.contains(item), "`{source}`: {error}");
+    }
+    let unspreadable = "`..` spreads a name glued to it";
+    for source in ["[.. xs]", "[..]", "[..[1]]", "[..5]", "[..\"a\"]"] {
+        let error = top(source).unwrap_err();
+        assert!(error.contains(unspreadable), "`{source}`: {error}");
+    }
+    for source in ["[..$xs]", "[..\\xs]"] {
+        let error = top(source).unwrap_err();
+        assert!(error.contains("code splicing's"), "`{source}`: {error}");
+    }
+}

@@ -122,9 +122,9 @@ binder that reads nothing of its own is an ordinary value.
 its right-hand side is a callable form at its root, through transparent groups
 (`LET f = (FN …)`), or its form is a combined one (`LET f = FN EXPR …`,
 `LET f = OP …`). It is a *data member* when it is a `LET` whose right-hand side
-(`Shape::rhs`), through one-part groups, is a list, dict or record literal, a
-nominal construction `(Head payload)`, or a quote whose `$` name reads a fellow
-member. It is a *module member* when it is a
+(`Shape::rhs`), through one-part groups, is a list, dict or record literal —
+a list literal's items may spread lists, `[..xs 1]` — a nominal construction
+`(Head payload)`, or a quote whose `$` name reads a fellow member. It is a *module member* when it is a
 `MODULE` or `GROUP` binder — a member class of its own rather than `Opaque`.
 Anything else is `Opaque` and refuses the tie before a member is read. A
 callable form anywhere else is no member. A `FN` a data member holds that
@@ -190,6 +190,14 @@ scratch first.
   name of a fellow an edge. So `LET echo = #(PRINT $echo)` is a one-node knot
   whose one binding is an edge to itself. A quote reading no fellow is an eager
   part the caller's evaluator supplies, born through [the quote door](#a-quote).
+- **A list item `..x` is staged as a spread of its source**: an edge where the
+  source is a fellow member or an anonymous node, else the list value the walk
+  reads. A source that is no list refuses the tie as `NotAList`: a value or a
+  constructor of another kind as it is staged, and an edge whose target is no
+  list node — a function, a quote, a dict — once every member is staged. So in
+  `LET xs = [..ys (FN :{} -> Number = #(LENGTH xs))]` with `ys` a list outside
+  the group, the spread is of `ys`'s value, and in `LET xs = [..zs 1]` with
+  `zs` a fellow list member, it is an edge to `zs`.
 
 Every mention of a fellow member becomes the edge the knot's plan mints for
 that node's index.
@@ -226,7 +234,10 @@ reading a declared memo at every cut. A cycle of derived nodes alone has no
 finite type and refuses the tie as `TypeCycle`, naming the members whose
 right-hand sides hold it: `LET a = (Boxed [a])` over `NEWTYPE (Type AS Boxed)`
 refuses, while `LET a = (Boxed [f])` with `f` a function capturing `a` ties
-with `a : :(Boxed {Type = LIST OF <f's type>})`. A construction the rule
+with `a : :(Boxed {Type = LIST OF <f's type>})`. A spread contributes its
+source's element type to its list's memo, and its edge is an edge between
+derived nodes, so `LET xs = [..zs 1]` beside `LET zs = [..xs 2]` refuses as
+`TypeCycle`, as `LET xs = [..xs 1]` does. A construction the rule
 refuses while a memo is derived refuses the tie as `Construction`. An ascription is no cut, since a retype stamps a
 structural type and no structural type names itself: `LET a = [1 a]` refuses,
 while `LET a = (Ring {next = a})` over `NEWTYPE Ring = :{next :Ring}` ties as a
@@ -247,7 +258,11 @@ order and a component follows every unit it reads.
 
 **Write.** Only then are the closure runs, the bound runs and each data node's
 resident laid down, the knot's weight summed, and the nodes tied: member `i` is node `i`,
-and the anonymous nodes follow.
+and the anonymous nodes follow. A list node that spreads is laid after every
+fellow it spreads — the spreads are acyclic, since a cycle of them is refused — as
+a [view](../values/README.md#views) over its own cells, the runs of the lists it
+spreads and those fellows' own runs, sharing their cells rather than copying
+them.
 
 Because nothing is written before every read and check has finished, **a
 refusal writes nothing**. The refusal is an `Untieable`:
@@ -261,6 +276,7 @@ refusal writes nothing**. The refusal is an `Untieable`:
   be.
 - `Construction` — a construction the rule refuses, with its site.
 - `TypeCycle` — a cycle of derived nodes, with the members holding it.
+- `NotAList` — a spread in a data member of what is no list, with its site.
 - `Type` — a member's signature the load left unknown did not elaborate.
 
 ## A lambda
@@ -567,12 +583,14 @@ carries the scalar types alone.
   an annotated data member is born at its annotation; and every tied knot
   copies whole with each link's kind kept.
 
-Five tests join the koan [Miri slate](../../observe/miri_slate.md), the paths
+Six tests join the koan [Miri slate](../../observe/miri_slate.md), the paths
 only `knot` drives: `a_copied_knot_outlives_its_home` — a knot's node run
 filled while closure runs are written into the same region, read through its
 edges after the region it was copied from is released —
 `a_copied_ring_outlives_its_home`, the same for a tagged ring whose record
 holds a string cell and an anonymous list node,
+`a_copied_list_view_outlives_its_home`, the same for a list node that spreads a
+fellow list node and a list from outside its knot, laid flat by the copy,
 `a_copied_module_outlives_its_home`, the same for a module whose member run is
 laid down over its members' copies, one copy of the function knot behind two
 of them, and

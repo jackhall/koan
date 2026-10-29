@@ -16,12 +16,13 @@ candidates by the arguments' types, and runs the one that wins.
 
 ## What dispatch runs
 
-Literals, names, containers, record access, construction, functions, keyword
-dispatch, the builtin library, quotes, `EVAL` and `USING` over code, modules —
+Literals, names, containers, record access, construction, reads of a list, a
+dict or a string, functions, keyword dispatch, the builtin library, quotes,
+`EVAL` and `USING` over code, modules —
 a `MODULE` or `GROUP` binder, `:!` and `:|`, a member read and
 `USING … SCOPE` — and uncaught faults.
 [Matching](../../roadmap/conditionals/matching.md) owns `MATCH`, and
-[catching errors](#catching) `TRY`, `CATCH` and `Result`; a node dispatch has
+[catching errors](#catching) `TRY` and `CATCH`; a node dispatch has
 no reading for is a fault.
 
 ## What a node is
@@ -40,7 +41,9 @@ never the parse — as one of:
   where the load left it unknown, elaborated through the view; a list, dict or record
   literal, lowered whole when every part is a literal and otherwise built from
   its parts' values — a list or dict literal the load types exactly built at
-  that type, so the run fills nothing the load filled;
+  that type, so the run fills nothing the load filled, and a list literal with
+  a spread item, `..xs`, built as a [view](../values/README.md#views)
+  concatenating each spread list and the runs of items between them;
 - a **block** a pairwise operator run hoisted an operand into, run through the
   program's block door, whose value is its last statement's — which is how the
   shared operand evaluates once;
@@ -75,8 +78,19 @@ never the parse — as one of:
 - a **keyworded call**: a node the shape holds a candidate list for;
 - an **application** `(head argument)`: a construction when the head is a type —
   a newtype, a family or a union variant, through `Tagged::construct`, the one
-  construction rule — and otherwise a call by name of the head over the
-  argument record.
+  construction rule — a **read** when the head is a list, a dict or a string
+  ([lookup.rs](lookup.rs)), and otherwise a call by name of the head over the
+  argument record. A read answers the builtin `Result`: a list or a string
+  applied to a `Number` reads the element or code point at that zero-based
+  index, and applied to a slice record — one naming `from` or `to`, whatever
+  else it names — slices it as a [view](../values/README.md#views); a dict
+  applied to a key looks it up. `Result.Error` holds the index, the first bound
+  or the key that failed. A slice is half-open, and runs backward where `to`
+  lies below `from` or is -1, -1 ≤ `to` ≤ `from` ≤ len - 1, and forward
+  otherwise, 0 ≤ `from` ≤ `to` ≤ len; an open end defaults `from` to 0 and
+  `to` to the length. Its bounds are checked each an integer, `from` first,
+  then the direction read off both, then `from`'s range, then `to`'s, and
+  `Error` holds the first that fails.
 
 A part a node needs is read in place when it is a literal, a name or a quote,
 and otherwise asked for — a `Shares` tenant of the evaluation's cell, kept —
@@ -95,8 +109,8 @@ so an evaluation that hands back a parameter, a top-level name, or a member
 of either, places nothing new. A keyworded call's selection reports where it
 read its callee, so the callee is held as any name read is, and every call
 hands its callee and arguments on through their kept parts. **A construction is built
-in its home**: a list, dict or record literal, and a type's application, is
-built in the evaluation's home over its parts, which it asks for forwarded —
+in its home**: a list, dict or record literal, a type's application and a
+read, is built in the evaluation's home over its parts, which it asks for forwarded —
 kept in a caching body — so it is never built in the evaluation only to be
 crossed whole, and the contract is applied there too. A caching body's
 construction that stays inside the body is built on the body's chain instead.
@@ -104,7 +118,7 @@ construction that stays inside the body is built on the body's chain instead.
 ## The builtin table
 
 [`builtins::table`](builtins.rs) binds no value name. Its type names are the
-lattice's builtin types and `Error`. Its **overloads** are function values —
+lattice's builtin types, `Error` and `Result`, which every read answers. Its **overloads** are function values —
 each a [builtin node](../knot/README.md#a-builtin-overload) over the expression
 shape it is registered at, whose `id` names its native — grouped by bucket key,
 so every keyworded use at a key lists them first among its candidates. Every
@@ -120,6 +134,8 @@ overload ranks its slots in written order.
   value. `!=` has no bucket: the shape rewrites `a != b` to `NOT (a == b)`.
 - `|` and `&` over types, the infix pair and the unary list form an operator run
   of them is rewritten to, each returning a type value.
+- `LENGTH` over a list, a dict or a string, returning a `Number`: a list's or
+  a dict's count, its memo, or a string's code points.
 - The overloads of the [builtin expression shapes](../parse/README.md#the-builtin-shape-table-one-typed-entry-every-fact)
   whose slots dispatch evaluates, typed as their entries type them: `ATTR` over a
   record or a tagged value over one, reading through every tagged layer at the
@@ -316,6 +332,20 @@ fixed:
   A surfaced key is a spread over every function the module offers there, so
   its verdict is at most *maybe*, and *never* only where one body definition or
   one closed signature head is the whole of the key;
+- a list literal with a spread item types each spread by its list's element
+  type, read at each end of the spread's static type — `Never` below and `Any`
+  above where that end is no list — and refuses the load where the lower end
+  lies outside every list;
+- an application whose head's static type is a list, a dict or a string at
+  either end — a variable, a union or `Any` is none — is a read: at most
+  `Result {Ok = O, Error = E}`, `O` the element (`Str` for a string) for an
+  index, the head's own type for a slice record, and their union for an
+  argument that may be either, `E` a `Number`; a lookup reads the value type,
+  `E` the key type where the key's upper end lies under it and their union
+  otherwise. It refuses the load where the argument's lower end lies outside
+  `Number | {}`, is a record naming neither bound or a bound outside `Number`,
+  or, for a dict, lies outside its key type or every scalar. A list, a dict or
+  a string satisfies no function type;
 - an application is the identity its construction builds when its head is a
   type the load knows, and its callee's return when the head is a function —
   exact by the same rule where the callee's static type is exact, a parameter
@@ -1064,6 +1094,8 @@ dispatch decides:
 | `EVAL` over a value that is no code | `` Number is not code for `EVAL` to run `` |
 | a `USING` ranking | `MOVE _ TO _ is ranked two ways` |
 | a dict key that is no scalar | `:(LIST OF Number) cannot be a dict key` |
+| a spread of what is no list | `` `..` spreads a list, and Number is none `` |
+| a read by what is neither an index nor a slice record | ``:(LIST OF Number) is read by a `Number` or by a slice record naming `from` or `to` as `Number`s, not by :{x :Number}`` |
 | a node with no reading | `nothing evaluates <node>` |
 
 A refusal a layer below renders keeps its own wording: a construction misfit
@@ -1073,7 +1105,8 @@ arguments, an argument a call by name does not fit
 group, a callee that is no function, a type expression that does not
 elaborate, and an `EVAL`'s refusal.
 
-A no-overload miss, an ambiguity, a return miss, an ascription miss, a view of
+A no-overload miss, an ambiguity, a return miss, an ascription miss, a read or
+a spread its argument can never satisfy, a view of
 what is never a module or at what is no signature, an `EVAL` of what is never
 code or an `EVAL` whose code can never meet its return the load can already see
 is no fault: it refuses the load, located at `path:line:col`
@@ -1135,7 +1168,15 @@ façade, [`walk/reads.rs`](walk/reads.rs).
 
 The suites load whole programs under `Koan` and read back what they wrote to
 either sink, one line per write ([tests.rs](tests.rs)):
-[selection](tests/selection.rs) — every ranking example, ambiguity within and
+[reads](tests/reads.rs) — the builtin `Result`, an index, a slice forward and
+backward with each bound's `Error` in order, a dict lookup, the load's typing
+from both ends of a head and its refusals, `LENGTH`, a list read through
+its knot, and a flat string read in one scan of its bytes;
+[spreads](tests/spreads.rs) — a spread literal's elements and static
+type, a spread refused at load and faulting at run, a quote spreading a
+list unequal to one holding it, a recursive list spreading lists from outside
+its group and fellow members, a spread cycle and a spread of no list refusing
+the group, and a recursive list's view crossing out of its frame; [selection](tests/selection.rs) — every ranking example, ambiguity within and
 across scopes at load and at run, the no-overload miss at load and at run, fall-through, builtin
 tie-wins, shadowed `==` and `PRINT`, the overlap refusal at load and at `EVAL`,
 and a quantified candidate that may admit whose carried solve fails;
@@ -1381,8 +1422,9 @@ region flat, a walk copying no part of its chain, a hop handing on its
 received arguments uncopied, no hop pledged, a cons loop copying a constant
 per hop, amortized, holding a constant times what it threads and delivering
 its whole list, the host's region, scratch and memo flat, a value passed on
-unchanged riding the loop cell through its compactions, and a call returning a
-part of its argument placing nothing new;
+unchanged riding the loop cell through its compactions, a call returning a
+part of its argument placing nothing new, and a view of a large list homed
+above the loop, extended each hop, copying none of its source;
 [door](tests/door.rs) — facts over no layers answering as the load does;
 [activation](tests/activation.rs) — a frame bound to run content deciding its
 dependent units in its activation, at its entry, a statement seam, a block's

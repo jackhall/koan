@@ -131,7 +131,7 @@ fn an_element_quote_is_sourced_at_the_whole_literal() {
         panic!("a quoted list literal");
     };
     for item in items {
-        let ExpressionPart::QuotedExpression(quote) = item else {
+        let ExpressionPart::QuotedExpression(quote) = item.part() else {
             panic!("every element is quoted");
         };
         assert_eq!(span_of(quote), s(8, 14));

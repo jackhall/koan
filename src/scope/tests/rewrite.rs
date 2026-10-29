@@ -73,7 +73,7 @@ fn part_tree(part: &ExpressionPart<'_>, symbols: &SymbolInterner) -> String {
                 if index > 0 {
                     out.push(' ');
                 }
-                out.push_str(&part_tree(item, symbols));
+                out.push_str(&part_tree(item.part(), symbols));
             }
             out.push(']');
             out

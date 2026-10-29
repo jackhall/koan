@@ -302,3 +302,13 @@ fn a_composed_quote_and_its_written_quote_have_the_same_syntax_digest() {
         digest_back(&mut substrate, "c")
     );
 }
+
+#[test]
+fn a_quote_spreading_a_list_digests_apart_from_one_holding_it() {
+    let [spread, held, again] = digests(
+        "LET xs = [1]\nLET a = #([..xs])\nLET b = #([xs])\nLET c = #([..xs])",
+        ["a", "b", "c"],
+    );
+    assert_ne!(spread, held);
+    assert_eq!(spread, again);
+}

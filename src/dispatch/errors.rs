@@ -79,6 +79,16 @@ pub(super) enum Raised<'a> {
     NotAKey {
         rejected: KeyRejected,
     },
+    /// A spread, `..value`, of a value that is no list.
+    NotAList {
+        value: KType,
+    },
+    /// A list or a string applied to what is neither a `Number` nor a slice record naming `from` or
+    /// `to` as `Number`s.
+    Unreadable {
+        head: KType,
+        argument: KType,
+    },
     /// A node dispatch has no reading for.
     Unevaluable {
         node: &'a KExpression<'a>,
@@ -182,6 +192,16 @@ impl fmt::Display for RaisedDisplay<'_, '_, '_, '_, '_> {
                 }
                 KeyRejected::NaN => f.write_str("NaN cannot be a dict key"),
             },
+            Raised::NotAList { value } => {
+                write!(f, "`..` spreads a list, and {} is none", ktype(value))
+            }
+            Raised::Unreadable { head, argument } => write!(
+                f,
+                "{} is read by a `Number` or by a slice record naming `from` or `to` as `Number`s, \
+                 not by {}",
+                ktype(head),
+                ktype(argument)
+            ),
             Raised::Unevaluable { node } => {
                 write!(f, "nothing evaluates {}", node.summary(self.symbols))
             }

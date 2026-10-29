@@ -17,6 +17,8 @@ mod render;
 mod satisfaction;
 mod settled;
 mod surface;
+mod text;
+mod views;
 mod working;
 
 use super::digest::{ContentDigest, DigestHasher, Tag};

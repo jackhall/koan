@@ -6,9 +6,8 @@
 evaluator answers each with an error saying it does not run yet. A `TRY` or
 `CATCH` operand is walked as an eager part of the enclosing shape, not as a
 block of its own. An error carries only `{message :Str}`, so an arm has nothing
-to select by. The builtin `Result` union has a declaration
-([`builtin_result`](../../src/elaborate/builtin.rs)) but no builtin-table entry,
-and `CATCH`'s declared return is `Any`.
+to select by. `CATCH`'s declared return is `Any`, not the builtin `Result`
+the [builtin table](../../src/dispatch/README.md#the-builtin-table) binds.
 [Tutorial 09](../../tutorial/09-errors.md)'s table of error kinds names
 refusals the rewrite makes at load (`UnboundName`, `ShapeError`, `ParseError`),
 and its examples catch an unbound name.
@@ -28,8 +27,7 @@ and its examples catch an unbound name.
   `frames`, the trace an uncaught fault prints, as a list of records.
 - `CATCH` turns its body's outcome into a `Result` value: `Result.Ok` of the
   value, or `Result.Error` of the caught `Error`.
-- The builtin `Result` union is declared in the builtin table, and `CATCH`'s
-  declared return names it.
+- `CATCH`'s declared return names the builtin `Result`.
 - A `TRY` or `CATCH` releases the frames a fault kept once it has built the
   caught `Error`.
 - Tutorial 09 teaches the fault kinds a running program meets, and every
@@ -51,5 +49,7 @@ and its examples catch an unbound name.
 
 - [Matching](matching.md) — `TRY` selects an arm as `MATCH … UNDER` does.
 - [Faults and call traces](faults.md) — what `TRY` and `CATCH` catch, and the frames they read.
+- [The builtin table](../../src/dispatch/README.md#the-builtin-table) — shipped:
+  the bound `Result` `CATCH` returns.
 
 **Unblocks:** none.

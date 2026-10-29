@@ -13,7 +13,9 @@
 //! keyworded use, and leading an atom it marks the name the atom starts with, so no line is led by
 //! one. **Adjacency** rejects a `[` or `{` glued to a neighbouring token. A paren glued to an atom
 //! that starts with `.` reads members of its value, `(MAKESET ints).Set`, through the suffixes a
-//! word runs. Everything else is an atom, which [`super::atom`] classifies. The one fact lowering
+//! word runs. A **spread** is `..` glued to a name or a paren group, and is a list literal's item
+//! and nothing else: lowering refuses it anywhere else, inside `#[…]` included, so no other part
+//! holds one. Everything else is an atom, which [`super::atom`] classifies. The one fact lowering
 //! records beyond the tree is the spelling of each bucket key a `NEEDING` list names, since past
 //! the parse a key is its symbol.
 //!
@@ -24,7 +26,7 @@ use sexlex::{Item, Kind, Node};
 use super::error::ParseError;
 use crate::memory::{ProgramBrand, collect};
 use crate::parse::ast::{
-    ExpressionPart, KExpression, KLiteral, KeyElement, Mark, ProgramExpression,
+    ExpressionPart, KExpression, KLiteral, KeyElement, ListItem, Mark, ProgramExpression,
 };
 use crate::parse::builtin_shapes::KEYWORDS;
 use crate::parse::builtin_shapes::binder::{admit_bare_type_slots, needed_key};
@@ -52,11 +54,17 @@ pub(super) fn lower_source<'a>(
     lines.iter().map(|line| lower.statement(line)).collect()
 }
 
+/// Why a `..` was refused where it was written.
+const NOT_AN_ITEM: &str = "`..` spreads a list only as an item of a list literal";
+/// Why a `..` in a list literal spreads nothing.
+const UNSPREADABLE: &str = "`..` spreads a name glued to it, `..xs`, or a paren group, `..(f x)`";
+
 /// Where a run of items sits, which decides where its parts land and which delimiters are
 /// meaningful. A brace carries the pair state machine the run feeds.
 enum Context<'c, 'a> {
     Expression,
-    List,
+    /// A list literal's items, beside the index of each part that is a spread.
+    List(&'c mut Vec<usize>),
     Brace(&'c mut DictFrame<'a>),
 }
 
@@ -177,7 +185,7 @@ impl<'a, 's> Lower<'a, '_, 's> {
             && matches!(needing.value, ExpressionPart::Keyword(symbol) if symbol == KEYWORDS.needing.symbol())
             && let ExpressionPart::ListLiteral(quotes) = list.value
         {
-            for key in quotes.iter().filter_map(needed_key) {
+            for key in quotes.iter().filter_map(|item| needed_key(item.as_part()?)) {
                 self.symbols.record_key(key.map(KeyElement::keyword));
             }
         }
@@ -199,6 +207,28 @@ impl<'a, 's> Lower<'a, '_, 's> {
         let mut parts = Vec::new();
         while let Some(item) = items.next() {
             match &item.node {
+                // A spread is a list literal's item and nothing else.
+                Node::Atom(text) if text.starts_with("..") => {
+                    let Context::List(spreads) = context else {
+                        return Err(ParseError::new(NOT_AN_ITEM, Some(item.span)));
+                    };
+                    spreads.push(parts.len());
+                    let glued = (text.len() == 2 && item.glued)
+                        .then(|| {
+                            items.next_if(|next| {
+                                matches!(
+                                    next.node,
+                                    Node::Group {
+                                        kind: Kind::Paren,
+                                        ..
+                                    }
+                                )
+                            })
+                        })
+                        .flatten();
+                    let part = self.spread(text, item, glued, wrappers)?;
+                    self.push_part(context, &mut parts, part)?;
+                }
                 Node::Atom(text) => {
                     // A sigil is an atom glued to the group after it; the pair is one part.
                     if let Some(sigil) = sigil_kind(text)
@@ -383,8 +413,18 @@ impl<'a, 's> Lower<'a, '_, 's> {
     ) -> Result<Spanned<ExpressionPart<'a>>, ParseError> {
         let writer = self.program.writer();
         if kind == Kind::Bracket {
-            let parts = self.lower_run(inner.iter(), &mut Context::List, wrappers)?;
-            let items = collect(writer, parts.into_iter().map(|part| part.value));
+            let mut spreads = Vec::new();
+            let parts = self.lower_run(inner.iter(), &mut Context::List(&mut spreads), wrappers)?;
+            let items = collect(
+                writer,
+                parts
+                    .into_iter()
+                    .enumerate()
+                    .map(|(at, part)| match spreads.binary_search(&at) {
+                        Ok(_) => ListItem::Spread(part.value),
+                        Err(_) => ListItem::Part(part.value),
+                    }),
+            );
             return Ok(Spanned::at(ExpressionPart::ListLiteral(items), item.span));
         }
         let mut dict = DictFrame::new(self.program, self.at(item.span));
@@ -398,6 +438,60 @@ impl<'a, 's> Lower<'a, '_, 's> {
             }
         };
         Ok(Spanned::at(part, item.span))
+    }
+
+    /// `..name` or `..(…)`, a spread item of a list literal: the name the atom's rest classifies
+    /// as, or the paren group `glued` to a bare `..`. A marked name's spread is code splicing's.
+    fn spread(
+        &self,
+        text: &str,
+        item: &Item<'s>,
+        glued: Option<&Item<'s>>,
+        wrappers: Wrappers,
+    ) -> Result<Spanned<ExpressionPart<'a>>, ParseError> {
+        let unspreadable = || ParseError::new(UNSPREADABLE, Some(item.span));
+        let rest = &text[2..];
+        if rest.is_empty() {
+            let Some(
+                group @ Item {
+                    node: Node::Group { kind, items: inner },
+                    ..
+                },
+            ) = glued
+            else {
+                return Err(unspreadable());
+            };
+            let part = self.group_part(group, inner, *kind, wrappers)?;
+            let span = Span {
+                start: item.span.start,
+                end: group.span.end,
+            };
+            return Ok(Spanned::at(part.value, span));
+        }
+        if rest.starts_with(['$', '\\']) {
+            return Err(ParseError::new(
+                "a spread of a marked name is code splicing's, which a quote writes as `$..name`",
+                Some(item.span),
+            ));
+        }
+        let span = Span {
+            start: item.span.start + 2,
+            end: item.span.end,
+        };
+        let classified = atom::classify(self.program, self.symbols, rest, span, self.file, None)?;
+        match classified.parts.as_slice() {
+            // A spread names its list: a literal or a keyword spreads nothing.
+            [only]
+                if !classified.trailing_colon
+                    && !matches!(
+                        only.value,
+                        ExpressionPart::Keyword(_) | ExpressionPart::Literal(_)
+                    ) =>
+            {
+                Ok(Spanned::at(only.value, item.span))
+            }
+            _ => Err(unspreadable()),
+        }
     }
 
     /// A sigil glued to its group. `#` takes an expression body, or a list, dict or record literal
@@ -420,6 +514,11 @@ impl<'a, 's> Lower<'a, '_, 's> {
         if sigil_kind == '#' && matches!(group_kind, Kind::Bracket | Kind::Brace) {
             self.check_close_adjacency(group, group_kind)?;
             let literal = self.collection_part(group, inner, group_kind, wrappers)?;
+            if let ExpressionPart::ListLiteral(items) = literal.value
+                && items.iter().any(|item| item.as_part().is_none())
+            {
+                return Err(ParseError::new(NOT_AN_ITEM, Some(group.span)));
+            }
             return Ok(Spanned::at(
                 self.quote_elements(literal.value, outer),
                 outer,
@@ -536,7 +635,9 @@ impl<'a, 's> Lower<'a, '_, 's> {
         match literal {
             ExpressionPart::ListLiteral(items) => ExpressionPart::ListLiteral(collect(
                 writer,
-                items.iter().map(|item| self.quoted(*item, span)),
+                items
+                    .iter()
+                    .map(|item| ListItem::Part(self.quoted(*item.part(), span))),
             )),
             ExpressionPart::DictLiteral(pairs) => ExpressionPart::DictLiteral(collect(
                 writer,

@@ -53,7 +53,12 @@ fn part_depth(part: &ExpressionPart<'_>) -> u32 {
         | ExpressionPart::SigiledTypeExpr(node)
         | ExpressionPart::RecordType(node)
         | ExpressionPart::MarkedUse(_, node) => node.reference().depth() as u32,
-        ExpressionPart::ListLiteral(items) => 1 + items.iter().map(part_depth).max().unwrap_or(0),
+        ExpressionPart::ListLiteral(items) => {
+            1 + (items.iter())
+                .map(|item| part_depth(item.part()))
+                .max()
+                .unwrap_or(0)
+        }
         ExpressionPart::DictLiteral(pairs) => {
             let deepest = pairs
                 .iter()

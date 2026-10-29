@@ -17,7 +17,7 @@ use self_cell::self_cell;
 use crate::memory::{
     BumpAllocator, BumpVec, Lays, ProgramBrand, ProgramStorage, collect, program_storage,
 };
-use crate::parse::{ExpressionPart, KExpression, ProgramNode, copied};
+use crate::parse::{ExpressionPart, KExpression, ListItem, ProgramNode, copied};
 use crate::type_lattice::{Term, TypeDigest};
 use crate::values::ContentDigest;
 
@@ -157,7 +157,7 @@ fn child<'g>(part: &ExpressionPart<'g>, at: usize) -> Option<&'g ExpressionPart<
         | ExpressionPart::MarkedUse(_, node) => {
             node.reference().parts.get(at).map(|part| &part.value)
         }
-        ExpressionPart::ListLiteral(items) => items.get(at),
+        ExpressionPart::ListLiteral(items) => items.get(at).map(ListItem::part),
         ExpressionPart::DictLiteral(pairs) => pairs
             .get(at / 2)
             .map(|(key, value)| if at.is_multiple_of(2) { key } else { value }),

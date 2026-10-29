@@ -154,6 +154,10 @@ in a later step.
 - `a_copied_list_outlives_its_home`
   a list of a string list and a string-keyed dict crosses under a copy verdict, is kept, its home
   released, and redeemed in the destination's next step: every byte reads back.
+- `a_copied_view_outlives_its_sources`
+  a list view — a backward slice of a string list concatenated with the list itself, a tree of
+  stretches over the source's run — crosses under a copy verdict, is laid flat, kept, its home and
+  the run it read released, and redeemed in the destination's next step: every element reads back.
 - `a_copied_type_value_names_a_type_its_destination_resolves`
   a type value whose record type its home's branch minted crosses under a copy verdict, its home
   is released, and the destination reads the record's node: the copy re-laid it in the
@@ -178,6 +182,11 @@ destination's writer, and is read through its edges after the region it came fro
   a self-referencing tagged value whose record holds a string cell and an anonymous list node
   naming the ring crosses under a copy verdict, is kept, its home released, and redeemed: every
   edge names a node of the copy and the string reads back.
+- `a_copied_list_view_outlives_its_home`
+  a list node spreading a fellow list node — whose function captures the list — and a string list
+  from outside its knot, a view over the fellow's run, the outside list's run and its own, crosses
+  under a copy verdict, is kept, its home released, and redeemed: the copy lays it flat, its edge
+  names a node of the copy and every string reads back.
 - `a_copied_module_outlives_its_home`
   a module holding a string list, a two-function knot and a newtype handle crosses under a copy
   verdict, is kept, its home released, and redeemed: every member is rebuilt through the one

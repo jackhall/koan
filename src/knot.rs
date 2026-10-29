@@ -454,6 +454,9 @@ pub enum Untieable<'x> {
     /// no function node or cut between them, so no finite type memoizes them: the members whose
     /// right-hand sides hold them, in component order.
     TypeCycle { names: &'x [BinderSymbol] },
+    /// A spread at `site` in data member `name` of what is no list: a value of another kind, a
+    /// function, or a fellow member that is no list.
+    NotAList { name: BinderSymbol, site: Site },
 }
 
 impl<'x> Untieable<'x> {
@@ -502,6 +505,9 @@ impl fmt::Display for UntieableDisplay<'_, '_, '_, '_, '_> {
                 "{}",
                 refused_construction(refused, self.symbols, self.types)
             ),
+            Untieable::NotAList { name: member, .. } => {
+                write!(f, "`..` in `{}` spreads what is not a list", name(member))
+            }
             Untieable::TypeCycle { names } => {
                 f.write_str("these bindings build values of no finite type:")?;
                 for member in names.iter() {

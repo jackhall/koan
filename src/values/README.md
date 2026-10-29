@@ -12,8 +12,8 @@ layers above, and they call in here.
 ## What a value is
 
 A [`Value`](../values.rs) is one `Copy` word of 24 bytes: a number, a bool,
-null, a string borrowed where its bytes live, or a borrow of a **per-kind
-resident struct** —
+null, a string borrowed where its bytes live or a [view](#views) of one, or a
+borrow of a **per-kind resident struct** —
 [`List`](list.rs), [`Dict`](dict.rs), [`Record`](record.rs),
 [`Tagged`](tagged.rs) or [`TypeValue`](type_value.rs) — or a **knot member**.
 `Value` is the sum and the per-kind structs carry the methods, so a consumer
@@ -321,7 +321,8 @@ every part shape. `admits` routes a working part to one or the other.
 
 Every composite stores its [`Weight`](weight.rs) beside its type: the bytes a
 total rebuild at a destination writes, saturating. A composite weighs its own
-resident struct plus every cell it lays down, and a cell weighs a whole `Value`
+resident struct plus every cell it lays down — a flat list its cells' prefix
+sums too ([views](#views)) — and a cell weighs a whole `Value`
 word plus whatever that word points at in the region — a string its bytes, a
 dict key its key word and bytes, a record name its symbol. A tagged value holds
 its payload word inline, so it adds only what the payload points at. A link
@@ -465,8 +466,8 @@ the values its family **lists** (`KnottedFamily::held`): the copy copies each of
 them, then hands the family's `copy_into` a cursor that answers each value it
 asks for with its finished copy, in the order `held` listed them, so the knot is
 tied once, after everything it holds has a copy. A data node lists and rebuilds
-through `Circular::held` and `Circular::copied`: each value link through that
-copy, each edge verbatim — an edge names a node by index, so it means the same
+through `Circular::held` and `Circular::copied`, a list node's view laid flat
+as links: each value link through that copy, each edge verbatim — an edge names a node by index, so it means the same
 node in the copy — and its memo and its weight's bytes carried over. A composite copy is
 laid through the doors that compute its memo bits over the destination's
 chain, and a re-tied knot's bits are stamped there. A re-tied knot keeps
@@ -530,15 +531,54 @@ doors are generic in the graph's delivery bundle, so a step at any bundle —
 ## Views
 
 Data is immutable, so an edit builds a new value from slices of its source and
-the parts spliced between them. A slice, a concatenation or a splice of a list
-or a string is a **view**: it reads through its sources' runs rather than
-laying down cells or bytes of its own, and a view built from views is one view,
-not a chain.
+the parts spliced between them. A slice of a list or a string, forward or
+backward, and a concatenation of lists are **views**: a view reads through its
+sources' runs rather than laying down cells or bytes of its own, memoizing its
+weight and its length, and a view built from views is one view, not a chain. A
+list view is an AVL tree of runs, each a stretch of one flat run read forward
+or backward, and a flat list keeps a prefix sum of its cells' weights every
+sixteen cells, so a slice of it is weighed in O(1). A string is read in code
+points, and nothing concatenates strings, so a string view is one stretch of
+one flat string, read forward or backward.
 
-**A view is invisible.** A slice carries its source's type, and a concatenation
-or a splice the type a flat list of its elements carries, derived from its
-sources' element types alone, whether it is a view or written flat. Equality, rendering and `satisfies` read through a view, so a program
-tells it from the flat value only by what it costs.
+Two doors build a list view ([list.rs](list.rs)): `List::sliced` takes
+elements `[from, to)` of a list, forward or backward, and `List::concatenated`
+lays pieces in order — runs of items, laid flat, and lists spread whole. The
+tree ([view.rs](view.rs)) concatenates by an AVL join without a middle key and
+slices by two splits, every operation laying new nodes and writing no old one,
+so a view built by n edits reads an element in O(log n) steps and costs O(log
+n) nodes per edit; a node reversed is one node with its direction toggled. A
+string view ([text.rs](text.rs)) shares the flat string it was first sliced from and
+lays a crumb — the byte offset of every sixty-fourth code point — unless that
+string is ASCII, so finding a code point decodes at most sixty-three past a
+crumb. A flat string is counted and its crumbs gathered in one scan of its
+bytes, and a read of one of its code points scans once up to it.
+
+**A knot's list may be a view.** A stretch over a knot's data node reads its
+links through a holder, the member that reads it. A list node that spreads a
+list is a view (`List::linked_pieces`) over its own cells, the lists spread
+into it and its fellows' runs, all laid before its knot exists, so its own runs
+name no holder: an **own** run's edges resolve through the member its reader
+holds. A view of other lists over a knot's list holds its tree under that
+member in one branch (`view::held`), which every rebuild below it pushes down
+as it does a reversal, so wrapping one is O(1) and every read and edit stays
+O(log n). A data node keeps no hides bit, so a view over one is taken to
+hide. Every reader of a list reads its elements through `List::get` and
+`List::elements`, and every reader of a string through its `Text`, so no reader
+outside these files tells a view from a flat run.
+
+**A view is a construction.** A view is built in its evaluation's home over its
+sources, as a list literal is, so a view a loop threads is built in the
+[loop cell](../scheduler/README.md#tail-hops), where a source homed above the
+loop pins free.
+
+**A view is invisible.** A slice carries its source's type, and a
+concatenation the type a flat list of its elements carries, derived from its
+sources' element types alone, whether it is a view or written flat. Equality,
+rendering, the digest and `satisfies` read through a view, so a program tells
+it from the flat value only by what it costs. A concatenation lays down its
+sources' cells in one case: a source whose cells hide a field the new element
+type names is copied flat at that type, as a list literal copies an item.
 
 **A crossing resolves a view.** A copy writes only the elements a view shows,
 as flat runs at the destination, and the copy holds nothing of its sources. A
@@ -565,7 +605,9 @@ number in numeric order, then every string by bytes. Any other value — a
 [sealed](#what-a-value-is) scalar included — is refused, naming its own type. A
 repeated key keeps its last occurrence. The sort and the de-duplication are
 staged in a `BumpVec` over the caller's scratch, and string keys are written
-into the dict's own region wherever they borrowed from.
+into the dict's own region wherever they borrowed from. A string view makes the
+key of the string it stands for: a forward one borrows its stretch, and a
+backward one's code points are laid in reading order where its caller says.
 
 A dict keyed this way is a value, not a table: it is built once and never
 written. A cell-resident keyed table that a binding channel writes into is the
@@ -814,11 +856,21 @@ test thread, and a chain of headers as deep digested and crossed
 ([tests/depth.rs](tests/depth.rs)), and the memo bits — masked out of a
 weight's bytes, set by the doors, a restamp, a copy and an exit, cleared by
 a porous part or chain, and an exit of a value that meets them laying nothing
-([tests/settled.rs](tests/settled.rs)). Three tests join the koan
+([tests/settled.rs](tests/settled.rs)). List views — a tree-law
+property over slices, backward slices and concatenations against a model, the
+O(log n) cost of a read and an edit, a slice's weight, typing, hiding, a
+copy and a pin, and a knot's list view read through its member, sliced and
+spread against a model, laid in constant cost however long the list it spreads
+— are [tests/views.rs](tests/views.rs), and string views —
+code points read through a crumb, a view equal, rendered, digested and keyed
+as its flat string, and copied flat — are [tests/text.rs](tests/text.rs).
+Four tests join the koan
 [Miri slate](../../observe/miri_slate.md), the paths only `values` drives:
 `a_copied_list_outlives_its_home` — a deep copy laying down strings, a list and
 a dict whose string keys are written inside its key run's `fill`, read after
 the region it was copied from is released —
+`a_copied_view_outlives_its_sources`, a list view laid flat by a copy and read
+after its sources' region is released,
 `a_copied_type_value_names_a_type_its_destination_resolves`, a type node
 re-laid in the destination's branch and read after its home is released, and
 `a_settled_bit_written_through_a_pinned_header_reads_in_a_later_step`, a
@@ -835,8 +887,6 @@ knots as deep as the chain of newtypes digests beside it.
 
 ## Open work
 
-- [Slicing and splicing](../../roadmap/metaprogramming/slicing-and-splicing.md) — views
-  over lists and strings, resolved at a crossing.
 - [Yielding iterators](../../roadmap/rewrite/yielding-iterators.md) — streams,
   the lazy transformations that run koan code.
 - [Recursion over run-time types](../../roadmap/rewrite/recursion-over-run-time-types.md)

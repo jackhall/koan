@@ -26,6 +26,8 @@
 //! already resolve there, and an exit marks what it walked settled after. It reads a value's bits
 //! before laying anything, and lays its walk in its caller's step scratch.
 
+use std::fmt::Write;
+
 use crate::memory::{
     Active, Bump, BumpAllocator, BumpBackedMap, BumpBackedSet, BumpVec, CellHandle, Covariant,
     CrossedOperand, Delivery, HomeHeader, Operand, Prices, Projects, Reattachable,
@@ -466,7 +468,12 @@ fn opened<'graph, 'cell, XF: KnottedFamily<'graph>>(
             entered(value);
             super::surface::raw_parts(value, &mut |part| stack.push(part));
         }
-        Value::Number(_) | Value::Bool(_) | Value::Null | Value::Str(_) | Value::Type(_) => {
+        Value::Number(_)
+        | Value::Bool(_)
+        | Value::Null
+        | Value::Str(_)
+        | Value::StrView(_)
+        | Value::Type(_) => {
             unreachable!("a value with no part is not entered")
         }
     }
@@ -476,7 +483,12 @@ fn opened<'graph, 'cell, XF: KnottedFamily<'graph>>(
 /// for a leaf or a type value, which has no part to enter.
 fn bits<X: Knotted>(value: &Value<'_, X>) -> Option<MemoBits> {
     match value {
-        Value::Number(_) | Value::Bool(_) | Value::Null | Value::Str(_) | Value::Type(_) => None,
+        Value::Number(_)
+        | Value::Bool(_)
+        | Value::Null
+        | Value::Str(_)
+        | Value::StrView(_)
+        | Value::Type(_) => None,
         Value::List(list) => Some(list.bits()),
         Value::Dict(dict) => Some(dict.bits()),
         Value::Record(record) => Some(record.bits()),
@@ -496,7 +508,12 @@ fn settle<X: Knotted>(value: &Value<'_, X>) {
         Value::Tagged(tagged) => tagged.settle(),
         Value::Knotted(member) => settle_knot(member),
         Value::Retyped(header) => settle_knot(&header.member()),
-        Value::Number(_) | Value::Bool(_) | Value::Null | Value::Str(_) | Value::Type(_) => {}
+        Value::Number(_)
+        | Value::Bool(_)
+        | Value::Null
+        | Value::Str(_)
+        | Value::StrView(_)
+        | Value::Type(_) => {}
     }
 }
 
@@ -759,6 +776,15 @@ where
             Value::Bool(flag) => Value::Bool(flag),
             Value::Null => Value::Null,
             Value::Str(source) => text(writer, source),
+            // A view is written flat: its stretch, or its code points in reading order.
+            Value::StrView(view) => match view.text().forward() {
+                Some(source) => text(writer, source),
+                None => {
+                    let mut prose = writer.prose();
+                    write!(prose, "{}", view.text()).expect("writing into a region does not fail");
+                    Value::Str(prose.finish())
+                }
+            },
             Value::Type(type_value) => {
                 self.adopt(type_value.handle());
                 Value::Type(type_value.copied(writer))
@@ -921,6 +947,7 @@ fn same_word<X: Knotted>(a: &Value<'_, X>, b: &Value<'_, X>) -> bool {
         (Value::Bool(a), Value::Bool(b)) => a == b,
         (Value::Null, Value::Null) => true,
         (Value::Str(a), Value::Str(b)) => std::ptr::eq(*a, *b),
+        (Value::StrView(a), Value::StrView(b)) => std::ptr::eq(*a, *b),
         (Value::Type(a), Value::Type(b)) => std::ptr::eq(*a, *b),
         (Value::List(a), Value::List(b)) => std::ptr::eq(*a, *b),
         (Value::Dict(a), Value::Dict(b)) => std::ptr::eq(*a, *b),

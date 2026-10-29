@@ -441,7 +441,9 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, '_, 'x, '_, R> {
                 }
                 let mut names = BumpVec::with_capacity_in(quotes.len(), self.scratch);
                 for quote in quotes.iter() {
-                    names.push(needed_entry(quote).ok_or(unsupported)?);
+                    names.push(
+                        needed_entry(quote.as_part().ok_or(unsupported)?).ok_or(unsupported)?,
+                    );
                 }
                 Ok(self.types.code_needing(self.scratch, kind, &names).into())
             }
@@ -474,7 +476,7 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, '_, 'x, '_, R> {
                 };
                 let mut members = BumpVec::with_capacity_in(operands.len(), self.scratch);
                 for member in operands.iter() {
-                    members.push(self.part(member, groups)?);
+                    members.push(self.part(member.as_part().ok_or(unsupported)?, groups)?);
                 }
                 Ok(self.types.union_of(self.scratch, &members))
             }
@@ -498,6 +500,7 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, '_, 'x, '_, R> {
                 let operands = self.closed_operands(site, || {
                     let mut operands = BumpVec::with_capacity_in(written.len(), self.scratch);
                     for operand in written.iter() {
+                        let operand = operand.as_part().ok_or(unsupported)?;
                         operands.push(self.part(operand, groups)?);
                     }
                     Ok(operands)

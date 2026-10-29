@@ -85,6 +85,110 @@ you can still pin an empty collection to a specific type:
 `[] :! (LIST OF Number)` is an empty list of numbers. (Braces are different: a bare `{}` is the empty *record*, not an empty
 dictionary.)
 
+## Reading lists, dictionaries and strings
+
+You read a list by applying it to an index, as you would call a function on
+an argument. Indices start at zero, and a string is read the same way, one code
+point at a time:
+
+```koan
+LET xs = [10 20 30]
+PRINT (xs 1)
+PRINT (xs 3)
+PRINT ("héllo" 1)
+```
+
+```text
+:(Ok {Error = Never, Ok = Number})(20)
+:(Error {Error = Number, Ok = Never})(3)
+:(Ok {Error = Never, Ok = Str})(é)
+```
+
+A read can miss, so it never hands back the element bare. It gives back a
+`Result`, a built-in [tagged union](05-tagged-unions.md) with two variants:
+`Ok` holding what was read, or `Error` holding the index that failed, which is
+one out of range or not a whole number. `PRINT` shows the variant's type before
+its payload; [`MATCH`](06-pattern-matching.md) is how you take a `Result` apart.
+
+A dictionary is read by applying it to a key. A missing key is an `Error` of
+that key, and a key of a type the dictionary can never hold is refused before
+the program runs:
+
+```koan
+LET ages = {"ada": 36, "alan": 41}
+PRINT (ages "ada")
+PRINT (ages "grace")
+```
+
+```text
+:(Ok {Error = Never, Ok = Number})(36)
+:(Error {Error = Str, Ok = Never})(grace)
+```
+
+### Slices
+
+Applied to a record naming `from`, `to` or both, a list or a string gives back
+a **slice** of itself. A slice is half-open — it runs from `from` up to, but not
+including, `to` — and a missing `from` starts at the beginning, a missing `to`
+runs to the end. When `to` is below `from`, or is `-1`, the slice runs
+backward: it starts at `from` and stops just past `to`, so `-1` reaches the
+first element. Reversing a list or a string is a backward slice from its last
+element:
+
+```koan
+LET xs = [10 20 30 40]
+PRINT (xs {from = 1, to = 3})
+PRINT (xs {from = 2})
+PRINT (xs {from = 3, to = 0})
+PRINT (xs {from = 3, to = -1})
+PRINT ("koan" {from = 3, to = -1})
+PRINT (xs {from = 0, to = 5})
+```
+
+```text
+:(Ok {Error = Never, Ok = :(LIST OF Number)})([20, 30])
+:(Ok {Error = Never, Ok = :(LIST OF Number)})([30, 40])
+:(Ok {Error = Never, Ok = :(LIST OF Number)})([40, 30, 20])
+:(Ok {Error = Never, Ok = :(LIST OF Number)})([40, 30, 20, 10])
+:(Ok {Error = Never, Ok = Str})(naok)
+:(Error {Error = Number, Ok = Never})(5)
+```
+
+A bound out of range gives back an `Error` of the first bad bound, `from`
+before `to`. A slice has the type of the list it came from, so a slice of
+`[1, "a"]` is still a `:(LIST OF (Number | Str))` even if it holds only the
+`1`. Slicing copies nothing: a slice reads the elements where they already
+are, however many slices of slices you take.
+
+### Counting and spreading
+
+`LENGTH` counts a list's elements, a dictionary's entries or a string's code
+points. Inside a list literal, `..` glued to a list's name, or to a
+parenthesized expression giving a list, lays that list's elements into the new
+list in place:
+
+```koan
+LET xs = [1 2]
+LET ys = [3]
+PRINT (LENGTH xs)
+PRINT (LENGTH {"a": 1, "b": 2})
+PRINT (LENGTH "héllo")
+PRINT [0 ..xs ..ys 4]
+PRINT [..([]) ..xs]
+```
+
+```text
+2
+2
+5
+[0, 1, 2, 3, 4]
+[1, 2]
+```
+
+Like a slice, a list built this way shares the elements it spreads rather than
+copying them. `..` means nothing outside a list literal's elements: `LENGTH ..xs`
+is a parse error.
+
 ## Comparing values with `==` and `!=`
 
 `==` tests whether two values are equal and `!=` whether they differ; both give

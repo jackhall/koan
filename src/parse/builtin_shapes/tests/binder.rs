@@ -440,7 +440,7 @@ fn a_needed_key_is_the_run_it_spells() {
     let to = crate::symbols::KeywordSymbol::of("TO").expect("a keyword token");
     let keys: Vec<Option<Vec<KeyElement>>> = needing
         .iter()
-        .map(|quote| needed_key(quote).map(Iterator::collect))
+        .map(|quote| needed_key(quote.part()).map(Iterator::collect))
         .collect();
     use KeyElement::{Keyword, Slot};
     assert_eq!(
@@ -460,7 +460,7 @@ fn a_needed_key_is_the_run_it_spells() {
 }
 
 /// The quotes of the first `<kind> NEEDING #[…]` run nested anywhere in `node`.
-fn find_needing<'a>(node: &KExpression<'a>) -> Option<&'a [ExpressionPart<'a>]> {
+fn find_needing<'a>(node: &KExpression<'a>) -> Option<&'a [crate::parse::ListItem<'a>]> {
     if let Some((_, quotes)) = needing(node) {
         return Some(quotes);
     }

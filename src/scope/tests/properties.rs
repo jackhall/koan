@@ -90,7 +90,7 @@ fn walk<'g>(
         }
         ExpressionPart::ListLiteral(items) => {
             for item in items.iter() {
-                walk(item, shapes, met);
+                walk(item.part(), shapes, met);
             }
         }
         ExpressionPart::DictLiteral(pairs) => {

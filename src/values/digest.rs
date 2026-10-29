@@ -44,11 +44,11 @@
 use std::hash::{Hash, Hasher};
 
 use crate::memory::{BumpAllocator, BumpBackedMap, BumpVec, Edge, bump_table};
-use crate::parse::{ExpressionPart, KExpression, KLiteral};
+use crate::parse::{ExpressionPart, KExpression, KLiteral, ListItem};
 use crate::type_lattice::{DeclaredType, KType};
 
 use super::surface::Parts;
-use super::{Chain, Knotted, Nothing, Seen, Surface, Value};
+use super::{Chain, Knotted, Nothing, Seen, Surface, Text, Value};
 
 /// A value's content identity: the low 128 bits of a BLAKE3 hash of its content, held as bytes so a
 /// node storing one keeps a word's alignment.
@@ -656,7 +656,11 @@ fn syntax_part(hasher: &mut DigestHasher, part: &ExpressionPart<'_>) {
         }
         Part::ListLiteral(items) => {
             hasher.tag(Tag::List).count(items.len());
-            items.iter().for_each(|item| syntax_part(hasher, item));
+            // A spread digests apart from the item it spreads.
+            for item in items.iter() {
+                hasher.feed(matches!(item, ListItem::Spread(_)));
+                syntax_part(hasher, item.part());
+            }
             hasher
         }
         Part::DictLiteral(pairs) => {
@@ -704,6 +708,16 @@ fn str_digest(text: &str) -> ContentDigest {
     DigestHasher::new(Tag::Str).text(text.as_bytes()).finished()
 }
 
+/// A string view's digest: its flat string's, its bytes fed in reading order.
+fn view_digest(text: Text<'_>) -> ContentDigest {
+    let mut hasher = DigestHasher::new(Tag::Str);
+    hasher.count(text.byte_len());
+    for point in text.chars() {
+        hasher.0.update(point.encode_utf8(&mut [0; 4]).as_bytes());
+    }
+    hasher.finished()
+}
+
 /// An edge's digest inside its knot's: its index, since it names a sibling the knot's digest
 /// covers.
 pub fn edge(edge: Edge) -> ContentDigest {
@@ -722,6 +736,7 @@ pub(super) fn scalar<X>(value: Value<'_, X>) -> ContentDigest {
         Value::Bool(flag) => bool_digest(flag),
         Value::Null => literal_digest(&KLiteral::Null),
         Value::Str(text) => str_digest(text),
+        Value::StrView(view) => view_digest(view.text()),
         Value::Type(value) => type_digest(value.handle(), value.ktype()),
         _ => unreachable!("a composite or a knot member is no leaf"),
     }

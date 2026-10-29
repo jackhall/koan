@@ -435,9 +435,10 @@ pub(crate) fn declared_group<'x>(
                 .map(|(statement, _)| statement),
             scratch,
         )?,
-        ExpressionPart::ListLiteral(heads) => {
-            scan_members(heads.iter().filter_map(quoted_body), scratch)?
-        }
+        ExpressionPart::ListLiteral(heads) => scan_members(
+            heads.iter().filter_map(|item| quoted_body(item.as_part()?)),
+            scratch,
+        )?,
         _ => return Err(()),
     };
     Ok(Some(DeclaredGroup {
@@ -602,7 +603,7 @@ impl<'graph> Scan<'graph, '_> {
                         self.node(quoted.reference())?
                     }
                     (Reading::Container, ExpressionPart::ListLiteral(items)) => {
-                        for item in items.iter().filter_map(quoted_body) {
+                        for item in items.iter().filter_map(|item| quoted_body(item.as_part()?)) {
                             self.node(item)?;
                         }
                     }
@@ -632,7 +633,7 @@ impl<'graph> Scan<'graph, '_> {
             | ExpressionPart::MarkedUse(_, node) => self.node(node.reference()),
             ExpressionPart::ListLiteral(items) => {
                 for item in items.iter() {
-                    self.part(item)?;
+                    self.part(item.part())?;
                 }
                 Ok(())
             }

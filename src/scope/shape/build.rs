@@ -58,7 +58,7 @@ use crate::parse::{
     needing, next_is_type_slot, slot_label,
 };
 use crate::parse::{BuiltinShape, BuiltinShapeId, ShapeElement, builtin_shape_for};
-use crate::parse::{ExpressionPart, KExpression, KeyElement, Mark};
+use crate::parse::{ExpressionPart, KExpression, KeyElement, ListItem, Mark};
 use crate::source::SourceRef;
 use crate::symbols::{
     BinderSymbol, KeySymbol, RegistrationSymbol, StaticName, SymbolInterner, TypeSymbol,
@@ -245,7 +245,9 @@ fn written_as_read<'e>(
             },
             Reading::Bare => !quoted(part),
             Reading::Container => match part {
-                ExpressionPart::ListLiteral(items) => items.iter().all(quoted),
+                ExpressionPart::ListLiteral(items) => {
+                    (items.iter()).all(|item| item.as_part().is_some_and(quoted))
+                }
                 ExpressionPart::DictLiteral(pairs) => pairs
                     .iter()
                     .all(|(key, value)| (key.is_wildcard() || quoted(key)) && quoted(value)),
@@ -360,7 +362,7 @@ fn part_marks<'graph>(
         | ExpressionPart::RecordType(node) => code_marks(sites, node.reference(), out),
         ExpressionPart::ListLiteral(items) => {
             for item in items.iter() {
-                part_marks(sites, item, written, out);
+                part_marks(sites, item.part(), written, out);
             }
         }
         ExpressionPart::DictLiteral(pairs) => {
@@ -1735,7 +1737,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             }
             ExpressionPart::ListLiteral(items) => {
                 for item in items.iter() {
-                    self.walk_part(level, statement, item, state.constructor())?;
+                    self.walk_part(level, statement, item.part(), state.constructor())?;
                 }
                 Ok(())
             }
@@ -1856,16 +1858,22 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 // parameters its group declares — so a later member naming one is no mention of the
                 // enclosing shape. The door resolves them against the definition it is elaborating.
                 let mut own = BumpVec::new_in(self.scratch);
-                own.extend(members.iter().filter_map(quoted_body).filter_map(|member| {
-                    match member.statement_binder_plan()?.name? {
-                        BinderSymbol::Type(name) => Some(name),
-                        _ => None,
-                    }
-                }));
+                own.extend(
+                    members
+                        .iter()
+                        .filter_map(|member| quoted_body(member.as_part()?))
+                        .filter_map(|member| match member.statement_binder_plan()?.name? {
+                            BinderSymbol::Type(name) => Some(name),
+                            _ => None,
+                        }),
+                );
                 let mark = self.skip.len();
                 self.skip.extend_from_slice(&own);
                 let mut walked = Ok(());
-                for member in members.iter().filter_map(quoted_body) {
+                for member in members
+                    .iter()
+                    .filter_map(|member| quoted_body(member.as_part()?))
+                {
                     let member = member.statement_spine();
                     if let Some(form) = member.cache().builtin_shape() {
                         walked =
@@ -2445,7 +2453,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         let writer = self.brand.writer();
         let mut offered = BumpVec::with_capacity_in(needed.len(), self.scratch);
         for entry in needed.iter() {
-            if let Some(name) = needed_name(entry) {
+            if let Some(name) = entry.as_part().and_then(needed_name) {
                 // An offer passes the name's value into the code, which a quantified function's
                 // name never is.
                 if self.quantified(level, name, at, None) != Quantified::No {
@@ -2470,7 +2478,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 continue;
             }
             // A malformed entry is the elaborator's to refuse.
-            let Some(run) = needed_key(entry) else {
+            let Some(run) = entry.as_part().and_then(needed_key) else {
                 continue;
             };
             let mut staged = BumpVec::new_in(self.scratch);
@@ -2516,7 +2524,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         mut level: usize,
         name: BinderSymbol,
         mut at: Position,
-    ) -> Option<&'graph [ExpressionPart<'graph>]> {
+    ) -> Option<&'graph [ListItem<'graph>]> {
         loop {
             let draft = &self.chain[level];
             let channels = draft.channels();
@@ -3049,6 +3057,9 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         let writer = self.brand.writer();
         let mut listed = BumpVec::with_capacity_in(items.len(), self.scratch);
         for item in items.iter() {
+            let Some(item) = item.as_part() else {
+                return Err(malformed);
+            };
             let entry = match (needed_name(item), needed_key(item)) {
                 (Some(name), _) => Listed::Name(name),
                 (None, Some(run)) => {

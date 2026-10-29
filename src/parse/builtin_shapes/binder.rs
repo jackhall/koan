@@ -11,7 +11,7 @@
 use smallvec::SmallVec;
 
 use crate::memory::{Writer, collect};
-use crate::parse::ast::{ExpressionPart, KExpression, KLiteral, KeyElement};
+use crate::parse::ast::{ExpressionPart, KExpression, KLiteral, KeyElement, ListItem};
 use crate::parse::builtin_shapes::role::Role;
 use crate::parse::builtin_shapes::{BuiltinShape, KEYWORDS, builtin_shape_for};
 use crate::source::Spanned;
@@ -174,7 +174,7 @@ pub(crate) fn quoted_body<'g>(part: &ExpressionPart<'g>) -> Option<&'g KExpressi
 /// `None` for any other node. The names are read by [`needed_name`].
 pub(crate) fn needing<'g>(
     node: &KExpression<'g>,
-) -> Option<(&'g ExpressionPart<'g>, &'g [ExpressionPart<'g>])> {
+) -> Option<(&'g ExpressionPart<'g>, &'g [ListItem<'g>])> {
     let [kind, connector, list] = node.parts else {
         return None;
     };
@@ -255,18 +255,22 @@ pub(crate) fn quantifier_entries<'g>(
         bound,
     };
     let (items, pairs): (
-        &'g [ExpressionPart<'g>],
+        &'g [ListItem<'g>],
         &'g [(ExpressionPart<'g>, ExpressionPart<'g>)],
     ) = match *group {
         ExpressionPart::ListLiteral(items) => (items, &[]),
         ExpressionPart::DictLiteral(pairs) => (&[], pairs),
         _ => (&[], &[]),
     };
-    items.iter().map(move |item| entry(item, None)).chain(
-        pairs
-            .iter()
-            .map(move |(key, bound)| entry(key, Some(quoted_part(bound).unwrap_or(bound)))),
-    )
+    // A spread is no quote: as written, it declares nothing.
+    items
+        .iter()
+        .map(move |item| entry(item.part(), None))
+        .chain(
+            pairs
+                .iter()
+                .map(move |(key, bound)| entry(key, Some(quoted_part(bound).unwrap_or(bound)))),
+        )
 }
 
 /// Bucket-key extractor for FN. The key must match what a future call would compute via

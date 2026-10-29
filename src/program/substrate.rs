@@ -4,7 +4,7 @@ use std::cell::Cell;
 
 use self_cell::self_cell;
 
-use crate::elaborate::builtin_error;
+use crate::elaborate::{builtin_error, builtin_result};
 use crate::knot::KBuiltins;
 use crate::memory::{
     Bump, BumpAllocator, ProgramBrand, ProgramStorage, SlabHandle, program_storage, resident,
@@ -200,6 +200,7 @@ impl CellSubstrate {
                 let walked = walked::<L>(shapes, builtins, types, brand.writer(), &scratch)
                     .map_err(refused)?;
                 let error = builtin_error(types, &owner.symbols, &scratch);
+                let result = builtin_result(types, &owner.symbols, &scratch);
                 let tiers = TypeTiers {
                     frozen: builder.freeze(),
                     agent: Agent::in_region(&owner.agent),
@@ -212,7 +213,7 @@ impl CellSubstrate {
                         walked,
                         builtins,
                         tiers,
-                        error,
+                        (error, result),
                         &owner.symbols,
                         (
                             L::evaluator(),

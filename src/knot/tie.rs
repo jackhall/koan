@@ -18,7 +18,8 @@
 //! member's slot holds. Every construction is then checked, and a part the caller has not
 //! evaluated, a cycle of derived nodes or a construction the rule refuses stops the tie before a
 //! byte is written.
-//! Only then are the closure runs, bound runs and data nodes laid down, the knot's weight summed,
+//! Only then are the closure runs, bound runs and data nodes laid down — each list node a node
+//! spreads before it — the knot's weight summed,
 //! and the nodes tied: member `i` is node `i`, and the anonymous nodes follow. A `FN` a data member
 //! holds that captures a fellow member is one of them, a function node staged like a function
 //! member, and so is a quote that reads one. The tie hands back each annotation it resolved beside
@@ -216,21 +217,30 @@ where
             run
         }));
     }
-    let mut circulars = BumpVec::with_capacity_in(nodes.len(), scratch);
-    for (index, node) in nodes.iter().enumerate() {
-        let data = node
+    // Every list node a node spreads is laid before it.
+    let mut nodes_laid = BumpVec::with_capacity_in(nodes.len(), scratch);
+    nodes_laid.resize(nodes.len(), None);
+    for index in data::lay_order(&nodes, scratch) {
+        let Some(node) = nodes[index]
             .as_ref()
-            .filter(|node| node.function().is_none() && node.code().is_none());
-        circulars.push(data.map(|node| {
-            let memo = memos[index]
-                .expect("every node's memo is derived")
-                .as_type()
-                .expect("a data node's memo is concrete");
-            let circular = data::lay_down(writer, node, memo, &plan, types, scratch);
-            knot_weight = knot_weight.plus(circular.weight());
-            circular
-        }));
+            .filter(|node| node.function().is_none() && node.code().is_none())
+        else {
+            continue;
+        };
+        let memo = memos[index]
+            .expect("every node's memo is derived")
+            .as_type()
+            .expect("a data node's memo is concrete");
+        let data = data::lay_down(writer, node, memo, (&plan, &nodes_laid), types, scratch);
+        knot_weight = knot_weight.plus(data.0.weight());
+        nodes_laid[index] = Some(data);
     }
+    let mut circulars = BumpVec::with_capacity_in(nodes.len(), scratch);
+    circulars.extend(
+        nodes_laid
+            .iter()
+            .map(|data| data.map(|(circular, _)| circular)),
+    );
     knot_weight = (0..nodes.len()).fold(knot_weight, |weight, _| {
         weight.plus(Weight::flat::<Node<'graph, 'cell>>())
     });

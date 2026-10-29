@@ -158,7 +158,9 @@ fn build_part<'a>(
         ),
         PartShape::List(items) => ExpressionPart::ListLiteral(collect(
             writer,
-            items.iter().map(|item| build_part(brand, item, symbols)),
+            items
+                .iter()
+                .map(|item| crate::parse::ListItem::Part(build_part(brand, item, symbols))),
         )),
         PartShape::Dict(pairs) => ExpressionPart::DictLiteral(collect(
             writer,

@@ -414,6 +414,15 @@ fn error_types(error: &ShapeError<'_>, each: &mut Each<'_>) {
             each(declared(callee));
             each(arguments.into());
         }
+        ShapeError::SpreadNeverAList { value, at: _ } => ktype(value),
+        ShapeError::ReadNeverSatisfied {
+            container,
+            argument,
+            at: _,
+        } => {
+            ktype(container);
+            ktype(argument);
+        }
         ShapeError::NotCode { value, at: _ }
         | ShapeError::NotAModule { value, at: _ }
         | ShapeError::NotASignature {

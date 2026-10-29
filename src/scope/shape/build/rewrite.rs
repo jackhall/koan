@@ -39,7 +39,7 @@
 use crate::memory::{BumpVec, collect};
 use crate::parse::KEYWORDS;
 use crate::parse::{DefinitionKind, Heads, Role};
-use crate::parse::{DispatchShape, ExpressionPart, KExpression, ProgramNode, Spanned};
+use crate::parse::{DispatchShape, ExpressionPart, KExpression, ListItem, ProgramNode, Spanned};
 use crate::source::{FileId, SourceRef, Span};
 use crate::symbols::{KeywordSymbol, ValueSymbol};
 use crate::type_lattice::{FoldDirection, ReductionMode};
@@ -266,9 +266,9 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
                 let mut run = BumpVec::with_capacity_in(items.len(), self.scratch);
                 let mut changed = false;
                 for item in items.iter() {
-                    let rewritten = self.rewrite_part(item)?;
+                    let rewritten = self.rewrite_part(item.part())?;
                     changed |= rewritten.is_some();
-                    run.push(rewritten.unwrap_or(*item));
+                    run.push(rewritten.map_or(*item, |part| item.with(part)));
                 }
                 Ok(changed.then(|| {
                     ExpressionPart::ListLiteral(collect(self.brand.writer(), run.iter().copied()))
@@ -362,9 +362,9 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
                 let mut run = BumpVec::with_capacity_in(items.len(), self.scratch);
                 let mut changed = false;
                 for item in items.iter() {
-                    let rewritten = self.rewrite_quote(item)?;
+                    let rewritten = self.rewrite_quote(item.part())?;
                     changed |= rewritten.is_some();
-                    run.push(rewritten.unwrap_or(*item));
+                    run.push(rewritten.map_or(*item, |part| item.with(part)));
                 }
                 Ok(changed
                     .then(|| ExpressionPart::ListLiteral(collect(writer, run.iter().copied()))))
@@ -448,7 +448,7 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
             ReductionMode::Unary => {
                 let items = collect(
                     self.brand.writer(),
-                    operands.iter().map(|operand| operand.value),
+                    operands.iter().map(|operand| ListItem::Part(operand.value)),
                 );
                 let last = operands.last().expect("an operator run has operands");
                 let run = [

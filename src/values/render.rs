@@ -185,6 +185,7 @@ impl<'x, O: fmt::Write, X: Knotted> Render<'_, '_, '_, '_, 'x, '_, O, X> {
             Value::Bool(flag) => write!(self.out, "{flag}"),
             Value::Null => self.out.write_str("null"),
             Value::Str(text) => self.out.write_str(text),
+            Value::StrView(view) => write!(self.out, "{}", view.text()),
             Value::Type(value) => {
                 write!(self.out, "{}", display_name(value.handle(), types, symbols))
             }

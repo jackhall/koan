@@ -37,6 +37,7 @@ mod builtins;
 mod check;
 mod errors;
 mod evaluate;
+mod lookup;
 mod rules;
 mod select;
 mod walk;

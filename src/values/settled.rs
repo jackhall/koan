@@ -30,7 +30,9 @@ pub(crate) fn part_bits<X: Knotted>(
     types: &Chain<'_, '_, '_, '_>,
 ) -> MemoBits {
     match part {
-        Value::Number(_) | Value::Bool(_) | Value::Null | Value::Str(_) => MemoBits::BOTH,
+        Value::Number(_) | Value::Bool(_) | Value::Null | Value::Str(_) | Value::StrView(_) => {
+            MemoBits::BOTH
+        }
         Value::Type(type_value) => MemoBits {
             root_closed: types.in_root(type_value.ktype()) && types.in_root(type_value.handle()),
             settled: true,

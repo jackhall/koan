@@ -672,6 +672,18 @@ impl<'to, 'x, 'bind, L: Lays<'to>> Relay<'to, 'x, 'bind, L> {
                 arguments,
                 at,
             },
+            ShapeError::ReadNeverSatisfied {
+                container,
+                argument,
+                at,
+            } => ShapeError::ReadNeverSatisfied {
+                container,
+                argument,
+                at,
+            },
+            ShapeError::SpreadNeverAList { value, at } => {
+                ShapeError::SpreadNeverAList { value, at }
+            }
             ShapeError::NotCode { value, at } => ShapeError::NotCode { value, at },
             ShapeError::NotAModule { value, at } => ShapeError::NotAModule { value, at },
             ShapeError::NotASignature { ascribed, at } => {

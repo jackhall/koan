@@ -261,7 +261,7 @@ pub(super) fn own_nodes<'graph>(
             }
             ExpressionPart::ListLiteral(items) => {
                 for item in items.iter() {
-                    walk_part(shape, item, visit);
+                    walk_part(shape, item.part(), visit);
                 }
             }
             ExpressionPart::DictLiteral(pairs) => {

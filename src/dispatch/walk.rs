@@ -157,7 +157,7 @@ use crate::memory::{
     resident,
 };
 use crate::parse::BuiltinShapeId;
-use crate::parse::{ExpressionPart, KExpression, KLiteral};
+use crate::parse::{ExpressionPart, KExpression, KLiteral, ListItem};
 use crate::program::kept;
 use crate::scope::{
     Address, BodyClass, BodyShape, Born, BuiltinIndex, Candidate, CandidateList, CandidateRoute,
@@ -173,9 +173,9 @@ use crate::symbols::{BinderSymbol, TypeSymbol};
 use crate::type_lattice::{
     Collector, DeclaredType, DispatchTokenElement, InstanceFailure, Interval, KKind, KType,
     Parametric, Scheme, Side, TypeNode, Variable, Variance, Verdict, admits_with, bound_above,
-    fits, instance_under, instantiate_quantified, intervals, judge_by_class, meet, read_through,
-    scheme_bound_above, scheme_return, scheme_slots, select_by_class, shape_return, shape_slots,
-    solving_slots,
+    fits, instance_under, instantiate_quantified, intervals, judge_by_class, lower_end_outside,
+    meet, read_through, scheme_bound_above, scheme_return, scheme_slots, select_by_class,
+    shape_return, shape_slots, solving_slots,
 };
 use crate::values::{
     Chain, ConstructionRefused, Retype, Value, construction, dict_type, list_type, may_hold_record,
@@ -183,6 +183,7 @@ use crate::values::{
 };
 
 mod caching;
+mod lookups;
 mod paths;
 mod reads;
 use paths::exact;
@@ -3757,15 +3758,29 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                     TypeNode::List { element } => Some(element),
                     _ => None,
                 });
+                // An item stands for itself, and a spread for its list's elements.
                 let mut typed = BumpVec::with_capacity_in(items.len(), scratch);
+                let mut elements = BumpVec::with_capacity_in(items.len(), scratch);
                 for item in items.iter() {
-                    typed.push(self.part_at(level, item, element)?);
+                    match item {
+                        ListItem::Part(item) => {
+                            let each = self.part_at(level, item, element)?;
+                            typed.push(each);
+                            elements.push(each);
+                        }
+                        ListItem::Spread(source) => {
+                            let list = self.part(level, source)?;
+                            typed.push(list);
+                            elements.push(self.spread_elements(level, source, list)?);
+                        }
+                    }
                 }
                 self.record_composite(
                     level,
                     self.site(level, part),
-                    items.iter().zip(typed.iter().copied()),
+                    items.iter().map(ListItem::part).zip(typed.iter().copied()),
                 );
+                let typed = elements;
                 match concrete_points(types, scratch, typed.iter().copied()) {
                     Some(points) => {
                         Interval::point(list_type(types, scratch, points.into_iter()).into())
@@ -3841,6 +3856,32 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             | ExpressionPart::Expression(_)
             | ExpressionPart::MarkedUse(..) => unknown(),
             _ => unreachable!("a name is a `Form::Name`, typed by `name`"),
+        })
+    }
+
+    /// The static type of the elements a spread of `source`, typed `list`, lays into a list
+    /// literal: each end's element where that end is a list, `Never` below and `Any` above where it
+    /// is none. Refused where the lower end lies outside every list.
+    fn spread_elements(
+        &self,
+        level: usize,
+        source: &ExpressionPart<'_>,
+        list: Interval,
+    ) -> Result<Interval, ShapeError<'o>> {
+        let (types, scratch) = (self.types, self.scratch);
+        if lower_end_outside(types, scratch, list, KType::LIST_OF_ANY) {
+            return Err(ShapeError::SpreadNeverAList {
+                value: bound_above(types, scratch, list.upper),
+                at: self.source(level, self.site(level, source)),
+            });
+        }
+        let element = |end: Parametric, missing: KType| match types.node(end) {
+            TypeNode::List { element } => element,
+            _ => missing.into(),
+        };
+        Ok(Interval {
+            lower: element(list.lower, KType::NEVER),
+            upper: element(list.upper, KType::ANY),
         })
     }
 
@@ -3969,8 +4010,8 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     }
 
     /// `(head argument)`: a construction's identity when the head is a type the load knows, a
-    /// call by name's [judged](Self::called) return when the head is a function, else
-    /// `[Never, Any]`.
+    /// read's `Result` when it is a list, a dict or a string ([lookups.rs](walk/lookups.rs)), a call by
+    /// name's [judged](Self::called) return when the head is a function, else `[Never, Any]`.
     fn apply(
         &mut self,
         level: usize,
@@ -3998,6 +4039,10 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 [(argument, payload)].into_iter(),
             );
             return Ok(Interval { lower, upper });
+        }
+        // A list, a dict or a string at the head is read, never called: no route.
+        if let Some(read) = self.read(level, node, (head, callee), argument)? {
+            return Ok(read);
         }
         self.route_by_name(level, node, callee);
         match self.callee(callee) {
@@ -5408,7 +5453,7 @@ fn written_names<'x>(
     match part {
         ExpressionPart::ListLiteral(items) => {
             for item in items.iter() {
-                names.push(quoted(item)?);
+                names.push(quoted(item.as_part()?)?);
             }
         }
         part => names.push(quoted(part)?),

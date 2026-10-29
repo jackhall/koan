@@ -290,12 +290,13 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'
         Form::Leaf(ExpressionPart::ListLiteral(items)) => {
             if items
                 .iter()
-                .all(|item| matches!(item, ExpressionPart::Literal(_)))
+                .all(|item| matches!(item.part(), ExpressionPart::Literal(_)))
             {
                 // Built in the home from the start: a fresh result, placed operand-free.
                 return step.finish_fresh(|writer, types, _| {
                     let cells = items.iter().map(|item| {
-                        Value::lower_part(writer, item, types, &scratch).expect("a literal lowers")
+                        Value::lower_part(writer, item.part(), types, &scratch)
+                            .expect("a literal lowers")
                     });
                     let list = List::new(writer, cells, types, &scratch);
                     record(format!("built {:p}", list));
@@ -304,7 +305,7 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'
             }
             let writer = step.writer();
             let mut cells = Vec::new();
-            for item in items.iter() {
+            for item in items.iter().map(|item| item.part()) {
                 match item {
                     ExpressionPart::Identifier(_) => match read(&view, item) {
                         Some(value) => cells.push(value),
@@ -427,7 +428,7 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'
             else {
                 return step.failed(StepError::Refused);
             };
-            match list.cells().first() {
+            match list.links().next() {
                 Some(Link::Edge(edge)) => {
                     let writer = step.writer();
                     step.finish(held(
@@ -435,7 +436,7 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'
                         contract,
                         writer,
                         types,
-                        Value::Knotted(holder.sibling(*edge)),
+                        Value::Knotted(holder.sibling(edge)),
                     ))
                 }
                 _ => step.failed(StepError::Refused),

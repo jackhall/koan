@@ -1,6 +1,7 @@
 //! Koan's data values, laid down in a cell's region through `memory`'s shapes and nothing else.
 //!
-//! A [`Value`] is one `Copy` word: a scalar, a string borrowed where it lives, or a borrow of a
+//! A [`Value`] is one `Copy` word: a scalar, a string borrowed where it lives or a [`StrView`]
+//! over one, or a borrow of a
 //! per-kind resident struct — [`List`], [`Dict`], [`Record`], [`Tagged`], [`TypeValue`] — or a
 //! member of a knot, which `values` does not define: the arm holds a type parameter a layer above
 //! closes, and [`Knotted`] and [`KnottedFamily`] are what `values` asks of it. A member retyped to
@@ -47,7 +48,9 @@ mod settled;
 mod settlement;
 mod surface;
 mod tagged;
+mod text;
 mod type_value;
+mod view;
 mod weight;
 pub mod working;
 
@@ -78,7 +81,7 @@ pub use fill::{filled, filled_union, may_hold_record};
 pub use habitat::{BranchCell, BranchSlot, Chain, Half, TypeTiers, Types};
 pub use hiding::held_in;
 pub use link::Link;
-pub use list::List;
+pub use list::{LinkedPiece, List, Piece};
 pub use record::Record;
 pub use retyped::Retyped;
 pub(crate) use settled::stamp_knot;
@@ -90,6 +93,9 @@ pub use surface::{
     retype_target, retype_target_as, retyped_to, retypes_by_header, under, unknown,
 };
 pub use tagged::Tagged;
+#[cfg(test)]
+pub(crate) use text::SCANS;
+pub use text::{StrView, Text};
 pub use type_value::TypeValue;
 pub use weight::{MemoBits, Weight};
 pub use working::{WorkingExpression, WorkingPart};
@@ -324,6 +330,9 @@ pub enum Value<'cell, X = Nothing> {
     Null,
     /// Bytes written into the region the value lives in.
     Str(&'cell str),
+    /// A slice of a string, forward or backward, over the bytes it was sliced from: a string to
+    /// every reader ([`as_text`](Value::as_text)).
+    StrView(&'cell StrView<'cell>),
     /// A first-class type: the handle and its own `OfKind` type.
     Type(&'cell TypeValue),
     List(&'cell List<'cell, X>),
@@ -356,7 +365,7 @@ impl<'cell, X: Knotted> Value<'cell, X> {
             Value::Number(_) => KType::NUMBER.into(),
             Value::Bool(_) => KType::BOOL.into(),
             Value::Null => KType::NULL.into(),
-            Value::Str(_) => KType::STR.into(),
+            Value::Str(_) | Value::StrView(_) => KType::STR.into(),
             Value::Type(value) => value.ktype().into(),
             Value::List(list) => list.ktype().into(),
             Value::Dict(dict) => dict.ktype().into(),
@@ -399,6 +408,7 @@ impl<'cell, X: Knotted> Value<'cell, X> {
         match self {
             Value::Number(_) | Value::Bool(_) | Value::Null => Weight::ZERO,
             Value::Str(text) => Weight::text(text.len()),
+            Value::StrView(view) => Weight::text(view.text().byte_len()),
             Value::Type(_) => Weight::flat::<TypeValue>(),
             Value::List(list) => list.weight(),
             Value::Dict(dict) => dict.weight(),
@@ -420,9 +430,20 @@ impl<'cell, X: Knotted> Value<'cell, X> {
 }
 
 impl<'cell, X: Copy> Value<'cell, X> {
+    /// The bytes of a flat string. A view answers `None`: read a string through
+    /// [`as_text`](Self::as_text).
     pub fn as_str(&self) -> Option<&'cell str> {
         match self {
             Value::Str(text) => Some(text),
+            _ => None,
+        }
+    }
+
+    /// A string's text, flat or a view.
+    pub fn as_text(&self) -> Option<Text<'cell>> {
+        match self {
+            Value::Str(text) => Some(Text::Flat(text)),
+            Value::StrView(view) => Some(view.text()),
             _ => None,
         }
     }

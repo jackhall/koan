@@ -9,6 +9,8 @@ use crate::values::{Key, KeyRejected, TypeValue, Weight};
 use super::{Dict, List, Record, Tagged, TypeSymbol, Value, entry, held, pin, text, with_fixture};
 
 const WORD: Weight = Weight::flat::<Value<'static>>();
+/// The one prefix-sum entry a list of fewer than sixteen cells lays beside them.
+const PREFIX: Weight = Weight::flat::<crate::values::view::Prefix>();
 
 #[test]
 fn a_list_memoizes_the_join_of_its_cells_and_weighs_every_byte_it_lays_down() {
@@ -28,6 +30,7 @@ fn a_list_memoizes_the_join_of_its_cells_and_weighs_every_byte_it_lays_down() {
                     .plus(WORD)
                     .plus(WORD)
                     .plus(Weight::text(5))
+                    .plus(PREFIX)
             );
             let mixed = [Value::Number(1.0), text(writer, "a")];
             let mixed = List::new(writer, mixed.into_iter(), types, scratch);
@@ -140,14 +143,20 @@ fn a_key_refuses_nan_and_non_scalars_and_folds_the_zeros() {
         fixture.in_cell(pin, |context| {
             let types = &fixture.tiers.of(context);
             let list = List::new(context.writer(), [].into_iter(), types, fixture.scratch());
-            assert_eq!(Key::of(&Value::Number(f64::NAN)), Err(KeyRejected::NaN));
             assert_eq!(
-                Key::of(&Value::List(list)),
+                Key::of(&Value::Number(f64::NAN), context.writer()),
+                Err(KeyRejected::NaN)
+            );
+            assert_eq!(
+                Key::of(&Value::List(list), context.writer()),
                 Err(KeyRejected::NotAScalar(list.ktype()))
             );
             assert_eq!(Key::number(-0.0), Ok(Key::number(0.0).unwrap()));
             assert_eq!(Key::number(f64::NAN), Err(KeyRejected::NaN));
-            let Value::Number(zero) = Key::of(&Value::Number(-0.0)).unwrap().value() else {
+            let Value::Number(zero) = Key::of(&Value::Number(-0.0), context.writer())
+                .unwrap()
+                .value()
+            else {
                 panic!("a number key is a number");
             };
             assert!(zero.is_sign_positive());
@@ -413,6 +422,7 @@ fn each_linked_door_stores_its_memo_and_weighs_its_links() {
                     .plus(link)
                     .plus(link)
                     .plus(Weight::text(3))
+                    .plus(PREFIX)
             );
 
             let entries = [(Key::str("k"), edge), (Key::str("k"), word)];

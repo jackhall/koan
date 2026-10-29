@@ -22,7 +22,7 @@ use crate::symbols::{BinderSymbol, SymbolInterner};
 use crate::type_lattice::{
     DeclaredType, KType, TypeNode, display_name, satisfied_by, substitute_quantified,
 };
-use crate::values::{Chain, Record, Retype, Tagged, TypeTiers, Value, satisfies};
+use crate::values::{Chain, Record, Retype, Tagged, Text, TypeTiers, Value, satisfies};
 
 use super::activation_store::Activate;
 use super::bundle::{KBirth, KBundle, Within};
@@ -219,6 +219,7 @@ pub struct Program<'graph> {
     activate: Activate<'graph>,
     output: Output,
     error: KType,
+    result: KType,
     /// Set by the top level when a unit receives an error value; laid down in program storage, and
     /// a `Cell<bool>` has no drop glue.
     uncaught: &'graph Cell<bool>,
@@ -230,7 +231,7 @@ impl<'graph> Program<'graph> {
         facts: &'graph LoadFacts<'graph>,
         builtins: &'graph KBuiltins<'graph, 'graph>,
         tiers: TypeTiers<'graph>,
-        error: KType,
+        (error, result): (KType, KType),
         symbols: &'graph SymbolInterner,
         (evaluator, settle, compose, activate): (
             NativeStep<'graph, KBundle>,
@@ -252,6 +253,7 @@ impl<'graph> Program<'graph> {
             activate,
             output,
             error,
+            result,
             uncaught,
         }
     }
@@ -317,6 +319,11 @@ impl<'graph> Program<'graph> {
         self.error
     }
 
+    /// The builtin union `Result`, whose variants are `Ok` and `Error`: what every read answers.
+    pub fn result_type(&self) -> KType {
+        self.result
+    }
+
     pub(super) fn uncaught(&self) -> &'graph Cell<bool> {
         self.uncaught
     }
@@ -368,7 +375,7 @@ impl<'graph> Program<'graph> {
         &self,
         value: &KValue<'graph, 'cell>,
         types: &Chain<'_, '_, '_, '_>,
-    ) -> Option<&'cell str> {
+    ) -> Option<Text<'cell>> {
         let Value::Tagged(tagged) = value else {
             return None;
         };
@@ -378,7 +385,7 @@ impl<'graph> Program<'graph> {
         let field = BinderSymbol::declared("message", self.symbols)?.symbol();
         let scratch = Bump::new();
         let payload = value.surface(types, &scratch)?.child(0, types, &scratch);
-        payload.field(field, types, &scratch)?.value().as_str()
+        payload.field(field, types, &scratch)?.value().as_text()
     }
 
     /// `value` held to `contract`: an error value passes unchanged, a value satisfying the

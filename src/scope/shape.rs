@@ -1349,6 +1349,14 @@ pub enum ShapeError<'graph> {
         arguments: KType,
         at: SourceRef,
     },
+    /// A spread, `..value`, whose static type can never be a list.
+    SpreadNeverAList { value: KType, at: SourceRef },
+    /// A read whose argument's static type can never read its list, dict or string head.
+    ReadNeverSatisfied {
+        container: KType,
+        argument: KType,
+        at: SourceRef,
+    },
     /// An `EVAL` whose operand's static type can never be code.
     NotCode { value: KType, at: SourceRef },
     /// A view ascription whose operand's static type can never be a module.
@@ -1459,6 +1467,8 @@ impl ShapeError<'_> {
             | ShapeError::AscriptionNeverSatisfied { at, .. }
             | ShapeError::AnnotationNeverSatisfied { at, .. }
             | ShapeError::CallNeverSatisfied { at, .. }
+            | ShapeError::ReadNeverSatisfied { at, .. }
+            | ShapeError::SpreadNeverAList { at, .. }
             | ShapeError::NotCode { at, .. }
             | ShapeError::NotAModule { at, .. }
             | ShapeError::NotASignature { at, .. }
@@ -1741,6 +1751,21 @@ impl fmt::Display for ShapeErrorDisplay<'_, '_, '_, '_> {
                 "{} can never be called with {}",
                 display_name(*callee, self.types, self.symbols),
                 display_name(*arguments, self.types, self.symbols)
+            ),
+            ShapeError::SpreadNeverAList { value, .. } => write!(
+                f,
+                "`..` spreads a list, and this value is {}, which can never be one",
+                display_name(*value, self.types, self.symbols)
+            ),
+            ShapeError::ReadNeverSatisfied {
+                container,
+                argument,
+                ..
+            } => write!(
+                f,
+                "{} can never be read by {}",
+                display_name(*container, self.types, self.symbols),
+                display_name(*argument, self.types, self.symbols)
             ),
             ShapeError::NotAModule { value, .. } => {
                 view_refused(f, ViewRefused::NotAModule(*value), self.symbols, self.types)

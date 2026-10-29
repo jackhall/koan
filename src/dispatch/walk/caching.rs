@@ -10,7 +10,7 @@
 //! are the text's.
 
 use crate::memory::{BumpVec, collect};
-use crate::parse::ExpressionPart;
+use crate::parse::{ExpressionPart, ListItem};
 use crate::scope::{
     Binder, Coordinate, Deps, DepsGathering, Segment, ShapeKind, Site, SiteDeps, Slot, Store, Tree,
     tree_deps,
@@ -128,7 +128,9 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 | ExpressionPart::MarkedUse(_, node) => {
                     parts.extend(node.parts.iter().map(|part| &part.value));
                 }
-                ExpressionPart::ListLiteral(items) => parts.extend(items.iter()),
+                ExpressionPart::ListLiteral(items) => {
+                    parts.extend(items.iter().map(ListItem::part))
+                }
                 ExpressionPart::DictLiteral(pairs) => {
                     parts.extend(pairs.iter().flat_map(|(key, value)| [key, value]));
                 }

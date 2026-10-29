@@ -2,8 +2,9 @@
 //! a hop copies only what it threads, and the host the loop delivers to holds the same bytes
 //! however long the loop runs ([tail hops](../../scheduler/README.md#tail-hops)).
 //!
-//! Three loops over [`caching::program`](super::caching::program)'s chain: a walk, which threads
-//! nothing it built; a record rebuilt whole each hop; and a list consed onto each hop. Each body
+//! Four loops over [`caching::program`](super::caching::program)'s chain: a walk, which threads
+//! nothing it built; a record rebuilt whole each hop; and a list consed onto each hop — and a view
+//! of a large list homed above the loop, extended by one element each hop. Each body
 //! first calls `TOUCH`, a callee whose own body tails, and each loop runs in a self-hopping form,
 //! which hops under its frame's settlement, and a mutual form, which seeks one each hop. The
 //! drain samples every region at each tail ([`HOPS`]); what a copy lays is counted in
@@ -559,4 +560,41 @@ fn a_chain_walk_through_a_helper_copies_no_part_of_the_chain() {
 #[test]
 fn a_chain_walk_through_a_helper_holds_its_memory_flat_in_its_depth() {
     assert_flat(ONWARD, "ints chain", |_| "done".to_string());
+}
+
+/// The view loop: hands on a view of the list it was handed with one more element after it.
+const VIEW: &str = "EXPR #(NAME m :Counter v :(LIST OF Number) link :Link) -> Number = \
+                    #((LET t = (TOUCH m)) (NEXT m [..v 1] (ATTR link next)))\n\
+                    EXPR #(NAME m :Counter v :(LIST OF Number) end :Null) -> Number = \
+                    #(LENGTH v)\n";
+
+/// Each hop builds its view in the loop cell over the list it was handed, where the large source
+/// homed above the loop pins free, so no hop copies the source's cells: what a loop copies per hop
+/// is a constant, and each hop lays the few tree nodes its edit makes — a growth per hop far below
+/// the source's cells, which a flat rebuild would lay again every hop.
+#[test]
+fn a_view_threaded_through_a_loop_copies_none_of_its_source() {
+    let big = format!("LET big = {}\n", numbers(10_000));
+    let source = 10_000 * size_of::<crate::values::Value<'static>>();
+    for form in [Form::Selfward, Form::Mutual] {
+        let spreads: Vec<usize> = (DEPTHS.iter())
+            .map(|&depth| {
+                let (looped, _) = looped(depth, &big, VIEW, form, "ints big chain");
+                assert_eq!(looped.printed, (10_000 + depth).to_string(), "{form:?}");
+                spread(&looped.hops)
+            })
+            .collect();
+        for (pair, depths) in spreads.windows(2).zip(DEPTHS.windows(2)) {
+            let per_hop = (pair[1] - pair[0]) / (depths[1] - depths[0]) as usize;
+            assert!(
+                per_hop < source / 64,
+                "{form:?}: the loop grows {per_hop} B a hop over a {source} B source"
+            );
+        }
+        let per_hop = copied_per_hop(&big, VIEW, form, "ints big chain");
+        assert!(
+            same_per_hop(&per_hop) && per_hop[0] < source / 64,
+            "{form:?}: {per_hop:?} bytes copied per hop"
+        );
+    }
 }

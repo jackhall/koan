@@ -8,8 +8,8 @@ use super::{bound, callable, pin, with_fixture};
 
 const KNOT: &str = "\
 LET greeting = \"hi\"
-LET f = FN EXPR #(GREET n :Number) -> Str = #(greeting (g n))
-LET g = FN EXPR #(TWICE x :Number) -> Str = #(f x)";
+LET f = FN EXPR #(GREET n :Number) -> Any = #([greeting (g n)])
+LET g = FN EXPR #(TWICE x :Number) -> Any = #(f x)";
 
 #[test]
 fn a_capture_step_reads_a_word_as_itself_and_an_edge_as_its_fellow() {

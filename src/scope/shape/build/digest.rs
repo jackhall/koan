@@ -29,7 +29,7 @@
 //! ([`BodyShape::composed_captures`](super::super::BodyShape::composed_captures)).
 
 use crate::memory::BumpVec;
-use crate::parse::{ExpressionPart, KExpression, KLiteral, Mark};
+use crate::parse::{ExpressionPart, KExpression, KLiteral, ListItem, Mark};
 use crate::values::digest::{DigestHasher, Tag};
 
 use super::super::{
@@ -181,8 +181,10 @@ impl<'graph> Walk<'_, 'graph, '_, '_> {
                     .tag(Tag::Group)
                     .feed(part_tag(part))
                     .count(items.len());
+                // A spread digests apart from the item it spreads.
                 for item in items.iter() {
-                    self.part(hasher, item);
+                    hasher.feed(matches!(item, ListItem::Spread(_)));
+                    self.part(hasher, item.part());
                 }
             }
             ExpressionPart::DictLiteral(pairs) => {

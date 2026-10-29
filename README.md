@@ -27,7 +27,7 @@ echo 'PRINT "hello"' | cargo run
 `PRINT` writes to standard output. A refused load, or an error the program does
 not catch, writes `error: <message>` to standard error and exits non-zero.
 
-The surface includes `LET`, `PRINT`, and the two callable binders `EXPR` (a keyworded, dispatch-reached definition) and `FN` (a lambda); the nominal-type declarators `UNION` and `NEWTYPE`; the control forms `MATCH <value> -> :<Type> WITH #{<branches>}`, `TRY (<expr>) -> :<Type> WITH #{<branches>}`, and `CATCH`; the module forms `MODULE`, `SIG`, `USING`, and the `:!` / `:|` ascription operators; the arithmetic and comparison operators `+ - * / < <= > >=` and `AND`, and the type-union operator `|` building `:(A | B)` (chained runs like `1 < 2 < 3` or `A | B | C` reduce per their operator group's mode — see [operator groups](src/scope/README.md#operator-groups)); the operator declarators `OP` and `GROUP`, with which a module declares its own chainable operators; and the `#` / `$` quote and eval sigils. See the [tutorial](tutorial/README.md) for a feature-by-feature walkthrough, and [tutorial/reference.md](tutorial/reference.md) for a one-page surface reference.
+The surface includes `LET`, `PRINT`, and the two callable binders `EXPR` (a keyworded, dispatch-reached definition) and `FN` (a lambda); the nominal-type declarators `UNION` and `NEWTYPE`; the control forms `MATCH <value> -> :<Type> WITH #{<branches>}`, `TRY (<expr>) -> :<Type> WITH #{<branches>}`, and `CATCH`; the module forms `MODULE`, `SIG`, `USING`, and the `:!` / `:|` ascription operators; the arithmetic and comparison operators `+ - * / < <= > >=` and `AND`, and the type-union operator `|` building `:(A | B)` (chained runs like `1 < 2 < 3` or `A | B | C` reduce per their operator group's mode — see [operator groups](src/scope/README.md#operator-groups)); reading a list, a dict or a string by applying it to an index, a slice record or a key (`xs 0`, `xs {from = 1}`, `d "k"`), each answering a `Result`, `LENGTH`, and `..` spreading a list into a list literal (`[..xs 3]`); the operator declarators `OP` and `GROUP`, with which a module declares its own chainable operators; and the `#` / `$` quote and eval sigils. See the [tutorial](tutorial/README.md) for a feature-by-feature walkthrough, and [tutorial/reference.md](tutorial/reference.md) for a one-page surface reference.
 
 User-defined functions declare a return type in the `-> Type` slot; a body whose value does not fit it ends in an error value. `Any` is the no-op fast-path. The surface-declarable types are `Number`, `Str`, `Bool`, `Null`, `:(LIST OF Elem)`, `:(MAP Key -> Val)`, `:(FN :{arg :Arg} -> Out)` (a lambda type; the parameter list is a record type, so `:{}` is the nullary form, and a `FOR ALL #[<names>]` group before the parameters makes it quantified, which only a signature's `VAL` member may be), `:(EXPR #(<head>) -> Out)` (an expression shape — the keyword/slot run a keyworded definition registers for dispatch, optionally under a `FOR ALL #[<names>]` quantifier group inside a signature), `Value`, `Type`, `Code` and the kinds of code under it (`Block`, `Expression`, `Declaration`, `Binder`, `Literal`, `Symbol`, `Name`, `Keyword`), `Module`, `Signature`, and `Any`; nominal types declared with `NEWTYPE`/`UNION` carry their own names. Parameterized type expressions use the glued-right `:` sigil opening an S-expression group; bare types like `Number` and ascriptions like `x :Number` may write the sigil but don't require it on a non-parameterized atom.
 
@@ -210,13 +210,15 @@ src/
 │   ├── header.rs         RegionHeader / HalfHeader — what a koan graph keeps per habitat half: its branch and the decision memo of the cells whose results are built in it; the projection to the branch's slot that values reads
 │   ├── closure.rs        ClosureBindings — a callable's captures, read from the enclosing activation into scratch then laid down: a Link, a value word or a knot edge, each, beside the arena node the callable was born under, its stamp and what its encloser's activation decided; the run's copy and weight
 │   └── activation.rs     ActivationView — one call's or block's Copy, Drop-free read half, covariant in its brand: its segment, the knot member it runs, a view of its slots, read by coordinate (an edge capture as its sibling member), and what its frame decided so far; Activation — the view beside the slot array that binds, invariant, with one constructor per body kind
-├── values.rs         pub mod values — Value, the 24-byte Copy sum over scalars, a region string, a borrow of each per-kind resident struct, a knot-member parameter and a header over one; the Knotted / KnottedFamily trait pair and its vacuous Nothing / NoKnot default; ValueFamily / ValueCarrier; the text helper and the ascription retype
+├── values.rs         pub mod values — Value, the 24-byte Copy sum over scalars, a region string or a view of one, a borrow of each per-kind resident struct, a knot-member parameter and a header over one; the Knotted / KnottedFamily trait pair and its vacuous Nothing / NoKnot default; ValueFamily / ValueCarrier; the text helper and the ascription retype
 ├── values/
 │   ├── weight.rs         Weight — the saturating bytes a total rebuild writes, memoized on every composite, with MemoBits in its top: root-closed and settled, where every type the value reaches already resolves — and the hides bit, where it stores a field the type it is held at hides
 │   ├── settled.rs        the memo bits a value door, a restamp, a copy and a knot's birth compute: folded from the parts' bits and whether the chain interns where it lays
 │   ├── type_value.rs     TypeValue — a type in value position beside its memoized OfKind type, or the kind a retype stamped
 │   ├── retyped.rs        Retyped — a knot member's header: the bare member beside the type a retype stamps it at
-│   ├── list.rs           List — one run of cells typed by the union of its elements' filled types, or a key's candidates typed `List<Any>`
+│   ├── list.rs           List — one run of cells with its prefix weight sums, or a view over other lists' runs, typed by the union of its elements' filled types, or a key's candidates typed `List<Any>`; the slice and concatenation doors, and a knot's list node laid as a view over the lists it spreads
+│   ├── view.rs           a list view: an AVL tree of stretches of flat runs, read forward or backward, a knot's own runs resolved through the holder a branch names or its reader brings, with its join, split, reversal and in-order walk
+│   ├── text.rs           StrView / Text — a string's text read in code points: flat bytes, or a slice of a string, forward or backward, over the bytes it was sliced from
 │   ├── dict.rs           Dict / Key — sorted keys and aligned cells, a binary-search lookup, entry order key order
 │   ├── record.rs         Record — symbol-sorted names and aligned cells, typed by the record of its fields
 │   ├── tagged.rs         Tagged — the one nominal wrap: a payload under a type identity, constructed through the checked door, held or peeled
@@ -254,7 +256,7 @@ src/
 │   ├── function.rs       Function — a function node: its memoized type, body shape, closure bindings and knot weight; the staging a tie does for a function member
 │   ├── builtin.rs        BuiltinFunction — a builtin overload's node over its registered shape and native id, and the door that lays one down
 │   ├── code.rs           Code — a quote's code node: its body, code shape, carried type and its bound and supplied runs; the quote door, the USING door, and the staging a tie does for a code node
-│   ├── data.rs           a knot's data members: the staging walk with its anonymous nodes and evaluator by site, container memos by the nominal cut, the construction check, and the node write
+│   ├── data.rs           a knot's data members: the staging walk with its anonymous nodes and evaluator by site, spreads of lists, container memos by the nominal cut, the construction check, and the node write in spread order
 │   ├── module.rs         Module — a module node and everything that reads one by name
 │   ├── module/
 │   │   ├── birth.rs          a module binder's activation and its tie once the body has bound every slot
@@ -285,8 +287,9 @@ src/
 │   └── substrate.rs      CellSubstrate — program storage, the types' load and agent-tier bumps and the interner as self_cell's owner, and Running — the graph, its run root and the Program record at 'graph, with run and inspect, reached through a closure per call; the load runs before the graph stands, builds the types' load and freezes it and the symbol table, and lays the agent tier
 ├── dispatch.rs       pub mod dispatch — Koan, the Language programs run under, and the vocabulary its submodules share
 └── dispatch/
-    ├── builtins.rs       the builtin table — the lattice's types, Error and every overload as a builtin node — and the natives the overloads run
-    ├── evaluate.rs       the evaluator step: what a node is, gathering its parts, an ascription, an EVAL, a keyworded call, an application, and finishing under a contract
+    ├── builtins.rs       the builtin table — the lattice's types, Error, Result and every overload as a builtin node — and the natives the overloads run
+    ├── evaluate.rs       the evaluator step: what a node is, gathering its parts, a spread literal, an ascription, an EVAL, a keyworded call, an application, and finishing under a contract
+    ├── lookup.rs         a read: a list, a dict or a string applied to an index, a slice record or a key, answering a Result
     ├── select.rs         admission and selection over a candidate list — the one tie rule and first-class elimination the load reads too — and a keyworded call's argument record
     ├── check.rs          the overlap check: a user overload taking operands a builtin overload at its key already takes
     ├── walk.rs           the load's one walk: its driver over bodies and units, the demand stack's components, and its value half — a static type for every value expression and binder, each keyworded use's candidates narrowed and chosen by them, and the return, ascription, view and EVAL checks
@@ -295,6 +298,7 @@ src/
     ├── walk/trees.rs     a module-valued expression read as its content tree, a call unfolded into its callee's summary
     ├── walk/paths.rs     each path resolved at load, closed or to its class; the crossing rule; member reads under transient pins
     ├── walk/caching.rs   what the caching fold reads of each minting and composite site
+    ├── walk/lookups.rs   the load's side of a read: typed from both ends of the head's static type, and refused where its argument never reads it
     ├── walk/views.rs     the load's half of a view: what each nested module carries, read off the operand's tree, and the types the run's view would intern laid in the root
     └── errors.rs         the messages of the error values dispatch raises
 ```

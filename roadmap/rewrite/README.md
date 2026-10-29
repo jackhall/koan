@@ -48,6 +48,10 @@ hand.
 Known gaps with no item behind them yet — recorded so they are not rediscovered
 as surprises, not scheduled.
 
+- **No bytes type.** A string is read in code points — an index, a slice and
+  `LENGTH` ([reads](../../src/dispatch/README.md#what-a-node-is)) — and
+  nothing reads one by byte. A type indexed by byte, over the same borrowed
+  run, is unwritten.
 - **Effect order rests on unit order, not on a rule about effects.** A body's
   units are performed in the order its shape numbers them
   ([units](../../src/scope/README.md#units)), which is the order they are

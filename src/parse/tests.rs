@@ -21,7 +21,7 @@ mod value_sigil;
 use super::lower::lower_run_for_tests;
 use super::parse;
 use crate::memory::program_storage;
-use crate::parse::{ExpressionPart, KExpression, KLiteral};
+use crate::parse::{ExpressionPart, KExpression, KLiteral, ListItem};
 use crate::symbols::SymbolInterner;
 
 pub(super) fn describe(e: &KExpression<'_>, symbols: &SymbolInterner) -> String {
@@ -63,7 +63,13 @@ pub(super) fn describe(e: &KExpression<'_>, symbols: &SymbolInterner) -> String 
                 format!("{}{}", mark.sigil(), describe(e, symbols))
             }
             ExpressionPart::ListLiteral(items) => {
-                let inner: Vec<String> = items.iter().map(|p| describe_part(p, symbols)).collect();
+                let inner: Vec<String> = items
+                    .iter()
+                    .map(|item| match item {
+                        ListItem::Part(part) => describe_part(part, symbols),
+                        ListItem::Spread(part) => format!("..{}", describe_part(part, symbols)),
+                    })
+                    .collect();
                 format!("L[{}]", inner.join(" "))
             }
             ExpressionPart::DictLiteral(pairs) => {

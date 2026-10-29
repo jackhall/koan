@@ -44,7 +44,7 @@ exists only at run time to live.
 **Directions.**
 
 - *Taking code apart — decided.* Taking a fragment out of a quote is code's
-  slice, as it is a list's ([slicing and splicing](slicing-and-splicing.md)). A
+  slice, as it is a list's ([reads](../../src/dispatch/README.md#what-a-node-is)). A
   hole names no binding, so a fragment taken away from the binder that filled
   it holds a hole again, while a `$` name carries its binding and the `\` marks
   a fragment holds are recomputed into its carried type. A quote born in a knot
@@ -107,7 +107,8 @@ exists only at run time to live.
 
 **Requires:**
 
-- [Slicing and splicing](slicing-and-splicing.md) — slice as a builtin, views, and `..` outside a quote.
+- [Views](../../src/values/README.md#views) — shipped: views, `..` outside a
+  quote, and the slice a fragment of code mirrors.
 - [`parse`](../../src/parse/README.md#the-syntax-depth-limit) — shipped: the syntax depth limit composed code is checked against.
 
 **Unblocks:**

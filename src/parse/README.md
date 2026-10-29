@@ -33,7 +33,7 @@ families, quoted strings, adjacency recorded as a glue bit, and indentation with
 its three suspending regimes. It never asks which atoms are keywords or which
 glued prefixes are sigils.
 
-Lowering is where koan's vocabulary enters, and six rules cover it
+Lowering is where koan's vocabulary enters, and seven rules cover it
 ([lower.rs](lower.rs)):
 
 - A **run** of sibling items becomes a run of parts, with the context —
@@ -72,6 +72,10 @@ Lowering is where koan's vocabulary enters, and six rules cover it
   value and type position alike, its suffixes chaining as they do after a word:
   `(MAKESET ints).empty`, `:((MAKESET ints).Set)`. With a space before the dot
   the atom stands alone, and a leading dot is an error.
+- A **spread** is `..` glued to a name, `..xs`, or to a paren group,
+  `..(f x)`, and is a list literal's item and nothing else: lowering refuses
+  `..` anywhere else, inside a `#[…]` literal included, so no other part holds
+  one, and refuses `..$xs` and `..\xs`, which are code splicing's.
 - Everything else is an **atom**, which [atom.rs](atom.rs) classifies.
 
 Atom classification is the one place text is read closely: literals; a split on
@@ -96,7 +100,8 @@ another region is a slice copy rather than a rebuild.
 
 `ExpressionPart` is the vocabulary a run is spelled in: keywords, identifiers and
 type names as classified symbols; nested expressions; the two type sigils
-(`:(…)` and `:{…}`); list, dict and record literals; scalar literals;
+(`:(…)` and `:{…}`); list, dict and record literals, a list literal's items
+each a `ListItem` — a part, or a spread of one; scalar literals;
 `QuotedExpression`, the `#(…)` body captured at parse time as data; and the two
 marked parts, `MarkedName` (`$x`, `\x`), which classifies as the name it marks,
 and `MarkedUse` (`$(…)`, `\(…)`), which classifies as a nested expression. A

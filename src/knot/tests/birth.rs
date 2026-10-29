@@ -514,7 +514,7 @@ fn a_container_and_the_function_that_captures_it_share_a_knot() {
                 panic!("`a` is a list node");
             };
             assert!(a.member().knot() == f.member().knot());
-            assert!(follow(a, list.cells()[0]) == f);
+            assert!(follow(a, list.link(0)) == f);
             assert_eq!(
                 list.ktype(),
                 types.list(f.ktype().as_type().expect("`f` is unquantified"))
@@ -556,7 +556,7 @@ fn a_nested_constructor_on_a_sibling_path_is_an_anonymous_node() {
             let (_, Circular::List(list)) = circular(Value::Knotted(inner)) else {
                 panic!("`inner` is an anonymous list node");
             };
-            assert!(follow(inner, list.cells()[0]) == f);
+            assert!(follow(inner, list.link(0)) == f);
             let Link::Value(Value::List(plain)) =
                 record.field(fixture.name("plain").symbol()).unwrap()
             else {
@@ -645,7 +645,7 @@ fn a_nested_construction_is_built_through_the_checked_door() {
             let (_, Circular::List(list)) = circular(bound(fixture, activation, "a")) else {
                 panic!("`a` is a list node");
             };
-            let Link::Value(Value::Tagged(tagged)) = list.cells()[0] else {
+            let Link::Value(Value::Tagged(tagged)) = list.link(0) else {
                 panic!("the construction is an ordinary tagged value");
             };
             assert_eq!(tagged.ktype(), distance);
@@ -674,7 +674,7 @@ fn an_eager_part_refuses_by_site_and_ties_when_supplied() {
             else {
                 panic!("`a` is a list literal");
             };
-            let call = fixture.shape_of(activation).site(&items[0]);
+            let call = fixture.shape_of(activation).site(items[0].part());
             assert_eq!(
                 tie_of(fixture, writer, types, activation, "a").err(),
                 Some(Untieable::Eager {
@@ -697,7 +697,7 @@ fn an_eager_part_refuses_by_site_and_ties_when_supplied() {
             else {
                 panic!("`a` is a list node");
             };
-            assert!(matches!(list.cells()[0], Link::Value(Value::Number(7.0))));
+            assert!(matches!(list.link(0), Link::Value(Value::Number(7.0))));
         });
     });
 }

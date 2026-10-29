@@ -12,7 +12,7 @@
 //! behind their barriers, see the payload.
 
 use crate::memory::{Bump, BumpAllocator, BumpVec};
-use crate::parse::{ExpressionPart, KLiteral};
+use crate::parse::{ExpressionPart, KLiteral, ListItem};
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::{
     Collector, DeclaredType, KKind, KType, NodeSchema, Parametric, TypeHandle, TypeNode, Variance,
@@ -219,7 +219,14 @@ pub fn part_ktype(
         ExpressionPart::Literal(KLiteral::String(_)) => KType::STR,
         ExpressionPart::Literal(KLiteral::Boolean(_)) => KType::BOOL,
         ExpressionPart::Literal(KLiteral::Null) => KType::NULL,
-        ExpressionPart::ListLiteral(items) => list_type(types, scratch, items.iter().map(element)),
+        // A spread's elements are unknown before it evaluates.
+        ExpressionPart::ListLiteral(items) => list_type(
+            types,
+            scratch,
+            items
+                .iter()
+                .map(|item| item.as_part().map_or(KType::ANY, element)),
+        ),
         ExpressionPart::DictLiteral(pairs) => dict_type(
             types,
             scratch,
@@ -338,7 +345,8 @@ impl<'x> Positions<'x> {
             }
             ExpressionPart::ListLiteral(items) => {
                 let child = self.step(at, Step::Element);
-                items.iter().for_each(|item| self.lay(item, child));
+                // A spread lays no element of its own.
+                (items.iter().filter_map(ListItem::as_part)).for_each(|item| self.lay(item, child));
             }
             ExpressionPart::DictLiteral(pairs) => {
                 let child = self.step(at, Step::Value);
@@ -411,9 +419,11 @@ fn admits_part_at(
                 return false;
             };
             within(part, at, Step::Element, |at| {
-                items
-                    .iter()
-                    .all(|item| admits_part_at(element, item, types, at))
+                // A spread's elements are unknown before it evaluates, so no slot admits it raw.
+                (items.iter()).all(|item| {
+                    item.as_part()
+                        .is_some_and(|item| admits_part_at(element, item, types, at))
+                })
             })
         }
         TypeNode::Dict { key, value } => {

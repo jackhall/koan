@@ -8,7 +8,7 @@
 use crate::memory::{Bump, BumpVec, ProgramBrand, collect};
 use crate::source::Spanned;
 
-use super::{ExpressionPart, KExpression, KLiteral, ProgramNode};
+use super::{ExpressionPart, KExpression, KLiteral, ListItem, ProgramNode};
 
 /// `syntax` laid whole through `brand`: equal to it as code, borrowing nothing of its storage.
 pub fn copied<'a>(brand: ProgramBrand<'a>, syntax: &KExpression<'_>) -> ProgramNode<'a> {
@@ -56,7 +56,10 @@ impl<'a> Copier<'a, '_> {
             }
             ExpressionPart::ListLiteral(items) => {
                 let mut run = BumpVec::with_capacity_in(items.len(), self.scratch);
-                run.extend(items.iter().map(|item| self.part(item)));
+                run.extend(items.iter().map(|item| match item {
+                    ListItem::Part(part) => ListItem::Part(self.part(part)),
+                    ListItem::Spread(part) => ListItem::Spread(self.part(part)),
+                }));
                 ExpressionPart::ListLiteral(collect(writer, run.iter().copied()))
             }
             ExpressionPart::DictLiteral(pairs) => {

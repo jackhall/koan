@@ -6,7 +6,7 @@ use std::cmp::Ordering;
 use std::fmt;
 use std::marker::PhantomData;
 
-use crate::memory::{BumpAllocator, BumpVec, Writer, resident};
+use crate::memory::{BumpAllocator, BumpVec, Lays, Writer, resident};
 use crate::type_lattice::KType;
 
 use super::fill::hides_more;
@@ -36,13 +36,26 @@ pub enum KeyRejected {
 }
 
 impl<'cell> Key<'cell> {
-    /// The key a value makes, borrowing its bytes where they already live; a refusal names the
-    /// value's own type.
-    pub fn of<X: Knotted>(value: &Value<'cell, X>) -> Result<Key<'cell>, KeyRejected> {
+    /// The key a value makes, borrowing its bytes where they already live — a backward string
+    /// view's laid in reading order through `lay`; a refusal names the value's own type.
+    pub fn of<X: Knotted>(
+        value: &Value<'cell, X>,
+        lay: impl Lays<'cell>,
+    ) -> Result<Key<'cell>, KeyRejected> {
         match *value {
             Value::Str(text) => Ok(Key::str(text)),
+            Value::StrView(view) => Ok(Key::str(view.text().laid(lay))),
             Value::Number(number) => Key::number(number),
             Value::Bool(flag) => Ok(Key::bool(flag)),
+            _ => Err(KeyRejected::NotAScalar(value.concrete_ktype())),
+        }
+    }
+
+    /// Whether a value makes a key, as [`of`](Self::of) answers, laying nothing.
+    pub fn admits<X: Knotted>(value: &Value<'_, X>) -> Result<(), KeyRejected> {
+        match *value {
+            Value::Str(_) | Value::StrView(_) | Value::Bool(_) => Ok(()),
+            Value::Number(number) => Key::number(number).map(drop),
             _ => Err(KeyRejected::NotAScalar(value.concrete_ktype())),
         }
     }

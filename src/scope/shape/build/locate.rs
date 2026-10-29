@@ -51,7 +51,7 @@ fn within_part(part: &ExpressionPart<'_>, here: SourceRef, address: usize) -> Op
         | ExpressionPart::MarkedUse(_, node) => source_within(node.reference(), address),
         ExpressionPart::ListLiteral(items) => items
             .iter()
-            .find_map(|item| within_part(item, here, address)),
+            .find_map(|item| within_part(item.part(), here, address)),
         ExpressionPart::DictLiteral(pairs) => pairs.iter().find_map(|(key, value)| {
             within_part(key, here, address).or_else(|| within_part(value, here, address))
         }),
@@ -88,7 +88,9 @@ fn part_in<'a>(part: &'a ExpressionPart<'a>, address: usize) -> Option<&'a Expre
         | ExpressionPart::RecordType(node)
         | ExpressionPart::QuotedExpression(node)
         | ExpressionPart::MarkedUse(_, node) => part_within(node.reference(), address),
-        ExpressionPart::ListLiteral(items) => items.iter().find_map(|item| part_in(item, address)),
+        ExpressionPart::ListLiteral(items) => {
+            (items.iter()).find_map(|item| part_in(item.part(), address))
+        }
         ExpressionPart::DictLiteral(pairs) => pairs
             .iter()
             .find_map(|(key, value)| part_in(key, address).or_else(|| part_in(value, address))),
@@ -125,7 +127,7 @@ fn each_part_in<'a>(part: &'a ExpressionPart<'a>, visit: &mut impl FnMut(&'a Exp
         | ExpressionPart::MarkedUse(_, node) => each_part_within(node.reference(), visit),
         ExpressionPart::ListLiteral(items) => {
             for item in items.iter() {
-                each_part_in(item, visit);
+                each_part_in(item.part(), visit);
             }
         }
         ExpressionPart::DictLiteral(pairs) => {

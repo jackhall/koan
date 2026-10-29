@@ -38,7 +38,7 @@ Read them in order the first time through — each builds on the last.
 1. [Getting started](01-getting-started.md) — running a program, expressions,
    grouping by parentheses and indentation.
 2. [Values and types](02-values-and-types.md) — numbers, strings, lists,
-   dictionaries, and the vocabulary for naming types.
+   dictionaries, reading and slicing them, and the vocabulary for naming types.
 3. [Names, binding, and dispatch](03-names-and-dispatch.md) — `LET`, lexical
    scope, the three token classes, and how matching by shape works.
 4. [Functions](04-functions.md) — defining and calling, return types,

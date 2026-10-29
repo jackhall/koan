@@ -1,8 +1,9 @@
 //! A knot member crossing under a copy: its whole knot re-tied at the destination.
 //!
 //! `a_copied_knot_outlives_its_home`, `a_copied_ring_outlives_its_home`,
-//! `a_copied_module_outlives_its_home`, `a_copied_barrier_outlives_its_home` and
-//! `a_copied_quote_outlives_its_home` are on the Miri slate: they are the paths only `knot` drives —
+//! `a_copied_list_view_outlives_its_home`, `a_copied_module_outlives_its_home`,
+//! `a_copied_barrier_outlives_its_home` and `a_copied_quote_outlives_its_home` are on the Miri
+//! slate: they are the paths only `knot` drives —
 //! a knot's run laid down with closure runs, typing records, bound runs and data nodes written into
 //! the region while the node run is being filled, over the held values' finished copies, read
 //! through edges after the region it was copied from is gone.
@@ -431,7 +432,58 @@ fn a_copied_ring_outlives_its_home() {
                 let (_, Circular::List(list)) = circular(Value::Knotted(items)) else {
                     panic!("`items` is an anonymous list node");
                 };
-                assert!(follow(items, list.cells()[0]) == a);
+                assert!(follow(items, list.link(0)) == a);
+            })
+            .unwrap();
+        graph.release(dest, ReleaseAbsorption::IntoHolder).unwrap();
+        assert!(graph.is_empty());
+    });
+}
+
+#[test]
+fn a_copied_list_view_outlives_its_home() {
+    with_fixture(|fixture| {
+        let lines = fixture.parse(
+            "LET words = [\"alpha\" \"beta\"]\n\
+             LET xs = [..zs ..words \"tail\"]\n\
+             LET zs = [(FN :{} -> Any = #(xs)) \"z\"]",
+        );
+        let mut graph: TestGraph<'_> = CellGraph::new(2, copy);
+        let home = graph.create(None).unwrap();
+        let dest = graph.create(None).unwrap();
+        let dormant = graph
+            .enter(home, |context| {
+                let types = &fixture.tiers.of(context);
+                let activation = fixture.run(context.writer(), types, &lines, &[]);
+                let xs = super::bound(fixture, activation, "xs");
+                let (_, Circular::List(list)) = circular(xs) else {
+                    panic!("`xs` is a list node");
+                };
+                assert!(list.is_view(), "a list node that spreads is a view");
+                let source = context.lift::<KValueFamily>(xs);
+                let crossed = fixture.tiers.cross(context, dest, &source).unwrap();
+                context.keep(crossed)
+            })
+            .unwrap();
+        graph.release(home, ReleaseAbsorption::IntoHolder).unwrap();
+        graph
+            .enter(dest, |context| {
+                let carrier = context.redeem(dormant).unwrap();
+                let (xs, Circular::List(list)) = circular(context.read(&carrier).value()) else {
+                    panic!("the kept list redeems as a list node");
+                };
+                assert!(!list.is_view(), "a copy lays a list node flat");
+                let function = follow(xs, list.link(0))
+                    .function()
+                    .expect("a function node");
+                assert!(follow(xs, function.closure().get(CaptureSlot(0))) == xs);
+                let words: Vec<_> = (1..list.len())
+                    .map(|at| match list.link(at) {
+                        Link::Value(value) => value.as_str().unwrap().to_owned(),
+                        Link::Edge(_) => panic!("a value cell"),
+                    })
+                    .collect();
+                assert_eq!(words, ["z", "alpha", "beta", "tail"]);
             })
             .unwrap();
         graph.release(dest, ReleaseAbsorption::IntoHolder).unwrap();
@@ -443,7 +495,7 @@ const MODULE: &str = "\
 LET greeting = \"hi\"
 MODULE m = (\
 (LET words = [\"alpha\" \"beta\"]) \
-(LET f = (FN :{} -> Any = #(greeting g))) \
+(LET f = (FN :{} -> Any = #([greeting g]))) \
 (LET g = (FN :{} -> Any = #(f))) \
 (NEWTYPE Dist = Number))";
 
