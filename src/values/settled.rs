@@ -50,6 +50,18 @@ pub(crate) fn part_bits<X: Knotted>(
     }
 }
 
+/// Whether `part`, or a part below it, stores a field the type it is held at hides: its hides bit.
+/// Clear for a leaf, a type value and a knot member, which no copy rebuilds.
+pub(crate) fn part_hides<X: Knotted>(part: &Value<'_, X>) -> bool {
+    match part {
+        Value::List(list) => list.weight().hides(),
+        Value::Dict(dict) => dict.weight().hides(),
+        Value::Record(record) => record.weight().hides(),
+        Value::Tagged(tagged) => tagged.weight().hides(),
+        _ => false,
+    }
+}
+
 /// The bits of a composite under `ktype` over `parts`, laid beside `types`: root-closed where
 /// every part is and `ktype` lies in the root; settled where every part meets the
 /// contract and `types` interns where it lays.

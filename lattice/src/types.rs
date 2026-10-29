@@ -121,5 +121,6 @@ pub use typed::{
     substitute_parameters, substitute_quantified, tied_members,
 };
 pub use unify::{Collector, Interval, UnifyFailure, admits_with, intervals};
+pub use verdicts::MemoKind;
 pub use walk::Variance;
 pub use window::{RecursiveGroupWindow, RelativeSchema, SealedGroup};

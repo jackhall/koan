@@ -183,9 +183,11 @@ The spacing matters: write `x :Number` (space before the colon, glued after) or
 parse error. A non-parameterized type like `Number` may be written with the
 sigil or as a bare token, but a parameterized `:(...)` type always needs it.
 
-Container types are always parameterized down to their elements. The element
-types of a list literal are joined: `[1, 2, 3]` is `:(LIST OF Number)`, while
-`[1, "x"]` widens to `:(LIST OF Any)`.
+Container types are always parameterized down to their elements. A list's
+element type is the union of its elements' types: `[1, 2, 3]` is
+`:(LIST OF Number)`, and `[1, "x"]` is `:(LIST OF (Number | Str))`. A list of
+records keeps every field each record was written with
+([records in a container](07-records.md#records-in-a-container)).
 
 ### Types are values
 

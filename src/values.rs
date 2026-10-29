@@ -34,7 +34,9 @@ mod crossing;
 mod dict;
 pub mod digest;
 mod equality;
+mod fill;
 mod habitat;
+mod hiding;
 mod link;
 mod list;
 mod lower;
@@ -70,7 +72,11 @@ pub use digest::{ContentDigest, Digests};
 #[cfg(test)]
 pub use digest::{DIGEST_DEMANDS, DIGEST_VISITS};
 pub use equality::Incomparable;
+#[cfg(test)]
+pub use fill::FILL_STEPS;
+pub use fill::{filled, filled_union, may_hold_record};
 pub use habitat::{BranchCell, BranchSlot, Chain, Half, TypeTiers, Types};
+pub use hiding::held_in;
 pub use link::Link;
 pub use list::List;
 pub use record::Record;

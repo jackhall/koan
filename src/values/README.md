@@ -160,12 +160,33 @@ is total. No AST node is ever homed in a cell.
 ## The type memo and `satisfies`
 
 Every composite stores its type as a memoized [`type_lattice`](../../lattice/src/types/README.md)
-handle, computed in the pass that lays its cells down: a list the join of its
-cells' types (`Never` when empty), a dict the joins over its keys and its
-cells, a record the record type of its fields in written order, a type value
-`OfKind` of the kind of the type it names, a tagged value its identity, and a
-knot member reports its own, or its header's. A join across families is their union, so a list
-holding a number and a type memoizes `List<(Number | ProperType)>`.
+handle, computed in the pass that lays its cells down: a list the union of its
+cells' filled types (`Never` when empty), a dict the union of its keys' types
+beside the union of its values' filled types, a record the record type of its
+fields in written order, a type value `OfKind` of the kind of the type it names,
+a tagged value its identity, and a knot member reports its own, or its header's.
+So a list holding a number and a type memoizes `List<(Number | ProperType)>`.
+
+**A container fills its records** ([fill.rs](fill.rs)). At each position below
+a container — a list's element, a dict's value, a record's field, across a
+union's members — each record gains, at `Null`, every field another record at
+that position names, so no record lies under another by width and the union
+keeps both: `[{x = 1, y = 2}, {x = 3}]` is a
+`List<({x :Number, y :Number} | {x :Number, y :Null})>` and prints
+`[{x = 1, y = 2}, {x = 3, y = null}]`. The fill stops at every other type
+node — a scalar, `Any`, a tagged value, a function, a type, code, a module —
+and never fills a dict's keys. It is computed from the cells' types alone, as a
+**merge**: the types reaching one position form a sorted, deduplicated group,
+and a group of fewer than two maps each type to itself, since a container's own
+type is already filled. So the merge descends only where two distinct types
+meet, and `[x, acc]` costs O(1) however deep `acc` is. Each group's results are
+memoized in the [lattice's memo](../../lattice/src/types/identity.md#downstream-memos),
+along with the results' own group as mapping to itself, and the merge runs over
+an explicit stack. **The fill writes no cell**: the door reads a field seen at
+exactly `Null` as `null` without its cell, and a part whose own type falls short
+of a member of the type it is read at is taken at that member once its own type
+is filled against it, at every depth. A record does not fill its own fields;
+only a container fills.
 `Value::ktype` copies that handle or names a leaf constant, and reads no
 type tier and walks nothing. It answers a
 [`DeclaredType`](../../lattice/src/types/identity.md#typed-handles): a concrete `KType`
@@ -173,19 +194,19 @@ for every value but a quantified callable, which answers its `Scheme`. A
 quantified callable is read only at the head of a call or as a `MODULE` or
 `GROUP` member's binding, and the load makes every other read of one an instance with a concrete
 type ([resolution](../scope/README.md#resolution)), so every other reader —
-a container's join, a construction, a diagnostic — takes
+a container's type, a construction, a diagnostic — takes
 `Value::concrete_ktype`, which names that rule where it narrows. A key's
 candidates — the functions a `USING` hole or an `EVAL` offer gathers at one
 key — are laid down by `List::of_candidates`, typed `List<Any>` without reading
 any function's type: dispatch alone reads such a list, each function by its own
-type, and a quantified registration's scheme joins into no list type. A quote's type is its carried type, memoized on its
+type, and a quantified registration's scheme enters no list type. A quote's type is its carried type, memoized on its
 node: its [code kind](../../lattice/src/types/vocabulary.md#the-code-family), read off its
 body as written ([`KExpression::code_kind`](../parse/README.md#the-ast-borrowed-copy-and-splice-free)),
 needing the `\` names no binder in its code fills
 ([code parameters](../scope/README.md#code-parameters)): `#(y)` is a `Name`,
 `#((y))` an `Expression`, `#(PRINT \y)` an `:(Expression NEEDING #[y])`. A
-container of quotes is an ordinary container, typed by the join of its
-elements' types as any other is.
+container of quotes is an ordinary container, typed by its elements' types as
+any other is.
 
 **A data node's memo is exact and finite.** The lattice has no structural
 recursive type, so recursion in a value's type goes through a declared memo: a
@@ -213,7 +234,10 @@ code, a kind for a type value, each it lies under, and for a module each
 signature application it fits, its head parameters pinned at what *fits*
 solves (`pinned_at_fit`, over `fit_solution`, the solve the view door reads
 too) — and keeps its own type where there is none, so a
-list ascribed `Any` stays as precise as it was. The target depends on the
+list ascribed `Any` stays as precise as it was. A record seen at a record type
+keeps at `Null` each field its own type lacks or has at exactly `Null`:
+`{x = 1, y = null} :! :{x :Number, y :(Number | Null)}` carries
+`{x :Number, y :Null}`. The target depends on the
 value and the type alone, never on member order. Which types re-stamp a value
 at themselves is one predicate in [surface.rs](surface.rs), `retyped_kind`:
 each of those, save `Module` and `Code`, which every module and every quote
@@ -224,7 +248,9 @@ load's static types of a retyped value (`retyped_to`) and of one at most a type
 load's content tree takes a retype node, so the load calls a retype
 exact exactly where the run makes it so — save a signature type leaving a head
 parameter unpinned, which each run pins afresh at what its module fits, so the
-load calls it at most that type.
+load calls it at most that type. So is a record type with a field `Null` lies
+strictly under: the load reads a retype to it as at least itself with each such
+field at `Null`, and at most itself.
 
 A plain value takes the target as its handle over the same shared runs, and a
 type value its kind beside the same named type. **A knot member takes a
@@ -253,8 +279,8 @@ prints `Point({x = 1, y = 2})`. An identity with no representation, such as an
 opaque view's carrier, hands its payload back at the payload's own type. A retype
 walks nothing, and a nested part obeys it all the same, so downstream dispatch
 sees the contract at every depth rather than the contents' incidental
-precision. An element is read at the type its container names, so a literal
-whose join widens a record hides that record's extra fields.
+precision. An element is read at the type its container names, filled: a
+list ascribed `LIST OF {x :Number}` reads each element at `{x :Number}`.
 
 A read carries a `Seen`: a value beside the type the read sees it at — its own
 memo at the top of a read, and below it what the holder's seen type names for
@@ -278,7 +304,9 @@ The same module answers the question for what is not yet a value.
 `admits_part` checks a raw AST part by shape, since an unevaluated literal has
 no type memo: a container literal admits by its elements — a list by each item, a
 dict by each key and value, a `_` key admitting any key type, a record by each
-field the slot names — a code kind on a part whose own code kind lies under it,
+field the slot names, each record filled against the others at its position as
+the run fills it, so a field another record there writes is admitted where its
+slot admits `null` — a code kind on a part whose own code kind lies under it,
 a bare group being code of its own kind as a quote is, a union on any member, a
 family top — `Value` or `Code` — on any concrete type of its family,
 a kind slot takes a type token only for `ProperType` and `AnyType`, a
@@ -307,7 +335,7 @@ weight, and a header weighs its own struct beside its member's weight. So a valu
 them all, while its copy lays down and weighs only what the type shows: the
 [verdict](#crossing) may over-price such a copy, and never under-prices one.
 
-The weight's two top bits are a second memo, [`MemoBits`](weight.rs), which
+The weight's top two bits are a second memo, [`MemoBits`](weight.rs), which
 the byte count saturates below and which its equality and order never read:
 **root-closed**, every type the value reaches is the root's, and **settled**,
 every type it reaches resolves in the root or its home region's branch. Each
@@ -316,6 +344,31 @@ through the shared borrow a value is read by; a knot keeps its bits on its
 root node. The doors compute both where they lay a value
 ([settled.rs](settled.rs)), and an adoption does not enter a part with either
 bit set ([type tiers](../../design/type-tiers.md#an-adoption-stops-at-a-settled-part)).
+
+**A hidden field never shows.** A part *hides* a field when it stores a cell
+for it that its view — the type the door reads it at through its holder — does
+not name, or names at exactly `Null`. The weight's third bit, **hides**, is set wherever the value or a
+part below it may hide a field. Types alone decide it, so it may be set where
+nothing is hidden, which costs only a visit, and it is kept without visiting a
+value ([hiding.rs](hiding.rs)): a scalar, a function, a type, code and a module
+hide nothing, a composite built from parts ORs their bits, a restamp from one
+type to another ORs in a walk of the two types alone, memoized in the lattice
+(`hides_more`), and a holder rebuilt over a copy sets it where a cell it keeps
+still hides a field at its view there, or, for a record, where it stores a
+field its own type does not name. Where a value with the bit set comes to be held at a new
+view — built into a container, or restamped by a binding, a handing on or
+`:!` — each part whose new view names a field its old view hides, or names at
+exactly `Null` a field it stores at another type, is copied shallowly without
+that field, over the same cells, and each holder on the path above it is
+rebuilt over the copy. The copy and each rebuilt holder take their own type
+narrowed by their old view, less the fields they drop: the type names what each
+holds and no `Null` a holder's fill gave it, so no type names a field a copy
+below it dropped, and a value reads alike whether or not a part of it was
+copied. So `xs = ([{g = 2, h = 1}] :! :(LIST
+OF :{h :Number}))` retyped to `LIST OF Any` prints `[{h = 1}]`, and no record
+stores a value under a field its view has at exactly `Null`. A value without the
+bit is never visited. A knot member is never copied: the door reads it at its
+holder's type.
 
 ## Crossing
 
@@ -329,9 +382,13 @@ into a value at the destination's brand: a **pinned** operand arrives there and
 embeds as it is, and a **copied** one is rebuilt by the deep copy — region
 parts written again through the destination's writer, and a knot member's whole
 knot re-tied by its family. The deep copy reads through
-[the door](#the-type-memo-and-satisfies) as every reader does: each part is laid
-down at the type it is seen at, holding only what that type names, and weighed
-by what it lays down, so a part a retype hid is dropped. A knot member copies
+[the door](#the-type-memo-and-satisfies) as every reader does: each part holds
+only what the type it is seen at names, and is weighed by what it lays down, so
+a part a retype hid is dropped, and a field a fill gave a record, which it does
+not store, stays unstored. A list, dict or record is laid down at its own type
+narrowed by the type it is seen at, as [a hiding part's copy](#weight) is, so a
+copy reads as a pinned source does under every later type, a widening `:!`
+included; a tagged value is laid down at the type it is seen at. A knot member copies
 with its knot, bare or under a header, and one seen at a type other than its
 own arrives under a header at that type, which the copy adopts into the
 destination first. The crossing doors therefore take the
@@ -479,8 +536,8 @@ laying down cells or bytes of its own, and a view built from views is one view,
 not a chain.
 
 **A view is invisible.** A slice carries its source's type, and a concatenation
-or a splice the join of its sources' types, whether it is a view or written
-flat. Equality, rendering and `satisfies` read through a view, so a program
+or a splice the type a flat list of its elements carries, derived from its
+sources' element types alone, whether it is a view or written flat. Equality, rendering and `satisfies` read through a view, so a program
 tells it from the flat value only by what it costs.
 
 **A crossing resolves a view.** A copy writes only the elements a view shows,
@@ -745,7 +802,13 @@ what each part's seen type shows ([tests/crossing.rs](tests/crossing.rs)), a
 result merging its home's branch, a copy adopting each laid part's memo and
 none hidden, a copied type value read after its home is released, and the
 habitat check refusing a value no crossing carried ([tests/habitat.rs](tests/habitat.rs)), `satisfies` by a node's memo
-([tests/satisfaction.rs](tests/satisfaction.rs)), and a chain of newtypes a
+([tests/satisfaction.rs](tests/satisfaction.rs)), the fill's laws — order
+independence, that it only narrows, idempotence, the fill of two fills and an
+invisible memo — beside its cases, its depth and its cost
+([tests/fill.rs](tests/fill.rs)), the hides bit set by a restamp and cleared
+by a copy, a part's own type narrowed by its view, and a crossing copy keeping
+each part's own type where its holder fills it ([tests/hiding.rs](tests/hiding.rs)), a cell read at its filled type
+over its own storage ([tests/surface.rs](tests/surface.rs)), and a chain of newtypes a
 hundred thousand deep rendered, compared, crossed and digested on the default
 test thread, and a chain of headers as deep digested and crossed
 ([tests/depth.rs](tests/depth.rs)), and the memo bits — masked out of a
@@ -766,14 +829,12 @@ slate.
 The digest recipe is [tests/digest.rs](tests/digest.rs): equal content alike
 across cells, key order and field-order blindness, a retype changing the digest
 while a hidden cell counts for nothing, each of the copy's four narrowing paths
-digesting as its source, and a shared part digested once per demand; a chain of
+— and a list whose fill gives a record a field it does not store — digesting as
+its source, and a shared part digested once per demand; a chain of
 knots as deep as the chain of newtypes digests beside it.
 
 ## Open work
 
-- [A container literal's element type](../../roadmap/gradual-typing/container-literal-types.md)
-  — a literal's element type that keeps every field its elements were written
-  with.
 - [Slicing and splicing](../../roadmap/metaprogramming/slicing-and-splicing.md) — views
   over lists and strings, resolved at a crossing.
 - [Yielding iterators](../../roadmap/rewrite/yielding-iterators.md) — streams,

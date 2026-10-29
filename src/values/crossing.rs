@@ -7,9 +7,12 @@
 //! member borrows of program storage embeds verbatim.
 //!
 //! The deep copy ([`Copying`]) reads the value through [the door](super::surface): it lays down only
-//! what each part's seen type names, at that type, and weighs what it lays down, so a copy drops
-//! what a retype hid. A knot's data node seen at its own memo copies with its knot; one seen at
-//! another type is laid down as a plain value of its kind, as a retype lays it down.
+//! what each part's seen type names, and weighs what it lays down, so a copy drops what a retype
+//! hid. A list, dict or record is laid at its own type [narrowed](super::hiding::narrowed) by its
+//! seen type, never at the seen type itself, so a copy reads as its source does under every later
+//! type, a fill's `Null`s included; a tagged value is laid at its seen type. A knot's data node
+//! seen at its own memo copies with its knot; one seen at another type is laid down as a plain
+//! value of its kind, as a retype lays it down.
 //!
 //! It runs over an explicit stack in a bump of its own, so the stack it
 //! uses does not grow with the value's depth: a composite is a frame whose children are copied
@@ -28,9 +31,10 @@ use crate::memory::{
     CrossedOperand, Delivery, HomeHeader, Operand, Prices, Projects, Reattachable,
     ReattachableOverBoth, Stale, StepContext, Verdict, Writer, bump_set, bump_table, collect,
 };
-use crate::type_lattice::{Branch, DeclaredType, Halves, KType, Parametric};
+use crate::type_lattice::{Branch, DeclaredType, Halves, KType, Parametric, TypeNode};
 
 use super::habitat::{BranchCell, Chain, Half, TypeTiers, Types};
+use super::hiding::narrowed;
 use super::settled::stamp_knot;
 use super::surface::Parts;
 use super::{
@@ -609,8 +613,10 @@ thread_local! {
 /// them have been started, and where its finished children begin on the copy's `done` stack.
 #[derive(Clone, Copy)]
 enum Frame<'x, 'from, X> {
-    /// A list, dict, record or tagged value, opened at the type it is seen at.
+    /// A list, dict, record or tagged value of its own type `own`, opened at the type it is seen
+    /// at.
     Composite {
+        own: KType,
         surface: Surface<'x, 'from, X>,
         next: usize,
         base: usize,
@@ -627,12 +633,13 @@ enum Frame<'x, 'from, X> {
     },
 }
 
-/// The deep copy of one placement: every region part of a value rebuilt through `writer` at the
-/// type it is seen at, laying down only what that type names and weighing what it lays down; every
-/// program node embedded as the same node; a knot member rebuilt by its family once per knot, its
-/// memos and weights carried over and its memo bits stamped where it lands. A composite's bits are
-/// computed by the door that lays it, through the destination's chain. Total. Built only by [`cross_view`] and
-/// [`copy_severed`], so every copy is one the graph priced.
+/// The deep copy of one placement: every region part of a value rebuilt through `writer`, laying
+/// down only what the type it is seen at names and weighing what it lays down, a list, dict or
+/// record at its own type narrowed by that type; every program node embedded as the same node; a
+/// knot member rebuilt by its family once per knot, its memos and weights carried over and its
+/// memo bits stamped where it lands. A composite's bits are computed by the door that lays it,
+/// through the destination's chain. Total. Built only by [`cross_view`] and [`copy_severed`], so
+/// every copy is one the graph priced.
 struct Copying<'graph, 'x, 'from, 'to, 'home, 'reg, XF: KnottedFamily<'graph>>
 where
     'graph: 'from,
@@ -652,6 +659,8 @@ where
     held: BumpVec<'x, Value<'from, XF::Closed<'from>>>,
     /// Each knot copied so far: its root, beside its copy's root.
     knots: BumpBackedMap<'x, XF::Closed<'from>, XF::Closed<'to>>,
+    /// Each part's own type and seen type narrowed so far, beside the type it narrowed to.
+    narrowings: BumpBackedMap<'x, (KType, KType), KType>,
 }
 
 impl<'graph, 'x, 'from, 'to, 'home, 'reg, XF: KnottedFamily<'graph>>
@@ -675,7 +684,19 @@ where
             done: BumpVec::new_in(scratch),
             held: BumpVec::new_in(scratch),
             knots: bump_table(scratch),
+            narrowings: bump_table(scratch),
         }
+    }
+
+    /// `own` [narrowed](super::hiding::narrowed) by `seen`, once per pair in a copy: the parts of
+    /// one container are mostly seen at a few pairs.
+    fn narrowed(&mut self, own: KType, seen: KType) -> KType {
+        if let Some(narrowed) = self.narrowings.get(&(own, seen)) {
+            return *narrowed;
+        }
+        let narrowed = narrowed(self.types, self.scratch, own, seen);
+        self.narrowings.insert((own, seen), narrowed);
+        narrowed
     }
 
     /// Make `kt` resolve in the destination, re-laying from the source what it lacks.
@@ -727,6 +748,7 @@ where
                     .surface(self.types, self.scratch)
                     .expect("a container or a tagged value opens");
                 self.frames.push(Frame::Composite {
+                    own: value.concrete_ktype(),
                     surface,
                     next: 0,
                     base,
@@ -819,9 +841,16 @@ where
     ) -> Value<'to, XF::Closed<'to>> {
         let writer = self.writer;
         let (base, finished) = match frame {
-            Frame::Composite { surface, base, .. } => {
+            Frame::Composite {
+                own, surface, base, ..
+            } => {
+                // A list, dict or record is laid at its own type narrowed by its view, so the copy
+                // reads as its source under every later type; a tagged value at its view.
+                let ktype = match surface.parts() {
+                    Parts::Tagged { .. } => surface.ktype(),
+                    _ => self.narrowed(own, surface.ktype()),
+                };
                 let built = &self.done[base..];
-                let ktype = surface.ktype();
                 let cells = || writer.fill(built.len(), |at| built[at]);
                 let finished = match surface.parts() {
                     Parts::List { .. } => {
@@ -831,9 +860,19 @@ where
                         let keys = writer.fill(surface.len(), |at| surface.key(at).rehomed(writer));
                         Value::Dict(Dict::weighed(writer, keys, cells(), ktype, self.types))
                     }
+                    // A field a fill gave the source, which it does not store, stays unstored, and
+                    // so does one its narrowed type drops.
                     Parts::Record { .. } => {
-                        let names = collect(writer, (0..surface.len()).map(|at| surface.name(at)));
-                        Value::Record(Record::weighed(writer, names, cells(), ktype, self.types))
+                        let TypeNode::Record { fields } = self.types.node(ktype) else {
+                            unreachable!("a record narrows to a record type")
+                        };
+                        let mut stored = BumpVec::with_capacity_in(surface.len(), self.scratch);
+                        stored.extend((0..surface.len()).filter(|at| {
+                            surface.stores(*at) && fields.get(surface.name(*at)).is_some()
+                        }));
+                        let names = collect(writer, stored.iter().map(|at| surface.name(*at)));
+                        let cells = collect(writer, stored.iter().map(|at| built[*at]));
+                        Value::Record(Record::weighed(writer, names, cells, ktype, self.types))
                     }
                     Parts::Tagged { .. } => {
                         Value::Tagged(Tagged::hold(writer, built[0], ktype, self.types))

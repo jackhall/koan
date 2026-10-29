@@ -9,7 +9,9 @@ use std::marker::PhantomData;
 use crate::memory::{BumpAllocator, BumpVec, Writer, resident};
 use crate::type_lattice::KType;
 
-use super::settled::{composite_bits, restamp_bits};
+use super::fill::hides_more;
+use super::hiding::unhidden_cells;
+use super::settled::{composite_bits, part_hides, restamp_bits};
 use super::{Chain, Knotted, Link, MemoBits, Nothing, Value, Weight, dict_type};
 
 /// A dict key: a string, a number or a bool. Its representation is private and every door
@@ -157,7 +159,8 @@ pub struct Dict<'cell, X = Nothing, C = Value<'cell, X>> {
 impl<'cell, X: Knotted> Dict<'cell, X> {
     /// Lay down `entries` sorted by key; where a key repeats, its last occurrence wins. Keys are
     /// written into `writer`'s region wherever they borrowed from, and the key and value types are
-    /// the joins over what stays. The sort is staged over `scratch`.
+    /// the key union and the value fill over what stays ([`dict_type`]). A value that would show
+    /// a field it hides is copied without it ([`unhidden_cells`]). The sort is staged over `scratch`.
     pub fn new(
         writer: Writer<'cell, '_>,
         entries: &[(Key<'_>, Value<'cell, X>)],
@@ -172,6 +175,7 @@ impl<'cell, X: Knotted> Dict<'cell, X> {
                 .zip(cells)
                 .map(|(key, cell)| (key.ktype(), cell.concrete_ktype())),
         );
+        let cells = unhidden_cells(writer, types, scratch, cells, ktype);
         Self::weighed(writer, keys, cells, ktype, types)
     }
 
@@ -185,6 +189,7 @@ impl<'cell, X: Knotted> Dict<'cell, X> {
         scratch: BumpAllocator<'_>,
     ) -> &'cell Dict<'cell, X> {
         let (keys, cells) = Self::kept(writer, entries, scratch);
+        let cells = unhidden_cells(writer, types, scratch, cells, ktype);
         Self::weighed(writer, keys, cells, ktype, types)
     }
 
@@ -217,7 +222,14 @@ impl<'cell, X: Knotted> Dict<'cell, X> {
             .iter()
             .fold(weight, |weight, cell| weight.plus(cell.weight()));
         let bits = composite_bits(types, ktype, cells);
-        Self::from_runs(writer, keys, cells, ktype, weight.with_bits(bits))
+        let hides = cells.iter().any(part_hides);
+        Self::from_runs(
+            writer,
+            keys,
+            cells,
+            ktype,
+            weight.with_bits(bits).with_hides(hides),
+        )
     }
 }
 
@@ -303,7 +315,9 @@ impl<'cell, X: Copy, C: Copy> Dict<'cell, X, C> {
         types: &Chain<'_, 'cell, '_, '_>,
     ) -> &'cell Self {
         let weight = self.weight.get();
-        let weight = weight.with_bits(restamp_bits(weight.bits(), types, ktype));
+        let weight = weight
+            .with_bits(restamp_bits(weight.bits(), types, ktype))
+            .with_hides(weight.hides() || hides_more(types, self.ktype, ktype));
         Self::from_runs(writer, self.keys, self.cells, ktype, weight)
     }
 
@@ -336,6 +350,12 @@ impl<'cell, X: Copy, C: Copy> Dict<'cell, X, C> {
             settled: true,
             ..weight.bits()
         }));
+    }
+
+    /// Record that a cell hides a field at its view under the value's own type — the mark a
+    /// holder rebuilt over a copy takes ([hiding.rs](super::hiding)) where its parts' bits miss it.
+    pub(super) fn hide(&self) {
+        self.weight.set(self.weight.get().with_hides(true));
     }
 }
 

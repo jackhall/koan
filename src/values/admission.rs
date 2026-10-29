@@ -11,7 +11,7 @@
 //! under `Any` alone, so only a slot naming the carrier takes it, and only the view's own functions,
 //! behind their barriers, see the payload.
 
-use crate::memory::{BumpAllocator, BumpVec};
+use crate::memory::{Bump, BumpAllocator, BumpVec};
 use crate::parse::{ExpressionPart, KLiteral};
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::{
@@ -19,6 +19,7 @@ use crate::type_lattice::{
     admits_with, satisfied_by, substitute_quantified,
 };
 
+use super::fill::filled_union;
 use super::{Chain, Knotted, Value, WorkingPart};
 
 /// Whether `slot` takes `value`: *fits* over the value's memoized type — a quantified callable's
@@ -244,44 +245,35 @@ pub fn part_ktype(
     })
 }
 
-fn joined<H: TypeHandle + From<KType>>(
-    items: impl Iterator<Item = H>,
+/// The type a list over cells of types `elements` memoizes: the list of the union of their filled
+/// types ([`filled_union`]), `Never` for none. Every list's memo is derived here —
+/// [`List::new`](super::List::new)'s over its cells, the tie's over a data node's staged cells, and
+/// the load's over a literal whose elements are exact.
+pub fn list_type(
     types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
-) -> H {
-    // The canonical union of two types is their join where both are concrete, and keeps a
-    // variable beside the rest where one is not.
-    items.fold(KType::NEVER.into(), |acc, item| {
-        types.union_of(scratch, &[acc, item])
-    })
+    elements: impl Iterator<Item = KType>,
+) -> KType {
+    types.list(filled_union(types, scratch, elements))
 }
 
-/// The type a list over cells of types `elements` memoizes: the list of their join, `Never` for
-/// none. Every list's memo is derived here — [`List::new`](super::List::new)'s over its cells, and
-/// the tie's over a data node's staged cells.
-pub fn list_type<H: TypeHandle + From<KType>>(
+/// The type a dict over entries of key and value types `entries` memoizes: the dict of its keys'
+/// union and of the union of its values' filled types. Every dict's memo is derived here, over the
+/// entries a repeated key leaves.
+pub fn dict_type(
     types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
-    elements: impl Iterator<Item = H>,
-) -> H {
-    types.list(joined(elements, types, scratch))
-}
-
-/// The type a dict over entries of key and value types `entries` memoizes: the dict of each side's
-/// join. Every dict's memo is derived here, over the entries a repeated key leaves.
-pub fn dict_type<H: TypeHandle + From<KType>>(
-    types: &Chain<'_, '_, '_, '_>,
-    scratch: BumpAllocator<'_>,
-    entries: impl Iterator<Item = (H, H)>,
-) -> H {
-    let never = H::from(KType::NEVER);
-    let (keys, values) = entries.fold((never, never), |(keys, values), entry| {
-        (
-            types.union_of(scratch, &[keys, entry.0]),
-            types.union_of(scratch, &[values, entry.1]),
-        )
-    });
-    types.dict(keys, values)
+    entries: impl Iterator<Item = (KType, KType)>,
+) -> KType {
+    let (mut keys, mut values) = (BumpVec::new_in(scratch), BumpVec::new_in(scratch));
+    for (key, value) in entries {
+        keys.push(key);
+        values.push(value);
+    }
+    types.dict(
+        types.union_of(scratch, &keys),
+        filled_union(types, scratch, values.into_iter()),
+    )
 }
 
 /// The type a record over `fields` memoizes: the record of each field's type. Every record's memo
@@ -296,8 +288,9 @@ pub fn record_type<H: TypeHandle>(
     types.record(scratch, &field_types)
 }
 
-/// Whether `slot` takes a raw part, by shape. A container literal admits by its elements; a union
-/// admits what any member admits; a family top admits what some concrete type of its family
+/// Whether `slot` takes a raw part, by shape. A container literal admits by its elements, each
+/// record filled against the others at its position as the run's [fill](super::fill) fills it; a
+/// union admits what any member admits; a family top admits what some concrete type of its family
 /// admits, as a union does; a code kind admits a part whose own code kind lies under it; a kind
 /// slot takes a type token only for `ProperType` and `AnyType`; a quantified slot takes what its
 /// bound takes. A function, nominal, carrier, signature, shape, constructor-application, deferred
@@ -307,10 +300,80 @@ pub fn admits_part(
     part: &ExpressionPart<'_>,
     types: &Chain<'_, '_, '_, '_>,
 ) -> bool {
+    admits_part_at(slot, part, types, None)
+}
+
+/// One step from a position in a container literal down to a part's position.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Step {
+    Element,
+    Value,
+    Field(BinderSymbol),
+}
+
+/// The positions of a container literal's parts, each reached from its parent by one step; the
+/// literal itself is position 0, and the position an edge leads to is its index plus one. A
+/// position names a field when some record literal there writes it: the field the fill lays at
+/// `Null` in a record there that does not.
+struct Positions<'x> {
+    edges: BumpVec<'x, (u32, Step)>,
+}
+
+impl<'x> Positions<'x> {
+    fn of(literal: &ExpressionPart<'_>, scratch: BumpAllocator<'x>) -> Self {
+        let mut positions = Positions {
+            edges: BumpVec::new_in(scratch),
+        };
+        positions.lay(literal, 0);
+        positions
+    }
+
+    fn lay(&mut self, part: &ExpressionPart<'_>, at: u32) {
+        match part {
+            ExpressionPart::RecordLiteral(fields) => {
+                for (name, field) in fields.iter() {
+                    let child = self.step(at, Step::Field(*name));
+                    self.lay(field, child);
+                }
+            }
+            ExpressionPart::ListLiteral(items) => {
+                let child = self.step(at, Step::Element);
+                items.iter().for_each(|item| self.lay(item, child));
+            }
+            ExpressionPart::DictLiteral(pairs) => {
+                let child = self.step(at, Step::Value);
+                pairs.iter().for_each(|(_, value)| self.lay(value, child));
+            }
+            _ => {}
+        }
+    }
+
+    fn child(&self, at: u32, step: Step) -> Option<u32> {
+        let edge = self.edges.iter().position(|edge| *edge == (at, step))?;
+        Some(edge as u32 + 1)
+    }
+
+    fn step(&mut self, at: u32, step: Step) -> u32 {
+        self.child(at, step).unwrap_or_else(|| {
+            self.edges.push((at, step));
+            self.edges.len() as u32
+        })
+    }
+}
+
+/// [`admits_part`] at a position of an enclosing container literal, if any. A container literal
+/// outside one lays its own positions; one inside reads the enclosing literal's, which already
+/// hold its parts.
+fn admits_part_at(
+    slot: Parametric,
+    part: &ExpressionPart<'_>,
+    types: &Chain<'_, '_, '_, '_>,
+    at: Option<(&Positions<'_>, u32)>,
+) -> bool {
     match types.node(slot) {
         TypeNode::Any => true,
         TypeNode::Quantified { bound, .. } | TypeNode::Lexical { bound, .. } => {
-            admits_part(bound.into(), part, types)
+            admits_part_at(bound.into(), part, types, at)
         }
         TypeNode::Never => false,
         TypeNode::AnyValue => matches!(
@@ -343,23 +406,40 @@ pub fn admits_part(
         TypeNode::Str => matches!(part, ExpressionPart::Literal(KLiteral::String(_))),
         TypeNode::Bool => matches!(part, ExpressionPart::Literal(KLiteral::Boolean(_))),
         TypeNode::Null => matches!(part, ExpressionPart::Literal(KLiteral::Null)),
-        TypeNode::List { element } => matches!(
-            part,
-            ExpressionPart::ListLiteral(items)
-                if items.iter().all(|item| admits_part(element, item, types))
-        ),
-        TypeNode::Dict { key, value } => matches!(
-            part,
-            ExpressionPart::DictLiteral(pairs) if pairs.iter().all(|(k, v)| {
-                (k.is_wildcard() || admits_part(key, k, types)) && admits_part(value, v, types)
+        TypeNode::List { element } => {
+            let ExpressionPart::ListLiteral(items) = part else {
+                return false;
+            };
+            within(part, at, Step::Element, |at| {
+                items
+                    .iter()
+                    .all(|item| admits_part_at(element, item, types, at))
             })
-        ),
+        }
+        TypeNode::Dict { key, value } => {
+            let ExpressionPart::DictLiteral(pairs) = part else {
+                return false;
+            };
+            within(part, at, Step::Value, |at| {
+                pairs.iter().all(|(k, v)| {
+                    (k.is_wildcard() || admits_part(key, k, types))
+                        && admits_part_at(value, v, types, at)
+                })
+            })
+        }
         TypeNode::Record { fields } => match part {
             ExpressionPart::RecordLiteral(written) => fields.iter().all(|(name, field)| {
-                written
-                    .iter()
-                    .find(|(held, _)| *held == name)
-                    .is_some_and(|(_, part)| admits_part(field, part, types))
+                let below = at.and_then(|(positions, from)| {
+                    Some((positions, positions.child(from, Step::Field(name))?))
+                });
+                match written.iter().find(|(held, _)| *held == name) {
+                    Some((_, part)) => admits_part_at(field, part, types, below),
+                    // The fill lays a field another record at this position writes at `Null`.
+                    None => {
+                        below.is_some()
+                            && admits_part(field, &ExpressionPart::Literal(KLiteral::Null), types)
+                    }
+                }
             }),
             _ => false,
         },
@@ -369,7 +449,7 @@ pub fn admits_part(
         }
         TypeNode::Union { members } => members
             .iter()
-            .any(|member| admits_part(member, part, types)),
+            .any(|member| admits_part_at(member, part, types, at)),
         TypeNode::KFunction { .. }
         | TypeNode::Scheme { .. }
         | TypeNode::SetMember { .. }
@@ -382,6 +462,24 @@ pub fn admits_part(
         | TypeNode::ConstructorApply { .. }
         | TypeNode::DeferredReturn(_)
         | TypeNode::Sibling(_) => false,
+    }
+}
+
+/// Run `check` at the position one `step` below `at` — below a container literal's own positions
+/// when no literal encloses `literal`.
+fn within(
+    literal: &ExpressionPart<'_>,
+    at: Option<(&Positions<'_>, u32)>,
+    step: Step,
+    check: impl FnOnce(Option<(&Positions<'_>, u32)>) -> bool,
+) -> bool {
+    match at {
+        Some((positions, from)) => check(positions.child(from, step).map(|to| (positions, to))),
+        None => {
+            let scratch = Bump::new();
+            let positions = Positions::of(literal, &scratch);
+            check(positions.child(0, step).map(|to| (&positions, to)))
+        }
     }
 }
 

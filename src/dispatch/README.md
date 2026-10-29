@@ -39,7 +39,8 @@ never the parse — as one of:
   its variables substituted with what their coordinates read when rigid — or,
   where the load left it unknown, elaborated through the view; a list, dict or record
   literal, lowered whole when every part is a literal and otherwise built from
-  its parts' values;
+  its parts' values — a list or dict literal the load types exactly built at
+  that type, so the run fills nothing the load filled;
 - a **block** a pairwise operator run hoisted an operand into, run through the
   program's block door, whose value is its last statement's — which is how the
   shared operand evaluates once;
@@ -223,7 +224,9 @@ slot to the parameter the registration names for it — or packs every slot into
 `operands` for a unary operator — and carries each type parameter the call
 solved, by name, as a type value, which the frame binds rather than solving
 again. A builtin's native runs in the evaluation's own step. A call by name
-hands its record over as written, beside the contributions the load recorded
+binds each parameter to the field of its argument record the parameter names,
+by name — `null` for a field a fill gave the record, which it does not store —
+whatever fields the record's type hides, and hands its record over as written, beside the contributions the load recorded
 for it — one per parameter in symbol order, as a keyworded use records one per
 slot — and the [frame](../program/README.md#the-body-runner) admits each
 argument — at its contribution where it has one — against its parameter's
@@ -253,10 +256,19 @@ fixed:
 
 - a literal, a quote, a `FN` and a type expression the load knows are exact, at
   their own type, their code type, their function type, and the type of the type
-  value they denote; a list, dict or record literal has the ends its parts' ends
-  build, and a construction the ends its payload's build;
+  value they denote; a record literal has the ends its parts' ends build, and a
+  construction the ends its payload's build. A list or dict literal whose
+  elements are each exactly a concrete type is exactly the type the run
+  [fills](../values/README.md#the-type-memo-and-satisfies) its cells to. The
+  fill is not monotone in its members, so otherwise neither end maps through it:
+  the upper end holds the plain union of its elements' upper ends, which the
+  fill only narrows, and the lower end the plain union of their lower ends, each
+  one that may hold a record read as `Never`; a dict's keys are the union of its
+  keys' ends either way;
 - a name has its binder's static type: a parameter is exactly its declared type
-  where the retype makes it so — a list, dict or record type, a family or its
+  where the retype makes it so — a list or dict type, a record type with no
+  field `Null` lies strictly under (one with such a field is at least itself
+  with that field at `Null`, since a record keeps its own `Null`s), a family or its
   application, a newtype or a union's variant, a function type or an expression
   shape, a code kind below `Code`, a kind, or a signature type pinning every head
   parameter — since its frame
@@ -1287,7 +1299,8 @@ way to a binding agrees with the binding where it types `Never` the statement
 holding the refused site;
 [surface](tests/surface.rs) — printing, `==`, `ATTR`, `FROM` and a field read
 through a newtype or a family seeing only what the carried type names, one node
-seen at two types, a widened literal's element, and `FROM` sharing its record's
+seen at two types, every container filling its records at each position, a
+hidden field never showing again, and `FROM` sharing its record's
 runs; [modules](tests/modules.rs) — each ascription operator, a retype at a
 signature and at a meet of two, a member read
 by name, through a chain and by a quoted label, a type member read through a

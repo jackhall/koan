@@ -13,10 +13,13 @@ elements cost O(kn).
 **Acceptance criteria.**
 
 - A slice, a concatenation or a splice of a list or a string is a view, which
-  lays down none of its sources' cells or bytes.
-- A slice carries its source's type, and a concatenation or a splice the join
-  of its sources' types, whether it is a view or written flat: a slice `[1]` of
-  `[1 "a"]` carries `(LIST OF Any)` and misses a `(LIST OF Number)` slot.
+  lays down none of its sources' cells or bytes, except a copy of a part that
+  hides a field the view's type names
+  ([hidden fields](../../src/values/README.md#weight)).
+- A slice carries its source's type, and a concatenation or a splice the type
+  a flat list of its elements carries, derived from its sources' element types
+  alone, whether it is a view or written flat: a slice `[1]` of `[1 "a"]`
+  carries `(LIST OF Any)` and misses a `(LIST OF Number)` slot.
 - A view equals and renders as the flat value it stands for.
 - A view built from views is one view: reading an element of a view built by n
   successive edits takes O(log n) steps.
@@ -102,8 +105,7 @@ elements cost O(kn).
 
 Splicing into code is [code splicing](code-splicing.md)'s.
 
-**Requires:**
-
+**Requires:** none.
 
 **Unblocks:**
 

@@ -103,6 +103,7 @@ const TAG_SIGNATURE_APPLY: u8 = 0x2E;
 const TAG_SIGNATURE_MEET: u8 = 0x2F;
 const TAG_CARRIER: u8 = 0x30;
 const TAG_SCHEME: u8 = 0x31;
+const TAG_MEMO_GROUP: u8 = 0x32;
 
 /// The one place the hash function is touched. Feeds a domain-tagged, length-prefixed,
 /// little-endian byte stream into a BLAKE3 hasher and truncates the result to a `u128`.
@@ -453,6 +454,17 @@ pub(super) fn union_digest<'run, H: Naming<'run>>(
     h.count(member_digests.len());
     for d in member_digests.iter() {
         h.digest(*d);
+    }
+    h.finish()
+}
+
+/// A set of types a memo is keyed by: its members' digests, which the caller sorts. Not a type's
+/// digest — its own domain — so it never names a node.
+pub(super) fn group_digest(sorted: impl ExactSizeIterator<Item = TypeDigest>) -> TypeDigest {
+    let mut h = DigestHasher::new(TAG_MEMO_GROUP);
+    h.count(sorted.len());
+    for d in sorted {
+        h.digest(d);
     }
     h.finish()
 }

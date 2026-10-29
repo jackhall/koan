@@ -218,3 +218,65 @@ fn a_restamp_is_one_storage_with_what_it_restamps() {
         })
     });
 }
+
+#[test]
+fn a_cell_is_read_at_its_filled_type_over_its_own_storage() {
+    with_fixture(|fixture| {
+        fixture.in_cell(pin, |context| {
+            let types = &fixture.tiers.of(context);
+            let writer = context.writer();
+            let (scratch, symbols) = (fixture.scratch(), fixture.symbols);
+            let name = |text| BinderSymbol::declared(text, symbols).unwrap();
+            let (x, y, p) = (name("x"), name("y"), name("p"));
+            let n = KType::NUMBER;
+            let wide = Record::new(
+                writer,
+                &[(x, Value::Number(1.0)), (y, Value::Number(2.0))],
+                types,
+                scratch,
+            );
+            let narrow = Record::new(writer, &[(x, Value::Number(3.0))], types, scratch);
+            let list = List::new(
+                writer,
+                [Value::Record(wide), Value::Record(narrow)].into_iter(),
+                types,
+                scratch,
+            );
+            let filled = types.record(scratch, &[(x, n), (y, KType::NULL)]);
+            let both = types.union_of(scratch, &[types.record(scratch, &[(x, n), (y, n)]), filled]);
+            assert_eq!(
+                list.ktype(),
+                types.list(both),
+                "the union of the filled types"
+            );
+            let surface = Value::List(list).surface(types, scratch).unwrap();
+            let second = surface.child(1, types, scratch);
+            assert!(
+                second.value().same_storage(&Value::Record(narrow)),
+                "no copy"
+            );
+            assert_eq!(second.ktype(), filled.into());
+            let read = second.field(y.symbol(), types, scratch).unwrap();
+            assert!(
+                matches!(read.value(), Value::Null),
+                "a filled field reads `null`"
+            );
+            // Nested, through a field.
+            let outer = |inner| Value::Record(Record::new(writer, &[(p, inner)], types, scratch));
+            let list = List::new(
+                writer,
+                [outer(Value::Record(wide)), outer(Value::Record(narrow))].into_iter(),
+                types,
+                scratch,
+            );
+            let second = Value::List(list)
+                .surface(types, scratch)
+                .unwrap()
+                .child(1, types, scratch);
+            let inner = second.field(p.symbol(), types, scratch).unwrap();
+            assert!(inner.value().same_storage(&Value::Record(narrow)));
+            let read = inner.field(y.symbol(), types, scratch).unwrap();
+            assert!(matches!(read.value(), Value::Null));
+        })
+    });
+}

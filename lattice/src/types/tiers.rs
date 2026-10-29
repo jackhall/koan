@@ -46,7 +46,7 @@ use super::chain::TypeChain;
 use super::digest::{TypeDigest, node_digest};
 use super::node::TypeNode;
 use super::stored::{Content, Flags, Linked, StoredNode};
-use super::verdicts::{VerdictEntry, VerdictKey};
+use super::verdicts::{Answer, VerdictEntry, VerdictKey};
 
 /// The root builder's node table: a reference to each stored node, bucket array in its bump.
 /// A node holds its own digest, so the table holds no second copy of it.
@@ -116,11 +116,11 @@ impl<'g> Grown<'g> {
         self.nodes.borrow().len()
     }
 
-    fn verdict(&self, key: VerdictKey) -> Option<bool> {
-        self.verdicts.get()?.get(key).map(VerdictEntry::verdict)
+    fn verdict(&self, key: VerdictKey) -> Option<Answer> {
+        self.verdicts.get()?.get(key).map(VerdictEntry::answer)
     }
 
-    fn record(&self, key: VerdictKey, verdict: bool) {
+    fn record(&self, key: VerdictKey, verdict: Answer) {
         record_in(&self.verdicts, self.bump, key, verdict);
     }
 
@@ -136,7 +136,7 @@ fn record_in<'t>(
     verdicts: &Cell<Option<&'t DigestTable<'t, VerdictEntry>>>,
     lay: impl LaysRuns<'t>,
     key: VerdictKey,
-    verdict: bool,
+    verdict: Answer,
 ) {
     let table = match verdicts.get() {
         Some(table) => table,
@@ -228,11 +228,11 @@ impl<'g> RootBuilder<'g> {
         self.grown.len()
     }
 
-    pub(super) fn verdict(&self, key: VerdictKey) -> Option<bool> {
+    pub(super) fn verdict(&self, key: VerdictKey) -> Option<Answer> {
         self.grown.verdict(key)
     }
 
-    pub(super) fn record(&self, key: VerdictKey, verdict: bool) {
+    pub(super) fn record(&self, key: VerdictKey, verdict: Answer) {
         self.grown.record(key, verdict);
     }
 
@@ -315,8 +315,8 @@ impl<'g> Frozen<'g> {
         self.nodes.get(digest)
     }
 
-    pub(super) fn verdict(&self, key: VerdictKey) -> Option<bool> {
-        self.verdicts.get(key).map(VerdictEntry::verdict)
+    pub(super) fn verdict(&self, key: VerdictKey) -> Option<Answer> {
+        self.verdicts.get(key).map(VerdictEntry::answer)
     }
 
     /// `test`-only: how many verdicts the load holds.
@@ -388,10 +388,10 @@ pub(super) trait AgentTier<'t> {
     fn find(&self, digest: TypeDigest) -> Option<Linked<'t>>;
 
     /// The tier's recorded verdict for `key`.
-    fn verdict(&self, key: VerdictKey) -> Option<bool>;
+    fn verdict(&self, key: VerdictKey) -> Option<Answer>;
 
     /// Record `verdict` for `key` in the tier.
-    fn record(&self, key: VerdictKey, verdict: bool);
+    fn record(&self, key: VerdictKey, verdict: Answer);
 }
 
 impl<'a: 't, 't> AgentTier<'t> for Agent<'a> {
@@ -399,11 +399,11 @@ impl<'a: 't, 't> AgentTier<'t> for Agent<'a> {
         self.grown.find(digest)
     }
 
-    fn verdict(&self, key: VerdictKey) -> Option<bool> {
+    fn verdict(&self, key: VerdictKey) -> Option<Answer> {
         self.grown.verdict(key)
     }
 
-    fn record(&self, key: VerdictKey, verdict: bool) {
+    fn record(&self, key: VerdictKey, verdict: Answer) {
         self.grown.record(key, verdict);
     }
 }
@@ -597,13 +597,13 @@ impl<'t> Branch<'t> {
         self.bottom.set(home.bottom);
     }
 
-    pub(super) fn verdict(&self, key: VerdictKey) -> Option<bool> {
-        self.verdicts.get()?.get(key).map(VerdictEntry::verdict)
+    pub(super) fn verdict(&self, key: VerdictKey) -> Option<Answer> {
+        self.verdicts.get()?.get(key).map(VerdictEntry::answer)
     }
 
     /// Record `verdict` unless the branch holds one for `key`, laying the verdict table through
     /// `lay` on the first.
-    pub(super) fn record(&self, lay: impl LaysRuns<'t>, key: VerdictKey, verdict: bool) {
+    pub(super) fn record(&self, lay: impl LaysRuns<'t>, key: VerdictKey, verdict: Answer) {
         record_in(&self.verdicts, lay, key, verdict);
     }
 }
@@ -658,7 +658,7 @@ impl<'t> Own<'t> {
         }
     }
 
-    pub(super) fn verdict(self, key: VerdictKey) -> Option<bool> {
+    pub(super) fn verdict(self, key: VerdictKey) -> Option<Answer> {
         match self {
             Own::Builder(builder) => builder.verdict(key),
             Own::Branch(branch) => branch.verdict(key),
@@ -666,7 +666,7 @@ impl<'t> Own<'t> {
         }
     }
 
-    pub(super) fn record(self, lay: impl LaysRuns<'t>, key: VerdictKey, verdict: bool) {
+    pub(super) fn record(self, lay: impl LaysRuns<'t>, key: VerdictKey, verdict: Answer) {
         match self {
             Own::Builder(builder) => builder.record(key, verdict),
             Own::Branch(branch) => branch.record(lay, key, verdict),
@@ -803,10 +803,10 @@ pub(super) trait Tier<'t> {
     fn reach(&self, digest: TypeDigest) -> Option<Linked<'t>>;
 
     /// The tier's recorded verdict for `key`.
-    fn verdict(&self, key: VerdictKey) -> Option<bool>;
+    fn verdict(&self, key: VerdictKey) -> Option<Answer>;
 
     /// Record `verdict` for `key` in the tier.
-    fn record(&self, key: VerdictKey, verdict: bool);
+    fn record(&self, key: VerdictKey, verdict: Answer);
 
     /// [`Branch::reaches_at`] over the tier's branch.
     fn reaches_at(&self, at: ChainPosition, steps: &Cell<usize>) -> bool;
@@ -836,11 +836,11 @@ impl<'r: 't, 't, H: Habitat<'r>> Tier<'t> for RegionTier<'r, H> {
         self.0.own()?.reach(digest)
     }
 
-    fn verdict(&self, key: VerdictKey) -> Option<bool> {
+    fn verdict(&self, key: VerdictKey) -> Option<Answer> {
         self.0.own()?.verdict(key)
     }
 
-    fn record(&self, key: VerdictKey, verdict: bool) {
+    fn record(&self, key: VerdictKey, verdict: Answer) {
         if let Some(own) = self.0.own() {
             own.record(self.0, key, verdict);
         }
@@ -880,11 +880,11 @@ impl<'h: 't, 't> Tier<'t> for BranchTier<'h> {
         self.0.reach(digest)
     }
 
-    fn verdict(&self, _: VerdictKey) -> Option<bool> {
+    fn verdict(&self, _: VerdictKey) -> Option<Answer> {
         None
     }
 
-    fn record(&self, _: VerdictKey, _: bool) {}
+    fn record(&self, _: VerdictKey, _: Answer) {}
 
     fn reaches_at(&self, at: ChainPosition, steps: &Cell<usize>) -> bool {
         self.0.reaches_at(at, steps)

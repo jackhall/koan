@@ -178,8 +178,8 @@ use crate::type_lattice::{
     solving_slots,
 };
 use crate::values::{
-    Chain, ConstructionRefused, Retype, Value, construction, dict_type, list_type, pinned_at_fit,
-    record_type, retype_target, retyped_to, under, unknown,
+    Chain, ConstructionRefused, Retype, Value, construction, dict_type, list_type, may_hold_record,
+    pinned_at_fit, record_type, retype_target, retyped_to, under, unknown,
 };
 
 mod caching;
@@ -1931,7 +1931,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         }
         let closed = |part| {
             let declared = self.in_body(level, part)?;
-            Some(Retype::of(types, types.concrete(declared)?))
+            Some(Retype::of(types, self.scratch, types.concrete(declared)?))
         };
         let mut parameters = BumpVec::new_in(self.scratch);
         parameters.extend((0..shape.slots() as u32).map(Slot).filter_map(|slot| {
@@ -2318,7 +2318,9 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 Some(SignatureMember {
                     declared: DeclaredType::Type(declared),
                     unpinned: None,
-                }) => DeclaredType::Type(member_read(self.types, surfacing, declared)),
+                }) => {
+                    DeclaredType::Type(member_read(self.types, self.scratch, surfacing, declared))
+                }
                 Some(SignatureMember {
                     declared: DeclaredType::Scheme(scheme),
                     unpinned: None,
@@ -2348,7 +2350,11 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         }
         let declared = self.in_body(level, Part::Parameter(name.symbol()));
         // Declared where the callable is written, a path there may not be reachable here.
-        let typed = retyped_to(self.types, declared.unwrap_or_else(|| KType::ANY.into()));
+        let typed = retyped_to(
+            self.types,
+            self.scratch,
+            declared.unwrap_or_else(|| KType::ANY.into()),
+        );
         DeclaredType::Type(self.sourced(level, typed))
     }
 
@@ -2434,7 +2440,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         let module = body.is_some_and(|body| body.kind() == ShapeKind::Module);
         Some(DeclaredType::Type(match shape.annotation(member) {
             Some(annotation) => match self.declared(level, annotation) {
-                Some(declared) => retyped_to(self.types, declared),
+                Some(declared) => retyped_to(self.types, self.scratch, declared),
                 None => unknown(),
             },
             None if module => under(KType::EMPTY_SIGNATURE.into()),
@@ -2770,7 +2776,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                     SignatureMember {
                         declared: DeclaredType::Type(declared),
                         unpinned: None,
-                    } => Some(member_read(self.types, operand, declared)),
+                    } => Some(member_read(self.types, self.scratch, operand, declared)),
                     _ => None,
                 }
             }
@@ -3624,9 +3630,9 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             return Ok(Interval::point(carried.into()));
         }
         if let Some(closed) = types.concrete(declared) {
-            self.record_retype(level, site, Retype::of(types, closed));
+            self.record_retype(level, site, Retype::of(types, scratch, closed));
         }
-        Ok(retyped_to(types, declared))
+        Ok(retyped_to(types, scratch, declared))
     }
 
     /// `USING <module> SCOPE <body>`: its body's last statement's type, the body typed with each
@@ -3706,7 +3712,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 at: node.source,
             });
         }
-        Ok(retyped_to(types, declared))
+        Ok(retyped_to(types, scratch, declared))
     }
 
     /// The type the type part `part` of the shape at `level` denotes, where the load knows it.
@@ -3760,9 +3766,17 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                     self.site(level, part),
                     items.iter().zip(typed.iter().copied()),
                 );
-                Interval {
-                    lower: list_type(types, scratch, typed.iter().map(|each| each.lower)),
-                    upper: list_type(types, scratch, typed.iter().map(|each| each.upper)),
+                match concrete_points(types, scratch, typed.iter().copied()) {
+                    Some(points) => {
+                        Interval::point(list_type(types, scratch, points.into_iter()).into())
+                    }
+                    None => {
+                        let (lower, upper) = container_ends(types, scratch, typed.iter().copied());
+                        Interval {
+                            lower: types.list(lower),
+                            upper: types.list(upper),
+                        }
+                    }
                 }
             }
             ExpressionPart::DictLiteral(pairs) => {
@@ -3781,17 +3795,25 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                     self.site(level, part),
                     each.flat_map(|((key, value), (k, v))| [(key, *k), (value, *v)]),
                 );
-                Interval {
-                    lower: dict_type(
-                        types,
-                        scratch,
-                        typed.iter().map(|(k, v)| (k.lower, v.lower)),
+                let keys = concrete_points(types, scratch, typed.iter().map(|(k, _)| *k));
+                let values = concrete_points(types, scratch, typed.iter().map(|(_, v)| *v));
+                match (keys, values) {
+                    (Some(keys), Some(values)) => Interval::point(
+                        dict_type(types, scratch, keys.into_iter().zip(values)).into(),
                     ),
-                    upper: dict_type(
-                        types,
-                        scratch,
-                        typed.iter().map(|(k, v)| (k.upper, v.upper)),
-                    ),
+                    _ => {
+                        let (lower, upper) =
+                            container_ends(types, scratch, typed.iter().map(|(_, v)| *v));
+                        let key = |end: fn(&Interval) -> Parametric| {
+                            let mut keys = BumpVec::with_capacity_in(typed.len(), scratch);
+                            keys.extend(typed.iter().map(|(k, _)| end(k)));
+                            types.union_of(scratch, &keys)
+                        };
+                        Interval {
+                            lower: types.dict(key(|k| k.lower), lower),
+                            upper: types.dict(key(|k| k.upper), upper),
+                        }
+                    }
                 }
             }
             ExpressionPart::RecordLiteral(fields) => {
@@ -4793,7 +4815,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             self.record_retype(
                 level,
                 self.node_site(level, node),
-                Retype::of(types, declared),
+                Retype::of(types, scratch, declared),
             );
         }
     }
@@ -5221,7 +5243,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 }
             };
         if solved {
-            retyped_to(self.types, returned)
+            retyped_to(self.types, self.scratch, returned)
         } else {
             under(returned)
         }
@@ -5399,6 +5421,46 @@ fn typed_of<'p>(given: &[Given<'_>], scratch: BumpAllocator<'p>) -> &'p [Interva
     let mut typed = BumpVec::with_capacity_in(given.len(), scratch);
     typed.extend(given.iter().map(|each| each.typed));
     typed.leak()
+}
+
+/// Each of `typed`, a container literal's elements' static types, as the concrete type it is
+/// exactly, where every one is: what the run fills the container's type over. `None` otherwise.
+fn concrete_points<'x>(
+    types: &Chain<'_, '_, '_, '_>,
+    scratch: BumpAllocator<'x>,
+    typed: impl ExactSizeIterator<Item = Interval>,
+) -> Option<BumpVec<'x, KType>> {
+    let mut points = BumpVec::with_capacity_in(typed.len(), scratch);
+    for each in typed {
+        points.push(types.concrete(each.upper).filter(|_| each.is_exact())?);
+    }
+    Some(points)
+}
+
+/// The ends of a container literal's element type, over `typed`, its elements' static types, where
+/// some is not exact. The fill is not monotone in its members, so neither end is mapped through
+/// it: the upper end is the plain union of the uppers, which the fill only narrows; the lower end
+/// is the plain union of the lowers, a lower that may hold a record the fill would widen read as
+/// `Never`.
+fn container_ends(
+    types: &Chain<'_, '_, '_, '_>,
+    scratch: BumpAllocator<'_>,
+    typed: impl ExactSizeIterator<Item = Interval> + Clone,
+) -> (Parametric, Parametric) {
+    let mut lowers = BumpVec::with_capacity_in(typed.len(), scratch);
+    lowers.extend(typed.clone().map(|each| {
+        if may_hold_record(types, scratch, each.lower) {
+            KType::NEVER.into()
+        } else {
+            each.lower
+        }
+    }));
+    let mut uppers = BumpVec::with_capacity_in(typed.len(), scratch);
+    uppers.extend(typed.map(|each| each.upper));
+    (
+        types.union_of(scratch, &lowers),
+        types.union_of(scratch, &uppers),
+    )
 }
 
 /// A shape's address, which keys the pass's tables of what it read off each shape.

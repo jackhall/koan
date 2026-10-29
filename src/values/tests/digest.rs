@@ -98,8 +98,9 @@ fn a_retype_changes_the_digest_and_a_hidden_cell_does_not() {
 }
 
 /// Each of the four ways a copy lays down less than, or other than, its source's cells: a retyped
-/// record, a list whose join hides a record's field, a ring's knot copied whole, and a data node
-/// seen narrower than its memo. The copy holds what the door showed, so it digests as its source.
+/// record, a list ascribed a type hiding a record's field, a ring's knot copied whole, and a data
+/// node seen narrower than its memo. The copy holds what the door showed, so it digests as its
+/// source; and a list whose fill gives a record a field it does not store copies it unstored.
 #[test]
 fn a_copy_digests_as_its_source() {
     use super::{Holding, Link, NodeFamily, ring, tie};
@@ -145,16 +146,25 @@ fn a_copy_digests_as_its_source() {
                     scratch,
                 ));
                 let list = List::new(writer, [wide, only_x].into_iter(), types, scratch);
-                assert_eq!(list.ktype(), types.list(narrow), "the join hides `y`");
-                let joined = Value::List(list);
-                let source = context.lift::<ValueFamily>(joined);
-                let crossed = fixture.tiers.cross(context, dest, &source).unwrap();
-                let copied = context.read(&crossed).value();
-                assert_eq!(
-                    copied.digest(types, scratch),
-                    joined.digest(types, scratch),
-                    "a list whose join hides a record's field"
-                );
+                let filled = Value::List(list);
+                let ascribed = filled.retyped(writer, types.list(narrow), types, scratch);
+                for (source, what) in [
+                    (ascribed, "a list ascribed a type hiding a record's field"),
+                    (filled, "a list whose fill gives a record a field"),
+                ] {
+                    let lifted = context.lift::<ValueFamily>(source);
+                    let crossed = fixture.tiers.cross(context, dest, &lifted).unwrap();
+                    let copied = context.read(&crossed).value();
+                    assert_eq!(
+                        copied.digest(types, scratch),
+                        source.digest(types, scratch),
+                        "{what}"
+                    );
+                    assert!(
+                        copied.weight().bytes() <= source.weight().bytes(),
+                        "{what} copies no heavier"
+                    );
+                }
 
                 let held_text = crate::values::text(writer, "held");
                 let members = ring(fixture, writer, types, identity, &[Some(held_text), None]);

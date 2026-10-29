@@ -207,7 +207,8 @@ perform, from the provenance the drain filled:
   wake of a rested birth build the destination's chain inside the build, over
   the graph's type tiers and the build's writer and header, since a
   [crossing](../values/README.md#crossing) makes every type the value carries
-  resolve there and a deep copy lays each part down at the type it is seen at.
+  resolve there and a deep copy lays each part down at a type built from the
+  one it is seen at.
 - **A result goes where the drain said.** The three `finish` ends below build
   or cross into the home the provenance names and fill the slot it names.
 

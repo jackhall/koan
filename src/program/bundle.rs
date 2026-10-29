@@ -469,8 +469,8 @@ impl<'graph> StepBundle<'graph> for KBundle {
         KState::Born(birth)
     }
 
-    /// A call a tail laid a skeleton beside hands on each field of its argument record, in the
-    /// record's order, then its callee.
+    /// A call a tail laid a skeleton beside hands on each field its argument record's type names,
+    /// in its binders' order, then its callee.
     fn handings<'cell>(
         birth: &KBirth<'graph, 'cell>,
         out: &mut impl FnMut(usize, Option<KeptPart<'graph, 'cell>>, bool),
@@ -487,20 +487,21 @@ impl<'graph> StepBundle<'graph> for KBundle {
         else {
             return false;
         };
-        let Some((names, _)) = arguments.stored_fields() else {
+        if !matches!(arguments, Value::Record(_)) {
             return false;
-        };
-        for (index, name) in names.iter().enumerate() {
-            let kept = (passing.arguments.iter()).find(|(passed, _)| passed == name);
+        }
+        for (index, binder) in passing.binders.iter().enumerate() {
+            let name = binder.symbol();
+            let kept = (passing.arguments.iter()).find(|(passed, _)| *passed == name);
             out(
                 index,
                 kept.map(|(_, part)| *part),
-                passing.threaded.contains(name),
+                passing.threaded.contains(&name),
             );
         }
         // A tail's callee handed on bare threads: the loop's frames keep it in the loop cell.
         out(
-            names.len(),
+            passing.binders.len(),
             passing.callee,
             owed.is_some() && passing.callee.is_none(),
         );
@@ -523,17 +524,20 @@ impl<'graph> StepBundle<'graph> for KBundle {
         else {
             return None;
         };
-        let (names, cells) = arguments.stored_fields()?;
+        if !matches!(arguments, Value::Record(_)) {
+            return None;
+        }
         let inline = |value: &KValue<'_, '_>| {
             matches!(
                 value,
                 Value::Number(_) | Value::Bool(_) | Value::Null | Value::Type(_)
             )
         };
-        let bare = passing.callee.is_none().then_some(callee);
-        (names.iter().zip(cells))
-            .filter(|(name, value)| passing.threaded.contains(name) && !inline(value))
-            .map(|(_, value)| value)
+        let bare = passing.callee.is_none().then_some(*callee);
+        (passing.binders.iter())
+            .filter(|binder| passing.threaded.contains(&binder.symbol()))
+            .map(|binder| arguments.named(binder.symbol()))
+            .filter(|value| !inline(value))
             .chain(bare)
             .map(|value| value.weight().bytes())
             .reduce(|threads, weight| threads + weight)
@@ -544,15 +548,17 @@ impl<'graph> StepBundle<'graph> for KBundle {
         'graph: 'cell,
     {
         let KBirth::Call {
-            callee, arguments, ..
+            callee,
+            arguments,
+            passing: Some(passing),
+            ..
         } = birth
         else {
             return None;
         };
-        let (_, cells) = arguments.stored_fields()?;
-        match cells.get(index) {
-            Some(value) => Some(*value),
-            None => (index == cells.len()).then_some(callee),
+        match passing.binders.get(index) {
+            Some(binder) => Some(arguments.named(binder.symbol())),
+            None => (index == passing.binders.len()).then_some(callee),
         }
     }
 
@@ -667,8 +673,7 @@ fn successor<'graph, 'cell>(
     else {
         unreachable!("a skeleton is a call laid beside what it hands on")
     };
-    let (_, cells) =
-        (arguments.stored_fields()).expect("a skeleton's arguments are a record, field by field");
+    let field = |at: usize| arguments.named(passing.binders[at].symbol());
     let held_at = |value: KValue<'graph, 'cell>, ktype: DeclaredType<KType>| {
         if ktype == value.ktype() {
             return value;
@@ -682,7 +687,7 @@ fn successor<'graph, 'cell>(
     let scratch = crate::memory::Bump::new();
     let mut fields = crate::memory::BumpVec::with_capacity_in(count, &scratch);
     fields
-        .extend((0..count).map(|at| (passing.binders[at], held_at(handed[at], cells[at].ktype()))));
+        .extend((0..count).map(|at| (passing.binders[at], held_at(handed[at], field(at).ktype()))));
     let record = Record::new(writer, &fields, types, &scratch);
     KBirth::Call {
         program,

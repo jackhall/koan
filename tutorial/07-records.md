@@ -167,6 +167,27 @@ Point({x = 3, y = 4})
 error: Point has no field z
 ```
 
+## Records in a container
+
+A list or dict can hold records of different widths. Each keeps every field it
+was written with, and a record that lacks a field another record there has
+reads that field as `null`:
+
+```koan
+PRINT [{x = 1, y = 2}, {x = 3}]
+PRINT ([{x = 1, y = 2}, {x = 3}] == [{x = 1, y = 2}, {x = 3, y = null}])
+```
+
+```text
+[{x = 1, y = 2}, {x = 3, y = null}]
+true
+```
+
+The list's element type keeps both shapes,
+`:({x :Number, y :Number} | {x :Number, y :Null})`, so a parameter typed
+`:(LIST OF :{x :Number})` still takes the list, and reads each element at
+`:{x :Number}`.
+
 ## Records and dispatch
 
 A function parameter can be typed with a record schema `:{...}` directly, and it

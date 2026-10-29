@@ -208,6 +208,11 @@ pub(super) fn retyped_type() -> BoxedStrategy<Desc> {
             2 => prop::collection::vec((0..3u8, inner.clone()), 0..3).prop_map(Desc::Record),
             1 => inner.clone().prop_map(|each| Desc::Dict(Box::new(each))),
             1 => inner.clone().prop_map(|each| Desc::Wrapped(Box::new(each))),
+            // Records naming different fields in one list, which the fill types against each other.
+            1 => (inner.clone(), inner.clone()).prop_map(|(a, b)| {
+                let (a, b) = (Desc::Record(vec![(0, a)]), Desc::Record(vec![(1, b)]));
+                Desc::List(Box::new(Desc::Union(Box::new(a), Box::new(b))))
+            }),
             1 => (inner, typed(0), any::<bool>()).prop_map(|(inhabited, other, first)| {
                 let (a, b) = if first { (inhabited, other) } else { (other, inhabited) };
                 Desc::Union(Box::new(a), Box::new(b))

@@ -5,18 +5,21 @@
 //! The byte count is the weight proper. The two flags in its top bits, [`MemoBits`], record where
 //! every type memo the value reaches resolves; an adoption does not enter a part that carries one
 //! ([design/type-tiers.md § An adoption stops at a settled part](../../design/type-tiers.md#an-adoption-stops-at-a-settled-part)).
-//! [settled.rs](settled.rs) computes them.
+//! [settled.rs](settled.rs) computes them. A third, the **hides** bit, records whether the value
+//! or a part below it stores a field the type it is held at hides ([hiding.rs](hiding.rs)).
 
 /// Set when every memo the value reaches is the root's.
 const ROOT_CLOSED: usize = 1 << (usize::BITS - 1);
 /// Set when every memo the value reaches resolves in the root or in the branch of the half the
 /// value lies in, below a part whose own bit answers for what lies under it.
 const SETTLED: usize = 1 << (usize::BITS - 2);
+/// Set when the value, or a part below it, stores a field the type it is held at hides.
+const HIDES: usize = 1 << (usize::BITS - 3);
 /// The byte count's bits, where every sum saturates.
-const BYTES: usize = SETTLED - 1;
+const BYTES: usize = HIDES - 1;
 
 /// Bytes a total rebuild of a value writes into a destination region, saturating below the two
-/// [`MemoBits`] it carries in its top bits.
+/// [`MemoBits`] and the hides bit it carries in its top bits.
 ///
 /// A composite's weight is its own resident struct plus every cell it lays down; a cell is a whole
 /// [`Value`](super::Value) word plus whatever that word points at in the region. Program storage
@@ -90,9 +93,9 @@ impl Weight {
         }
     }
 
-    /// The same bytes under `bits`.
+    /// The same bytes and hides bit under `bits`.
     pub const fn with_bits(self, bits: MemoBits) -> Weight {
-        let mut word = self.bytes();
+        let mut word = self.0 & (BYTES | HIDES);
         if bits.root_closed {
             word |= ROOT_CLOSED;
         }
@@ -102,9 +105,23 @@ impl Weight {
         Weight(word)
     }
 
-    /// The same bytes with both bits clear.
+    /// The same bytes with every bit clear.
     pub const fn without_bits(self) -> Weight {
         Weight(self.bytes())
+    }
+
+    /// Whether the value, or a part below it, stores a field the type it is held at hides.
+    pub const fn hides(self) -> bool {
+        self.0 & HIDES != 0
+    }
+
+    /// The same bytes and memo bits, the hides bit set to `hides`.
+    pub const fn with_hides(self, hides: bool) -> Weight {
+        Weight(if hides {
+            self.0 | HIDES
+        } else {
+            self.0 & !HIDES
+        })
     }
 
     /// `bytes` clamped below the bits.
@@ -140,6 +157,7 @@ impl std::fmt::Debug for Weight {
             .field("bytes", &self.bytes())
             .field("root_closed", &bits.root_closed)
             .field("settled", &bits.settled)
+            .field("hides", &self.hides())
             .finish()
     }
 }

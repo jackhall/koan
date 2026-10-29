@@ -461,7 +461,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                         let retyped = self.retyped_tree(inner, declared.into(), site)?;
                         Some(Carried::Tree(retyped))
                     }
-                    _ => retyped_to(types, declared.into())
+                    _ => retyped_to(types, scratch, declared.into())
                         .is_exact()
                         .then_some(Carried::Typed(declared)),
                 }

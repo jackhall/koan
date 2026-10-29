@@ -320,6 +320,26 @@ load and the agent tier rest in bumps their owner keeps for them — in a
 loaded program, the [substrate's own](../../../src/program/README.md),
 released whole with the rest — and each branch in its half.
 
+### Downstream memos
+
+The same tables keep a **memo** for a walk a downstream crate runs over type
+nodes (`MemoKind`): a pure answer about types alone, which the lattice never
+reads. An entry's answer is one word (`Answer`) — a verdict's bool or a
+handle's bits — so an entry stays 64 bytes. Two shapes share the tables under
+the relation `Memo(kind)`:
+
+- a **flag** over two types (`memo_flag`, `record_memo_flag`), placed and read
+  as a verdict is;
+- a **type for one member of a group** (`memo_member`, `record_memo_member`),
+  a group being a sorted, deduplicated set of types. The key is the group's
+  digest (`group_digest`, its own domain, so it never names a node) beside the
+  member's. The entry is placed in the shortest-lived tier holding any of the
+  group's types or the answer, and read from every tier, longest-lived first.
+
+Like a verdict, a memo entry is never load-bearing: one a table lacks costs a
+re-walk. `values` keeps its [fill](../../../src/values/fill.rs) and its hides
+walk here.
+
 Every door that sorts, flattens or canonicalizes takes a **scratch allocator**
 from its caller and builds its transient buffers there, and every door computes
 its digest off the caller's own slices first, so content is laid in the half

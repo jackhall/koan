@@ -768,3 +768,34 @@ proptest::proptest! {
         proptest::prop_assert_eq!(facts(&written), facts(&swapped), "in\n{}\nswapped as\n{}", written, swapped);
     }
 }
+
+/// A container's type is the union of its cells' filled types, and the load types a literal whose
+/// elements are exact by exactly that type.
+#[test]
+fn a_container_literal_is_typed_by_its_cells_filled_types() {
+    let kind = "EXPR #(KIND xs :(LIST OF :{x :Number})) -> Str = #(\"narrow\")\n\
+                EXPR #(KIND xs :(LIST OF (:{x :Number, y :Number} | :{x :Number, y :Null}))) \
+                -> Str = #(\"filled\")\n\
+                PRINT (KIND [{x = 1, y = 2}, {x = 3}])";
+    assert_eq!(run(kind), "filled");
+    for (source, typed) in [
+        (
+            "LET l = [{x = 1, y = 2}, {x = 3}]",
+            ":(LIST OF :(:{x :Number y :Number} | :{x :Number y :Null}))",
+        ),
+        (
+            "LET l = [{p = {x = 1, y = 2}}, {p = {x = 3}}]",
+            ":(LIST OF :(:{p :{x :Number y :Number}} | :{p :{x :Number y :Null}}))",
+        ),
+        (
+            "LET l = {\"a\": {x = 1, y = 2}, \"b\": {x = 3}}",
+            ":(MAP Str -> :(:{x :Number y :Number} | :{x :Number y :Null}))",
+        ),
+    ] {
+        loaded(source, |program| {
+            let typed_at = interval(program, program.shape(), "l");
+            assert!(typed_at.is_exact(), "{source} is exact");
+            assert_eq!(binder(program, program.shape(), "l"), typed);
+        });
+    }
+}

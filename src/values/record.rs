@@ -8,7 +8,8 @@ use crate::memory::{BumpAllocator, BumpVec, Writer, resident};
 use crate::symbols::{BinderSymbol, Symbol};
 use crate::type_lattice::KType;
 
-use super::settled::{composite_bits, restamp_bits};
+use super::fill::hides_more;
+use super::settled::{composite_bits, part_hides, restamp_bits};
 use super::{Chain, Knotted, Link, MemoBits, Nothing, Value, Weight, record_type};
 
 /// An anonymous structural record value, resident in the region its cells live in. It carries no
@@ -73,7 +74,14 @@ impl<'cell, X: Knotted> Record<'cell, X> {
             .iter()
             .fold(weight, |weight, cell| weight.plus(cell.weight()));
         let bits = composite_bits(types, ktype, cells);
-        Self::from_runs(writer, names, cells, ktype, weight.with_bits(bits))
+        let hides = cells.iter().any(part_hides);
+        Self::from_runs(
+            writer,
+            names,
+            cells,
+            ktype,
+            weight.with_bits(bits).with_hides(hides),
+        )
     }
 }
 
@@ -149,7 +157,9 @@ impl<'cell, X: Copy, C: Copy> Record<'cell, X, C> {
         types: &Chain<'_, 'cell, '_, '_>,
     ) -> &'cell Self {
         let weight = self.weight.get();
-        let weight = weight.with_bits(restamp_bits(weight.bits(), types, ktype));
+        let weight = weight
+            .with_bits(restamp_bits(weight.bits(), types, ktype))
+            .with_hides(weight.hides() || hides_more(types, self.ktype, ktype));
         Self::from_runs(writer, self.names, self.cells, ktype, weight)
     }
 
@@ -174,6 +184,12 @@ impl<'cell, X: Copy, C: Copy> Record<'cell, X, C> {
             settled: true,
             ..weight.bits()
         }));
+    }
+
+    /// Record that a cell hides a field at its view under the value's own type — the mark a
+    /// holder rebuilt over a copy takes ([hiding.rs](super::hiding)) where its parts' bits miss it.
+    pub(super) fn hide(&self) {
+        self.weight.set(self.weight.get().with_hides(true));
     }
 }
 

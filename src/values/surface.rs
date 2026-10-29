@@ -12,19 +12,27 @@
 //! seen at its type there. Equality, rendering, the mark pass, the deep copy and the content digest
 //! walk it; a reader that hands a part on as a value of its own [restamps](Seen::restamped) it.
 //!
+//! A container's type is the fill of its cells' types ([fill.rs](super::fill)), which names, at
+//! `Null`, fields a cell does not store. So a field seen at exactly `Null` reads `null` without its
+//! cell, and a container is taken at a member of the type it is read at that its own type fits
+//! once filled against it. A record seen at a record type keeps at `Null` each field its own type
+//! lacks or has at exactly `Null`.
+//!
 //! The static type of a value retyped to a type ([`retyped_to`]) and of one at most a type
 //! ([`under`]) live here too, beside the retype they describe: the load reads the same predicate
 //! `seen_at` retypes by. Where the load closes a retype's declared type it records the
 //! [`Retype`], and the run re-stamps by it ([`Seen::seen_by`]) without computing the target.
 
-use crate::memory::{BumpAllocator, BumpVec, Edge, Writer};
+use crate::memory::{Bump, BumpAllocator, BumpVec, Edge, Writer};
 use crate::symbols::{BinderSymbol, Symbol, TypeSymbol};
 use crate::type_lattice::{
-    DeclaredType, FitsFailure, Interval, KType, Members, Parametric, TypeNode, fits,
-    fits_application, meet, satisfied_by,
+    DeclaredType, FitsFailure, Interval, KType, Members, Parametric, TypeNode, bound_above, fits,
+    fits_application, is_subtype_of, meet, satisfied_by,
 };
 
 use super::circular::{Circular, Resolved};
+use super::fill::filled_against;
+use super::hiding::unhidden;
 use super::{Chain, Key, Knotted, Link, Nothing, Retyped, Value, representation};
 
 /// Why the type a container, a tagged value or a data node is seen at is concrete: its memo is a
@@ -177,9 +185,10 @@ impl<'cell, X: Knotted + 'cell> Seen<'cell, X> {
     }
 
     /// The value handed on as a value of its own, restamped at its seen type: a plain value takes
-    /// it as its handle over the same cells; a knot member, whose node every holder shares, takes a
-    /// [`Retyped`] header over its bare member, or is that bare member where the seen type is its
-    /// own.
+    /// it as its handle over the same cells, once each part the seen type would show a field of
+    /// that it hides is copied without it ([`unhidden`]); a knot member, whose node every holder
+    /// shares, takes a [`Retyped`] header over its bare member, or is that bare member where the
+    /// seen type is its own.
     pub fn restamped(
         self,
         writer: Writer<'cell, '_>,
@@ -188,7 +197,14 @@ impl<'cell, X: Knotted + 'cell> Seen<'cell, X> {
         if self.value.ktype() == self.ktype {
             return self.value;
         }
-        match self.value {
+        // A part the seen type would show a field of that its view so far hides is copied first.
+        let value = match self.value {
+            Value::List(_) | Value::Dict(_) | Value::Record(_) | Value::Tagged(_) => {
+                unhidden(writer, types, &Bump::new(), self.value, self.concrete())
+            }
+            other => other,
+        };
+        match value {
             Value::List(list) => Value::List(list.with_type(writer, self.concrete(), types)),
             Value::Dict(dict) => Value::Dict(dict.with_type(writer, self.concrete(), types)),
             Value::Record(record) => {
@@ -248,7 +264,8 @@ impl<'cell, X: Knotted + 'cell> Seen<'cell, X> {
     }
 
     /// The field `name` of a record, or a record data node, seen at a record type naming it, seen
-    /// at its type there. `None` otherwise — a tagged value included: its caller peels it through
+    /// at its type there — `null` where that type is exactly `Null`, stored or not. `None`
+    /// otherwise — a tagged value included: its caller peels it through
     /// [`surface`](Self::surface).
     pub fn field(
         &self,
@@ -263,6 +280,9 @@ impl<'cell, X: Knotted + 'cell> Seen<'cell, X> {
             unreachable!("a record is seen only at a record type")
         };
         let declared = fields.get(name)?;
+        if declared == KType::NULL {
+            return Some(Seen::of(Value::Null));
+        }
         Some(Seen::of(cells.get(held_at(names, name))).seen_at(declared, types, scratch))
     }
 }
@@ -304,7 +324,8 @@ impl<'cell, X: Knotted + 'cell> Value<'cell, X> {
 
     /// The part the record field `label` stores, read through every tagged payload first — a
     /// knot's data node's included — at its own memo: the stored part a field read restamps.
-    /// Reads, never writes. `None` where nothing along the way is a record storing `label`.
+    /// Reads, never writes. `None` where nothing along the way is a record storing `label` — a
+    /// field a fill gave a record, at `Null`, among them ([`Value::named`]).
     pub fn along(self, label: Symbol) -> Option<Value<'cell, X>> {
         let mut value = self;
         loop {
@@ -318,6 +339,13 @@ impl<'cell, X: Knotted + 'cell> Value<'cell, X> {
         }
     }
 
+    /// The field `label` of this record, one its type names, as [`along`](Self::along) reads it:
+    /// `null` where the record stores none, a field a fill gave it at `Null`, which the door reads
+    /// as `null`. What a call by name hands each parameter of a record held whole.
+    pub fn named(self, label: Symbol) -> Value<'cell, X> {
+        self.along(label).unwrap_or(Value::Null)
+    }
+
     /// The value capture slot `slot` of the function this value is holds — a value word, or the
     /// fellow member of its knot an edge names — as an activation of it reads that capture.
     /// `None` for a value that is no function, and past its closure run.
@@ -327,16 +355,6 @@ impl<'cell, X: Knotted + 'cell> Value<'cell, X> {
             return None;
         };
         Some(closure.get(slot as usize)?.resolve(member))
-    }
-
-    /// A plain record's runs as stored: its field names in symbol order beside each field at its
-    /// own memo, whatever type the record is seen at — what a hop hands on field by field, each as
-    /// [`along`](Self::along) reads it. `None` for anything else.
-    pub fn stored_fields(&self) -> Option<(&'cell [Symbol], &'cell [Value<'cell, X>])> {
-        match self {
-            Value::Record(record) => Some((record.names(), record.cells())),
-            _ => None,
-        }
     }
 
     /// The value restamped at `ktype`, a type a restamp of the same storage carried: what a value
@@ -454,7 +472,8 @@ impl<'x, 'a, X: Knotted + 'a> Surface<'x, 'a, X> {
         self.len() == 0
     }
 
-    /// The part at `at`, below [`len`](Self::len), seen at its type there.
+    /// The part at `at`, below [`len`](Self::len), seen at its type there: a field seen at exactly
+    /// `Null` is `null`, whether the record stores it or a fill gave it.
     pub fn child(
         &self,
         at: usize,
@@ -474,6 +493,9 @@ impl<'x, 'a, X: Knotted + 'a> Surface<'x, 'a, X> {
                 cells,
             } => {
                 let (name, declared) = fields[at];
+                if declared == KType::NULL {
+                    return Seen::of(Value::Null);
+                }
                 Seen::of(cells.get(held_at(names, name))).seen_at(declared, types, scratch)
             }
             Parts::Tagged {
@@ -500,7 +522,10 @@ impl<'x, 'a, X: Knotted + 'a> Surface<'x, 'a, X> {
                 fields,
                 names,
                 cells,
-            } => cells.get(held_at(names, fields[at].0)),
+            } => match fields[at] {
+                (_, declared) if declared == KType::NULL => Value::Null,
+                (name, _) => cells.get(held_at(names, name)),
+            },
             Parts::Tagged { payload, .. } => payload.get(0),
         }
     }
@@ -514,8 +539,20 @@ impl<'x, 'a, X: Knotted + 'a> Surface<'x, 'a, X> {
                 fields,
                 names,
                 cells,
-            } => cells.edge(held_at(names, fields[at].0)),
+            } => match fields[at] {
+                (_, declared) if declared == KType::NULL => None,
+                (name, _) => cells.edge(held_at(names, name)),
+            },
             Parts::Tagged { payload, .. } => payload.edge(0),
+        }
+    }
+
+    /// Whether a record stores the field at `at`: one its seen type names at `Null` that a fill
+    /// gave it stores none.
+    pub(super) fn stores(&self, at: usize) -> bool {
+        match self.parts {
+            Parts::Record { fields, names, .. } => names.binary_search(&fields[at].0).is_ok(),
+            _ => true,
         }
     }
 
@@ -545,11 +582,11 @@ impl<'x, 'a, X: Knotted + 'a> Surface<'x, 'a, X> {
     }
 }
 
-/// Where a record holds the field `name` its seen type names.
+/// Where a record holds the field `name` its seen type names at a type other than `Null`.
 fn held_at(names: &[Symbol], name: Symbol) -> usize {
     names
         .binary_search(&name)
-        .expect("a record holds every field its type names")
+        .expect("a record holds every field its type names at a type other than `Null`")
 }
 
 /// A run of cells read as values: plain words, or links resolved through their holder.
@@ -701,8 +738,10 @@ pub enum Retype {
     /// The value's own type: the declared type re-stamps no kind — `Any`, a scalar, `Module` or
     /// `Code`.
     Keeps,
-    /// The meet of what the members of this union of the value's kind take it at.
-    Members(KType),
+    /// The target computed at the run: the meet of what the members of this union of the value's
+    /// kind take it at, or this record type with a field `Null` lies strictly under, whose `Null`s
+    /// the value keeps.
+    Computed(KType),
     /// What *fits* pins a module at under this signature type, which leaves a head parameter
     /// unpinned.
     Fit(KType),
@@ -710,14 +749,17 @@ pub enum Retype {
 
 impl Retype {
     /// The retype to `declared`, read off its node: the classes [`retyped_to`] reads.
-    pub fn of(types: &Chain<'_, '_, '_, '_>, declared: KType) -> Self {
+    pub fn of(types: &Chain<'_, '_, '_, '_>, scratch: BumpAllocator<'_>, declared: KType) -> Self {
         if let TypeNode::Union { .. } = types.node(declared) {
-            return Retype::Members(declared);
+            return Retype::Computed(declared);
         }
         match retyped_kind(types, declared.into()) {
             None => Retype::Keeps,
             Some(Kind::Module) if !pins_every_parameter(types, declared.into()) => {
                 Retype::Fit(declared)
+            }
+            Some(Kind::Record) if !record_is_point(types, scratch, declared.into()) => {
+                Retype::Computed(declared)
             }
             Some(_) => Retype::Point(declared),
         }
@@ -736,7 +778,7 @@ fn target_by(
     match retype {
         Retype::Point(point) => Some(point),
         Retype::Keeps => None,
-        Retype::Members(declared) | Retype::Fit(declared) => {
+        Retype::Computed(declared) | Retype::Fit(declared) => {
             target(types, scratch, kind, own, declared)
         }
     }
@@ -768,6 +810,19 @@ fn target(
     computed(types, scratch, kind, own, declared)
 }
 
+/// What the door takes a part of type `own` at where its holder names `declared`: [`target`],
+/// uncounted, read off the type's kind; `own` where it keeps its own type.
+pub(super) fn taken_at(
+    types: &Chain<'_, '_, '_, '_>,
+    scratch: BumpAllocator<'_>,
+    own: KType,
+    declared: KType,
+) -> KType {
+    retyped_kind(types, own.into())
+        .and_then(|kind| computed(types, scratch, kind, own.into(), declared))
+        .unwrap_or(own)
+}
+
 /// [`target`], uncounted: what a recorded retype is checked against.
 fn computed(
     types: &Chain<'_, '_, '_, '_>,
@@ -783,6 +838,17 @@ fn computed(
         TypeNode::ConstructorApply { constructor, .. } => constructor,
         _ => handle,
     };
+    // A container is taken at a member its own type fits once filled against it: a part a
+    // container's fill names a field for that it lacks reads that field as `null`.
+    let filled_fits = |member: KType| {
+        let own = own.as_type().expect(SEEN);
+        fits(
+            types,
+            scratch,
+            filled_against(types, scratch, own, member),
+            member,
+        )
+    };
     let taken = |member: KType| {
         if retyped_kind(types, member.into()) != Some(kind) {
             return None;
@@ -790,6 +856,9 @@ fn computed(
         match kind {
             Kind::Module => pinned_at_fit(types, scratch, own.as_type().expect(SEEN), member),
             Kind::Tagged if constructor(member) != constructor(own.as_type().expect(SEEN)) => None,
+            Kind::List | Kind::Dict | Kind::Record => {
+                (fits(types, scratch, own, member) || filled_fits(member)).then_some(member)
+            }
             _ => fits(types, scratch, own, member).then_some(member),
         }
     };
@@ -798,7 +867,7 @@ fn computed(
         TypeNode::Union { members: held } => members.extend(held.iter()),
         _ => members.push(declared),
     }
-    members
+    let target = members
         .iter()
         .filter_map(|member| taken(*member))
         .reduce(|lower, member| {
@@ -809,7 +878,45 @@ fn computed(
             } else {
                 meet(types, scratch, lower, member)
             }
-        })
+        });
+    match (kind, target) {
+        (Kind::Record, Some(target)) => Some(keeping_null(types, scratch, own, target)),
+        _ => target,
+    }
+}
+
+/// `target`, a record retype's target, with each field the record's own type `own` lacks or has
+/// at exactly `Null` at `Null`: a record seen at a type keeps the `Null`s its own type has. Its
+/// own fields only; a nested record keeps its own as the door reads it.
+fn keeping_null(
+    types: &Chain<'_, '_, '_, '_>,
+    scratch: BumpAllocator<'_>,
+    own: DeclaredType<KType>,
+    target: KType,
+) -> KType {
+    let (TypeNode::Record { fields: own }, TypeNode::Record { fields }) =
+        (types.node(own.as_type().expect(SEEN)), types.node(target))
+    else {
+        return target;
+    };
+    let kept = |name: BinderSymbol, field: KType| {
+        field != KType::NULL && own.get(name.symbol()).is_none_or(|own| own == KType::NULL)
+    };
+    if !fields.iter().any(|(name, field)| kept(name, field)) {
+        return target;
+    }
+    let mut rebuilt = BumpVec::with_capacity_in(fields.len(), scratch);
+    rebuilt.extend(fields.iter().map(|(name, field)| {
+        (
+            name,
+            if kept(name, field) {
+                KType::NULL
+            } else {
+                field
+            },
+        )
+    }));
+    types.record(scratch, &rebuilt)
 }
 
 /// The applications the signature type `carried` holds, in `scratch`: a meet's members, or
@@ -990,12 +1097,77 @@ fn node_kind(node: TypeNode<'_, Parametric>) -> Option<Kind> {
 /// parameter — and at most `declared`
 /// otherwise; a union keeps each variant's own type. A module is pinned afresh at each run where
 /// `declared` leaves a parameter unpinned, and two pins of one parameter are unordered. It reads
-/// the predicate [`Seen::seen_at`] retypes by.
-pub fn retyped_to(types: &Chain<'_, '_, '_, '_>, declared: Parametric) -> Interval {
+/// the predicate [`Seen::seen_at`] retypes by. A record type with a field `Null` lies strictly
+/// under is retyped to at most itself, and at least itself with each such field at `Null`, since a
+/// record keeps the `Null`s its own type has; where such a field is parametric, at most itself.
+pub fn retyped_to(
+    types: &Chain<'_, '_, '_, '_>,
+    scratch: BumpAllocator<'_>,
+    declared: Parametric,
+) -> Interval {
     match retyped_kind(types, declared) {
         Some(Kind::Module) if !pins_every_parameter(types, declared) => under(declared),
+        Some(Kind::Record) => record_retyped_to(types, scratch, declared),
         Some(_) => Interval::point(declared),
         None => under(declared),
+    }
+}
+
+/// Whether `field`, a record type's field, is one a record seen at it may keep at `Null`: `Null`
+/// lies strictly under it — under its bound above where it holds a variable.
+fn nullable(types: &Chain<'_, '_, '_, '_>, scratch: BumpAllocator<'_>, field: Parametric) -> bool {
+    field != KType::NULL.into()
+        && match types.concrete(field) {
+            Some(field) => is_subtype_of(types, scratch, KType::NULL, field),
+            None => is_subtype_of(
+                types,
+                scratch,
+                KType::NULL,
+                bound_above(types, scratch, field),
+            ),
+        }
+}
+
+/// Whether a retype to the record type `declared` re-stamps every record at `declared` itself: no
+/// field of it is [`nullable`].
+fn record_is_point(
+    types: &Chain<'_, '_, '_, '_>,
+    scratch: BumpAllocator<'_>,
+    declared: Parametric,
+) -> bool {
+    let TypeNode::Record { fields } = types.node(declared) else {
+        unreachable!("a record retype's type is a record type")
+    };
+    !fields.values().any(|field| nullable(types, scratch, field))
+}
+
+/// [`retyped_to`] a record type.
+fn record_retyped_to(
+    types: &Chain<'_, '_, '_, '_>,
+    scratch: BumpAllocator<'_>,
+    declared: Parametric,
+) -> Interval {
+    let TypeNode::Record { fields } = types.node(declared) else {
+        unreachable!("a record retype's type is a record type")
+    };
+    let mut lower = BumpVec::with_capacity_in(fields.len(), scratch);
+    let mut keeps = false;
+    for (name, field) in fields.iter() {
+        if !nullable(types, scratch, field) {
+            lower.push((name, field));
+        } else if types.concrete(field).is_some() {
+            keeps = true;
+            lower.push((name, KType::NULL.into()));
+        } else {
+            return under(declared);
+        }
+    }
+    if !keeps {
+        return Interval::point(declared);
+    }
+    Interval {
+        lower: types.record(scratch, &lower),
+        upper: declared,
     }
 }
 

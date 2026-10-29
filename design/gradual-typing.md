@@ -128,7 +128,10 @@ type that is one type re-stamps the value at itself — a list, dict or record
 type, a nominal or a family's application, a function type or an expression
 shape, a code kind, a kind, a signature type — so a member read through a
 module and a call through a function see exactly the declared type, as a field
-read through a record does. A signature type re-stamps a module at each of its
+read through a record does. A retype to a record type keeps at `Null` each
+field the record's own type lacks or has at exactly `Null`:
+`{x = 1, y = null} :! :{x :Number, y :(Number | Null)}` carries
+`{x :Number, y :Null}`. A signature type re-stamps a module at each of its
 applications the module fits, pinned at what *fits* solves for each head
 parameter left open; each run pins afresh, so the load calls such a retype
 exact only where it computes the pins itself. A union keeps each variant's own
@@ -224,7 +227,6 @@ changes what a reader sees and which overload runs.
 
 - [Gradual typing](../roadmap/gradual-typing/README.md) — the project's open
   items.
-- [A container literal's element type](../roadmap/gradual-typing/container-literal-types.md)
 - [Dependent signatures](../roadmap/gradual-typing/dependent-signatures.md)
 - [A nested projection](../roadmap/gradual-typing/nested-projection.md)
 - [A pin over a variable](../roadmap/gradual-typing/pins-over-variables.md)

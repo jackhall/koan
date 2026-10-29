@@ -40,7 +40,6 @@ subdirectory's README carries its own slice.
 - [Placing a verdict without probing](gradual-build/verdict-placement.md)
 - [Warm composed types](gradual-build/warm-composed-types.md)
 - [What a barrier rebuilds](gradual-typing/barrier-coercion.md)
-- [A container literal's element type](gradual-typing/container-literal-types.md)
 - [A carried union at a contravariant position](gradual-typing/contravariant-union-solve.md)
 - [Dependent signatures](gradual-typing/dependent-signatures.md)
 - [A pin over a variable](gradual-typing/pins-over-variables.md)

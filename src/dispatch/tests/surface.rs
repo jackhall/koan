@@ -101,15 +101,15 @@ fn one_node_seen_at_two_types_compares_at_each() {
     );
 }
 
-/// An element is read at the type its list names, so a literal whose join widens a record hides
-/// that record's extra fields. [A container literal's element
-/// type](../../../roadmap/gradual-typing/container-literal-types.md) changes this.
+/// An element is read at the type its list names, which fills each record with the fields another
+/// names: a literal keeps every record's fields, and reads a missing one as `null`.
 #[test]
-fn a_widened_literal_element_hides_its_extra_fields() {
+fn a_literal_element_keeps_its_fields_and_reads_a_missing_one_as_null() {
     assert_eq!(
         run("PRINT [{x = 1, y = 2}, {x = 3}]\n\
-             PRINT ([{x = 1, y = 2}, {x = 3}] == [{x = 1, y = 9}, {x = 3}])"),
-        "[{x = 1}, {x = 3}]\ntrue"
+             PRINT ([{x = 1, y = 2}, {x = 3}] == [{x = 1, y = 9}, {x = 3}])\n\
+             PRINT ([{x = 1, y = 2}, {x = 3}] == [{x = 1, y = 2}, {x = 3, y = null}])"),
+        "[{x = 1, y = 2}, {x = 3, y = null}]\nfalse\ntrue"
     );
 }
 
@@ -177,5 +177,147 @@ fn a_projection_shares_its_records_runs() {
     assert_eq!(
         weight_back(&mut substrate, "p"),
         weight_back(&mut substrate, "r")
+    );
+}
+
+/// Every list and dict fills its records at each position, built at the run or written as a
+/// literal, through nested lists, dicts and records; one ascribed a narrower element type reads
+/// each element at it.
+#[test]
+fn every_container_fills_its_records_at_each_position() {
+    assert_eq!(
+        run("LET a = {x = 1, y = 2}\nLET b = {x = 3}\nPRINT [a, b]"),
+        "[{x = 1, y = 2}, {x = 3, y = null}]"
+    );
+    assert_eq!(
+        run("PRINT [{p = {x = 1, y = 2}}, {p = {x = 3}}]"),
+        "[{p = {x = 1, y = 2}}, {p = {x = 3, y = null}}]"
+    );
+    assert_eq!(
+        run("PRINT [[{x = 1, y = 2}], [{x = 3}]]"),
+        "[[{x = 1, y = 2}], [{x = 3, y = null}]]"
+    );
+    assert_eq!(
+        run("PRINT {\"a\": {x = 1, y = 2}, \"b\": {x = 3}}"),
+        "{\"a\": {x = 1, y = 2}, \"b\": {x = 3, y = null}}"
+    );
+    // A knot's list reads a fellow member at its filled type, and the member alone at its own.
+    assert_eq!(
+        run("NEWTYPE Ring = :{next :Any}\n\
+             LET a = [b, {m = 1}]\n\
+             LET b = {n = (Ring {next = a})}\n\
+             PRINT a\nPRINT b"),
+        "@0 = [{m = null, n = Ring({next = @0})}, {m = 1, n = null}]\n\
+         {n = @0 = Ring({next = [{m = null, n = @0}, {m = 1, n = null}]})}"
+    );
+    // A literal whose elements the load does not know exactly fills at the run.
+    assert_eq!(
+        run("EXPR #(PICK u :Any) -> Any = #([u, {x = 5}])\n\
+             PRINT (PICK {x = 1, y = 2})\nPRINT (PICK 3)"),
+        "[{x = 1, y = 2}, {x = 5, y = null}]\n[3, {x = 5}]"
+    );
+    assert_eq!(
+        run("PRINT ([{x = 1, y = 2}, {x = 3}] :! :(LIST OF :{x :Number}))"),
+        "[{x = 1}, {x = 3}]"
+    );
+}
+
+/// Reading a field a record's type does not name is refused at the load, filled lists or not.
+#[test]
+fn a_field_no_type_names_is_refused_at_the_load() {
+    assert_eq!(
+        run("LET r = {x = 1, y = 2}\nPRINT (ATTR r z)"),
+        "load: <test>:2:7: :{x :Number y :Number} has no field z"
+    );
+}
+
+/// No record shows a value it stores under a field the type it is held at hides, whatever type
+/// later names that field or would show it: building a container whose fill names it, passing it
+/// to a wider parameter, retyping it wider, or reading a field through a widened holder.
+#[test]
+fn a_hidden_field_never_shows_again() {
+    let xs = "LET xs = ([{x = 1, y = 3}] :! :(LIST OF :{x :Number}))\n";
+    assert_eq!(
+        run(&format!(
+            "{xs}LET zs = [xs, [{{x = 2, y = 4}}]]\nPRINT zs\n\
+             PRINT (zs :! :(LIST OF (LIST OF (:{{x :Number, y :Number}} | :{{x :Number, y :Null}}))))"
+        )),
+        "[[{x = 1, y = null}], [{x = 2, y = 4}]]\n[[{x = 1, y = null}], [{x = 2, y = 4}]]"
+    );
+    assert_eq!(
+        run("LET h = ({p = {x = 2, f = 3}} :! :{p :{x :Number}})\n\
+             PRINT [h, {p = {x = 1, f = null}}]"),
+        "[{p = {f = null, x = 2}}, {p = {f = null, x = 1}}]"
+    );
+    let gh = "LET xs = ([{g = 2, h = 1}] :! :(LIST OF :{h :Number}))\n";
+    assert_eq!(
+        run(&format!(
+            "{gh}LET f = (FN :{{ys :(LIST OF (:{{g :Number}} | :{{h :Number}}))}} -> Any = #(PRINT ys))\n\
+             f {{ys = xs}}\n\
+             PRINT (xs :! :(LIST OF (:{{g :Number}} | :{{h :Number}})))\n\
+             PRINT (xs :! :(LIST OF Any))\n\
+             PRINT ((xs :! :(LIST OF Any)) == [{{g = 2, h = 1}}])\n\
+             LET r = ({{g = 2, h = 1}} :! :{{h :Number}})\n\
+             PRINT (r :! Any)"
+        )),
+        "[{h = 1}]\n[{h = 1}]\n[{h = 1}]\nfalse\n{h = 1}"
+    );
+    assert_eq!(
+        run("LET r = ({p = {g = 2, h = 1}} :! :{p :{h :Number}})\n\
+             LET w = (r :! :{p :Any})\n\
+             PRINT w.p\n\
+             LET inner = w.p\n\
+             PRINT (ATTR inner g)"),
+        "{h = 1}\nerror: :{h :Number} has no field g"
+    );
+    // A holder rebuilt over a copy, and a copied record, still hide what their types hide.
+    assert_eq!(
+        run(
+            "LET xs = ([{x = 1, y = 3}, {x = 2, g = 5}] :! :(LIST OF :{x :Number}))\n\
+             LET zs = [xs, [{x = 9, g = 4}]]\n\
+             PRINT (zs :! :(LIST OF (LIST OF Any)))"
+        ),
+        "[[{x = 1}, {x = 2}], [{g = 4, x = 9}]]"
+    );
+    // A holder rebuilt over a copy is typed by what it holds, so no type promises a field it hid.
+    assert_eq!(
+        run("LET r = {a = {x = 1, y = 2}}\n\
+             LET h = ({q = r} :! :{q :{a :{x :Number}}})\n\
+             LET t = (h :! :{q :Any}).q\n\
+             LET f = (FN :{s :{a :{x :Number, y :Number}}} -> Any = #(PRINT s.a.y))\n\
+             f {s = t}"),
+        "error: :(FN :{s :{a :{x :Number y :Number}}} -> Any) cannot be called with \
+         :{s :{a :{x :Number}}}"
+    );
+    assert_eq!(
+        run(
+            "LET h = ({l = [{x = 1, y = 2}]} :! :{l :(LIST OF :{x :Number})})\n\
+             LET inner = (h :! :{l :Any}).l\n\
+             PRINT (inner :! :(LIST OF :{x :Number, y :Number}))"
+        ),
+        "error: :(LIST OF :{x :Number}) does not satisfy its ascription \
+         :(LIST OF :{x :Number y :Number})"
+    );
+    assert_eq!(
+        run(
+            "LET r = ({a = {x = 1, y = 3}, g = 5} :! :{a :{x :Number}})\n\
+             LET zs = [r, {a = {x = 2}, g = null}]\n\
+             PRINT (zs :! :(LIST OF :{a :Any}))"
+        ),
+        "[{a = {x = 1}}, {a = {x = 2}}]"
+    );
+    // A knot's list holds a hiding value at its view under the list's fill.
+    assert_eq!(
+        run(&format!(
+            "NEWTYPE Ring = :{{next :Any}}\n{xs}\
+             LET a = [xs, [{{x = 2, y = 4}}], b]\nLET b = (Ring {{next = a}})\nPRINT a"
+        )),
+        "@0 = [[{x = 1, y = null}], [{x = 2, y = 4}], Ring({next = @0})]"
+    );
+    // A field a holder hid, filled at `Null` beside a record naming it, is no longer stored.
+    assert_eq!(
+        run("LET r = ({p = {g = 2, h = 1}} :! :{p :{h :Number}})\n\
+             LET l = [r.p, {g = 5, h = 2}]\nPRINT l\nPRINT (l :! :(LIST OF Any))"),
+        "[{g = null, h = 1}, {g = 5, h = 2}]\n[{h = 1}, {g = 5, h = 2}]"
     );
 }

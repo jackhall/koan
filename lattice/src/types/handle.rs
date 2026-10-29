@@ -259,6 +259,16 @@ impl Handle {
         TypeDigest(self.0 & DIGEST_BITS)
     }
 
+    /// The handle's whole word, flags and all: what a memo keeps of a type it answers with.
+    pub(super) const fn bits(self) -> u128 {
+        self.0
+    }
+
+    /// The handle [`bits`](Self::bits) gave.
+    pub(super) const fn from_bits(bits: u128) -> Handle {
+        Handle(bits)
+    }
+
     /// Whether the node lies in the root: one bit, no lookup.
     pub(super) const fn in_root(self) -> bool {
         self.0 & IN_ROOT != 0

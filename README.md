@@ -212,16 +212,18 @@ src/
 │   └── activation.rs     ActivationView — one call's or block's Copy, Drop-free read half, covariant in its brand: its segment, the knot member it runs, a view of its slots, read by coordinate (an edge capture as its sibling member), and what its frame decided so far; Activation — the view beside the slot array that binds, invariant, with one constructor per body kind
 ├── values.rs         pub mod values — Value, the 24-byte Copy sum over scalars, a region string, a borrow of each per-kind resident struct, a knot-member parameter and a header over one; the Knotted / KnottedFamily trait pair and its vacuous Nothing / NoKnot default; ValueFamily / ValueCarrier; the text helper and the ascription retype
 ├── values/
-│   ├── weight.rs         Weight — the saturating bytes a total rebuild writes, memoized on every composite, with MemoBits in its top: root-closed and settled, where every type the value reaches already resolves
+│   ├── weight.rs         Weight — the saturating bytes a total rebuild writes, memoized on every composite, with MemoBits in its top: root-closed and settled, where every type the value reaches already resolves — and the hides bit, where it stores a field the type it is held at hides
 │   ├── settled.rs        the memo bits a value door, a restamp, a copy and a knot's birth compute: folded from the parts' bits and whether the chain interns where it lays
 │   ├── type_value.rs     TypeValue — a type in value position beside its memoized OfKind type, or the kind a retype stamped
 │   ├── retyped.rs        Retyped — a knot member's header: the bare member beside the type a retype stamps it at
-│   ├── list.rs           List — one run of cells typed by the join of its elements, or a key's candidates typed `List<Any>`
+│   ├── list.rs           List — one run of cells typed by the union of its elements' filled types, or a key's candidates typed `List<Any>`
 │   ├── dict.rs           Dict / Key — sorted keys and aligned cells, a binary-search lookup, entry order key order
 │   ├── record.rs         Record — symbol-sorted names and aligned cells, typed by the record of its fields
 │   ├── tagged.rs         Tagged — the one nominal wrap: a payload under a type identity, constructed through the checked door, held or peeled
 │   ├── link.rs           Link — a value word or an edge into the holder's own knot: a data node's cell, a closure binding
 │   ├── circular.rs       Circular / Resolved / CodeView — a knot's data node over link cells, what a member holds as `values` reads it, and a data node's run listing and rebuild for its knot's copy
+│   ├── fill.rs           the fill — a container's records typed against each other at each position, a merge memoized in the lattice — and hides_more, the walk the hides bit reads
+│   ├── hiding.rs         unhidden / held_in — the shallow copy a part takes where a new view would show a field it hides; narrowed — a part's own type less what its view hides, the type every copy of a list, dict or record is laid at
 │   ├── admission.rs      satisfies over a value's memoized type, admits_part / part_ktype over a raw AST part, admits over a working part, and construction, the one newtype-construction rule, and representation, the type a tagged payload is read at
 │   ├── surface.rs        Seen / Surface — the one door every read of a container or tagged value goes through: a value beside the type a read sees it at, opened to show only what that type names; Value::retyped, Retype — what the load records a retype re-stamps at — and the load's static type of a retyped value
 │   ├── habitat.rs        BranchSlot / BranchCell — the part of a habitat half's header values reads, its branch's slot; Half, a half's writer beside its header door projected to that slot (or the root builder at the load) under a pairing brand; Chain, a chain paired to the writer it serves, and Types, the chain a step, a build or the load reads and interns through

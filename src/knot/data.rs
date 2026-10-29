@@ -30,8 +30,8 @@ use crate::symbols::BinderSymbol;
 use crate::type_lattice::{DeclaredType, KType, satisfied_by};
 use crate::values::{
     CALL_ONLY, Chain, Circular, ConstructionRefused, Dict, Key, Link, List, Record, Retype, Tagged,
-    TypeValue, Value, construction, dict_type, kept_entries, list_type, part_ktype, record_type,
-    retype_target_as, solves_identity,
+    TypeValue, Value, construction, dict_type, held_in, kept_entries, list_type, part_ktype,
+    record_type, retype_target_as, solves_identity,
 };
 
 use super::{Eager, KReading, KValue, Knotted, Supplied, Untieable};
@@ -707,15 +707,20 @@ pub(super) fn lay_down<'graph, 'cell>(
     scratch: BumpAllocator<'_>,
 ) -> Circular<'cell, Knotted<'graph, 'cell>> {
     let cell = |staged| link(writer, staged, plan, types, scratch);
+    // A list's or dict's value cell is held at its view under the node's memo.
+    let held = |staged| match cell(staged) {
+        Link::Value(value) => Link::Value(held_in(writer, types, scratch, value, memo)),
+        edge => edge,
+    };
     match &node.shape {
         Staged::List(items) => {
             let mut cells = BumpVec::with_capacity_in(items.len(), scratch);
-            cells.extend(items.iter().map(cell));
+            cells.extend(items.iter().map(held));
             Circular::List(List::linked(writer, &cells, memo))
         }
         Staged::Dict(entries) => {
             let mut cells = BumpVec::with_capacity_in(entries.len(), scratch);
-            cells.extend(entries.iter().map(|(key, staged)| (*key, cell(staged))));
+            cells.extend(entries.iter().map(|(key, staged)| (*key, held(staged))));
             Circular::Dict(Dict::linked(writer, &cells, memo, scratch))
         }
         Staged::Record(fields) => {

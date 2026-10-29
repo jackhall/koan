@@ -120,7 +120,7 @@ fn returns(
                         Some(held) => Interval::point(KType::of_kind(held.kind_of(types)).into()),
                         None => under(KType::ANY_TYPE.into()),
                     },
-                    _ => member_read(types, given[0].typed, declared),
+                    _ => member_read(types, scratch, given[0].typed, declared),
                 },
                 _ => match name {
                     BinderSymbol::Type(_) => under(KType::ANY_TYPE.into()),
@@ -133,7 +133,7 @@ fn returns(
             let upper = upper_field(types, scratch, value.upper, *name);
             // A union field's value keeps its variant, so both ends must name the field alike.
             if lower_field(types, value.lower, *name) == upper {
-                retyped_to(types, upper)
+                retyped_to(types, scratch, upper)
             } else {
                 under(upper)
             }
@@ -148,6 +148,7 @@ fn returns(
 /// schema and retypes it to `declared` — and at most `declared` otherwise.
 pub(super) fn member_read(
     types: &Chain<'_, '_, '_, '_>,
+    scratch: BumpAllocator<'_>,
     operand: Interval,
     declared: Parametric,
 ) -> Interval {
@@ -159,7 +160,7 @@ pub(super) fn member_read(
                 | TypeNode::SignatureMeet { .. }
         );
     if exact {
-        retyped_to(types, declared)
+        retyped_to(types, scratch, declared)
     } else {
         under(declared)
     }

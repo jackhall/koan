@@ -3,7 +3,8 @@
 //! No law: a verdict is never load-bearing, so what a table remembers is invisible to the algebra.
 //! These pin the tables' own contract: a hit answers only for its own key, a verdict over two load
 //! types is read from the load's table alone, and the load's table keeps every verdict the load
-//! recorded.
+//! recorded. A downstream memo rides the same tables: an answer for a member of a group reads back
+//! for that pair alone, from whichever tier holds its shortest-lived type.
 
 use crate::bump::Bump;
 use crate::symbols::{BinderSymbol, SymbolInterner};
@@ -12,7 +13,7 @@ use crate::types::chain::TypeChain;
 use crate::types::digest::TypeDigest;
 use crate::types::handle::{Handle, KType, TypeHandle};
 use crate::types::tiers::{Agent, BumpHalf, RootBuilder};
-use crate::types::verdicts::Relation;
+use crate::types::verdicts::{MemoKind, Relation};
 
 /// A root handle over `n`: the suite runs on the load's chain, where every handle is in-root.
 fn key(n: u128) -> Handle {
@@ -123,4 +124,49 @@ fn the_loads_verdict_table_keeps_every_verdict() {
             Some(i % 3 == 0)
         );
     }
+}
+
+#[test]
+fn a_memo_answers_for_its_own_group_and_member_alone() {
+    let bump = Bump::new();
+    let types = crate::types::tests::building(&bump);
+    let mut group = [KType::NUMBER, KType::STR, KType::NULL];
+    group.sort_unstable_by_key(|kt| kt.raw());
+    types.record_memo_member(MemoKind::Fill, &group, KType::NUMBER, KType::ANY);
+    let read = |group: &[KType], member| types.memo_member(MemoKind::Fill, group, member);
+    assert_eq!(read(&group, KType::NUMBER), Some(KType::ANY));
+    assert_eq!(read(&group, KType::STR), None, "another member");
+    assert_eq!(read(&group[..2], KType::NUMBER), None, "another group");
+    assert_eq!(
+        types.memo_member(MemoKind::Hides, &group, KType::NUMBER),
+        None,
+        "another kind"
+    );
+    types.record_memo_flag(MemoKind::Hides, KType::NUMBER, KType::STR, true);
+    let flag = |subject, candidate| types.memo_flag(MemoKind::Hides, subject, candidate);
+    assert_eq!(flag(KType::NUMBER, KType::STR), Some(true));
+    assert_eq!(flag(KType::STR, KType::NUMBER), None);
+}
+
+#[test]
+fn a_memo_over_root_types_answering_with_a_branch_type_reads_back() {
+    let symbols = SymbolInterner::new();
+    let region = Bump::new();
+    let types = crate::types::tests::tiered(&region);
+    let minted = branch_type(&types, &symbols);
+    let mut group = [KType::NUMBER, KType::STR];
+    group.sort_unstable_by_key(|kt| kt.raw());
+    types.record_memo_member(MemoKind::Fill, &group, KType::STR, minted);
+    assert_eq!(
+        types.memo_member(MemoKind::Fill, &group, KType::STR),
+        Some(minted)
+    );
+    // Over a group holding the branch type, the answer is the branch's too.
+    let mut mixed = [KType::NUMBER, minted];
+    mixed.sort_unstable_by_key(|kt| kt.raw());
+    types.record_memo_member(MemoKind::Fill, &mixed, minted, KType::NUMBER);
+    assert_eq!(
+        types.memo_member(MemoKind::Fill, &mixed, minted),
+        Some(KType::NUMBER)
+    );
 }

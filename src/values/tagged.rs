@@ -4,13 +4,14 @@
 use std::cell::Cell;
 use std::marker::PhantomData;
 
-use crate::memory::{BumpAllocator, Writer, resident};
+use crate::memory::{Bump, BumpAllocator, Writer, resident};
 use crate::type_lattice::KType;
 
-use super::settled::{composite_bits, restamp_bits};
+use super::fill::hides_more;
+use super::settled::{composite_bits, part_hides, restamp_bits};
 use super::{
     Chain, ConstructionRefused, Knotted, Link, MemoBits, Nothing, SealRefused, TypeValue, Value,
-    Weight, construction, sealing,
+    Weight, construction, representation, sealing,
 };
 
 /// A tagged value. The identity is its type, so no tag symbol rides beside the payload. Its payload
@@ -48,7 +49,22 @@ impl<'cell, X: Knotted> Tagged<'cell, X> {
     ) -> &'cell Tagged<'cell, X> {
         let weight = Weight::flat::<Self>().plus(payload.referent_weight());
         let bits = composite_bits(types, identity, [&payload]);
-        Self::from_payload(writer, payload, identity, weight.with_bits(bits))
+        let scratch = Bump::new();
+        // The payload is held at the identity's representation, which may hide a field it stores.
+        let composite = matches!(
+            payload,
+            Value::List(_) | Value::Dict(_) | Value::Record(_) | Value::Tagged(_)
+        );
+        let hides = part_hides(&payload)
+            || (composite
+                && (representation(types, &scratch, identity))
+                    .is_some_and(|held| hides_more(types, payload.concrete_ktype(), held)));
+        Self::from_payload(
+            writer,
+            payload,
+            identity,
+            weight.with_bits(bits).with_hides(hides),
+        )
     }
 
     /// A member sealed behind an opaque view's barrier: [`sealing`] checks the identity is a
@@ -125,7 +141,9 @@ impl<'cell, X: Copy, C: Copy> Tagged<'cell, X, C> {
         types: &Chain<'_, 'cell, '_, '_>,
     ) -> &'cell Self {
         let weight = self.weight.get();
-        let weight = weight.with_bits(restamp_bits(weight.bits(), types, ktype));
+        let weight = weight
+            .with_bits(restamp_bits(weight.bits(), types, ktype))
+            .with_hides(weight.hides() || hides_more(types, self.ktype, ktype));
         Self::from_payload(writer, self.payload, ktype, weight)
     }
 

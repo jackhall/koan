@@ -215,8 +215,9 @@ type, a code node's its carried type and a tagged node's the head it names; all
 are declared, and
 exist before the knot does. A *derived* node's memo is read off its cells, with
 an edge contributing its target's memo. A container's is derived by the rule the plain door of
-its kind uses (`values::list_type`, `dict_type`, `record_type`) — the join of its cells for a list, the key and value
-joins for a dict, the record type of its fields. A tagged node whose head is a
+its kind uses (`values::list_type`, `dict_type`, `record_type`) — the union of its cells' filled types for a list, its
+keys' union beside its values' filled union for a dict, the record type of its fields. A list's or dict's value cell
+is held at its view under that memo, copied without a field it hides that the view would show ([hiding](../values/README.md#weight)). A tagged node whose head is a
 family with a representation is derived too, and is no cut: its memo is the
 application the [construction rule](../values/README.md#what-a-value-is)
 solves from its payload's memo. So the tie derives memos over the strongly

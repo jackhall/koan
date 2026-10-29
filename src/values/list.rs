@@ -1,14 +1,17 @@
-//! A list: one run of cells in the region, typed by the join of its elements — or `List<Any>` for a
+//! A list: one run of cells in the region, typed by the union of its elements' filled types
+//! ([fill.rs](super::fill)) — or `List<Any>` for a
 //! key's candidates, which dispatch alone reads. Its cells are value words, or [`Link`]s when the
 //! list is a knot's data node.
 
 use std::cell::Cell;
 use std::marker::PhantomData;
 
-use crate::memory::{BumpAllocator, Writer, resident};
+use crate::memory::{Bump, BumpAllocator, Writer, resident};
 use crate::type_lattice::KType;
 
-use super::settled::{composite_bits, restamp_bits};
+use super::fill::hides_more;
+use super::hiding::unhidden_cells;
+use super::settled::{composite_bits, part_hides, restamp_bits};
 use super::{Chain, Knotted, Link, MemoBits, Nothing, Value, Weight, list_type};
 
 /// A list value, resident in the region its cells live in.
@@ -35,8 +38,9 @@ fn filled<'cell, X: Knotted>(
 }
 
 impl<'cell, X: Knotted> List<'cell, X> {
-    /// Lay down `items` as the list's cells. The element type is the join of the cells' types —
-    /// `Never` for an empty list — and the weight is summed in the same pass.
+    /// Lay down `items` as the list's cells. The element type is the union of the cells' filled
+    /// types ([`list_type`]) — `Never` for an empty list — and the weight is summed in the same
+    /// pass. A cell that would show a field it hides is copied without it ([`unhidden_cells`]).
     pub fn new(
         writer: Writer<'cell, '_>,
         items: impl ExactSizeIterator<Item = Value<'cell, X>>,
@@ -45,6 +49,7 @@ impl<'cell, X: Knotted> List<'cell, X> {
     ) -> &'cell List<'cell, X> {
         let cells = filled(writer, items);
         let ktype = list_type(types, scratch, cells.iter().map(Value::concrete_ktype));
+        let cells = unhidden_cells(writer, types, scratch, cells, ktype);
         Self::weighed(writer, cells, ktype, types)
     }
 
@@ -68,7 +73,9 @@ impl<'cell, X: Knotted> List<'cell, X> {
         ktype: KType,
         types: &Chain<'_, 'cell, '_, '_>,
     ) -> &'cell List<'cell, X> {
-        Self::weighed(writer, filled(writer, items), ktype, types)
+        let cells = filled(writer, items);
+        let cells = unhidden_cells(writer, types, &Bump::new(), cells, ktype);
+        Self::weighed(writer, cells, ktype, types)
     }
 
     /// A list over value cells already resident in `writer`'s region under `ktype`, weighed as
@@ -83,7 +90,13 @@ impl<'cell, X: Knotted> List<'cell, X> {
             weight.plus(cell.weight())
         });
         let bits = composite_bits(types, ktype, cells);
-        Self::from_run(writer, cells, ktype, weight.with_bits(bits))
+        let hides = cells.iter().any(part_hides);
+        Self::from_run(
+            writer,
+            cells,
+            ktype,
+            weight.with_bits(bits).with_hides(hides),
+        )
     }
 }
 
@@ -136,7 +149,9 @@ impl<'cell, X: Copy, C: Copy> List<'cell, X, C> {
         types: &Chain<'_, 'cell, '_, '_>,
     ) -> &'cell Self {
         let weight = self.weight.get();
-        let weight = weight.with_bits(restamp_bits(weight.bits(), types, ktype));
+        let weight = weight
+            .with_bits(restamp_bits(weight.bits(), types, ktype))
+            .with_hides(weight.hides() || hides_more(types, self.ktype, ktype));
         Self::from_run(writer, self.cells, ktype, weight)
     }
 
@@ -169,6 +184,12 @@ impl<'cell, X: Copy, C: Copy> List<'cell, X, C> {
             settled: true,
             ..weight.bits()
         }));
+    }
+
+    /// Record that a cell hides a field at its view under the value's own type — the mark a
+    /// holder rebuilt over a copy takes ([hiding.rs](super::hiding)) where its parts' bits miss it.
+    pub(super) fn hide(&self) {
+        self.weight.set(self.weight.get().with_hides(true));
     }
 }
 

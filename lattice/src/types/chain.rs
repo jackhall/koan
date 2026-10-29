@@ -39,6 +39,9 @@
 //! the agent's, since no run writes the load's; one whose types are load or agent types is the
 //! agent's; any other is read from the own tier's, the region tier's, then the agent's, and
 //! recorded in the shortest-lived tier holding one of its two types ([`verdicts`](super::verdicts)).
+//! A downstream memo rides the verdict tables: a flag over two types is placed and read as a verdict;
+//! a type answering for one member of a group is placed in the shortest-lived tier holding any of
+//! the group's types or the answer, and read from every tier.
 //!
 //! [`adopt`](TypeChain::adopt), [`merge`](TypeChain::merge) and [`link`](TypeChain::link) are how a
 //! crossing makes another half's handles resolve here ([transfer.rs](super::transfer)).
@@ -73,7 +76,7 @@ use super::signatures::canonical_applications;
 use super::stored::{Content, Flags, Linked, StoredNode, copied, mapped_fields};
 use super::substitute::{rewrite_siblings, substitute_quantified};
 use super::tiers::{Agent, AgentTier, ChainPosition, Frozen, Habitat, Halves, Own, lay_one};
-use super::verdicts::{Relation, VerdictKey};
+use super::verdicts::{Answer, MemoKind, Relation, VerdictKey};
 use super::walk::Variance;
 use super::walk::unary::{Visit, children, visit, visit_free_quantified};
 
@@ -1547,7 +1550,15 @@ impl<'t, H: Habitat<'t>> TypeChain<'t, H> {
             candidate: candidate.digest(),
             relation,
         };
-        if subject.in_root() && candidate.in_root() {
+        self.answer(key, subject.in_root() && candidate.in_root())
+            .map(Answer::verdict)
+    }
+
+    /// The answer recorded for `key`: where `in_root`, in the frozen load's table, then the
+    /// agent's — on the load's chain, the builder's alone — and otherwise in the own tier's, the
+    /// region tier's, then the agent's.
+    fn answer(&self, key: VerdictKey, in_root: bool) -> Option<Answer> {
+        if in_root {
             let Some(frozen) = self.frozen else {
                 return self.half.own()?.verdict(key);
             };
@@ -1570,7 +1581,7 @@ impl<'t, H: Habitat<'t>> TypeChain<'t, H> {
     }
 
     /// The agent's verdict for `key`: its tier's, or the own tier's on the chain that writes it.
-    fn agent_verdict(&self, key: VerdictKey) -> Option<bool> {
+    fn agent_verdict(&self, key: VerdictKey) -> Option<Answer> {
         match self.agent {
             Some(agent) => agent.verdict(key),
             None => self.half.own()?.verdict(key),
@@ -1593,18 +1604,80 @@ impl<'t, H: Habitat<'t>> TypeChain<'t, H> {
             candidate: candidate.digest(),
             relation,
         };
-        match self.tier_of(subject).max(self.tier_of(candidate)) {
+        let placed = self.tier_of(subject).max(self.tier_of(candidate));
+        self.record_answer(key, placed, Answer::of_verdict(verdict));
+    }
+
+    /// Record `answer` for `key` in the tier `placed` names.
+    fn record_answer(&self, key: VerdictKey, placed: Placed, answer: Answer) {
+        match placed {
             Placed::Load | Placed::Agent => match self.agent {
-                Some(agent) => agent.record(key, verdict),
+                Some(agent) => agent.record(key, answer),
                 // The resting chain, whose own tier is the agent's.
-                None => self.half.own_or_lay().record(self.half, key, verdict),
+                None => self.half.own_or_lay().record(self.half, key, answer),
             },
             Placed::Region => {
                 if let Some(region) = self.half.region() {
-                    region.tier().record(key, verdict);
+                    region.tier().record(key, answer);
                 }
             }
-            Placed::Own => self.half.own_or_lay().record(self.half, key, verdict),
+            Placed::Own => self.half.own_or_lay().record(self.half, key, answer),
+        }
+    }
+
+    // --- Memos ---
+
+    /// The flag a downstream walk `kind` recorded over `subject` and `candidate`, read as a
+    /// verdict is.
+    pub fn memo_flag(&self, kind: MemoKind, subject: KType, candidate: KType) -> Option<bool> {
+        self.verdict(subject.raw(), candidate.raw(), Relation::Memo(kind))
+    }
+
+    /// Record `flag` for `kind` over `subject` and `candidate`, placed as a verdict is.
+    pub fn record_memo_flag(&self, kind: MemoKind, subject: KType, candidate: KType, flag: bool) {
+        self.record_verdict(subject.raw(), candidate.raw(), Relation::Memo(kind), flag);
+    }
+
+    /// The type a downstream walk `kind` recorded for `member` of `group`, a sorted, deduplicated
+    /// set of types holding it. Read from every tier, longest-lived first, since the answer may
+    /// live in a shorter-lived tier than the group.
+    pub fn memo_member(&self, kind: MemoKind, group: &[KType], member: KType) -> Option<KType> {
+        let key = Self::member_key(kind, group, member);
+        let in_root = group.iter().all(|kt| kt.raw().in_root());
+        let found = self.answer(key, in_root).or_else(|| {
+            // A root group's answer may lie in the own or region tier, which `answer` skips.
+            in_root.then(|| self.answer(key, false)).flatten()
+        })?;
+        Some(wrap(found.handle()))
+    }
+
+    /// Record `answer` for `member` of `group` under `kind`, in the shortest-lived tier holding
+    /// any of the group's types or the answer.
+    pub fn record_memo_member(
+        &self,
+        kind: MemoKind,
+        group: &[KType],
+        member: KType,
+        answer: KType,
+    ) {
+        let key = Self::member_key(kind, group, member);
+        let placed = (group.iter().chain([&answer]))
+            .map(|kt| self.tier_of(kt.raw()))
+            .max()
+            .expect("a memo's group is never empty");
+        self.record_answer(key, placed, Answer::of_type(answer.raw()));
+    }
+
+    /// The key of `member`'s answer within `group`: the group's digest beside the member's.
+    fn member_key(kind: MemoKind, group: &[KType], member: KType) -> VerdictKey {
+        debug_assert!(
+            group.windows(2).all(|pair| pair[0].raw() < pair[1].raw()),
+            "a memo's group is sorted and deduplicated"
+        );
+        VerdictKey {
+            subject: digest::group_digest(group.iter().map(|kt| kt.digest())),
+            candidate: member.digest(),
+            relation: Relation::Memo(kind),
         }
     }
 

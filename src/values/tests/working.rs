@@ -132,9 +132,10 @@ fn every_part_shape_admits_the_type_it_reports() {
         let (types, scratch) = (fixture.types, fixture.scratch());
         let every_shape = fixture.parse(
             "x Number (a b) :(LIST OF Number) :{x :Number} [1 \"a\"] {\"k\": 1} {x = true} 1 \"s\" \
-             true null #(a)",
+             true null #(a) [{x = 1, y = 2} {x = 3}] [[{x = 1, y = 2}] [{x = 3}]] \
+             {\"a\": {x = 1} \"b\": {y = 2}}",
         );
-        assert_eq!(every_shape.parts.len(), 13);
+        assert_eq!(every_shape.parts.len(), 16);
         for part in every_shape.parts {
             let part = part.value;
             let reported =
@@ -159,6 +160,24 @@ fn every_part_shape_admits_the_type_it_reports() {
             &fixture.part("1"),
             types
         ));
+    });
+}
+
+#[test]
+fn a_list_literal_admits_its_records_filled_against_each_other() {
+    with_fixture(|fixture| {
+        let (types, scratch) = (fixture.types, fixture.scratch());
+        let x = BinderSymbol::declared("x", fixture.symbols).unwrap();
+        let y = BinderSymbol::declared("y", fixture.symbols).unwrap();
+        let nullable = types.union_of(scratch, &[KType::NUMBER, KType::NULL]);
+        let filled = types.list(types.record(scratch, &[(x, KType::NUMBER), (y, nullable)]));
+        let strict = types.list(types.record(scratch, &[(x, KType::NUMBER), (y, KType::NUMBER)]));
+        let literal = fixture.part("[{x = 1, y = 2} {x = 3}]");
+        assert!(admits_part(filled.into(), &literal, types));
+        assert!(!admits_part(strict.into(), &literal, types));
+        // A record outside a container literal is not filled.
+        let alone = types.record(scratch, &[(x, KType::NUMBER), (y, nullable)]);
+        assert!(!admits_part(alone.into(), &fixture.part("{x = 3}"), types));
     });
 }
 

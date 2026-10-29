@@ -13,6 +13,11 @@
 //! - A **branch's** is insert-only: a digest table laid in its half at its first verdict and
 //!   released with it.
 //!
+//! The same tables keep a **memo** for a walk a downstream crate runs over type nodes
+//! ([`MemoKind`]): a pure answer about types alone — a flag over two types, or a type for one
+//! member of a set of types, keyed by the set's [`group_digest`](super::digest::group_digest) and
+//! the member's — and as never load-bearing as a verdict.
+//!
 //! The chain decides which tier records a verdict ([chain.rs](super::chain)); the relations that
 //! read and record verdicts live in [`order`](super::order), [`ranking`](super::ranking) and
 //! [`unify`](super::unify).
@@ -20,6 +25,17 @@
 use crate::bump::Keyed;
 
 use super::digest::TypeDigest;
+use super::handle::Handle;
+
+/// A walk a downstream crate memoizes in the lattice's tables: each names one pure question over
+/// types, which the crate defines and the lattice never reads.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum MemoKind {
+    /// A container's fill: the type a member of a set of types fills to, merged with the rest.
+    Fill,
+    /// Whether a value held at one type hides a field it would show at another.
+    Hides,
+}
 
 /// Which question a recorded verdict answers. They never alias — each digest domain is disjoint by
 /// construction, and a class verdict names its class — but the enum still keys the table
@@ -34,6 +50,8 @@ pub(super) enum Relation {
     MemberAtLeast,
     /// [`class_at_least`](super::ranking::class_at_least) at the class it names.
     ClassAtLeast(u16),
+    /// A downstream memo ([`MemoKind`]).
+    Memo(MemoKind),
 }
 
 impl Relation {
@@ -44,6 +62,7 @@ impl Relation {
             Relation::Fits => 1,
             Relation::MemberAtLeast => 2,
             Relation::ClassAtLeast(class) => 3 + u64::from(class),
+            Relation::Memo(kind) => (1 << 16) + 3 + kind as u64,
         }
     }
 }
@@ -66,22 +85,48 @@ impl VerdictKey {
     }
 }
 
+/// What an entry answers: a verdict, or a type a memo records, read as its key's relation says.
+/// One word, so an entry is no larger for holding a type.
+#[derive(Clone, Copy)]
+pub(super) struct Answer(u128);
+
+impl Answer {
+    pub(super) fn of_verdict(verdict: bool) -> Self {
+        Answer(u128::from(verdict))
+    }
+
+    pub(super) fn of_type(handle: Handle) -> Self {
+        Answer(handle.bits())
+    }
+
+    pub(super) fn verdict(self) -> bool {
+        self.0 != 0
+    }
+
+    pub(super) fn handle(self) -> Handle {
+        Handle::from_bits(self.0)
+    }
+}
+
 /// One verdict a tier keeps: its key beside its answer. Laid in the tier's storage.
 #[derive(Clone, Copy)]
 pub(super) struct VerdictEntry {
     key: VerdictKey,
-    verdict: bool,
+    answer: Answer,
 }
 
 impl VerdictEntry {
-    pub(super) fn new(key: VerdictKey, verdict: bool) -> Self {
-        VerdictEntry { key, verdict }
+    pub(super) fn new(key: VerdictKey, answer: Answer) -> Self {
+        VerdictEntry { key, answer }
     }
 
-    pub(super) fn verdict(&self) -> bool {
-        self.verdict
+    pub(super) fn answer(&self) -> Answer {
+        self.answer
     }
 }
+
+// A type answer costs an entry nothing: the key's digests already align it to a word.
+const _: () = assert!(std::mem::size_of::<VerdictEntry>() == 64);
 
 impl Keyed for VerdictEntry {
     type Key = VerdictKey;

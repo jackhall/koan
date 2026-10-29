@@ -540,3 +540,50 @@ fn a_projection_over_an_exact_record_is_exact() {
     });
     assert_eq!(run(&format!("{source}\nPRINT which")), "got xy");
 }
+
+/// A record seen at a record type keeps at `Null` each field its own type has at exactly `Null`.
+#[test]
+fn a_record_retyped_keeps_the_nulls_its_own_type_has() {
+    let describe = "EXPR #(DESCRIBE r :{x :Number, y :(Number | Null)}) -> Str = #(\"maybe y\")\n\
+                    EXPR #(DESCRIBE r :{x :Number, y :Null}) -> Str = #(\"no y\")\n";
+    let show = format!(
+        "{describe}EXPR #(SHOW p :{{x :Number, y :(Number | Null)}}) -> Str = #(DESCRIBE p)\n\
+         PRINT (SHOW {{x = 1, y = 2}})\nPRINT (SHOW {{x = 1, y = null}})"
+    );
+    assert_eq!(run(&show), "maybe y\nno y");
+    let ascribed = format!(
+        "{describe}PRINT (DESCRIBE ({{x = 1, y = null}} :! :{{x :Number, y :(Number | Null)}}))"
+    );
+    assert_eq!(run(&ascribed), "no y");
+}
+
+/// The load reads a retype to a record type with a field `Null` lies strictly under as at most
+/// that type and at least it with that field at `Null`, and refuses what neither end admits.
+#[test]
+fn a_record_retype_to_a_nullable_field_is_read_between_its_nulls_and_itself() {
+    loaded(
+        "LET r = ({x = 1, y = null} :! :{x :Number, y :(Number | Null)})",
+        |program| {
+            assert_eq!(
+                ends(program, program.shape(), "r"),
+                (
+                    ":{x :Number y :Null}".to_string(),
+                    ":{x :Number y :(Number | Null)}".to_string()
+                )
+            );
+        },
+    );
+    // A slot only the lower end admits is chosen at the run, not refused at the load.
+    let only_null = "EXPR #(ONLY_NULL r :{x :Number, y :Null}) -> Str = #(\"null y\")\n\
+                     LET r = ({x = 1, y = 2} :! :{x :Number, y :(Number | Null)})\n\
+                     PRINT (ONLY_NULL r)";
+    assert!(
+        run(only_null).starts_with("error: no overload of `ONLY_NULL _`"),
+        "{}",
+        run(only_null)
+    );
+    // A slot neither end admits is still refused at the load.
+    let wrong = "EXPR #(STR r :{x :Str}) -> Str = #(\"str\")\n\
+                 LET f = (FN :{p :{x :Number, y :(Number | Null)}} -> Any = #(STR p))";
+    assert!(run(wrong).starts_with("load:"), "{}", run(wrong));
+}

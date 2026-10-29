@@ -63,7 +63,7 @@ impl<'a, 'tier, 'graph, 'here, 'reg> Exit<'a, 'tier, 'here, 'reg> {
         self.handle(contract.returns);
         self.handle(contract.retype);
         match contract.restamp {
-            Some(Retype::Point(kt) | Retype::Members(kt) | Retype::Fit(kt)) => self.handle(kt),
+            Some(Retype::Point(kt) | Retype::Computed(kt) | Retype::Fit(kt)) => self.handle(kt),
             Some(Retype::Keeps) | None => {}
         }
     }

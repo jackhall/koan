@@ -148,8 +148,11 @@ lower bound. Both are commutative, associative and idempotent, each absorbs
 the other, and `a ≤ b` exactly when `join(a, b)` is `b` and `meet(a, b)` is
 `a` — all by handle. `Never` and `Any` are their identities.
 
-**What rests on it.** `join` types every container: a list's type is the join
-of its cells' types, and nothing later descends into a value to type it again.
+**What rests on it.** `join` is the canonical union every container's type is
+built from: a list's type is the union of its cells' types once
+[`values`](../../../src/values/README.md#the-type-memo-and-satisfies) fills
+their records against each other, and nothing later descends into a value to
+type it again.
 A variable's least instance is the join of its lower contributions. `meet` is
 the solve's upper end, the `&` a program writes, a retype's target, and the
 test behind every *never* verdict and every refused return or ascription.

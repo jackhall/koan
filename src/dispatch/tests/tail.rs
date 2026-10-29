@@ -1,5 +1,6 @@
 //! A keyworded self-call in tail position hops to the callee's frame: however deep the recursion,
-//! the cells live at once stay constant.
+//! the cells live at once stay constant. A call by name, in tail position or not, binds each
+//! parameter to the field of its argument record the parameter names.
 
 use std::cell::Cell;
 
@@ -239,4 +240,23 @@ fn a_tail_call_reads_its_route_and_derives_none() {
     let (printed, derived, _) = routed(4, &format!("{RUNS}{unknown}"));
     assert_eq!(printed, format!("{}7", "n\n".repeat(4)));
     assert_eq!(derived, 1);
+}
+
+#[test]
+fn a_call_by_name_binds_each_parameter_to_the_field_it_names_past_a_hidden_one() {
+    // Each argument record stores a field its type hides, sorting before a field it names.
+    let source = "LET f = (FN :{x :Number} -> Any = #(x))\n\
+                  PRINT (f ({x = 1, y = 3} :! :{x :Number}))\n\
+                  PRINT (f ({a = 5, x = 7} :! :{x :Number}))\n\
+                  LET g = (FN :{y :Number} -> Any = #(y))\n\
+                  PRINT (g ({x = 5, y = 7} :! :{y :Number}))\n";
+    assert_eq!(super::run(source), "1\n7\n7");
+    // In tail position the call hops, and its successor binds by name too.
+    let tail = "LET h = (FN :{x :Number, z :Number} -> Any = #(z))\n\
+                LET k = (FN :{r :Any} -> Any = #(h r))\n\
+                PRINT (k {r = ({a = 5, x = 7, y = 1, z = 9} :! :{x :Number, z :Number})})\n\
+                LET f = (FN :{x :Number} -> Any = #(x))\n\
+                LET g = (FN :{r :Any} -> Any = #(f r))\n\
+                PRINT (g {r = ({a = 5, x = 7} :! :{x :Number})})\n";
+    assert_eq!(super::run(tail), "9\n7");
 }

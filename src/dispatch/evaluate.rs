@@ -744,19 +744,44 @@ fn container<'step, 'graph, 'here>(
         let error = Raised::NotAKey { rejected }.raise(at.program, step.writer(), &at.types);
         return finish(step, at, error);
     }
+    // The load typed a list or dict literal whose elements are exact by the fill the run would
+    // compute, so the run stamps that type rather than merging its cells' types again.
+    let shape = at.view.shape();
+    let decided = (at
+        .view
+        .facts()
+        .value_type(&at.types, shape, shape.site(part)))
+    .filter(|typed| typed.is_exact())
+    .and_then(|typed| at.types.concrete(typed.upper));
     finish_built(step, at, &parts, |writer, types, values| {
         let scratch = Bump::new();
+        let decided = decided.filter(|ktype| types.resolves(*ktype));
         match part {
-            ExpressionPart::ListLiteral(_) => {
-                Value::List(List::new(writer, values.iter().copied(), types, &scratch))
-            }
+            ExpressionPart::ListLiteral(_) => Value::List(match decided {
+                Some(ktype) => {
+                    debug_assert_eq!(
+                        ktype,
+                        crate::values::list_type(
+                            types,
+                            &scratch,
+                            values.iter().map(Value::concrete_ktype)
+                        ),
+                        "the load decides a literal's type as the run fills it"
+                    );
+                    List::typed(writer, values.iter().copied(), ktype, types)
+                }
+                None => List::new(writer, values.iter().copied(), types, &scratch),
+            }),
             ExpressionPart::DictLiteral(_) => {
                 let mut entries = BumpVec::with_capacity_in(values.len() / 2, &scratch);
                 for pair in values.chunks(2) {
                     let key = Key::of(&pair[0]).expect("a dict literal's keys were checked");
                     entries.push((key, pair[1]));
                 }
-                Value::Dict(Dict::new(writer, &entries, types, &scratch))
+                Value::Dict(match decided {
+                    Some(ktype) => Dict::typed(writer, &entries, ktype, types, &scratch),
+                    None => Dict::new(writer, &entries, types, &scratch),
+                })
             }
             ExpressionPart::RecordLiteral(fields) => {
                 let mut named = BumpVec::with_capacity_in(fields.len(), &scratch);
@@ -1220,13 +1245,17 @@ fn apply<'step, 'graph, 'here>(
             head_kept,
         ),
         None => {
-            let names = (argument.value.stored_fields()).map_or(&[][..], |(names, _)| names);
+            let names = match at.types.node(argument.value.concrete_ktype()) {
+                TypeNode::Record { fields } => Some(fields.keys()),
+                _ => None,
+            };
             let threaded = tail && threads(at, argument_part);
-            let fields = names.iter().map(|name| {
+            let fields = names.into_iter().flatten().map(|binder| {
+                let name = binder.symbol();
                 let kept =
-                    (argument.kept).map(|part| part.extended(writer, PathSegment::Label(*name)));
-                let value = (argument.value.along(*name)).expect("a record stores its fields");
-                (*name, Held { value, kept }, threaded)
+                    (argument.kept).map(|part| part.extended(writer, PathSegment::Label(name)));
+                let value = argument.value.named(name);
+                (name, Held { value, kept }, threaded)
             });
             passing(writer, at, argument.value, fields, head_kept)
         }

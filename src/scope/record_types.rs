@@ -525,7 +525,7 @@ impl Named for KType {
 impl Named for Retype {
     fn each_named(&self, each: &mut Each<'_>) {
         match self {
-            Retype::Point(ktype) | Retype::Members(ktype) | Retype::Fit(ktype) => {
+            Retype::Point(ktype) | Retype::Computed(ktype) | Retype::Fit(ktype) => {
                 each((*ktype).into())
             }
             Retype::Keeps => {}

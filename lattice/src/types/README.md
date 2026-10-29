@@ -51,7 +51,7 @@ breaks without it.
 | Doc | Holds |
 |---|---|
 | [The laws](laws.md) | each law, what rests on it, what breaks without it, and what enforces it |
-| [Identity and storage](identity.md) | the content digest, typed handles, the frozen load, the agent tier and the branches, records and schemas, recursive groups |
+| [Identity and storage](identity.md) | the content digest, typed handles, the frozen load, the agent tier and the branches, the verdict tables and downstream memos, records and schemas, recursive groups |
 | [The node vocabulary](vocabulary.md) | every node variant, the kind order, the three families, the code family |
 | [The relations](relations.md) | the order, *fits*, `join` and `meet`, signature types, quantified binders |
 | [Solving](solving.md) | substitution, the unifier, and priority classes: admission, ranking and judging |
