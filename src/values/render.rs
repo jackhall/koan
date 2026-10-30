@@ -14,16 +14,34 @@
 
 use std::fmt;
 
-use crate::memory::program_storage;
 use crate::memory::{BumpAllocator, BumpBackedMap, BumpBackedSet, BumpVec, bump_set, bump_table};
+use crate::memory::{Writer, program_storage};
 use crate::symbols::{Symbol, SymbolInterner};
 use crate::type_lattice::{KType, display_name};
 
 use super::circular::Resolved;
 use super::surface::Parts;
-use super::{Chain, Key, Knotted, Seen, Surface, Value};
+use super::{Chain, Key, Knotted, Seen, Surface, Text, Value};
 
 impl<'a, X: Knotted> Value<'a, X> {
+    /// The text `PRINT` writes for it: a string's own text, and any other value rendered flat
+    /// through `writer`.
+    pub fn rendered_text(
+        &self,
+        writer: Writer<'a, '_>,
+        types: &Chain<'_, '_, '_, '_>,
+        symbols: &SymbolInterner,
+        scratch: BumpAllocator<'_>,
+    ) -> Text<'a> {
+        if let Some(text) = self.as_text() {
+            return text;
+        }
+        let mut prose = writer.prose();
+        self.render(&mut prose, types, symbols, scratch)
+            .expect("writing into a region does not fail");
+        Text::Flat(prose.finish())
+    }
+
     /// Render the value into `out`. A string writes its text bare, a dict key quoted; a list reads
     /// `[a, b]`, a dict `{k: v}` in key order, a record `{x = 1}` in field-name order; a tagged value
     /// reads as its type's name around its payload, a type as its name, a quote as its body's
