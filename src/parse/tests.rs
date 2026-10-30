@@ -57,10 +57,16 @@ pub(super) fn describe(e: &KExpression<'_>, symbols: &SymbolInterner) -> String 
                 } else {
                     't'
                 };
-                format!("{}{class}({})", mark.sigil(), symbols.render(name.symbol()))
+                format!(
+                    "{}{class}({})",
+                    mark.sigil().unwrap_or('~'),
+                    symbols.render(name.symbol())
+                )
             }
+            ExpressionPart::Splice(name) => format!("$..t({})", symbols.render(name.symbol())),
+            ExpressionPart::FilledUse(_, _, e) => format!("~{}", describe(e, symbols)),
             ExpressionPart::MarkedUse(mark, e) => {
-                format!("{}{}", mark.sigil(), describe(e, symbols))
+                format!("{}{}", mark.sigil().unwrap_or('~'), describe(e, symbols))
             }
             ExpressionPart::ListLiteral(items) => {
                 let inner: Vec<String> = items

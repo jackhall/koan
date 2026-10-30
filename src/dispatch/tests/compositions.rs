@@ -1,4 +1,4 @@
-//! Code composed at run time, through the test-only `COMPOSE`: an `EVAL` of it runs under its
+//! Code composed at run time, a splice of written quotes: an `EVAL` of it runs under its
 //! composition, found by its syntax digest or built, which rests nothing in the agent tier and
 //! reports what its code refuses as the load words it.
 
@@ -33,9 +33,9 @@ fn composed(source: &str) -> (String, Tiers, usize) {
 fn an_eval_of_composed_code_runs_as_its_written_quote_does() {
     let (printed, tiers, live) = composed(
         "LET x = 1
-LET q = #((LET y = 2) (PRINT (y + $x)))
+LET q = #((LET y = 2) (PRINT (y + $x)))\nLET qs = [q]
 EVAL q -> Any
-EVAL (COMPOSE q) -> Any",
+EVAL #($..qs) -> Any",
     );
     assert_eq!(printed, "3\n3");
     assert_eq!((tiers.composed, live), (1, 1));
@@ -45,11 +45,11 @@ EVAL (COMPOSE q) -> Any",
 fn a_second_eval_of_equal_composed_code_hits_its_composition() {
     let (printed, tiers, live) = composed(
         "LET x = 1
-LET q = #(PRINT (2 + $x))
-LET p = #(PRINT (2 + $x))
-EVAL (COMPOSE q) -> Any
-EVAL (COMPOSE q) -> Any
-EVAL (COMPOSE p) -> Any",
+LET q = #(PRINT (2 + $x))\nLET qs = [q]
+LET p = #(PRINT (2 + $x))\nLET ps = [p]
+EVAL #($..qs) -> Any
+EVAL #($..qs) -> Any
+EVAL #($..ps) -> Any",
     );
     assert_eq!(printed, "3\n3\n3");
     // Two quotes written apart are one syntax, so one composition.
@@ -100,9 +100,9 @@ fn looped(source: &str, budget: BuildBudget) -> Looped {
 fn a_loop_composing_code_each_hop_holds_o1_compositions() {
     // Three quotes composed each hop, under a budget of one and a half compositions: every `EVAL`
     // misses, evicting the least recently used.
-    let quotes = "LET q = #(1 + 1)\nLET r = #(2 + 2)\nLET s = #(3 + 3)\n";
+    let quotes = "LET q = #(1 + 1)\nLET qs = [q]\nLET r = #(2 + 2)\nLET rs = [r]\nLET s = #(3 + 3)\nLET ss = [s]\n";
     let one = looped(
-        &format!("{quotes}EVAL (COMPOSE q) -> Any"),
+        &format!("{quotes}EVAL #($..qs) -> Any"),
         BuildBudget::default(),
     );
     let budget = BuildBudget {
@@ -113,8 +113,8 @@ fn a_loop_composing_code_each_hop_holds_o1_compositions() {
             &program(
                 depth,
                 &format!(
-                    "{quotes}EXPR #(LOOP link :Link) -> Number = #((EVAL (COMPOSE q) -> Any) \
-                     (EVAL (COMPOSE r) -> Any) (EVAL (COMPOSE s) -> Any) (LOOP (ATTR link next)))
+                    "{quotes}EXPR #(LOOP link :Link) -> Number = #((EVAL #($..qs) -> Any) \
+                     (EVAL #($..rs) -> Any) (EVAL #($..ss) -> Any) (LOOP (ATTR link next)))
 EXPR #(LOOP end :Null) -> Number = #(7)
 PRINT (LOOP chain)"
                 ),
@@ -149,7 +149,9 @@ fn composed_code_that_does_not_type_refuses_at_its_eval_worded_as_the_load() {
         "#(PRINT \\w)",
     ] {
         let written = run(&format!("LET q = {code}\nEVAL q -> Any"));
-        let composed = run(&format!("LET q = {code}\nEVAL (COMPOSE q) -> Any"));
+        let composed = run(&format!(
+            "LET q = {code}\nLET qs = [q]\nEVAL #($..qs) -> Any"
+        ));
         assert!(written.starts_with("error: "), "`{code}`: {written}");
         assert_eq!(composed, written, "`{code}`");
     }
@@ -161,8 +163,8 @@ fn a_composition_rests_nothing_in_the_agent_tier() {
         "LET x = 1
 LET Alias = Number
 LET q = #((LET r = {a = $x}) (NEWTYPE Boxed = :(LIST OF $Alias)) \
-         (LET f = (FN :{n :($Alias)} -> Number = #(n + 1))) (PRINT [r (Boxed [1]) (f {n = 2})]))
-EVAL (COMPOSE q) -> Any",
+         (LET f = (FN :{n :($Alias)} -> Number = #(n + 1))) (PRINT [r (Boxed [1]) (f {n = 2})]))\nLET qs = [q]
+EVAL #($..qs) -> Any",
     );
     assert_eq!(printed, "[{a = 1}, Boxed([1]), 3]");
     assert_eq!(tiers.agent, 0);
@@ -173,8 +175,8 @@ fn a_composed_invariant_site_rests_nothing_in_the_agent_tier() {
     let (printed, tiers, _) = composed(
         "LET q = #((SIG Hold FOR ALL #[Elt] = #[(VAL held :Elt)]) (MODULE m = ((LET held = 1))) \
          (LET peek = (FN :{m :Hold} -> Str = #((LET v = (m :| Hold)) (\"x\")))) \
-         (PRINT (peek {m = m})) (PRINT (peek {m = m})))
-EVAL (COMPOSE q) -> Any",
+         (PRINT (peek {m = m})) (PRINT (peek {m = m})))\nLET qs = [q]
+EVAL #($..qs) -> Any",
     );
     assert_eq!(printed, "x\nx");
     assert_eq!(tiers.agent, 0);
@@ -186,8 +188,8 @@ const OUTER: &str = "EXPR #(OUTER m :Holder) -> Number = #((LET w = (m :| Holder
 #[test]
 fn a_composed_asker_calling_a_written_keyed_operator_settles_it() {
     let (printed, tiers, _) = composed(&format!(
-        "{PRELUDE}{OUTER}LET q = #((MODULE m = ((LET held = 1))) (PRINT $(OUTER m)))
-EVAL (COMPOSE q) -> Any"
+        "{PRELUDE}{OUTER}LET q = #((MODULE m = ((LET held = 1))) (PRINT $(OUTER m)))\nLET qs = [q]
+EVAL #($..qs) -> Any"
     ));
     assert_eq!(printed, "7");
     // The module is the one the load computed for the written quote: load content, so the call
@@ -200,8 +202,8 @@ fn a_written_callee_under_the_root_bound_to_a_composed_module_relays_nothing() {
     let (printed, tiers, _) = composed(&format!(
         "{PRELUDE}{OUTER}LET f = (FN :{{n :Number}} -> Number = #(n))
 LET x = (f {{n = 1}})
-LET q = #((MODULE m = ((LET held = $x))) (PRINT $(OUTER m)))
-EVAL (COMPOSE q) -> Any"
+LET q = #((MODULE m = ((LET held = $x))) (PRINT $(OUTER m)))\nLET qs = [q]
+EVAL #($..qs) -> Any"
     ));
     assert_eq!(printed, "7");
     // No layer of the callee's chain holds the module's tree: the call seeks nothing.
@@ -212,8 +214,8 @@ EVAL (COMPOSE q) -> Any"
 fn a_derived_type_under_a_composition_is_minted_once_per_binding_event() {
     let minted = |evals: usize| {
         let source = format!(
-            "LET x = 1\nLET q = #((LET r = {{a = $x}}) (PRINT r))\n{}",
-            "EVAL (COMPOSE q) -> Any\n".repeat(evals)
+            "LET x = 1\nLET q = #((LET r = {{a = $x}}) (PRINT r))\nLET qs = [q]\n{}",
+            "EVAL #($..qs) -> Any\n".repeat(evals)
         );
         let laid = ADOPT_LAID.with(Cell::get);
         let (_, tiers, _) = composed(&source);
@@ -238,7 +240,7 @@ fn lazily(unused: usize, calls: usize) -> (usize, usize) {
     }
     code.push_str("(FN :{n :Number} -> Any = #((LET r :{b :($Alias)} = {b = n}) (r))))");
     let source = format!(
-        "LET Alias = Number\nLET q = {code}\nLET f = (EVAL (COMPOSE q) -> Any)\n{}",
+        "LET Alias = Number\nLET q = {code}\nLET qs = [q]\nLET f = (EVAL #($..qs) -> Any)\n{}",
         "PRINT (f {n = 1})\n".repeat(calls)
     );
     crate::scope::TERM_PROBES.with(|probes| probes.set(0));
@@ -283,13 +285,13 @@ fn smallest(source: &str) -> (String, Tiers) {
 #[test]
 fn a_composition_evicted_and_rebuilt_gives_its_functions_the_same_identity() {
     let (printed, tiers) = smallest(
-        "LET q = #(FN :{n :Number} -> Number = #(n + 1))
-LET p = #(PRINT 0)
-LET f = (EVAL (COMPOSE q) -> Any)
-EVAL (COMPOSE p) -> Any
-LET g = (EVAL (COMPOSE q) -> Any)
+        "LET q = #(FN :{n :Number} -> Number = #(n + 1))\nLET qs = [q]
+LET p = #(PRINT 0)\nLET ps = [p]
+LET f = (EVAL #($..qs) -> Any)
+EVAL #($..ps) -> Any
+LET g = (EVAL #($..qs) -> Any)
 PRINT (f == g)
-EVAL (COMPOSE p) -> Any
+EVAL #($..ps) -> Any
 PRINT (f {n = 1})",
     );
     // `p`'s miss evicts `q`'s composition, which `g`'s rebuilds; then `p`'s evicts it again, and
@@ -299,12 +301,29 @@ PRINT (f {n = 1})",
 }
 
 #[test]
+fn build_after_an_eviction_rebuilds_the_composition() {
+    let (printed, tiers) = smallest(
+        "LET a = [#(PRINT 1)]
+LET b = [#(PRINT 0)]
+LET built = (BUILD #($..a))
+EVAL #($..b) -> Any
+LET again = (BUILD #($..a))
+PRINT (built == again)
+EVAL again -> Any",
+    );
+    // `b`'s miss evicts the composition `a`'s first `BUILD` built, which the second rebuilds and
+    // the `EVAL` finds.
+    assert_eq!(printed, "0\ntrue\n1");
+    assert_eq!(tiers.composed, 3);
+}
+
+#[test]
 fn a_quote_born_of_composed_code_runs_under_its_composition() {
     let (printed, tiers) = smallest(
-        "LET q = #((LET inner = #(PRINT 5)) (EVAL inner -> Any) (inner))
-LET p = #(PRINT 0)
-LET i = (EVAL (COMPOSE q) -> Any)
-EVAL (COMPOSE p) -> Any
+        "LET q = #((LET inner = #(PRINT 5)) (EVAL inner -> Any) (inner))\nLET qs = [q]
+LET p = #(PRINT 0)\nLET ps = [p]
+LET i = (EVAL #($..qs) -> Any)
+EVAL #($..ps) -> Any
 EVAL i -> Any
 PRINT i",
     );
@@ -317,39 +336,40 @@ PRINT i",
 fn a_using_over_a_quote_born_of_composed_code_fills_its_holes() {
     let source = |eval: &str| {
         format!(
-            "LET q = #((LET inner = #(PRINT (x + 1))) (inner))
-LET p = #(PRINT 0)
+            "LET q = #((LET inner = #(PRINT (x + 1))) (inner))\nLET qs = [q]
+LET p = #(PRINT 0)\nLET ps = [p]
 LET i = ({eval} -> Any)
-EVAL (COMPOSE p) -> Any
+EVAL #($..ps) -> Any
 LET j = (i USING {{x = 4}})
 EVAL j -> Any"
         )
     };
-    let (printed, tiers) = smallest(&source("EVAL (COMPOSE q)"));
+    let (printed, tiers) = smallest(&source("EVAL #($..qs)"));
     // `p`'s miss evicts `q`'s composition between the birth of `i` and the `USING`, which
-    // rebuilds it to fill the hole there; the `EVAL` of `j` finds it.
+    // rebuilds it to fill the hole there; `j`'s syntax holds the filled mark, so its `EVAL` builds
+    // a composition of its own.
     assert_eq!(printed, "0\n5");
     assert_eq!(printed, smallest(&source("EVAL q")).0);
-    assert_eq!((tiers.composed, tiers.bounced), (3, 3));
+    assert_eq!((tiers.composed, tiers.bounced), (4, 4));
 }
 
 #[test]
 fn a_module_born_of_composed_code_reads_as_one_written() {
     let source = |eval: &str| {
         format!(
-            "LET q = #((MODULE m = ((LET x = 1) (LET y = 2))) (m))\nLET m = ({eval} -> Any)\nPRINT m.y"
+            "LET q = #((MODULE m = ((LET x = 1) (LET y = 2))) (m))\nLET qs = [q]\nLET m = ({eval} -> Any)\nPRINT m.y"
         )
     };
     assert_eq!(run(&source("EVAL q")), "2");
-    assert_eq!(run(&source("EVAL (COMPOSE q)")), "2");
+    assert_eq!(run(&source("EVAL #($..qs)")), "2");
 }
 
 #[test]
 fn a_call_of_a_function_born_of_composed_code_reads_its_compositions_types() {
     let (printed, tiers, _) = composed(
         "LET Alias = Number
-LET q = #((LET g = (FN :{n :($Alias)} -> Number = #(n + 1))) (g))
-LET f = (EVAL (COMPOSE q) -> Any)
+LET q = #((LET g = (FN :{n :($Alias)} -> Number = #(n + 1))) (g))\nLET qs = [q]
+LET f = (EVAL #($..qs) -> Any)
 PRINT (f {n = 1})
 PRINT (f {n = 2})",
     );
@@ -363,10 +383,10 @@ PRINT (f {n = 2})",
 fn a_composed_declared_nominal_is_minted_at_its_declaring_statement() {
     let source = |eval: &str| {
         format!(
-            "LET Alias = Number\nLET q = #((NEWTYPE Boxed = :(LIST OF $Alias)) (PRINT (Boxed [1, 2])))\n{eval} -> Any"
+            "LET Alias = Number\nLET q = #((NEWTYPE Boxed = :(LIST OF $Alias)) (PRINT (Boxed [1, 2])))\nLET qs = [q]\n{eval} -> Any"
         )
     };
-    let (composed, tiers, _) = composed(&source("EVAL (COMPOSE q)"));
+    let (composed, tiers, _) = composed(&source("EVAL #($..qs)"));
     assert_eq!(composed, run(&source("EVAL q")));
     assert_eq!(composed, "Boxed([1, 2])");
     assert_eq!(tiers.agent, 0);
@@ -392,15 +412,17 @@ fn pinned(source: &str, budget: BuildBudget) -> (String, Tiers, (usize, usize)) 
 const PEEK: &str = "(SIG Hold FOR ALL #[Elt] = #[(VAL held :Elt)]) \
                     (LET peek = (FN :{m :Hold} -> Any = #((LET v = (m :| Hold)) ({h = v.held}))))";
 
-/// A module composed from text the program never held, so only its composition computes its tree.
-const FRESH: &str = "LET m = (EVAL (COMPOSE \"#((MODULE m = ((LET held = 1))) (m))\") -> Any)\n";
+/// A module whose `MODULE` is composed where it is born, its body spliced in: no shape the load
+/// builds holds it, so only its composition computes its tree.
+const FRESH: &str = "LET body = [#(((LET held = 1)))]\n\
+                     LET m = (EVAL #((MODULE m = $..body) (m)) -> Any)\n";
 
 #[test]
 fn a_callable_born_in_composed_code_keys_a_settlement_under_its_composition() {
     let (printed, tiers, (under, pins)) = pinned(
         &format!(
             "LET q = #({PEEK} (MODULE m = ((LET held = 1))) (PRINT (peek {{m = m}})) \
-             (PRINT (peek {{m = m}})))\nEVAL (COMPOSE q) -> Any"
+             (PRINT (peek {{m = m}})))\nLET qs = [q]\nEVAL #($..qs) -> Any"
         ),
         BuildBudget::default(),
     );
@@ -414,11 +436,11 @@ fn a_callable_born_in_composed_code_keys_a_settlement_under_its_composition() {
 fn a_settlement_under_a_composition_rests_nothing_in_the_agent_tier() {
     let source = |eval: &str| {
         format!(
-            "LET q = #({PEEK} (MODULE m = ((LET held = 1))) (PRINT (peek {{m = m}})))\n\
+            "LET q = #({PEEK} (MODULE m = ((LET held = 1))) (PRINT (peek {{m = m}})))\nLET qs = [q]\n\
              {eval} -> Any"
         )
     };
-    let (printed, tiers, _) = pinned(&source("EVAL (COMPOSE q)"), BuildBudget::default());
+    let (printed, tiers, _) = pinned(&source("EVAL #($..qs)"), BuildBudget::default());
     assert_eq!(printed, run(&source("EVAL q")));
     assert_eq!(tiers.settled, 1);
     assert_eq!((tiers.agent, tiers.relayed, tiers.rested), (0, 0, 0));
@@ -428,7 +450,7 @@ fn a_settlement_under_a_composition_rests_nothing_in_the_agent_tier() {
 fn a_settlement_binding_a_module_another_composition_computed_pins_it() {
     let (printed, tiers, (under, pins)) = pinned(
         &format!(
-            "{FRESH}LET q = #({PEEK} (peek))\nLET peek = (EVAL (COMPOSE q) -> Any)\n\
+            "{FRESH}LET q = #({PEEK} (peek))\nLET qs = [q]\nLET peek = (EVAL #($..qs) -> Any)\n\
              PRINT (peek {{m = m}})\nPRINT (peek {{m = m}})"
         ),
         BuildBudget::default(),
@@ -443,9 +465,9 @@ fn a_settlement_binding_a_module_another_composition_computed_pins_it() {
 fn a_pinned_composition_is_evicted_only_after_its_last_pinner() {
     let (printed, tiers, (under, pins)) = pinned(
         &format!(
-            "{FRESH}LET q = #({PEEK} (peek))\nLET peek = (EVAL (COMPOSE q) -> Any)\n\
-             PRINT (peek {{m = m}})\nPRINT (peek {{m = m}})\nLET p = #(PRINT 0)\n\
-             EVAL (COMPOSE p) -> Any"
+            "{FRESH}LET q = #({PEEK} (peek))\nLET qs = [q]\nLET peek = (EVAL #($..qs) -> Any)\n\
+             PRINT (peek {{m = m}})\nPRINT (peek {{m = m}})\nLET p = #(PRINT 0)\nLET ps = [p]\n\
+             EVAL #($..ps) -> Any"
         ),
         SMALLEST,
     );

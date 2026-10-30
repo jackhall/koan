@@ -21,15 +21,14 @@ the result: projecting `y` of `r = {x = 1, y = {z = 2, w = 3}}` onto `z` is
 
 **Directions.**
 
-- *How a schema is written — open.* `#{x: null, y: #[z]}` quotes each value, so
-  `#[z]` arrives as code. A schema of symbols waits on how the
-  [metaprogramming](../metaprogramming/README.md) project represents names as
-  data.
+- *How a schema is written — open.* `#[z]` is the list `[#(z)]` of `Name`
+  quotes ([quoting each element](../../tutorial/10-quoting.md#quoting-each-element-of-a-list-or-dict)),
+  so `#{x: null, y: #[z]}` is a dict of `null` and lists of names, and reading
+  a `Name` quote as a field is a read, not a parse. Recommended: that
+  spelling, with `null` the only non-code value a schema holds.
 
 ## Dependencies
 
-**Requires:**
-
-- [Code names](../metaprogramming/code-names.md) — the end of the metaprogramming project.
+**Requires:** none — `FROM` and name quotes have shipped.
 
 **Unblocks:** none — a leaf.

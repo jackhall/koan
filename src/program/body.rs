@@ -61,31 +61,33 @@ use smallvec::SmallVec;
 
 use crate::knot::body_activation;
 use crate::knot::module::coerce::{self, CoercionRefused};
+use crate::knot::module::layout;
 use crate::knot::module::surface::surface;
 use crate::knot::{
-    CodeBody, KActivation, KActivationView, KReading, KValue, Knotted, Supplied, Tied, Untieable,
-    tie, using,
+    KActivation, KActivationView, KReading, KValue, Knotted, Supplied, Tied, Untieable, built, tie,
+    using,
 };
 use crate::memory::{Bump, BumpVec, Writer, resident};
-use crate::parse::ExpressionPart;
+use crate::parse::{ExpressionPart, Scope};
 use crate::scheduler::{
     Action, Held, MemoHome, Placement, Received, Replayed, Request, Requested, Seek, Slot as Asked,
     Step, StepError, Taken, Use,
 };
+use crate::scope::ShapeError;
 use crate::scope::{Activated, Entry, EventSite, MemoKey, extended};
 use crate::scope::{Address, AtRun, Bound, Tree, Unknown};
 use crate::scope::{BodyShape, Component, Position, ShapeKind, Site, Slot, Unit, UnitWork};
-use crate::scope::{CaptureSource, ClosureBindings, Code, ComposedRoot, Facts, ShapeError};
+use crate::scope::{CaptureSource, ClosureBindings, Code, CodeSyntax, ComposedRoot, Facts};
 use crate::scope::{ComposedSyntax, Stamp};
 use crate::scope::{Coordinate, ParameterBinding, Retypes, Static, Target};
-use crate::symbols::{BinderSymbol, Symbol, SymbolInterner, TypeSymbol};
+use crate::symbols::{BinderSymbol, KeySymbol, Symbol, SymbolInterner, TypeSymbol};
 use crate::type_lattice::{
     Collector, DeclaredType, DeclaredView, KType, Parametric, Record as TypeRecord, TypeNode,
     Variance, admits_with, display_name, substitute_quantified,
 };
 use crate::values::{
     ArenaRef, BindingImage, CALL_ONLY, Chain, ContentDigest, Link, List, Record, Text, TypeValue,
-    Value,
+    Value, binding_at,
 };
 
 use super::activation_store::bound_of;
@@ -325,11 +327,11 @@ pub fn run<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'g
 
 /// The root of the composed code the frame `birth` runs: a call's callee born of it, or an
 /// `EVAL`'s code composed at run time. `None` for written code and any other birth.
-fn composed_root<'graph>(birth: &KBirth<'graph, '_>) -> Option<ComposedRoot<'graph>> {
+fn composed_root<'here>(birth: &KBirth<'_, 'here>) -> Option<ComposedRoot<'here>> {
     match birth {
         KBirth::Call { callee, .. } => called_function(*callee)?.body().root,
-        KBirth::Eval { code, .. } | KBirth::Using { code, .. } => {
-            composed_root_of(code.as_code()?.code()?.shaped())
+        KBirth::Eval { code, .. } | KBirth::Composed { code, .. } => {
+            code.as_code()?.code()?.flat()?.root()
         }
         _ => None,
     }
@@ -337,11 +339,11 @@ fn composed_root<'graph>(birth: &KBirth<'graph, '_>) -> Option<ComposedRoot<'gra
 
 /// The root of the composed code a module the call `birth` binds at a keyed name was born of,
 /// where its syntax digest is `wanted`.
-fn wanted_root<'graph>(
-    birth: &KBirth<'graph, '_>,
+fn wanted_root<'here>(
+    birth: &KBirth<'_, 'here>,
     wanted: ContentDigest,
     types: &Chain<'_, '_, '_, '_>,
-) -> Option<ComposedRoot<'graph>> {
+) -> Option<ComposedRoot<'here>> {
     let KBirth::Call {
         callee, arguments, ..
     } = birth
@@ -355,14 +357,6 @@ fn wanted_root<'graph>(
         let root = argument.knot_member()?.module()?.body()?.root?;
         (root.digest == wanted).then_some(root)
     })
-}
-
-/// The root of `body`, where it is code composed at run time.
-fn composed_root_of(body: CodeBody<'_>) -> Option<ComposedRoot<'_>> {
-    match body {
-        CodeBody::Composed { root, .. } => Some(root),
-        CodeBody::Written { .. } => None,
-    }
 }
 
 /// The stamp of the chain of settlements the frame of the call `birth` runs under, which a
@@ -555,7 +549,7 @@ fn ran<'graph, 'here, 'scratch>(
         }) => {
             let root = (code.as_code())
                 .and_then(|member| member.code())
-                .and_then(|node| composed_root_of(node.shaped()));
+                .and_then(|node| node.flat()?.root());
             // Composed code is checked here, under its composition: the refusal it reached, then
             // each name it reads, once the types its facts name resolve in this frame's chain.
             if let Some(refusal) = refused {
@@ -654,20 +648,28 @@ fn ran<'graph, 'here, 'scratch>(
                 ..Runner::at(program, activation, Level::Block, None)
             }
         }
-        KState::Born(KBirth::Using {
+        KState::Born(KBirth::Composed {
             program,
             code,
             source,
         }) => {
             let scratch = Bump::new();
             let (door, facts) = step.door();
-            let member = code.as_code().expect("`USING` fills a quote's code");
+            let member = code
+                .as_code()
+                .expect("`USING` and `BUILD` take a quote's code");
             let writer = step.writer();
-            let filled = match using(writer, &door, &facts, member, source, types, &scratch) {
-                Ok(filled) => Value::Knotted(filled),
-                Err(refused) => program.error(writer, types, refused.display(program.symbols())),
+            let finished = match source {
+                None => Value::Knotted(built(writer, &door, member, types)),
+                Some(source) => match using(writer, &door, &facts, member, source, types, &scratch)
+                {
+                    Ok(filled) => Value::Knotted(filled),
+                    Err(refused) => {
+                        program.error(writer, types, refused.display(program.symbols()))
+                    }
+                },
             };
-            return step.finish(filled);
+            return step.finish(finished);
         }
         KState::Runner(mut runner) => match woken(&mut step, &mut runner, scratch, types) {
             Ok(()) => runner,
@@ -974,12 +976,12 @@ impl fmt::Display for CodeRefusedDisplay<'_, '_, '_, '_, '_> {
 }
 
 /// What an evaluator asks for to fill the holes of `code`, code composed at run time, from
-/// `source` under `USING`: a one-step frame under the code's composition, where its shape lies,
-/// which shares its operands' storage.
-pub fn using_composed<'graph, 'here>(
+/// `source` under `USING`, or with no source to build it under `BUILD`: a one-step frame under
+/// the code's composition, where its shape lies, which shares its operands' storage.
+pub fn under_composition<'graph, 'here>(
     program: &'graph Program<'graph>,
     code: KValue<'graph, 'here>,
-    source: KValue<'graph, 'here>,
+    source: Option<KValue<'graph, 'here>>,
     use_: Use,
 ) -> Request<'graph, 'here, KBundle> {
     Request {
@@ -987,7 +989,7 @@ pub fn using_composed<'graph, 'here>(
         use_,
         work: crate::scheduler::Work {
             step: run,
-            state: KBirth::Using {
+            state: KBirth::Composed {
                 program,
                 code,
                 source,
@@ -1016,7 +1018,7 @@ pub fn eval<'step, 'graph, 'here>(
 ) -> Result<Request<'graph, 'here, KBundle>, CodeRefused<'step>> {
     let node = code.code().expect("an `EVAL` is handed a quote's code");
     // Composed code's shape lies in its composition, where its frame checks it.
-    if let CodeBody::Written { segment } = node.shaped() {
+    if let Some(CodeSyntax::Written { segment, .. }) = node.flat() {
         let shape = door.shape(segment);
         if let Some(error) = facts.typing_refusal(types, shape) {
             return Err(CodeRefused::Shape(error));
@@ -1063,25 +1065,21 @@ fn unbound<'step>(
     for capture in shape.captures() {
         let bound = match capture.source {
             CaptureSource::Read(_) | CaptureSource::Member { .. } => true,
+            // A filled hole is a filled mark, no hole: a key a use selects from alone is unbound.
             CaptureSource::Hole => {
-                node.supplied()
-                    .iter()
-                    .any(|(name, _)| *name == capture.name)
-                    || matches!(capture.name, BinderSymbol::Key(key) if shape.required_holes().binary_search(&key).is_err())
+                matches!(capture.name, BinderSymbol::Key(key) if shape.required_holes().binary_search(&key).is_err())
             }
             CaptureSource::Offered => offers(capture.name),
+            // A key binds the registrations at it, and holds no function where there are none.
+            CaptureSource::Entry { .. } if matches!(capture.name, BinderSymbol::Key(_)) => true,
             CaptureSource::Entry { head } => {
-                match node
-                    .bound()
-                    .binary_search_by_key(&capture.name, |(name, _)| *name)
-                {
+                match binding_at(node.bound(), capture.scope(), capture.name) {
                     // A quantified function is read only at a call's head, as the load refuses
                     // a written `$` name read anywhere else.
-                    Ok(at) if !head && quantified(node.bound()[at].1.resolve(code)) => {
+                    Some(binding) if !head && quantified(binding.link.resolve(code)) => {
                         return Err(CodeRefused::QuantifiedRead(capture.name));
                     }
-                    // A key the value binds nothing at holds no function.
-                    found => found.is_ok() || matches!(capture.name, BinderSymbol::Key(_)),
+                    found => found.is_some(),
                 }
             }
         };
@@ -1785,10 +1783,11 @@ fn crossed_out<'graph, 'here>(
 }
 
 /// An `EVAL`'s frame: the code's activation over a closure run assembled in its shape's capture
-/// order — each `$` name from the bindings the code carries, each hole from those `USING` supplied,
-/// each `\` name from `offered` — every edge resolved to the member it names, so the run holds value
-/// words only. A keyworded hole nothing filled holds no function. `None` when a name is bound
-/// nowhere, which [`eval`] refuses first.
+/// order — each `$` name and filled mark from the binding the code carries at its mark's scope
+/// and name, a filled key from its list there, each `$(…)` key from the registrations it carries at
+/// that scope with that key, each `\` name from `offered` — every edge resolved to the member it
+/// names, so the run holds value words only. A keyworded hole holds no function. `None` when a name
+/// is bound nowhere, which [`eval`] refuses first.
 fn code_frame<'graph, 'here>(
     step: &Taking<'_, 'graph, '_, 'here, '_, '_>,
     types: &Chain<'_, 'here, '_, '_>,
@@ -1801,31 +1800,32 @@ fn code_frame<'graph, 'here>(
     let (door, facts) = step.door();
     let shape = node.shape(&door);
     offered.as_record()?;
-    let find = |run: &[(BinderSymbol, Link<'here, Knotted<'graph, 'here>>)], name| {
-        let at = run.binary_search_by_key(&name, |(held, _)| *held).ok()?;
-        Some(run[at].1.resolve(member))
-    };
+    let find = |run, scope, name| Some(binding_at(run, scope, name)?.link.resolve(member));
     let bump = Bump::new();
     let writer = step.writer();
     let mut links = BumpVec::with_capacity_in(shape.captures().len(), &bump);
     for capture in shape.captures() {
         let value = match capture.source {
             CaptureSource::Read(_) | CaptureSource::Member { .. } => {
-                find(node.bound(), capture.name)?
+                find(node.bound(), capture.scope(), capture.name)?
             }
-            CaptureSource::Entry { .. } => match find(node.bound(), capture.name) {
-                Some(value) => value,
-                None if matches!(capture.name, BinderSymbol::Key(_)) => {
-                    Value::List(List::new(writer, [].into_iter(), types, &bump))
+            // A key a `USING` filled is bound to its list; a `$(…)` key, to the registrations at it.
+            CaptureSource::Entry { .. } => match (
+                find(node.bound(), capture.scope(), capture.name),
+                capture.name,
+            ) {
+                (Some(filled), _) => filled,
+                (None, BinderSymbol::Key(key)) => {
+                    registrations_at(writer, member, (capture.scope(), key), types, &bump)
                 }
-                None => return None,
+                (None, _) => return None,
             },
-            CaptureSource::Hole => match find(node.supplied(), capture.name) {
-                Some(value) => value,
-                None if matches!(capture.name, BinderSymbol::Key(_)) => {
+            // A hole is never bound at an `EVAL`; a key's holds no function.
+            CaptureSource::Hole => match capture.name {
+                BinderSymbol::Key(_) => {
                     Value::List(List::new(writer, [].into_iter(), types, &bump))
                 }
-                None => return None,
+                _ => return None,
             },
             CaptureSource::Offered => offered.field(capture.name.symbol(), types, &bump)?.value(),
         };
@@ -1837,6 +1837,35 @@ fn code_frame<'graph, 'here>(
         writer,
         KActivation::of_code(writer, shape, &facts, closure, program.builtins()),
     ))
+}
+
+/// The list of the registrations the code `member` carries at `scope` whose key is `key`, built
+/// in `writer`'s region: what an entry capture of a `$(…)` use's key binds — the empty list where
+/// the code carries none. Grouped here, where a chain resolves each registration's key, so a code
+/// value's run keeps its registrations one by one.
+fn registrations_at<'graph, 'here>(
+    writer: Writer<'here, '_>,
+    member: Knotted<'graph, 'here>,
+    (scope, key): (Scope, KeySymbol),
+    types: &Chain<'_, 'here, '_, '_>,
+    scratch: &Bump,
+) -> KValue<'graph, 'here> {
+    let node = member.code().expect("a code member holds code");
+    let mut found = BumpVec::new_in(scratch);
+    for binding in node.bound() {
+        if binding.scope != scope || !matches!(binding.name, BinderSymbol::Registration(_)) {
+            continue;
+        }
+        let function = binding.link.resolve(member);
+        let shape = layout::registered_shape(function).expect("a registration is a function");
+        if layout::key_of(shape, types) == key {
+            found.push(function);
+        }
+    }
+    if found.is_empty() {
+        return Value::List(List::new(writer, [].into_iter(), types, scratch));
+    }
+    Value::List(List::of_candidates(writer, found.iter().copied(), types))
 }
 
 /// A parked runner woken: the evaluation it asked for bound or kept, or the parts a tie named

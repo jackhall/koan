@@ -1,61 +1,67 @@
-# Code names
+# Named code as a body
 
-A class of names that holds only code, read where a shape is built, so code
-named once can be built where it is used.
+A callable's body written as the name of a quote, so code named once is the
+body of several callables.
 
-**Problem.** Code has no name class of its own. A quote bound by `LET` sits in
-a value name, and the [shape builder](../../src/scope/README.md#three-tiers)
-reads no value where it builds a shape, so a callable's body can only be a
-quote written in place
-([what is quoted](../../tutorial/10-quoting.md#what-is-quoted-and-what-is-bare));
-code named once cannot be the body of two callables. A module exports code only as a value,
-and a `SIG` has no member for code.
+**Problem.** A callable's body is a written quote and nothing else. The role
+table reads a body part as a quote (`Role::Body(kind).reading()` in
+[`role.rs`](../../src/parse/builtin_shapes/role.rs)), the static check refuses a
+name there, and `enter_body`
+([`build.rs`](../../src/scope/shape/build.rs)) builds the body's shape from the
+syntax under the part it visits
+([three tiers](../../src/scope/README.md#three-tiers)). The load traces a
+`LET`-bound name to its written quote for an `EVAL` (`Walk::traced_code` in
+[`walk.rs`](../../src/dispatch/walk.rs)), but the shape builder runs first and
+consults nothing of the kind. So code that serves two callables is composed into
+each declaration and `EVAL`ed,
+`EVAL #((EXPR #(AREA w :Number h :Number) -> Number = #($..body)) …)`, which
+confines the callable to the `EVAL`'s shape — no overload is visible past it
+and no module exports it — and reports the body's refusals where the `EVAL`
+runs rather than at load; a `$..` splice in a body written in place is refused
+outright.
 
 **Acceptance criteria.**
 
-- A sigiled name holds only code and resolves to a coordinate where the shape
-  is built; a sigiled parameter binds per call.
-- A shape is built from code only where it traces that code back to written
-  quotes, as `USING … SCOPE` traces its operand; code it cannot trace is shaped
-  when it is evaluated.
-- A `SIG` declares a code member with `VAL`, as a slot, or with `LET`, as
-  manifest code.
-- Code `#(\w * \h)` named as the body of a callable with parameters `w` and `h`
-  binds both to them, and a hole in such a body is refused where the callable
-  is built ([building code](../../src/scope/README.md#building-code)).
+- A callable's body is a written quote or a lowercase name. The name is read as
+  a value where the callable is born, that value's code is the body, and the
+  callable registers and exports as one with a written body does.
+- Where the load traces the name to a written quote, as it traces an `EVAL`'s
+  operand, the body's shape is built at load and its refusals are reported
+  there. Code the load cannot trace is built where the callable is born, found
+  by its digest as `BUILD` finds a composition
+  ([building code](../../src/scope/README.md#building-code)), its refusal kept
+  and reported by the first call.
+- Code named as the body of a callable with parameters `w` and `h` is written
+  `#(\w * \h)`: the parameters fill its `\` marks, its own binders fill what
+  they bind, and a hole in it is refused as unbound where the body is built
+  ([holes and marks](../../src/scope/README.md#holes-and-marks)).
+- The quote value and a body built from its code are two shapes over one text:
+  the value keeps its carried type and its needs, and each callable the code
+  names digests and compares as a callable with a written body does
+  ([equality and knots](../../src/scope/README.md#equality-and-knots)).
+- A name whose load-time type can never be code is refused at load; a value
+  that is not code is an error where the callable is born.
 
 **Directions.**
 
-- *A code naming channel — decided.* A name class of its own, marked by a sigil
-  since case is spent, holding only code. A sigiled parameter binds per call as
-  a type parameter does: a quote's code travels with its value and its shape
-  is found or built where it runs, so running code needs nothing from the
-  shape that runs it, and only building a new shape
-  from code needs the code where the shape is built. Elaboration may evaluate
-  code, as a subdispatch does, provided that code is deterministic, since what
-  elaboration builds is interned. A `VAL` code member is sealed as a value is
-  behind its type: a holder can run the code but not see which code it is.
-- *The sigil's character — open.* `#` reads as code, but `#y` sits one pair of
-  parens from `#(y)`, the quote of the symbol `y`.
-- *What a sigiled name resolves to — open.* Narrowing the family alone is
-  admission's job, so the sigil needs a resolution rule of its own. One
-  candidate: inside a quote, a sigiled name splices its code, while a lowercase
-  name is a hole ([holes and marks](../../src/scope/README.md#holes-and-marks)).
-- *A code binder in a module's self-signature — open.* A slot at its code kind,
-  as a value binder is, or a manifest member, as a type binder is.
-- *Manifest code in a `SIG` — open.* Two textually identical `SIG`s are one
-  type, so manifest code that captures from its surroundings would make
-  identical text differ. Code equality follows bindings
-  ([equality and knots](../../src/scope/README.md#equality-and-knots)), so either manifest
-  code captures nothing, or a `SIG`'s identity compares its code by something
-  other than equality.
+- *No name class and no sigil — decided.* Body position admits a quote and
+  nothing evaluated, so a bare name there means named code and nothing else;
+  inside a quote, `$` and `$..` already splice named code
+  ([splicing](../../src/scope/README.md#splicing)). The load's typing is
+  traced, so a sigil would mark nothing the load cannot tell, and `#body` sits
+  one pair of parens from `#(body)`, the quote of a name.
+- *What stands in body position — open.* A lone name, or any evaluated part,
+  such as a member read `m.body` or a call answering code. Recommended: a lone
+  name, which the trace follows and the quoted-or-bare rule states in a
+  clause; a wider part composes with `$..` as it does today.
+- *Keying the second shape — open.* A body built from a traced quote's syntax
+  is keyed by its body site and numbered in walk order, as a nested shape is,
+  or by its digest beside the compositions. Recommended: the body site, since
+  the body is written, with its parameters, where the callable is.
 
 ## Dependencies
 
-**Requires:**
+**Requires:** none — code composed at run time, which it shapes where it runs,
+has shipped.
 
-- [Code splicing](code-splicing.md) — a shape built at run time for code the builder cannot trace.
-
-**Unblocks:**
-
-- [A nested projection](../gradual-typing/nested-projection.md) — a schema of names as data.
+**Unblocks:** none — a leaf.

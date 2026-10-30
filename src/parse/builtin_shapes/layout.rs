@@ -59,6 +59,24 @@ impl<'a> SlotLayout<'a> {
         self.entries.is_empty()
     }
 
+    /// The bytes this layout occupies where its body's seal laid it: none for the shared empty one.
+    /// The most a body over `parts` parts lays: one entry per statement, and a node is one
+    /// statement or a block of its parts.
+    pub(crate) fn bound(parts: usize) -> usize {
+        size_of::<SlotLayout<'_>>()
+            + parts.max(1) * size_of::<Entry>()
+            + 2 * crate::parse::ast::ALLOCATION_SLACK
+    }
+
+    pub(crate) fn laid_bytes(&self) -> usize {
+        if self.entries.is_empty() {
+            return 0;
+        }
+        size_of::<SlotLayout<'_>>()
+            + std::mem::size_of_val(self.entries)
+            + 2 * crate::parse::ast::ALLOCATION_SLACK
+    }
+
     /// The slot `name` addresses — one binary search over the sorted run, the read that replaces a
     /// hash probe on the value channel.
     pub fn slot_of(&self, name: ValueSymbol) -> Option<usize> {

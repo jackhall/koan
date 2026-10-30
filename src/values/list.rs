@@ -23,7 +23,7 @@ use crate::type_lattice::{KType, TypeNode};
 use super::fill::hides_more;
 use super::hiding::{held_in, unhidden_cells};
 use super::settled::{composite_bits, part_hides, restamp_bits};
-use super::view::{self, BLOCK, Node, Prefix, Run, Weighed, prefixes};
+use super::view::{self, BLOCK, ListNode, Prefix, Run, Weighed, prefixes};
 use super::{Chain, Circular, Knotted, Link, MemoBits, Nothing, Value, Weight, list_type};
 
 /// A list value, resident in the region its cells live in: one flat run, or a view over the runs
@@ -47,7 +47,7 @@ enum Storage<'cell, X, C> {
     },
     /// A tree of stretches of other lists' flat runs. A knot's data node that spreads a list is
     /// one, its own runs' edges resolved through the member its reader holds.
-    View(&'cell Node<'cell, X>),
+    View(&'cell ListNode<'cell, X>),
 }
 
 /// What a list over `len` elements weighing `cells` bytes writes: its struct, its cells and the
@@ -211,7 +211,7 @@ impl<'cell, X: Knotted> List<'cell, X> {
     /// `None`.
     fn viewed(
         writer: Writer<'cell, '_>,
-        node: Option<&'cell Node<'cell, X>>,
+        node: Option<&'cell ListNode<'cell, X>>,
         ktype: KType,
         bits: MemoBits,
         hides: bool,
@@ -357,7 +357,7 @@ impl<'cell, X: Knotted> List<'cell, X, Link<'cell, X>> {
 
     /// Its tree with its own runs waiting for a holder: a view's own, or one leaf over its run;
     /// `None` where it holds nothing.
-    fn own_tree(&self, writer: Writer<'cell, '_>) -> Option<&'cell Node<'cell, X>> {
+    fn own_tree(&self, writer: Writer<'cell, '_>) -> Option<&'cell ListNode<'cell, X>> {
         match self.storage {
             Storage::Flat { cells, prefix } => (!cells.is_empty())
                 .then(|| view::leaf(writer, Run::Linked(cells, None), prefix, 0, cells.len())),
@@ -486,7 +486,7 @@ impl<'cell, X: Copy, C: Copy> List<'cell, X, C> {
     pub fn len(&self) -> usize {
         match self.storage {
             Storage::Flat { cells, .. } => cells.len(),
-            Storage::View(node) => node.len(),
+            Storage::View(node) => node.count(),
         }
     }
 
@@ -537,7 +537,7 @@ pub enum Piece<'a, 'cell, X> {
 fn tree<'cell, X: Knotted>(
     writer: Writer<'cell, '_>,
     source: Value<'cell, X>,
-) -> (Option<&'cell Node<'cell, X>>, bool) {
+) -> (Option<&'cell ListNode<'cell, X>>, bool) {
     let flat = |run, prefix, len| (len > 0).then(|| view::leaf(writer, run, prefix, 0, len));
     match source {
         Value::List(list) => {

@@ -38,7 +38,8 @@ enum Tree {
     Identifier(String),
     Type(String),
     Number(f64),
-    Str(String),
+    /// A string literal: the quote that delimits it and its body as written between the quotes.
+    Str(char, String),
     Boolean(bool),
     Null,
     Group(Vec<Tree>),
@@ -47,6 +48,8 @@ enum Tree {
     Quote(Vec<Tree>),
     Marked(char, String),
     List(Vec<Tree>),
+    /// A list item `..x` or `..(…)`, drawn only as a list literal's item.
+    Spread(Box<Tree>),
     Dict(Vec<(Tree, Tree)>),
     Record(Vec<(String, Tree)>),
 }
@@ -107,11 +110,26 @@ fn scalar() -> BoxedStrategy<Tree> {
         4 => identifier().prop_map(Tree::Identifier),
         3 => type_name().prop_map(Tree::Type),
         2 => (-99i32..1000).prop_map(|n| Tree::Number(f64::from(n))),
-        2 => "[a-zé ]{0,4}".prop_map(Tree::Str),
+        2 => string(),
         1 => any::<bool>().prop_map(Tree::Boolean),
         1 => Just(Tree::Null),
     ]
     .boxed()
+}
+
+/// A string literal. The body mixes plain text, the other quote, an escaped delimiter and an even
+/// run of backslashes before the other quote, which escapes nothing.
+fn string() -> impl Strategy<Value = Tree> {
+    prop::sample::select(&['"', '\''][..]).prop_flat_map(|quote| {
+        let other = if quote == '"' { '\'' } else { '"' };
+        let fragment = prop_oneof![
+            4 => "[a-zé ]{1,3}",
+            1 => Just(other.to_string()),
+            1 => Just(format!("\\{quote}")),
+            1 => Just(format!("\\\\{other}")),
+        ];
+        prop::collection::vec(fragment, 0..3).prop_map(move |body| Tree::Str(quote, body.concat()))
+    })
 }
 
 /// A marked name, `$name` or `\name`.
@@ -134,10 +152,21 @@ fn literal_tree(depth: u32) -> BoxedStrategy<Tree> {
     prop_oneof![
         6 => scalar(),
         2 => prop::collection::vec(value_tree(depth - 1), 0..3).prop_map(Tree::Group),
-        1 => prop::collection::vec(literal_tree(depth - 1), 0..3).prop_map(Tree::List),
+        1 => prop::collection::vec(list_item(depth - 1), 0..3).prop_map(Tree::List),
         1 => dict_pairs(depth - 1).prop_map(Tree::Dict),
         1 => record_fields(depth - 1).prop_map(Tree::Record),
         1 => prop::collection::vec(value_tree(depth - 1), 1..3).prop_map(Tree::Quote),
+    ]
+    .boxed()
+}
+
+/// A list literal's item: an element, or a spread of a name or a group.
+fn list_item(depth: u32) -> BoxedStrategy<Tree> {
+    prop_oneof![
+        5 => literal_tree(depth),
+        1 => identifier().prop_map(|name| Tree::Spread(Box::new(Tree::Identifier(name)))),
+        1 => prop::collection::vec(value_tree(depth), 0..3)
+            .prop_map(|items| Tree::Spread(Box::new(Tree::Group(items)))),
     ]
     .boxed()
 }
@@ -204,7 +233,7 @@ fn value_tree(depth: u32) -> BoxedStrategy<Tree> {
         1 => type_sigil_body(depth - 1).prop_map(Tree::TypeSigil),
         1 => record_type_pairs(depth - 1).prop_map(Tree::RecordType),
         1 => prop::collection::vec(value_tree(depth - 1), 1..3).prop_map(Tree::Quote),
-        1 => prop::collection::vec(literal_tree(depth - 1), 0..3).prop_map(Tree::List),
+        1 => prop::collection::vec(list_item(depth - 1), 0..3).prop_map(Tree::List),
         1 => dict_pairs(depth - 1).prop_map(Tree::Dict),
         1 => record_fields(depth - 1).prop_map(Tree::Record),
     ]
@@ -340,13 +369,17 @@ fn render_item(item: &Tree, layout: Layout, tape: &mut Tape, out: &mut String) {
             out.push_str(text);
         }
         Tree::Number(value) => out.push_str(&value.to_string()),
-        Tree::Str(body) => {
-            out.push('\'');
+        Tree::Str(quote, body) => {
+            out.push(*quote);
             out.push_str(body);
-            out.push('\'');
+            out.push(*quote);
         }
         Tree::Boolean(value) => out.push_str(if *value { "true" } else { "false" }),
         Tree::Null => out.push_str("null"),
+        Tree::Spread(item) => {
+            out.push_str("..");
+            render_item(item, layout, tape, out);
+        }
         Tree::Group(items) => {
             out.push('(');
             render_run(items, layout, tape, out);
@@ -428,10 +461,10 @@ fn render_key(key: &Tree, out: &mut String) {
     match key {
         Tree::Keyword(text) | Tree::Identifier(text) | Tree::Type(text) => out.push_str(text),
         Tree::Number(value) => out.push_str(&value.to_string()),
-        Tree::Str(body) => {
-            out.push('\'');
+        Tree::Str(quote, body) => {
+            out.push(*quote);
             out.push_str(body);
-            out.push('\'');
+            out.push(*quote);
         }
         Tree::Boolean(value) => out.push_str(if *value { "true" } else { "false" }),
         Tree::Null => out.push_str("null"),
@@ -476,7 +509,8 @@ fn describe_tree(item: &Tree) -> String {
         Tree::Keyword(text) | Tree::Identifier(text) => format!("t({text})"),
         Tree::Type(text) => format!("T({text})"),
         Tree::Number(value) => format!("n({value})"),
-        Tree::Str(body) => format!("s({body})"),
+        Tree::Str(_, body) => format!("s({body})"),
+        Tree::Spread(item) => format!("..{}", describe_tree(item)),
         Tree::Boolean(value) => format!("b({value})"),
         Tree::Null => "null".to_string(),
         Tree::Group(items) => body_describe(items),
@@ -517,6 +551,18 @@ fn read_back(source: &str) -> Vec<String> {
     top(source).unwrap_or_else(|error| panic!("{source:?}: {error}"))
 }
 
+/// `source`'s statements as code prints them, one per line.
+fn printed(source: &str) -> String {
+    let program = program_storage();
+    let symbols = SymbolInterner::new();
+    parse(program.brand(), &symbols, source)
+        .unwrap_or_else(|e| panic!("{source:?}: {e}"))
+        .iter()
+        .map(|statement| statement.summarize(&symbols))
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// What a statement carries: how many one-part wrappers stand around its spine, the spine's shape
 /// string and the cache it filled at construction, and the extent the outermost node claims.
 struct StatementFacts {
@@ -545,7 +591,7 @@ fn statement_facts(source: &str) -> StatementFacts {
         let ExpressionPart::Expression(child) = only.value else {
             unreachable!("a wrapper holds a node")
         };
-        node = child.reference();
+        node = child;
         wrappers += 1;
     }
     StatementFacts {
@@ -611,14 +657,21 @@ fn check_part(part: &ExpressionPart<'_>, span: Span, source: &str, symbols: &Sym
         ExpressionPart::Identifier(name) => assert_eq!(symbols.render(name.symbol()), text),
         ExpressionPart::Type(name) => assert_eq!(symbols.render(name.symbol()), text),
         ExpressionPart::MarkedName(mark, name) => assert_eq!(
-            format!("{}{}", mark.sigil(), symbols.render(name.symbol())),
+            format!(
+                "{}{}",
+                mark.sigil().unwrap_or('~'),
+                symbols.render(name.symbol())
+            ),
             text
         ),
         ExpressionPart::Literal(KLiteral::Number(value)) => {
             assert_eq!(text.parse::<f64>().ok(), Some(*value));
         }
         ExpressionPart::Literal(KLiteral::String(body)) => {
-            assert_eq!(text, format!("'{body}'"));
+            assert!(
+                [format!("'{body}'"), format!("\"{body}\"")].contains(&text.to_string()),
+                "got {text:?}"
+            );
         }
         ExpressionPart::Literal(KLiteral::Boolean(value)) => assert_eq!(text, value.to_string()),
         ExpressionPart::Literal(KLiteral::Null) => assert_eq!(text, "null"),
@@ -638,9 +691,13 @@ fn check_part(part: &ExpressionPart<'_>, span: Span, source: &str, symbols: &Sym
             assert!(text.starts_with('#') && text.ends_with(')'), "got {text:?}");
             check_expression(node, source, symbols, Some(span));
         }
+        ExpressionPart::Splice(name) => {
+            assert_eq!(format!("$..{}", symbols.render(name.symbol())), text)
+        }
+        ExpressionPart::FilledUse(..) => unreachable!("a parse holds no filled use"),
         ExpressionPart::MarkedUse(mark, node) => {
             assert!(
-                text.starts_with(mark.sigil()) && text.ends_with(')'),
+                text.starts_with(mark.sigil().unwrap_or('~')) && text.ends_with(')'),
                 "got {text:?}"
             );
             check_expression(node, source, symbols, Some(span));
@@ -687,7 +744,8 @@ fn tree_spellings(item: &Tree, out: &mut BTreeSet<String>) {
         Tree::Keyword(text) | Tree::Identifier(text) | Tree::Type(text) => {
             out.insert(text.clone());
         }
-        Tree::Number(_) | Tree::Str(_) | Tree::Boolean(_) | Tree::Null => {}
+        Tree::Number(_) | Tree::Str(..) | Tree::Boolean(_) | Tree::Null => {}
+        Tree::Spread(item) => tree_spellings(item, out),
         Tree::Group(items) | Tree::Quote(items) | Tree::TypeSigil(items) | Tree::List(items) => {
             for item in items {
                 tree_spellings(item, out);
@@ -723,11 +781,13 @@ fn part_symbols(part: &ExpressionPart<'_>, out: &mut Vec<Symbol>) {
         ExpressionPart::Identifier(name) => out.push(name.symbol()),
         ExpressionPart::Type(name) => out.push(name.symbol()),
         ExpressionPart::MarkedName(_, name) => out.push(name.symbol()),
+        ExpressionPart::Splice(name) => out.push(name.symbol()),
         ExpressionPart::Expression(node)
         | ExpressionPart::SigiledTypeExpr(node)
         | ExpressionPart::RecordType(node)
         | ExpressionPart::QuotedExpression(node)
-        | ExpressionPart::MarkedUse(_, node) => node_symbols(node, out),
+        | ExpressionPart::MarkedUse(_, node)
+        | ExpressionPart::FilledUse(_, _, node) => node_symbols(node, out),
         ExpressionPart::ListLiteral(items) => {
             for item in *items {
                 part_symbols(item.part(), out);
@@ -879,6 +939,15 @@ proptest! {
     fn a_rendered_tree_reads_back_as_itself(statements in program(), bytes in tape_bytes()) {
         let source = render(&statements, bytes);
         prop_assert_eq!(read_back(&source), expected_program(&statements), "source:\n{}", source);
+    }
+
+    /// **Law 1b.** Printed syntax reads back: a parsed program printed statement by statement
+    /// parses to the same trees, its written parens and its strings' quotes included.
+    #[test]
+    fn printed_syntax_reads_back(statements in program(), bytes in tape_bytes()) {
+        let source = render(&statements, bytes);
+        let printed = printed(&source);
+        prop_assert_eq!(read_back(&printed), read_back(&source), "printed:\n{}", printed);
     }
 
     /// **Law 2.** A written paren is kept: a statement wrapped in `n` parens is `n` nested

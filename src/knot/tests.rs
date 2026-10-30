@@ -23,6 +23,7 @@ mod equality;
 mod families;
 mod lambda;
 mod properties;
+mod view;
 
 use std::cell::{Cell, RefCell};
 
@@ -204,7 +205,7 @@ impl<'graph> Fixture<'_, 'graph> {
     }
 
     /// The written code of the program the fixture last parsed.
-    pub fn written(&self) -> Written<'graph, 'graph> {
+    pub fn written(&self) -> Written<'graph, 'graph, 'graph> {
         Written::of(self.load())
     }
 
@@ -346,20 +347,50 @@ impl<'graph> Fixture<'_, 'graph> {
                 continue;
             };
             let value = match rhs.value {
-                ExpressionPart::QuotedExpression(_) => Some(Value::Knotted(quote(
-                    writer,
-                    &self.reading_of(activation),
-                    self.written(),
-                    &rhs.value,
-                    types,
-                    self.scratch,
-                ))),
+                ExpressionPart::QuotedExpression(_) => Some(Value::Knotted(
+                    quote(
+                        writer,
+                        &self.reading_of(activation),
+                        self.written(),
+                        &rhs.value,
+                        types,
+                        self.scratch,
+                    )
+                    .expect("a test's quote composes"),
+                )),
+                ExpressionPart::ListLiteral(items) => self.listed(writer, types, activation, items),
                 _ => Value::lower_part(writer, &rhs.value, types, self.scratch),
             };
             if let Some(value) = value {
                 activation.bind(*slot, value).expect("an empty slot binds");
             }
         }
+    }
+
+    /// The list a list literal of `items` builds, where each is a name bound in `activation`,
+    /// or else what it lowers to.
+    fn listed<'cell>(
+        &self,
+        writer: Writer<'cell, '_>,
+        types: &Chain<'cell, 'cell, '_, '_>,
+        activation: &KActivation<'graph, 'cell>,
+        items: &[crate::parse::ListItem<'_>],
+    ) -> Option<KValue<'graph, 'cell>> {
+        let shape = self.shape_of(activation);
+        let read = |item: &crate::parse::ListItem<'_>| match item.as_part()? {
+            ExpressionPart::Identifier(name) => {
+                let (slot, _) = shape.slot(BinderSymbol::Value(*name))?;
+                Some(activation.read(crate::scope::Coordinate::Activation {
+                    hops: 0,
+                    target: crate::scope::Target::Local(slot),
+                }))
+            }
+            part => Value::lower_part(writer, part, types, self.scratch),
+        };
+        let values: Option<Vec<_>> = items.iter().map(read).collect();
+        let values = values?;
+        let list = crate::values::List::new(writer, values.into_iter(), types, self.scratch);
+        Some(Value::List(list))
     }
 
     /// Bring a module binder into being, body first: its body's activation laid down with every
@@ -460,7 +491,7 @@ fn module_body_node<'graph>(node: &KExpression<'graph>) -> &'graph KExpression<'
         .find(|(role, _)| matches!(role, Role::Body(BodyKind::Module)))
         .expect("a module binder has a module body");
     match part.value {
-        crate::parse::ExpressionPart::Expression(body) => body.reference(),
+        crate::parse::ExpressionPart::Expression(body) => body,
         _ => panic!("a module body is a node"),
     }
 }

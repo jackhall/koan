@@ -239,7 +239,7 @@ fn a_quote_satisfies_its_own_kind_and_every_kind_above_it() {
             .collect();
         fixture.in_cell(pin, |_| {
             for ((source, above), part) in cases.iter().zip(&parts) {
-                let quote = Holding::Knotted(Stand::Code(*part));
+                let quote = Holding::Knotted(Stand::Code(part));
                 for kind in kinds {
                     assert_eq!(
                         satisfies(kind, &quote, types, scratch),

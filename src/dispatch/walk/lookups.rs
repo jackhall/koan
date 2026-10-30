@@ -1,5 +1,5 @@
 //! The load's side of a read ([lookup.rs](../lookup.rs)): `(head argument)` where the head's
-//! static type is a list, a dict or a string, typed at both ends of that type.
+//! static type is a list, a dict, a string or code, typed at both ends of that type.
 //!
 //! The head is read as a container where either end of its static type is one; a variable, a
 //! union, `Any` or `Never` is none, so a head typed by a variable bounded by a list types as an
@@ -9,7 +9,8 @@
 //! neither bound; a dict refuses a key outside `Str | Number | Bool` or outside its key type. The
 //! read's upper end is `Result {Ok = O, Error = E}`: an index reads the element (`Str` for a
 //! string), a slice the container's own type, either `E = Number`; an argument that may be either
-//! reads their union. A lookup reads the value type, `E` the key type where the argument's upper
+//! reads their union. Code reads `Code` either way: a part or a slice is code no load can type, so
+//! the run carries it unbuilt. A lookup reads the value type, `E` the key type where the argument's upper
 //! end lies under it and the union of both otherwise. Its lower end is `Never`: the run answers
 //! either variant.
 
@@ -36,6 +37,7 @@ enum Container {
     List { element: Parametric },
     Dict { key: Parametric, value: Parametric },
     Str,
+    Code,
 }
 
 impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
@@ -46,6 +48,11 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     fn container(&self, end: Parametric) -> Option<Container> {
         if end == KType::STR.into() {
             return Some(Container::Str);
+        }
+        let code = (self.types.concrete(end))
+            .is_some_and(|end| is_subtype_of(self.types, self.scratch, end, KType::ANY_CODE));
+        if code && end != KType::NEVER.into() {
+            return Some(Container::Code);
         }
         match self.types.node(end) {
             TypeNode::List { element } => Some(Container::List { element }),
@@ -78,6 +85,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 value: KType::ANY.into(),
             },
             (None, Some(Container::Str)) => Container::Str,
+            (None, Some(Container::Code)) => Container::Code,
             (None, None) => return Ok(None),
         };
         let payload = self.part(level, argument)?;
@@ -133,11 +141,13 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             _ => {
                 let element = match shape {
                     Container::List { element } => element,
+                    Container::Code => KType::ANY_CODE.into(),
                     _ => KType::STR.into(),
                 };
-                let head_upper = match self.container(typed.upper) {
-                    Some(_) => typed.upper,
-                    None => KType::ANY.into(),
+                let head_upper = match (shape, self.container(typed.upper)) {
+                    (Container::Code, _) => KType::ANY_CODE.into(),
+                    (_, Some(_)) => typed.upper,
+                    (_, None) => KType::ANY.into(),
                 };
                 let ok = if payload.upper == number || payload.upper == KType::NEVER.into() {
                     element

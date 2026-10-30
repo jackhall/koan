@@ -233,8 +233,8 @@ where
         module
     }
 
-    /// A fresh activation of the code shape `shape` over its closure bindings — its `$` names, its
-    /// supplied holes and its offered names, in capture order — every slot empty. Like a module's,
+    /// A fresh activation of the code shape `shape` over its closure bindings — its `$` names and
+    /// filled marks, its keyworded holes and its offered names, in capture order — every slot empty. Like a module's,
     /// it runs no knot member and reads through no enclosing activation: code reaches nothing the
     /// `EVAL` running it does not hand it.
     pub fn of_code(

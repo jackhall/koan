@@ -264,9 +264,9 @@ fn tail_of<'graph>(shape: &BodyShape<'graph>, node: &'graph KExpression<'graph>)
             ExpressionPart::Expression(inner)
                 if shape.nested(shape.site(&only.value)).is_none() =>
             {
-                tail_of(shape, inner.reference())
+                tail_of(shape, inner)
             }
-            ExpressionPart::MarkedUse(_, inner) => tail_of(shape, inner.reference()),
+            ExpressionPart::MarkedUse(_, inner) => tail_of(shape, inner),
             _ => Tail::Other,
         },
         _ => Tail::Other,
@@ -281,7 +281,6 @@ pub(super) fn name_of<'p>(
     match part {
         part if part.is_name() => Some(part),
         ExpressionPart::Expression(node) if shape.nested(shape.site(part)).is_none() => {
-            let node = node.reference();
             match (node.cache().builtin_shape(), node.parts) {
                 (None, [only]) if shape.candidates(shape.site_of_node(node)).is_none() => {
                     name_of(shape, &only.value)

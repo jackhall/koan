@@ -802,6 +802,66 @@ fn a_code_kind_needing_names_is_ordered_by_kind_and_by_its_names() {
     );
 }
 
+/// An unbuilt code kind lies over its kind, over every `NEEDING` type over a kind within it and
+/// over a kind under it unbuilt, and under `Code`; no built type lies over it. It meets a built
+/// type at the kinds' meet needing what the built side needs, and `UNBUILT Code` is `Code`.
+#[test]
+fn an_unbuilt_code_kind_is_above_every_code_of_its_kind() {
+    let bump = Bump::new();
+    let region = &bump;
+    let types = crate::types::tests::tiered(region);
+    let symbols = SymbolInterner::new();
+    let y = BinderSymbol::declared("y", &symbols).expect("a bindable token");
+    let below = |a: KType, b: KType| typed::is_subtype_of(&types, region, a, b);
+    let unbuilt = |kind: KType| types.code_unbuilt(kind);
+    let block_y = types.code_needing(region, KType::BLOCK, &[y]);
+    let expression_y = types.code_needing(region, KType::EXPRESSION, &[y]);
+
+    assert_eq!(unbuilt(KType::ANY_CODE), KType::ANY_CODE);
+    for (lower, upper) in [
+        (KType::BLOCK, unbuilt(KType::BLOCK)),
+        (KType::LITERAL, unbuilt(KType::BLOCK)),
+        (block_y, unbuilt(KType::BLOCK)),
+        (expression_y, unbuilt(KType::EXPRESSION)),
+        (unbuilt(KType::EXPRESSION), unbuilt(KType::BLOCK)),
+        (unbuilt(KType::BLOCK), KType::ANY_CODE),
+    ] {
+        assert!(below(lower, upper), "{lower:?} under {upper:?}");
+        assert!(!below(upper, lower), "{upper:?} not under {lower:?}");
+    }
+    for (a, b) in [
+        (unbuilt(KType::BLOCK), KType::BLOCK),
+        (unbuilt(KType::EXPRESSION), block_y),
+        (block_y, unbuilt(KType::EXPRESSION)),
+        (unbuilt(KType::LITERAL), unbuilt(KType::DECLARATION)),
+        (unbuilt(KType::BLOCK), KType::ANY_VALUE),
+    ] {
+        assert!(!below(a, b), "{a:?} not under {b:?}");
+    }
+
+    let meet = |a, b| typed::meet(&types, region, a, b);
+    assert_eq!(meet(unbuilt(KType::EXPRESSION), block_y), expression_y);
+    assert_eq!(
+        meet(unbuilt(KType::EXPRESSION), unbuilt(KType::BLOCK)),
+        unbuilt(KType::EXPRESSION)
+    );
+    assert_eq!(
+        meet(unbuilt(KType::LITERAL), unbuilt(KType::DECLARATION)),
+        KType::NEVER
+    );
+    assert_eq!(meet(unbuilt(KType::BINDER), KType::LITERAL), KType::NEVER);
+    assert_eq!(meet(unbuilt(KType::BLOCK), KType::NUMBER), KType::NEVER);
+    assert_eq!(
+        typed::join(&types, region, block_y, unbuilt(KType::BLOCK)),
+        unbuilt(KType::BLOCK)
+    );
+
+    assert_eq!(
+        display_handle(unbuilt(KType::BLOCK).raw(), &types, &symbols).to_string(),
+        ":(UNBUILT Block)"
+    );
+}
+
 /// No law: the order's laws hold over concrete types, and these pin the worked examples — a variable
 /// bounded by `Number | Str` against the unions above and around its bound, in the order, a union's
 /// canonical form and the meet.

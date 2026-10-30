@@ -191,7 +191,8 @@ impl<'graph> Numbering<'graph, '_> {
             | ExpressionPart::SigiledTypeExpr(node)
             | ExpressionPart::RecordType(node)
             | ExpressionPart::QuotedExpression(node)
-            | ExpressionPart::MarkedUse(_, node) => self.node(node.reference()),
+            | ExpressionPart::MarkedUse(_, node)
+            | ExpressionPart::FilledUse(_, _, node) => self.node(node),
             ExpressionPart::ListLiteral(items) => {
                 items.iter().for_each(|item| self.part(item.part()))
             }
@@ -208,6 +209,7 @@ impl<'graph> Numbering<'graph, '_> {
             | ExpressionPart::Identifier(_)
             | ExpressionPart::Type(_)
             | ExpressionPart::MarkedName(..)
+            | ExpressionPart::Splice(_)
             | ExpressionPart::Literal(_) => {}
         }
     }

@@ -38,7 +38,7 @@ use smallvec::SmallVec;
 use crate::build::{Layer, LoadStore, fold, key_of};
 use crate::knot::{Function, KValue, Knotted};
 use crate::memory::{Bump, BumpBackedSet, BumpVec, ProgramBrand, Writer, bump_set, resident};
-use crate::parse::ProgramNode;
+use crate::parse::KExpression;
 use crate::scheduler::{Ask, Asked, Seek, Sought};
 use crate::scope::{
     Address, Binding, Bound, Composition, Facts, Keyed, Level, Settlement, Shapes, Slot, Tree,
@@ -428,7 +428,7 @@ pub(crate) fn composed<'a, 'graph, L: Language>(
     program: &Program<'graph>,
     brand: ProgramBrand<'a>,
     bump: &'a Bump,
-    syntax: ProgramNode<'a>,
+    syntax: &'a KExpression<'a>,
     _: &'a &'graph (),
 ) -> Composition<'a> {
     let scratch = Bump::new();
@@ -437,15 +437,7 @@ pub(crate) fn composed<'a, 'graph, L: Language>(
     let claims = program.shapes().root().group_frame().claims();
     let builtins = program.builtins();
     let symbols = program.symbols();
-    let shapes = Shapes::of_code(
-        brand,
-        syntax.reference(),
-        claims,
-        builtins,
-        &types,
-        symbols,
-        &scratch,
-    );
+    let shapes = Shapes::of_code(brand, syntax, claims, builtins, &types, symbols, &scratch);
     let writer = brand.writer();
     let store = LoadStore::new(writer, &scratch, shapes, Binding::EMPTY);
     let root = shapes.root();
@@ -470,7 +462,7 @@ pub(crate) fn composed<'a, 'graph, L: Language>(
         named.push(DeclaredType::from(shape.code_type()));
     }
     facts.each_type(&mut |kt| named.push(kt));
-    let quotes = quote_paths(writer, &scratch, shapes, syntax.reference());
+    let quotes = quote_paths(writer, &scratch, shapes, syntax);
     Composition::new(
         syntax,
         facts,

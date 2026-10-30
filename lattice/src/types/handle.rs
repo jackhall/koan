@@ -567,6 +567,7 @@ pub(super) fn leaf_name<'run, H: Naming<'run>>(
         TypeNode::Never => &NEVER_NAME,
         TypeNode::OfKind(_)
         | TypeNode::CodeNeeding { .. }
+        | TypeNode::CodeUnbuilt { .. }
         | TypeNode::Parameter { .. }
         | TypeNode::Carrier { .. }
         | TypeNode::SetMember { .. }

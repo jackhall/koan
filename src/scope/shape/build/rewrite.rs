@@ -39,7 +39,7 @@
 use crate::memory::{BumpVec, collect};
 use crate::parse::KEYWORDS;
 use crate::parse::{DefinitionKind, Heads, Role};
-use crate::parse::{DispatchShape, ExpressionPart, KExpression, ListItem, ProgramNode, Spanned};
+use crate::parse::{DispatchShape, ExpressionPart, KExpression, ListItem, Spanned};
 use crate::source::{FileId, SourceRef, Span};
 use crate::symbols::{KeywordSymbol, ValueSymbol};
 use crate::type_lattice::{FoldDirection, ReductionMode};
@@ -47,6 +47,7 @@ use crate::type_lattice::{FoldDirection, ReductionMode};
 use super::super::super::groups::{
     Cover, equal_symbol, equality_mode, is_equality, is_unequal, not_symbol,
 };
+use super::super::super::shapes::Origin;
 use super::super::super::signature::{pair_label, signature_run};
 use super::super::ShapeError;
 use super::Builder;
@@ -95,11 +96,8 @@ fn cover(first: Option<Span>, last: Option<Span>, fallback: Span) -> Span {
 }
 
 /// A part holding the built `node`, spanned as the node is.
-fn holding<'graph>(node: ProgramNode<'graph>) -> Spanned<ExpressionPart<'graph>> {
-    Spanned::at(
-        ExpressionPart::Expression(node),
-        node.reference().source.span,
-    )
+fn holding<'graph>(node: &'graph KExpression<'graph>) -> Spanned<ExpressionPart<'graph>> {
+    Spanned::at(ExpressionPart::Expression(node), node.source.span)
 }
 
 impl<'graph, 'x> Builder<'graph, 'x, '_> {
@@ -120,9 +118,11 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
                 ExpressionPart::Expression(rewritten),
                 node.source.span,
             ));
-            *self.brand.nested_node(&run, node.source).reference()
+            let holder = self.brand.nested_node(&run, node.source);
+            self.originate(holder, Origin::Run(*node));
+            *holder
         } else {
-            *rewritten.reference()
+            *rewritten
         };
         // The parse counts an operator run as the nesting this rewrite builds, so the depth limit
         // it checked still bounds every walk over the rewritten statement.
@@ -131,8 +131,8 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
     }
 
     /// Whether `node` is a block the pairwise rewrite synthesized.
-    fn is_block(&self, node: ProgramNode<'graph>) -> bool {
-        self.built_as(node.reference())
+    fn is_block(&self, node: &'graph KExpression<'graph>) -> bool {
+        self.built_as(node)
             .is_some_and(|built| built.kind == BuiltKind::Block)
     }
 
@@ -142,13 +142,38 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
     }
 
     /// Record `node` as built for the operator run being chained.
-    fn record(&mut self, node: ProgramNode<'graph>, kind: BuiltKind) {
+    fn record(&mut self, node: &'graph KExpression<'graph>, kind: BuiltKind) {
         let built = Built {
             run: self.runs,
             kind,
         };
-        self.built
-            .insert(node.reference().parts.as_ptr() as usize, built);
+        self.built.insert(node.parts.as_ptr() as usize, built);
+        self.chained_from(node);
+    }
+
+    /// Record `node` as built from `origin`, the written node it stands for.
+    fn originate(&mut self, node: &'graph KExpression<'graph>, origin: Origin<'graph>) {
+        self.origins.insert(node.parts.as_ptr() as usize, origin);
+    }
+
+    /// Record `node` as built for the operator run being chained.
+    fn chained_from(&mut self, node: &'graph KExpression<'graph>) {
+        let run = self
+            .run_node
+            .expect("a node is built for an operator run being chained");
+        self.originate(node, Origin::Run(run));
+    }
+
+    /// Every node the rewrite built beside its origin, sorted by its parts address.
+    pub(super) fn sealed_origins(&self) -> &'graph [(usize, Origin<'graph>)] {
+        let mut origins = BumpVec::with_capacity_in(self.origins.len(), self.scratch);
+        origins.extend(
+            self.origins
+                .iter()
+                .map(|(address, origin)| (*address, *origin)),
+        );
+        origins.sort_unstable_by_key(|(address, _)| *address);
+        collect(self.brand.writer(), origins.iter().copied())
     }
 
     /// One node with every operator run under it chained. A node with a builtin shape is read by
@@ -157,7 +182,7 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
     fn rewrite_node(
         &mut self,
         node: &KExpression<'graph>,
-    ) -> Result<Option<ProgramNode<'graph>>, ShapeError<'graph>> {
+    ) -> Result<Option<&'graph KExpression<'graph>>, ShapeError<'graph>> {
         let mut run: Run<'x, 'graph> = BumpVec::with_capacity_in(node.parts.len(), self.scratch);
         let mut changed = false;
         match node.cache().builtin_shape() {
@@ -211,6 +236,7 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
                     });
                 }
                 if node.shape() == DispatchShape::OperatorChain {
+                    self.run_node = Some(*node);
                     return self.chain(&run, node.source).map(Some);
                 }
                 // `a != b` written alone is the same rewrite one pair of a pairwise run takes.
@@ -222,11 +248,17 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
                         span: separator.span.unwrap_or(node.source.span),
                     };
                     self.runs += 1;
+                    self.run_node = Some(*node);
                     return self.infix(node.source.file, *left, op, *right).map(Some);
                 }
             }
         }
-        Ok(changed.then(|| self.brand.nested_node(&run, node.source)))
+        if !changed {
+            return Ok(None);
+        }
+        let rebuilt = self.brand.nested_node(&run, node.source);
+        self.originate(rebuilt, Origin::Rebuilt(*node));
+        Ok(Some(rebuilt))
     }
 
     /// One part with every operator run under it chained. A quote is data and is never rewritten.
@@ -235,25 +267,25 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
         part: &ExpressionPart<'graph>,
     ) -> Result<Option<ExpressionPart<'graph>>, ShapeError<'graph>> {
         match part {
-            ExpressionPart::Expression(node) => Ok(self
-                .rewrite_node(node.reference())?
-                .map(ExpressionPart::Expression)),
+            ExpressionPart::Expression(node) => {
+                Ok(self.rewrite_node(node)?.map(ExpressionPart::Expression))
+            }
             ExpressionPart::SigiledTypeExpr(node) => Ok(self
-                .rewrite_node(node.reference())?
+                .rewrite_node(node)?
                 .map(ExpressionPart::SigiledTypeExpr)),
-            ExpressionPart::RecordType(node) => Ok(self
-                .rewrite_fields(node.reference())?
-                .map(ExpressionPart::RecordType)),
+            ExpressionPart::RecordType(node) => {
+                Ok(self.rewrite_fields(node)?.map(ExpressionPart::RecordType))
+            }
             // A mark over a hoisting pairwise operator run holds its block in a node of one part, as a
             // statement does, so the block is still held by an `Expression` part.
             ExpressionPart::MarkedUse(mark, node) => {
-                let Some(rewritten) = self.rewrite_node(node.reference())? else {
+                let Some(rewritten) = self.rewrite_node(node)? else {
                     return Ok(None);
                 };
                 if !self.is_block(rewritten) {
                     return Ok(Some(ExpressionPart::MarkedUse(*mark, rewritten)));
                 }
-                let source = rewritten.reference().source;
+                let source = rewritten.source;
                 let holder = [Spanned::at(
                     ExpressionPart::Expression(rewritten),
                     source.span,
@@ -261,6 +293,23 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
                 let holder = self.brand.nested_node(&holder, source);
                 self.record(holder, BuiltKind::Holder);
                 Ok(Some(ExpressionPart::MarkedUse(*mark, holder)))
+            }
+            // A filled use is a mark over the use too, and holds a rewritten block the same way.
+            ExpressionPart::FilledUse(scope, keys, node) => {
+                let Some(rewritten) = self.rewrite_node(node)? else {
+                    return Ok(None);
+                };
+                if !self.is_block(rewritten) {
+                    return Ok(Some(ExpressionPart::FilledUse(*scope, keys, rewritten)));
+                }
+                let source = rewritten.source;
+                let holder = [Spanned::at(
+                    ExpressionPart::Expression(rewritten),
+                    source.span,
+                )];
+                let holder = self.brand.nested_node(&holder, source);
+                self.record(holder, BuiltKind::Holder);
+                Ok(Some(ExpressionPart::FilledUse(*scope, keys, holder)))
             }
             ExpressionPart::ListLiteral(items) => {
                 let mut run = BumpVec::with_capacity_in(items.len(), self.scratch);
@@ -303,6 +352,7 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
             | ExpressionPart::Keyword(_)
             | ExpressionPart::Literal(_)
             | ExpressionPart::MarkedName(..)
+            | ExpressionPart::Splice(_)
             | ExpressionPart::QuotedExpression(_) => Ok(None),
         }
     }
@@ -331,7 +381,7 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
     fn rewrite_fields(
         &mut self,
         run: &KExpression<'graph>,
-    ) -> Result<Option<ProgramNode<'graph>>, ShapeError<'graph>> {
+    ) -> Result<Option<&'graph KExpression<'graph>>, ShapeError<'graph>> {
         let mut parts: Run<'x, 'graph> = BumpVec::with_capacity_in(run.parts.len(), self.scratch);
         parts.extend_from_slice(run.parts);
         let mut changed = false;
@@ -345,7 +395,12 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
             }
             index += if typed { 2 } else { 1 };
         }
-        Ok(changed.then(|| self.brand.nested_node(&parts, run.source)))
+        if !changed {
+            return Ok(None);
+        }
+        let rebuilt = self.brand.nested_node(&parts, run.source);
+        self.originate(rebuilt, Origin::Rebuilt(*run));
+        Ok(Some(rebuilt))
     }
 
     /// The quotes of a container the shape builder reads where it is written — a list's items, or
@@ -396,7 +451,7 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
             return Ok(None);
         };
         Ok(self
-            .rewrite_node(node.reference())?
+            .rewrite_node(node)?
             .map(ExpressionPart::QuotedExpression))
     }
 }
@@ -419,7 +474,7 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
         &mut self,
         parts: &[Spanned<ExpressionPart<'graph>>],
         source: SourceRef,
-    ) -> Result<ProgramNode<'graph>, ShapeError<'graph>> {
+    ) -> Result<&'graph KExpression<'graph>, ShapeError<'graph>> {
         let mut operators: BumpVec<'x, Operator> = BumpVec::new_in(self.scratch);
         operators.extend(
             parts
@@ -531,7 +586,7 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
         operands: &[Spanned<ExpressionPart<'graph>>],
         operators: &[Operator],
         mode: ReductionMode,
-    ) -> Result<ProgramNode<'graph>, ShapeError<'graph>> {
+    ) -> Result<&'graph KExpression<'graph>, ShapeError<'graph>> {
         let direction = match mode {
             ReductionMode::FoldRight => FoldDirection::Right,
             _ => FoldDirection::Left,
@@ -547,7 +602,7 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
         operands: &[Spanned<ExpressionPart<'graph>>],
         operators: &[Operator],
         direction: FoldDirection,
-    ) -> Result<ProgramNode<'graph>, ShapeError<'graph>> {
+    ) -> Result<&'graph KExpression<'graph>, ShapeError<'graph>> {
         debug_assert_eq!(operands.len(), operators.len() + 1);
         let mut node = None;
         match direction {
@@ -581,7 +636,7 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
         operators: &[Operator],
         combiner: KeywordSymbol,
         direction: FoldDirection,
-    ) -> Result<ProgramNode<'graph>, ShapeError<'graph>> {
+    ) -> Result<&'graph KExpression<'graph>, ShapeError<'graph>> {
         let file = source.file;
         let mut hoisted: Run<'x, 'graph> = BumpVec::new_in(self.scratch);
         let mut named: Run<'x, 'graph> = BumpVec::with_capacity_in(operands.len(), self.scratch);
@@ -606,6 +661,7 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
                     file,
                 },
             );
+            self.chained_from(binding);
             hoisted.push(holding(binding));
             named.push(Spanned::at(ExpressionPart::Identifier(name), written));
         }
@@ -649,7 +705,7 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
         left: Spanned<ExpressionPart<'graph>>,
         op: Operator,
         right: Spanned<ExpressionPart<'graph>>,
-    ) -> Result<ProgramNode<'graph>, ShapeError<'graph>> {
+    ) -> Result<&'graph KExpression<'graph>, ShapeError<'graph>> {
         let span = cover(left.span, right.span, op.span);
         if is_unequal(op.symbol) {
             let equal = [
@@ -683,9 +739,9 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
         op: Operator,
         run: &[Spanned<ExpressionPart<'graph>>],
         span: Span,
-    ) -> Result<ProgramNode<'graph>, ShapeError<'graph>> {
+    ) -> Result<&'graph KExpression<'graph>, ShapeError<'graph>> {
         let node = self.brand.nested_node(run, SourceRef { span, file });
-        if node.reference().cache().builtin_shape().is_some() {
+        if node.cache().builtin_shape().is_some() {
             return Err(ShapeError::SpellsForm {
                 symbol: op.symbol,
                 at: SourceRef {

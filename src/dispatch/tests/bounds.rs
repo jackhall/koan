@@ -61,7 +61,7 @@ fn ran(source: &str, budget: BuildBudget) -> (String, Tiers, usize) {
 /// settlements and compositions both.
 fn looping(composes: bool) -> String {
     let compose = match composes {
-        true => "(EVAL (COMPOSE (ATTR h q)) -> Any) ",
+        true => "(LET qs = [(ATTR h q)]) (EVAL #($..qs) -> Any) ",
         false => "",
     };
     format!(

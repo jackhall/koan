@@ -31,7 +31,7 @@ mod substrate;
 #[cfg(test)]
 pub(crate) mod tests;
 
-pub use body::{CodeRefused, Runner, block, call, eval, run, surfaced_block, using_composed};
+pub use body::{CodeRefused, Runner, block, call, eval, run, surfaced_block, under_composition};
 pub use bundle::{
     FrameKept, Handed, KBirth, KBirthFamily, KBundle, KScratchFamily, KState, KStateFamily, Keeps,
     Passing, Within,

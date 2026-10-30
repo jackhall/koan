@@ -125,6 +125,11 @@ fn write_name_in<'run>(
             }
             f.write_str("])")
         }
+        TypeNode::CodeUnbuilt { kind } => {
+            f.write_str(":(UNBUILT ")?;
+            write_name_in(kind, f, types, symbols, binder)?;
+            f.write_str(")")
+        }
         TypeNode::List { element } => {
             f.write_str(":(LIST OF ")?;
             write_name_in(element, f, types, symbols, binder)?;

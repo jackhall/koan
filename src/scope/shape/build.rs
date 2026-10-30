@@ -72,7 +72,7 @@ use super::super::builtins::{BuiltinNames, Builtins};
 use super::super::channels::Channels;
 use super::super::groups::{self, Claim, Claims, GroupFrame};
 use super::super::keyed::Keyed;
-use super::super::shapes::Shapes;
+use super::super::shapes::{Origin, Shapes};
 use super::super::signature::{
     body_of, declare_family_parameters, declare_parameters, declare_quantifiers, pair_label,
     quantifier_bounds, quoted_body, signature_run,
@@ -148,9 +148,10 @@ pub(in crate::scope) fn program<'graph, X: Knotted>(
     let writer = brand.writer();
     let bodies = collect(writer, builder.sealed.iter().copied());
     let parents = collect(writer, builder.parents.iter().copied());
+    let origins = builder.sealed_origins();
     Ok(resident(
         writer,
-        Shapes::laid(writer, scratch, bodies, parents),
+        Shapes::laid(writer, scratch, bodies, parents, origins, None),
     ))
 }
 
@@ -182,7 +183,11 @@ pub(in crate::scope) fn code<'c, X: Knotted>(
     let writer = brand.writer();
     let bodies = collect(writer, builder.sealed.iter().copied());
     let parents = collect(writer, builder.parents.iter().copied());
-    resident(writer, Shapes::laid(writer, scratch, bodies, parents))
+    let origins = builder.sealed_origins();
+    resident(
+        writer,
+        Shapes::laid(writer, scratch, bodies, parents, origins, Some(*syntax)),
+    )
 }
 
 /// The parameters a node declares before any of its parts is read: a signature's or an `EXPR`
@@ -316,19 +321,17 @@ enum Marked<'graph> {
 
 /// Every mark `node` holds outside the quote values nested in it, each beside its site: what a code
 /// draft that could not be built would have met. A quote a builtin reads as written is syntax of
-/// the code around it, so its marks are the code's. A group mark over an operator run is left out:
-/// which uses the operator run becomes is the rewrite's, and the code was not built.
+/// the code around it, so its marks are the code's, and so is every quote part of a node holding
+/// a splice, which the splice may make a builtin's body. A group mark over an operator run is left
+/// out: which uses the operator run becomes is the rewrite's, and the code was not built.
 fn code_marks<'graph>(
     sites: &Sites<'_>,
     node: &KExpression<'graph>,
     out: &mut BumpVec<'_, (Mark, Marked<'graph>, Site)>,
 ) {
-    let form = node.cache().builtin_shape();
+    let slots = node.written_slots();
     for (index, part) in node.parts.iter().enumerate() {
-        let written = form
-            .and_then(|form| form.roles().nth(index))
-            .is_some_and(|role| role.reading() != Reading::Evaluated);
-        part_marks(sites, &part.value, written, out);
+        part_marks(sites, &part.value, slots.at(index), out);
     }
 }
 
@@ -343,11 +346,8 @@ fn part_marks<'graph>(
         ExpressionPart::MarkedName(mark, name) => {
             out.push((*mark, Marked::Name(*name), sites.site(part)))
         }
-        ExpressionPart::QuotedExpression(node) if written => {
-            code_marks(sites, node.reference(), out)
-        }
+        ExpressionPart::QuotedExpression(node) if written => code_marks(sites, node, out),
         ExpressionPart::MarkedUse(mark, node) => {
-            let node = node.reference();
             let keyed = node
                 .parts
                 .iter()
@@ -357,9 +357,11 @@ fn part_marks<'graph>(
             }
             code_marks(sites, node, out)
         }
+        // A filled use's mark names its fill, which nothing resolves where the code is written.
         ExpressionPart::Expression(node)
         | ExpressionPart::SigiledTypeExpr(node)
-        | ExpressionPart::RecordType(node) => code_marks(sites, node.reference(), out),
+        | ExpressionPart::RecordType(node)
+        | ExpressionPart::FilledUse(_, _, node) => code_marks(sites, node, out),
         ExpressionPart::ListLiteral(items) => {
             for item in items.iter() {
                 part_marks(sites, item.part(), written, out);
@@ -376,6 +378,12 @@ fn part_marks<'graph>(
                 part_marks(sites, value, written, out);
             }
         }
+        // A splice's operand is read where the quote is written, as a `$` name is.
+        ExpressionPart::Splice(name) => out.push((
+            Mark::DOLLAR,
+            Marked::Name(BinderSymbol::Value(*name)),
+            sites.site(part),
+        )),
         ExpressionPart::QuotedExpression(_)
         | ExpressionPart::Identifier(_)
         | ExpressionPart::Type(_)
@@ -432,12 +440,14 @@ struct Reader {
     class: MentionClass,
 }
 
-/// A group mark in force over the walk: the mark, and the operator run the node it wraps tops, if
-/// it tops one, whose every use the mark covers too.
+/// A group mark in force over the walk: the mark, the operator run the node it wraps tops, if it
+/// tops one, whose every use the mark covers too, and for a filled use the keys it fills — a use
+/// at any other key is unmarked. A `$(…)` or `\(…)` mark covers every key.
 #[derive(Clone, Copy)]
-struct Marking {
+struct Marking<'graph> {
     mark: Mark,
     run: Option<u32>,
+    keys: Option<&'graph [KeySymbol]>,
 }
 
 /// Where [`Builder::listed`] lists a key's registrations from: the draft at `site` as a use at
@@ -666,6 +676,8 @@ struct Draft<'graph, 'x> {
     /// A code draft's carried type, and why its code cannot be built; see [`BodyShape::code_type`].
     code_type: KType,
     refusal: Option<&'graph ShapeError<'graph>>,
+    /// Whether a code draft composes its code where it is born; see [`BodyShape::composing`].
+    composing: bool,
     /// Whether this body's last statement is in tail position.
     tail: bool,
     /// Whether this is a `USING … SCOPE` body, whose operand's registrations the builder does not
@@ -824,10 +836,15 @@ struct Builder<'graph, 'x, 'e> {
     /// enters as a block rather than walking it as a call, and each use a group mark over its
     /// operator run covers.
     built: BumpBackedMap<'x, usize, Built>,
+    /// Every node the operator-run rewrite built, by its parts address, beside the written node it
+    /// came from: what [`Shapes::origin`] answers once the load seals.
+    origins: BumpBackedMap<'x, usize, Origin<'graph>>,
+    /// The operator run being chained, which every node built from here on is built for.
+    run_node: Option<KExpression<'graph>>,
     /// How many operator runs the rewrite has chained, which numbers each run.
     runs: u32,
     /// The group mark over the node being walked, if any.
-    marking: Option<Marking>,
+    marking: Option<Marking<'graph>>,
     chain: BumpVec<'x, Draft<'graph, 'x>>,
     /// Type parameters of the forms enclosing the current walk path: never mentions.
     skip: BumpVec<'x, TypeSymbol>,
@@ -866,6 +883,8 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             claims,
             frame,
             built: bump_table(scratch),
+            origins: bump_table(scratch),
+            run_node: None,
             runs: 0,
             marking: None,
             chain: BumpVec::new_in(scratch),
@@ -1091,6 +1110,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             required: BumpVec::new_in(scratch),
             code_type: KType::ANY_CODE,
             refusal: None,
+            composing: false,
             tail: false,
             surfaced: false,
             quantified: BumpVec::new_in(scratch),
@@ -1441,7 +1461,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         statement: u32,
         node: &KExpression<'graph>,
         state: State,
-        marking: Option<Marking>,
+        marking: Option<Marking<'graph>>,
     ) -> Result<(), ShapeError<'graph>> {
         let outer = std::mem::replace(&mut self.marking, marking);
         let walked = self.visit_node(level, statement, node, state);
@@ -1682,7 +1702,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         // far the elaborator reads the type holding it.
         if let ExpressionPart::Expression(node) | ExpressionPart::SigiledTypeExpr(node) = part
             && (self.in_type > 0 || matches!(part, ExpressionPart::SigiledTypeExpr(_)))
-            && path_spelling(node.reference(), self.scratch).is_some()
+            && path_spelling(node, self.scratch).is_some()
         {
             self.chain[level].path_spellings.push((part, statement));
         }
@@ -1703,7 +1723,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 // A block the pairwise rewrite synthesized runs as a block: its hoists are its
                 // binders, and its value is its last statement's.
                 if self
-                    .built_as(node.reference())
+                    .built_as(node)
                     .is_some_and(|built| built.kind == BuiltKind::Block)
                 {
                     self.admits = Admits::Nothing;
@@ -1714,26 +1734,22 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                         self.site(level, part),
                         ShapeKind::Block,
                         Entry::PLAIN,
-                        node.reference().body_statements(),
+                        node.body_statements(),
                     );
                 }
-                self.walk_node(level, statement, node.reference(), state)
+                self.walk_node(level, statement, node, state)
             }
             ExpressionPart::SigiledTypeExpr(node) => {
                 if self.in_type == 0 {
                     self.record_type(level, statement, part, None);
                 }
-                self.typed(|builder| {
-                    builder.walk_node(level, statement, node.reference(), State::Eager)
-                })
+                self.typed(|builder| builder.walk_node(level, statement, node, State::Eager))
             }
             ExpressionPart::RecordType(node) => {
                 if self.in_type == 0 {
                     self.record_type(level, statement, part, None);
                 }
-                self.typed(|builder| {
-                    builder.walk_fields(level, statement, node.reference(), State::Eager)
-                })
+                self.typed(|builder| builder.walk_fields(level, statement, node, State::Eager))
             }
             ExpressionPart::ListLiteral(items) => {
                 for item in items.iter() {
@@ -1763,7 +1779,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 Ok(())
             }
             ExpressionPart::QuotedExpression(node) => {
-                self.enter_code(level, statement, part, node.reference(), state)
+                self.enter_code(level, statement, part, node, state)
             }
             ExpressionPart::MarkedName(mark, name) => self.mention_through(
                 level,
@@ -1774,21 +1790,36 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 state,
                 admits == Admits::Head,
             ),
-            ExpressionPart::MarkedUse(..) if !self.in_quote(level) => {
+            ExpressionPart::MarkedUse(..)
+            | ExpressionPart::FilledUse(..)
+            | ExpressionPart::Splice(_)
+                if !self.in_quote(level) =>
+            {
                 Err(ShapeError::MarkOutsideQuote {
                     at: self.part_source(level, statement, self.site(level, part)),
                 })
             }
             // A group mark says where the keyworded use it wraps resolves — and each use of the
-            // operator run that node tops; the names inside it are read as any others are.
+            // operator run that node tops; the names inside it are read as any others are. A
+            // filled use says it for the keys its fill covers.
             ExpressionPart::MarkedUse(mark, node) => {
-                let node = node.reference();
                 let marking = Marking {
                     mark: *mark,
                     run: self.built_as(node).map(|built| built.run),
+                    keys: None,
                 };
                 self.walk_marked(level, statement, node, State::Eager, Some(marking))
             }
+            ExpressionPart::FilledUse(scope, keys, node) => {
+                let marking = Marking {
+                    mark: Mark::Filled(*scope),
+                    run: self.built_as(node).map(|built| built.run),
+                    keys: Some(keys),
+                };
+                self.walk_marked(level, statement, node, State::Eager, Some(marking))
+            }
+            // A quote holding a splice is composed where it is born, so its walk never reaches one.
+            ExpressionPart::Splice(_) => Ok(()),
             ExpressionPart::Type(_) | ExpressionPart::Keyword(_) | ExpressionPart::Literal(_) => {
                 Ok(())
             }
@@ -1986,7 +2017,11 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                     false,
                 );
             }
-            ExpressionPart::MarkedUse(..) if !self.in_quote(level) => {
+            ExpressionPart::MarkedUse(..)
+            | ExpressionPart::FilledUse(..)
+            | ExpressionPart::Splice(_)
+                if !self.in_quote(level) =>
+            {
                 return Err(ShapeError::MarkOutsideQuote {
                     at: self.part_source(level, statement, self.site(level, part)),
                 });
@@ -2009,7 +2044,8 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             | ExpressionPart::SigiledTypeExpr(run)
             | ExpressionPart::RecordType(run)
             | ExpressionPart::QuotedExpression(run)
-            | ExpressionPart::MarkedUse(_, run) => run.reference(),
+            | ExpressionPart::MarkedUse(_, run)
+            | ExpressionPart::FilledUse(_, _, run) => run,
             ExpressionPart::ListLiteral(_)
             | ExpressionPart::DictLiteral(_)
             | ExpressionPart::RecordLiteral(_) => {
@@ -2018,7 +2054,8 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             ExpressionPart::Type(_)
             | ExpressionPart::Identifier(_)
             | ExpressionPart::Keyword(_)
-            | ExpressionPart::Literal(_) => return Ok(()),
+            | ExpressionPart::Literal(_)
+            | ExpressionPart::Splice(_) => return Ok(()),
         };
         for inner in run.parts {
             self.walk_definition_part(level, statement, &inner.value, state)?;
@@ -2234,13 +2271,18 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         let parent = &mut self.chain[level];
         parent.current = (statement, state.constructor().class());
         let entered_at = parent.boundary();
-        let built = self.nested(|builder| builder.code_draft(entered_at, code));
-        let child = match built {
-            Ok(mut draft) => {
-                draft.code_type = self.code_type(&draft, code);
-                draft
+        let child = if code.composes() {
+            self.marked_code(level, statement, entered_at, code, None)?
+        } else {
+            match self.nested(|builder| builder.code_draft(entered_at, code)) {
+                Ok(mut draft) => {
+                    draft.code_type = self.code_type(&draft, code);
+                    draft
+                }
+                Err(refusal) => {
+                    self.marked_code(level, statement, entered_at, code, Some(refusal))?
+                }
             }
-            Err(refusal) => self.refused_code(level, statement, entered_at, code, refusal)?,
         };
         let site = self.site(level, part);
         self.chain[level].adopt(site, child);
@@ -2277,27 +2319,29 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         self.draft(ShapeKind::Code, entry, entered_at, code.body_statements())
     }
 
-    /// The code draft of a quote whose code could not be built: no statements, its `$` names and
-    /// `$(…)` uses captured where the quote is written — each as the built draft would have
-    /// captured it — and `refusal` kept. Its carried type needs every `\` name and `\(…)` key its
-    /// code writes outside the quote values nested in it, since which of them its own binders fill
-    /// is unknown.
-    fn refused_code(
+    /// The code draft of a quote whose code is not built where it is written: no statements, its
+    /// `$` names, `$(…)` uses and splice operands captured where the quote is written — each as the
+    /// built draft would have captured it, an operand as an eager read. Code that could not be
+    /// built keeps `refusal`, and its carried type needs every `\` name and `\(…)` key its code
+    /// writes outside the quote values nested in it, since which of them its own binders fill is
+    /// unknown. Code holding a splice, `refusal` `None`, composes where it is born, typed as
+    /// [`composing_type`](Self::composing_type) says.
+    fn marked_code(
         &mut self,
         level: usize,
         statement: u32,
         entered_at: Position,
         code: &KExpression<'graph>,
-        refusal: ShapeError<'graph>,
+        refusal: Option<ShapeError<'graph>>,
     ) -> Result<Draft<'graph, 'x>, ShapeError<'graph>> {
         let mut marks = BumpVec::new_in(self.scratch);
         code_marks(&self.chain[level].sites, code, &mut marks);
         // A `$` name reads where the quote is written, so a quantified function read through one
         // anywhere but a call's head is the program's error. The refusal's site is the code's, so
         // the mark is matched by where it is written.
-        if let ShapeError::QuantifiedRead { at: read, .. } = refusal
+        if let Some(refusal @ ShapeError::QuantifiedRead { at: read, .. }) = refusal
             && marks.iter().any(|(mark, marked, site)| {
-                *mark == Mark::Written
+                matches!(mark, Mark::Written(_))
                     && matches!(marked, Marked::Name(_))
                     && self.part_source(level, statement, *site) == read
             })
@@ -2323,15 +2367,42 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         let mut draft = self.chain.pop().expect("this draft was pushed above");
         draft.sites = Sites::EMPTY;
         resolved?;
-        draft.code_type = self.refused_type(code, &marks);
-        draft.refusal = Some(resident(self.brand.writer(), refusal));
+        match refusal {
+            Some(refusal) => {
+                draft.code_type = self.refused_type(code, &marks);
+                draft.refusal = Some(resident(self.brand.writer(), refusal));
+            }
+            None => {
+                draft.code_type = self.composing_type(code);
+                draft.composing = true;
+            }
+        }
         Ok(draft)
     }
 
-    /// The root draft of code built alone that could not be built: [`refused_code`]'s draft, with
+    /// The carried type of code that composes where it is born: its kind unbuilt — the root's own
+    /// kind where the root holds no splice, and otherwise an expression where a part beside its
+    /// splices is no group, a block where none is.
+    fn composing_type(&self, code: &KExpression<'graph>) -> KType {
+        let kind = if !code.holds_splice() {
+            code.code_kind()
+        } else if code.parts.iter().any(|part| {
+            !matches!(
+                part.value,
+                ExpressionPart::Expression(_) | ExpressionPart::Splice(_)
+            )
+        }) {
+            KType::EXPRESSION
+        } else {
+            KType::BLOCK
+        };
+        self.types.code_unbuilt(kind)
+    }
+
+    /// The root draft of code built alone that could not be built: [`marked_code`]'s draft, with
     /// no site where it is written to resolve its `$` marks at, since its value binds them.
     ///
-    /// [`refused_code`]: Self::refused_code
+    /// [`marked_code`]: Self::marked_code
     fn refused_root(
         &mut self,
         code: &KExpression<'graph>,
@@ -2385,11 +2456,11 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         reader: Reader,
         marks: &[(Mark, Marked<'graph>, Site)],
     ) -> Result<(), ShapeError<'graph>> {
-        let written = Some(Mark::Written);
         for (mark, marked, site) in marks.iter().copied() {
-            if mark != Mark::Written {
+            if !matches!(mark, Mark::Written(_)) {
                 continue;
             }
+            let written = Some(mark);
             match marked {
                 Marked::Name(name) if self.builtins.lookup(name).is_some() => {}
                 Marked::Name(name) => {
@@ -2539,7 +2610,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 else {
                     return None;
                 };
-                return needing(written.reference()).map(|(_, names)| names);
+                return needing(written).map(|(_, names)| names);
             }
             if matches!(draft.kind, ShapeKind::Program | ShapeKind::Code) {
                 return None;
@@ -2659,7 +2730,9 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         let code = self.chain[..=level]
             .iter()
             .rposition(|draft| draft.kind == ShapeKind::Code);
-        let mark = self.marking.filter(|_| !closed).map(|marking| marking.mark);
+        let mark = (self.marking.filter(|_| !closed))
+            .filter(|marking| marking.keys.is_none_or(|keys| keys.contains(&key)))
+            .map(|marking| marking.mark);
         let mut candidates = BumpVec::new_in(self.scratch);
         let classes = match (mark, code) {
             (Some(Mark::Built), _) => {
@@ -2684,7 +2757,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             }
             // Code built alone has no site where it is written: the builtins at the key, then the
             // key bound at its entry to a list of functions, ranked as written.
-            (Some(Mark::Written), Some(0)) => {
+            (Some(mark @ Mark::Written(_)), Some(0)) => {
                 let listing = Listing {
                     level,
                     reader,
@@ -2696,12 +2769,12 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 let classes = self.listed(listing, elements, node.source, &mut candidates)?;
                 let open = BinderSymbol::Key(self.spelled(elements));
                 let entry = self
-                    .resolve(level, open, Some(Mark::Written), at, reader)
+                    .resolve(level, open, Some(mark), at, reader)
                     .expect("code built alone binds a `$` key at its entry");
                 candidates.push(Candidate::Spread(entry));
                 classes
             }
-            (Some(Mark::Written), Some(code)) => {
+            (Some(mark @ Mark::Written(_)), Some(code)) => {
                 let site = code - 1;
                 let written_at = self.chain[site].boundary();
                 let listing = Listing {
@@ -2709,10 +2782,29 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                     reader,
                     site,
                     at: written_at,
-                    mark: Some(Mark::Written),
+                    mark: Some(mark),
                     closed: false,
                 };
                 self.listed(listing, elements, node.source, &mut candidates)?
+            }
+            // A key a `USING` filled: listed as an unmarked use lists it, its hole read through the
+            // fill's binding in place of a hole — at code built alone, an entry capture.
+            (Some(mark @ Mark::Filled(_)), Some(_)) => {
+                let listing = Listing {
+                    level,
+                    reader,
+                    site: level,
+                    at,
+                    mark: None,
+                    closed,
+                };
+                let classes = self.listed(listing, elements, node.source, &mut candidates)?;
+                let open = BinderSymbol::Key(self.spelled(elements));
+                let filled = self
+                    .resolve(level, open, Some(mark), at, reader)
+                    .expect("a quote's code reads a filled key through its binding");
+                candidates.push(Candidate::Spread(filled));
+                classes
             }
             (Some(_), None) => unreachable!("a mark outside a quote is refused"),
             (None, _) => {
@@ -2989,6 +3081,17 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
     ) -> Option<Coordinate> {
         let draft = &self.chain[level];
         let kind = draft.kind;
+        // Code built alone is the root a pinned mark belongs to: there it is its unpinned mark,
+        // sharing the root's entry capture of that scope and name.
+        let mark = match (kind, mark) {
+            (ShapeKind::Code, Some(Mark::Written(scope))) if level == 0 => {
+                Some(Mark::Written(scope.unpinned()))
+            }
+            (ShapeKind::Code, Some(Mark::Filled(scope))) if level == 0 => {
+                Some(Mark::Filled(scope.unpinned()))
+            }
+            _ => mark,
+        };
         if let Some(target) = resolve_here(draft.channels(), &draft.captures, name, mark, at) {
             if let Target::Local(slot) = target {
                 self.edge(level, slot, reader);
@@ -3011,11 +3114,19 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 CaptureSource::Read(read)
             }
             (ShapeKind::Callable, _) => CaptureSource::Read(outer(self, mark)?),
-            // Code built alone, composed at run time: its value carries each `$` binding.
-            (ShapeKind::Code, Some(Mark::Written)) if level == 0 => {
+            // Code built alone, composed at run time: its value carries each `$` and filled
+            // binding, keyed by scope.
+            (ShapeKind::Code, Some(mark)) if mark.is_bound() && level == 0 => {
                 CaptureSource::Entry { head: true }
             }
-            (ShapeKind::Code, Some(Mark::Written)) => CaptureSource::Read(outer(self, None)?),
+            // A pinned mark belongs to the root past every quote around it, so it keeps its mark
+            // across this quote's boundary; an unpinned one is an ordinary name of the encloser.
+            (ShapeKind::Code, Some(mark)) if mark.scope().is_some_and(|scope| scope.pinned) => {
+                CaptureSource::Read(outer(self, Some(mark))?)
+            }
+            (ShapeKind::Code, Some(Mark::Written(_) | Mark::Filled(_))) => {
+                CaptureSource::Read(outer(self, None)?)
+            }
             (ShapeKind::Code, Some(Mark::Built)) => CaptureSource::Offered,
             (ShapeKind::Code, None) => CaptureSource::Hole,
         };
@@ -3368,6 +3479,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
 
         for (_, child) in draft.children.iter_mut() {
             let binder = draft.statement_binders[child.parent_statement as usize].first();
+            let at = draft.nodes[child.parent_statement as usize].source;
             for capture in child.captures.iter_mut() {
                 let CaptureSource::Read(Coordinate::Activation {
                     hops: 0,
@@ -3382,6 +3494,9 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                     let index = members
                         .binary_search(&bound)
                         .expect("a slot sits in its own component");
+                    if child.composing {
+                        return Err(ShapeError::SpliceInKnot { at });
+                    }
                     capture.source = CaptureSource::Member {
                         component,
                         index: index as u32,
@@ -3730,6 +3845,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 arm: draft.arm,
                 code_type: draft.code_type,
                 refusal: draft.refusal,
+                composing: draft.composing,
                 offers,
                 registrations,
                 rankings: collect(writer, draft.rankings.iter().copied()),
@@ -3806,8 +3922,7 @@ impl<'graph> Builder<'graph, '_, '_> {
             else {
                 unreachable!("the builder records a path's node");
             };
-            let spelling =
-                path_spelling(node.reference(), self.scratch).expect("a recorded path spells one");
+            let spelling = path_spelling(node, self.scratch).expect("a recorded path spells one");
             let root = match spelling.root {
                 SpelledRoot::Inline(root) => Some(Root::Inline {
                     site: draft.sites.site(root),
@@ -3865,16 +3980,13 @@ fn types_with_its_binder(form: &BuiltinShape) -> bool {
 fn rooted_at_name(part: &ExpressionPart<'_>) -> bool {
     match part {
         ExpressionPart::Identifier(_) | ExpressionPart::MarkedName(..) => true,
-        ExpressionPart::Expression(node) => {
-            let node = node.reference();
-            match (node.cache().builtin_shape(), node.parts) {
-                (Some(form), [_, operand, _]) if form.id == BuiltinShapeId::Attribute => {
-                    rooted_at_name(&operand.value)
-                }
-                (None, [only]) => rooted_at_name(&only.value),
-                _ => false,
+        ExpressionPart::Expression(node) => match (node.cache().builtin_shape(), node.parts) {
+            (Some(form), [_, operand, _]) if form.id == BuiltinShapeId::Attribute => {
+                rooted_at_name(&operand.value)
             }
-        }
+            (None, [only]) => rooted_at_name(&only.value),
+            _ => false,
+        },
         _ => false,
     }
 }

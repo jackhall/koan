@@ -40,16 +40,17 @@ use crate::memory::ProgramBrand;
 use crate::source::{self, CurrentFileGuard, FileId, SourceFile};
 use crate::symbols::SymbolInterner;
 
-pub use copy::copied;
+pub use copy::{Quoted, Remark, copied, remarked, remarked_whole};
 pub use depth::MAX_SYNTAX_DEPTH;
 pub use error::ParseError;
 
 /// The span wrapper a node's parts run carries — the type every construction door here takes, so a
 /// caller building a node names it through `parse` rather than reaching past it.
-pub use crate::source::Spanned;
+pub use crate::source::{SourceRef, Spanned};
 pub use ast::{
     DispatchShape, ExpressionKey, ExpressionPart, KExpression, KLiteral, KeyElement, ListItem,
-    Mark, NodeCache, PartClass, ProgramExpression, ProgramNode, classify_dispatch_shape,
+    Mark, NodeCache, PartClass, PartsSummary, ProgramExpression, Scope, WrittenSlots,
+    classify_dispatch_shape,
 };
 pub use builtin_shapes::binder::{
     BinderBucketFn, BinderNameFn, BinderSurface, BucketKeys, StoredBinderKey,

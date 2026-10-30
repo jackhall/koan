@@ -418,6 +418,8 @@ pub(super) fn unlocated(error: ShapeError) -> ShapeError {
         E::NotAModule { value, .. } => E::NotAModule { value, at },
         E::NotASignature { ascribed, .. } => E::NotASignature { ascribed, at },
         E::SpreadNeverAList { value, .. } => E::SpreadNeverAList { value, at },
+        E::SpliceNeverCode { value, .. } => E::SpliceNeverCode { value, at },
+        E::SpliceInKnot { .. } => E::SpliceInKnot { at },
         E::ReadNeverSatisfied {
             container,
             argument,

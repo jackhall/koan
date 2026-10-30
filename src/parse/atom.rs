@@ -550,8 +550,14 @@ mod tests {
                 format!("#({})", inner.join(" "))
             }
             ExpressionPart::MarkedName(mark, name) => {
-                format!("{}({})", mark.sigil(), symbols.render(name.symbol()))
+                format!(
+                    "{}({})",
+                    mark.sigil().unwrap_or('~'),
+                    symbols.render(name.symbol())
+                )
             }
+            ExpressionPart::Splice(name) => format!("$..({})", symbols.render(name.symbol())),
+            ExpressionPart::FilledUse(..) => unreachable!("a parse holds no filled use"),
             ExpressionPart::Literal(KLiteral::String(s)) => format!("s({})", s),
             ExpressionPart::Literal(KLiteral::Number(n)) => format!("n({})", n),
             ExpressionPart::Literal(KLiteral::Boolean(b)) => format!("b({})", b),

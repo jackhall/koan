@@ -113,6 +113,14 @@ pub enum TypeNode<'run, H: Naming<'run> = Handle> {
         /// Symbol-sorted and deduplicated: the needed names are a set.
         names: &'run [BinderSymbol],
     },
+    /// A code kind and every code under it whatever it needs, spelled `:(UNBUILT Block)`: the
+    /// carried type of code no build has classified. Above the kind and every `NEEDING` type over
+    /// a kind within it; below `Code`. `UNBUILT Code` is `Code`, so `kind` is below `Code`. Build
+    /// through [`TypeChain::code_unbuilt`](super::chain::TypeChain::code_unbuilt).
+    CodeUnbuilt {
+        /// A code kind below `Code`.
+        kind: H::Bound,
+    },
     /// The uninhabited bottom: admitted by no value, below every other type, and the identity
     /// element of both [`join`](super::lattice::join) and union canonicalization. Spellable as
     /// the builtin name `Never`, where it declares a slot nothing fills.
@@ -326,6 +334,7 @@ impl<'run, H: Naming<'run>> TypeNode<'run, H> {
             | TypeNode::Never
             | TypeNode::OfKind(_)
             | TypeNode::CodeNeeding { .. }
+            | TypeNode::CodeUnbuilt { .. }
             | TypeNode::Parameter { .. }
             | TypeNode::Carrier { .. }
             | TypeNode::SetMember { .. }

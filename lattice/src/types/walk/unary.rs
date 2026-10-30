@@ -240,6 +240,7 @@ pub fn children<'run>(
         | TypeNode::AnyCode
         // Its kind is a ground code leaf, so nothing under it is ever rebuilt.
         | TypeNode::CodeNeeding { .. }
+        | TypeNode::CodeUnbuilt { .. }
         | TypeNode::Never
         | TypeNode::OfKind(_)
         | TypeNode::DeferredReturn(_)
@@ -376,6 +377,7 @@ fn reassemble<'run>(
         | TypeNode::AnyValue
         | TypeNode::AnyCode
         | TypeNode::CodeNeeding { .. }
+        | TypeNode::CodeUnbuilt { .. }
         | TypeNode::Never
         | TypeNode::OfKind(_)
         | TypeNode::DeferredReturn(_)

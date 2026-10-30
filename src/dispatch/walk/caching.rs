@@ -125,7 +125,8 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 ExpressionPart::Expression(node)
                 | ExpressionPart::SigiledTypeExpr(node)
                 | ExpressionPart::RecordType(node)
-                | ExpressionPart::MarkedUse(_, node) => {
+                | ExpressionPart::MarkedUse(_, node)
+                | ExpressionPart::FilledUse(_, _, node) => {
                     parts.extend(node.parts.iter().map(|part| &part.value));
                 }
                 ExpressionPart::ListLiteral(items) => {

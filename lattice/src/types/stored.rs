@@ -117,6 +117,9 @@ pub(super) enum Content<'run> {
         kind: Linked<'run>,
         names: &'run [BinderSymbol],
     },
+    CodeUnbuilt {
+        kind: Linked<'run>,
+    },
     Never,
     OfKind(KKind),
     Parameter {
@@ -291,6 +294,9 @@ impl<'run> StoredNode<'run> {
             Content::CodeNeeding { kind, names } => TypeNode::CodeNeeding {
                 kind: C::read_bound(kind),
                 names,
+            },
+            Content::CodeUnbuilt { kind } => TypeNode::CodeUnbuilt {
+                kind: C::read_bound(kind),
             },
             Content::Never => TypeNode::Never,
             Content::OfKind(kind) => TypeNode::OfKind(kind),
@@ -526,6 +532,7 @@ impl<'run> Content<'run> {
             TypeNode::AnyValue => Content::AnyValue,
             TypeNode::AnyCode => Content::AnyCode,
             TypeNode::CodeNeeding { kind, names } => Content::CodeNeeding { kind, names },
+            TypeNode::CodeUnbuilt { kind } => Content::CodeUnbuilt { kind },
             TypeNode::Never => Content::Never,
             TypeNode::OfKind(kind) => Content::OfKind(kind),
             TypeNode::Parameter { name, bound } => Content::Parameter { name, bound },
@@ -640,6 +647,7 @@ impl<'run> Content<'run> {
                 kind: map(kind),
                 names: copied(lay, names),
             },
+            Content::CodeUnbuilt { kind } => Content::CodeUnbuilt { kind: map(kind) },
             Content::Never => Content::Never,
             Content::OfKind(kind) => Content::OfKind(kind),
             Content::Parameter { name, bound } => Content::Parameter {
@@ -825,6 +833,7 @@ impl<'run> Content<'run> {
             | Content::Keyword
             | Content::AnyCode
             | Content::CodeNeeding { .. }
+            | Content::CodeUnbuilt { .. }
             | Content::Never => Flags::NONE,
         }
     }

@@ -120,11 +120,7 @@ pub(super) fn let_narrowing(program: &Program<'_>, shape: &BodyShape<'_>, name: 
     };
     rendered(
         (program.facts())
-            .use_statics(
-                &program.tiers().resting(),
-                shape,
-                shape.site_of_node(node.reference()),
-            )
+            .use_statics(&program.tiers().resting(), shape, shape.site_of_node(node))
             .narrowing,
     )
 }

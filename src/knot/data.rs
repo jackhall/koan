@@ -120,13 +120,10 @@ pub(super) fn root<'step>(
         | ExpressionPart::DictLiteral(_)
         | ExpressionPart::RecordLiteral(_) => Some(part),
         ExpressionPart::QuotedExpression(_) => fellow_quote(shape, part).map(|_| part),
-        ExpressionPart::Expression(node) => {
-            let node = node.reference();
-            match node.parts {
-                [only] if node.cache().builtin_shape().is_none() => root(shape, &only.value),
-                _ => construction_parts(shape, node).map(|_| part),
-            }
-        }
+        ExpressionPart::Expression(node) => match node.parts {
+            [only] if node.cache().builtin_shape().is_none() => root(shape, &only.value),
+            _ => construction_parts(shape, node).map(|_| part),
+        },
         _ => None,
     }
 }
@@ -311,7 +308,10 @@ impl<'stage, 'step, 'graph, 'cell> Stager<'stage, 'step, 'graph, 'cell> {
                 }));
                 return Ok(Staged::Edge(index));
             }
-            ExpressionPart::MarkedName(..) | ExpressionPart::MarkedUse(..) => {
+            ExpressionPart::MarkedName(..)
+            | ExpressionPart::MarkedUse(..)
+            | ExpressionPart::FilledUse(..)
+            | ExpressionPart::Splice(_) => {
                 unreachable!("the shape builder refuses a mark outside a quote value")
             }
             ExpressionPart::Identifier(_) | ExpressionPart::Type(_) => {
@@ -321,7 +321,6 @@ impl<'stage, 'step, 'graph, 'cell> Stager<'stage, 'step, 'graph, 'cell> {
                 };
             }
             ExpressionPart::Expression(node) => {
-                let node = node.reference();
                 if let [only] = node.parts
                     && node.cache().builtin_shape().is_none()
                 {

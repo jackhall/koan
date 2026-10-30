@@ -46,7 +46,6 @@ pub(crate) fn path_spelling<'graph, 'x>(
     };
     let mut chain = BumpVec::new_in(scratch);
     while let ExpressionPart::Expression(node) = root {
-        let node = node.reference();
         if let Some((owner, step)) = attribute(node) {
             let ExpressionPart::Identifier(step) = step else {
                 return None;

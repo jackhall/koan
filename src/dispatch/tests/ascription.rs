@@ -33,9 +33,7 @@ fn settled(program: &Program<'_>, name: &str) -> bool {
     let Some(ExpressionPart::Expression(node)) = shape.rhs(slot(program, shape, name)) else {
         panic!("`{name}` is bound to a node");
     };
-    program
-        .facts()
-        .settled(shape, shape.site_of_node(node.reference()))
+    program.facts().settled(shape, shape.site_of_node(node))
 }
 
 /// The `WHICH` overloads each test dispatches the retyped value through.

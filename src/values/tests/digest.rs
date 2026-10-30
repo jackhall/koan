@@ -316,9 +316,9 @@ mod syntax {
             let (program, other) = (program_storage(), program_storage());
             let symbols = SymbolInterner::new();
             let source = build(program.brand(), &shape, &symbols);
-            let copy = crate::parse::copied(other.brand(), &source);
-            prop_assert!(expression_equal(&source, &copy));
-            prop_assert_eq!(syntax_digest(&source), syntax_digest(&copy));
+            let copy = crate::parse::copied(other.brand().writer(), &source);
+            prop_assert!(expression_equal(&source, copy));
+            prop_assert_eq!(syntax_digest(&source), syntax_digest(copy));
         }
     }
 

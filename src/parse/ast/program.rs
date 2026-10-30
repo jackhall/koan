@@ -1,29 +1,23 @@
-//! The eternal-tier marker on the AST's value channel: [`ProgramExpression`] and [`ProgramNode`],
-//! the two `Copy` newtypes whose private fields make "this node's parts run is hosted in program
-//! storage" a type rather than a discipline.
+//! Program storage's construction doors for the AST: [`ProgramBrand`]'s mints, and
+//! [`ProgramExpression`], the `Copy` newtype lowering carries a node in while it is still being
+//! placed.
 //!
-//! The claim is about the **parts slice**, not the node struct. [`KExpression`] is `Copy` and rides
-//! by value, so what a holder can outlive is the run of parts the node borrows — and, transitively,
-//! everything reachable from it. That is why the marker sits on the *references inside* the
-//! expression-holding [`ExpressionPart`](super::ExpressionPart) arms and on a quoted-expression
-//! value ([`Value::Expression`](crate::values::Value::Expression)), and why re-homing the node
-//! struct itself at any brand ([`ProgramExpression::rehost`]) is sound.
-//!
-//! The marker is consumed only where the claim is used. The dispatch channel — `sub_dispatches`,
-//! [`WorkingExpression`](crate::values::WorkingExpression), the classifier, the structural
-//! cache — keeps carrying bare [`KExpression`], so nothing here goes viral and there is no erase
-//! point to audit.
+//! A node's parts hold plain `&'a KExpression<'a>` references, so the storage a node lies in is
+//! its lifetime: a node at the program's lifetime is eternal by that lifetime alone. These doors
+//! take the brand at the node's own lifetime, and the brand is invariant in it, so program
+//! storage never holds a node of shorter-lived storage. See
+//! [README.md](../README.md#the-eternal-tier-is-the-lifetime).
 
 use std::ops::Deref;
 
-use crate::memory::{ProgramBrand, Writer, resident};
+use crate::memory::{ProgramBrand, resident};
 use crate::source::{SourceRef, Spanned};
 
 use super::{ExpressionPart, KExpression, RunIter};
 
 /// A node whose parts run — and everything reachable from it — is hosted in eternal program
-/// storage. Minted only by [`ProgramBrand`]'s doors below; holding one **is** the proof the value
-/// channel's verdicts cite.
+/// storage, as lowering carries a node before it places it. Minted only by [`ProgramBrand`]'s
+/// doors below.
 ///
 /// The field is private to this module, so the only way to obtain one is a door that took a
 /// `ProgramBrand` or an accessor on a value that already carries the proof. A node cannot be
@@ -52,47 +46,10 @@ use super::{ExpressionPart, KExpression, RunIter};
 #[derive(Clone, Copy, Debug)]
 pub struct ProgramExpression<'a>(KExpression<'a>);
 
-/// A marked `&'a KExpression<'a>` — the payload of the expression-holding
-/// [`ExpressionPart`](super::ExpressionPart) arms, the conduits from the AST into the value
-/// channel. Matching one out of an arm is what lets a value-channel door compile its proof out of
-/// the match.
-#[derive(Clone, Copy, Debug)]
-pub struct ProgramNode<'a>(&'a KExpression<'a>);
-
-impl<'a> ProgramNode<'a> {
-    /// The marked node by value — the copy-out the value-channel doors take. Copying the struct
-    /// preserves the claim: the parts run it borrows does not move.
-    pub fn expression(self) -> ProgramExpression<'a> {
-        ProgramExpression(*self.0)
-    }
-
-    /// Widening exit to the bare reference, for the read and dispatch sites that carry no claim.
-    pub fn reference(self) -> &'a KExpression<'a> {
-        self.0
-    }
-}
-
-impl<'a> Deref for ProgramNode<'a> {
-    type Target = KExpression<'a>;
-    fn deref(&self) -> &KExpression<'a> {
-        self.0
-    }
-}
-
 impl<'a> ProgramExpression<'a> {
     /// Widening exit to the bare node, mirroring [`ProgramBrand::writer`]: widens, never narrows.
     pub fn node(self) -> KExpression<'a> {
         self.0
-    }
-
-    /// Re-home the node **struct** into `writer`'s region and hand back the marked reference.
-    ///
-    /// Sound at any writer because the marker's claim is about the parts run, which this does not
-    /// touch: the write copies the `Copy` struct (its `parts`, structural cache and binder cache
-    /// all stay the program-storage borrows they were) into wherever `writer` writes. What the
-    /// resulting `ProgramNode` promises is unchanged — only the address of the node header moves.
-    pub fn rehost(self, writer: Writer<'a, '_>) -> ProgramNode<'a> {
-        ProgramNode(resident(writer, self.0))
     }
 }
 
@@ -155,8 +112,8 @@ impl<'a> ProgramBrand<'a> {
     }
 
     /// Write a marked node into program storage, yielding the reference an arm payload holds.
-    pub fn alloc_node(self, expression: ProgramExpression<'a>) -> ProgramNode<'a> {
-        ProgramNode(resident(self.writer(), expression.0))
+    pub fn alloc_node(self, expression: ProgramExpression<'a>) -> &'a KExpression<'a> {
+        resident(self.writer(), expression.0)
     }
 
     /// Build and write in one step — the [`ExpressionPart::Expression`] analogue of
@@ -165,17 +122,17 @@ impl<'a> ProgramBrand<'a> {
         self,
         parts: &[Spanned<ExpressionPart<'a>>],
         source: SourceRef,
-    ) -> ProgramNode<'a> {
-        ProgramNode(KExpression::nested(self.writer(), parts, source))
+    ) -> &'a KExpression<'a> {
+        KExpression::nested(self.writer(), parts, source)
     }
 
     /// [`nested_node`](Self::nested_node)'s peer for a computed run —
     /// [`KExpression::nested_from_iter`] with the tier proof attached.
-    pub fn nested_node_from_iter<I>(self, parts: I, source: SourceRef) -> ProgramNode<'a>
+    pub fn nested_node_from_iter<I>(self, parts: I, source: SourceRef) -> &'a KExpression<'a>
     where
         I: IntoIterator<Item = Spanned<ExpressionPart<'a>>>,
         RunIter<I>: ExactSizeIterator,
     {
-        ProgramNode(KExpression::nested_from_iter(self.writer(), parts, source))
+        KExpression::nested_from_iter(self.writer(), parts, source)
     }
 }

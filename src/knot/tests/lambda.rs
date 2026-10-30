@@ -42,9 +42,7 @@ fn body_of<'graph>(
     let ExpressionPart::Expression(node) = part else {
         panic!("a `FN` item is a parenthesized node");
     };
-    let site = shape
-        .site_of_body(node.reference())
-        .expect("a `FN` has a body");
+    let site = shape.site_of_body(node).expect("a `FN` has a body");
     shape.nested(site).expect("the body has a shape")
 }
 

@@ -414,7 +414,8 @@ fn error_types(error: &ShapeError<'_>, each: &mut Each<'_>) {
             each(declared(callee));
             each(arguments.into());
         }
-        ShapeError::SpreadNeverAList { value, at: _ } => ktype(value),
+        ShapeError::SpreadNeverAList { value, at: _ }
+        | ShapeError::SpliceNeverCode { value, at: _ } => ktype(value),
         ShapeError::ReadNeverSatisfied {
             container,
             argument,
@@ -487,6 +488,7 @@ fn error_types(error: &ShapeError<'_>, each: &mut Each<'_>) {
         | ShapeError::NoCandidate { key: _, at: _ }
         | ShapeError::Unlisted { name: _, at: _ }
         | ShapeError::OpenPathInType { at: _ }
+        | ShapeError::SpliceInKnot { at: _ }
         | ShapeError::UnpinnedMember {
             member: _,
             parameter: _,

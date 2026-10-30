@@ -121,7 +121,7 @@ fn planned_items<'graph>(
                     coordinate => Item::Read(coordinate),
                 }
             }
-            ExpressionPart::Expression(node) => (shape.site_of_body(node.reference()))
+            ExpressionPart::Expression(node) => (shape.site_of_body(node))
                 .and_then(|site| shape.nested(site))
                 .filter(|body| {
                     body.kind() == ShapeKind::Callable

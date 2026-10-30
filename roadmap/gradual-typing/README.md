@@ -27,6 +27,7 @@ hand.
 - [What a barrier rebuilds](barrier-coercion.md)
 - [A carried union at a contravariant position](contravariant-union-solve.md)
 - [Dependent signatures](dependent-signatures.md)
+- [A nested projection](nested-projection.md)
 - [A pin over a variable](pins-over-variables.md)
 
 ## Unplanned work

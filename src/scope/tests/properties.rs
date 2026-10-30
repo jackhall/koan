@@ -60,9 +60,10 @@ fn walk<'g>(
         | ExpressionPart::MarkedName(..) => {
             met.push(Met::Name(shapes.last().map(|shape| shape.site(part))))
         }
-        ExpressionPart::MarkedUse(_, node) => {
-            meet_use(node.reference(), shapes, met);
-            for inner in node.reference().parts {
+        ExpressionPart::Splice(_) => {}
+        ExpressionPart::MarkedUse(_, node) | ExpressionPart::FilledUse(_, _, node) => {
+            meet_use(node, shapes, met);
+            for inner in node.parts {
                 walk(&inner.value, shapes, met);
             }
         }
@@ -79,8 +80,8 @@ fn walk<'g>(
                 met.push(Met::Open(nested));
                 shapes.push(nested);
             }
-            meet_use(node.reference(), shapes, met);
-            for inner in node.reference().parts {
+            meet_use(node, shapes, met);
+            for inner in node.parts {
                 walk(&inner.value, shapes, met);
             }
             if nested.is_some() {
@@ -945,7 +946,7 @@ fn written_parts<'g>(shape: &BodyShape<'g>) -> Vec<Written<'g>> {
         each_part(statement, |part| {
             parts.push(Written::Part(part));
             if let ExpressionPart::Expression(node) = part {
-                parts.push(Written::Node(node.reference()));
+                parts.push(Written::Node(node));
             }
         });
     }

@@ -8,6 +8,7 @@ use proptest::prelude::*;
 use crate::memory::{ProgramBrand, collect, program_storage};
 use crate::parse::{
     DispatchShape, ExpressionPart, KExpression, KLiteral, KeyElement, Mark, PartClass,
+    PartsSummary, Scope,
 };
 use crate::source::Spanned;
 use crate::symbols::{BinderSymbol, KeywordSymbol, SymbolInterner, TypeSymbol, ValueSymbol};
@@ -37,6 +38,9 @@ pub(crate) enum PartShape {
     Record(Vec<(String, PartShape)>),
     MarkedName(Mark, String),
     MarkedUse(Mark, Vec<PartShape>),
+    Splice(String),
+    /// A filled use over `items`, filling the infix key of each keyword spelling listed.
+    FilledUse(Scope, Vec<String>, Vec<PartShape>),
 }
 
 fn keyword_spelling() -> impl Strategy<Value = String> {
@@ -51,8 +55,17 @@ fn type_spelling() -> impl Strategy<Value = String> {
     "[A-Z][a-z][A-Za-z]{0,3}".prop_map(String::from)
 }
 
+fn scope() -> impl Strategy<Value = Scope> {
+    (0u32..3, any::<bool>()).prop_map(|(number, pinned)| Scope { number, pinned })
+}
+
 fn mark() -> impl Strategy<Value = Mark> {
-    prop_oneof![Just(Mark::Written), Just(Mark::Built)]
+    prop_oneof![
+        3 => Just(Mark::DOLLAR),
+        2 => Just(Mark::Built),
+        1 => scope().prop_map(Mark::Written),
+        1 => scope().prop_map(Mark::Filled),
+    ]
 }
 
 /// One part, to a bounded nesting depth.
@@ -66,6 +79,7 @@ pub(crate) fn part_shape() -> impl Strategy<Value = PartShape> {
         any::<bool>().prop_map(PartShape::Boolean),
         Just(PartShape::Null),
         (mark(), value_spelling()).prop_map(|(mark, name)| PartShape::MarkedName(mark, name)),
+        value_spelling().prop_map(PartShape::Splice),
     ];
     leaf.prop_recursive(3, 16, 3, |inner| {
         prop_oneof![
@@ -77,8 +91,14 @@ pub(crate) fn part_shape() -> impl Strategy<Value = PartShape> {
             prop::collection::vec((inner.clone(), inner.clone()), 0..2).prop_map(PartShape::Dict),
             prop::collection::vec((value_spelling(), inner.clone()), 0..2)
                 .prop_map(PartShape::Record),
-            (mark(), prop::collection::vec(inner, 1..3))
+            (mark(), prop::collection::vec(inner.clone(), 1..3))
                 .prop_map(|(mark, items)| PartShape::MarkedUse(mark, items)),
+            (
+                scope(),
+                prop::collection::vec(keyword_spelling(), 0..2),
+                prop::collection::vec(inner, 1..3)
+            )
+                .prop_map(|(scope, keys, items)| PartShape::FilledUse(scope, keys, items)),
         ]
     })
 }
@@ -90,6 +110,30 @@ pub(crate) fn parts_run() -> impl Strategy<Value = Vec<PartShape>> {
         3 => prop::collection::vec(part_shape(), 0..6),
         1 => chain_run(),
         1 => keyword_led_run(),
+    ]
+}
+
+/// A run long enough to lay [`Blocks`](super::Blocks): parts and keywords mixed, so it holds
+/// breaks and alike neighbours both, and sometimes an operator chain throughout.
+fn long_run() -> impl Strategy<Value = Vec<PartShape>> {
+    prop_oneof![
+        prop::collection::vec(
+            prop_oneof![
+                2 => part_shape(),
+                1 => keyword_spelling().prop_map(PartShape::Keyword),
+            ],
+            0..120,
+        ),
+        prop::collection::vec(chain_run(), 1..30).prop_map(|runs| {
+            let mut joined = Vec::new();
+            for run in runs {
+                if !joined.is_empty() {
+                    joined.push(PartShape::Keyword("+".to_string()));
+                }
+                joined.extend(run);
+            }
+            joined
+        }),
     ]
 }
 
@@ -186,6 +230,25 @@ fn build_part<'a>(
         ),
         PartShape::MarkedUse(mark, items) => ExpressionPart::MarkedUse(
             *mark,
+            brand.nested_node_from_iter(build_run(brand, items, symbols), crate::tests::source()),
+        ),
+        PartShape::Splice(name) => ExpressionPart::Splice(
+            ValueSymbol::declared(name, symbols).expect("a value token by construction"),
+        ),
+        PartShape::FilledUse(scope, keys, items) => ExpressionPart::FilledUse(
+            *scope,
+            collect(
+                writer,
+                keys.iter().map(|text| {
+                    let keyword = KeywordSymbol::declared(text, symbols)
+                        .expect("keyword-class by construction");
+                    KeyElement::key([
+                        KeyElement::Slot,
+                        KeyElement::Keyword(keyword),
+                        KeyElement::Slot,
+                    ])
+                }),
+            ),
             brand.nested_node_from_iter(build_run(brand, items, symbols), crate::tests::source()),
         ),
     }
@@ -329,6 +392,113 @@ proptest! {
         prop_assert_eq!(expression.summarize(&symbols), joined);
     }
 
+    /// A stretch's summary read through a node's blocks is the join of its parts' own, and a node
+    /// is an operator run exactly where its whole summary says so.
+    #[test]
+    fn a_stretch_summary_is_the_join_of_its_parts(
+        shapes in long_run(),
+        cuts in prop::collection::vec((0.0..=1.0f64, 0.0..=1.0f64), 8),
+    ) {
+        let program = program_storage();
+        let symbols = SymbolInterner::new();
+        let expression = build(program.brand(), &shapes, &symbols);
+        let len = expression.parts.len();
+        let joined = |from: usize, to: usize| {
+            (expression.parts[from..to].iter())
+                .map(|part| PartsSummary::of(&part.value))
+                .fold(PartsSummary::default(), PartsSummary::joined)
+        };
+        let ends = cuts.iter().map(|(a, b)| {
+            let (a, b) = ((a * len as f64) as usize, (b * len as f64) as usize);
+            (a.min(b), a.max(b))
+        });
+        for (from, to) in ends.chain([(0, len)]) {
+            prop_assert_eq!(expression.stretch(from, to), joined(from, to), "[{}, {})", from, to);
+        }
+        prop_assert_eq!(
+            expression.stretch(0, len).is_operator_run() && len > 0,
+            expression.shape() == DispatchShape::OperatorChain,
+        );
+    }
+
+    /// A node weighs at most its own bound over its parts' summed weight, so a code view pricing a
+    /// node it has not laid never under-prices it.
+    #[test]
+    fn a_nodes_weight_is_within_its_own_bound(
+        shapes in prop_oneof![3 => parts_run(), 1 => long_run()],
+    ) {
+        let program = program_storage();
+        let symbols = SymbolInterner::new();
+        let expression = build(program.brand(), &shapes, &symbols);
+        prop_assert!(within_bound(&expression));
+    }
+
+    /// A node's weight bounds what a copy of it writes, so a code view priced by weights never
+    /// under-prices its flat copy.
+    #[test]
+    fn a_nodes_weight_bounds_what_its_copy_writes(
+        shapes in prop_oneof![3 => parts_run(), 1 => long_run()],
+    ) {
+        let program = program_storage();
+        let symbols = SymbolInterner::new();
+        let expression = build(program.brand(), &shapes, &symbols);
+        let other = program_storage();
+        let writer = other.brand().writer();
+        // A chunk boundary strands the old chunk's tail, which no weight prices: start a chunk
+        // far larger than any generated copy first, so the copy lands inside it.
+        fresh_chunk(writer);
+        let before = writer.in_use();
+        let copy = crate::parse::copied(writer, &expression);
+        let written = writer.in_use() - before;
+        prop_assert!(written <= expression.weight() as usize, "{written} > {}", expression.weight());
+        prop_assert_eq!(copy.weight(), expression.weight());
+    }
+
+}
+
+/// Leave `writer` early in a fresh chunk of at least 128 KiB: past a 64 KiB text, small texts
+/// until one strands its chunk's tail, starting a new chunk, which doubles the last.
+fn fresh_chunk(writer: crate::memory::Writer<'_, '_>) {
+    writer.text(&"x".repeat(1 << 16));
+    let filler = "x".repeat(1 << 12);
+    for _ in 0..64 {
+        let before = writer.in_use();
+        writer.text(&filler);
+        if writer.in_use() - before != filler.len() {
+            return;
+        }
+    }
+    panic!("no chunk switch within 256 KiB");
+}
+
+/// Whether `node` weighs at most [`KExpression::own_bound`] over its parts' summed weight.
+fn within_bound(node: &KExpression<'_>) -> bool {
+    let below = node.stretch(0, node.parts.len()).weight;
+    u64::from(node.weight())
+        <= KExpression::own_bound(node.parts.len(), below.into()) + u64::from(below)
+}
+
+/// A binder's plan is within its node's own bound, a definition's long signature key included.
+#[test]
+fn a_binders_weight_is_within_its_own_bound() {
+    let program = program_storage();
+    let symbols = SymbolInterner::new();
+    let slots = (0..40)
+        .map(|at| format!("a{at} :Number"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    let source = format!(
+        "LET f = (FN :{{{slots}}} -> Number = #(1))\nLET plus = UNARY OP #(+++) OVER Number -> Number = (operands)"
+    );
+    let parsed = crate::parse::parse(program.brand(), &symbols, &source).expect("it parses");
+    for statement in &parsed {
+        assert!(
+            statement.binder_plan().is_some(),
+            "{}",
+            statement.summarize(&symbols)
+        );
+        assert!(within_bound(statement));
+    }
 }
 
 /// A quote's code kind is read off its body as written: each source here is one quote, and its
@@ -377,6 +547,34 @@ fn a_quote_is_typed_by_its_body_as_written() {
         let ExpressionPart::QuotedExpression(body) = part.value else {
             panic!("{source:?} is a quote");
         };
-        assert_eq!(body.reference().code_kind(), *kind, "{source}");
+        assert_eq!(body.code_kind(), *kind, "{source}");
     }
+}
+
+/// A scoped `$` mark prints as `$x` whatever its scope or pin, a filled mark and a filled use print
+/// bare, and a splice as `$..xs`, so code holding them prints as it was written.
+#[test]
+fn a_scoped_mark_prints_as_written_and_a_filled_mark_bare() {
+    let program = program_storage();
+    let symbols = SymbolInterner::new();
+    let pinned = Scope {
+        number: 2,
+        pinned: true,
+    };
+    let shapes = [
+        PartShape::MarkedName(Mark::Written(pinned), "x".into()),
+        PartShape::MarkedName(Mark::Filled(pinned), "y".into()),
+        PartShape::Splice("xs".into()),
+        PartShape::FilledUse(
+            Scope::WRITTEN,
+            vec!["+".into()],
+            vec![
+                PartShape::Identifier("a".into()),
+                PartShape::Keyword("+".into()),
+                PartShape::Identifier("b".into()),
+            ],
+        ),
+    ];
+    let node = build(program.brand(), &shapes, &symbols);
+    assert_eq!(node.summarize(&symbols), "$x y $..xs a + b");
 }

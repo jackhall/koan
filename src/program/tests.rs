@@ -144,7 +144,7 @@ pub(crate) fn syntax_back(substrate: &mut CellSubstrate, name: &str) -> String {
 
 /// [`digesting`]'s sibling: it records how the wanted code was shaped, and its syntax digest.
 fn syntaxing<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'graph, KBundle> {
-    use crate::knot::CodeBody;
+    use crate::scope::CodeSyntax;
     use crate::values::digest::syntax_digest;
     let (step, state) = step.state();
     let KState::Born(birth @ KBirth::Inspect { program, view }) = state else {
@@ -155,13 +155,15 @@ fn syntaxing<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<
     let code = (value.as_code())
         .and_then(|member| member.code())
         .expect("the wanted binding is code");
-    let shaped = match code.shaped() {
-        CodeBody::Written { .. } => "written".to_string(),
-        CodeBody::Composed { root, segment } => format!("composed {:?} {segment:?}", root.digest),
+    let shaped = match code.flat().expect("the wanted code is flat") {
+        CodeSyntax::Written { .. } => "written".to_string(),
+        CodeSyntax::Composed { root, segment, .. } => {
+            format!("composed {:?} {segment:?}", root.digest)
+        }
     };
     record(format!(
         "{shaped} {:?}",
-        syntax_digest(code.body().reference())
+        syntax_digest(code.body().expect("flat code"))
     ));
     step.leave(birth)
 }
@@ -299,7 +301,7 @@ fn describe_member<'graph>(
         let bound: Vec<_> = code
             .bound()
             .iter()
-            .map(|(name, link)| {
+            .map(|crate::values::Binding { name, link, .. }| {
                 let value = match link {
                     Link::Edge(edge) if member.sibling(*edge) == member => String::from("self"),
                     Link::Edge(_) => String::from("edge"),
@@ -310,7 +312,7 @@ fn describe_member<'graph>(
             .collect();
         return format!(
             "#({}) in {} binding [{}]",
-            code.body().summary(program.symbols()),
+            code.body().expect("flat code").summary(program.symbols()),
             member.member().knot().len(),
             bound.join(" ")
         );

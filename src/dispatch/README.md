@@ -17,8 +17,10 @@ candidates by the arguments' types, and runs the one that wins.
 ## What dispatch runs
 
 Literals, names, containers, record access, construction, reads of a list, a
-dict or a string, functions, keyword dispatch, the builtin library, quotes,
-`EVAL` and `USING` over code, modules —
+dict, a string or code, functions, keyword dispatch, the builtin library,
+quotes, splices composed where a quote is born, `EVAL`, `USING` and `BUILD`
+over code — the last two, over composed code, in a one-step frame under its
+composition, where its shape lies — modules —
 a `MODULE` or `GROUP` binder, `:!` and `:|`, a member read and
 `USING … SCOPE` — and uncaught faults.
 [Matching](../../roadmap/conditionals/matching.md) owns `MATCH`, and
@@ -78,7 +80,7 @@ never the parse — as one of:
 - a **keyworded call**: a node the shape holds a candidate list for;
 - an **application** `(head argument)`: a construction when the head is a type —
   a newtype, a family or a union variant, through `Tagged::construct`, the one
-  construction rule — a **read** when the head is a list, a dict or a string
+  construction rule — a **read** when the head is a list, a dict, a string or code
   ([lookup.rs](lookup.rs)), and otherwise a call by name of the head over the
   argument record. A read answers the builtin `Result`: a list or a string
   applied to a `Number` reads the element or code point at that zero-based
@@ -90,7 +92,10 @@ never the parse — as one of:
   otherwise, 0 ≤ `from` ≤ `to` ≤ len; an open end defaults `from` to 0 and
   `to` to the length. Its bounds are checked each an integer, `from` first,
   then the direction read off both, then `from`'s range, then `to`'s, and
-  `Error` holds the first that fails.
+  `Error` holds the first that fails. Code reads as a list of its root's parts
+  ([splicing](../scope/README.md#splicing)): an index reads one part as code, a
+  group part as the node it wraps, and a slice the node of exactly those parts,
+  each an unbuilt code view.
 
 A part a node needs is read in place when it is a literal, a name or a quote,
 and otherwise asked for — a `Shares` tenant of the evaluation's cell, kept —
@@ -134,8 +139,14 @@ overload ranks its slots in written order.
   value. `!=` has no bucket: the shape rewrites `a != b` to `NOT (a == b)`.
 - `|` and `&` over types, the infix pair and the unary list form an operator run
   of them is rewritten to, each returning a type value.
-- `LENGTH` over a list, a dict or a string, returning a `Number`: a list's or
-  a dict's count, its memo, or a string's code points.
+- `LENGTH` over a list, a dict, a string or code, returning a `Number`: a
+  list's or a dict's count, its memo, a string's code points, or the parts of
+  code's root.
+- `BUILD` over code, which lays an unbuilt [code view](../knot/README.md#a-code-view)
+  flat and answers it at the exact type its composition's shape gives it, and
+  answers code already built unchanged ([building code](../scope/README.md#building-code)).
+  Its rule answers `[Never, upper]` of its operand's interval, since built code
+  lies under the code it was built from.
 - The overloads of the [builtin expression shapes](../parse/README.md#the-builtin-shape-table-one-typed-entry-every-fact)
   whose slots dispatch evaluates, typed as their entries type them: `ATTR` over a
   record or a tagged value over one, reading through every tagged layer at the
@@ -150,7 +161,8 @@ overload ranks its slots in written order.
   at the projection of its carried type onto the fields it names, each once,
   sharing the record's runs; a name that type does not name is an error value,
   as it is to `ATTR`. `USING` fills a code's holes through the
-  [`USING` door](../knot/README.md#a-quote).
+  [`USING` door](../knot/README.md#a-quote), and answers composed code whose
+  filled holes are filled marks.
 
 **Each native has a [type rule](rules.rs).** From its arguments' static types,
 read at both ends, and each name operand as written, the rule gives the type
@@ -1171,7 +1183,13 @@ either sink, one line per write ([tests.rs](tests.rs)):
 [reads](tests/reads.rs) — the builtin `Result`, an index, a slice forward and
 backward with each bound's `Error` in order, a dict lookup, the load's typing
 from both ends of a head and its refusals, `LENGTH`, a list read through
-its knot, and a flat string read in one scan of its bytes;
+its knot, a flat string read in one scan of its bytes, and code read by its
+parts as unbuilt code, typed as code at load and crossing its frame flat;
+[splicing](tests/splicing.rs) — `$..` at statement and part level, one line or
+several, each element keeping its bindings, a quote part beside a splice bound
+where it is written, the load's and the birth's refusals, the depth limit,
+a loop growing code in O(n log n) region bytes, `BUILD` and the unbuilt type,
+and `USING`'s filled marks surviving a splice and never rebound;
 [spreads](tests/spreads.rs) — a spread literal's elements and static
 type, a spread refused at load and faulting at run, a quote spreading a
 list unequal to one holding it, a recursive list spreading lists from outside
@@ -1437,7 +1455,8 @@ settlement and captures, the heap flat, and the law that a memoized activation
 equals one decided from scratch; [compositions](tests/compositions.rs) — an
 `EVAL` of composed code running as its written quote does, a second hitting
 its composition, a loop composing code each hop holding O(1) compositions, an
-evicted composition rebuilt with its functions' identity kept, a derived type
+evicted composition rebuilt with its functions' identity kept, and by a
+`BUILD`, a derived type
 minted once per binding event and no term probed unread, a refusal worded as
 the load words it, nothing rested in the agent tier, settlements under a
 composition and the pins they take; [replay](tests/replay.rs) — a call

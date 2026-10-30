@@ -73,7 +73,7 @@ fn node<'graph>(part: &ExpressionPart<'graph>) -> &'graph KExpression<'graph> {
     let ExpressionPart::Expression(node) = part else {
         panic!("a parenthesized node");
     };
-    node.reference()
+    node
 }
 
 /// The candidates of the keyworded use `node` in `shape`.
@@ -481,11 +481,7 @@ fn a_keyworded_node_in_a_type_expression_is_no_use() {
         let ExpressionPart::SigiledTypeExpr(written) = &shape.body()[0].parts[3].value else {
             panic!("a type expression");
         };
-        assert!(
-            shape
-                .candidates(shape.site_of_node(written.reference()))
-                .is_none()
-        );
+        assert!(shape.candidates(shape.site_of_node(written)).is_none());
     });
 }
 
@@ -515,7 +511,7 @@ fn a_use_rooting_a_path_in_a_type_has_its_candidates() {
         let ExpressionPart::SigiledTypeExpr(path) = &shape.body()[1].parts[2].value else {
             panic!("a sigiled type");
         };
-        let mut path = path.reference();
+        let mut path: &KExpression<'_> = path;
         // Peel the sigil's own paren down to the member read.
         while let [only] = path.parts {
             path = node_of(&only.value);
@@ -531,9 +527,7 @@ fn a_use_rooting_a_path_in_a_type_has_its_candidates() {
 /// The node a parenthesized or sigiled part holds.
 fn node_of<'graph>(part: &ExpressionPart<'graph>) -> &'graph KExpression<'graph> {
     match part {
-        ExpressionPart::Expression(node) | ExpressionPart::SigiledTypeExpr(node) => {
-            node.reference()
-        }
+        ExpressionPart::Expression(node) | ExpressionPart::SigiledTypeExpr(node) => node,
         _ => panic!("a node"),
     }
 }

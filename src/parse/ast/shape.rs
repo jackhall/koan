@@ -12,6 +12,7 @@
 //! one cache.
 
 use crate::memory::{Writer, collect};
+use crate::parse::ast::ALLOCATION_SLACK;
 use crate::parse::builtin_shapes::binder::StoredBinderKey;
 use crate::parse::builtin_shapes::{BuiltinShape, builtin_shape_for};
 use crate::symbols::{KeySymbol, KeywordSymbol};
@@ -235,6 +236,8 @@ pub struct NodeCache<'a> {
     /// [`declaring`]: Self::declaring
     declared: Option<&'static BuiltinShape>,
     binder_plan: Option<&'a StoredBinderKey<'a>>,
+    /// Whether the node holds a `$..` splice among its own parts.
+    splicing: bool,
 }
 
 impl<'a> NodeCache<'a> {
@@ -248,7 +251,32 @@ impl<'a> NodeCache<'a> {
             builtin_shape: builtin_shape_for(key.iter().copied()),
             declared: None,
             binder_plan: None,
+            splicing: false,
         }
+    }
+
+    /// This cache of a node holding a splice: its arity is unknown until its quote is born, so it
+    /// matches no builtin shape and has no binder plan.
+    pub fn splicing(self) -> Self {
+        NodeCache {
+            builtin_shape: None,
+            splicing: true,
+            ..self
+        }
+    }
+
+    /// Whether the node holds a `$..` splice among its own parts.
+    pub fn splices(&self) -> bool {
+        self.splicing
+    }
+
+    /// The bytes the binder plan the seal laid occupies: the plan and each bucket key's run.
+    pub(crate) fn laid_bytes(&self) -> usize {
+        self.binder_plan.map_or(0, |plan| {
+            let keys = plan.buckets.iter().flat_map(|buckets| buckets.iter());
+            let keys = keys.map(|key| std::mem::size_of_val(key) + ALLOCATION_SLACK);
+            size_of::<StoredBinderKey<'_>>() + ALLOCATION_SLACK + keys.sum::<usize>()
+        })
     }
 
     /// This cache read as a declaration — the second half of the AST node's seal, once the node the

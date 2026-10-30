@@ -5,7 +5,7 @@
 use std::fmt;
 
 use crate::knot::module::coerce::CoercionRefused;
-use crate::knot::{KValue, UsingRefused};
+use crate::knot::{ComposeRefused, KValue, UsingRefused};
 use crate::memory::Writer;
 use crate::parse::{KExpression, KeyElement};
 use crate::program::Program;
@@ -71,6 +71,10 @@ pub(super) enum Raised<'a> {
     /// An `EVAL` whose operand is no code.
     NotCode {
         value: KType,
+    },
+    /// A quote holding a splice that could not compose where it was born.
+    Uncomposed {
+        refused: ComposeRefused,
     },
     /// A `USING` whose module ranks `key` other than the code's own candidates do.
     RankedTwice {
@@ -183,6 +187,23 @@ impl fmt::Display for RaisedDisplay<'_, '_, '_, '_, '_> {
             Raised::NotCode { value } => {
                 write!(f, "{} is not code for `EVAL` to run", ktype(value))
             }
+            Raised::Uncomposed { refused } => match refused {
+                ComposeRefused::NotAList { value } => {
+                    write!(
+                        f,
+                        "`$..` splices a list of code, and {} is none",
+                        ktype(value)
+                    )
+                }
+                ComposeRefused::NotCode { element } => {
+                    write!(f, "a spliced element is no code: {}", ktype(element))
+                }
+                ComposeRefused::TooDeep => write!(
+                    f,
+                    "composed code nests deeper than the syntax depth limit of {}",
+                    crate::parse::MAX_SYNTAX_DEPTH
+                ),
+            },
             Raised::RankedTwice { key } => {
                 write!(f, "{}", UsingRefused::Ranking { key }.display(self.symbols))
             }

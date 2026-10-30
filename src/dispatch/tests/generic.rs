@@ -244,7 +244,7 @@ fn use_leading<'graph>(
     }
     node.parts.iter().find_map(|part| match &part.value {
         ExpressionPart::Expression(inner) | ExpressionPart::MarkedUse(_, inner) => {
-            use_leading(program, inner.reference(), lead)
+            use_leading(program, inner, lead)
         }
         _ => None,
     })

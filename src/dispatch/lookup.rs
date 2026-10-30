@@ -1,7 +1,9 @@
-//! A read: a list, a dict or a string at an application's head, applied to its argument. A list or
-//! a string applied to a `Number` reads the element or code point at that zero-based index, and
-//! applied to a slice record — one naming `from` or `to` — slices it; a dict applied to a key looks
-//! the key up. Every read answers the builtin `Result`: `Ok` of what it read, or `Error` of the
+//! A read: a list, a dict, a string or code at an application's head, applied to its argument. A
+//! list, a string or code applied to a `Number` reads the element, code point or part at that
+//! zero-based index, and applied to a slice record — one naming `from` or `to` — slices it; a dict
+//! applied to a key looks the key up. Code's part is a group part's node, or a one-part node of any
+//! other part, and its slice the node of exactly those parts: each a code view, unbuilt
+//! ([knot/view.rs](../knot/view.rs)). Every read answers the builtin `Result`: `Ok` of what it read, or `Error` of the
 //! index, the first bound or the key that failed.
 //!
 //! A slice is half-open and zero-based. With `to` below `from`, or at -1, it runs backward from
@@ -15,7 +17,7 @@
 //! An argument the load could not refuse — a record naming neither bound, a bound or an index of
 //! another type, a dict key no dict holds — is an error value here.
 
-use crate::knot::KValue;
+use crate::knot::{KValue, Knotted, code_length, code_part, code_slice};
 use crate::memory::{BumpAllocator, Writer};
 use crate::program::Program;
 use crate::symbols::{Symbol, TypeSymbol, ValueSymbol};
@@ -35,21 +37,23 @@ pub(super) fn bound(name: &str) -> Symbol {
 
 /// What a read's head is.
 #[derive(Clone, Copy)]
-enum Head<'cell> {
+enum Head<'graph, 'cell> {
     List,
     Dict,
     Str(Text<'cell>),
+    Code(Knotted<'graph, 'cell>),
 }
 
-/// What `head` is read as, if it is a list, a dict or a string, plain or a knot's data node.
-fn head<'cell>(head: KValue<'_, 'cell>) -> Option<Head<'cell>> {
+/// What `head` is read as, if it is a list, a dict, a string or code, plain or a knot's node.
+fn head<'graph, 'cell>(head: KValue<'graph, 'cell>) -> Option<Head<'graph, 'cell>> {
     match head {
         Value::List(_) => Some(Head::List),
         Value::Dict(_) => Some(Head::Dict),
-        _ => match (head.as_text(), head.as_circular()) {
-            (Some(text), _) => Some(Head::Str(text)),
-            (_, Some((_, Circular::List(_)))) => Some(Head::List),
-            (_, Some((_, Circular::Dict(_)))) => Some(Head::Dict),
+        _ => match (head.as_text(), head.as_circular(), head.as_code()) {
+            (Some(text), _, _) => Some(Head::Str(text)),
+            (_, Some((_, Circular::List(_))), _) => Some(Head::List),
+            (_, Some((_, Circular::Dict(_))), _) => Some(Head::Dict),
+            (_, _, Some(code)) => Some(Head::Code(code)),
             _ => None,
         },
     }
@@ -106,6 +110,7 @@ pub(super) fn read<'graph, 'cell>(
         let at = whole(index).and_then(|at| usize::try_from(at).ok());
         let read = at.and_then(|at| match shape {
             Head::Str(text) => text.code_point(writer, at),
+            Head::Code(code) => code_part(writer, code, at, types).map(Value::Knotted),
             _ => {
                 let items = container.surface(types, scratch).expect("a list opens");
                 (at < items.len()).then(|| items.child(at, types, scratch).restamped(writer, types))
@@ -133,9 +138,10 @@ pub(super) fn read<'graph, 'cell>(
         Head::Str(text) => Some(text.anchored(writer, scratch)),
         _ => None,
     };
-    let len = match anchored {
-        Some(anchored) => anchored.len(),
-        None => container
+    let len = match (anchored, shape) {
+        (Some(anchored), _) => anchored.len(),
+        (None, Head::Code(code)) => code_length(code),
+        (None, _) => container
             .surface(types, scratch)
             .expect("a list opens")
             .len(),
@@ -167,9 +173,12 @@ pub(super) fn read<'graph, 'cell>(
     };
     answer(
         "Ok",
-        match anchored {
-            Some(anchored) => anchored.sliced(writer, range, backward),
-            None => Value::List(List::sliced(writer, container, range, backward, types)),
+        match (anchored, shape) {
+            (Some(anchored), _) => anchored.sliced(writer, range, backward),
+            (None, Head::Code(code)) => {
+                Value::Knotted(code_slice(writer, code, range, backward, types))
+            }
+            (None, _) => Value::List(List::sliced(writer, container, range, backward, types)),
         },
     )
 }

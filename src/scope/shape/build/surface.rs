@@ -127,7 +127,6 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
         spend(fuel)?;
         match part {
             ExpressionPart::Expression(node) => {
-                let node = node.reference();
                 match node.cache().builtin_shape().map(|shape| shape.id) {
                     Some(BuiltinShapeId::AscribeOpaque | BuiltinShapeId::AscribeTransparent) => {
                         let signature = &node.parts.get(2).ok_or(())?.value;
@@ -192,7 +191,6 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
         spend(fuel)?;
         match part {
             ExpressionPart::Expression(node) | ExpressionPart::SigiledTypeExpr(node) => {
-                let node = node.reference();
                 // `<Sig> WITH {…}`: a pin changes no name.
                 if let [pinned, separator, _] = node.parts
                     && matches!(separator.value, ExpressionPart::Keyword(_))
@@ -398,7 +396,7 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
         loop {
             let draft = &self.chain[level];
             let names = draft.channels();
-            if mark != Some(Mark::Written)
+            if !mark.is_some_and(Mark::is_bound)
                 && let Some(index) = names.find(name)
                 && at.sees(names.get(index))
             {
@@ -422,7 +420,7 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
                 };
             }
             match (draft.kind, mark) {
-                (ShapeKind::Code, Some(Mark::Written)) => mark = None,
+                (ShapeKind::Code, Some(Mark::Written(_) | Mark::Filled(_))) => mark = None,
                 (ShapeKind::Program | ShapeKind::Code, _) => return Quantified::No,
                 _ => {}
             }
@@ -562,7 +560,6 @@ fn written_as(part: &ExpressionPart<'_>, id: BuiltinShapeId) -> bool {
     let (ExpressionPart::Expression(node) | ExpressionPart::SigiledTypeExpr(node)) = part else {
         return false;
     };
-    let node = node.reference();
     match (node.cache().builtin_shape(), node.parts) {
         (Some(form), _) => form.id == id,
         (None, [only]) => written_as(&only.value, id),

@@ -155,8 +155,7 @@ fn a_function_born_for_a_registration_carries_its_shape() {
             // quantifier maps are empty, beside the one parameter name its binding reads.
             let member =
                 Weight::flat::<Node<'static, 'static>>().plus(twice_function.closure().weight());
-            let typing =
-                Weight::run::<BinderSymbol>(1).plus(Weight::flat::<Typing<'static, 'static>>());
+            let typing = Weight::run::<BinderSymbol>(1).plus(Weight::flat::<Typing<'static>>());
             assert_eq!(
                 twice.weight(),
                 Weight::flat::<usize>()

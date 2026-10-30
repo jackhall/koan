@@ -56,7 +56,8 @@ Read them in order the first time through — each builds on the last.
    `CATCH`, and `Result`.
 10. [Quoting and evaluating](10-quoting.md) — capturing an expression as data
     with `#`, running it with `EVAL`, binding its names with `$`, `\` and
-    `USING`, and passing code to a function you wrote.
+    `USING`, passing code to a function you wrote, and splicing, reading and
+    building code.
 11. [Modules](11-modules.md) — grouping bindings, signatures, and ascription.
 12. [Functors](12-functors.md) — module-returning functions: parameterizing a
     module by another module, what a module captures, and signature

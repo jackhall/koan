@@ -27,7 +27,7 @@ echo 'PRINT "hello"' | cargo run
 `PRINT` writes to standard output. A refused load, or an error the program does
 not catch, writes `error: <message>` to standard error and exits non-zero.
 
-The surface includes `LET`, `PRINT`, and the two callable binders `EXPR` (a keyworded, dispatch-reached definition) and `FN` (a lambda); the nominal-type declarators `UNION` and `NEWTYPE`; the control forms `MATCH <value> -> :<Type> WITH #{<branches>}`, `TRY (<expr>) -> :<Type> WITH #{<branches>}`, and `CATCH`; the module forms `MODULE`, `SIG`, `USING`, and the `:!` / `:|` ascription operators; the arithmetic and comparison operators `+ - * / < <= > >=` and `AND`, and the type-union operator `|` building `:(A | B)` (chained runs like `1 < 2 < 3` or `A | B | C` reduce per their operator group's mode — see [operator groups](src/scope/README.md#operator-groups)); reading a list, a dict or a string by applying it to an index, a slice record or a key (`xs 0`, `xs {from = 1}`, `d "k"`), each answering a `Result`, `LENGTH`, and `..` spreading a list into a list literal (`[..xs 3]`); the operator declarators `OP` and `GROUP`, with which a module declares its own chainable operators; and the `#` / `$` quote and eval sigils. See the [tutorial](tutorial/README.md) for a feature-by-feature walkthrough, and [tutorial/reference.md](tutorial/reference.md) for a one-page surface reference.
+The surface includes `LET`, `PRINT`, and the two callable binders `EXPR` (a keyworded, dispatch-reached definition) and `FN` (a lambda); the nominal-type declarators `UNION` and `NEWTYPE`; the control forms `MATCH <value> -> :<Type> WITH #{<branches>}`, `TRY (<expr>) -> :<Type> WITH #{<branches>}`, and `CATCH`; the module forms `MODULE`, `SIG`, `USING`, and the `:!` / `:|` ascription operators; the arithmetic and comparison operators `+ - * / < <= > >=` and `AND`, and the type-union operator `|` building `:(A | B)` (chained runs like `1 < 2 < 3` or `A | B | C` reduce per their operator group's mode — see [operator groups](src/scope/README.md#operator-groups)); reading a list, a dict, a string or code by applying it to an index, a slice record or a key (`xs 0`, `xs {from = 1}`, `d "k"`), each answering a `Result`, `LENGTH`, and `..` spreading a list into a list literal (`[..xs 3]`); the operator declarators `OP` and `GROUP`, with which a module declares its own chainable operators; the `#` / `$` quote and eval sigils, `$..` splicing a list of code into a quote, and `BUILD` typing composed code exactly. See the [tutorial](tutorial/README.md) for a feature-by-feature walkthrough, and [tutorial/reference.md](tutorial/reference.md) for a one-page surface reference.
 
 User-defined functions declare a return type in the `-> Type` slot; a body whose value does not fit it ends in an error value. `Any` is the no-op fast-path. The surface-declarable types are `Number`, `Str`, `Bool`, `Null`, `:(LIST OF Elem)`, `:(MAP Key -> Val)`, `:(FN :{arg :Arg} -> Out)` (a lambda type; the parameter list is a record type, so `:{}` is the nullary form, and a `FOR ALL #[<names>]` group before the parameters makes it quantified, which only a signature's `VAL` member may be), `:(EXPR #(<head>) -> Out)` (an expression shape — the keyword/slot run a keyworded definition registers for dispatch, optionally under a `FOR ALL #[<names>]` quantifier group inside a signature), `Value`, `Type`, `Code` and the kinds of code under it (`Block`, `Expression`, `Declaration`, `Binder`, `Literal`, `Symbol`, `Name`, `Keyword`), `Module`, `Signature`, and `Any`; nominal types declared with `NEWTYPE`/`UNION` carry their own names. Parameterized type expressions use the glued-right `:` sigil opening an S-expression group; bare types like `Number` and ascriptions like `x :Number` may write the sigil but don't require it on a non-parameterized atom.
 
@@ -85,7 +85,7 @@ The output is one [`KExpression`](src/parse/ast.rs) per top-level line: an order
 
 `parse` owns what it produces, not just the walk that produces it: [ast.rs](src/parse/ast.rs) defines the syntax types and the [`NodeCache`](src/parse/ast/shape.rs) each node fills at construction, and [builtin_shapes.rs](src/parse/builtin_shapes.rs) holds `BUILTIN_SHAPES` — the one table spelling every builtin bucket as a typed run, tagged by a `BuiltinShapeId`: keywords in position, and at each slot a role beside one type per overload of the bucket, with one return apiece, plus the binder facts and the reserved bit each entry's readers ask for. The untyped bucket key is an erasure of that run, not a column of its own, and each slot's role says how the shape builder reads its part: as a written quote, as bare syntax, as a container of quotes, or evaluated. A node probes that table once, and every later reader names a shape by its tag rather than respelling its key.
 
-`KExpression` is a `Copy` handle: its parts run and every string in it borrow the program storage the parse wrote them into. The scheduler dispatches a separate [`WorkingExpression`](src/values/working.rs), which is where a resolved sub-result gets spliced back in — so an expression *value* can never carry one. A node only reaches the value channel wrapped in the [program-storage marker](src/parse/ast/program.rs), which types the tier the channel's verdicts assume. See [src/parse/README.md](src/parse/README.md).
+`KExpression` is a `Copy` handle: its parts run and every string in it borrow the storage they were written into. The scheduler dispatches a separate [`WorkingExpression`](src/values/working.rs), which is where a resolved sub-result gets spliced back in — so an expression *value* can never carry one. A node's lifetime is the storage it lies in: written syntax lives at the program's lifetime, and code composed at run time lays its syntax in a region ([the eternal tier](src/parse/README.md#the-eternal-tier-is-the-lifetime)). See [src/parse/README.md](src/parse/README.md).
 
 ### load — `KExpression` → `BodyShape`, typed
 
@@ -145,8 +145,8 @@ the overlap check, and static selection — see
 [lattice](lattice/README.md) crate: `symbols` ([the symbol
 vocabulary](lattice/src/symbols/README.md)) and `type_lattice`, which is
 `lattice::types` ([the closed algebra over interned type
-nodes](lattice/src/types/README.md)). `parse` splits into [ast/](src/parse/ast.rs) (the syntax types, the node cache and the
-eternal-tier program marker), and
+nodes](lattice/src/types/README.md)). `parse` splits into [ast/](src/parse/ast.rs) (the syntax types, the node cache, the stretch
+summaries a code view reads and program storage's construction doors), and
 [builtin_shapes/](src/parse/builtin_shapes.rs) (`BUILTIN_SHAPES` and the role /
 binder / slot-layout facts riding its entries).
 
@@ -165,14 +165,15 @@ src/
 ├── parse.rs             pub mod parse — the parser and what it produces: the syntax AST and the builtin shape table, written in the symbol vocabulary
 ├── parse/
 │   ├── lower.rs            layout tree → KExpressions: sigils, marks and `#[…]`/`#{…}` element quoting, the layout-line peel, adjacency, spans
-│   ├── copy.rs             copied — a whole expression laid again in another program storage, every part and nested quote with it, so a composition owns the syntax it builds its shapes over
+│   ├── copy.rs             copied — a whole expression laid again through a writer, every part and nested quote with it, so a composition owns the syntax it builds its shapes over and composed code lays its syntax in a region; the Remark hooks that rewrite a mark's scope and write filled marks as it copies
 │   ├── atom.rs             classify one atom — the colon split, compound-operator desugaring
 │   ├── brace.rs            DictFrame state machine for `{k: v}` / `{x = 1}` pairing
 │   ├── operators.rs        operator registry
 │   ├── ast.rs              the syntax AST: KLiteral / ExpressionPart / KExpression — Copy handles over written slices, with a Type part carrying only its TypeSymbol
 │   ├── ast/
 │   │   ├── shape.rs        PartClass / DispatchShape / KeyElement / ExpressionKey + NodeCache, the one structural cache both node families carry (stored key, shape, BUILTIN_SHAPES entry, binder plan) and the readers that fill it
-│   │   └── program.rs      ProgramExpression / ProgramNode — the eternal-tier marker that makes "this node's parts run is hosted in program storage" a type
+│   │   ├── blocks.rs       PartsSummary / Blocks — the monoid summary of a stretch of a node's parts, and the block memo a node of more than 16 parts lays so any stretch summarizes in O(1)
+│   │   └── program.rs      ProgramExpression and ProgramBrand's node doors — how lowering mints nodes in program storage
 │   ├── builtin_shapes.rs   BUILTIN_SHAPES — every builtin bucket as one typed run spelled once, tagged by BuiltinShapeId, carrying each slot's role and its type per overload, one return per overload, its binder facts and its reserved bit; the bucket key derived off that run, the two build-time laws over it, KEYWORDS, and the single table probe
 │   └── builtin_shapes/
 │       ├── role.rs         Role / Reading / BodyKind / Heads / DefinitionKind — what each part of an entry is to name resolution, and how the shape builder reads it
@@ -196,6 +197,7 @@ src/
 │   ├── record_types.rs   the records type visitor: every type a record names, each record destructured whole so a new type-bearing field does not compile unvisited
 │   ├── relay.rs          Relay — the records copier: a record or closing laid again through another layer, every slice and tree with it, a frontier laid flat
 │   ├── settlement_facts.rs  Settlement — a settlement's facts over its parent's: the binding, the records it woke, its closed trees, its terms under a composition or its refusal; Activated — one binding event's records over the event below
+│   ├── filled.rs         filled_sites — where the holes a USING fills lie in the syntax its code was written as, each operator run read through the rewrite's origins
 │   ├── composition.rs    Composition / ComposedSyntax — a composition's facts: its code's shapes and the load's work done over a copy of its syntax, its terms, its refusal and its nested quotes' paths
 │   ├── stamp.rs          Ask / Asked / Level / Stamp — what a miss settles, one settlement's whole request, and the chain of them a callable holds by value for a replay
 │   ├── memo.rs           DecisionMemo — what the cells of a tail chain decided in their activations, at most eight bodies, keyed by body, arena node and the bindings beneath
@@ -217,7 +219,8 @@ src/
 │   ├── type_value.rs     TypeValue — a type in value position beside its memoized OfKind type, or the kind a retype stamped
 │   ├── retyped.rs        Retyped — a knot member's header: the bare member beside the type a retype stamps it at
 │   ├── list.rs           List — one run of cells with its prefix weight sums, or a view over other lists' runs, typed by the union of its elements' filled types, or a key's candidates typed `List<Any>`; the slice and concatenation doors, and a knot's list node laid as a view over the lists it spreads
-│   ├── view.rs           a list view: an AVL tree of stretches of flat runs, read forward or backward, a knot's own runs resolved through the holder a branch names or its reader brings, with its join, split, reversal and in-order walk
+│   ├── view.rs           a view's tree: a persistent AVL tree generic over its leaves and their monoid summary, with its join, split, reversal and in-order walk; list views and code views both ride it
+│   ├── view/stretch.rs   a list view's leaves: stretches of flat runs, read forward or backward, a knot's own runs resolved through the holder a branch names or its reader brings
 │   ├── text.rs           StrView / Text — a string's text read in code points: flat bytes, or a slice of a string, forward or backward, over the bytes it was sliced from
 │   ├── dict.rs           Dict / Key — sorted keys and aligned cells, a binary-search lookup, entry order key order
 │   ├── record.rs         Record — symbol-sorted names and aligned cells, typed by the record of its fields
@@ -238,7 +241,7 @@ src/
 │   └── lower.rs          Value::lower_part — a region-pure AST part straight to a value
 ├── elaborate.rs      pub mod elaborate — type expressions elaborated into lattice handles where the program loads and, for what the load leaves unknown, through the activation they are read in
 ├── elaborate/
-│   ├── expression.rs     type_expression — bare names, LIST OF, MAP ->, unions, record types, FN and EXPR types with their FOR ALL groups (refused outside a signature member), a signature's WITH application, a code kind NEEDING names, Union.Tag
+│   ├── expression.rs     type_expression — bare names, LIST OF, MAP ->, unions, record types, FN and EXPR types with their FOR ALL groups (refused outside a signature member), a signature's WITH application, a code kind NEEDING names or UNBUILT, Union.Tag
 │   ├── signature.rs      callable_type — a FN's, EXPR's or OP's type read off the expression shape its body sits in, with a registration's ranked shape and parameter binding
 │   ├── unit.rs           the type half of the load's walk: a unit's type binders, type expressions, guards, registrations — a USING block's surfaced key included — and callables typed closed, rigid or unknown through the one load-time Reader over a TypeContext the walk implements
 │   ├── paths.rs          what a path through a module reads — declared_through and path_binding — the one reader every walk shares
@@ -255,7 +258,8 @@ src/
 ├── knot/
 │   ├── function.rs       Function — a function node: its memoized type, body shape, closure bindings and knot weight; the staging a tie does for a function member
 │   ├── builtin.rs        BuiltinFunction — a builtin overload's node over its registered shape and native id, and the door that lays one down
-│   ├── code.rs           Code — a quote's code node: its body, code shape, carried type and its bound and supplied runs; the quote door, the USING door, and the staging a tie does for a code node
+│   ├── code.rs           Code — a quote's code node: its syntax (written, composed in a region, or a code view), carried type and one bound run keyed by scope and name; the quote door, the reads and LENGTH of code, the USING door writing filled marks, BUILD, and the staging a tie does for a code node
+│   ├── view.rs           code views — spliced and sliced code as an AVL tree over stretches of the syntax it came from, the composer a quote holding a splice is born through, and the materializer that lays a view flat with its scopes and pins
 │   ├── data.rs           a knot's data members: the staging walk with its anonymous nodes and evaluator by site, spreads of lists, container memos by the nominal cut, the construction check, and the node write in spread order
 │   ├── module.rs         Module — a module node and everything that reads one by name
 │   ├── module/

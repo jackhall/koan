@@ -46,13 +46,14 @@ pub(super) fn node_depth(parts: &[Spanned<ExpressionPart<'_>>], cache: &NodeCach
 /// A part's depth: a nested node's stored depth, one more than a literal's deepest element, and
 /// zero for a leaf. Literal parts nest only where `sexlex` read a group, so this recursion is
 /// bounded by the reader's limit and never descends into a node.
-fn part_depth(part: &ExpressionPart<'_>) -> u32 {
+pub(super) fn part_depth(part: &ExpressionPart<'_>) -> u32 {
     match part {
         ExpressionPart::Expression(node)
         | ExpressionPart::QuotedExpression(node)
         | ExpressionPart::SigiledTypeExpr(node)
         | ExpressionPart::RecordType(node)
-        | ExpressionPart::MarkedUse(_, node) => node.reference().depth() as u32,
+        | ExpressionPart::MarkedUse(_, node)
+        | ExpressionPart::FilledUse(_, _, node) => node.depth() as u32,
         ExpressionPart::ListLiteral(items) => {
             1 + (items.iter())
                 .map(|item| part_depth(item.part()))
@@ -76,6 +77,7 @@ fn part_depth(part: &ExpressionPart<'_>) -> u32 {
         | ExpressionPart::Identifier(_)
         | ExpressionPart::Type(_)
         | ExpressionPart::Literal(_)
-        | ExpressionPart::MarkedName(..) => 0,
+        | ExpressionPart::MarkedName(..)
+        | ExpressionPart::Splice(_) => 0,
     }
 }

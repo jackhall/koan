@@ -271,6 +271,114 @@ such as `:(Block NEEDING #[it])`, lies under the same kind needing more. A paren
 `#(y)` is a `Name`, but `#((y))` is an `Expression` whose one part is the group
 `(y)`, and `#((LET x = 1))` is an `Expression` rather than a `Binder`.
 
+## Putting code together
+
+`$..xs` inside a quote splices in the code held by the list `xs`. Like `$x`,
+it reads `xs` where the quote is written, so a list you compute enters by `LET`
+first. Placed among statements, each element adds its statements:
+
+```koan
+LET greeting = #(PRINT "hello")
+LET farewell = #(PRINT "bye")
+LET steps = [greeting, farewell]
+LET both = #($..steps)
+PRINT both
+EVAL both -> Any
+```
+
+```text
+(PRINT "hello") (PRINT "bye")
+hello
+bye
+```
+
+Beside parts that are not statements, each element becomes one part, wrapped
+in parentheses when it holds more than one:
+
+```koan
+LET args = [#(1 + 2), #(3)]
+PRINT #(f $..args)
+```
+
+```text
+f (1 + 2) 3
+```
+
+Each piece keeps the `$` bindings its own quote gave it, and a binder in one
+piece fills a hole in another, as if they had been written together. A splice
+stands only among a quote's parts: an element that is not code is an error, and
+so is a splice in a list literal, a type or a `$(…)`. To spread a list's
+*value* when the code runs, write `..$xs` in a list literal inside the quote:
+
+```koan
+LET xs = [1 2]
+LET q = #([0 ..$xs])
+PRINT (EVAL q -> Any)
+```
+
+```text
+[0, 1, 2]
+```
+
+A hole that `USING` filled keeps its fill wherever the code goes, so no binder
+spliced beside it can rebind it:
+
+```koan
+LET filled = [(#(PRINT x) USING {x = 1})]
+EVAL #((LET x = 2) $..filled) -> Any
+```
+
+```text
+1
+```
+
+## Taking code apart
+
+Code reads like a list of its parts. `code i` is part `i` — a parenthesized
+part as the code inside it — `code {from, to}` the code of those parts, and
+`LENGTH code` counts them. A read answers a `Result`, as a list's does:
+
+```koan
+LET q = #((LET x = 4) (PRINT x) (PRINT 7))
+PRINT (LENGTH q)
+PRINT (q 1)
+PRINT (q {from = 1})
+```
+
+```text
+3
+:(Ok {Error = Never, Ok = :(UNBUILT Expression)})(PRINT x)
+:(Ok {Error = Never, Ok = :(UNBUILT Block)})((PRINT x) (PRINT 7))
+```
+
+A fragment keeps its `$` bindings, but a name its own code filled is a hole
+again once the binder is left behind: the `x` in `PRINT x` above is a hole.
+
+## Building composed code
+
+Spliced and sliced code is **unbuilt**. Its type, such as `:(UNBUILT Block)`,
+says its kind but not which `\` names it needs, since only building it can tell
+which of them its own binders fill. `EVAL` runs it as it is, but a parameter
+that [asks for names](#asking-for-names-a-quote-needs) takes it only once
+`BUILD` has given it its exact type:
+
+```koan
+LET stmts = [#(LET x = 4), #(PRINT (x + \y))]
+LET s = #($..stmts)
+LET take = (FN :{c :(Block NEEDING #[y])} -> Any = #((LET y = 2) (EVAL c -> Any)))
+take {c = (BUILD s)}
+```
+
+```text
+6
+```
+
+Passing `s` itself is refused, since `:(UNBUILT Block)` does not promise to
+need only `y`. A written quote is built where the program loads, so `BUILD` of
+it, or of code already built, returns it unchanged, and code `USING` returns is
+built too. Building code that has an error in it is not an error: the `EVAL`
+that runs it reports the error.
+
 ## The sigil must be glued
 
 Each sigil and its opening bracket are a single unit — the `(`, or the `[` or

@@ -281,7 +281,7 @@ fn a_frame_binds_a_type_value_and_a_module_value_by_its_content() {
 #[test]
 fn a_composed_quote_and_its_written_quote_have_the_same_syntax_digest() {
     let mut substrate = CellSubstrate::load::<Koan>(
-        "LET x = 1\nLET q = #(PRINT $x)\nLET c = (COMPOSE q)",
+        "LET x = 1\nLET q = #(PRINT $x)\nLET qs = [q]\nLET c = (BUILD #($..qs))",
         "<test>",
         8,
         BuildBudget::default(),

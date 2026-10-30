@@ -63,7 +63,7 @@
 
 use crate::knot::module::layout;
 use crate::knot::module::view::{self, Ascription, Unascribable};
-use crate::knot::{CodeBody, KValue, Knotted, instance, lambda, quote, refused_construction};
+use crate::knot::{KValue, Knotted, flattened, instance, lambda, quote, refused_construction};
 use crate::memory::{Active, Bump, BumpAllocator, BumpVec, Writer, collect, resident};
 use crate::parse::BuiltinShapeId;
 use crate::parse::Role;
@@ -292,10 +292,12 @@ pub(super) fn of_part<'step>(
     match part {
         ExpressionPart::Expression(node) => match shape.nested(shape.site(part)) {
             Some(nested) if nested.kind() == ShapeKind::Block => Form::Block(nested),
-            _ => of_node(shape, node.reference()),
+            _ => of_node(shape, node),
         },
         // A mark says where the use it wraps resolved, which the candidate list already holds.
-        ExpressionPart::MarkedUse(_, node) => of_node(shape, node.reference()),
+        ExpressionPart::MarkedUse(_, node) | ExpressionPart::FilledUse(_, _, node) => {
+            of_node(shape, node)
+        }
         part if part.is_name() => Form::Name(part),
         part => Form::Leaf(part),
     }
@@ -374,7 +376,8 @@ fn leaf<'step, 'graph, 'here>(
         | ExpressionPart::RecordLiteral(_) => container(step, at, part, stage),
         ExpressionPart::Keyword(_)
         | ExpressionPart::Expression(_)
-        | ExpressionPart::MarkedUse(..) => step.failed(StepError::Refused),
+        | ExpressionPart::MarkedUse(..)
+        | ExpressionPart::FilledUse(..) => step.failed(StepError::Refused),
         _ => unreachable!("a name is a `Form::Name`, read by `read`"),
     }
 }
@@ -615,6 +618,8 @@ fn evaluated<'step, 'graph, 'here>(
         };
         return finish(step, at, raised.raise(program, writer, &at.types));
     };
+    // A code view runs laid flat, here in the evaluation's home.
+    let code = flattened(writer, code, &at.types);
     let facts = at.view.facts();
     let returns = match facts.denoted(
         types,
@@ -646,10 +651,7 @@ fn evaluated<'step, 'graph, 'here>(
     ) {
         Ok(request) => {
             // Code composed at run time runs under its composition, where its shape lies.
-            let composed = (code.code()).and_then(|node| match node.shaped() {
-                CodeBody::Composed { root, .. } => Some(root),
-                CodeBody::Written { .. } => None,
-            });
+            let composed = (code.code()).and_then(|node| node.flat()?.root());
             let asked = match composed {
                 Some(root) => step.spawn_composing(request, root.digest),
                 None => step.spawn(request),
@@ -943,15 +945,27 @@ fn call<'step, 'graph, 'here>(
         Selection::Builtin(builtin) => {
             let native = Native::of(builtin.id());
             // A `USING` over code composed at run time fills its holes under its composition,
-            // where its shape lies.
-            if native == Native::Using
+            // where its shape lies, and a `BUILD` of unbuilt code types it there. A code view is
+            // laid flat first, here in the evaluation's home.
+            let source = match native {
+                Native::Using => operands[1].value().map(Some),
+                Native::Build => Some(None),
+                _ => None,
+            };
+            if let Some(source) = source
                 && let Some(code) = operands[0].value()
-                && let Some(CodeBody::Composed { root, .. }) = (code.as_code())
-                    .and_then(|member| member.code())
-                    .map(|node| node.shaped())
-                && let Some(source) = operands[1].value()
+                && let Some(member) = code.as_code()
+                && (native == Native::Using || unbuilt(member, &at.types))
+                && let flat = flattened(writer, member, &at.types)
+                && let Some(root) = (flat.code()).and_then(|node| node.flat()?.root())
             {
-                let request = crate::program::using_composed(program, code, source, Use::Forwards);
+                let code = if flat == member {
+                    code
+                } else {
+                    Value::Knotted(flat)
+                };
+                let request =
+                    crate::program::under_composition(program, code, source, Use::Forwards);
                 let asked = step.spawn_composing(request, root.digest);
                 return park(step, at, asked, FINISHING);
             }
@@ -1492,14 +1506,15 @@ fn in_place<'step, 'graph, 'here>(
         ExpressionPart::Literal(_) => {
             Value::lower_part(writer, part, types, scratch).map(Held::bare)
         }
-        ExpressionPart::QuotedExpression(_) => Some(Held::bare(Value::Knotted(quote(
-            writer,
-            &at.view,
-            (at.program).written_under(at.view.facts(), at.within.root),
-            part,
-            types,
-            scratch,
-        )))),
+        ExpressionPart::QuotedExpression(_) => {
+            let written = (at.program).written_under(at.view.facts(), at.within.root);
+            Some(Held::bare(
+                match quote(writer, &at.view, written, part, types, scratch) {
+                    Ok(code) => Value::Knotted(code),
+                    Err(refused) => Raised::Uncomposed { refused }.raise(at.program, writer, types),
+                },
+            ))
+        }
         _ => {
             let shape = at.view.shape();
             let mention = shape.mention(shape.site(part))?;
@@ -1773,4 +1788,13 @@ thread_local! {
     /// its node's site, while a test sets it: so a test sees a frame read the selection its facts
     /// hold.
     pub(super) static CHOSE: std::cell::Cell<Option<Chose>> = const { std::cell::Cell::new(None) };
+}
+
+/// Whether `code` is carried at a type no shape gave it, which a `BUILD` gives it: an unbuilt
+/// kind, or `Code`, which is `UNBUILT Code`.
+fn unbuilt(code: Knotted<'_, '_>, types: &Chain<'_, '_, '_, '_>) -> bool {
+    matches!(
+        types.node(Value::Knotted(code).concrete_ktype()),
+        TypeNode::CodeUnbuilt { .. } | TypeNode::AnyCode
+    )
 }

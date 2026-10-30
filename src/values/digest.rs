@@ -132,6 +132,10 @@ pub enum Tag {
     Settlement = 0x31,
     /// Code as lowered syntax: what code equality compares, spans and caches left out.
     Syntax = 0x32,
+    /// A `$..` splice of a quote's syntax, by the name it spreads.
+    Splice = 0x33,
+    /// A use a `USING` filled: its scope, the keys it fills, and the use.
+    FilledUse = 0x34,
 }
 
 /// The one hasher every digest is computed through: a tag first, then payload, then each part's
@@ -639,6 +643,15 @@ fn syntax_part(hasher: &mut DigestHasher, part: &ExpressionPart<'_>) {
             syntax_expression(hasher, use_);
             hasher
         }
+        Part::FilledUse(scope, keys, use_) => {
+            hasher.tag(Tag::FilledUse).feed(scope).count(keys.len());
+            for key in keys.iter() {
+                hasher.feed(key);
+            }
+            syntax_expression(hasher, use_);
+            hasher
+        }
+        Part::Splice(name) => hasher.tag(Tag::Splice).feed(name),
         Part::Expression(node)
         | Part::SigiledTypeExpr(node)
         | Part::RecordType(node)

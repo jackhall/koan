@@ -13,7 +13,7 @@
 //! `'cell` and so is every member.
 
 use crate::memory::{BumpAllocator, Writer, collect};
-use crate::parse::KExpression;
+use crate::parse::{KExpression, Scope};
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::KType;
 
@@ -52,26 +52,55 @@ pub enum Resolved<'a, X> {
     Barrier,
     /// A data node.
     Circular(Circular<'a, X>),
-    /// A quote's code.
-    Code(CodeView<'a, X>),
+    /// A quote's code, whose syntax a reader reads through [`Knotted::code_view`].
+    Code,
 }
 
-/// A quote's code as `values` reads it: its body as written, and the names its code binds, each
-/// beside a link read through the member — its `$` names and the holes a `USING` filled, each run
-/// sorted by name.
-pub struct CodeView<'a, X> {
-    pub body: &'a KExpression<'a>,
-    pub bound: &'a [(BinderSymbol, Link<'a, X>)],
-    pub supplied: &'a [(BinderSymbol, Link<'a, X>)],
+/// A quote's code as `values` reads it, through [`Knotted::code_view`]: its flat syntax at `'read`,
+/// the storage a reader owns where the code is a view it lays flat, and the bindings its code
+/// carries, value words at `'a`, each a link read through the member — its `$` names' and its
+/// filled marks' — sorted by scope, then name.
+pub struct CodeView<'read, 'a, X> {
+    pub body: &'read KExpression<'read>,
+    pub bound: &'read [Binding<'a, X>],
 }
 
-impl<X> Clone for CodeView<'_, X> {
+/// One binding a code value carries — a `$` name's, a `$(…)` registration's or a fill's — in the
+/// scope its marks read it at, the pin included. A run of them is sorted by
+/// [`key`](Self::key).
+#[derive(Clone, Copy, Debug)]
+pub struct Binding<'a, X> {
+    pub scope: Scope,
+    pub name: BinderSymbol,
+    pub link: Link<'a, X>,
+}
+
+impl<X> Binding<'_, X> {
+    /// What a run is sorted and searched by.
+    pub fn key(&self) -> (Scope, BinderSymbol) {
+        (self.scope, self.name)
+    }
+}
+
+/// The binding of `run`, sorted by [`Binding::key`], at `scope` and `name`.
+pub fn binding_at<'run, 'a, X>(
+    run: &'run [Binding<'a, X>],
+    scope: Scope,
+    name: BinderSymbol,
+) -> Option<&'run Binding<'a, X>> {
+    let at = run
+        .binary_search_by_key(&(scope, name), Binding::key)
+        .ok()?;
+    Some(&run[at])
+}
+
+impl<X> Clone for CodeView<'_, '_, X> {
     fn clone(&self) -> Self {
         *self
     }
 }
 
-impl<X> Copy for CodeView<'_, X> {}
+impl<X> Copy for CodeView<'_, '_, X> {}
 
 /// A data node of a knot. `Copy`.
 pub enum Circular<'cell, X = Nothing> {

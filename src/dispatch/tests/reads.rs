@@ -226,3 +226,68 @@ fn a_read_of_a_flat_string_scans_its_bytes_once() {
     assert_eq!(scans("{from = 1, to = 4}"), (ok("Str", "éll"), 1));
     assert_eq!(scans("{from = 10, to = -1}"), (ok("Str", "dlröw olléh"), 1));
 }
+
+/// Code is read as a list is: a part by index — a group part as the node it wraps — and a slice by
+/// its bounds, each unbuilt code; an index past the last is an error; `LENGTH` counts its root's
+/// parts.
+#[test]
+fn code_is_read_by_its_parts_as_unbuilt_code() {
+    let source = "LET k = 2\nLET q = #((LET x = 1) (PRINT (x + $k)) 7)\n\
+                  PRINT (LENGTH q)\nPRINT (q 1)\nPRINT (q 2)\nPRINT (q 3)\n\
+                  PRINT (q {from = 1})\nPRINT (q {from = 2, to = -1})\nPRINT (q {from = 1, to = 1})";
+    assert_eq!(
+        run(source),
+        [
+            "3".to_string(),
+            ok(":(UNBUILT Expression)", "PRINT (x + $k)"),
+            ok(":(UNBUILT Literal)", "7"),
+            ":(Error {Error = Number, Ok = Never})(3)".to_string(),
+            ok(":(UNBUILT Expression)", "(PRINT (x + $k)) 7"),
+            ok(":(UNBUILT Expression)", "7 (PRINT (x + $k)) (LET x = 1)"),
+            ok(":(UNBUILT Expression)", ""),
+        ]
+        .join("\n")
+    );
+}
+
+/// The load types a read of code as code, whatever part it names.
+#[test]
+fn the_load_types_a_read_of_code_as_code() {
+    use super::statics::top;
+    let result = "(Ok {Error = Number, Ok = Code}) | (Error {Error = Number, Ok = Code})";
+    for read in ["(q 0)", "(q {from = 1})"] {
+        assert_eq!(
+            top(
+                &format!("LET q = #((PRINT 1) (PRINT 2))\nLET r = {read}"),
+                "r"
+            ),
+            format!(":({result})")
+        );
+    }
+}
+
+/// A read of code crosses its frame laid flat, its `$` names' bindings beside it, and reads and
+/// compares as it did.
+#[test]
+fn a_read_of_code_crosses_its_frame_flat() {
+    let source = "LET k = 2\nLET f = (FN :{} -> Any = #((LET q = #((PRINT 1) (PRINT $k))) (q {from = 1})))\n\
+                  LET r = (f {})\nPRINT r\nPRINT (r == (f {}))";
+    assert_eq!(
+        run(source),
+        [
+            ok(":(UNBUILT Expression)", "(PRINT $k)"),
+            "true".to_string()
+        ]
+        .join("\n")
+    );
+}
+
+/// A part read out of a quote is the code of that part alone, a name its binder filled a hole
+/// again: it equals a splice of the quote written of it, which is unbuilt as the read is.
+#[test]
+fn a_part_of_code_equals_the_quote_written_of_it_alone() {
+    let source = "LET q = #((LET x = 4) (PRINT x))\nLET xs = [#(PRINT x)]\n\
+                  PRINT ((q 1) == (Result.Ok #($..xs)))\n\
+                  LET ys = [#(PRINT y)]\nPRINT ((q 1) == (Result.Ok #($..ys)))";
+    assert_eq!(run(source), "true\nfalse");
+}

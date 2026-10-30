@@ -51,17 +51,20 @@ mod data;
 mod function;
 pub mod module;
 mod tie;
+pub(crate) mod view;
 
 #[cfg(test)]
 pub(crate) mod tests;
 
 pub use builtin::{BuiltinFunction, builtin};
-pub use code::{Code, CodeBody, UsingRefused, composed_code, quote, using};
+pub use code::{Code, UsingRefused, built, composed_code, quote, using};
+pub(crate) use code::{code_length, code_part, code_slice, flattened};
 #[cfg(test)]
 pub(crate) use function::INSTANTIATED;
 pub use function::{Function, barrier_instance, header_instance, instance, lambda};
 pub use module::{Born, Coerced, Module, body_activation};
 pub use tie::{Tied, tie};
+pub use view::ComposeRefused;
 
 use std::cell::Cell;
 use std::fmt;
@@ -74,8 +77,8 @@ use crate::symbols::{BinderSymbol, SymbolInterner};
 use crate::type_lattice::{DeclaredType, KType, display_name};
 use crate::values::digest::{DigestHasher, Tag};
 use crate::values::{
-    self, Chain, Circular, ConstructionRefused, ContentDigest, FunctionIdentity, KeyRejected,
-    MemoBits, Resolved, Seen, Value, ValueCarrier, ValueFamily, Weight,
+    self, Chain, Circular, CodeView, ConstructionRefused, ContentDigest, FunctionIdentity,
+    KeyRejected, MemoBits, Resolved, Seen, Value, ValueCarrier, ValueFamily, Weight,
 };
 
 /// The payload of a knot node.
@@ -386,8 +389,16 @@ impl values::Knotted for Knotted<'_, '_> {
             Node::Data { circular, .. } => Resolved::Circular(*circular),
             Node::Module(_) => Resolved::Module,
             Node::Coerced(_) => Resolved::Barrier,
-            Node::Code(code) => Resolved::Code(code.view()),
+            Node::Code(_) => Resolved::Code,
         }
+    }
+
+    fn code_view<'read, 'a>(&self, writer: Writer<'read, '_>) -> Option<CodeView<'read, 'a, Self>>
+    where
+        Self: 'a,
+        'a: 'read,
+    {
+        Some(Knotted::code(*self)?.code_view(writer))
     }
 }
 

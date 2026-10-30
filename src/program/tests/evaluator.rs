@@ -141,7 +141,7 @@ fn form<'step>(shape: &'step BodyShape<'step>, node: Evaluated) -> Form<'step> {
 
 fn of_part<'step>(part: &'step ExpressionPart<'step>) -> Form<'step> {
     match part {
-        ExpressionPart::Expression(node) => of_node(node.reference()),
+        ExpressionPart::Expression(node) => of_node(node),
         part => Form::Leaf(part),
     }
 }
@@ -253,7 +253,8 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'
         }
         Form::Leaf(part @ ExpressionPart::QuotedExpression(_)) => {
             let written = program.written();
-            let member = quote(step.writer(), &view, written, part, types, &scratch);
+            let member = quote(step.writer(), &view, written, part, types, &scratch)
+                .expect("a test's quote composes");
             return {
                 let writer = step.writer();
                 step.finish(held(
@@ -313,7 +314,8 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'
                     },
                     ExpressionPart::QuotedExpression(_) => {
                         let written = program.written();
-                        let member = quote(writer, &view, written, item, types, &scratch);
+                        let member = quote(writer, &view, written, item, types, &scratch)
+                            .expect("a test's quote composes");
                         cells.push(Value::Knotted(member));
                     }
                     _ => match Value::lower_part(writer, item, types, &scratch) {

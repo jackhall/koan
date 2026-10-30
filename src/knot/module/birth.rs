@@ -59,7 +59,7 @@ pub fn body_activation<'graph, 'cell>(
 pub fn tie_member<'graph, 'cell, 'x>(
     writer: Writer<'cell, '_>,
     activation: &KReading<'_, 'graph, 'cell>,
-    written: Written<'graph, '_>,
+    written: Written<'graph, 'cell, '_>,
     component: &Component<'_>,
     types: &Chain<'_, 'cell, '_, '_>,
     scratch: BumpAllocator<'x>,

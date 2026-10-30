@@ -284,7 +284,7 @@ fn a_copied_quote_outlives_its_home() {
                 let member = echo.as_code().expect("the kept code redeems as code");
                 let code = member.code().expect("a quote's node");
                 let greeting = fixture.name("greeting");
-                for (name, link) in code.bound() {
+                for crate::values::Binding { name, link, .. } in code.bound() {
                     match link {
                         Link::Edge(edge) => {
                             assert!(ptr::eq(member.sibling(*edge).node(), member.node()));

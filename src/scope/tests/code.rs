@@ -52,7 +52,7 @@ fn node<'graph>(part: &ExpressionPart<'graph>) -> &'graph KExpression<'graph> {
     let ExpressionPart::Expression(node) = part else {
         panic!("a parenthesized node");
     };
-    node.reference()
+    node
 }
 
 /// The shape of the `FN` a `LET f = (FN …)` line births.

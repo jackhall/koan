@@ -26,9 +26,7 @@ pub(crate) fn signature_run<'graph>(
     part: &ExpressionPart<'graph>,
 ) -> Option<&'graph KExpression<'graph>> {
     match part {
-        ExpressionPart::RecordType(node) | ExpressionPart::QuotedExpression(node) => {
-            Some(node.reference())
-        }
+        ExpressionPart::RecordType(node) | ExpressionPart::QuotedExpression(node) => Some(node),
         _ => None,
     }
 }
@@ -78,7 +76,7 @@ pub(crate) fn body_of<'graph>(
     part: &ExpressionPart<'graph>,
 ) -> Option<&'graph KExpression<'graph>> {
     match part {
-        ExpressionPart::Expression(node) => Some(node.reference()),
+        ExpressionPart::Expression(node) => Some(node),
         _ => None,
     }
 }

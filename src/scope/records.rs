@@ -18,8 +18,8 @@
 //! born of written code keeps what it holds of its body through [`Written`], since the load is
 //! never evicted.
 
-use crate::memory::{BumpAllocator, BumpVec, Lays, collect, resident};
-use crate::parse::{ExpressionPart, ProgramNode};
+use crate::memory::{BumpAllocator, BumpVec, Lays, Writer, collect, resident};
+use crate::parse::{ExpressionPart, KExpression, copied};
 use crate::symbols::{BinderSymbol, Symbol};
 use crate::type_lattice::{DeclaredType, Interval, KType, Parametric, Term, TypeDigest};
 use crate::values::{Chain, ContentDigest, Retype, Weight};
@@ -766,48 +766,133 @@ impl<'a> RecordSource<'a> for LoadFacts<'a> {
 
 /// The code a value is born of, read at the program's own lifetime: the program's written code,
 /// or, for a cell whose chain rests on a composition, the code composed at run time, under its root
-/// code value. What a value born of it keeps is its body's record or a quote's syntax. The load is
-/// never evicted, so a value may point into it; a composition may be, so a value born of composed
-/// code keeps its own copy of its body's record and the root that finds or rebuilds the
-/// composition, and its quote's syntax inside the root's. Every fact a step decides by is read
-/// through [`Facts`] instead.
+/// code value, whose syntax lives at `'root`. What a value born of it keeps is its body's record or
+/// a quote's syntax. The load is never evicted, so a value may point into it; a composition may be,
+/// so a value born of composed code keeps its own copy of its body's record beside the root that
+/// finds or rebuilds the composition, and its quote's syntax inside the root's. Every fact a step
+/// decides by is read through [`Facts`] instead.
 #[derive(Clone, Copy)]
-pub struct Written<'graph, 'step> {
+pub struct Written<'graph, 'root, 'step> {
     load: LoadRecords<'graph>,
-    composed: Option<(ComposedRoot<'graph>, &'step Composition<'step>)>,
+    composed: Option<(ComposedRoot<'root>, &'step Composition<'step>)>,
 }
 
-/// A body's record as a value born of it holds it: the load's, by pointer, or one of composed code,
-/// its root included, copied into the value's region.
+/// A body's record as a value born of it holds it: the load's, by pointer, or one of composed code
+/// laid at `'a`, beside its root at `'root`.
 #[derive(Clone, Copy)]
-pub enum BodyAt<'graph, 'cell> {
+pub enum BodyAt<'graph, 'root, 'a> {
     Written(&'graph BodyRef<'graph, 'graph>),
-    Composed(&'cell BodyRef<'graph, 'cell>),
+    Composed(&'a BodyRef<'root, 'a>),
 }
 
-impl<'graph: 'cell, 'cell> BodyAt<'graph, 'cell> {
+impl<'graph: 'root, 'root: 'a, 'a> BodyAt<'graph, 'root, 'a> {
     /// The record itself.
-    pub fn get(self) -> &'cell BodyRef<'graph, 'cell> {
+    pub fn get(self) -> &'a BodyRef<'root, 'a> {
         match self {
             BodyAt::Written(body) => body,
             BodyAt::Composed(body) => body,
         }
     }
 
-    /// This record as a value copied through `lay` holds it: the load's pointer kept, composed
-    /// code's record copied.
-    pub fn copied<'to>(self, lay: impl Lays<'to>) -> BodyAt<'graph, 'to>
+    /// This record as a value copied through `writer` holds it: the load's pointer kept, composed
+    /// code's record copied beside a copy of its root.
+    pub fn copied<'to>(self, writer: Writer<'to, '_>) -> BodyAt<'graph, 'to, 'to>
     where
         'graph: 'to,
     {
         match self {
             BodyAt::Written(body) => BodyAt::Written(body),
-            BodyAt::Composed(body) => BodyAt::Composed(body.laid(lay, body.root)),
+            BodyAt::Composed(body) => {
+                BodyAt::Composed(body.laid(writer, body.root.map(|root| root.copied(writer))))
+            }
         }
     }
 }
 
-impl<'graph, 'step> Written<'graph, 'step> {
+/// Where a code value's syntax is and what shapes it.
+#[derive(Clone, Copy, Debug)]
+pub enum CodeSyntax<'graph, 'cell> {
+    /// A quote the program writes: its body in program storage, its shape the load's, by segment.
+    Written {
+        body: &'graph KExpression<'graph>,
+        segment: Segment,
+    },
+    /// Code composed at run time, its syntax laid in a region: `root` finds or rebuilds its
+    /// composition, and `body` is the root's syntax or a quote nested in it, whose shape `segment`
+    /// names among its composition's shapes — `None` for the root itself.
+    Composed {
+        body: &'cell KExpression<'cell>,
+        root: ComposedRoot<'cell>,
+        segment: Option<Segment>,
+    },
+}
+
+impl<'graph: 'cell, 'cell> CodeSyntax<'graph, 'cell> {
+    /// The syntax itself.
+    pub fn body(self) -> &'cell KExpression<'cell> {
+        match self {
+            CodeSyntax::Written { body, .. } | CodeSyntax::Composed { body, .. } => body,
+        }
+    }
+
+    /// The root of the composed code this is, if it is not written.
+    pub fn root(self) -> Option<ComposedRoot<'cell>> {
+        match self {
+            CodeSyntax::Written { .. } => None,
+            CodeSyntax::Composed { root, .. } => Some(root),
+        }
+    }
+
+    /// What laying this syntax again writes: nothing for written code, which a copy points at;
+    /// composed code's body, and its root beside it where the body is a quote nested in it.
+    pub fn weight(self) -> Weight {
+        match self {
+            CodeSyntax::Written { .. } => Weight::ZERO,
+            CodeSyntax::Composed {
+                root,
+                segment: None,
+                ..
+            } => Weight::syntax(root.syntax),
+            CodeSyntax::Composed { body, root, .. } => {
+                Weight::syntax(body).plus(Weight::syntax(root.syntax))
+            }
+        }
+    }
+
+    /// This syntax as a copy through `writer` holds it: written code's pointer kept, composed
+    /// code laid again, its root beside its body where the two differ.
+    pub fn copied<'to>(self, writer: Writer<'to, '_>) -> CodeSyntax<'graph, 'to>
+    where
+        'graph: 'to,
+    {
+        match self {
+            CodeSyntax::Written { body, segment } => CodeSyntax::Written { body, segment },
+            CodeSyntax::Composed {
+                root,
+                segment: None,
+                ..
+            } => {
+                let root = root.copied(writer);
+                CodeSyntax::Composed {
+                    body: root.syntax,
+                    root,
+                    segment: None,
+                }
+            }
+            CodeSyntax::Composed {
+                body,
+                root,
+                segment,
+            } => CodeSyntax::Composed {
+                body: copied(writer, body),
+                root: root.copied(writer),
+                segment,
+            },
+        }
+    }
+}
+
+impl<'graph, 'root, 'step> Written<'graph, 'root, 'step> {
     /// The written code `load` holds.
     pub fn of(load: &LoadFacts<'graph>) -> Self {
         Written {
@@ -819,7 +904,7 @@ impl<'graph, 'step> Written<'graph, 'step> {
     /// The code composed at run time whose root is `root`, which `composition` holds.
     pub fn composed(
         self,
-        root: ComposedRoot<'graph>,
+        root: ComposedRoot<'root>,
         composition: &'step Composition<'step>,
     ) -> Self {
         Written {
@@ -829,34 +914,61 @@ impl<'graph, 'step> Written<'graph, 'step> {
     }
 
     /// The root of the composed code this is, if it is not the program's.
-    pub fn root(&self) -> Option<ComposedRoot<'graph>> {
+    pub fn root(&self) -> Option<ComposedRoot<'root>> {
         self.composed.map(|(root, _)| root)
     }
 
     /// The body at `segment`, as a value born of it holds it, a composed record laid through `lay`
     /// beside its root.
-    pub fn body<'cell>(&self, lay: impl Lays<'cell>, segment: Segment) -> BodyAt<'graph, 'cell>
+    pub fn body<'a>(&self, lay: impl Lays<'a>, segment: Segment) -> BodyAt<'graph, 'root, 'a>
     where
-        'graph: 'cell,
+        'graph: 'a,
+    {
+        self.laid(lay, segment, self.root())
+    }
+
+    /// [`body`](Self::body) with no root on a composed record: what scratch shorter-lived than the
+    /// root holds, the root kept beside it.
+    pub fn unrooted<'a>(&self, lay: impl Lays<'a>, segment: Segment) -> BodyAt<'graph, 'static, 'a>
+    where
+        'graph: 'a,
+    {
+        self.laid(lay, segment, None)
+    }
+
+    /// The body at `segment`, a composed record laid through `lay` beside `root`.
+    fn laid<'held, 'a>(
+        &self,
+        lay: impl Lays<'a>,
+        segment: Segment,
+        root: Option<ComposedRoot<'held>>,
+    ) -> BodyAt<'graph, 'held, 'a>
+    where
+        'graph: 'a,
     {
         match self.composed {
             None => BodyAt::Written(&self.load.laid(segment).body),
-            Some((root, composition)) => BodyAt::Composed(
-                composition
-                    .facts()
-                    .0
-                    .laid(segment)
-                    .body
-                    .laid(lay, Some(root)),
-            ),
+            Some((_, composition)) => {
+                BodyAt::Composed(composition.facts().0.laid(segment).body.laid(lay, root))
+            }
         }
     }
 
-    /// The syntax of the quote at `site` of the body at `segment`.
-    pub fn quote(&self, segment: Segment, site: Site) -> ProgramNode<'graph> {
+    /// The syntax of the quote at `site` of the body at `segment`, as a code value born of it
+    /// holds it.
+    pub fn quote(&self, segment: Segment, site: Site) -> CodeSyntax<'graph, 'root>
+    where
+        'graph: 'root,
+    {
         let Some((root, composition)) = self.composed else {
-            return match self.load.shapes.shape_at(segment).located(site) {
-                Located::Part(ExpressionPart::QuotedExpression(node)) => *node,
+            let shape = self.load.shapes.shape_at(segment);
+            return match shape.located(site) {
+                Located::Part(ExpressionPart::QuotedExpression(body)) => CodeSyntax::Written {
+                    body,
+                    segment: (shape.nested(site))
+                        .expect("a quote's site holds its code shape")
+                        .segment(),
+                },
                 _ => unreachable!("a quote's site locates its quoted expression"),
             };
         };
@@ -864,7 +976,11 @@ impl<'graph, 'step> Written<'graph, 'step> {
         let nested = (shapes.shape_at(segment).nested(site))
             .expect("a quote's site holds its code shape")
             .segment();
-        composition.quote_in(root.syntax, nested)
+        CodeSyntax::Composed {
+            body: composition.quote_in(root.syntax, nested),
+            root,
+            segment: Some(nested),
+        }
     }
 }
 
@@ -873,10 +989,10 @@ impl<'graph, 'step> Written<'graph, 'step> {
 /// builder captures but those reading the program's top level, then the type captures its contract
 /// names. A value's identity, digest and equality read those alone. Beside them, what a caller
 /// needs of a body it did not shape: the slots a call's settlement keys on, by name, and the root
-/// of the composed code it lies in, which finds or rebuilds its composition. One pointer, so a
-/// value holds it in place of its shape's.
+/// of the composed code it lies in, at `'root`, which finds or rebuilds its composition. One
+/// pointer, so a value holds it in place of its shape's.
 #[derive(Clone, Copy)]
-pub struct BodyRef<'graph, 'a> {
+pub struct BodyRef<'root, 'a> {
     pub base: ContentDigest,
     pub segment: Segment,
     pub code: ContentDigest,
@@ -885,21 +1001,31 @@ pub struct BodyRef<'graph, 'a> {
     /// seeks nothing.
     pub keys: Option<&'a [(Slot, BinderSymbol)]>,
     /// `None` for written code.
-    pub root: Option<ComposedRoot<'graph>>,
+    pub root: Option<ComposedRoot<'root>>,
     /// Whether the body can birth a callable, which a call seeking a settlement of it lays a level
     /// for.
     pub births: bool,
 }
 
-/// The root of code composed at run time: its syntax, which lives in program storage until code
-/// splicing lays composed syntax in regions, and its syntax digest, which finds its composition.
+/// The root of code composed at run time: its syntax, laid where the code value holding it lives,
+/// and its syntax digest, which finds its composition.
 #[derive(Clone, Copy, Debug)]
 pub struct ComposedRoot<'a> {
-    pub syntax: ProgramNode<'a>,
+    pub syntax: &'a KExpression<'a>,
     pub digest: ContentDigest,
 }
 
-impl<'graph> BodyRef<'graph, '_> {
+impl ComposedRoot<'_> {
+    /// This root with its syntax copied through `writer`.
+    pub fn copied<'to>(self, writer: Writer<'to, '_>) -> ComposedRoot<'to> {
+        ComposedRoot {
+            syntax: copied(writer, self.syntax),
+            digest: self.digest,
+        }
+    }
+}
+
+impl BodyRef<'_, '_> {
     /// Whether the closure slot `at` composes: one past the slots recorded does.
     pub fn composed(&self, at: usize) -> bool {
         self.composes.get(at).copied().unwrap_or(true)
@@ -925,16 +1051,17 @@ impl<'graph> BodyRef<'graph, '_> {
         )
     }
 
-    /// What laying a copy of this record costs a rebuild: nothing for written code, whose record
-    /// the load holds.
+    /// What laying a copy of this record costs a rebuild, its root's syntax included: nothing for
+    /// written code, whose record the load holds.
     pub fn weight(&self) -> Weight {
         match self.root {
             None => Weight::ZERO,
-            Some(_) => Weight::flat::<BodyRef<'_, '_>>()
+            Some(root) => Weight::flat::<BodyRef<'_, '_>>()
                 .plus(Weight::run::<bool>(self.composes.len()))
                 .plus(Weight::run::<(Slot, BinderSymbol)>(
                     self.keys.map_or(0, <[_]>::len),
-                )),
+                ))
+                .plus(Weight::syntax(root.syntax)),
         }
     }
 }

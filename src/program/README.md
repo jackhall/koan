@@ -145,9 +145,10 @@ a program's steps run over, with its three families:
   `Eval`, a quote's code, a record of the names its `EVAL` offers and the
   contract its declared return makes; `Evaluate`, a node, the view it is read
   through and the [contract](#frames-contracts-and-tails) it owes, if any; `Block`, a
-  synthesized block's shape and the view it sits in; `Using`, a `USING` over
-  code composed at run time, which fills the code's holes under its
-  composition; and `Inspect`, the view the top level leaves at rest. A `Call`
+  synthesized block's shape and the view it sits in; `Composed`, a `USING` or
+  a `BUILD` over code composed at run time, which under the code's
+  composition fills its holes from a source or, with none, carries it at the
+  exact type its shape gives it; and `Inspect`, the view the top level leaves at rest. A `Call`
   also carries, for a hop under its frame's own settlement, the level of that
   settlement, which a callable born in the frame records in its stamp; what
   the call hands its frame through kept parts (`Passing`), which every call
@@ -230,9 +231,13 @@ type-parameter solution substituted, a digested parameter taking the digest
 memo the caller handed for it where the value it binds carries the type the
 caller's did; born as `KBirth::Eval` it lays the code's activation down in the
 frame's own cell over a closure run it assembles in the code shape's capture
-order — each `$` name from the bindings the code carries, each hole from those
-a `USING` supplied, each `\` name from the offered record — every edge resolved
-to the member it names, so the run holds value words only.
+order — each `$` name and filled hole from the binding the code carries at
+its scope and name, each `$(…)` key of composed code as the list of the
+registrations it carries at that scope whose key it is, grouped here, where
+the type chain is, a keyworded hole nothing filled as an empty list, each `\` name from the offered record — every edge resolved to the
+member it names, so the run holds value words only. An unbuilt
+[code view](../knot/README.md#a-code-view) is laid flat before its frame is
+asked for.
 
 **How a frame binds depends on how the call reached it.** A keyworded call's
 arguments were admitted by the [selection](../dispatch/README.md#selection) that
@@ -511,7 +516,7 @@ invariant types warm. A frame born under a settlement routes: it holds its
 scratch. Dispatch picks the door where it calls: a hop of the frame's own
 callee, keyed, from a frame under a settlement its route marks a hop,
 `tail_under` the frame's arena node; any other call `spawn_seeking` or
-`tail_seeking`; an `EVAL` or a `USING` of composed code `spawn_composing`; an
+`tail_seeking`; an `EVAL`, a `USING` or a `BUILD` of composed code `spawn_composing`; an
 evaluation or a block `spawn`; and a frame's last statement `hand_off`.
 
 A frame's runner takes the arena node it runs under at its first step and
@@ -594,7 +599,7 @@ spawned; composed code's, by its frame under the composition. The
 evaluator hands it the names the `EVAL` offers, read at the coordinates the
 shape recorded for its operand (`BodyShape::offers`), as a record. It refuses
 with a `CodeRefused`: `Shape` for code whose shape kept an error, `Unbound`
-for the first name hole no `USING` filled, `\` name the `EVAL` does not
+for the first name hole, `\` name the `EVAL` does not
 offer, or keyworded hole some use in the code selects from alone, and
 `QuantifiedRead` for a `$` name at composed code's entry bound to a
 quantified function and read other than as a call's head. An overlap the

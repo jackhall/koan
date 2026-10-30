@@ -29,8 +29,8 @@ use crate::values::tests::reading;
 
 /// One slot as drawn: pinned at most its declared type in both intervals, or a chain `J.lower ≤
 /// I.lower ≤ I.upper ≤ J.upper`, a lower end the load never computes read as `Never`; and the
-/// names it holds. Drawn as modules, each record the chain holds at its top is a module's
-/// signature over the record's fields, which orders as the records do.
+/// names it holds. Drawn as modules, each record the chain holds is a module's signature over
+/// the record's fields, which orders as the records do only where their fields' names agree.
 #[derive(Clone, Debug)]
 struct Slot {
     pinned: bool,
@@ -165,6 +165,8 @@ struct Drawn<'x> {
     inner: Interval,
     outer: Interval,
     names: &'x [BinderSymbol],
+    /// Whether the chain was drawn as modules.
+    modules: bool,
 }
 
 impl<'x> Drawn<'x> {
@@ -219,6 +221,16 @@ fn law(
     };
     let declared_slots: Vec<KType> = shape_slots(declared, world.types).collect();
     let drawn = draw(&world, slots, &declared_slots);
+    // Signatures are ordered by their pins, never by their members, so a chain drawn as modules
+    // may not order as its records do: the law holds over draws with `I` within `J`. Every other
+    // chain orders by construction.
+    for slot in &drawn {
+        let within = world.within(slot.inner, slot.outer);
+        match slot.modules {
+            true => prop_assume!(within),
+            false => prop_assert!(within, "a drawn chain orders: I lies within J"),
+        }
+    }
     let over = |pick: &dyn Fn(usize, &Drawn<'_>) -> Interval, named| {
         let given: Vec<Given<'_>> = (drawn.iter().enumerate())
             .map(|(index, slot)| slot.given(pick(index, slot), named))
@@ -291,6 +303,7 @@ fn draw<'x>(world: &World<'x, '_>, slots: &[Slot], declared: &[KType]) -> Vec<Dr
             inner,
             outer,
             names,
+            modules: !slot.pinned && slot.modules,
         });
     }
     drawn

@@ -32,6 +32,7 @@ mod channels;
 mod closure;
 mod composition;
 mod facts;
+mod filled;
 mod groups;
 mod header;
 mod keyed;
@@ -64,15 +65,16 @@ pub use builtins::Builtins;
 pub use closure::ClosureBindings;
 pub use composition::{ComposedSyntax, Composition, quote_paths};
 pub use facts::{Address, Binding, Bound, Cut, Frontier, Store, UnitId, Unknown};
+pub use filled::{FilledSites, filled_sites};
 pub use groups::{BuiltinGroup, GroupFrame, is_equal, is_equality, is_unequal};
 pub use header::{HalfHeader, RegionHeader};
 pub use keyed::{Keyed, KeyedEntry};
 pub use memo::{DecisionMemo, Entry, EntryFamily, EventSite, MemoFamily, MemoKey, extended};
 pub use record_types::Named;
 pub use records::{
-    AtRun, BodyAt, BodyRef, Born, Closing, ComposedRoot, Deps, DepsGathering, Facts, FactsOver,
-    Folds, Layers, LoadFacts, LoadRecords, NamedVariable, Retypes, SiteDeps, Typed, UnitFacts,
-    Written, tree_deps,
+    AtRun, BodyAt, BodyRef, Born, Closing, CodeSyntax, ComposedRoot, Deps, DepsGathering, Facts,
+    FactsOver, Folds, Layers, LoadFacts, LoadRecords, NamedVariable, Retypes, SiteDeps, Typed,
+    UnitFacts, Written, tree_deps,
 };
 pub use settlement_facts::{Activated, Settlement};
 pub use shape::{
@@ -83,7 +85,7 @@ pub use shape::{
     TypeExpression, Unit, UnitHolds, UnitIndex, UnitWork, ViewRefused, Which, each_part, follow,
     in_body_of, part_of, selection_refused, source_of, spelled, view_refused,
 };
-pub use shapes::{BindSite, Code, Shapes};
+pub use shapes::{BindSite, Code, Origin, Shapes};
 pub use stamp::{Ask, Asked, Level, Sought, Stamp};
 pub use tree::{Binder, Identity, KnotNode, Leaf, NodeCapture, Tree, Unfolded, Within};
 pub use typed::{

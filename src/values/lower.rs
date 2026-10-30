@@ -46,7 +46,9 @@ fn lowers(part: &ExpressionPart<'_>) -> bool {
         | ExpressionPart::RecordType(_)
         | ExpressionPart::QuotedExpression(_)
         | ExpressionPart::MarkedName(..)
-        | ExpressionPart::MarkedUse(..) => false,
+        | ExpressionPart::MarkedUse(..)
+        | ExpressionPart::FilledUse(..)
+        | ExpressionPart::Splice(_) => false,
     }
 }
 
@@ -105,6 +107,8 @@ fn lower<'cell, X: Knotted>(
         | ExpressionPart::RecordType(_)
         | ExpressionPart::QuotedExpression(_)
         | ExpressionPart::MarkedName(..)
-        | ExpressionPart::MarkedUse(..) => unreachable!("a lowerable part needs no dispatch"),
+        | ExpressionPart::MarkedUse(..)
+        | ExpressionPart::FilledUse(..)
+        | ExpressionPart::Splice(_) => unreachable!("a lowerable part needs no dispatch"),
     }
 }

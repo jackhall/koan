@@ -854,6 +854,21 @@ impl<'t, H: Habitat<'t>> TypeChain<'t, H> {
         }))
     }
 
+    /// Every code of a kind within `kind`, whatever it needs: the type of code no build has
+    /// classified. `kind` is `Code` or a code kind below it, and `UNBUILT Code` is `Code`.
+    pub fn code_unbuilt<N: Naming<'t>>(&self, kind: N) -> N {
+        let linked = kind.linked(self);
+        if linked.handle() == Handle::ANY_CODE {
+            return kind;
+        }
+        debug_assert!(
+            linked.handle().code_parent().is_some(),
+            "an unbuilt code type is over a code kind",
+        );
+        let digest = digest::code_unbuilt_digest(kind.digest());
+        N::read(self.intern_digested(digest, || TypeNode::CodeUnbuilt { kind: linked }))
+    }
+
     /// The `index`-th rigid variable of the enclosing scheme's group, bounded by `bound`.
     pub fn quantified(&self, index: usize, bound: KType) -> Parametric {
         Parametric::read(self.quantified_node(index, bound))

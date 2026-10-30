@@ -228,6 +228,10 @@ impl<'run> Lockstep<'run> for Order {
                         && needs.iter().all(|name| names.contains(name))
                 })
             }
+            // An unbuilt code kind is above every code type whose kind lies within its own.
+            (_, TypeNode::CodeUnbuilt { kind }) => {
+                code_kind_of(a).is_some_and(|sub| sub.handle().within_code(kind.handle()))
+            }
             // A code kind below `Code` is above exactly the code kinds under it in the code
             // family's tree.
             _ if b.handle().code_parent().is_some() => a.handle().within_code(b.handle()),
@@ -276,6 +280,16 @@ pub(super) fn code_needs(ktype: Linked<'_>) -> Option<(Linked<'_>, &[BinderSymbo
     }
 }
 
+/// The code kind a code type below `Code` is of: a bare kind itself, and the kind a `NEEDING` or
+/// `UNBUILT` type is over. `None` for every other type.
+pub(super) fn code_kind_of(ktype: Linked<'_>) -> Option<Linked<'_>> {
+    match ktype.view() {
+        TypeNode::CodeNeeding { kind, .. } | TypeNode::CodeUnbuilt { kind } => Some(kind),
+        _ if ktype.handle().code_parent().is_some() => Some(ktype),
+        _ => None,
+    }
+}
+
 /// The family top `node` lies under by its own shape — `Value`, `Type` or `Code` — or `None` for a
 /// node whose family is decided elsewhere: the lattice's top and bottom, a union by its members, a
 /// type variable by its bound, and a deferred return by the return it defers; or for an opaque
@@ -313,6 +327,7 @@ fn family_top<'run>(node: &TypeNode<'run, Linked<'run>>) -> Option<Handle> {
         | TypeNode::Name
         | TypeNode::Keyword
         | TypeNode::CodeNeeding { .. }
+        | TypeNode::CodeUnbuilt { .. }
         | TypeNode::AnyCode => Some(Handle::ANY_CODE),
         TypeNode::OfKind(_) => Some(Handle::ANY_TYPE),
         TypeNode::Any

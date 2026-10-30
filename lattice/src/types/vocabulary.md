@@ -183,6 +183,18 @@ covers. Two code types meet at their kinds' meet needing the names both need,
 and at `Never` when the kinds do; the join is the ordinary union. A code kind
 needing names holds no variable, so every walk treats it as ground.
 
+**An unbuilt code kind** is `CodeUnbuilt`, spelled `:(UNBUILT Block)` and built
+through `TypeChain::code_unbuilt`: code of that kind or under it, needing
+whatever it needs — the type of composed code no build has classified, since
+only building its shape can say which names it needs. It lies above every code
+type whose kind lies within its kind, `NEEDING` lists and unbuilt kinds
+included, and under `Code` and every unbuilt kind above its own; it lies under
+no bare kind and no kind needing names, since it may need more. `Code` already
+admits code whatever it needs, so `UNBUILT Code` is `Code`, one handle. An
+unbuilt kind meets a code type at their kinds' meet, needing what the other
+needs, and two unbuilt kinds meet unbuilt; join is the union, which drops a
+member under another. It holds no variable either.
+
 Which kind a written quote is belongs to `parse`
 ([`KExpression::code_kind`](../../../src/parse/ast.rs)); the lattice holds only the order.
 Containers of code are ordinary value types — `List(Name)` lies under

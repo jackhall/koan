@@ -56,6 +56,16 @@ pub(super) fn lower_source<'a>(
 
 /// Why a `..` was refused where it was written.
 const NOT_AN_ITEM: &str = "`..` spreads a list only as an item of a list literal";
+/// Why a splice was refused where it was written, or for what its operand is.
+const SPLICE_IN_LITERAL: &str = "`$..` splices code into an expression, and a literal holds \
+                                 none; a list literal spreads with `..`";
+const SPLICE_IN_TYPE: &str = "a type expression holds no splice";
+const SPLICE_OPERAND: &str = "the operand of `$..` is a name";
+const BUILT_SPLICE: &str = "`\\..` has no reading: a `\\` name binds where the code is built, to a value \
+                            that arrives with each call";
+const SPLICE_IN_MARKED_USE: &str =
+    "a marked use wraps one keyworded use, whose key a splice would leave unknown";
+
 /// Why a `..` in a list literal spreads nothing.
 const UNSPREADABLE: &str = "`..` spreads a name glued to it, `..xs`, or a paren group, `..(f x)`";
 
@@ -207,6 +217,11 @@ impl<'a, 's> Lower<'a, '_, 's> {
         let mut parts = Vec::new();
         while let Some(item) = items.next() {
             match &item.node {
+                // A splice is a part of an expression, and `\..` none at all.
+                Node::Atom(text) if text.starts_with("$..") || text.starts_with("\\..") => {
+                    let part = self.splice(text, item, wrappers)?;
+                    self.push_part(context, &mut parts, part)?;
+                }
                 // A spread is a list literal's item and nothing else.
                 Node::Atom(text) if text.starts_with("..") => {
                     let Context::List(spreads) = context else {
@@ -311,6 +326,11 @@ impl<'a, 's> Lower<'a, '_, 's> {
         part: Spanned<ExpressionPart<'a>>,
     ) -> Result<(), ParseError> {
         if !matches!(context, Context::Expression)
+            && let ExpressionPart::Splice(_) = part.value
+        {
+            return Err(ParseError::new(SPLICE_IN_LITERAL, part.span));
+        }
+        if !matches!(context, Context::Expression)
             && let ExpressionPart::Keyword(symbol) = part.value
             && !(symbol == WILDCARD.symbol()
                 && matches!(context, Context::Brace(dict) if dict.admits_wildcard()))
@@ -395,6 +415,15 @@ impl<'a, 's> Lower<'a, '_, 's> {
         {
             return Ok(self.quote_part(quote));
         }
+        // A layout line that is one splice is that splice, so a block splices the same statements
+        // whether it is written on one line or across lines.
+        if kind == Kind::Layout
+            && let [only] = inner
+            && let Node::Atom(text) = &only.node
+            && (text.starts_with("$..") || text.starts_with("\\.."))
+        {
+            return self.splice(text, only, wrappers);
+        }
         let expr = self.lower_body(inner, item.span, wrappers)?;
         Ok(Spanned::at(
             ExpressionPart::Expression(self.program.alloc_node(expr)),
@@ -440,8 +469,45 @@ impl<'a, 's> Lower<'a, '_, 's> {
         Ok(Spanned::at(part, item.span))
     }
 
+    /// `$..name`, a splice of the code elements of `name` into a quote's syntax. Its operand is a
+    /// value name, since `$` never evaluates; a type expression holds none, and `\\..` has no
+    /// reading.
+    fn splice(
+        &self,
+        text: &str,
+        item: &Item<'s>,
+        wrappers: Wrappers,
+    ) -> Result<Spanned<ExpressionPart<'a>>, ParseError> {
+        if text.starts_with('\\') {
+            return Err(ParseError::new(BUILT_SPLICE, Some(item.span)));
+        }
+        if wrappers == Wrappers::Keep {
+            return Err(ParseError::new(SPLICE_IN_TYPE, Some(item.span)));
+        }
+        let rest = &text[3..];
+        let span = Span {
+            start: item.span.start + 3,
+            end: item.span.end,
+        };
+        let operand = || ParseError::new(SPLICE_OPERAND, Some(item.span));
+        if rest.is_empty() || !rest.starts_with(|c: char| c.is_alphabetic() || c == '_') {
+            return Err(operand());
+        }
+        let classified = atom::classify(self.program, self.symbols, rest, span, self.file, None)?;
+        match classified.parts.as_slice() {
+            [only] if !classified.trailing_colon => match only.value {
+                ExpressionPart::Identifier(name) => {
+                    Ok(Spanned::at(ExpressionPart::Splice(name), item.span))
+                }
+                _ => Err(operand()),
+            },
+            _ => Err(operand()),
+        }
+    }
+
     /// `..name` or `..(…)`, a spread item of a list literal: the name the atom's rest classifies
-    /// as, or the paren group `glued` to a bare `..`. A marked name's spread is code splicing's.
+    /// as, or the paren group `glued` to a bare `..`. A marked name's spread, `..$xs` or `..\xs`,
+    /// spreads the name's value when the code runs.
     fn spread(
         &self,
         text: &str,
@@ -468,17 +534,16 @@ impl<'a, 's> Lower<'a, '_, 's> {
             };
             return Ok(Spanned::at(part.value, span));
         }
-        if rest.starts_with(['$', '\\']) {
-            return Err(ParseError::new(
-                "a spread of a marked name is code splicing's, which a quote writes as `$..name`",
-                Some(item.span),
-            ));
-        }
         let span = Span {
             start: item.span.start + 2,
             end: item.span.end,
         };
-        let classified = atom::classify(self.program, self.symbols, rest, span, self.file, None)?;
+        // `..$xs` and `..\\xs` spread a marked name's value when the code runs.
+        let mark = rest.chars().next().and_then(mark_of);
+        if mark.is_some() && !rest[1..].starts_with(|c: char| c.is_alphabetic() || c == '_') {
+            return Err(unspreadable());
+        }
+        let classified = atom::classify(self.program, self.symbols, rest, span, self.file, mark)?;
         match classified.parts.as_slice() {
             // A spread names its list: a literal or a keyword spreads nothing.
             [only]
@@ -688,6 +753,13 @@ impl<'a, 's> Lower<'a, '_, 's> {
         outer: Span,
     ) -> Result<Spanned<ExpressionPart<'a>>, ParseError> {
         let node = body.node();
+        if node
+            .parts
+            .iter()
+            .any(|part| matches!(part.value, ExpressionPart::Splice(_)))
+        {
+            return Err(ParseError::new(SPLICE_IN_MARKED_USE, Some(outer)));
+        }
         let keyworded = node
             .stored_key()
             .iter()
@@ -697,7 +769,7 @@ impl<'a, 's> Lower<'a, '_, 's> {
                 format!(
                     "`{}(…)` wraps exactly one keyworded use, and `{}` is none; a closed builtin \
                      expression shape such as `LET` resolves the same everywhere",
-                    mark.sigil(),
+                    mark.sigil().expect("a written mark has a sigil"),
                     node.summary(self.symbols),
                 ),
                 Some(outer),
@@ -817,7 +889,7 @@ fn sigil_kind(text: &str) -> Option<char> {
 /// The mark a sigil character writes, if it writes one.
 fn mark_of(sigil: char) -> Option<Mark> {
     match sigil {
-        '$' => Some(Mark::Written),
+        '$' => Some(Mark::DOLLAR),
         '\\' => Some(Mark::Built),
         _ => None,
     }

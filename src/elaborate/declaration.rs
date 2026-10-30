@@ -460,7 +460,7 @@ fn last_type_name(part: &ExpressionPart<'_>) -> Option<TypeSymbol> {
     let ExpressionPart::Expression(run) = part else {
         return None;
     };
-    match run.reference().parts.last()?.value {
+    match run.parts.last()?.value {
         ExpressionPart::Type(name) => Some(name),
         _ => None,
     }
@@ -743,5 +743,5 @@ fn quoted_operator(part: &ExpressionPart<'_>) -> Option<KeywordSymbol> {
     let ExpressionPart::QuotedExpression(quoted) = part else {
         return None;
     };
-    symbol_from_quote_body(quoted.reference())
+    symbol_from_quote_body(quoted)
 }

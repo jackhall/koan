@@ -188,12 +188,12 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, '_, 'x, '_, R> {
                 self.mention(site, *name).map(DeclaredType::Type)
             }
             ExpressionPart::Expression(node) | ExpressionPart::SigiledTypeExpr(node) => {
-                self.node_declared(site, node.reference(), groups)
+                self.node_declared(site, node, groups)
             }
             ExpressionPart::RecordType(node) => {
                 self.binder.set(false);
                 let mut fields = BumpVec::new_in(self.scratch);
-                self.pairs(site, node.reference(), groups, |name, ktype| {
+                self.pairs(site, node, groups, |name, ktype| {
                     fields.push((name, ktype));
                     Ok(())
                 })?;
@@ -408,7 +408,7 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, '_, 'x, '_, R> {
     }
 
     /// A composite of the formless connectors: a list, a dict, a union, a meet, an application, a
-    /// code kind needing names, or a pinned signature.
+    /// code kind needing names or unbuilt, or a pinned signature.
     fn composite(
         &self,
         site: Site,
@@ -446,6 +446,14 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, '_, 'x, '_, R> {
                     );
                 }
                 Ok(self.types.code_needing(self.scratch, kind, &names).into())
+            }
+            // `UNBUILT Kind` — `Code` or a code kind below it, whatever its code needs.
+            2 if keyword(0, &KEYWORDS.unbuilt) => {
+                let kind = self.closed_concrete(site, || self.part(&parts[1].value, groups))?;
+                if kind != KType::ANY_CODE && kind.code_parent().is_none() {
+                    return Err(unsupported);
+                }
+                Ok(self.types.code_unbuilt(kind).into())
             }
             // `Sig WITH {Param = Type, …}` — a declared signature with some head parameters pinned.
             3 if keyword(1, &KEYWORDS.with)
@@ -688,7 +696,7 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, '_, 'x, '_, R> {
         let mut params = BumpVec::new_in(self.scratch);
         self.pairs(
             self.reader.shape().site(schema),
-            fields.reference(),
+            fields,
             groups,
             |name, ktype| {
                 params.push((name, ktype));
@@ -735,7 +743,6 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, '_, 'x, '_, R> {
         let ExpressionPart::QuotedExpression(run) = head else {
             return Err(unsupported);
         };
-        let run = run.reference();
         let mut params = BumpVec::with_capacity_in(run.parts.len() / 2, self.scratch);
         walk_head(run, unsupported, |element| {
             if let HeadElement::Slot(label, slot) = element {
@@ -779,7 +786,6 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, '_, 'x, '_, R> {
         let ExpressionPart::QuotedExpression(run) = head else {
             return Err(unsupported);
         };
-        let run = run.reference();
         let mut elements = BumpVec::with_capacity_in(run.parts.len(), self.scratch);
         let mut ranks = BumpVec::with_capacity_in(run.parts.len() / 2, self.scratch);
         walk_head(run, unsupported, |element| {

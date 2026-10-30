@@ -312,6 +312,9 @@ fn every_node_kind_has_its_own_tag() {
             kind: node(KType::EXPRESSION),
             names: &needed,
         },
+        TypeNode::CodeUnbuilt {
+            kind: node(KType::BLOCK),
+        },
         TypeNode::SetMember {
             component,
             index: 0,
@@ -396,6 +399,11 @@ fn every_compound_variant_digests_as_pinned() {
                 .code_needing(scratch, KType::EXPRESSION, &[y, x])
                 .raw(),
             0x1b9f9c4b7b1022f3dd04bf0dcffac4d9,
+        ),
+        (
+            "CodeUnbuilt",
+            types.code_unbuilt(KType::BLOCK).raw(),
+            0x3ccc2258e46a4a9bc186eabecf9cdf86,
         ),
         (
             "Parameter",
@@ -577,6 +585,7 @@ fn every_compound_variant_digests_as_pinned() {
     assert!(moved.is_empty(), "digests moved:\n{}", moved.join("\n"));
     let compound = [
         "CodeNeeding",
+        "CodeUnbuilt",
         "Parameter",
         "Carrier",
         "List",
@@ -652,6 +661,7 @@ fn variant_name<'run, H: crate::types::handle::Naming<'run>>(
         TypeNode::Sibling(_) => "Sibling",
         TypeNode::SetMember { .. } => "SetMember",
         TypeNode::CodeNeeding { .. } => "CodeNeeding",
+        TypeNode::CodeUnbuilt { .. } => "CodeUnbuilt",
     }
 }
 

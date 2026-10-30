@@ -736,7 +736,7 @@ fn kind<X: Knotted>(value: Value<'_, X>) -> Option<Kind> {
                 Resolved::Circular(node) => node,
                 Resolved::Function { .. } | Resolved::Barrier => return Some(Kind::Function),
                 Resolved::Module => return Some(Kind::Module),
-                Resolved::Code(_) => return Some(Kind::Code),
+                Resolved::Code => return Some(Kind::Code),
             }
         }
         _ => return None,

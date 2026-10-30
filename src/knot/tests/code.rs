@@ -7,7 +7,7 @@ use std::ptr;
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::display_name;
 use crate::values::tests::parts;
-use crate::values::{Chain, Knotted as _, Link, Value};
+use crate::values::{Binding, Chain, Knotted as _, Link, Value};
 
 use super::super::{Knotted, UsingRefused, using};
 use super::{Fixture, bound, pin, with_fixture};
@@ -47,9 +47,8 @@ fn a_quote_binds_its_dollar_names_where_it_is_written_and_prints_its_marks() {
             assert_eq!(q.member().knot().len(), 1, "a quote is a one-node knot");
             assert!(matches!(
                 node.bound(),
-                [(name, Link::Value(Value::Number(7.0)))] if *name == fixture.name("k")
+                [Binding { name, link: Link::Value(Value::Number(7.0)), .. }] if *name == fixture.name("k")
             ));
-            assert!(node.supplied().is_empty());
             assert_eq!(
                 display_name(q.ktype(), types, fixture.symbols).to_string(),
                 ":(Expression NEEDING #[it])"
@@ -105,7 +104,13 @@ fn a_quote_reading_its_own_binder_is_a_one_node_knot() {
             let activation = fixture.run(context.writer(), types, &lines, &[]);
             let echo = code(fixture, activation, "echo");
             assert_eq!(echo.member().knot().len(), 1);
-            let [(_, Link::Edge(edge))] = echo.code().expect("a quote's node").bound() else {
+            let [
+                Binding {
+                    link: Link::Edge(edge),
+                    ..
+                },
+            ] = echo.code().expect("a quote's node").bound()
+            else {
                 panic!("`$echo` is an edge into its own knot");
             };
             assert!(ptr::eq(echo.sibling(*edge).node(), echo.node()));
@@ -134,19 +139,20 @@ fn using_fills_the_holes_a_record_names_and_ignores_the_rest() {
             let activation = fixture.run(writer, types, &lines, &[]);
             let q = code(fixture, activation, "q");
             let record = |name| bound(fixture, activation, name);
-            let supplied = |member: Knotted<'_, '_>| -> Vec<_> {
+            // A filled hole's binding is in the code's run, at the fills' own scope.
+            let filled_by = |member: Knotted<'_, '_>| -> Vec<_> {
                 member
                     .code()
                     .expect("a quote's node")
-                    .supplied()
+                    .bound()
                     .iter()
-                    .map(|(name, link)| match link {
-                        Link::Value(Value::Number(number)) => (*name, *number),
-                        _ => panic!("a supplied binding is a number word"),
+                    .map(|binding| match binding.link {
+                        Link::Value(Value::Number(number)) => (binding.name, number),
+                        _ => panic!("a filled binding is a number word"),
                     })
                     .collect()
             };
-            let (x, y) = (fixture.name("x"), fixture.name("y"));
+            let x = fixture.name("x");
 
             let filled = using(
                 writer,
@@ -158,26 +164,13 @@ fn using_fills_the_holes_a_record_names_and_ignores_the_rest() {
                 scratch,
             )
             .expect("the fill agrees");
-            assert_eq!(supplied(filled), [(x, 1.0)], "`z` names no hole");
-            assert!(supplied(q).is_empty(), "the source code is unchanged");
+            assert_eq!(filled_by(filled), [(x, 1.0)], "`z` names no hole");
+            assert!(filled_by(q).is_empty(), "the source code is unchanged");
             assert_eq!(filled.ktype(), q.ktype());
-
-            let both = using(
-                writer,
-                &fixture.code(),
-                &fixture.facts(),
-                filled,
-                record("second"),
-                types,
-                scratch,
-            )
-            .expect("the fill agrees");
-            let mut expected = [(x, 1.0), (y, 2.0)];
-            expected.sort_by_key(|(name, _)| *name);
             assert_eq!(
-                supplied(both),
-                expected,
-                "a hole an earlier `USING` filled is never rebound"
+                rendered(fixture, types, filled),
+                "x PLUS y",
+                "a filled mark prints bare"
             );
 
             let equal = |left: Knotted<'_, '_>, right: Knotted<'_, '_>| {
@@ -235,8 +228,11 @@ fn using_reads_a_module_by_member_name_and_keeps_refused_code_unchanged() {
             )
             .expect("the fill agrees");
             assert!(matches!(
-                q.code().expect("a quote's node").supplied(),
-                [(_, Link::Value(Value::Number(4.0)))]
+                q.code().expect("a quote's node").bound(),
+                [Binding {
+                    link: Link::Value(Value::Number(4.0)),
+                    ..
+                }]
             ));
             let bad = code(fixture, activation, "bad");
             assert!(
@@ -289,8 +285,13 @@ fn using_fills_a_keyworded_hole_with_a_module_s_registrations_at_its_key() {
                 scratch,
             )
             .expect("the fill agrees");
-            let [(name, Link::Value(Value::List(list)))] =
-                filled.code().expect("a quote's node").supplied()
+            let [
+                Binding {
+                    name,
+                    link: Link::Value(Value::List(list)),
+                    ..
+                },
+            ] = filled.code().expect("a quote's node").bound()
             else {
                 panic!("one hole filled with a list");
             };

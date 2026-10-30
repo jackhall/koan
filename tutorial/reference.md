@@ -60,10 +60,15 @@ the link in each section to the relevant chapter.
 | `x` inside a quote | A hole: binds only to a builtin, a binder in the quote's own code, or a name `USING` supplies. |
 | `$x`, `$(<keyworded use>)` inside a quote | Resolve the name, or the one keyworded use, where the quote is written. |
 | `\x`, `\(<keyworded use>)` inside a quote | Resolve where the code is run, from what the code parameter's type offers. |
-| `<code> USING <record>` | Fill the holes the record's fields (or a module's members) name; the rest stay holes. |
+| `<code> USING <record>` | Fill the holes the record's fields (or a module's members) name; the rest stay holes. A filled hole keeps its fill wherever the code goes. |
+| `$..<name>` inside a quote | Splice the code elements of the list `<name>`, read where the quote is written: among statements each adds its statements, beside other parts each is one part. |
+| `..$<name>` in a list literal inside a quote | Spread the list's value when the code runs. |
+| `<code> <index>`, `<code> {from = <i>, to = <j>}` | Read a part of code, or the code of a run of its parts, as a list is read: `Result.Ok` of unbuilt code. |
+| `BUILD <code>` | Give spliced or sliced code its exact type; built code is returned unchanged. |
 | `<name> :Expression`  | A parameter taking one statement of code as a value; call sites pass `#(…)`. |
 | `<name> :(Expression NEEDING #[<name> ...])` | A code parameter offering names; an `EVAL` of it supplies each where the `EVAL` is written. |
 | `Block` `Expression` `Declaration` `Binder` `Literal` `Symbol` `Name` `Keyword` | The kinds of code under `Code`, each under the one before it in [the tree](10-quoting.md#what-kind-of-code-a-quote-is). |
+| `:(UNBUILT <kind>)` | Code of that kind, needing whatever it needs: the type of spliced and sliced code before `BUILD`. |
 
 ## Modules — see [11](11-modules.md), [12](12-functors.md)
 
@@ -91,7 +96,7 @@ the link in each section to the relevant chapter.
 | `<list> <index>`, `<string> <index>` | Read the element or code point at a zero-based index: `Result.Ok` of it, or `Result.Error` of the index. |
 | `<dict> <key>`                | Look a key up: `Result.Ok` of its value, or `Result.Error` of the key. |
 | `<list> {from = <i>, to = <j>}` | A slice of a list or a string, `from` up to but not including `to`; either bound may be left out. Backward when `to` is below `from` or is `-1`. `Result.Error` of the first bound out of range. |
-| `LENGTH <value>`              | A list's elements, a dict's entries or a string's code points, counted. |
+| `LENGTH <value>`              | A list's elements, a dict's entries, a string's code points or code's parts, counted. |
 | `[..<list> <element> ...]`    | Spread a list's elements into a list literal; `..(<expr>)` spreads a parenthesized expression's. |
 
 ## Type expressions — see [2](02-values-and-types.md)

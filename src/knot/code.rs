@@ -1,8 +1,10 @@
-//! A quote's code as a knot node: the quote's body as written, where its code shape was built —
-//! where the program loads, by segment, or for code composed at run time in its composition, under
-//! its root code value ([`CodeBody`]) — its content digest, its carried type, and the bindings its
-//! code carries — each `$` name's binding, and each hole a `USING` filled — both runs sorted by
-//! name. A reader that needs the shape reads it by segment through its step's door.
+//! A quote's code as a knot node: its syntax and where its code shape was built — written syntax
+//! in program storage, shaped where the program loads, by segment, or composed syntax laid in a
+//! region, shaped in its composition, under its root code value ([`CodeSyntax`]) — its content
+//! digest, its carried type, and the bindings its code carries — each `$` name's and `$(…)`
+//! registration's, and each hole a `USING` filled — both runs of [`Binding`]s sorted by scope, then
+//! name. A reader that needs the shape reads it by segment through its step's door. A copy lays
+//! composed syntax again in its destination region; written syntax it points at.
 //!
 //! A quote is born where it is evaluated through the quote door, [`quote`], as a one-node knot
 //! whose `$` names are read through the activation the quote sits in. A quote a data member holds
@@ -15,89 +17,98 @@
 
 use std::cell::Cell;
 
-use crate::memory::{BumpAllocator, BumpVec, Edge, KnotPlan, Writer, collect, resident};
-use crate::parse::{ExpressionPart, ProgramNode};
+use crate::memory::{
+    Bump, BumpAllocator, BumpVec, Edge, KnotPlan, Writer, collect, program_storage, resident,
+};
+use crate::parse::{ExpressionPart, KExpression, Mark, Quoted, Remark, Scope, remarked_whole};
 use crate::scope::{
-    self, BodyShape, CaptureSource, ComposedRoot, Facts, Segment, ShapeKind, Site, Written,
+    self, BodyShape, CaptureSlot, CaptureSource, CodeSyntax, ComposedRoot, Facts, FilledSites,
+    ShapeKind, Site, Written, filled_sites,
 };
 use crate::symbols::{BinderSymbol, KeySymbol, SymbolInterner};
 use crate::type_lattice::{KType, TypeNode};
 use crate::values::digest::{DigestHasher, Tag, syntax_digest};
-use crate::values::{Chain, CodeView, ContentDigest, Link, List, Seen, Value, Weight};
+use crate::values::{self, Chain, CodeView, ContentDigest, Link, List, Seen, Value, Weight};
 
+use super::view::{self, CodeTree, ComposeRefused, Env, composed, materialized};
 use super::{KActivationView, KReading, KValue, Knotted, Node};
 
-/// One name the code binds, beside its binding.
-pub type Binding<'graph, 'cell> = (BinderSymbol, Link<'cell, Knotted<'graph, 'cell>>);
+/// One binding the code carries, at its scope and name.
+pub type Binding<'graph, 'cell> = values::Binding<'cell, Knotted<'graph, 'cell>>;
 
-/// Where a quote's code was shaped.
+/// What a code value holds of its syntax: flat syntax, beside the digest its content covers of it
+/// — a written quote's code digest, as resolved where the program loads, composed code's syntax
+/// digest — or a code view, laid flat by whatever reads it.
 #[derive(Clone, Copy, Debug)]
-pub enum CodeBody<'graph> {
-    /// A quote the program writes: the segment of the code shape the load built for it.
-    Written { segment: Segment },
-    /// Code composed at run time: its root code value as composed, and the segment of this code's
-    /// shape among its composition's shapes — `None` for the root itself, which they name.
-    Composed {
-        root: ComposedRoot<'graph>,
-        segment: Option<Segment>,
+pub(crate) enum Syntax<'graph, 'cell> {
+    Flat {
+        syntax: CodeSyntax<'graph, 'cell>,
+        code: ContentDigest,
     },
+    View(&'cell CodeTree<'graph, 'cell>),
 }
 
 /// A quote's code: what one knot node points at, homed beside it for the reason
-/// [`Node::Coerced`] is.
+/// [`Node::Coerced`] is. A view's runs are empty: its environments hold its bindings.
 pub struct Code<'graph, 'cell> {
-    body: ProgramNode<'graph>,
-    shaped: CodeBody<'graph>,
-    /// What its content covers of its syntax: a written quote's code digest, as resolved where the
-    /// program loads; composed code's syntax digest.
-    code: ContentDigest,
+    syntax: Syntax<'graph, 'cell>,
     ktype: KType,
-    /// Each `$` name's binding, sorted by name.
+    /// Each `$` name's, filled mark's and `$(…)` registration's binding, sorted by scope, then
+    /// name.
     bound: &'cell [Binding<'graph, 'cell>],
-    /// Each hole a `USING` filled, sorted by name.
-    supplied: &'cell [Binding<'graph, 'cell>],
     /// What rebuilding the whole knot this node sits in writes, the same on every node; the root
     /// node's also carries the knot's memo bits.
     knot_weight: Cell<Weight>,
 }
 
-impl<'graph, 'cell> Code<'graph, 'cell> {
-    /// The quote's body as written.
-    pub fn body(&self) -> ProgramNode<'graph> {
-        self.body
+impl<'graph: 'cell, 'cell> Code<'graph, 'cell> {
+    /// The flat syntax, or `None` for a view.
+    pub fn body(&self) -> Option<&'cell KExpression<'cell>> {
+        self.flat().map(CodeSyntax::body)
     }
 
-    /// Where this code was shaped.
-    pub fn shaped(&self) -> CodeBody<'graph> {
-        self.shaped
+    /// Where this code's flat syntax is and what shapes it, or `None` for a view.
+    pub fn flat(&self) -> Option<CodeSyntax<'graph, 'cell>> {
+        match self.syntax {
+            Syntax::Flat { syntax, .. } => Some(syntax),
+            Syntax::View(_) => None,
+        }
+    }
+
+    /// The view this code is, if it is one.
+    pub(crate) fn view(&self) -> Option<&'cell CodeTree<'graph, 'cell>> {
+        match self.syntax {
+            Syntax::View(tree) => Some(tree),
+            Syntax::Flat { .. } => None,
+        }
     }
 
     /// The code shape this code runs, read through `door`: a written quote's by its segment in the
-    /// load's table, composed code's in its composition's, which `door` must rest on.
+    /// load's table, composed code's in its composition's, which `door` must rest on. A view is
+    /// laid flat before anything reads its shape.
     pub fn shape<'step>(&self, door: &scope::Code<'step>) -> &'step BodyShape<'step> {
-        match self.shaped {
-            CodeBody::Written { segment }
-            | CodeBody::Composed {
+        match self
+            .flat()
+            .expect("a view is laid flat before its shape is read")
+        {
+            CodeSyntax::Written { segment, .. }
+            | CodeSyntax::Composed {
                 segment: Some(segment),
                 ..
             } => door.shape(segment),
-            CodeBody::Composed { segment: None, .. } => door.shapes().root(),
+            CodeSyntax::Composed { segment: None, .. } => door.shapes().root(),
         }
     }
 
     /// The carried type: the code's kind, needing the `\` names no binder in the code fills, or the
-    /// retype of its binder's annotation where the tie births it at one. A header over the node
-    /// carries any other retype; `USING` builds code typed by its own syntax.
+    /// retype of its binder's annotation where the tie births it at one; a view's kind unbuilt. A
+    /// header over the node carries any other retype; `USING` builds code typed by its own syntax.
     pub fn ktype(&self) -> KType {
         self.ktype
     }
 
     pub fn bound(&self) -> &'cell [Binding<'graph, 'cell>] {
         self.bound
-    }
-
-    pub fn supplied(&self) -> &'cell [Binding<'graph, 'cell>] {
-        self.supplied
     }
 
     pub fn knot_weight(&self) -> Weight {
@@ -110,75 +121,144 @@ impl<'graph, 'cell> Code<'graph, 'cell> {
     }
 
     /// The values the node's content covers, in the order [`content`](Self::content) asks for
-    /// their digests: each binding that holds a value, not an edge, bound then supplied.
+    /// their digests: each binding that holds a value, not an edge — a view's [`listed`](view::listed).
     pub(super) fn content_parts<'a>(&self, out: &mut dyn FnMut(Seen<'a, Knotted<'graph, 'cell>>))
     where
         'cell: 'a,
     {
-        for (_, link) in self.bound.iter().chain(self.supplied) {
-            if let Link::Value(value) = link {
-                out(Seen::of(*value));
-            }
-        }
+        self.held(&mut |value| out(Seen::of(value)));
     }
 
-    /// The node's content: its quote's code digest, its carried type, and each binding's name and
-    /// digest, bound then supplied, a value's answered by `parts`.
+    /// The node's content: its syntax's digest, its carried type, and each binding's scope, name
+    /// and digest, a value's answered by `parts`. A view digests as it lays flat, so it equals its
+    /// own materialization's content: `parts` answers each value it lists, and each flat binding
+    /// takes its value's digest.
     pub(super) fn content(&self, parts: &mut dyn FnMut() -> ContentDigest) -> ContentDigest {
-        let mut hasher = DigestHasher::new(Tag::Code);
-        hasher.digest(self.code).feed(self.ktype);
-        for run in [self.bound, self.supplied] {
-            hasher.count(run.len());
-            for (name, link) in run {
-                hasher.feed(name).digest(link.digest_from(parts));
+        let digest = |code, run: &[Binding<'graph, 'cell>], parts: &mut dyn FnMut() -> _| {
+            let mut hasher = DigestHasher::new(Tag::Code);
+            hasher.digest(code).feed(self.ktype).count(run.len());
+            for binding in run {
+                (hasher.feed(binding.scope).feed(binding.name))
+                    .digest(binding.link.digest_from(parts));
+            }
+            hasher.finished()
+        };
+        match self.syntax {
+            Syntax::Flat { code, .. } => digest(code, self.bound, parts),
+            Syntax::View(tree) => {
+                let (storage, scratch) = (program_storage(), Bump::new());
+                let mut digests = BumpVec::new_in(&scratch);
+                view::listed(tree, &mut |_| digests.push(parts()));
+                let flat = materialized(storage.brand().writer(), tree, &scratch);
+                let mut answers = flat.sources.iter().map(|source| digests[*source]);
+                let mut each = || answers.next().expect("a flat binding's value is listed");
+                digest(syntax_digest(flat.body), &flat.bindings, &mut each)
             }
         }
-        hasher.finished()
     }
 
-    /// What `values` reads of this code.
-    pub(super) fn view(&self) -> CodeView<'cell, Knotted<'graph, 'cell>> {
-        CodeView {
-            body: self.body.reference(),
-            bound: self.bound,
-            supplied: self.supplied,
+    /// What `values` reads of this code's syntax, its bindings beside it: a view laid flat
+    /// through `writer`, which the reader owns.
+    pub(super) fn code_view<'read>(
+        &self,
+        writer: Writer<'read, '_>,
+    ) -> CodeView<'read, 'cell, Knotted<'graph, 'cell>>
+    where
+        'cell: 'read,
+    {
+        match self.syntax {
+            Syntax::Flat { syntax, .. } => CodeView {
+                body: syntax.body(),
+                bound: self.bound,
+            },
+            Syntax::View(tree) => {
+                let scratch = Bump::new();
+                let flat = materialized(writer, tree, &scratch);
+                CodeView {
+                    body: flat.body,
+                    bound: collect(writer, flat.bindings.iter().copied()),
+                }
+            }
         }
     }
 
-    /// Every value this code's bindings hold, bound then supplied, in the order
-    /// [`rebuilt`](Self::rebuilt) asks for them.
+    /// Every value this code's bindings hold, in the order [`rebuilt`](Self::rebuilt) asks for
+    /// them: a view's [`listed`](view::listed), without laying it flat.
     pub(super) fn held(&self, out: &mut dyn FnMut(KValue<'graph, 'cell>)) {
-        for (_, link) in self.bound.iter().chain(self.supplied) {
-            if let Link::Value(value) = link {
-                out(*value);
+        let mut each = |run: &[Binding<'graph, 'cell>]| {
+            for binding in run {
+                if let Link::Value(value) = binding.link {
+                    out(value);
+                }
             }
+        };
+        match self.syntax {
+            Syntax::Flat { .. } => each(self.bound),
+            Syntax::View(tree) => view::listed(tree, out),
         }
     }
 
     /// This code rebuilt in `writer`'s region — the copy's arm: each binding's value through `copy`,
-    /// each edge verbatim, and the body, shape, type and knot weight carried over.
+    /// each edge verbatim, composed syntax laid again, and the shape, type and knot weight carried
+    /// over. A view is laid flat, keeping its type.
     pub(super) fn rebuilt<'to>(
         &self,
         writer: Writer<'to, '_>,
         mut copy: impl FnMut(&KValue<'graph, 'cell>) -> KValue<'graph, 'to>,
     ) -> Code<'graph, 'to> {
-        let mut run = |source: &'cell [Binding<'graph, 'cell>]| {
+        let mut run = |source: &[Binding<'graph, 'cell>]| {
             writer.fill(source.len(), |at| {
-                let (name, link) = &source[at];
-                (*name, link.copied(&mut copy))
+                let binding = &source[at];
+                Binding {
+                    link: binding.link.copied(&mut copy),
+                    ..*binding
+                }
             })
         };
-        let bound = run(self.bound);
-        let supplied = run(self.supplied);
+        let (syntax, bound) = match self.syntax {
+            Syntax::Flat { syntax, code } => {
+                let bound = run(self.bound);
+                let syntax = Syntax::Flat {
+                    syntax: syntax.copied(writer),
+                    code,
+                };
+                (syntax, bound)
+            }
+            // Each listed value is copied once, in order, and each flat binding takes its copy.
+            Syntax::View(tree) => {
+                let scratch = Bump::new();
+                let mut copies = BumpVec::new_in(&scratch);
+                view::listed(tree, &mut |value| copies.push(copy(&value)));
+                let flat = materialized(writer, tree, &scratch);
+                let bound = writer.fill(flat.bindings.len(), |at| Binding {
+                    link: Link::Value(copies[flat.sources[at]]),
+                    ..flat.bindings[at]
+                });
+                (composed_syntax(flat.body), bound)
+            }
+        };
         Code {
-            body: self.body,
-            shaped: self.shaped,
-            code: self.code,
+            syntax,
             ktype: self.ktype,
             bound,
-            supplied,
             knot_weight: Cell::new(self.knot_weight.get().without_bits()),
         }
+    }
+}
+
+/// Flat composed syntax over the root `body`, its content its syntax digest.
+fn composed_syntax<'graph, 'cell>(body: &'cell KExpression<'cell>) -> Syntax<'graph, 'cell> {
+    let code = syntax_digest(body);
+    Syntax::Flat {
+        syntax: CodeSyntax::Composed {
+            body,
+            root: ComposedRoot {
+                syntax: body,
+                digest: code,
+            },
+            segment: None,
+        },
+        code,
     }
 }
 
@@ -186,14 +266,13 @@ impl<'graph, 'cell> Code<'graph, 'cell> {
 fn run_weight(run: &[Binding<'_, '_>]) -> Weight {
     run.iter().fold(
         Weight::run::<Binding<'_, '_>>(run.len()),
-        |weight, (_, link)| weight.plus(link.referent_weight()),
+        |weight, binding| weight.plus(binding.link.referent_weight()),
     )
 }
 
 /// A code node, read and not yet written.
 pub(super) struct Staged<'graph, 'cell, 'x> {
-    pub body: ProgramNode<'graph>,
-    pub shaped: CodeBody<'graph>,
+    pub syntax: CodeSyntax<'graph, 'cell>,
     pub code: ContentDigest,
     pub bound: BumpVec<'x, Binding<'graph, 'cell>>,
     /// The carried type: the code's own, or the annotation's retype its binder births it at.
@@ -208,7 +287,8 @@ impl<'graph, 'cell> Staged<'graph, 'cell, '_> {
         writer: Writer<'cell, '_>,
     ) -> (&'cell [Binding<'graph, 'cell>], Weight) {
         let bound = collect(writer, self.bound.iter().copied());
-        let weight = run_weight(bound).plus(Weight::flat::<Code<'graph, 'cell>>());
+        let weight = (run_weight(bound).plus(Weight::flat::<Code<'graph, 'cell>>()))
+            .plus(self.syntax.weight());
         (bound, weight)
     }
 
@@ -222,12 +302,12 @@ impl<'graph, 'cell> Staged<'graph, 'cell, '_> {
         Node::Code(resident(
             writer,
             Code {
-                body: self.body,
-                shaped: self.shaped,
-                code: self.code,
+                syntax: Syntax::Flat {
+                    syntax: self.syntax,
+                    code: self.code,
+                },
                 ktype: self.ktype,
                 bound,
-                supplied: &[],
                 knot_weight: Cell::new(knot_weight),
             },
         ))
@@ -247,10 +327,10 @@ fn shape_of<'step>(
     (code.kind() == ShapeKind::Code).then_some((site, code))
 }
 
-/// Read the quote `body` of code shape `shape` into `scratch`: each `$` name's binding read through
-/// `activation`, each `Member` source minted by `edge`.
-pub(super) fn staged<'graph, 'cell, 'x>(
-    (body, root): (ProgramNode<'graph>, Option<ComposedRoot<'graph>>),
+/// Read the quote of `syntax` and code shape `shape` into `scratch`: each `$` name's binding read
+/// through `activation`, each `Member` source minted by `edge`.
+pub(super) fn staged<'graph: 'cell, 'cell, 'x>(
+    syntax: CodeSyntax<'graph, 'cell>,
     shape: &BodyShape<'_>,
     activation: &KActivationView<'graph, 'cell>,
     scratch: BumpAllocator<'x>,
@@ -264,61 +344,51 @@ pub(super) fn staged<'graph, 'cell, 'x>(
             // A nested quote's `$` names read its encloser; only code built alone binds at entry.
             CaptureSource::Hole | CaptureSource::Offered | CaptureSource::Entry { .. } => continue,
         };
-        bound.push((capture.name, link));
+        bound.push(Binding {
+            scope: capture.scope(),
+            name: capture.name,
+            link,
+        });
     }
-    bound.sort_unstable_by_key(|(name, _)| *name);
+    bound.sort_unstable_by_key(Binding::key);
     // A quote of composed code is its syntax under the root it lies in, not its code as resolved
     // where it was composed.
-    let (shaped, code) = match root {
-        None => {
-            let segment = shape.segment();
-            (CodeBody::Written { segment }, shape.code_digest())
-        }
-        Some(root) => {
-            let segment = Some(shape.segment());
-            (
-                CodeBody::Composed { root, segment },
-                syntax_digest(body.reference()),
-            )
-        }
+    let code = match syntax {
+        CodeSyntax::Written { .. } => shape.code_digest(),
+        CodeSyntax::Composed { body, .. } => syntax_digest(body),
     };
     Staged {
-        body,
-        shaped,
+        syntax,
         code,
         bound,
         ktype: shape.code_type(),
     }
 }
 
-/// Lay code shaped as `shaped` down as a one-node knot in `writer`'s region, its content covering
-/// `code`, its runs holding value words only.
-#[allow(clippy::too_many_arguments)]
-fn one_node<'graph, 'cell>(
+/// Lay code of `syntax` carried at `ktype` down as a one-node knot in `writer`'s region, its runs
+/// holding value words only.
+fn one_node<'graph: 'cell, 'cell>(
     writer: Writer<'cell, '_>,
-    body: ProgramNode<'graph>,
-    (shaped, code, ktype): (CodeBody<'graph>, ContentDigest, KType),
+    (syntax, ktype): (Syntax<'graph, 'cell>, KType),
     bound: &[Binding<'graph, 'cell>],
-    supplied: &[Binding<'graph, 'cell>],
     types: &Chain<'_, '_, '_, '_>,
 ) -> Knotted<'graph, 'cell> {
     let bound = collect(writer, bound.iter().copied());
-    let supplied = collect(writer, supplied.iter().copied());
     let knot_weight = Weight::flat::<usize>()
         .plus(Weight::flat::<Node<'graph, 'cell>>())
         .plus(Weight::flat::<Code<'graph, 'cell>>())
         .plus(run_weight(bound))
-        .plus(run_weight(supplied));
+        .plus(match syntax {
+            Syntax::Flat { syntax, .. } => syntax.weight(),
+            Syntax::View(tree) => tree.weight(),
+        });
     let knot = KnotPlan::new(1).tie(writer, |_| {
         Node::Code(resident(
             writer,
             Code {
-                body,
-                shaped,
-                code,
+                syntax,
                 ktype,
                 bound,
-                supplied,
                 knot_weight: Cell::new(knot_weight),
             },
         ))
@@ -336,38 +406,126 @@ fn one_node<'graph, 'cell>(
 pub fn quote<'graph, 'cell>(
     writer: Writer<'cell, '_>,
     activation: &KReading<'_, 'graph, 'cell>,
-    written: Written<'graph, '_>,
+    written: Written<'graph, 'cell, '_>,
     part: &ExpressionPart<'_>,
     types: &Chain<'_, 'cell, '_, '_>,
     scratch: BumpAllocator<'_>,
-) -> Knotted<'graph, 'cell> {
+) -> Result<Knotted<'graph, 'cell>, ComposeRefused> {
     let (site, shape) = shape_of(activation.shape(), part)
         .expect("a quote is born at the site of a code shape its shape holds");
-    let body = written.quote(activation.segment(), site);
-    let staged = staged((body, written.root()), shape, activation, scratch, |_| {
+    let syntax = written.quote(activation.segment(), site);
+    let staged = staged(syntax, shape, activation, scratch, |_| {
         unreachable!("only the tie births a quote that reads a fellow member")
     });
-    let written = (staged.shaped, staged.code, staged.ktype);
-    one_node(writer, body, written, &staged.bound, &[], types)
+    // Code holding a splice composes here, its own bindings the environment of its own parts.
+    if shape.composing() {
+        let root = composed(writer, syntax.body(), &staged.bound, types, scratch)?;
+        return Ok(viewed(writer, CodeTree::of(writer, root), types));
+    }
+    let syntax = Syntax::Flat {
+        syntax: staged.syntax,
+        code: staged.code,
+    };
+    Ok(one_node(
+        writer,
+        (syntax, staged.ktype),
+        &staged.bound,
+        types,
+    ))
 }
 
-/// Code composed at run time from `syntax`, carried at `ktype`, `bound` holding each `$` binding
-/// sorted by name: a one-node knot in `writer`'s region, with no shape. Its content is its syntax
-/// digest over its bindings.
-pub fn composed_code<'graph, 'cell>(
+/// Code composed at run time from `syntax`, laid in `writer`'s region, carried at `ktype`, `bound`
+/// holding each binding sorted by scope, then name: a one-node knot there, with no shape. Its content is
+/// its syntax digest over its bindings.
+pub fn composed_code<'graph: 'cell, 'cell>(
     writer: Writer<'cell, '_>,
-    syntax: ProgramNode<'graph>,
+    syntax: &'cell KExpression<'cell>,
     ktype: KType,
     bound: &[Binding<'graph, 'cell>],
     types: &Chain<'_, '_, '_, '_>,
 ) -> Knotted<'graph, 'cell> {
-    let digest = syntax_digest(syntax.reference());
-    let root = ComposedRoot { syntax, digest };
-    let shaped = CodeBody::Composed {
-        root,
-        segment: None,
+    one_node(writer, (composed_syntax(syntax), ktype), bound, types)
+}
+
+/// The code view `tree` as a one-node knot in `writer`'s region, carried at its kind unbuilt.
+pub(crate) fn viewed<'graph: 'cell, 'cell>(
+    writer: Writer<'cell, '_>,
+    tree: &'cell CodeTree<'graph, 'cell>,
+    types: &Chain<'_, '_, '_, '_>,
+) -> Knotted<'graph, 'cell> {
+    let ktype = types.code_unbuilt(tree.kind());
+    one_node(writer, (Syntax::View(tree), ktype), &[], types)
+}
+
+/// The root of `member`'s code as a view: a view's own, or one over a flat code value's root,
+/// laid through `writer`, its marks resolving through the member's bindings.
+pub(super) fn root_view<'graph: 'cell, 'cell>(
+    writer: Writer<'cell, '_>,
+    member: Knotted<'graph, 'cell>,
+) -> &'cell CodeTree<'graph, 'cell> {
+    let node = member.code().expect("a code member holds code");
+    match node.syntax {
+        Syntax::View(tree) => tree,
+        Syntax::Flat { syntax, .. } => CodeTree::of(
+            writer,
+            CodeTree::over(writer, syntax.body(), Env::Code(member)),
+        ),
+    }
+}
+
+/// How many parts the root of `member`'s code holds: what `LENGTH` answers.
+pub(crate) fn code_length(member: Knotted<'_, '_>) -> usize {
+    let node = member.code().expect("a code member holds code");
+    match node.syntax {
+        Syntax::View(tree) => tree.len(),
+        Syntax::Flat { syntax, .. } => syntax.body().parts.len(),
+    }
+}
+
+/// `code i`: part `at` of the root of `member`'s code as an unbuilt view in `writer`'s region — a
+/// group part as the node it wraps, any other part as a one-part node — or `None` past the last.
+pub(crate) fn code_part<'graph: 'cell, 'cell>(
+    writer: Writer<'cell, '_>,
+    member: Knotted<'graph, 'cell>,
+    at: usize,
+    types: &Chain<'_, '_, '_, '_>,
+) -> Option<Knotted<'graph, 'cell>> {
+    let tree = root_view(writer, member);
+    (at < tree.len()).then(|| viewed(writer, CodeTree::of(writer, tree.part(writer, at)), types))
+}
+
+/// `code {from, to}`: the root of `member`'s code's parts `[from, to)`, within its length, read
+/// backward where `backward` is set, as an unbuilt view in `writer`'s region.
+pub(crate) fn code_slice<'graph: 'cell, 'cell>(
+    writer: Writer<'cell, '_>,
+    member: Knotted<'graph, 'cell>,
+    range: (usize, usize),
+    backward: bool,
+    types: &Chain<'_, '_, '_, '_>,
+) -> Knotted<'graph, 'cell> {
+    let tree = root_view(writer, member);
+    viewed(
+        writer,
+        CodeTree::of(writer, tree.slice(writer, range, backward)),
+        types,
+    )
+}
+
+/// `member`'s code laid flat in `writer`'s region where it is a view, at the view's type: what an
+/// `EVAL` or a `USING` runs. Flat code is itself.
+pub(crate) fn flattened<'graph: 'cell, 'cell>(
+    writer: Writer<'cell, '_>,
+    member: Knotted<'graph, 'cell>,
+    types: &Chain<'_, '_, '_, '_>,
+) -> Knotted<'graph, 'cell> {
+    let node = member.code().expect("a code member holds code");
+    let Some(tree) = node.view() else {
+        return member;
     };
-    one_node(writer, syntax, (shaped, digest, ktype), bound, &[], types)
+    let scratch = Bump::new();
+    let flat = materialized(writer, tree, &scratch);
+    let syntax = composed_syntax(flat.body);
+    one_node(writer, (syntax, node.ktype), &flat.bindings, types)
 }
 
 /// Why a `USING` refused to fill a code's holes.
@@ -376,41 +534,55 @@ pub enum UsingRefused {
     /// The module's registrations at `key` rank its slots other than the code's own candidates at
     /// `key` do.
     Ranking { key: KeySymbol },
+    /// A filled use's holder would nest the code deeper than the syntax depth limit.
+    TooDeep,
 }
 
 impl UsingRefused {
     /// The refusal as the error `USING` raises words it, its names read through `symbols`.
     pub fn display(self, symbols: &SymbolInterner) -> impl std::fmt::Display + '_ {
-        let UsingRefused::Ranking { key } = self;
-        RankedTwice { key, symbols }
+        UsingRefusal {
+            refused: self,
+            symbols,
+        }
     }
 }
 
 /// [`UsingRefused::display`]'s view.
-struct RankedTwice<'x> {
-    key: KeySymbol,
+struct UsingRefusal<'x> {
+    refused: UsingRefused,
     symbols: &'x SymbolInterner,
 }
 
-impl std::fmt::Display for RankedTwice<'_> {
+impl std::fmt::Display for UsingRefusal<'_> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        write!(
-            f,
-            "{} is ranked two ways",
-            self.symbols.display(self.key.symbol())
-        )
+        match self.refused {
+            UsingRefused::Ranking { key } => write!(
+                f,
+                "{} is ranked two ways",
+                self.symbols.display(key.symbol())
+            ),
+            UsingRefused::TooDeep => write!(
+                f,
+                "composed code nests deeper than the syntax depth limit of {}",
+                crate::parse::MAX_SYNTAX_DEPTH
+            ),
+        }
     }
 }
 
-/// `code USING source`: a new one-node knot in `writer`'s region whose holes `source` fills, and
-/// whose other holes stay holes. A name hole takes the field of `source` — a record, or a module's
-/// member — that it names; a keyworded hole takes the list of a module's registrations at its key,
-/// and stays open where the module has none. A field naming no hole is ignored, and a hole an
-/// earlier `USING` filled is no hole, so it is never rebound. Code whose shape, read through
-/// `door`, carries a refusal comes back unchanged — `facts` say which does: its holes are unknown,
-/// and the `EVAL` that runs it reports the refusal.
-/// Each binding of `code` that is an edge is resolved to the member it names, so the new knot's
-/// runs hold value words only.
+/// `code USING source`: composed code in `writer`'s region whose holes `source` fills, each a
+/// filled mark in a scope of its own, and whose other holes stay holes. A name hole takes the field
+/// of `source` — a record, or a module's member — that it names; a keyworded hole takes the list
+/// of a module's registrations at its key, and stays open where the module has none. A field
+/// naming no hole is ignored, and a hole an earlier `USING` filled is a filled mark, no hole, so it
+/// is never rebound. The code is built, at the type its shape, read through `door`, gives it. Code
+/// whose shape carries a refusal comes back unchanged — `facts` say which does: its holes are
+/// unknown, and the `EVAL` that runs it reports the refusal.
+///
+/// The syntax is copied from the syntax its shapes were built over, each filled hole marked where
+/// it is written ([`filled_sites`]); each binding of `code` that is an edge is resolved to the
+/// member it names, so the new knot's run holds value words only.
 ///
 /// Refused, writing nothing, where a module's registrations at a hole's key rank their slots other
 /// than the code's own candidates at the key do.
@@ -430,18 +602,19 @@ pub fn using<'graph, 'cell>(
     if facts.typing_refusal(types, shape).is_some() {
         return Ok(code);
     }
-    let resolved = |(name, link): &Binding<'graph, 'cell>| (*name, Link::Value(link.resolve(code)));
-    let mut supplied: BumpVec<'_, Binding<'graph, 'cell>> = BumpVec::new_in(scratch);
-    supplied.extend(node.supplied().iter().map(resolved));
-    let before = supplied.len();
+    // The fills' scope is one no binding of the code holds.
+    let scope = Scope {
+        number: (node.bound().iter())
+            .map(|binding| binding.scope.number + 1)
+            .max()
+            .unwrap_or(0),
+        pinned: false,
+    };
+    let mut fills: BumpVec<'_, Binding<'graph, 'cell>> = BumpVec::new_in(scratch);
+    let mut holes = BumpVec::new_in(scratch);
     let mut keyed = BumpVec::new_in(scratch);
-    for capture in shape.captures() {
-        if capture.source != CaptureSource::Hole
-            || node
-                .supplied()
-                .iter()
-                .any(|(name, _)| *name == capture.name)
-        {
+    for (index, capture) in shape.captures().iter().enumerate() {
+        if capture.source != CaptureSource::Hole {
             continue;
         }
         let value = match capture.name {
@@ -454,23 +627,107 @@ pub fn using<'graph, 'cell>(
             name => super::field(writer, source, name, types, scratch),
         };
         if let Some(value) = value {
-            supplied.push((capture.name, Link::Value(value)));
+            holes.push(CaptureSlot(index as u32));
+            fills.push(Binding {
+                scope,
+                name: capture.name,
+                link: Link::Value(value),
+            });
         }
     }
-    if supplied.len() == before {
-        return Ok(code);
+    if fills.is_empty() {
+        return Ok(built(writer, door, code, types));
     }
-    supplied.sort_unstable_by_key(|(name, _)| *name);
-    let mut bound = BumpVec::with_capacity_in(node.bound().len(), scratch);
+    let written = (door.shapes())
+        .written(shape.segment())
+        .expect("code is written");
+    let mut filling = Filling {
+        sites: filled_sites(door.shapes(), shape, &holes, scratch),
+        scope: scope.number,
+    };
+    let body = remarked_whole(writer, &written, &mut filling);
+    // Each filled use's holder is a level of its own.
+    if body.depth() > crate::parse::MAX_SYNTAX_DEPTH {
+        return Err(UsingRefused::TooDeep);
+    }
+    let resolved = |binding: &Binding<'graph, 'cell>| Binding {
+        link: Link::Value(binding.link.resolve(code)),
+        ..*binding
+    };
+    let mut bound = BumpVec::with_capacity_in(node.bound().len() + fills.len(), scratch);
     bound.extend(node.bound().iter().map(resolved));
-    Ok(one_node(
+    bound.extend(fills.iter().copied());
+    bound.sort_unstable_by_key(Binding::key);
+    Ok(composed_code(
         writer,
-        node.body(),
-        (node.shaped(), node.code, shape.code_type()),
+        body,
+        shape.code_type(),
         &bound,
-        &supplied,
         types,
     ))
+}
+
+/// `USING`'s copy of written syntax: each name it fills a filled mark, and each use it fills a
+/// filled use, at the fills' scope, pinned where a quote value holds it, so it reads the root's
+/// binding there.
+struct Filling<'x> {
+    sites: FilledSites<'x>,
+    scope: u32,
+}
+
+impl Remark for Filling<'_> {
+    fn scope(&mut self, scope: Scope, _: Quoted) -> Scope {
+        scope
+    }
+
+    fn filled(&mut self, part: &ExpressionPart<'_>, at: Quoted) -> Option<Mark> {
+        self.sites.name(part).then_some(Mark::Filled(Scope {
+            number: self.scope,
+            pinned: at.now,
+        }))
+    }
+
+    fn filled_use(
+        &mut self,
+        node: &KExpression<'_>,
+        at: Quoted,
+        keys: &mut dyn FnMut(KeySymbol),
+    ) -> Option<Scope> {
+        let mut filled = false;
+        for key in self.sites.keys(node) {
+            keys(key);
+            filled = true;
+        }
+        filled.then_some(Scope {
+            number: self.scope,
+            pinned: at.now,
+        })
+    }
+}
+
+/// `code`, composed at run time and laid flat, carried at the exact type its shape gives it, which
+/// `door` reads under its composition: a new one-node knot in `writer`'s region over the same
+/// syntax and bindings, or `code` itself where it is carried there already. Code whose shape kept
+/// an error builds too: the `EVAL` that runs it reports the error.
+pub fn built<'graph, 'cell>(
+    writer: Writer<'cell, '_>,
+    door: &scope::Code<'_>,
+    code: Knotted<'graph, 'cell>,
+    types: &Chain<'_, 'cell, '_, '_>,
+) -> Knotted<'graph, 'cell> {
+    let node = code.code().expect("`BUILD` builds a quote's code");
+    let ktype = node.shape(door).code_type();
+    if ktype == Value::Knotted(code).concrete_ktype() {
+        return code;
+    }
+    let scratch = Bump::new();
+    let resolved = |binding: &Binding<'graph, 'cell>| Binding {
+        link: Link::Value(binding.link.resolve(code)),
+        ..*binding
+    };
+    let mut bound = BumpVec::with_capacity_in(node.bound().len(), &scratch);
+    bound.extend(node.bound().iter().map(resolved));
+    one_node(writer, (node.syntax, ktype), &bound, types)
 }
 
 /// Push onto `found` each function the module `source` offers at `key` — a registration, an

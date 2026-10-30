@@ -54,11 +54,7 @@ fn let_tree<'graph>(
     };
     operand(
         (program.facts())
-            .view_tree(
-                &program.tiers().resting(),
-                shape,
-                shape.site_of_node(node.reference()),
-            )
+            .view_tree(&program.tiers().resting(), shape, shape.site_of_node(node))
             .expect("the right-hand side is an opaque ascription"),
     )
 }
@@ -163,7 +159,7 @@ fn let_node<'graph>(
     else {
         panic!("`{name}` is bound to a node");
     };
-    node.reference()
+    node
 }
 
 /// `SIG Ordered`, two modules of different content that fit it, `SIG Sample`, and `SIG Zeroed`.

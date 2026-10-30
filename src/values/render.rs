@@ -14,6 +14,7 @@
 
 use std::fmt;
 
+use crate::memory::program_storage;
 use crate::memory::{BumpAllocator, BumpBackedMap, BumpBackedSet, BumpVec, bump_set, bump_table};
 use crate::symbols::{Symbol, SymbolInterner};
 use crate::type_lattice::{KType, display_name};
@@ -157,7 +158,13 @@ impl<'x, O: fmt::Write, X: Knotted> Render<'_, '_, '_, '_, 'x, '_, O, X> {
         let value = seen.value();
         if let Some(member) = value.knot_member() {
             match member.resolve() {
-                Resolved::Code(code) => return write!(self.out, "{}", code.body.summary(symbols)),
+                Resolved::Code => {
+                    // A view is laid flat into storage of the rendering's own.
+                    let storage = program_storage();
+                    let code = (member.code_view(storage.brand().writer()))
+                        .expect("a code member reads its syntax");
+                    return write!(self.out, "{}", code.body.summary(symbols));
+                }
                 Resolved::Function { .. } | Resolved::Module | Resolved::Barrier => {
                     return write!(self.out, "{}", display_name(seen.ktype(), types, symbols));
                 }

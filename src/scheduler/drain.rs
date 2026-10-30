@@ -241,6 +241,12 @@ fn tally(count: impl FnOnce(&mut Tiers)) {
 
 #[cfg(test)]
 thread_local! {
+    /// Bytes run steps have written to their write homes' regions: a count. Tests reset it.
+    pub(crate) static REGION_WRITTEN: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+thread_local! {
     /// The [`Tiers`] every step has left so far. Tests reset it.
     pub(crate) static TIERS: std::cell::Cell<Tiers> = const {
         std::cell::Cell::new(Tiers {
@@ -1027,6 +1033,7 @@ where
             .and_then(HalfHeader::branch)
             .map_or(0, Branch::len),
         tiers.agent.len(),
+        context.writer().in_use(),
     );
     // The door reads the settlement the cell runs under, over the composition its chain rests on
     // or the load, borrowed from the arena for the step.
@@ -1061,6 +1068,9 @@ where
                 *entry = (entry.0 + scratch, entry.1 + warm);
             });
         }
+        REGION_WRITTEN.with(|written| {
+            written.set(written.get() + context.writer().in_use().saturating_sub(before.2))
+        });
         TIERS.with(|tiers| {
             let most = tiers.get();
             tiers.set(Tiers {

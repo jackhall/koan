@@ -310,8 +310,8 @@ fn nested_programs(depth: usize) -> Vec<(&'static str, String, String)> {
         (
             "a quote",
             format!("LET q = #{}\nPRINT (q == q)\nPRINT q", parens(inner)),
-            // A quote prints its code through the parentheses written around it.
-            "true\n1".into(),
+            // A quote prints its code with the parentheses written inside its own.
+            format!("true\n{}", parens(inner - 1)),
         ),
         (
             "a list literal",
@@ -677,4 +677,10 @@ fn the_records_index_is_no_larger_than_the_facts_it_keys() {
     eprintln!("records index: {index} bytes; the facts it keys: {facts} bytes");
     assert!(facts > 0);
     assert!(index <= facts);
+}
+
+#[test]
+fn printed_code_reads_back() {
+    let source = "LET q = #((LET x = 4) (PRINT \"a 'b'\" 'c'))\nPRINT q\nPRINT (q == #((LET x = 4) (PRINT \"a 'b'\" \"c\")))";
+    assert_eq!(run(source), "(LET x = 4) (PRINT \"a 'b'\" \"c\")\ntrue");
 }

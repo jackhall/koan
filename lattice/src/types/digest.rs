@@ -104,6 +104,7 @@ const TAG_SIGNATURE_MEET: u8 = 0x2F;
 const TAG_CARRIER: u8 = 0x30;
 const TAG_SCHEME: u8 = 0x31;
 const TAG_MEMO_GROUP: u8 = 0x32;
+const TAG_CODE_UNBUILT: u8 = 0x33;
 
 /// The one place the hash function is touched. Feeds a domain-tagged, length-prefixed,
 /// little-endian byte stream into a BLAKE3 hasher and truncates the result to a `u128`.
@@ -215,6 +216,7 @@ pub(super) fn node_digest<'run, C: Naming<'run>>(
         TypeNode::AnyCode => leaf_digest(TAG_ANY_CODE),
         TypeNode::Never => leaf_digest(TAG_NEVER),
         TypeNode::CodeNeeding { kind, names } => code_needing_digest(kind.digest(), names),
+        TypeNode::CodeUnbuilt { kind } => code_unbuilt_digest(kind.digest()),
         TypeNode::OfKind(k) => of_kind_digest(*k),
         TypeNode::DeferredReturn(surface) => deferred_return_digest(*surface),
         TypeNode::Parameter { name, bound } => parameter_digest(*name, bound.digest()),
@@ -340,6 +342,11 @@ pub(super) fn code_needing_digest(kind: TypeDigest, names: &[BinderSymbol]) -> T
         h.symbol(name.symbol());
     }
     h.finish()
+}
+
+/// An unbuilt code kind: the kind.
+pub(super) fn code_unbuilt_digest(kind: TypeDigest) -> TypeDigest {
+    DigestHasher::new(TAG_CODE_UNBUILT).digest(kind).finish()
 }
 
 // Per-shape digest builders. Each takes its children as handles or nodes — each holds its digest

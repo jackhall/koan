@@ -65,7 +65,7 @@ fn node<'graph>(part: &ExpressionPart<'graph>) -> &'graph KExpression<'graph> {
     let ExpressionPart::Expression(node) = part else {
         panic!("a parenthesized node");
     };
-    node.reference()
+    node
 }
 
 /// Each capture of `shape` as `(name, mark, source)`.
@@ -117,7 +117,7 @@ fn a_hole_a_written_name_and_a_built_name_each_resolve_their_own_way() {
             [
                 hole(fixture, "PRINT _ _ _"),
                 (x, None, CaptureSource::Hole),
-                (x, Some(Mark::Written), local(slot)),
+                (x, Some(Mark::DOLLAR), local(slot)),
                 (x, Some(Mark::Built), CaptureSource::Offered),
             ]
         );
@@ -142,7 +142,7 @@ fn a_written_name_never_binds_to_a_binder_in_its_code() {
                 captures(code),
                 [
                     hole(fixture, "PRINT _ _"),
-                    (x, Some(Mark::Written), local(outer))
+                    (x, Some(Mark::DOLLAR), local(outer))
                 ]
             );
             // The unmarked `x` is the code's own binder.
@@ -179,7 +179,7 @@ fn a_function_in_code_captures_each_name_through_its_mark() {
                 [
                     print,
                     (x, None, CaptureSource::Hole),
-                    (v, Some(Mark::Written), local(slot)),
+                    (v, Some(Mark::DOLLAR), local(slot)),
                     (y, Some(Mark::Built), CaptureSource::Offered),
                 ]
             );
@@ -191,7 +191,7 @@ fn a_function_in_code_captures_each_name_through_its_mark() {
                 [
                     (print.0, None, CaptureSource::Read(captured(0))),
                     (x, None, CaptureSource::Read(captured(1))),
-                    (v, Some(Mark::Written), CaptureSource::Read(captured(2))),
+                    (v, Some(Mark::DOLLAR), CaptureSource::Read(captured(2))),
                     (y, Some(Mark::Built), CaptureSource::Read(captured(3))),
                 ]
             );
@@ -213,7 +213,7 @@ fn marks_work_on_type_names_and_a_builtin_is_no_hole() {
                 captures(code),
                 [
                     hole(fixture, "PRINT _ _ _ _"),
-                    (alias, Some(Mark::Written), local(slot)),
+                    (alias, Some(Mark::DOLLAR), local(slot)),
                     (carrier, None, CaptureSource::Hole),
                 ]
             );
@@ -236,7 +236,7 @@ fn marks_work_on_type_names_and_a_builtin_is_no_hole() {
             let (slot, _) = shape.slot(alias).unwrap();
             assert_eq!(
                 captures(code),
-                [(alias, Some(Mark::Written), local(slot))],
+                [(alias, Some(Mark::DOLLAR), local(slot))],
                 "`{source}`"
             );
         });
@@ -257,7 +257,7 @@ fn a_nested_quotes_written_name_is_a_hole_of_the_code_around_it() {
             captures(inner),
             [
                 print,
-                (y, Some(Mark::Written), CaptureSource::Read(captured(1)))
+                (y, Some(Mark::DOLLAR), CaptureSource::Read(captured(1)))
             ]
         );
     });
@@ -309,7 +309,7 @@ fn a_malformed_quote_loads_and_keeps_its_refusal() {
             let (v, _) = shape.slot(value(fixture, "v")).unwrap();
             assert_eq!(
                 captures(code),
-                [(value(fixture, "v"), Some(Mark::Written), local(v))]
+                [(value(fixture, "v"), Some(Mark::DOLLAR), local(v))]
             );
             let needing =
                 fixture
@@ -493,7 +493,7 @@ fn alone<R>(
             let claims = program.root().group_frame().claims();
             let shapes = crate::scope::Shapes::of_code(
                 fixture.program,
-                syntax.reference(),
+                syntax,
                 claims,
                 table,
                 fixture.types,
@@ -554,7 +554,7 @@ fn a_root_dollar_name_is_an_entry_capture() {
                 [
                     hole(fixture, "PRINT _ _ _"),
                     (x, None, CaptureSource::Hole),
-                    (x, Some(Mark::Written), CaptureSource::Entry { head: false }),
+                    (x, Some(Mark::DOLLAR), CaptureSource::Entry { head: false }),
                     (x, Some(Mark::Built), CaptureSource::Offered),
                 ]
             );
@@ -566,7 +566,7 @@ fn a_root_dollar_name_is_an_entry_capture() {
         let f = value(fixture, "f");
         assert_eq!(
             captures(shapes.root()),
-            [(f, Some(Mark::Written), CaptureSource::Entry { head: true })]
+            [(f, Some(Mark::DOLLAR), CaptureSource::Entry { head: true })]
         );
     });
 }
@@ -580,9 +580,7 @@ fn a_root_dollar_spread_is_a_spread_capture() {
         let ExpressionPart::MarkedUse(_, greet) = parts[1].value else {
             panic!("a marked use");
         };
-        let list = code
-            .candidates(code.site_of_node(greet.reference()))
-            .unwrap();
+        let list = code.candidates(code.site_of_node(greet)).unwrap();
         let greet_key = BinderSymbol::Key(fixture.symbols.key("GREET _").unwrap());
         let at = code
             .captures()
@@ -602,13 +600,219 @@ fn a_root_dollar_spread_is_a_spread_capture() {
         let ExpressionPart::MarkedUse(_, print) = parts[2].value else {
             panic!("a marked use");
         };
-        let list = code
-            .candidates(code.site_of_node(print.reference()))
-            .unwrap();
+        let list = code.candidates(code.site_of_node(print)).unwrap();
         assert!(matches!(
             list.candidates.last(),
             Some(crate::scope::Candidate::Spread(_))
         ));
         assert!(list.candidates.len() > 1);
     });
+}
+
+/// How a test remarks parsed syntax: the `n`-th `$` name (from 0) marked anew, or each `$(…)` use
+/// made a use filled through a scope at its first key.
+#[derive(Clone, Copy)]
+enum Remark {
+    NthDollar(usize, Mark),
+    FillFirstKey(crate::parse::Scope),
+}
+
+/// `node` copied through `fixture`'s program storage, each part `remark` touches replaced, nested
+/// nodes first: hand-built composed syntax over a parsed quote. `seen` counts `$` names met.
+fn remarked<'graph>(
+    fixture: &Fixture<'_, 'graph>,
+    node: &KExpression<'graph>,
+    remark: Remark,
+    seen: &mut usize,
+) -> &'graph KExpression<'graph> {
+    let writer = fixture.program.writer();
+    let mut parts = Vec::new();
+    for part in node.parts {
+        let value = match (part.value, remark) {
+            (ExpressionPart::Expression(inner), _) => {
+                ExpressionPart::Expression(remarked(fixture, inner, remark, seen))
+            }
+            (ExpressionPart::QuotedExpression(inner), _) => {
+                ExpressionPart::QuotedExpression(remarked(fixture, inner, remark, seen))
+            }
+            (ExpressionPart::MarkedUse(Mark::DOLLAR, inner), Remark::FillFirstKey(scope)) => {
+                let inner = remarked(fixture, inner, remark, seen);
+                let key = crate::parse::KeyElement::key(inner.stored_key()[..3].iter().copied());
+                let keys = crate::memory::collect(writer, std::iter::once(key));
+                ExpressionPart::FilledUse(scope, keys, inner)
+            }
+            (ExpressionPart::MarkedUse(mark, inner), _) => {
+                ExpressionPart::MarkedUse(mark, remarked(fixture, inner, remark, seen))
+            }
+            (ExpressionPart::MarkedName(Mark::DOLLAR, name), Remark::NthDollar(n, mark)) => {
+                *seen += 1;
+                let mark = if *seen == n + 1 { mark } else { Mark::DOLLAR };
+                ExpressionPart::MarkedName(mark, name)
+            }
+            (other, _) => other,
+        };
+        parts.push(crate::source::Spanned {
+            value,
+            span: part.span,
+        });
+    }
+    KExpression::nested(writer, &parts, node.source)
+}
+
+/// [`alone`] over the quote's syntax [`remarked`] by `remark`.
+fn alone_remarked<R>(
+    source: &str,
+    statement: usize,
+    remark: Remark,
+    check: impl for<'f, 'graph> FnOnce(&Fixture<'f, 'graph>, &'graph crate::scope::Shapes<'graph>) -> R,
+) -> R {
+    with_fixture(|fixture| {
+        let lines = fixture.parse(source);
+        fixture.in_cell(|writer, _| {
+            let table: &Builtins = builtins(fixture, writer);
+            let program = crate::scope::Shapes::of_program(
+                fixture.program,
+                &lines,
+                table,
+                fixture.types,
+                fixture.symbols,
+                fixture.scratch(),
+            )
+            .unwrap_or_else(|_| panic!("`{source}` shapes"));
+            let ExpressionPart::QuotedExpression(syntax) = lines[statement].parts[3].value else {
+                panic!("a quote");
+            };
+            let syntax = remarked(fixture, syntax, remark, &mut 0);
+            let claims = program.root().group_frame().claims();
+            let shapes = crate::scope::Shapes::of_code(
+                fixture.program,
+                syntax,
+                claims,
+                table,
+                fixture.types,
+                fixture.symbols,
+                fixture.scratch(),
+            );
+            check(fixture, shapes)
+        })
+    })
+}
+
+/// A scope numbered `number`, pinned or not.
+fn scope(number: u32, pinned: bool) -> crate::parse::Scope {
+    crate::parse::Scope { number, pinned }
+}
+#[test]
+fn two_scopes_of_one_dollar_name_are_two_entry_captures() {
+    let source = "LET x = 1\nLET q = #(PRINT $x $x)";
+    alone_remarked(
+        source,
+        1,
+        Remark::NthDollar(1, Mark::Written(scope(1, false))),
+        |fixture, shapes| {
+            let x = value(fixture, "x");
+            assert_eq!(
+                captures(shapes.root()),
+                [
+                    hole(fixture, "PRINT _ _"),
+                    (x, Some(Mark::DOLLAR), CaptureSource::Entry { head: false }),
+                    (
+                        x,
+                        Some(Mark::Written(scope(1, false))),
+                        CaptureSource::Entry { head: false }
+                    ),
+                ]
+            );
+        },
+    );
+}
+
+#[test]
+fn a_filled_name_skips_a_binder_of_its_name() {
+    let source = "LET x = 1\nLET q = #((LET x = 2) (PRINT $x))";
+    let filled = Mark::Filled(scope(1, false));
+    alone_remarked(
+        source,
+        1,
+        Remark::NthDollar(0, filled),
+        |fixture, shapes| {
+            let x = value(fixture, "x");
+            let code = captures(shapes.root());
+            assert!(
+                code.contains(&(x, Some(filled), CaptureSource::Entry { head: false })),
+                "{code:?}"
+            );
+        },
+    );
+}
+
+#[test]
+fn a_filled_use_fills_only_the_keys_it_lists() {
+    let source = "LET q = #(PRINT $(1 + 2 - 3))";
+    let filled = scope(1, false);
+    alone_remarked(
+        source,
+        0,
+        Remark::FillFirstKey(filled),
+        |fixture, shapes| {
+            let plus = BinderSymbol::Key(fixture.symbols.key("_ + _").unwrap());
+            let minus = BinderSymbol::Key(fixture.symbols.key("_ - _").unwrap());
+            let code = captures(shapes.root());
+            assert!(
+                code.contains(&(
+                    plus,
+                    Some(Mark::Filled(filled)),
+                    CaptureSource::Entry { head: true }
+                )),
+                "{code:?}"
+            );
+            assert!(
+                code.contains(&(minus, None, CaptureSource::Hole)),
+                "{code:?}"
+            );
+            assert!(
+                !code
+                    .iter()
+                    .any(|(name, mark, _)| *name == plus && mark.is_none())
+            );
+        },
+    );
+}
+
+#[test]
+fn a_pinned_mark_in_a_nested_quote_is_the_roots_entry_capture() {
+    // The second `$x` sits in the nested quote, pinned to the root's binding; the third is that
+    // quote's own, an ordinary name of the code around it.
+    let source = "LET x = 1\nLET q = #(PRINT $x #(PRINT $x $x))";
+    alone_remarked(
+        source,
+        1,
+        Remark::NthDollar(1, Mark::Written(scope(0, true))),
+        |fixture, shapes| {
+            let x = value(fixture, "x");
+            let root = shapes.root();
+            let code = captures(root);
+            let entries = (code.iter())
+                .filter(|(name, _, source)| {
+                    *name == x && matches!(source, CaptureSource::Entry { .. })
+                })
+                .count();
+            assert_eq!(entries, 1, "one shared entry capture: {code:?}");
+            assert!(code.contains(&(x, None, CaptureSource::Hole)), "{code:?}");
+            let inner = &root.body()[0].parts[2].value;
+            let nested = root
+                .nested(root.site(inner))
+                .expect("the nested quote is shaped");
+            let pinned = (nested.captures().iter())
+                .find(|capture| capture.mark == Some(Mark::Written(scope(0, true))))
+                .expect("the nested quote captures its pinned mark");
+            assert!(matches!(pinned.source, CaptureSource::Read(_)));
+            assert!(
+                nested
+                    .captures()
+                    .iter()
+                    .any(|capture| capture.mark == Some(Mark::DOLLAR))
+            );
+        },
+    );
 }

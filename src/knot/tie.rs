@@ -58,7 +58,7 @@ pub struct Tied<'graph, 'cell, 'x> {
 pub fn tie<'graph, 'cell, 'x>(
     writer: Writer<'cell, '_>,
     activation: &KReading<'_, 'graph, 'cell>,
-    written: Written<'graph, '_>,
+    written: Written<'graph, 'cell, '_>,
     component: &Component<'_>,
     born: (ArenaRef, Option<Stamp<'cell, Knotted<'graph, 'cell>>>),
     types: &Chain<'_, 'cell, '_, '_>,
@@ -157,9 +157,8 @@ where
     let mut codes = BumpVec::with_capacity_in(nodes.len(), scratch);
     codes.extend(nodes.iter().map(|node| {
         let (site, shape) = node.as_ref()?.code()?;
-        let body = written.quote(activation.segment(), site);
         Some(code::staged(
-            (body, written.root()),
+            written.quote(activation.segment(), site),
             shape,
             activation,
             scratch,

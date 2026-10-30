@@ -257,7 +257,7 @@ pub(super) fn own_nodes<'graph>(
         }
         match part {
             ExpressionPart::Expression(inner) | ExpressionPart::MarkedUse(_, inner) => {
-                node(shape, inner.reference(), visit)
+                node(shape, inner, visit)
             }
             ExpressionPart::ListLiteral(items) => {
                 for item in items.iter() {

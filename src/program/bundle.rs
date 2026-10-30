@@ -73,12 +73,13 @@ pub enum KBirth<'graph, 'cell> {
         contract: Contract,
         inherit: Option<MemoHome>,
     },
-    /// A `USING` over code composed at run time: one step, under the code's composition, where its
-    /// shape lies, fills the holes of `code` from `source` and finishes with the filled code.
-    Using {
+    /// A `USING` or a `BUILD` over code composed at run time: one step, under the code's
+    /// composition, where its shape lies, fills the holes of `code` from `source`, a `USING`'s,
+    /// or with none, a `BUILD`'s, carries it at the type its shape gives it, and finishes with it.
+    Composed {
         program: &'graph Program<'graph>,
         code: KValue<'graph, 'cell>,
-        source: KValue<'graph, 'cell>,
+        source: Option<KValue<'graph, 'cell>>,
     },
     /// An evaluation: what it evaluates, and the view of the activation it reads names through.
     /// A frame's tail hands its last statement over with the frame's `contract`, which the
@@ -126,7 +127,7 @@ pub struct Within<'graph, 'cell> {
     pub stamp: Option<Stamp<'cell, Knotted<'graph, 'cell>>>,
     pub memo: Option<MemoHome>,
     pub inherit: Option<MemoHome>,
-    pub root: Option<ComposedRoot<'graph>>,
+    pub root: Option<ComposedRoot<'cell>>,
     pub kept: Option<&'cell FrameKept<'graph, 'cell>>,
 }
 
@@ -239,9 +240,9 @@ impl<'graph, 'cell> KBirth<'graph, 'cell> {
                 out(code);
                 out(offered);
             }
-            KBirth::Using { code, source, .. } => {
+            KBirth::Composed { code, source, .. } => {
                 out(code);
-                out(source);
+                source.iter().for_each(&mut *out);
             }
             KBirth::Block {
                 module: Some((module, _)),
@@ -339,7 +340,9 @@ impl<'graph> StepBundle<'graph> for KBundle {
                     + kept.map_or(0, |kept| size_of_val(kept.arguments))
             }
             KBirth::Eval { code, offered, .. } => code.weight().plus(offered.weight()).bytes(),
-            KBirth::Using { code, source, .. } => code.weight().plus(source.weight()).bytes(),
+            KBirth::Composed { code, source, .. } => (source.iter())
+                .fold(code.weight(), |weight, source| weight.plus(source.weight()))
+                .bytes(),
             KBirth::Evaluate { .. } | KBirth::Block { .. } | KBirth::Inspect { .. } => usize::MAX,
         }
     }
@@ -435,19 +438,33 @@ impl<'graph> StepBundle<'graph> for KBundle {
                         inherit,
                     }
                 }
-                KBirth::Using {
+                KBirth::Composed {
                     program,
                     code,
                     source,
                 } => {
                     let types = tiers.chain(Halves::alone(Half::of(writer, header)));
-                    let [code, source] = copy_severed::<_, KnottedFamily, _, 2>(
-                        writer,
-                        &types,
-                        view,
-                        [&code, &source],
-                    );
-                    KBirth::Using {
+                    let (code, source) = match source {
+                        Some(source) => {
+                            let [code, source] = copy_severed::<_, KnottedFamily, _, 2>(
+                                writer,
+                                &types,
+                                view,
+                                [&code, &source],
+                            );
+                            (code, Some(source))
+                        }
+                        None => {
+                            let [code] = copy_severed::<_, KnottedFamily, _, 1>(
+                                writer,
+                                &types,
+                                view,
+                                [&code],
+                            );
+                            (code, None)
+                        }
+                    };
+                    KBirth::Composed {
                         program,
                         code,
                         source,

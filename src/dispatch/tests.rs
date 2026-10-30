@@ -37,6 +37,7 @@ mod rules;
 mod selection;
 mod signatures;
 mod spellings;
+mod splicing;
 mod spreads;
 mod statics;
 mod surface;
@@ -109,26 +110,4 @@ fn assert_linear(what: &str, count: impl Fn(usize) -> usize) {
         second <= first + first / 8,
         "{what} grow faster than linearly: {at8} at 8, {at16} at 16, {at24} at 24"
     );
-}
-
-/// The syntax of the one quote `text` writes, parsed into program storage leaked for the test, so
-/// it outlives every graph: what `COMPOSE` over text composes.
-pub(super) fn quoted(
-    text: &str,
-    symbols: &crate::symbols::SymbolInterner,
-) -> crate::parse::ProgramNode<'static> {
-    use crate::parse::ExpressionPart;
-    let storage = Box::leak(Box::new(crate::memory::program_storage()));
-    let parsed = crate::parse::parse(storage.brand(), symbols, text)
-        .expect("`COMPOSE` is handed text that parses");
-    let [quote] = &parsed[..] else {
-        panic!("`COMPOSE` is handed one quote's text")
-    };
-    let [part] = quote.parts else {
-        panic!("`COMPOSE` is handed one quote's text")
-    };
-    let ExpressionPart::QuotedExpression(syntax) = part.value else {
-        panic!("`COMPOSE` is handed a quote's text")
-    };
-    syntax
 }

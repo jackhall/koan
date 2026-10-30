@@ -102,7 +102,7 @@ pub fn callable_type<'graph, 'x, R: Reads<'graph> + ?Sized>(
                     let ExpressionPart::QuotedExpression(run) = signature else {
                         unreachable!("`head_function` refused a head that is no quote")
                     };
-                    (interned, Some(Head::Written(run.reference())))
+                    (interned, Some(Head::Written(run)))
                 }
                 _ => return Err(unsupported),
             };
@@ -213,7 +213,7 @@ fn operator_function<'graph, R: Reads<'graph> + ?Sized>(
     let ExpressionPart::QuotedExpression(quoted) = symbol else {
         return Err(unsupported);
     };
-    let symbol = symbol_from_quote_body(quoted.reference()).ok_or(unsupported)?;
+    let symbol = symbol_from_quote_body(quoted).ok_or(unsupported)?;
     // `!=` is nobody's to declare: every infix `a != b` is rewritten to `NOT (a == b)` before it
     // reaches a bucket, so a declaration of it would answer no call.
     if is_unequal(symbol) {

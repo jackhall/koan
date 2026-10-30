@@ -69,9 +69,11 @@ fn a_replay_rebuilds_the_composition_its_chain_pins() {
         "LET q = #((SIG Hold FOR ALL #[Elt] = #[(VAL held :Elt)]) \
          (LET make = (FN :{m :Hold} -> Any = #((LET v = (m :| Hold)) \
          (FN :{n :Number} -> Number = #(n + 1))))) (MODULE m = ((LET held = 1))) (make {m = m}))
-LET g = (EVAL (COMPOSE q) -> Any)
+LET qs = [q]
+LET g = (EVAL #($..qs) -> Any)
 LET p = #(PRINT 0)
-EVAL (COMPOSE p) -> Any
+LET ps = [p]
+EVAL #($..ps) -> Any
 PRINT (g {n = 1})",
         SMALLEST,
     );

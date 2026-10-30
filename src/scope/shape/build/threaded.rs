@@ -116,7 +116,6 @@ fn handed_on<'graph, 'x>(
 fn received(draft: &Draft<'_, '_>, this: usize, part: &ExpressionPart<'_>) -> bool {
     match part {
         ExpressionPart::Expression(node) | ExpressionPart::MarkedUse(_, node) => {
-            let node = node.reference();
             let Some(attribute) = node.cache().builtin_shape() else {
                 return false;
             };

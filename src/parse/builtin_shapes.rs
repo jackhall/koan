@@ -84,6 +84,8 @@ pub(crate) struct SurfaceKeywords {
     pub(crate) transparent: StaticName<KeywordSymbol>,
     /// The connector of a code kind and the names its code needs, `Expression NEEDING #[y]`.
     pub(crate) needing: StaticName<KeywordSymbol>,
+    /// The head of an unbuilt code kind, `UNBUILT Block`.
+    pub(crate) unbuilt: StaticName<KeywordSymbol>,
     /// `!=`, which the operator-run rewrite turns into `NOT (a == b)`; the parse's depth count
     /// reads it to count the nesting that rewrite builds.
     pub(crate) unequal: StaticName<KeywordSymbol>,
@@ -125,6 +127,7 @@ pub(crate) static KEYWORDS: SurfaceKeywords = SurfaceKeywords {
     opaque: crate::static_name!(KeywordSymbol, ":|"),
     transparent: crate::static_name!(KeywordSymbol, ":!"),
     needing: crate::static_name!(KeywordSymbol, "NEEDING"),
+    unbuilt: crate::static_name!(KeywordSymbol, "UNBUILT"),
     unequal: crate::static_name!(KeywordSymbol, "!="),
 };
 
@@ -189,6 +192,13 @@ impl BuiltinShape {
             ShapeElement::Keyword(_) => Role::Keyword,
             ShapeElement::Slot { role, .. } => *role,
         })
+    }
+
+    /// Whether this shape reads its part `index` as written, a keyword position included: a quote
+    /// there is syntax of the code around it, its marks the code's, not a quote value's.
+    pub fn reads_written(&self, index: usize) -> bool {
+        (self.roles().nth(index))
+            .is_some_and(|role| role.reading() != crate::parse::Reading::Evaluated)
     }
 
     /// False for a bucket the body-shape builder does not resolve — its slots carry

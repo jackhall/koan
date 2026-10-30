@@ -27,7 +27,7 @@ fn written<'g>(shape: &BodyShape<'g>) -> Vec<Result<&'g ExpressionPart<'g>, usiz
             | ExpressionPart::QuotedExpression(node)
             | ExpressionPart::MarkedUse(_, node) = part
             {
-                out.push(Err(node.reference().parts.as_ptr().addr()));
+                out.push(Err(node.parts.as_ptr().addr()));
             }
         });
     }

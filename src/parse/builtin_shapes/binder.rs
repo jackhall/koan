@@ -126,11 +126,7 @@ pub(crate) fn declarator_parameters<'g>(
     part: &ExpressionPart<'g>,
 ) -> impl Iterator<Item = TypeSymbol> + 'g {
     let parts: &'g [Spanned<ExpressionPart<'g>>] = match part {
-        ExpressionPart::Expression(run) => run
-            .reference()
-            .parts
-            .split_last()
-            .map_or(&[], |(_, before)| before),
+        ExpressionPart::Expression(run) => run.parts.split_last().map_or(&[], |(_, before)| before),
         _ => &[],
     };
     parts.iter().filter_map(|part| match part.value {
@@ -157,7 +153,7 @@ pub(crate) fn bounded<'g>(
     part: &ExpressionPart<'g>,
 ) -> Option<(&'g ExpressionPart<'g>, &'g ExpressionPart<'g>)> {
     match part {
-        ExpressionPart::Expression(node) => bounded_run(node.reference()),
+        ExpressionPart::Expression(node) => bounded_run(node),
         _ => None,
     }
 }
@@ -165,7 +161,7 @@ pub(crate) fn bounded<'g>(
 /// The body a written quote holds, or `None` for any other part.
 pub(crate) fn quoted_body<'g>(part: &ExpressionPart<'g>) -> Option<&'g KExpression<'g>> {
     match part {
-        ExpressionPart::QuotedExpression(node) => Some(node.reference()),
+        ExpressionPart::QuotedExpression(node) => Some(node),
         _ => None,
     }
 }
@@ -458,7 +454,7 @@ pub(crate) fn symbol_from_quote_body(inner: &KExpression<'_>) -> Option<KeywordS
 /// whether to install park edges (the body's own extraction reports a bad symbol).
 pub(crate) fn symbol_from_parts(expr: &KExpression<'_>) -> Option<KeywordSymbol> {
     let quoted = expr.parts.iter().find_map(|part| match part.value {
-        ExpressionPart::QuotedExpression(inner) => Some(inner.reference()),
+        ExpressionPart::QuotedExpression(inner) => Some(inner),
         _ => None,
     })?;
     symbol_from_quote_body(quoted)
@@ -578,7 +574,7 @@ impl BinderFacts {
 /// Parse-side admission of the bare parenthesized type spelling. If `parts` matches a builtin
 /// shape's key, every plain `Expression` part at one of that shape's
 /// [`type_slots`](BinderFacts::type_slots) is rewritten to `SigiledTypeExpr` — the same
-/// `ProgramNode` payload under a different parse-context marker, so `(LIST OF Str)` ≡
+/// node under a different parse-context marker, so `(LIST OF Str)` ≡
 /// `:(LIST OF Str)` in exactly those positions and nowhere else.
 ///
 /// A variant change is the whole of it, and everything downstream follows by construction: the

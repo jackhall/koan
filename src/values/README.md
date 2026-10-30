@@ -44,8 +44,10 @@ parameter.
 **What a member holds** is the one total answer `Knotted::resolve` gives, a
 [`Resolved`](circular.rs): a **function**, as its identity, the solution it
 was instantiated at where it is an instance of a quantified function, and its
-closure bindings; a quote's **code**, as a `CodeView` of its body as written and the
-bindings its names carry; a **module** or a **barrier**, both opaque to
+closure bindings; a quote's **code**, whose syntax a reader reads through
+`Knotted::code_view` as a `CodeView` — its flat syntax, a code view laid flat
+into storage the reader owns, beside the bindings its marks read, each keyed
+by scope and name; a **module** or a **barrier**, both opaque to
 `values` — a module carries no type this module names; or a **data node**, a
 [`Circular`](circular.rs). A function's identity is a `usize` the layer above
 derives from its body shape, since `values` names no shape. `Value::as_callable`
@@ -64,8 +66,8 @@ names bind values, and one may name a fellow member, as
 value word, so their accessors and deep-copy doors are written once; each has
 a `linked` door that lays a data node down under a memo its caller already
 derived, and the plain doors stay on value cells. A function's closure
-bindings are the same `Link` run, and so are a quote's bound and supplied
-names.
+bindings are the same `Link` run, and so is a quote's bound run, each binding
+beside its scope and name.
 
 No type handle rides in the word. A `KType` is a `u128` aligned to 16 bytes, and
 one inline would more than double every cell; every handle lives in the resident
@@ -544,7 +546,9 @@ one flat string, read forward or backward.
 Two doors build a list view ([list.rs](list.rs)): `List::sliced` takes
 elements `[from, to)` of a list, forward or backward, and `List::concatenated`
 lays pieces in order — runs of items, laid flat, and lists spread whole. The
-tree ([view.rs](view.rs)) concatenates by an AVL join without a middle key and
+tree ([view.rs](view.rs)) is generic over its leaves, a list's being stretches
+of runs ([view/stretch.rs](view/stretch.rs)) and code's stretches of a node's
+parts, each subtree memoizing a monoid summary of its leaves. It concatenates by an AVL join without a middle key and
 slices by two splits, every operation laying new nodes and writing no old one,
 so a view built by n edits reads an element in O(log n) steps and costs O(log
 n) nodes per edit; a node reversed is one node with its direction toggled. A
@@ -585,6 +589,17 @@ as flat runs at the destination, and the copy holds nothing of its sources. A
 view weighs what that copy writes, so the [verdict](#crossing) copies a small
 view of a large source rather than pinning the source whole; a pinned view
 stays a view.
+
+**Code has views too.** Spliced and sliced code is a code view on the same
+tree ([the knot module](../knot/README.md#a-code-view)): each leaf a stretch of
+a flat node's parts beside the code its bindings come from, each node
+memoizing its count of parts, its count of parts that are no group, its deepest
+part and its weight, so a splice, a read and `LENGTH` cost O(log n). Unlike a
+list view, a code view is not invisible: its type is
+[unbuilt](../../lattice/src/types/vocabulary.md#the-code-family), since only
+building its shape can say what it needs, and `BUILD` lays it flat. Equality,
+rendering and the digest read a code view as its flat form, and a crossing
+writes it flat, its type kept.
 
 **Only a structural transformation is a view.** A view remaps its sources'
 indices and runs no koan code. A transformation that runs code, as `map` and
@@ -695,8 +710,9 @@ as the value its expression evaluates to, and no recipe is written twice.
 value compares its identity before its payload, so it never equals its bare
 payload, a sealed one included;
 two type values are equal when they name the same handle; two quotes' code
-compares as syntax, part by part with spans ignored and marks included, then
-the values its `$` names and its supplied holes bind, name by name, under the
+compares as syntax, part by part with spans ignored and marks included, each
+mark's scope and pin with it, then the values its bindings hold, scope by scope and
+name by name, under the
 pair set circular values use below
 ([quotes](../scope/README.md#equality-and-knots)). Each side compares at the
 type it is seen at, through [the door](#the-type-memo-and-satisfies): a record

@@ -24,7 +24,8 @@ use std::cell::Cell;
 use crate::memory::{BumpAllocator, BumpVec, Edge, KnotPlan, Writer, resident};
 use crate::scope::{Activated, AtRun, Elaboration, StaticInstance};
 use crate::scope::{
-    BodyAt, BodyRef, BodyShape, ClosureBindings, Registration, ShapeKind, Site, Stamp, Written,
+    BodyAt, BodyRef, BodyShape, ClosureBindings, ComposedRoot, Registration, ShapeKind, Site,
+    Stamp, Written,
 };
 use crate::scope::{Callable, FunctionGroupMap, ParameterBinding, Registered, ShapeGroupMap};
 use crate::symbols::{BinderSymbol, TypeSymbol};
@@ -46,7 +47,7 @@ pub struct Function<'graph, 'cell, X> {
     /// of line for the reason [`Node::Coerced`] is.
     ///
     /// [`Node::Coerced`]: super::Node::Coerced
-    typing: Option<&'cell Typing<'graph, 'cell>>,
+    typing: Option<&'cell Typing<'cell>>,
     /// The body it runs, beside which of its type captures its content composes: the load's, or
     /// `None` for a body of composed code, whose record its typing record holds.
     body: Option<&'graph BodyRef<'graph, 'graph>>,
@@ -61,7 +62,7 @@ impl<'graph, 'cell, X> Function<'graph, 'cell, X> {
     /// `knot_weight`. The private-field constructor the tie uses.
     pub(super) fn new(
         ktype: DeclaredType<KType>,
-        typing: Option<&'cell Typing<'graph, 'cell>>,
+        typing: Option<&'cell Typing<'cell>>,
         body: Option<&'graph BodyRef<'graph, 'graph>>,
         closure: &'cell ClosureBindings<'cell, X>,
         knot_weight: Weight,
@@ -127,7 +128,7 @@ impl<'graph, 'cell, X> Function<'graph, 'cell, X> {
 
     /// The body as the function holds it: the segment of the shape a call activates, the closure
     /// slots its content composes, and the root of the composed code it lies in, if any.
-    pub fn body(&self) -> &'cell BodyRef<'graph, 'cell>
+    pub fn body(&self) -> &'cell BodyRef<'cell, 'cell>
     where
         'graph: 'cell,
     {
@@ -168,7 +169,11 @@ impl<'graph, 'cell, X> Function<'graph, 'cell, X> {
                 self.registered(),
                 self.instance().unwrap_or(&[]),
                 self.typing.and_then(|typing| typing.declared),
-                self.body.is_none().then(|| self.body()),
+                // A copy holds its own copy of the root's syntax.
+                self.body.is_none().then(|| {
+                    let body = self.body();
+                    (body, body.root.map(|root| root.copied(writer)))
+                }),
             ),
             body: self.body,
             closure,
@@ -210,7 +215,7 @@ impl<'graph, 'cell> Function<'graph, 'cell, Knotted<'graph, 'cell>> {
 /// solution. The knot node points at this record rather than holding it: a slice or a second type
 /// handle inline would widen every knot node in the program from 64 to 80 bytes.
 #[derive(Clone, Copy)]
-pub struct Typing<'graph, 'cell> {
+pub struct Typing<'cell> {
     quantifier_map: FunctionGroupMap<'cell>,
     registered: Option<Registered<'cell, KType>>,
     /// The solution in group order; empty for anything that is no instance.
@@ -220,20 +225,21 @@ pub struct Typing<'graph, 'cell> {
     declared: Option<DeclaredType<KType>>,
     /// The body's record of a function born of code composed at run time, its root on it, which a
     /// copy lays again.
-    composed: Option<&'cell BodyRef<'graph, 'cell>>,
+    composed: Option<&'cell BodyRef<'cell, 'cell>>,
 }
 
-impl<'graph, 'cell> Typing<'graph, 'cell> {
+impl<'cell> Typing<'cell> {
     /// `map`, `registered`, `instance`, `declared` and a body of composed code's record written
-    /// into the region `writer` fills, or `None` where the function has none of them.
+    /// into the region `writer` fills beside the root it is handed, or `None` where the function
+    /// has none of them.
     pub(super) fn laid_down(
         writer: Writer<'cell, '_>,
         map: FunctionGroupMap<'_>,
         registered: Option<Registered<'_, KType>>,
         instance: &[KType],
         declared: Option<DeclaredType<KType>>,
-        composed: Option<&BodyRef<'graph, '_>>,
-    ) -> Option<&'cell Typing<'graph, 'cell>> {
+        composed: Option<(&BodyRef<'_, '_>, Option<ComposedRoot<'cell>>)>,
+    ) -> Option<&'cell Typing<'cell>> {
         let empty = map.is_empty() && registered.is_none() && instance.is_empty();
         (!empty || declared.is_some() || composed.is_some()).then(|| {
             let quantifier_map = FunctionGroupMap(writer.fill(map.0.len(), |at| map.0[at]));
@@ -258,7 +264,7 @@ impl<'graph, 'cell> Typing<'graph, 'cell> {
                     registered,
                     instance: writer.fill(instance.len(), |at| instance[at]),
                     declared,
-                    composed: composed.map(|body| body.laid(writer, body.root)),
+                    composed: composed.map(|(body, root)| body.laid(writer, root)),
                 },
             )
         })
@@ -287,15 +293,18 @@ impl<'graph, 'cell> Typing<'graph, 'cell> {
             .plus(Weight::run::<(TypeSymbol, usize)>(map))
             .plus(Weight::run::<BinderSymbol>(names))
             .plus(Weight::run::<KType>(instance))
-            .plus(Weight::flat::<Typing<'_, '_>>())
+            .plus(Weight::flat::<Typing<'_>>())
             .plus(composed)
     }
 }
 
 /// A function node, read and not yet written.
 pub(super) struct Staged<'graph, 'cell, 'x> {
-    /// Its body, a composed record's copy in scratch until the tie lays the node.
-    pub body: BodyAt<'graph, 'x>,
+    /// Its body, a composed record's copy in scratch until the tie lays the node, with no root.
+    pub body: BodyAt<'graph, 'static, 'x>,
+    /// The root of the composed code the body lies in, at the region's lifetime, which the scratch
+    /// record does not hold.
+    pub root: Option<ComposedRoot<'cell>>,
     pub ktype: DeclaredType<KType>,
     /// The name-keyed quantifier map the elaborator handed back, scratch-lived until the tie lays
     /// it into the region.
@@ -332,7 +341,7 @@ impl<'graph, 'cell> Staged<'graph, 'cell, '_> {
         born: (ArenaRef, Option<Stamp<'cell, Knotted<'graph, 'cell>>>),
     ) -> (
         &'cell ClosureBindings<'cell, Knotted<'graph, 'cell>>,
-        Option<&'cell Typing<'graph, 'cell>>,
+        Option<&'cell Typing<'cell>>,
         Weight,
     ) {
         let composed = match self.body {
@@ -346,7 +355,7 @@ impl<'graph, 'cell> Staged<'graph, 'cell, '_> {
             self.registered,
             self.instance,
             self.declared,
-            composed,
+            composed.map(|body| (body, self.root)),
         );
         let weight = closure.weight().plus(Typing::weight(
             self.quantifier_map.0.len(),
@@ -367,7 +376,7 @@ pub(super) fn staged<'graph, 'cell, 'x>(
     body: &BodyShape<'_>,
     registration: Option<&Registration<'_>>,
     activation: &KReading<'_, 'graph, 'cell>,
-    written: Written<'graph, '_>,
+    written: Written<'graph, 'cell, '_>,
     types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'x>,
     edge: impl FnMut(u32) -> Edge,
@@ -391,7 +400,8 @@ where
     };
     let captures = ClosureBindings::read_captures(body, activation, scratch, edge);
     Ok(Staged {
-        body: written.body(scratch, body.segment()),
+        body: written.unrooted(scratch, body.segment()),
+        root: written.root(),
         ktype,
         quantifier_map: callable.quantifier_map,
         registered: callable.registered,
@@ -487,7 +497,7 @@ pub(super) type Born<'step> = (&'step BodyShape<'step>, Option<&'step Registrati
 pub(super) fn stage<'graph, 'cell, 'x>(
     plan: &KnotPlan,
     activation: &KReading<'_, 'graph, 'cell>,
-    written: Written<'graph, '_>,
+    written: Written<'graph, 'cell, '_>,
     bodies: &[Option<Born<'_>>],
     types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'x>,
@@ -528,7 +538,7 @@ where
 pub fn lambda<'graph, 'cell, 'x>(
     writer: Writer<'cell, '_>,
     activation: &KReading<'_, 'graph, 'cell>,
-    written: Written<'graph, '_>,
+    written: Written<'graph, 'cell, '_>,
     site: Site,
     born: (ArenaRef, Option<Stamp<'cell, Knotted<'graph, 'cell>>>),
     types: &Chain<'_, 'cell, '_, '_>,
@@ -661,7 +671,10 @@ pub fn instance<'graph, 'cell>(
         None,
         solution,
         None,
-        function.body.is_none().then(|| function.body()),
+        function
+            .body
+            .is_none()
+            .then(|| (function.body(), function.body().root)),
     );
     let knot_weight = Weight::flat::<usize>()
         .plus(closure.weight())

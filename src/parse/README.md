@@ -53,7 +53,11 @@ Lowering is where koan's vocabulary enters, and seven rules cover it
   `ATTR $a b`, and an atom that starts with no name (`$3`, `\true`) is a parse
   error naming it. The parser marks wherever it meets a mark; the shape builder
   refuses one no quote value holds. `$..` leads a splice, `$..xs`
-  ([splicing](../scope/README.md#splicing)). `#` also glues to
+  ([splicing](../scope/README.md#splicing)): a part of an expression and
+  nothing else, its operand a value name, so `$..(f x)` and `$..3` are errors,
+  and so is a splice in a list or brace literal, in a type expression, or in a
+  marked use, whose key a splice would leave unknown. `\..xs` has no reading
+  and is an error. `#` also glues to
   a `[…]` or `{…}` literal and quotes each element: a paren-group element is
   quoted as that group, any other element as a one-part quote, and a `_` key or
   a record's field name stays bare, so `#{Some: (x), _: (y)}` is
@@ -75,7 +79,8 @@ Lowering is where koan's vocabulary enters, and seven rules cover it
 - A **spread** is `..` glued to a name, `..xs`, or to a paren group,
   `..(f x)`, and is a list literal's item and nothing else: lowering refuses
   `..` anywhere else, inside a `#[…]` literal included, so no other part holds
-  one, and refuses `..$xs` and `..\xs`, which are code splicing's.
+  one. A spread of a marked name, `..$xs` or `..\xs`, is a list item inside a
+  quote that spreads the name's value when the code runs.
 - Everything else is an **atom**, which [atom.rs](atom.rs) classifies.
 
 Atom classification is the one place text is read closely: literals; a split on
@@ -102,10 +107,34 @@ another region is a slice copy rather than a rebuild.
 type names as classified symbols; nested expressions; the two type sigils
 (`:(…)` and `:{…}`); list, dict and record literals, a list literal's items
 each a `ListItem` — a part, or a spread of one; scalar literals;
-`QuotedExpression`, the `#(…)` body captured at parse time as data; and the two
+`QuotedExpression`, the `#(…)` body captured at parse time as data; the two
 marked parts, `MarkedName` (`$x`, `\x`), which classifies as the name it marks,
-and `MarkedUse` (`$(…)`, `\(…)`), which classifies as a nested expression. A
-`Mark` is `Written` (`$`) or `Built` (`\`).
+and `MarkedUse` (`$(…)`, `\(…)`), which classifies as a nested expression;
+`Splice`, `$..xs`; and `FilledUse`, a keyworded use or operator run whose uses
+at the keys it lists a `USING` filled, which classifies as a nested expression.
+A `Mark` is `Written` (`$`) or `Built` (`\`) or `Filled`, a hole a `USING`
+filled, which only composed code holds and which prints bare. A `Written` or
+`Filled` mark carries a **scope**, the quote its binding came from, and whether
+it is **pinned**, moved by a read or splice inside a quote value it does not
+belong to ([splicing](../scope/README.md#splicing)): 0 and unpinned in
+everything the parser writes.
+
+A node holding a `Splice` matches no builtin shape and has no binder plan,
+since its arity is unknown until the quote holding it is born. Every node
+stores its **weight**, the bytes a copy of its subtree writes, computed at
+construction from its parts as its depth is, so a
+[code view](../values/README.md#views) prices a stretch of parts without
+walking it. A node of more than 16 parts also lays a block memo beside itself
+([ast/blocks.rs](ast/blocks.rs)) — running sums of its parts' weights, counts
+and keywords every 16 parts, and a sparse table over each block's deepest part
+— so the summary of any stretch of its parts reads in O(1).
+
+The copier ([copy.rs](copy.rs)) lays a whole node again through any writer: a
+composition's own program storage, or the region a code value's composed
+syntax lives in. It may rewrite each mark's scope as it goes, told whether a
+quote value lies between the copy's root and the mark before the copy and in
+it, and may mark a name filled or hold a use under a filled use; that is how a
+code view's materializer and `USING` write scopes, pins and fills.
 
 **Every node carries a source.** Code always comes from somewhere, so a node
 holds the [`SourceRef`](../source.rs) — extent and registered file — of the text
@@ -145,19 +174,27 @@ form is a distinct type in [`values`](../values/README.md#working-expressions),
 and a resolved sub-result or a staging hole lives only there. That separation is what lets the same node be shared across
 activations without any of them being able to write into it.
 
-### The eternal tier is a type, not a discipline
+### The eternal tier is the lifetime
 
-[ast/program.rs](ast/program.rs) holds `ProgramExpression` and `ProgramNode`,
-two `Copy` newtypes whose private fields make "this node's parts run is hosted in
-program storage" a property the compiler checks.
+A node's parts hold plain `&'a KExpression<'a>` references, so a node lies
+wholly in the storage its lifetime names. Program storage outlives every
+region, so a node at the program's lifetime `'graph` is eternal by that
+lifetime alone: a code value holds written syntax at `'graph`, where a copy
+shares it and its weight counts nothing past the pointer, and composed syntax
+at its region's lifetime, laid there by [code splicing](../scope/README.md#splicing),
+where a copy lays it again. A construction door takes a writer at the node's own
+lifetime, and the lifetime is invariant at the program brand's doors, so
+program storage never holds a node of shorter-lived storage.
 
-The claim is about the **parts slice**, not the node struct: a `KExpression` is
-`Copy` and rides by value, so what a holder can outlive is the run of parts the
-node borrows and everything reachable from it. That is why the marker sits on the
-references *inside* the expression-holding part arms rather than on the node, and
-why re-homing the node struct itself at any brand is sound. The marker is
-consumed only where the claim is used — the dispatch channel keeps carrying bare
-`KExpression` — so nothing goes viral and there is no erase point to audit.
+### Printing
+
+`ExpressionPart::write_summary` prints syntax so it reads back: a group in its
+parens, a string between the quote its body allows (`"` unless the body holds
+an unescaped `"`), and every sigil as written. A scoped mark prints as `$x`,
+whatever its scope, a filled mark and a `FilledUse` bare, and a splice as
+`$..xs`, so printed code reads back with the holes and marks it was written
+with, its bindings and fills aside. A law states it over generated programs:
+printing a parsed program and parsing the result gives the same syntax.
 
 ## The structural cache: classify once, at construction
 
@@ -335,6 +372,11 @@ and a statement's wrapper around the block — and a lone `a != b` counts 2, for
 `PRINT (1 + 2 + 3)` is 6. The rewrite therefore never deepens a statement past
 the depth the parse stored for it, and a run too long for the limit is refused
 like deep parentheses, with no cap on run length of its own.
+
+Code composed at run time is held to the same limit where it is composed: a
+[code view](../values/README.md#views) stores each node's depth as a node does,
+and a splice that would nest past the limit is an error value naming it, so no
+walk ever meets syntax deeper than a parse admits.
 
 The limit is sized against a known stack: a host runs a program on a thread of
 [`STACK_BYTES`](../program/README.md#the-stack).

@@ -62,7 +62,7 @@ fn wraps_pick(source: &str) -> (Segment, Site, bool) {
         let Some(ExpressionPart::Expression(node)) = wrap.rhs(slot(program, wrap, "p")) else {
             panic!("`p` is bound to a call");
         };
-        let site = wrap.site_of_node(node.reference());
+        let site = wrap.site_of_node(node);
         let narrowing = program
             .facts()
             .use_statics(&program.tiers().resting(), wrap, site)
@@ -193,7 +193,7 @@ fn a_statement_seam_decides_the_units_it_wakes_in_the_activation() {
         let Some(ExpressionPart::Expression(node)) = use_.rhs(slot(program, use_, "p")) else {
             panic!("`p` is bound to a call");
         };
-        let site = use_.site_of_node(node.reference());
+        let site = use_.site_of_node(node);
         let narrowing = program
             .facts()
             .use_statics(&program.tiers().resting(), use_, site)
@@ -267,7 +267,7 @@ fn a_module_body_reads_its_frames_entry_decisions() {
         let Some(ExpressionPart::Expression(node)) = body.rhs(slot(program, body, "p")) else {
             panic!("`p` is bound to a call");
         };
-        let site = body.site_of_node(node.reference());
+        let site = body.site_of_node(node);
         let narrowing = program
             .facts()
             .use_statics(&program.tiers().resting(), body, site)
@@ -313,7 +313,7 @@ fn blocks_pick(source: &str) -> (Segment, Site, bool) {
         let Some(ExpressionPart::Expression(node)) = block.rhs(slot(program, block, "p")) else {
             panic!("`p` is bound to a call");
         };
-        let site = block.site_of_node(node.reference());
+        let site = block.site_of_node(node);
         let narrowing = program
             .facts()
             .use_statics(&program.tiers().resting(), block, site)

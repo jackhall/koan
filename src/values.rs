@@ -50,7 +50,7 @@ mod surface;
 mod tagged;
 mod text;
 mod type_value;
-mod view;
+pub(crate) mod view;
 mod weight;
 pub mod working;
 
@@ -61,7 +61,7 @@ pub use admission::{
     ConstructionRefused, SealRefused, admits, admits_part, construction, dict_type, list_type,
     part_ktype, record_type, representation, satisfies, sealing, solves_identity,
 };
-pub use circular::{Circular, CodeView, FunctionIdentity, Resolved};
+pub use circular::{Binding, Circular, CodeView, FunctionIdentity, Resolved, binding_at};
 #[cfg(test)]
 pub use crossing::{ADOPTED, COPIED, EXIT_WALKS, PARTS_ENTERED, PARTS_SKIPPED};
 pub use crossing::{
@@ -163,6 +163,18 @@ pub trait Knotted: Copy + Eq + Hash {
     fn resolve<'a>(&self) -> Resolved<'a, Self>
     where
         Self: 'a;
+
+    /// A quote's code as a reader of its syntax reads it — equality, rendering: its own flat
+    /// syntax, or a code view laid flat through `writer`, into storage the reader owns. `None` for
+    /// any other member.
+    fn code_view<'read, 'a>(&self, writer: Writer<'read, '_>) -> Option<CodeView<'read, 'a, Self>>
+    where
+        Self: 'a,
+        'a: 'read,
+    {
+        let _ = writer;
+        None
+    }
 }
 
 /// A knot member across region lifetimes: its form at each, and the copy from one to another.
@@ -499,7 +511,7 @@ impl<'cell, X: Knotted> Value<'cell, X> {
     /// The quote's code this value is, if it is one.
     pub fn as_code(&self) -> Option<X> {
         self.knot_member()
-            .filter(|member| matches!(member.resolve(), Resolved::Code(_)))
+            .filter(|member| matches!(member.resolve(), Resolved::Code))
     }
 
     /// The module this value is, if it is one.
@@ -513,7 +525,7 @@ impl<'cell, X: Knotted> Value<'cell, X> {
     pub fn as_opaque(&self) -> Option<X> {
         self.knot_member().filter(|member| match member.resolve() {
             Resolved::Module | Resolved::Barrier => true,
-            Resolved::Function { .. } | Resolved::Circular(_) | Resolved::Code(_) => false,
+            Resolved::Function { .. } | Resolved::Circular(_) | Resolved::Code => false,
         })
     }
 

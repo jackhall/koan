@@ -178,7 +178,7 @@ fn narrowing(
     };
     rendered(
         facts
-            .use_statics(door.types, shape, shape.site_of_node(node.reference()))
+            .use_statics(door.types, shape, shape.site_of_node(node))
             .narrowing,
     )
 }
@@ -236,7 +236,7 @@ fn elimination(
     else {
         panic!("`{name}` is bound to a node");
     };
-    let site = shape.site_of_node(node.reference());
+    let site = shape.site_of_node(node);
     match facts.use_statics(door.types, shape, site).narrowing {
         crate::scope::Narrowing::Kept(kept) => match kept.elimination {
             crate::scope::Elimination::Open => "open",
@@ -749,7 +749,7 @@ fn node_of(symbols: &SymbolInterner, shape: &BodyShape<'_>, name: &str) -> Site 
     let Some(ExpressionPart::Expression(node)) = shape.rhs(slot(symbols, shape, name)) else {
         panic!("`{name}` is bound to a node");
     };
-    shape.site_of_node(node.reference())
+    shape.site_of_node(node)
 }
 
 /// A module unknown binds to a closed content tree, so a view over a bound module parameter is
@@ -1092,7 +1092,7 @@ mod laws {
                 let mut uses = vec![shape.site_of_node(statement)];
                 each_part(statement, |part| {
                     if let ExpressionPart::Expression(node) = part {
-                        uses.push(shape.site_of_node(node.reference()));
+                        uses.push(shape.site_of_node(node));
                     }
                 });
                 for (at, site) in uses.into_iter().enumerate() {
@@ -1819,7 +1819,7 @@ mod laws {
                 each_part(statement, |part| {
                     sites.push(shape.site(part));
                     if let ExpressionPart::Expression(node) = part {
-                        sites.push(shape.site_of_node(node.reference()));
+                        sites.push(shape.site_of_node(node));
                     }
                 });
                 for site in sites {

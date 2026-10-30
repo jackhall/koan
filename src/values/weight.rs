@@ -70,6 +70,11 @@ impl Weight {
         Weight::saturated(len)
     }
 
+    /// A copy of `syntax` laid down in a region, every node and string of it.
+    pub fn syntax(syntax: &crate::parse::KExpression<'_>) -> Weight {
+        Weight::saturated(syntax.weight() as usize)
+    }
+
     /// A run of `len` `T`s laid down in a region — a function's quantifier map.
     pub const fn run<T>(len: usize) -> Weight {
         Weight::saturated(size_of::<T>().saturating_mul(len))

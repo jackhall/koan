@@ -161,7 +161,7 @@ impl<'graph> Walk<'_, 'graph, '_, '_> {
             }
             ExpressionPart::Identifier(_) | ExpressionPart::Type(_) => self.leaf(hasher, part),
             ExpressionPart::MarkedName(mark, _) => {
-                hasher.tag(Tag::Mark).feed(mark_tag(*mark));
+                mark_tag(hasher, *mark);
                 self.leaf(hasher, part);
             }
             ExpressionPart::Expression(node)
@@ -169,11 +169,19 @@ impl<'graph> Walk<'_, 'graph, '_, '_> {
             | ExpressionPart::RecordType(node)
             | ExpressionPart::QuotedExpression(node) => {
                 hasher.tag(Tag::Group).feed(part_tag(part));
-                self.node(hasher, node.reference());
+                self.node(hasher, node);
             }
             ExpressionPart::MarkedUse(mark, node) => {
-                hasher.tag(Tag::Mark).feed(mark_tag(*mark));
-                self.node(hasher, node.reference());
+                mark_tag(hasher, *mark);
+                self.node(hasher, node);
+            }
+            ExpressionPart::FilledUse(scope, _, node) => {
+                mark_tag(hasher, Mark::Filled(*scope));
+                self.node(hasher, node);
+            }
+            // A node holding a splice is composed when its quote is born, so it digests as written.
+            ExpressionPart::Splice(name) => {
+                hasher.tag(Tag::Splice).feed(name);
             }
             ExpressionPart::Literal(literal) => scalar(hasher, literal),
             ExpressionPart::ListLiteral(items) => {
@@ -281,11 +289,18 @@ fn kind_tag(kind: ShapeKind) -> u8 {
     }
 }
 
-/// A mark's place in the digest.
-fn mark_tag(mark: Mark) -> u8 {
-    match mark {
-        Mark::Written => 0,
-        Mark::Built => 1,
+/// A mark's place in the digest: its sigil, then a scoped mark's scope.
+fn mark_tag(hasher: &mut DigestHasher, mark: Mark) {
+    let (tag, scope) = match mark {
+        Mark::Written(scope) => (0, Some(scope)),
+        Mark::Built => (1, None),
+        Mark::Filled(scope) => (2, Some(scope)),
+    };
+    hasher.tag(Tag::Mark).feed(tag);
+    if let Some(scope) = scope {
+        hasher
+            .count(scope.number as usize)
+            .feed(u8::from(scope.pinned));
     }
 }
 

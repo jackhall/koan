@@ -113,7 +113,7 @@ fn a_mark_leading_a_word_marks_its_name() {
 
 #[test]
 fn a_mark_leading_no_name_is_refused() {
-    for source in ["$3", "$..xs", "\\true", "$LET", "$$x"] {
+    for source in ["$3", "\\true", "$LET", "$$x"] {
         let error = tree(source).unwrap_err();
         assert!(
             error.contains(&format!("`{source}`")),
@@ -157,4 +157,54 @@ fn no_line_is_led_by_a_mark() {
         top("LET q = #(\n  $x\n  \\y\n  $(PRINT z)\n)").unwrap(),
         vec!["[t(LET) t(q) t(=) #[[$t(x)] [\\t(y)] [$[t(PRINT) t(z)]]]]"]
     );
+}
+
+/// `$..xs` is a part of an expression, a layout line of its own included: a block splices the same
+/// parts written on one line or across lines.
+#[test]
+fn a_splice_is_a_part_of_an_expression() {
+    assert_eq!(tree("f $..args").unwrap(), "[t(f) $..t(args)]");
+    assert_eq!(
+        top("#((LET x = 1) $..stmts (PRINT x))").unwrap(),
+        top("#(\n  LET x = 1\n  $..stmts\n  PRINT x\n)").unwrap(),
+    );
+    assert_eq!(top("#(\n  $..stmts\n)").unwrap(), vec!["[#[$..t(stmts)]]"]);
+    // A written group around a splice stays a group.
+    assert_eq!(tree("#(($..xs))").unwrap(), "[#[[$..t(xs)]]]");
+}
+
+/// A splice's operand is a name, and a splice stands nowhere but in an expression: never as a
+/// list item, a brace entry, inside a type expression or a marked use; `\\..` has no reading.
+#[test]
+fn a_splice_stands_only_in_an_expression() {
+    for (source, says) in [
+        ("f $..(g x)", "the operand of `$..` is a name"),
+        ("f $..3", "the operand of `$..` is a name"),
+        ("f $..", "the operand of `$..` is a name"),
+        ("f $..Xs", "the operand of `$..` is a name"),
+        ("f \\..xs", "`\\..` has no reading"),
+        ("[$..xs]", "a list literal spreads with `..`"),
+        ("[\n  $..xs\n]", "a list literal spreads with `..`"),
+        ("{a: $..xs}", "a literal holds none"),
+        (":(LIST OF $..xs)", "a type expression holds no splice"),
+        ("$(f $..xs)", "whose key a splice would leave unknown"),
+        ("\\(LET $..xs)", "whose key a splice would leave unknown"),
+    ] {
+        let error = top(source).unwrap_err();
+        assert!(error.contains(says), "`{source}`: {error}");
+    }
+}
+
+/// A node holding a splice matches no builtin shape, so it declares nothing: its arity is unknown
+/// until its quote is born.
+#[test]
+fn a_node_holding_a_splice_has_no_binder_plan() {
+    let program = crate::memory::program_storage();
+    let symbols = crate::symbols::SymbolInterner::new();
+    let parsed = crate::parse::parse(program.brand(), &symbols, "#(LET $..xs)").unwrap();
+    let crate::parse::ExpressionPart::QuotedExpression(node) = parsed[0].parts[0].value else {
+        panic!("a quote")
+    };
+    assert!(node.cache().builtin_shape().is_none());
+    assert!(node.binder_plan().is_none());
 }

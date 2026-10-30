@@ -76,6 +76,21 @@ pub struct Shapes<'graph> {
     tails: &'graph [Tails<'graph>],
     /// Each shape's digest memo facts, at its segment.
     memos: &'graph [Memos<'graph>],
+    /// Every node the operator-run rewrite built, by its parts address, sorted, beside the written
+    /// node it stands for.
+    origins: &'graph [(usize, Origin<'graph>)],
+    /// The syntax code built alone was built from: its root's written node. `None` for a program.
+    syntax: Option<KExpression<'graph>>,
+}
+
+/// The written node a node the operator-run rewrite built stands for: the node it rebuilt over a
+/// rewritten part, or the operator run it was chained from. A shape's statements are its written
+/// statements but where the rewrite built a node, so a site in one is found in the syntax it came
+/// from through this.
+#[derive(Clone, Copy, Debug)]
+pub enum Origin<'graph> {
+    Rebuilt(KExpression<'graph>),
+    Run(KExpression<'graph>),
 }
 
 /// The levels one shape numbers along its chain.
@@ -117,6 +132,8 @@ impl<'graph> Shapes<'graph> {
         levels: &[],
         tails: &[],
         memos: &[],
+        origins: &[],
+        syntax: None,
     };
 
     /// The shapes of a program's top-level statements and of every body nested in them.
@@ -145,12 +162,15 @@ impl<'graph> Shapes<'graph> {
         super::shape::build_code(brand, syntax, claims, builtins, types, symbols, scratch)
     }
 
-    /// The table over `bodies` and `parents`, its levels numbered along each chain.
+    /// The table over `bodies` and `parents`, its levels numbered along each chain, beside the
+    /// rewrite's `origins` and, for code built alone, the `syntax` it was built from.
     pub(super) fn laid(
         writer: Writer<'graph, '_>,
         scratch: BumpAllocator<'_>,
         bodies: &'graph [&'graph BodyShape<'graph>],
         parents: &'graph [Option<(Segment, u32)>],
+        origins: &'graph [(usize, Origin<'graph>)],
+        syntax: Option<KExpression<'graph>>,
     ) -> Self {
         debug_assert_eq!(bodies.len(), parents.len());
         debug_assert!(
@@ -192,6 +212,8 @@ impl<'graph> Shapes<'graph> {
             levels: collect(writer, levels.iter().copied()),
             tails: &[],
             memos: &[],
+            origins,
+            syntax,
         };
         let tails = tails::tails(writer, scratch, &shapes);
         shapes.tails = collect(writer, tails.iter().copied());
@@ -218,6 +240,32 @@ impl<'graph> Shapes<'graph> {
     /// The body enclosing `segment`, and the statement of it `segment` sits in: `None` for the root.
     pub fn parent(&self, segment: Segment) -> Option<(Segment, u32)> {
         self.parents[segment.index() as usize]
+    }
+
+    /// The written node the rewrite built `node` from, if it built it; otherwise `node` is written.
+    pub fn origin(&self, node: &KExpression<'_>) -> Option<Origin<'graph>> {
+        let address = node.parts.as_ptr().addr();
+        let at = (self.origins).binary_search_by_key(&address, |(built, _)| *built);
+        at.ok().map(|at| self.origins[at].1)
+    }
+
+    /// The written node the body at `segment` was built from: the syntax of code built alone at
+    /// its root, else the node of the part its encloser records it at. `None` for a program.
+    pub fn written(&self, segment: Segment) -> Option<KExpression<'graph>> {
+        let Some((encloser, _)) = self.parent(segment) else {
+            return self.syntax;
+        };
+        let encloser = self.shape_at(encloser);
+        let (site, _) = (encloser.nested_shapes().iter())
+            .find(|(_, nested)| nested.segment() == segment)
+            .expect("an encloser records each body nested in it");
+        match encloser.located(*site) {
+            super::Located::Part(
+                ExpressionPart::QuotedExpression(node) | ExpressionPart::Expression(node),
+            ) => Some(**node),
+            super::Located::Node(node) => Some(*node),
+            super::Located::Part(_) => None,
+        }
     }
 
     /// The nearest body at or around `segment` that owns units: the program, a callable or a

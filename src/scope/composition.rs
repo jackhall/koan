@@ -17,7 +17,7 @@ use self_cell::self_cell;
 use crate::memory::{
     BumpAllocator, BumpVec, Lays, ProgramBrand, ProgramStorage, collect, program_storage,
 };
-use crate::parse::{ExpressionPart, KExpression, ListItem, ProgramNode, copied};
+use crate::parse::{ExpressionPart, KExpression, ListItem, copied};
 use crate::type_lattice::{Term, TypeDigest};
 use crate::values::ContentDigest;
 
@@ -33,6 +33,9 @@ pub struct SyntaxOwner {
     digest: ContentDigest,
 }
 
+/// A borrowed syntax root, named so [`ComposedSyntax`]'s cell can borrow it from its owner.
+type SyntaxRoot<'a> = &'a KExpression<'a>;
+
 self_cell!(
     /// Composed code's syntax, copied whole into program storage of its own: what a cell that
     /// bounces a miss hands the drain, and what the composition built from it keeps, its shapes
@@ -40,7 +43,7 @@ self_cell!(
     pub struct ComposedSyntax {
         owner: SyntaxOwner,
         #[covariant]
-        dependent: ProgramNode,
+        dependent: SyntaxRoot,
     }
 );
 
@@ -52,13 +55,13 @@ impl ComposedSyntax {
             digest: root.digest,
         };
         ComposedSyntax::new(owner, |owner| {
-            copied(owner.storage.brand(), root.syntax.reference())
+            copied(owner.storage.brand().writer(), root.syntax)
         })
     }
 
     /// The copy.
-    pub fn syntax(&self) -> ProgramNode<'_> {
-        *self.borrow_dependent()
+    pub fn syntax(&self) -> &'_ KExpression<'_> {
+        self.borrow_dependent()
     }
 
     /// Its syntax digest, which finds its composition.
@@ -81,7 +84,7 @@ impl ComposedSyntax {
 #[derive(Clone, Copy)]
 pub struct Composition<'a> {
     /// Its own copy of the root syntax, which its shapes are built over.
-    syntax: ProgramNode<'a>,
+    syntax: &'a KExpression<'a>,
     facts: &'a LoadFacts<'a>,
     terms: Keyed<'a, (TypeDigest, Term<'a>)>,
     refusal: Option<&'a str>,
@@ -92,7 +95,7 @@ pub struct Composition<'a> {
 
 impl<'a> Composition<'a> {
     pub fn new(
-        syntax: ProgramNode<'a>,
+        syntax: &'a KExpression<'a>,
         facts: &'a LoadFacts<'a>,
         terms: Keyed<'a, (TypeDigest, Term<'a>)>,
         refusal: Option<&'a str>,
@@ -108,7 +111,7 @@ impl<'a> Composition<'a> {
     }
 
     /// Its own copy of the root syntax.
-    pub fn syntax(&self) -> ProgramNode<'a> {
+    pub fn syntax(&self) -> &'a KExpression<'a> {
         self.syntax
     }
 
@@ -130,17 +133,17 @@ impl<'a> Composition<'a> {
 
     /// The syntax of the quote whose code shape is `segment`, inside `root`, a root syntax equal
     /// to this composition's: the paths are structural, so a value's own copy finds its quotes.
-    pub fn quote_in<'g>(&self, root: ProgramNode<'g>, segment: Segment) -> ProgramNode<'g> {
+    pub fn quote_in<'g>(&self, root: &'g KExpression<'g>, segment: Segment) -> &'g KExpression<'g> {
         let path = self.quotes[segment.index() as usize];
         let (first, down) = path
             .split_first()
             .expect("a nested quote lies below its root");
-        let mut part = &root.reference().parts[*first as usize].value;
+        let mut part = &root.parts[*first as usize].value;
         for at in down {
             part = child(part, *at as usize).expect("a path names a child its part has");
         }
         match part {
-            ExpressionPart::QuotedExpression(node) => *node,
+            ExpressionPart::QuotedExpression(node) => node,
             _ => unreachable!("a quote's path ends at its quoted expression"),
         }
     }
@@ -154,9 +157,8 @@ fn child<'g>(part: &ExpressionPart<'g>, at: usize) -> Option<&'g ExpressionPart<
         | ExpressionPart::SigiledTypeExpr(node)
         | ExpressionPart::RecordType(node)
         | ExpressionPart::QuotedExpression(node)
-        | ExpressionPart::MarkedUse(_, node) => {
-            node.reference().parts.get(at).map(|part| &part.value)
-        }
+        | ExpressionPart::MarkedUse(_, node)
+        | ExpressionPart::FilledUse(_, _, node) => node.parts.get(at).map(|part| &part.value),
         ExpressionPart::ListLiteral(items) => items.get(at).map(ListItem::part),
         ExpressionPart::DictLiteral(pairs) => pairs
             .get(at / 2)
@@ -185,7 +187,7 @@ pub fn quote_paths<'a>(
         scratch: BumpAllocator<'x>,
     ) {
         if let ExpressionPart::QuotedExpression(node) = part {
-            let at = node.reference().parts.as_ptr().addr();
+            let at = node.parts.as_ptr().addr();
             quotes.push((at, &*scratch.alloc_slice_copy(path)));
         }
         let mut at = 0;
@@ -212,7 +214,7 @@ pub fn quote_paths<'a>(
             let Located::Part(ExpressionPart::QuotedExpression(node)) = shape.located(*site) else {
                 continue;
             };
-            let at = node.reference().parts.as_ptr().addr();
+            let at = node.parts.as_ptr().addr();
             let (_, found) = (quotes.iter())
                 .find(|(quote, _)| *quote == at)
                 .expect("each quote's code shape is a quote of the syntax");

@@ -430,9 +430,7 @@ pub(crate) fn declared_group<'x>(
     // A `GROUP` statement's body is an in-place block; a bodyless head's is a list of head quotes.
     let members = match body.ok_or(())? {
         ExpressionPart::Expression(body) => scan_members(
-            body.reference()
-                .body_statements()
-                .map(|(statement, _)| statement),
+            body.body_statements().map(|(statement, _)| statement),
             scratch,
         )?,
         ExpressionPart::ListLiteral(heads) => scan_members(
@@ -489,7 +487,7 @@ fn quoted_symbol(part: &ExpressionPart<'_>) -> Result<KeywordSymbol, ()> {
     let ExpressionPart::QuotedExpression(quoted) = part else {
         return Err(());
     };
-    symbol_from_quote_body(quoted.reference()).ok_or(())
+    symbol_from_quote_body(quoted).ok_or(())
 }
 
 /// Whether two group records are the same group: content identity, over any two lifetimes.
@@ -600,7 +598,7 @@ impl<'graph> Scan<'graph, '_> {
                 }
                 match (role.reading(), &part.value) {
                     (Reading::Quote, ExpressionPart::QuotedExpression(quoted)) => {
-                        self.node(quoted.reference())?
+                        self.node(quoted)?
                     }
                     (Reading::Container, ExpressionPart::ListLiteral(items)) => {
                         for item in items.iter().filter_map(|item| quoted_body(item.as_part()?)) {
@@ -630,7 +628,8 @@ impl<'graph> Scan<'graph, '_> {
             ExpressionPart::Expression(node)
             | ExpressionPart::SigiledTypeExpr(node)
             | ExpressionPart::RecordType(node)
-            | ExpressionPart::MarkedUse(_, node) => self.node(node.reference()),
+            | ExpressionPart::MarkedUse(_, node)
+            | ExpressionPart::FilledUse(_, _, node) => self.node(node),
             ExpressionPart::ListLiteral(items) => {
                 for item in items.iter() {
                     self.part(item.part())?;
@@ -657,6 +656,7 @@ impl<'graph> Scan<'graph, '_> {
             | ExpressionPart::Identifier(_)
             | ExpressionPart::Type(_)
             | ExpressionPart::MarkedName(..)
+            | ExpressionPart::Splice(_)
             | ExpressionPart::Literal(_) => Ok(()),
         }
     }

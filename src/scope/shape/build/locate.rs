@@ -48,7 +48,8 @@ fn within_part(part: &ExpressionPart<'_>, here: SourceRef, address: usize) -> Op
         | ExpressionPart::SigiledTypeExpr(node)
         | ExpressionPart::RecordType(node)
         | ExpressionPart::QuotedExpression(node)
-        | ExpressionPart::MarkedUse(_, node) => source_within(node.reference(), address),
+        | ExpressionPart::MarkedUse(_, node)
+        | ExpressionPart::FilledUse(_, _, node) => source_within(node, address),
         ExpressionPart::ListLiteral(items) => items
             .iter()
             .find_map(|item| within_part(item.part(), here, address)),
@@ -62,6 +63,7 @@ fn within_part(part: &ExpressionPart<'_>, here: SourceRef, address: usize) -> Op
         | ExpressionPart::Identifier(_)
         | ExpressionPart::Type(_)
         | ExpressionPart::MarkedName(..)
+        | ExpressionPart::Splice(_)
         | ExpressionPart::Literal(_) => None,
     }
 }
@@ -87,7 +89,8 @@ fn part_in<'a>(part: &'a ExpressionPart<'a>, address: usize) -> Option<&'a Expre
         | ExpressionPart::SigiledTypeExpr(node)
         | ExpressionPart::RecordType(node)
         | ExpressionPart::QuotedExpression(node)
-        | ExpressionPart::MarkedUse(_, node) => part_within(node.reference(), address),
+        | ExpressionPart::MarkedUse(_, node)
+        | ExpressionPart::FilledUse(_, _, node) => part_within(node, address),
         ExpressionPart::ListLiteral(items) => {
             (items.iter()).find_map(|item| part_in(item.part(), address))
         }
@@ -101,6 +104,7 @@ fn part_in<'a>(part: &'a ExpressionPart<'a>, address: usize) -> Option<&'a Expre
         | ExpressionPart::Identifier(_)
         | ExpressionPart::Type(_)
         | ExpressionPart::MarkedName(..)
+        | ExpressionPart::Splice(_)
         | ExpressionPart::Literal(_) => None,
     }
 }
@@ -124,7 +128,8 @@ fn each_part_in<'a>(part: &'a ExpressionPart<'a>, visit: &mut impl FnMut(&'a Exp
         | ExpressionPart::SigiledTypeExpr(node)
         | ExpressionPart::RecordType(node)
         | ExpressionPart::QuotedExpression(node)
-        | ExpressionPart::MarkedUse(_, node) => each_part_within(node.reference(), visit),
+        | ExpressionPart::MarkedUse(_, node)
+        | ExpressionPart::FilledUse(_, _, node) => each_part_within(node, visit),
         ExpressionPart::ListLiteral(items) => {
             for item in items.iter() {
                 each_part_in(item.part(), visit);
@@ -145,6 +150,7 @@ fn each_part_in<'a>(part: &'a ExpressionPart<'a>, visit: &mut impl FnMut(&'a Exp
         | ExpressionPart::Identifier(_)
         | ExpressionPart::Type(_)
         | ExpressionPart::MarkedName(..)
+        | ExpressionPart::Splice(_)
         | ExpressionPart::Literal(_) => {}
     }
 }

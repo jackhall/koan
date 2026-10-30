@@ -514,7 +514,7 @@ fn handoffs(program: &Program<'_>) -> usize {
             let mut sites = vec![shape.site_of_node(statement)];
             crate::scope::each_part(statement, |part| {
                 if let crate::parse::ExpressionPart::Expression(node) = part {
-                    sites.push(shape.site_of_node(node.reference()));
+                    sites.push(shape.site_of_node(node));
                 }
             });
             handed += (sites.into_iter())

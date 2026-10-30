@@ -22,6 +22,8 @@ beside it:
   node and the door that lays one down.
 - [`code.rs`](code.rs) — a code node, the staging a tie does for one, and
   [the quote and `USING` doors](#a-quote).
+- [`view.rs`](view.rs) — [a code view](#a-code-view), the composer that
+  splices one where a quote is born, and the materializer that lays one flat.
 - [`data.rs`](data.rs) — a data node: staging, the memo derivation below, and
   the lay-down.
 - [`module/`](module/README.md) — a module node and a barrier node, and
@@ -76,11 +78,16 @@ activation. This module closes it:
   ([members are born coerced](module/README.md#members-are-born-coerced)):
   the function it stands before, the type a caller sees, the slot type the
   view's signature declares, and the two substitutions it coerces between. A
-  `Code` node is a quote's code, homed beside the node as a barrier is: the
-  quote's body as written, the code shape the program built for it where it
-  loads, its carried type, its **bound** run — each `$` name's binding — and its
-  **supplied** run — each hole a `USING` filled — both sorted by name, and the
-  same knot weight. A `Builtin` node points at a builtin overload's record in
+  `Code` node is a quote's code, homed beside the node as a barrier is: its
+  **syntax** — a written quote's body in program storage beside the segment of
+  the shape the load built for it, composed code's flat syntax in a region
+  beside the root that finds its composition, or an unbuilt
+  [code view](#a-code-view) — its carried type, its **bound** run — each `$`
+  name's, `$(…)` registration's and filled hole's binding, keyed by
+  [scope](../scope/README.md#splicing) and name and sorted so, empty for a view;
+  a root reads a pinned mark's binding at its scope's number, so only a quote
+  born inside composed code keys its pinned marks apart —
+  and the same knot weight. A `Builtin` node points at a builtin overload's record in
   program storage. `values::Knotted::resolve` says which arm a node is, and
   `Knotted::function`, `::builtin`, `::code`, `::module` and `::coerced` each
   answer only for their own arm.
@@ -359,19 +366,68 @@ reports. No binding it reads is an edge, since a quote that reads a fellow
 member is a node of its binder's knot, which the tie never asks the evaluator
 for. A hole or a `\` mark names no binding, so neither is held.
 
+A quote holding a splice is a **composing** quote: its shape, built at the
+load, holds no statements, only the reads of its `$` names and splice operands
+where it is written, and the door births a [code view](#a-code-view) over its
+written syntax and the elements its operands hold, refusing a non-list or a
+non-code element and syntax past the depth limit with an error the evaluator
+raises.
+
 [`using`](code.rs) is `code USING src`: a new one-node knot whose holes a field
 of `src` names — a record's field its type shows, read through
 [the door](../values/README.md#the-type-memo-and-satisfies) at the type the
 record's type names it at, or a module's member — are filled, and whose
-other holes stay holes. A keyworded hole takes the list of a module's
+other holes stay holes. It reads the code's shape — the load's for written
+code, its composition's for composed code, a view laid flat first — to find
+where each filled hole is read, and lays flat composed syntax with a filled
+mark there, in a scope of the fills' own, its fills in the one bound run. A keyworded hole takes the list of a module's
 registrations at its key, each key read off a function's registered shape, and
 stays open where the module has none; a module whose registrations at a hole's
 key rank their slots otherwise than the code's own candidates there is refused
 (`UsingRefused::Ranking`), since a candidate list carries one ranking. A field naming no hole is ignored, and a hole an
 earlier `USING` filled is no hole, so it is never rebound. Every binding the
 code carries that is an edge is resolved to the member it names, so the new
-knot's runs hold value words only. Code whose shape carries a refusal comes
+knot's run holds value words only. Code whose shape carries a refusal comes
 back unchanged, since which names are its holes is unknown.
+
+## A code view
+
+[`view.rs`](view.rs) holds unbuilt composed code as a **view**: a node of code as
+an AVL tree of items, on [the tree list views use](../values/README.md#views),
+each item a stretch of a flat node's parts, read forward or backward, beside
+the **env** its root-owned marks resolve through — the code value it came from,
+or a composing quote's own run — or one group or builtin-read quote part whose
+node is itself a view. Every tree node memoizes its subtree's count of parts,
+count of parts that are no group, deepest part and weight, so a splice, a read,
+`LENGTH`, the view's kind and its depth each cost the logarithm of the code's
+size, and a stretch is priced from a prefix of its parts' stored weights, laid
+once per flat node a view reads. Nothing in a view is copied, renumbered or
+digested.
+
+The **materializer** lays a view flat: every node fresh through one writer, so a
+flat syntax lies wholly in one region. Each mark its env's root owned is given
+its canonical scope, the env and its own scope numbered by first appearance,
+and is [pinned](../scope/README.md#splicing) where it now lies inside a quote
+value nested in the code, by the builtin shape of each node laid around it; a
+mark a nested quote value owned keeps scope 0. One bound run is gathered from
+each env's bindings at each scope first met, each edge resolved through the
+env's member and each `$(…)` registration kept as it is, since only an `EVAL`
+holds the type chain that groups them by key. Each gathered binding also records
+where its value stands among the view's **listed** values: every binding of
+each env, envs in the pre-order their stretches first appear, read without
+laying the view flat. A crossing copies each listed value once, then lays the
+view flat once into its destination, each flat binding taking its copy by that
+position; the content digest likewise digests the listed values, then lays the
+view flat once into storage of its own. Both cover every binding of each env,
+a superset of those the marks read, which the view's weight already prices.
+`BUILD` materializes into the value's region, `EVAL` and `USING` for
+themselves, and printing and equality into storage of their own, so a view
+equals, prints and digests as its flat form.
+
+The **composer** a composing quote is born through visits each part of the
+written quote once: a node none of whose owned parts splices answers nothing
+and stays a stretch of its parent, and a node that does becomes a view whose
+stretches are its own parts between the parts that compose.
 
 ## Closure bindings and edges
 
@@ -394,8 +450,10 @@ not an edge.
 ## Weight and copy
 
 A member's weight is its knot's: the run header, one `Node` per node, each
-function's closure run and typing record, each code node's resident and its
-bound and supplied runs, each data node's resident, each module's member run
+function's closure run and typing record, each code node's resident, its
+bound run and its region syntax — a view priced as its flat copy, its bindings
+as the whole knot of each env it reads, once per stretch, which may over-price
+and never under-prices, since the copy resolves an edge to its member's value — each data node's resident, each module's member run
 and each barrier's resident, with everything their value
 words point at. A member
 that is itself a knot member contributes its *whole* knot's weight, since a
@@ -419,7 +477,8 @@ the value family's deep copy copies each of them over its own
 whole knot in the destination's region, answered each value it asks for with
 that finished copy: every node rebuilt in index order — a function's closure
 run through `ClosureBindings::copied` and its typing record re-homed beside it
-through the destination's writer, a code node's bound and supplied runs, a data
+through the destination's writer, a code node's bound run and its composed
+syntax laid again, a view materialized there and keeping its type, a data
 node through `Circular::copied`, a module's member run and a barrier's
 underlying function — each edge carried verbatim, since an edge names a node by
 index and so means the same node in the copy, anonymous nodes included, and
@@ -490,8 +549,9 @@ call per knot. A node's content is what it is:
   demand first reaches it, its captures listed as a function's are until then;
 - a **barrier**: the digest of the function it stands before, the type a caller
   sees, the declared type and both substitutions;
-- a **code** node: its quote's code digest, its carried type, and each bound and
-  supplied name beside its value's digest;
+- a **code** node: its written quote's code digest or its composed syntax's
+  syntax digest — a view's read off its flat form — its carried type, and each
+  binding's scope and name beside its value's digest;
 - a **data** node: read through [the door](../values/README.md#views) at its
   memo — its memo, its kind and each part the memo shows, a value link by its
   digest and an edge by its index.
@@ -568,6 +628,13 @@ carries the scalar types alone.
   quote is written and printing its marks, code compared by its text and the
   values its names bind, a quote reading its own binder as a one-node knot, and
   `USING` over a record and a module, extra fields and refused code included.
+- [`tests/view.rs`](tests/view.rs) — code views: a read's part and slice,
+  either way; a fragment equal to the quote written of its parts, a hole again
+  and its `$` bindings kept; a mark a read moves into a quote value pinned; a
+  fragment of a knot's quote holding its member as a value; a filled hole kept
+  through a slice; and a law that a chain of slices lays flat as its memos say
+  — length, depth, kind and a weight that never under-prices, a composed
+  view's included, linear along a chain of splices.
 - [`tests/equality.rs`](tests/equality.rs) — comparison and rendering: rings
   from two programs are equal, a function by the `FN` written and its
   captures, a list node holding a function equal to itself, a module

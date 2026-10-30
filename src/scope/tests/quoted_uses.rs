@@ -66,7 +66,7 @@ fn code<'graph>(shape: &BodyShape<'graph>, statement: usize) -> &'graph BodyShap
 /// The node a parenthesized or marked part holds.
 fn node<'graph>(part: &ExpressionPart<'graph>) -> &'graph KExpression<'graph> {
     match part {
-        ExpressionPart::Expression(node) | ExpressionPart::MarkedUse(_, node) => node.reference(),
+        ExpressionPart::Expression(node) | ExpressionPart::MarkedUse(_, node) => node,
         _ => panic!("a node"),
     }
 }
@@ -207,7 +207,7 @@ LET q = #(PRINT $(GREET 1) $(PRINT 2))";
         assert_eq!(greet.candidates, [Candidate::One(captured(1))]);
         let capture = code.captures()[1];
         assert_eq!(capture.name, shape.slot_name(registration));
-        assert_eq!(capture.mark, Some(Mark::Written));
+        assert_eq!(capture.mark, Some(Mark::DOLLAR));
         assert_eq!(
             capture.source,
             CaptureSource::Read(Coordinate::Activation {
@@ -391,7 +391,7 @@ LET q = #($(a < b < c))";
         // The operator run's two `<` uses share one capture, and none of its uses is a hole.
         assert_eq!(
             keyed_captures(code),
-            [(shape.slot_name(registration), Some(Mark::Written))]
+            [(shape.slot_name(registration), Some(Mark::DOLLAR))]
         );
     });
     // An operator run written in an operand is one of its own, which the mark does not cover.
@@ -462,7 +462,7 @@ LET s = (NOT 1)";
             equal.candidates,
             [Candidate::One(Coordinate::Builtin(_)), Candidate::One(read)] if *read == captured(0)
         ));
-        let [(registration, Some(Mark::Written))] = keyed_captures(code)[..] else {
+        let [(registration, Some(Mark::DOLLAR))] = keyed_captures(code)[..] else {
             panic!("no hole for either use");
         };
         assert!(matches!(registration, BinderSymbol::Registration(_)));

@@ -7,8 +7,9 @@
 //! run, where every keyworded use at the key lists it first among its candidates.
 //!
 //! The library is `PRINT`; `+ - * /` over `Number`; `< <= > >=` over `Number`, returning `Bool`;
-//! `AND` and `NOT` over `Bool`; `==` over `Any`; `LENGTH` over a list, a dict or a string, counting
-//! its elements, entries or code points; `|` and `&` over types, as the infix pair and the
+//! `AND` and `NOT` over `Bool`; `==` over `Any`; `LENGTH` over a list, a dict, a string or code,
+//! counting its elements, entries, code points or root parts; `BUILD` over code, typing unbuilt
+//! code exactly under its composition, as the evaluator runs it; `|` and `&` over types, as the infix pair and the
 //! unary list form an operator run of them is rewritten to; and each overload of the builtin
 //! expression shapes whose slots dispatch evaluates — `ATTR`, `FROM` and `USING` — typed
 //! as their [`BUILTIN_SHAPES`] entry types it. Every overload ranks its slots in written order.
@@ -68,12 +69,10 @@ pub(super) enum Native {
     /// `FROM`.
     Project,
     Using,
-    /// `LENGTH` over a list, a dict or a string.
+    /// `LENGTH` over a list, a dict, a string or code.
     Length,
-    /// `COMPOSE q`, for tests alone: code composed at run time, the one producer until code
-    /// splicing ships.
-    #[cfg(test)]
-    Compose,
+    /// `BUILD` over code: unbuilt code carried at the exact type its shape gives it.
+    Build,
 }
 
 impl Native {
@@ -101,8 +100,7 @@ impl Native {
         Native::Project,
         Native::Using,
         Native::Length,
-        #[cfg(test)]
-        Native::Compose,
+        Native::Build,
     ];
 
     /// The native a builtin node's `id` names.
@@ -217,11 +215,21 @@ static OVERLOADS: &[Overload] = &[
         returns: KType::NUMBER,
         native: Native::Length,
     },
-    #[cfg(test)]
     Overload {
-        elements: &[Element::Keyword("COMPOSE"), ANY],
+        elements: &[
+            Element::Keyword("LENGTH"),
+            Element::Slot(Takes::Is(KType::ANY_CODE)),
+        ],
+        returns: KType::NUMBER,
+        native: Native::Length,
+    },
+    Overload {
+        elements: &[
+            Element::Keyword("BUILD"),
+            Element::Slot(Takes::Is(KType::ANY_CODE)),
+        ],
         returns: KType::ANY_CODE,
-        native: Native::Compose,
+        native: Native::Build,
     },
 ];
 
@@ -523,74 +531,27 @@ pub(super) fn run<'graph, 'here>(
             ) {
                 Ok(filled) => Value::Knotted(filled),
                 Err(UsingRefused::Ranking { key }) => raise(Raised::RankedTwice { key }),
+                Err(UsingRefused::TooDeep) => raise(Raised::Uncomposed {
+                    refused: crate::knot::ComposeRefused::TooDeep,
+                }),
             }
         }
-        // A list's or a dict's count is its memo, a view's included; a string counts code points.
+        // A list's or a dict's count is its memo, a view's included; a string counts code points,
+        // and code its root's parts.
         Native::Length => {
-            let count = match value(0).as_text() {
-                Some(text) => text.len(),
-                None => (value(0).surface(types, scratch))
+            let count = match (value(0).as_text(), value(0).as_code()) {
+                (Some(text), _) => text.len(),
+                (_, Some(code)) => crate::knot::code_length(code),
+                _ => (value(0).surface(types, scratch))
                     .expect("a list or dict slot admits containers alone")
                     .len(),
             };
             Value::Number(count as f64)
         }
-        #[cfg(test)]
-        Native::Compose => compose(value(0), program, writer, types, scratch),
+        // Code its shape types already finishes as it is; the evaluator builds the rest under
+        // their compositions.
+        Native::Build => value(0),
     }
-}
-
-/// `COMPOSE q`: code composed at run time over the syntax the quote's code `value` was written
-/// with, carried at its type, binding each `$` name as the quote does and each `$(…)` key to the
-/// list of the registrations the quote's use there reads. Holes a `USING` filled are dropped.
-///
-/// `COMPOSE "#(…)"`: code composed at run time over syntax the program never held, parsed from the
-/// quote the text writes into storage the test leaks, binding nothing: the one way a composition
-/// computes a fact the load did not.
-#[cfg(test)]
-fn compose<'graph, 'here>(
-    value: KValue<'graph, 'here>,
-    program: &crate::program::Program<'graph>,
-    writer: Writer<'here, '_>,
-    types: &Chain<'_, 'here, '_, '_>,
-    scratch: &Bump,
-) -> KValue<'graph, 'here> {
-    use crate::knot::composed_code;
-    use crate::values::{Link, List};
-    if let Value::Str(text) = value {
-        let syntax = super::tests::quoted(text, program.symbols());
-        let ktype = types.code_needing(scratch, syntax.code_kind(), &[]);
-        return Value::Knotted(composed_code(writer, syntax, ktype, &[], types));
-    }
-    let member = value.as_code().expect("`COMPOSE` is handed a quote's code");
-    let code = member.code().expect("a code member holds code");
-    let mut bound = BumpVec::new_in(scratch);
-    let mut keyed: BumpVec<'_, (crate::symbols::KeySymbol, KValue<'graph, 'here>)> =
-        BumpVec::new_in(scratch);
-    for (name, link) in code.bound() {
-        let value = link.resolve(member);
-        match name {
-            BinderSymbol::Registration(_) => {
-                let shape = layout::registered_shape(value).expect("a registration is a function");
-                keyed.push((layout::key_of(shape, types), value));
-            }
-            name => bound.push((*name, Link::Value(value))),
-        }
-    }
-    keyed.sort_by_key(|(key, _)| *key);
-    for run in keyed.chunk_by(|left, right| left.0 == right.0) {
-        let functions = run.iter().map(|(_, function)| *function);
-        let list = Value::List(List::of_candidates(writer, functions, types));
-        bound.push((BinderSymbol::Key(run[0].0), Link::Value(list)));
-    }
-    bound.sort_unstable_by_key(|(name, _)| *name);
-    Value::Knotted(composed_code(
-        writer,
-        code.body(),
-        code.ktype(),
-        &bound,
-        types,
-    ))
 }
 
 /// The elements of a list a slot admitted, read through its surface into `scratch`.
@@ -620,7 +581,7 @@ fn label(operand: Operand<'_, '_>) -> BinderSymbol {
 /// The name `value` is, where it is a one-name quote's code.
 fn one_name(value: KValue<'_, '_>) -> Option<BinderSymbol> {
     let code = value.as_code().and_then(|member| member.code())?;
-    super::one_name(code.body().reference())
+    super::one_name(code.body()?)
 }
 
 /// The field `name` of `value`, restamped in `writer`'s region at the type it is seen at: a

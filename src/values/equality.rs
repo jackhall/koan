@@ -11,7 +11,7 @@
 //! A module or a barrier has no structural equality: a comparison that reaches one on either side
 //! is [`Incomparable`], which the `==` builtin reports, never `false`. A function compares by its
 //! identity — one per `FN`, `EXPR` or `OP` written — and its closure bindings; a quote's code by its
-//! syntax, marks included, and the values its `$` names and its supplied holes bind.
+//! syntax, marks included, and the values its `$` names and its filled marks bind.
 //!
 //! Two knot members compare as a bisimulation: a member pair, each beside the type it is seen at,
 //! is recorded before what it holds is compared, and a recorded pair met again counts as equal. See
@@ -25,11 +25,11 @@
 //! A quote's syntax is compared recursively ([`expression_equal`]): parsed syntax nests no deeper
 //! than [`MAX_SYNTAX_DEPTH`](crate::parse::MAX_SYNTAX_DEPTH).
 
-use crate::memory::{BumpAllocator, BumpBackedSet, BumpVec, bump_set};
+use crate::memory::{BumpAllocator, BumpBackedSet, BumpVec, bump_set, program_storage};
 use crate::parse::{ExpressionPart, KExpression, KLiteral, ListItem};
 use crate::type_lattice::{DeclaredType, KType, satisfied_by};
 
-use super::circular::{CodeView, Resolved};
+use super::circular::{Binding, CodeView, Resolved};
 use super::surface::Parts;
 use super::{Chain, Knotted, Seen, Surface, Value};
 
@@ -121,10 +121,18 @@ fn pair_equal<'left, 'right, X: Knotted, Y: Knotted>(
                 );
                 return Ok(true);
             }
-            (Resolved::Code(code), Resolved::Code(other)) => {
+            (Resolved::Code, Resolved::Code) => {
                 if !seen.insert(entered) {
                     return Ok(true);
                 }
+                // A view is laid flat into storage of the comparison's own.
+                let storage = program_storage();
+                let writer = storage.brand().writer();
+                let read = "a code member reads its syntax";
+                let (code, other) = (
+                    left.code_view(writer).expect(read),
+                    right.code_view(writer).expect(read),
+                );
                 return Ok(code_gate((code, left), (other, right), pending));
             }
             _ => {}
@@ -197,34 +205,29 @@ fn surface_gate<X: Knotted, Y: Knotted>(
     }
 }
 
-/// Two quotes' code: the same syntax, and the same names bound by their `$` names and supplied
-/// holes. When they are, each name's two values are pushed onto `pending`, bound then supplied.
+/// Two quotes' code: the same syntax, and the same scopes and names bound by their `$` names and
+/// filled marks. When they are, each name's two values are pushed onto `pending`.
 fn code_gate<'left, 'right, X: Knotted, Y: Knotted>(
-    (left, holder): (CodeView<'left, X>, X),
-    (right, other): (CodeView<'right, Y>, Y),
+    (left, holder): (CodeView<'_, 'left, X>, X),
+    (right, other): (CodeView<'_, 'right, Y>, Y),
     pending: &mut Pending<'_, 'left, 'right, X, Y>,
 ) -> bool {
-    let names = |left: &[(_, _)], right: &[(_, _)]| {
+    let names = |left: &[Binding<'_, X>], right: &[Binding<'_, Y>]| {
         left.len() == right.len()
             && left
                 .iter()
                 .zip(right)
-                .all(|(left, right)| left.0 == right.0)
+                .all(|(left, right)| left.key() == right.key())
     };
-    if !expression_equal(left.body, right.body)
-        || !names(left.bound, right.bound)
-        || !names(left.supplied, right.supplied)
-    {
+    if !expression_equal(left.body, right.body) || !names(left.bound, right.bound) {
         return false;
     }
-    for (left, right) in [(left.bound, right.bound), (left.supplied, right.supplied)] {
-        pending.extend(left.iter().zip(right).map(|(left, right)| {
-            (
-                Seen::of(left.1.resolve(holder)),
-                Seen::of(right.1.resolve(other)),
-            )
-        }));
-    }
+    pending.extend(left.bound.iter().zip(right.bound).map(|(left, right)| {
+        (
+            Seen::of(left.link.resolve(holder)),
+            Seen::of(right.link.resolve(other)),
+        )
+    }));
     true
 }
 
@@ -252,6 +255,10 @@ fn part_equal(left: &ExpressionPart<'_>, right: &ExpressionPart<'_>) -> bool {
         (Part::MarkedUse(mark, left), Part::MarkedUse(other, right)) => {
             mark == other && expression_equal(left, right)
         }
+        (Part::FilledUse(scope, keys, left), Part::FilledUse(other, held, right)) => {
+            scope == other && keys == held && expression_equal(left, right)
+        }
+        (Part::Splice(left), Part::Splice(right)) => left == right,
         (Part::Expression(left), Part::Expression(right))
         | (Part::SigiledTypeExpr(left), Part::SigiledTypeExpr(right))
         | (Part::RecordType(left), Part::RecordType(right))

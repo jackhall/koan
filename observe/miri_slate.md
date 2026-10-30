@@ -84,6 +84,11 @@ silence the stale-anchor check; delete a redundant test instead.
   laid: the branch, and the decision memo of the cells whose results are built in the half,
   replaced as a cell lays a new one. No `unsafe` of its own; the backing `unsafe` is
   `cellgraph`'s header reattach and its projected door.
+- `src/knot/code.rs` — a code value's composed syntax is laid in a region through the syntax
+  copier's `Writer` and read, after its composition is evicted, by values born of it or copied by
+  a crossing: syntax nodes, their part runs and strings in a cell's region. No `unsafe` of its own;
+  the backing `unsafe` is `cellgraph`'s `fill` and reattach seam, which no other slate test drives
+  with region-laid syntax.
 <!-- slate-audit-whitelist:end -->
 
 ## The slate
@@ -329,17 +334,29 @@ composition and their pinners may be released in any order the arena's policy al
   budget and settled again by a replay.
 - `a_pinned_composition_outlives_its_last_pinner`
   a settlement whose facts read a wording out of a composition it pins, the arena's handle on the
-  composition dropped first, and the composition released last, by the pinner's own `Rc`. (A
-  program-level composition test leaks the syntax the test-only `COMPOSE` parses, by design.)
+  composition dropped first, and the composition released last, by the pinner's own `Rc`.
+
+**Composed syntax** ([src/knot/code.rs](../src/knot/code.rs),
+[src/scope/records.rs](../src/scope/records.rs)) — code composed at run time holds its syntax in the
+region its code value lives in, and every value born of it points into that root or, once copied,
+holds its own copy laid by the crossing.
+
+- `a_quote_born_of_composed_code_runs_under_its_composition`
+  a quote born inside composed code, its syntax inside the root's region-laid syntax, handed back
+  across its `EVAL`'s frame, run again after its composition is evicted and printed.
+- `a_composition_evicted_and_rebuilt_gives_its_functions_the_same_identity`
+  functions born of composed code, each keeping its root's syntax beside its body's record, crossed
+  out of their frames and called after their composition is evicted, which the call rebuilds from
+  the copied root.
 
 ## Recent full-slate run durations
 
 Prepended by `python3 tools/miri.py --log` on a clean run, trimmed to five.
 
 <!-- slate-durations:start -->
+- 2026-10-29: 1461s — 45 tests, 0 leaks, 0 UB
+- 2026-10-29: 1455s — 45 tests, 0 leaks, 0 UB
+- 2026-10-29: 1489s — 45 tests, 0 leaks, 0 UB
 - 2026-10-25: 1979s — 41 tests, 0 leaks, 0 UB
 - 2026-10-22: 1174s — 46 tests, 0 leaks, 0 UB
-- 2026-10-22: 1176s — 46 tests, 0 leaks, 0 UB
-- 2026-10-22: 1173s — 46 tests, 0 leaks, 0 UB
-- 2026-10-22: 1173s — 46 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

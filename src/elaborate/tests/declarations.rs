@@ -379,6 +379,50 @@ fn a_code_kind_needing_names_is_spelled_with_needing() {
     }
 }
 
+/// `UNBUILT Kind` is the code kind whatever its code needs, rendered back as written;
+/// `UNBUILT Code` is `Code`, and a kind that is no code refuses as `NEEDING` refuses it.
+#[test]
+fn an_unbuilt_code_kind_is_spelled_with_unbuilt() {
+    fn kinds(
+        _: &Chain<'_, '_, '_, '_>,
+        _: BumpAllocator<'_>,
+        _: &SymbolInterner,
+    ) -> Vec<(&'static str, KType)> {
+        vec![("Block", KType::BLOCK), ("Code", KType::ANY_CODE)]
+    }
+    let declared = |source: &str, check: &dyn Fn(Program<'_, '_, '_>, Result<(), Elaboration>)| {
+        with_program(
+            source,
+            kinds,
+            |_, _, _| Held::Empty,
+            |program| {
+                let brought = program.declare();
+                check(program, brought)
+            },
+        )
+    };
+    declared(
+        "LET Loose = :(UNBUILT Block)\nLET Top = :(UNBUILT Code)",
+        &|program, brought| {
+            brought.expect("an unbuilt code kind declares");
+            let unbuilt = program.types.code_unbuilt(KType::BLOCK);
+            assert_eq!(program.bound("Loose"), unbuilt);
+            assert_eq!(program.bound("Top"), KType::ANY_CODE);
+            assert_eq!(
+                display_name(unbuilt, program.types, program.symbols).to_string(),
+                ":(UNBUILT Block)"
+            );
+        },
+    );
+    declared("LET Bad = :(UNBUILT Number)", &|program, brought| {
+        assert!(
+            matches!(brought, Err(Elaboration::Unsupported { .. })),
+            "a kind that is no code refuses: {brought:?}"
+        );
+        assert!(program.unbound("Bad"));
+    });
+}
+
 #[test]
 fn a_projection_off_a_fellow_union_names_no_tag_yet() {
     declared(

@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 0670607c9b3eca107b3c5b2f943766c30c9c40f3485666bc1ca7c6cfb0baa062 # shrinks to shapes = [Quote([MarkedUse(Written(Scope { number: 0, pinned: false }), [Keyword("AA")])]), Keyword("AA"), Keyword("AA"), Keyword("AA"), RecordType([Keyword("AA")]), Type("ByOk"), List([]), Keyword("TZB"), Keyword("-"), Quote([Dict([])]), Keyword("<"), Nested([Boolean(true)]), Identifier("qm47"), Keyword("YXY"), Keyword("|/"), Dict([(Keyword("*"), MarkedUse(Written(Scope { number: 0, pinned: false }), [Text(1), Number(0)]))]), Nested([Quote([Number(5), Number(5)])]), Keyword("/<"), Keyword("+"), Record([("oh", MarkedName(Written(Scope { number: 0, pinned: false }), "f15ll"))]), Keyword("FQ")]

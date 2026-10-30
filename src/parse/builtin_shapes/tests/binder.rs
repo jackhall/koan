@@ -339,7 +339,7 @@ fn a_bound_is_read_off_its_declarator() {
     let ExpressionPart::SigiledTypeExpr(node) = typed.parts[3].value else {
         panic!("a sigiled type expression");
     };
-    assert_eq!(entries(&node.reference().parts[3].value), vec![(elt, true)]);
+    assert_eq!(entries(&node.parts[3].value), vec![(elt, true)]);
 }
 
 // ---------- rankings ----------
@@ -468,7 +468,7 @@ fn find_needing<'a>(node: &KExpression<'a>) -> Option<&'a [crate::parse::ListIte
         ExpressionPart::Expression(child)
         | ExpressionPart::SigiledTypeExpr(child)
         | ExpressionPart::RecordType(child)
-        | ExpressionPart::QuotedExpression(child) => find_needing(child.reference()),
+        | ExpressionPart::QuotedExpression(child) => find_needing(child),
         _ => None,
     })
 }

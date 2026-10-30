@@ -16,7 +16,7 @@ use crate::bump::{BumpAllocator, BumpVec};
 use super::chain::TypeChain;
 use super::handle::Handle;
 use super::node::TypeNode;
-use super::order::{code_needs, is_subtype_of};
+use super::order::{code_kind_of, code_needs, is_subtype_of};
 use super::signatures::is_signature_type;
 use super::stored::{Content, Linked};
 use super::tiers::Habitat;
@@ -146,6 +146,25 @@ impl<'run> Lockstep<'run> for Meet {
         }
         // Two code kinds, one needing names, meet at the kinds' meet needing the names both need.
         // Two bare kinds unordered in the code tree have no meet.
+        // An unbuilt kind meets a code type at the kinds' meet, needing what the other side needs:
+        // unbuilt again when both are.
+        let unbuilt = |kt: Linked<'run>| matches!(kt.content(), Content::CodeUnbuilt { .. });
+        if unbuilt(a) || unbuilt(b) {
+            let (Some(x), Some(y)) = (code_kind_of(a), code_kind_of(b)) else {
+                return types.never();
+            };
+            let kind = meet_through_variables(types, scratch, x, y);
+            if kind == Handle::NEVER {
+                return types.never();
+            }
+            return match (unbuilt(a), unbuilt(b)) {
+                (true, true) => types.code_unbuilt(kind),
+                (true, false) => {
+                    types.code_needing(scratch, kind, code_needs(b).map_or(&[], |n| n.1))
+                }
+                _ => types.code_needing(scratch, kind, code_needs(a).map_or(&[], |n| n.1)),
+            };
+        }
         let needing = |kt: Linked<'run>| matches!(kt.content(), Content::CodeNeeding { .. });
         match (code_needs(a), code_needs(b)) {
             (Some((x, xs)), Some((y, ys))) if needing(a) || needing(b) => {

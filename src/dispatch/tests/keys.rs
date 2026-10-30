@@ -445,7 +445,7 @@ fn wraps_pick(source: &str) -> (Segment, Site, bool) {
         let Some(ExpressionPart::Expression(node)) = wrap.rhs(slot(program, wrap, "p")) else {
             panic!("`p` is bound to a call");
         };
-        let site = wrap.site_of_node(node.reference());
+        let site = wrap.site_of_node(node);
         let narrowing = program
             .facts()
             .use_statics(&program.tiers().resting(), wrap, site)

@@ -830,7 +830,7 @@ Two forms introduce names no shape can see.
 A quote is code as a value: its syntax, and bindings for some of its names.
 Nothing in a quote resolves unless the quote says how, and the shape its code
 runs in is built only where that code is built — as a callable's body, or by
-`EVAL`. One rule holds the pieces together: **code fills holes, frames never
+`EVAL` or `BUILD`. One rule holds the pieces together: **code fills holes, frames never
 do.** A binder anywhere in the code a quote is composed into binds a hole in
 it; a callable's parameters, locals and scope never reach code it merely
 receives; and a name bound with `$` is never re-resolved.
@@ -886,7 +886,13 @@ Inside a quote, a name or a keyworded use is in one of three states:
   template's holes can be filled in stages. A field naming no hole is ignored,
   as record width subtyping ignores a field a slot does not name, so templates
   can share one context record; a hole an earlier `USING` filled is no hole, and
-  is never rebound.
+  is never rebound. What it returns is composed code in which each filled hole
+  is a **filled mark** in a scope of its own ([splicing](#splicing)): resolved
+  through its fill as a `$` name is through its binding, so the fill survives
+  any splice or slice of the code and no binder composed beside it rebinds it,
+  and printed bare, as it was written. A filled keyworded use in an operator run
+  lists the keys it fills, so the run's other keys stay holes. Its result is
+  built, with the type of the code it filled.
 
 Both marks work on value and type names alike, a type name's in a type
 expression too: `:(LIST OF $Alias)`, or `:($Alias)` alone, since the `:` sigil
@@ -898,7 +904,8 @@ everywhere. A use of an open bucket — `PRINT`, `==`, an operator — can be
 overloaded, so a mark around it stands. A mark belongs to the innermost quote
 that is a value; a quote a builtin reads as written — a callable's body, a
 head, an arm — is syntax of the code around it, so a `$y` in an `FN` body
-inside `#(…)` is that quote's. Neither mark has a reading outside a quote
+inside `#(…)` is that quote's. A [pinned](#splicing) mark belongs to its code's
+root wherever it sits. Neither mark has a reading outside a quote
 value, where every name already resolves where it is written, and a mark there
 is refused; running code is `EVAL`'s. Neither leads a line: each prefixes one
 atom or glues to one group, so `$x` alone on a line is the bound name, and on a
@@ -926,13 +933,18 @@ name fills.
 A splice's outer sigil says when it happens. `$..xs` spreads where the quote is
 written: `xs` names a list of code, and its elements become the quote's syntax
 when the quote is born. `..$xs` binds `xs` where the quote is written and
-spreads its value when the code runs, as `..` spreads outside a quote. `$`
-still never evaluates, since splitting a list runs no koan code, so the operand
-of `$..` is a name, and each element is code: a value element would be spliced
-syntax or a nested quote according to its kind. `\..xs` has no reading, since
-a `\` name binds where a body is built, to a slot whose value arrives with each
-call. A spread is one level deep, as Lisp's `,@xs` and Julia's `$(xs...)` are,
-and a spliced part [composes](#composition) as any part does.
+spreads its value when the code runs, as `..` spreads outside a quote, and
+`..\xs` spreads what the build supplies. `$` still never evaluates, since
+splitting a list runs no koan code, so the operand of `$..` is a name, and each
+element is code: a value element would be spliced syntax or a nested quote
+according to its kind. A computed list enters by `LET` first. `\..xs` has no
+reading, since a `\` name binds where a body is built, to a slot whose value
+arrives with each call. A spread is one level deep, as Lisp's `,@xs` and
+Julia's `$(xs...)` are, and a spliced part [composes](#composition) as any part
+does. A splice stands only as a part of an expression: a list or brace literal,
+a type expression and a marked use hold none. Where the load can tell that
+`xs` is never a list of code it refuses the program, and otherwise a list that
+is not one is an error value where the quote is born.
 
 The level a splice acts at is read from the parts around it, never from the
 lines, since a block is any node of two or more groups
@@ -954,14 +966,64 @@ itself ([lowering](../parse/README.md#the-division-of-labour-with-sexlex)), so
 a block split across lines splices as it does on one line, while a written
 `($..xs)` stays a group, as every written paren does.
 
-Taking a fragment out of code is code's slice, as it is a list's. A hole names
-no binding, so a fragment taken away from the binder that filled it holds a
-hole again: `PRINT x` taken out of a block that also holds `LET x = 4` has `x`
-a hole. A fragment keeps its `$` bindings wherever it goes.
+Taking a fragment out of code is code's read, as it is a list's
+([reads](../dispatch/README.md#what-a-node-is)): `code i` is part `i` as code, a
+group part as the node it wraps and any other part as a one-part quote, so it
+inverts a part-level splice; `code {from, to}` is the node of exactly those
+parts; and `LENGTH code` counts its parts. A hole names no binding, so a
+fragment taken away from the binder that filled it holds a hole again:
+`#((LET x = 4) (PRINT x)) 1` is `PRINT x` with `x` a hole. A fragment keeps its
+`$` bindings wherever it goes, even where a read cuts a quote away from the
+builtin that read it as written. With `LET q = #(FN :{a :Number} -> Any = #(PRINT $x))`,
+`q 5` is `#(#(PRINT $x))`: the inner quote is now a quote value, but its `$x`
+still reads `q`'s binding of `x`. Such a mark is **pinned**: it belongs to the
+code's root past every quote around it, and prints as written.
+
+A node holding a splice has no expression shape until the quote is born, so the
+load cannot tell whether a quote part beside the splice will be a quote value
+or a builtin's body. The quote therefore binds, where it is written, every `$`
+name such a part would own, as it binds its own. A part the splice makes a
+builtin's body keeps those bindings; a part left a quote value binds its `$`
+names where that quote is born, as any quote value does. A name nothing binds
+where the quote is written is refused at load, so with no `y` in sight
+
+```koan
+LET q = #((LET y = 2) (f $..args #(PRINT $y)))
+```
+
+is refused, and the inner quote is bound outside the splicing node instead:
+`#((LET y = 2) (LET p = #(PRINT $y)) (f $..args p))`. A quote value inside a
+spliced element is the element's own, so its `$` names bind where it is born.
+When the splice makes it a builtin's body instead, as
+`#(FN :{a :Number} -> Any = $..qs)` does with `qs` bound to
+`[#(#(PRINT $x))]`, that quote is never born, so nothing binds its `$x`, and an
+`EVAL` of the code reports `x` unbound.
+
+**Scopes.** Composition puts together parts whose `$` names were bound by
+different quotes, so a `$` mark carries the **scope** of the quote its binding
+came from, and a code value's bindings are one run keyed by scope and name.
+With `mk` returning `#(PRINT $i)`, splicing `(mk 1)` and `(mk 2)` holds `$i`
+twice in two scopes and prints `1` then `2`. Scopes are numbered by their first
+appearance in the code's own marks, so a quote spliced alone is its written
+text, and the same code value spliced twice is one scope, since its bindings
+are one run. A filled mark is scoped the same way, and a pinned mark reads its
+root's binding at its scope. Printing never shows a scope or a pin.
+
+**Code views.** Spliced and sliced code is a **view**
+([views](../values/README.md#views)): a balanced tree over stretches of the
+syntax it came from, beside the code each stretch's bindings come from. A
+splice, a read and `LENGTH` copy, renumber and digest nothing, so code grown a
+statement at a time costs each step the logarithm of its size. A view is
+**unbuilt**: its type is `:(UNBUILT <kind>)`
+([the code family](../../lattice/src/types/vocabulary.md#the-code-family)),
+its kind read off its parts, needing whatever it needs. Only the shape builder
+can say which `\` names the code's own binders fill, and a view runs it only
+when it is [built](#building-code).
 
 ### Building code
 
-A shape is built from code in two places, and each fills different names.
+A shape is built from code in two ways, and each fills different names: as a
+callable's body, and alone, by `EVAL` or `BUILD`.
 
 - **A callable's body.** A body written in place resolves the names written in
   it where it is written, which is where it is built: in
@@ -987,7 +1049,16 @@ A shape is built from code in two places, and each fills different names.
   so an `EVAL` takes no hold on a frame and waits on no binder declared before
   it: its operand is an eager mention like any other. Its `\` marks are filled
   only through a [code parameter](#code-parameters)'s type, and any other mark
-  left is unbound.
+  left is unbound. An `EVAL` of an unbuilt view lays it flat for that `EVAL`
+  alone.
+- **`BUILD`.** `BUILD code` lays a view flat once — its syntax in the value's
+  region, its `$` scopes numbered, one binding run — finds or builds its
+  composition by the syntax digest, and answers the code at its exact type, its
+  kind needing the `\` names its own binders leave open. Written code is built
+  where the program loads, so `BUILD` of it, or of code already built, answers
+  it unchanged. `BUILD` refuses nothing: code that does not type keeps its
+  refusal, and the `EVAL` that runs it reports it. A program that runs composed
+  code many times builds it once, and every `EVAL` after finds its composition.
 
 ```koan
 EXPR #(GREET who :Str) -> Str = #(PRINT who)
@@ -1020,8 +1091,11 @@ admits every quote. Dispatch reads a carried type as it reads any other, so a
 quote needing a name the parameter does not list is a non-match that falls
 through. An `EVAL` of the parameter resolves the supplied names and keys where
 the `EVAL` is written, statically, as it resolves a name written there, so
-nothing is searched at run time. Composition and slicing recompute a carried
-type: a binder composed ahead of `\it` binds it, and `it` leaves the list.
+nothing is searched at run time. Spliced and sliced code is unbuilt, and an
+unbuilt type lists no names, so a `NEEDING` parameter admits such code only
+once [`BUILD`](#building-code) recomputes its type: a binder composed ahead of
+`\it` binds it, and `it` leaves the list. A parameter typed `:(UNBUILT Block)`
+admits every block, built or not, and an `EVAL` of it offers nothing.
 Haskell's implicit parameters are the same consent by name: `?x` in a type,
 supplied where the value is used.
 
@@ -1059,7 +1133,15 @@ printed code reads back with the same holes and marks.
 A `$` name naming a fellow knot member is a deferred mention, so a quote
 holding one is born in that member's knot as a function node is:
 `LET echo = #(PRINT $echo)` is a one-node knot, and it equals its copy. A hole
-or a `\` mark names no binding and adds no edge.
+or a `\` mark names no binding and adds no edge. A quote holding a splice is
+composed when it is born, from values it reads there, so it is never a knot
+node: one whose `$` name names a fellow member is refused at load, and a splice
+operand naming one is an eager cycle. A fragment of a knot's quote resolves each
+edge to its member's value word, so no code outside a knot holds an edge.
+
+Equality reads a mark's scope and pin as syntax, so code spliced from two quotes binding
+`$i` alike is unequal to one quote holding `$i` twice: an over-distinction, which
+keys two equal things apart and is sound.
 
 ## Operator groups
 
@@ -1178,6 +1260,13 @@ its operand, and the synthesized block and its last statement the whole run.
 
 A statement holding no operator run is returned unchanged, keeping its own part
 addresses, so the shape of untouched code is the shape of the parse.
+The shape table records, for each node the rewrite builds, the written node it
+stands for (`Shapes::origin`): the node it rebuilt over a rewritten part, or
+the operator run a chained node was built for. So a site a shape's statements
+hold is found in the syntax as written, which is where a `USING` writes its
+filled marks ([filled.rs](filled.rs)): every operand of one run resolves
+alike, so a name hole fills each operand naming it, and a key hole fills the
+run, its other keys left holes.
 
 A run's length counts toward the
 [syntax depth limit](../parse/README.md#the-syntax-depth-limit): the parse
@@ -1206,7 +1295,12 @@ program only for a `$` name nothing binds where the quote is written:
 - an **unbound** name — no binding of it visible where the mention reads, or
   a hole left in code a callable's body is built from ([quotes](#quotes));
 - an **eager cycle** — a component with an eager mention of a fellow member;
-- a **mark outside a quote** — a `$` or `\` no quote value holds;
+- a **mark outside a quote** — a `$`, a `\` or a `$..` splice no quote value
+  holds;
+- a **splice never code** — a `$..` operand whose static type can never be a
+  list of code ([splicing](#splicing));
+- a **splice in a knot** — a quote holding a splice whose `$` name names a
+  fellow member of its binder's knot ([equality and knots](#equality-and-knots));
 - an **unsurfaced** `USING` — an operand that does not say, where the shape is
   built, which names it surfaces;
 - an **unlisted** read — a `MODULE` or `GROUP` body reading an outer name its
@@ -1362,7 +1456,5 @@ type outside the one error that lists names, and on a retired lifetime name.
 
 - [Dict defaults](../../roadmap/rewrite/dict-defaults.md) — a value dict's `_`
   default, which lifts the dict-default refusal.
-- [Code splicing](../../roadmap/metaprogramming/code-splicing.md) — how several parts
-  are spliced into a quote at once, and a kind for built code.
 - [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — `CLOSE
   OVER`, and a warning for an unmarked keyworded use in a quote.

@@ -574,13 +574,31 @@ fn arb_leaf(
                     .raw()
             })
         });
+    // An unbuilt code kind, over every kind of the code tree, `Code` (which is `Code` itself)
+    // included.
+    let unbuilt_world = world.clone();
+    let unbuilt = prop::sample::select(
+        &[
+            KType::ANY_CODE,
+            KType::BLOCK,
+            KType::EXPRESSION,
+            KType::DECLARATION,
+            KType::BINDER,
+            KType::LITERAL,
+            KType::SYMBOL,
+            KType::NAME,
+            KType::IDENTIFIER,
+        ][..],
+    )
+    .prop_map(move |kind| unbuilt_world.types.code_unbuilt(kind).raw());
+    let needing = prop_oneof![2 => needing, 1 => unbuilt];
     if !vocabulary.variables {
-        return prop_oneof![8 => atoms, 1 => deferred, 3 => opaque, 2 => needing].boxed();
+        return prop_oneof![8 => atoms, 1 => deferred, 3 => opaque, 3 => needing].boxed();
     }
     let mut rigid: Vec<Handle> = bound.as_ref().clone();
     rigid.extend(members.iter().copied());
     if rigid.is_empty() {
-        return prop_oneof![8 => atoms, 1 => deferred, 3 => opaque, 2 => lexical, 2 => needing]
+        return prop_oneof![8 => atoms, 1 => deferred, 3 => opaque, 2 => lexical, 3 => needing]
             .boxed();
     }
     let in_scope = (0..rigid.len()).prop_map(move |index| rigid[index]);
@@ -589,7 +607,7 @@ fn arb_leaf(
         1 => deferred,
         2 => opaque,
         2 => lexical,
-        2 => needing,
+        3 => needing,
         4 => in_scope
     ]
     .boxed()

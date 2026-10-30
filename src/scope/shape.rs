@@ -44,7 +44,7 @@ use std::fmt;
 use crate::memory::BumpAllocator;
 use crate::parse::BuiltinShapeId;
 use crate::parse::{DefinitionKind, Heads, Role};
-use crate::parse::{ExpressionPart, KExpression, KeyElement, Mark};
+use crate::parse::{ExpressionPart, KExpression, KeyElement, Mark, Scope};
 use crate::source::SourceRef;
 use crate::symbols::{
     BinderSymbol, KeySymbol, KeywordSymbol, SymbolInterner, TypeSymbol, ValueSymbol,
@@ -459,6 +459,14 @@ pub struct CaptureSpec {
     pub source: CaptureSource,
 }
 
+impl CaptureSpec {
+    /// The scope a code value carries this capture's binding at: its mark's, the pin included, and
+    /// written code's for an unmarked name or a `\` mark.
+    pub fn scope(&self) -> Scope {
+        self.mark.and_then(Mark::scope).unwrap_or(Scope::WRITTEN)
+    }
+}
+
 /// Where a closure binding comes from at birth.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum CaptureSource {
@@ -658,6 +666,10 @@ pub struct BodyShape<'graph> {
     /// Why a code shape's code cannot be built, reported when an `EVAL` runs it. A code shape the
     /// builder refuses holds its `$` captures and nothing else.
     refusal: Option<&'graph ShapeError<'graph>>,
+    /// Whether a code shape composes its code where it is born: its code holds a splice among the
+    /// parts it owns. It holds its `$` captures and its splice operands' and nothing else, and is
+    /// typed unbuilt.
+    composing: bool,
     /// Each `EVAL` of a code parameter whose type needs names, by its operand's site, beside each
     /// needed name or key and what the `EVAL` offers for it.
     offers: Keyed<'graph, (Site, &'graph [(BinderSymbol, Offer<'graph>)])>,
@@ -1011,6 +1023,11 @@ impl<'graph> BodyShape<'graph> {
         self.refusal
     }
 
+    /// Whether this code shape composes its code where it is born.
+    pub fn composing(&self) -> bool {
+        self.composing
+    }
+
     /// Every type expression this body records, sorted by site.
     pub fn type_expressions(&self) -> &'graph [TypeExpression<'graph>] {
         self.type_expressions.entries()
@@ -1119,7 +1136,7 @@ fn resolve_here(
     mark: Option<Mark>,
     at: Position,
 ) -> Option<Target> {
-    if mark != Some(Mark::Written)
+    if !mark.is_some_and(Mark::is_bound)
         && let Some(index) = names.find(name)
         && at.sees(names.get(index))
     {
@@ -1351,6 +1368,11 @@ pub enum ShapeError<'graph> {
     },
     /// A spread, `..value`, whose static type can never be a list.
     SpreadNeverAList { value: KType, at: SourceRef },
+    /// A splice, `$..value`, whose static type can never be a list of code.
+    SpliceNeverCode { value: KType, at: SourceRef },
+    /// A quote holding a splice whose `$` name names a fellow member of the knot its binder ties:
+    /// it is composed when it is born, before that knot is tied.
+    SpliceInKnot { at: SourceRef },
     /// A read whose argument's static type can never read its list, dict or string head.
     ReadNeverSatisfied {
         container: KType,
@@ -1469,6 +1491,8 @@ impl ShapeError<'_> {
             | ShapeError::CallNeverSatisfied { at, .. }
             | ShapeError::ReadNeverSatisfied { at, .. }
             | ShapeError::SpreadNeverAList { at, .. }
+            | ShapeError::SpliceNeverCode { at, .. }
+            | ShapeError::SpliceInKnot { at }
             | ShapeError::NotCode { at, .. }
             | ShapeError::NotAModule { at, .. }
             | ShapeError::NotASignature { at, .. }
@@ -1756,6 +1780,15 @@ impl fmt::Display for ShapeErrorDisplay<'_, '_, '_, '_> {
                 f,
                 "`..` spreads a list, and this value is {}, which can never be one",
                 display_name(*value, self.types, self.symbols)
+            ),
+            ShapeError::SpliceNeverCode { value, .. } => write!(
+                f,
+                "`$..` splices a list of code, and this value is {}, which can never be one",
+                display_name(*value, self.types, self.symbols)
+            ),
+            ShapeError::SpliceInKnot { .. } => f.write_str(
+                "a quote holding a splice is composed when it is born, so it cannot name a fellow \
+                 member of the knot its binder ties",
             ),
             ShapeError::ReadNeverSatisfied {
                 container,

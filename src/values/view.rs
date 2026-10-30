@@ -1,240 +1,101 @@
-//! A list view: a list that lays down none of its sources' cells, built by a slice or a
-//! concatenation over the flat runs they hold. See
-//! [README.md § Views](README.md#views).
+//! A view's tree: a persistent AVL tree over leaves of one kind, each a stretch of some flat
+//! run. A list view's leaves are stretches of flat runs of values or links
+//! ([stretch.rs](view/stretch.rs)). See [README.md § Views](README.md#views).
 //!
-//! A view is an AVL tree of [`Stretch`]es, each a stretch of one flat run read forward or backward.
-//! Every [`Node`] memoizes its subtree's length, weight and height, and a branch may read its two
+//! Every [`Node`] memoizes its subtree's height and its leaves' [`Summary`] — their length and
+//! whatever the leaf kind adds, a monoid joined left to right — and a branch may read its two
 //! children in reverse, so a reversal is one node. Every operation is persistent: it lays new nodes
 //! in the writer's region and never writes an old one. Concatenation is an AVL join without a
 //! middle key, and a slice is two splits over it, so a view built by n edits reads an element in
 //! O(log n) steps and costs O(log n) nodes per edit.
 //!
-//! A run of a knot's data node resolves its edges through a holder, the knot member that reads
-//! it. A knot's own list is laid before its knot exists, so its runs name no holder: an **own**
-//! run's edges resolve through the holder its reader brings. A view of other lists over it is held
-//! by one branch naming its holder ([`held`]), pushed down lazily as a reversal is, so every read
-//! and edit stays O(log n).
-//!
-//! A flat run keeps a [`Prefix`] sum of its cells' weights every [`BLOCK`] cells
-//! ([list.rs](super::list) lays it), so a stretch of it is weighed in O(1): a view weighs what its
-//! flat copy writes. A view's type, bits and hides bit are its builder's ([list.rs](super::list));
-//! nothing here reads a type.
+//! A branch may also carry a leaf kind's **lazy** tag down to the leaves below it, pushed down as
+//! a reversal is, so every read and edit stays O(log n): a list's holder, the knot member its own
+//! runs' edges resolve through ([`held`]). A leaf kind that needs none uses `()`.
+
+use std::fmt;
 
 use crate::memory::{Writer, resident};
 
-use super::{Knotted, Link, Value};
+mod stretch;
 
-/// How many cells of a flat run one [`Prefix`] entry spans.
-pub(super) const BLOCK: usize = 16;
+pub(super) use stretch::{BLOCK, Links, ListNode, Prefix, Run, Weighed, leaf, prefixes};
 
-/// The tallest tree [`Links`] walks: an AVL tree of more leaves than a `usize` counts stands
+/// The tallest tree [`Leaves`] walks: an AVL tree of more leaves than a `usize` counts stands
 /// lower than this.
 const TALLEST: usize = 96;
 
-// [`Links`] keeps one direction bit per pending subtree in a `u128`.
+// [`Leaves`] keeps one direction bit per pending subtree in a `u128`.
 const _: () = assert!(TALLEST <= 128);
 
-/// The weight of a flat run's cells before a block boundary: the bytes their copy writes past the
-/// list's own struct, and how many of them are edges, whose copy also copies their holder's knot.
-#[derive(Clone, Copy, Default, Debug, PartialEq, Eq)]
-pub(crate) struct Prefix {
-    bytes: usize,
-    edges: usize,
-}
+/// A leaf of a view's tree: a non-empty stretch of elements, read in its own direction.
+pub(crate) trait Leaf: Copy {
+    /// What a subtree memoizes of its leaves.
+    type Summary: Summary<Self::Lazy>;
+    /// What a branch carries down to the leaves below it.
+    type Lazy: Copy;
 
-impl Prefix {
-    /// The bytes its cells' copy writes, edges' knots aside.
-    pub(super) fn bytes(&self) -> usize {
-        self.bytes
-    }
-}
-
-/// One cell's share of a [`Prefix`]: its bytes, and whether it is an edge.
-pub(super) trait Weighed {
-    fn weighed(&self) -> (usize, bool);
-}
-
-impl<X: Knotted> Weighed for Value<'_, X> {
-    fn weighed(&self) -> (usize, bool) {
-        (self.weight().bytes(), false)
-    }
-}
-
-impl<X: Knotted> Weighed for Link<'_, X> {
-    fn weighed(&self) -> (usize, bool) {
-        (self.weight().bytes(), matches!(self, Link::Edge(_)))
-    }
-}
-
-/// The prefix sums of `cells`, laid through `writer`: entry `b` sums cells `[0, BLOCK·b)`, for `b`
-/// in `0..=len / BLOCK`.
-pub(super) fn prefixes<'cell, C: Weighed>(
-    writer: Writer<'cell, '_>,
-    cells: &[C],
-) -> &'cell [Prefix] {
-    let mut sum = Prefix::default();
-    writer.fill(cells.len() / BLOCK + 1, |block| {
-        let at = sum;
-        if let Some(cells) = cells.get(block * BLOCK..(block + 1) * BLOCK) {
-            sum = add(sum, cells);
-        }
-        at
-    })
-}
-
-/// `sum` plus every cell of `cells`, saturating.
-fn add<C: Weighed>(sum: Prefix, cells: &[C]) -> Prefix {
-    cells.iter().fold(sum, |sum, cell| {
-        let (bytes, edge) = cell.weighed();
-        Prefix {
-            bytes: sum.bytes.saturating_add(bytes),
-            edges: sum.edges + usize::from(edge),
-        }
-    })
-}
-
-/// What cells `[from, to)` of a flat run weigh: the prefix difference over the whole blocks
-/// between them, and a direct sum over the at most `BLOCK - 1` cells on each side. Saturates.
-fn stretch_weight<C: Weighed>(cells: &[C], prefix: &[Prefix], from: usize, to: usize) -> Prefix {
-    let (first, last) = (from.div_ceil(BLOCK), to / BLOCK);
-    if first > last {
-        return add(Prefix::default(), &cells[from..to]);
-    }
-    let (low, high) = (prefix[first], prefix[last]);
-    let whole = Prefix {
-        bytes: match high.bytes {
-            usize::MAX => usize::MAX,
-            bytes => bytes - low.bytes,
-        },
-        edges: high.edges - low.edges,
-    };
-    let sides = add(
-        add(whole, &cells[from..first * BLOCK]),
-        &cells[last * BLOCK..to],
-    );
-    #[cfg(test)]
-    VIEW_STEPS.with(|steps| steps.set(steps.get() + 1));
-    sides
-}
-
-/// One flat run a stretch reads: plain value words, or a data node's links. A run of links resolves
-/// its edges through the holder it names, or, where it names none, through the holder its reader
-/// brings: an **own** run, a knot's list laid before its knot exists.
-#[derive(Clone, Copy, Debug)]
-pub(super) enum Run<'cell, X> {
-    Plain(&'cell [Value<'cell, X>]),
-    Linked(&'cell [Link<'cell, X>], Option<X>),
-}
-
-impl<'cell, X: Knotted> Run<'cell, X> {
-    /// The cell at `at`, an edge resolved to a value through the run's holder or else `holder`;
-    /// an own run's edge with neither stays an edge, for its reader to resolve.
-    fn link(self, at: usize, holder: Option<X>) -> Link<'cell, X> {
-        match self {
-            Run::Plain(cells) => Link::Value(cells[at]),
-            Run::Linked(cells, own) => match own.or(holder) {
-                Some(holder) => Link::Value(cells[at].resolve(holder)),
-                None => cells[at],
-            },
-        }
-    }
-
-    /// What cells `[from, to)` of this run weigh: the bytes their copy writes — an edge's also its
-    /// holder's knot, where the run names it — and how many of them are an own run's edges.
-    fn weight(self, prefix: &[Prefix], from: usize, to: usize) -> (usize, usize) {
-        match self {
-            Run::Plain(cells) => (stretch_weight(cells, prefix, from, to).bytes, 0),
-            Run::Linked(cells, holder) => {
-                let Prefix { bytes, edges } = stretch_weight(cells, prefix, from, to);
-                match holder {
-                    Some(holder) => (with_knots(bytes, edges, holder), 0),
-                    None => (bytes, edges),
-                }
-            }
-        }
-    }
-}
-
-/// `bytes` plus `edges` copies of `holder`'s knot, saturating.
-fn with_knots<X: Knotted>(bytes: usize, edges: usize, holder: X) -> usize {
-    bytes.saturating_add(edges.saturating_mul(holder.weight().bytes()))
-}
-
-/// `len` cells of one flat run from `start`, read forward or backward. Never empty.
-#[derive(Clone, Copy, Debug)]
-pub(super) struct Stretch<'cell, X> {
-    run: Run<'cell, X>,
-    prefix: &'cell [Prefix],
-    start: usize,
-    len: usize,
-    backward: bool,
-    weight: usize,
-    /// How many of its cells are an own run's edges.
-    edges: usize,
-}
-
-impl<'cell, X: Knotted> Stretch<'cell, X> {
-    /// Cells `[start, start + len)` of `run`, forward.
-    pub(super) fn of(
-        run: Run<'cell, X>,
-        prefix: &'cell [Prefix],
-        start: usize,
-        len: usize,
-    ) -> Self {
-        debug_assert!(len > 0, "a stretch is never empty");
-        let (weight, edges) = run.weight(prefix, start, start + len);
-        Stretch {
-            run,
-            prefix,
-            start,
-            len,
-            backward: false,
-            weight,
-            edges,
-        }
-    }
-
-    /// The cell index of the element at `at`, read `backward` or not.
-    fn cell(&self, at: usize, backward: bool) -> usize {
-        match backward {
-            false => self.start + at,
-            true => self.start + self.len - 1 - at,
-        }
-    }
+    /// Its elements' summary, in reading order.
+    fn summary(&self) -> Self::Summary;
 
     /// Its first `at` elements and the rest, in reading order; either `None` where empty.
-    fn split(self, at: usize) -> (Option<Self>, Option<Self>) {
-        let part = |start, len| {
-            (len > 0).then(|| Stretch {
-                backward: self.backward,
-                ..Stretch::of(self.run, self.prefix, start, len)
-            })
-        };
-        let rest = self.len - at;
-        match self.backward {
-            false => (part(self.start, at), part(self.start + at, rest)),
-            true => (part(self.start + rest, at), part(self.start, rest)),
-        }
-    }
+    fn split(self, at: usize) -> (Option<Self>, Option<Self>);
+
+    /// The same elements read in reverse.
+    fn reversed(self) -> Self;
+
+    /// The leaf under `lazy`, where its summary [waits](Summary::waits) for one.
+    fn under(self, lazy: Self::Lazy) -> Self;
+
+    /// Whether its memo equals its recomputed value.
+    #[cfg(test)]
+    fn holds_its_laws(&self) -> bool;
 }
 
-/// A view's tree: a stretch, or two subtrees read left then right, or right then left each
-/// reversed where `backward` is set. A branch naming a `holder` resolves the own runs below it
-/// through it — those below no nearer holder — as `backward` reverses what lies below it, and
-/// counts none of their edges; otherwise `edges` counts every own run's edge below it.
-#[derive(Debug)]
-pub(super) enum Node<'cell, X> {
-    Leaf(Stretch<'cell, X>),
+/// What a subtree memoizes of its leaves: a monoid under [`joined`](Self::joined), its length
+/// among what it counts.
+pub(crate) trait Summary<Lazy>: Copy + PartialEq {
+    fn len(&self) -> usize;
+
+    /// This summary, then `right`'s.
+    fn joined(self, right: Self) -> Self;
+
+    /// The summary of the same elements read in reverse: `a·b` reversed is `b` reversed, then `a`.
+    fn reversed(self) -> Self;
+
+    /// Whether some leaf below waits for a lazy tag, which [`held`] then lays.
+    fn waits(&self) -> bool;
+
+    /// The summary of the same elements under `lazy`.
+    fn under(self, lazy: Lazy) -> Self;
+}
+
+/// A view's tree: a leaf, or two subtrees read left then right, or right then left each reversed
+/// where `backward` is set. A branch naming a `lazy` tag carries it to the leaves below it — those
+/// below no nearer one — as `backward` reverses what lies below it, and its summary is theirs
+/// under it.
+pub(crate) enum Node<'cell, L, S, Z> {
+    Leaf(L),
     Branch {
-        left: &'cell Node<'cell, X>,
-        right: &'cell Node<'cell, X>,
+        left: &'cell Node<'cell, L, S, Z>,
+        right: &'cell Node<'cell, L, S, Z>,
         height: u8,
-        len: usize,
-        weight: usize,
-        edges: usize,
+        summary: S,
         backward: bool,
-        holder: Option<X>,
+        lazy: Option<Z>,
     },
+}
+
+/// The tree over leaves `L`: a [`Node`] memoizing their summary and carrying their lazy tag.
+pub(crate) type Tree<'cell, L> = Node<'cell, L, <L as Leaf>::Summary, <L as Leaf>::Lazy>;
+
+impl<L, S, Z> fmt::Debug for Node<'_, L, S, Z> {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            Node::Leaf(_) => "Leaf",
+            Node::Branch { .. } => "Branch",
+        })
+    }
 }
 
 #[cfg(test)]
@@ -245,33 +106,22 @@ thread_local! {
 }
 
 /// Count one step of a view operation, in a test build.
-fn step() {
+pub(super) fn step() {
     #[cfg(test)]
     VIEW_STEPS.with(|steps| steps.set(steps.get() + 1));
 }
 
-impl<'cell, X> Node<'cell, X> {
-    pub(super) fn len(&self) -> usize {
+impl<'cell, L: Leaf> Tree<'cell, L> {
+    /// Its leaves' summary, in reading order.
+    pub(crate) fn summary(&self) -> L::Summary {
         match self {
-            Node::Leaf(stretch) => stretch.len,
-            Node::Branch { len, .. } => *len,
+            Node::Leaf(leaf) => leaf.summary(),
+            Node::Branch { summary, .. } => *summary,
         }
     }
 
-    /// The bytes its cells' flat copy writes, past the list's own struct and prefix.
-    pub(super) fn weight(&self) -> usize {
-        match self {
-            Node::Leaf(stretch) => stretch.weight,
-            Node::Branch { weight, .. } => *weight,
-        }
-    }
-
-    /// How many own runs' edges below it wait for a holder.
-    pub(super) fn edges(&self) -> usize {
-        match self {
-            Node::Leaf(stretch) => stretch.edges,
-            Node::Branch { edges, .. } => *edges,
-        }
+    pub(crate) fn len(&self) -> usize {
+        self.summary().len()
     }
 
     fn height(&self) -> u8 {
@@ -280,29 +130,25 @@ impl<'cell, X> Node<'cell, X> {
             Node::Branch { height, .. } => *height,
         }
     }
-}
 
-impl<'cell, X: Knotted> Node<'cell, X> {
-    /// The element at `at`, below [`len`](Self::len), descending with the reversals above it
-    /// folded into one bit and the nearest holder above it: a value, or an edge of an own run no
-    /// holder above it resolves, which its reader resolves. Lays nothing.
-    pub(super) fn link(&self, at: usize) -> Link<'cell, X> {
-        let (mut node, mut at, mut flip, mut holder) = (self, at, false, None);
+    /// The leaf holding element `at`, below [`len`](Self::len), beside `at`'s offset in it read
+    /// in the tree's reading order, whether the reversals above it flip it, and the nearest lazy
+    /// tag above it. Lays nothing.
+    pub(crate) fn locate(&self, at: usize) -> (L, usize, bool, Option<L::Lazy>) {
+        let (mut node, mut at, mut flip, mut lazy) = (self, at, false, None);
         loop {
             step();
             match *node {
-                Node::Leaf(stretch) => {
-                    return (stretch.run).link(stretch.cell(at, stretch.backward ^ flip), holder);
-                }
+                Node::Leaf(leaf) => return (leaf, at, flip, lazy),
                 Node::Branch {
                     left,
                     right,
                     backward,
-                    holder: held,
+                    lazy: held,
                     ..
                 } => {
                     flip ^= backward;
-                    holder = held.or(holder);
+                    lazy = held.or(lazy);
                     let (first, second) = if flip { (right, left) } else { (left, right) };
                     if at < first.len() {
                         node = first;
@@ -315,39 +161,31 @@ impl<'cell, X: Knotted> Node<'cell, X> {
         }
     }
 
-    /// Every element, in reading order, as [`link`](Self::link) reads it.
-    pub(super) fn links(&'cell self) -> Links<'cell, X> {
-        let mut links = Links {
+    /// Every leaf, in reading order, as [`locate`](Self::locate) reads it.
+    pub(crate) fn leaves(&'cell self) -> Leaves<'cell, L, L::Summary, L::Lazy> {
+        let mut leaves = Leaves {
             pending: [None; TALLEST],
-            holders: [None; TALLEST],
+            lazies: [None; TALLEST],
             flips: 0,
             depth: 0,
-            leaf: None,
-            next: 0,
         };
-        links.push(self, false, None);
-        links
+        leaves.push(self, false, None);
+        leaves
     }
 }
 
-/// A one-leaf tree over cells `[start, start + len)` of `run`, `len > 0`.
-pub(super) fn leaf<'cell, X: Knotted>(
-    writer: Writer<'cell, '_>,
-    run: Run<'cell, X>,
-    prefix: &'cell [Prefix],
-    start: usize,
-    len: usize,
-) -> &'cell Node<'cell, X> {
+/// A one-leaf tree.
+pub(crate) fn of<'cell, L: Leaf>(writer: Writer<'cell, '_>, leaf: L) -> &'cell Tree<'cell, L> {
     step();
-    resident(writer, Node::Leaf(Stretch::of(run, prefix, start, len)))
+    resident(writer, Node::Leaf(leaf))
 }
 
 /// A branch reading `left` then `right`.
-fn branch<'cell, X: Knotted>(
+fn branch<'cell, L: Leaf>(
     writer: Writer<'cell, '_>,
-    left: &'cell Node<'cell, X>,
-    right: &'cell Node<'cell, X>,
-) -> &'cell Node<'cell, X> {
+    left: &'cell Tree<'cell, L>,
+    right: &'cell Tree<'cell, L>,
+) -> &'cell Tree<'cell, L> {
     step();
     resident(
         writer,
@@ -355,118 +193,95 @@ fn branch<'cell, X: Knotted>(
             left,
             right,
             height: 1 + left.height().max(right.height()),
-            len: left.len() + right.len(),
-            weight: left.weight().saturating_add(right.weight()),
-            edges: left.edges() + right.edges(),
+            summary: left.summary().joined(right.summary()),
             backward: false,
-            holder: None,
+            lazy: None,
         },
     )
 }
 
-/// `node` with the own runs below it resolving through `holder`: one node, or `node` itself where
-/// no edge below it waits for a holder. Its weight gains each such edge's copy of `holder`'s knot.
-pub(super) fn held<'cell, X: Knotted>(
+/// `node` with the leaves below it under `lazy`: one node, or `node` itself where no leaf below
+/// it waits for one.
+pub(crate) fn held<'cell, L: Leaf>(
     writer: Writer<'cell, '_>,
-    node: &'cell Node<'cell, X>,
-    holder: X,
-) -> &'cell Node<'cell, X> {
-    let edges = node.edges();
-    if edges == 0 {
+    node: &'cell Tree<'cell, L>,
+    lazy: L::Lazy,
+) -> &'cell Tree<'cell, L> {
+    if !node.summary().waits() {
         return node;
     }
     step();
-    let weight = with_knots(node.weight(), edges, holder);
     resident(
         writer,
         match *node {
-            Node::Leaf(stretch) => {
-                let Run::Linked(cells, None) = stretch.run else {
-                    unreachable!("only an own run's edges wait for a holder")
-                };
-                Node::Leaf(Stretch {
-                    run: Run::Linked(cells, Some(holder)),
-                    weight,
-                    edges: 0,
-                    ..stretch
-                })
-            }
+            Node::Leaf(leaf) => Node::Leaf(leaf.under(lazy)),
             Node::Branch {
                 left,
                 right,
                 height,
-                len,
+                summary,
                 backward,
                 ..
             } => Node::Branch {
                 left,
                 right,
                 height,
-                len,
-                weight,
-                edges: 0,
+                summary: summary.under(lazy),
                 backward,
-                holder: Some(holder),
+                lazy: Some(lazy),
             },
         },
     )
 }
 
 /// `node` read in reverse: one node with its direction toggled.
-pub(super) fn reversed<'cell, X: Knotted>(
+pub(crate) fn reversed<'cell, L: Leaf>(
     writer: Writer<'cell, '_>,
-    node: &'cell Node<'cell, X>,
-) -> &'cell Node<'cell, X> {
+    node: &'cell Tree<'cell, L>,
+) -> &'cell Tree<'cell, L> {
     step();
     resident(
         writer,
         match *node {
-            Node::Leaf(stretch) => Node::Leaf(Stretch {
-                backward: !stretch.backward,
-                ..stretch
-            }),
+            Node::Leaf(leaf) => Node::Leaf(leaf.reversed()),
             Node::Branch {
                 left,
                 right,
                 height,
-                len,
-                weight,
-                edges,
+                summary,
                 backward,
-                holder,
+                lazy,
             } => Node::Branch {
                 left,
                 right,
                 height,
-                len,
-                weight,
-                edges,
+                summary: summary.reversed(),
                 backward: !backward,
-                holder,
+                lazy,
             },
         },
     )
 }
 
 /// A branch's two children in reading order, each reversed where the branch reads backward and
-/// held where it names a holder.
-fn oriented<'cell, X: Knotted>(
+/// held where it names a lazy tag.
+fn oriented<'cell, L: Leaf>(
     writer: Writer<'cell, '_>,
-    node: &'cell Node<'cell, X>,
-) -> (&'cell Node<'cell, X>, &'cell Node<'cell, X>) {
+    node: &'cell Tree<'cell, L>,
+) -> (&'cell Tree<'cell, L>, &'cell Tree<'cell, L>) {
     step();
     let Node::Branch {
         left,
         right,
         backward,
-        holder,
+        lazy,
         ..
     } = *node
     else {
         unreachable!("only a branch has children")
     };
-    let (left, right) = match holder {
-        Some(holder) => (held(writer, left, holder), held(writer, right, holder)),
+    let (left, right) = match lazy {
+        Some(lazy) => (held(writer, left, lazy), held(writer, right, lazy)),
         None => (left, right),
     };
     match backward {
@@ -477,11 +292,11 @@ fn oriented<'cell, X: Knotted>(
 
 /// `left` then `right`, rebalanced where their heights differ by two: one rotation, single or
 /// double.
-fn balanced<'cell, X: Knotted>(
+fn balanced<'cell, L: Leaf>(
     writer: Writer<'cell, '_>,
-    left: &'cell Node<'cell, X>,
-    right: &'cell Node<'cell, X>,
-) -> &'cell Node<'cell, X> {
+    left: &'cell Tree<'cell, L>,
+    right: &'cell Tree<'cell, L>,
+) -> &'cell Tree<'cell, L> {
     let (hl, hr) = (left.height(), right.height());
     if hl > hr + 1 {
         let (outer, inner) = oriented(writer, left);
@@ -512,11 +327,11 @@ fn balanced<'cell, X: Knotted>(
 
 /// `left` then `right`: an AVL join without a middle key, descending the taller tree's facing
 /// spine to a subtree within one of the shorter's height. O(|h(left) − h(right)|) nodes.
-pub(super) fn concat<'cell, X: Knotted>(
+pub(crate) fn concat<'cell, L: Leaf>(
     writer: Writer<'cell, '_>,
-    left: &'cell Node<'cell, X>,
-    right: &'cell Node<'cell, X>,
-) -> &'cell Node<'cell, X> {
+    left: &'cell Tree<'cell, L>,
+    right: &'cell Tree<'cell, L>,
+) -> &'cell Tree<'cell, L> {
     let (hl, hr) = (left.height(), right.height());
     if hl > hr + 1 {
         let (outer, inner) = oriented(writer, left);
@@ -530,11 +345,11 @@ pub(super) fn concat<'cell, X: Knotted>(
 }
 
 /// [`concat`] over either side missing.
-pub(super) fn joined<'cell, X: Knotted>(
+pub(crate) fn joined<'cell, L: Leaf>(
     writer: Writer<'cell, '_>,
-    left: Option<&'cell Node<'cell, X>>,
-    right: Option<&'cell Node<'cell, X>>,
-) -> Option<&'cell Node<'cell, X>> {
+    left: Option<&'cell Tree<'cell, L>>,
+    right: Option<&'cell Tree<'cell, L>>,
+) -> Option<&'cell Tree<'cell, L>> {
     match (left, right) {
         (Some(left), Some(right)) => Some(concat(writer, left, right)),
         (left, right) => left.or(right),
@@ -543,26 +358,21 @@ pub(super) fn joined<'cell, X: Knotted>(
 
 /// `node`'s first `at` elements and the rest, `at` at most its length; either `None` where empty.
 /// O(log n) nodes: each level joins back what it cut past, and the joins' heights telescope.
-pub(super) fn split<'cell, X: Knotted>(
+pub(crate) fn split<'cell, L: Leaf>(
     writer: Writer<'cell, '_>,
-    node: &'cell Node<'cell, X>,
+    node: &'cell Tree<'cell, L>,
     at: usize,
-) -> (Option<&'cell Node<'cell, X>>, Option<&'cell Node<'cell, X>>) {
+) -> (Option<&'cell Tree<'cell, L>>, Option<&'cell Tree<'cell, L>>) {
     if at == 0 {
         return (None, Some(node));
     }
     if at == node.len() {
         return (Some(node), None);
     }
-    let laid = |stretch: Option<Stretch<'cell, X>>| {
-        stretch.map(|stretch| {
-            step();
-            resident(writer, Node::Leaf(stretch))
-        })
-    };
+    let laid = |leaf: Option<L>| leaf.map(|leaf| of(writer, leaf));
     match node {
-        Node::Leaf(stretch) => {
-            let (first, rest) = stretch.split(at);
+        Node::Leaf(leaf) => {
+            let (first, rest) = leaf.split(at);
             (laid(first), laid(rest))
         }
         Node::Branch { .. } => {
@@ -579,76 +389,62 @@ pub(super) fn split<'cell, X: Knotted>(
 }
 
 /// Elements `[from, to)` of `node`, forward, `from ≤ to ≤ len`; `None` where empty.
-pub(super) fn sliced<'cell, X: Knotted>(
+pub(crate) fn sliced<'cell, L: Leaf>(
     writer: Writer<'cell, '_>,
-    node: &'cell Node<'cell, X>,
+    node: &'cell Tree<'cell, L>,
     from: usize,
     to: usize,
-) -> Option<&'cell Node<'cell, X>> {
+) -> Option<&'cell Tree<'cell, L>> {
     let (first, _) = split(writer, node, to);
     split(writer, first?, from).1
 }
 
-/// A view's elements in reading order, walked over a stack of the subtrees still to read, each
-/// beside whether it reads reversed — one bit apiece of `flips` — and the holder its own runs
-/// resolve through. O(1) amortized per element; lays nothing.
-pub(super) struct Links<'cell, X> {
-    pending: [Option<&'cell Node<'cell, X>>; TALLEST],
-    holders: [Option<X>; TALLEST],
+/// A view's leaves in reading order, walked over a stack of the subtrees still to read, each
+/// beside whether it reads reversed — one bit apiece of `flips` — and the lazy tag it is under.
+/// Each leaf comes beside whether the reversals above it flip it, and the nearest tag above it.
+/// O(1) amortized per leaf; lays nothing.
+pub(crate) struct Leaves<'cell, L, S, Z> {
+    pending: [Option<&'cell Node<'cell, L, S, Z>>; TALLEST],
+    lazies: [Option<Z>; TALLEST],
     flips: u128,
     depth: usize,
-    /// The leaf being read, whether it reads backward, its holder, and how many of its elements
-    /// are read.
-    leaf: Option<(Stretch<'cell, X>, bool, Option<X>)>,
-    next: usize,
 }
 
-impl<'cell, X: Knotted> Links<'cell, X> {
-    fn push(&mut self, node: &'cell Node<'cell, X>, flip: bool, holder: Option<X>) {
+impl<'cell, L: Leaf> Leaves<'cell, L, L::Summary, L::Lazy> {
+    fn push(&mut self, node: &'cell Tree<'cell, L>, flip: bool, lazy: Option<L::Lazy>) {
         self.pending[self.depth] = Some(node);
-        self.holders[self.depth] = holder;
+        self.lazies[self.depth] = lazy;
         self.flips = (self.flips & !(1 << self.depth)) | (u128::from(flip) << self.depth);
         self.depth += 1;
     }
 }
 
-impl<'cell, X: Knotted> Iterator for Links<'cell, X> {
-    type Item = Link<'cell, X>;
+impl<'cell, L: Leaf> Iterator for Leaves<'cell, L, L::Summary, L::Lazy> {
+    type Item = (L, bool, Option<L::Lazy>);
 
-    fn next(&mut self) -> Option<Link<'cell, X>> {
+    fn next(&mut self) -> Option<Self::Item> {
         loop {
-            if let Some((stretch, backward, holder)) = self.leaf {
-                if self.next < stretch.len {
-                    self.next += 1;
-                    let at = stretch.cell(self.next - 1, backward);
-                    return Some(stretch.run.link(at, holder));
-                }
-                self.leaf = None;
-            }
             if self.depth == 0 {
                 return None;
             }
             self.depth -= 1;
             let node = self.pending[self.depth].take().expect("a pending subtree");
             let flip = self.flips & (1 << self.depth) != 0;
-            let holder = self.holders[self.depth];
+            let lazy = self.lazies[self.depth];
             match *node {
-                Node::Leaf(stretch) => {
-                    self.leaf = Some((stretch, stretch.backward ^ flip, holder));
-                    self.next = 0;
-                }
+                Node::Leaf(leaf) => return Some((leaf, flip, lazy)),
                 Node::Branch {
                     left,
                     right,
                     backward,
-                    holder: held,
+                    lazy: held,
                     ..
                 } => {
-                    let (flip, holder) = (flip ^ backward, held.or(holder));
+                    let (flip, lazy) = (flip ^ backward, held.or(lazy));
                     let (first, second) = if flip { (right, left) } else { (left, right) };
                     // The second is read after the first, so it is pushed first.
-                    self.push(second, flip, holder);
-                    self.push(first, flip, holder);
+                    self.push(second, flip, lazy);
+                    self.push(first, flip, lazy);
                 }
             }
         }
@@ -656,44 +452,29 @@ impl<'cell, X: Knotted> Iterator for Links<'cell, X> {
 }
 
 #[cfg(test)]
-impl<'cell, X: Knotted> Node<'cell, X> {
+impl<L: Leaf> Tree<'_, L> {
     /// Whether every branch's children differ in height by at most one, and every memo equals its
     /// recomputed value.
     pub(crate) fn holds_its_laws(&self) -> bool {
         match self {
-            Node::Leaf(stretch) => {
-                stretch.len > 0
-                    && (stretch.weight, stretch.edges)
-                        == stretch.run.weight(
-                            stretch.prefix,
-                            stretch.start,
-                            stretch.start + stretch.len,
-                        )
-            }
+            Node::Leaf(leaf) => leaf.summary().len() > 0 && leaf.holds_its_laws(),
             Node::Branch {
                 left,
                 right,
                 height,
-                len,
-                weight,
-                edges,
-                holder,
-                ..
+                summary,
+                backward,
+                lazy,
             } => {
-                let (below, waiting) = (
-                    left.weight().saturating_add(right.weight()),
-                    left.edges() + right.edges(),
-                );
-                let memos = match *holder {
-                    Some(holder) => {
-                        waiting > 0 && *edges == 0 && *weight == with_knots(below, waiting, holder)
-                    }
-                    None => *edges == waiting && *weight == below,
+                let below = left.summary().joined(right.summary());
+                let below = if *backward { below.reversed() } else { below };
+                let memo = match *lazy {
+                    Some(lazy) => below.waits() && *summary == below.under(lazy),
+                    None => *summary == below,
                 };
                 left.height().abs_diff(right.height()) <= 1
                     && *height == 1 + left.height().max(right.height())
-                    && *len == left.len() + right.len()
-                    && memos
+                    && memo
                     && left.holds_its_laws()
                     && right.holds_its_laws()
             }

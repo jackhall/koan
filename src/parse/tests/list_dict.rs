@@ -380,8 +380,15 @@ fn a_spread_anywhere_but_a_list_literal_s_item_is_refused() {
         let error = top(source).unwrap_err();
         assert!(error.contains(unspreadable), "`{source}`: {error}");
     }
-    for source in ["[..$xs]", "[..\\xs]"] {
+    for source in ["[..$5]", "[..$]", "[..\\(x)]"] {
         let error = top(source).unwrap_err();
-        assert!(error.contains("code splicing's"), "`{source}`: {error}");
+        assert!(error.contains(unspreadable), "`{source}`: {error}");
     }
+}
+
+/// `..$xs` and `..\\xs` spread a marked name: the item is the name the rest classifies as.
+#[test]
+fn a_marked_name_spreads() {
+    assert_eq!(top("[0 ..$xs]").unwrap(), vec!["[L[n(0) ..$t(xs)]]"]);
+    assert_eq!(top("[..\\xs]").unwrap(), vec!["[L[..\\t(xs)]]"]);
 }

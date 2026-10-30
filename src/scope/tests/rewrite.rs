@@ -65,8 +65,8 @@ fn tree(node: &KExpression<'_>, symbols: &SymbolInterner) -> String {
 
 fn part_tree(part: &ExpressionPart<'_>, symbols: &SymbolInterner) -> String {
     match part {
-        ExpressionPart::Expression(node) => tree(node.reference(), symbols),
-        ExpressionPart::SigiledTypeExpr(node) => format!(":{}", tree(node.reference(), symbols)),
+        ExpressionPart::Expression(node) => tree(node, symbols),
+        ExpressionPart::SigiledTypeExpr(node) => format!(":{}", tree(node, symbols)),
         ExpressionPart::ListLiteral(items) => {
             let mut out = String::from("[");
             for (index, item) in items.iter().enumerate() {
@@ -87,7 +87,7 @@ fn expression<'graph>(part: &ExpressionPart<'graph>) -> &'graph KExpression<'gra
     let ExpressionPart::Expression(node) = part else {
         panic!("the part is a parenthesized node");
     };
-    node.reference()
+    node
 }
 
 /// The shape nested at part `index` of `node`.
@@ -313,7 +313,7 @@ fn spanned_within(node: &KExpression<'_>, statement: SourceRef, source: &str) {
         | ExpressionPart::RecordType(inner)
         | ExpressionPart::QuotedExpression(inner) = part.value
         {
-            spanned_within(inner.reference(), statement, source);
+            spanned_within(inner, statement, source);
         }
     }
 }

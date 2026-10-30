@@ -239,9 +239,11 @@ pub fn part_ktype(
             scratch,
             fields.iter().map(|(name, value)| (*name, element(value))),
         ),
-        ExpressionPart::MarkedUse(..) => KType::EXPRESSION,
+        ExpressionPart::MarkedUse(..)
+        | ExpressionPart::FilledUse(..)
+        | ExpressionPart::Splice(_) => KType::EXPRESSION,
         ExpressionPart::Expression(node) | ExpressionPart::QuotedExpression(node) => {
-            node.reference().code_kind()
+            node.code_kind()
         }
         ExpressionPart::SigiledTypeExpr(_) => KType::SIGILED_TYPE_EXPR,
         ExpressionPart::RecordType(_) => KType::RECORD_TYPE,
@@ -407,7 +409,7 @@ fn admits_part_at(
             .concrete(slot)
             .is_some_and(|slot| part.code_kind().is_some_and(|kind| kind.within_code(slot))),
         // A raw part reports its kind alone, so the names a slot offers constrain nothing here.
-        TypeNode::CodeNeeding { kind, .. } => {
+        TypeNode::CodeNeeding { kind, .. } | TypeNode::CodeUnbuilt { kind } => {
             part.code_kind().is_some_and(|part| part.within_code(kind))
         }
         TypeNode::Number => matches!(part, ExpressionPart::Literal(KLiteral::Number(_))),

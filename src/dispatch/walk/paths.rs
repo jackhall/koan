@@ -379,13 +379,11 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         else {
             unreachable!("the builder records a path's node");
         };
-        let spelling = path_spelling(node.reference(), self.scratch).map(|spelling| spelling.root);
+        let spelling = path_spelling(node, self.scratch).map(|spelling| spelling.root);
         // A root written in place is typed where its path resolves, its own types first.
         if let Some(SpelledRoot::Inline(written)) = spelling {
             let holds = |site: Site| match written {
-                ExpressionPart::Expression(node) => {
-                    part_of(shape, node.reference(), site).is_some()
-                }
+                ExpressionPart::Expression(node) => part_of(shape, node, site).is_some(),
                 _ => false,
             };
             // Its own types sit in its statement, so among its unit's, in program order.

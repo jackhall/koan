@@ -138,6 +138,8 @@ fn returns(
                 under(upper)
             }
         }
+        // Building types code exactly, below the kind it was carried at.
+        (Native::Build, _) => under(given[0].typed.upper),
         _ => under(declared_return(declared, types).into()),
     }
 }

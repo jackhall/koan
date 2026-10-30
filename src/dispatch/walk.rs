@@ -169,7 +169,7 @@ use crate::scope::{
     UnitWork, Unknown, UseStatics, Variable as Located, Within, follow, part_of, source_of,
 };
 use crate::source::SourceRef;
-use crate::symbols::{BinderSymbol, TypeSymbol};
+use crate::symbols::{BinderSymbol, TypeSymbol, ValueSymbol};
 use crate::type_lattice::{
     Collector, DeclaredType, DispatchTokenElement, InstanceFailure, Interval, KKind, KType,
     Parametric, Scheme, Side, TypeNode, Variable, Variance, Verdict, admits_with, bound_above,
@@ -3742,9 +3742,15 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             ExpressionPart::Literal(KLiteral::String(_)) => Interval::point(KType::STR.into()),
             ExpressionPart::Literal(KLiteral::Boolean(_)) => Interval::point(KType::BOOL.into()),
             ExpressionPart::Literal(KLiteral::Null) => Interval::point(KType::NULL.into()),
-            ExpressionPart::QuotedExpression(_) => shape
-                .nested(self.site(level, part))
-                .map_or_else(unknown, |code| Interval::point(code.code_type().into())),
+            // Code composed where it is born may be any code of its kind.
+            ExpressionPart::QuotedExpression(node) => match shape.nested(self.site(level, part)) {
+                None => unknown(),
+                Some(code) if code.composing() => {
+                    self.spliced(level, node, code)?;
+                    under(code.code_type().into())
+                }
+                Some(code) => Interval::point(code.code_type().into()),
+            },
             ExpressionPart::SigiledTypeExpr(_) | ExpressionPart::RecordType(_) => {
                 match self.resolved_type(level, self.type_cell(shape, shape.site(part))) {
                     Static::Closed(handle) => {
@@ -3854,9 +3860,44 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             }
             ExpressionPart::Keyword(_)
             | ExpressionPart::Expression(_)
-            | ExpressionPart::MarkedUse(..) => unknown(),
+            | ExpressionPart::MarkedUse(..)
+            | ExpressionPart::FilledUse(..) => unknown(),
             _ => unreachable!("a name is a `Form::Name`, typed by `name`"),
         })
+    }
+
+    /// Refuse a splice of the composing quote `node`, of code shape `code`, whose operand's static
+    /// type can never be a list of code: each operand is the quote's `$` capture of its name, read
+    /// where the quote is written.
+    fn spliced(
+        &self,
+        level: usize,
+        node: &'graph KExpression<'graph>,
+        code: &BodyShape<'_>,
+    ) -> Result<(), ShapeError<'o>> {
+        let (types, scratch) = (self.types, self.scratch);
+        let codes = types.list(KType::ANY_CODE);
+        let mut refused = Ok(());
+        each_splice(node, &mut |name, at| {
+            let found = code.captures().iter().find(|capture| {
+                capture.name == BinderSymbol::Value(name)
+                    && capture.mark == Some(crate::parse::Mark::DOLLAR)
+            });
+            let Some(CaptureSource::Read(coordinate)) = found.map(|capture| capture.source) else {
+                return;
+            };
+            // A quantified function, read anywhere but a call's head, the builder refused.
+            let DeclaredType::Type(typed) = self.read_declared(level, coordinate) else {
+                return;
+            };
+            if refused.is_ok() && lower_end_outside(types, scratch, typed, codes) {
+                refused = Err(ShapeError::SpliceNeverCode {
+                    value: bound_above(types, scratch, typed.upper),
+                    at,
+                });
+            }
+        });
+        refused
     }
 
     /// The static type of the elements a spread of `source`, typed `list`, lays into a list
@@ -5312,7 +5353,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         operand: &'graph ExpressionPart<'graph>,
     ) -> Option<&'graph BodyShape<'graph>> {
         let shape = self.chain[level].shape;
-        match operand {
+        let traced = match operand {
             ExpressionPart::QuotedExpression(_) => shape.nested(shape.site(operand)),
             ExpressionPart::Identifier(_) => {
                 let coordinate = shape.mention(shape.site(operand))?.coordinate;
@@ -5324,7 +5365,9 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 }
             }
             _ => None,
-        }
+        };
+        // Code composed where it is born has no shape at load.
+        traced.filter(|code| !code.composing())
     }
 
     /// Whether `candidate`, read in the shape at `level`, is an unmarked key's hole: a spread a
@@ -5446,7 +5489,7 @@ fn written_names<'x>(
     scratch: BumpAllocator<'x>,
 ) -> Option<&'x [BinderSymbol]> {
     let quoted = |part: &ExpressionPart<'_>| match part {
-        ExpressionPart::QuotedExpression(node) => one_name(node.reference()),
+        ExpressionPart::QuotedExpression(node) => one_name(node),
         _ => None,
     };
     let mut names = BumpVec::new_in(scratch);
@@ -5610,4 +5653,24 @@ fn unnarrowed_now() -> bool {
     return UNNARROWED.with(std::cell::Cell::get);
     #[cfg(not(test))]
     false
+}
+
+/// Each splice the quote `node` owns, its operand beside where it is written: among its own parts,
+/// its groups', and those of each quote a builtin reads as written.
+fn each_splice(node: &KExpression<'_>, out: &mut dyn FnMut(ValueSymbol, SourceRef)) {
+    let slots = node.written_slots();
+    for (index, part) in node.parts.iter().enumerate() {
+        match &part.value {
+            ExpressionPart::Splice(name) => out(
+                *name,
+                SourceRef {
+                    span: part.span.unwrap_or(node.source.span),
+                    ..node.source
+                },
+            ),
+            ExpressionPart::Expression(inner) => each_splice(inner, out),
+            ExpressionPart::QuotedExpression(inner) if slots.at(index) => each_splice(inner, out),
+            _ => {}
+        }
+    }
 }

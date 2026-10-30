@@ -29,7 +29,7 @@ use crate::memory::{
     ReattachableOverBoth, ReleaseAbsorption, Stale, StepContext, Verdict, Writer, covariant,
     program_storage, reattachable,
 };
-use crate::parse::{ExpressionPart, KExpression, ProgramNode, parse};
+use crate::parse::{ExpressionPart, KExpression, parse};
 use crate::symbols::{SymbolInterner, TypeSymbol};
 use crate::type_lattice::{
     Agent, DeclaredType, Halves, KType, Parametric, RecursiveGroupWindow, RelativeSchema,
@@ -389,7 +389,7 @@ pub(super) fn copy(_: Prices) -> Verdict {
 pub(super) enum Stand<'graph> {
     Function(usize),
     Barrier,
-    Code(ProgramNode<'graph>),
+    Code(&'graph KExpression<'graph>),
 }
 
 impl Stand<'_> {
@@ -397,7 +397,7 @@ impl Stand<'_> {
         match self {
             Stand::Function(identity) => (0, *identity),
             Stand::Barrier => (1, 0),
-            Stand::Code(node) => (2, std::ptr::from_ref(node.reference()).addr()),
+            Stand::Code(node) => (2, std::ptr::from_ref(node).addr()),
         }
     }
 }
@@ -482,17 +482,33 @@ impl Knotted for Stand<'_> {
                 composes: &[],
             },
             Stand::Barrier => Resolved::Barrier,
-            Stand::Code(node) => Resolved::Code(CodeView {
-                body: node.reference(),
+            Stand::Code(_) => Resolved::Code,
+        }
+    }
+
+    fn code_view<'read, 'a>(
+        &self,
+        _: crate::memory::Writer<'read, '_>,
+    ) -> Option<CodeView<'read, 'a, Self>>
+    where
+        Self: 'a,
+        'a: 'read,
+    {
+        match *self {
+            Stand::Code(node) => Some(CodeView {
+                body: node,
                 bound: &[],
-                supplied: &[],
             }),
+            _ => None,
         }
     }
 }
 
 /// The quote `source` parses to.
-pub(super) fn quote<'graph>(fixture: &Fixture<'_, 'graph>, source: &str) -> ProgramNode<'graph> {
+pub(super) fn quote<'graph>(
+    fixture: &Fixture<'_, 'graph>,
+    source: &str,
+) -> &'graph KExpression<'graph> {
     match fixture.part(source) {
         ExpressionPart::QuotedExpression(node) => node,
         _ => panic!("`{source}` parses to a quote"),

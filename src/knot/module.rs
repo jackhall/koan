@@ -80,7 +80,7 @@ pub struct Module<'graph, 'cell> {
 pub enum Born<'graph, 'cell> {
     View(ModuleContent),
     Body {
-        body: BodyAt<'graph, 'cell>,
+        body: BodyAt<'graph, 'cell, 'cell>,
         closure: &'cell ClosureBindings<'cell, Knotted<'graph, 'cell>>,
     },
 }
@@ -90,7 +90,7 @@ pub enum Born<'graph, 'cell> {
 struct Content<'graph, 'cell> {
     known: Cell<Option<ModuleContent>>,
     body: Option<(
-        BodyAt<'graph, 'cell>,
+        BodyAt<'graph, 'cell, 'cell>,
         &'cell ClosureBindings<'cell, Knotted<'graph, 'cell>>,
     )>,
 }
@@ -173,7 +173,7 @@ impl<'graph, 'cell> Module<'graph, 'cell> {
 
     /// A body-born module's body's record, the root of the composed code it lies in on it: `None`
     /// for a view.
-    pub fn body(&self) -> Option<&'cell BodyRef<'graph, 'cell>> {
+    pub fn body(&self) -> Option<&'cell BodyRef<'cell, 'cell>> {
         self.content.body.map(|(body, _)| body.get())
     }
 
@@ -181,7 +181,7 @@ impl<'graph, 'cell> Module<'graph, 'cell> {
     pub fn pending(
         &self,
     ) -> Option<(
-        &'cell BodyRef<'graph, 'cell>,
+        &'cell BodyRef<'cell, 'cell>,
         &'cell ClosureBindings<'cell, Knotted<'graph, 'cell>>,
     )> {
         (self.content.body)

@@ -684,6 +684,8 @@ impl<'to, 'x, 'bind, L: Lays<'to>> Relay<'to, 'x, 'bind, L> {
             ShapeError::SpreadNeverAList { value, at } => {
                 ShapeError::SpreadNeverAList { value, at }
             }
+            ShapeError::SpliceNeverCode { value, at } => ShapeError::SpliceNeverCode { value, at },
+            ShapeError::SpliceInKnot { at } => ShapeError::SpliceInKnot { at },
             ShapeError::NotCode { value, at } => ShapeError::NotCode { value, at },
             ShapeError::NotAModule { value, at } => ShapeError::NotAModule { value, at },
             ShapeError::NotASignature { ascribed, at } => {
