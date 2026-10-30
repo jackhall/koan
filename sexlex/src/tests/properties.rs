@@ -472,6 +472,31 @@ proptest! {
         }
     }
 
+    /// Reading a slice at a base reads it as `read` does, every span shifted by the base.
+    #[test]
+    fn read_at_shifts_every_span(source in "[ ()\\[\\]{},'\"\\na-z#:\\\\]{0,40}", base in 0u32..1000) {
+        fn shifted(items: &mut [Item<'_>], base: u32) {
+            for item in items {
+                item.span = Span { start: item.span.start + base, end: item.span.end + base };
+                if let Node::Group { items, .. } = &mut item.node {
+                    shifted(items, base);
+                }
+            }
+        }
+        let expected = read(&source).map(|mut items| {
+            shifted(&mut items, base);
+            items
+        });
+        match (crate::read_at(&source, base), expected) {
+            (Ok(read), Ok(expected)) => prop_assert_eq!(read, expected),
+            (Err(read), Err(expected)) => prop_assert_eq!(
+                read.span,
+                Span { start: expected.span.start + base, end: expected.span.end + base }
+            ),
+            (read, expected) => prop_assert!(false, "{:?} against {:?}", read, expected),
+        }
+    }
+
     /// Arbitrary text never panics the reader.
     #[test]
     fn arbitrary_text_never_panics(source in "[ ()\\[\\]{},'\"\\n\\ta-z#:\\\\]{0,40}") {

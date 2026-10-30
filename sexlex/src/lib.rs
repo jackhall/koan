@@ -1,6 +1,7 @@
 //! Whitespace-sensitive s-expressions with glue: the layout half of a parser, with no vocabulary.
 //!
-//! [`read`] turns source text into a tree of [`Item`]s and knows exactly five things about it:
+//! [`read`] turns source text into a tree of [`Item`]s and knows exactly five things about it
+//! ([`read_at`] reads a slice of a larger source, its spans indexing that source):
 //!
 //! 1. **Whitespace separates.** A token is a maximal run of anything that is not whitespace, a
 //!    bracket, a quote or a comma. Nothing else splits a token, so `:Number`, `a.b`, `->` and `#`
@@ -209,4 +210,36 @@ impl std::error::Error for Error {}
 /// Read `source` into its top-level layout groups, one per top-level line.
 pub fn read(source: &str) -> Result<Vec<Item<'_>>, Error> {
     reader::read(source)
+}
+
+/// Read `text`, a slice of a larger source starting at byte `base`, as [`read`] reads a source:
+/// every span, an error's included, is shifted by `base`, so it indexes the larger source.
+pub fn read_at(text: &str, base: u32) -> Result<Vec<Item<'_>>, Error> {
+    let shift = |span: &mut Span| {
+        span.start += base;
+        span.end += base;
+    };
+    fn shifted(items: &mut [Item<'_>], shift: &impl Fn(&mut Span)) {
+        for item in items {
+            shift(&mut item.span);
+            if let Node::Group { items, .. } = &mut item.node {
+                shifted(items, shift);
+            }
+        }
+    }
+    match read(text) {
+        Ok(mut items) => {
+            shifted(&mut items, &shift);
+            Ok(items)
+        }
+        Err(mut error) => {
+            shift(&mut error.span);
+            match &mut error.kind {
+                ErrorKind::MismatchedCloser { opener, .. }
+                | ErrorKind::CloserDedented { opener } => shift(opener),
+                _ => {}
+            }
+            Err(error)
+        }
+    }
 }
