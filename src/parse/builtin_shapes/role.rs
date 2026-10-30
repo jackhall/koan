@@ -52,12 +52,15 @@ pub enum Role {
 }
 
 /// How the shape builder reads one part of a builtin shape. A part that runs later, conditionally
-/// or never is a quote; one that declares, or runs where it is written, once, is bare; one that
-/// names things as data is a container of quotes; every other part is evaluated.
+/// or never is a quote, except a callable's body, which is code: a quote or a part evaluated to
+/// code; one that declares, or runs where it is written, once, is bare; one that names things as
+/// data is a container of quotes; every other part is evaluated.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Reading {
     /// A written quote.
     Quote,
+    /// A callable's body: a written quote, or an evaluated part whose value is code.
+    Code,
     /// Bare syntax that declares, or runs where it is written, once.
     Bare,
     /// A bare list or dict literal whose every element is a written quote.
@@ -75,7 +78,7 @@ impl Role {
         match self {
             Role::Body(kind) => {
                 if kind.is_callable() {
-                    Reading::Quote
+                    Reading::Code
                 } else {
                     Reading::Bare
                 }

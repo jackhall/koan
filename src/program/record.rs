@@ -175,7 +175,7 @@ pub(super) type Compose<'graph> = for<'a> fn(
     &Program<'graph>,
     ProgramBrand<'a>,
     &'a Bump,
-    &'a KExpression<'a>,
+    (&'a KExpression<'a>, &'a [BinderSymbol]),
     &'a &'graph (),
 ) -> Composition<'a>;
 
@@ -198,7 +198,13 @@ impl<'graph> Settles<'graph> for Program<'graph> {
         bump: &'a Bump,
         witness: &'a &'graph (),
     ) -> Composition<'a> {
-        (self.compose)(self, syntax.brand(), bump, syntax.syntax(), witness)
+        (self.compose)(
+            self,
+            syntax.brand(),
+            bump,
+            (syntax.syntax(), syntax.parameters()),
+            witness,
+        )
     }
 }
 

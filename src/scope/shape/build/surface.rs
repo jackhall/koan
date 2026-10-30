@@ -419,9 +419,17 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
                     None => Quantified::No,
                 };
             }
-            match (draft.kind, mark) {
-                (ShapeKind::Code, Some(Mark::Written(_) | Mark::Filled(_))) => mark = None,
-                (ShapeKind::Program | ShapeKind::Code, _) => return Quantified::No,
+            match (draft.named, draft.kind, mark) {
+                // A traced body's `$` name reads where its quote is written, and its `\` name
+                // outside it; an unmarked one stops at it.
+                (Some(written), _, Some(Mark::Written(_) | Mark::Filled(_))) => {
+                    (level, at, mark) = (written, self.chain[written].end(), None);
+                    continue;
+                }
+                (Some(_), _, Some(Mark::Built)) => mark = None,
+                (Some(_), _, None) => return Quantified::No,
+                (None, ShapeKind::Code, Some(Mark::Written(_) | Mark::Filled(_))) => mark = None,
+                (None, ShapeKind::Program | ShapeKind::Code, _) => return Quantified::No,
                 _ => {}
             }
             let Some(parent) = level.checked_sub(1) else {

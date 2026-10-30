@@ -255,6 +255,7 @@ fn composed_syntax<'graph, 'cell>(body: &'cell KExpression<'cell>) -> Syntax<'gr
             root: ComposedRoot {
                 syntax: body,
                 digest: code,
+                parameters: &[],
             },
             segment: None,
         },

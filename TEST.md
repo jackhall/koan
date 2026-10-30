@@ -132,8 +132,9 @@ body drafted, a mark no quote value holds, and the names an `EVAL` offers.
   bindings copy the enclosing words or hold knot edges. A quote's code is not activated, since
   only an `EVAL` runs one.
 
-The knot suite renders the same plans with no quote value, since its law does not read how a
-quote ties.
+The knot suite renders the same plans, quote values included: a quote whose `$` name names a
+fellow member, as a data member's whole right-hand side or an item of its list, is a code node of
+that member's knot, its bindings following its code's captures, and a copy rebuilds it.
 
 ### Dispatch property laws
 

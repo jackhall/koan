@@ -44,7 +44,6 @@ subdirectory's README carries its own slice.
 - [Dependent signatures](gradual-typing/dependent-signatures.md)
 - [A nested projection](gradual-typing/nested-projection.md)
 - [A pin over a variable](gradual-typing/pins-over-variables.md)
-- [Named code as a body](metaprogramming/code-names.md)
 - [String templates](metaprogramming/string-templates.md)
 - [Agents](rewrite/agents.md)
 - [The build image](rewrite/build-image.md)

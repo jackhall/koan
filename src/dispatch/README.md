@@ -51,7 +51,9 @@ never the parse — as one of:
   shared operand evaluates once;
 - a `FN`, born through the [lambda door](../knot/README.md#a-lambda), so a
   callable no binder names is born where it is evaluated, with the captures it
-  reads there — a `FN FOR ALL` the load instantiated born as its instance;
+  reads there — a `FN FOR ALL` the load instantiated born as its instance, and
+  one whose body is [untraced code](../scope/README.md#building-code) born over
+  the value its body part evaluates to, gathered first;
 - an **ascription** `<value> :! <Type>` or `<module> :| <Sig>`, its operator read
   with the node, so the load reads it as the run does: the operand, evaluated, checked against
   the type its type part denotes — read as a type expression leaf's is — unless

@@ -493,7 +493,7 @@ fn alone<R>(
             let claims = program.root().group_frame().claims();
             let shapes = crate::scope::Shapes::of_code(
                 fixture.program,
-                syntax,
+                (syntax, &[]),
                 claims,
                 table,
                 fixture.types,
@@ -686,7 +686,7 @@ fn alone_remarked<R>(
             let claims = program.root().group_frame().claims();
             let shapes = crate::scope::Shapes::of_code(
                 fixture.program,
-                syntax,
+                (syntax, &[]),
                 claims,
                 table,
                 fixture.types,

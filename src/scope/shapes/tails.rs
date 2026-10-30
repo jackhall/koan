@@ -262,7 +262,7 @@ fn tail_of<'graph>(shape: &BodyShape<'graph>, node: &'graph KExpression<'graph>)
     match node.parts {
         [only] => match &only.value {
             ExpressionPart::Expression(inner)
-                if shape.nested(shape.site(&only.value)).is_none() =>
+                if shape.nested_in_place(shape.site(&only.value)).is_none() =>
             {
                 tail_of(shape, inner)
             }
@@ -280,7 +280,7 @@ pub(super) fn name_of<'p>(
 ) -> Option<&'p ExpressionPart<'p>> {
     match part {
         part if part.is_name() => Some(part),
-        ExpressionPart::Expression(node) if shape.nested(shape.site(part)).is_none() => {
+        ExpressionPart::Expression(node) if shape.nested_in_place(shape.site(part)).is_none() => {
             match (node.cache().builtin_shape(), node.parts) {
                 (None, [only]) if shape.candidates(shape.site_of_node(node)).is_none() => {
                     name_of(shape, &only.value)

@@ -8,9 +8,9 @@
 //!
 //! Everything a member needs is then read into scratch with no writer in reach — a function's
 //! body, its type elaborated from its signature and its captures; a code node's `$` bindings; a
-//! data member's cells, with a
-//! part only the caller can evaluate asked of its evaluator by site —
-//! every mention of a fellow member minted as an edge into the knot about to be tied. Each member
+//! data member's cells; a part only the caller can evaluate, a data cell's or an untraced
+//! function body's, asked of its evaluator by site — every mention of a fellow member minted as an
+//! edge into the knot about to be tied. Each member
 //! is born at its annotation: an annotated function member takes the annotation's retype as its
 //! type and keeps the signature its body was checked against, an annotated code member takes it as
 //! its carried type, and an annotated data member's memo is its derived memo retyped as soon as it
@@ -29,13 +29,15 @@ use std::cell::Cell;
 
 use crate::memory::{BumpAllocator, BumpVec, Knot, KnotPlan, Writer};
 use crate::parse::ExpressionPart;
-use crate::scope::{BodyShape, Component, ShapeKind, Stamp, Written};
+use crate::scope::{BodyShape, Component, Located, ShapeKind, Stamp, Written};
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::{DeclaredType, KType, satisfied_by};
 use crate::values::{ArenaRef, Chain, Retype, Weight, retype_target_as};
 
 use super::data::{self, Stager};
-use super::{Eager, Function, KReading, Knotted, Node, Untieable, code, function, module};
+use super::{
+    Eager, Function, KReading, Knotted, Node, Supplied, Untieable, code, function, module,
+};
 
 /// A knot [`tie`] laid down, beside each member's annotation as the tie resolved it, by member
 /// index: `None` where the member states none, or it does not resolve. The caller holds each slot
@@ -109,7 +111,48 @@ where
             }
         }
     }
+    // Each untraced member body's part is the caller's to evaluate, asked with the data members'
+    // parts in one attempt.
+    let mut untraced: Option<Untieable<'x>> = None;
+    let mut codes = BumpVec::with_capacity_in(component.members.len(), scratch);
+    for slot in component.members {
+        codes.push(match shape.births(*slot).filter(|body| body.deferred()) {
+            None => None,
+            Some(body) => {
+                let form = body.form().expect("a callable's body records its form");
+                let site = shape
+                    .site_of_body(form)
+                    .expect("a callable's form has a body");
+                let Located::Part(part) = shape.located(site) else {
+                    unreachable!("a body's site locates its part")
+                };
+                match eager(site, Some(part)) {
+                    Some(Supplied::Value(value)) => Some(value),
+                    _ => {
+                        untraced.get_or_insert(Untieable::Eager {
+                            name: shape.slot_name(*slot),
+                            site,
+                        });
+                        None
+                    }
+                }
+            }
+        });
+    }
     let nodes = Stager::nodes(activation, component, &roots, scratch, eager)?;
+    if let Some(refused) = untraced {
+        return Err(refused);
+    }
+    // Members are the first nodes, and an untraced `FN` captures nothing, so it is never an
+    // anonymous node a data member's fellow capture makes.
+    debug_assert!(
+        nodes[component.members.len()..].iter().all(|node| node
+            .as_ref()
+            .and_then(|node| node.function())
+            .is_none_or(|body| !body.deferred())),
+        "an untraced body is born only as a member"
+    );
+    codes.resize(nodes.len(), None);
     let plan = KnotPlan::new(nodes.len() as u32);
     let mut bodies = BumpVec::with_capacity_in(nodes.len(), scratch);
     bodies.extend(nodes.iter().enumerate().map(|(index, node)| match node {
@@ -140,7 +183,8 @@ where
         let site = activation.shape().site(annotation);
         facts.retype(types, activation.shape(), site)
     }));
-    let mut functions = function::stage(&plan, activation, written, &bodies, types, scratch)?;
+    let mut functions =
+        function::stage(&plan, activation, written, &bodies, &codes, types, scratch)?;
     // An annotated function member is born at the annotation's retype, keeping the signature its
     // body was checked against for its frame.
     for ((staged, annotation), retype) in functions.iter_mut().zip(&annotations).zip(&retypes) {
@@ -203,7 +247,7 @@ where
     let mut laid = BumpVec::with_capacity_in(functions.len(), scratch);
     for staged in functions.iter() {
         laid.push(staged.as_ref().map(|staged| {
-            let (closure, typing, weight) = staged.laid_down(writer, born);
+            let (closure, typing, weight) = staged.laid_down(writer, born, activation, types);
             knot_weight = knot_weight.plus(weight);
             (closure, typing)
         }));

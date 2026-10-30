@@ -10,7 +10,9 @@ the main way you extend Koan.
 quoted mix of fixed keywords and typed parameter slots; the body is a quoted
 expression evaluated each time the function is called. Both are quoted with
 `#(…)` because neither runs where it is written — see
-[Quoting and evaluating](10-quoting.md#what-is-quoted-and-what-is-bare). (`EXPR` is
+[Quoting and evaluating](10-quoting.md#what-is-quoted-and-what-is-bare). A body
+can also be [code named elsewhere](10-quoting.md#naming-code-as-a-functions-body),
+shared by several functions. (`EXPR` is
 one of koan's two function words — the other, `FN`, writes an anonymous lambda;
 [Two kinds of function](#two-kinds-of-function) below covers the split.)
 

@@ -10,16 +10,16 @@
 use crate::elaborate::{self, Signatures, Tools, TypeContext};
 use crate::memory::{BumpVec, collect};
 use crate::scope::{
-    Binder, BodyShape, Born, Component, Registration, Resolved, Segment, ShapeError, ShapeKind,
-    Shapes, Site, Slot, StaticCallable, StaticRegistered, StaticType, Store, TypeExpression,
-    Unknown,
+    Binder, BodyShape, Born, Component, Located, Registration, Resolved, Segment, ShapeError,
+    ShapeKind, Shapes, Site, Slot, StaticCallable, StaticRegistered, StaticType, Store,
+    TypeExpression, Unknown,
 };
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::{KType, Parametric, is_subtype_of};
 
 use super::super::check::overlap;
 use super::reads::Part;
-use super::{Pass, Tag};
+use super::{Pass, Tag, never_satisfies};
 
 impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>> TypeContext<'graph, 'o>
     for Pass<'p, 'o, '_, 'graph, 'tier, '_, '_, S>
@@ -165,12 +165,15 @@ impl<'p, 'o: 'p, 'x, 'graph: 'o + 'p, 'tier: 'o, 'pair, 'reg, S: Store<'o>>
 
     /// Step three's birth: the callable `body`, born in the shape at `level`, typed through its
     /// encloser's names, beside its own group as its body reads it and its parameters that digest
-    /// at a constant cost.
+    /// at a constant cost. An untraced body's part is typed first, read where the callable is born.
     pub(super) fn birth(
         &mut self,
         level: usize,
         body: &'graph BodyShape<'graph>,
     ) -> Result<(), ShapeError<'o>> {
+        if body.deferred() {
+            self.deferred(level, body)?;
+        }
         let shape = self.chain[level].shape;
         let typed = elaborate::callable(&*self, self.tools(), self.lay, shape, body)?;
         let levels = elaborate::own_levels(&*self, self.tools(), self.lay, body, typed);
@@ -192,6 +195,32 @@ impl<'p, 'o: 'p, 'x, 'graph: 'o + 'p, 'tier: 'o, 'pair, 'reg, S: Store<'o>>
         let digestible = collect(self.lay, digestible.iter().copied());
         self.set_born(body.segment(), Born { digestible, ..born });
         Ok(())
+    }
+
+    /// The part an untraced `body`, born in the shape at `level`, is written as, typed there: a load
+    /// refusal where it can never be code.
+    fn deferred(
+        &mut self,
+        level: usize,
+        body: &'graph BodyShape<'graph>,
+    ) -> Result<(), ShapeError<'o>> {
+        let shape = self.chain[level].shape;
+        let form = body.form().expect("a callable's body records its form");
+        let site = shape
+            .site_of_body(form)
+            .expect("a callable's form has a body");
+        let Located::Part(part) = shape.located(site) else {
+            unreachable!("a body's site locates its part")
+        };
+        let typed = self.part(level, part)?;
+        let (types, scratch) = (self.types, self.scratch);
+        match never_satisfies(types, scratch, typed.upper, KType::ANY_CODE.into()) {
+            Some((value, _)) => Err(ShapeError::BodyNotCode {
+                value,
+                at: self.source(level, site),
+            }),
+            None => Ok(()),
+        }
     }
 
     /// Whether `frame`'s parameter at `slot` digests at a constant cost: a type binder, or one

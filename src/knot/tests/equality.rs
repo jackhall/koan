@@ -1,4 +1,4 @@
-//! A function compares by the `FN` written and its captures, and renders as its type; a builtin
+//! A function compares by its body's code and type and by its captures, and renders as its type; a builtin
 //! compares by its record; a module is incomparable; a knot's data nodes compare as a bisimulation and render with a label wherever a
 //! cycle closes.
 
@@ -12,12 +12,13 @@ const RING: &str =
     "NEWTYPE Ring = :{next :Ring}\nLET a = (Ring {next = b})\nLET b = (Ring {next = a})";
 
 #[test]
-fn a_function_compares_by_the_fn_written_and_its_captures() {
+fn a_function_compares_by_its_code_type_and_captures() {
     with_fixture(|fixture| {
         let lines = fixture.parse(
             "LET k = 1\n\
              LET f = (FN :{x :Number} -> Number = #(k))\n\
-             LET g = (FN :{x :Number} -> Number = #(k))",
+             LET g = (FN :{x :Number} -> Number = #(k))\n\
+             LET wide = (FN :{x :Number} -> Any = #(k))",
         );
         let scratch = fixture.scratch();
         fixture.in_cell(pin, |context| {
@@ -28,10 +29,22 @@ fn a_function_compares_by_the_fn_written_and_its_captures() {
             let one = Value::Number(1.0);
             let list = |cell| Value::List(List::new(writer, [cell].into_iter(), types, scratch));
             assert_eq!(f.equals(&f, types, scratch), Ok(true));
+            let equal = |left: &str, right: &str| {
+                bound(fixture, activation, left).equals(
+                    &bound(fixture, activation, right),
+                    types,
+                    scratch,
+                )
+            };
             assert_eq!(
-                f.equals(&bound(fixture, activation, "g"), types, scratch),
+                equal("f", "g"),
+                Ok(true),
+                "the same code at the same type is one function wherever it is written"
+            );
+            assert_eq!(
+                equal("f", "wide"),
                 Ok(false),
-                "the same text at another site is another function"
+                "another type is another function"
             );
             assert_eq!(f.equals(&one, types, scratch), Ok(false));
             assert_eq!(one.equals(&f, types, scratch), Ok(false));

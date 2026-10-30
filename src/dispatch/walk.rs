@@ -167,6 +167,7 @@ use crate::scope::{
     ShapeError, ShapeKind, Shapes, Site, SiteDeps, Slot, Source, Static, StaticInstance,
     StaticRegistered, StaticType, Store, SurfacedHead, Tree, Typed, UnitFacts, UnitId, UnitIndex,
     UnitWork, Unknown, UseStatics, Variable as Located, Within, follow, part_of, source_of,
+    traced_quote,
 };
 use crate::source::SourceRef;
 use crate::symbols::{BinderSymbol, TypeSymbol, ValueSymbol};
@@ -5345,8 +5346,8 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     }
 
     /// The code shape the part `operand` runs, where the load traces it to a written quote: the
-    /// quote itself, or a name a `LET` binds to one. Code names extend this; composed code has no
-    /// shape at load.
+    /// quote itself, or a name a `LET` binds to one, by [`traced_quote`]'s rule, which a callable's
+    /// named body shares. Composed code has no shape at load.
     fn traced_code(
         &self,
         level: usize,
@@ -5359,10 +5360,9 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 let coordinate = shape.mention(shape.site(operand))?.coordinate;
                 let (at, slot) = self.landed_slot(level, coordinate)?;
                 let holder = self.chain[at].shape;
-                match holder.rhs(slot)? {
-                    rhs @ ExpressionPart::QuotedExpression(_) => holder.nested(holder.site(rhs)),
-                    _ => None,
-                }
+                let rhs = holder.rhs(slot)?;
+                traced_quote(rhs)?;
+                holder.nested(holder.site(rhs))
             }
             _ => None,
         };

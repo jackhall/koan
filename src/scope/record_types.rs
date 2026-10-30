@@ -425,6 +425,7 @@ fn error_types(error: &ShapeError<'_>, each: &mut Each<'_>) {
             ktype(argument);
         }
         ShapeError::NotCode { value, at: _ }
+        | ShapeError::BodyNotCode { value, at: _ }
         | ShapeError::NotAModule { value, at: _ }
         | ShapeError::NotASignature {
             ascribed: value,
@@ -487,6 +488,7 @@ fn error_types(error: &ShapeError<'_>, each: &mut Each<'_>) {
         | ShapeError::RankingDisagrees { key: _, at: _ }
         | ShapeError::NoCandidate { key: _, at: _ }
         | ShapeError::Unlisted { name: _, at: _ }
+        | ShapeError::ParameterOutsideBody { name: _, at: _ }
         | ShapeError::OpenPathInType { at: _ }
         | ShapeError::SpliceInKnot { at: _ }
         | ShapeError::UnpinnedMember {

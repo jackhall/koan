@@ -97,3 +97,13 @@ fn a_tail_chain_through_a_retyped_function_returns_the_outermost_return() {
                   PRINT (WHICH (outer {g = inner}))";
     assert_eq!(run(source), "any");
 }
+
+#[test]
+fn functions_of_one_code_and_type_compare_by_their_captures() {
+    let source = "LET make = (FN :{c :Number} -> Any = #(FN :{x :Number} -> Number = #(c)))\n\
+                  LET other = (FN :{c :Number} -> Any = #(FN :{x :Number} -> Number = #(c)))\n\
+                  PRINT ((make {c = 1}) == (make {c = 1}))\n\
+                  PRINT ((make {c = 1}) == (other {c = 1}))\n\
+                  PRINT ((make {c = 1}) == (make {c = 2}))";
+    assert_eq!(run(source), "true\ntrue\nfalse");
+}

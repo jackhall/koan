@@ -466,8 +466,6 @@ pub(super) struct Generator<'c> {
     statement: usize,
     /// The program registrations a `$(…)` in the code being generated lists, by key and statement.
     written: Vec<(Key, usize)>,
-    /// Whether the plan writes quote values.
-    quotes: bool,
 }
 
 impl<'c> Generator<'c> {
@@ -485,7 +483,6 @@ impl<'c> Generator<'c> {
             registered: Vec::new(),
             statement: 0,
             written: Vec::new(),
-            quotes: true,
         }
     }
 
@@ -863,7 +860,7 @@ impl<'c> Generator<'c> {
             self.registered = registrations.clone();
         }
         // Only the quote's code holds no injection, so a refused read is never routed into it.
-        let quotable = self.quotes && self.code.is_none() && injection.is_none();
+        let quotable = self.code.is_none() && injection.is_none();
         let mut statements = Vec::with_capacity(count);
         for (index, draft) in drafts.into_iter().enumerate() {
             if kind == Kind::Program {
@@ -1612,14 +1609,13 @@ struct Renderer<'p> {
     typed: bool,
 }
 
-/// The source of the program `choices` plans, writing no quote value — what the knot suite runs a
-/// plan as, which does not read how a quote ties — and well-typed, so the load's walk accepts it:
+/// The source of the program `choices` plans, as the knot suite runs a plan: well-typed, so the
+/// load's walk accepts it:
 /// each callable returns its planned return type joined with `Any`, and each `MATCH` arm after the
 /// first guards its planned head joined with a list type no other arm names. Every planned read
 /// stays a mention where it was.
 pub(crate) fn program_source(choices: &[u32]) -> String {
     let mut generator = Generator::new(choices);
-    generator.quotes = false;
     let program = generator.program();
     let mut renderer = Renderer::new(&program, 0);
     renderer.typed = true;
@@ -1831,6 +1827,13 @@ impl<'p> Renderer<'p> {
                     unreachable!("matched a lambda");
                 };
                 self.lambda(callable);
+            }
+            (1, 0) if matches!(deferred[0], Carrier::Quote(..)) => {
+                let Carrier::Quote(_, code) = deferred[0] else {
+                    unreachable!("matched a quote");
+                };
+                self.text("#");
+                self.body(code);
             }
             (_, _) => {
                 self.text("[");

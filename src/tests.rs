@@ -45,7 +45,11 @@ pub(crate) fn composed_syntax() -> crate::scope::ComposedSyntax {
     let digest = crate::values::digest::DigestHasher::new(crate::values::digest::Tag::Number)
         .count(0)
         .finished();
-    crate::scope::ComposedSyntax::of(crate::scope::ComposedRoot { syntax, digest })
+    crate::scope::ComposedSyntax::of(crate::scope::ComposedRoot {
+        syntax,
+        digest,
+        parameters: &[],
+    })
 }
 
 /// The load's walk of koan over `shapes`, as a program's load runs it: what a suite below the

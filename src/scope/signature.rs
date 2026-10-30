@@ -80,3 +80,15 @@ pub(crate) fn body_of<'graph>(
         _ => None,
     }
 }
+
+/// The quote a binding's right-hand side `rhs` traces to: a written quote holding no splice, whose
+/// code the load builds where it is written. The one rule an `EVAL`'s operand and a callable's
+/// body share when the load follows a name to its quote.
+pub(crate) fn traced_quote<'graph>(
+    rhs: &'graph ExpressionPart<'graph>,
+) -> Option<&'graph KExpression<'graph>> {
+    match rhs {
+        ExpressionPart::QuotedExpression(code) if !code.composes() => Some(code),
+        _ => None,
+    }
+}

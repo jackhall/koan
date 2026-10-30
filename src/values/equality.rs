@@ -10,7 +10,7 @@
 //!
 //! A module or a barrier has no structural equality: a comparison that reaches one on either side
 //! is [`Incomparable`], which the `==` builtin reports, never `false`. A function compares by its
-//! identity — one per `FN`, `EXPR` or `OP` written — and its closure bindings; a quote's code by its
+//! identity — its body's code and type — and its closure bindings; a quote's code by its
 //! syntax, marks included, and the values its `$` names and its filled marks bind.
 //!
 //! Two knot members compare as a bisimulation: a member pair, each beside the type it is seen at,
@@ -101,16 +101,21 @@ fn pair_equal<'left, 'right, X: Knotted, Y: Knotted>(
                     identity: other,
                     instance: solved,
                     closure: others,
-                    ..
+                    composes: composing,
                 },
             ) => {
                 if !seen.insert(entered) {
                     return Ok(true);
                 }
-                if identity != other || instance != solved || closure.len() != others.len() {
+                // One identity may be two bodies whose type captures differ with where each sits,
+                // so both sides must compose the same slots.
+                if identity != other
+                    || instance != solved
+                    || closure.len() != others.len()
+                    || composes != composing
+                {
                     return Ok(false);
                 }
-                // One identity is one body, so both sides compose the same slots.
                 let composed = |at: usize| composes.get(at).copied().unwrap_or(true);
                 pending.extend(
                     (closure.iter().zip(others).enumerate())

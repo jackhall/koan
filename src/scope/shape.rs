@@ -670,6 +670,11 @@ pub struct BodyShape<'graph> {
     /// parts it owns. It holds its `$` captures and its splice operands' and nothing else, and is
     /// typed unbuilt.
     composing: bool,
+    /// Whether this is a callable's untraced body: a body written as code the load cannot trace,
+    /// holding no statements. Its callable's closure is the code its body part was read to where
+    /// the callable was born, then the record of what that scope offers it; its call builds the
+    /// code as a composition binding the callable's parameters.
+    deferred: bool,
     /// Each `EVAL` of a code parameter whose type needs names, by its operand's site, beside each
     /// needed name or key and what the `EVAL` offers for it.
     offers: Keyed<'graph, (Site, &'graph [(BinderSymbol, Offer<'graph>)])>,
@@ -954,6 +959,19 @@ impl<'graph> BodyShape<'graph> {
         self.nested.get(site).map(|(_, body)| *body)
     }
 
+    /// The shape of the body the part at `site` is written as: [`nested`](Self::nested)'s, but
+    /// for a callable's body written as a part it evaluates — a name, a member read, a call —
+    /// which is a part of this shape as well, read where its callable is born.
+    pub fn nested_in_place(&self, site: Site) -> Option<&'graph BodyShape<'graph>> {
+        let body = self.nested(site)?;
+        let evaluated = body.kind == ShapeKind::Callable
+            && !matches!(
+                self.located(site),
+                Located::Part(ExpressionPart::QuotedExpression(_))
+            );
+        (!evaluated).then_some(body)
+    }
+
     /// Every nested shape beside its site, in program order.
     pub fn nested_shapes(&self) -> &'graph [(Site, &'graph BodyShape<'graph>)] {
         self.nested.entries()
@@ -1026,6 +1044,11 @@ impl<'graph> BodyShape<'graph> {
     /// Whether this code shape composes its code where it is born.
     pub fn composing(&self) -> bool {
         self.composing
+    }
+
+    /// Whether this is a callable's untraced body; see the field.
+    pub fn deferred(&self) -> bool {
+        self.deferred
     }
 
     /// Every type expression this body records, sorted by site.
@@ -1381,6 +1404,11 @@ pub enum ShapeError<'graph> {
     },
     /// An `EVAL` whose operand's static type can never be code.
     NotCode { value: KType, at: SourceRef },
+    /// A callable's body, not written as a quote, whose static type can never be code.
+    BodyNotCode { value: KType, at: SourceRef },
+    /// A callable's body, not written as a quote, reading `name`, one of the callable's own
+    /// parameters, which only a body reads.
+    ParameterOutsideBody { name: BinderSymbol, at: SourceRef },
     /// A view ascription whose operand's static type can never be a module.
     NotAModule { value: KType, at: SourceRef },
     /// A view ascription at a type the view door never takes: no one application of a signature.
@@ -1405,13 +1433,13 @@ pub enum ShapeError<'graph> {
 /// Which part of a form a quote, or a container of quotes, was wanted for.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum QuotedPart {
-    Body,
     Head,
     Symbol,
     Arms,
     Variants,
     Quantifiers,
     Members,
+    Captures,
 }
 
 impl QuotedPart {
@@ -1424,14 +1452,14 @@ impl QuotedPart {
             Role::Definition(DefinitionKind::Union) => QuotedPart::Variants,
             Role::Definition(DefinitionKind::Members) => QuotedPart::Members,
             Role::Quantifiers => QuotedPart::Quantifiers,
-            _ => QuotedPart::Body,
+            Role::Captures => QuotedPart::Captures,
+            _ => unreachable!("only a part read as a quote or a container of quotes is unquoted"),
         }
     }
 
     /// How the part is written, as a diagnostic tells the writer to write it.
     fn spelling(self) -> &'static str {
         match self {
-            QuotedPart::Body => "body as a quote: write #(…)",
             QuotedPart::Head => "head as a quote: write #(…)",
             QuotedPart::Symbol => "symbol as a quote: write #(…)",
             QuotedPart::Arms => "arms as a dict of quotes: write #{…}",
@@ -1440,6 +1468,7 @@ impl QuotedPart {
                 "quantifiers as a list or dict of quotes: write #[…] or #{…}"
             }
             QuotedPart::Members => "members as a list of quotes: write #[…]",
+            QuotedPart::Captures => "captures as a list of quotes: write #[…]",
         }
     }
 }
@@ -1482,6 +1511,8 @@ impl ShapeError<'_> {
             | ShapeError::NoField { at, .. }
             | ShapeError::NoMember { at, .. }
             | ShapeError::Unlisted { at, .. }
+            | ShapeError::BodyNotCode { at, .. }
+            | ShapeError::ParameterOutsideBody { at, .. }
             | ShapeError::OpenPathInType { at }
             | ShapeError::UnpinnedMember { at, .. }
             | ShapeError::Ambiguous { at, .. }
@@ -1813,6 +1844,17 @@ impl fmt::Display for ShapeErrorDisplay<'_, '_, '_, '_> {
                 f,
                 "this value is {}, which can never be code for `EVAL` to run",
                 display_name(*value, self.types, self.symbols)
+            ),
+            ShapeError::BodyNotCode { value, .. } => write!(
+                f,
+                "this body is {}, which can never be code: write the body as a quote, #(…), or \
+                 name code",
+                display_name(*value, self.types, self.symbols)
+            ),
+            ShapeError::ParameterOutsideBody { name: read, .. } => write!(
+                f,
+                "`{}` is a parameter, which only the body reads: write the body as a quote, #(…)",
+                name(read)
             ),
             ShapeError::EvalNeverSatisfied { code, returns, .. } => write!(
                 f,

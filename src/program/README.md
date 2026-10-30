@@ -529,7 +529,8 @@ carries no stamp; a frame under the arena node its callee was born under
 carries its callee's. A call whose callee's
 arena node is no longer live replays the callee's stamp before the frame
 runs. The top level and a module's closure run under the root, and an `EVAL`
-of composed code under its composition.
+of composed code, or a call of a function whose body is untraced code, under
+its composition.
 
 At each binding event whose names its arena node's facts leave unbound —
 its entry, a statement seam, a block's entry, an `EVAL`'s captures — the
@@ -610,6 +611,19 @@ evaluator checks. The frame owes the type the `EVAL` declares, as a called
 frame owes its return ([frames](#frames-contracts-and-tails)), and reads
 nothing of the scope the `EVAL` is written in but those names, so code fills no
 hole from the frame that runs it ([building code](../scope/README.md#building-code)).
+
+**Running untraced code.** A call of a function whose body is untraced code
+([building code](../scope/README.md#building-code)) runs that code as an `EVAL`
+runs composed code, binding the callee's parameters: its frame is born under
+the composition the function's typing record finds — by the digest of the
+code's syntax and the parameter names, so a callable with no parameters shares
+`BUILD`'s — and activates its root, binding each parameter as any call's frame
+does, and its captures from the code's bindings and from the record the
+declaring scope offered where the function was born. Before it runs, the frame
+faults with the composition's kept refusal or with `unbound`'s, as an `EVAL`
+frame refuses. It seeks no settlement keyed on its parameters and carries no
+stamp, and its arguments and result are checked against the callee's declared
+signature, as every call's are.
 
 ## The scheduler is a view
 

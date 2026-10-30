@@ -121,8 +121,9 @@ meets a `FN` no binder names finds its body shape.
 **Code is read where it is written.** Before the builder walks a builtin node's
 parts it checks each part the node's roles read as written
 ([the builtin shape table](../parse/README.md#the-builtin-shape-table-one-typed-entry-every-fact)):
-a callable's body and an `EXPR` head are a quote; an arm set, a union's
-variants, a `FOR ALL` group and a `SIG` body are a list or dict of quotes; a
+an `EXPR` head is a quote, and a callable's body a quote or a part evaluated
+to code; an arm set, a union's variants, a `FOR ALL` group and a `SIG` body are
+a list or dict of quotes; a
 binder name, an in-place body, a type expression and a `TRY` or `CATCH` operand
 are bare; and each admits one of its slot's code types. A type expression's and
 an in-place operand's slot type is the value it denotes, so only their spelling
@@ -131,8 +132,11 @@ is checked. One static check does it, against the table's own types through
 rule a raw part is admitted by anywhere — so no position list and no second
 admission rule sits beside the table; the readers after it assume a well-formed
 part. A part no slot type admits is `Inadmissible`, which names the slot's type
-through the lattice's renderer. A callable's body shape is built over its quote's body and keyed by the
-quote part, so `Site::of_body` finds it as it finds any body. An `EXPR` head's
+through the lattice's renderer. A callable's body that is no quote is typed by
+the value it evaluates to, where the program loads ([building code](#building-code)).
+A callable's body shape is keyed by its body part, so `Site::of_body` finds it
+as it finds any body: built over a written quote's body, over the quote a lone
+name traces to, or holding no statements where its code arrives at run time. An `EXPR` head's
 names are read through its quote. An arm set is a dict of guard quotes to arm
 quotes, and each arm is a block shape binding `it`. A `MATCH … WITH` guard is a
 type — a type name, a `:(…)` or a `:{…}`, typed `Dict(TypeCode, Block)`, whose
@@ -832,8 +836,9 @@ Nothing in a quote resolves unless the quote says how, and the shape its code
 runs in is built only where that code is built — as a callable's body, or by
 `EVAL` or `BUILD`. One rule holds the pieces together: **code fills holes, frames never
 do.** A binder anywhere in the code a quote is composed into binds a hole in
-it; a callable's parameters, locals and scope never reach code it merely
-receives; and a name bound with `$` is never re-resolved.
+it, a callable's parameters among them where the code is its body; a callable's
+locals and scope never reach a hole in code it receives; and a name bound with
+`$` is never re-resolved.
 
 ### Holes and marks
 
@@ -846,7 +851,8 @@ Inside a quote, a name or a keyworded use is in one of three states:
 | resolved where its code is built | `\x` | `\(GREET "bob")` |
 
 - **A hole** binds only to a binder in the same code — a `LET` before it in the
-  quote, or one in code composed with the quote — or to a builtin value or
+  quote, one in code composed with the quote, or a parameter of the callable
+  the code is the body of — or to a builtin value or
   type, which belongs to no scope. A keyworded use that is a hole
   also has the builtin table's overloads as candidates, since they belong to no
   scope, and a registration is a candidate for it only when composed ahead of
@@ -1030,12 +1036,48 @@ callable's body, and alone, by `EVAL` or `BUILD`.
   `FN :{name :Str} -> Str = #(GREET name)`, `name` is the parameter and `GREET`
   a candidate list read in the callable's scope, as in any body. That is the
   grant a defining expression gives the quote written as its body, and it
-  reaches only the names written in that quote. Code that arrives in a body —
-  code named as the body, or code composed into a written one — has its holes
-  filled only by binders in the composed body, and the callable's parameters
-  and scope fill only its `\` marks. Code named as the body of a callable with
-  parameters `w` and `h` is written `#(\w * \h)`, and a hole left in it is
-  refused as [unbound](#errors) where the callable is built.
+  reaches only the names written in that quote.
+
+  A body may instead be any part evaluated to code — a name, a member read, a
+  call — read where the callable is born, as an argument is. Its code is
+  composed with the callable: the code's own binders bind first; the
+  callable's parameters, its `FOR ALL` names and an operator's operands among
+  them, fill its holes and its `\` marks; the scope the callable is written in
+  fills its `\` marks and never a hole; and a name left over is refused as
+  [unbound](#errors) where the body is built. With `k` bound beside them,
+
+  ```koan
+  LET body = #(w * \k)
+  EXPR #(SCALE w :Number) -> Number = body
+  ```
+
+  binds `w` to the parameter and `\k` to that `k`. The body is read eagerly, so
+  code that names, through `$`, the callable it becomes the body of is an
+  [eager cycle](#errors), while a `\` name reaches the callable through its
+  scope, `\(COUNTDOWN it)`, as a written body's free name does.
+
+  - **Traced code.** Where the body is a lone name the load traces to a
+    written quote holding no splice — a name a `LET` binds to one, traced as
+    an `EVAL`'s operand is — the body's shape is built where the program
+    loads, over the quote's statements, keyed at the body part as a written
+    body's is. Its `$` names resolve where the quote is written, as the quote's
+    own do, and become the callable's captures; it is typed, and its refusals
+    are the program's. The quote value keeps its own shape, carried type and
+    needs: two shapes over one text, and each declaration naming the quote
+    builds its own.
+  - **Untraced code.** Any other body — a parameter's code, code computed or
+    composed, a member read, a call — has a shape at the body part holding no
+    statements, which types and registers the callable from its signature. Its
+    code is read where the callable is born, an error there if it is no code,
+    and built at the first call as composed code whose parameters are the
+    callable's: found by a digest of its syntax and those parameter names as
+    `BUILD` finds a composition, so a callable with no parameters shares
+    `BUILD`'s. The call reports the composition's refusal and any name left
+    unbound. Nothing searches the declaring scope at run time, so that scope
+    fills only the `\` names and keys a code parameter's type lists, as an
+    `EVAL` of the parameter offers them ([code parameters](#code-parameters)).
+    The parameters are of unknown type inside the composition; the call checks
+    the arguments and the result against the signature, as every call does.
 - **`EVAL`.** `EVAL code -> <Type>` runs a shape built from the code alone. The shape
   depends on nothing else, since a `\` mark is filled by what the `EVAL`
   offers, so a written quote's is built once, where the program loads, and every
@@ -1090,8 +1132,9 @@ its own code fills, so `#((LET x = 5) (PRINT (x + \y)))` is a
 admits every quote. Dispatch reads a carried type as it reads any other, so a
 quote needing a name the parameter does not list is a non-match that falls
 through. An `EVAL` of the parameter resolves the supplied names and keys where
-the `EVAL` is written, statically, as it resolves a name written there, so
-nothing is searched at run time. Spliced and sliced code is unbuilt, and an
+the `EVAL` is written, statically, as it resolves a name written there, and a
+callable whose body is the parameter resolves them where the callable is
+written ([building code](#building-code)), so nothing is searched at run time. Spliced and sliced code is unbuilt, and an
 unbuilt type lists no names, so a `NEEDING` parameter admits such code only
 once [`BUILD`](#building-code) recomputes its type: a binder composed ahead of
 `\it` binds it, and `it` leaves the list. A parameter typed `:(UNBUILT Block)`
@@ -1110,7 +1153,9 @@ checked where it is written, declares its parameters' types and its return
 type, and captures every free name of its body where it is written. A quote can
 be inspected and composed, is checked only where its code is built, and
 captures only its `$` names. Code becomes a callable as the body of an `FN`:
-the `FN`'s parameters supply the code's `\` marks, and its declared return type
+the `FN`'s parameters fill the code's holes and `\` marks, the scope it is
+written in fills the code's other `\` marks ([building code](#building-code)),
+and its declared return type
 is the annotation the code cannot carry.
 
 An `FN` written in a quote has one shape, built with the quote's code, and
@@ -1126,7 +1171,8 @@ with spans ignored, a bound name followed through its binding under the
 coinductive pair set, a hole by its symbol, and a `\` mark by its symbol and
 its mark. A quote equals its copy, and two quotes of the same text whose `$`
 names bind different values are unequal. A function reached through a binding
-compares by its shape and captures, as [knots](../knot/README.md#equality-and-rendering)
+compares by its body's code digest, its type and its captures, as
+[knots](../knot/README.md#equality-and-rendering)
 say. Printing code never follows a binding, and prints each mark as written, so
 printed code reads back with the same holes and marks.
 
@@ -1293,7 +1339,8 @@ program only for a `$` name nothing binds where the quote is written:
 - a **rebind** — a name declared twice in one shape, parameters included;
 - a binding that **shadows a builtin**, in either channel;
 - an **unbound** name — no binding of it visible where the mention reads, or
-  a hole left in code a callable's body is built from ([quotes](#quotes));
+  a hole or `\` mark left unbound in code a callable's body is built from
+  ([building code](#building-code));
 - an **eager cycle** — a component with an eager mention of a fellow member;
 - a **mark outside a quote** — a `$`, a `\` or a `$..` splice no quote value
   holds;
@@ -1315,10 +1362,18 @@ program only for a `$` name nothing binds where the quote is written:
   quote's body binding a quantified function by a keyworded form, which would
   be the body's value ([resolution](#resolution));
 - an **unquoted** part — one its role reads as a quote or a container of
-  quotes, written otherwise: a bare function body, a bare arm set, a bare `SIG`
+  quotes, written otherwise: a bare `EXPR` head, a bare arm set, a bare `SIG`
   body. The message says how the part is written;
+- a **body never code** — a callable's body part, not written as a quote,
+  whose static type can never be code, `FN :{} -> Number = 5`, or a block the
+  pairwise rewrite built, whose value is a `Bool`. The message says to write
+  the body as a quote or to name code;
+- a **parameter outside its body** — a callable's body part, not written as a
+  quote, reading a parameter of that callable, which only its body sees,
+  `FN :{x :Number} -> Number = (x + 1)`. The message says to write the body as
+  a quote;
 - an **inadmissible** part — one read as written whose syntax fills none of its
-  slot's types: `42` as a body, a value guard such as `#{1: (a)}` as a
+  slot's types: a value guard such as `#{1: (a)}` as a
   `MATCH … WITH`'s arms, `#[(PRINT 1)]` as a signature's members, `#{}` as a
   union's variants;
 - a **malformed** form — a quote where bare syntax is read (`LET #(x) = 1`,

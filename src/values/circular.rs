@@ -15,7 +15,7 @@
 use crate::memory::{BumpAllocator, Writer, collect};
 use crate::parse::{KExpression, Scope};
 use crate::symbols::BinderSymbol;
-use crate::type_lattice::KType;
+use crate::type_lattice::{KType, TypeDigest};
 
 use super::digest::{ContentDigest, DigestHasher, Tag, edge, scalar};
 use super::surface::Parts;
@@ -25,19 +25,25 @@ use super::{
 };
 
 /// What a function is one of, which two equal functions share: a builtin overload, by its
-/// record's address, or a body, by the digest of the base whose shape table holds it and its
-/// segment there, so a body rebuilt from the same base keeps it.
+/// record's address, or a body, by the digest of the base whose shape table holds it, its code
+/// digest and its declared type's digest — so a body rebuilt from the same base keeps it, and two
+/// bodies of one resolved code at one type are one function wherever they are written. The code
+/// digest leaves out the signature's types, which the type's digest keeps.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum FunctionIdentity {
     Builtin(usize),
-    Body(ContentDigest, u32),
+    Body {
+        base: ContentDigest,
+        code: ContentDigest,
+        ktype: TypeDigest,
+    },
 }
 
 /// What a knot member holds.
 #[derive(Clone, Copy)]
 pub enum Resolved<'a, X> {
-    /// A function, rendered as its type's name. It compares by `identity` — one per `FN`, `EXPR` or
-    /// `OP` written, so a copy keeps it — by the solution an instance of a quantified function was
+    /// A function, rendered as its type's name. It compares by `identity` — its body's code and
+    /// type, so a copy keeps it — by the solution an instance of a quantified function was
     /// made at, empty for anything else, and by the closure bindings its content composes, read
     /// through the member: each slot `composes` marks, every one past its end.
     Function {

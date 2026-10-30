@@ -207,14 +207,90 @@ its plain kind. A parameter accepts a quote whose needed names its list covers,
 and `:Code` accepts every quote. A name listed that is not bound where the
 `EVAL` is written is refused before the program runs.
 
+## Naming code as a function's body
+
+A function's body is usually a quote written in place, but it can also be code
+you named elsewhere: any expression whose value is code, read where the
+function is defined, as an argument is. One piece of code can then be the body
+of several functions:
+
+```koan
+LET area = #(w * h)
+EXPR #(AREA w :Number h :Number) -> Number = area
+LET rect = (FN :{w :Number, h :Number} -> Number = area)
+PRINT (AREA 2 3)
+PRINT (rect {w = 4, h = 5})
+```
+
+```text
+6
+20
+```
+
+The code becomes the function's own body, so its holes bind to the function's
+parameters, after any binder in the code itself. A `\` name binds to a
+parameter too, or else to a name where the function is written, and a `$` name
+binds where the quote is written, as always:
+
+```koan
+LET factor = 3
+LET scaled = #(x * \factor)
+EXPR #(SCALE x :Number) -> Number = scaled
+PRINT (SCALE 2)
+```
+
+```text
+6
+```
+
+The scope the function is written in never fills a hole, so a hole that no
+parameter fills is an unbound name:
+
+```koan
+LET factor = 3
+LET scaled = #(x * factor)
+EXPR #(SCALE x :Number) -> Number = scaled
+```
+
+```text
+error: <input>:2:20: `factor` names no binding visible here
+```
+
+When the body is a name a `LET` binds to a quote written out, as `scaled`
+is, the body is checked before the program runs, like a body written in place.
+Any other body — a code parameter, a call that returns code, a module's member —
+is checked when the function is first called, and the scope it is written in
+supplies only the `\` names its code parameter's type lists, as an
+[`EVAL`](#asking-for-names-a-quote-needs) of that parameter would. That is how
+a function can build functions from code it is given:
+
+```koan
+EXPR #(LIFT code :Expression) -> Any = #(
+  FN :{x :Number} -> Number = code
+)
+LET inc = (LIFT #(x + 1))
+PRINT (inc {x = 4})
+```
+
+```text
+5
+```
+
+A value that is not code is an error where the function is defined. A body
+that reads the function's parameters is still written as a quote: bare, as in
+`FN :{x :Number} -> Number = (x + 1)`, it would run where the function is
+defined, where no parameter is bound, so it is refused before the program
+runs.
+
 ## What is quoted and what is bare
 
 The built-in forms follow the same rule, so a reader can tell from any call
 which of its parts run there:
 
 - A part that runs later, conditionally or never is **quoted**: a function's
-  body (`FN :{x :Number} -> Number = #(x)`), an `EXPR` head, and an operator's
-  symbol (`OP #(+) OVER …`).
+  body (`FN :{x :Number} -> Number = #(x)`), unless it
+  [names code](#naming-code-as-a-functions-body), an `EXPR` head, and an
+  operator's symbol (`OP #(+) OVER …`).
 - A part that declares, or runs once where it is written, is **bare**: the name
   a `LET` binds, a type expression, and the body of a `MODULE`, a `GROUP`, a
   `USING … SCOPE`, a `TRY` or a `CATCH`.
@@ -224,7 +300,7 @@ which of its parts run there:
   and the members of a [`SIG`](11-modules.md).
 - Every other part is an ordinary argument, evaluated before the form runs.
 
-Writing a part the wrong way — a function body without its `#`, a `MATCH` whose
+Writing a part the wrong way — an `EXPR` head without its `#`, a `MATCH` whose
 arms are not a `#{…}` — is refused before the program runs, with a message
 saying how the part is written.
 

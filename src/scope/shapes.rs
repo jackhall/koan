@@ -152,7 +152,7 @@ impl<'graph> Shapes<'graph> {
     /// [`build::code`](super::shape::build_code).
     pub(crate) fn of_code<X: Knotted>(
         brand: ProgramBrand<'graph>,
-        syntax: &KExpression<'graph>,
+        syntax: (&KExpression<'graph>, &[BinderSymbol]),
         claims: &'graph Claims<'graph>,
         builtins: &Builtins<'_, X>,
         types: &Chain<'graph, 'graph, 'graph, '_>,

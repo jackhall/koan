@@ -725,7 +725,8 @@ numbers are unequal. That makes `==` intransitive across ascriptions by design.
 `Result<bool, Incomparable>`: a comparison with a module or a barrier on either
 side is `Incomparable`, which the `==` builtin reports as an error rather than
 `false`, and so is a pair of related containers whose aligned cells reach one.
-A function compares by its identity and its instance solution, then its
+A function compares by its identity — its body's code digest and its type —
+and its instance solution, then its
 closure bindings under the same pair set ([knots](../knot/README.md#equality-and-rendering)). A
 knot member under a header compares as its bare member seen at the header's
 type, so a function passed through a function-typed slot equals the function

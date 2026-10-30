@@ -252,7 +252,7 @@ pub(super) fn own_nodes<'graph>(
         part: &'graph ExpressionPart<'graph>,
         visit: &mut dyn FnMut(&'graph KExpression<'graph>),
     ) {
-        if shape.nested(shape.site(part)).is_some() {
+        if shape.nested_in_place(shape.site(part)).is_some() {
             return;
         }
         match part {

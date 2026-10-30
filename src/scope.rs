@@ -57,7 +57,7 @@ pub(crate) use records::RecordSource;
 #[cfg(test)]
 pub(crate) use records::{RIGID_AT_RUN, TERM_PROBES, rigid_at_run};
 pub(crate) use shape::IMPLICIT;
-pub(crate) use signature::pair_label;
+pub(crate) use signature::{pair_label, traced_quote};
 pub(crate) use spelling::{PathSpelling, SpelledRoot, path_spelling};
 
 pub use activation::{Activation, ActivationView, Reading};

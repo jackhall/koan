@@ -66,20 +66,20 @@ const RECORDED_READINGS: &[(BuiltinShapeId, &[(usize, Reading)])] = &[
     (BuiltinShapeId::NewTypeDefinition, &[(1, B), (3, B)]),
     (BuiltinShapeId::NewTypeDeclaration, &[(1, B)]),
     (BuiltinShapeId::Val, &[(1, B), (2, B)]),
-    (BuiltinShapeId::Lambda, &[(3, B), (5, Q)]),
+    (BuiltinShapeId::Lambda, &[(3, B), (5, K)]),
     (BuiltinShapeId::LambdaType, &[(3, B)]),
     (BuiltinShapeId::CombinedLambda, &[]),
-    (BuiltinShapeId::QuantifiedLambda, &[(3, C), (6, B), (8, Q)]),
+    (BuiltinShapeId::QuantifiedLambda, &[(3, C), (6, B), (8, K)]),
     (BuiltinShapeId::QuantifiedLambdaType, &[(3, C), (6, B)]),
     (BuiltinShapeId::CombinedQuantifiedLambda, &[]),
     (
         BuiltinShapeId::ExpressionDefinition,
-        &[(1, Q), (3, B), (5, Q)],
+        &[(1, Q), (3, B), (5, K)],
     ),
     (BuiltinShapeId::ExpressionHead, &[(1, Q), (3, B)]),
     (
         BuiltinShapeId::QuantifiedExpressionDefinition,
-        &[(3, C), (4, Q), (6, B), (8, Q)],
+        &[(3, C), (4, Q), (6, B), (8, K)],
     ),
     (
         BuiltinShapeId::QuantifiedExpressionHead,
@@ -88,24 +88,24 @@ const RECORDED_READINGS: &[(BuiltinShapeId, &[(usize, Reading)])] = &[
     (BuiltinShapeId::BucketDeclaration, &[(1, Q)]),
     (
         BuiltinShapeId::CombinedExpression,
-        &[(1, B), (5, Q), (7, B), (9, Q)],
+        &[(1, B), (5, Q), (7, B), (9, K)],
     ),
     (
         BuiltinShapeId::CombinedQuantifiedExpression,
-        &[(1, B), (7, C), (8, Q), (10, B), (12, Q)],
+        &[(1, B), (7, C), (8, Q), (10, B), (12, K)],
     ),
     (
         BuiltinShapeId::OperatorDefinition,
-        &[(1, Q), (3, B), (5, Q)],
+        &[(1, Q), (3, B), (5, K)],
     ),
     (
         BuiltinShapeId::OperatorDefinitionReturning,
-        &[(1, Q), (3, B), (5, B), (7, Q)],
+        &[(1, Q), (3, B), (5, B), (7, K)],
     ),
     (BuiltinShapeId::UnaryOperatorDefinition, &[]),
     (
         BuiltinShapeId::UnaryOperatorDefinitionReturning,
-        &[(2, Q), (4, B), (6, B), (8, Q)],
+        &[(2, Q), (4, B), (6, B), (8, K)],
     ),
     (BuiltinShapeId::OperatorHead, &[(1, Q), (3, B)]),
     (
@@ -119,16 +119,16 @@ const RECORDED_READINGS: &[(BuiltinShapeId, &[(usize, Reading)])] = &[
     ),
     (
         BuiltinShapeId::CombinedOperator,
-        &[(1, B), (4, Q), (6, B), (8, Q)],
+        &[(1, B), (4, Q), (6, B), (8, K)],
     ),
     (
         BuiltinShapeId::CombinedOperatorReturning,
-        &[(1, B), (4, Q), (6, B), (8, B), (10, Q)],
+        &[(1, B), (4, Q), (6, B), (8, B), (10, K)],
     ),
     (BuiltinShapeId::CombinedUnaryOperator, &[]),
     (
         BuiltinShapeId::CombinedUnaryOperatorReturning,
-        &[(1, B), (5, Q), (7, B), (9, B), (11, Q)],
+        &[(1, B), (5, Q), (7, B), (9, B), (11, K)],
     ),
     (BuiltinShapeId::GroupHeadFoldLeft, &[(4, C)]),
     (BuiltinShapeId::GroupHeadFoldRight, &[(4, C)]),
@@ -153,6 +153,7 @@ const RECORDED_READINGS: &[(BuiltinShapeId, &[(usize, Reading)])] = &[
 ];
 
 const Q: Reading = Reading::Quote;
+const K: Reading = Reading::Code;
 const B: Reading = Reading::Bare;
 const C: Reading = Reading::Container;
 const L: Reading = Reading::Label;

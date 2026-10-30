@@ -45,6 +45,7 @@ use std::hash::{Hash, Hasher};
 
 use crate::memory::{BumpAllocator, BumpBackedMap, BumpVec, Edge, bump_table};
 use crate::parse::{ExpressionPart, KExpression, KLiteral, ListItem};
+use crate::symbols::BinderSymbol;
 use crate::type_lattice::{DeclaredType, KType};
 
 use super::surface::Parts;
@@ -136,6 +137,8 @@ pub enum Tag {
     Splice = 0x33,
     /// A use a `USING` filled: its scope, the keys it fills, and the use.
     FilledUse = 0x34,
+    /// A composition binding a callable's parameters: its code's syntax digest, then the names.
+    Composition = 0x35,
 }
 
 /// The one hasher every digest is computed through: a tag first, then payload, then each part's
@@ -621,6 +624,23 @@ pub fn literal_digest(literal: &KLiteral<'_>) -> ContentDigest {
 pub fn syntax_digest(code: &KExpression<'_>) -> ContentDigest {
     let mut hasher = DigestHasher::new(Tag::Syntax);
     syntax_expression(&mut hasher, code);
+    hasher.finished()
+}
+
+/// The digest that finds the composition of `code` binding `parameters`, a callable's in its
+/// shape's channel order: the code's syntax digest where it binds none — so a callable with no
+/// parameters shares the composition an `EVAL` or a `BUILD` of the code finds — and otherwise a
+/// digest of that and the names.
+pub fn composition_digest(code: &KExpression<'_>, parameters: &[BinderSymbol]) -> ContentDigest {
+    let syntax = syntax_digest(code);
+    if parameters.is_empty() {
+        return syntax;
+    }
+    let mut hasher = DigestHasher::new(Tag::Composition);
+    hasher.digest(syntax).count(parameters.len());
+    for name in parameters {
+        hasher.feed(name);
+    }
     hasher.finished()
 }
 

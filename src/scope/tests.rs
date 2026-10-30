@@ -415,6 +415,8 @@ pub(super) fn unlocated(error: ShapeError) -> ShapeError {
             at,
         },
         E::NotCode { value, .. } => E::NotCode { value, at },
+        E::BodyNotCode { value, .. } => E::BodyNotCode { value, at },
+        E::ParameterOutsideBody { name, .. } => E::ParameterOutsideBody { name, at },
         E::NotAModule { value, .. } => E::NotAModule { value, at },
         E::NotASignature { ascribed, .. } => E::NotASignature { ascribed, at },
         E::SpreadNeverAList { value, .. } => E::SpreadNeverAList { value, at },

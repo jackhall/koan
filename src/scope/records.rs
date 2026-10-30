@@ -852,10 +852,8 @@ impl<'graph: 'cell, 'cell> CodeSyntax<'graph, 'cell> {
                 root,
                 segment: None,
                 ..
-            } => Weight::syntax(root.syntax),
-            CodeSyntax::Composed { body, root, .. } => {
-                Weight::syntax(body).plus(Weight::syntax(root.syntax))
-            }
+            } => root.weight(),
+            CodeSyntax::Composed { body, root, .. } => Weight::syntax(body).plus(root.weight()),
         }
     }
 
@@ -1008,20 +1006,29 @@ pub struct BodyRef<'root, 'a> {
 }
 
 /// The root of code composed at run time: its syntax, laid where the code value holding it lives,
-/// and its syntax digest, which finds its composition.
+/// its composition's digest, which finds the composition, and the parameters the composition
+/// binds — a callable's, in its shape's channel order, where the code is the untraced body of one,
+/// and none for code an `EVAL` or a `BUILD` runs, whose digest is its syntax digest.
 #[derive(Clone, Copy, Debug)]
 pub struct ComposedRoot<'a> {
     pub syntax: &'a KExpression<'a>,
     pub digest: ContentDigest,
+    pub parameters: &'a [BinderSymbol],
 }
 
 impl ComposedRoot<'_> {
-    /// This root with its syntax copied through `writer`.
+    /// This root with its syntax and parameters copied through `writer`.
     pub fn copied<'to>(self, writer: Writer<'to, '_>) -> ComposedRoot<'to> {
         ComposedRoot {
             syntax: copied(writer, self.syntax),
             digest: self.digest,
+            parameters: collect(writer, self.parameters.iter().copied()),
         }
+    }
+
+    /// What laying a copy of this root writes: its syntax and its parameters.
+    pub fn weight(&self) -> Weight {
+        Weight::syntax(self.syntax).plus(Weight::run::<BinderSymbol>(self.parameters.len()))
     }
 }
 
@@ -1061,7 +1068,7 @@ impl BodyRef<'_, '_> {
                 .plus(Weight::run::<(Slot, BinderSymbol)>(
                     self.keys.map_or(0, <[_]>::len),
                 ))
-                .plus(Weight::syntax(root.syntax)),
+                .plus(root.weight()),
         }
     }
 }
@@ -1224,9 +1231,12 @@ impl<'graph> LoadFacts<'graph> {
                     segment: shape.segment(),
                     code: shape.code_digest(),
                     composes: composes(lay, shape, contract, layout.len()),
-                    keys: folds.and_then(|folds| folds.keys).map(|keys| {
-                        collect(lay, keys.iter().map(|slot| (*slot, shape.slot_name(*slot))))
-                    }),
+                    // An untraced body's call runs under its composition, keyed on nothing.
+                    keys: (folds.and_then(|folds| folds.keys))
+                        .filter(|_| !shape.deferred())
+                        .map(|keys| {
+                            collect(lay, keys.iter().map(|slot| (*slot, shape.slot_name(*slot))))
+                        }),
                     root: None,
                     births: shape.births_callable(),
                 },

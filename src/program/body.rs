@@ -28,6 +28,11 @@
 //! result is built in: a cell that ran the same body over the same bindings before, anywhere in
 //! the frame's tail chain or among the frames it was called from, decided what this one would.
 //!
+//! **An untraced body runs as code.** A call of a function whose body is untraced code runs under
+//! that code's composition, binding its parameters, as an `EVAL` of the code runs under its own:
+//! its frame activates the composition's root over the code's bindings and what its declaring
+//! scope offered it, and a name the code reads that nothing binds faults the frame.
+//!
 //! **A declared parameter is an ascription.** A frame binds each value parameter to its argument
 //! retyped to the parameter's declared type, with the call's solution substituted. So is an
 //! annotated binder, `LET <name> <type> = <value>`: its value is checked against the type, unless
@@ -294,7 +299,7 @@ pub fn run<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'g
     let (code, facts) = step.door();
     let shape = match &state {
         KState::Born(KBirth::Call { callee, .. }) => {
-            called_function(*callee).map(|function| code.shape(function.body().segment))
+            called_function(*callee).map(|function| function.frame_shape(&code))
         }
         KState::Born(KBirth::Eval { code: value, .. }) => (value.as_code())
             .and_then(|member| member.code())
@@ -329,7 +334,7 @@ pub fn run<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'g
 /// `EVAL`'s code composed at run time. `None` for written code and any other birth.
 fn composed_root<'here>(birth: &KBirth<'_, 'here>) -> Option<ComposedRoot<'here>> {
     match birth {
-        KBirth::Call { callee, .. } => called_function(*callee)?.body().root,
+        KBirth::Call { callee, .. } => called_function(*callee)?.root(),
         KBirth::Eval { code, .. } | KBirth::Composed { code, .. } => {
             code.as_code()?.code()?.flat()?.root()
         }
@@ -499,6 +504,17 @@ fn ran<'graph, 'here, 'scratch>(
             let sought = step.sought();
             let home = Some(step.memo_home());
             let mut memo = Memo::at(home, inherit);
+            // An untraced body runs under its composition, as an `EVAL` of its code does: what it
+            // births is born there, and it runs under no settlement of its own.
+            let untraced =
+                called_function(callee).is_some_and(|function| function.composing().is_some());
+            let (build, stamp) = match untraced {
+                true => (step.arena_ref(ArenaRef::ROOT), None),
+                false => (
+                    step.arena_ref(born_under(callee)),
+                    stamped(&step, &birth, sought.as_deref()),
+                ),
+            };
             match frame(
                 &step,
                 types,
@@ -521,11 +537,11 @@ fn ran<'graph, 'here, 'scratch>(
                     barrier,
                     within: Within {
                         routes,
-                        build: step.arena_ref(born_under(callee)),
-                        stamp: stamped(&step, &birth, sought.as_deref()),
+                        build,
+                        stamp,
                         memo: home,
                         inherit,
-                        root: called_function(callee).and_then(|function| function.body().root),
+                        root: called_function(callee).and_then(|function| function.root()),
                         kept: bare(callee)
                             .then(|| frame_kept(&mut step, activation, (callee, arguments), keeps)),
                     },
@@ -1358,7 +1374,7 @@ fn frame<'graph, 'here>(
     };
     arguments.as_record().ok_or_else(misnamed)?;
     let (code, facts) = step.door();
-    let shape = code.shape(function.body().segment);
+    let shape = function.frame_shape(&code);
     let quantified = matches!(declared, DeclaredType::Scheme(_));
     let view = declared.view(types);
     let TypeNode::KFunction { params, ret } = view.body else {
@@ -1421,9 +1437,8 @@ fn frame<'graph, 'here>(
             }
         }
     }
-    let activation = resident(
-        writer,
-        KActivation::of_callable(
+    let activation = match function.composing() {
+        None => KActivation::of_callable(
             writer,
             shape,
             &facts,
@@ -1431,11 +1446,20 @@ fn frame<'graph, 'here>(
             function.closure(),
             program.builtins(),
         ),
-    );
+        Some(_) => KActivation::of_composed(
+            writer,
+            shape,
+            &facts,
+            member,
+            untraced_closure(writer, types, program, function, shape)?,
+            program.builtins(),
+        ),
+    };
+    let activation = resident(writer, activation);
     let reading = activation.view().reading(&code, facts);
     // What the frame re-stamps its arguments and value at, where the load closed their types: a
-    // quantified callee's are solved per call.
-    let retypes = match quantified {
+    // quantified callee's are solved per call, and an untraced body's composition closed none.
+    let retypes = match quantified || function.composing().is_some() {
         true => Retypes::NONE,
         false => facts.retypes(types, shape),
     };
@@ -1782,12 +1806,47 @@ fn crossed_out<'graph, 'here>(
     value
 }
 
+/// The closure of a frame of `function`, whose untraced body's code runs as `shape`, its
+/// composition's root: the code's closure run ([`code_closure`]) over what the scope the function
+/// was born in offers it. The message the frame faults with where a name the code reads is bound
+/// nowhere — a hole, a `\` name the offer lacks — or where a quantified function is read anywhere
+/// but a call's head.
+fn untraced_closure<'graph, 'here>(
+    writer: Writer<'here, '_>,
+    types: &Chain<'_, 'here, '_, '_>,
+    program: &'graph Program<'graph>,
+    function: &crate::knot::Function<'graph, 'here, Knotted<'graph, 'here>>,
+    shape: &BodyShape<'_>,
+) -> Result<&'here ClosureBindings<'here, Knotted<'graph, 'here>>, &'here str> {
+    let &[Link::Value(code), Link::Value(offered)] = function.closure().links() else {
+        unreachable!("an untraced body's closure is its code and what it is offered")
+    };
+    let member = code.as_code().expect("an untraced body's code is code");
+    let refused = match unbound(member, shape, offered, types) {
+        Ok(None) => None,
+        Ok(Some(name)) => Some(CodeRefused::Unbound(name)),
+        Err(refused) => Some(refused),
+    };
+    if let Some(refused) = refused {
+        return Err(rendered(
+            writer,
+            format_args!("{}", refused.display(program.symbols(), types)),
+        ));
+    }
+    let bump = Bump::new();
+    let links = code_closure(writer, types, member, shape, offered, &bump)
+        .expect("a name `unbound` finds bound is bound");
+    // The frame's callables are born under the composition, so its own chain is not placed.
+    Ok(ClosureBindings::of(
+        writer,
+        &links,
+        (ArenaRef::ROOT, None),
+        None,
+    ))
+}
+
 /// An `EVAL`'s frame: the code's activation over a closure run assembled in its shape's capture
-/// order — each `$` name and filled mark from the binding the code carries at its mark's scope
-/// and name, a filled key from its list there, each `$(…)` key from the registrations it carries at
-/// that scope with that key, each `\` name from `offered` — every edge resolved to the member it
-/// names, so the run holds value words only. A keyworded hole holds no function. `None` when a name
-/// is bound nowhere, which [`eval`] refuses first.
+/// order ([`code_closure`]). `None` when a name is bound nowhere, which [`eval`] refuses first.
 fn code_frame<'graph, 'here>(
     step: &Taking<'_, 'graph, '_, 'here, '_, '_>,
     types: &Chain<'_, 'here, '_, '_>,
@@ -1796,14 +1855,36 @@ fn code_frame<'graph, 'here>(
     offered: KValue<'graph, 'here>,
 ) -> Option<&'here KActivation<'graph, 'here>> {
     let member = code.as_code()?;
-    let node = member.code()?;
     let (door, facts) = step.door();
-    let shape = node.shape(&door);
-    offered.as_record()?;
-    let find = |run, scope, name| Some(binding_at(run, scope, name)?.link.resolve(member));
+    let shape = member.code()?.shape(&door);
     let bump = Bump::new();
     let writer = step.writer();
-    let mut links = BumpVec::with_capacity_in(shape.captures().len(), &bump);
+    let links = code_closure(writer, types, member, shape, offered, &bump)?;
+    // A quote's lexical chain of arena nodes is not placed, so its frame seeks from the root.
+    let closure = ClosureBindings::of(writer, &links, (ArenaRef::ROOT, None), None);
+    Some(resident(
+        writer,
+        KActivation::of_code(writer, shape, &facts, closure, program.builtins()),
+    ))
+}
+
+/// The closure run of `member`'s code, run as `shape`, in its capture order: each `$` name and
+/// filled mark from the binding the code carries at its mark's scope and name, a filled key from
+/// its list there, each `$(…)` key from the registrations it carries at that scope with that key,
+/// each `\` name from `offered` — every edge resolved to the member it names, so the run holds
+/// value words only. A keyworded hole holds no function. `None` when a name is bound nowhere.
+fn code_closure<'graph, 'here, 'x>(
+    writer: Writer<'here, '_>,
+    types: &Chain<'_, 'here, '_, '_>,
+    member: Knotted<'graph, 'here>,
+    shape: &BodyShape<'_>,
+    offered: KValue<'graph, 'here>,
+    bump: &'x Bump,
+) -> Option<BumpVec<'x, Link<'here, Knotted<'graph, 'here>>>> {
+    let node = member.code()?;
+    offered.as_record()?;
+    let find = |run, scope, name| Some(binding_at(run, scope, name)?.link.resolve(member));
+    let mut links = BumpVec::with_capacity_in(shape.captures().len(), bump);
     for capture in shape.captures() {
         let value = match capture.source {
             CaptureSource::Read(_) | CaptureSource::Member { .. } => {
@@ -1816,27 +1897,20 @@ fn code_frame<'graph, 'here>(
             ) {
                 (Some(filled), _) => filled,
                 (None, BinderSymbol::Key(key)) => {
-                    registrations_at(writer, member, (capture.scope(), key), types, &bump)
+                    registrations_at(writer, member, (capture.scope(), key), types, bump)
                 }
                 (None, _) => return None,
             },
             // A hole is never bound at an `EVAL`; a key's holds no function.
             CaptureSource::Hole => match capture.name {
-                BinderSymbol::Key(_) => {
-                    Value::List(List::new(writer, [].into_iter(), types, &bump))
-                }
+                BinderSymbol::Key(_) => Value::List(List::new(writer, [].into_iter(), types, bump)),
                 _ => return None,
             },
-            CaptureSource::Offered => offered.field(capture.name.symbol(), types, &bump)?.value(),
+            CaptureSource::Offered => offered.field(capture.name.symbol(), types, bump)?.value(),
         };
         links.push(Link::Value(value));
     }
-    // A quote's lexical chain of arena nodes is not placed, so its frame seeks from the root.
-    let closure = ClosureBindings::of(writer, &links, (ArenaRef::ROOT, None), None);
-    Some(resident(
-        writer,
-        KActivation::of_code(writer, shape, &facts, closure, program.builtins()),
-    ))
+    Some(links)
 }
 
 /// The list of the registrations the code `member` carries at `scope` whose key is `key`, built

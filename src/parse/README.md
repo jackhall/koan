@@ -243,11 +243,13 @@ their own.
 elements with their types dropped, which is what `BuiltinShape::matches` walks.
 
 **The role says the reading; the type says the syntax.** A slot's role says how
-the shape builder reads its part (`Role::reading`), one of four ways: as a written
-**quote**, for a part that runs later, conditionally or never — a callable's
-body, an `EXPR` head (`Role::Head`), an `OP` symbol or a `PAIRWISE` combiner
-(`Data`); as **bare** syntax, for a part that declares or runs where it is
-written, once — a binder name, an in-place `MODULE`, `GROUP` or `USING` body,
+the shape builder reads its part (`Role::reading`), one of five ways: as a written
+**quote**, for a part that runs later, conditionally or never — an `EXPR` head
+(`Role::Head`), an `OP` symbol or a `PAIRWISE` combiner (`Data`); as **code**,
+for a callable's body, which runs later — a written quote, or any other part,
+evaluated to code where the callable is born
+([building code](../scope/README.md#building-code)); as **bare** syntax, for a
+part that declares or runs where it is written, once — a binder name, an in-place `MODULE`, `GROUP` or `USING` body,
 `NEWTYPE`'s representation, a type expression (`Role::TypeExpression`), a `TRY`
 or `CATCH` operand (`Role::InPlace`); as a **container** of quotes, for a part
 that names things as data — an arm set, a union's variants, a `FOR ALL` group, and a `SIG`
@@ -260,8 +262,10 @@ syntax fills it — a code kind, or a container of code kinds, for a part read a
 written, and a value type for one evaluated — and no slot keeps a part raw. A
 type expression and an in-place operand are the exceptions: they are bare, but
 their slot type is the value they denote, so the builder checks their spelling
-alone. The table only states those types: the shape builder's static check
-([scope](../scope/README.md#three-tiers)) admits a written part against them
+alone. A callable's body slot is typed `Block`, which a written quote is
+admitted against; any other part there is typed by the value it evaluates to,
+where the program loads. The table only states those types: the shape
+builder's static check ([scope](../scope/README.md#three-tiers)) admits a written part against them
 through [`admits_part`](../values/admission.rs) over the program's registry, the
 one admission rule, so no rule here restates a container's elements.
 

@@ -597,7 +597,7 @@ impl<'graph> Scan<'graph, '_> {
                     continue;
                 }
                 match (role.reading(), &part.value) {
-                    (Reading::Quote, ExpressionPart::QuotedExpression(quoted)) => {
+                    (Reading::Quote | Reading::Code, ExpressionPart::QuotedExpression(quoted)) => {
                         self.node(quoted)?
                     }
                     (Reading::Container, ExpressionPart::ListLiteral(items)) => {

@@ -23,6 +23,7 @@ mod lexical;
 mod loops;
 mod memo;
 mod modules;
+mod named_code;
 mod narrowing;
 mod paths;
 mod programs;

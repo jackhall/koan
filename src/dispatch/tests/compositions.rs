@@ -15,7 +15,7 @@ use super::{WRITTEN, output, run};
 
 /// What one run of `source` left: what it printed, the drain's tallies, and how many compositions
 /// were live at its end.
-fn composed(source: &str) -> (String, Tiers, usize) {
+pub(super) fn composed(source: &str) -> (String, Tiers, usize) {
     WRITTEN.with(|written| written.borrow_mut().clear());
     let mut substrate =
         CellSubstrate::load::<Koan>(source, "<test>", 4, BuildBudget::default(), output())
@@ -270,7 +270,7 @@ fn a_frame_under_a_composition_probes_no_term_it_does_not_read() {
 }
 
 /// What one run of `source` under the smallest budget printed, with how many compositions it built.
-fn smallest(source: &str) -> (String, Tiers) {
+pub(super) fn smallest(source: &str) -> (String, Tiers) {
     WRITTEN.with(|written| written.borrow_mut().clear());
     let mut substrate = CellSubstrate::load::<Koan>(source, "<test>", 4, SMALLEST, output())
         .unwrap_or_else(|error| panic!("the program loads: {error}"));

@@ -61,6 +61,7 @@ fn born<'graph, 'cell>(
         &fixture.reading_of(activation),
         fixture.written(),
         site,
+        None,
         (crate::values::ArenaRef::ROOT, None),
         types,
         fixture.scratch(),

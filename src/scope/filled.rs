@@ -167,7 +167,7 @@ impl<'graph> Locating<'_, 'graph, '_> {
     ) {
         if let Some(site) = shape.sites().find(part) {
             // A body nested here is read through its own shape.
-            if let Some(nested) = shape.nested(site) {
+            if let Some(nested) = shape.nested_in_place(site) {
                 return self.body(nested);
             }
             if let Some(mention) = shape.mention(site)

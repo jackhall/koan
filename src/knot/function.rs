@@ -7,6 +7,12 @@
 //! record, the root of that code on it, which finds or rebuilds the composition — so the knot node
 //! stays 64 bytes and nothing it holds points into an arena node.
 //!
+//! A function whose body is untraced code — named code the load could not follow to its quote —
+//! is born over the code its body part evaluated to: its closure is that code, laid flat, and the
+//! record of what its declaring scope offers it, and its typing record holds what finds the code's
+//! composition, which binds its parameters ([`Composing`]). A call builds or finds that
+//! composition and runs its root ([`Function::frame_shape`]).
+//!
 //! Beside it, the staging a [tie](super::tie()) does for a function node. Everything a node needs
 //! is read into scratch with no writer in reach — its body shape, its type as the facts fix it, and
 //! its captures, every mention of a fellow member minted as an edge into the
@@ -21,21 +27,21 @@
 
 use std::cell::Cell;
 
-use crate::memory::{BumpAllocator, BumpVec, Edge, KnotPlan, Writer, resident};
+use crate::memory::{Bump, BumpAllocator, BumpVec, Edge, KnotPlan, Writer, resident};
 use crate::scope::{Activated, AtRun, Elaboration, StaticInstance};
 use crate::scope::{
-    BodyAt, BodyRef, BodyShape, ClosureBindings, ComposedRoot, Registration, ShapeKind, Site,
-    Stamp, Written,
+    BodyAt, BodyRef, BodyShape, Candidate, ClosureBindings, ComposedRoot, Offer, Position,
+    Registration, ShapeKind, Site, Slot, Stamp, Written,
 };
 use crate::scope::{Callable, FunctionGroupMap, ParameterBinding, Registered, ShapeGroupMap};
 use crate::symbols::{BinderSymbol, TypeSymbol};
 use crate::type_lattice::{DeclaredType, KType, Scheme, instantiate_quantified};
-use crate::values::digest::function_content;
+use crate::values::digest::{composition_digest, function_content};
 use crate::values::{
-    ArenaRef, Chain, ContentDigest, Knotted as _, Link, Retyped, Seen, Value, Weight,
+    ArenaRef, Chain, ContentDigest, Knotted as _, Link, List, Record, Retyped, Seen, Value, Weight,
 };
 
-use super::{Coerced, KReading, KValue, Knotted, Node, Untieable, composed};
+use super::{Coerced, KReading, KValue, Knotted, Node, Untieable, composed, flattened};
 
 /// A function: what one knot node holds.
 pub struct Function<'graph, 'cell, X> {
@@ -144,6 +150,12 @@ impl<'graph, 'cell, X> Function<'graph, 'cell, X> {
         self.closure
     }
 
+    /// What a call finds the composition of this function's untraced body by; `None` for any other
+    /// body.
+    pub fn composing(&self) -> Option<Composing<'cell>> {
+        self.typing.and_then(|typing| typing.composing)
+    }
+
     pub fn knot_weight(&self) -> Weight {
         self.knot_weight.get()
     }
@@ -174,6 +186,7 @@ impl<'graph, 'cell, X> Function<'graph, 'cell, X> {
                     let body = self.body();
                     (body, body.root.map(|root| root.copied(writer)))
                 }),
+                self.composing(),
             ),
             body: self.body,
             closure,
@@ -183,6 +196,35 @@ impl<'graph, 'cell, X> Function<'graph, 'cell, X> {
 }
 
 impl<'graph, 'cell> Function<'graph, 'cell, Knotted<'graph, 'cell>> {
+    /// The root of this function's untraced body's code — the code is its first closure binding —
+    /// beside what finds its composition. `None` for any other body.
+    pub fn untraced_root(&self) -> Option<ComposedRoot<'cell>> {
+        let composing = self.composing()?;
+        let Some(Link::Value(code)) = self.closure.links().first() else {
+            unreachable!("an untraced body's first closure binding is its code")
+        };
+        let syntax = code.as_code()?.code()?.body()?;
+        Some(ComposedRoot {
+            syntax,
+            digest: composing.digest,
+            parameters: composing.parameters,
+        })
+    }
+
+    /// The root of the composed code a call of this function runs under: its untraced body's
+    /// code, or the composed code its body lies in. `None` for a body of written code.
+    pub fn root(&self) -> Option<ComposedRoot<'cell>> {
+        self.untraced_root().or(self.body().root)
+    }
+
+    /// The shape a call of this function activates, read through `door`: an untraced body's
+    /// composition's root, which `door` must rest on, or the shape at its body's segment.
+    pub fn frame_shape<'step>(&self, door: &crate::scope::Code<'step>) -> &'step BodyShape<'step> {
+        match self.composing() {
+            Some(_) => door.shapes().root(),
+            None => door.shape(self.body().segment),
+        }
+    }
     /// The values the node's content covers, in the order [`content`](Self::content) asks for
     /// their digests: each capture the code digest does not name that holds a value, not an edge.
     pub(super) fn content_parts<'a>(&self, out: &mut dyn FnMut(Seen<'a, Knotted<'graph, 'cell>>))
@@ -226,12 +268,24 @@ pub struct Typing<'cell> {
     /// The body's record of a function born of code composed at run time, its root on it, which a
     /// copy lays again.
     composed: Option<&'cell BodyRef<'cell, 'cell>>,
+    /// What a call of a function of an untraced body finds its composition by.
+    composing: Option<Composing<'cell>>,
+}
+
+/// What a call of a function whose body is untraced code finds the code's composition by: the
+/// digest of the code's syntax and the parameters it binds, and those parameters, the function's
+/// own in its shape's channel order. The code itself is the function's first closure binding, the
+/// record of what its declaring scope offers it the second.
+#[derive(Clone, Copy)]
+pub struct Composing<'cell> {
+    pub digest: ContentDigest,
+    pub parameters: &'cell [BinderSymbol],
 }
 
 impl<'cell> Typing<'cell> {
-    /// `map`, `registered`, `instance`, `declared` and a body of composed code's record written
-    /// into the region `writer` fills beside the root it is handed, or `None` where the function
-    /// has none of them.
+    /// `map`, `registered`, `instance`, `declared`, a body of composed code's record beside the
+    /// root it is handed, and what an untraced body's call composes by, written into the region
+    /// `writer` fills, or `None` where the function has none of them.
     pub(super) fn laid_down(
         writer: Writer<'cell, '_>,
         map: FunctionGroupMap<'_>,
@@ -239,9 +293,10 @@ impl<'cell> Typing<'cell> {
         instance: &[KType],
         declared: Option<DeclaredType<KType>>,
         composed: Option<(&BodyRef<'_, '_>, Option<ComposedRoot<'cell>>)>,
+        composing: Option<Composing<'_>>,
     ) -> Option<&'cell Typing<'cell>> {
         let empty = map.is_empty() && registered.is_none() && instance.is_empty();
-        (!empty || declared.is_some() || composed.is_some()).then(|| {
+        (!empty || declared.is_some() || composed.is_some() || composing.is_some()).then(|| {
             let quantifier_map = FunctionGroupMap(writer.fill(map.0.len(), |at| map.0[at]));
             let registered = registered.map(|registered| Registered {
                 shape: registered.shape,
@@ -265,6 +320,11 @@ impl<'cell> Typing<'cell> {
                     instance: writer.fill(instance.len(), |at| instance[at]),
                     declared,
                     composed: composed.map(|(body, root)| body.laid(writer, root)),
+                    composing: composing.map(|composing| Composing {
+                        parameters: writer
+                            .fill(composing.parameters.len(), |at| composing.parameters[at]),
+                        ..composing
+                    }),
                 },
             )
         })
@@ -277,10 +337,20 @@ impl<'cell> Typing<'cell> {
         instance: usize,
         declared: bool,
         composed: Option<&BodyRef<'_, '_>>,
+        composing: Option<&Composing<'_>>,
     ) -> Weight {
-        if len == 0 && registered.is_none() && instance == 0 && !declared && composed.is_none() {
+        if len == 0
+            && registered.is_none()
+            && instance == 0
+            && !declared
+            && composed.is_none()
+            && composing.is_none()
+        {
             return Weight::ZERO;
         }
+        let composing = composing.map_or(Weight::ZERO, |composing| {
+            Weight::run::<BinderSymbol>(composing.parameters.len())
+        });
         let composed = composed.map_or(Weight::ZERO, BodyRef::weight);
         let (map, names) = registered.map_or((0, 0), |registered| {
             let names = match registered.parameters {
@@ -295,6 +365,7 @@ impl<'cell> Typing<'cell> {
             .plus(Weight::run::<KType>(instance))
             .plus(Weight::flat::<Typing<'_>>())
             .plus(composed)
+            .plus(composing)
     }
 }
 
@@ -320,6 +391,9 @@ pub(super) struct Staged<'graph, 'cell, 'x> {
     pub captures: BumpVec<'x, Link<'cell, Knotted<'graph, 'cell>>>,
     /// What the activation the function is born in had decided, which its closure keeps.
     pub decided: Option<&'cell Activated<'cell>>,
+    /// An untraced body's code, beside its body part's site in the shape it is born in and the
+    /// parameters its composition binds.
+    pub untraced: Option<(Knotted<'graph, 'cell>, Site, &'x [BinderSymbol])>,
 }
 
 impl<'graph, 'cell> Staged<'graph, 'cell, '_> {
@@ -334,11 +408,14 @@ impl<'graph, 'cell> Staged<'graph, 'cell, '_> {
 
     /// This node's closure run, born under the arena node `build`, and typing record laid down in
     /// `writer`'s region, beside what the two add to the knot's weight. A plain unquantified `FN` has
-    /// no typing record and writes none.
+    /// no typing record and writes none. An untraced body's closure is its code, laid flat, then
+    /// the record of what `activation`, the activation it is born in, offers it.
     pub(super) fn laid_down(
         &self,
         writer: Writer<'cell, '_>,
         born: (ArenaRef, Option<Stamp<'cell, Knotted<'graph, 'cell>>>),
+        activation: &KReading<'_, 'graph, 'cell>,
+        types: &Chain<'_, 'cell, '_, '_>,
     ) -> (
         &'cell ClosureBindings<'cell, Knotted<'graph, 'cell>>,
         Option<&'cell Typing<'cell>>,
@@ -348,7 +425,37 @@ impl<'graph, 'cell> Staged<'graph, 'cell, '_> {
             BodyAt::Written(_) => None,
             BodyAt::Composed(body) => Some(body),
         };
-        let closure = ClosureBindings::of(writer, &self.captures, born, self.decided);
+        let (closure, composing) = match self.untraced {
+            None => (
+                ClosureBindings::of(writer, &self.captures, born, self.decided),
+                None,
+            ),
+            Some((code, site, parameters)) => {
+                let scratch = Bump::new();
+                let code = flattened(writer, code, types);
+                let syntax =
+                    (code.code().and_then(|node| node.body())).expect("flat code has a body");
+                let shape = activation.shape();
+                let links = [
+                    Link::Value(Value::Knotted(code)),
+                    Link::Value(offered(
+                        writer,
+                        activation,
+                        shape.offers(site),
+                        types,
+                        &scratch,
+                    )),
+                ];
+                let composing = Composing {
+                    digest: composition_digest(syntax, parameters),
+                    parameters,
+                };
+                (
+                    ClosureBindings::of(writer, &links, born, self.decided),
+                    Some(composing),
+                )
+            }
+        };
         let typing = Typing::laid_down(
             writer,
             self.quantifier_map,
@@ -356,6 +463,7 @@ impl<'graph, 'cell> Staged<'graph, 'cell, '_> {
             self.instance,
             self.declared,
             composed.map(|body| (body, self.root)),
+            composing,
         );
         let weight = closure.weight().plus(Typing::weight(
             self.quantifier_map.0.len(),
@@ -363,6 +471,7 @@ impl<'graph, 'cell> Staged<'graph, 'cell, '_> {
             self.instance.len(),
             self.declared.is_some(),
             composed,
+            composing.as_ref(),
         ));
         (closure, typing, weight)
     }
@@ -371,12 +480,15 @@ impl<'graph, 'cell> Staged<'graph, 'cell, '_> {
 /// Read the callable of `body` into `scratch`: its type as the load, or a layer `activation`
 /// reads, fixed it, born for `registration` or for none, and its captures read through
 /// `activation`, each `Member` source minted by `edge`. The function keeps its body's record as
-/// `written` holds it.
+/// `written` holds it. An untraced body is born over `code`, what its body part evaluated to, which
+/// is `NotCode` where it is no code.
+#[allow(clippy::too_many_arguments)]
 pub(super) fn staged<'graph, 'cell, 'x>(
     body: &BodyShape<'_>,
     registration: Option<&Registration<'_>>,
     activation: &KReading<'_, 'graph, 'cell>,
     written: Written<'graph, 'cell, '_>,
+    code: Option<KValue<'graph, 'cell>>,
     types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'x>,
     edge: impl FnMut(u32) -> Edge,
@@ -384,6 +496,30 @@ pub(super) fn staged<'graph, 'cell, 'x>(
 where
     'graph: 'x,
 {
+    let untraced = match body.deferred() {
+        false => None,
+        true => {
+            let code = code.expect("an untraced body is born over its code");
+            let Some(member) = code.as_code() else {
+                return Err(Untieable::NotCode {
+                    value: code.concrete_ktype(),
+                });
+            };
+            let shape = activation.shape();
+            let form = body.form().expect("a callable's body records its form");
+            let site = shape
+                .site_of_body(form)
+                .expect("a callable's form has a body");
+            let mut parameters = BumpVec::new_in(scratch);
+            parameters.extend(
+                (0..body.slots() as u32)
+                    .map(Slot)
+                    .filter(|slot| body.position_of(*slot) == Position::PARAMETER)
+                    .map(|slot| body.slot_name(slot)),
+            );
+            Some((member, site, &*parameters.leak()))
+        }
+    };
     let callable =
         loaded(body, registration, activation, types, scratch).map_err(Untieable::Type)?;
     // A body whose group the load solved where it is wanted is born as that instance.
@@ -409,6 +545,7 @@ where
         declared: None,
         captures,
         decided: activation.view().decided(),
+        untraced,
     })
 }
 
@@ -493,12 +630,13 @@ pub(super) type Born<'step> = (&'step BodyShape<'step>, Option<&'step Registrati
 
 /// Read every function node into `scratch`, by node index — `bodies[i]` is node `i`'s callable
 /// body beside the registration it is born for, `None` for a data node — each capture of a fellow
-/// member minted as an edge through `plan`.
+/// member minted as an edge through `plan`. An untraced body is born over `codes[i]`.
 pub(super) fn stage<'graph, 'cell, 'x>(
     plan: &KnotPlan,
     activation: &KReading<'_, 'graph, 'cell>,
     written: Written<'graph, 'cell, '_>,
     bodies: &[Option<Born<'_>>],
+    codes: &[Option<KValue<'graph, 'cell>>],
     types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'x>,
 ) -> Result<BumpVec<'x, Option<Staged<'graph, 'cell, 'x>>>, Untieable<'x>>
@@ -506,13 +644,14 @@ where
     'graph: 'x,
 {
     let mut staged = BumpVec::with_capacity_in(bodies.len(), scratch);
-    for body in bodies {
+    for (body, code) in bodies.iter().zip(codes) {
         staged.push(match body {
             Some((body, registration)) => Some(self::staged(
                 body,
                 *registration,
                 activation,
                 written,
+                *code,
                 types,
                 scratch,
                 |index| {
@@ -534,12 +673,15 @@ where
 ///
 /// A callable that captures a fellow member is born inside its binder's knot by the tie, which
 /// never asks for it, so no capture here is an edge. It is born under the arena node `build`, and
-/// keeps its body's record as `written` holds it.
+/// keeps its body's record as `written` holds it. An untraced body is born over `code`, what the
+/// caller evaluated its body part to.
+#[allow(clippy::too_many_arguments)]
 pub fn lambda<'graph, 'cell, 'x>(
     writer: Writer<'cell, '_>,
     activation: &KReading<'_, 'graph, 'cell>,
     written: Written<'graph, 'cell, '_>,
     site: Site,
+    code: Option<KValue<'graph, 'cell>>,
     born: (ArenaRef, Option<Stamp<'cell, Knotted<'graph, 'cell>>>),
     types: &Chain<'_, 'cell, '_, '_>,
     scratch: BumpAllocator<'x>,
@@ -552,10 +694,17 @@ where
         .nested(site)
         .filter(|body| body.kind() == ShapeKind::Callable)
         .expect("a lambda is born at the site of a callable body its shape holds");
-    let staged = staged(body, None, activation, written, types, scratch, |_| {
-        unreachable!("only the tie births a callable that captures a fellow member")
-    })?;
-    let (closure, typing, weight) = staged.laid_down(writer, born);
+    let staged = staged(
+        body,
+        None,
+        activation,
+        written,
+        code,
+        types,
+        scratch,
+        |_| unreachable!("only the tie births a callable that captures a fellow member"),
+    )?;
+    let (closure, typing, weight) = staged.laid_down(writer, born, activation, types);
     let knot_weight = Weight::flat::<usize>()
         .plus(weight)
         .plus(Weight::flat::<Node<'graph, 'cell>>());
@@ -675,6 +824,7 @@ pub fn instance<'graph, 'cell>(
             .body
             .is_none()
             .then(|| (function.body(), function.body().root)),
+        function.composing(),
     );
     let knot_weight = Weight::flat::<usize>()
         .plus(closure.weight())
@@ -684,6 +834,7 @@ pub fn instance<'graph, 'cell>(
             solution.len(),
             false,
             function.body.is_none().then(|| function.body()),
+            function.composing().as_ref(),
         ))
         .plus(Weight::flat::<Node<'graph, 'cell>>());
     let knot = KnotPlan::new(1).tie(writer, |_| {
@@ -696,4 +847,48 @@ pub fn instance<'graph, 'cell>(
         ))
     });
     Knotted::of(super::stamped(knot, types), 0)
+}
+
+/// The record of the names and keys `offers` — an `EVAL`'s, or an untraced body's — offers the code
+/// it runs, read through `activation` and built in `writer`'s region: a name's value, and a key as
+/// the list of its functions, as a use at the key written there resolves it.
+pub fn offered<'graph, 'cell>(
+    writer: Writer<'cell, '_>,
+    activation: &KReading<'_, 'graph, 'cell>,
+    offers: &[(BinderSymbol, Offer<'_>)],
+    types: &Chain<'_, 'cell, '_, '_>,
+    scratch: &Bump,
+) -> KValue<'graph, 'cell> {
+    let mut fields = BumpVec::with_capacity_in(offers.len(), scratch);
+    for (name, offer) in offers {
+        let offered = match offer {
+            Offer::Name(coordinate) => activation.read(*coordinate),
+            Offer::Key(list) => {
+                let mut functions = BumpVec::new_in(scratch);
+                for candidate in list.candidates {
+                    match candidate {
+                        Candidate::One(coordinate) => functions.push(activation.read(*coordinate)),
+                        Candidate::Spread(coordinate) => {
+                            let spread = activation.read(*coordinate);
+                            if spread.as_list().is_some()
+                                && let Some(list) = spread.surface(types, scratch)
+                            {
+                                functions.extend(
+                                    (0..list.len())
+                                        .map(|at| list.child(at, types, scratch).value()),
+                                );
+                            }
+                        }
+                    }
+                }
+                Value::List(List::of_candidates(
+                    writer,
+                    functions.iter().copied(),
+                    types,
+                ))
+            }
+        };
+        fields.push((*name, offered));
+    }
+    Value::Record(Record::new(writer, &fields, types, scratch))
 }

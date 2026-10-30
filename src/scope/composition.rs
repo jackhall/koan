@@ -18,6 +18,7 @@ use crate::memory::{
     BumpAllocator, BumpVec, Lays, ProgramBrand, ProgramStorage, collect, program_storage,
 };
 use crate::parse::{ExpressionPart, KExpression, ListItem, copied};
+use crate::symbols::BinderSymbol;
 use crate::type_lattice::{Term, TypeDigest};
 use crate::values::ContentDigest;
 
@@ -33,8 +34,12 @@ pub struct SyntaxOwner {
     digest: ContentDigest,
 }
 
-/// A borrowed syntax root, named so [`ComposedSyntax`]'s cell can borrow it from its owner.
-type SyntaxRoot<'a> = &'a KExpression<'a>;
+/// A borrowed syntax root beside the parameters its composition binds, named so
+/// [`ComposedSyntax`]'s cell can borrow them from its owner.
+pub struct SyntaxRoot<'a> {
+    syntax: &'a KExpression<'a>,
+    parameters: &'a [BinderSymbol],
+}
 
 self_cell!(
     /// Composed code's syntax, copied whole into program storage of its own: what a cell that
@@ -48,20 +53,29 @@ self_cell!(
 );
 
 impl ComposedSyntax {
-    /// `root`'s syntax copied into fresh storage.
+    /// `root`'s syntax and parameters copied into fresh storage.
     pub fn of(root: ComposedRoot<'_>) -> Self {
         let owner = SyntaxOwner {
             storage: program_storage(),
             digest: root.digest,
         };
         ComposedSyntax::new(owner, |owner| {
-            copied(owner.storage.brand().writer(), root.syntax)
+            let writer = owner.storage.brand().writer();
+            SyntaxRoot {
+                syntax: copied(writer, root.syntax),
+                parameters: collect(writer, root.parameters.iter().copied()),
+            }
         })
     }
 
     /// The copy.
     pub fn syntax(&self) -> &'_ KExpression<'_> {
-        self.borrow_dependent()
+        self.borrow_dependent().syntax
+    }
+
+    /// The parameters its composition binds.
+    pub fn parameters(&self) -> &'_ [BinderSymbol] {
+        self.borrow_dependent().parameters
     }
 
     /// Its syntax digest, which finds its composition.

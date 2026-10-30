@@ -16,6 +16,8 @@
 //!   and capture slot; a name written where it is declared hashes its symbol;
 //! - a keyworded use hashes its key and each candidate by the same rule, a spread tagged;
 //! - a type expression hashes its syntax, its names resolved the same way;
+//! - a callable's body written as a name, a member read or a call hashes its nested body, then
+//!   the part as any other;
 //! - spans are left out, and marks are kept.
 //!
 //! A top-level read names the binding it reads, which is bound once per program, so two bodies of
@@ -147,13 +149,19 @@ impl<'graph> Walk<'_, 'graph, '_, '_> {
     fn part(&mut self, hasher: &mut DigestHasher, part: &ExpressionPart<'graph>) {
         let draft = &self.builder.chain[self.level];
         let site = draft.sites.site(part);
-        // The children are drafted in program order, so by site.
+        // The children are drafted in program order, so by site. A callable's body written as any
+        // part but a quote is that part as well, which is hashed as written after the body.
         if let Ok(index) = draft
             .children
             .binary_search_by_key(&site, |(site, _)| *site)
         {
-            hasher.tag(Tag::Nested).digest(draft.children[index].1.code);
-            return;
+            let child = &draft.children[index].1;
+            hasher.tag(Tag::Nested).digest(child.code);
+            if child.kind != ShapeKind::Callable
+                || matches!(part, ExpressionPart::QuotedExpression(_))
+            {
+                return;
+            }
         }
         match part {
             ExpressionPart::Keyword(symbol) => {

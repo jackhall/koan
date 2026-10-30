@@ -253,6 +253,34 @@ where
         Self::laid_down(writer, shape, facts, closure, builtins, None, None)
     }
 
+    /// A fresh activation of the code shape `shape`, built alone binding the parameters of
+    /// `callable`, whose untraced body it is, over a closure run in its capture order, every slot
+    /// empty: a call of `callable` binds the parameter slots, as a frame of a callable shape does.
+    pub fn of_composed(
+        writer: Writer<'cell, '_>,
+        shape: &BodyShape<'_>,
+        facts: &Facts<'_>,
+        callable: XF::Closed<'cell>,
+        closure: &'cell ClosureBindings<'cell, XF::Closed<'cell>>,
+        builtins: &'cell Builtins<'cell, XF::Closed<'cell>>,
+    ) -> Self {
+        debug_assert_eq!(shape.kind(), ShapeKind::Code);
+        debug_assert_eq!(
+            closure.len(),
+            shape.captures().len(),
+            "the closure bindings follow the shape's capture layout",
+        );
+        Self::laid_down(
+            writer,
+            shape,
+            facts,
+            closure,
+            builtins,
+            None,
+            Some(callable),
+        )
+    }
+
     /// A fresh activation of the block shape `shape` beside the resident view `enclosing`, every
     /// slot empty. A view is all it needs, so an evaluation holding only a view can lay a block
     /// down.

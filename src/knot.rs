@@ -24,10 +24,9 @@
 //! edge to a sibling by its index, beside its index there — so values that reach one another
 //! digest as one knot. A member lists the values its knot holds and hashes the knot over their
 //! digests; `values` walks them on its own stack, so a chain of knots never nests a call per knot.
-//! A function compares by its body's base and segment — one per `FN` written, so a copy keeps it —
-//! and its
-//! captures, a builtin by its record's address, a quote by its code and bindings, and a module or a
-//! barrier is
+//! A function compares by its body's base, code digest and declared type — so a copy keeps it, and
+//! two `FN`s of one resolved code and type written apart are one function — and its captures; a
+//! builtin by its record's address, a quote by its code and bindings, and a module or a barrier is
 //! [`Incomparable`](crate::values::Incomparable).
 //!
 //! **What sits where.** This file is the vocabulary every node kind shares: the member, the node,
@@ -61,7 +60,9 @@ pub use code::{Code, UsingRefused, built, composed_code, quote, using};
 pub(crate) use code::{code_length, code_part, code_slice, flattened};
 #[cfg(test)]
 pub(crate) use function::INSTANTIATED;
-pub use function::{Function, barrier_instance, header_instance, instance, lambda};
+pub use function::{
+    Composing, Function, barrier_instance, header_instance, instance, lambda, offered,
+};
 pub use module::{Born, Coerced, Module, body_activation};
 pub use tie::{Tied, tie};
 pub use view::ComposeRefused;
@@ -369,12 +370,13 @@ impl values::Knotted for Knotted<'_, '_> {
         Self: 'a,
     {
         match self.node() {
-            // One body per function written, so its base and segment are the function's identity.
+            // A body's resolved code and its declared type are the function's identity.
             Node::Function(function) => Resolved::Function {
-                identity: FunctionIdentity::Body(
-                    function.body().base,
-                    function.body().segment.index(),
-                ),
+                identity: FunctionIdentity::Body {
+                    base: function.body().base,
+                    code: function.body().code,
+                    ktype: function.declared().digest(),
+                },
                 instance: function.instance().unwrap_or(&[]),
                 closure: function.closure().links(),
                 composes: function.body().composes,
@@ -468,6 +470,8 @@ pub enum Untieable<'x> {
     /// A spread at `site` in data member `name` of what is no list: a value of another kind, a
     /// function, or a fellow member that is no list.
     NotAList { name: BinderSymbol, site: Site },
+    /// A callable's untraced body evaluated to `value`, a value of this type, which is no code.
+    NotCode { value: KType },
 }
 
 impl<'x> Untieable<'x> {
@@ -515,6 +519,11 @@ impl fmt::Display for UntieableDisplay<'_, '_, '_, '_, '_> {
                 f,
                 "{}",
                 refused_construction(refused, self.symbols, self.types)
+            ),
+            Untieable::NotCode { value } => write!(
+                f,
+                "this body is {}, which is not code for a callable to run",
+                ktype(value)
             ),
             Untieable::NotAList { name: member, .. } => {
                 write!(f, "`..` in `{}` spreads what is not a list", name(member))

@@ -7,7 +7,8 @@
 //!   evaluated and the container built; a type expression, elaborated to a type value;
 //! - a **block** a pairwise operator run was rewritten into, run through the
 //!   [block door](crate::program::block) with its last statement's value its own;
-//! - a `FN`, born through the [lambda door](crate::knot::lambda);
+//! - a `FN`, born through the [lambda door](crate::knot::lambda), an untraced body over the code
+//!   its body part evaluates to, asked for first;
 //! - an **ascription** `<value> :! <Type>`: its operand checked against the type, unless the load
 //!   settled it, and retyped to it; a module operand, under `:!` or `:|`, is seen as its signature
 //!   through the view door;
@@ -77,9 +78,8 @@ use crate::scheduler::{
     Use,
 };
 use crate::scope::{
-    AtRun, BodyShape, Candidate, CandidateList, CandidateRoute, Coordinate, Elaboration,
-    Elimination, HandedTo, InstanceRead, Located, Narrowing, Offer, ParameterBinding, ShapeKind,
-    Site, StaticType,
+    AtRun, BodyShape, CandidateList, CandidateRoute, Coordinate, Elaboration, Elimination,
+    HandedTo, InstanceRead, Located, Narrowing, ParameterBinding, ShapeKind, Site, StaticType,
 };
 use crate::symbols::{BinderSymbol, Symbol};
 use crate::type_lattice::{KType, TypeNode, Verdict};
@@ -222,29 +222,7 @@ fn evaluate_on<'graph, 'here, 'tier, 'reg>(
             let asked = step.spawn(block);
             park(step, &at, asked, FINISHING)
         }
-        Form::Lambda(node) => {
-            let site = view.shape().site_of_body(node).expect("a `FN` has a body");
-            let scratch = Bump::new();
-            let writer = step.writer();
-            let written = program.written_under(view.facts(), within.root);
-            let value = match lambda(
-                writer,
-                &view,
-                written,
-                site,
-                within.born(),
-                &at.types,
-                &scratch,
-            ) {
-                Ok(member) => Value::Knotted(member),
-                Err(refused) => program.error(
-                    writer,
-                    &at.types,
-                    refused.display(program.symbols(), &at.types),
-                ),
-            };
-            finish(step, &at, value)
-        }
+        Form::Lambda(node) => born_lambda(step, &at, node, stage),
         Form::Declaration => finish(step, &at, Value::Null),
         Form::Ascribe(node, mode) => ascribe(step, &at, node, mode, stage),
         Form::Eval(node) => evaluated(step, &at, node, stage),
@@ -263,6 +241,57 @@ fn evaluate_on<'graph, 'here, 'tier, 'reg>(
             finish(step, &at, error)
         }
     }
+}
+
+/// A `FN` no binder names, born through the lambda door: an untraced body over the code its body
+/// part evaluates to, asked for first. A refused birth — a part that is no code among them — is an
+/// error value.
+fn born_lambda<'step, 'graph, 'here>(
+    mut step: Taking<'_, 'graph, '_, 'here, '_, '_>,
+    at: &Evaluation<'step, 'graph, 'here, '_, '_, '_>,
+    node: &'step KExpression<'step>,
+    stage: u32,
+) -> Action<'graph, KBundle> {
+    let program = at.program;
+    let shape = at.view.shape();
+    let site = shape.site_of_body(node).expect("a `FN` has a body");
+    let scratch = Bump::new();
+    let code = match shape.nested(site).is_some_and(|body| body.deferred()) {
+        false => None,
+        true => {
+            let Located::Part(part) = shape.located(site) else {
+                unreachable!("a body's site locates its part")
+            };
+            let wanted = [Wanted::Evaluated(part)];
+            match gathered(&mut step, at, &wanted, Use::Keeps, stage, &scratch) {
+                Gathered::Ready(operands) => match operands[..] {
+                    [Operand::Value(Held { value, .. })] => Some(value),
+                    _ => unreachable!("an untraced body's part is evaluated"),
+                },
+                other => return unready(step, at, other),
+            }
+        }
+    };
+    let writer = step.writer();
+    let written = program.written_under(at.view.facts(), at.within.root);
+    let value = match lambda(
+        writer,
+        &at.view,
+        written,
+        site,
+        code,
+        at.within.born(),
+        &at.types,
+        &scratch,
+    ) {
+        Ok(member) => Value::Knotted(member),
+        Err(refused) => program.error(
+            writer,
+            &at.types,
+            refused.display(program.symbols(), &at.types),
+        ),
+    };
+    finish(step, at, value)
 }
 
 /// How an evaluation asks for a block whose value is its own: kept in a caching body, so a value
@@ -673,35 +702,8 @@ fn offered<'step, 'graph, 'here>(
     operand: &'step ExpressionPart<'step>,
     scratch: &Bump,
 ) -> KValue<'graph, 'here> {
-    let types = &at.types;
     let offers = at.view.shape().offers(at.view.shape().site(operand));
-    let mut fields = BumpVec::with_capacity_in(offers.len(), scratch);
-    for (name, offer) in offers {
-        let offered = match offer {
-            Offer::Name(coordinate) => at.view.read(*coordinate),
-            Offer::Key(list) => {
-                let mut functions = BumpVec::new_in(scratch);
-                for candidate in list.candidates {
-                    match candidate {
-                        Candidate::One(coordinate) => functions.push(at.view.read(*coordinate)),
-                        Candidate::Spread(coordinate) => {
-                            let spread = at.view.read(*coordinate);
-                            if spread.as_list().is_some() {
-                                functions.extend(builtins::listed(spread, types, scratch));
-                            }
-                        }
-                    }
-                }
-                Value::List(List::of_candidates(
-                    writer,
-                    functions.iter().copied(),
-                    types,
-                ))
-            }
-        };
-        fields.push((*name, offered));
-    }
-    Value::Record(Record::new(writer, &fields, types, scratch))
+    crate::knot::offered(writer, &at.view, offers, &at.types, scratch)
 }
 
 /// A list literal with a spread among its items, over its items' and spread lists' values `parts`:

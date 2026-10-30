@@ -417,8 +417,9 @@ pub(crate) fn settled<'a, 'graph, L: Language>(
     })
 }
 
-/// The composition of the code `syntax`, composed at run time: its shapes built alone under the
-/// program's claims and laid through `brand`, then `L`'s walk rooted at them with nothing bound,
+/// The composition of the code `syntax`, composed at run time — binding `parameters`, where it is
+/// the untraced body of a callable: its shapes built alone under the program's claims and laid
+/// through `brand`, then `L`'s walk rooted at them with nothing bound,
 /// its records and folds laid there too, as the load lays the program's. The walk interns through
 /// a chain of its own over the agent tier, laid in `bump`; a term of each type the shapes or
 /// records name that the agent tier and the root do not hold is laid in `bump` too, for a frame
@@ -428,7 +429,7 @@ pub(crate) fn composed<'a, 'graph, L: Language>(
     program: &Program<'graph>,
     brand: ProgramBrand<'a>,
     bump: &'a Bump,
-    syntax: &'a KExpression<'a>,
+    (syntax, parameters): (&'a KExpression<'a>, &'a [BinderSymbol]),
     _: &'a &'graph (),
 ) -> Composition<'a> {
     let scratch = Bump::new();
@@ -437,7 +438,15 @@ pub(crate) fn composed<'a, 'graph, L: Language>(
     let claims = program.shapes().root().group_frame().claims();
     let builtins = program.builtins();
     let symbols = program.symbols();
-    let shapes = Shapes::of_code(brand, syntax, claims, builtins, &types, symbols, &scratch);
+    let shapes = Shapes::of_code(
+        brand,
+        (syntax, parameters),
+        claims,
+        builtins,
+        &types,
+        symbols,
+        &scratch,
+    );
     let writer = brand.writer();
     let store = LoadStore::new(writer, &scratch, shapes, Binding::EMPTY);
     let root = shapes.root();

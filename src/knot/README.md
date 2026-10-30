@@ -51,7 +51,9 @@ activation. This module closes it:
   **typing record**: its quantifier map, its registered shape, for an
   [instance](#an-instance) the solution its group was instantiated at, and,
   for a member [born at its annotation](#the-tie), the signature its body was
-  checked against. The
+  checked against, and, for a function whose body is
+  [untraced code](#a-lambda), what its call finds that code's composition by.
+  The
   **registered shape** is the expression shape a function born for a
   definition's registration puts in its bucket — beside how a keyworded call
   binds that shape's slots to the function's parameters — which the
@@ -314,6 +316,18 @@ the tie never asks the evaluator for. Its type is read as the tie's is, and a
 signature the load left unknown that does not elaborate refuses `Type` and
 writes nothing.
 
+**An untraced body.** A callable whose body is code the load could not follow
+to a written quote ([building code](../scope/README.md#building-code)) is born
+over the value its body part evaluates to: the evaluator gathers the part
+before it calls the door, and the tie asks `eager` for it beside its data
+members' parts. A value that is no code refuses `NotCode`. The function's
+closure is that code, laid flat, then the record of the names and keys its
+declaring scope offers it, as an `EVAL` of a code parameter is offered them;
+its typing record holds the digest of the code's syntax and the callable's
+parameter names, which its call finds the code's composition by. Its body
+shape holds no statements and captures nothing, so it is never a node of a
+data member's knot.
+
 ## An instance
 
 A quantified function the load instantiated at an
@@ -496,24 +510,32 @@ would be.
 
 ## Equality and rendering
 
-A function compares by its shape, its instance and its captures: two functions
-are equal when they hold the same shape handle — one per written `FN`, `EXPR` or
-`OP`, so a copy keeps it — the same instance solution, empty for anything no
-instance, and their closure bindings compare equal as a bisimulation,
-under the pair set circular data uses. Bindings are immutable and no shape
-retains a defining scope ([quotes](../scope/README.md#quotes)), so a function's
-shape and captures fix what it does. A closure's equality reads a
+A function compares by its body's code digest, its type, its instance and its
+captures: two functions are equal when their bodies digest alike under one base
+— the load, or one composition — at one type, with the same instance solution,
+empty for anything no instance, their closures laid out alike, and their
+closure bindings compare equal as a bisimulation, under the pair set circular
+data uses. A code digest is a body's code as resolved, not as written, and it
+names no parameter's type, so the type is the identity's too. Bindings are
+immutable and no shape retains a defining scope
+([quotes](../scope/README.md#quotes)), so a function's code, type and captures
+fix what it does. A closure's equality reads a
 [type capture](../scope/README.md#resolution) — an enclosing call's binding of
 a type name — only where its contract composes it: where a call in its body
 reads it for a solve, or an
 instance site in it is made at it: at a slot that solves in one of the call's
 candidates, including one the load judged *never* and dropped, since the call
 runs what selection over the full list would. So a function born under two
-bindings of a type name compares equal wherever nothing in it reads that name. The same text written at another site is
-unequal, and a builtin compares by its table identity. `values` compares by an
-identity rather than a shape, since it names none: `Knotted::resolve` hands it
-the shape's address. A quote's code compares as its syntax and the values its
-names bind ([quotes](../scope/README.md#equality-and-knots)), so
+bindings of a type name compares equal wherever nothing in it reads that name.
+The same text written at two sites is one function where it resolves alike, at
+one type, over equal captures, so an `FN` written in code
+[named as the body](../scope/README.md#building-code) of two callables is one
+function across them; a builtin compares by its table identity. `values`
+compares by an identity rather than a shape, since it names none:
+`Knotted::resolve` hands it the body's base and code digest and its type's
+digest, which compare across programs as a handle would not. A quote's code
+compares as its syntax and the values its names bind
+([quotes](../scope/README.md#equality-and-knots)), so
 `LET echo = #(PRINT $echo)` equals its copy. A module and a barrier
 have no structural equality: a comparison that reaches one is `Incomparable`
 ([Equality](../values/README.md#equality-and-rendering)), which the `==`
@@ -636,7 +658,7 @@ carries the scalar types alone.
   — length, depth, kind and a weight that never under-prices, a composed
   view's included, linear along a chain of splices.
 - [`tests/equality.rs`](tests/equality.rs) — comparison and rendering: rings
-  from two programs are equal, a function by the `FN` written and its
+  from two programs are equal, a function by its code, its type and its
   captures, a list node holding a function equal to itself, a module
   incomparable, and a ring renders with a label where it closes.
 - [`tests/properties.rs`](tests/properties.rs) — over `scope`'s generated shape

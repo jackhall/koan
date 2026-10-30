@@ -111,16 +111,6 @@ fn a_part_not_written_as_its_role_reads_it_is_refused() {
     let unquoted = |form, part| ShapeError::Unquoted { form, part, at };
     let cases = [
         (
-            "LET f = (FN :{} -> Number = (1))",
-            unquoted(BuiltinShapeId::Lambda, QuotedPart::Body),
-            "(1)",
-        ),
-        (
-            "LET f = (FN :{} -> Number = x)",
-            unquoted(BuiltinShapeId::Lambda, QuotedPart::Body),
-            "x",
-        ),
-        (
             "EXPR (FOO a :Number) -> Number = #(a)",
             unquoted(BuiltinShapeId::ExpressionDefinition, QuotedPart::Head),
             "(FOO a :Number)",
@@ -170,16 +160,6 @@ fn a_part_not_written_as_its_role_reads_it_is_refused() {
                 at,
             },
             "#(x)",
-        ),
-        (
-            "LET f = (FN :{} -> Number = 42)",
-            ShapeError::Inadmissible {
-                form: BuiltinShapeId::Lambda,
-                index: 5,
-                slot: KType::BLOCK,
-                at,
-            },
-            "42",
         ),
         (
             "MODULE m = 42",
