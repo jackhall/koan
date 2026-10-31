@@ -226,7 +226,10 @@ region, so a node at the program's lifetime `'graph` is eternal by that
 lifetime alone: a code value holds written syntax at `'graph`, where a copy
 shares it and its weight counts nothing past the pointer, and composed syntax
 at its region's lifetime, laid there by [code splicing](../scope/README.md#splicing),
-where a copy lays it again. A construction door takes a writer at the node's own
+where a copy lays it again. For the same reason a string a written literal or
+template evaluates to shares the literal's text, and one from composed code
+copies it into the region
+([lowering](../values/README.md#equality-and-rendering)). A construction door takes a writer at the node's own
 lifetime, and the lifetime is invariant at the program brand's doors, so
 program storage never holds a node of shorter-lived storage.
 

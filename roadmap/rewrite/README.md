@@ -37,6 +37,7 @@ hand.
 
 - [Agents](agents.md)
 - [The build image](build-image.md)
+- [Comments](comments.md)
 - [Dict defaults](dict-defaults.md)
 - [Families as parameters](families-as-parameters.md)
 - [Recursion over run-time types](recursion-over-run-time-types.md)

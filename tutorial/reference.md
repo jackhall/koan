@@ -99,6 +99,15 @@ the link in each section to the relevant chapter.
 | `LENGTH <value>`              | A list's elements, a dict's entries, a string's code points or code's parts, counted. |
 | `[..<list> <element> ...]`    | Spread a list's elements into a list literal; `..(<expr>)` spreads a parenthesized expression's. |
 
+## Building strings — see [2](02-values-and-types.md#building-strings)
+
+| Form                          | Meaning                                            |
+|-------------------------------|----------------------------------------------------|
+| `%"… {<expr>} …"`, `%'…'`     | A template: a `Str` of its text, each brace's expression rendered into it as `PRINT` renders it. `{{` and `}}` write a brace. |
+| `%"… %{<expr>} …"`            | A brace keeping its value apart: the template is `{strings :(LIST OF Str), values :(LIST OF …)}`, the kept values and the n + 1 strings around them. |
+| `JOIN <list>`                 | A list's elements, each rendered as `PRINT` renders it, written one after another as a `Str`. |
+| `JOIN <list> BY <string>`     | The same, with the separator between consecutive elements. |
+
 ## Type expressions — see [2](02-values-and-types.md)
 
 | Form                          | Meaning                                            |

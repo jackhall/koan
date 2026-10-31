@@ -33,7 +33,9 @@ The [evaluator](evaluate.rs) reads a node off the shape that holds it — the
 statements the shape owns, [rewritten](../scope/README.md#the-four-rewrites),
 never the parse — as one of:
 
-- a **leaf**: a literal, lowered; a name, read through its mention's
+- a **leaf**: a literal, lowered, its strings sharing the program's text where
+  the code is as the program wrote it and copied into the region in composed
+  code; a name, read through its mention's
   coordinate — at an [instance site](#static-types) the load recorded, made
   into the instance through the knot's
   [instance door](../knot/README.md#an-instance); a quote, born through the [quote door](../knot/README.md#a-quote);

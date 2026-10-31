@@ -150,10 +150,13 @@ their barriers, see the payload.
 A value borrows at one lifetime, `Value<'cell>`: what a writer laid down in a
 cell's region, following
 [cellgraph's contract](../../cellgraph/README.md#the-contract-four-embedder-types).
-No arm holds program storage. A quote's body lives there, but a quote is a knot
-member, and what a member holds of program storage — a function's body shape, a
-quote's body and code shape — sits inside the member, at the lifetime the layer
-above closes the parameter with.
+No arm holds program storage but a string's text. A quote's body lives there,
+but a quote is a knot member, and what a member holds of program storage — a
+function's body shape, a quote's body and code shape — sits inside the member,
+at the lifetime the layer above closes the parameter with. A string evaluated
+from a literal or a template's text, in code as the program wrote it, shares
+that text, which outlives every region
+([lowering](#equality-and-rendering)).
 
 So **every value copies**: every region part has a deep copy, and a knot member
 is rebuilt by its family, which embeds its program storage verbatim, so the copy
@@ -558,7 +561,9 @@ doors build one: slicing a string's `Text`, and `Concatenation`, which pushes
 texts in order — a flat one as one stretch, a view as its whole tree — and
 finishes as a view, or as the flat `""` where every text was empty. A
 [template](../parse/README.md#templates) and `JOIN` splice through it, so a
-spliced string shares its parts' bytes, and n pushes cost O(n log n) nodes. A
+spliced string shares its parts' bytes — a written template's pieces the
+program's text, and a rendered value other than a string its text, laid flat
+once — and n pushes cost O(n log n) nodes. A
 stretch shares the flat string it was taken from and lays a crumb — the byte
 offset of every sixty-fourth code point — unless that string is ASCII, so
 finding a code point in a view is O(log n) steps to its stretch and decodes at
@@ -798,7 +803,13 @@ scalar or string literal, or a container literal whose every element lowers and
 whose every dict key is a scalar literal — and refuses anything that needs
 dispatch or a scope, a quote included, since its code binds its `$` names where
 it is written ([the quote door](../knot/README.md#a-quote)). The part is checked whole before anything is
-written, so a refusal leaves the region untouched.
+written, so a refusal leaves the region untouched. It copies each string into
+the region. `Value::lower_shared` lowers a part in storage that outlives the
+region, as program storage does, each string sharing the part's own text. The
+evaluator lowers code as the program wrote it through `lower_shared` and
+composed code through `lower_part`, since a value may outlive the composed
+code it came from; a template's pieces follow the same rule. A crossing copies
+a string's bytes either way.
 
 ## Working expressions
 
