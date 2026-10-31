@@ -948,7 +948,10 @@ reading, since a `\` name binds where a body is built, to a slot whose value
 arrives with each call. A spread is one level deep, as Lisp's `,@xs` and
 Julia's `$(xs...)` are, and a spliced part [composes](#composition) as any part
 does. A splice stands only as a part of an expression: a list or brace literal,
-a type expression and a marked use hold none. Where the load can tell that
+a type expression and a marked use hold none. Composing stops at a literal, so
+a group a literal's element or a [template](../parse/README.md#templates)'s
+brace holds composes nothing, and the parse refuses one holding a splice; a
+quote written there composes as its own. Where the load can tell that
 `xs` is never a list of code it refuses the program, and otherwise a list that
 is not one is an error value where the quote is born.
 
@@ -1511,5 +1514,8 @@ type outside the one error that lists names, and on a retired lifetime name.
 
 - [Dict defaults](../../roadmap/rewrite/dict-defaults.md) — a value dict's `_`
   default, which lifts the dict-default refusal.
+- [Composing inside literals](../../roadmap/metaprogramming/composing-inside-literals.md)
+  — a splice in a group a literal or a template brace holds, composed as in a
+  paren group.
 - [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — `CLOSE
   OVER`, and a warning for an unmarked keyworded use in a quote.

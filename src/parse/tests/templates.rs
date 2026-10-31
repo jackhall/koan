@@ -79,6 +79,9 @@ fn a_splice_under_a_literal_is_refused() {
     assert_eq!(refused("#({a = (f ($..p))})"), span(7, 17));
     assert!(tree(r#"#(%"{#($..p)}")"#).is_ok());
     assert!(tree("#([#($..p)])").is_ok());
+    // A `#[…]` or `#{…}` literal quotes each element, so its splice composes there.
+    assert!(tree("#[($..p)]").is_ok());
+    assert!(tree("#{a = ($..p)}").is_ok());
 }
 
 #[test]
