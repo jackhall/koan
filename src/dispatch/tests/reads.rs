@@ -27,7 +27,7 @@ fn a_result_slot_admits_either_variant_and_refuses_a_payload_outside_it() {
 }
 
 /// The rendered `Ok` and `Error` of a read, as `PRINT` writes them.
-fn ok(ok: &str, payload: &str) -> String {
+pub(super) fn ok(ok: &str, payload: &str) -> String {
     format!(":(Ok {{Error = Never, Ok = {ok}}})({payload})")
 }
 

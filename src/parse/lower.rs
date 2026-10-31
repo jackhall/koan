@@ -62,11 +62,6 @@ const NOT_AN_ITEM: &str = "`..` spreads a list only as an item of a list literal
 /// Why a splice was refused where it was written, or for what its operand is.
 const SPLICE_IN_LITERAL: &str = "`$..` splices code into an expression, and a literal holds \
                                  none; a list literal spreads with `..`";
-/// Why a splice in a group a literal or a template brace holds was refused: composing stops at
-/// the literal.
-const SPLICE_UNDER_LITERAL: &str = "`$..` splices code into the groups of the expression it \
-                                    stands in, and a literal's element or a template's brace is \
-                                    none";
 const SPLICE_IN_TYPE: &str = "a type expression holds no splice";
 const SPLICE_OPERAND: &str = "the operand of `$..` is a name";
 const BUILT_SPLICE: &str = "`\\..` has no reading: a `\\` name binds where the code is built, to a value \
@@ -78,21 +73,12 @@ const SPLICE_IN_MARKED_USE: &str =
 const UNSPREADABLE: &str = "`..` spreads a name glued to it, `..xs`, or a paren group, `..(f x)`";
 
 /// Where a run of items sits, which decides where its parts land and which delimiters are
-/// meaningful. A brace carries the pair state machine the run feeds. A literal's `bool` is whether
-/// it is a `#[…]` or `#{…}` literal, whose elements each become a quote of their own.
+/// meaningful. A brace carries the pair state machine the run feeds.
 enum Context<'c, 'a> {
     Expression,
     /// A list literal's items, beside the index of each part that is a spread.
-    List(&'c mut Vec<usize>, bool),
-    Brace(&'c mut DictFrame<'a>, bool),
-}
-
-impl Context<'_, '_> {
-    /// Whether this is a literal whose elements each become a quote, so that a splice in one
-    /// composes into that element's own quote.
-    fn quotes_elements(&self) -> bool {
-        matches!(self, Context::List(_, true) | Context::Brace(_, true))
-    }
+    List(&'c mut Vec<usize>),
+    Brace(&'c mut DictFrame<'a>),
 }
 
 /// Whether a layout line that is a body's whole content comes off. In a value expression it does:
@@ -241,7 +227,7 @@ impl<'a, 's> Lower<'a, '_, 's> {
                 }
                 // A spread is a list literal's item and nothing else.
                 Node::Atom(text) if text.starts_with("..") => {
-                    let Context::List(spreads, _) = context else {
+                    let Context::List(spreads) = context else {
                         return Err(ParseError::new(NOT_AN_ITEM, Some(item.span)));
                     };
                     spreads.push(parts.len());
@@ -296,7 +282,7 @@ impl<'a, 's> Lower<'a, '_, 's> {
                 // A comma pairs entries inside a brace and is whitespace everywhere else, so
                 // annotation runs like `a :Number, b :Str` read the same either way.
                 Node::Comma => {
-                    if let Context::Brace(dict, _) = context {
+                    if let Context::Brace(dict) = context {
                         dict.accept_comma()?;
                     }
                 }
@@ -329,7 +315,7 @@ impl<'a, 's> Lower<'a, '_, 's> {
                     items: inner,
                 } => {
                     self.check_adjacency(item, *kind)?;
-                    let part = self.collection_part(item, inner, *kind, false, wrappers)?;
+                    let part = self.collection_part(item, inner, *kind, wrappers)?;
                     self.push_part(context, &mut parts, part)?;
                 }
             }
@@ -357,16 +343,9 @@ impl<'a, 's> Lower<'a, '_, 's> {
             return Err(ParseError::new(SPLICE_IN_LITERAL, part.span));
         }
         if !matches!(context, Context::Expression)
-            && !context.quotes_elements()
-            && let ExpressionPart::Expression(node) = part.value
-            && node.composes()
-        {
-            return Err(ParseError::new(SPLICE_UNDER_LITERAL, part.span));
-        }
-        if !matches!(context, Context::Expression)
             && let ExpressionPart::Keyword(symbol) = part.value
             && !(symbol == WILDCARD.symbol()
-                && matches!(context, Context::Brace(dict, _) if dict.admits_wildcard()))
+                && matches!(context, Context::Brace(dict) if dict.admits_wildcard()))
         {
             return Err(ParseError::new(
                 format!(
@@ -378,7 +357,7 @@ impl<'a, 's> Lower<'a, '_, 's> {
             ));
         }
         match context {
-            Context::Brace(dict, _) => dict.push(part.value),
+            Context::Brace(dict) => dict.push(part.value),
             _ => parts.push(part),
         }
         Ok(())
@@ -401,7 +380,7 @@ impl<'a, 's> Lower<'a, '_, 's> {
                 return Err(self.missing_sigil_group(sigil, item.span.start));
             }
             return match context {
-                Context::Brace(dict, _) => dict.accept_colon(),
+                Context::Brace(dict) => dict.accept_colon(),
                 _ => Err(self.colon_error(item.span.end)),
             };
         }
@@ -416,7 +395,7 @@ impl<'a, 's> Lower<'a, '_, 's> {
         // Inside a brace `=` is the record-pair separator (`{x = 1}`); everywhere else it stays an
         // ordinary keyword token (`LET x = 1`, kwargs, FN bodies).
         if text == "="
-            && let Context::Brace(dict, _) = context
+            && let Context::Brace(dict) = context
         {
             return dict.accept_equals();
         }
@@ -427,7 +406,7 @@ impl<'a, 's> Lower<'a, '_, 's> {
         }
         if classified.trailing_colon {
             return match context {
-                Context::Brace(dict, _) => dict.accept_colon(),
+                Context::Brace(dict) => dict.accept_colon(),
                 _ => Err(self.colon_error(item.span.end)),
             };
         }
@@ -535,9 +514,6 @@ impl<'a, 's> Lower<'a, '_, 's> {
             let node = self
                 .program
                 .alloc_node(self.lower_body(inner, brace_span, wrappers)?);
-            if node.composes() {
-                return Err(ParseError::new(SPLICE_UNDER_LITERAL, Some(brace_span)));
-            }
             let part = ExpressionPart::Expression(node);
             slots.push(match kept {
                 true => TemplateSlot::Kept(part),
@@ -567,24 +543,18 @@ impl<'a, 's> Lower<'a, '_, 's> {
     }
 
     /// A `[...]` list literal, or a `{...}` brace literal — a dict (`:` pairs) or a record
-    /// (`=` pairs), whichever its first pairing operator selects; `quoted` for a `#[…]` or `#{…}`
-    /// literal, whose elements each become a quote.
+    /// (`=` pairs), whichever its first pairing operator selects.
     fn collection_part(
         &self,
         item: &Item<'s>,
         inner: &[Item<'s>],
         kind: Kind,
-        quoted: bool,
         wrappers: Wrappers,
     ) -> Result<Spanned<ExpressionPart<'a>>, ParseError> {
         let writer = self.program.writer();
         if kind == Kind::Bracket {
             let mut spreads = Vec::new();
-            let parts = self.lower_run(
-                inner.iter(),
-                &mut Context::List(&mut spreads, quoted),
-                wrappers,
-            )?;
+            let parts = self.lower_run(inner.iter(), &mut Context::List(&mut spreads), wrappers)?;
             let items = collect(
                 writer,
                 parts
@@ -598,11 +568,7 @@ impl<'a, 's> Lower<'a, '_, 's> {
             return Ok(Spanned::at(ExpressionPart::ListLiteral(items), item.span));
         }
         let mut dict = DictFrame::new(self.program, self.at(item.span));
-        self.lower_run(
-            inner.iter(),
-            &mut Context::Brace(&mut dict, quoted),
-            wrappers,
-        )?;
+        self.lower_run(inner.iter(), &mut Context::Brace(&mut dict), wrappers)?;
         let part = match dict.finish(self.symbols)? {
             BraceContents::Dict(pairs) => {
                 ExpressionPart::DictLiteral(collect(writer, pairs.into_iter()))
@@ -723,7 +689,7 @@ impl<'a, 's> Lower<'a, '_, 's> {
         };
         if sigil_kind == '#' && matches!(group_kind, Kind::Bracket | Kind::Brace) {
             self.check_close_adjacency(group, group_kind)?;
-            let literal = self.collection_part(group, inner, group_kind, true, wrappers)?;
+            let literal = self.collection_part(group, inner, group_kind, wrappers)?;
             if let ExpressionPart::ListLiteral(items) = literal.value
                 && items.iter().any(|item| item.as_part().is_none())
             {
@@ -898,11 +864,8 @@ impl<'a, 's> Lower<'a, '_, 's> {
         outer: Span,
     ) -> Result<Spanned<ExpressionPart<'a>>, ParseError> {
         let node = body.node();
-        if node
-            .parts
-            .iter()
-            .any(|part| matches!(part.value, ExpressionPart::Splice(_)))
-        {
+        // Anywhere under it: the load builds a marked use, so a splice there would never compose.
+        if node.composes() {
             return Err(ParseError::new(SPLICE_IN_MARKED_USE, Some(outer)));
         }
         let keyworded = node

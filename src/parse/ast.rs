@@ -819,18 +819,11 @@ impl<'a> KExpression<'a> {
     }
 
     /// Whether a quote of this node composes where it is born: a `$..` splice lies among the parts
-    /// it owns — its own, its groups', and those of each quote a builtin reads as written.
+    /// it owns ([`each_owned`](Self::each_owned)).
     pub fn composes(&self) -> bool {
-        let slots = self.written_slots();
-        self.parts
-            .iter()
-            .enumerate()
-            .any(|(index, part)| match &part.value {
-                ExpressionPart::Splice(_) => true,
-                ExpressionPart::Expression(node) => node.composes(),
-                ExpressionPart::QuotedExpression(node) => slots.at(index) && node.composes(),
-                _ => false,
-            })
+        let mut splices = false;
+        self.each_owned(&mut |part| splices |= matches!(part, ExpressionPart::Splice(_)));
+        splices
     }
 
     /// Visit each part this node owns: its own and, depth first, those of the syntax nested in

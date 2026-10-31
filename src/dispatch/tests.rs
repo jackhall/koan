@@ -20,6 +20,7 @@ mod instances;
 mod kept;
 mod keys;
 mod lexical;
+mod literal_splices;
 mod loops;
 mod memo;
 mod modules;

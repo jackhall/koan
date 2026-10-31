@@ -5696,7 +5696,7 @@ fn unnarrowed_now() -> bool {
 }
 
 /// Each splice the quote `node` owns, its operand beside where it is written: among its own parts,
-/// its groups', and those of each quote a builtin reads as written.
+/// its groups', each literal element's, and those of each quote a builtin reads as written.
 fn each_splice(node: &KExpression<'_>, out: &mut dyn FnMut(ValueSymbol, SourceRef)) {
     let slots = node.written_slots();
     for (index, part) in node.parts.iter().enumerate() {
@@ -5708,9 +5708,28 @@ fn each_splice(node: &KExpression<'_>, out: &mut dyn FnMut(ValueSymbol, SourceRe
                     ..node.source
                 },
             ),
-            ExpressionPart::Expression(inner) => each_splice(inner, out),
-            ExpressionPart::QuotedExpression(inner) if slots.at(index) => each_splice(inner, out),
-            _ => {}
+            part => each_splice_under(part, slots.at(index), out),
         }
+    }
+}
+
+/// Each splice the quote around `part` owns under it, `written` whether its slot is read as written:
+/// in a group, a quote a builtin reads as written, or a literal's elements, read as their literal is.
+fn each_splice_under(
+    part: &ExpressionPart<'_>,
+    written: bool,
+    out: &mut dyn FnMut(ValueSymbol, SourceRef),
+) {
+    match part {
+        ExpressionPart::Expression(inner) => each_splice(inner, out),
+        ExpressionPart::QuotedExpression(inner) if written => each_splice(inner, out),
+        literal if literal.is_literal() => {
+            let mut at = 0;
+            while let Some(element) = literal.child(at) {
+                each_splice_under(element, written, out);
+                at += 1;
+            }
+        }
+        _ => {}
     }
 }
