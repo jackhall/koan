@@ -1,5 +1,5 @@
-//! A `.` projection in type position: a record field's declared type, read through its newtype
-//! layers and chained.
+//! A `.` projection in type position: a record field's declared type or a union's variant, read
+//! through its newtype layers and chained.
 
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::{KType, Parametric};
@@ -71,6 +71,35 @@ fn a_field_the_type_does_not_declare_is_refused() {
             );
         });
     }
+}
+
+#[test]
+fn a_tag_projection_reads_through_a_variant_s_payload() {
+    brought(
+        "UNION Maybe = #{Some: Number, None: Null}\nUNION Shape = #{Sized: Maybe, Flat: Null}\n\
+         NEWTYPE Wrapped = Maybe\nLET Direct = :(Maybe.Some)\nLET Through = :(Shape.Sized.Some)\n\
+         LET Peeled = :(Wrapped.Some)",
+        |program| {
+            assert_eq!(program.bound("Through"), program.bound("Direct"));
+            assert_eq!(program.bound("Peeled"), program.bound("Direct"));
+        },
+    );
+}
+
+#[test]
+fn a_tag_the_peeled_union_does_not_declare_is_refused() {
+    declared(
+        "UNION Maybe = #{Some: Number, None: Null}\nUNION Shape = #{Sized: Maybe, Flat: Null}\n\
+         LET Sz = :(Shape.Sized)\nLET Missing = :(Shape.Sized.Bogus)",
+        |program, brought| {
+            let expected = Parametric::from(program.bound("Sz"));
+            let bogus = BinderSymbol::classify("Bogus").unwrap().symbol();
+            assert!(
+                matches!(brought, Err(Elaboration::NoSuchMember { owner, name, .. }) if owner == expected && name == bogus),
+                "the tag is refused: {brought:?}"
+            );
+        },
+    );
 }
 
 #[test]

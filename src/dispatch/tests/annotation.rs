@@ -43,10 +43,20 @@ fn an_annotation_the_load_settles_is_not_checked_at_run() {
 }
 
 #[test]
+fn an_annotation_the_value_s_lower_end_lies_outside_refuses_the_load() {
+    assert_eq!(
+        run("LET r = ({v = 1} :! :{v :Any})\nLET n :{v :Number} = r"),
+        "load: <test>:2:1: this value is at least :{v :Null}, which can never satisfy its \
+         annotation :{v :Number}"
+    );
+}
+
+#[test]
 fn an_annotation_the_value_misses_at_run_is_an_error_value() {
     assert_eq!(
-        run("LET r = ({v = 1} :! :{v :Any})\nLET n :{v :Number} = r\nPRINT \"bound\""),
-        "error: :{v :Any} does not satisfy its annotation :{v :Number}"
+        run("LET make = (FN :{} -> Any = #({v = \"s\"}))\n\
+             LET n :{v :Number} = (make {})\nPRINT \"bound\""),
+        "error: :{v :Str} does not satisfy its annotation :{v :Number}"
     );
 }
 
@@ -101,7 +111,8 @@ fn an_annotated_data_member_of_a_cycle_is_born_at_its_annotation() {
 /// as at the top level rather than the tie refusing.
 #[test]
 fn an_annotated_data_member_of_a_cycle_that_misses_still_faults() {
-    let source = "LET r :{x :Str} = {x = 1, f = g}\n\
+    let source = "LET one = (FN :{} -> Any = #(1))\n\
+                  LET r :{x :Str} = {x = (one {}), f = g}\n\
                   LET g = (FN :{} -> Any = #(r))\n\
                   PRINT \"tied\"";
     assert_eq!(

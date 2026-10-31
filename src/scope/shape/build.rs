@@ -91,7 +91,7 @@ use super::super::signature::{
     body_of, declare_family_parameters, declare_parameters, declare_quantifiers, pair_label,
     quantifier_bounds, quoted_body, signature_run, traced_quote,
 };
-use super::super::spelling::{SpelledRoot, path_spelling};
+use super::super::spelling::{SpelledRoot, path_spelling, tag_projection};
 use super::super::tree::Binder as TreeBinder;
 use super::super::typed::Root;
 use super::{
@@ -1867,6 +1867,13 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             ExpressionPart::SigiledTypeExpr(node) => {
                 if self.in_type == 0 {
                     self.record_type(level, statement, part, None);
+                    // A construction's head projecting a variant records its owner too: the load
+                    // reads the union the construction is reached through off it.
+                    if admits == Admits::Head
+                        && let Some((owner, _)) = tag_projection(node)
+                    {
+                        self.record_type(level, statement, owner, None);
+                    }
                 }
                 self.typed(|builder| builder.walk_node(level, statement, node, State::Eager))
             }
@@ -2370,7 +2377,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         {
             let site = self.site(level, part);
             return Err(ShapeError::BodyNotCode {
-                value: KType::BOOL,
+                value: KType::BOOL.into(),
                 at: self.part_source(level, statement, site),
             });
         }

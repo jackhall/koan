@@ -92,7 +92,12 @@ impl World<'_, '_> {
                 record_type(self.types, self.scratch, distinct.into_iter())
             }
             Desc::Union(a, b) => self.types.union_of(self.scratch, &[intern(a), intern(b)]),
-            Desc::Dict(_) | Desc::Boxed | Desc::Wrapped(_) | Desc::Maybe | Desc::MaybeSome => {
+            Desc::Dict(_)
+            | Desc::Boxed
+            | Desc::Wrapped(_)
+            | Desc::Optional(_)
+            | Desc::Maybe
+            | Desc::MaybeSome => {
                 unreachable!("{RETYPED_ONLY}")
             }
         }

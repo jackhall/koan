@@ -57,7 +57,8 @@ fn two_paths_compare_by_their_content_trees() {
              LET meters = (ints :| Counter)\nLET feet = (m2 :| Counter)\n\
              PRINT (SAME meters.zero AND feet.zero)"
         )),
-        "load: <test>:7:7: no overload of `SAME _ AND _` admits (Carrier, Carrier)"
+        "load: <test>:7:7: no overload of `SAME _ AND _` admits these arguments:\n  (Carrier, \
+         Carrier), which can never satisfy :(EXPR FOR ALL #[Elt] #(SAME _ :Elt AND _ :Elt) -> Elt)"
     );
     let twice =
         "LET a = (ints :| Counter)\nLET b = (ints :| Counter)\nLET s = (SAME a.zero AND b.zero)\n";
@@ -133,7 +134,8 @@ fn a_path_through_a_call_is_the_carrier_the_run_computes() {
         run(&format!(
             "{ORDERED}PRINT (SAME (MAKESET asc).empty AND (MAKESET desc).empty)"
         )),
-        "load: <test>:20:7: no overload of `SAME _ AND _` admits (Set, Set)"
+        "load: <test>:20:7: no overload of `SAME _ AND _` admits these arguments:\n  (Set, Set), \
+         which can never satisfy :(EXPR FOR ALL #[Elt] #(SAME _ :Elt AND _ :Elt) -> Elt)"
     );
     assert_eq!(
         narrowing(
@@ -490,11 +492,16 @@ proptest! {
                 whole,
                 source
             );
-        } else if let Some(located) = narrowed.strip_prefix(&format!("error: <test>:{line}:")) {
-            // The decision at a binder the paths are rooted at refused the use, worded as the
-            // load words it: the unnarrowed run raises the same at the use.
-            let message = located.split_once(": ").map_or(located, |(_, message)| message);
-            prop_assert_eq!(&whole, &format!("error: {message}"), "in\n{}", source);
+        } else if narrowed.starts_with(&format!("error: <test>:{line}:")) {
+            // The decision at a binder the paths are rooted at refused the use: the unnarrowed
+            // run faults at it too, worded as the run words it.
+            prop_assert!(
+                whole.starts_with("error: ") && !whole.contains('\n'),
+                "{} unnarrowed ran {:?}\nin\n{}",
+                narrowed,
+                whole,
+                source
+            );
         } else {
             prop_assert_eq!(&narrowed, &whole, "in\n{}", source);
             if narrowing(&source, "s") == "selected" {

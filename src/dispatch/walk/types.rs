@@ -217,7 +217,7 @@ impl<'p, 'o: 'p, 'x, 'graph: 'o + 'p, 'tier: 'o, 'pair, 'reg, S: Store<'o>>
         };
         let typed = self.part(level, part)?;
         let (types, scratch) = (self.types, self.scratch);
-        match never_satisfies(types, scratch, typed.upper, KType::ANY_CODE.into()) {
+        match never_satisfies(types, scratch, typed, KType::ANY_CODE.into()) {
             Some((value, _)) => Err(ShapeError::BodyNotCode {
                 value,
                 at: self.source(level, site),

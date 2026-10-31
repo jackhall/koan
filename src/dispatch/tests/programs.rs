@@ -140,7 +140,9 @@ fn attr_reads_a_field_by_a_label_written_bare_or_quoted() {
     );
     assert_eq!(
         run("LET p = {y = 1}\nPRINT (ATTR p \"y\")"),
-        "load: <test>:2:7: no overload of `ATTR _ _` admits (:{y :Number}, Str)"
+        "load: <test>:2:7: no overload of `ATTR _ _` admits these arguments:\n  :{y :Number}, which \
+         can never satisfy Module\n  Str, which can never satisfy Name\n  :{y :Number}, which can \
+         never satisfy Type"
     );
     assert_eq!(
         run("NEWTYPE Point = :{x :Number, y :Number}\n\
@@ -165,7 +167,8 @@ fn attr_reads_a_field_by_a_label_written_bare_or_quoted() {
 fn a_call_by_name_admits_its_arguments_and_solves_its_own_group() {
     assert_eq!(
         run("LET f = (FN :{x :Number} -> Str = #(\"ran\"))\nPRINT (f {x = \"s\"})"),
-        "load: <test>:2:7: :(FN :{x :Number} -> Str) can never be called with :{x :Str}",
+        "load: <test>:2:7: this argument is :{x :Str}, which can never satisfy the parameters :{x \
+         :Number} of :(FN :{x :Number} -> Str)",
         "an exact callee its argument can never satisfy refuses the load"
     );
     assert_eq!(
@@ -185,8 +188,8 @@ fn a_call_by_name_admits_its_arguments_and_solves_its_own_group() {
     assert_eq!(pair("(f {x = 1, y = 2})"), "Number\nran");
     assert_eq!(
         pair("(f {x = 1, y = 2, Elt = Str})"),
-        "load: <test>:1:102: :(FN FOR ALL #[Elt] :{x :Elt y :Elt} -> Str) can never be called \
-         with :{x :Number y :Number Elt :ProperType}",
+        "load: <test>:1:102: this argument is :{x :Number y :Number Elt :ProperType}, which can \
+         never satisfy the parameters of :(FN FOR ALL #[Elt] :{x :Elt y :Elt} -> Str)",
         "a type parameter is solved, never written"
     );
 }
@@ -445,7 +448,10 @@ fn a_callable_over_a_run_bound_type_is_born_with_the_solution() {
     assert_eq!(run(source), ":(FN :{y :Number} -> Number)\n2");
     let misfit = source.replace("(PRINT (g {y = 2}))", "(PRINT (g {y = \"s\"}))");
     assert!(
-        run(&misfit).contains(":(FN :{y :Number} -> Number) can never be called with :{y :Str}"),
+        run(&misfit).contains(
+            "this argument is :{y :Str}, which can never satisfy the parameters :{y :Number} of \
+             :(FN :{y :Number} -> Number)"
+        ),
         "the solution makes `g` exact, so the load refuses the misfit"
     );
 }
@@ -587,7 +593,9 @@ fn a_module_whose_member_is_as_general_fits_a_quantified_head() {
     // A `MODULE` binder is exactly its signature at load, so the miss refuses the load.
     assert_eq!(
         run(&format!("{BOXES}PRINT (TAKE mono)")),
-        "load: <test>:5:7: no overload of `TAKE _` admits (SIG (#(BOX _ :Number) -> :(LIST OF Number)))"
+        "load: <test>:5:7: no overload of `TAKE _` admits this argument:\n  SIG (#(BOX _ :Number) \
+         -> :(LIST OF Number)), which can never satisfy SIG (FOR ALL #[Elt] #(BOX _ :Elt) -> :(LIST \
+         OF Elt))"
     );
 }
 
@@ -610,7 +618,9 @@ fn a_module_fits_each_application_its_overloads_answer() {
     assert_eq!(fits("NUMBERS one"), "numbers");
     assert_eq!(
         fits("STRINGS one"),
-        "load: <test>:10:7: no overload of `STRINGS _` admits (SIG (#(PUSH _ :Number) -> :(LIST OF Number)))"
+        "load: <test>:10:7: no overload of `STRINGS _` admits this argument:\n  SIG (#(PUSH _ \
+         :Number) -> :(LIST OF Number)), which can never satisfy SIG FOR ALL #{Elt: Any} (#(PUSH _ \
+         :Elt) -> :(LIST OF Elt)) WITH {Elt = Str}"
     );
     assert_eq!(fits("ANY two"), "stack");
     assert_eq!(fits("NUMBERS two"), "numbers");
@@ -618,7 +628,10 @@ fn a_module_fits_each_application_its_overloads_answer() {
     assert_eq!(fits("BOTH two"), "both");
     assert_eq!(
         fits("BOTH one"),
-        "load: <test>:10:7: no overload of `BOTH _` admits (SIG (#(PUSH _ :Number) -> :(LIST OF Number)))"
+        "load: <test>:10:7: no overload of `BOTH _` admits this argument:\n  SIG (#(PUSH _ :Number) \
+         -> :(LIST OF Number)), which can never satisfy (SIG FOR ALL #{Elt: Any} (#(PUSH _ :Elt) -> \
+         :(LIST OF Elt)) WITH {Elt = Str}) & (SIG FOR ALL #{Elt: Any} (#(PUSH _ :Elt) -> :(LIST OF \
+         Elt)) WITH {Elt = Number})"
     );
 }
 

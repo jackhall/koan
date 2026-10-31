@@ -390,8 +390,7 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, '_, 'x, '_, R> {
                     self.types
                         .concrete(owner)
                         .and_then(|owner| {
-                            self.types
-                                .union_member_named(owner, name)
+                            declared_variant(self.types, self.scratch, owner, name)
                                 .or_else(|| declared_field(self.types, self.scratch, owner, name))
                         })
                         .map(|member| DeclaredType::Type(member.into()))
@@ -625,13 +624,13 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, '_, 'x, '_, R> {
         {
             return Err(unsupported);
         }
-        if let TypeNode::Union { members } = self.types.node(constructor) {
-            let mut applied = BumpVec::with_capacity_in(members.len(), self.scratch);
-            applied.extend(members.iter().map(|member| {
-                self.types
-                    .constructor_apply(self.scratch, member, arguments)
-            }));
-            return Ok(self.types.union_of(self.scratch, &applied));
+        if self.types.is_union(constructor) {
+            return Ok(applied_union(
+                self.types,
+                self.scratch,
+                constructor,
+                arguments,
+            ));
         }
         Ok(self
             .types
@@ -901,11 +900,76 @@ pub fn declared_field(
     owner: KType,
     name: Symbol,
 ) -> Option<KType> {
+    through_layers(types, scratch, owner, |layer| match types.node(layer) {
+        TypeNode::Record { fields } => Some(fields.get(name)),
+        _ => None,
+    })
+    .flatten()
+}
+
+/// The union a tag projection off `owner` reads its tags from: `owner` where it is a union, else
+/// the first union its newtype layers peel down to, as [`declared_field`] peels to a record.
+pub fn tag_union(
+    types: &Chain<'_, '_, '_, '_>,
+    scratch: BumpAllocator<'_>,
+    owner: KType,
+) -> Option<KType> {
+    through_layers(types, scratch, owner, |layer| {
+        types.is_union(layer).then_some(layer)
+    })
+}
+
+/// The variant `name` a tag projection off `owner` names: the member `name` of its
+/// [`tag_union`]. `None` where no union lies under `owner` or it declares no `name`.
+pub fn declared_variant(
+    types: &Chain<'_, '_, '_, '_>,
+    scratch: BumpAllocator<'_>,
+    owner: KType,
+    name: Symbol,
+) -> Option<KType> {
+    tag_union(types, scratch, owner).and_then(|union| types.union_member_named(union, name))
+}
+
+/// The parameterized union `union`, not yet applied, applied at `arguments`: each of its variants
+/// applied at the same arguments, unioned. The caller has checked `arguments` against the
+/// parameters the variants declare.
+pub fn applied_union(
+    types: &Chain<'_, '_, '_, '_>,
+    scratch: BumpAllocator<'_>,
+    union: KType,
+    arguments: &[(BinderSymbol, Parametric)],
+) -> Parametric {
+    let TypeNode::Union { members } = types.node(union) else {
+        unreachable!("`applied_union` applies a union")
+    };
+    debug_assert!(
+        (members.iter())
+            .all(|member| !matches!(types.node(member), TypeNode::ConstructorApply { .. })),
+        "`applied_union` applies an unapplied union"
+    );
+    let mut applied = BumpVec::with_capacity_in(members.len(), scratch);
+    applied.extend(
+        members
+            .iter()
+            .map(|member| types.constructor_apply(scratch, member, arguments)),
+    );
+    types.union_of(scratch, &applied)
+}
+
+/// The first of `owner` and the representations its newtype layers peel down to — a `NEWTYPE`'s,
+/// a union variant's payload — that `read` answers, stopping at a layer that is no newtype or one
+/// already peeled.
+fn through_layers<R>(
+    types: &Chain<'_, '_, '_, '_>,
+    scratch: BumpAllocator<'_>,
+    owner: KType,
+    read: impl Fn(KType) -> Option<R>,
+) -> Option<R> {
     let mut peeled = BumpVec::new_in(scratch);
     let mut layer = owner;
     loop {
-        if let TypeNode::Record { fields } = types.node(layer) {
-            return fields.get(name);
+        if let Some(answer) = read(layer) {
+            return Some(answer);
         }
         match types.member_schema(layer) {
             Some(NodeSchema::NewType(repr)) if !peeled.contains(&repr) => {

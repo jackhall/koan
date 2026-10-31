@@ -513,6 +513,12 @@ site to say so, and the body can use `Elt` as an ordinary type name. A name your
 arguments never mention has nothing to be worked out from, so it stands for its
 [bound](#bounding-a-type-parameter) — `Any`, unless you give it another.
 
+An argument built through a union's variant reads as the union its head names:
+with the `Maybe` of [Tagged unions](05-tagged-unions.md), `BOX (Maybe.Some 3)`
+reads `Elt = Maybe`, so a body can `MATCH x UNDER Elt`, though the value is
+still a `Some`. Built through a name bound to the variant itself, as after
+`LET Sm = Maybe.Some`, `(Sm 3)` reads `Elt = Some`.
+
 Two arguments at one type parameter need not share a type: `Elt` becomes the
 smallest type holding both. A head's slots are read in **priority classes**,
 though — one class per slot, in written order, unless a declaration such as
@@ -685,7 +691,8 @@ PRINT (counter.zero + 1)
 ```
 
 ```text
-error: <input>:7:7: no overload of `_ + _` admits (Carrier, Number)
+error: <input>:7:7: no overload of `_ + _` admits these arguments:
+  Carrier, which can never satisfy Number
 ```
 
 Only the module's own functions, reached through the view, work with the

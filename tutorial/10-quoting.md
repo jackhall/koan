@@ -167,7 +167,8 @@ TWICE (PRINT "hi")
 ```
 
 ```text
-error: <input>:5:1: no overload of `TWICE _` admits (Str)
+error: <input>:5:1: no overload of `TWICE _` admits this argument:
+  Str, which can never satisfy Expression
 ```
 
 The same happens to a name — its value, not its code, reaches the slot:
@@ -182,11 +183,13 @@ TWICE greeting
 ```
 
 ```text
-error: <input>:6:1: no overload of `TWICE _` admits (Str)
+error: <input>:6:1: no overload of `TWICE _` admits this argument:
+  Str, which can never satisfy Expression
 ```
 
-The message names each argument by its *type*, not by its spelling —
-`greeting` holds a `Str`, and a `Str` can never match an `:Expression` slot.
+The message names the argument by its *type*, not by its spelling, beside the
+slot it can never satisfy — `greeting` holds a `Str`, and a `Str` can never
+match an `:Expression` slot.
 Where the argument's type is only known once it runs, the argument runs first,
 side effects and all, and the call fails when it is chosen. Write `#(…)` to pass
 the code itself.

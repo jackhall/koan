@@ -1,11 +1,14 @@
-//! A path by its tokens: a member read whose label is a type token, read through a chain of value
-//! members rooted at a value name or at an expression written in place — `m.Carrier`,
-//! `(PICK p).Set`.
+//! Two member reads by their tokens alone, no reader asked what the owner holds.
 //!
-//! The shape builder records each one a type spells ([`BodyShape::path_spellings`]), so the type
+//! A path is a member read whose label is a type token, read through a chain of value members
+//! rooted at a value name or at an expression written in place — `m.Carrier`, `(PICK p).Set`. The
+//! shape builder records each one a type spells ([`BodyShape::path_spellings`]), so the type
 //! channel mints its entry however far the elaborator reads the type holding it; the elaborator
-//! decides a path by the same tokens, beside its root's mention. No reader is asked what the root
-//! holds.
+//! decides a path by the same tokens, beside its root's mention.
+//!
+//! A tag projection is a member read labelled by a type token off a type — `Maybe.Some`,
+//! `Shape.Sized.Some`, `m.Mb.Some`. The shape builder records the owner of one heading a
+//! construction, and the load reads the union the construction is reached through off it.
 //!
 //! [`BodyShape::path_spellings`]: super::BodyShape::path_spellings
 
@@ -70,4 +73,25 @@ pub(crate) fn path_spelling<'graph, 'x>(
         chain,
         label: *label,
     })
+}
+
+/// `node` as a tag projection by its tokens alone: a member read labelled by a type token off a
+/// type — a type name, or a type expression such as another projection or a path — so
+/// `Maybe.Some`, `Shape.Sized.Some` and `m.Mb.Some`. Its owner part and label; `None` for any
+/// other node, a module's type member `m.Mb` among them.
+pub(crate) fn tag_projection<'graph>(
+    node: &'graph KExpression<'graph>,
+) -> Option<(&'graph ExpressionPart<'graph>, TypeSymbol)> {
+    match (node.cache().builtin_shape(), node.parts) {
+        (Some(form), [_, owner, label]) if form.id == BuiltinShapeId::Attribute => {
+            match (&owner.value, &label.value) {
+                (
+                    ExpressionPart::Type(_) | ExpressionPart::SigiledTypeExpr(_),
+                    ExpressionPart::Type(label),
+                ) => Some((&owner.value, *label)),
+                _ => None,
+            }
+        }
+        _ => None,
+    }
 }

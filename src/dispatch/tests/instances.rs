@@ -36,7 +36,8 @@ fn an_annotated_binding_instantiates_its_quantified_value() {
     assert_eq!(top(inc, "inc"), ":(FN :{x :Number} -> Number)");
     assert_eq!(
         run(&format!("{inc}PRINT (inc {{x = \"s\"}})")),
-        "load: <test>:2:7: :(FN :{x :Number} -> Number) can never be called with :{x :Str}"
+        "load: <test>:2:7: this argument is :{x :Str}, which can never satisfy the parameters :{x \
+         :Number} of :(FN :{x :Number} -> Number)"
     );
     assert_eq!(
         run(&format!(
@@ -463,8 +464,9 @@ fn other_arguments_that_never_fit_drop_the_candidate() {
     // The quantified argument is listed at its scheme: no instance of it is made.
     assert_eq!(
         run(&format!("{pair}{}", module("(PAIR pick WITH 1)"))),
-        "load: <test>:2:72: no overload of `PAIR _ WITH _` admits \
-         (:(FN FOR ALL #[Elt] :{x :Elt} -> Elt), Number)"
+        "load: <test>:2:72: no overload of `PAIR _ WITH _` admits these arguments:\n  \
+         (:(FN FOR ALL #[Elt] :{x :Elt} -> Elt), Number), which can never satisfy \
+         :(EXPR FOR ALL #[Elt] #(PAIR _ :(FN :{x :Elt} -> Elt) WITH _ :(LIST OF Elt)) -> Elt)"
     );
 }
 
@@ -475,8 +477,8 @@ fn an_instance_bound_by_name_keeps_its_exact_type() {
     assert_eq!(
         run(&source),
         format!(
-            "load: <test>:1:{column}: :(FN :{{x :Number}} -> Number) can never be called with \
-             :{{x :Str}}"
+            "load: <test>:1:{column}: this argument is :{{x :Str}}, which can never satisfy the \
+             parameters :{{x :Number}} of :(FN :{{x :Number}} -> Number)"
         )
     );
 }
@@ -590,7 +592,7 @@ fn an_instance_field_whose_other_fields_never_fit_refuses_the_call() {
               Any = #(f)))";
     let refused = run(&beside_over_b(ap, "ap {f = pick, y = 1}"));
     assert!(
-        refused.starts_with("load:") && refused.contains("can never be called with"),
+        refused.starts_with("load:") && refused.contains("which can never satisfy the parameters"),
         "{refused}"
     );
 }

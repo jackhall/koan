@@ -71,6 +71,17 @@ pub(super) fn interval(program: &Program<'_>, shape: &BodyShape<'_>, name: &str)
         .expect("the binder binds no quantified callable")
 }
 
+/// `typed`'s ends, rendered `[lower, upper]`, or the one type where they meet.
+pub(super) fn ends(program: &Program<'_>, typed: Interval) -> String {
+    let bump = Bump::new();
+    let types = reading(program.tiers(), &bump);
+    let show = |end| display_name(end, &types, program.symbols()).to_string();
+    match typed.lower == typed.upper {
+        true => show(typed.upper),
+        false => format!("[{}, {}]", show(typed.lower), show(typed.upper)),
+    }
+}
+
 /// The static type of the top-level binder `name` of `source`, rendered.
 pub(super) fn top(source: &str, name: &str) -> String {
     loaded(source, |program| binder(program, program.shape(), name))
@@ -319,16 +330,19 @@ fn a_candidate_that_can_never_admit_is_dropped() {
 fn a_use_no_candidate_can_admit_refuses_the_load() {
     assert_eq!(
         run("PRINT (\"a\" + 1)"),
-        "load: <test>:1:7: no overload of `_ + _` admits (Str, Number)"
+        "load: <test>:1:7: no overload of `_ + _` admits these arguments:\n  Str, which can never \
+         satisfy Number"
     );
     assert_eq!(
         run("EXPR #(NEVER CALLED) -> Any = #(\n  PRINT (\"a\" + 1)\n)"),
-        "load: <test>:2:9: no overload of `_ + _` admits (Str, Number)",
+        "load: <test>:2:9: no overload of `_ + _` admits these arguments:\n  Str, which can never \
+         satisfy Number",
         "inside a body no call reaches"
     );
     assert_eq!(
         run("EXPR FOR ALL #{Elt: Str} #(PLUS x :Elt) -> Any = #(x + 1)"),
-        "load: <test>:1:51: no overload of `_ + _` admits (Elt, Number)",
+        "load: <test>:1:51: no overload of `_ + _` admits these arguments:\n  Elt, which can never \
+         satisfy Number",
         "a rigid variable is judged through its bound"
     );
     assert_eq!(
@@ -341,7 +355,8 @@ fn a_use_no_candidate_can_admit_refuses_the_load() {
 fn a_refusal_in_a_quote_s_code_is_reported_by_its_eval() {
     assert_eq!(
         run("LET q = #(PRINT $(\"a\" + 1))\nPRINT \"loaded\"\nEVAL q -> Any"),
-        "loaded\nerror: <test>:1:18: no overload of `_ + _` admits (Str, Number)"
+        "loaded\nerror: <test>:1:18: no overload of `_ + _` admits these arguments:\n  Str, which \
+         can never satisfy Number"
     );
 }
 
@@ -517,7 +532,9 @@ fn a_surfaced_head_reads_the_ascription_s_pins() {
     });
     let refused = run(&using("(Stack WITH {Elt = Number})", "PUSH \"s\""));
     assert!(
-        refused.contains("no overload of `PUSH _` admits (Str)"),
+        refused.contains(
+            "no overload of `PUSH _` admits this argument:\n  Str, which can never satisfy Number"
+        ),
         "{refused}"
     );
     let open = using("Stack", "LET a = (PUSH 1)");
@@ -549,7 +566,9 @@ fn a_surfaced_operator_head_is_typed_at_load() {
     });
     let refused = run(&using("\"s\" <> 2"));
     assert!(
-        refused.contains("no overload of `_ <> _` admits (Str, Number)"),
+        refused.contains(
+            "no overload of `_ <> _` admits these arguments:\n  Str, which can never satisfy Number"
+        ),
         "every overload the header offers is retyped to the head: {refused}"
     );
 }

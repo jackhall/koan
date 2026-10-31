@@ -1489,10 +1489,13 @@ found by searching its statement, on the error path only
 
 Each renders with the names a user needs spelled through the symbol interner,
 and an inadmissible part's slot type through the type registry's renderer —
-`:(LIST OF Declaration)` for a signature's members. A refused selection and a
-refused view are worded by `selection_refused` and `view_refused`
+`:(LIST OF Declaration)` for a signature's members. A refused view and an
+ambiguous selection are worded by `view_refused` and `selection_refused`
 ([shape.rs](shape.rs)), which [dispatch](../dispatch/README.md#errors)'s run
-faults call too, so the load and the run say one thing.
+faults call too, so the load and the run say one thing there. A selection no
+candidate admits is worded at load one candidate per line, each argument by
+the end of its static type that decides (`ShapeError::NoAdmittingCandidate`),
+and at run by `selection_refused`'s list of the arguments' types.
 
 ## Memory
 

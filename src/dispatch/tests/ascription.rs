@@ -286,7 +286,8 @@ fn a_slot_above_no_type_an_argument_can_carry_refuses_the_load() {
              LET rec = {a = r.v}\n\
              EXPR #(GET x :{b :Number}) -> Any = #(x)\n\
              PRINT (GET rec)"),
-        "load: <test>:4:7: no overload of `GET _` admits (:{a :Any})"
+        "load: <test>:4:7: no overload of `GET _` admits this argument:\n  at least :{a :Never}, \
+         which can never satisfy :{b :Number}"
     );
 }
 

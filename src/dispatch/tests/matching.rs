@@ -2,13 +2,10 @@
 //! selects, what it refuses, and what a run selects and yields.
 
 use crate::scope::Arms;
-use crate::type_lattice::{Interval, KType, Verdict, display_name};
-use crate::values::tests::reading;
+use crate::type_lattice::{Interval, KType, Verdict};
 
 use super::run;
-use super::statics::{body, interval, loaded, top};
-use crate::memory::Bump;
-use crate::program::Program;
+use super::statics::{body, ends, interval, loaded, top};
 
 const MAYBE: &str = "UNION Maybe = #{Some: Number, None: Null}";
 
@@ -19,17 +16,6 @@ fn in_f(source: &str, name: &str) -> String {
         let typed = interval(program, body(program, program.shape(), "f"), name);
         ends(program, typed)
     })
-}
-
-/// `typed`'s ends, rendered `[lower, upper]`, or the one type where they meet.
-fn ends(program: &Program<'_>, typed: Interval) -> String {
-    let bump = Bump::new();
-    let types = reading(program.tiers(), &bump);
-    let show = |end| display_name(end, &types, program.symbols()).to_string();
-    match typed.lower == typed.upper {
-        true => show(typed.upper),
-        false => format!("[{}, {}]", show(typed.lower), show(typed.upper)),
-    }
 }
 
 /// The load's record of the arms of the `MATCH` bound to the top-level `name`.
@@ -318,10 +304,30 @@ fn a_union_clause_over_a_run_bound_name_is_checked_where_it_is_bound() {
         picked.contains("Some names no variant of"),
         "a binding making a label miss refuses: {picked}"
     );
-    let direct = run(&format!("{MAYBE}\n{f}\nPRINT (PICK (Maybe.Some 3))"));
+    assert_eq!(
+        run(&format!("{MAYBE}\n{f}\nPRINT (PICK (Maybe.Some 3))")),
+        "3",
+        "a construction through `Maybe` binds `Un` to the union"
+    );
+    let aliased = run(&format!(
+        "{MAYBE}\n{f}\nLET Sm = Maybe.Some\nPRINT (PICK (Sm 3))"
+    ));
     assert!(
-        direct.contains("and Some is not one; a lone variant is not its union"),
-        "a constructed variant binds `Un` to the variant, no union: {direct}"
+        aliased.contains("and Some is not one; a lone variant is not its union"),
+        "a construction through a variant alias binds `Un` to the variant, no union: {aliased}"
+    );
+}
+
+#[test]
+fn an_arm_the_scrutinee_s_lower_end_lies_outside_is_dropped() {
+    assert_eq!(
+        top(
+            &format!(
+                "{MAYBE}\nLET m = (MATCH (Maybe.Some 1) UNDER Maybe WITH #{{Some: (it), None: (\"none\")}})"
+            ),
+            "m"
+        ),
+        "Number"
     );
 }
 

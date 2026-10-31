@@ -72,7 +72,8 @@ fn a_mistyped_dollar_use_is_refused_at_load() {
         run("LET s = \"a\"
 LET bad = #($s * \\x)
 EXPR #(BAD x :Number) -> Number = bad"),
-        "load: <test>:2:12: no overload of `_ * _` admits (Str, Number)"
+        "load: <test>:2:12: no overload of `_ * _` admits these arguments:\n  Str, which can never \
+         satisfy Number"
     );
 }
 
@@ -164,7 +165,8 @@ PRINT (NEEDS area)"),
 EXPR #(AREA w :Number h :Number) -> Number = area
 EXPR #(CLOSED code :Expression) -> Str = #(\"admitted\")
 CLOSED area"),
-        "load: <test>:4:1: no overload of `CLOSED _` admits (:(Expression NEEDING #[h]))"
+        "load: <test>:4:1: no overload of `CLOSED _` admits this argument:\n  :(Expression NEEDING \
+         #[h]), which can never satisfy Expression"
     );
 }
 

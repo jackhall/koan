@@ -23,7 +23,9 @@
 //! fields it names. `ATTR` over a module reads the member at its layout index, a quantified one
 //! made into the instance the load solved at the read.
 
-use crate::elaborate::{builtin_error, builtin_result, builtin_shape_types, declared_field};
+use crate::elaborate::{
+    builtin_error, builtin_result, builtin_shape_types, declared_field, declared_variant,
+};
 use crate::knot::module::layout;
 use crate::knot::{
     KBuiltins, KValue, UsingRefused, barrier_instance, builtin, header_instance, instance, using,
@@ -506,7 +508,7 @@ pub(super) fn run<'graph, 'here>(
         }
         Native::Variant => {
             let (union, name) = (handle(value(0)), label(operands[1]).symbol());
-            match types.union_member_named(union, name) {
+            match declared_variant(types, scratch, union, name) {
                 Some(variant) => type_value(variant),
                 None => raise(Raised::NoMember {
                     of: union,

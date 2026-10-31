@@ -231,9 +231,9 @@ label's the code kind of its name. [`select`](select.rs) then:
    survivors were declared in — no scope shadows another's overload. No
    admitting candidate is a **no-overload** error naming the arguments' types.
    That tie rule is one function, [`winner`](select.rs), which the load's
-   selection ends in too, and both refusals are worded by one formatter,
-   [`selection_refused`](../scope/shape.rs), so a load refusal and a run fault
-   read alike.
+   selection ends in too. Both run faults and the load's ambiguity are worded
+   by one formatter, [`selection_refused`](../scope/shape.rs); the load words a
+   no-overload refusal candidate by candidate ([verdicts](#static-types)).
 
 A typed argument a candidate does not admit is a non-match that falls through to
 the others, never a bind-time error. The candidate list is fixed per site, and
@@ -383,8 +383,16 @@ fixed:
   exact by the same rule where the callee's static type is exact, a parameter
   of function type included, since its frame retypes the function to the
   parameter's type and a call through it retypes its value to the return it
-  shows, and at most that return otherwise; a union variant construction is at
-  most `Any`;
+  shows, and at most that return otherwise. A construction whose head projects
+  its variant off a union — `Maybe.Some`, or `Shape.Sized.Some` through
+  `Sized`'s payload — lies between what it builds and that union, a family's
+  applied at the arguments the construction over the payload's upper end
+  solves: `(Maybe.Some 3)` lies in `[Some, Maybe]` and `(Option.Some 3)` in
+  `[(Some {Elem = Number}), (Number -> Option)]`, while the value carries the
+  variant ([a union's variants](../elaborate/README.md#a-unions-variants)).
+  The load reads the union off the type the projection's owner part records;
+  a construction through a name bound to the variant itself spells no union and
+  is exactly what it builds;
 - `ATTR` over a record is the named field's type in the record's static type,
   read at each end: exactly that type where both ends name the field at one type
   the retype makes exact, since the run reads the field's value at it, and at
@@ -463,8 +471,21 @@ the load calls exact is the one the run stamps.
 
 Every refusal for a value that "can never satisfy" a type — a return, an
 ascription, an annotation, an `EVAL`'s code or operand, a view's operand, an
-instance site's other argument — is one test, `never_satisfies`: both read through
-their bounds, they meet at `Never`.
+instance site's other argument — is one test, `never_satisfies`, which reads
+both ends of the value's static type: its upper end meets the type at `Never`,
+both read through their bounds, or else its lower end lies outside the type,
+since every type the run carries there lies above that end. The refusal names
+the end that decides, the lower one as `at least` it: after
+`UNION Maybe = #{Some: Number, None: Null}`,
+`LET x :(Maybe.None) = (Maybe.Some 3)` is refused with
+
+```text
+this value is at least Some, which can never satisfy its annotation None
+```
+
+A `MATCH` arm the same test judges *never* is dropped rather than refused
+([matching](#matching)), and a traced `EVAL`'s code, which the load knows only
+at most, is read at its upper end alone.
 
 A static type's ends are
 [parametric](../../lattice/src/types/identity.md#typed-handles), since they may hold
@@ -565,8 +586,8 @@ one only the slot names is read through `[Never, bound]`, so under
 `MAP pick AT y` over a parameter `y :(Number | Str)` refuses — and loads under
 `EXPR #(MAP 2 AT 1)`, `Elt` taken from `y`. An other argument
 that does not admit its slot fixes nothing either, so it refuses the load as
-`Unfixed` too — save one that can never fit its slot, its upper end meeting the
-slot at `Never`, both read through their bounds: at a keyworded use that
+`Unfixed` too — save one that can never fit its slot, as `never_satisfies`
+reads it: at a keyworded use that
 candidate is dropped and left to the judge's own refusal, and a call by name is
 refused `CallNeverSatisfied`. A candidate whose
 slot gives no instance is *never*. The rest are judged with the instance as an
@@ -682,11 +703,20 @@ variable's interval: at its least instance for *always*, at its greatest for
 `Number | Str` and `b` lies under it, while `PAIR a WITH e`, `e` an `EVAL`
 declared `-> Any`, is *maybe*: `e` may carry a type `Elt` does not admit. An argument whose static type is `Never` never arrives,
 so its use drops and ranks nothing and its own static type is `Never`. A use
-left with no candidate refuses the load (`ShapeError::NoAdmittingCandidate`):
+left with no candidate refuses the load (`ShapeError::NoAdmittingCandidate`),
+one line for each candidate with a shape. A line names a lone argument beside
+its slot where that argument alone refuses the candidate, else every argument
+beside every slot, each by the end that decides as `never_satisfies` names it;
+a quantified candidate's slots read its group, so its line names its arguments
+beside its whole shape. For `"a" + 1`:
 
 ```text
-no overload of `_ + _` admits (Str, Number)
+no overload of `_ + _` admits these arguments:
+  Str, which can never satisfy Number
 ```
+
+The run's fault for a use it finds no candidate for lists the arguments' types
+instead ([errors](#errors)).
 
 A use whose last candidate a builtin's need dropped refuses it in the native's
 own words (`ShapeError::NoField`):
@@ -715,7 +745,7 @@ recorded too, closed or rigid over the run's variables, and the run reads it
 rather than instantiating.
 
 **The return check.** A callable body whose static type — its last statement's
-— meets its declared return at `Never` refuses the load
+— can never satisfy its declared return refuses the load
 (`ShapeError::ReturnNeverSatisfied`), since every call of it would fault on its
 contract:
 
@@ -726,7 +756,7 @@ this body returns Number, which can never satisfy its declared return Str
 A body whose static type is `Never` never arrives, and is not checked. A
 callable declared to return `Never` is checked like any other, so its body must
 itself be `Never`-typed — every other body meets `Never` at `Never`, and refuses
-the load. The check is a meet of upper ends, not an order: a body whose static
+the load. The check is `never_satisfies`, not an order: a body whose static
 type is at most `Any` loads, and the run holds what it returns to the contract.
 An `EVAL`'s traced code is checked against its declared return the same way,
 both read through `bound_above`, and refuses the load at the `EVAL`
@@ -737,7 +767,7 @@ is refused with
 this `EVAL`'s code returns Str, which can never satisfy its declared return Number
 ```
 
-An `EVAL` whose operand's upper end meets `Code` at `Never` refuses the load
+An `EVAL` whose operand can never be code refuses the load
 too (`ShapeError::NotCode`):
 
 ```text
@@ -745,7 +775,7 @@ this value is Number, which can never be code for `EVAL` to run
 ```
 
 **The ascription check.** An ascription is checked the same way: one whose
-operand's upper end meets its type at `Never` refuses the load
+operand can never satisfy its type refuses the load
 (`ShapeError::AscriptionNeverSatisfied`), located at the ascription node, both
 read through `bound_above`:
 
@@ -789,8 +819,12 @@ name the parameters exactly, and refuses the load
 (`ShapeError::CallNeverSatisfied`), as does a judgement of *never*:
 
 ```text
-:(FN :{x :Number} -> Str) can never be called with :{x :Str}
+this argument is :{x :Str}, which can never satisfy the parameters :{x :Number} of :(FN :{x :Number} -> Str)
 ```
+
+A quantified callee's rendering names its parameters itself, so its refusal
+names only the callee: `… which can never satisfy the parameters of
+:(FN FOR ALL #[Elt] :{x :Elt y :Elt} -> Str)`.
 
 So under `LET which = FN EXPR #(WHICH x :(LIST OF Number)) -> Str`, `which {x = x}`
 over a parameter `x :(LIST OF Any)` refuses the load as `WHICH x` does, while
@@ -1078,8 +1112,10 @@ re-stamps `it` at the type the load closed.
 **The load narrows the arms** ([`walk/arms.rs`](walk/arms.rs)) against the
 scrutinee's static type, as [static selection](#selection) narrows a keyworded
 use's candidates. Each arm's verdict is *never* where its guard can admit no
-value of that type, *always* where it admits every one — a value guard never
-does — and *maybe* otherwise. A *never* arm is dropped, not refused, since
+value of that type — it meets the upper end at `Never`, or the lower end, which
+every type the scrutinee carries lies above, lies outside it — *always* where
+it admits every one — a value guard never does — and *maybe* otherwise. A
+*never* arm is dropped, not refused, since
 coverage forces arms a narrow scrutinee never reaches; a *maybe* arm an
 *always* guarded one outranks is dropped where every guard is closed, and `_`
 beside an *always* guarded arm. No arm left refuses the load, and so do arms
@@ -1222,7 +1258,9 @@ code or an `EVAL` whose code can never meet its return the load can already see
 is no fault: it refuses the load, located at `path:line:col`
 ([static types](#static-types)). A refused selection and a refused view are
 worded by one formatter each, `selection_refused` and `view_refused` in
-[`scope`](../scope/shape.rs), for the load's refusal and the run's fault alike.
+[`scope`](../scope/shape.rs): a view's for the load's refusal and the run's
+fault alike, a selection's for the run's fault and the load's ambiguity, since
+the load names a no-overload miss candidate by candidate.
 The run meets only those whose static types are too wide to tell — an argument
 read out of a record field, say, whose static type is `Any`, or a type a run
 binds.
@@ -1315,7 +1353,12 @@ ascription's pins, a wider signature *always* at a narrower one's slot and
 outranking it, a component's members typed alike whatever their order —
 an annotated fellow read at its annotation, a fellow's callable body reading
 the fellow's own type — and the law that reordering independent declarations
-changes no fact; [types](tests/types.rs) — the walk's
+changes no fact; [constructions](tests/constructions.rs) — a
+construction's static type: a newtype's, a family's applied at its payload, and
+a union variant's between what it builds and the union its head's path reaches,
+a tag projection through a variant's payload, an annotation at the union
+settled at load, a generic call binding its name to that union, and the lower
+end's refusals, named `at least` it; [types](tests/types.rs) — the walk's
 [type half](../elaborate/README.md#testing);
 [generic](tests/generic.rs) — generic code at load: a nested callable
 substituted by level and agreeing with its load-time type where it is born, a

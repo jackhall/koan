@@ -29,7 +29,8 @@ PRINT (1 + "one")
 ```
 
 ```text
-error: <input>:2:7: no overload of `_ + _` admits (Number, Str)
+error: <input>:2:7: no overload of `_ + _` admits these arguments:
+  Str, which can never satisfy Number
 ```
 
 ## Catching errors with `TRY`

@@ -463,7 +463,8 @@ fn a_generic_return_is_read_through_its_group_s_intervals() {
     });
     assert_eq!(
         run(&format!("{only}PRINT ((ONLY 1) + \"a\")")),
-        "load: <test>:2:7: no overload of `_ + _` admits (Number, Str)"
+        "load: <test>:2:7: no overload of `_ + _` admits these arguments:\n  Str, which can never \
+         satisfy Number"
     );
     let handler = "EXPR FOR ALL #[Elt] #(HANDLER f :(FN :{x :Elt} -> Null)) -> \
                    :(FN :{x :Elt} -> Null) = #(f)\n\

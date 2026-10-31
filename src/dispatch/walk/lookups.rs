@@ -14,6 +14,7 @@
 //! end lies under it and the union of both otherwise. Its lower end is `Never`: the run answers
 //! either variant.
 
+use crate::elaborate::applied_union;
 use crate::memory::BumpVec;
 use crate::parse::{ExpressionPart, KExpression};
 use crate::scope::{ShapeError, Store};
@@ -164,17 +165,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         let mut arguments = BumpVec::with_capacity_in(2, scratch);
         arguments.extend([(variant("Ok"), ok), (variant("Error"), error)]);
         arguments.sort_unstable_by_key(|(name, _)| *name);
-        let result = result_type(self.builtins);
-        let TypeNode::Union { members } = types.node(result) else {
-            unreachable!("the builtin `Result` is a union")
-        };
-        let mut variants = BumpVec::with_capacity_in(2, scratch);
-        variants.extend(
-            members
-                .iter()
-                .map(|variant| types.constructor_apply(scratch, variant, &arguments)),
-        );
-        let upper = types.union_of(scratch, &variants);
+        let upper = applied_union(types, scratch, result_type(self.builtins), &arguments);
         self.record_composite(
             level,
             self.node_site(level, node),

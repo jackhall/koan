@@ -91,11 +91,13 @@ Each candidate of each keyworded call then gets a verdict:
 
 The same reading refuses a body that can never satisfy its declared return, an
 ascription or an annotated binding that can never hold, and a call by name of an
-exactly known function its argument can never satisfy; it settles an ascription
-or annotation that always holds:
+exactly known function its argument can never satisfy, reading both ends of
+the static type and naming the end that decides (`at least` the lower one); it
+settles an ascription or annotation that always holds:
 
 ```text
-no overload of `_ + _` admits (Str, Number)
+no overload of `_ + _` admits these arguments:
+  Str, which can never satisfy Number
 this body returns Number, which can never satisfy its declared return Str
 ```
 

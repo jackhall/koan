@@ -10,12 +10,13 @@
 //! site for a walk rooted at the arm ([`entering_of`](super::Pass::entering_of)).
 //!
 //! The arms are then narrowed against the scrutinee's static type as
-//! [static selection](super::super::select) narrows a keyworded use's candidates: an arm whose
-//! guard can never admit is dropped, not refused, since coverage forces arms a narrow scrutinee
-//! never reaches; one a guard that always admits outranks is dropped too, as is `_` beside such a
-//! guard. No arm left refuses the load, and so do arms that all always admit with none ranking
-//! first. Where every arm left always admits, the one they rank first is recorded as the arm the
-//! run takes.
+//! [static selection](super::super::select) narrows a keyworded use's candidates, reading both
+//! ends of the scrutinee's static type: an arm whose guard can never admit, or that the
+//! scrutinee's lower end lies outside, is dropped, not refused, since coverage forces arms a
+//! narrow scrutinee never reaches; one a guard that always admits outranks is dropped too, as is
+//! `_` beside such a guard. No arm left refuses the load, and so do arms that all always admit
+//! with none ranking first. Where every arm left always admits, the one they rank first is
+//! recorded as the arm the run takes.
 //! How guarded arms rank — a value outranks every type, and a type another it lies strictly under
 //! — is laid in a table where every guard is closed and the arms fit one, which the run reads
 //! instead of ranking; past a table's bound, both rank by brute force ([`first_ranked`]).
@@ -259,9 +260,10 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     }
 
     /// Each arm's verdict against a scrutinee of the static type `scrutinee`: *never* where its
-    /// guard can admit no value of it, *always* where every value of it is admitted — a guard its
-    /// upper end lies under, `_` under `WITH`, and `_` under a union `clause` its upper end lies
-    /// under — and *maybe* otherwise. A value guard never always admits.
+    /// guard can admit no value of it or the scrutinee's lower end lies outside the guard,
+    /// *always* where every value of it is admitted — a guard its upper end lies under, `_` under
+    /// `WITH`, and `_` under a union `clause` its upper end lies under — and *maybe* otherwise. A
+    /// value guard never always admits.
     fn verdicts(
         &self,
         scrutinee: Interval,
@@ -270,7 +272,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     ) -> BumpVec<'p, Verdict> {
         let (types, scratch) = (self.types, self.scratch);
         let judge = |admits: Parametric, may_always: bool| {
-            if never_satisfies(types, scratch, scrutinee.upper, admits).is_some() {
+            if never_satisfies(types, scratch, scrutinee, admits).is_some() {
                 Verdict::Never
             } else if may_always && fits(types, scratch, scrutinee.upper, admits) {
                 Verdict::Always

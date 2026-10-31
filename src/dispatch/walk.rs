@@ -154,7 +154,9 @@
 //!
 //! See [README.md § Static types](README.md#static-types).
 
-use crate::elaborate::{SignatureMember, declares_nominal, module_signature, signature_member};
+use crate::elaborate::{
+    SignatureMember, applied_union, declares_nominal, module_signature, signature_member, tag_union,
+};
 use crate::knot::module::layout;
 use crate::knot::module::view::{self, Ascription, ViewTypes, opaque_view_types};
 use crate::knot::{BuiltinFunction, KBuiltins};
@@ -171,11 +173,11 @@ use crate::scope::{
     Address, Arms, BodyClass, BodyShape, Born, BuiltinIndex, Candidate, CandidateList,
     CandidateRoute, CaptureChain, CaptureSlot, CaptureSource, Closing, ComponentIndex, Coordinate,
     Cut, Elimination, Frontier, Identity, InstanceRead, Kept, Keyed, Lands, Leaf, Listed,
-    NamedVariable, Narrowing, PathEntry, Pick, Point, Points, Position, Resolution, Retypes, Route,
-    Segment, ShapeError, ShapeKind, Shapes, Site, SiteDeps, Slot, Source, Static, StaticInstance,
-    StaticRegistered, StaticType, Store, SurfacedHead, Tree, Typed, UnitFacts, UnitId, UnitIndex,
-    UnitWork, Unknown, UseStatics, Variable as Located, Within, follow, part_of, source_of,
-    traced_quote,
+    NamedVariable, Narrowing, PathEntry, Pick, Point, Points, Position, RefusedLine, Resolution,
+    Retypes, Route, Segment, ShapeError, ShapeKind, Shapes, Shown, Site, SiteDeps, Slot, Source,
+    Span, Static, StaticInstance, StaticRegistered, StaticType, Store, SurfacedHead, Tree, Typed,
+    UnitFacts, UnitId, UnitIndex, UnitWork, Unknown, UseStatics, Variable as Located, Within,
+    follow, part_of, source_of, tag_projection, traced_quote,
 };
 use crate::source::SourceRef;
 use crate::symbols::{BinderSymbol, TypeSymbol, ValueSymbol};
@@ -295,20 +297,114 @@ fn newest<T>(held: &mut BumpVec<'_, (Site, T)>) {
     held.dedup_by_key(|(site, _)| *site);
 }
 
-/// `value` and `wanted` read through their bounds, where they meet at `Never`: no value of the
-/// static type `value` can ever satisfy `wanted`. `None` where one might. Each end is named
-/// through its bound, since a variable's name is its binder's.
+/// `value` [shown](crate::scope::Shown) by the end that decides and `wanted` read through its
+/// bound, where no value of the static type `value` can ever satisfy `wanted`: its upper end, read
+/// through its bound, meets `wanted` at `Never`, or else its lower end, read below its variables,
+/// lies outside it. `None` where one might.
 fn never_satisfies(
     types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
-    value: Parametric,
+    value: Interval,
     wanted: Parametric,
-) -> Option<(KType, KType)> {
-    let (value, wanted) = (
-        bound_above(types, scratch, value),
+) -> Option<(Shown, KType)> {
+    let (upper, bound) = (
+        bound_above(types, scratch, value.upper),
         bound_above(types, scratch, wanted),
     );
-    (meet(types, scratch, value, wanted) == KType::NEVER).then_some((value, wanted))
+    if meet(types, scratch, upper, bound) == KType::NEVER {
+        return Some((upper.into(), bound));
+    }
+    lower_end_outside(types, scratch, value, bound).then(|| {
+        let value = Interval {
+            upper: upper.into(),
+            ..value
+        };
+        (Shown::at_least(types, value), bound)
+    })
+}
+
+/// `typed` as a refusal names it against `slot`: its upper end where that meets `slot` at `Never`,
+/// at least its lower end where that alone lies outside `slot`, each read through their bounds,
+/// and its upper end otherwise.
+fn shown_against(
+    types: &Chain<'_, '_, '_, '_>,
+    scratch: BumpAllocator<'_>,
+    typed: Interval,
+    slot: Parametric,
+) -> Shown {
+    let (upper, bound) = (
+        bound_above(types, scratch, typed.upper),
+        bound_above(types, scratch, slot),
+    );
+    match meet(types, scratch, upper, bound) != KType::NEVER
+        && lower_end_outside(types, scratch, typed, bound)
+    {
+        true => Shown::at_least(types, typed),
+        false => Shown::Is(typed.upper.into()),
+    }
+}
+
+/// The slot types of the shape `shape`, in order.
+fn slots_of<'x>(
+    types: &Chain<'_, '_, '_, '_>,
+    scratch: BumpAllocator<'x>,
+    shape: DeclaredType<Parametric>,
+) -> BumpVec<'x, Parametric> {
+    let mut slots = BumpVec::new_in(scratch);
+    match shape {
+        DeclaredType::Type(shape) => slots.extend(shape_slots(shape, types)),
+        DeclaredType::Scheme(scheme) => slots.extend(scheme_slots(scheme, types)),
+    }
+    slots
+}
+
+/// `arguments`, which `shape` judges *never*, as a refusal names them against it: a lone argument
+/// it judges *never* however the others lie, beside its slot, else all of them beside every slot —
+/// each [shown against](self::shown_against) its slot. A quantified shape's slots read its group,
+/// so all of them stand beside the whole shape, which names it.
+fn refused_against<'x>(
+    types: &Chain<'_, '_, '_, '_>,
+    scratch: BumpAllocator<'x>,
+    shape: DeclaredType<Parametric>,
+    arguments: &[Interval],
+) -> (BumpVec<'x, Shown>, BumpVec<'x, DeclaredType<Parametric>>) {
+    let slots = slots_of(types, scratch, shape);
+    if slots.iter().any(|slot| types.concrete(*slot).is_none()) {
+        let mut shown = BumpVec::with_capacity_in(arguments.len(), scratch);
+        shown.extend(
+            (0..arguments.len()).map(|at| shown_against(types, scratch, arguments[at], slots[at])),
+        );
+        let mut whole = BumpVec::with_capacity_in(1, scratch);
+        whole.push(shape);
+        return (shown, whole);
+    }
+    // `arguments` with every other than the one at `position` unknown; all of them where none is.
+    let alone = |position: Option<usize>| {
+        let mut read = BumpVec::with_capacity_in(arguments.len(), scratch);
+        read.extend(
+            (arguments.iter().enumerate()).map(|(at, each)| match position {
+                Some(position) if at != position => unknown(),
+                _ => *each,
+            }),
+        );
+        read
+    };
+    let lone = (0..arguments.len()).find(|position| {
+        judge_by_class(types, scratch, shape, &alone(Some(*position))).verdict == Verdict::Never
+    });
+    let shown_of = |at: usize| shown_against(types, scratch, arguments[at], slots[at]);
+    let (mut shown, mut kept) = (BumpVec::new_in(scratch), BumpVec::new_in(scratch));
+    match lone {
+        Some(position) => {
+            shown.push(shown_of(position));
+            kept.push(DeclaredType::Type(slots[position]));
+        }
+        None => {
+            shown.extend((0..arguments.len()).map(shown_of));
+            kept.extend(slots.iter().map(|slot| DeclaredType::Type(*slot)));
+        }
+    }
+    (shown, kept)
 }
 
 /// Whether a value of the static type `typed` can reach a type minted at run: where its upper end
@@ -721,9 +817,9 @@ enum Unsolved<'p> {
     Open(BumpVec<'p, usize>),
 }
 
-/// A call by name's argument laid onto its callee's slots: the argument's static upper end, each
-/// slot's static type, and each slot's contribution.
-type Laid<'p, 'o> = (Parametric, &'p [Interval], &'o [StaticType<'o>]);
+/// A call by name's argument laid onto its callee's slots: the argument's static type, each slot's
+/// static type, and each slot's contribution.
+type Laid<'p, 'o> = (Interval, &'p [Interval], &'o [StaticType<'o>]);
 
 /// A call by name's callee, read as a keyworded use's lone candidate.
 #[derive(Clone, Copy)]
@@ -2901,12 +2997,10 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             if admitted.is_err() {
                 // Only an argument meeting its slot at `Never` never fits; an imprecise one fixes
                 // nothing.
-                return Err(
-                    match never_satisfies(types, scratch, argument.upper, *other) {
-                        Some(_) => Unsolved::Misfit,
-                        None => named(),
-                    },
-                );
+                return Err(match never_satisfies(types, scratch, *argument, *other) {
+                    Some(_) => Unsolved::Misfit,
+                    None => named(),
+                });
             }
             exact &= argument.is_exact();
             declared.push(*other);
@@ -3201,10 +3295,10 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             return Ok(());
         };
         let last = shape.body().len() - 1;
-        let body = self.statement_at(level, last).upper;
+        let body = self.statement_at(level, last);
         let (types, scratch) = (self.types, self.scratch);
         // A body that never arrives returns nothing to check.
-        if body == KType::NEVER.into() {
+        if body.upper == KType::NEVER.into() {
             return Ok(());
         }
         if let Some((body, returns)) = never_satisfies(types, scratch, body, ret) {
@@ -3593,7 +3687,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             return Ok(Interval::point(KType::NEVER.into()));
         }
         if let Some((value, _)) =
-            never_satisfies(types, scratch, typed.upper, KType::EMPTY_SIGNATURE.into())
+            never_satisfies(types, scratch, typed, KType::EMPTY_SIGNATURE.into())
         {
             return Err(ShapeError::NotAModule {
                 value,
@@ -3622,7 +3716,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             && !fits(types, scratch, exact, declared)
         {
             return Err(ShapeError::AscriptionNeverSatisfied {
-                value: exact,
+                value: exact.into(),
                 ascribed,
                 at: node.source,
             });
@@ -3662,7 +3756,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         typed: Interval,
         part: &'graph ExpressionPart<'graph>,
         site: Site,
-    ) -> Result<Interval, (KType, KType)> {
+    ) -> Result<Interval, (Shown, KType)> {
         // A value that never arrives has nothing to check.
         if typed.upper == KType::NEVER.into() {
             return Ok(Interval::point(KType::NEVER.into()));
@@ -3671,7 +3765,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             return Ok(unknown());
         };
         let (types, scratch) = (self.types, self.scratch);
-        if let Some(refused) = never_satisfies(types, scratch, typed.upper, declared) {
+        if let Some(refused) = never_satisfies(types, scratch, typed, declared) {
             return Err(refused);
         }
         if fits(types, scratch, typed.upper, declared) {
@@ -3687,7 +3781,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                     | TypeNode::SignatureMeet { .. }
             );
             if signature && pinned_at_fit(types, scratch, exact, closed).is_none() {
-                return Err((exact, closed));
+                return Err((exact.into(), closed));
             }
             let carried = retype_target(types, scratch, exact.into(), closed)
                 .as_type()
@@ -3757,9 +3851,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         // Every `EVAL` enters a frame whose code the load may not see.
         self.exit(level);
         let (types, scratch) = (self.types, self.scratch);
-        if let Some((value, _)) =
-            never_satisfies(types, scratch, typed.upper, KType::ANY_CODE.into())
-        {
+        if let Some((value, _)) = never_satisfies(types, scratch, typed, KType::ANY_CODE.into()) {
             return Err(ShapeError::NotCode {
                 value,
                 at: node.source,
@@ -3771,7 +3863,15 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         // Code that never arrives returns nothing to check.
         if let Some(code) = self.traced(level, &operand.value)
             && code != KType::NEVER
-            && let Some((code, returns)) = never_satisfies(types, scratch, code.into(), declared)
+            && let Some((_, returns)) = never_satisfies(
+                types,
+                scratch,
+                Interval {
+                    lower: KType::NEVER.into(),
+                    upper: code.into(),
+                },
+                declared,
+            )
         {
             return Err(ShapeError::EvalNeverSatisfied {
                 code,
@@ -4135,9 +4235,10 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         }
     }
 
-    /// `(head argument)`: a construction's identity when the head is a type the load knows, a
-    /// read's `Result` when it is a list, a dict or a string ([lookups.rs](walk/lookups.rs)), a call by
-    /// name's [judged](Self::called) return when the head is a function, else `[Never, Any]`.
+    /// `(head argument)`: a construction's identity when the head is a type the load knows, at
+    /// most the union a tag projection head reaches its variant through; a read's `Result` when
+    /// it is a list, a dict or a string ([lookups.rs](walk/lookups.rs)); a call by name's
+    /// [judged](Self::called) return when the head is a function; else `[Never, Any]`.
     fn apply(
         &mut self,
         level: usize,
@@ -4150,12 +4251,22 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         let callee = self.head(level, head)?;
         let (types, scratch) = (self.types, self.scratch);
         if let Some(identity) = self.head_handle(level, head) {
+            let through = self.reached_union(level, head);
             let payload = self.part(level, argument)?;
             let upper = match construction(types, scratch, identity, payload.upper) {
-                Ok(constructed) => constructed,
                 Err(ConstructionRefused::NotConstructible(_)) => KType::ANY.into(),
-                // A misfit faults; an unsolved family lies under the bare family.
-                Err(_) => identity.into(),
+                // Through a union, the union applied at the arguments the payload solves.
+                Ok(constructed) => match (through, types.node(constructed)) {
+                    (Some(union), TypeNode::ConstructorApply { arguments, .. }) => {
+                        let mut solved = BumpVec::with_capacity_in(arguments.len(), scratch);
+                        solved.extend(arguments.iter());
+                        applied_union(types, scratch, union, &solved)
+                    }
+                    (Some(union), _) => union.into(),
+                    (None, _) => constructed,
+                },
+                // A misfit faults; an unsolved family lies under the bare family or union.
+                Err(_) => through.unwrap_or(identity).into(),
             };
             let lower = construction(types, scratch, identity, payload.lower)
                 .unwrap_or_else(|_| KType::NEVER.into());
@@ -4306,7 +4417,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                     && !self.holds_nothing_minted_part(level, argument, payload)?;
                 let Some(arguments) = self.laid_out(callee, payload) else {
                     return match callee.exact {
-                        true => Err(self.never(callee, payload.upper, node)),
+                        true => Err(self.never(callee, payload, node)),
                         false => {
                             if inexact {
                                 self.exit(level);
@@ -4330,7 +4441,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 let contributions =
                     self.contributions(level, callee, arguments, node.source, |_| true);
                 whole = Some(payload);
-                (payload.upper, arguments, contributions)
+                (payload, arguments, contributions)
             }
         };
         if !self.unfilled && (contributions.iter()).any(|each| !matches!(each, Static::Unknown)) {
@@ -4423,7 +4534,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         let names_exactly = fields.len() == callee.names.len()
             && fields.iter().all(|(name, _)| slot_of(*name).is_some());
         if !names_exactly {
-            return Err(self.never(callee, uppers(&typed), node));
+            return Err(self.never(callee, under(uppers(&typed)), node));
         }
         if typed
             .iter()
@@ -4454,7 +4565,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 contributions,
             ) {
                 Ok(made) => made,
-                Err(None) => return Err(self.never(callee, uppers(&typed), node)),
+                Err(None) => return Err(self.never(callee, under(uppers(&typed)), node)),
                 Err(Some(error)) => return Err(error),
             };
             for (site, made) in sites.iter().zip(made.iter()) {
@@ -4480,19 +4591,39 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             upper: ends(|each| each.upper),
         };
         self.record_part(level, self.site(level, argument), payload);
-        Ok(Some((payload.upper, arguments.leak(), contributions)))
+        Ok(Some((payload, arguments.leak(), contributions)))
     }
 
-    /// `CallNeverSatisfied` for the call by name `node` of `callee` over an argument whose static
-    /// upper end is `payload`, both read through their bounds.
+    /// `CallNeverSatisfied` for the call by name `node` of `callee`, read through its bounds, over
+    /// an argument of the static type `payload` [shown against](self::shown_against) its
+    /// parameters, which the refusal names beside it unless `callee` is quantified and names them
+    /// itself.
     fn never(
         &self,
         callee: Callee<'_>,
-        payload: Parametric,
+        payload: Interval,
         node: &KExpression<'_>,
     ) -> ShapeError<'o> {
         let (types, scratch) = (self.types, self.scratch);
+        let TypeNode::KFunction { params, .. } = callee.function.view(types).body else {
+            unreachable!("a callee is a function")
+        };
+        let parameters = record_type(types, scratch, params.iter());
+        let arguments = shown_against(
+            types,
+            scratch,
+            Interval {
+                upper: bound_above(types, scratch, payload.upper).into(),
+                ..payload
+            },
+            parameters,
+        );
         ShapeError::CallNeverSatisfied {
+            arguments,
+            parameters: match callee.function {
+                DeclaredType::Type(_) => Some(bound_above(types, scratch, parameters)),
+                DeclaredType::Scheme(_) => None,
+            },
             callee: match callee.function {
                 DeclaredType::Type(function) => {
                     DeclaredType::Type(bound_above(types, scratch, function))
@@ -4501,7 +4632,6 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                     DeclaredType::Scheme(scheme_bound_above(types, scratch, scheme))
                 }
             },
-            arguments: bound_above(types, scratch, payload),
             at: node.source,
         }
     }
@@ -4536,6 +4666,26 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             DeclaredType::Scheme(scheme) => scheme_return(scheme, self.types),
         };
         self.through(ret.expect("a registered shape returns"), intervals)
+    }
+
+    /// The union a construction's head `head` reaches its variant through: where it is a tag
+    /// projection whose owner the load knows closed, the union that owner peels to
+    /// ([`tag_union`]). `None` for every other head.
+    fn reached_union(&self, level: usize, head: &'graph ExpressionPart<'graph>) -> Option<KType> {
+        let ExpressionPart::SigiledTypeExpr(node) = head else {
+            return None;
+        };
+        let (owner, label) = tag_projection(node)?;
+        let owner = self
+            .declared(level, owner)
+            .and_then(|owner| self.types.concrete(owner))?;
+        let union = tag_union(self.types, self.scratch, owner)?;
+        debug_assert_eq!(
+            self.types.union_member_named(union, label.symbol()),
+            self.head_handle(level, head),
+            "the variant a tag projection names is a member of the union it reaches"
+        );
+        Some(union)
     }
 
     /// The type an application's head denotes, where the load knows it.
@@ -4677,15 +4827,17 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
 
         // Each argument as a refusal lists it: its upper end, or an instance argument's scheme.
         let lay = self.lay;
+        let typed = |position: usize, argument: Interval| match sites
+            .iter()
+            .find(|site| site.position == position)
+        {
+            Some(site) => DeclaredType::Scheme(site.scheme),
+            None => DeclaredType::Type(argument.upper),
+        };
         let uppers = || {
             collect(
                 lay,
-                arguments.iter().enumerate().map(|(position, argument)| {
-                    match sites.iter().find(|site| site.position == position) {
-                        Some(site) => DeclaredType::Scheme(site.scheme),
-                        None => DeclaredType::Type(argument.upper),
-                    }
-                }),
+                (arguments.iter().enumerate()).map(|(at, each)| typed(at, *each)),
             )
         };
 
@@ -4810,9 +4962,49 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                     Lacks::Member(member) => ShapeError::NoMember { of, member, at },
                 })
             });
+            // Each candidate with a shape names its refusal on a line of its own.
+            let (mut lines, mut shown, mut against) = (
+                BumpVec::new_in(scratch),
+                BumpVec::new_in(scratch),
+                BumpVec::new_in(scratch),
+            );
+            for (candidate, read) in list.candidates.iter().zip(reads.iter()) {
+                let Some(shape) = read.known.shape() else {
+                    continue;
+                };
+                if self.unfilled && self.hole(level, *candidate) {
+                    continue;
+                }
+                let (each, satisfied) = match sites.is_empty() {
+                    true => refused_against(types, scratch, shape, arguments),
+                    false => {
+                        let mut each = BumpVec::new_in(scratch);
+                        each.extend(
+                            (arguments.iter().enumerate())
+                                .map(|(at, typed_at)| Shown::from(typed(at, *typed_at))),
+                        );
+                        let mut whole = BumpVec::with_capacity_in(1, scratch);
+                        whole.push(shape);
+                        (each, whole)
+                    }
+                };
+                let span = |start: usize, len: usize| Span {
+                    start: start as u16,
+                    len: len as u16,
+                };
+                lines.push(RefusedLine {
+                    shown: span(shown.len(), each.len()),
+                    against: span(against.len(), satisfied.len()),
+                });
+                shown.extend(each);
+                against.extend(satisfied);
+            }
             return Err(missing.unwrap_or_else(|| ShapeError::NoAdmittingCandidate {
                 key: list.elements,
-                arguments: uppers(),
+                arguments: arguments.len(),
+                lines: collect(lay, lines.into_iter()),
+                shown: collect(lay, shown.into_iter()),
+                against: collect(lay, against.into_iter()),
                 at: node.source,
             }));
         }

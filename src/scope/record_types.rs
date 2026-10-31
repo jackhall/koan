@@ -362,10 +362,16 @@ fn error_types(error: &ShapeError<'_>, each: &mut Each<'_>) {
         } => ktype(builtin),
         ShapeError::NoAdmittingCandidate {
             key: _,
-            arguments,
+            arguments: _,
+            lines: _,
+            shown,
+            against,
             at: _,
+        } => {
+            shown.iter().for_each(|shown| each(shown.named()));
+            against.iter().for_each(|against| each(*against));
         }
-        | ShapeError::Ambiguous {
+        ShapeError::Ambiguous {
             key: _,
             arguments,
             count: _,
@@ -385,8 +391,11 @@ fn error_types(error: &ShapeError<'_>, each: &mut Each<'_>) {
             body,
             returns,
             at: _,
+        } => {
+            each(body.named());
+            each(returns.into());
         }
-        | ShapeError::EvalNeverSatisfied {
+        ShapeError::EvalNeverSatisfied {
             code: body,
             returns,
             at: _,
@@ -404,16 +413,20 @@ fn error_types(error: &ShapeError<'_>, each: &mut Each<'_>) {
             annotated: other,
             at: _,
         } => {
-            ktype(value);
-            ktype(other);
+            each(value.named());
+            each(other.into());
         }
         ShapeError::CallNeverSatisfied {
             callee,
             arguments,
+            parameters,
             at: _,
         } => {
             each(declared(callee));
-            each(arguments.into());
+            each(arguments.named());
+            parameters
+                .into_iter()
+                .for_each(|parameters| each(parameters.into()));
         }
         ShapeError::SpreadNeverAList { value, at: _ }
         | ShapeError::SpliceNeverCode { value, at: _ } => ktype(value),
@@ -427,8 +440,8 @@ fn error_types(error: &ShapeError<'_>, each: &mut Each<'_>) {
         }
         ShapeError::NotCode { value, at: _ }
         | ShapeError::BodyNotCode { value, at: _ }
-        | ShapeError::NotAModule { value, at: _ }
-        | ShapeError::NotASignature {
+        | ShapeError::NotAModule { value, at: _ } => each(value.named()),
+        ShapeError::NotASignature {
             ascribed: value,
             at: _,
         } => ktype(value),

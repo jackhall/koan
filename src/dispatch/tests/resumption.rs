@@ -488,7 +488,9 @@ fn a_binding_no_overload_admits_refuses_as_the_load_would() {
     });
     let refused = refused.expect_err("no overload admits `Str`");
     assert!(
-        refused.contains("no overload of `_ + _` admits (Str, Number)"),
+        refused.contains(
+            "no overload of `_ + _` admits these arguments:\n  Str, which can never satisfy Number"
+        ),
         "{refused}"
     );
 }

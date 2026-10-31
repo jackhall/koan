@@ -50,7 +50,7 @@ use crate::symbols::{
     BinderSymbol, KeySymbol, KeywordSymbol, Symbol, SymbolInterner, TypeSymbol, ValueSymbol,
 };
 use crate::type_lattice::{
-    DeclaredGroup, DeclaredType, KType, Parametric, Scheme, TypeNode, display_name,
+    DeclaredGroup, DeclaredType, Interval, KType, Parametric, Scheme, TypeNode, display_name,
     instantiate_quantified,
 };
 use crate::values::{Chain, ContentDigest};
@@ -1382,11 +1382,16 @@ pub enum ShapeError<'graph> {
         builtin: KType,
         at: SourceRef,
     },
-    /// A keyworded use none of whose candidates can admit its arguments' static types: each
-    /// argument's upper end, or an instance argument's scheme.
+    /// A keyworded use of `arguments` arguments none of whose candidates can admit their static
+    /// types. Each candidate with a shape names its refusal on a [line](self::RefusedLine): a span
+    /// of `shown`, each argument [shown](self::Shown) by the end that decides or an instance
+    /// argument's scheme, beside the span of `against` it can never satisfy.
     NoAdmittingCandidate {
         key: &'graph [KeyElement],
-        arguments: &'graph [DeclaredType<Parametric>],
+        arguments: usize,
+        lines: &'graph [RefusedLine],
+        shown: &'graph [Shown],
+        against: &'graph [DeclaredType<Parametric>],
         at: SourceRef,
     },
     /// A keyworded use whose last candidate a builtin's type rule dropped, the argument's static
@@ -1426,19 +1431,19 @@ pub enum ShapeError<'graph> {
     },
     /// A callable body whose static type can never satisfy its declared return.
     ReturnNeverSatisfied {
-        body: KType,
+        body: Shown,
         returns: KType,
         at: SourceRef,
     },
     /// An ascription whose operand's static type can never satisfy its type.
     AscriptionNeverSatisfied {
-        value: KType,
+        value: Shown,
         ascribed: KType,
         at: SourceRef,
     },
     /// An annotated binder whose value's static type can never satisfy its annotation.
     AnnotationNeverSatisfied {
-        value: KType,
+        value: Shown,
         annotated: KType,
         at: SourceRef,
     },
@@ -1447,7 +1452,8 @@ pub enum ShapeError<'graph> {
     /// type can never solve.
     CallNeverSatisfied {
         callee: DeclaredType<KType>,
-        arguments: KType,
+        arguments: Shown,
+        parameters: Option<KType>,
         at: SourceRef,
     },
     /// A spread, `..value`, whose static type can never be a list.
@@ -1464,14 +1470,14 @@ pub enum ShapeError<'graph> {
         at: SourceRef,
     },
     /// An `EVAL` whose operand's static type can never be code.
-    NotCode { value: KType, at: SourceRef },
+    NotCode { value: Shown, at: SourceRef },
     /// A callable's body, not written as a quote, whose static type can never be code.
-    BodyNotCode { value: KType, at: SourceRef },
+    BodyNotCode { value: Shown, at: SourceRef },
     /// A callable's body, not written as a quote, reading `name`, one of the callable's own
     /// parameters, which only a body reads.
     ParameterOutsideBody { name: BinderSymbol, at: SourceRef },
     /// A view ascription whose operand's static type can never be a module.
-    NotAModule { value: KType, at: SourceRef },
+    NotAModule { value: Shown, at: SourceRef },
     /// A view ascription at a type the view door never takes: no one application of a signature.
     NotASignature { ascribed: KType, at: SourceRef },
     /// An `EVAL` of traced code whose static type can never satisfy the type the `EVAL` declares.
@@ -1868,8 +1874,50 @@ impl fmt::Display for ShapeErrorDisplay<'_, '_, '_, '_> {
                 "no overload of `{}` takes this function at a type that fixes its group",
                 self.key(key)
             ),
-            ShapeError::NoAdmittingCandidate { key, arguments, .. } => {
-                selection_refused(f, key, arguments, None, self.symbols, self.types)
+            ShapeError::NoAdmittingCandidate {
+                key,
+                arguments,
+                lines,
+                shown,
+                against,
+                ..
+            } => {
+                let noun = match arguments {
+                    1 => "this argument",
+                    _ => "these arguments",
+                };
+                write!(f, "no overload of `{}` admits {noun}:", self.key(key))?;
+                // One type as it is, several in parentheses.
+                let listed = |f: &mut fmt::Formatter<'_>,
+                              count: usize,
+                              one: &dyn Fn(&mut fmt::Formatter<'_>, usize) -> fmt::Result| {
+                    if count > 1 {
+                        f.write_str("(")?;
+                    }
+                    for index in 0..count {
+                        if index > 0 {
+                            f.write_str(", ")?;
+                        }
+                        one(f, index)?;
+                    }
+                    if count > 1 {
+                        f.write_str(")")?;
+                    }
+                    Ok(())
+                };
+                let (types, symbols) = (self.types, self.symbols);
+                for line in lines.iter() {
+                    let (shown, against) = (line.shown.of(shown), line.against.of(against));
+                    f.write_str("\n  ")?;
+                    listed(f, shown.len(), &|f, index| {
+                        write!(f, "{}", shown[index].display(types, symbols))
+                    })?;
+                    f.write_str(", which can never satisfy ")?;
+                    listed(f, against.len(), &|f, index| {
+                        write!(f, "{}", display_name(against[index], types, symbols))
+                    })?;
+                }
+                Ok(())
             }
             ShapeError::NoField { of, field, .. } => write!(
                 f,
@@ -1919,7 +1967,7 @@ impl fmt::Display for ShapeErrorDisplay<'_, '_, '_, '_> {
             ShapeError::ReturnNeverSatisfied { body, returns, .. } => write!(
                 f,
                 "this body returns {}, which can never satisfy its declared return {}",
-                display_name(*body, self.types, self.symbols),
+                body.display(self.types, self.symbols),
                 display_name(*returns, self.types, self.symbols)
             ),
             ShapeError::AscriptionNeverSatisfied {
@@ -1927,7 +1975,7 @@ impl fmt::Display for ShapeErrorDisplay<'_, '_, '_, '_> {
             } => write!(
                 f,
                 "this value is {}, which can never satisfy its ascription {}",
-                display_name(*value, self.types, self.symbols),
+                value.display(self.types, self.symbols),
                 display_name(*ascribed, self.types, self.symbols)
             ),
             ShapeError::AnnotationNeverSatisfied {
@@ -1935,17 +1983,29 @@ impl fmt::Display for ShapeErrorDisplay<'_, '_, '_, '_> {
             } => write!(
                 f,
                 "this value is {}, which can never satisfy its annotation {}",
-                display_name(*value, self.types, self.symbols),
+                value.display(self.types, self.symbols),
                 display_name(*annotated, self.types, self.symbols)
             ),
             ShapeError::CallNeverSatisfied {
-                callee, arguments, ..
-            } => write!(
-                f,
-                "{} can never be called with {}",
-                display_name(*callee, self.types, self.symbols),
-                display_name(*arguments, self.types, self.symbols)
-            ),
+                callee,
+                arguments,
+                parameters,
+                ..
+            } => {
+                write!(
+                    f,
+                    "this argument is {}, which can never satisfy the parameters ",
+                    arguments.display(self.types, self.symbols)
+                )?;
+                if let Some(parameters) = parameters {
+                    write!(
+                        f,
+                        "{} ",
+                        display_name(*parameters, self.types, self.symbols)
+                    )?;
+                }
+                write!(f, "of {}", display_name(*callee, self.types, self.symbols))
+            }
             ShapeError::SpreadNeverAList { value, .. } => write!(
                 f,
                 "`..` spreads a list, and this value is {}, which can never be one",
@@ -1982,13 +2042,13 @@ impl fmt::Display for ShapeErrorDisplay<'_, '_, '_, '_> {
             ShapeError::NotCode { value, .. } => write!(
                 f,
                 "this value is {}, which can never be code for `EVAL` to run",
-                display_name(*value, self.types, self.symbols)
+                value.display(self.types, self.symbols)
             ),
             ShapeError::BodyNotCode { value, .. } => write!(
                 f,
                 "this body is {}, which can never be code: write the body as a quote, #(…), or \
                  name code",
-                display_name(*value, self.types, self.symbols)
+                value.display(self.types, self.symbols)
             ),
             ShapeError::ParameterOutsideBody { name: read, .. } => write!(
                 f,
@@ -2030,8 +2090,8 @@ impl ShapeErrorDisplay<'_, '_, '_, '_> {
 }
 
 /// A refused selection at `key` worded — no overload admits `arguments`, or (`ambiguous`) that
-/// many admit and none ranks first — for the load's refusal and the run's fault alike.
-pub fn selection_refused<A: Copy + Into<DeclaredType<Parametric>>>(
+/// many admit and none ranks first — for the run's fault, and for the load's where it is ambiguous.
+pub fn selection_refused<A: Copy + Into<Shown>>(
     f: &mut fmt::Formatter<'_>,
     key: &[KeyElement],
     arguments: &[A],
@@ -2048,7 +2108,7 @@ pub fn selection_refused<A: Copy + Into<DeclaredType<Parametric>>>(
         if index > 0 {
             f.write_str(", ")?;
         }
-        write!(f, "{}", display_name(*argument, types, symbols))?;
+        write!(f, "{}", (*argument).into().display(types, symbols))?;
     }
     f.write_str(")")?;
     match ambiguous {
@@ -2083,11 +2143,90 @@ pub fn arm_refused(
     }
 }
 
+/// One candidate's line in a refused keyworded use: the span of its arguments, shown, beside the
+/// span of what they can never satisfy — the slots they lie at, or a quantified candidate's whole
+/// shape.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct RefusedLine {
+    pub shown: Span,
+    pub against: Span,
+}
+
+/// A span of a slice, by its start and length.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Span {
+    pub start: u16,
+    pub len: u16,
+}
+
+impl Span {
+    /// This span of `all`.
+    pub fn of<T>(self, all: &[T]) -> &[T] {
+        &all[self.start as usize..][..self.len as usize]
+    }
+}
+
+/// A refused value's static type as its refusal names it: its upper end, or — where the lower end
+/// alone decides the refusal — at least that end, which every type the run can carry there lies
+/// above.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Shown {
+    Is(DeclaredType<Parametric>),
+    AtLeast(KType),
+}
+
+impl Shown {
+    /// `typed` refused by its lower end: at least that end where it is closed and neither `Never`
+    /// nor the upper end, else the upper end.
+    pub fn at_least(types: &Chain<'_, '_, '_, '_>, typed: Interval) -> Shown {
+        match types.concrete(typed.lower) {
+            Some(lower) if lower != KType::NEVER && typed.lower != typed.upper => {
+                Shown::AtLeast(lower)
+            }
+            _ => Shown::Is(typed.upper.into()),
+        }
+    }
+
+    /// The type this names, as an error's types are visited.
+    pub fn named(self) -> DeclaredType<Parametric> {
+        match self {
+            Shown::Is(named) => named,
+            Shown::AtLeast(lower) => lower.into(),
+        }
+    }
+
+    /// This rendered: the type, or `at least` it.
+    pub fn display<'d>(
+        self,
+        types: &'d Chain<'_, '_, '_, '_>,
+        symbols: &'d SymbolInterner,
+    ) -> impl fmt::Display + 'd {
+        fmt::from_fn(move |f| match self {
+            Shown::Is(named) => write!(f, "{}", display_name(named, types, symbols)),
+            Shown::AtLeast(lower) => {
+                write!(f, "at least {}", display_name(lower, types, symbols))
+            }
+        })
+    }
+}
+
+impl From<KType> for Shown {
+    fn from(named: KType) -> Shown {
+        Shown::Is(named.into())
+    }
+}
+
+impl From<DeclaredType<Parametric>> for Shown {
+    fn from(named: DeclaredType<Parametric>) -> Shown {
+        Shown::Is(named)
+    }
+}
+
 /// Why the view door refuses an ascription, whatever the operand's or the type's other faults.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum ViewRefused {
     /// The operand, of this type, is no module.
-    NotAModule(KType),
+    NotAModule(Shown),
     /// The type ascribed is no one application of a signature.
     NotASignature(KType),
 }
@@ -2100,13 +2239,16 @@ pub fn view_refused(
     types: &Chain<'_, '_, '_, '_>,
 ) -> fmt::Result {
     match refused {
-        ViewRefused::NotAModule(value) => {
-            write!(
-                f,
-                "{} is no module to ascribe",
-                display_name(value, types, symbols)
-            )
-        }
+        ViewRefused::NotAModule(Shown::AtLeast(value)) => write!(
+            f,
+            "a value at least {} is no module to ascribe",
+            display_name(value, types, symbols)
+        ),
+        ViewRefused::NotAModule(Shown::Is(value)) => write!(
+            f,
+            "{} is no module to ascribe",
+            display_name(value, types, symbols)
+        ),
         ViewRefused::NotASignature(ascribed) => {
             write!(
                 f,

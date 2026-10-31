@@ -171,9 +171,12 @@ impl fmt::Display for RaisedDisplay<'_, '_, '_, '_, '_> {
             Raised::Incomparable { left, right } => {
                 write!(f, "{} and {} cannot be compared", ktype(left), ktype(right))
             }
-            Raised::NotAModule { value } => {
-                view_refused(f, ViewRefused::NotAModule(value), self.symbols, self.types)
-            }
+            Raised::NotAModule { value } => view_refused(
+                f,
+                ViewRefused::NotAModule(value.into()),
+                self.symbols,
+                self.types,
+            ),
             Raised::NotASignature { ascribed } => view_refused(
                 f,
                 ViewRefused::NotASignature(ascribed),

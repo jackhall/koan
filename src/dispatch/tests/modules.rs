@@ -157,7 +157,8 @@ fn a_missing_member_and_an_ascription_that_can_never_hold_refuse_the_load() {
             "{LABELS}EXPR #(TAKE m :HasLabel) -> Str = #(m.label)\nPRINT (TAKE named)\n\
              PRINT (TAKE plain)"
         )),
-        "load: <test>:6:7: no overload of `TAKE _` admits (SIG (other: Number))"
+        "load: <test>:6:7: no overload of `TAKE _` admits this argument:\n  SIG (other: Number), \
+         which can never satisfy SIG (label: Str)"
     );
 }
 
@@ -395,7 +396,8 @@ fn a_call_through_an_opaque_view_crosses_its_barrier_both_ways() {
         run(&format!(
             "{COUNTER}LET v = (ints :| Counter)\nPRINT (v.succ {{x = 1}})"
         )),
-        "load: <test>:4:7: :(FN :{x :Carrier} -> Carrier) can never be called with :{x :Number}",
+        "load: <test>:4:7: this argument is :{x :Number}, which can never satisfy the parameters \
+         :{x :Carrier} of :(FN :{x :Carrier} -> Carrier)",
         "an argument the view never sealed, at load"
     );
     assert_eq!(
@@ -451,23 +453,27 @@ fn a_sealed_member_is_opaque_outside_its_view_whatever_its_bound() {
         )
     };
     // `USE c` settles at `c`'s closed tree, which refuses as a load would.
-    let refused_plus = "error: <test>:4:34: no overload of `_ + _` admits (Carrier, Number)";
-    let refused_take = "no overload of `TAKE _` admits (SIG (Carrier: Carrier, zero: Carrier, \
-                        succ: :(FN :{x :Carrier} -> Carrier)))";
+    let refused_plus = "error: <test>:4:34: no overload of `_ + _` admits these \
+                        arguments:\n  Carrier, which can never satisfy Number";
+    let refused_take = "no overload of `TAKE _` admits this argument:\n  SIG (Carrier: Carrier, \
+                        zero: Carrier, succ: :(FN :{x :Carrier} -> Carrier)), which can never \
+                        satisfy SIG (zero: Number)";
     let loaded_take = format!("load: <test>:10:7: {refused_take}");
     // Through `p :Counter`, the view is seen at `Counter` pinned at its own carrier; `PASS c`'s
     // settlement refuses as a load would.
-    let ran_take = "error: <test>:9:35: no overload of `TAKE _` admits (SIG FOR ALL \
-                    #{Carrier: Number} (zero: Carrier, succ: :(FN :{x :Carrier} -> Carrier)) WITH \
-                    {Carrier = Carrier})";
+    let ran_take = "error: <test>:9:35: no overload of `TAKE _` admits this argument:\n  SIG FOR \
+                    ALL #{Carrier: Number} (zero: Carrier, succ: :(FN :{x :Carrier} -> Carrier)) \
+                    WITH {Carrier = Carrier}, which can never satisfy SIG (zero: Number)";
     for (program, printed) in [
         (
             "PRINT (c.zero + 1)",
-            "load: <test>:10:7: no overload of `_ + _` admits (Carrier, Number)",
+            "load: <test>:10:7: no overload of `_ + _` admits these arguments:\n  Carrier, which \
+             can never satisfy Number",
         ),
         (
             "PRINT (SHOW c.zero)",
-            "load: <test>:10:7: no overload of `SHOW _` admits (Carrier)",
+            "load: <test>:10:7: no overload of `SHOW _` admits this argument:\n  Carrier, which can \
+             never satisfy Number",
         ),
         (
             "LET n :Number = c.zero\nPRINT n",
@@ -508,7 +514,8 @@ fn an_opaque_view_of_an_opaque_view_reseals_and_stacks_its_barriers() {
     );
     assert_eq!(
         run(&source("PRINT (d.succ {x = c.zero})")),
-        "load: <test>:6:7: :(FN :{x :Carrier} -> Carrier) can never be called with :{x :Carrier}"
+        "load: <test>:6:7: this argument is :{x :Carrier}, which can never satisfy the parameters \
+         :{x :Carrier} of :(FN :{x :Carrier} -> Carrier)"
     );
     assert_eq!(
         run(&source(
@@ -561,8 +568,8 @@ fn an_argument_crossing_a_union_slot_inwards_unseals_by_the_member_over_the_carr
     );
     assert_eq!(
         run(&format!("{source}PRINT (v.show {{x = 1}})")),
-        "load: <test>:4:7: :(FN :{x :(Carrier | Str)} -> Str) can never be called with \
-         :{x :Number}"
+        "load: <test>:4:7: this argument is :{x :Number}, which can never satisfy the parameters \
+         :{x :(Carrier | Str)} of :(FN :{x :(Carrier | Str)} -> Str)"
     );
     assert_eq!(
         run(&format!(

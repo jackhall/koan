@@ -54,7 +54,7 @@ mod tests;
 
 pub use builtin::{builtin_error, builtin_result, builtin_shape_types};
 pub use declaration::declares_nominal;
-pub use expression::declared_field;
+pub use expression::{applied_union, declared_field, declared_variant, tag_union};
 pub use members::{
     SignatureMember, applied_member, member_count, schema_member, schema_of, signature_member,
     type_members, value_count,

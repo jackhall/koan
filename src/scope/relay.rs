@@ -620,13 +620,21 @@ impl<'to, 'x, 'bind, L: Lays<'to>> Relay<'to, 'x, 'bind, L> {
                 builtin,
                 at,
             },
-            ShapeError::NoAdmittingCandidate { key, arguments, at } => {
-                ShapeError::NoAdmittingCandidate {
-                    key: self.copied(key),
-                    arguments: self.copied(arguments),
-                    at,
-                }
-            }
+            ShapeError::NoAdmittingCandidate {
+                key,
+                arguments,
+                lines,
+                shown,
+                against,
+                at,
+            } => ShapeError::NoAdmittingCandidate {
+                key: self.copied(key),
+                arguments,
+                lines: self.copied(lines),
+                shown: self.copied(shown),
+                against: self.copied(against),
+                at,
+            },
             ShapeError::NoField { of, field, at } => ShapeError::NoField { of, field, at },
             ShapeError::NoMember { of, member, at } => ShapeError::NoMember { of, member, at },
             ShapeError::Unlisted { name, at } => ShapeError::Unlisted { name, at },
@@ -675,10 +683,12 @@ impl<'to, 'x, 'bind, L: Lays<'to>> Relay<'to, 'x, 'bind, L> {
             ShapeError::CallNeverSatisfied {
                 callee,
                 arguments,
+                parameters,
                 at,
             } => ShapeError::CallNeverSatisfied {
                 callee,
                 arguments,
+                parameters,
                 at,
             },
             ShapeError::ReadNeverSatisfied {

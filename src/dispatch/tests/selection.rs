@@ -51,8 +51,9 @@ fn a_keyworded_call_solves_a_group_class_by_class_and_a_call_by_name_jointly() {
     );
     assert_eq!(
         run(&format!("{pair}PRINT (PAIR [1] WITH [1, \"x\"])")),
-        "load: <test>:2:7: no overload of `PAIR _ WITH _` admits \
-         (:(LIST OF Number), :(LIST OF :(Number | Str)))",
+        "load: <test>:2:7: no overload of `PAIR _ WITH _` admits these arguments:\n  \
+         (:(LIST OF Number), :(LIST OF :(Number | Str))), which can never satisfy \
+         :(EXPR FOR ALL #[Elt] #(PAIR _ :(LIST OF Elt) WITH _ :(LIST OF Elt)) -> Str)",
         "an exact second argument above `Elt`'s solution refuses the load"
     );
     assert_eq!(
@@ -87,7 +88,8 @@ fn one_variable_in_two_classes_takes_its_type_from_the_first() {
                   PRINT (PAIR 1 WITH \"x\")";
     assert_eq!(
         run(source),
-        "load: <test>:2:7: no overload of `PAIR _ WITH _` admits (Number, Str)"
+        "load: <test>:2:7: no overload of `PAIR _ WITH _` admits these arguments:\n  (Number, Str), \
+         which can never satisfy :(EXPR FOR ALL #[Elt] #(PAIR _ :Elt WITH _ :Elt) -> Str)"
     );
 }
 
@@ -156,12 +158,14 @@ fn no_admitting_candidate_is_a_miss_naming_the_argument_types() {
     );
     assert_eq!(
         run("PRINT (\"a\" + 1)"),
-        "load: <test>:1:7: no overload of `_ + _` admits (Str, Number)",
+        "load: <test>:1:7: no overload of `_ + _` admits these arguments:\n  Str, which can never \
+         satisfy Number",
         "a use no candidate can admit refuses the load"
     );
     assert_eq!(
         run("EXPR #(PICK x :Str) -> Str = #(\"a\")\nPRINT (PICK {n = 1})"),
-        "load: <test>:2:7: no overload of `PICK _` admits (:{n :Number})"
+        "load: <test>:2:7: no overload of `PICK _` admits this argument:\n  :{n :Number}, which can \
+         never satisfy Str"
     );
 }
 

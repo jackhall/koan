@@ -539,6 +539,11 @@ impl<'s, 'run, T> Collector<'s, 'run, T> {
     /// The `index`-th variable's answer: the join of its lower contributions where any reached it,
     /// else the meet of its upper ones and its bound; or, where the join does not lie under some
     /// ceiling — an upper contribution or the bound — the join beside the first such ceiling.
+    ///
+    /// A cell holding a parametric contribution is read in handle order, not arrival order. A join
+    /// or meet that keeps a variable beside a member the rigid rule orders under it answers
+    /// equivalent but distinct handles in different orders, so arrival order would leak slot order
+    /// into the answer. Over concrete contributions both are exact by handle in any order.
     fn answer(
         &self,
         types: &TypeChain<'run, impl Habitat<'run>>,
@@ -546,7 +551,8 @@ impl<'s, 'run, T> Collector<'s, 'run, T> {
     ) -> Result<Linked<'run>, (Linked<'run>, Linked<'run>)> {
         let scratch = self.scratch;
         let bound = self.bounds[index];
-        let (lower, upper) = (&self.lower[index], &self.upper[index]);
+        let lower = in_handle_order(scratch, &self.lower[index]);
+        let upper = in_handle_order(scratch, &self.upper[index]);
         if lower.is_empty() {
             return Ok(upper.iter().fold(bound, |met, each| {
                 meet_through_variables(types, scratch, met, each)
@@ -581,6 +587,21 @@ impl<'s, 'run, T> Collector<'s, 'run, T> {
             false => Err((joined, bound)),
         }
     }
+}
+
+/// A collector cell in handle order where it holds a parametric contribution among two or more,
+/// copied into `scratch` and sorted; the cell itself, in arrival order, otherwise. A concrete cell
+/// keeps arrival order so a union it joins to keeps the members in the order the slots wrote them.
+fn in_handle_order<'a, 'run>(
+    scratch: BumpAllocator<'a>,
+    cell: &'a [Linked<'run>],
+) -> &'a [Linked<'run>] {
+    if cell.len() < 2 || cell.iter().all(|each| each.is_concrete()) {
+        return cell;
+    }
+    let sorted = scratch.alloc_slice_copy(cell);
+    sorted.sort_unstable();
+    sorted
 }
 
 /// Does `carried` fill the position `declared`, and what does it contribute to the variables there?

@@ -53,7 +53,10 @@ contributions and its declared bound. The solve fails only where the set the
 pair denotes is empty — where the lower end lies above an upper contribution or
 above the bound. A contribution set with a maximum joins to that maximum, and
 one with a minimum meets to that minimum; admission cannot depend on the order
-the slots are read.
+the slots are read. So where a variable's contributions hold a parametric one,
+the solve reads them in handle order, not arrival order: a join or meet that
+keeps a variable beside a member lying under it reaches equivalent but distinct
+handles in different orders.
 
 While it is solved, a variable can slide between its ends, so the solve picks
 no point, and *fits*' instantiation clause asks only that each pair denote

@@ -218,7 +218,7 @@ fn a_call_by_name_whose_closed_solve_fails_refuses_the_load() {
                   EXPR #(USE a :(Number | Str)) -> Any = #(only {x = a})";
     let refused = run(source);
     assert!(
-        refused.starts_with("load:") && refused.contains("can never be called with"),
+        refused.starts_with("load:") && refused.contains("which can never satisfy the parameters"),
         "{refused}"
     );
 }
@@ -256,7 +256,7 @@ fn a_call_by_name_whose_argument_never_fits_below_refuses_the_load_as_its_keywor
     };
     let by_name = which("which {x = x}");
     assert!(
-        by_name.starts_with("load:") && by_name.contains("can never be called with"),
+        by_name.starts_with("load:") && by_name.contains("which can never satisfy the parameters"),
         "{by_name}"
     );
     assert!(which("WHICH x").starts_with("load:"));
@@ -278,13 +278,14 @@ fn a_call_by_name_reads_its_argument_at_both_ends() {
         "{f}LET call = (FN :{{g :(FN :{{}} -> :{{y :Str}})}} -> Str = #(f (g {{}})))"
     ));
     assert!(
-        exact.contains("can never be called with :{y :Str}"),
+        exact.contains("this argument is :{y :Str}, which can never satisfy"),
         "{exact}"
     );
     let refused = |source: &str| {
         let refused = run(source);
         assert!(
-            refused.starts_with("load:") && refused.contains("can never be called with"),
+            refused.starts_with("load:")
+                && refused.contains("which can never satisfy the parameters"),
             "{refused}"
         );
     };
@@ -349,8 +350,10 @@ fn a_reproducible_solve_that_fails_over_a_lexical_variable_refuses_the_load() {
     );
     assert_eq!(
         run(&source),
-        "load: <test>:4:60: no overload of `PUT _ WITH _ AT _` admits \
-         (Number, :(FN :{v :Str} -> Null), :(LIST OF Outer))"
+        "load: <test>:4:60: no overload of `PUT _ WITH _ AT _` admits these arguments:\n  \
+         (Number, :(FN :{v :Str} -> Null), :(LIST OF Outer)), which can never satisfy \
+         :(EXPR FOR ALL #[Elt Key] #(PUT 1 :Elt WITH 1 :(FN :{v :Elt} -> Null) AT 1 :(LIST OF Key)) \
+         -> Str)"
     );
 }
 
@@ -385,7 +388,9 @@ fn a_later_slot_reads_an_earlier_lexical_solution_at_its_ends() {
     );
     assert_eq!(
         run(&source),
-        "paired\nerror: <test>:2:50: no overload of `PAIR _ WITH _` admits (Number, Str)"
+        "paired\nerror: <test>:2:50: no overload of `PAIR _ WITH _` admits these \
+         arguments:\n  (Number, Str), which can never satisfy :(EXPR FOR ALL #[Elt] #(PAIR _ :Elt \
+         WITH _ :Elt) -> Str)"
     );
 }
 
@@ -403,8 +408,8 @@ fn a_call_by_name_over_a_lexical_variable_is_judged_by_a_reproducible_solve() {
     ));
     assert_eq!(
         refused,
-        "load: <test>:2:69: :(FN FOR ALL #[Elt] :{y :(LIST OF Elt)} -> Type) can never be called \
-         with :{y :((LIST OF Any) | Null)}"
+        "load: <test>:2:69: this argument is :{y :((LIST OF Any) | Null)}, which can never \
+         satisfy the parameters of :(FN FOR ALL #[Elt] :{y :(LIST OF Elt)} -> Type)"
     );
     let same =
         "LET same = FN EXPR FOR ALL #[Elt] #(SAME y :(LIST OF Elt)) -> :(LIST OF Elt) = #(y)\n";

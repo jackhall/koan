@@ -45,7 +45,8 @@ fn eval_runs_code_whose_dollar_names_bind_where_the_quote_is_written() {
     );
     assert_eq!(
         run(&format!("{TWICE}TWICE (PRINT \"hi\")")),
-        "load: <test>:5:1: no overload of `TWICE _` admits (Str)"
+        "load: <test>:5:1: no overload of `TWICE _` admits this argument:\n  Str, which can never \
+         satisfy Expression"
     );
     assert_eq!(
         run(&format!(
@@ -185,7 +186,8 @@ fn a_backslash_group_takes_its_key_from_the_eval_that_runs_it() {
     );
     assert_eq!(
         run(&format!("{run_it}PRINT (RUN #(\\(WAVE \"bob\")))")),
-        "load: <test>:5:7: no overload of `RUN _` admits (:(Expression NEEDING #[(WAVE _)]))",
+        "load: <test>:5:7: no overload of `RUN _` admits this argument:\n  :(Expression NEEDING \
+         #[(WAVE _)]), which can never satisfy :(Expression NEEDING #[(GREET _)])",
         "a parameter admits a quote whose needed keys its list covers"
     );
 }

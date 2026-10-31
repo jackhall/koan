@@ -75,7 +75,10 @@ registry's own doors:
 - `Kind NEEDING #[y …]` is the [code kind](../../lattice/src/types/vocabulary.md#the-code-family)
   `Kind` needing the names its one-name quotes spell; a kind that is no code
   kind, or an element that is no one-name quote, is unsupported;
-- `Union.Tag` is the member of the union whose tag it names;
+- `Union.Tag` is the member of the union whose tag it names, read through
+  every newtype layer above the union as a field is read through those above a
+  record: under `UNION Shape = #{Sized: Maybe, Flat: Null}`, `Shape.Sized.Some`
+  is `Maybe`'s `Some`;
 - `Record.field` is the type the record under `Record` declares `field` with,
   read through every newtype layer above the record — a `NEWTYPE`'s
   representation, a union variant's payload — so a field's type is reached the
@@ -517,7 +520,8 @@ steps, after the paths the unit spells are resolved:
 
 1. a component of type binders, through [the declaration door](#declarations),
    so a component reads the binders of the units before it;
-2. each type expression the unit records — a sigiled type in value position, a
+2. each type expression the unit records — a sigiled type in value position,
+   and the owner of one that projects a variant at a construction's head, a
    type part of an expression shape that births no callable, a `MATCH … WITH`
    guard — then the guards' check and each `MATCH … UNDER`'s check against its
    union;
@@ -555,13 +559,14 @@ A variant's identity is its name, kind and payload, not its union: it unifies
 with its standalone twin ([identity](../../lattice/src/types/identity.md)). So a
 one-variant `UNION` is the same type as its variant, and is refused where it is
 declared, and a lone variant is no union. The union a construction belongs to
-is a fact of the path that spells it: a construction through a union binder is
-at most the union the path reaches the variant through — `(Maybe.Some 3)` at
-most `Maybe`, `(Shape.Sized.Some 3)` at most `Maybe` where `Sized`'s payload is
-`Maybe`, and a construction through a [family](#families)'s variant at most the
-union applied at what the payload's static upper end pins, each parameter the
-payload says nothing about at `Never` — while the value still carries the
-variant ([static types](../dispatch/README.md#static-types)). So a clause over a
+is a fact of the path that spells it: a construction through a union binder
+lies between what it builds and the union the path reaches the variant
+through — `(Maybe.Some 3)` between `Some` and `Maybe`, `(Shape.Sized.Some 3)`
+between `Some` and `Maybe` where `Sized`'s payload is `Maybe`, and a
+construction through a [family](#families)'s variant at most the union applied
+at what the payload's static upper end pins, each parameter the payload says
+nothing about at `Never` — while the value still carries the variant
+([static types](../dispatch/README.md#static-types)). So a clause over a
 `FOR ALL` name a call binds at such a construction — `PICK (Maybe.Some 3)` over
 `MATCH x UNDER Un` — reads the union, and the check runs under it.
 
@@ -649,8 +654,8 @@ refusal, and a callable's type and registered shape off each builtin shape that
 births one — a bare definition and its combined twin alike — over a program
 shaped and activated on the load's chain, in program storage, with every slot
 bound or left empty as the test asks; [`tests/projections.rs`](tests/projections.rs) reads a record
-field's declared type through an alias, a newtype layer and a chain, and each
-refusal. [`tests/declarations.rs`](tests/declarations.rs) runs the declaration
+field's declared type and a union's variant through an alias, a newtype layer
+and a chain, and each refusal. [`tests/declarations.rs`](tests/declarations.rs) runs the declaration
 door over the same harness: each form it elaborates, each group it seals — a
 ring, a union and a newtype in one component, a ring written in either order
 interning equal — the chaining record a bodyless `GROUP` head declares and the
@@ -698,8 +703,8 @@ every fact through its `TypeContext`.
 
 ## Open work
 
-- [A variant's union in its identity](../../roadmap/gradual-typing/variant-union-identity.md)
-  — a `MATCH … UNDER` clause reading a freshly built variant as its union.
+- [A parameterized union's variant takes only the parameters its payload names](../../roadmap/gradual-typing/variant-parameters.md)
+  — `Result.Error` a family over `Error` alone.
 - [Families as parameters](../../roadmap/rewrite/families-as-parameters.md) —
   higher-kinded head parameters, and a constructor application leaving a
   parameter unpinned.

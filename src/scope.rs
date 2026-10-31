@@ -58,7 +58,7 @@ pub(crate) use records::RecordSource;
 pub(crate) use records::{RIGID_AT_RUN, TERM_PROBES, rigid_at_run};
 pub(crate) use shape::IMPLICIT;
 pub(crate) use signature::{pair_label, traced_quote};
-pub(crate) use spelling::{PathSpelling, SpelledRoot, path_spelling};
+pub(crate) use spelling::{PathSpelling, SpelledRoot, path_spelling, tag_projection};
 
 pub use activation::{Activation, ActivationView, Reading};
 pub use builtins::Builtins;
@@ -80,11 +80,11 @@ pub use settlement_facts::{Activated, Settlement};
 pub use shape::{
     Arm, BodyShape, BuiltinIndex, Candidate, CandidateList, CaptureChain, CaptureSlot,
     CaptureSource, CaptureSpec, Component, ComponentIndex, Coordinate, Guard, Lands, Listed,
-    Located, Mention, MentionClass, Offer, PathId, Position, QuotedPart, Ranking, Registration,
-    Repeated, Scalar, Segment, ShapeError, ShapeKind, Site, Sites, Slot, SpelledPath, SurfacedHead,
-    Target, TopLevel, TypeExpression, Unit, UnitHolds, UnitIndex, UnitWork, ViewRefused, Which,
-    arm_refused, each_part, follow, in_body_of, part_of, selection_refused, source_of, spelled,
-    view_refused,
+    Located, Mention, MentionClass, Offer, PathId, Position, QuotedPart, Ranking, RefusedLine,
+    Registration, Repeated, Scalar, Segment, ShapeError, ShapeKind, Shown, Site, Sites, Slot, Span,
+    SpelledPath, SurfacedHead, Target, TopLevel, TypeExpression, Unit, UnitHolds, UnitIndex,
+    UnitWork, ViewRefused, Which, arm_refused, each_part, follow, in_body_of, part_of,
+    selection_refused, source_of, spelled, view_refused,
 };
 pub use shapes::{BindSite, Code, Origin, Shapes};
 pub use stamp::{Ask, Asked, Level, Sought, Stamp};

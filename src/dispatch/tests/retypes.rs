@@ -177,7 +177,10 @@ fn a_quote_retyped_to_a_code_kind_dispatches_at_it() {
                        PRINT (f {q = #(y)})");
     assert!(
         printed.starts_with("load:")
-            && printed.contains("no overload of `ONLY _` admits (Expression)"),
+            && printed.contains(
+                "no overload of `ONLY _` admits this argument:\n  Expression, which can never \
+                 satisfy Name"
+            ),
         "{printed}"
     );
 }

@@ -384,9 +384,21 @@ pub(super) fn unlocated(error: ShapeError) -> ShapeError {
         E::RankingDisagrees { key, .. } => E::RankingDisagrees { key, at },
         E::NoCandidate { key, .. } => E::NoCandidate { key, at },
         E::Overlaps { key, builtin, .. } => E::Overlaps { key, builtin, at },
-        E::NoAdmittingCandidate { key, arguments, .. } => {
-            E::NoAdmittingCandidate { key, arguments, at }
-        }
+        E::NoAdmittingCandidate {
+            key,
+            arguments,
+            lines,
+            shown,
+            against,
+            ..
+        } => E::NoAdmittingCandidate {
+            key,
+            arguments,
+            lines,
+            shown,
+            against,
+            at,
+        },
         E::NoField { of, field, .. } => E::NoField { of, field, at },
         E::NoMember { of, member, .. } => E::NoMember { of, member, at },
         E::Unlisted { name, .. } => E::Unlisted { name, at },
@@ -427,10 +439,14 @@ pub(super) fn unlocated(error: ShapeError) -> ShapeError {
             at,
         },
         E::CallNeverSatisfied {
-            callee, arguments, ..
+            callee,
+            arguments,
+            parameters,
+            ..
         } => E::CallNeverSatisfied {
             callee,
             arguments,
+            parameters,
             at,
         },
         E::NotCode { value, .. } => E::NotCode { value, at },

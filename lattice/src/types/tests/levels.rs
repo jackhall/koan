@@ -169,6 +169,51 @@ fn a_lexical_variable_with_a_lower_end() {
     );
 }
 
+/// A union keeps a variable beside a member under its lower end, so meets over such contributions
+/// reach equivalent but distinct handles in different orders: the solve must not read them in the
+/// order the slots arrive.
+#[test]
+fn a_solve_over_a_lexical_variable_ignores_slot_order() {
+    let bump = Bump::new();
+    let world = World::new(&bump);
+    let (types, region) = (&world.types, world.region);
+    let lists = types.union_of(region, &[types.list(KType::NUMBER), types.list(KType::STR)]);
+    let item = types
+        .lexical_between(
+            region,
+            0,
+            world.name("Item"),
+            types.list(KType::NUMBER),
+            lists,
+        )
+        .raw();
+    let taking = |param: Handle| world.function(&[], "x", param, KType::NULL.raw());
+    let declared = taking(types.quantified(0, KType::LIST_OF_ANY).raw());
+    let arguments = [
+        taking(types.union_of(region, &[item, KType::NUMBER.raw()])),
+        taking(types.union_of(region, &[item, KType::STR.raw()])),
+        taking(lists.raw()),
+    ];
+    let solve = |order: &mut dyn Iterator<Item = &Handle>| {
+        let mut collector = Collector::<Handle>::new(types, region, &[KType::LIST_OF_ANY]);
+        for argument in order {
+            let admitted = admits(
+                types,
+                region,
+                declared,
+                *argument,
+                Variance::Co,
+                &mut collector,
+            );
+            assert_eq!(admitted, Ok(()));
+        }
+        collector.solve(types).map(|solution| solution.to_vec())
+    };
+    let forward = solve(&mut arguments.iter());
+    assert!(forward.is_ok());
+    assert_eq!(forward, solve(&mut arguments.iter().rev()));
+}
+
 #[test]
 fn no_solve_binds_a_lexical_variable() {
     let bump = Bump::new();
