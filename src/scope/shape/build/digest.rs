@@ -203,6 +203,19 @@ impl<'graph> Walk<'_, 'graph, '_, '_> {
                     self.part(hasher, item.part());
                 }
             }
+            ExpressionPart::Template(template) => {
+                hasher
+                    .tag(Tag::Group)
+                    .feed(part_tag(part))
+                    .count(template.slots.len());
+                for piece in template.pieces.iter() {
+                    hasher.text(piece.as_bytes());
+                }
+                for slot in template.slots.iter() {
+                    hasher.feed(slot.is_kept());
+                    self.part(hasher, slot.part());
+                }
+            }
             ExpressionPart::DictLiteral(pairs) => {
                 hasher
                     .tag(Tag::Group)
@@ -322,6 +335,7 @@ fn part_tag(part: &ExpressionPart<'_>) -> u8 {
         ExpressionPart::ListLiteral(_) => 4,
         ExpressionPart::DictLiteral(_) => 5,
         ExpressionPart::RecordLiteral(_) => 6,
-        _ => 7,
+        ExpressionPart::Template(_) => 7,
+        _ => 8,
     }
 }

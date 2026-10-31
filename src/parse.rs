@@ -40,7 +40,7 @@ use crate::memory::ProgramBrand;
 use crate::source::{self, CurrentFileGuard, FileId, SourceFile};
 use crate::symbols::SymbolInterner;
 
-pub use copy::{Quoted, Remark, copied, remarked, remarked_whole};
+pub use copy::{Quoted, Remark, copied, literal_laid, remarked, remarked_whole};
 pub use depth::MAX_SYNTAX_DEPTH;
 pub use error::ParseError;
 
@@ -48,9 +48,9 @@ pub use error::ParseError;
 /// caller building a node names it through `parse` rather than reaching past it.
 pub use crate::source::{SourceRef, Spanned};
 pub use ast::{
-    DispatchShape, ExpressionKey, ExpressionPart, KExpression, KLiteral, KeyElement, ListItem,
-    Mark, NodeCache, PartClass, PartsSummary, ProgramExpression, Scope, WrittenSlots,
-    classify_dispatch_shape,
+    DispatchShape, ExpressionKey, ExpressionPart, KExpression, KLiteral, KTemplate, KeyElement,
+    ListItem, Mark, NodeCache, PartClass, PartsSummary, ProgramExpression, Scope, TemplateSlot,
+    WrittenSlots, classify_dispatch_shape, template_fields,
 };
 pub use builtin_shapes::binder::{
     BinderBucketFn, BinderNameFn, BinderSurface, BucketKeys, StoredBinderKey,

@@ -23,6 +23,7 @@ use proptest::prelude::*;
 use super::super::atom::classify_token;
 use super::{top, tree};
 use crate::memory::program_storage;
+use crate::parse::ast::TEMPLATE_FIELDS;
 use crate::parse::{DispatchShape, ExpressionPart, KExpression, KLiteral, KeyElement, parse};
 use crate::source::Span;
 use crate::symbols::{Symbol, SymbolInterner, is_keyword_token, is_type_name};
@@ -52,6 +53,9 @@ enum Tree {
     Spread(Box<Tree>),
     Dict(Vec<(Tree, Tree)>),
     Record(Vec<(String, Tree)>),
+    /// A `%"…"` template: its quote, its pieces as read (each `{` or `}` one brace, written
+    /// doubled), and its braces between them, each kept or rendered and holding a run.
+    Template(char, Vec<String>, Vec<(bool, Vec<Tree>)>),
 }
 
 /// A statement is a run of parts; a program is a run of statements.
@@ -132,6 +136,91 @@ fn string() -> impl Strategy<Value = Tree> {
     })
 }
 
+/// A template. Its pieces hold braces and `%` but no quote or backslash, and none ends in `%`
+/// before a rendered brace, where `%{` would open a kept one. A brace's run is drawn as any run
+/// is and then fitted to the quotes around it ([`fitted`]).
+fn template(depth: u32) -> BoxedStrategy<Tree> {
+    let piece = "[a-zé {}%]{0,3}";
+    let brace = (
+        any::<bool>(),
+        prop::collection::vec(value_tree(depth), 1..3),
+    );
+    (
+        prop::sample::select(&['"', '\''][..]),
+        prop::collection::vec((piece, brace), 0..3),
+        piece,
+    )
+        .prop_map(|(quote, braces, last)| {
+            let (mut pieces, mut slots) = (Vec::new(), Vec::new());
+            for (piece, (kept, run)) in braces {
+                pieces.push(match kept {
+                    true => piece,
+                    false => piece.trim_end_matches('%').to_string(),
+                });
+                let run = run
+                    .into_iter()
+                    .map(|item| fitted(item, Some(quote)))
+                    .collect();
+                slots.push((kept, run));
+            }
+            pieces.push(last);
+            Tree::Template(quote, pieces, slots)
+        })
+        .boxed()
+}
+
+/// `item` fitted inside a template delimited by `quote`: a string takes the other quote and
+/// drops every quote from its body, and a nested template takes the other quote too, its braces
+/// holding no string — whose quote would end a template around it — and no template. With no
+/// quote left to take, a string or a template becomes a number.
+fn fitted(item: Tree, quote: Option<char>) -> Tree {
+    let other = quote.map(|quote| if quote == '"' { '\'' } else { '"' });
+    let all = |items: Vec<Tree>| items.into_iter().map(|item| fitted(item, quote)).collect();
+    match item {
+        Tree::Str(_, body) => match other {
+            Some(other) => Tree::Str(other, body.replace(['"', '\'', '\\'], "")),
+            None => Tree::Number(1.0),
+        },
+        Tree::Template(_, pieces, slots) => match other {
+            Some(other) => Tree::Template(
+                other,
+                pieces,
+                slots
+                    .into_iter()
+                    .map(|(kept, run)| {
+                        (
+                            kept,
+                            run.into_iter().map(|item| fitted(item, None)).collect(),
+                        )
+                    })
+                    .collect(),
+            ),
+            None => Tree::Number(1.0),
+        },
+        Tree::Group(items) => Tree::Group(all(items)),
+        Tree::TypeSigil(items) => Tree::TypeSigil(all(items)),
+        Tree::Quote(items) => Tree::Quote(all(items)),
+        Tree::List(items) => Tree::List(all(items)),
+        Tree::Spread(item) => Tree::Spread(Box::new(fitted(*item, quote))),
+        Tree::RecordType(pairs) => Tree::RecordType(
+            (pairs.into_iter())
+                .map(|(left, right)| (fitted(left, quote), fitted(right, quote)))
+                .collect(),
+        ),
+        Tree::Dict(pairs) => Tree::Dict(
+            (pairs.into_iter())
+                .map(|(key, value)| (fitted(key, quote), fitted(value, quote)))
+                .collect(),
+        ),
+        Tree::Record(fields) => Tree::Record(
+            (fields.into_iter())
+                .map(|(name, value)| (name, fitted(value, quote)))
+                .collect(),
+        ),
+        leaf => leaf,
+    }
+}
+
 /// A marked name, `$name` or `\name`.
 fn marked() -> impl Strategy<Value = Tree> {
     (prop::sample::select(&['$', '\\'][..]), binder_name())
@@ -156,6 +245,7 @@ fn literal_tree(depth: u32) -> BoxedStrategy<Tree> {
         1 => dict_pairs(depth - 1).prop_map(Tree::Dict),
         1 => record_fields(depth - 1).prop_map(Tree::Record),
         1 => prop::collection::vec(value_tree(depth - 1), 1..3).prop_map(Tree::Quote),
+        1 => template(depth - 1),
     ]
     .boxed()
 }
@@ -236,6 +326,7 @@ fn value_tree(depth: u32) -> BoxedStrategy<Tree> {
         1 => prop::collection::vec(list_item(depth - 1), 0..3).prop_map(Tree::List),
         1 => dict_pairs(depth - 1).prop_map(Tree::Dict),
         1 => record_fields(depth - 1).prop_map(Tree::Record),
+        1 => template(depth - 1),
     ]
     .boxed()
 }
@@ -452,6 +543,23 @@ fn render_item(item: &Tree, layout: Layout, tape: &mut Tape, out: &mut String) {
             }
             out.push('}');
         }
+        Tree::Template(quote, pieces, slots) => {
+            out.push('%');
+            out.push(*quote);
+            let escaped = |piece: &str| piece.replace('{', "{{").replace('}', "}}");
+            for (piece, (kept, run)) in pieces.iter().zip(slots) {
+                out.push_str(&escaped(piece));
+                out.push_str(if *kept { "%{" } else { "{" });
+                // `{{` is text, so a run opening with a brace is spaced off.
+                if matches!(run[0], Tree::Dict(_) | Tree::Record(_)) || tape.pick(3) == 1 {
+                    out.push(' ');
+                }
+                render_run(run, layout, tape, out);
+                out.push('}');
+            }
+            out.push_str(&escaped(pieces.last().expect("one more piece than braces")));
+            out.push(*quote);
+        }
     }
 }
 
@@ -536,6 +644,15 @@ fn describe_tree(item: &Tree) -> String {
                 .collect::<Vec<_>>()
                 .join(", ")
         ),
+        Tree::Template(_, pieces, slots) => {
+            let mut inner = vec![format!("s({})", pieces[0])];
+            for ((kept, run), piece) in slots.iter().zip(&pieces[1..]) {
+                let sigil = if *kept { "%" } else { "" };
+                inner.push(format!("{sigil}{{{}}}", body_describe(run)));
+                inner.push(format!("s({piece})"));
+            }
+            format!("T[{}]", inner.join(" "))
+        }
     }
 }
 
@@ -708,6 +825,12 @@ fn check_part(part: &ExpressionPart<'_>, span: Span, source: &str, symbols: &Sym
                 check_nested(item.part(), span, source, symbols);
             }
         }
+        ExpressionPart::Template(template) => {
+            assert!(text.starts_with('%'), "got {text:?}");
+            for slot in template.slots.iter() {
+                check_nested(slot.part(), span, source, symbols);
+            }
+        }
         ExpressionPart::DictLiteral(pairs) => {
             assert!(text.starts_with('{') && text.ends_with('}'), "got {text:?}");
             for (key, value) in *pairs {
@@ -766,6 +889,15 @@ fn tree_spellings(item: &Tree, out: &mut BTreeSet<String>) {
                 tree_spellings(value, out);
             }
         }
+        // A kept brace's template is a record, whose field names the parse records.
+        Tree::Template(_, _, slots) => {
+            if slots.iter().any(|(kept, _)| *kept) {
+                out.extend(TEMPLATE_FIELDS.map(str::to_string));
+            }
+            for item in slots.iter().flat_map(|(_, run)| run) {
+                tree_spellings(item, out);
+            }
+        }
     }
 }
 
@@ -791,6 +923,11 @@ fn part_symbols(part: &ExpressionPart<'_>, out: &mut Vec<Symbol>) {
         ExpressionPart::ListLiteral(items) => {
             for item in *items {
                 part_symbols(item.part(), out);
+            }
+        }
+        ExpressionPart::Template(template) => {
+            for slot in template.slots.iter() {
+                part_symbols(slot.part(), out);
             }
         }
         ExpressionPart::DictLiteral(pairs) => {

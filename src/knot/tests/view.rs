@@ -320,12 +320,13 @@ fn a_composed_view_lays_flat_within_its_weight() {
             "LET k = 1\nLET a0 = #(PRINT $k)\nLET l0 = [a0]\nLET a1 = #((g $..l0) (h $..l0))\n\
              LET l1 = [a1]\nLET a2 = #(f $..l1 $k)\nLET fn = #(FN)\nLET sig = #(:{a :Number, b :Str})\n\
              LET arrow = #(->)\nLET any = #(Any)\nLET eq = #(=)\nLET body = #(#(PRINT $k))\n\
-             LET head = [fn, sig, arrow, any, eq, body]\nLET f = #($..head)",
+             LET head = [fn, sig, arrow, any, eq, body]\nLET f = #($..head)\n\
+             LET listed = #([(h $..l0 $k) {a = ($..l1)}])",
         );
         fixture.in_cell(pin, |context| {
             let types = &fixture.tiers.of(context);
             let activation = fixture.run(context.writer(), types, &lines, &[]);
-            for name in ["a1", "a2", "f"] {
+            for name in ["a1", "a2", "f", "listed"] {
                 let view = tree(code(fixture, activation, name));
                 let (storage, scratch) = (program_storage(), Bump::new());
                 let flat = materialized(storage.brand().writer(), view, &scratch);
@@ -419,6 +420,56 @@ fn a_view_digests_as_its_flat_copy() {
                 Value::Knotted(k).digest(types, scratch),
                 Value::Knotted(j).digest(types, scratch)
             );
+        });
+    });
+}
+
+/// A quote composed through literals — a list, a record, a dict with a composing key, a template
+/// with both brace kinds, a nested literal, an element beside a `$k` mark and a group that does not
+/// compose, and a `MATCH` arm — lays flat as its memos say, within its weight, and digests as its
+/// flat copy does.
+#[test]
+fn a_composed_literal_lays_flat_as_its_memos_say() {
+    with_fixture(|fixture| {
+        let lines = fixture.parse(
+            "LET k = 1\nLET p = #(PRINT $k)\nLET ps = [p]\nLET list = #(PRINT [($..ps)])\n\
+             LET record = #({a = ($..ps), b = 2})\nLET dict = #({($..ps): (1 + 1)})\n\
+             LET template = #(%\"a {$..ps} b %{$..ps}\")\nLET nest = #([[($..ps)] [3]])\n\
+             LET beside = #(f [$k ($..ps) (g 1)])\n\
+             LET arm = #(MATCH (42) -> :Str WITH #{Number: ($..ps)})",
+        );
+        fixture.in_cell(pin, |context| {
+            let types = &fixture.tiers.of(context);
+            let writer = context.writer();
+            let activation = fixture.run(writer, types, &lines, &[]);
+            let scratch = fixture.scratch();
+            for name in [
+                "list", "record", "dict", "template", "nest", "beside", "arm",
+            ] {
+                let member = code(fixture, activation, name);
+                let view = tree(member);
+                assert!(view.root().holds_its_laws(), "`{name}`");
+                let laying = Bump::new();
+                let flat = materialized(writer, view, &laying);
+                assert_eq!(view.depth() as usize, flat.body.depth(), "`{name}`");
+                assert_eq!(view.kind(), flat.body.code_kind(), "`{name}`");
+                let laid = flat.body.weight() as usize
+                    + flat.bindings.len()
+                        * size_of::<crate::values::Binding<'_, Knotted<'_, '_>>>();
+                assert!(view.weight().bytes() >= laid, "`{name}`");
+                let copy = crate::knot::composed_code(
+                    writer,
+                    flat.body,
+                    Value::Knotted(member).concrete_ktype(),
+                    &flat.bindings,
+                    types,
+                );
+                assert_eq!(
+                    Value::Knotted(member).digest(types, scratch),
+                    Value::Knotted(copy).digest(types, scratch),
+                    "`{name}`"
+                );
+            }
         });
     });
 }

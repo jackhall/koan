@@ -174,7 +174,8 @@ fn a_splice_is_a_part_of_an_expression() {
 }
 
 /// A splice's operand is a name, and a splice stands nowhere but in an expression: never as a
-/// list item, a brace entry, inside a type expression or a marked use; `\\..` has no reading.
+/// list item, a brace entry, inside a type expression or anywhere under a marked use; `\\..` has no
+/// reading.
 #[test]
 fn a_splice_stands_only_in_an_expression() {
     for (source, says) in [
@@ -189,6 +190,8 @@ fn a_splice_stands_only_in_an_expression() {
         (":(LIST OF $..xs)", "a type expression holds no splice"),
         ("$(f $..xs)", "whose key a splice would leave unknown"),
         ("\\(LET $..xs)", "whose key a splice would leave unknown"),
+        ("$(f ($..xs))", "whose key a splice would leave unknown"),
+        ("$(f [($..xs)])", "whose key a splice would leave unknown"),
     ] {
         let error = top(source).unwrap_err();
         assert!(error.contains(says), "`{source}`: {error}");

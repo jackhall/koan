@@ -189,6 +189,69 @@ Like a slice, a list built this way shares the elements it spreads rather than
 copying them. `..` means nothing outside a list literal's elements: `LENGTH ..xs`
 is a parse error.
 
+## Building strings
+
+A string written with `%` glued in front of its opening quote is a
+**template**. Each `{…}` in it holds an expression, which is evaluated where the
+template is and written into the text as `PRINT` would print it. A brace holds
+one expression, exactly as a pair of parentheses does, and `{{` and `}}` write
+a brace itself:
+
+```koan
+LET name = "Ada"
+LET xs = [1 2]
+PRINT %"Hello, {name}!"
+PRINT %"{xs} has {LENGTH xs} elements"
+PRINT %'{{braces}} and {"quotes"}'
+```
+
+```text
+Hello, Ada!
+[1, 2] has 2 elements
+{braces} and quotes
+```
+
+A string inside a brace takes the other quote, since the template's own quote
+would end it. `%{` always opens a brace of the second kind, below, so a `%`
+just before a brace is written as a string of its own, `{'%'}{n}`.
+
+A program writing text for another language — SQL, HTML, a shell command —
+must treat the values it splices in apart from the text it trusts. A `%{…}`
+brace **keeps** its value apart: a template holding one is a record of
+`strings`, the pieces of text around the kept values, and `values`, the kept
+values in order. A `{…}` brace still renders into the text beside it:
+
+```koan
+LET user = "x'; DROP TABLE users"
+LET query = %"SELECT * FROM users WHERE name = %{user} AND age > %{30}"
+PRINT query.strings
+PRINT query.values
+```
+
+```text
+[SELECT * FROM users WHERE name = ,  AND age > , ]
+[x'; DROP TABLE users, 30]
+```
+
+There is always one more string than value, so a function taking such a record
+can quote or escape each value for its language and interleave the two.
+
+`JOIN` writes a list's elements one after another, each rendered as `PRINT`
+renders it, and `JOIN … BY` puts a separator string between them:
+
+```koan
+PRINT (JOIN ["a" 1 [2]])
+PRINT (JOIN ["red" "green" "blue"] BY ", ")
+```
+
+```text
+a1[2]
+red, green, blue
+```
+
+A string built by a template or by `JOIN` shares the strings it is made from
+rather than copying them, as a slice does.
+
 ## Comparing values with `==` and `!=`
 
 `==` tests whether two values are equal and `!=` whether they differ; both give

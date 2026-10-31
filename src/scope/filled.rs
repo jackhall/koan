@@ -182,6 +182,7 @@ impl<'graph> Locating<'_, 'graph, '_> {
         }
         let item_at = |index: usize| match at {
             Some(ExpressionPart::ListLiteral(items)) => Some(items[index].part()),
+            Some(ExpressionPart::Template(template)) => Some(template.slots[index].part()),
             _ => None,
         };
         match part {
@@ -194,6 +195,11 @@ impl<'graph> Locating<'_, 'graph, '_> {
             ExpressionPart::ListLiteral(items) => {
                 for (index, item) in items.iter().enumerate() {
                     self.part(shape, item.part(), item_at(index), written);
+                }
+            }
+            ExpressionPart::Template(template) => {
+                for (index, slot) in template.slots.iter().enumerate() {
+                    self.part(shape, slot.part(), item_at(index), written);
                 }
             }
             ExpressionPart::DictLiteral(pairs) => {

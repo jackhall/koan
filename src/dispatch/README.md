@@ -33,7 +33,9 @@ The [evaluator](evaluate.rs) reads a node off the shape that holds it — the
 statements the shape owns, [rewritten](../scope/README.md#the-four-rewrites),
 never the parse — as one of:
 
-- a **leaf**: a literal, lowered; a name, read through its mention's
+- a **leaf**: a literal, lowered, its strings sharing the program's text where
+  the code is as the program wrote it and copied into the region in composed
+  code; a name, read through its mention's
   coordinate — at an [instance site](#static-types) the load recorded, made
   into the instance through the knot's
   [instance door](../knot/README.md#an-instance); a quote, born through the [quote door](../knot/README.md#a-quote);
@@ -45,7 +47,12 @@ never the parse — as one of:
   its parts' values — a list or dict literal the load types exactly built at
   that type, so the run fills nothing the load filled, and a list literal with
   a spread item, `..xs`, built as a [view](../values/README.md#views)
-  concatenating each spread list and the runs of items between them;
+  concatenating each spread list and the runs of items between them; a
+  [template](../parse/README.md#templates), lowered when it has no brace and
+  otherwise built from its braces' values: its text with each rendered brace's
+  value spliced in as `PRINT` renders it, a string [view](../values/README.md#views)
+  over its pieces and those texts, or, where a brace keeps its value, the record
+  of the n + 1 strings around the kept values and those values;
 - a **block** a pairwise operator run hoisted an operand into, run through the
   program's block door, whose value is its last statement's — which is how the
   shared operand evaluates once;
@@ -149,6 +156,9 @@ overload ranks its slots in written order.
   answers code already built unchanged ([building code](../scope/README.md#building-code)).
   Its rule answers `[Never, upper]` of its operand's interval, since built code
   lies under the code it was built from.
+- `JOIN` over a list, returning a `Str`: its elements, each rendered as `PRINT`
+  renders it, spliced into one string [view](../values/README.md#views), and
+  `JOIN … BY` over a list and a `Str`, the separator spliced between them.
 - The overloads of the [builtin expression shapes](../parse/README.md#the-builtin-shape-table-one-typed-entry-every-fact)
   whose slots dispatch evaluates, typed as their entries type them: `ATTR` over a
   record or a tagged value over one, reading through every tagged layer at the
@@ -294,7 +304,11 @@ fixed:
   the upper end holds the plain union of its elements' upper ends, which the
   fill only narrows, and the lower end the plain union of their lower ends, each
   one that may hold a record read as `Never`; a dict's keys are the union of its
-  keys' ends either way;
+  keys' ends either way. A [template](../parse/README.md#templates) with no
+  kept brace is exactly `Str`, whatever its rendered braces are, and one with a
+  kept brace the record `{strings :(LIST OF Str), values :(LIST OF …)}`, its
+  `values` list typed from the kept braces as a list literal's from its
+  elements;
 - a name has its binder's static type: a parameter is exactly its declared type
   where the retype makes it so — a list or dict type, a record type with no
   field `Null` lies strictly under (one with such a field is at least itself
@@ -1192,11 +1206,20 @@ several, each element keeping its bindings, a quote part beside a splice bound
 where it is written, the load's and the birth's refusals, the depth limit,
 a loop growing code in O(n log n) region bytes, `BUILD` and the unbuilt type,
 and `USING`'s filled marks surviving a splice and never rebound;
-[spreads](tests/spreads.rs) — a spread literal's elements and static
+[literal splices](tests/literal_splices.rs) — a splice in a group a list, dict
+or record literal's element or a template's brace holds, or in a written arm in
+`#{…}`, composing as in a paren group at its level, with its bindings, under
+the load's and the birth's refusals and the depth limit, and refused anywhere
+under a marked use; [spreads](tests/spreads.rs) — a spread literal's elements and static
 type, a spread refused at load and faulting at run, a quote spreading a
 list unequal to one holding it, a recursive list spreading lists from outside
 its group and fellow members, a spread cycle and a spread of no list refusing
-the group, and a recursive list's view crossing out of its frame; [selection](tests/selection.rs) — every ranking example, ambiguity within and
+the group, and a recursive list's view crossing out of its frame;
+[templates](tests/templates.rs) — rendered and kept braces, a consumer selecting
+on the kept values' types, the load typing a template as `Str` or its record,
+a brace's names read where the template is, a quoted template filled by
+`USING`, a template read and keyed as its string, and `JOIN` with and without
+`BY`; [selection](tests/selection.rs) — every ranking example, ambiguity within and
 across scopes at load and at run, the no-overload miss at load and at run, fall-through, builtin
 tie-wins, shadowed `==` and `PRINT`, the overlap refusal at load and at `EVAL`,
 and a quantified candidate that may admit whose carried solve fails;

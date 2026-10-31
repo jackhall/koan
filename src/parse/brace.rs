@@ -109,6 +109,7 @@ fn is_dict_key_start_part(part: &ExpressionPart<'_>) -> bool {
             ExpressionPart::Identifier(_)
                 | ExpressionPart::Type(_)
                 | ExpressionPart::Literal(_)
+                | ExpressionPart::Template(_)
                 | ExpressionPart::Expression(_)
                 | ExpressionPart::QuotedExpression(_)
                 | ExpressionPart::ListLiteral(_)

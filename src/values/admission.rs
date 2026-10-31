@@ -12,7 +12,7 @@
 //! behind their barriers, see the payload.
 
 use crate::memory::{Bump, BumpAllocator, BumpVec};
-use crate::parse::{ExpressionPart, KLiteral, ListItem};
+use crate::parse::{ExpressionPart, KLiteral, ListItem, template_fields};
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::{
     Collector, DeclaredType, KKind, KType, NodeSchema, Parametric, TypeHandle, TypeNode, Variance,
@@ -227,6 +227,16 @@ pub fn part_ktype(
                 .iter()
                 .map(|item| item.as_part().map_or(KType::ANY, element)),
         ),
+        // A brace's value is unknown before it evaluates.
+        ExpressionPart::Template(template) if template.kept() => {
+            let [strings, values] = template_fields();
+            let fields = [
+                (strings, list_type(types, scratch, [KType::STR].into_iter())),
+                (values, list_type(types, scratch, [KType::ANY].into_iter())),
+            ];
+            record_type(types, scratch, fields.into_iter())
+        }
+        ExpressionPart::Template(_) => KType::STR,
         ExpressionPart::DictLiteral(pairs) => dict_type(
             types,
             scratch,
@@ -390,6 +400,7 @@ fn admits_part_at(
             part,
             ExpressionPart::Literal(_)
                 | ExpressionPart::ListLiteral(_)
+                | ExpressionPart::Template(_)
                 | ExpressionPart::DictLiteral(_)
                 | ExpressionPart::RecordLiteral(_)
         ),
@@ -413,7 +424,11 @@ fn admits_part_at(
             part.code_kind().is_some_and(|part| part.within_code(kind))
         }
         TypeNode::Number => matches!(part, ExpressionPart::Literal(KLiteral::Number(_))),
-        TypeNode::Str => matches!(part, ExpressionPart::Literal(KLiteral::String(_))),
+        TypeNode::Str => match part {
+            ExpressionPart::Literal(KLiteral::String(_)) => true,
+            ExpressionPart::Template(template) => !template.kept(),
+            _ => false,
+        },
         TypeNode::Bool => matches!(part, ExpressionPart::Literal(KLiteral::Boolean(_))),
         TypeNode::Null => matches!(part, ExpressionPart::Literal(KLiteral::Null)),
         TypeNode::List { element } => {

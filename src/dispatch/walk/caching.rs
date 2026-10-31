@@ -10,7 +10,7 @@
 //! are the text's.
 
 use crate::memory::{BumpVec, collect};
-use crate::parse::{ExpressionPart, ListItem};
+use crate::parse::{ExpressionPart, ListItem, TemplateSlot};
 use crate::scope::{
     Binder, Coordinate, Deps, DepsGathering, Segment, ShapeKind, Site, SiteDeps, Slot, Store, Tree,
     tree_deps,
@@ -131,6 +131,9 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 }
                 ExpressionPart::ListLiteral(items) => {
                     parts.extend(items.iter().map(ListItem::part))
+                }
+                ExpressionPart::Template(template) => {
+                    parts.extend(template.slots.iter().map(TemplateSlot::part))
                 }
                 ExpressionPart::DictLiteral(pairs) => {
                     parts.extend(pairs.iter().flat_map(|(key, value)| [key, value]));

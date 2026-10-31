@@ -130,6 +130,17 @@ fn the_load_refuses_a_splice_outside_a_quote_or_of_no_code() {
         "load: <test>:2:17: `$..` splices a list of code, and this value is :(LIST OF Number), \
          which can never be one"
     );
+    // Under a literal's element or a template's brace, as in a paren group.
+    assert_eq!(
+        run("LET xs = [1 2]\nLET q = #(PRINT [($..xs)])"),
+        "load: <test>:2:19: `$..` splices a list of code, and this value is :(LIST OF Number), \
+         which can never be one"
+    );
+    assert_eq!(
+        run("LET xs = [1 2]\nLET q = #(%\"{$..xs}\")"),
+        "load: <test>:2:14: `$..` splices a list of code, and this value is :(LIST OF Number), \
+         which can never be one"
+    );
 }
 
 /// R8: a quote holding a splice is composed when it is born, so it cannot wait on its binder.
@@ -144,15 +155,17 @@ fn a_splice_naming_a_fellow_member_is_refused() {
 
 #[test]
 fn a_splice_of_no_list_or_of_no_code_is_an_error_value() {
-    let splicer = "LET f = (FN :{x :Any} -> Any = #(#(PRINT $..x)))\n";
-    assert_eq!(
-        run(&format!("{splicer}PRINT (f {{x = 5}})")),
-        "error: `$..` splices a list of code, and Number is none"
-    );
-    assert_eq!(
-        run(&format!("{splicer}PRINT (f {{x = [1]}})")),
-        "error: a spliced element is no code: Number"
-    );
+    for splice in ["$..x", "[($..x)]"] {
+        let splicer = format!("LET f = (FN :{{x :Any}} -> Any = #(#(PRINT {splice})))\n");
+        assert_eq!(
+            run(&format!("{splicer}PRINT (f {{x = 5}})")),
+            "error: `$..` splices a list of code, and Number is none"
+        );
+        assert_eq!(
+            run(&format!("{splicer}PRINT (f {{x = [1]}})")),
+            "error: a spliced element is no code: Number"
+        );
+    }
 }
 
 #[test]
@@ -177,7 +190,7 @@ fn nested(n: usize) -> String {
 }
 
 /// `check` run on the stack the interpreter sizes for syntax at the depth limit.
-fn on_its_stack(check: fn()) {
+pub(super) fn on_its_stack(check: fn()) {
     std::thread::Builder::new()
         .stack_size(crate::program::STACK_BYTES)
         .spawn(check)
@@ -186,7 +199,8 @@ fn on_its_stack(check: fn()) {
         .expect("runs within the stack");
 }
 
-const TOO_DEEP: &str = "error: composed code nests deeper than the syntax depth limit of 1024";
+pub(super) const TOO_DEEP: &str =
+    "error: composed code nests deeper than the syntax depth limit of 1024";
 
 #[test]
 fn composing_past_the_depth_limit_is_an_error_value() {

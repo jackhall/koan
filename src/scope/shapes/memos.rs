@@ -264,6 +264,11 @@ pub(super) fn own_nodes<'graph>(
                     walk_part(shape, item.part(), visit);
                 }
             }
+            ExpressionPart::Template(template) => {
+                for slot in template.slots.iter() {
+                    walk_part(shape, slot.part(), visit);
+                }
+            }
             ExpressionPart::DictLiteral(pairs) => {
                 for (key, value) in pairs.iter() {
                     walk_part(shape, key, visit);

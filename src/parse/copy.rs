@@ -9,16 +9,17 @@
 //! it came from and in the copy. The remark may also fill: mark a name filled, or hold a node under
 //! a filled use, as a `USING` does ([knot/code.rs](../knot/code.rs)). A code view's materializer lays its stretches this way
 //! ([knot/view.rs](../knot/view.rs)), which is also why a part copied on its own is told whether
-//! its slot is read as written before and now.
+//! its slot is read as written before and now, and it lays a literal whose elements composed
+//! through the same rebuild a copy does ([`literal_laid`]).
 //! Modeled on the shape builder's rewrite walk (`scope/shape/build/rewrite.rs`), which copies only
 //! the path to a change and never enters a quote; this copies everything.
 
-use crate::memory::{Bump, BumpVec, Writer, collect};
+use crate::memory::{Bump, BumpVec, Writer, collect, resident};
 use crate::source::Spanned;
 
 use crate::symbols::{BinderSymbol, KeySymbol};
 
-use super::{ExpressionPart, KExpression, KLiteral, ListItem, Mark, Scope};
+use super::{ExpressionPart, KExpression, KLiteral, KTemplate, ListItem, Mark, Scope};
 
 /// Where a copied part stands: whether a quote value lies between the copy's root and it in the
 /// syntax it came from, and in the copy.
@@ -96,6 +97,60 @@ pub fn remarked<'a>(
         remark,
     }
     .part(part, written, at)
+}
+
+/// `literal`, a list, dict or record literal or a template, laid through `writer`, each element
+/// laid by `element`, which is handed each stored element in [`ExpressionPart::child`]'s order —
+/// a reference into the literal's own storage, so its address names the element.
+pub fn literal_laid<'a, 'p>(
+    writer: Writer<'a, '_>,
+    scratch: &Bump,
+    literal: &ExpressionPart<'p>,
+    element: &mut dyn FnMut(&ExpressionPart<'p>) -> ExpressionPart<'a>,
+) -> ExpressionPart<'a> {
+    match literal {
+        ExpressionPart::ListLiteral(items) => {
+            let mut run = BumpVec::with_capacity_in(items.len(), scratch);
+            for item in items.iter() {
+                run.push(match item {
+                    ListItem::Part(part) => ListItem::Part(element(part)),
+                    ListItem::Spread(part) => ListItem::Spread(element(part)),
+                });
+            }
+            ExpressionPart::ListLiteral(collect(writer, run.iter().copied()))
+        }
+        ExpressionPart::Template(template) => {
+            let mut slots = BumpVec::with_capacity_in(template.slots.len(), scratch);
+            for slot in template.slots.iter() {
+                slots.push(slot.with(element(slot.part())));
+            }
+            let mut pieces = BumpVec::with_capacity_in(template.pieces.len(), scratch);
+            pieces.extend(template.pieces.iter().map(|piece| writer.text(piece)));
+            ExpressionPart::Template(resident(
+                writer,
+                KTemplate {
+                    pieces: collect(writer, pieces.iter().copied()),
+                    slots: collect(writer, slots.iter().copied()),
+                },
+            ))
+        }
+        ExpressionPart::DictLiteral(pairs) => {
+            let mut run = BumpVec::with_capacity_in(pairs.len(), scratch);
+            for (key, value) in pairs.iter() {
+                let key = element(key);
+                run.push((key, element(value)));
+            }
+            ExpressionPart::DictLiteral(collect(writer, run.iter().copied()))
+        }
+        ExpressionPart::RecordLiteral(pairs) => {
+            let mut run = BumpVec::with_capacity_in(pairs.len(), scratch);
+            for (name, value) in pairs.iter() {
+                run.push((*name, element(value)));
+            }
+            ExpressionPart::RecordLiteral(collect(writer, run.iter().copied()))
+        }
+        _ => unreachable!("a literal is a list, dict or record literal or a template"),
+    }
 }
 
 /// One copy's destination writer, the scratch its runs gather in, and its remark.
@@ -187,31 +242,16 @@ impl<'a> Copier<'a, '_, '_, '_> {
                 self.node(node, at),
             ),
             ExpressionPart::Splice(name) => ExpressionPart::Splice(*name),
-            // A literal's items stand in its slot, read as it is.
-            ExpressionPart::ListLiteral(items) => {
-                let mut run = BumpVec::with_capacity_in(items.len(), self.scratch);
-                for item in items.iter() {
-                    run.push(match item {
-                        ListItem::Part(part) => ListItem::Part(self.part(part, written, at)),
-                        ListItem::Spread(part) => ListItem::Spread(self.part(part, written, at)),
-                    });
-                }
-                ExpressionPart::ListLiteral(collect(writer, run.iter().copied()))
-            }
-            ExpressionPart::DictLiteral(pairs) => {
-                let mut run = BumpVec::with_capacity_in(pairs.len(), self.scratch);
-                for (key, value) in pairs.iter() {
-                    let key = self.part(key, written, at);
-                    run.push((key, self.part(value, written, at)));
-                }
-                ExpressionPart::DictLiteral(collect(writer, run.iter().copied()))
-            }
-            ExpressionPart::RecordLiteral(pairs) => {
-                let mut run = BumpVec::with_capacity_in(pairs.len(), self.scratch);
-                for (name, value) in pairs.iter() {
-                    run.push((*name, self.part(value, written, at)));
-                }
-                ExpressionPart::RecordLiteral(collect(writer, run.iter().copied()))
+            // A literal's items stand in its slot, read as it is. Spelled out, not a guard on
+            // `is_literal`, so the match stays exhaustive with no `_` arm.
+            literal @ (ExpressionPart::ListLiteral(_)
+            | ExpressionPart::Template(_)
+            | ExpressionPart::DictLiteral(_)
+            | ExpressionPart::RecordLiteral(_)) => {
+                let scratch = self.scratch;
+                literal_laid(writer, scratch, literal, &mut |element| {
+                    self.part(element, written, at)
+                })
             }
             ExpressionPart::Literal(literal) => ExpressionPart::Literal(match literal {
                 KLiteral::Number(number) => KLiteral::Number(*number),

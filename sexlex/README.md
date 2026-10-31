@@ -70,7 +70,10 @@ The tree **borrows the source it was read from**: an atom is a `&'s str` into
 the input, a string body is the bytes between the quotes untouched, and every
 span is a byte range into that same text. So reading allocates the tree and
 nothing else, and the language above can hold the borrow for as long as it holds
-the source. Escape processing is deliberately *not* done here — `body` is raw,
+the source. `read_at(text, base)` reads a slice of a larger source starting at
+byte `base` as `read` reads a source, with every span — an error's and its
+opener's included — shifted by `base`, so a language that finds a nested source
+inside a string can read it with spans indexing the whole file. Escape processing is deliberately *not* done here — `body` is raw,
 because what `\n` means is vocabulary.
 
 A group's span covers its whole extent: a bracketed group from opener through
@@ -189,7 +192,8 @@ The rules are pinned two ways, in [src/tests](src/tests.rs):
   layouts* — closer placement, body indentation depth, bracket line breaks, comma
   continuations, blank lines — and checks three laws: the tree reads back
   unchanged (layout never changes structure), every span slices to its own text,
-  and any unbalancing edit is rejected.
+  and any unbalancing edit is rejected. A fourth checks `read_at` against
+  `read` with every span shifted.
 
 The first law is the crate's whole contract stated as a property, and the third
 is what makes the error set's totality checkable rather than asserted.

@@ -23,6 +23,9 @@ fn a_node_is_one_deeper_than_its_deepest_part() {
     assert_eq!(depths("PRINT #((1))"), Ok(vec![3]));
     assert_eq!(depths("PRINT {1: [2]}"), Ok(vec![3]));
     assert_eq!(depths("PRINT {a = [2]}"), Ok(vec![3]));
+    // A template is one deeper than its deepest brace, whose node holds `[1]`.
+    assert_eq!(depths("PRINT %'a'"), Ok(vec![2]));
+    assert_eq!(depths("PRINT %'{1} {[1]}'"), Ok(vec![4]));
 }
 
 #[test]

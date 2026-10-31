@@ -105,6 +105,21 @@ EVAL (greet USING {name = "bob"}) -> Str
 bob
 ```
 
+A [template](02-values-and-types.md#building-strings)'s braces follow the same
+rules, so a quoted template is one you fill in later: its plain names are
+holes `USING` fills, a `$` name binds where the quote is written, and the
+`EVAL` that runs it gives back the string:
+
+```koan
+LET x = 7
+LET greet = #(%"Hi {name}, from {$x}")
+PRINT (EVAL (greet USING {name = "bob"}) -> Str)
+```
+
+```text
+Hi bob, from 7
+```
+
 The third mark, `\`, lets the code that runs a quote supply a name; see
 [code parameters](#asking-for-names-a-quote-needs) below. A `$` or `\` means
 something only inside a quote, and one written anywhere else is refused before
@@ -381,10 +396,23 @@ f (1 + 2) 3
 ```
 
 Each piece keeps the `$` bindings its own quote gave it, and a binder in one
-piece fills a hole in another, as if they had been written together. A splice
-stands only among a quote's parts: an element that is not code is an error, and
-so is a splice in a list literal, a type or a `$(…)`. To spread a list's
-*value* when the code runs, write `..$xs` in a list literal inside the quote:
+piece fills a hole in another, as if they had been written together. A
+parenthesized group splices the same way wherever it is written, even as a list
+literal's element or as a template's brace:
+
+```koan
+LET parts = [#(1 + 2)]
+PRINT (EVAL #(%"sum {$..parts}") -> Str)
+```
+
+```text
+sum 3
+```
+
+A splice stands only among a quote's parts: an element that is not code is an
+error, and so is a splice written straight into a list literal, or anywhere in a
+type or a `$(…)`. To spread a list's *value* when the code runs, write `..$xs`
+in a list literal inside the quote:
 
 ```koan
 LET xs = [1 2]

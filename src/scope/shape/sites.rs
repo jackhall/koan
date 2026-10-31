@@ -196,6 +196,10 @@ impl<'graph> Numbering<'graph, '_> {
             ExpressionPart::ListLiteral(items) => {
                 items.iter().for_each(|item| self.part(item.part()))
             }
+            ExpressionPart::Template(template) => template
+                .slots
+                .iter()
+                .for_each(|slot| self.part(slot.part())),
             ExpressionPart::DictLiteral(pairs) => {
                 for (key, value) in pairs.iter() {
                     self.part(key);

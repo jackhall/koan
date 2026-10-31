@@ -283,6 +283,13 @@ fn part_equal(left: &ExpressionPart<'_>, right: &ExpressionPart<'_>) -> bool {
                         _ => false,
                     })
         }
+        (Part::Template(left), Part::Template(right)) => {
+            left.pieces == right.pieces
+                && left.slots.len() == right.slots.len()
+                && (left.slots.iter().zip(right.slots.iter())).all(|(left, right)| {
+                    left.is_kept() == right.is_kept() && part_equal(left.part(), right.part())
+                })
+        }
         (Part::DictLiteral(left), Part::DictLiteral(right)) => {
             left.len() == right.len()
                 && left.iter().zip(right.iter()).all(|(left, right)| {

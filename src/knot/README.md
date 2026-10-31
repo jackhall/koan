@@ -411,7 +411,8 @@ an AVL tree of items, on [the tree list views use](../values/README.md#views),
 each item a stretch of a flat node's parts, read forward or backward, beside
 the **env** its root-owned marks resolve through — the code value it came from,
 or a composing quote's own run — or one group or builtin-read quote part whose
-node is itself a view. Every tree node memoizes its subtree's count of parts,
+node is itself a view, or one literal part of a flat node beside a view for
+each of its elements that composed. Every tree node memoizes its subtree's count of parts,
 count of parts that are no group, deepest part and weight, so a splice, a read,
 `LENGTH`, the view's kind and its depth each cost the logarithm of the code's
 size, and a stretch is priced from a prefix of its parts' stored weights, laid
@@ -441,7 +442,12 @@ equals, prints and digests as its flat form.
 The **composer** a composing quote is born through visits each part of the
 written quote once: a node none of whose owned parts splices answers nothing
 and stays a stretch of its parent, and a node that does becomes a view whose
-stretches are its own parts between the parts that compose.
+stretches are its own parts between the parts that compose. It descends a list,
+dict or record literal or a template as each owned part's walk does: a literal
+part composes where a group one of its elements holds does, or a quote there a
+builtin reads as written, a nested literal's elements included, and the
+materializer lays the literal as written with each such element laid from its
+view.
 
 ## Closure bindings and edges
 

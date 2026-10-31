@@ -53,6 +53,9 @@ fn within_part(part: &ExpressionPart<'_>, here: SourceRef, address: usize) -> Op
         ExpressionPart::ListLiteral(items) => items
             .iter()
             .find_map(|item| within_part(item.part(), here, address)),
+        ExpressionPart::Template(template) => {
+            (template.slots.iter()).find_map(|slot| within_part(slot.part(), here, address))
+        }
         ExpressionPart::DictLiteral(pairs) => pairs.iter().find_map(|(key, value)| {
             within_part(key, here, address).or_else(|| within_part(value, here, address))
         }),
@@ -94,6 +97,9 @@ fn part_in<'a>(part: &'a ExpressionPart<'a>, address: usize) -> Option<&'a Expre
         ExpressionPart::ListLiteral(items) => {
             (items.iter()).find_map(|item| part_in(item.part(), address))
         }
+        ExpressionPart::Template(template) => {
+            (template.slots.iter()).find_map(|slot| part_in(slot.part(), address))
+        }
         ExpressionPart::DictLiteral(pairs) => pairs
             .iter()
             .find_map(|(key, value)| part_in(key, address).or_else(|| part_in(value, address))),
@@ -133,6 +139,11 @@ fn each_part_in<'a>(part: &'a ExpressionPart<'a>, visit: &mut impl FnMut(&'a Exp
         ExpressionPart::ListLiteral(items) => {
             for item in items.iter() {
                 each_part_in(item.part(), visit);
+            }
+        }
+        ExpressionPart::Template(template) => {
+            for slot in template.slots.iter() {
+                each_part_in(slot.part(), visit);
             }
         }
         ExpressionPart::DictLiteral(pairs) => {

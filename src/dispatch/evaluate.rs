@@ -68,7 +68,9 @@ use crate::knot::{KValue, Knotted, flattened, instance, lambda, quote, refused_c
 use crate::memory::{Active, Bump, BumpAllocator, BumpVec, Writer, collect, resident};
 use crate::parse::BuiltinShapeId;
 use crate::parse::Role;
-use crate::parse::{ExpressionPart, KExpression, ListItem};
+use crate::parse::{
+    ExpressionPart, KExpression, KLiteral, KTemplate, ListItem, TemplateSlot, template_fields,
+};
 use crate::program::{
     CallKind, Contract, Evaluated, Exit, Handed, KBirth, KBundle, KState, Passing, block,
     called_function, seek, surfaced_block,
@@ -81,13 +83,13 @@ use crate::scope::{
     AtRun, BodyShape, CandidateList, CandidateRoute, Coordinate, Elaboration, Elimination,
     HandedTo, InstanceRead, Located, Narrowing, ParameterBinding, ShapeKind, Site, StaticType,
 };
-use crate::symbols::{BinderSymbol, Symbol};
+use crate::symbols::{BinderSymbol, Symbol, SymbolInterner};
 use crate::type_lattice::{KType, TypeNode, Verdict};
 #[cfg(debug_assertions)]
 use crate::type_lattice::{bound_above, lower_end_outside, satisfied_by};
 use crate::values::{
-    Chain, Circular, Dict, Key, List, PathSegment, Piece, Record, Tagged, TypeValue, Value,
-    satisfies,
+    Chain, Circular, Concatenation, Dict, Key, List, PathSegment, Piece, Record, Tagged, Text,
+    TypeValue, Value, satisfies,
 };
 
 use super::builtins::{self, Native};
@@ -401,6 +403,7 @@ fn leaf<'step, 'graph, 'here>(
             finish(step, at, value)
         }
         ExpressionPart::ListLiteral(_)
+        | ExpressionPart::Template(_)
         | ExpressionPart::DictLiteral(_)
         | ExpressionPart::RecordLiteral(_) => container(step, at, part, stage),
         ExpressionPart::Keyword(_)
@@ -760,18 +763,17 @@ fn spread<'step, 'graph, 'here>(
     })
 }
 
-/// A list, dict or record literal: lowered whole when every part is a literal, and otherwise built
-/// from its parts' values.
+/// A list, dict or record literal or a template: lowered whole when every part is a literal, and
+/// otherwise built from its parts' values.
 fn container<'step, 'graph, 'here>(
     mut step: Taking<'_, 'graph, '_, 'here, '_, '_>,
     at: &Evaluation<'step, 'graph, 'here, '_, '_, '_>,
     part: &'step ExpressionPart<'step>,
     stage: u32,
 ) -> Action<'graph, KBundle> {
-    let types = &at.types;
     let scratch = Bump::new();
     if stage == BORN
-        && let Some(value) = Value::lower_part(step.writer(), part, types, &scratch)
+        && let Some(value) = lowered(step.writer(), at, part, &scratch)
     {
         return finish(step, at, value);
     }
@@ -788,7 +790,15 @@ fn container<'step, 'graph, 'here>(
         ExpressionPart::RecordLiteral(fields) => {
             wanted.extend(fields.iter().map(|(_, value)| Wanted::Evaluated(value)));
         }
-        _ => unreachable!("a container is a list, dict or record literal"),
+        ExpressionPart::Template(template) => {
+            wanted.extend(
+                template
+                    .slots
+                    .iter()
+                    .map(|slot| Wanted::Evaluated(slot.part())),
+            );
+        }
+        _ => unreachable!("a container is a list, dict or record literal or a template"),
     }
     let operands = match gathered(&mut step, at, &wanted, built(at), stage, &scratch) {
         Gathered::Ready(operands) => operands,
@@ -819,6 +829,14 @@ fn container<'step, 'graph, 'here>(
         .value_type(&at.types, shape, shape.site(part)))
     .filter(|typed| typed.is_exact())
     .and_then(|typed| at.types.concrete(typed.upper));
+    let symbols = at.program.symbols();
+    let written = match part {
+        ExpressionPart::Template(_) => match written_part(at, part) {
+            Some(ExpressionPart::Template(template)) => Some(template.pieces),
+            _ => None,
+        },
+        _ => None,
+    };
     finish_built(step, at, &parts, |writer, types, values| {
         let scratch = Bump::new();
         let decided = decided.filter(|ktype| types.resolves(*ktype));
@@ -855,9 +873,69 @@ fn container<'step, 'graph, 'here>(
                 named.extend((fields.iter().map(|(name, _)| *name)).zip(values.iter().copied()));
                 Value::Record(Record::new(writer, &named, types, &scratch))
             }
-            _ => unreachable!("a container is a list, dict or record literal"),
+            ExpressionPart::Template(template) => {
+                templated(writer, types, symbols, template, written, values)
+            }
+            _ => unreachable!("a container is a list, dict or record literal or a template"),
         }
     })
+}
+
+/// What `template` evaluates to over its braces' `values`: its text with each rendered brace's value
+/// spliced in as `PRINT` renders it, or, where a brace keeps its value, the record of the strings
+/// around the kept values and those values. Each string is a view over its parts; `written` is
+/// the template's pieces where the load holds them, shared rather than copied.
+fn templated<'graph, 'their>(
+    writer: Writer<'their, '_>,
+    types: &Chain<'_, 'their, '_, '_>,
+    symbols: &SymbolInterner,
+    template: &KTemplate<'_>,
+    written: Option<&'graph [&'graph str]>,
+    values: &[KValue<'graph, 'their>],
+) -> KValue<'graph, 'their> {
+    let scratch = Bump::new();
+    let (mut strings, mut kept) = (BumpVec::new_in(&scratch), BumpVec::new_in(&scratch));
+    let mut text = Concatenation::new();
+    // A piece is shared where the load holds it; composed code may die first, so its pieces are
+    // written into the region the string lands in.
+    let piece = |at: usize| match (written, template.pieces[at]) {
+        (Some(pieces), _) => Text::Flat(pieces[at]),
+        (None, "") => Text::Flat(""),
+        (None, piece) => Text::Flat(writer.text(piece)),
+    };
+    text.push(writer, &scratch, piece(0));
+    for (index, (slot, value)) in template.slots.iter().zip(values).enumerate() {
+        match slot {
+            TemplateSlot::Rendered(_) => {
+                text.push(
+                    writer,
+                    &scratch,
+                    value.rendered_text(writer, types, symbols, &scratch),
+                );
+            }
+            TemplateSlot::Kept(_) => {
+                strings.push(std::mem::take(&mut text).finish(writer));
+                kept.push(*value);
+            }
+        }
+        text.push(writer, &scratch, piece(index + 1));
+    }
+    if kept.is_empty() {
+        return text.finish(writer);
+    }
+    strings.push(text.finish(writer));
+    let [strings_field, values_field] = template_fields();
+    let fields = [
+        (
+            strings_field,
+            Value::List(List::new(writer, strings.iter().copied(), types, &scratch)),
+        ),
+        (
+            values_field,
+            Value::List(List::new(writer, kept.iter().copied(), types, &scratch)),
+        ),
+    ];
+    Value::Record(Record::new(writer, &fields, types, &scratch))
 }
 
 /// A keyworded call: its slots evaluated, a candidate selected, and the builtin's native run or the
@@ -1465,8 +1543,8 @@ fn carried_under_static<'step, 'graph, 'here>(
     };
     let facts = at.view.facts();
     let expected = match node {
-        Evaluated::Part(site) => facts.value_type(&at.types, shape, site),
-        Evaluated::Statement(index) => facts.statement_type(&at.types, shape, index as usize),
+        Evaluated::Part(site) => facts.value_type(types, shape, site),
+        Evaluated::Statement(index) => facts.statement_type(types, shape, index as usize),
     };
     let Some(expected) = expected else {
         return;
@@ -1482,6 +1560,35 @@ fn carried_under_static<'step, 'graph, 'here>(
         ) && !lower_end_outside(types, &scratch, expected, carried),
         "the carried type lies within the load-time static type"
     );
+}
+
+/// `part` lowered straight to a value, as [`Value::lower_part`] lowers it, its strings sharing
+/// the program's text where the code is as written.
+fn lowered<'graph, 'here>(
+    writer: Writer<'here, '_>,
+    at: &Evaluation<'_, 'graph, 'here, '_, '_, '_>,
+    part: &ExpressionPart<'_>,
+    scratch: &Bump,
+) -> Option<KValue<'graph, 'here>> {
+    // A scalar has no text to share, and a part that does not lower has nothing to find.
+    let shares = match part {
+        ExpressionPart::Literal(literal) => matches!(literal, KLiteral::String(_)),
+        _ => KValue::lowers(part),
+    };
+    match shares.then(|| written_part(at, part)).flatten() {
+        Some(part) => Value::lower_shared(writer, part, &at.types, scratch),
+        None => Value::lower_part(writer, part, &at.types, scratch),
+    }
+}
+
+/// `part` where the load holds it, which outlives every region, so a value may share its text;
+/// `None` in composed code.
+fn written_part<'graph>(
+    at: &Evaluation<'_, 'graph, '_, '_, '_, '_>,
+    part: &ExpressionPart<'_>,
+) -> Option<&'graph ExpressionPart<'graph>> {
+    let written = (at.program).written_under(at.view.facts(), at.within.root);
+    written.part(at.view.segment(), part)
 }
 
 /// Whether `part` is read in place rather than asked for.
@@ -1505,9 +1612,7 @@ fn in_place<'step, 'graph, 'here>(
     let writer = step.writer();
     let types = &at.types;
     match part {
-        ExpressionPart::Literal(_) => {
-            Value::lower_part(writer, part, types, scratch).map(Held::bare)
-        }
+        ExpressionPart::Literal(_) => lowered(writer, at, part, scratch).map(Held::bare),
         ExpressionPart::QuotedExpression(_) => {
             let written = (at.program).written_under(at.view.facts(), at.within.root);
             Some(Held::bare(

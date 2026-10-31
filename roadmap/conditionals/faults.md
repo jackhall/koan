@@ -4,7 +4,8 @@
 [error value](../../src/program/README.md#faults-and-output) built by
 [`Program::error`](../../src/program/record.rs): a tagged value of the builtin
 `Error` over `{message :Str}`, its message rendered into text in the region it
-is raised in. Every unit that receives one tests its tag and stops, and a frame
+is raised in and again in each frame it finishes. Any value of `Error` reads as
+raised, so user code raises one by building `Error {message = …}`. Every unit that receives one tests its tag and stops, and a frame
 finishes with it, so it climbs the frame chain as a value while each frame it
 leaves is released. So an uncaught error prints only `error: <message>`:
 nothing says which calls it passed through, and an error raised deep in a

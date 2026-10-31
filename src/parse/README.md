@@ -33,7 +33,7 @@ families, quoted strings, adjacency recorded as a glue bit, and indentation with
 its three suspending regimes. It never asks which atoms are keywords or which
 glued prefixes are sigils.
 
-Lowering is where koan's vocabulary enters, and seven rules cover it
+Lowering is where koan's vocabulary enters, and eight rules cover it
 ([lower.rs](lower.rs)):
 
 - A **run** of sibling items becomes a run of parts, with the context —
@@ -56,7 +56,8 @@ Lowering is where koan's vocabulary enters, and seven rules cover it
   ([splicing](../scope/README.md#splicing)): a part of an expression and
   nothing else, its operand a value name, so `$..(f x)` and `$..3` are errors,
   and so is a splice in a list or brace literal, in a type expression, or in a
-  marked use, whose key a splice would leave unknown. `\..xs` has no reading
+  marked use, whose key a splice would leave unknown, and one in a group a
+  literal or a [template](#templates) brace holds. `\..xs` has no reading
   and is an error. `#` also glues to
   a `[…]` or `{…}` literal and quotes each element: a paren-group element is
   quoted as that group, any other element as a one-part quote, and a `_` key or
@@ -81,6 +82,9 @@ Lowering is where koan's vocabulary enters, and seven rules cover it
   `..` anywhere else, inside a `#[…]` literal included, so no other part holds
   one. A spread of a marked name, `..$xs` or `..\xs`, is a list item inside a
   quote that spreads the name's value when the code runs.
+- A **template** is `%` glued to a string, `%"…"` or `%'…'`: its text is read
+  for braces, and each brace is lowered as a paren group with the same contents
+  ([templates](#templates)). A `%` with a space after it is an atom.
 - Everything else is an **atom**, which [atom.rs](atom.rs) classifies.
 
 Atom classification is the one place text is read closely: literals; a split on
@@ -97,6 +101,41 @@ one `{…}` frame serves two containers: a **dict** (`{k: v}`) and a **record**
 error, and an empty `{}` is the empty record. No keyword enters a literal but `_`
 as a dict's key, which names the dict's default.
 
+### Templates
+
+A template's text is read in [lower.rs](lower.rs), left to right: `{{` and
+`}}` are one literal brace each, `{…}` is a **rendered** brace, `%{…}` a
+**kept** one, and `%{{` a `%` before a literal `{`. A `}` alone in the text, a
+brace with no closing `}`, and a brace holding only whitespace are parse
+errors spanning what they name. Text outside the braces is raw, as a string's
+body is. A brace closes at the `}` that balances it, counting nested braces and
+skipping quoted strings as `sexlex` reads them, and its text is then read on its
+own by [`sexlex::read_at`](../../sexlex/README.md), whose spans index the
+file, and lowered as a paren group with the same contents is. So a brace holds
+one expression: `{x}` is `(x)`, `{a + b}` is `(a + b)`, and a brace whose
+expression opens with a brace is spaced off, `{ {a = 1} }`, since `{{` is text.
+
+The part is `Template`, a `KTemplate` of `pieces`, the text between the braces
+with each doubled brace read as one, and `slots`, one `TemplateSlot` per brace,
+`Rendered` or `Kept`, each holding the brace's group. There is one more piece
+than slot. A template with a kept brace evaluates to a record, so lowering
+records its field names, `strings` and `values`, as it records any spelling a
+program renders. Braces are read only here: no builtin reads a run-time string
+as a template, so a brace holds any expression without a string ever becoming
+code.
+
+A brace cannot hold the quote character of a template around it, since `sexlex`
+ended the string there, so a string or a template inside a brace takes the other
+quote, and templates nest at most two deep: `%"{(f %'{x}')}"`. Each brace's read
+counts its own groups against `MAX_DEPTH`, and a template's stored depth is one
+over its deepest brace's ([the depth limit](#the-syntax-depth-limit)), so syntax
+nested through braces is refused as any other syntax is.
+
+Since a brace is a paren group, a `$..` splice in one composes when its quote
+is born as one in a paren group does
+([splicing](../scope/README.md#splicing)): with `parts` bound to
+`[#(1 + 2)]`, `#(%"sum {$..parts}")` is the quote of `%"sum {1 + 2}"`.
+
 ## The AST: borrowed, `Copy`, and splice-free
 
 A [`KExpression`](ast.rs) node borrows its storage — the parts run and the
@@ -106,7 +145,8 @@ another region is a slice copy rather than a rebuild.
 `ExpressionPart` is the vocabulary a run is spelled in: keywords, identifiers and
 type names as classified symbols; nested expressions; the two type sigils
 (`:(…)` and `:{…}`); list, dict and record literals, a list literal's items
-each a `ListItem` — a part, or a spread of one; scalar literals;
+each a `ListItem` — a part, or a spread of one; `Template`, a
+[template](#templates)'s pieces and braces; scalar literals;
 `QuotedExpression`, the `#(…)` body captured at parse time as data; the two
 marked parts, `MarkedName` (`$x`, `\x`), which classifies as the name it marks,
 and `MarkedUse` (`$(…)`, `\(…)`), which classifies as a nested expression;
@@ -182,7 +222,10 @@ region, so a node at the program's lifetime `'graph` is eternal by that
 lifetime alone: a code value holds written syntax at `'graph`, where a copy
 shares it and its weight counts nothing past the pointer, and composed syntax
 at its region's lifetime, laid there by [code splicing](../scope/README.md#splicing),
-where a copy lays it again. A construction door takes a writer at the node's own
+where a copy lays it again. For the same reason a string a written literal or
+template evaluates to shares the literal's text, and one from composed code
+copies it into the region
+([lowering](../values/README.md#equality-and-rendering)). A construction door takes a writer at the node's own
 lifetime, and the lifetime is invariant at the program brand's doors, so
 program storage never holds a node of shorter-lived storage.
 
@@ -190,7 +233,10 @@ program storage never holds a node of shorter-lived storage.
 
 `ExpressionPart::write_summary` prints syntax so it reads back: a group in its
 parens, a string between the quote its body allows (`"` unless the body holds
-an unescaped `"`), and every sigil as written. A scoped mark prints as `$x`,
+an unescaped `"`), and every sigil as written. A template prints `%` and its
+quote, chosen as a string's is, its pieces with each brace doubled, and each
+brace as `{…}` or `%{…}` around its group printed bare, spaced off where it
+opens with a brace; a string or a template inside takes the other quote. A scoped mark prints as `$x`,
 whatever its scope, a filled mark and a `FilledUse` bare, and a splice as
 `$..xs`, so printed code reads back with the holes and marks it was written
 with, its bindings and fills aside. A law states it over generated programs:
@@ -366,7 +412,8 @@ Two checks share the constant, each where the nesting first becomes visible:
 So every node stores its depth, computed once at construction from its parts'
 own stored depths, and no check walks a tree. A node is one level over its
 deepest part, where a nested node counts its stored depth, a list, dict or
-record literal one more than its deepest element, and anything else nothing.
+record literal one more than its deepest element, a template one more than its
+deepest brace, and anything else nothing.
 Two shapes count more, as the nesting the
 [operator-run rewrite](../scope/README.md#the-four-rewrites) builds from them:
 a run of `k` operators counts `k + 3` levels, the most any rewrite builds — a

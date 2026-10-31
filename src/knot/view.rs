@@ -6,7 +6,8 @@
 //! A view's root is a [`NodeView`]: a node's parts as an AVL tree of [`CodeItem`]s
 //! ([values/view.rs](../values/view.rs)), each a stretch of a flat node's parts beside the
 //! environment its `$` and filled marks resolve through — a code value's bindings, or a composing
-//! quote's own — or one group or builtin-read quote part whose node is itself a view. Every tree
+//! quote's own — or one group or builtin-read quote part whose node is itself a view, or one
+//! literal part of a flat node whose composing elements' nodes are views ([`LiteralView`]). Every tree
 //! node memoizes its parts' [`CodeSummary`], so a view's length, depth, kind and weight read in
 //! O(1) and every read or edit is O(log n) in its root's parts.
 //!
@@ -22,7 +23,7 @@ use crate::memory::{Bump, BumpVec, Writer, collect, program_storage, resident};
 use crate::parse::SourceRef;
 use crate::parse::{
     BUILTIN_SHAPES, ExpressionPart, KEYWORDS, KExpression, KeyElement, PartsSummary, Quoted,
-    Remark, Scope, Spanned, WrittenSlots, builtin_shape_for, remarked,
+    Remark, Scope, Spanned, WrittenSlots, builtin_shape_for, literal_laid, remarked,
 };
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::KType;
@@ -111,6 +112,8 @@ pub(crate) enum CodeItem<'graph, 'cell> {
         wrap: Wrap,
         node: &'cell NodeView<'graph, 'cell>,
     },
+    /// One literal part of a flat node, some of whose elements composed.
+    Literal(&'cell LiteralView<'graph, 'cell>),
 }
 
 impl<'graph, 'cell> CodeItem<'graph, 'cell> {
@@ -129,6 +132,94 @@ impl<'graph, 'cell> CodeItem<'graph, 'cell> {
             env,
             summary: node.stretch(from, to),
         }
+    }
+}
+
+/// One list, dict or record literal or template part of a flat node, its marks resolving through
+/// `env`, beside the view each of its elements that composed is laid from, keyed by the element's
+/// address and standing as a group or a quote. A nested literal's elements are among them, all in
+/// the order a walk of [`ExpressionPart::child`] meets them, so each walk reads them in turn.
+#[derive(Debug)]
+pub(crate) struct LiteralView<'graph, 'cell> {
+    part: &'cell Spanned<ExpressionPart<'cell>>,
+    /// Whether the literal's slot in the node it came from is read as written.
+    before: bool,
+    env: Env<'graph, 'cell>,
+    children: &'cell [(usize, Wrap, &'cell NodeView<'graph, 'cell>)],
+    summary: CodeSummary,
+}
+
+impl<'graph, 'cell> LiteralView<'graph, 'cell> {
+    /// The literal `part`, its slot read as written where `before`, through `env`, beside its
+    /// composed `children`; at least one.
+    fn of(
+        writer: Writer<'cell, '_>,
+        part: &'cell Spanned<ExpressionPart<'cell>>,
+        before: bool,
+        env: Env<'graph, 'cell>,
+        children: &'cell [(usize, Wrap, &'cell NodeView<'graph, 'cell>)],
+    ) -> &'cell Self {
+        let mut literal = LiteralView {
+            part,
+            before,
+            env,
+            children,
+            summary: CodeSummary::default(),
+        };
+        // Its written summary, each composed element's flat copy added to the weight: an element's
+        // written weight stays in, which over-prices, as a weight may.
+        let mut parts = PartsSummary::of(&part.value);
+        let laid = children
+            .iter()
+            .map(|(_, _, view)| view.exact())
+            .sum::<u64>();
+        parts.weight = u32::try_from(u64::from(parts.weight) + laid).unwrap_or(u32::MAX);
+        let mut next = 0;
+        parts.deepest = literal.depth(&part.value, &mut next);
+        // A child out of the walk's order would be laid as written, its splice and all.
+        assert_eq!(next, children.len(), "the composer keeps its walk's order");
+        literal.summary = CodeSummary {
+            parts,
+            flat: 0,
+            slack: children.iter().map(|(_, _, view)| view.slack()).sum(),
+            envs: env.weight()
+                + children
+                    .iter()
+                    .map(|(_, _, view)| view.summary().envs)
+                    .sum::<u64>(),
+        };
+        resident(writer, literal)
+    }
+
+    /// The composed view `element` is laid from, standing as a group or a quote, if it composed:
+    /// child `next`, which a walk meeting the elements in order then steps past.
+    fn child(
+        &self,
+        element: &ExpressionPart<'_>,
+        next: &mut usize,
+    ) -> Option<(Wrap, &'cell NodeView<'graph, 'cell>)> {
+        let &(key, wrap, view) = self.children.get(*next)?;
+        (key == std::ptr::from_ref(element).addr()).then(|| {
+            *next += 1;
+            (wrap, view)
+        })
+    }
+
+    /// How deep `literal`, this one or one nested in it, lays: one more than its deepest element,
+    /// a composed element as deep as its view; `next` as [`child`](Self::child) reads it.
+    fn depth(&self, literal: &ExpressionPart<'_>, next: &mut usize) -> u32 {
+        let mut deepest = 0;
+        let mut at = 0;
+        while let Some(element) = literal.child(at) {
+            let depth = match self.child(element, next) {
+                Some((_, view)) => view.depth(),
+                None if element.is_literal() => self.depth(element, next),
+                None => PartsSummary::of(element).deepest,
+            };
+            deepest = deepest.max(depth);
+            at += 1;
+        }
+        1 + deepest
     }
 }
 
@@ -196,6 +287,7 @@ impl Leaf for CodeItem<'_, '_> {
                 envs: env.weight(),
             },
             CodeItem::Nested { wrap, node } => node.as_part(wrap),
+            CodeItem::Literal(literal) => literal.summary,
         }
     }
 
@@ -243,7 +335,7 @@ impl Leaf for CodeItem<'_, '_> {
                 env,
                 summary,
             },
-            nested @ CodeItem::Nested { .. } => nested,
+            one @ (CodeItem::Nested { .. } | CodeItem::Literal(_)) => one,
         }
     }
 
@@ -262,6 +354,9 @@ impl Leaf for CodeItem<'_, '_> {
                 ..
             } => from < to && summary == node.stretch(from as usize, to as usize),
             CodeItem::Nested { node, .. } => node.holds_its_laws(),
+            CodeItem::Literal(literal) => {
+                (literal.children.iter()).all(|(_, _, node)| node.holds_its_laws())
+            }
         }
     }
 }
@@ -308,7 +403,7 @@ impl<'graph, 'cell> NodeView<'graph, 'cell> {
     }
 
     /// The part at `at`, below [`len`](Self::len): the item holding it, and the part itself where
-    /// the item is a stretch of a flat node.
+    /// the item is a stretch of a flat node, or the literal as written where it is a literal.
     fn located(
         &self,
         at: usize,
@@ -333,6 +428,8 @@ impl<'graph, 'cell> NodeView<'graph, 'cell> {
                 (item, Some((&node.parts[index].value, index)))
             }
             CodeItem::Nested { .. } => (item, None),
+            // Its index is read only by a stretch's `code i`, which a literal never answers.
+            CodeItem::Literal(literal) => (item, Some((&literal.part.value, 0))),
         }
     }
 
@@ -589,6 +686,14 @@ fn environments<'graph, 'cell, 'x>(
                 }
             }
             CodeItem::Nested { node, .. } => environments(node, seen, out),
+            CodeItem::Literal(literal) => {
+                if seen.insert(literal.env.identity()) {
+                    out.push(literal.env);
+                }
+                for (_, _, node) in literal.children {
+                    environments(node, seen, out);
+                }
+            }
         }
     }
 }
@@ -701,6 +806,10 @@ impl<'to, 'graph, 'cell> Laying<'to, '_, 'graph, 'cell, '_> {
                     keys.push(KeyElement::Slot);
                     items.push(Laid::Nested(wrap, node));
                 }
+                CodeItem::Literal(literal) => {
+                    keys.push(KeyElement::Slot);
+                    items.push(Laid::Literal(literal));
+                }
             }
         }
         let now = WrittenSlots::of(builtin_shape_for(keys.iter().copied()), splicing);
@@ -729,10 +838,56 @@ impl<'to, 'graph, 'cell> Laying<'to, '_, 'graph, 'cell, '_> {
                         Some(node.source.span),
                     )
                 }
+                Laid::Literal(literal) => {
+                    let mut next = 0;
+                    let written = (literal.before, written);
+                    let value =
+                        self.literal(&literal.part.value, literal, written, quoted, &mut next);
+                    assert_eq!(next, literal.children.len(), "every composed element lays");
+                    (value, literal.part.span)
+                }
             };
             run.push(Spanned { value, span });
         }
         KExpression::nested(writer, &run, view.source)
+    }
+
+    /// `part`, `view`'s literal or one nested in it, laid with its slot read as `written` before and
+    /// now, each composed element laid from its view as [`Laid::Nested`] is, every other element
+    /// as a stretch's part is; `next` as [`LiteralView::child`] reads it.
+    fn literal(
+        &mut self,
+        part: &ExpressionPart<'cell>,
+        view: &LiteralView<'graph, 'cell>,
+        written: (bool, bool),
+        quoted: bool,
+        next: &mut usize,
+    ) -> ExpressionPart<'to> {
+        let writer = self.writer;
+        let scratch = Bump::new();
+        literal_laid(
+            writer,
+            &scratch,
+            part,
+            &mut |element| match view.child(element, next) {
+                Some((Wrap::Group, node)) => ExpressionPart::Expression(self.node(node, quoted)),
+                Some((Wrap::Quote, node)) => {
+                    ExpressionPart::QuotedExpression(self.node(node, quoted || !written.1))
+                }
+                None if element.is_literal() => self.literal(element, view, written, quoted, next),
+                None => {
+                    let at = Quoted {
+                        before: false,
+                        now: quoted,
+                    };
+                    let mut remark = Remarking {
+                        laying: self,
+                        env: view.env,
+                    };
+                    remarked(writer, element, written, at, &mut remark)
+                }
+            },
+        )
     }
 
     /// The canonical number of `scope` of `env`, its bindings gathered on first sight.
@@ -776,11 +931,13 @@ impl<'to, 'graph, 'cell> Laying<'to, '_, 'graph, 'cell, '_> {
 }
 
 /// One part of a node being laid, as the walk gathers them: a part of a flat node, whether its
-/// slot there is read as written, and the environment it reads through; or a nested view.
+/// slot there is read as written, and the environment it reads through; a nested view; or a
+/// literal some of whose elements composed.
 #[derive(Clone, Copy)]
 enum Laid<'graph, 'cell> {
     Part(&'cell KExpression<'cell>, usize, bool, Env<'graph, 'cell>),
     Nested(Wrap, &'cell NodeView<'graph, 'cell>),
+    Literal(&'cell LiteralView<'graph, 'cell>),
 }
 
 /// The materializer's [`Remark`] for the parts of one stretch, through its environment.
@@ -868,7 +1025,8 @@ impl<'cell, 'graph> Composer<'cell, '_, 'graph, '_> {
     /// **statement level** where every part but its splices is a group: each element adds its
     /// statements — a block's root its own, any other element one group of it — and a node of one
     /// statement is that statement. Otherwise, at **part level**, an element of one part adds that
-    /// part, and any other element one group of it. Each part is visited once: a node's stretches
+    /// part, and any other element one group of it. A literal part composes where an element of
+    /// it does, a nested literal's too. Each part is visited once: a node's stretches
     /// are laid only once a part of it composes.
     fn node(
         &self,
@@ -886,6 +1044,7 @@ impl<'cell, 'graph> Composer<'cell, '_, 'graph, '_> {
         let wrapped = |root: &'cell NodeView<'graph, 'cell>, wrap| {
             view::of(writer, CodeItem::Nested { wrap, node: root })
         };
+        let env = Env::Own(self.own);
         // Each part that composes, beside what it adds in its place.
         let mut composing = BumpVec::new_in(self.scratch);
         for (index, part) in node.parts.iter().enumerate() {
@@ -918,6 +1077,16 @@ impl<'cell, 'graph> Composer<'cell, '_, 'graph, '_> {
                         None => continue,
                     }
                 }
+                ref literal if literal.is_literal() => {
+                    let mut children = BumpVec::new_in(self.scratch);
+                    self.literal(literal, slots.at(index), types, &mut children)?;
+                    if children.is_empty() {
+                        continue;
+                    }
+                    let children = collect(writer, children.iter().copied());
+                    let literal = LiteralView::of(writer, part, slots.at(index), env, children);
+                    Some(view::of(writer, CodeItem::Literal(literal)))
+                }
                 _ => continue,
             };
             composing.push((index, added));
@@ -925,7 +1094,6 @@ impl<'cell, 'graph> Composer<'cell, '_, 'graph, '_> {
         if composing.is_empty() {
             return Ok(None);
         }
-        let env = Env::Own(self.own);
         let mut tree: Option<&'cell CodeNode<'graph, 'cell>> = None;
         let mut start = 0;
         for (index, added) in composing.iter().copied() {
@@ -960,6 +1128,35 @@ impl<'cell, 'graph> Composer<'cell, '_, 'graph, '_> {
             return Err(ComposeRefused::TooDeep);
         }
         Ok(Some(composed))
+    }
+
+    /// Each element of `literal` that composes, by its address, beside its view and how it stands:
+    /// a group, or a quote where the literal's slot is read as `written`. A nested literal's
+    /// elements are among them.
+    fn literal(
+        &self,
+        literal: &'cell ExpressionPart<'cell>,
+        written: bool,
+        types: &crate::values::Chain<'_, '_, '_, '_>,
+        out: &mut BumpVec<'_, (usize, Wrap, &'cell NodeView<'graph, 'cell>)>,
+    ) -> Result<(), ComposeRefused> {
+        let mut at = 0;
+        while let Some(element) = literal.child(at) {
+            at += 1;
+            let (wrap, inner) = match element {
+                nested if nested.is_literal() => {
+                    self.literal(nested, written, types, out)?;
+                    continue;
+                }
+                ExpressionPart::Expression(inner) => (Wrap::Group, inner),
+                ExpressionPart::QuotedExpression(inner) if written => (Wrap::Quote, inner),
+                _ => continue,
+            };
+            if let Some(view) = self.node(inner, types)? {
+                out.push((std::ptr::from_ref(element).addr(), wrap, view));
+            }
+        }
+        Ok(())
     }
 
     /// The elements of the list the splice operand `name` is bound to, each a code member.

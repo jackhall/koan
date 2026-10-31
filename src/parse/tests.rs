@@ -15,6 +15,7 @@ mod list_dict;
 mod literals;
 mod properties;
 mod spans;
+mod templates;
 mod type_sigil;
 mod value_sigil;
 
@@ -77,6 +78,19 @@ pub(super) fn describe(e: &KExpression<'_>, symbols: &SymbolInterner) -> String 
                     })
                     .collect();
                 format!("L[{}]", inner.join(" "))
+            }
+            // `%"a{x}b%{y}c"` describes as `T[s(a) {[t(x)]} s(b) %{[t(y)]} s(c)]`.
+            ExpressionPart::Template(template) => {
+                let mut inner = vec![format!("s({})", template.pieces[0])];
+                for (slot, piece) in template.slots.iter().zip(&template.pieces[1..]) {
+                    let sigil = if slot.is_kept() { "%" } else { "" };
+                    inner.push(format!(
+                        "{sigil}{{{}}}",
+                        describe_part(slot.part(), symbols)
+                    ));
+                    inner.push(format!("s({piece})"));
+                }
+                format!("T[{}]", inner.join(" "))
             }
             ExpressionPart::DictLiteral(pairs) => {
                 let inner: Vec<String> = pairs

@@ -95,7 +95,7 @@ pub use surface::{
 pub use tagged::Tagged;
 #[cfg(test)]
 pub(crate) use text::SCANS;
-pub use text::{StrView, Text};
+pub use text::{Concatenation, StrView, Text};
 pub use type_value::TypeValue;
 pub use weight::{MemoBits, Weight};
 pub use working::{WorkingExpression, WorkingPart};

@@ -1,5 +1,5 @@
 use super::{err, ok};
-use crate::{ErrorKind, Kind, MAX_DEPTH, Node, Span, read};
+use crate::{ErrorKind, Kind, MAX_DEPTH, Node, Span, read, read_at};
 
 // --- Lines and indentation ---
 
@@ -349,4 +349,36 @@ fn spans_cover_delimiters_and_layout_groups_cover_their_items() {
     };
     assert_eq!(paren[1].span.slice(source), "'x'");
     assert_eq!(line[2].span.slice(source), "baz");
+}
+
+// --- Reading a slice ---
+
+#[test]
+fn read_at_indexes_the_larger_source() {
+    let items = read_at("{a b}", 10).unwrap();
+    let [line] = &items[..] else {
+        panic!("one line")
+    };
+    assert_eq!(line.span, Span { start: 10, end: 15 });
+    let Node::Group { items, .. } = &line.node else {
+        panic!("a layout group")
+    };
+    let [brace] = &items[..] else {
+        panic!("one brace")
+    };
+    assert_eq!(brace.span, Span { start: 10, end: 15 });
+    let Node::Group {
+        kind: Kind::Brace,
+        items,
+    } = &brace.node
+    else {
+        panic!("a brace")
+    };
+    let spans: Vec<Span> = items.iter().map(|item| item.span).collect();
+    assert_eq!(
+        spans,
+        [Span { start: 11, end: 12 }, Span { start: 13, end: 14 }]
+    );
+    let error = read_at("{a", 10).unwrap_err();
+    assert_eq!(error.span, Span { start: 10, end: 11 });
 }

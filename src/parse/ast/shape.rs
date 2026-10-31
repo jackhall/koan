@@ -65,6 +65,7 @@ pub enum PartClass {
     SigiledTypeExpr,
     RecordType,
     ListLiteral,
+    Template,
     DictLiteral,
     RecordLiteral,
     Literal,
@@ -99,7 +100,7 @@ pub enum DispatchShape {
     /// or forward-references), with no internal type-constructor builtin behind it.
     RecordType,
     /// Single-part literal-shaped expression — `Literal`, `Spliced`, nested
-    /// `Expression`, `ListLiteral`, `DictLiteral`, or `RecordLiteral`. Surfaces the
+    /// `Expression`, `ListLiteral`, `Template`, `DictLiteral`, or `RecordLiteral`. Surfaces the
     /// inner value without a bucket lookup.
     LiteralPassThrough,
     /// Chainable operator run: a slot-led key whose keywords alternate with slots,
@@ -155,6 +156,7 @@ pub fn classify_dispatch_shape(key: &[KeyElement], head: Option<PartClass>) -> D
             | PartClass::Expression
             | PartClass::QuotedExpression
             | PartClass::ListLiteral
+            | PartClass::Template
             | PartClass::DictLiteral
             | PartClass::RecordLiteral => DispatchShape::LiteralPassThrough,
             // A lone hole classifies as a bare identifier — the shape a resolvable single part
@@ -179,6 +181,7 @@ pub fn classify_dispatch_shape(key: &[KeyElement], head: Option<PartClass>) -> D
         PartClass::Literal
         | PartClass::Spliced
         | PartClass::ListLiteral
+        | PartClass::Template
         | PartClass::DictLiteral
         | PartClass::RecordLiteral
         | PartClass::RecordType

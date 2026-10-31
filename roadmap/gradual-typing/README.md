@@ -29,6 +29,7 @@ hand.
 - [Dependent signatures](dependent-signatures.md)
 - [A nested projection](nested-projection.md)
 - [A pin over a variable](pins-over-variables.md)
+- [Return contracts](return-contracts.md)
 
 ## Unplanned work
 

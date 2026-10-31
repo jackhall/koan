@@ -1,16 +1,18 @@
 # Catching errors
 
 **Problem.** `TRY` and `CATCH` each have a
-[builtin expression shape](../../src/parse/builtin_shapes.rs) and arm shapes the
-[scope builder](../../src/scope/README.md#three-tiers) already builds, but the
-evaluator answers each with an error saying it does not run yet. A `TRY` or
+[builtin expression shape](../../src/parse/builtin_shapes.rs), and the
+[scope builder](../../src/scope/README.md#three-tiers) already builds `TRY`'s
+arm shapes, but the evaluator has no reading for either and refuses each with
+`nothing evaluates …`. A `TRY` or
 `CATCH` operand is walked as an eager part of the enclosing shape, not as a
 block of its own. An error carries only `{message :Str}`, so an arm has nothing
 to select by. `CATCH`'s declared return is `Any`, not the builtin `Result`
 the [builtin table](../../src/dispatch/README.md#the-builtin-table) binds.
 [Tutorial 09](../../tutorial/09-errors.md)'s table of error kinds names
 refusals the rewrite makes at load (`UnboundName`, `ShapeError`, `ParseError`),
-and its examples catch an unbound name.
+its examples catch an unbound name, and it gives an arm's `frames` as a list of
+strings.
 
 **Acceptance criteria.**
 
@@ -42,6 +44,11 @@ and its examples catch an unbound name.
   parameterized: a field whose type varies with the refusal, such as a missing
   key, is `Any`. A field may hold a value, since the fault keeps the frame it
   lies in until the catcher copies it out.
+- *`TRY`'s declared result — open.* `TRY … -> <type> WITH` declares its result
+  type. A `MATCH` declares none, its type computed from its arms
+  ([matching](matching.md)), since a declared result that retypes makes a tail
+  arm's outcome differ from a non-tail one's. `TRY` may drop its declared
+  result likewise, or keep it, since its body is never in tail position.
 
 ## Dependencies
 

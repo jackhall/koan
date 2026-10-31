@@ -20,12 +20,11 @@ knot node of its own whose members are read by slot, and
 [the program](../../src/program/README.md) above them all turns a loaded koan
 program into work for the drain. The items here complete the path to running a
 program: the lattice, value, scope and callable pieces dispatch rests on;
-dispatch over all of them; and module programs and yielding iterators above dispatch. Four bodies of work that build on dispatch have projects of
+dispatch over all of them; and module programs and yielding iterators above dispatch. Three bodies of work that build on dispatch have projects of
 their own: [conditionals](../conditionals/README.md) (matching, faults and catching),
 [gradual build](../gradual-build/README.md) (what the load fixes, what a
-binding settles, and where each lives),
-[gradual typing](../gradual-typing/README.md) and
-[metaprogramming](../metaprogramming/README.md). What it buys the language: one runtime whose
+binding settles, and where each lives) and
+[gradual typing](../gradual-typing/README.md). What it buys the language: one runtime whose
 every layer was designed knowing the layers above it, with the old runtime's
 workarounds left behind rather than carried forward.
 
@@ -37,6 +36,7 @@ hand.
 
 - [Agents](agents.md)
 - [The build image](build-image.md)
+- [Comments](comments.md)
 - [Dict defaults](dict-defaults.md)
 - [Families as parameters](families-as-parameters.md)
 - [Recursion over run-time types](recursion-over-run-time-types.md)

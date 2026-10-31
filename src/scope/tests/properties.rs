@@ -94,6 +94,11 @@ fn walk<'g>(
                 walk(item.part(), shapes, met);
             }
         }
+        ExpressionPart::Template(template) => {
+            for slot in template.slots.iter() {
+                walk(slot.part(), shapes, met);
+            }
+        }
         ExpressionPart::DictLiteral(pairs) => {
             for (key, value) in pairs.iter() {
                 walk(key, shapes, met);

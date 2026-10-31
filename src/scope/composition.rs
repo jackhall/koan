@@ -17,7 +17,7 @@ use self_cell::self_cell;
 use crate::memory::{
     BumpAllocator, BumpVec, Lays, ProgramBrand, ProgramStorage, collect, program_storage,
 };
-use crate::parse::{ExpressionPart, KExpression, ListItem, copied};
+use crate::parse::{ExpressionPart, KExpression, copied};
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::{Term, TypeDigest};
 use crate::values::ContentDigest;
@@ -154,7 +154,9 @@ impl<'a> Composition<'a> {
             .expect("a nested quote lies below its root");
         let mut part = &root.parts[*first as usize].value;
         for at in down {
-            part = child(part, *at as usize).expect("a path names a child its part has");
+            part = part
+                .child(*at as usize)
+                .expect("a path names a child its part has");
         }
         match part {
             ExpressionPart::QuotedExpression(node) => node,
@@ -163,28 +165,9 @@ impl<'a> Composition<'a> {
     }
 }
 
-/// Child `at` of `part`: a nested expression's parts, a list's items, a dict's keys and values in
-/// turn, a record's values. `None` past the last, and for a part that nests nothing.
-fn child<'g>(part: &ExpressionPart<'g>, at: usize) -> Option<&'g ExpressionPart<'g>> {
-    match part {
-        ExpressionPart::Expression(node)
-        | ExpressionPart::SigiledTypeExpr(node)
-        | ExpressionPart::RecordType(node)
-        | ExpressionPart::QuotedExpression(node)
-        | ExpressionPart::MarkedUse(_, node)
-        | ExpressionPart::FilledUse(_, _, node) => node.parts.get(at).map(|part| &part.value),
-        ExpressionPart::ListLiteral(items) => items.get(at).map(ListItem::part),
-        ExpressionPart::DictLiteral(pairs) => pairs
-            .get(at / 2)
-            .map(|(key, value)| if at.is_multiple_of(2) { key } else { value }),
-        ExpressionPart::RecordLiteral(fields) => fields.get(at).map(|(_, value)| value),
-        _ => None,
-    }
-}
-
 /// Each code shape's path through `syntax`, the root its `shapes` were built over, by segment,
 /// laid through `lay`: the index of each part on the way down to the quote it shapes, by
-/// [`child`]'s numbering. Empty for the root and for every body that is no quote's code.
+/// [`ExpressionPart::child`]'s numbering. Empty for the root and for every body that is no quote's code.
 pub fn quote_paths<'a>(
     lay: impl Lays<'a>,
     scratch: BumpAllocator<'_>,
@@ -205,7 +188,7 @@ pub fn quote_paths<'a>(
             quotes.push((at, &*scratch.alloc_slice_copy(path)));
         }
         let mut at = 0;
-        while let Some(inner) = child(part, at) {
+        while let Some(inner) = part.child(at) {
             path.push(at as u32);
             walk(inner, path, quotes, scratch);
             path.pop();

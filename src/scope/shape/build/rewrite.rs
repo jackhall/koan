@@ -36,10 +36,10 @@
 //!
 //! See [README.md § Operator groups](../../README.md#operator-groups).
 
-use crate::memory::{BumpVec, collect};
+use crate::memory::{BumpVec, collect, resident};
 use crate::parse::KEYWORDS;
 use crate::parse::{DefinitionKind, Heads, Role};
-use crate::parse::{DispatchShape, ExpressionPart, KExpression, ListItem, Spanned};
+use crate::parse::{DispatchShape, ExpressionPart, KExpression, KTemplate, ListItem, Spanned};
 use crate::source::{FileId, SourceRef, Span};
 use crate::symbols::{KeywordSymbol, ValueSymbol};
 use crate::type_lattice::{FoldDirection, ReductionMode};
@@ -321,6 +321,26 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
                 }
                 Ok(changed.then(|| {
                     ExpressionPart::ListLiteral(collect(self.brand.writer(), run.iter().copied()))
+                }))
+            }
+            ExpressionPart::Template(template) => {
+                let mut slots = BumpVec::with_capacity_in(template.slots.len(), self.scratch);
+                let mut changed = false;
+                for slot in template.slots.iter() {
+                    let rewritten = self.rewrite_part(slot.part())?;
+                    changed |= rewritten.is_some();
+                    slots.push(rewritten.map_or(*slot, |part| slot.with(part)));
+                }
+                Ok(changed.then(|| {
+                    let writer = self.brand.writer();
+                    let slots = collect(writer, slots.iter().copied());
+                    ExpressionPart::Template(resident(
+                        writer,
+                        KTemplate {
+                            slots,
+                            ..**template
+                        },
+                    ))
                 }))
             }
             ExpressionPart::DictLiteral(pairs) => {
