@@ -567,6 +567,7 @@ mod tests {
                     items.iter().map(|p| describe(p.part(), symbols)).collect();
                 format!("L[{}]", inner.join(" "))
             }
+            ExpressionPart::Template(_) => unreachable!("an atom is no template"),
             ExpressionPart::DictLiteral(pairs) => {
                 let inner: Vec<String> = pairs
                     .iter()

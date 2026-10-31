@@ -65,6 +65,9 @@ pub enum ExpressionPart<'a> {
     /// internal type-constructor builtin behind it.
     RecordType(&'a KExpression<'a>),
     ListLiteral(&'a [ListItem<'a>]),
+    /// `%"…"`: a string template — the text between its braces and the brace expressions, in
+    /// order. See [README.md](README.md) § Templates.
+    Template(&'a KTemplate<'a>),
     DictLiteral(&'a [(ExpressionPart<'a>, ExpressionPart<'a>)]),
     /// Anonymous record literal (`{x = 1, y = "a"}`) — identifier-keyed `=` pairs. The
     /// brace frame routes here when the first pair separator is `=`; `:` pairs stay a
@@ -223,6 +226,56 @@ impl<'a> ListItem<'a> {
     }
 }
 
+/// A template's text and braces: `pieces` holds one more entry than `slots`, piece `i` written
+/// before slot `i`, each with `{{` and `}}` read as one brace.
+#[derive(Debug, Clone, Copy)]
+pub struct KTemplate<'a> {
+    pub pieces: &'a [&'a str],
+    pub slots: &'a [TemplateSlot<'a>],
+}
+
+impl KTemplate<'_> {
+    /// Whether a brace keeps its value apart from the text, so the template is a record.
+    pub fn kept(&self) -> bool {
+        self.slots.iter().any(TemplateSlot::is_kept)
+    }
+}
+
+/// A template's brace: `{…}` renders its value into the text, `%{…}` keeps it apart. Its part is
+/// the one a parenthesized group with the same contents lowers to.
+#[derive(Debug, Clone, Copy)]
+pub enum TemplateSlot<'a> {
+    Rendered(ExpressionPart<'a>),
+    Kept(ExpressionPart<'a>),
+}
+
+impl<'a> TemplateSlot<'a> {
+    /// The part the brace holds.
+    pub fn part(&self) -> &ExpressionPart<'a> {
+        match self {
+            TemplateSlot::Rendered(part) | TemplateSlot::Kept(part) => part,
+        }
+    }
+
+    /// The same brace over `part`.
+    pub fn with<'b>(&self, part: ExpressionPart<'b>) -> TemplateSlot<'b> {
+        match self {
+            TemplateSlot::Rendered(_) => TemplateSlot::Rendered(part),
+            TemplateSlot::Kept(_) => TemplateSlot::Kept(part),
+        }
+    }
+
+    pub fn is_kept(&self) -> bool {
+        matches!(self, TemplateSlot::Kept(_))
+    }
+}
+
+/// The fields of the record a template with a kept brace evaluates to: `strings`, then `values`.
+pub fn template_fields() -> [BinderSymbol; 2] {
+    ["strings", "values"]
+        .map(|name| BinderSymbol::Value(ValueSymbol::classify(name).expect("a value name")))
+}
+
 impl<'a> ExpressionPart<'a> {
     /// The structural family this part belongs to — what dispatch-shape classification reads.
     pub fn class(&self) -> PartClass {
@@ -234,6 +287,7 @@ impl<'a> ExpressionPart<'a> {
             ExpressionPart::SigiledTypeExpr(_) => PartClass::SigiledTypeExpr,
             ExpressionPart::RecordType(_) => PartClass::RecordType,
             ExpressionPart::ListLiteral(_) => PartClass::ListLiteral,
+            ExpressionPart::Template(_) => PartClass::Template,
             ExpressionPart::DictLiteral(_) => PartClass::DictLiteral,
             ExpressionPart::RecordLiteral(_) => PartClass::RecordLiteral,
             ExpressionPart::Literal(_) => PartClass::Literal,
@@ -276,6 +330,7 @@ impl<'a> ExpressionPart<'a> {
             ExpressionPart::Keyword(_)
             | ExpressionPart::Literal(_)
             | ExpressionPart::ListLiteral(_)
+            | ExpressionPart::Template(_)
             | ExpressionPart::DictLiteral(_)
             | ExpressionPart::RecordLiteral(_)
             | ExpressionPart::Splice(_) => None,
@@ -341,6 +396,13 @@ impl<'a> ExpressionPart<'a> {
                 run(items.len(), size_of::<ListItem<'_>>()),
                 &mut items.iter().map(|item| item.part().laid_weight()),
             ),
+            ExpressionPart::Template(template) => sum(
+                run(1, size_of::<KTemplate<'_>>())
+                    .saturating_add(run(template.pieces.len(), size_of::<&str>()))
+                    .saturating_add(run(template.slots.len(), size_of::<TemplateSlot<'_>>())),
+                &mut (template.pieces.iter().map(|piece| run(piece.len(), 1)))
+                    .chain(template.slots.iter().map(|slot| slot.part().laid_weight())),
+            ),
             ExpressionPart::DictLiteral(pairs) => sum(
                 run(
                     pairs.len(),
@@ -370,28 +432,39 @@ impl<'a> ExpressionPart<'a> {
         f: &mut std::fmt::Formatter<'_>,
         symbols: &SymbolInterner,
     ) -> std::fmt::Result {
+        self.write_in(f, symbols, None)
+    }
+
+    /// [`write_summary`](Self::write_summary) inside a template delimited by `avoid`, whose string
+    /// literals take the other quote.
+    fn write_in(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+        symbols: &SymbolInterner,
+        avoid: Option<char>,
+    ) -> std::fmt::Result {
         match self {
             ExpressionPart::Keyword(symbol) => write!(f, "{}", symbols.display(symbol.symbol())),
             ExpressionPart::Identifier(v) => write!(f, "{}", symbols.display(v.symbol())),
             ExpressionPart::Type(t) => write!(f, "{}", symbols.display(t.symbol())),
             ExpressionPart::Expression(e) => {
                 f.write_str("(")?;
-                e.write_summary(f, symbols)?;
+                e.write_in(f, symbols, avoid)?;
                 f.write_str(")")
             }
             ExpressionPart::SigiledTypeExpr(e) => {
                 f.write_str(":(")?;
-                e.write_summary(f, symbols)?;
+                e.write_in(f, symbols, avoid)?;
                 f.write_str(")")
             }
             ExpressionPart::RecordType(e) => {
                 f.write_str(":{")?;
-                e.write_summary(f, symbols)?;
+                e.write_in(f, symbols, avoid)?;
                 f.write_str("}")
             }
             ExpressionPart::QuotedExpression(e) => {
                 f.write_str("#(")?;
-                e.write_summary(f, symbols)?;
+                e.write_in(f, symbols, avoid)?;
                 f.write_str(")")
             }
             ExpressionPart::MarkedName(mark, name) => {
@@ -405,10 +478,10 @@ impl<'a> ExpressionPart<'a> {
                     write!(f, "{sigil}")?;
                 }
                 f.write_str("(")?;
-                e.write_summary(f, symbols)?;
+                e.write_in(f, symbols, avoid)?;
                 f.write_str(")")
             }
-            ExpressionPart::FilledUse(_, _, e) => e.write_summary(f, symbols),
+            ExpressionPart::FilledUse(_, _, e) => e.write_in(f, symbols, avoid),
             ExpressionPart::Splice(name) => write!(f, "$..{}", symbols.display(name.symbol())),
             ExpressionPart::ListLiteral(items) => {
                 f.write_str("[")?;
@@ -419,9 +492,48 @@ impl<'a> ExpressionPart<'a> {
                     if let ListItem::Spread(_) = item {
                         f.write_str("..")?;
                     }
-                    item.part().write_summary(f, symbols)?;
+                    item.part().write_in(f, symbols, avoid)?;
                 }
                 f.write_str("]")
+            }
+            ExpressionPart::Template(template) => {
+                let quote = match template
+                    .pieces
+                    .iter()
+                    .any(|piece| holds_unescaped(piece, '"'))
+                {
+                    true => '\'',
+                    false => '"',
+                };
+                let quote = if avoid == Some(quote) {
+                    other(quote)
+                } else {
+                    quote
+                };
+                write!(f, "%{quote}")?;
+                let escaped = |piece: &str| piece.replace('{', "{{").replace('}', "}}");
+                for (piece, slot) in template.pieces.iter().zip(template.slots.iter()) {
+                    // `%{` always opens a kept brace, so no piece ends in `%` before a rendered one.
+                    debug_assert!(slot.is_kept() || !piece.ends_with('%'));
+                    f.write_str(&escaped(piece))?;
+                    f.write_str(if slot.is_kept() { "%{" } else { "{" })?;
+                    // A brace's node prints bare, spaced off where it opens with a brace of its
+                    // own, since `{{` is text.
+                    let (lead, node) = match slot.part() {
+                        ExpressionPart::Expression(node) => (node.parts.first(), Some(node)),
+                        _ => (None, None),
+                    };
+                    if lead.is_some_and(|lead| opens_brace(&lead.value)) {
+                        f.write_str(" ")?;
+                    }
+                    match node {
+                        Some(node) => node.write_in(f, symbols, Some(quote))?,
+                        None => slot.part().write_in(f, symbols, Some(quote))?,
+                    }
+                    f.write_str("}")?;
+                }
+                let last = template.pieces.last().expect("one more piece than slots");
+                write!(f, "{}{quote}", escaped(last))
             }
             ExpressionPart::DictLiteral(pairs) => {
                 f.write_str("{")?;
@@ -429,9 +541,9 @@ impl<'a> ExpressionPart<'a> {
                     if index > 0 {
                         f.write_str(", ")?;
                     }
-                    k.write_summary(f, symbols)?;
+                    k.write_in(f, symbols, avoid)?;
                     f.write_str(": ")?;
-                    v.write_summary(f, symbols)?;
+                    v.write_in(f, symbols, avoid)?;
                 }
                 f.write_str("}")
             }
@@ -442,7 +554,7 @@ impl<'a> ExpressionPart<'a> {
                         f.write_str(", ")?;
                     }
                     write!(f, "{} = ", symbols.display(k.symbol()))?;
-                    v.write_summary(f, symbols)?;
+                    v.write_in(f, symbols, avoid)?;
                 }
                 f.write_str("}")
             }
@@ -450,6 +562,11 @@ impl<'a> ExpressionPart<'a> {
                 KLiteral::Number(n) => write!(f, "{n}"),
                 KLiteral::String(s) => {
                     let quote = if holds_unescaped(s, '"') { '\'' } else { '"' };
+                    let quote = if avoid == Some(quote) {
+                        other(quote)
+                    } else {
+                        quote
+                    };
                     write!(f, "{quote}{s}{quote}")
                 }
                 KLiteral::Boolean(b) => write!(f, "{b}"),
@@ -494,6 +611,23 @@ fn holds_unescaped(body: &str, quote: char) -> bool {
         backslashes = if c == '\\' { backslashes + 1 } else { 0 };
     }
     false
+}
+
+/// Whether `part` prints opening with `{`: a dict or record literal, or a filled use led by one.
+fn opens_brace(part: &ExpressionPart<'_>) -> bool {
+    match part {
+        ExpressionPart::DictLiteral(_) | ExpressionPart::RecordLiteral(_) => true,
+        ExpressionPart::FilledUse(_, _, node) => node
+            .parts
+            .first()
+            .is_some_and(|lead| opens_brace(&lead.value)),
+        _ => false,
+    }
+}
+
+/// The quote that is not `quote`.
+fn other(quote: char) -> char {
+    if quote == '"' { '\'' } else { '"' }
 }
 
 /// A parsed Koan expression: an ordered run of [`ExpressionPart`]s borrowed from the storage that
@@ -819,6 +953,7 @@ impl<'a> KExpression<'a> {
             | ExpressionPart::Splice(_)
             | ExpressionPart::Expression(_)
             | ExpressionPart::ListLiteral(_)
+            | ExpressionPart::Template(_)
             | ExpressionPart::DictLiteral(_)
             | ExpressionPart::RecordLiteral(_) => KType::EXPRESSION,
         }
@@ -872,11 +1007,21 @@ impl<'a> KExpression<'a> {
         f: &mut std::fmt::Formatter<'_>,
         symbols: &SymbolInterner,
     ) -> std::fmt::Result {
+        self.write_in(f, symbols, None)
+    }
+
+    /// [`write_summary`](Self::write_summary) inside a template delimited by `avoid`.
+    fn write_in(
+        &self,
+        f: &mut std::fmt::Formatter<'_>,
+        symbols: &SymbolInterner,
+        avoid: Option<char>,
+    ) -> std::fmt::Result {
         for (index, part) in self.parts.iter().enumerate() {
             if index > 0 {
                 f.write_str(" ")?;
             }
-            part.value.write_summary(f, symbols)?;
+            part.value.write_in(f, symbols, avoid)?;
         }
         Ok(())
     }
@@ -945,6 +1090,11 @@ fn owned_part<'a>(
         ExpressionPart::ListLiteral(items) => {
             for item in items.iter() {
                 owned_part(item.part(), written, visit);
+            }
+        }
+        ExpressionPart::Template(template) => {
+            for slot in template.slots.iter() {
+                owned_part(slot.part(), written, visit);
             }
         }
         ExpressionPart::DictLiteral(pairs) => {

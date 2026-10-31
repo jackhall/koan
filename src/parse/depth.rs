@@ -60,6 +60,12 @@ pub(super) fn part_depth(part: &ExpressionPart<'_>) -> u32 {
                 .max()
                 .unwrap_or(0)
         }
+        ExpressionPart::Template(template) => {
+            1 + (template.slots.iter())
+                .map(|slot| part_depth(slot.part()))
+                .max()
+                .unwrap_or(0)
+        }
         ExpressionPart::DictLiteral(pairs) => {
             let deepest = pairs
                 .iter()

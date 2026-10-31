@@ -17,7 +17,7 @@ use self_cell::self_cell;
 use crate::memory::{
     BumpAllocator, BumpVec, Lays, ProgramBrand, ProgramStorage, collect, program_storage,
 };
-use crate::parse::{ExpressionPart, KExpression, ListItem, copied};
+use crate::parse::{ExpressionPart, KExpression, ListItem, TemplateSlot, copied};
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::{Term, TypeDigest};
 use crate::values::ContentDigest;
@@ -163,8 +163,8 @@ impl<'a> Composition<'a> {
     }
 }
 
-/// Child `at` of `part`: a nested expression's parts, a list's items, a dict's keys and values in
-/// turn, a record's values. `None` past the last, and for a part that nests nothing.
+/// Child `at` of `part`: a nested expression's parts, a list's items, a template's braces, a dict's
+/// keys and values in turn, a record's values. `None` past the last, and for a part that nests nothing.
 fn child<'g>(part: &ExpressionPart<'g>, at: usize) -> Option<&'g ExpressionPart<'g>> {
     match part {
         ExpressionPart::Expression(node)
@@ -174,6 +174,7 @@ fn child<'g>(part: &ExpressionPart<'g>, at: usize) -> Option<&'g ExpressionPart<
         | ExpressionPart::MarkedUse(_, node)
         | ExpressionPart::FilledUse(_, _, node) => node.parts.get(at).map(|part| &part.value),
         ExpressionPart::ListLiteral(items) => items.get(at).map(ListItem::part),
+        ExpressionPart::Template(template) => template.slots.get(at).map(TemplateSlot::part),
         ExpressionPart::DictLiteral(pairs) => pairs
             .get(at / 2)
             .map(|(key, value)| if at.is_multiple_of(2) { key } else { value }),

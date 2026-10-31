@@ -386,6 +386,11 @@ fn part_marks<'graph>(
                 part_marks(sites, item.part(), written, out);
             }
         }
+        ExpressionPart::Template(template) => {
+            for slot in template.slots.iter() {
+                part_marks(sites, slot.part(), written, out);
+            }
+        }
         ExpressionPart::DictLiteral(pairs) => {
             for (key, value) in pairs.iter() {
                 part_marks(sites, key, written, out);
@@ -1821,6 +1826,14 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 }
                 Ok(())
             }
+            // A brace is evaluated to build the string, so it reads its names eagerly, as an
+            // argument does: no template is a knot construction.
+            ExpressionPart::Template(template) => {
+                for slot in template.slots.iter() {
+                    self.walk_part(level, statement, slot.part(), State::Eager)?;
+                }
+                Ok(())
+            }
             ExpressionPart::DictLiteral(pairs) => {
                 // A value dict's `_` default has no reading yet; an arm set's `_` never reaches
                 // here, since arms are read as a container.
@@ -2111,6 +2124,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             | ExpressionPart::MarkedUse(_, run)
             | ExpressionPart::FilledUse(_, _, run) => run,
             ExpressionPart::ListLiteral(_)
+            | ExpressionPart::Template(_)
             | ExpressionPart::DictLiteral(_)
             | ExpressionPart::RecordLiteral(_) => {
                 return self.walk_part(level, statement, part, state);

@@ -139,6 +139,8 @@ pub enum Tag {
     FilledUse = 0x34,
     /// A composition binding a callable's parameters: its code's syntax digest, then the names.
     Composition = 0x35,
+    /// A string template: its pieces, then each brace's kind and part.
+    Template = 0x36,
 }
 
 /// The one hasher every digest is computed through: a tag first, then payload, then each part's
@@ -693,6 +695,17 @@ fn syntax_part(hasher: &mut DigestHasher, part: &ExpressionPart<'_>) {
             for item in items.iter() {
                 hasher.feed(matches!(item, ListItem::Spread(_)));
                 syntax_part(hasher, item.part());
+            }
+            hasher
+        }
+        Part::Template(template) => {
+            hasher.tag(Tag::Template).count(template.slots.len());
+            for piece in template.pieces.iter() {
+                hasher.text(piece.as_bytes());
+            }
+            for slot in template.slots.iter() {
+                hasher.feed(slot.is_kept());
+                syntax_part(hasher, slot.part());
             }
             hasher
         }

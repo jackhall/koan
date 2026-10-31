@@ -398,9 +398,11 @@ impl<'stage, 'step, 'graph, 'cell> Stager<'stage, 'step, 'graph, 'cell> {
                 }
                 Staged::Record(staged)
             }
+            // A template is a string or a plain record built from its braces, never a constructor.
             ExpressionPart::Keyword(_)
             | ExpressionPart::SigiledTypeExpr(_)
-            | ExpressionPart::RecordType(_) => return self.evaluate(part),
+            | ExpressionPart::RecordType(_)
+            | ExpressionPart::Template(_) => return self.evaluate(part),
         };
         let mut edged = false;
         each_child(&staged, |child| edged |= matches!(child, Staged::Edge(_)));

@@ -13,12 +13,12 @@
 //! Modeled on the shape builder's rewrite walk (`scope/shape/build/rewrite.rs`), which copies only
 //! the path to a change and never enters a quote; this copies everything.
 
-use crate::memory::{Bump, BumpVec, Writer, collect};
+use crate::memory::{Bump, BumpVec, Writer, collect, resident};
 use crate::source::Spanned;
 
 use crate::symbols::{BinderSymbol, KeySymbol};
 
-use super::{ExpressionPart, KExpression, KLiteral, ListItem, Mark, Scope};
+use super::{ExpressionPart, KExpression, KLiteral, KTemplate, ListItem, Mark, Scope};
 
 /// Where a copied part stands: whether a quote value lies between the copy's root and it in the
 /// syntax it came from, and in the copy.
@@ -197,6 +197,21 @@ impl<'a> Copier<'a, '_, '_, '_> {
                     });
                 }
                 ExpressionPart::ListLiteral(collect(writer, run.iter().copied()))
+            }
+            ExpressionPart::Template(template) => {
+                let mut slots = BumpVec::with_capacity_in(template.slots.len(), self.scratch);
+                for slot in template.slots.iter() {
+                    slots.push(slot.with(self.part(slot.part(), written, at)));
+                }
+                let mut pieces = BumpVec::with_capacity_in(template.pieces.len(), self.scratch);
+                pieces.extend(template.pieces.iter().map(|piece| writer.text(piece)));
+                ExpressionPart::Template(resident(
+                    writer,
+                    KTemplate {
+                        pieces: collect(writer, pieces.iter().copied()),
+                        slots: collect(writer, slots.iter().copied()),
+                    },
+                ))
             }
             ExpressionPart::DictLiteral(pairs) => {
                 let mut run = BumpVec::with_capacity_in(pairs.len(), self.scratch);

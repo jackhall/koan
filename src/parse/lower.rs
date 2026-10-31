@@ -2,7 +2,7 @@
 //! top-level line. This is where koan's vocabulary enters — which atoms are sigils, what a colon
 //! binds to, what a comma means inside a brace — none of which the layout pass knows.
 //!
-//! Six rules cover it. A **run** of sibling items becomes a run of parts ([`Lower::lower_run`]),
+//! Seven rules cover it. A **run** of sibling items becomes a run of parts ([`Lower::lower_run`]),
 //! with the context (expression, list element, brace entry) deciding where each part lands. A
 //! **body** is a run that becomes a node ([`Lower::lower_body`]). A paren the program writes is
 //! kept, so `((a b))` is `(a b)` wrapped once more and `#((y))` is no `#(y)`; only a layout line
@@ -15,7 +15,9 @@
 //! that starts with `.` reads members of its value, `(MAKESET ints).Set`, through the suffixes a
 //! word runs. A **spread** is `..` glued to a name or a paren group, and is a list literal's item
 //! and nothing else: lowering refuses it anywhere else, inside `#[…]` included, so no other part
-//! holds one. Everything else is an atom, which [`super::atom`] classifies. The one fact lowering
+//! holds one. A **template** is `%` glued to a string: its text is read for `{…}` and `%{…}`
+//! braces, and each brace's text is read on its own ([`sexlex::read_at`]) and lowered as a paren
+//! group with the same contents is. Everything else is an atom, which [`super::atom`] classifies. The one fact lowering
 //! records beyond the tree is the spelling of each bucket key a `NEEDING` list names, since past
 //! the parse a key is its symbol.
 //!
@@ -24,9 +26,10 @@
 use sexlex::{Item, Kind, Node};
 
 use super::error::ParseError;
-use crate::memory::{ProgramBrand, collect};
+use crate::memory::{ProgramBrand, collect, resident};
 use crate::parse::ast::{
-    ExpressionPart, KExpression, KLiteral, KeyElement, ListItem, Mark, ProgramExpression,
+    ExpressionPart, KExpression, KLiteral, KTemplate, KeyElement, ListItem, Mark,
+    ProgramExpression, TemplateSlot,
 };
 use crate::parse::builtin_shapes::KEYWORDS;
 use crate::parse::builtin_shapes::binder::{admit_bare_type_slots, needed_key};
@@ -244,6 +247,15 @@ impl<'a, 's> Lower<'a, '_, 's> {
                     let part = self.spread(text, item, glued, wrappers)?;
                     self.push_part(context, &mut parts, part)?;
                 }
+                // `%` glued to a string makes it a template.
+                Node::Atom("%")
+                    if item.glued
+                        && let Some(string) =
+                            items.next_if(|next| matches!(next.node, Node::Str { .. })) =>
+                {
+                    let part = self.template(item, string, wrappers)?;
+                    self.push_part(context, &mut parts, part)?;
+                }
                 Node::Atom(text) => {
                     // A sigil is an atom glued to the group after it; the pair is one part.
                     if let Some(sigil) = sigil_kind(text)
@@ -428,6 +440,97 @@ impl<'a, 's> Lower<'a, '_, 's> {
         Ok(Spanned::at(
             ExpressionPart::Expression(self.program.alloc_node(expr)),
             item.span,
+        ))
+    }
+
+    /// A template, `%` glued to `string`: its text read for braces, each brace's text read on its
+    /// own and lowered as a paren group with the same contents is. See
+    /// [README.md](README.md) § Templates.
+    fn template(
+        &self,
+        percent: &Item<'s>,
+        string: &Item<'s>,
+        wrappers: Wrappers,
+    ) -> Result<Spanned<ExpressionPart<'a>>, ParseError> {
+        let Node::Str { body, .. } = string.node else {
+            unreachable!("a template's text is a string")
+        };
+        // The body starts past the one-byte opening quote.
+        let base = string.span.start + 1;
+        let span = |from: usize, to: usize| Span {
+            start: base + from as u32,
+            end: base + to as u32,
+        };
+        let writer = self.program.writer();
+        let (mut pieces, mut slots, mut piece) = (Vec::new(), Vec::new(), String::new());
+        let mut at = 0;
+        while let Some(c) = body[at..].chars().next() {
+            let rest = &body[at..];
+            if rest.starts_with("{{") || rest.starts_with("}}") {
+                piece.push(c);
+                at += 2;
+                continue;
+            }
+            if c == '}' {
+                return Err(ParseError::new(
+                    "a `}` in a template's text is written `}}`",
+                    Some(span(at, at + 1)),
+                ));
+            }
+            let kept = rest.starts_with("%{") && !rest[1..].starts_with("{{");
+            if c != '{' && !kept {
+                piece.push(c);
+                at += c.len_utf8();
+                continue;
+            }
+            let open = if kept { at + 1 } else { at };
+            let Some(close) = brace_close(body, open) else {
+                return Err(ParseError::new(
+                    "this brace in a template has no closing `}`",
+                    Some(span(open, body.len())),
+                ));
+            };
+            let brace_span = span(open, close + 1);
+            if body[open + 1..close].trim().is_empty() {
+                return Err(ParseError::new(
+                    "a template's brace holds an expression",
+                    Some(brace_span),
+                ));
+            }
+            let read = sexlex::read_at(&body[open..=close], brace_span.start)
+                .map_err(|e| ParseError::new(e.to_string(), Some(e.span)))?;
+            let [line] = &read[..] else {
+                unreachable!("a brace read alone is one line")
+            };
+            let Node::Group { items, .. } = &line.node else {
+                unreachable!("a line is a layout group")
+            };
+            let [brace] = &items[..] else {
+                unreachable!("a balanced brace is the line's one item")
+            };
+            let Node::Group { items: inner, .. } = &brace.node else {
+                unreachable!("a balanced brace reads as a group")
+            };
+            let node = self.lower_body(inner, brace_span, wrappers)?;
+            let part = ExpressionPart::Expression(self.program.alloc_node(node));
+            slots.push(match kept {
+                true => TemplateSlot::Kept(part),
+                false => TemplateSlot::Rendered(part),
+            });
+            pieces.push(writer.text(&std::mem::take(&mut piece)));
+            at = close + 1;
+        }
+        pieces.push(writer.text(&piece));
+        let template = KTemplate {
+            pieces: collect(writer, pieces.into_iter()),
+            slots: collect(writer, slots.into_iter()),
+        };
+        Ok(Spanned::at(
+            ExpressionPart::Template(resident(writer, template)),
+            Span {
+                start: percent.span.start,
+                end: string.span.end,
+            },
         ))
     }
 
@@ -893,6 +996,32 @@ fn mark_of(sigil: char) -> Option<Mark> {
         '\\' => Some(Mark::Built),
         _ => None,
     }
+}
+
+/// The byte offset of the `}` closing the brace that opens at `open` in a template's `body`,
+/// counting nested braces and skipping quoted strings as `sexlex` reads them.
+fn brace_close(body: &str, open: usize) -> Option<usize> {
+    let (mut depth, mut quote, mut escaped) = (0, None, false);
+    for (offset, c) in body[open..].char_indices() {
+        match quote {
+            Some(_) if escaped => escaped = false,
+            Some(_) if c == '\\' => escaped = true,
+            Some(q) if c == q => quote = None,
+            Some(_) => {}
+            None => match c {
+                '\'' | '"' => quote = Some(c),
+                '{' => depth += 1,
+                '}' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        return Some(open + offset);
+                    }
+                }
+                _ => {}
+            },
+        }
+    }
+    None
 }
 
 /// Whether a layout line leads with `#`, the one sigil that quotes a line.

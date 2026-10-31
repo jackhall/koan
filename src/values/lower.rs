@@ -38,6 +38,8 @@ fn lowers(part: &ExpressionPart<'_>) -> bool {
             scalar && lowers(value)
         }),
         ExpressionPart::RecordLiteral(fields) => fields.iter().all(|(_, value)| lowers(value)),
+        // A template with no brace is its text.
+        ExpressionPart::Template(template) => template.slots.is_empty(),
         ExpressionPart::Keyword(_)
         | ExpressionPart::Identifier(_)
         | ExpressionPart::Type(_)
@@ -62,6 +64,7 @@ fn lower<'cell, X: Knotted>(
     match part {
         ExpressionPart::Literal(KLiteral::Number(number)) => Value::Number(*number),
         ExpressionPart::Literal(KLiteral::String(literal)) => text(writer, literal),
+        ExpressionPart::Template(template) => text(writer, template.pieces[0]),
         ExpressionPart::Literal(KLiteral::Boolean(flag)) => Value::Bool(*flag),
         ExpressionPart::Literal(KLiteral::Null) => Value::Null,
         ExpressionPart::ListLiteral(items) => {

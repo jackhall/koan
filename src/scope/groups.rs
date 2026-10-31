@@ -636,6 +636,12 @@ impl<'graph> Scan<'graph, '_> {
                 }
                 Ok(())
             }
+            ExpressionPart::Template(template) => {
+                for slot in template.slots.iter() {
+                    self.part(slot.part())?;
+                }
+                Ok(())
+            }
             ExpressionPart::DictLiteral(pairs) => {
                 for (key, value) in pairs.iter() {
                     self.part(key)?;
