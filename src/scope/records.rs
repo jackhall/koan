@@ -952,6 +952,23 @@ impl<'graph, 'root, 'step> Written<'graph, 'root, 'step> {
         }
     }
 
+    /// `part`, of the body at `segment`, where the load holds it, which outlives every region;
+    /// `None` for composed code, which a value born of it may outlive.
+    pub fn part(
+        &self,
+        segment: Segment,
+        part: &ExpressionPart<'_>,
+    ) -> Option<&'graph ExpressionPart<'graph>> {
+        if self.composed.is_some() {
+            return None;
+        }
+        let shape = self.load.shapes.shape_at(segment);
+        match shape.located(shape.site(part)) {
+            Located::Part(part) => Some(part),
+            Located::Node(_) => unreachable!("a part's site locates a part"),
+        }
+    }
+
     /// The syntax of the quote at `site` of the body at `segment`, as a code value born of it
     /// holds it.
     pub fn quote(&self, segment: Segment, site: Site) -> CodeSyntax<'graph, 'root>

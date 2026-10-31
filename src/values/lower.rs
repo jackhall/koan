@@ -1,9 +1,10 @@
-//! Lowering a region-pure AST part straight to a value, with no dispatch and no scope.
+//! Lowering a region-pure AST part straight to a value, with no dispatch and no scope: each string
+//! copied into the region, or shared with a part in storage that outlives it.
 
 use crate::memory::{BumpAllocator, BumpVec, Writer};
 use crate::parse::{ExpressionPart, KLiteral};
 
-use super::{Chain, Dict, Key, Knotted, List, Record, Value, text};
+use super::{Chain, Dict, Key, Knotted, List, Record, Value};
 
 impl<'cell, X: Knotted> Value<'cell, X> {
     /// The value a region-pure part denotes: a scalar or string literal, or a container literal
@@ -17,7 +18,18 @@ impl<'cell, X: Knotted> Value<'cell, X> {
         types: &Chain<'_, 'cell, '_, '_>,
         scratch: BumpAllocator<'_>,
     ) -> Option<Value<'cell, X>> {
-        lowers(part).then(|| lower(writer, part, types, scratch))
+        lowers(part).then(|| lower(writer, part, &|text| writer.text(text), types, scratch))
+    }
+
+    /// [`lower_part`](Self::lower_part) of a part in storage that outlives the region, such as
+    /// the program's: each string shares its text there rather than copying it in.
+    pub fn lower_shared<'p: 'cell>(
+        writer: Writer<'cell, '_>,
+        part: &'p ExpressionPart<'p>,
+        types: &Chain<'_, 'cell, '_, '_>,
+        scratch: BumpAllocator<'_>,
+    ) -> Option<Value<'cell, X>> {
+        lowers(part).then(|| lower(writer, part, &|text| text, types, scratch))
     }
 }
 
@@ -54,17 +66,18 @@ fn lowers(part: &ExpressionPart<'_>) -> bool {
     }
 }
 
-/// The value of a part [`lowers`] took.
-fn lower<'cell, X: Knotted>(
+/// The value of a part [`lowers`] took, each string's text laid in the region by `laid`.
+fn lower<'cell, 'p, X: Knotted>(
     writer: Writer<'cell, '_>,
-    part: &ExpressionPart<'_>,
+    part: &'p ExpressionPart<'p>,
+    laid: &dyn Fn(&'p str) -> &'cell str,
     types: &Chain<'_, 'cell, '_, '_>,
     scratch: BumpAllocator<'_>,
 ) -> Value<'cell, X> {
     match part {
         ExpressionPart::Literal(KLiteral::Number(number)) => Value::Number(*number),
-        ExpressionPart::Literal(KLiteral::String(literal)) => text(writer, literal),
-        ExpressionPart::Template(template) => text(writer, template.pieces[0]),
+        ExpressionPart::Literal(KLiteral::String(literal)) => Value::Str(laid(literal)),
+        ExpressionPart::Template(template) => Value::Str(laid(template.pieces[0])),
         ExpressionPart::Literal(KLiteral::Boolean(flag)) => Value::Bool(*flag),
         ExpressionPart::Literal(KLiteral::Null) => Value::Null,
         ExpressionPart::ListLiteral(items) => {
@@ -72,7 +85,7 @@ fn lower<'cell, X: Knotted>(
             cells.extend(
                 items
                     .iter()
-                    .map(|item| lower(writer, item.part(), types, scratch)),
+                    .map(|item| lower(writer, item.part(), laid, types, scratch)),
             );
             Value::List(List::new(writer, cells.iter().copied(), types, scratch))
         }
@@ -89,7 +102,7 @@ fn lower<'cell, X: Knotted>(
                     ExpressionPart::Literal(KLiteral::Boolean(flag)) => Key::bool(*flag),
                     _ => unreachable!("a lowerable dict key is a scalar literal"),
                 };
-                (key, lower(writer, value, types, scratch))
+                (key, lower(writer, value, laid, types, scratch))
             }));
             Value::Dict(Dict::new(writer, &entries, types, scratch))
         }
@@ -98,7 +111,7 @@ fn lower<'cell, X: Knotted>(
             cells.extend(
                 fields
                     .iter()
-                    .map(|(name, value)| (*name, lower(writer, value, types, scratch))),
+                    .map(|(name, value)| (*name, lower(writer, value, laid, types, scratch))),
             );
             Value::Record(Record::new(writer, &cells, types, scratch))
         }

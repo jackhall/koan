@@ -771,10 +771,9 @@ fn container<'step, 'graph, 'here>(
     part: &'step ExpressionPart<'step>,
     stage: u32,
 ) -> Action<'graph, KBundle> {
-    let types = &at.types;
     let scratch = Bump::new();
     if stage == BORN
-        && let Some(value) = Value::lower_part(step.writer(), part, types, &scratch)
+        && let Some(value) = lowered(step.writer(), at, part, &scratch)
     {
         return finish(step, at, value);
     }
@@ -831,6 +830,10 @@ fn container<'step, 'graph, 'here>(
     .filter(|typed| typed.is_exact())
     .and_then(|typed| at.types.concrete(typed.upper));
     let symbols = at.program.symbols();
+    let written = match written_part(at, part) {
+        Some(ExpressionPart::Template(template)) => Some(template.pieces),
+        _ => None,
+    };
     finish_built(step, at, &parts, |writer, types, values| {
         let scratch = Bump::new();
         let decided = decided.filter(|ktype| types.resolves(*ktype));
@@ -868,7 +871,7 @@ fn container<'step, 'graph, 'here>(
                 Value::Record(Record::new(writer, &named, types, &scratch))
             }
             ExpressionPart::Template(template) => {
-                templated(writer, types, symbols, template, values)
+                templated(writer, types, symbols, template, written, values)
             }
             _ => unreachable!("a container is a list, dict or record literal or a template"),
         }
@@ -877,21 +880,25 @@ fn container<'step, 'graph, 'here>(
 
 /// What `template` evaluates to over its braces' `values`: its text with each rendered brace's value
 /// spliced in as `PRINT` renders it, or, where a brace keeps its value, the record of the strings
-/// around the kept values and those values. Each string is a view over its parts.
+/// around the kept values and those values. Each string is a view over its parts; `written` is
+/// the template's pieces where the load holds them, shared rather than copied.
 fn templated<'graph, 'their>(
     writer: Writer<'their, '_>,
     types: &Chain<'_, 'their, '_, '_>,
     symbols: &SymbolInterner,
     template: &KTemplate<'_>,
+    written: Option<&'graph [&'graph str]>,
     values: &[KValue<'graph, 'their>],
 ) -> KValue<'graph, 'their> {
     let scratch = Bump::new();
     let (mut strings, mut kept) = (BumpVec::new_in(&scratch), BumpVec::new_in(&scratch));
     let mut text = Concatenation::new();
-    // A piece lives with the syntax, so it is written into the region its string lands in.
-    let piece = |at: usize| match template.pieces[at] {
-        "" => Text::Flat(""),
-        piece => Text::Flat(writer.text(piece)),
+    // A piece is shared where the load holds it; composed code may die first, so its pieces are
+    // written into the region the string lands in.
+    let piece = |at: usize| match (written, template.pieces[at]) {
+        (Some(pieces), _) => Text::Flat(pieces[at]),
+        (None, "") => Text::Flat(""),
+        (None, piece) => Text::Flat(writer.text(piece)),
     };
     text.push(writer, &scratch, piece(0));
     for (index, (slot, value)) in template.slots.iter().zip(values).enumerate() {
@@ -1552,6 +1559,30 @@ fn carried_under_static<'step, 'graph, 'here>(
     );
 }
 
+/// `part` lowered straight to a value, as [`Value::lower_part`] lowers it, its strings sharing
+/// the program's text where the code is as written.
+fn lowered<'graph, 'here>(
+    writer: Writer<'here, '_>,
+    at: &Evaluation<'_, 'graph, 'here, '_, '_, '_>,
+    part: &ExpressionPart<'_>,
+    scratch: &Bump,
+) -> Option<KValue<'graph, 'here>> {
+    match written_part(at, part) {
+        Some(part) => Value::lower_shared(writer, part, &at.types, scratch),
+        None => Value::lower_part(writer, part, &at.types, scratch),
+    }
+}
+
+/// `part` where the load holds it, which outlives every region, so a value may share its text;
+/// `None` in composed code.
+fn written_part<'graph>(
+    at: &Evaluation<'_, 'graph, '_, '_, '_, '_>,
+    part: &ExpressionPart<'_>,
+) -> Option<&'graph ExpressionPart<'graph>> {
+    let written = (at.program).written_under(at.view.facts(), at.within.root);
+    written.part(at.view.segment(), part)
+}
+
 /// Whether `part` is read in place rather than asked for.
 fn read_in_place(part: &ExpressionPart<'_>) -> bool {
     part.is_name()
@@ -1573,9 +1604,7 @@ fn in_place<'step, 'graph, 'here>(
     let writer = step.writer();
     let types = &at.types;
     match part {
-        ExpressionPart::Literal(_) => {
-            Value::lower_part(writer, part, types, scratch).map(Held::bare)
-        }
+        ExpressionPart::Literal(_) => lowered(writer, at, part, scratch).map(Held::bare),
         ExpressionPart::QuotedExpression(_) => {
             let written = (at.program).written_under(at.view.facts(), at.within.root);
             Some(Held::bare(

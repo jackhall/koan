@@ -2,6 +2,7 @@
 
 use std::ptr;
 
+use crate::parse::{ExpressionPart, KLiteral};
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::{KKind, KType, TypeNode};
 use crate::values::{Key, KeyRejected, TypeValue, Weight};
@@ -359,6 +360,33 @@ fn a_tagged_value_takes_the_application_it_lies_under() {
                 "a bare family names its own constructor"
             );
         });
+    });
+}
+
+/// Lowering copies a string into the region; lowering shared points at the part's own text.
+#[test]
+fn shared_lowering_points_at_the_part_s_text() {
+    with_fixture(|fixture| {
+        let scratch = fixture.scratch();
+        let ExpressionPart::ListLiteral(items) = fixture.part("[\"ab\" %\"cd\"]") else {
+            panic!("a list literal");
+        };
+        fixture.in_cell(pin, |context| {
+            let types = &fixture.tiers.of(context);
+            let writer = context.writer();
+            for item in items.iter() {
+                let text = match item.part() {
+                    ExpressionPart::Literal(KLiteral::String(text)) => *text,
+                    ExpressionPart::Template(template) => template.pieces[0],
+                    _ => panic!("a string or a template"),
+                };
+                let at = |value: Option<Value<'_>>| value.unwrap().as_str().unwrap().as_ptr();
+                let shared = at(Value::lower_shared(writer, item.part(), types, scratch));
+                let copied = at(Value::lower_part(writer, item.part(), types, scratch));
+                assert!(ptr::eq(shared, text.as_ptr()));
+                assert!(!ptr::eq(copied, text.as_ptr()));
+            }
+        })
     });
 }
 
