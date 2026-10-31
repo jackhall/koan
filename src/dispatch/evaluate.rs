@@ -68,7 +68,9 @@ use crate::knot::{KValue, Knotted, flattened, instance, lambda, quote, refused_c
 use crate::memory::{Active, Bump, BumpAllocator, BumpVec, Writer, collect, resident};
 use crate::parse::BuiltinShapeId;
 use crate::parse::Role;
-use crate::parse::{ExpressionPart, KExpression, ListItem};
+use crate::parse::{
+    ExpressionPart, KExpression, KTemplate, ListItem, TemplateSlot, template_fields,
+};
 use crate::program::{
     CallKind, Contract, Evaluated, Exit, Handed, KBirth, KBundle, KState, Passing, block,
     called_function, seek, surfaced_block,
@@ -81,13 +83,13 @@ use crate::scope::{
     AtRun, BodyShape, CandidateList, CandidateRoute, Coordinate, Elaboration, Elimination,
     HandedTo, InstanceRead, Located, Narrowing, ParameterBinding, ShapeKind, Site, StaticType,
 };
-use crate::symbols::{BinderSymbol, Symbol};
+use crate::symbols::{BinderSymbol, Symbol, SymbolInterner};
 use crate::type_lattice::{KType, TypeNode, Verdict};
 #[cfg(debug_assertions)]
 use crate::type_lattice::{bound_above, lower_end_outside, satisfied_by};
 use crate::values::{
-    Chain, Circular, Dict, Key, List, PathSegment, Piece, Record, Tagged, TypeValue, Value,
-    satisfies,
+    Chain, Circular, Concatenation, Dict, Key, List, PathSegment, Piece, Record, Tagged, Text,
+    TypeValue, Value, satisfies,
 };
 
 use super::builtins::{self, Native};
@@ -401,6 +403,7 @@ fn leaf<'step, 'graph, 'here>(
             finish(step, at, value)
         }
         ExpressionPart::ListLiteral(_)
+        | ExpressionPart::Template(_)
         | ExpressionPart::DictLiteral(_)
         | ExpressionPart::RecordLiteral(_) => container(step, at, part, stage),
         ExpressionPart::Keyword(_)
@@ -760,8 +763,8 @@ fn spread<'step, 'graph, 'here>(
     })
 }
 
-/// A list, dict or record literal: lowered whole when every part is a literal, and otherwise built
-/// from its parts' values.
+/// A list, dict or record literal or a template: lowered whole when every part is a literal, and
+/// otherwise built from its parts' values.
 fn container<'step, 'graph, 'here>(
     mut step: Taking<'_, 'graph, '_, 'here, '_, '_>,
     at: &Evaluation<'step, 'graph, 'here, '_, '_, '_>,
@@ -788,7 +791,15 @@ fn container<'step, 'graph, 'here>(
         ExpressionPart::RecordLiteral(fields) => {
             wanted.extend(fields.iter().map(|(_, value)| Wanted::Evaluated(value)));
         }
-        _ => unreachable!("a container is a list, dict or record literal"),
+        ExpressionPart::Template(template) => {
+            wanted.extend(
+                template
+                    .slots
+                    .iter()
+                    .map(|slot| Wanted::Evaluated(slot.part())),
+            );
+        }
+        _ => unreachable!("a container is a list, dict or record literal or a template"),
     }
     let operands = match gathered(&mut step, at, &wanted, built(at), stage, &scratch) {
         Gathered::Ready(operands) => operands,
@@ -819,6 +830,7 @@ fn container<'step, 'graph, 'here>(
         .value_type(&at.types, shape, shape.site(part)))
     .filter(|typed| typed.is_exact())
     .and_then(|typed| at.types.concrete(typed.upper));
+    let symbols = at.program.symbols();
     finish_built(step, at, &parts, |writer, types, values| {
         let scratch = Bump::new();
         let decided = decided.filter(|ktype| types.resolves(*ktype));
@@ -855,9 +867,65 @@ fn container<'step, 'graph, 'here>(
                 named.extend((fields.iter().map(|(name, _)| *name)).zip(values.iter().copied()));
                 Value::Record(Record::new(writer, &named, types, &scratch))
             }
-            _ => unreachable!("a container is a list, dict or record literal"),
+            ExpressionPart::Template(template) => {
+                templated(writer, types, symbols, template, values)
+            }
+            _ => unreachable!("a container is a list, dict or record literal or a template"),
         }
     })
+}
+
+/// What `template` evaluates to over its braces' `values`: its text with each rendered brace's value
+/// spliced in as `PRINT` renders it, or, where a brace keeps its value, the record of the strings
+/// around the kept values and those values. Each string is a view over its parts.
+fn templated<'graph, 'their>(
+    writer: Writer<'their, '_>,
+    types: &Chain<'_, 'their, '_, '_>,
+    symbols: &SymbolInterner,
+    template: &KTemplate<'_>,
+    values: &[KValue<'graph, 'their>],
+) -> KValue<'graph, 'their> {
+    let scratch = Bump::new();
+    let (mut strings, mut kept) = (BumpVec::new_in(&scratch), BumpVec::new_in(&scratch));
+    let mut text = Concatenation::new();
+    // A piece lives with the syntax, so it is written into the region its string lands in.
+    let piece = |at: usize| match template.pieces[at] {
+        "" => Text::Flat(""),
+        piece => Text::Flat(writer.text(piece)),
+    };
+    text.push(writer, &scratch, piece(0));
+    for (index, (slot, value)) in template.slots.iter().zip(values).enumerate() {
+        match slot {
+            TemplateSlot::Rendered(_) => {
+                text.push(
+                    writer,
+                    &scratch,
+                    value.rendered_text(writer, types, symbols, &scratch),
+                );
+            }
+            TemplateSlot::Kept(_) => {
+                strings.push(std::mem::take(&mut text).finish(writer));
+                kept.push(*value);
+            }
+        }
+        text.push(writer, &scratch, piece(index + 1));
+    }
+    if kept.is_empty() {
+        return text.finish(writer);
+    }
+    strings.push(text.finish(writer));
+    let [strings_field, values_field] = template_fields();
+    let fields = [
+        (
+            strings_field,
+            Value::List(List::new(writer, strings.iter().copied(), types, &scratch)),
+        ),
+        (
+            values_field,
+            Value::List(List::new(writer, kept.iter().copied(), types, &scratch)),
+        ),
+    ];
+    Value::Record(Record::new(writer, &fields, types, &scratch))
 }
 
 /// A keyworded call: its slots evaluated, a candidate selected, and the builtin's native run or the

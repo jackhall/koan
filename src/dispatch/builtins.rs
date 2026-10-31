@@ -9,7 +9,8 @@
 //! The library is `PRINT`; `+ - * /` over `Number`; `< <= > >=` over `Number`, returning `Bool`;
 //! `AND` and `NOT` over `Bool`; `==` over `Any`; `LENGTH` over a list, a dict, a string or code,
 //! counting its elements, entries, code points or root parts; `BUILD` over code, typing unbuilt
-//! code exactly under its composition, as the evaluator runs it; `|` and `&` over types, as the infix pair and the
+//! code exactly under its composition, as the evaluator runs it; `JOIN` over a list, and `JOIN … BY`
+//! with a `Str` separator, splicing its elements as `PRINT` renders them; `|` and `&` over types, as the infix pair and the
 //! unary list form an operator run of them is rewritten to; and each overload of the builtin
 //! expression shapes whose slots dispatch evaluates — `ATTR`, `FROM` and `USING` — typed
 //! as their [`BUILTIN_SHAPES`] entry types it. Every overload ranks its slots in written order.
@@ -33,7 +34,7 @@ use crate::scheduler::Held;
 use crate::scope::{Builtins, InstanceRead};
 use crate::symbols::{BinderSymbol, KeywordSymbol, Symbol, SymbolInterner, TypeSymbol};
 use crate::type_lattice::{DispatchTokenElement, KType, TypeNode, builtin_types, meet};
-use crate::values::{Chain, Circular, Seen, TypeValue, Value, record_type};
+use crate::values::{Chain, Circular, Concatenation, Seen, TypeValue, Value, record_type};
 
 use super::errors::Raised;
 use super::rules;
@@ -73,6 +74,10 @@ pub(super) enum Native {
     Length,
     /// `BUILD` over code: unbuilt code carried at the exact type its shape gives it.
     Build,
+    /// `JOIN` over a list, each element rendered as `PRINT` renders it.
+    Join,
+    /// `JOIN … BY`: `JOIN` with a separator between the elements.
+    JoinBy,
 }
 
 impl Native {
@@ -101,6 +106,8 @@ impl Native {
         Native::Using,
         Native::Length,
         Native::Build,
+        Native::Join,
+        Native::JoinBy,
     ];
 
     /// The native a builtin node's `id` names.
@@ -145,6 +152,8 @@ const BOOL: Element = Element::Slot(Takes::Is(KType::BOOL));
 const ANY: Element = Element::Slot(Takes::Is(KType::ANY));
 const TYPE: Element = Element::Slot(Takes::Is(KType::ANY_TYPE));
 const TYPES: Element = Element::Slot(Takes::ListOf(KType::ANY_TYPE));
+const STR: Element = Element::Slot(Takes::Is(KType::STR));
+const VALUES: Element = Element::Slot(Takes::Is(KType::LIST_OF_ANY));
 
 /// An infix overload whose two operands take one type.
 macro_rules! binary {
@@ -230,6 +239,21 @@ static OVERLOADS: &[Overload] = &[
         ],
         returns: KType::ANY_CODE,
         native: Native::Build,
+    },
+    Overload {
+        elements: &[Element::Keyword("JOIN"), VALUES],
+        returns: KType::STR,
+        native: Native::Join,
+    },
+    Overload {
+        elements: &[
+            Element::Keyword("JOIN"),
+            VALUES,
+            Element::Keyword("BY"),
+            STR,
+        ],
+        returns: KType::STR,
+        native: Native::JoinBy,
     },
 ];
 
@@ -551,6 +575,25 @@ pub(super) fn run<'graph, 'here>(
         // Code its shape types already finishes as it is; the evaluator builds the rest under
         // their compositions.
         Native::Build => value(0),
+        // The joined string is a view over its elements' texts and the separator's.
+        Native::Join | Native::JoinBy => {
+            let separator = (native == Native::JoinBy).then(|| {
+                value(1)
+                    .as_text()
+                    .expect("a `Str` slot admits strings alone")
+            });
+            let mut joined = Concatenation::new();
+            for (index, element) in listed(value(0), types, scratch).iter().enumerate() {
+                if index > 0
+                    && let Some(separator) = separator
+                {
+                    joined.push(writer, scratch, separator);
+                }
+                let text = element.rendered_text(writer, types, program.symbols(), scratch);
+                joined.push(writer, scratch, text);
+            }
+            joined.finish(writer)
+        }
     }
 }
 

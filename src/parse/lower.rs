@@ -29,12 +29,12 @@ use super::error::ParseError;
 use crate::memory::{ProgramBrand, collect, resident};
 use crate::parse::ast::{
     ExpressionPart, KExpression, KLiteral, KTemplate, KeyElement, ListItem, Mark,
-    ProgramExpression, TemplateSlot,
+    ProgramExpression, TEMPLATE_FIELDS, TemplateSlot,
 };
 use crate::parse::builtin_shapes::KEYWORDS;
 use crate::parse::builtin_shapes::binder::{admit_bare_type_slots, needed_key};
 use crate::source::{FileId, SourceRef, Span, Spanned};
-use crate::symbols::{SymbolInterner, WILDCARD};
+use crate::symbols::{SymbolInterner, ValueSymbol, WILDCARD};
 
 use super::atom;
 use super::brace::{BraceContents, DictFrame};
@@ -521,6 +521,12 @@ impl<'a, 's> Lower<'a, '_, 's> {
             at = close + 1;
         }
         pieces.push(writer.text(&piece));
+        // The record a kept brace makes renders its field names.
+        if slots.iter().any(TemplateSlot::is_kept) {
+            for name in TEMPLATE_FIELDS {
+                ValueSymbol::declared(name, self.symbols).expect("a value name");
+            }
+        }
         let template = KTemplate {
             pieces: collect(writer, pieces.into_iter()),
             slots: collect(writer, slots.into_iter()),

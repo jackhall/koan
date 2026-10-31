@@ -270,9 +270,12 @@ impl<'a> TemplateSlot<'a> {
     }
 }
 
+/// The names of the fields of the record a template with a kept brace evaluates to.
+pub const TEMPLATE_FIELDS: [&str; 2] = ["strings", "values"];
+
 /// The fields of the record a template with a kept brace evaluates to: `strings`, then `values`.
 pub fn template_fields() -> [BinderSymbol; 2] {
-    ["strings", "values"]
+    TEMPLATE_FIELDS
         .map(|name| BinderSymbol::Value(ValueSymbol::classify(name).expect("a value name")))
 }
 

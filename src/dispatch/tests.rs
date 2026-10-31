@@ -43,6 +43,7 @@ mod spreads;
 mod statics;
 mod surface;
 mod tail;
+mod templates;
 mod trees;
 mod types;
 mod views;

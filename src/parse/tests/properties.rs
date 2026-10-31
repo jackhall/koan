@@ -23,6 +23,7 @@ use proptest::prelude::*;
 use super::super::atom::classify_token;
 use super::{top, tree};
 use crate::memory::program_storage;
+use crate::parse::ast::TEMPLATE_FIELDS;
 use crate::parse::{DispatchShape, ExpressionPart, KExpression, KLiteral, KeyElement, parse};
 use crate::source::Span;
 use crate::symbols::{Symbol, SymbolInterner, is_keyword_token, is_type_name};
@@ -888,7 +889,11 @@ fn tree_spellings(item: &Tree, out: &mut BTreeSet<String>) {
                 tree_spellings(value, out);
             }
         }
+        // A kept brace's template is a record, whose field names the parse records.
         Tree::Template(_, _, slots) => {
+            if slots.iter().any(|(kept, _)| *kept) {
+                out.extend(TEMPLATE_FIELDS.map(str::to_string));
+            }
             for item in slots.iter().flat_map(|(_, run)| run) {
                 tree_spellings(item, out);
             }

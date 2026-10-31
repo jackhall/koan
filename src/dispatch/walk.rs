@@ -157,7 +157,9 @@ use crate::memory::{
     resident,
 };
 use crate::parse::BuiltinShapeId;
-use crate::parse::{ExpressionPart, KExpression, KLiteral, ListItem};
+use crate::parse::{
+    ExpressionPart, KExpression, KLiteral, ListItem, TemplateSlot, template_fields,
+};
 use crate::program::kept;
 use crate::scope::{
     Address, BodyClass, BodyShape, Born, BuiltinIndex, Candidate, CandidateList, CandidateRoute,
@@ -3787,18 +3789,37 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                     self.site(level, part),
                     items.iter().map(ListItem::part).zip(typed.iter().copied()),
                 );
-                let typed = elements;
-                match concrete_points(types, scratch, typed.iter().copied()) {
-                    Some(points) => {
-                        Interval::point(list_type(types, scratch, points.into_iter()).into())
-                    }
-                    None => {
-                        let (lower, upper) = container_ends(types, scratch, typed.iter().copied());
-                        Interval {
-                            lower: types.list(lower),
-                            upper: types.list(upper),
-                        }
-                    }
+                list_interval(types, scratch, &elements)
+            }
+            // A rendered brace's value is written into the text, so its type constrains nothing.
+            ExpressionPart::Template(template) => {
+                let mut typed = BumpVec::with_capacity_in(template.slots.len(), scratch);
+                for slot in template.slots.iter() {
+                    typed.push(self.part(level, slot.part())?);
+                }
+                let slots = template.slots.iter().map(TemplateSlot::part);
+                self.record_composite(
+                    level,
+                    self.site(level, part),
+                    slots.zip(typed.iter().copied()),
+                );
+                let mut kept = BumpVec::with_capacity_in(typed.len(), scratch);
+                let each = template.slots.iter().zip(typed.iter());
+                kept.extend(
+                    each.filter(|(slot, _)| slot.is_kept())
+                        .map(|(_, typed)| *typed),
+                );
+                if kept.is_empty() {
+                    return Ok(Interval::point(KType::STR.into()));
+                }
+                let values = list_interval(types, scratch, &kept);
+                let strings: Parametric =
+                    list_type(types, scratch, [KType::STR].into_iter()).into();
+                let [names, values_name] = template_fields();
+                let record = |values| [(names, strings), (values_name, values)].into_iter();
+                Interval {
+                    lower: record_type(types, scratch, record(values.lower)),
+                    upper: record_type(types, scratch, record(values.upper)),
                 }
             }
             ExpressionPart::DictLiteral(pairs) => {
@@ -5523,6 +5544,25 @@ fn concrete_points<'x>(
         points.push(types.concrete(each.upper).filter(|_| each.is_exact())?);
     }
     Some(points)
+}
+
+/// The static type of a list literal whose elements' static types are `elements`: the list the run
+/// fills where every one is exact, and otherwise a list over [`container_ends`].
+fn list_interval(
+    types: &Chain<'_, '_, '_, '_>,
+    scratch: BumpAllocator<'_>,
+    elements: &[Interval],
+) -> Interval {
+    match concrete_points(types, scratch, elements.iter().copied()) {
+        Some(points) => Interval::point(list_type(types, scratch, points.into_iter()).into()),
+        None => {
+            let (lower, upper) = container_ends(types, scratch, elements.iter().copied());
+            Interval {
+                lower: types.list(lower),
+                upper: types.list(upper),
+            }
+        }
+    }
 }
 
 /// The ends of a container literal's element type, over `typed`, its elements' static types, where
