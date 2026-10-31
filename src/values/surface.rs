@@ -41,12 +41,14 @@ const SEEN: &str = "a value of a kind is seen at a type, never a scheme";
 
 /// One step from a value down to one of its parts: a record field's label, read as
 /// [`Value::along`] reads it; a capture slot of a function, read as [`Value::captured`] reads it;
-/// or a member slot of a module, which `values` sees as opaque and the knot reads.
+/// a member slot of a module, which `values` sees as opaque and the knot reads; or a tagged
+/// value's payload, read as [`Value::untagged`] reads it.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum PathSegment {
     Label(Symbol),
     Capture(u32),
     Member(u32),
+    Payload,
 }
 
 /// A path of segments from a value down to one of its parts.
@@ -336,6 +338,15 @@ impl<'cell, X: Knotted + 'cell> Value<'cell, X> {
                 }
                 Raw::List(_) | Raw::Dict(..) => return None,
             }
+        }
+    }
+
+    /// The payload one tagged layer below this value, as [`along`](Self::along) reads through it:
+    /// `None` for a value that is not tagged.
+    pub fn untagged(self) -> Option<Value<'cell, X>> {
+        match raw(self)?.1 {
+            Raw::Tagged(payload) => Some(payload.get(0)),
+            Raw::Record(..) | Raw::List(_) | Raw::Dict(..) => None,
         }
     }
 

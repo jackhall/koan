@@ -1,25 +1,31 @@
-//! The threaded set of a callable's or a code body's last statement: what a tail call it makes hands
-//! on that its frame built itself, so the frame builds it where it outlives the hop rather than in a
-//! region the next hop reclaims ([`BodyShape::threaded`](super::super::BodyShape::threaded)). Read
-//! off a draft at its seal, beside `last_reads`.
+//! The threaded set of a callable's, a code body's or a tail arm's last statement: what a tail call
+//! it makes hands on that its frame built itself, so the frame builds it where it outlives the hop
+//! rather than in a region the next hop reclaims
+//! ([`BodyShape::threaded`](super::super::BodyShape::threaded)). Read off a draft at its seal, beside
+//! `last_reads`.
 //!
 //! A value the frame received — a parameter, a capture, a binder bound bare to one, or a member read
 //! of one through the builtin `ATTR` alone — is no member: it rests where it was handed from, and a
-//! hop hands it on from there.
+//! hop hands it on from there. A tail arm's `it` is received where its `MATCH`'s scrutinee is; one
+//! that is not is built by the `MATCH`, so an arm handing it on threads the scrutinee in the body
+//! holding the `MATCH`. An arm reads any other name of the bodies around it as received: the body
+//! it lands in reads it in its own last statement, so its own set holds it where it is built.
 
 use super::{
     BumpAllocator, BumpVec, Candidate, Coordinate, Draft, ExpressionPart, KExpression, Lands,
-    Position, Role, ShapeKind, Site, Slot,
+    Position, Role, Site, Slot,
 };
 use crate::parse::BuiltinShapeId;
 
 /// The threaded set of `draft`, the body at level `this` of the chain its mentions land on: the
 /// binders in the backward closure over its read edges from its last statement's reads, and its
-/// last statement's argument parts that are no name and no literal, each less what the frame
-/// received, both sorted. Empty for any kind but a callable's or a code body.
+/// last statement's argument parts that are no name and no literal — and, where `threads_it` says
+/// a tail arm of it hands on an `it` it built, its `MATCH`'s scrutinee — each less what the frame
+/// received, both sorted. Empty for any body but a callable's, a code body or a tail arm.
 pub(super) fn threaded<'x>(
     draft: &Draft<'_, 'x>,
     this: usize,
+    threads_it: bool,
     scratch: BumpAllocator<'x>,
 ) -> (BumpVec<'x, Slot>, BumpVec<'x, Site>) {
     let mut slots = BumpVec::new_in(scratch);
@@ -27,12 +33,14 @@ pub(super) fn threaded<'x>(
     let Some(last) = draft.statements.checked_sub(1) else {
         return (slots, parts);
     };
-    if !matches!(draft.kind, ShapeKind::Callable | ShapeKind::Code) {
+    if !draft.tail {
         return (slots, parts);
     }
-    // A type slot and a parameter are never built by the frame.
+    // A type slot and a parameter are never built by the frame, save an arm's `it` it built.
     let built = |slot: Slot| {
-        !draft.is_type_slot(slot) && draft.channels().get(slot.index()) != Position::PARAMETER
+        !draft.is_type_slot(slot)
+            && (draft.channels().get(slot.index()) != Position::PARAMETER
+                || !received_binder(draft, this, slot))
     };
     let mut pending = BumpVec::new_in(scratch);
     pending.extend(
@@ -53,7 +61,11 @@ pub(super) fn threaded<'x>(
     }
     slots.sort_unstable();
     let node = &draft.body[last as usize];
-    for part in handed_on(draft, node, scratch) {
+    let matched = (node.cache().builtin_shape()).is_some_and(|shape| {
+        matches!(shape.id, BuiltinShapeId::Match | BuiltinShapeId::MatchUnder)
+    });
+    let scrutinee = (threads_it && matched).then(|| &node.parts[1].value);
+    for part in handed_on(draft, node, scratch).into_iter().chain(scrutinee) {
         let named = part.is_name() || matches!(part, ExpressionPart::Literal(_));
         if !named && !received(draft, this, part) {
             parts.push(draft.sites.site(part));
@@ -113,7 +125,7 @@ fn handed_on<'graph, 'x>(
 /// Whether `part` is a value the frame body at level `this` received: a name landing on one of its
 /// parameters, a capture, a builtin or a binder of a body around it, or on a binder of its own
 /// bound bare to such a value; or a member read of such a value through the builtin `ATTR` alone.
-fn received(draft: &Draft<'_, '_>, this: usize, part: &ExpressionPart<'_>) -> bool {
+pub(super) fn received(draft: &Draft<'_, '_>, this: usize, part: &ExpressionPart<'_>) -> bool {
     match part {
         ExpressionPart::Expression(node) | ExpressionPart::MarkedUse(_, node) => {
             let Some(attribute) = node.cache().builtin_shape() else {
@@ -163,11 +175,11 @@ fn received(draft: &Draft<'_, '_>, this: usize, part: &ExpressionPart<'_>) -> bo
     }
 }
 
-/// Whether the binder at `slot` of the body at level `this` holds a value it received: a parameter,
-/// or a binder bound bare to a received value.
+/// Whether the binder at `slot` of the body at level `this` holds a value it received: a parameter
+/// — an arm's `it` where its scrutinee is received — or a binder bound bare to a received value.
 fn received_binder(draft: &Draft<'_, '_>, this: usize, slot: Slot) -> bool {
     if draft.channels().get(slot.index()) == Position::PARAMETER {
-        return true;
+        return draft.arm.is_none() || draft.it_received;
     }
     (draft.binders.get(slot.index()))
         .and_then(|binder| binder.rhs)

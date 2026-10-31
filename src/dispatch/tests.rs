@@ -22,6 +22,7 @@ mod keys;
 mod lexical;
 mod literal_splices;
 mod loops;
+mod matching;
 mod memo;
 mod modules;
 mod named_code;

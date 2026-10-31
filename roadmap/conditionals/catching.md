@@ -46,7 +46,7 @@ strings.
   lies in until the catcher copies it out.
 - *`TRY`'s declared result — open.* `TRY … -> <type> WITH` declares its result
   type. A `MATCH` declares none, its type computed from its arms
-  ([matching](matching.md)), since a declared result that retypes makes a tail
+  ([matching](../../src/dispatch/README.md#matching)), since a declared result that retypes makes a tail
   arm's outcome differ from a non-tail one's. `TRY` may drop its declared
   result likewise, or keep it, since its body is never in tail position.
 
@@ -54,7 +54,6 @@ strings.
 
 **Requires:**
 
-- [Matching](matching.md) — `TRY` selects an arm as `MATCH … UNDER` does.
 - [Faults and call traces](faults.md) — what `TRY` and `CATCH` catch, and the frames they read.
 - [The builtin table](../../src/dispatch/README.md#the-builtin-table) — shipped:
   the bound `Result` `CATCH` returns.

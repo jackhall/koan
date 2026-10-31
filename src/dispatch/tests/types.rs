@@ -553,35 +553,31 @@ fn a_refusal_in_a_quote_s_code_is_kept_for_its_eval() {
 /// against the first guard of its type, whatever order the handles sort in.
 #[test]
 fn the_first_repeat_in_program_order_is_refused() {
-    let error =
-        refused("MATCH 1 -> :Number WITH #{Str: (1), Number: (2), :(Number): (3), :(Str): (4)}");
+    let error = refused("MATCH 1 WITH #{Str: (1), Number: (2), :(Number): (3), :(Str): (4)}");
     assert_eq!(
         error,
-        "<test>:1:25: `Number` guards two arms; first at <test>:1:25"
+        "<test>:1:14: `Number` guards two arms; first at <test>:1:14"
     );
 }
 
 #[test]
 fn a_guard_written_twice_refuses_the_arm_set() {
     for source in [
-        "MATCH 1 -> :Number WITH #{Number: (1), :(Number): (2)}",
-        "LET Num = Number\nMATCH 1 -> :Number WITH #{Num: (1), Number: (2)}",
-        "MATCH 1 -> :Number WITH #{:(Number | Str): (1), :(Str | Number): (2)}",
+        "MATCH 1 WITH #{Number: (1), :(Number): (2)}",
+        "LET Num = Number\nMATCH 1 WITH #{Num: (1), Number: (2)}",
+        "MATCH 1 WITH #{:(Number | Str): (1), :(Str | Number): (2)}",
         "EXPR FOR ALL #[Elt] #(FUN x :Elt) -> Any = \
-         #(MATCH x -> :Number WITH #{Elt: (1), :(Elt): (2)})",
+         #(MATCH x WITH #{Elt: (1), :(Elt): (2)})",
     ] {
         let error = refused(source);
         assert!(error.contains("guards two arms"), "`{source}`: {error}");
     }
-    loaded(
-        "MATCH 1 -> :Number WITH #{Number: (1), Str: (2)}",
-        |program| {
-            let guards = (program.shape().type_expressions().iter())
-                .filter(|expression| expression.guard.is_some())
-                .count();
-            assert_eq!(guards, 2);
-        },
-    );
+    loaded("MATCH 1 WITH #{Number: (1), Str: (2)}", |program| {
+        let guards = (program.shape().type_expressions().iter())
+            .filter(|expression| expression.guard.is_some())
+            .count();
+        assert_eq!(guards, 2);
+    });
 }
 
 #[test]

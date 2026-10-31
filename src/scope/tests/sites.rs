@@ -11,7 +11,7 @@ const NESTED: &str = "LET f = (FN :{x :Number} -> Any = #(\n  \
                       LET g = (FN :{y :Number} -> Number = #(1 < (y) <= 3))\n  \
                       LET q = #(x + 1)\n  \
                       LET r = {a = [x 2], b = {\"k\": (g 1)}}\n  \
-                      MATCH r -> :Any WITH #{_: #(it)}\n))\n\
+                      MATCH r WITH #{_: #(it)}\n))\n\
                       LET z = 2\n1 < (z) <= 3";
 
 /// Each node and part `shape`'s statements hold, in written order: a node before its parts.

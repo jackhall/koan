@@ -73,6 +73,12 @@
 //! Inside a quote's code a refusal, and the first registration overlapping a builtin, is kept in
 //! the code's closing record, and the `EVAL` running it reports it.
 //!
+//! A `MATCH` types each arm as a block whose `it` is the scrutinee retyped to the arm's guard, keeps
+//! the arms a run can take as static selection keeps a use's candidates, refusing a `MATCH` none of
+//! whose arms can run or several of whose arms always admit with none ranking first, and is the
+//! span of the kept arms' types ([`arms`]). A `MATCH … UNDER`'s arms are checked against its union
+//! beside the guards, where the walk closes the union clause.
+//!
 //! A `MODULE` or `GROUP` binder's body is typed where its binder is, since it runs inline, and the
 //! binder is exactly the signature the run ties where every member is exact ([`module_signature`]),
 //! else at most `Module`. A `:|` ascription is a view: refused where every run's
@@ -162,11 +168,11 @@ use crate::parse::{
 };
 use crate::program::kept;
 use crate::scope::{
-    Address, BodyClass, BodyShape, Born, BuiltinIndex, Candidate, CandidateList, CandidateRoute,
-    CaptureChain, CaptureSlot, CaptureSource, Closing, ComponentIndex, Coordinate, Cut,
-    Elimination, Frontier, Identity, InstanceRead, Kept, Keyed, Lands, Leaf, Listed, NamedVariable,
-    Narrowing, PathEntry, Pick, Point, Points, Position, Resolution, Retypes, Route, Segment,
-    ShapeError, ShapeKind, Shapes, Site, SiteDeps, Slot, Source, Static, StaticInstance,
+    Address, Arms, BodyClass, BodyShape, Born, BuiltinIndex, Candidate, CandidateList,
+    CandidateRoute, CaptureChain, CaptureSlot, CaptureSource, Closing, ComponentIndex, Coordinate,
+    Cut, Elimination, Frontier, Identity, InstanceRead, Kept, Keyed, Lands, Leaf, Listed,
+    NamedVariable, Narrowing, PathEntry, Pick, Point, Points, Position, Resolution, Retypes, Route,
+    Segment, ShapeError, ShapeKind, Shapes, Site, SiteDeps, Slot, Source, Static, StaticInstance,
     StaticRegistered, StaticType, Store, SurfacedHead, Tree, Typed, UnitFacts, UnitId, UnitIndex,
     UnitWork, Unknown, UseStatics, Variable as Located, Within, follow, part_of, source_of,
     traced_quote,
@@ -185,6 +191,7 @@ use crate::values::{
     pinned_at_fit, record_type, retype_target, retyped_to, under, unknown,
 };
 
+mod arms;
 mod caching;
 mod lookups;
 mod paths;
@@ -352,6 +359,16 @@ struct Followed {
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 struct Tag(u32);
 
+/// How the walk enters an inline body's parameters: as a `USING … SCOPE` body, each surfaced name
+/// the member read of an operand of this static type, or as a `MATCH` arm, whose `it` lies within
+/// this interval — each beside the unit that fixed it. A plain body binds no parameter.
+#[derive(Clone, Copy)]
+enum Entering {
+    Plain,
+    Surfaced(Interval, Tag),
+    Arm(Interval, Tag),
+}
+
 /// One running unit's gathering: each unknown it read itself, and each ended frontier it read,
 /// cut to the chain as it read it. Unsorted until its frontier lays it.
 struct Gathering<'p, 'o> {
@@ -429,6 +446,7 @@ enum Wrote {
     Instance(usize),
     Named(usize),
     Route(usize),
+    Arms(usize),
     Retype(usize),
     Tree(usize),
     Picks(usize),
@@ -474,6 +492,8 @@ struct Level<'p, 'o, 'graph> {
     named: BumpVec<'p, (Site, &'o [StaticType<'o>], Tag)>,
     /// Each tail call's route, by its node's site.
     routes: BumpVec<'p, (Site, Route<'o>, Tag)>,
+    /// Each `MATCH`'s arms, by its node's site.
+    arms: BumpVec<'p, (Site, Arms<'o>, Tag)>,
     /// Each retype to a closed declared type, by its settled site or member read's node site.
     retypes: BumpVec<'p, (Site, Retype, Tag)>,
     /// Whether a porous value leaves the shape: through its return, or an argument of a call it
@@ -798,6 +818,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             instances: BumpVec::new_in(scratch),
             named: BumpVec::new_in(scratch),
             routes: BumpVec::new_in(scratch),
+            arms: BumpVec::new_in(scratch),
             retypes: BumpVec::new_in(scratch),
             exits: false,
             minting: BumpVec::new_in(scratch),
@@ -843,7 +864,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             true => Err(*shape
                 .refusal()
                 .expect("a refused code shape holds its refusal")),
-            false => self.units_of(level, None).and_then(|_| self.closing(level)),
+            false => (self.units_of(level, Entering::Plain)).and_then(|_| self.closing(level)),
         };
         // A quote's code keeps its first overlap for the `EVAL` running it to report.
         let walked = walked.map(|(mut closing, tag)| {
@@ -946,7 +967,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 // absorbed, and the callables they birth walked.
                 self.push(nested, false);
                 let at = self.chain.len() - 1;
-                self.units_of(at, None)?;
+                self.units_of(at, Entering::Plain)?;
                 self.chain.pop();
             }
         }
@@ -960,19 +981,32 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         level: usize,
         shape: &'graph BodyShape<'graph>,
     ) -> Result<(), ShapeError<'o>> {
-        let surfacing = self.surfacing_of(level, shape);
+        let entering = self.entering_of(level, shape);
         self.push(shape, false);
         let at = self.chain.len() - 1;
-        self.units_of(at, surfacing)?;
+        self.units_of(at, entering)?;
         self.chain.pop();
         Ok(())
     }
 
-    /// The static type of the operand of the `USING … SCOPE` whose body is `block`, as the shape at
-    /// `level` holding it has it, beside the unit that fixed it: `None` for any other inline body.
-    fn surfacing_of(&self, level: usize, block: &BodyShape<'graph>) -> Option<(Interval, Tag)> {
+    /// How the shape at `level` entered the inline body `block`, as its facts have it: as a
+    /// `USING … SCOPE` body over its operand's static type, or as a `MATCH` arm over the interval
+    /// the `MATCH` typed its `it` at, which it holds at the arm's site; each beside the unit that
+    /// fixed it.
+    fn entering_of(&self, level: usize, block: &BodyShape<'graph>) -> Entering {
         let shape = self.chain[level].shape;
-        let (_, statement) = self.shapes.parent(block.segment())?;
+        let Some((_, statement)) = self.shapes.parent(block.segment()) else {
+            return Entering::Plain;
+        };
+        if block.arm().is_some() {
+            let site = (shape.nested_in(statement as usize).iter())
+                .find_map(|(site, nested)| (nested.segment() == block.segment()).then_some(*site))
+                .expect("an arm is nested in its statement");
+            return match self.chain[level].parts.get(&site) {
+                Some((typed, tag)) => Entering::Arm(*typed, *tag),
+                None => Entering::Plain,
+            };
+        }
         let holding = &shape.body()[statement as usize];
         let surfaces = |node: &'graph KExpression<'graph>| {
             matches!(of_node(shape, node), Form::Using(_))
@@ -987,11 +1021,17 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 using = Some(node);
             }
         });
-        let [_, operand, _, _] = using?.parts else {
+        let Some(using) = using else {
+            return Entering::Plain;
+        };
+        let [_, operand, _, _] = using.parts else {
             unreachable!("a `USING … SCOPE` has its keyword, its module, `SCOPE` and a body")
         };
         let site = self.site(level, &operand.value);
-        self.chain[level].parts.get(&site).copied()
+        match self.chain[level].parts.get(&site) {
+            Some((typed, tag)) => Entering::Surfaced(*typed, *tag),
+            None => Entering::Plain,
+        }
     }
 
     /// Absorb the unit `index` of the owning body at chain level `level`, which a walk rooted below
@@ -1032,14 +1072,10 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     }
 
     /// Run the entry and each unit of the body at `level`, each callable a unit births walked
-    /// right after it: an inline body's entry over what it is `surfacing`.
-    fn units_of(
-        &mut self,
-        level: usize,
-        surfacing: Option<(Interval, Tag)>,
-    ) -> Result<(), ShapeError<'o>> {
+    /// right after it: an inline body's entry as `entering` says.
+    fn units_of(&mut self, level: usize, entering: Entering) -> Result<(), ShapeError<'o>> {
         let shape = self.chain[level].shape;
-        self.unit(level, UnitIndex::ENTRY, |pass| pass.entry(level, surfacing))?;
+        self.unit(level, UnitIndex::ENTRY, |pass| pass.entry(level, entering))?;
         for (index, unit) in shape.units().iter().enumerate() {
             let at = UnitIndex::of_run(index);
             // Collected outside the unit: one the store absorbs runs no steps but births its
@@ -1218,6 +1254,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         let mut instances = BumpVec::new_in(scratch);
         let mut named = BumpVec::new_in(scratch);
         let mut routes = BumpVec::new_in(scratch);
+        let mut arms = BumpVec::new_in(scratch);
         let mut retypes = BumpVec::new_in(scratch);
         let mut trees = BumpVec::new_in(scratch);
         let mut picks = BumpVec::new_in(scratch);
@@ -1311,6 +1348,12 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                         routes.push((site, route));
                     }
                 }
+                Wrote::Arms(index) => {
+                    let (site, fixed, held) = at.arms[index];
+                    if ours(held) {
+                        arms.push((site, fixed));
+                    }
+                }
                 Wrote::Retype(index) => {
                     let (site, retype, held) = at.retypes[index];
                     if ours(held) {
@@ -1346,6 +1389,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         newest(&mut instances);
         newest(&mut named);
         newest(&mut routes);
+        newest(&mut arms);
         newest(&mut retypes);
         newest(&mut trees);
         newest(&mut picks);
@@ -1362,6 +1406,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             selections: keyed(lay, &selections),
             by_name: Keyed::sorted(lay, &mut named),
             routes: Keyed::sorted(lay, &mut routes),
+            arms: Keyed::sorted(lay, &mut arms),
             retypes: Keyed::sorted(lay, &mut retypes),
             trees: Keyed::sorted(lay, &mut trees),
             picks: Keyed::sorted(lay, &mut picks),
@@ -1451,6 +1496,8 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 .iter()
                 .map(|(site, route)| (*site, *route, tag)),
         );
+        at.arms
+            .extend(typed.arms.iter().map(|(site, arms)| (*site, *arms, tag)));
         at.retypes.extend(
             typed
                 .retypes
@@ -1500,31 +1547,32 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     /// The entry of the owning body or inline body at `level`: each slot it binds before any
     /// statement runs seeded — a parameter, its own `FOR ALL` names, its `:Type` parameters, a
     /// block's surfaced names — a `USING … SCOPE` body's surfaced names at the member reads they
-    /// name of the module typed `surfacing`.
-    fn entry(
-        &mut self,
-        level: usize,
-        surfacing: Option<(Interval, Tag)>,
-    ) -> Result<(), ShapeError<'o>> {
+    /// name of the module its operand is typed, and an arm's `it` at the interval its `MATCH` typed
+    /// it at, as `entering` says.
+    fn entry(&mut self, level: usize, entering: Entering) -> Result<(), ShapeError<'o>> {
         let shape = self.chain[level].shape;
         for slot in shape.holds(UnitIndex::ENTRY).slots.iter().copied() {
-            // A surfaced name reads the module's static type, which its `USING` read.
-            let surfaced = surfacing.filter(|_| shape.position_of(slot) == Position::PARAMETER);
-            if let Some((_, tag)) = surfaced {
+            // A surfaced name reads the module's static type, which its `USING` read, and an
+            // arm's `it` the interval its `MATCH` typed it at.
+            let entered = match shape.position_of(slot) == Position::PARAMETER {
+                true => entering,
+                false => Entering::Plain,
+            };
+            if let Entering::Surfaced(_, tag) | Entering::Arm(_, tag) = entered {
                 self.gather(tag);
             }
             // A block's surfaced key is a registration bound at its entry.
             if let Some(registration) = shape.registration(slot) {
                 self.register(level, registration)?;
             }
-            self.seed_slot(level, slot, surfaced.map(|(typed, _)| typed));
+            self.seed_slot(level, slot, entered);
         }
         Ok(())
     }
 
     /// Seed the binder at `slot` of the shape at `level` before its unit types anything.
-    fn seed_slot(&mut self, level: usize, slot: Slot, surfacing: Option<Interval>) {
-        let seeded = self.seeded(level, slot, surfacing);
+    fn seed_slot(&mut self, level: usize, slot: Slot, entering: Entering) {
+        let seeded = self.seeded(level, slot, entering);
         self.note_own(level, slot, seeded);
         self.set_binder(level, slot, seeded);
     }
@@ -1544,7 +1592,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         let holds = shape.holds(index);
         for slot in holds.slots.iter().copied() {
             if !self.component_types(shape, slot) && shape.declarations(slot).is_none() {
-                self.seed_slot(level, slot, None);
+                self.seed_slot(level, slot, Entering::Plain);
             }
         }
         // 1. Each path its statements spell, before anything reads it.
@@ -1557,7 +1605,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             if shape.declarations(component.members[0]).is_some() {
                 self.declare(level, component)?;
                 for member in component.members {
-                    self.seed_slot(level, *member, None);
+                    self.seed_slot(level, *member, Entering::Plain);
                 }
             }
         }
@@ -1567,7 +1615,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         for slot in holds.slots.iter().copied() {
             if let Some(registration) = shape.registration(slot) {
                 self.register(level, registration)?;
-                self.seed_slot(level, slot, None);
+                self.seed_slot(level, slot, Entering::Plain);
             }
         }
         for nested in nests.callables {
@@ -1588,11 +1636,11 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             }
             UnitWork::Component(index) => self.component(level, index.index())?,
         }
-        // A block its value statics did not reach — an arm a builtin's rule reads no further than
+        // A block its value statics did not reach — a block a builtin's rule reads no further than
         // its value — is typed on its own, inside the unit.
         for nested in nests.blocks {
             if !self.walked.contains(&nested.segment()) {
-                self.block(level, nested, None)?;
+                self.block(level, nested, Entering::Plain)?;
             }
         }
         // A statement no rule typed is at most `Any`.
@@ -1630,8 +1678,8 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         Ok(())
     }
 
-    /// Type the inline body `nested` — an arm, a block, a `USING … SCOPE` body over what it is
-    /// `surfacing`, a `MODULE` or `GROUP` body — inside the unit running it, nested in the shape at
+    /// Type the inline body `nested` — an arm, a block, a `USING … SCOPE` body, a `MODULE` or
+    /// `GROUP` body, entered as `entering` says — inside the unit running it, nested in the shape at
     /// `level`: its entry and its units, each in a record of its own, each callable a unit births
     /// walked right after it. The running unit reads each of their frontiers, cut at it, so it
     /// wakes wherever one of them would on a name bound outside `nested`, and keeps the body's
@@ -1640,12 +1688,12 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         &mut self,
         level: usize,
         nested: &'graph BodyShape<'graph>,
-        surfacing: Option<(Interval, Tag)>,
+        entering: Entering,
         finish: impl FnOnce(&mut Self, usize) -> Result<T, ShapeError<'o>>,
     ) -> Result<(T, Level<'p, 'o, 'graph>), ShapeError<'o>> {
         self.push(nested, false);
         let at = level + 1;
-        let finished = match self.units_of(at, surfacing) {
+        let finished = match self.units_of(at, entering) {
             Ok(()) => finish(self, at),
             Err(error) => Err(error),
         };
@@ -1671,16 +1719,16 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         finished.map(|finished| (finished, popped))
     }
 
-    /// Type the block `nested` — an arm, or a `USING … SCOPE` body over what it is `surfacing` —
+    /// Type the block `nested` — an arm, or a `USING … SCOPE` body, entered as `entering` says —
     /// nested in the shape at `level`, folding its class in: its last statement's static type.
     fn block(
         &mut self,
         level: usize,
         nested: &'graph BodyShape<'graph>,
-        surfacing: Option<(Interval, Tag)>,
+        entering: Entering,
     ) -> Result<Option<Interval>, ShapeError<'o>> {
         let last = |pass: &mut Self, at: usize| Ok(pass.last_statement(at));
-        let (last, popped) = self.inline(level, nested, surfacing, last)?;
+        let (last, popped) = self.inline(level, nested, entering, last)?;
         self.fold(level, &popped);
         Ok(last)
     }
@@ -1730,7 +1778,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             }
             Ok(typed)
         };
-        let (typed, popped) = self.inline(level, body, None, signed)?;
+        let (typed, popped) = self.inline(level, body, Entering::Plain, signed)?;
         self.fold(level, &popped);
         let mints = !popped.minting.is_empty() || popped.minted_within;
         self.module_mints.insert(address(body), mints);
@@ -1962,7 +2010,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         self.push(code, true);
         let level = self.chain.len() - 1;
         self.open_paths(code);
-        let walked = self.units_of(level, None);
+        let walked = self.units_of(level, Entering::Plain);
         let last = self.last_statement(level);
         self.close_paths(code);
         self.unwind(open);
@@ -2300,9 +2348,9 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
 
     /// A slot's static type before any unit runs: a registration's function type, a type name's
     /// type value's, a parameter's declared type as its body reads it, a name a `USING … SCOPE`
-    /// body surfaces from a module typed `surfacing` the member read it names ([`member_read`]),
-    /// and `[Never, Any]` for a local its unit sets.
-    fn seeded(&self, level: usize, slot: Slot, surfacing: Option<Interval>) -> Bound {
+    /// body surfaces the member read it names of its operand ([`member_read`]), an arm's `it` the
+    /// interval its `MATCH` typed it at, and `[Never, Any]` for a local its unit sets.
+    fn seeded(&self, level: usize, slot: Slot, entering: Entering) -> Bound {
         let shape = self.chain[level].shape;
         // A type name a resumption binds holds the closed type it binds, and a module parameter
         // is exactly the type it binds.
@@ -2314,7 +2362,11 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 _ => Interval::point(bound.into()),
             });
         }
-        if let (Some(surfacing), BinderSymbol::Value(_)) = (surfacing, shape.slot_name(slot))
+        if let (Entering::Arm(it, _), BinderSymbol::Value(_)) = (entering, shape.slot_name(slot)) {
+            return DeclaredType::Type(it);
+        }
+        if let (Entering::Surfaced(surfacing, _), BinderSymbol::Value(_)) =
+            (entering, shape.slot_name(slot))
             && shape.position_of(slot) == Position::PARAMETER
         {
             let name = shape.slot_name(slot);
@@ -2513,7 +2565,15 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     /// declared return for its last statement, whose value is the body's.
     fn tail(&self, level: usize, index: usize) -> Option<Parametric> {
         let shape = self.chain[level].shape;
-        if shape.kind() != ShapeKind::Callable || index + 1 != shape.body().len() {
+        if index + 1 != shape.body().len() {
+            return None;
+        }
+        // A tail arm's last statement is its `MATCH`'s, the last of the body around it.
+        if shape.arm().is_some_and(|arm| arm.tail) {
+            let around = self.chain[level - 1].shape.body().len();
+            return self.tail(level - 1, around - 1);
+        }
+        if shape.kind() != ShapeKind::Callable {
             return None;
         }
         let ret = self.in_body(level, Part::Return)?;
@@ -3262,7 +3322,9 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         Ok(match form {
             Form::Leaf(part) => self.leaf(level, part, wanted)?,
             Form::Name(part) => self.name(level, part, wanted)?,
-            Form::Block(nested) => self.block(level, nested, None)?.unwrap_or_else(unknown),
+            Form::Block(nested) => {
+                (self.block(level, nested, Entering::Plain)?).unwrap_or_else(unknown)
+            }
             Form::Lambda(node) => {
                 match shape.site_of_body(node).and_then(|site| shape.nested(site)) {
                     Some(body) => match self.callable(level, body) {
@@ -3285,6 +3347,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             Form::Ascribe(node, mode) => self.ascribe(level, node, mode)?,
             Form::Eval(node) => self.eval(level, node)?,
             Form::Using(node) => self.using(level, node)?,
+            Form::Match { node, under } => self.matched(level, node, under)?,
             Form::Member {
                 node,
                 list,
@@ -3671,7 +3734,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         }
         let tag = self.innermost();
         Ok(self
-            .block(level, body, Some((typed, tag)))?
+            .block(level, body, Entering::Surfaced(typed, tag))?
             .unwrap_or_else(unknown))
     }
 
@@ -4928,18 +4991,23 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         }
     }
 
-    /// The return of the callable body at `level`, as the contract its frame owes holds it, where
-    /// `node` is the body's tail call: `Some(None)` where that return is open.
+    /// The return of the callable body whose tail call `node` is, as the contract its frame owes
+    /// holds it: `node` the last statement's call of the body at `level`, the callable or a tail
+    /// arm's block in it. `Some(None)` where that return is open.
     fn tail_returns(&self, level: usize, node: &KExpression<'graph>) -> Option<Option<KType>> {
         let shape = self.chain[level].shape;
-        if self.unfilled || shape.kind() != ShapeKind::Callable {
+        let owner = self.shapes.tail_owner(shape)?;
+        if self.unfilled || owner.kind() != ShapeKind::Callable {
             return None;
         }
         let tail = self.shapes.tail_call(shape)?;
         if !std::ptr::eq(tail, node) {
             return None;
         }
-        let returns = self.in_body(level, Part::Return);
+        let owned = (0..=level)
+            .rev()
+            .find(|at| self.chain[*at].shape.segment() == owner.segment())?;
+        let returns = self.in_body(owned, Part::Return);
         Some(returns.and_then(|returns| self.types.concrete(returns)))
     }
 

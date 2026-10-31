@@ -35,8 +35,8 @@ error: <input>:2:7: no overload of `_ + _` admits (Number, Str)
 ## Catching errors with `TRY`
 
 `TRY (<expr>) -> :<Type> WITH #{<branches>}` runs `<expr>` in a catching context
-and dispatches to a branch based on the result. Like `MATCH`, it needs a result
-type, and every branch must produce that type. The branches are a dict of
+and dispatches to a branch based on the result. Unlike `MATCH`, it declares a
+result type, and every branch must produce that type. The branches are a dict of
 quotes, `#{<head>: (<body>), …}`, and the heads are:
 
 - `Ok` — the expression succeeded; `it` is its value.
@@ -44,7 +44,7 @@ quotes, `#{<head>: (<body>), …}`, and the heads are:
   payload record.
 - `_` — a default branch catching every kind you did not name.
 
-Unlike `MATCH … OVER`, a `TRY` need not cover every kind: an error no branch
+Unlike `MATCH … UNDER`, a `TRY` need not cover every kind: an error no branch
 names is simply re-raised, so `_` is optional. Anything else in head position —
 a boolean literal, a name that is not an error kind — is an error at the form.
 
@@ -184,10 +184,10 @@ Ok(1)
 Error(boom)
 ```
 
-And like any union, you take one apart with `MATCH … OVER`:
+And like any union, you take one apart with `MATCH … UNDER`:
 
 ```koan
-MATCH (CATCH (mystery)) OVER Result -> :Str WITH #{
+MATCH (CATCH (mystery)) UNDER Result WITH #{
   Ok: (PRINT "worked")
   Error: (PRINT "failed")
 }

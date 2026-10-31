@@ -91,15 +91,16 @@ pub enum KBirth<'graph, 'cell> {
         contract: Option<Contract>,
         within: Within<'graph, 'cell>,
     },
-    /// A block — a synthesized block part's shape, or a `USING … SCOPE` body — run beside the
-    /// view of the activation it sits in, its last statement's value its own; a `USING` body's
-    /// parameters bound to what `module` surfaces, beside the `USING`'s site in the enclosing body,
-    /// where the load recorded its picks. `within` as an evaluation's.
+    /// A block — a synthesized block part's shape, a `USING … SCOPE` body or a `MATCH` arm — run
+    /// beside the view of the activation it sits in, its last statement's value its own, its
+    /// parameters bound as `entered` says. A tail arm a `MATCH` hands off owes the `MATCH`'s
+    /// `contract`, and tails its last statement as a frame does. `within` as an evaluation's.
     Block {
         program: &'graph Program<'graph>,
         segment: Segment,
         enclosing: KActivationView<'graph, 'cell>,
-        module: Option<(KValue<'graph, 'cell>, Site)>,
+        entered: Entered<'graph, 'cell>,
+        contract: Option<Contract>,
         within: Within<'graph, 'cell>,
     },
     /// What the top level leaves at rest when it ends: its activation's view, for a later root
@@ -108,6 +109,18 @@ pub enum KBirth<'graph, 'cell> {
         program: &'graph Program<'graph>,
         view: KActivationView<'graph, 'cell>,
     },
+}
+
+/// How a block's parameters are bound where it is entered.
+#[derive(Clone, Copy)]
+pub enum Entered<'graph, 'cell> {
+    /// A synthesized block part's, which binds none.
+    Plain,
+    /// A `USING … SCOPE` body's, bound to what this module surfaces, beside the `USING`'s site in
+    /// the enclosing body, where the load recorded its picks.
+    Surfaced(KValue<'graph, 'cell>, Site),
+    /// A `MATCH` arm's `it`, bound to this value.
+    Arm(KValue<'graph, 'cell>),
 }
 
 /// What a body runs within, handed to every evaluation and block it asks for: whether it runs in
@@ -119,7 +132,7 @@ pub enum KBirth<'graph, 'cell> {
 /// callable born in it keeps beside that node — `None` for a frame under its own settlement whose
 /// body births no callable; and what its frame keeps of its arguments, callee and binders, which
 /// a name read of the frame's body reads beside the value — `None` outside a called frame, and for
-/// one called through a barrier.
+/// one called through a barrier; and what the `MATCH` arms it runs in keep of their `it`.
 #[derive(Clone, Copy)]
 pub struct Within<'graph, 'cell> {
     pub routes: bool,
@@ -129,6 +142,7 @@ pub struct Within<'graph, 'cell> {
     pub inherit: Option<MemoHome>,
     pub root: Option<ComposedRoot<'cell>>,
     pub kept: Option<&'cell FrameKept<'graph, 'cell>>,
+    pub arms: Option<&'cell ArmKept<'graph, 'cell>>,
 }
 
 /// What a call hands its frame through kept parts, laid beside the birth: each argument the birth's
@@ -191,6 +205,30 @@ impl<'graph> FrameKept<'graph, '_> {
     }
 }
 
+/// What a `MATCH` arm's block keeps of its `it`: the kept part `it` is, or is a restamp of, bound
+/// at `slot` of the arm's `segment`, laid in the region of the evaluation that entered the arm,
+/// beside what the arms around it keep. A name read landing on an arm's `it` is held beside it.
+pub struct ArmKept<'graph, 'cell> {
+    pub segment: Segment,
+    pub slot: Slot,
+    pub part: KeptPart<'graph, 'cell>,
+    pub outer: Option<&'cell ArmKept<'graph, 'cell>>,
+}
+
+impl<'graph, 'cell> ArmKept<'graph, 'cell> {
+    /// What this arm, or one around it, keeps of the value bound at `slot` of `segment`.
+    pub fn slot(&self, segment: Segment, slot: Slot) -> Option<KeptPart<'graph, 'cell>> {
+        let mut arm = Some(self);
+        while let Some(at) = arm {
+            if (at.segment, at.slot) == (segment, slot) {
+                return Some(at.part);
+            }
+            arm = at.outer;
+        }
+        None
+    }
+}
+
 impl<'graph, 'cell> Within<'graph, 'cell> {
     /// The top level's before its runner names its memo: no caching frame, and the root.
     pub const TOP: Self = Within {
@@ -201,6 +239,7 @@ impl<'graph, 'cell> Within<'graph, 'cell> {
         inherit: None,
         root: None,
         kept: None,
+        arms: None,
     };
 
     /// Where a callable born in the body is born: the arena node, and the stamp of its chain.
@@ -245,9 +284,9 @@ impl<'graph, 'cell> KBirth<'graph, 'cell> {
                 source.iter().for_each(&mut *out);
             }
             KBirth::Block {
-                module: Some((module, _)),
+                entered: Entered::Surfaced(value, _) | Entered::Arm(value),
                 ..
-            } => out(module),
+            } => out(value),
             _ => {}
         }
     }

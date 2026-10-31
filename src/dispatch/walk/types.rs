@@ -100,7 +100,7 @@ impl<'p, 'o: 'p, 'x, 'graph: 'o + 'p, 'tier: 'o, 'pair, 'reg, S: Store<'o>>
 
     /// Step three's types: the type expressions of the shape at `level` at `expressions`, indices
     /// into its own in program order, then each `MATCH … WITH` guard against the others of its arm
-    /// set.
+    /// set, and each `MATCH … UNDER`'s arms against its union.
     pub(super) fn type_expressions(
         &mut self,
         level: usize,
@@ -114,6 +114,9 @@ impl<'p, 'o: 'p, 'x, 'graph: 'o + 'p, 'tier: 'o, 'pair, 'reg, S: Store<'o>>
             self.type_expression(level, expression)?;
         }
         elaborate::guards(shape, &written, self.scratch, |expression| {
+            self.type_cell(shape, expression.site)
+        })?;
+        elaborate::arms_under(self.types, self.scratch, shape, &written, |expression| {
             self.type_cell(shape, expression.site)
         })
     }

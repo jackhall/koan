@@ -293,6 +293,11 @@ in a tenant's storage and crossed into the callee's birth.
   a keyworded call as a frame's last statement selects its own overload by the carried type of a
   link read through a newtype, and the evaluation owing the frame's contract tails into the next
   frame with the argument record it built — three hops under Miri, against two.
+- `a_recursion_through_tail_arms_holds_its_cells_constant_however_deep`
+  a frame hands its last statement, a `MATCH … UNDER`, off under its contract; the `MATCH` hands
+  its tail arm off as a block owing that contract, its `it` the payload of a parameter held one
+  `Payload` segment below the frame's kept carrier through the arm's carrier chain; the arm's call
+  hops to the next frame — through a nested `MATCH` too — three hops under Miri, against two.
 - `an_instance_made_in_a_frame_is_called_where_it_lands`
   a quantified member of a two-member knot whose closure holds an edge to its sibling and a
   captured string, instantiated at a frame's last statement: its knot re-tied through the frame's
@@ -354,9 +359,9 @@ holds its own copy laid by the crossing.
 Prepended by `python3 tools/miri.py --log` on a clean run, trimmed to five.
 
 <!-- slate-durations:start -->
+- 2026-10-31: 1478s — 46 tests, 0 leaks, 0 UB
 - 2026-10-29: 1461s — 45 tests, 0 leaks, 0 UB
 - 2026-10-29: 1455s — 45 tests, 0 leaks, 0 UB
 - 2026-10-29: 1489s — 45 tests, 0 leaks, 0 UB
 - 2026-10-25: 1979s — 41 tests, 0 leaks, 0 UB
-- 2026-10-22: 1174s — 46 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

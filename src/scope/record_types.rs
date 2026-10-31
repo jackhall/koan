@@ -10,7 +10,7 @@ use crate::type_lattice::{DeclaredType, Interval, KType, Parametric};
 use crate::values::Retype;
 
 use super::records::{AtRun, Born, Closing, Retypes, Typed, UnitFacts};
-use super::shape::ShapeError;
+use super::shape::{Repeated, ShapeError};
 use super::tree::{KnotNode, Leaf, NodeCapture, Tree, Unfolded, Within};
 use super::typed::{
     Callable, Elaboration, InstanceRead, Kept, Narrowing, PathEntry, Point, Points, Registered,
@@ -174,6 +174,7 @@ fn typed_types(typed: &Typed<'_>, each: &mut Each<'_>) {
         selections,
         by_name,
         routes: _,
+        arms: _,
         retypes,
         trees,
         picks: _,
@@ -431,11 +432,37 @@ fn error_types(error: &ShapeError<'_>, each: &mut Each<'_>) {
             ascribed: value,
             at: _,
         } => ktype(value),
+        ShapeError::NoAdmittingArm {
+            scrutinee,
+            union,
+            at: _,
+        } => {
+            ktype(scrutinee);
+            union.into_iter().for_each(ktype);
+        }
+        ShapeError::AmbiguousArms {
+            count: _,
+            scrutinee,
+            at: _,
+        } => ktype(scrutinee),
+        ShapeError::NotUnion { clause, at: _ } => ktype(clause),
+        ShapeError::Uncovered {
+            union,
+            variant,
+            at: _,
+        } => {
+            ktype(union);
+            ktype(variant);
+        }
         ShapeError::RepeatedGuard {
             guard,
             first: _,
             at: _,
-        } => each(guard.into()),
+        } => {
+            if let Repeated::Type(guard) = guard {
+                each(guard.into())
+            }
+        }
         ShapeError::Type { error, at: _ } => elaboration_types(&error, each),
         ShapeError::Rebind {
             name: _,
@@ -443,6 +470,13 @@ fn error_types(error: &ShapeError<'_>, each: &mut Each<'_>) {
             second: _,
         }
         | ShapeError::ShadowsBuiltin { name: _, at: _ }
+        | ShapeError::NotAGuard { at: _ }
+        | ShapeError::NoVariant {
+            label: _,
+            union: _,
+            at: _,
+        }
+        | ShapeError::LoneVariant { name: _, at: _ }
         | ShapeError::Unbound {
             name: _,
             site: _,

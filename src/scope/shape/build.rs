@@ -69,7 +69,9 @@ use crate::parse::{
     needing, next_is_type_slot, slot_label,
 };
 use crate::parse::{BuiltinShape, BuiltinShapeId, ShapeElement, builtin_shape_for};
-use crate::parse::{ExpressionPart, KExpression, KeyElement, ListItem, Mark};
+use crate::parse::{
+    ExpressionPart, KExpression, KeyElement, ListItem, Mark, type_decl_binder_name,
+};
 use crate::source::SourceRef;
 use crate::symbols::{
     BinderSymbol, KeySymbol, RegistrationSymbol, StaticName, SymbolInterner, TypeSymbol,
@@ -93,10 +95,10 @@ use super::super::tree::Binder as TreeBinder;
 use super::super::typed::Root;
 use super::{
     Arm, Binder, BodyShape, BuiltinIndex, Candidate, CandidateList, CaptureChain, CaptureSlot,
-    CaptureSource, CaptureSpec, Component, ComponentIndex, Coordinate, Lands, Listed, Mention,
-    MentionClass, Offer, PathId, Position, QuotedPart, Ranking, Registration, Segment, ShapeError,
-    ShapeKind, Site, Sites, Slot, SpelledPath, SurfacedHead, Target, TopLevel, TypeExpression,
-    Unit, UnitHolds, UnitIndex, UnitWork, Which, follow, resolve_here,
+    CaptureSource, CaptureSpec, Component, ComponentIndex, Coordinate, Guard, Lands, Listed,
+    Mention, MentionClass, Offer, PathId, Position, QuotedPart, Ranking, Registration, Repeated,
+    Scalar, Segment, ShapeError, ShapeKind, Site, Sites, Slot, SpelledPath, SurfacedHead, Target,
+    TopLevel, TypeExpression, Unit, UnitHolds, UnitIndex, UnitWork, Which, follow, resolve_here,
 };
 use crate::parse::{BodyKind, DefinitionKind, Heads, Opens, Reading, Role};
 use std::cell::Cell;
@@ -223,6 +225,32 @@ fn declared_parameters(
     }
 }
 
+/// The guard a key of an arm set is written as, under `heads`: `_`, or a quote holding a label, a
+/// type or a lone scalar literal. `None` for a nested quote, or a marked name as a label.
+fn written_guard<'graph>(
+    key: &'graph ExpressionPart<'graph>,
+    heads: Heads,
+) -> Option<Guard<'graph>> {
+    if key.is_wildcard() {
+        return Some(Guard::Default);
+    }
+    let body = quoted_body(key).expect("the static check admits only quotes");
+    match (heads, body.parts) {
+        (Heads::Labels, [label]) => match label.value {
+            ExpressionPart::Type(name) => Some(Guard::Label(name.symbol())),
+            ExpressionPart::Identifier(name) => Some(Guard::Label(name.symbol())),
+            _ => None,
+        },
+        (Heads::Labels, _) => unreachable!("the slot type admits only a name"),
+        (Heads::Types, [only]) => match &only.value {
+            ExpressionPart::Literal(literal) => Some(Guard::Value(Scalar::of(literal))),
+            ExpressionPart::QuotedExpression(_) => None,
+            _ => Some(Guard::Type(key)),
+        },
+        (Heads::Types, _) => Some(Guard::Type(key)),
+    }
+}
+
 /// The static check of a builtin node, before any part is walked: each part its role reads as
 /// written — as a quote, as bare syntax or as a container of quotes — is written as the reading
 /// says, and admits one of its slot's types by [`admits_part`], the one admission rule — a type
@@ -311,6 +339,17 @@ fn written_as_read<'e>(
         {
             return Err(inadmissible);
         }
+    }
+    // A union of one variant is that variant's type, so it is no union.
+    if form.id == BuiltinShapeId::Union
+        && let [.., definition] = node.parts
+        && let ExpressionPart::DictLiteral([_]) = definition.value
+        && let Some(BinderSymbol::Type(name)) = type_decl_binder_name(node)
+    {
+        return Err(ShapeError::LoneVariant {
+            name,
+            at: node.source,
+        });
     }
     Ok(())
 }
@@ -495,6 +534,8 @@ struct Listing {
 struct Entry<'e, 'graph> {
     tail: bool,
     arm: Option<Arm<'graph>>,
+    /// An arm's: its `MATCH`'s scrutinee, which `it` is bound from.
+    scrutinee: Option<&'graph ExpressionPart<'graph>>,
     parameters: &'e [(BinderSymbol, SourceRef)],
     signature: Option<&'graph KExpression<'graph>>,
     surfacing: Option<Surfacing<'e, 'graph>>,
@@ -543,6 +584,7 @@ impl Entry<'_, '_> {
     const PLAIN: Entry<'static, 'static> = Entry {
         tail: false,
         arm: None,
+        scrutinee: None,
         parameters: &[],
         signature: None,
         surfacing: None,
@@ -735,6 +777,11 @@ struct Draft<'graph, 'x> {
     quantified: BumpVec<'x, BinderSymbol>,
     /// What this body is to the `MATCH` or `TRY` holding it, when it is an arm.
     arm: Option<Arm<'graph>>,
+    /// An arm's: its `MATCH`'s scrutinee, and whether `it` is a value its body received, as that
+    /// scrutinee is to the body holding the `MATCH` — read at that body's seal, once its components
+    /// are known.
+    scrutinee: Option<&'graph ExpressionPart<'graph>>,
+    it_received: bool,
     /// The statement being walked when a nested draft was entered, and the class that path takes
     /// at this level.
     current: (u32, MentionClass),
@@ -800,6 +847,7 @@ struct Recorded<'graph> {
     part: &'graph ExpressionPart<'graph>,
     statement: u32,
     guard: Option<(Site, u32)>,
+    clause: bool,
 }
 
 /// What the builder has found about one slot's binder so far; [`seal`](Builder::seal) freezes
@@ -1028,6 +1076,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         draft.held = held;
         draft.tail = entry.tail;
         draft.arm = entry.arm;
+        draft.scrutinee = entry.scrutinee;
         draft.surfaced = entry.surfacing.is_some();
         draft.over = entry.over;
         draft.form = entry.form;
@@ -1179,6 +1228,8 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             surfaced: false,
             quantified: BumpVec::new_in(scratch),
             arm: None,
+            scrutinee: None,
+            it_received: false,
             current: (0, MentionClass::Eager),
             over: None,
             listed_top: BumpVec::new_in(scratch),
@@ -1733,6 +1784,10 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 Role::TypeExpression => {
                     if self.in_type == 0 && !types_with_its_binder(form) {
                         self.record_type(level, statement, part, None);
+                        if form.id == BuiltinShapeId::MatchUnder {
+                            let recorded = self.chain[level].type_expressions.last_mut();
+                            recorded.expect("the clause was just recorded").clause = true;
+                        }
                     }
                     self.typed(|builder| builder.walk_part(level, statement, part, State::Eager))?
                 }
@@ -2252,6 +2307,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         let entry = Entry {
             tail: shape_kind == ShapeKind::Callable,
             arm: None,
+            scrutinee: None,
             parameters: &paired,
             signature,
             surfacing: (kind == BodyKind::Surfaced).then_some(Surfacing {
@@ -2380,10 +2436,11 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
     }
 
     /// An arm set: a dict of guard quotes to arm quotes, each arm a block binding `it`. A guard
-    /// written under `MATCH … WITH` is a type read where the match runs; a label names a variant
-    /// or an error kind and is no mention; `_` is the default arm. An arm's last statement is in
-    /// tail position exactly where the `MATCH` or `TRY` is: at the root of a body's last statement
-    /// that binds nothing, in a tail body.
+    /// written under `MATCH … WITH` is a type read where the match runs, or a scalar literal; a
+    /// label names a variant or an error kind and is no mention; `_` is the default arm. A label,
+    /// `_` or value written twice is refused here, and a type written twice where the walk types
+    /// it. An arm's last statement is in tail position exactly where the `MATCH` or `TRY` is: at
+    /// the root of a body's last statement that binds nothing, in a tail body.
     fn enter_arms(
         &mut self,
         level: usize,
@@ -2401,22 +2458,37 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             && draft.tail
             && draft.statement_binders[statement as usize].is_empty()
             && statement + 1 == draft.statements;
-        for (index, (guard, body_part)) in arms.iter().enumerate() {
-            let guard = (!guard.is_wildcard()).then_some(guard);
-            if heads == Heads::Types
-                && let Some(guard) = guard
+        let at = self.part_source(level, statement, self.site(level, part));
+        let mut guards = BumpVec::with_capacity_in(arms.len(), self.scratch);
+        for (guard, _) in arms.iter() {
+            let guard = written_guard(guard, heads).ok_or(ShapeError::NotAGuard { at })?;
+            let repeated = match guard {
+                Guard::Type(_) => None,
+                Guard::Value(scalar) => Some(Repeated::Value(scalar)),
+                Guard::Label(label) => Some(Repeated::Label(label)),
+                Guard::Default => Some(Repeated::Default),
+            };
+            if let Some(guard) = repeated
+                && guards.contains(&Some(guard))
             {
+                return Err(ShapeError::RepeatedGuard {
+                    guard,
+                    first: at,
+                    at,
+                });
+            }
+            guards.push(repeated);
+        }
+        for (index, (written, body_part)) in arms.iter().enumerate() {
+            let guard = written_guard(written, heads).expect("each guard was read above");
+            if let Guard::Type(quote) = guard {
                 self.record_type(
                     level,
                     statement,
-                    guard,
+                    quote,
                     Some((self.site(level, part), index as u32)),
                 );
-            }
-            if heads == Heads::Types
-                && let Some(written) = guard.and_then(quoted_body)
-            {
-                for inner in written.parts {
+                for inner in quoted_body(quote).expect("a type guard is a quote").parts {
                     self.typed(|builder| {
                         builder.walk_part(level, statement, &inner.value, State::Eager)
                     })?;
@@ -2428,6 +2500,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 tail,
                 arm: Some(Arm { guard, heads, tail }),
                 parameters: &it,
+                scrutinee: Some(&node.parts[1].value),
                 ..Entry::PLAIN
             };
             self.enter_child(
@@ -2904,6 +2977,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             part,
             statement,
             guard,
+            clause: false,
         });
     }
 
@@ -3931,16 +4005,17 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
 
     /// Lay a finished draft down in program storage, its nested drafts first; `form` is the node
     /// holding a callable draft's body.
-    /// The slots a callable's or a code body's last statement reads — directly, through a nested
-    /// block, or through a nested body's captures — beside every type slot, sorted: what a frame
-    /// that hands its last statement on keeps alive across the hand-off. A type slot is listed
-    /// whole, since a type capture the load's walk adds later reads one at a birth no read here
-    /// records. Empty for any other kind, and for a body with no statements.
+    /// The slots a callable's, a code body's or a tail arm's last statement reads — directly,
+    /// through a nested block, or through a nested body's captures — beside every type slot,
+    /// sorted: what a frame or block that hands its last statement on keeps alive across the
+    /// hand-off. A type slot is listed whole, since a type capture the load's walk adds later reads
+    /// one at a birth no read here records. Empty for any other body, and for one with no
+    /// statements.
     fn last_reads(&self, draft: &Draft<'graph, 'x>) -> &'graph [Slot] {
         let Some(last) = draft.statements.checked_sub(1) else {
             return &[];
         };
-        if !matches!(draft.kind, ShapeKind::Callable | ShapeKind::Code) {
+        if !draft.tail {
             return &[];
         }
         let mut slots = BumpVec::new_in(self.scratch);
@@ -3992,6 +4067,9 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 nested_starts.push(nested.len() as u32);
             }
             let statement = child.parent_statement;
+            let mut child = child;
+            child.it_received = (child.scrutinee)
+                .is_some_and(|scrutinee| threaded::received(&draft, around.len(), scrutinee));
             let sealed = self.seal(child, &chain);
             nested_parents.push((sealed.segment, statement));
             nested.push((site, sealed));
@@ -4033,7 +4111,14 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             }
         }));
         let spelled = self.spelled_paths(&draft, &chain);
-        let (threaded, threaded_parts) = threaded::threaded(&draft, around.len(), self.scratch);
+        // A tail arm handing on an `it` its body built threads its `MATCH`'s scrutinee.
+        let threads_it = nested.iter().any(|(_, child)| {
+            let it = child.slot(BinderSymbol::Value(IMPLICIT.it.symbol()));
+            child.arm().is_some_and(|arm| arm.tail)
+                && it.is_some_and(|(slot, _)| child.threaded().binary_search(&slot).is_ok())
+        });
+        let (threaded, threaded_parts) =
+            threaded::threaded(&draft, around.len(), threads_it, self.scratch);
         drop(chain);
         let mentions = Keyed::from_sorted(collect(writer, mentions.iter().copied()));
         let mut offers = draft.offers;
@@ -4086,6 +4171,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 part: recorded.part,
                 statement: recorded.statement,
                 guard: recorded.guard,
+                clause: recorded.clause,
             }
         }));
         let holds = self.unit_holds(

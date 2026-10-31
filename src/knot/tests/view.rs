@@ -436,7 +436,7 @@ fn a_composed_literal_lays_flat_as_its_memos_say() {
              LET record = #({a = ($..ps), b = 2})\nLET dict = #({($..ps): (1 + 1)})\n\
              LET template = #(%\"a {$..ps} b %{$..ps}\")\nLET nest = #([[($..ps)] [3]])\n\
              LET beside = #(f [$k ($..ps) (g 1)])\n\
-             LET arm = #(MATCH (42) -> :Str WITH #{Number: ($..ps)})",
+             LET arm = #(MATCH (42) WITH #{Number: ($..ps)})",
         );
         fixture.in_cell(pin, |context| {
             let types = &fixture.tiers.of(context);

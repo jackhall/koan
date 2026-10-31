@@ -164,9 +164,9 @@ impl BodyKind {
 /// What an arm's head is.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Heads {
-    /// A type name read where the match runs (`MATCH … WITH`).
+    /// A type read where the match runs, or a scalar literal (`MATCH … WITH`).
     Types,
-    /// A member or error-kind label (`MATCH … OVER`, `TRY`).
+    /// A variant or error-kind label (`MATCH … UNDER`, `TRY`).
     Labels,
 }
 

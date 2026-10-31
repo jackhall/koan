@@ -26,13 +26,13 @@
 
 use crate::knot::module::layout;
 use crate::knot::{BuiltinFunction, KValue, Knotted};
-use crate::memory::{Bump, BumpVec, Lays, Writer};
-use crate::scope::{Candidate, Coordinate, Elimination, IMPLICIT, Points, Table};
+use crate::memory::{Bump, BumpAllocator, BumpVec, Lays, Writer};
+use crate::scope::{Arms, Candidate, Coordinate, Elimination, Guard, IMPLICIT, Points, Table};
 use crate::scope::{ParameterBinding, Registered, ShapeGroupMap};
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::{
-    DeclaredType, KType, Parametric, Verdict, admit_by_class, outranks, satisfied_by, scheme_slots,
-    select_by_class, shape_slots, solving_slots, substitute_quantified,
+    DeclaredType, KType, Parametric, Verdict, admit_by_class, is_subtype_of, outranks,
+    satisfied_by, scheme_slots, select_by_class, shape_slots, solving_slots, substitute_quantified,
 };
 use crate::values::{Chain, List, Record, TypeValue, Value};
 
@@ -269,6 +269,92 @@ pub(super) fn checked(
         assert_eq!(table.decide(mask), expected, "over the subset {subset:?}");
     }
     SUBSETS.with(|subsets| subsets.set(Some(count + 1)));
+}
+
+/// Whether the arm guarded by `a`, admitting by the closed type beside it, strictly outranks the
+/// one guarded by `b`: a value outranks every type, a type outranks another it lies strictly
+/// under, and nothing else outranks — labels admit disjoint variants, and `_` ranks below every
+/// guarded arm. The load's ranking and the run's both read it.
+pub(super) fn guard_outranks(
+    types: &Chain<'_, '_, '_, '_>,
+    scratch: BumpAllocator<'_>,
+    (a, a_type): (Guard<'_>, Option<KType>),
+    (b, b_type): (Guard<'_>, Option<KType>),
+) -> bool {
+    match (a, b, a_type, b_type) {
+        (Guard::Value(_), Guard::Type(_), _, _) => true,
+        (Guard::Type(_), Guard::Type(_), Some(a), Some(b)) => {
+            is_subtype_of(types, scratch, a, b) && !is_subtype_of(types, scratch, b, a)
+        }
+        _ => false,
+    }
+}
+
+/// The arm a `MATCH` the load recorded `arms` for runs, `guards` beside the closed type each admits
+/// by where the run reads it, `admits` saying whether a *maybe* arm admits the scrutinee: the arm
+/// the load chose, else the one the admitting guarded arms rank first, else `_` where it admits.
+/// `Err(None)` where no arm admits, and `Err(Some(count))` where that many admitting arms rank
+/// none first.
+pub(super) fn arm(
+    types: &Chain<'_, '_, '_, '_>,
+    scratch: BumpAllocator<'_>,
+    arms: Arms<'_>,
+    guards: &[(Guard<'_>, Option<KType>)],
+    admits: impl Fn(usize) -> bool,
+) -> Result<usize, Option<usize>> {
+    if let Some(chosen) = arms.chosen {
+        debug_assert!(admits(chosen.into()), "the arm the load chose admits");
+        return Ok(chosen.into());
+    }
+    let (mut admitted, mut default) = (BumpVec::new_in(scratch), None);
+    for (at, verdict) in arms
+        .kept
+        .iter()
+        .map(|(at, verdict)| (usize::from(*at), *verdict))
+    {
+        if verdict != Verdict::Always && !admits(at) {
+            continue;
+        }
+        match guards[at].0 {
+            Guard::Default => default = Some(at),
+            _ => admitted.push(at),
+        }
+    }
+    if admitted.is_empty() {
+        return default.ok_or(None);
+    }
+    let outranks = |a: usize, b: usize| guard_outranks(types, scratch, guards[a], guards[b]);
+    let decided = match arms.ranking {
+        Elimination::Table(table) => {
+            // A table lays at most `Table::MOST` arms, so each position is one bit.
+            let mask = (admitted.iter()).fold(0u64, |mask, at| mask | 1 << at);
+            let decided = table.decide(mask);
+            debug_assert_eq!(
+                decided,
+                first_ranked(&admitted, outranks),
+                "a recorded arm table ranks as the guards do"
+            );
+            decided
+        }
+        Elimination::Open => first_ranked(&admitted, outranks),
+    };
+    decided.map_err(Some)
+}
+
+/// The one arm of `admitted`, by position, that no other one there `outranks`; `Err` with how many
+/// none outranks where that is not one. What an arm table decides, without a table's bound on how
+/// many arms it ranks.
+pub(super) fn first_ranked(
+    admitted: &[usize],
+    outranks: impl Fn(usize, usize) -> bool,
+) -> Result<usize, usize> {
+    let mut first =
+        (admitted.iter().copied()).filter(|at| !admitted.iter().any(|by| outranks(*by, *at)));
+    match (first.next(), first.count()) {
+        (Some(only), 0) => Ok(only),
+        (Some(_), more) => Err(more + 1),
+        (None, _) => Err(0),
+    }
 }
 
 /// Whether a candidate that may admit, registered at `maybe`, never runs beside candidates that

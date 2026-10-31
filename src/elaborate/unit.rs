@@ -27,9 +27,9 @@ use crate::parse::{KExpression, Role};
 use crate::scope::{
     Address, Binder, BodyShape, Bound, Builtins, Callable, CaptureSlot, CaptureSource, Component,
     Coordinate, Elaboration, FunctionGroupMap, ParameterBinding, Registered, Registration,
-    Resolved, Segment, ShapeError, ShapeGroupMap, ShapeKind, Shapes, Site, Slot, Source, Static,
-    StaticCallable, StaticRegistered, StaticType, SurfacedHead, Target, TypeExpression, Unknown,
-    Variable, source_of,
+    Repeated, Resolved, Segment, ShapeError, ShapeGroupMap, ShapeKind, Shapes, Site, Slot, Source,
+    Static, StaticCallable, StaticRegistered, StaticType, SurfacedHead, Target, TypeExpression,
+    Unknown, Variable, source_of,
 };
 use crate::source::SourceRef;
 use crate::symbols::{BinderSymbol, TypeSymbol, ValueSymbol};
@@ -494,6 +494,8 @@ where
         None => type_expression(expression.part, &reader, types, scratch),
     };
     match typed {
+        // A union clause is read as a projection's owner is.
+        Ok(_) if expression.clause && reader.rigid_reads() > 0 => Ok(Static::Unknown),
         Ok(handle) => Ok(reader.fixed(lay, handle, |handle| types.concrete(handle).expect(FREE))),
         Err(Elaboration::Unknown { .. }) => Ok(Static::Unknown),
         Err(error) => {
@@ -547,7 +549,7 @@ pub fn guards<'graph, 'o>(
         source_of(shape, statement, expression.site).unwrap_or(statement.source)
     };
     Err(ShapeError::RepeatedGuard {
-        guard,
+        guard: Repeated::Type(guard),
         first: source(first),
         at: source(expression),
     })

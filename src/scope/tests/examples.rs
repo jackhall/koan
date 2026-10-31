@@ -213,10 +213,10 @@ fn a_function_recursive_with_one_inside_a_module_is_an_eager_cycle() {
 #[test]
 fn an_arm_binds_it_and_its_names_are_gone_after_it() {
     shaped(
-        "LET q = 1\nMATCH q -> :Number WITH #{Number: ((LET w = it) (q))}",
+        "LET q = 1\nMATCH q WITH #{Number: ((LET w = it) (q))}",
         |fixture, lines, shape| {
             let shape = shape.expect("the program shapes");
-            let ExpressionPart::DictLiteral(pairs) = lines[1].parts[5].value else {
+            let ExpressionPart::DictLiteral(pairs) = lines[1].parts[3].value else {
                 panic!("the arms are a dict");
             };
             let (_, arm_part) = &pairs[0];
@@ -246,7 +246,7 @@ fn an_arm_binds_it_and_its_names_are_gone_after_it() {
         },
     );
     shaped(
-        "MATCH 1 -> :Number WITH #{Number: ((LET w = it) (w))}\nLET u = w",
+        "MATCH 1 WITH #{Number: ((LET w = it) (w))}\nLET u = w",
         |fixture, _, shape| {
             assert!(matches!(
                 shape,
@@ -303,8 +303,8 @@ fn each_error_names_what_a_user_needs() {
             "<input>:2:7: `USING` cannot tell which names this module surfaces;",
         ),
         (
-            "MATCH 1 -> :Number WITH (Number (1))",
-            "<input>:1:25: `Match` takes its arms as a dict of quotes: write #{…}",
+            "MATCH 1 WITH (Number (1))",
+            "<input>:1:14: `Match` takes its arms as a dict of quotes: write #{…}",
         ),
         (
             "SIG Sg = #[(PRINT 1)]",
@@ -1117,7 +1117,7 @@ fn a_code_digest_is_blind_to_position_and_names_top_level_reads_by_binding() {
 #[test]
 fn a_callables_last_reads_reach_through_blocks_and_captures() {
     let source = "\
-LET f = (FN FOR ALL #[Elt] :{a :Number, b :Elt, c :Number} -> Any = #((LET u = b) (LET e = a) (LET g = c) ([(MATCH a -> :Number WITH #{Number: ((e))}) (FN :{} -> Number = #(g))])))";
+LET f = (FN FOR ALL #[Elt] :{a :Number, b :Elt, c :Number} -> Any = #((LET u = b) (LET e = a) (LET g = c) ([(MATCH a WITH #{Number: ((e))}) (FN :{} -> Number = #(g))])))";
     shaped(source, |fixture, lines, shape| {
         let shape = shape.expect("the program shapes");
         let body = nested_at(shape, &lines[0], 3, 8);

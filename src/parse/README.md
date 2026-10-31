@@ -319,8 +319,8 @@ A slot type rests in the table as a [`KType`](../../lattice/src/types/handle.rs)
 handle is a `const` content digest, so an entry states its types with no registry
 in hand and its erasure and laws are computed at build time. Every compound a
 slot is typed by is a pinned constant of the same kind: the code containers
-`List(Name)`, `List(Declaration)`, `Dict(TypeCode, Block)`, `Dict(Name, Block)`
-and `Dict(Name, TypeCode)`, the union `TypeCode`, a `FOR ALL` group's union
+`List(Name)`, `List(Declaration)`, `Dict(TypeCode | Literal, Block)`,
+`Dict(Name, Block)` and `Dict(Name, TypeCode)`, the union `TypeCode`, a `FOR ALL` group's union
 `List(Name) | Dict(Name, TypeCode)` (`KType::QUANTIFIER_CODE`), and the empty
 record. Each is stated once, in the registry's seeding, which every registry
 runs; a test asks a fresh registry for every slot type and return, so a table
@@ -335,9 +335,9 @@ type no registry seeds fails there.
 - every slot the builder reads as written, save a type expression and an
   in-place operand, is typed by its reading's code type in every overload
   (`roles_agree_with_code_types`): a body `Block`, a head `Expression`, a symbol
-  `Keyword`, a label `Name`, an arm set `Dict(TypeCode, Block)` under type
-  guards (`MATCH … WITH`) and `Dict(Name, Block)` under labels
-  (`MATCH … OVER`, `TRY`), a union's variants `Dict(Name, TypeCode)`, a member
+  `Keyword`, a label `Name`, an arm set `Dict(TypeCode | Literal, Block)` under
+  type and value guards (`MATCH … WITH`) and `Dict(Name, Block)` under labels
+  (`MATCH … UNDER`, `TRY`), a union's variants `Dict(Name, TypeCode)`, a member
   list `List(Declaration)`, `NEWTYPE`'s representation `TypeCode`, a `FOR ALL` group
   the union `List(Name) | Dict(Name, TypeCode)`, and a binder name a code kind within
   `Expression`; and an `Rhs` slot is `Any`, since a binding's right-hand side is

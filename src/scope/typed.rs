@@ -621,6 +621,16 @@ impl UseStatics<'_> {
     }
 }
 
+/// What the load fixed about one `MATCH`'s arms, each named by its position in written order: the
+/// arms a run selects among, each beside its verdict — *always* or *maybe*, never *never* — how
+/// those that admit rank, and the arm the run takes without admitting where the load selected one.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Arms<'graph> {
+    pub kept: &'graph [(u16, Verdict)],
+    pub ranking: Elimination<'graph>,
+    pub chosen: Option<u16>,
+}
+
 /// How a call in its frame body's tail position routes its frame, as the walk fixed it: per
 /// candidate, in the order the call reads them — one for a selected use or a call by name.
 /// Written only at a tail call of a callable body whose callee the load knows.

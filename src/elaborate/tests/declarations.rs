@@ -933,7 +933,7 @@ fn a_quantified_type_is_written_only_as_a_signature_member() {
                      :{g :(FN FOR ALL #[Elt] :{x :Elt} -> Elt) y :Outer} -> Outer))]",
         "SIG Sg = #[(VAL f :{g :(FN FOR ALL #[Elt] :{x :Elt} -> Elt)})]",
         "SIG Sg = #[(EXPR #(APPLY f :(FN FOR ALL #[Elt] :{x :Elt} -> Elt)) -> Null)]",
-        "UNION Poly = #{Map: :(FN FOR ALL #[Held] :{x :Held} -> Held)}",
+        "UNION Poly = #{Map: :(FN FOR ALL #[Held] :{x :Held} -> Held), None: Null}",
     ] {
         declared(source, |_, brought| {
             assert!(

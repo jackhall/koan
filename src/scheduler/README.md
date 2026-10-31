@@ -242,8 +242,10 @@ value and a path of segments down to one of its parts, projected through
 cellgraph's `project`. Each segment is one step down: a record field's label,
 read as `Value::along` reads it; a function's capture slot, read as
 `Value::captured` reads it, an edge resolved to the fellow member of the knot
-it names; or a module's member slot, which `values` sees as opaque and the
-knot reads (`layout::stored_member`).
+it names; a module's member slot, which `values` sees as opaque and the
+knot reads (`layout::stored_member`); or a tagged value's payload, one tagged
+layer down, read as `Value::untagged` reads it — the part a `MATCH … UNDER`
+arm's `it` is.
 
 **The wake keeps what every call hands on.** The bundle lays every call's
 birth beside the kept part of each value it hands on, the callee among them

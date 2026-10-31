@@ -33,7 +33,8 @@ Each `UNION` declaration mints its own distinct type, even if another union has
 the same variant names. A few shapes are rejected:
 
 - a lowercase tag (`some`) — tags must be capitalized type names;
-- an empty variant list;
+- an empty variant list, or one with a single variant — a union has at least
+  two, and a single tagged type is declared with `NEWTYPE`;
 - two variants with the same tag.
 
 ## Aliasing a union

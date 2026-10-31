@@ -462,7 +462,7 @@ fn an_arm_counts_toward_the_body_running_it() {
     assert_eq!(
         class(
             "LET f = (FN :{m :Counter, c :Number} -> Number = \
-             #(MATCH (c) -> :Number WITH #{Number: ((LET v = (m :| Counter)) (it))}))",
+             #(MATCH (c) WITH #{Number: ((LET v = (m :| Counter)) (it))}))",
             "f"
         ),
         "sealed 1 caches"
@@ -471,7 +471,7 @@ fn an_arm_counts_toward_the_body_running_it() {
         class(
             "EXPR #(KEEP x :Any) -> Number = #(1)\n\
              LET f = (FN :{m :Counter, c :Number} -> Number = \
-             #((LET v = (m :| Counter)) (MATCH (c) -> :Number WITH #{Number: (KEEP v)})))",
+             #((LET v = (m :| Counter)) (MATCH (c) WITH #{Number: (KEEP v)})))",
             "f"
         ),
         "porous 1"
@@ -636,7 +636,7 @@ fn a_view_over_a_local_binder_varies() {
     assert_eq!(
         caching(
             "LET f = (FN :{n :Number} -> Number = \
-             #((LET w = (MATCH (n) -> :Any WITH #{Number: (ints)})) (LET v = (w :| Counter)) (n)))",
+             #((LET w = (MATCH (n) WITH #{Number: (ints)})) (LET v = (w :| Counter)) (n)))",
             "f"
         )
         .0,

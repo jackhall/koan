@@ -276,11 +276,13 @@ that misnames a parameter, an argument that does not fit its parameter, and a
 group the arguments cannot solve are each a
 [fault](#faults-and-output). Born as `KBirth::Block` it lays a block's
 activation down beside the view it sits in, in the asker's own cell, and yields
-its last statement's value. A `USING … SCOPE` body is such a block entered on a
-module (`surfaced_block`): its parameters are bound to what the module surfaces
+its last statement's value. A block is entered as its birth's `Entered` says
+(`entered_block`). A `USING … SCOPE` body is entered on a module: its
+parameters are bound to what the module surfaces
 ([entering a block](../knot/module/README.md#entering-a-using--scope-block))
 before its first unit runs, and since its shape and the module cannot disagree,
-a refusal there is an invariant break.
+a refusal there is an invariant break. A `MATCH` arm is entered on its `it`,
+which its one parameter binds ([matching](../dispatch/README.md#matching)).
 
 **A frame called through a barrier** — a function an opaque view carries
 ([members are born coerced](../knot/module/README.md#members-are-born-coerced)) —
@@ -401,7 +403,11 @@ outermost return of the chain — the contract's `retype`. So beside
 returns a `LIST OF Any`. An `EVAL`'s frame owes the type the `EVAL` declares
 as a called frame owes its return; its contract names no callee, so a miss
 names the `EVAL`'s code (`` `EVAL`'s code returned Str, which does not satisfy
-Number ``). A block never tails, and nor does a frame called through a barrier.
+Number ``). A frame called through a barrier never tails. A block tails only as
+a tail `MATCH` arm: the `MATCH`'s evaluation hands the arm's block off owing its
+own contract, and the block tails its last statement as a frame does
+(`Runner::tail_body`), so a recursion through tail arms holds a constant number
+of cells. Every other block runs as a child and never tails.
 
 **A frame keeps what it was handed.** A frame called with no barrier before its
 callee lays a table in its region at its first step (`FrameKept`): a
@@ -417,7 +423,11 @@ read that lands on one is held beside the kept callee, one capture segment
 down, and a module member read beside its module's kept part, one member
 segment down. So a frame that returns its parameter, a binder bound bare to
 one, a top-level name, a module's member, or a field of any of them hands it
-back from where it rests rather than copying it into its caller.
+back from where it rests rather than copying it into its caller. A `MATCH`
+arm's `it` is held where its scrutinee rests, as a restamp of the scrutinee's
+kept part or one payload segment below it: the arm's block carries it in a
+chain beside the arms around it (`ArmKept`, on `Within`), which a name read
+consults before the frame's table.
 
 **Every call hands on a skeleton.** A call lays a `Passing` beside its birth:
 the arguments held beside a kept part, by name, the callee through the kept
@@ -435,7 +445,7 @@ over them, each restamped at the type the skeleton held it at, and keeps a
 carrier of each; the skeleton and the predecessor's record die with the hop
 ([tail hops](../scheduler/README.md#tail-hops)).
 
-**What a loop keeps.** A binder of the frame body's
+**What a loop keeps.** A binder of the frame body's — or a tail arm's block's —
 [threaded set](../scope/README.md#the-threaded-set), and each argument part of its
 last statement in it, is asked for with `Use::Threads`, so it is built in the
 loop's cell where the frame's provenance names one: what a tail call hands on

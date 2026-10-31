@@ -15,10 +15,10 @@ use crate::memory::{BumpAllocator, BumpBackedMap, BumpVec, Lays, bump_table, col
 use super::facts::{Binding, Bound, Frontier, Unknown};
 use super::keyed::Keyed;
 use super::records::{Born, Closing, Deps, Retypes, SiteDeps, Typed, UnitFacts};
-use super::shape::ShapeError;
+use super::shape::{Repeated, Scalar, ShapeError};
 use super::tree::{KnotNode, Leaf, NodeCapture, Tree, Unfolded, Within};
 use super::typed::{
-    Callable, Elimination, FunctionGroupMap, InstanceRead, Kept, Narrowing, ParameterBinding,
+    Arms, Callable, Elimination, FunctionGroupMap, InstanceRead, Kept, Narrowing, ParameterBinding,
     PathEntry, Pick, Points, Registered, Resolution, Route, ShapeGroupMap, Static, StaticInstance,
     UseStatics,
 };
@@ -278,6 +278,7 @@ impl<'to, 'x, 'bind, L: Lays<'to>> Relay<'to, 'x, 'bind, L> {
             selections,
             by_name,
             routes,
+            arms,
             retypes,
             trees,
             picks,
@@ -314,6 +315,14 @@ impl<'to, 'x, 'bind, L: Lays<'to>> Relay<'to, 'x, 'bind, L> {
             }),
             routes: self.keyed(*routes, |route| Route {
                 per: self.copied(route.per),
+            }),
+            arms: self.keyed(*arms, |arms| Arms {
+                kept: self.copied(arms.kept),
+                ranking: match arms.ranking {
+                    Elimination::Open => Elimination::Open,
+                    Elimination::Table(table) => Elimination::Table(table.relaid(self.lay)),
+                },
+                chosen: arms.chosen,
             }),
             retypes: self.keyed_copied(*retypes),
             trees: self.keyed(*trees, |tree| resident(self.lay, self.tree(tree))),
@@ -686,6 +695,33 @@ impl<'to, 'x, 'bind, L: Lays<'to>> Relay<'to, 'x, 'bind, L> {
             }
             ShapeError::SpliceNeverCode { value, at } => ShapeError::SpliceNeverCode { value, at },
             ShapeError::SpliceInKnot { at } => ShapeError::SpliceInKnot { at },
+            ShapeError::NotAGuard { at } => ShapeError::NotAGuard { at },
+            ShapeError::NoAdmittingArm {
+                scrutinee,
+                union,
+                at,
+            } => ShapeError::NoAdmittingArm {
+                scrutinee,
+                union,
+                at,
+            },
+            ShapeError::AmbiguousArms {
+                count,
+                scrutinee,
+                at,
+            } => ShapeError::AmbiguousArms {
+                count,
+                scrutinee,
+                at,
+            },
+            ShapeError::NotUnion { clause, at } => ShapeError::NotUnion { clause, at },
+            ShapeError::NoVariant { label, union, at } => {
+                ShapeError::NoVariant { label, union, at }
+            }
+            ShapeError::Uncovered { union, variant, at } => {
+                ShapeError::Uncovered { union, variant, at }
+            }
+            ShapeError::LoneVariant { name, at } => ShapeError::LoneVariant { name, at },
             ShapeError::NotCode { value, at } => ShapeError::NotCode { value, at },
             ShapeError::BodyNotCode { value, at } => ShapeError::BodyNotCode { value, at },
             ShapeError::ParameterOutsideBody { name, at } => {
@@ -699,9 +735,22 @@ impl<'to, 'x, 'bind, L: Lays<'to>> Relay<'to, 'x, 'bind, L> {
                 ShapeError::EvalNeverSatisfied { code, returns, at }
             }
             ShapeError::Type { error, at } => ShapeError::Type { error, at },
-            ShapeError::RepeatedGuard { guard, first, at } => {
-                ShapeError::RepeatedGuard { guard, first, at }
-            }
+            ShapeError::RepeatedGuard { guard, first, at } => ShapeError::RepeatedGuard {
+                guard: match guard {
+                    Repeated::Type(handle) => Repeated::Type(handle),
+                    Repeated::Value(Scalar::Str(text)) => Repeated::Value(Scalar::Str(
+                        std::str::from_utf8(self.copied(text.as_bytes()))
+                            .expect("a copy of a string is one"),
+                    )),
+                    Repeated::Value(Scalar::Number(bits)) => Repeated::Value(Scalar::Number(bits)),
+                    Repeated::Value(Scalar::Bool(truth)) => Repeated::Value(Scalar::Bool(truth)),
+                    Repeated::Value(Scalar::Null) => Repeated::Value(Scalar::Null),
+                    Repeated::Label(label) => Repeated::Label(label),
+                    Repeated::Default => Repeated::Default,
+                },
+                first,
+                at,
+            },
         }
     }
 }

@@ -9,7 +9,7 @@ use crate::knot::{ComposeRefused, KValue, UsingRefused};
 use crate::memory::Writer;
 use crate::parse::{KExpression, KeyElement};
 use crate::program::Program;
-use crate::scope::{ViewRefused, selection_refused, view_refused};
+use crate::scope::{ViewRefused, arm_refused, selection_refused, view_refused};
 use crate::symbols::{KeySymbol, Symbol, SymbolInterner};
 use crate::type_lattice::{KType, display_name};
 use crate::values::{Chain, KeyRejected};
@@ -27,6 +27,18 @@ pub(super) enum Raised<'a> {
     Ambiguous {
         key: &'a [KeyElement],
         arguments: &'a [KType],
+        count: usize,
+    },
+    /// No arm of a `MATCH` admits its scrutinee, which carries `scrutinee`; `union` is a
+    /// `MATCH … UNDER`'s clause.
+    NoArm {
+        scrutinee: KType,
+        union: Option<KType>,
+    },
+    /// `count` arms of a `MATCH` admit its scrutinee, which carries `scrutinee`, and none ranks
+    /// first.
+    AmbiguousArms {
+        scrutinee: KType,
         count: usize,
     },
     NoField {
@@ -138,6 +150,12 @@ impl fmt::Display for RaisedDisplay<'_, '_, '_, '_, '_> {
                 arguments,
                 count,
             } => selection_refused(f, key, arguments, Some(count), self.symbols, self.types),
+            Raised::NoArm { scrutinee, union } => {
+                arm_refused(f, scrutinee, union, None, self.symbols, self.types)
+            }
+            Raised::AmbiguousArms { scrutinee, count } => {
+                arm_refused(f, scrutinee, None, Some(count), self.symbols, self.types)
+            }
             Raised::NoField { of, field } => write!(
                 f,
                 "{} has no field {}",

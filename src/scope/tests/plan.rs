@@ -289,10 +289,9 @@ pub(super) enum Carrier {
     Read(Read),
     /// A `FN` value: in a list when deferred, called or passed when eager.
     Lambda(Class, Callable),
-    /// A `MATCH` over the scrutinee (or `1`) with its type and each arm's head read eagerly.
+    /// A `MATCH` over the scrutinee (or `1`) with each arm's head read eagerly.
     Arm {
         scrutinee: Option<Read>,
-        ty: Read,
         arms: Vec<(Read, Scope)>,
     },
     /// A quote value of the code scope: in a list when deferred, a call argument when eager. Its
@@ -352,13 +351,8 @@ impl Scope {
                                 out.extend(callable.types.iter_mut());
                                 out.push(&mut callable.returns);
                             }
-                            Carrier::Arm {
-                                scrutinee,
-                                ty,
-                                arms,
-                            } => {
+                            Carrier::Arm { scrutinee, arms } => {
                                 out.extend(scrutinee.iter_mut());
-                                out.push(ty);
                                 out.extend(arms.iter_mut().map(|(head, _)| head));
                             }
                         }
@@ -1168,7 +1162,6 @@ impl<'c> Generator<'c> {
         };
         let scrutinee = take(self, false);
         let number = Read::builtin(NUMBER, Class::Eager);
-        let ty = take(self, true).unwrap_or(number);
         let count = 1 + self.pick(2);
         let mut bodies: Vec<Vec<Read>> = vec![Vec::new(); count];
         for read in routed {
@@ -1193,11 +1186,7 @@ impl<'c> Generator<'c> {
                 (head, body)
             })
             .collect();
-        Carrier::Arm {
-            scrutinee,
-            ty,
-            arms,
-        }
+        Carrier::Arm { scrutinee, arms }
     }
 }
 
@@ -1778,6 +1767,12 @@ impl<'p> Renderer<'p> {
                     self.out.tokens.push(Token::Other);
                     self.read(read);
                 }
+                // A union declares at least two variants: the second, if unplanned, reads nothing.
+                if reads.len() == 1 {
+                    self.text(", Kz: ");
+                    self.out.tokens.push(Token::Other);
+                    self.text(":{}");
+                }
                 self.text("}");
             }
             BuiltinShape::Bare(carriers) => {
@@ -1907,32 +1902,32 @@ impl<'p> Renderer<'p> {
                 };
                 self.text(&format!("{sigil}({key} 1)"));
             }
-            Carrier::Arm {
-                scrutinee,
-                ty,
-                arms,
-            } => {
+            Carrier::Arm { scrutinee, arms } => {
                 self.text("(MATCH ");
                 match scrutinee {
                     Some(read) => self.read(read),
                     None => self.text("1"),
                 }
-                self.text(" -> :");
-                self.read(ty);
                 self.text(" WITH #{");
                 for (index, (head, body)) in arms.iter().enumerate() {
                     if index > 0 {
                         self.text(", ");
                     }
-                    // Two arms guarding one type refuse the load.
-                    match self.typed && index > 0 {
-                        true => {
+                    // Two arms guarding one type refuse the load, and so does a `MATCH` none of
+                    // whose arms can admit its scrutinee: the first admits anything.
+                    match (self.typed, index) {
+                        (true, 0) => {
+                            self.text(":(");
+                            self.read(head);
+                            self.text(" | Any)");
+                        }
+                        (true, _) => {
                             self.text(":(");
                             self.read(head);
                             let (open, close) = ("(LIST OF ".repeat(index), ")".repeat(index));
                             self.text(&format!(" | {open}Bool{close})"));
                         }
-                        false => self.read(head),
+                        (false, _) => self.read(head),
                     }
                     self.text(": ");
                     self.body(body);

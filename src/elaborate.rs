@@ -47,6 +47,7 @@ mod paths;
 mod reads;
 mod signature;
 mod unit;
+mod variants;
 
 #[cfg(test)]
 mod tests;
@@ -65,6 +66,7 @@ pub use unit::{
     Mode, Reader, Signatures, Tools, TypeContext, callable, declarations, expression, guards,
     own_levels, registration,
 };
+pub use variants::{arm_guards, arm_shapes, arms_under, variant_label, variant_named, variants};
 
 #[cfg(test)]
 thread_local! {

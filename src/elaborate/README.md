@@ -501,9 +501,10 @@ entry carries no quantifier map and binds no parameter.
 **What stays unknown.** A spelling whose value over a rigid variable can differ
 from substituting first and elaborating after: a meet (`Elt & Number` meets to
 `Never` over a rigid `Elt`, but is `Number` where `Elt` is `Number`), a
-projection's owner, an application's head and a `NEEDING` kind, each over a
-run-bound name; and a `FOR ALL` bound naming one, since a bound holds no
-variable. A type binder is closed or unknown,
+projection's owner, an application's head, a `NEEDING` kind and a
+`MATCH … UNDER`'s union clause, each over a run-bound name; and a `FOR ALL`
+bound naming one, since a bound holds no variable. A union clause left unknown
+leaves [its check](#a-unions-variants) to the binding that closes it. A type binder is closed or unknown,
 never rigid: its readers across a callable boundary could not reach the
 coordinates its variables are read at, and a sealed nominal is a leaf
 substitution never enters, so a `NEWTYPE` over a `FOR ALL` name is a different
@@ -518,7 +519,8 @@ steps, after the paths the unit spells are resolved:
    so a component reads the binders of the units before it;
 2. each type expression the unit records — a sigiled type in value position, a
    type part of an expression shape that births no callable, a `MATCH … WITH`
-   guard — then the guards' check;
+   guard — then the guards' check and each `MATCH … UNDER`'s check against its
+   union;
 3. each registration the unit binds, through [`callable_type`](signature.rs)
    or through its signature for a surfaced head;
 4. the type of each callable the unit births, through the enclosing shape's
@@ -529,7 +531,32 @@ steps, after the paths the unit spells are resolved:
 `Number` and `:(Number)`, an alias and what it names, `:(Number | Str)` and
 `:(Str | Number)`, a `FOR ALL` name spelled twice — refuse the shape as
 `RepeatedGuard`, naming both. Of several repeats, the refusal names the first
-in program order, against the first guard written of its type.
+in program order, against the first guard written of its type. Two `FOR ALL`
+names a settlement binds to one type repeat there. A repeated label, value
+guard or `_` is syntax, which [the scope builder](../scope/README.md#three-tiers)
+refuses where it reads the arm set.
+
+### A union's variants
+
+A `MATCH … UNDER` clause's variants are the members of its `Union` type node, in
+stored order ([`variants`](variants.rs)). A label names the member of its name: a
+declared variant by its own name, and a variant applied to arguments,
+`:(Number AS Option)`'s `Some`, by its constructor's. A structural member,
+`Number` in `:(Maybe | Number)`, has no name, so no label names it and only `_`
+covers it. [`arms_under`](variants.rs) checks each `MATCH … UNDER` whose clause
+the walk closes, beside the guards: a clause that is no `Union` node refuses as
+`NotUnion`, a label naming no variant as `NoVariant`, and, where no `_` arm is
+written, a variant no label names as `Uncovered`. The check runs once under each
+binding that closes the clause — the load for a closed union, a settlement for
+one over a `FOR ALL` name — before any arm is selected under it, never where the
+`MATCH` runs.
+
+A variant's identity is its name, kind and payload, not its union: it unifies
+with its standalone twin ([identity](../../lattice/src/types/identity.md)). So a
+one-variant `UNION` is the same type as its variant, and is refused where it is
+declared, and a clause over a `FOR ALL` name a call binds to a freshly built
+variant — `PICK (Maybe.Some 3)` over `MATCH x UNDER Un` — reads the variant,
+which is no union, and refuses as `NotUnion`.
 
 **Refusals.** A closed type that does not elaborate refuses the load as
 `ShapeError::Type`, located at the part the refusal is about, else at the type
@@ -656,11 +683,16 @@ application; each spelling left unknown; a type binder over a closed path
 declared closed; a nominal over a run-bound type left unknown and a reader of
 it rigid; each repeated guard; a refusal refusing the load, or kept in its
 quote's code's closing record; and the frontier of the unit holding each fact.
+[`tests/variants.rs`](tests/variants.rs) reads a union's variants and the
+member each label names, a family's application by its constructor's name and a
+structural member by none.
 [`tests::boundary`](tests/boundary.rs) also holds the type half to reading
 every fact through its `TypeContext`.
 
 ## Open work
 
+- [A variant's union in its identity](../../roadmap/gradual-typing/variant-union-identity.md)
+  — a `MATCH … UNDER` clause reading a freshly built variant as its union.
 - [Families as parameters](../../roadmap/rewrite/families-as-parameters.md) —
   higher-kinded head parameters, and a constructor application leaving a
   parameter unpinned.

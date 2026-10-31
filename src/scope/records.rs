@@ -36,7 +36,7 @@ use super::shape::{
 use super::shapes::Shapes;
 use super::tree::{Leaf, NodeCapture, Tree, closed_trees};
 use super::typed::{
-    BodyClass, Caching, Elaboration, Handoff, InstanceRead, Mint, PathEntry, Pick, Points,
+    Arms, BodyClass, Caching, Elaboration, Handoff, InstanceRead, Mint, PathEntry, Pick, Points,
     Resolution, Route, Source, Static, StaticCallable, StaticInstance, StaticRegistered,
     StaticType, UseStatics, Variable, ViewSlots,
 };
@@ -96,6 +96,8 @@ pub struct Typed<'a> {
     pub by_name: Keyed<'a, (Site, &'a [StaticType<'a>])>,
     /// Each tail call's route, by its node's site.
     pub routes: Keyed<'a, (Site, Route<'a>)>,
+    /// Each `MATCH`'s arms, by its node's site.
+    pub arms: Keyed<'a, (Site, Arms<'a>)>,
     /// Each retype to a closed declared type, by the site its check is settled at, and each module
     /// member read's, by its node's site.
     pub retypes: Keyed<'a, (Site, Retype)>,
@@ -133,6 +135,7 @@ impl Typed<'_> {
         selections: Keyed::EMPTY,
         by_name: Keyed::EMPTY,
         routes: Keyed::EMPTY,
+        arms: Keyed::EMPTY,
         retypes: Keyed::EMPTY,
         trees: Keyed::EMPTY,
         picks: Keyed::EMPTY,
@@ -1177,6 +1180,7 @@ impl<'graph> LoadFacts<'graph> {
                 + size_of_val(typed.selections.entries())
                 + size_of_val(typed.by_name.entries())
                 + size_of_val(typed.routes.entries())
+                + size_of_val(typed.arms.entries())
                 + size_of_val(typed.retypes.entries())
                 + size_of_val(typed.trees.entries())
                 + size_of_val(typed.picks.entries())
@@ -1679,6 +1683,11 @@ impl<'a, S: RecordSource<'a>> FactsOver<S> {
         self.at_site(shape, site, |typed| typed.routes)
     }
 
+    /// What the load fixed about the arms of the `MATCH` whose node sits at `site` of `shape`.
+    pub fn arms(&self, shape: &BodyShape<'_>, site: Site) -> Option<Arms<'a>> {
+        self.at_site(shape, site, |typed| typed.arms)
+    }
+
     /// What the load recorded a retype at `site` of `shape` re-stamps at, where it closed the
     /// declared type.
     pub fn retype(
@@ -2067,6 +2076,7 @@ impl Typed<'_> {
             .chain(self.selections.iter().map(|(site, _)| *site))
             .chain(self.by_name.iter().map(|(site, _)| *site))
             .chain(self.routes.iter().map(|(site, _)| *site))
+            .chain(self.arms.iter().map(|(site, _)| *site))
             .chain(self.retypes.iter().map(|(site, _)| *site))
             .chain(self.trees.iter().map(|(site, _)| *site))
             .chain(self.picks.iter().map(|(site, _)| *site))

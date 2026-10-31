@@ -66,7 +66,7 @@ fn parameter(program: &Program<'_, '_, '_>, params: &[TypeSymbol], name: &str) -
 #[test]
 fn a_parameterized_union_declares_a_family_per_variant() {
     brought(
-        &format!("{RESULT}\nUNION Shape = #{{Circle: Number}}"),
+        &format!("{RESULT}\nUNION Shape = #{{Circle: Number, Square: Number}}"),
         |program| {
             let TypeNode::Union { members } = program.types.node(program.bound("Result")) else {
                 panic!("a UNION binds a union");
@@ -84,7 +84,7 @@ fn a_parameterized_union_declares_a_family_per_variant() {
             }
             assert!(
                 matches!(
-                    program.types.node(program.bound("Shape")),
+                    program.types.node(variant(&program, "Shape", "Circle")),
                     TypeNode::SetMember {
                         kind: KKind::NewType,
                         ..
@@ -247,12 +247,18 @@ fn a_family_declaration_is_refused() {
     for (source, left) in [
         // An application is covariant in its arguments.
         (
-            "UNION (Elem AS Sink) = #{Take: :(FN :{x :Elem} -> Null)}",
+            "UNION (Elem AS Sink) = #{Take: :(FN :{x :Elem} -> Null), None: Null}",
             "Sink",
         ),
-        ("UNION (Elem Elem AS Twice) = #{One: Elem}", "Twice"),
+        (
+            "UNION (Elem Elem AS Twice) = #{One: Elem, None: Null}",
+            "Twice",
+        ),
         // A family's parameters take no bound.
-        ("UNION ((Elem AS Opt) UNDER Any) = #{None: Null}", "Opt"),
+        (
+            "UNION ((Elem AS Opt) UNDER Any) = #{Some: Number, None: Null}",
+            "Opt",
+        ),
         (
             &format!("{RESULT}\nLET Bad = :(Result {{Ok = Number}})"),
             "Bad",
@@ -272,14 +278,14 @@ fn a_family_declaration_is_refused() {
     }
     // A parameter at a covariant position declares, however many flips put it there.
     for source in [
-        "UNION (Elem AS Source) = #{Give: :(FN :{} -> Elem)}",
-        "UNION (Elem AS Wrapper) = #{Nest: :(FN :{f :(FN :{x :Elem} -> Null)} -> Null)}",
+        "UNION (Elem AS Source) = #{Give: :(FN :{} -> Elem), None: Null}",
+        "UNION (Elem AS Wrapper) = #{Nest: :(FN :{f :(FN :{x :Elem} -> Null)} -> Null), None: Null}",
     ] {
         brought(source, |_| ());
     }
     // A construction solves the parameters from its payload, which either member admits alike.
     declared(
-        "UNION (Left Right AS Either) = #{One: :(Left | Right)}",
+        "UNION (Left Right AS Either) = #{One: :(Left | Right), None: Null}",
         |program, brought| {
             assert!(
                 matches!(brought, Err(Elaboration::TiedUnion { .. })),

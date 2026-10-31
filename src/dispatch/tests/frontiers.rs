@@ -401,20 +401,17 @@ fn a_blocks_units_keep_their_own_records() {
 /// once `MATCH` runs.
 #[test]
 fn an_arms_it_binds_at_its_blocks_entry() {
-    loaded(
-        "MATCH 1 -> :Number WITH #{Number: (it), Str: (0)}",
-        |program| {
-            let arms: Vec<_> = (program.shapes().bodies().iter())
-                .filter(|shape| shape.kind() == ShapeKind::Block)
-                .collect();
-            assert_eq!(arms.len(), 2);
-            for arm in arms {
-                let it = unknown(program, arm, "it");
-                let site = program.shapes().bind_site(it);
-                assert_eq!((site.segment, site.unit), entry_of(arm));
-            }
-        },
-    );
+    loaded("MATCH 1 WITH #{Number: (it), Str: (0)}", |program| {
+        let arms: Vec<_> = (program.shapes().bodies().iter())
+            .filter(|shape| shape.kind() == ShapeKind::Block)
+            .collect();
+        assert_eq!(arms.len(), 2);
+        for arm in arms {
+            let it = unknown(program, arm, "it");
+            let site = program.shapes().bind_site(it);
+            assert_eq!((site.segment, site.unit), entry_of(arm));
+        }
+    });
 }
 
 /// A chain of views, each over the one before, lays and notes frontier entries linear in its

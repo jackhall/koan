@@ -328,6 +328,25 @@ pub(super) fn unlocated(error: ShapeError) -> ShapeError {
         E::AmbiguousInstance { key, .. } => E::AmbiguousInstance { key, at },
         E::NoInstanceAtCandidates { key, .. } => E::NoInstanceAtCandidates { key, at },
         E::QuantifiedValue { .. } => E::QuantifiedValue { at },
+        E::NotAGuard { .. } => E::NotAGuard { at },
+        E::NoAdmittingArm {
+            scrutinee, union, ..
+        } => E::NoAdmittingArm {
+            scrutinee,
+            union,
+            at,
+        },
+        E::AmbiguousArms {
+            count, scrutinee, ..
+        } => E::AmbiguousArms {
+            count,
+            scrutinee,
+            at,
+        },
+        E::NotUnion { clause, .. } => E::NotUnion { clause, at },
+        E::NoVariant { label, union, .. } => E::NoVariant { label, union, at },
+        E::Uncovered { union, variant, .. } => E::Uncovered { union, variant, at },
+        E::LoneVariant { name, .. } => E::LoneVariant { name, at },
         E::QuantifiedRead { name, site, .. } => E::QuantifiedRead { name, site, at },
         E::EagerCycle {
             members,

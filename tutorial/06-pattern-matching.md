@@ -1,82 +1,153 @@
 # Pattern matching
 
-`MATCH` runs exactly one of several branches. It has two forms, and which one you
-write decides how the branch heads are read. `MATCH … OVER <Union> WITH` reads
-every head as a **variant of that union** and hands the branch the payload —
-this is the [tagged-union](05-tagged-unions.md) form. Plain `MATCH … WITH` reads
-every head as a **type**, branching on the value's runtime type (a plain
-`Number`, a `Str`, an untagged `:(Number | Str)`), and binds the value unchanged.
-Unlike [variant dispatch](05-tagged-unions.md#dispatching-on-a-variant), a match
-over a union gives you the payload to work with.
+`MATCH` runs exactly one of several arms, chosen by the value you hand it. It
+has two forms, and which one you write decides how the arms' guards are read.
+`MATCH … UNDER <Union> WITH` reads every guard as a **variant of that union**
+and hands the arm the variant's payload — this is the
+[tagged-union](05-tagged-unions.md) form. Plain `MATCH … WITH` reads every guard
+as a **type** or a **literal value**, branching on the value itself (a plain
+`Number`, a `Str`, an untagged `:(Number | Str)`, the number `0`). Unlike
+[variant dispatch](05-tagged-unions.md#dispatching-on-a-variant), a match over a
+union gives you the payload to work with.
 
 ## The shape of a match
 
 ```koan
 UNION Maybe = #{Some: Number, None: Null}
 LET m = (Maybe.Some 42)
-MATCH (m) OVER Maybe -> :Str WITH #{Some: (PRINT "got a value"), None: (PRINT "nothing")}
+MATCH m UNDER Maybe WITH #{Some: (PRINT "got a value"), None: (PRINT "nothing")}
 ```
 
 ```text
 got a value
 ```
 
-A match has four parts: the value to inspect, `OVER <Union>` naming the union
-its heads come from, a **result type** written `-> :Type`, and a `WITH` dict of
-branches. The `-> :Type` is required — it declares the type the whole `MATCH`
-expression produces, and every branch body must produce a value of that type
-(just like a function's return type). The branches are written `#{<Tag>: (<body>), …}`,
-a dict of quotes: each body is quoted because only one of them runs (see
+A match has three parts: the value to inspect, `UNDER <Union>` naming the union
+its guards come from, and a `WITH` dict of arms. The arms are written
+`#{<guard>: (<body>), …}`, a dict of quotes: each body is quoted because only one
+of them runs (see
 [What is quoted and what is bare](10-quoting.md#what-is-quoted-and-what-is-bare)).
 
-The branch whose variant matches runs; when several match, the most specific one
-wins. Inside a branch, the name `it` is bound to the matched value's payload, so
-a match is also how you *unwrap* a union:
+The arm whose guard admits the value runs, and its value is the whole `MATCH`'s.
+Inside an arm, the name `it` is bound to what the guard admitted — under a
+union, the variant's payload — so a match is also how you *unwrap* a union:
 
 ```koan
 UNION Maybe = #{Some: Number, None: Null}
 LET m = (Maybe.Some 42)
 PRINT
-  MATCH (m) OVER Maybe -> :Number WITH #{Some: (it), None: (0)}
+  MATCH m UNDER Maybe WITH #{Some: (it), None: (0)}
 ```
 
 ```text
 42
 ```
 
-Here the result type is `:Number`, the `Some` branch returns the unwrapped
-payload `it`, and because the whole `MATCH` is a `Number` it slots straight into
-`PRINT`.
-
-Without `OVER`, `MATCH` branches on the value's runtime type instead. Each
-head is a type — a type name such as `Number`, or a sigiled type such as
-`:(Number | Str)`:
+A `MATCH` declares no result type. Its type is worked out from its arms: here
+both arms produce a `Number`, so the whole `MATCH` is a `Number` and slots
+straight into `PRINT`. When the arms produce different types, the `MATCH` may
+be any of them. To check a `MATCH`'s value yourself, ascribe it with `:!`:
 
 ```koan
-MATCH 42 -> :Str WITH #{Number: (PRINT "a number"), Str: (PRINT "a string")}
+LET twice = (FN :{x :Any} -> Any = #((MATCH x WITH #{Number: (x + x), Str: (it)}) :! Number))
+PRINT (twice {x = 4})
+PRINT (twice {x = "four"})
+```
+
+```text
+8
+error: Str does not satisfy its ascription Number
+```
+
+## Matching on a type or a value
+
+Without `UNDER`, `MATCH` branches on the value itself. A guard is a type — a
+type name such as `Number`, or a sigiled type such as `:(Number | Str)` — or a
+literal: a number, a string, `true`, `false` or `null`:
+
+```koan
+MATCH 42 WITH #{Number: (PRINT "a number"), Str: (PRINT "a string")}
 ```
 
 ```text
 a number
 ```
 
-A head is always a type, never a value: `#{true: (…)}` is refused before the
-program runs.
+A type guard admits every value of its type. A literal guard admits a value
+equal to it, as `==` compares them, so a [tagged](05-tagged-unions.md) value
+never matches a plain literal: `(Meters 1)` is not the number `1`.
 
-## Every case must be covered
+Inside an arm, `it` has the guard's type, just as a function's parameter has the
+type it declares. Under `:(LIST OF Any)`, `it` is a list of anything, and a call
+that dispatches on it picks the overload for that type, whatever the list holds:
 
-A match has no implicit fallthrough. An `OVER` match must name **every** member
-of its union, and a missing one is an error at the match itself — before any
-value is looked at:
+```koan
+EXPR #(KIND xs :(LIST OF Number)) -> Str = #("numbers")
+EXPR #(KIND xs :(LIST OF Any)) -> Str = #("anything")
+LET xs = [1 2 3]
+PRINT (KIND xs)
+PRINT (MATCH xs WITH #{:(LIST OF Any): (KIND it)})
+```
+
+```text
+numbers
+anything
+```
+
+## The most specific arm wins
+
+The arms are a dict, so the order you write them in says nothing. When several
+guards admit a value, the **most specific** one runs, as
+[dispatch](03-names-and-dispatch.md) picks the most specific overload: a literal
+beats every type, and a narrower type beats a wider one. A `_` key is the
+default arm: it admits anything and loses to every other guard.
+
+```koan
+LET describe = (FN :{x :Any} -> Str = #(
+  MATCH x WITH #{0: ("zero"), Number: ("some number"), Str: ("a string"), _: ("something else")}
+))
+PRINT (describe {x = 0})
+PRINT (describe {x = 7})
+PRINT (describe {x = "hi"})
+PRINT (describe {x = true})
+```
+
+```text
+zero
+some number
+a string
+something else
+```
+
+A value no guard admits is an error, and so is a value admitted by two guards
+with neither more specific than the other. Where the guards and the value's type
+already show it, the error comes before the program runs:
+
+```koan
+MATCH 1 WITH #{:(Number | Str): (1), :(Number | Bool): (2)}
+```
+
+```text
+error: <input>:1:1: ambiguous `MATCH`: 2 arms admit Number and none ranks first
+```
+
+Writing the same guard twice — a type under two spellings, one literal, one
+label, or `_` — is refused too.
+
+## Every variant must be covered
+
+A match has no implicit fallthrough. A `MATCH … UNDER` must have an arm for
+**every** variant of its union, and a missing one is an error at the match
+itself — before any value is looked at:
 
 ```koan
 UNION Maybe = #{Some: Number, None: Null}
 LET m = (Maybe.None null)
-MATCH (m) OVER Maybe -> :Str WITH #{Some: (PRINT "got")}
+MATCH m UNDER Maybe WITH #{Some: (PRINT "got")}
 ```
 
 ```text
-error: shape error: inexhaustive match over `Maybe`: no arm for None (add a `_` arm to default them)
+error: <input>:3:1: this `MATCH … UNDER :(Some | None)` has no arm for None; add a `_` arm to default it
 ```
 
 Cover every variant the union declares — or add a `_` key, which stands in for
@@ -85,31 +156,29 @@ all the ones you left out:
 ```koan
 UNION Color = #{Red: Null, Green: Null, Blue: Null}
 LET c = (Color.Blue null)
-MATCH (c) OVER Color -> :Str WITH #{Red: (PRINT "red"), _: (PRINT "some other colour")}
+MATCH c UNDER Color WITH #{Red: (PRINT "red"), _: (PRINT "some other colour")}
 ```
 
 ```text
 some other colour
 ```
 
-A named branch always wins over `_`, whatever order you write them in, and `_`
-binds `it` to the payload exactly as a named branch does. You may write at most
-one `_`. What `_` does *not* do is widen the match: it defaults the union's
-members, so a value that belongs to no member of the union is still an error.
+A named arm always wins over `_`, and `_` binds `it` to the payload exactly as a
+named arm does. What `_` does *not* do is widen the match: it defaults the
+union's variants, so a value that belongs to no variant of the union is still an
+error. The same check refuses a guard naming no variant of the union, and a
+`UNDER` clause that is not a union at all.
 
-An `OVER`-less match is checked against the value instead: it errors when no
-branch's type admits what it was handed.
+## Writing arms across lines
 
-## Writing branches across lines
-
-For more than a couple of branches, open the `#{` at the end of the `MATCH`
-line and write one branch per line, indented inside it. The commas between
-entries are optional:
+For more than a couple of arms, open the `#{` at the end of the `MATCH` line and
+write one arm per line, indented inside it. The commas between entries are
+optional:
 
 ```koan
 UNION Color = #{Red: Null, Green: Null, Blue: Null}
 LET c = (Color.Green null)
-MATCH (c) OVER Color -> :Str WITH #{
+MATCH c UNDER Color WITH #{
   Red: (PRINT "red")
   Green: (PRINT "green")
   Blue: (PRINT "blue")
@@ -120,8 +189,8 @@ MATCH (c) OVER Color -> :Str WITH #{
 green
 ```
 
-A branch body that needs several steps writes each step as its own group, and
-its last expression is the branch's value:
+An arm body that needs several steps writes each step as its own group, and its
+last expression is the arm's value:
 
 ```koan
 Some: ((PRINT "found it") (it))
@@ -136,7 +205,7 @@ where each `Succ` wraps a smaller value and `Zero` is the base:
 ```koan
 UNION Nat = #{Zero: Null, Succ: Nat}
 EXPR #(COUNTDOWN n :Nat) -> Str = #(
-  MATCH (n) OVER Nat -> :Str WITH #{
+  MATCH n UNDER Nat WITH #{
     Zero: (PRINT "liftoff")
     Succ: ((PRINT "tick") (COUNTDOWN it))
   }
@@ -155,9 +224,10 @@ tick
 liftoff
 ```
 
-Each `Succ` branch prints `tick` and recurses on `it` — the wrapped predecessor
-— until `COUNTDOWN` reaches `Zero`. The recursive call is in tail position, so
-this runs in constant stack space no matter how deep the count.
+Each `Succ` arm prints `tick` and recurses on `it` — the wrapped predecessor —
+until `COUNTDOWN` reaches `Zero`. The `MATCH` is the last thing `COUNTDOWN`
+does, so the recursive call at the end of its arm is in tail position, and this
+runs in constant stack space no matter how deep the count.
 
 A loop written this way also keeps very little memory while it runs. What it
 holds on to is what its tail call hands to the next round: the arguments of
@@ -171,13 +241,13 @@ more:
 ```koan
 UNION Nat = #{Zero: Null, Succ: Nat}
 EXPR #(COUNTDOWN n :Nat) -> Str = #(
-  MATCH (n) OVER Nat -> :Str WITH #{
+  MATCH n UNDER Nat WITH #{
     Zero: (PRINT "liftoff")
     Succ: ((PRINT "tick") (COUNTDOWN it))
   }
 )
 EXPR #(DOUBLE n :Nat acc :Nat) -> Nat = #(
-  MATCH (n) OVER Nat -> :Nat WITH #{
+  MATCH n UNDER Nat WITH #{
     Zero: (acc)
     Succ: (DOUBLE it (Nat.Succ (Nat.Succ acc)))
   }

@@ -10,6 +10,7 @@ mod examples;
 mod families;
 mod module;
 mod projections;
+mod variants;
 
 use crate::memory::{Bump, BumpAllocator, ProgramBrand, Writer, program_storage, resident};
 use crate::parse::{KExpression, parse};

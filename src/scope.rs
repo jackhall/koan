@@ -79,20 +79,21 @@ pub use records::{
 pub use settlement_facts::{Activated, Settlement};
 pub use shape::{
     Arm, BodyShape, BuiltinIndex, Candidate, CandidateList, CaptureChain, CaptureSlot,
-    CaptureSource, CaptureSpec, Component, ComponentIndex, Coordinate, Lands, Listed, Located,
-    Mention, MentionClass, Offer, PathId, Position, QuotedPart, Ranking, Registration, Segment,
-    ShapeError, ShapeKind, Site, Sites, Slot, SpelledPath, SurfacedHead, Target, TopLevel,
-    TypeExpression, Unit, UnitHolds, UnitIndex, UnitWork, ViewRefused, Which, each_part, follow,
-    in_body_of, part_of, selection_refused, source_of, spelled, view_refused,
+    CaptureSource, CaptureSpec, Component, ComponentIndex, Coordinate, Guard, Lands, Listed,
+    Located, Mention, MentionClass, Offer, PathId, Position, QuotedPart, Ranking, Registration,
+    Repeated, Scalar, Segment, ShapeError, ShapeKind, Site, Sites, Slot, SpelledPath, SurfacedHead,
+    Target, TopLevel, TypeExpression, Unit, UnitHolds, UnitIndex, UnitWork, ViewRefused, Which,
+    arm_refused, each_part, follow, in_body_of, part_of, selection_refused, source_of, spelled,
+    view_refused,
 };
 pub use shapes::{BindSite, Code, Origin, Shapes};
 pub use stamp::{Ask, Asked, Level, Sought, Stamp};
 pub use tree::{Binder, Identity, KnotNode, Leaf, NodeCapture, Tree, Unfolded, Within};
 pub use typed::{
-    BodyClass, Caching, Callable, CandidateRoute, Elaboration, ElaborationDisplay, Elimination,
-    FunctionGroupMap, HandedTo, Handoff, InstanceRead, Kept, Mint, Narrowing, ParameterBinding,
-    PathEntry, Pick, Point, Points, Registered, Resolution, Resolved, Root, Route, ShapeGroupMap,
-    Source, Static, StaticCallable, StaticInstance, StaticRegistered, StaticType, Table,
-    UseStatics, Variable, ViewSlots,
+    Arms, BodyClass, Caching, Callable, CandidateRoute, Elaboration, ElaborationDisplay,
+    Elimination, FunctionGroupMap, HandedTo, Handoff, InstanceRead, Kept, Mint, Narrowing,
+    ParameterBinding, PathEntry, Pick, Point, Points, Registered, Resolution, Resolved, Root,
+    Route, ShapeGroupMap, Source, Static, StaticCallable, StaticInstance, StaticRegistered,
+    StaticType, Table, UseStatics, Variable, ViewSlots,
 };
 pub use writes::{KeyedWrites, Writes};

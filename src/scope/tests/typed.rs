@@ -88,7 +88,7 @@ fn the_builder_records_each_type_expression_once() {
                   LET Alias = :(LIST OF Str)\n\
                   NEWTYPE Wrapped = :{v :(LIST OF Number)}\n\
                   LET f = (FN :{x :Number} -> :(LIST OF Number) = #(x))\n\
-                  MATCH 1 -> :Number WITH #{Number: (1), :(Str): (2), _: (3)}";
+                  MATCH 1 WITH #{Number: (1), :(Str): (2), _: (3)}";
     with_fixture(|fixture| {
         let lines = fixture.parse(source);
         fixture.in_cell(|writer, _| {
@@ -112,7 +112,7 @@ fn the_builder_records_each_type_expression_once() {
                         .count()
                 })
                 .collect();
-            assert_eq!(per_statement, [1, 0, 0, 0, 3]);
+            assert_eq!(per_statement, [1, 0, 0, 0, 2]);
             let mut guards: Vec<_> = recorded
                 .iter()
                 .filter_map(|expression| Some((expression.guard?, expression.part)))

@@ -50,7 +50,8 @@
 //! the evaluator with that [`Contract`], and the evaluation owes it instead. A frame a tail hop
 //! reached is checked against its own return and retyped to the one the hop owed, so a chain of
 //! hops returns at the outermost contract. An `EVAL`'s frame owes the `EVAL`'s declared return as a
-//! called frame owes its own; a block never tails.
+//! called frame owes its own. A block tails only as a tail `MATCH` arm, which the `MATCH`'s
+//! evaluation hands off owing its contract; every other block runs as a child and never tails.
 //!
 //! **A caching body interns in scratch.** Each step picks one chain ([`run`]). A caching body
 //! keeps its blocks' and its last statement's values rather than forwarding them, so a value
@@ -78,13 +79,13 @@ use crate::scheduler::{
     Action, Held, MemoHome, Placement, Received, Replayed, Request, Requested, Seek, Slot as Asked,
     Step, StepError, Taken, Use,
 };
-use crate::scope::ShapeError;
 use crate::scope::{Activated, Entry, EventSite, MemoKey, extended};
 use crate::scope::{Address, AtRun, Bound, Tree, Unknown};
 use crate::scope::{BodyShape, Component, Position, ShapeKind, Site, Slot, Unit, UnitWork};
 use crate::scope::{CaptureSource, ClosureBindings, Code, CodeSyntax, ComposedRoot, Facts};
 use crate::scope::{ComposedSyntax, Stamp};
 use crate::scope::{Coordinate, ParameterBinding, Retypes, Static, Target};
+use crate::scope::{IMPLICIT, ShapeError};
 use crate::symbols::{BinderSymbol, KeySymbol, Symbol, SymbolInterner, TypeSymbol};
 use crate::type_lattice::{
     Collector, DeclaredType, DeclaredView, KType, Parametric, Record as TypeRecord, TypeNode,
@@ -96,7 +97,7 @@ use crate::values::{
 };
 
 use super::activation_store::bound_of;
-use super::bundle::{FrameKept, Handed, KBirth, KBundle, KState, Keeps, Passing, Within};
+use super::bundle::{Entered, FrameKept, Handed, KBirth, KBundle, KState, Keeps, Passing, Within};
 use super::exit::Exit;
 use super::record::{CallKind, Contract, Evaluated, Program, rendered};
 use super::settle::called_function;
@@ -114,7 +115,7 @@ pub struct Runner<'graph, 'cell> {
     /// The enclosing bodies of a module body being run inline, innermost first.
     outer: Option<&'cell Outer<'graph, 'cell>>,
     level: Level,
-    /// What a called frame or an `EVAL`'s owes; `None` everywhere else.
+    /// What a called frame, an `EVAL`'s or a tail arm's block owes; `None` everywhere else.
     contract: Option<Contract>,
     /// The outermost barrier a frame was called through, which its value crosses outwards.
     barrier: Option<Barrier<'graph, 'cell>>,
@@ -544,6 +545,7 @@ fn ran<'graph, 'here, 'scratch>(
                         root: called_function(callee).and_then(|function| function.root()),
                         kept: bare(callee)
                             .then(|| frame_kept(&mut step, activation, (callee, arguments), keeps)),
+                        arms: None,
                     },
                     memo,
                     ..Runner::at(program, activation, Level::Frame, Some(contract))
@@ -629,7 +631,8 @@ fn ran<'graph, 'here, 'scratch>(
             program,
             segment,
             enclosing,
-            module,
+            entered,
+            contract,
             within,
         }) => {
             let writer = step.writer();
@@ -640,13 +643,24 @@ fn ran<'graph, 'here, 'scratch>(
                 writer,
                 KActivation::of_block(writer, shape, &facts, enclosing),
             );
-            // A `USING` body's parameters are the module's surfaced names, which its shape and the
-            // module cannot disagree on: a refusal is an invariant break.
-            if let Some((module, site)) = module {
-                let bump = Bump::new();
-                let picks = facts.picks(code.shape(enclosing.segment()), site);
-                if surface(writer, module, picks, activation, shape, types, &bump).is_err() {
-                    return step.failed(StepError::Refused);
+            match entered {
+                Entered::Plain => {}
+                // A `USING` body's parameters are the module's surfaced names, which its shape and
+                // the module cannot disagree on: a refusal is an invariant break.
+                Entered::Surfaced(module, site) => {
+                    let bump = Bump::new();
+                    let picks = facts.picks(code.shape(enclosing.segment()), site);
+                    if surface(writer, module, picks, activation, shape, types, &bump).is_err() {
+                        return step.failed(StepError::Refused);
+                    }
+                }
+                // An arm's one parameter is its `it`.
+                Entered::Arm(it) => {
+                    let it_slot = shape.slot(BinderSymbol::Value(IMPLICIT.it.symbol()));
+                    let bound = it_slot.map(|(slot, _)| activation.bind(slot, it));
+                    if !matches!(bound, Some(Ok(()))) {
+                        return step.failed(StepError::Refused);
+                    }
                 }
             }
             let mut memo = Memo::at(within.memo, within.inherit);
@@ -661,7 +675,7 @@ fn ran<'graph, 'here, 'scratch>(
             Runner {
                 within,
                 memo,
-                ..Runner::at(program, activation, Level::Block, None)
+                ..Runner::at(program, activation, Level::Block, contract)
             }
         }
         KState::Born(KBirth::Composed {
@@ -905,17 +919,26 @@ pub fn block<'graph, 'here>(
     use_: Use,
     within: Within<'graph, 'here>,
 ) -> Request<'graph, 'here, KBundle> {
-    surfaced_block(program, shape, enclosing, None, use_, within)
+    entered_block(
+        program,
+        shape,
+        enclosing,
+        Entered::Plain,
+        None,
+        use_,
+        within,
+    )
 }
 
-/// What an evaluator asks for to run `shape`, a `USING … SCOPE` body, inside `enclosing`, its
-/// parameters bound to what `module` surfaces, beside the `USING`'s site in `enclosing`'s body:
-/// [`block`]'s request, the block entered on the module.
-pub fn surfaced_block<'graph, 'here>(
+/// What an evaluator asks for to run `shape`, a `USING … SCOPE` body or a `MATCH` arm, inside
+/// `enclosing`, its parameters bound as `entered` says: [`block`]'s request, the block entered on
+/// the module or on its `it`, owing `contract` where a tail arm is handed off.
+pub fn entered_block<'graph, 'here>(
     program: &'graph Program<'graph>,
     shape: &BodyShape<'_>,
     enclosing: KActivationView<'graph, 'here>,
-    module: Option<(KValue<'graph, 'here>, Site)>,
+    entered: Entered<'graph, 'here>,
+    contract: Option<Contract>,
     use_: Use,
     within: Within<'graph, 'here>,
 ) -> Request<'graph, 'here, KBundle> {
@@ -929,7 +952,8 @@ pub fn surfaced_block<'graph, 'here>(
                 program,
                 segment: shape.segment(),
                 enclosing,
-                module,
+                entered,
+                contract,
                 within,
             },
         },
@@ -1173,15 +1197,22 @@ impl<'graph, 'cell> Runner<'graph, 'cell> {
         unit.last && self.level != Level::Top && self.outer.is_none()
     }
 
-    /// Whether `unit` is a frame's last, a statement binding nothing whose value is the frame's —
-    /// which the runner hands to the evaluator by a tail rather than waiting on. A frame called
-    /// through a barrier never tails: its value crosses the barrier where the frame ends.
+    /// Whether `unit` is a frame's last, or a block's owing a contract (a tail arm's), a statement
+    /// binding nothing whose value is the body's — which the runner hands to the evaluator by a
+    /// tail rather than waiting on. A frame called through a barrier never tails: its value
+    /// crosses the barrier where the frame ends.
     fn tails(&self, unit: Unit, shape: &BodyShape<'_>) -> bool {
-        self.level == Level::Frame
+        self.tail_body()
             && self.barrier.is_none()
             && self.yields(unit)
             && self.unit as usize + 1 == shape.units().len()
             && matches!(unit.work, UnitWork::Statement(_))
+    }
+
+    /// Whether the runner runs a body whose last statement may tail: a frame's, or a tail arm's
+    /// block, which owes its frame's contract.
+    fn tail_body(&self) -> bool {
+        self.level == Level::Frame || self.level == Level::Block && self.contract.is_some()
     }
 
     /// Where an evaluation this runner asks for lives: a `Fresh` tree child of the root at the top
@@ -2254,7 +2285,7 @@ fn perform<'graph, 'here>(
             return step.failed(StepError::Refused);
         };
         // A binder the frame's tail call hands on is built where it outlives the hop.
-        let threads = runner.level == Level::Frame
+        let threads = runner.tail_body()
             && runner.outer.is_none()
             && shape.threaded().binary_search(slot).is_ok();
         let asked = ask(

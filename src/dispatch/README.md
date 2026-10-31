@@ -22,9 +22,8 @@ quotes, splices composed where a quote is born, `EVAL`, `USING` and `BUILD`
 over code — the last two, over composed code, in a one-step frame under its
 composition, where its shape lies — modules —
 a `MODULE` or `GROUP` binder, `:!` and `:|`, a member read and
-`USING … SCOPE` — and uncaught faults.
-[Matching](../../roadmap/conditionals/matching.md) owns `MATCH`, and
-[catching errors](#catching) `TRY` and `CATCH`; a node dispatch has
+`USING … SCOPE` — `MATCH`, and uncaught faults.
+[Catching errors](#catching) owns `TRY` and `CATCH`; a node dispatch has
 no reading for is a fault.
 
 ## What a node is
@@ -85,6 +84,10 @@ never the parse — as one of:
   each surfaced name bound to the member it names and each surfaced key to the
   list of the functions the module offers there; its value is the body's last
   statement's;
+- a **`MATCH`**, `MATCH <scrutinee> WITH <arms>` or
+  `MATCH <scrutinee> UNDER <union> WITH <arms>`: the scrutinee, evaluated,
+  selecting one arm, which runs as a block entered on its `it`
+  ([matching](#matching)); its value is the arm's;
 - a **bucket declaration**, whose value is `null`;
 - a **keyworded call**: a node the shape holds a candidate list for;
 - an **application** `(head argument)`: a construction when the head is a type —
@@ -324,8 +327,9 @@ fixed:
   local has its right-hand side's, an annotated local, `LET n :T = v`, what
   the ascription `v :! T` would have — a member of a cyclic component included,
   since the tie births it at its annotation — a
-  registration is exactly its function type, and a type name its type value's; a block's `it`, an arm's `it`
-  and a quote's hole are at most `Any`, and a name a `USING` surfaces is at
+  registration is exactly its function type, and a type name its type value's; a quote's hole
+  is at most `Any`, an arm's `it` is the scrutinee retyped to its guard
+  ([matching](#matching)), and a name a `USING` surfaces is at
   most the member read of its operand it names;
 - a block has its last statement's type, and a bucket declaration is `Null`;
 - an ascription `e :! T` is, like a parameter, exactly `T` where the retype
@@ -421,6 +425,8 @@ fixed:
   through any other operand the read is unknown. A lower end that is a
   signature lacking the member makes the candidate *never*, so `geometry.tau`
   refuses the load as `SIG (pi: Number) has no member tau`;
+- a `MATCH` spans the static types of the arms the load keeps
+  ([matching](#matching)), and is `Never` over a scrutinee that is `Never`;
 - a call in tail position is typed as any other call: its node never finishes,
   since the frame it tails into returns at the enclosing contract, so no
   carried type is read against it;
@@ -1043,6 +1049,75 @@ digested slot bare records the hand-off, by field or by position, and the run
 hands the filled memo to the callee's parameter at the frame's birth. Every
 hand-off is found, whatever order the calls and views are written in.
 
+## Matching
+
+A `MATCH`'s arms are a dict of quotes, guards to blocks, so their written order
+says nothing: the run takes the unique most specific arm whose guard admits the
+scrutinee, as [selection](#selection) takes a candidate. A guard
+([`Guard`](../scope/shape.rs)) is a type or a scalar literal under
+`MATCH … WITH`, a variant's label under `MATCH … UNDER`, or `_`. A type guard
+admits a value its type satisfies; a value guard — a number, a string, `true`,
+`false` or `null` — a value `==` to it, so a tagged value matches none; a label
+a value of the variant it names of the union clause
+([a union's variants](../elaborate/README.md#a-unions-variants)); and `_`
+anything under `WITH`, and under `UNDER` any value under the union. A value
+guard outranks every type guard, a type guard outranks another it lies
+strictly under, labels never outrank, since their variants are disjoint, and
+`_` ranks below every guarded arm: [`guard_outranks`](select.rs), which the
+load's ranking and the run's both read.
+
+**`it` is the scrutinee retyped to its guard**, as a parameter is to its
+declared type: at a type guard's type, at a value guard's scalar type, which
+the scrutinee already carries, and under a label the variant's payload retyped
+to the variant's representation. Under `_` it is the scrutinee unchanged —
+under `UNDER`, its payload — at most the union of the representations of the
+variants no label names. The load types each arm as a block entered with its
+`it` at that interval, which it also keeps at the arm's site, and the run
+re-stamps `it` at the type the load closed.
+
+**The load narrows the arms** ([`walk/arms.rs`](walk/arms.rs)) against the
+scrutinee's static type, as [static selection](#selection) narrows a keyworded
+use's candidates. Each arm's verdict is *never* where its guard can admit no
+value of that type, *always* where it admits every one — a value guard never
+does — and *maybe* otherwise. A *never* arm is dropped, not refused, since
+coverage forces arms a narrow scrutinee never reaches; a *maybe* arm an
+*always* guarded one outranks is dropped where every guard is closed, and `_`
+beside an *always* guarded arm. No arm left refuses the load, and so do arms
+that all always admit with none ranking first. Where every arm left always
+admits, the one they rank first is recorded as the arm the run takes; a lone
+*maybe* arm is not, since the scrutinee may miss it. Where every guard is
+closed, the ranking is laid as an elimination table, which holds up to
+`Table::MOST` arms; past it, the load and the run rank the guards themselves
+([`first_ranked`](select.rs)). A guard over a `FOR ALL` name ranks at the run,
+since its relation to another guard need not hold under every binding. The record, [`Arms`](../scope/typed.rs), is keyed by the
+`MATCH`'s site.
+
+**A `MATCH`'s static type** spans its kept arms': the chosen arm's where the
+load chose one, and otherwise the plain union of their upper ends over the
+lattice meet of their lower ends where every one is closed, `Never` below
+otherwise. A settlement re-walks the body with its `FOR ALL` names bound, so
+there every end is closed and the type exact. A `MATCH` declares no result; a
+reader who wants one checked ascribes it, `(MATCH …) :! Str`.
+
+**At the run** ([`matched`](evaluate.rs)) the scrutinee is evaluated and
+[`select::arm`](select.rs) picks the arm the load chose, else, among the kept
+arms that admit — each *always* one taken as admitting — the one the recorded
+table, or the guards themselves under an open ranking, rank first, else `_`
+where it admits. No arm admitting, or several ranking none first, is a fault,
+worded by the formatter the load's refusal shares,
+[`arm_refused`](../scope/shape.rs). **`it` is held where its scrutinee rests**:
+as a restamp of the scrutinee's kept part, or, under a label, that part with a
+payload segment appended
+([kept and held values](../scheduler/README.md#kept-and-held-values)). The
+arm's block keeps it in a chain beside the arms around it,
+[`ArmKept`](../program/bundle.rs), so a name read of `it` is held as a frame's
+binder is. An arm whose `MATCH` is in tail position — at the root of its body's
+last statement, which binds nothing, in a tail body — is handed off as a block
+owing the evaluation's contract, so a recursion through tail arms holds a
+constant number of cells ([tails](#tails-under-a-contract)); any other runs as
+a child, and its value finishes the `MATCH`'s evaluation, held to the contract
+there.
+
 ## Tails under a contract
 
 An evaluation a frame [tails into](../program/README.md#frames-contracts-and-tails)
@@ -1052,7 +1127,11 @@ satisfies the contract — or calls an unquantified function by name whose retur
 does, the one answer [`Contract::kept_by`](../program/record.rs) gives both — it hands its cell to the callee's frame by a tail rather than spawning
 it, handing the frame the contract it owes, so a keyworded self-call in tail
 position holds a constant number of cells however deep it recurses, and a chain
-of tail hops returns at the outermost declared return. The load records each
+of tail hops returns at the outermost declared return. A tail `MATCH` arm's last
+statement is one of its callable's tail statements: the evaluation hands the arm
+off owing its contract, and the arm's tail call hops as the callable's own
+would, its route recorded and its return read off the callable that owns it.
+The load records each
 callable's tail call's **route**: per candidate, whether it keeps the frame's
 contract, where the frame's return and the candidate are closed, and whether
 the call hops into the frame's own body, a self tail edge of a body whose name
@@ -1124,6 +1203,8 @@ dispatch decides:
 | a dict key that is no scalar | `:(LIST OF Number) cannot be a dict key` |
 | a spread of what is no list | `` `..` spreads a list, and Number is none `` |
 | a read by what is neither an index nor a slice record | ``:(LIST OF Number) is read by a `Number` or by a slice record naming `from` or `to` as `Number`s, not by :{x :Number}`` |
+| no `MATCH` arm admitting | ``no arm of `MATCH … UNDER :(Some \| None)` admits Number`` |
+| two `MATCH` arms admitting, none ranking first | ``ambiguous `MATCH`: 2 arms admit Number and none ranks first`` |
 | a node with no reading | `nothing evaluates <node>` |
 
 A refusal a layer below renders keeps its own wording: a construction misfit
@@ -1133,7 +1214,8 @@ arguments, an argument a call by name does not fit
 group, a callee that is no function, a type expression that does not
 elaborate, and an `EVAL`'s refusal.
 
-A no-overload miss, an ambiguity, a return miss, an ascription miss, a read or
+A no-overload miss, an ambiguity, a `MATCH` no arm of which admits or whose
+arms rank none first, a return miss, an ascription miss, a read or
 a spread its argument can never satisfy, a view of
 what is never a module or at what is no signature, an `EVAL` of what is never
 code or an `EVAL` whose code can never meet its return the load can already see
@@ -1455,7 +1537,15 @@ each hop, caching and flat, a `Number`-returning callee viewing it at an invaria
 included;
 [tail](tests/tail.rs), a keyworded tail
 recursion holding its cells constant, which is on the
-[Miri slate](../../observe/miri_slate.md), and a tail call reading its route;
+[Miri slate](../../observe/miri_slate.md), a tail call reading its route, and
+the same through tail `MATCH` arms: a recursion holding its cells constant, an
+arm owing its frame's contract whether or not it tails, a tail arm's call
+reading its route, and an arm under a barrier running as a child;
+[matching](tests/matching.rs) — an arm's `it` and a `MATCH` typed at load, the
+arms the load keeps and chooses, its refusals, a union clause checked where it
+closes — the load, or a settlement over a `FOR ALL` name — and the arm a run
+takes, a value guard and a rigid guard among them, and arms past a table's
+bound ranked at load and at run;
 [kept](tests/kept.rs) — a frame handing back its parameter, a field of it and a
 binder bound bare to it unchanged, and a record a call returns built once in
 its caller's home; [loops](tests/loops.rs) — a tail loop's memory at 16, 64
@@ -1466,8 +1556,12 @@ received arguments uncopied, no hop pledged, a cons loop copying a constant
 per hop, amortized, holding a constant times what it threads and delivering
 its whole list, the host's region, scratch and memo flat, a value passed on
 unchanged riding the loop cell through its compactions, a call returning a
-part of its argument placing nothing new, and a view of a large list homed
-above the loop, extended each hop, copying none of its source;
+part of its argument placing nothing new, a view of a large list homed
+above the loop, extended each hop, copying none of its source, and the same
+loops through `MATCH` arms — a walk and a cons loop, a walk down a union, tutorial
+06's `DOUBLE` holding what the same loop holds without a `MATCH`, a helper
+handing back its arm's `it` where it rests, and a `MATCH` over a scrutinee its
+frame builds threading it;
 [door](tests/door.rs) — facts over no layers answering as the load does;
 [activation](tests/activation.rs) — a frame bound to run content deciding its
 dependent units in its activation, at its entry, a statement seam, a block's
@@ -1496,8 +1590,6 @@ tutorial snippet is checked against its shown output by
 
 ## Open work
 
-- [Matching](../../roadmap/conditionals/matching.md) — `MATCH`, its arm selection,
-  and matching on values.
 - [Faults and call traces](../../roadmap/conditionals/faults.md) — faults apart from
   values, and the trace an uncaught one prints.
 - [Catching errors](../../roadmap/conditionals/catching.md) — `TRY`, `CATCH`, `Error`

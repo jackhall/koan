@@ -142,9 +142,9 @@ fn a_splice_in_a_written_quote_of_a_container_literal_composes_into_the_quote_ar
     let ys = "LET ys = [#(PRINT \"got\")]\n";
     assert_eq!(
         run(&format!(
-            "{ys}PRINT #(MATCH (42) -> :Str WITH #{{Number: ($..ys)}})"
+            "{ys}PRINT #(MATCH (42) WITH #{{Number: ($..ys)}})"
         )),
-        "MATCH (42) -> Str WITH {#(Number): #(PRINT \"got\")}"
+        "MATCH (42) WITH {#(Number): #(PRINT \"got\")}"
     );
     assert_eq!(
         run(&format!(
@@ -153,8 +153,8 @@ fn a_splice_in_a_written_quote_of_a_container_literal_composes_into_the_quote_ar
         "TRY (42) -> Str WITH {#(Ok): #(PRINT \"got\")}"
     );
     assert_eq!(
-        run("LET xs = [1]\nLET q = #(MATCH (42) -> :Str WITH #{Number: ($..xs)})"),
-        "load: <test>:2:46: `$..` splices a list of code, and this value is :(LIST OF Number), \
+        run("LET xs = [1]\nLET q = #(MATCH (42) WITH #{Number: ($..xs)})"),
+        "load: <test>:2:38: `$..` splices a list of code, and this value is :(LIST OF Number), \
          which can never be one"
     );
 }

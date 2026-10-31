@@ -16,6 +16,9 @@
 //!   called frame owes its return;
 //! - a **`USING … SCOPE`**: its body run as a block entered on the module, each surfaced name bound
 //!   to the member it names and each surfaced key to the module's functions there;
+//! - a **`MATCH`**: its scrutinee selecting an arm over what the load kept of them
+//!   ([`select::arm`](super::select::arm)), the arm run as a block entered on its `it`, handed
+//!   off owing the evaluation's contract where the arm is in tail position;
 //! - a bucket declaration, which is `Null`;
 //! - a **keyworded call**, which evaluates its slots and runs what [`select`](super::select) picks
 //!   among the candidates [the load](super::statics) kept, or what the load selected: a builtin's
@@ -62,6 +65,7 @@
 //! static type; the narrowing law (`tests/narrowing.rs`) is what holds a narrowed call to full
 //! selection.
 
+use crate::elaborate::{arm_shapes, variant_named};
 use crate::knot::module::layout;
 use crate::knot::module::view::{self, Ascription, Unascribable};
 use crate::knot::{KValue, Knotted, flattened, instance, lambda, quote, refused_construction};
@@ -72,16 +76,17 @@ use crate::parse::{
     ExpressionPart, KExpression, KLiteral, KTemplate, ListItem, TemplateSlot, template_fields,
 };
 use crate::program::{
-    CallKind, Contract, Evaluated, Exit, Handed, KBirth, KBundle, KState, Passing, block,
-    called_function, seek, surfaced_block,
+    ArmKept, CallKind, Contract, Entered, Evaluated, Exit, Handed, KBirth, KBundle, KState,
+    Passing, Within, block, called_function, entered_block, seek,
 };
 use crate::scheduler::{
     Action, Held, KeptPart, Placement, Received, Request, Slot as Asked, Step, StepError, Taken,
     Use,
 };
 use crate::scope::{
-    AtRun, BodyShape, CandidateList, CandidateRoute, Coordinate, Elaboration, Elimination,
-    HandedTo, InstanceRead, Located, Narrowing, ParameterBinding, ShapeKind, Site, StaticType,
+    AtRun, BodyShape, CandidateList, CandidateRoute, Coordinate, Elaboration, Elimination, Guard,
+    HandedTo, IMPLICIT, InstanceRead, Located, Narrowing, ParameterBinding, Scalar, ShapeKind,
+    Site, StaticType,
 };
 use crate::symbols::{BinderSymbol, Symbol, SymbolInterner};
 use crate::type_lattice::{KType, TypeNode, Verdict};
@@ -89,7 +94,7 @@ use crate::type_lattice::{KType, TypeNode, Verdict};
 use crate::type_lattice::{bound_above, lower_end_outside, satisfied_by};
 use crate::values::{
     Chain, Circular, Concatenation, Dict, Key, List, PathSegment, Piece, Record, Tagged, Text,
-    TypeValue, Value, satisfies,
+    TypeValue, Value, representation, satisfies,
 };
 
 use super::builtins::{self, Native};
@@ -123,6 +128,11 @@ pub(super) enum Form<'step> {
     Eval(&'step KExpression<'step>),
     /// `USING <module> SCOPE <body>`.
     Using(&'step KExpression<'step>),
+    /// `MATCH <scrutinee> WITH <arms>`, or, `under`, `MATCH <scrutinee> UNDER <union> WITH <arms>`.
+    Match {
+        node: &'step KExpression<'step>,
+        under: bool,
+    },
     Declaration,
     Call(&'step KExpression<'step>, &'step CandidateList<'step>),
     /// `ATTR <operand> <label>` with its label written bare: a member read.
@@ -238,6 +248,7 @@ fn evaluate_on<'graph, 'here, 'tier, 'reg>(
             };
             apply(step, &at, node, &head.value, &argument.value, stage)
         }
+        Form::Match { node, under } => matched(step, &at, node, under, stage),
         Form::Unevaluable(node) => {
             let error = Raised::Unevaluable { node }.raise(program, step.writer(), &at.types);
             finish(step, &at, error)
@@ -350,6 +361,8 @@ pub(super) fn of_node<'step>(
         Some(BuiltinShapeId::AscribeOpaque) => return Form::Ascribe(node, Ascription::Opaque),
         Some(BuiltinShapeId::Eval) => return Form::Eval(node),
         Some(BuiltinShapeId::UsingScope) => return Form::Using(node),
+        Some(BuiltinShapeId::Match) => return Form::Match { node, under: false },
+        Some(BuiltinShapeId::MatchUnder) => return Form::Match { node, under: true },
         Some(BuiltinShapeId::BucketDeclaration) => return Form::Declaration,
         _ => {}
     }
@@ -607,16 +620,170 @@ fn using<'step, 'graph, 'here>(
     let body = (at.view.shape().site_of_body(node))
         .and_then(|site| at.view.shape().nested(site))
         .expect("a `USING … SCOPE` body is a block its shape holds");
-    let request = surfaced_block(
+    let request = entered_block(
         program,
         body,
         at.view.view(),
-        Some((module, at.view.shape().site_of_node(node))),
+        Entered::Surfaced(module, at.view.shape().site_of_node(node)),
+        None,
         inside(at),
         at.within,
     );
     let asked = step.spawn(request);
     park(step, at, asked, FINISHING)
+}
+
+/// `MATCH <scrutinee> WITH <arms>`, or `… UNDER <union> WITH <arms>`: the scrutinee, evaluated,
+/// selects an arm over the load's record of the arms ([`select::arm`]), which runs as a block whose
+/// `it` is the scrutinee retyped to its guard — under a union, its payload retyped to its variant's
+/// representation — its value the `MATCH`'s. No arm admitting, or several ranking none first, is a
+/// fault. A tail arm is handed off owing the evaluation's contract, so a recursion through it
+/// tails.
+fn matched<'step, 'graph, 'here>(
+    mut step: Taking<'_, 'graph, '_, 'here, '_, '_>,
+    at: &Evaluation<'step, 'graph, 'here, '_, '_, '_>,
+    node: &'step KExpression<'step>,
+    under: bool,
+    stage: u32,
+) -> Action<'graph, KBundle> {
+    let (program, types) = (at.program, &at.types);
+    let scratch = Bump::new();
+    let wanted = [Wanted::Evaluated(&node.parts[1].value)];
+    let operands = match gathered(&mut step, at, &wanted, Use::Keeps, stage, &scratch) {
+        Gathered::Ready(operands) => operands,
+        other => return unready(step, at, other),
+    };
+    let [Operand::Value(held @ Held { value, .. })] = operands[..] else {
+        unreachable!("a `MATCH`'s scrutinee is evaluated")
+    };
+    let (shape, facts) = (at.view.shape(), at.view.facts());
+    let Some(arms) = facts.arms(shape, shape.site_of_node(node)) else {
+        return step.failed(StepError::Refused);
+    };
+    let denoted = |part: &ExpressionPart<'_>| facts.denoted(types, shape, shape.site(part)).ok();
+    let union = match under {
+        true => match denoted(&node.parts[3].value) {
+            Some(union) => Some(union),
+            None => return step.failed(StepError::Refused),
+        },
+        false => None,
+    };
+    let bodies: BumpVec<'_, &BodyShape<'_>> = {
+        let mut bodies = BumpVec::new_in(&scratch);
+        bodies.extend(arm_shapes(shape, node));
+        bodies
+    };
+    let mut guards = BumpVec::with_capacity_in(bodies.len(), &scratch);
+    for body in bodies.iter() {
+        let guard = body.arm().expect("an arm knows it is one").guard;
+        let admits = match guard {
+            Guard::Type(quote) => denoted(quote),
+            Guard::Label(label) => union.and_then(|union| variant_named(types, union, label)),
+            Guard::Value(_) | Guard::Default => None,
+        };
+        guards.push((guard, admits));
+    }
+    let admits = |arm: usize| match guards[arm] {
+        (Guard::Value(scalar), _) => {
+            (value.equals(&scalar_value(scalar), types, &scratch)).unwrap_or(false)
+        }
+        (Guard::Default, _) => union.is_none_or(|union| satisfies(union, &value, types, &scratch)),
+        (_, Some(admits)) => satisfies(admits, &value, types, &scratch),
+        (_, None) => false,
+    };
+    let chosen = match select::arm(types, &scratch, arms, &guards, admits) {
+        Ok(chosen) => chosen,
+        Err(ambiguous) => {
+            let scrutinee = value.concrete_ktype();
+            let raised = match ambiguous {
+                None => Raised::NoArm { scrutinee, union },
+                Some(count) => Raised::AmbiguousArms { scrutinee, count },
+            };
+            let error = raised.raise(program, step.writer(), types);
+            return finish(step, at, error);
+        }
+    };
+    let Some(ExpressionPart::DictLiteral(written)) = node.parts.last().map(|arms| &arms.value)
+    else {
+        unreachable!("a `MATCH`'s last part is its arm set")
+    };
+    let retype = facts.retype(types, shape, shape.site(&written[chosen].1));
+    let writer = step.writer();
+    // `it` is held where its scrutinee rests: as a restamp of it, or one tagged layer below it.
+    let payload = |value: KValue<'graph, 'here>| Held {
+        value,
+        kept: (held.kept).map(|part| part.extended(writer, PathSegment::Payload)),
+    };
+    let it = match guards[chosen] {
+        (Guard::Type(_), Some(guard)) => {
+            held.becoming(value.retyped_as(writer, guard, retype, types, &scratch))
+        }
+        (Guard::Label(_), Some(variant)) => {
+            let Some(payload) = value.untagged().map(payload) else {
+                return step.failed(StepError::Refused);
+            };
+            match representation(types, &scratch, variant) {
+                Some(represented) => payload.becoming((payload.value).retyped_as(
+                    writer,
+                    represented,
+                    retype,
+                    types,
+                    &scratch,
+                )),
+                None => payload,
+            }
+        }
+        // `_` under a union binds the payload, and a structural member is its own.
+        (Guard::Default, _) if under => value.untagged().map_or(held, payload),
+        _ => held,
+    };
+    let body = bodies[chosen];
+    let it_slot = body.slot(BinderSymbol::Value(IMPLICIT.it.symbol()));
+    let arms = match (it.kept, it_slot) {
+        (Some(part), Some((slot, _))) => Some(resident(
+            writer,
+            ArmKept {
+                segment: body.segment(),
+                slot,
+                part,
+                outer: at.within.arms,
+            },
+        )),
+        _ => at.within.arms,
+    };
+    // A tail arm owes the evaluation's contract, so it is handed off, as a frame's last statement
+    // is; any other runs as a child, its value held to the contract where this one finishes.
+    let tails = at
+        .contract
+        .filter(|_| body.arm().is_some_and(|arm| arm.tail));
+    let request = entered_block(
+        program,
+        body,
+        at.view.view(),
+        Entered::Arm(it.value),
+        tails,
+        inside(at),
+        Within { arms, ..at.within },
+    );
+    if tails.is_some() {
+        exits(&step, at, &scratch, |exit| {
+            exit.value(&it.value);
+            tails.iter().for_each(|owed| exit.contract(owed));
+        });
+        return step.hand_off(request.work);
+    }
+    let asked = step.spawn(request);
+    park(step, at, asked, FINISHING)
+}
+
+/// The value a value guard's scalar is.
+fn scalar_value<'graph>(scalar: Scalar<'graph>) -> Value<'graph> {
+    match scalar.literal() {
+        KLiteral::Number(number) => Value::Number(number),
+        KLiteral::String(text) => Value::Str(text),
+        KLiteral::Boolean(truth) => Value::Bool(truth),
+        KLiteral::Null => Value::Null,
+    }
 }
 
 /// `EVAL <code> -> <Type>`: the code run in a frame over the names and keys the `EVAL` offers,
@@ -1646,16 +1813,22 @@ fn in_place<'step, 'graph, 'here>(
     }
 }
 
-/// What the frame keeps of the value a read at `coordinate` reads: a slot of its own body whole,
-/// or a capture of its callee as that part of the kept callee. `None` outside a called frame, and
-/// for a read it keeps nothing of.
+/// What the frame keeps of the value a read at `coordinate` reads: an arm's `it` as its arm keeps
+/// it, a slot of its own body whole, or a capture of its callee as that part of the kept callee.
+/// `None` outside a called frame or an arm, and for a read it keeps nothing of.
 fn kept_read<'graph, 'here>(
     at: &Evaluation<'_, 'graph, 'here, '_, '_, '_>,
     writer: Writer<'here, '_>,
     coordinate: Coordinate,
 ) -> Option<KeptPart<'graph, 'here>> {
+    let landing = at.view.landing(coordinate);
+    if let (Some((segment, slot)), Some(arms)) = (landing, at.within.arms)
+        && let Some(part) = arms.slot(segment, slot)
+    {
+        return Some(part);
+    }
     let table = at.within.kept?;
-    if let Some((segment, slot)) = at.view.landing(coordinate) {
+    if let Some((segment, slot)) = landing {
         let kept = table.slot(segment, slot)?;
         return Some(KeptPart { kept, path: &[] });
     }

@@ -672,10 +672,11 @@ fixed_handles! {
     LIST_OF_EXPRESSION = 0x08165380_1efeb93b_e93c08e1_dbd8a138;
     /// `List<Declaration>` — a `SIG` body, or the heads a bodyless `GROUP` declares.
     LIST_OF_DECLARATION = 0x1d49374c_42ceaa3f_eefd92f2_d2a5ad70;
-    /// `Dict<Name, Block>` — a `MATCH … OVER` or `TRY` arm set, each guard a label.
+    /// `Dict<Name, Block>` — a `MATCH … UNDER` or `TRY` arm set, each guard a label.
     DICT_NAME_BLOCK = 0x162f630b_16626d22_68df48ae_99aab59a;
-    /// `Dict<TypeCode, Block>` — a `MATCH … WITH` arm set, each guard a type.
-    DICT_TYPE_CODE_BLOCK = 0x2efc47c2_5f812e70_335cc928_f4dc5ee4;
+    /// `Dict<TypeCode | Literal, Block>` — a `MATCH … WITH` arm set, each guard a type or a scalar
+    /// literal.
+    DICT_GUARD_BLOCK = 0x0bae0cc8_db677a61_fdd9a0b0_fe0c8312;
     /// `Dict<Name, TypeCode>` — a union's variants.
     DICT_NAME_TYPE_CODE = 0x308df2ab_2486cbd5_4573fb6d_af592079;
     /// `List<Name> | Dict<Name, TypeCode>` — the code a `FOR ALL` group is written as: a list of

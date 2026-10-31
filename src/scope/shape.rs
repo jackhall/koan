@@ -44,13 +44,14 @@ use std::fmt;
 use crate::memory::BumpAllocator;
 use crate::parse::BuiltinShapeId;
 use crate::parse::{DefinitionKind, Heads, Role};
-use crate::parse::{ExpressionPart, KExpression, KeyElement, Mark, Scope};
+use crate::parse::{ExpressionPart, KExpression, KLiteral, KeyElement, Mark, Scope};
 use crate::source::SourceRef;
 use crate::symbols::{
-    BinderSymbol, KeySymbol, KeywordSymbol, SymbolInterner, TypeSymbol, ValueSymbol,
+    BinderSymbol, KeySymbol, KeywordSymbol, Symbol, SymbolInterner, TypeSymbol, ValueSymbol,
 };
 use crate::type_lattice::{
-    DeclaredGroup, DeclaredType, KType, Parametric, Scheme, display_name, instantiate_quantified,
+    DeclaredGroup, DeclaredType, KType, Parametric, Scheme, TypeNode, display_name,
+    instantiate_quantified,
 };
 use crate::values::{Chain, ContentDigest};
 
@@ -571,6 +572,9 @@ pub struct TypeExpression<'graph> {
     pub statement: u32,
     /// For a guard: the site of its arm set, and its place among the arms in written order.
     pub guard: Option<(Site, u32)>,
+    /// Whether it is a `MATCH … UNDER`'s union clause, read as a projection's owner is: unknown
+    /// where it reads a run-bound name, so the union's check waits for the binding that closes it.
+    pub clause: bool,
 }
 
 impl KeyedEntry for TypeExpression<'_> {
@@ -724,12 +728,67 @@ pub enum Offer<'graph> {
 /// What a `MATCH` or `TRY` arm's block is to the expression shape holding it.
 #[derive(Clone, Copy, Debug)]
 pub struct Arm<'graph> {
-    /// The guard's quote as written — `it`'s type or label — or `None` for the `_` default.
-    pub guard: Option<&'graph ExpressionPart<'graph>>,
-    /// Whether a type (`MATCH … WITH`) or a label (`MATCH … OVER`, `TRY`) is written there.
+    /// What admits a value to the arm.
+    pub guard: Guard<'graph>,
+    /// Whether a type or value (`MATCH … WITH`) or a label (`MATCH … UNDER`, `TRY`) is written
+    /// there.
     pub heads: Heads,
     /// Whether the block's last statement is in tail position.
     pub tail: bool,
+}
+
+/// An arm's guard, as written.
+#[derive(Clone, Copy, Debug)]
+pub enum Guard<'graph> {
+    /// A type, the guard's quote read as a type expression (`MATCH … WITH`).
+    Type(&'graph ExpressionPart<'graph>),
+    /// A scalar literal (`MATCH … WITH`).
+    Value(Scalar<'graph>),
+    /// A variant or error-kind label (`MATCH … UNDER`, `TRY`).
+    Label(Symbol),
+    /// `_`, the default arm.
+    Default,
+}
+
+/// A scalar literal compared by value, so `1` and `1.0` are one: a number by its bits, with `-0`
+/// read as `0`, and a string by its text.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Scalar<'graph> {
+    Number(u64),
+    Str(&'graph str),
+    Bool(bool),
+    Null,
+}
+
+impl<'graph> Scalar<'graph> {
+    pub fn of(literal: &KLiteral<'graph>) -> Self {
+        match *literal {
+            KLiteral::Number(number) => Scalar::Number((number + 0.0).to_bits()),
+            KLiteral::String(text) => Scalar::Str(text),
+            KLiteral::Boolean(truth) => Scalar::Bool(truth),
+            KLiteral::Null => Scalar::Null,
+        }
+    }
+
+    /// The literal this scalar is written as.
+    pub fn literal(self) -> KLiteral<'graph> {
+        match self {
+            Scalar::Number(bits) => KLiteral::Number(f64::from_bits(bits)),
+            Scalar::Str(text) => KLiteral::String(text),
+            Scalar::Bool(truth) => KLiteral::Boolean(truth),
+            Scalar::Null => KLiteral::Null,
+        }
+    }
+}
+
+/// A guard [`ShapeError::RepeatedGuard`] finds written twice in one arm set: a type by the handle
+/// it elaborates to, however each is spelled.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Repeated<'graph> {
+    Type(Parametric),
+    Value(Scalar<'graph>),
+    Label(Symbol),
+    Default,
 }
 
 const _: () = assert!(!std::mem::needs_drop::<BodyShape<'static>>());
@@ -919,28 +978,30 @@ impl<'graph> BodyShape<'graph> {
         &self.nested.entries()[start as usize..end as usize]
     }
 
-    /// The slots a callable's or a code body's last statement reads — directly, through a nested
-    /// block or through a nested body's captures — and every type slot, sorted; empty for any
-    /// other kind. A caching frame that hands its last statement on adopts these slots' values
-    /// into its region at the hand-off, since its scratch departs while the statement still reads
-    /// them.
+    /// The slots a callable's, a code body's or a tail arm's last statement reads — directly,
+    /// through a nested block or through a nested body's captures — and every type slot, sorted;
+    /// empty for any other body. A caching frame or block that hands its last statement on adopts
+    /// these slots' values into its region at the hand-off, since its scratch departs while the
+    /// statement still reads them.
     pub fn last_reads(&self) -> &'graph [Slot] {
         self.last_reads
     }
 
-    /// The binders a callable's or a code body's last statement hands on that its frame built
-    /// itself, sorted: the backward closure over its read edges from that statement's reads, type
-    /// slots, parameters and every binder bound bare to a value the frame received excluded. Empty
-    /// for any other kind. A frame asks for each one's value to be built where it outlives the hop
-    /// — in its loop's cell — so a tail call hands it on from there.
+    /// The binders a callable's, a code body's or a tail arm's last statement hands on that its
+    /// frame built itself, sorted: the backward closure over its read edges from that statement's
+    /// reads, type slots, parameters — save an arm's `it` over a scrutinee the frame built — and
+    /// every binder bound bare to a value the frame received excluded. Empty for any other body. A
+    /// frame asks for each one's value to be built where it outlives the hop — in its loop's cell
+    /// — so a tail call hands it on from there.
     pub fn threaded(&self) -> &'graph [Slot] {
         self.threaded
     }
 
     /// The last statement's argument parts a tail call of this body hands on that are no name and
     /// no literal and not a value the frame received — a parameter's member read through the
-    /// builtin `ATTR` alone, say — sorted: what the frame's evaluation of that statement asks to be
-    /// built where it outlives the hop, as it asks for [`threaded`](Self::threaded) binders.
+    /// builtin `ATTR` alone, say — and a last `MATCH`'s scrutinee a tail arm hands on as `it`,
+    /// sorted: what the frame's evaluation of that statement asks to be built where it outlives
+    /// the hop, as it asks for [`threaded`](Self::threaded) binders.
     pub fn threaded_parts(&self) -> &'graph [Site] {
         self.threaded_parts
     }
@@ -1421,10 +1482,40 @@ pub enum ShapeError<'graph> {
     },
     /// A closed type that does not elaborate.
     Type { error: Elaboration, at: SourceRef },
-    /// Two guards of one `MATCH … WITH` arm set that type to one handle, `guard`; `at` is the
-    /// second's.
+    /// An arm set's key that is no guard: a nested quote, or a marked name as a label.
+    NotAGuard { at: SourceRef },
+    /// A `UNION` declaring one variant, which is the same type as that variant.
+    LoneVariant { name: TypeSymbol, at: SourceRef },
+    /// A `MATCH` none of whose arms can ever admit its scrutinee, of static type at most
+    /// `scrutinee`; `union` is the union clause of a `MATCH … UNDER`.
+    NoAdmittingArm {
+        scrutinee: KType,
+        union: Option<KType>,
+        at: SourceRef,
+    },
+    /// A `MATCH` `count` of whose arms always admit its scrutinee, none ranking first.
+    AmbiguousArms {
+        count: usize,
+        scrutinee: KType,
+        at: SourceRef,
+    },
+    /// A `MATCH … UNDER` clause that is no union.
+    NotUnion { clause: KType, at: SourceRef },
+    /// A `MATCH … UNDER` arm's `label` naming no variant of `union`.
+    NoVariant {
+        label: Symbol,
+        union: KType,
+        at: SourceRef,
+    },
+    /// A `MATCH … UNDER` with no `_` arm and no arm for the variant `variant` of `union`.
+    Uncovered {
+        union: KType,
+        variant: KType,
+        at: SourceRef,
+    },
+    /// Two guards of one arm set that are one `guard`; `at` is the second's.
     RepeatedGuard {
-        guard: Parametric,
+        guard: Repeated<'graph>,
         first: SourceRef,
         at: SourceRef,
     },
@@ -1499,6 +1590,13 @@ impl ShapeError<'_> {
             | ShapeError::Derived { at, .. }
             | ShapeError::Unquoted { at, .. }
             | ShapeError::Inadmissible { at, .. }
+            | ShapeError::NotAGuard { at }
+            | ShapeError::NoAdmittingArm { at, .. }
+            | ShapeError::AmbiguousArms { at, .. }
+            | ShapeError::NotUnion { at, .. }
+            | ShapeError::NoVariant { at, .. }
+            | ShapeError::Uncovered { at, .. }
+            | ShapeError::LoneVariant { at, .. }
             | ShapeError::DictDefault { at, .. }
             | ShapeError::ClosedBucket { at, .. }
             | ShapeError::NoKeyword { at }
@@ -1692,6 +1790,47 @@ impl fmt::Display for ShapeErrorDisplay<'_, '_, '_, '_> {
             ShapeError::DictDefault { .. } => {
                 f.write_str("a dict's `_` default is not supported yet")
             }
+            ShapeError::NotAGuard { .. } => f.write_str(
+                "an arm's guard is a type or a scalar literal under `MATCH … WITH`, and a label \
+                 under `MATCH … UNDER` and `TRY`",
+            ),
+            ShapeError::NoAdmittingArm {
+                scrutinee, union, ..
+            } => arm_refused(f, *scrutinee, *union, None, self.symbols, self.types),
+            ShapeError::AmbiguousArms {
+                count, scrutinee, ..
+            } => arm_refused(f, *scrutinee, None, Some(*count), self.symbols, self.types),
+            ShapeError::NotUnion { clause, .. } => {
+                write!(
+                    f,
+                    "`MATCH … UNDER` takes a union, and {} is not one",
+                    display_name(*clause, self.types, self.symbols)
+                )?;
+                // A nominal or a family's application may be a variant, which names no union.
+                match self.types.node(*clause) {
+                    TypeNode::SetMember { .. } | TypeNode::ConstructorApply { .. } => {
+                        write!(f, "; a lone variant is not its union")
+                    }
+                    _ => Ok(()),
+                }
+            }
+            ShapeError::NoVariant { label, union, .. } => write!(
+                f,
+                "{} names no variant of {}",
+                self.symbols.display(*label),
+                display_name(*union, self.types, self.symbols)
+            ),
+            ShapeError::Uncovered { union, variant, .. } => write!(
+                f,
+                "this `MATCH … UNDER {}` has no arm for {}; add a `_` arm to default it",
+                display_name(*union, self.types, self.symbols),
+                display_name(*variant, self.types, self.symbols)
+            ),
+            ShapeError::LoneVariant { name, .. } => write!(
+                f,
+                "UNION {} declares one variant; declare a single tagged type with NEWTYPE",
+                self.symbols.display(name.symbol())
+            ),
             ShapeError::ClosedBucket { key, .. } => write!(
                 f,
                 "`{}` is a builtin expression shape, which no definition adds to",
@@ -1865,11 +2004,21 @@ impl fmt::Display for ShapeErrorDisplay<'_, '_, '_, '_> {
             ShapeError::Type { error, .. } => {
                 write!(f, "{}", error.display(self.symbols, self.types))
             }
-            ShapeError::RepeatedGuard { guard, first, .. } => write!(
-                f,
-                "`{}` guards two arms; first at {first}",
-                display_name(*guard, self.types, self.symbols)
-            ),
+            ShapeError::RepeatedGuard { guard, first, .. } => {
+                match guard {
+                    Repeated::Type(handle) => {
+                        write!(f, "`{}`", display_name(*handle, self.types, self.symbols))?
+                    }
+                    Repeated::Value(scalar) => {
+                        f.write_str("`")?;
+                        ExpressionPart::Literal(scalar.literal()).write_summary(f, self.symbols)?;
+                        f.write_str("`")?
+                    }
+                    Repeated::Label(label) => write!(f, "`{}`", self.symbols.display(*label))?,
+                    Repeated::Default => f.write_str("`_`")?,
+                }
+                write!(f, " guards two arms; first at {first}")
+            }
         }
     }
 }
@@ -1905,6 +2054,32 @@ pub fn selection_refused<A: Copy + Into<DeclaredType<Parametric>>>(
     match ambiguous {
         None => Ok(()),
         Some(_) => f.write_str(" and none ranks first"),
+    }
+}
+
+/// A `MATCH` that selects no arm worded — none admits `scrutinee`, or (`ambiguous`) that many admit
+/// and none ranks first; `union` is a `MATCH … UNDER`'s clause — for the load's refusal and the
+/// run's fault alike.
+pub fn arm_refused(
+    f: &mut fmt::Formatter<'_>,
+    scrutinee: KType,
+    union: Option<KType>,
+    ambiguous: Option<usize>,
+    symbols: &SymbolInterner,
+    types: &Chain<'_, '_, '_, '_>,
+) -> fmt::Result {
+    let scrutinee = display_name(scrutinee, types, symbols);
+    match (ambiguous, union) {
+        (Some(count), _) => write!(
+            f,
+            "ambiguous `MATCH`: {count} arms admit {scrutinee} and none ranks first"
+        ),
+        (None, Some(union)) => write!(
+            f,
+            "no arm of `MATCH … UNDER {}` admits {scrutinee}",
+            display_name(union, types, symbols)
+        ),
+        (None, None) => write!(f, "no arm of `MATCH` admits {scrutinee}"),
     }
 }
 

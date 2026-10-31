@@ -139,21 +139,32 @@ as it finds any body: built over a written quote's body, over the quote a lone
 name traces to, or holding no statements where its code arrives at run time. An `EXPR` head's
 names are read through its quote. An arm set is a dict of guard quotes to arm
 quotes, and each arm is a block shape binding `it`. A `MATCH … WITH` guard is a
-type — a type name, a `:(…)` or a `:{…}`, typed `Dict(TypeCode, Block)`, whose
-names are mentions of the shape holding the `MATCH`, typed where the program
-loads ([load-time types](#load-time-types)) — and a `MATCH … OVER` or `TRY`
-guard a label, typed `Dict(Name, Block)`; a value guard is `Inadmissible`. A
+type — a type name, a `:(…)` or a `:{…}`, whose names are mentions of the shape
+holding the `MATCH`, typed where the program loads
+([load-time types](#load-time-types)) — or a lone scalar literal, so its arm
+set is typed `Dict(TypeCode | Literal, Block)`; a `MATCH … UNDER` or `TRY`
+guard is a label, typed `Dict(Name, Block)`, and names no binder. A key that
+is a nested quote, or a marked name as a label, is `NotAGuard`. A `UNION`
+declaring one variant is refused where it is declared, `LoneVariant`: it would
+be the same type as its variant, which a single `NEWTYPE` declares. A
 `SIG` body's members and a bodyless `GROUP`'s heads are the statements of a
 list's quotes, each walked by its own builtin shape's roles.
 
 **An arm knows it is one.** An arm's block shape carries an `Arm`
-(`BodyShape::arm`): its guard as written — the key quote, a type under
-`MATCH … WITH` and a label under `MATCH … OVER` or `TRY` — or none for the `_`
-default arm, and whether the arm's last statement is in tail position. It is
+(`BodyShape::arm`): its `Guard` as written — a type quote or a scalar literal
+under `MATCH … WITH`, a label under `MATCH … UNDER` or `TRY`, or `Default` for
+the `_` arm — and whether the arm's last statement is in tail position. It is
 exactly where the `MATCH` or `TRY` is: at the root of a body's last statement,
 binding nothing, in a tail body. A callable's body is a tail body and an arm's
 is when its own tail is; the program, a module, a `USING` body and a
-synthesized block are not.
+synthesized block are not. A label, a value guard or `_` written twice in one
+arm set is refused as `RepeatedGuard` where the builder reads the set, a value
+guard compared by value, so `1` and `1.0` are one; a type written twice is
+refused where the walk types it, by handle
+([guards](../elaborate/README.md#the-type-channel-at-load)). A tail arm's last
+statement is one of its owner's tail statements (`Shapes::tail_owner`, through
+every tail arm out to the callable or code body the `MATCH` ends): its calls
+are tail edges of that owner, and pair the owner's parameters it passes bare.
 
 ## Resolution
 
@@ -460,8 +471,8 @@ operand is its only mention.
 
 ### The threaded set
 
-A callable's or a code body's shape seals, beside the slots its last statement
-reads, its **threaded set** ([threaded.rs](shape/build/threaded.rs)): what a
+A callable's, a code body's or a tail arm's shape seals, beside the slots its
+last statement reads, its **threaded set** ([threaded.rs](shape/build/threaded.rs)): what a
 tail call that statement makes hands on that the frame built itself, so the
 frame builds it where it outlives the hop
 ([what a loop keeps](../program/README.md#frames-contracts-and-tails)).
@@ -474,6 +485,13 @@ there. Both leave out what the frame **received**, which rests where it was
 handed from: a type slot, a parameter, a capture, a binder bound bare to a
 received value, and a member read of one through the builtin `ATTR` alone.
 Every other kind of body has an empty set.
+
+A tail arm's `it` is received where its `MATCH`'s scrutinee is a value the body
+holding the `MATCH` received, decided at that body's seal; otherwise the
+`MATCH` built it, so an arm handing `it` on threads it, and the body holding
+the `MATCH` threads the scrutinee among its argument parts. An arm reads any
+other name of the bodies around it as received: the body it lands in reads it
+in its own last statement, so that body's own set holds it where it is built.
 
 The set is static and composes without knowing the loop it runs in, which
 matters because the runtime tails more than the static
@@ -646,9 +664,9 @@ table sorted by its key:
 - the type channel's facts: each type binder's declaration and each
   registration's expression shape, by slot, and each recorded **type
   expression**'s type, by site — a `:(…)` or `:{…}` in value position, a type
-  part of an expression shape that births no callable — a `MATCH`'s result and
+  part of an expression shape that births no callable — a `MATCH … UNDER`'s
   union clause, a `TRY`'s result, an ascription's type — and each
-  `MATCH … WITH` guard. A callable's signature, a declaration's definition and
+  `MATCH … WITH` type guard. A callable's signature, a declaration's definition and
   a type `LET`'s right-hand side are not recorded: they are typed with their
   callable or binder, and a type nested in a recorded one is part of it;
 - the value channel's facts: a static type, an interval, for each part the
@@ -664,8 +682,12 @@ table sorted by its key:
   an argument's carried type — and each kept list of closed candidates beside
   its **elimination table**, which pair outranks which at each class; each
   callable's tail call's **route**, per candidate whether it keeps the frame's
-  contract and whether it hops into the frame's own body; each **retype** to a
-  closed declared type, what it re-stamps a value at;
+  contract and whether it hops into the frame's own body; each `MATCH`'s
+  **arms** (`Arms`), by its node's site — the arms a run selects among beside
+  their verdicts, how those that admit rank, and the arm the load chose, if
+  any ([matching](../dispatch/README.md#matching)); each **retype** to a
+  closed declared type, what it re-stamps a value at, an arm's `it` among them
+  at the arm's site;
   the site of each **settled** `:!` or annotation, whose value's static type
   lies under its type, so the run checks nothing there; what the load fixed at
   each [instance site](../dispatch/README.md#static-types) — the solution it is
@@ -700,7 +722,7 @@ layer binding the root resolves closed before the run reads it. A born
 instance is a `StaticInstance`, closed or rigid, its type recorded beside its
 solution, or nothing: it has no unknown arm. The vocabulary lives here, beside
 the shape its records key on: `Static`, `StaticInstance`, `Variable`, `Point`,
-`Kept` and `Table`, `Route`, and the callable-typing records the
+`Kept` and `Table`, `Route`, `Arms`, and the callable-typing records the
 elaborator fills, `Callable`, `Registered`, `ParameterBinding`, and
 `Elaboration`, so a shape error can carry an elaboration's refusal.
 
@@ -708,7 +730,7 @@ elaborator fills, `Callable`, `Registered`, `ParameterBinding`, and
 birth and the suites — reads facts through one set of readers
 ([`records`](records.rs)), each accessor taking the body's shape
 (`typed_expression`, `value_type`, `use_statics`, `settled`, `instance_at`,
-`named_contributions`, `view_tree`, `route`, `retype`, `class`, `caching` and
+`named_contributions`, `view_tree`, `route`, `arms`, `retype`, `class`, `caching` and
 the rest), so no reader names where a fact is kept. `LoadFacts` reads one
 load's records; `Facts`, what a step's door hands it, reads a cell's layers —
 its activation's decisions, the settlements it runs under, and the
@@ -1381,11 +1403,17 @@ program only for a `$` name nothing binds where the quote is written:
   a quote;
 - an **inadmissible** part — one read as written whose syntax fills none of its
   slot's types: a value guard such as `#{1: (a)}` as a
-  `MATCH … WITH`'s arms, `#[(PRINT 1)]` as a signature's members, `#{}` as a
+  `MATCH … UNDER`'s arms, `#[(PRINT 1)]` as a signature's members, `#{}` as a
   union's variants;
+- **not a guard** — an arm set's key that is a nested quote, or a marked name
+  as a label;
+- a **repeated guard** written as syntax — a label, a value guard or `_`
+  guarding two arms of one arm set;
+- a **lone variant** — a `UNION` declaring one variant, whose message points at
+  `NEWTYPE`;
 - a **malformed** form — a quote where bare syntax is read (`LET #(x) = 1`,
-  `MODULE m = #(…)`, `MATCH x -> #(Number) WITH …`, `CATCH #(x)`), or a body
-  that is not the shape its form declares;
+  `MODULE m = #(…)`, `CATCH #(x)`), or a body that is not the shape its form
+  declares;
 - a **dict default** — a value dict holding a `_` key, refused until its default
   has a reading (see [Open work](#open-work)); an arm set's `_` is its default
   arm;
@@ -1403,7 +1431,7 @@ where it has one:
 - **no candidate** — a keyworded use with no builtin overload and no visible
   registration;
 
-four [dispatch](../dispatch/README.md#the-overlap-check) finds once the shape is
+six [dispatch](../dispatch/README.md#the-overlap-check) finds once the shape is
 built and its types can be read — an **overlap**, a user overload taking
 operands a builtin overload at its key already takes; **no admitting
 candidate**, a keyworded use every candidate of which
@@ -1416,12 +1444,18 @@ return at `Never` — beside the refusals of its
 ascription or a call by name that can never be satisfied, a member read of a
 signature lacking the member (**no member**) or of a quantified member over an
 unpinned head parameter (**unpinned member**), a type capture a module's `OVER`
-list leaves out, and the load walk's other checks;
+list leaves out, and the load walk's other checks; **no admitting arm**, a
+`MATCH` every arm of which the load drops, and **ambiguous arms**, a `MATCH`
+whose arms all always admit with none ranking first, each naming the
+scrutinee's static type ([matching](../dispatch/README.md#matching));
 
-two the [walk's type half](../elaborate/README.md#the-type-channel-at-load)
-finds — a **type** that does not elaborate, carrying the elaborator's refusal,
-and a **repeated guard**, two guards of one `MATCH … WITH` arm set that type to
-one handle, naming both;
+five the [walk's type half](../elaborate/README.md#the-type-channel-at-load)
+finds — a **type** that does not elaborate, carrying the elaborator's refusal;
+a **repeated guard**, two guards of one `MATCH … WITH` arm set that type to
+one handle, naming both; and, where a `MATCH … UNDER`'s clause closes
+([a union's variants](../elaborate/README.md#a-unions-variants)), a clause
+that is **not a union**, a label naming **no variant** of it, and a variant
+**uncovered** by any arm where no `_` arm is written;
 
 and six more from [operator groups](#operator-groups), each naming the symbol it
 is about:

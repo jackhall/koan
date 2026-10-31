@@ -11,6 +11,10 @@
 //! [`COPIED`], and what a hop lays in the host's decision memo in `KEPT`. Each figure a run
 //! counts outside its samples is taken against a run of the same program that prints `0` instead
 //! of looping, so building the chain is not billed to the loop.
+//!
+//! The same loops through `MATCH` arms, the last tests here: a walk and a cons loop under
+//! `MATCH … WITH`, a walk and tutorial 06's `DOUBLE` under `MATCH … UNDER`, a helper returning an
+//! arm's `it`, and a `MATCH` over a scrutinee its frame builds.
 
 use std::cell::Cell;
 
@@ -595,6 +599,185 @@ fn a_view_threaded_through_a_loop_copies_none_of_its_source() {
         assert!(
             same_per_hop(&per_hop) && per_hop[0] < source / 64,
             "{form:?}: {per_hop:?} bytes copied per hop"
+        );
+    }
+}
+
+/// The walk through a `MATCH`: its `Link` arm's tail call hands on the next link of the link the
+/// arm admitted as `it`.
+const MATCH_WALK: &str = "EXPR #(NAME m :Counter link :Any) -> Str = \
+                          #((LET t = (TOUCH m)) (MATCH link WITH \
+                          #{Link: (NEXT m (ATTR it next)), Null: (\"done\")}))\n";
+
+/// The cons loop through a `MATCH`: its `Link` arm hands on the list it was handed with one more
+/// cell in front.
+const MATCH_ACC: &str = "EXPR #(NAME m :Counter acc :Any link :Any) -> Any = \
+                         #((LET t = (TOUCH m)) (MATCH link WITH \
+                         #{Link: (NEXT m {head = 1, tail = acc} (ATTR it next)), \
+                         Null: (ATTR acc head)}))\n";
+
+#[test]
+fn a_chain_walk_through_a_match_holds_its_memory_flat_and_copies_none_of_the_chain() {
+    assert_flat(MATCH_WALK, "ints chain", |_| "done".to_string());
+    for form in [Form::Selfward, Form::Mutual] {
+        let per_hop = copied_per_hop("", MATCH_WALK, form, "ints chain");
+        assert!(
+            same_per_hop(&per_hop),
+            "{form:?}: {per_hop:?} bytes per hop"
+        );
+    }
+}
+
+#[test]
+fn a_cons_loop_through_a_match_holds_a_constant_times_what_it_threads() {
+    for form in [Form::Selfward, Form::Mutual] {
+        let (looped, _) = looped(256, "", MATCH_ACC, form, "ints null chain");
+        assert_eq!(looped.printed, "1");
+        let hops = &looped.hops;
+        let hop_region = (hops.iter())
+            .map(|sample| sample.hop_region)
+            .max()
+            .unwrap_or(0);
+        for (at, sample) in hops.iter().enumerate() {
+            let held = sample.live.saturating_sub(hops[0].live);
+            assert!(
+                held <= 4 * sample.threads + hop_region + SLACK,
+                "{form:?}: at sample {at} the loop holds {held} B for {} B threaded",
+                sample.threads
+            );
+        }
+    }
+}
+
+/// `Nat`, `zero`, and a `Nat` of `depth` bound to `nat`: what a loop under `MATCH … UNDER` walks.
+fn nat(depth: u32) -> String {
+    let mut prelude = String::from(
+        "UNION Nat = #{Zero: Null, Succ: Nat}\nLET zero = (Nat.Zero null)\nLET nat0 = zero\n",
+    );
+    for at in 1..=depth {
+        prelude.push_str(&format!("LET nat{at} = (Nat.Succ nat{})\n", at - 1));
+    }
+    prelude + &format!("LET nat = nat{depth}\n")
+}
+
+/// The walk down a `Nat` under its union: its `Succ` arm hands on the payload it binds as `it`.
+const NAT_WALK: &str = "EXPR #(NAME m :Counter n :Nat) -> Str = \
+                        #((LET t = (TOUCH m)) (MATCH n UNDER Nat WITH \
+                        #{Zero: (\"done\"), Succ: (NEXT m it)}))\n";
+
+/// Tutorial 06's `DOUBLE`: walks `n` down, handing on an accumulator two `Succ` layers deeper.
+const DOUBLE: &str = "EXPR #(NAME m :Counter n :Nat acc :Nat) -> Nat = \
+                      #((LET t = (TOUCH m)) (MATCH n UNDER Nat WITH \
+                      #{Zero: (acc), Succ: (NEXT m it (Nat.Succ (Nat.Succ acc)))}))\n";
+
+/// [`DOUBLE`] with no `MATCH`: walks the chain by overload, handing on the same accumulator.
+const DOUBLE_PLAIN: &str = "EXPR #(NAME m :Counter link :Link acc :Nat) -> Nat = \
+                            #((LET t = (TOUCH m)) \
+                            (NEXT m (ATTR link next) (Nat.Succ (Nat.Succ acc))))\n\
+                            EXPR #(NAME m :Counter end :Null acc :Nat) -> Nat = #(acc)\n";
+
+#[test]
+fn a_walk_under_a_union_holds_its_memory_flat_and_copies_none_of_it() {
+    for form in [Form::Selfward, Form::Mutual] {
+        let spreads: Vec<usize> = (DEPTHS.iter())
+            .map(|&depth| {
+                let (looped, _) = looped(depth, &nat(depth), NAT_WALK, form, "ints nat");
+                assert_eq!(looped.printed, "done", "{form:?} at {depth}");
+                spread(&looped.hops)
+            })
+            .collect();
+        assert!(
+            spreads[2] <= spreads[0] + SLACK,
+            "{form:?}: live bytes spread {spreads:?} over depths {DEPTHS:?}"
+        );
+        let copied: Vec<usize> = (DEPTHS.iter())
+            .map(|&depth| {
+                let (looped, baseline) = looped(depth, &nat(depth), NAT_WALK, form, "ints nat");
+                looped.copied.saturating_sub(baseline.copied)
+            })
+            .collect();
+        let per_hop: Vec<usize> = (copied.windows(2).zip(DEPTHS.windows(2)))
+            .map(|(copied, depths)| (copied[1] - copied[0]) / (depths[1] - depths[0]) as usize)
+            .collect();
+        assert!(
+            same_per_hop(&per_hop),
+            "{form:?}: {per_hop:?} bytes per hop"
+        );
+    }
+}
+
+/// What `DOUBLE` holds at each hop is what the same loop holds walking its count without a
+/// `MATCH`: its accumulator, and a constant more.
+#[test]
+fn double_holds_what_the_same_loop_holds_without_a_match() {
+    let held = |looped: &Measured| -> Vec<usize> {
+        let first = looped.hops[0].live;
+        (looped.hops.iter())
+            .map(|sample| sample.live.saturating_sub(first))
+            .collect()
+    };
+    for form in [Form::Selfward, Form::Mutual] {
+        let (matched, _) = looped(256, &nat(256), DOUBLE, form, "ints nat zero");
+        let (plain, _) = looped(256, &nat(256), DOUBLE_PLAIN, form, "ints chain zero");
+        assert_eq!(matched.printed, plain.printed, "{form:?}");
+        assert!(matched.hops.iter().any(|sample| sample.threads > 0));
+        let (matched, plain) = (held(&matched), held(&plain));
+        assert_eq!(matched.len(), plain.len(), "{form:?}: one sample per hop");
+        for (at, (matched, plain)) in matched.iter().zip(&plain).enumerate() {
+            assert!(
+                *matched <= plain + SLACK,
+                "{form:?}: at sample {at} `DOUBLE` holds {matched} B against {plain} B"
+            );
+        }
+    }
+}
+
+/// `PAYLOAD` hands back the `it` its arm binds: the payload of its argument, at the home that
+/// argument rests in, so the walk through it places nothing new in the host.
+#[test]
+fn a_helper_returning_it_hands_back_its_scrutinees_payload_where_it_rests() {
+    let helper = "EXPR #(PAYLOAD n :Nat) -> Nat = \
+                  #(MATCH n UNDER Nat WITH #{Succ: (it), Zero: (n)})\n";
+    let walk = "EXPR #(NAME m :Counter n :Nat) -> Str = \
+                #((LET t = (TOUCH m)) (MATCH n UNDER Nat WITH \
+                #{Zero: (\"done\"), Succ: ((LET p = (PAYLOAD n)) (NEXT m p))}))\n";
+    for form in [Form::Selfward, Form::Mutual] {
+        crate::scheduler::PASSED.with(|passed| passed.set(0));
+        let prelude = format!("{}{helper}", nat(64));
+        let (looped, _) = looped(64, &prelude, walk, form, "ints nat");
+        assert_eq!(looped.printed, "done");
+        let passed = crate::scheduler::PASSED.with(Cell::get);
+        assert!(
+            passed >= 64,
+            "{form:?}: {passed} values handed back unchanged"
+        );
+        let (early, last) = (&looped.hops[16], looped.hops.last().unwrap());
+        assert_eq!(
+            early.host_region, last.host_region,
+            "{form:?}: the host holds flat"
+        );
+    }
+}
+
+/// The cons loop matching the cell it builds: the arm hands on `it`, which the frame built, so the
+/// frame builds its scrutinee in the loop cell, and a hop copies a constant, amortized, as the
+/// plain cons loop's does, never the list it hands on.
+#[test]
+fn a_match_over_a_scrutinee_its_frame_builds_threads_it() {
+    let body = "EXPR #(NAME m :Counter acc :Any link :Link) -> Any = \
+                #((LET t = (TOUCH m)) (MATCH {head = 1, tail = acc} WITH \
+                #{Any: (NEXT m it (ATTR link next))}))\n\
+                EXPR #(NAME m :Counter acc :Any end :Null) -> Any = #(ATTR acc head)\n";
+    for form in [Form::Selfward, Form::Mutual] {
+        let (looped, _) = looped(64, "", body, form, "ints null chain");
+        assert_eq!(looped.printed, "1");
+        assert!(looped.hops.iter().any(|sample| sample.threads > 0));
+        let per_hop = copied_per_hop("", body, form, "ints null chain");
+        assert!(
+            per_hop
+                .windows(2)
+                .all(|pair| pair[1] <= pair[0] + pair[0] / 4),
+            "{form:?}: {per_hop:?} bytes per hop"
         );
     }
 }

@@ -12,9 +12,9 @@
 use crate::elaborate::schema_of;
 use crate::memory::BumpVec;
 use crate::scope::{
-    Address, BodyShape, Born, Cut, Frontier, InstanceRead, Narrowing, Pick, Points, Route, Segment,
-    ShapeKind, Site, Slot, Static, StaticCallable, StaticInstance, StaticRegistered, StaticType,
-    Store, Tree, Typed, UnitFacts, UnitId, Unknown, UseStatics, in_body_of,
+    Address, Arms, BodyShape, Born, Cut, Frontier, InstanceRead, Narrowing, Pick, Points, Route,
+    Segment, ShapeKind, Site, Slot, Static, StaticCallable, StaticInstance, StaticRegistered,
+    StaticType, Store, Tree, Typed, UnitFacts, UnitId, Unknown, UseStatics, in_body_of,
 };
 use crate::symbols::{BinderSymbol, Symbol};
 use crate::type_lattice::{DeclaredType, Interval, KType, Parametric, Side, TypeNode, Variable};
@@ -459,6 +459,14 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         let index = self.chain[level].retypes.len();
         self.chain[level].retypes.push((site, retype, tag));
         self.wrote(level, tag, Wrote::Retype(index));
+    }
+
+    /// Record what the load fixed about the arms of the `MATCH` whose node sits at `site`.
+    pub(super) fn record_arms(&mut self, level: usize, site: Site, arms: Arms<'o>) {
+        let tag = self.innermost();
+        let index = self.chain[level].arms.len();
+        self.chain[level].arms.push((site, arms, tag));
+        self.wrote(level, tag, Wrote::Arms(index));
     }
 
     /// Record the route of the tail call whose node sits at `site`.

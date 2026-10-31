@@ -4,8 +4,10 @@
 
 use crate::parse::BuiltinShapeId;
 use crate::parse::Heads;
-use crate::parse::{ExpressionPart, KExpression};
-use crate::scope::{BodyShape, Builtins, Position, QuotedPart, ShapeError, ShapeKind};
+use crate::parse::{ExpressionPart, KExpression, KLiteral};
+use crate::scope::{
+    BodyShape, Builtins, Guard, Position, QuotedPart, Repeated, Scalar, ShapeError, ShapeKind,
+};
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::KType;
 
@@ -116,17 +118,17 @@ fn a_part_not_written_as_its_role_reads_it_is_refused() {
             "(FOO a :Number)",
         ),
         (
-            "MATCH 1 -> :Number WITH (Number -> (1))",
+            "MATCH 1 WITH (Number -> (1))",
             unquoted(BuiltinShapeId::Match, QuotedPart::Arms),
             "(Number -> (1))",
         ),
         (
-            "MATCH 1 -> :Number WITH {Number: (1)}",
+            "MATCH 1 WITH {Number: (1)}",
             unquoted(BuiltinShapeId::Match, QuotedPart::Arms),
             "{Number: (1)}",
         ),
         (
-            "MATCH 1 -> :Number WITH #(x)",
+            "MATCH 1 WITH #(x)",
             unquoted(BuiltinShapeId::Match, QuotedPart::Arms),
             "#(x)",
         ),
@@ -171,36 +173,46 @@ fn a_part_not_written_as_its_role_reads_it_is_refused() {
             },
             "42",
         ),
-        // A type guard is type code, and a value is none.
+        // A guard is a type or a scalar, and a list is neither.
         (
-            "MATCH 1 -> :Number WITH #{1: (a)}",
+            "MATCH 1 WITH #{(PRINT 1): (a)}",
             ShapeError::Inadmissible {
                 form: BuiltinShapeId::Match,
-                index: 5,
-                slot: KType::DICT_TYPE_CODE_BLOCK,
+                index: 3,
+                slot: KType::DICT_GUARD_BLOCK,
                 at,
             },
-            "#{1: (a)}",
+            "#{(PRINT 1): (a)}",
         ),
-        // A label guard is a name, and a compound type is none.
+        // A label guard is a name, and a compound type or a value is none.
         (
-            "UNION Mb = #{Some: Number}\nMATCH 1 OVER Mb -> :Number WITH #{:(Number | Str): (it)}",
+            "UNION Mb = #{Some: Number, None: Null}\nMATCH 1 UNDER Mb WITH #{:(Number | Str): (it)}",
             ShapeError::Inadmissible {
-                form: BuiltinShapeId::MatchOver,
-                index: 7,
+                form: BuiltinShapeId::MatchUnder,
+                index: 5,
                 slot: KType::DICT_NAME_BLOCK,
                 at,
             },
             "#{:(Number | Str): (it)}",
         ),
-        // A type expression and a `TRY` or `CATCH` operand are bare: a quote there is refused.
         (
-            "MATCH 1 -> #(Number) WITH #{Number: (it)}",
-            ShapeError::Malformed {
-                form: BuiltinShapeId::Match,
+            "UNION Mb = #{Some: Number, None: Null}\nMATCH 1 UNDER Mb WITH #{1: (it)}",
+            ShapeError::Inadmissible {
+                form: BuiltinShapeId::MatchUnder,
+                index: 5,
+                slot: KType::DICT_NAME_BLOCK,
                 at,
             },
-            "#(Number)",
+            "#{1: (it)}",
+        ),
+        // A union clause and a `TRY` or `CATCH` operand are bare: a quote there is refused.
+        (
+            "UNION Mb = #{Some: Number, None: Null}\nMATCH 1 UNDER #(Mb) WITH #{_: (it)}",
+            ShapeError::Malformed {
+                form: BuiltinShapeId::MatchUnder,
+                at,
+            },
+            "#(Mb)",
         ),
         (
             "TRY #(1) -> :Number WITH #{_: (0)}",
@@ -268,7 +280,7 @@ fn a_part_not_written_as_its_role_reads_it_is_refused() {
         });
     }
     shaped(
-        "MATCH 1 -> :Number WITH #{:(Number | Str): (it), :{x :Number} : (0)}",
+        "MATCH 1 WITH #{:(Number | Str): (it), :{x :Number} : (0)}",
         |_, _, shape| {
             assert!(shape.is_ok(), "a compound type is a type guard");
         },
@@ -316,11 +328,11 @@ fn a_heads_names_and_a_groups_names_are_the_bodys() {
 #[test]
 fn an_arm_is_a_block_binding_it_and_knows_its_guard() {
     shaped(
-        "LET q = 1\nMATCH q -> :Number WITH #{Number: (it), _: (q)}",
+        "LET q = 1\nMATCH q WITH #{Number: (it), _: (q)}",
         |fixture, lines, shape| {
             let shape = shape.expect("the program shapes");
-            let arms = arms(shape, &lines[1], 5);
-            let ExpressionPart::DictLiteral(pairs) = lines[1].parts[5].value else {
+            let arms = arms(shape, &lines[1], 3);
+            let ExpressionPart::DictLiteral(pairs) = lines[1].parts[3].value else {
                 panic!("the arms are a dict");
             };
             for ((guard, arm), (written, _)) in arms.iter().zip(pairs.iter()) {
@@ -333,15 +345,122 @@ fn an_arm_is_a_block_binding_it_and_knows_its_guard() {
                 assert_eq!(facts.heads, Heads::Types);
                 assert!(!facts.tail, "the top level is no tail body");
                 match facts.guard {
-                    Some(held) => {
+                    Guard::Type(held) => {
                         assert!(std::ptr::eq(held, *guard) && std::ptr::eq(held, written))
                     }
-                    None => assert!(guard.is_wildcard(), "only `_` guards nothing"),
+                    Guard::Default => assert!(guard.is_wildcard(), "only `_` is the default"),
+                    other => panic!("a type or `_` guard, not {other:?}"),
                 }
             }
-            assert!(arms[1].1.arm().expect("an arm").guard.is_none());
+            assert!(matches!(
+                arms[1].1.arm().expect("an arm").guard,
+                Guard::Default
+            ));
         },
     );
+}
+
+#[test]
+fn a_scalar_guard_is_a_value_and_a_label_a_symbol() {
+    shaped(
+        "MATCH 1 WITH #{0: (it), \"a\": (it), true: (it), null: (it), Number: (it)}",
+        |_, lines, shape| {
+            let shape = shape.expect("the program shapes");
+            let guards: Vec<_> = arms(shape, &lines[0], 3)
+                .iter()
+                .map(|(_, arm)| arm.arm().expect("an arm").guard)
+                .collect();
+            assert!(matches!(
+                guards[..],
+                [
+                    Guard::Value(Scalar::Number(0)),
+                    Guard::Value(Scalar::Str("a")),
+                    Guard::Value(Scalar::Bool(true)),
+                    Guard::Value(Scalar::Null),
+                    Guard::Type(_),
+                ]
+            ));
+        },
+    );
+    shaped(
+        "UNION Mb = #{Some: Number, None: Null}\nMATCH 1 UNDER Mb WITH #{Some: (it), _: (it)}",
+        |fixture, lines, shape| {
+            let shape = shape.expect("the program shapes");
+            let guards: Vec<_> = arms(shape, &lines[1], 5)
+                .iter()
+                .map(|(_, arm)| arm.arm().expect("an arm").guard)
+                .collect();
+            let some = type_name("Some", fixture.symbols).symbol();
+            assert!(matches!(guards[..], [Guard::Label(label), Guard::Default] if label == some));
+        },
+    );
+}
+
+#[test]
+fn a_guard_written_twice_or_no_guard_is_refused_where_the_arms_are_built() {
+    let value = |number: f64| Repeated::Value(Scalar::of(&KLiteral::Number(number)));
+    for (source, repeated) in [
+        ("MATCH 1 WITH #{1: (it), 1.0: (it)}", value(1.0)),
+        ("MATCH 1 WITH #{0: (it), -0: (it)}", value(0.0)),
+        (
+            "MATCH 1 WITH #{\"a\": (it), Str: (it), \"a\": (it)}",
+            Repeated::Value(Scalar::Str("a")),
+        ),
+        ("MATCH 1 WITH #{_: (it), _: (it)}", Repeated::Default),
+    ] {
+        refused(source, |error| {
+            assert!(
+                matches!(error, ShapeError::RepeatedGuard { guard, .. } if guard == repeated),
+                "{source}: {error:?}"
+            );
+        });
+    }
+    refused(
+        "UNION Mb = #{Some: Number, None: Null}\nMATCH 1 UNDER Mb WITH #{Some: (it), Some: (it)}",
+        |error| {
+            assert!(matches!(
+                error,
+                ShapeError::RepeatedGuard {
+                    guard: Repeated::Label(_),
+                    ..
+                }
+            ))
+        },
+    );
+    refused("MATCH 1 WITH #{#(1): (it)}", |error| {
+        assert!(matches!(error, ShapeError::NotAGuard { .. }), "{error:?}");
+    });
+}
+
+#[test]
+fn a_match_declares_no_result_and_names_its_union_under() {
+    for source in [
+        "MATCH 1 -> :Number WITH #{Number: (it)}",
+        "UNION Mb = #{Some: Number, None: Null}\nMATCH 1 OVER Mb WITH #{Some: (it), None: (0)}",
+        "UNION Mb = #{Some: Number, None: Null}\nMATCH 1 OVER Mb -> :Number WITH #{Some: (it), None: (0)}",
+    ] {
+        refused(source, |_| ());
+    }
+}
+
+#[test]
+fn a_union_of_one_variant_is_refused_where_it_is_declared() {
+    for (source, name) in [
+        ("UNION One = #{Only: Number}", "One"),
+        ("UNION (Elem AS Wrap) = #{Wrapped: Elem}", "Wrap"),
+    ] {
+        shaped(source, |fixture, _, shape| {
+            let expected = type_name(name, fixture.symbols);
+            let error = shape.err().expect("the union is refused");
+            assert!(
+                matches!(error, ShapeError::LoneVariant { name, .. } if name == expected),
+                "{source}: {error:?}"
+            );
+        });
+    }
+    shaped("UNION Two = #{One: Number, Other: Null}", |_, _, shape| {
+        assert!(shape.is_ok(), "a union of two variants declares");
+    });
 }
 
 #[test]
@@ -369,10 +488,10 @@ fn an_arm_is_in_tail_position_exactly_where_its_match_is() {
             tails
         })
     };
-    let arm = "MATCH x -> :Number WITH #{Number: (it)}";
+    let arm = "MATCH x WITH #{Number: (it)}";
     assert_eq!(tail_of(arm), [true], "the body's last statement");
     assert_eq!(
-        tail_of("MATCH x -> :Number WITH #{Number: (MATCH it -> :Number WITH #{Number: (it)})}"),
+        tail_of("MATCH x WITH #{Number: (MATCH it WITH #{Number: (it)})}"),
         [true, true],
         "an arm's tail inside a tail arm"
     );
@@ -389,7 +508,7 @@ fn an_arm_is_in_tail_position_exactly_where_its_match_is() {
         "a last statement that binds"
     );
     shaped(
-        "MODULE m = (MATCH 1 -> :Number WITH #{Number: (it)})",
+        "MODULE m = (MATCH 1 WITH #{Number: (it)})",
         |_, _, shape| {
             let shape = shape.expect("the program shapes");
             let module = shape.nested_shapes()[0].1;
@@ -401,7 +520,7 @@ fn an_arm_is_in_tail_position_exactly_where_its_match_is() {
 
 #[test]
 fn a_unions_payloads_are_type_expressions_and_its_tags_name_nothing() {
-    refused("UNION Mb = #{Some: Undefined}", |undefined| {
+    refused("UNION Mb = #{Some: Undefined, None: Null}", |undefined| {
         assert!(
             matches!(undefined, ShapeError::Unbound { .. }),
             "{undefined:?}"
@@ -422,8 +541,8 @@ fn a_unions_payloads_are_type_expressions_and_its_tags_name_nothing() {
 #[test]
 fn a_unions_family_parameters_are_declared_on_both_walks() {
     for source in [
-        "UNION (Elem AS Tree) = #{Leaf: Elem}",
-        "SIG Sg = #[(UNION (Elem AS Tree) = #{Leaf: Elem})]",
+        "UNION (Elem AS Tree) = #{Leaf: Elem, Empty: Null}",
+        "SIG Sg = #[(UNION (Elem AS Tree) = #{Leaf: Elem, Empty: Null})]",
     ] {
         shaped(source, |fixture, _, shape| {
             let shape = shape.expect("the program shapes");
@@ -466,7 +585,7 @@ fn a_value_dicts_default_is_refused_and_an_arm_sets_is_not() {
             }
         });
     }
-    shaped("MATCH 1 -> :Number WITH #{_: (3)}", |_, _, shape| {
+    shaped("MATCH 1 WITH #{_: (3)}", |_, _, shape| {
         assert!(shape.is_ok(), "an arm set's `_` is its default arm");
     });
 }
@@ -492,12 +611,12 @@ fn a_group_in_a_quoted_body_is_claimed_and_one_in_a_free_quote_is_not() {
 #[test]
 fn an_operator_run_in_a_quoted_body_or_an_arm_is_chained() {
     shaped(
-        "LET f = (FN :{a :Number} -> Number = #(a + 1 + 2))\nMATCH 1 -> :Number WITH #{Number: (it + 1 + 2)}",
+        "LET f = (FN :{a :Number} -> Number = #(a + 1 + 2))\nMATCH 1 WITH #{Number: (it + 1 + 2)}",
         |_, lines, shape| {
             let shape = shape.expect("the program shapes");
             let chained = |statement: &KExpression<'_>| matches!(statement.parts, [left, _, _] if matches!(left.value, ExpressionPart::Expression(_)));
             assert!(chained(&lambda_body(shape, &lines[0]).body()[0]));
-            let (_, arm) = arms(shape, &shape.body()[1], 5)[0];
+            let (_, arm) = arms(shape, &shape.body()[1], 3)[0];
             assert!(chained(&arm.body()[0]));
         },
     );

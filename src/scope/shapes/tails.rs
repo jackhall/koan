@@ -1,7 +1,11 @@
 //! The tail-call facts of the text: which callables **escape**, every **tail edge** a callable's or
-//! a quote's code's last statement makes, and the **invariance** fixpoint over those edges — the
+//! a quote's code's tail statements make, and the **invariance** fixpoint over those edges — the
 //! parameters every tail edge into a body passes on bare
 //! ([where each body interns](../../../design/type-tiers.md#where-each-body-interns)).
+//!
+//! A body's tail statements are its last statement and, where that is a `MATCH`, each arm's last
+//! statement, through every `MATCH` a tail arm ends in: a tail arm's block runs owing its frame's
+//! contract ([`tail_owner`]). A tail arm's call reads the callable's parameters a block level out.
 //!
 //! A callable escapes where a frame of it may be born from anywhere: it is written in place, born
 //! in a `MODULE` or `GROUP` body, or named as a value anywhere but a call's head. A tail edge is a
@@ -197,14 +201,29 @@ pub(super) fn candidate_callable<'graph>(
     births_callable(shapes, shapes.follow(shape.segment(), coordinate)?)
 }
 
-/// The node of the tail call `shape`'s last statement makes, where `shape` is a callable or a
-/// quote's code and the statement is a call by name or a keyworded use.
+/// The callable or quote's code whose tail statement `shape`'s last statement is: `shape` itself,
+/// or for a tail arm's block, its `MATCH`'s body's owner. `None` for any other body.
+pub(super) fn tail_owner<'graph>(
+    shapes: &Shapes<'graph>,
+    shape: &'graph BodyShape<'graph>,
+) -> Option<&'graph BodyShape<'graph>> {
+    match shape.kind() {
+        ShapeKind::Callable | ShapeKind::Code => Some(shape),
+        ShapeKind::Block if shape.arm().is_some_and(|arm| arm.tail) => {
+            let (parent, _) = shapes.parent(shape.segment())?;
+            tail_owner(shapes, shapes.shape_at(parent))
+        }
+        _ => None,
+    }
+}
+
+/// The node of the tail call `shape`'s last statement makes, where `shape` is a callable, a
+/// quote's code or a tail arm's block and the statement is a call by name or a keyworded use.
 pub(super) fn tail_call<'graph>(
+    shapes: &Shapes<'graph>,
     shape: &'graph BodyShape<'graph>,
 ) -> Option<&'graph KExpression<'graph>> {
-    if !matches!(shape.kind(), ShapeKind::Callable | ShapeKind::Code) {
-        return None;
-    }
+    tail_owner(shapes, shape)?;
     match tail_of(shape, shape.body().last()?) {
         Tail::Apply(node, ..) | Tail::Call(node) => Some(node),
         Tail::Other => None,
@@ -292,15 +311,17 @@ pub(super) fn name_of<'p>(
     }
 }
 
-/// The caller's own parameter `value` names bare, read in `shape`.
+/// The parameter of `caller` that `value` names bare, read in `shape`, `caller` itself or a tail
+/// arm's block in it.
 fn bare_parameter<'graph>(
     shape: &BodyShape<'graph>,
+    caller: &BodyShape<'graph>,
     value: &'graph ExpressionPart<'graph>,
 ) -> Option<Slot> {
     let mention = shape.mention(shape.site(name_of(shape, value)?))?;
     match mention.lands {
         Lands::Binder { at: segment, slot }
-            if segment == shape.segment() && shape.position_of(slot) == Position::PARAMETER =>
+            if segment == caller.segment() && caller.position_of(slot) == Position::PARAMETER =>
         {
             Some(slot)
         }
@@ -372,18 +393,19 @@ fn written_slots<'x>(
     Some(names)
 }
 
-/// Push the tail edges of `shape`'s last statement onto `edges`, where `shape` is a callable or a
-/// quote's code: a call by name of a callable a binder births, and one edge per candidate a
-/// keyworded use there may select, each beside the caller's own parameters it passes bare.
+/// Push the tail edges of `shape`'s last statement onto `edges`, where `shape` is a callable, a
+/// quote's code or a tail arm's block, whose edges are its owner's: a call by name of a callable a
+/// binder births, and one edge per candidate a keyworded use there may select, each beside the
+/// caller's own parameters it passes bare.
 fn tail_edges<'x, 'graph>(
     scratch: BumpAllocator<'x>,
     shapes: &Shapes<'graph>,
     shape: &'graph BodyShape<'graph>,
     edges: &mut BumpVec<'x, Edge<'x>>,
 ) {
-    if !matches!(shape.kind(), ShapeKind::Callable | ShapeKind::Code) {
+    let Some(caller) = tail_owner(shapes, shape) else {
         return;
-    }
+    };
     let Some(last) = shape.body().last() else {
         return;
     };
@@ -391,7 +413,7 @@ fn tail_edges<'x, 'graph>(
         let mut arguments = BumpVec::new_in(scratch);
         arguments.extend(parameters(callee).map(|slot| (slot, passed(slot))));
         edges.push(Edge {
-            caller: shape.segment(),
+            caller: caller.segment(),
             callee: callee.segment(),
             arguments: scratch.alloc_slice_copy(&arguments),
         });
@@ -404,7 +426,7 @@ fn tail_edges<'x, 'graph>(
             let mut bare = BumpVec::new_in(scratch);
             if let ExpressionPart::RecordLiteral(fields) = argument {
                 for (field, value) in fields.iter() {
-                    if let Some(from) = bare_parameter(shape, value) {
+                    if let Some(from) = bare_parameter(shape, caller, value) {
                         bare.push((field.symbol(), from));
                     }
                 }
@@ -436,7 +458,7 @@ fn tail_edges<'x, 'graph>(
                     .unwrap_or_else(|| BumpVec::new_in(scratch));
                 let mut bare = BumpVec::new_in(scratch);
                 for (name, (part, label)) in names.iter().zip(wanted.iter()) {
-                    if !label && let Some(from) = bare_parameter(shape, part) {
+                    if !label && let Some(from) = bare_parameter(shape, caller, part) {
                         bare.push((*name, from));
                     }
                 }

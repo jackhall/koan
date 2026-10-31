@@ -311,10 +311,10 @@ fn builtin_overloads_come_first_in_a_candidate_list() {
 #[test]
 fn a_block_reads_an_outer_registration_and_keeps_its_own() {
     let source = "EXPR #(GREET x :Number) -> Number = #(x)\n\
-                  MATCH 1 -> :Number WITH #{Number: (GREET it)}";
+                  MATCH 1 WITH #{Number: (GREET it)}";
     built(source, |_, shape| {
         let registration = shape.registrations()[0].slot;
-        let ExpressionPart::DictLiteral(arms) = &shape.body()[1].parts[5].value else {
+        let ExpressionPart::DictLiteral(arms) = &shape.body()[1].parts[3].value else {
             panic!("an arm set");
         };
         let arm = shape
@@ -324,7 +324,7 @@ fn a_block_reads_an_outer_registration_and_keeps_its_own() {
         assert_eq!(list.candidates, [local(1, registration)]);
     });
     let (_, message) = refusal(
-        "MATCH 1 -> :Number WITH #{Number: ((EXPR #(HIDDEN x :Number) -> Number = #(x)) \
+        "MATCH 1 WITH #{Number: ((EXPR #(HIDDEN x :Number) -> Number = #(x)) \
          (HIDDEN it))}\nLET a = (HIDDEN 1)",
     );
     assert_eq!(message, "`HIDDEN _` has no overload visible here");

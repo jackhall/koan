@@ -418,7 +418,7 @@ fn an_inner_callable_over_an_outer_name_settles_under_its_binding() {
 fn an_inner_callable_inside_a_block_settles_under_its_binding() {
     let source = format!(
         "{PICK}EXPR FOR ALL #[Elt] #(WRAP x :Elt) -> Any = #(\n  \
-         MATCH 1 -> :Any WITH #{{Number: ((LET g = (FN :{{y :Number}} -> Any = #(\
+         MATCH 1 WITH #{{Number: ((LET g = (FN :{{y :Number}} -> Any = #(\
          (LET p = (PICK x)) (p)))) (g))}}\n)"
     );
     let (before, after) = resumed(&source, |door| {

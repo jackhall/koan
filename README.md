@@ -11,8 +11,8 @@ cargo build                                        # the library and the `koan` 
 cargo build --release                              # optimized
 ```
 
-The single binary target `koan` does not yet run `MATCH`, `TRY`, `CATCH`,
-`Result` or the module expression shapes
+The single binary target `koan` does not yet run `TRY`, `CATCH`, `Result` or
+the module expression shapes
 ([what dispatch runs](src/dispatch/README.md#what-dispatch-runs)).
 
 ## Run
@@ -27,7 +27,7 @@ echo 'PRINT "hello"' | cargo run
 `PRINT` writes to standard output. A refused load, or an error the program does
 not catch, writes `error: <message>` to standard error and exits non-zero.
 
-The surface includes `LET`, `PRINT`, and the two callable binders `EXPR` (a keyworded, dispatch-reached definition) and `FN` (a lambda); the nominal-type declarators `UNION` and `NEWTYPE`; the control forms `MATCH <value> -> :<Type> WITH #{<branches>}`, `TRY (<expr>) -> :<Type> WITH #{<branches>}`, and `CATCH`; the module forms `MODULE`, `SIG`, `USING`, and the `:!` / `:|` ascription operators; the arithmetic and comparison operators `+ - * / < <= > >=` and `AND`, and the type-union operator `|` building `:(A | B)` (chained runs like `1 < 2 < 3` or `A | B | C` reduce per their operator group's mode — see [operator groups](src/scope/README.md#operator-groups)); reading a list, a dict, a string or code by applying it to an index, a slice record or a key (`xs 0`, `xs {from = 1}`, `d "k"`), each answering a `Result`, `LENGTH`, and `..` spreading a list into a list literal (`[..xs 3]`); the operator declarators `OP` and `GROUP`, with which a module declares its own chainable operators; the `#` / `$` quote and eval sigils, `$..` splicing a list of code into a quote, and `BUILD` typing composed code exactly. See the [tutorial](tutorial/README.md) for a feature-by-feature walkthrough, and [tutorial/reference.md](tutorial/reference.md) for a one-page surface reference.
+The surface includes `LET`, `PRINT`, and the two callable binders `EXPR` (a keyworded, dispatch-reached definition) and `FN` (a lambda); the nominal-type declarators `UNION` and `NEWTYPE`; the control forms `MATCH <value> WITH #{<arms>}`, `MATCH <value> UNDER <Union> WITH #{<arms>}`, `TRY (<expr>) -> :<Type> WITH #{<branches>}`, and `CATCH`; the module forms `MODULE`, `SIG`, `USING`, and the `:!` / `:|` ascription operators; the arithmetic and comparison operators `+ - * / < <= > >=` and `AND`, and the type-union operator `|` building `:(A | B)` (chained runs like `1 < 2 < 3` or `A | B | C` reduce per their operator group's mode — see [operator groups](src/scope/README.md#operator-groups)); reading a list, a dict, a string or code by applying it to an index, a slice record or a key (`xs 0`, `xs {from = 1}`, `d "k"`), each answering a `Result`, `LENGTH`, and `..` spreading a list into a list literal (`[..xs 3]`); the operator declarators `OP` and `GROUP`, with which a module declares its own chainable operators; the `#` / `$` quote and eval sigils, `$..` splicing a list of code into a quote, and `BUILD` typing composed code exactly. See the [tutorial](tutorial/README.md) for a feature-by-feature walkthrough, and [tutorial/reference.md](tutorial/reference.md) for a one-page surface reference.
 
 User-defined functions declare a return type in the `-> Type` slot; a body whose value does not fit it ends in an error value. `Any` is the no-op fast-path. The surface-declarable types are `Number`, `Str`, `Bool`, `Null`, `:(LIST OF Elem)`, `:(MAP Key -> Val)`, `:(FN :{arg :Arg} -> Out)` (a lambda type; the parameter list is a record type, so `:{}` is the nullary form, and a `FOR ALL #[<names>]` group before the parameters makes it quantified, which only a signature's `VAL` member may be), `:(EXPR #(<head>) -> Out)` (an expression shape — the keyword/slot run a keyworded definition registers for dispatch, optionally under a `FOR ALL #[<names>]` quantifier group inside a signature), `Value`, `Type`, `Code` and the kinds of code under it (`Block`, `Expression`, `Declaration`, `Binder`, `Literal`, `Symbol`, `Name`, `Keyword`), `Module`, `Signature`, and `Any`; nominal types declared with `NEWTYPE`/`UNION` carry their own names. Parameterized type expressions use the glued-right `:` sigil opening an S-expression group; bare types like `Number` and ascriptions like `x :Number` may write the sigil but don't require it on a non-parameterized atom.
 
@@ -246,6 +246,7 @@ src/
 │   ├── unit.rs           the type half of the load's walk: a unit's type binders, type expressions, guards, registrations — a USING block's surfaced key included — and callables typed closed, rigid or unknown through the one load-time Reader over a TypeContext the walk implements
 │   ├── paths.rs          what a path through a module reads — declared_through and path_binding — the one reader every walk shares
 │   ├── members.rs        a signature's members: layout order, and the one lookup of where a member sits and what it is declared at, shared by the type reader, dispatch and the module layout
+│   ├── variants.rs       a union's variants as a MATCH … UNDER clause names them, the member each label names, and the check of a MATCH … UNDER's arms against its union
 │   └── reads.rs          Reads / TypeAt — what elaboration reads names through: an activation, its view, or the walk's load-time reader
 ├── build.rs          pub mod build — the load's store, a resumption's layer and the folds over a walk's records; what decides a settlement's identity
 ├── build/
@@ -278,7 +279,7 @@ src/
 │   ├── seek.rs           Seek — what an asker hands the drain to find a frame's arena node — the Settles door a miss runs through, and the Lending a request's cell is born with: its asker's, a seek, a replay, a composition
 │   ├── action.rs         Step — the only thing a step is handed: its writers, its state and scratch state, its door (the code and facts it reads at the step's borrow), spawn, spawn_seeking and spawn_composing, results, arena_ref and kept_here, the decision memo's doors and the caching chain, the park / hand_off / tail / tail_seeking / tail_under / bounce / rebuild / replay / finish_fresh / finish_in_home / finish / done / leave / failed ends that alone build an Action (opaque, over the drain-only Kind); Placement, Use, Request, Received, Slot, the drain's Spawns buffer, StepError
 │   ├── continuation.rs   StepBundle — the covariant birth family and its crossing, the parked state family, the scratch family and born, which the layer above supplies, and the hooks a call's handed values are woken and kept through; BirthAt / StateAt, NativeStep, Work, and the ContinuationFamily a cell parks: Continuation, Rested, Provenance
-│   ├── kept.rs           Kept, KeptPart, Held — a value at rest at its true home, the part of it a path of label, capture and member segments reaches, and a value a step holds beside the kept part it is
+│   ├── kept.rs           Kept, KeptPart, Held — a value at rest at its true home, the part of it a path of label, capture, member and payload segments reaches, and a value a step holds beside the kept part it is
 │   └── delivery.rs       KDelivery — koan's delivery bundle: a scratch fill and a carrier fill, both the value family
 ├── program.rs        pub mod program — a loaded program as one owning value and the body runner that performs it, over build, elaborate, knot, memory, parse, scheduler, scope, symbols, type_lattice and values
 ├── program/
@@ -292,12 +293,13 @@ src/
 ├── dispatch.rs       pub mod dispatch — Koan, the Language programs run under, and the vocabulary its submodules share
 └── dispatch/
     ├── builtins.rs       the builtin table — the lattice's types, Error, Result and every overload as a builtin node — and the natives the overloads run
-    ├── evaluate.rs       the evaluator step: what a node is, gathering its parts, a spread literal, an ascription, an EVAL, a keyworded call, an application, and finishing under a contract
+    ├── evaluate.rs       the evaluator step: what a node is, gathering its parts, a spread literal, an ascription, an EVAL, a MATCH, a keyworded call, an application, and finishing under a contract
     ├── lookup.rs         a read: a list, a dict or a string applied to an index, a slice record or a key, answering a Result
-    ├── select.rs         admission and selection over a candidate list — the one tie rule and first-class elimination the load reads too — and a keyworded call's argument record
+    ├── select.rs         admission and selection over a candidate list — the one tie rule and first-class elimination the load reads too — a keyworded call's argument record, and the arm a MATCH runs
     ├── check.rs          the overlap check: a user overload taking operands a builtin overload at its key already takes
     ├── walk.rs           the load's one walk: its driver over bodies and units, the demand stack's components, and its value half — a static type for every value expression and binder, each keyworded use's candidates narrowed and chosen by them, and the return, ascription, view and EVAL checks
     ├── walk/reads.rs     the walk's façade: every read and write of a fact through the store, each unit's frontier gathered
+    ├── walk/arms.rs      a MATCH at load: each arm's it, the arms a run can take and the one the load chooses, and the MATCH's static type
     ├── walk/types.rs     the walk as the type half's TypeContext, and a unit's declarations, type expressions, registrations and births
     ├── walk/trees.rs     a module-valued expression read as its content tree, a call unfolded into its callee's summary
     ├── walk/paths.rs     each path resolved at load, closed or to its class; the crossing rule; member reads under transient pins

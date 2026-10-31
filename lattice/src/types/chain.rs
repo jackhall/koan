@@ -370,7 +370,8 @@ impl<'t, H: Habitat<'t>> TypeChain<'t, H> {
         list(KType::LIST_OF_DECLARATION, Handle::DECLARATION);
         dict(KType::DICT_NAME_BLOCK, Handle::NAME, Handle::BLOCK);
         dict(KType::DICT_NAME_TYPE_CODE, Handle::NAME, type_code);
-        dict(KType::DICT_TYPE_CODE_BLOCK, type_code, Handle::BLOCK);
+        let guard_code = self.union_of(scratch, &[type_code, Handle::LITERAL]);
+        dict(KType::DICT_GUARD_BLOCK, guard_code, Handle::BLOCK);
         self.union_of(
             scratch,
             &[Handle::LIST_OF_NAME, Handle::DICT_NAME_TYPE_CODE],

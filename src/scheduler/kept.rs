@@ -22,7 +22,7 @@ use crate::values::{PartPath, PathSegment};
 pub struct Kept<'graph>(pub(super) Dormant<'graph, KValueFamily>);
 
 /// A kept value, or the part of it a path of segments reaches: a record field, a function's
-/// capture or a module's member at each step.
+/// capture, a module's member or a tagged value's payload at each step.
 #[derive(Clone, Copy)]
 pub struct KeptPart<'graph, 'cell> {
     pub kept: Kept<'graph>,
@@ -43,7 +43,8 @@ pub struct Held<'graph, 'cell> {
 impl<'graph> KeptPart<'graph, '_> {
     /// This part's kept value redeemed into the step `context` runs, and projected along its path,
     /// each segment read as [`Value::along`](crate::values::Value::along),
-    /// [`Value::captured`](crate::values::Value::captured) or [`layout::stored_member`] reads it:
+    /// [`Value::captured`](crate::values::Value::captured), [`layout::stored_member`] or
+    /// [`Value::untagged`](crate::values::Value::untagged) reads it:
     /// the carrier of the storage this part names, at its true home. `None` where it does not
     /// redeem or the path reaches nothing.
     pub(super) fn redeemed<'step, 'here, 'scratch, 'lent, B: StepBundle<'graph>>(
@@ -67,6 +68,7 @@ impl<'graph> KeptPart<'graph, '_> {
                     PathSegment::Label(label) => at.along(label)?,
                     PathSegment::Capture(slot) => at.captured(slot)?,
                     PathSegment::Member(slot) => layout::stored_member(at, slot as usize)?,
+                    PathSegment::Payload => at.untagged()?,
                 };
             }
             Some(Active::new(at))

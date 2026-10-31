@@ -59,7 +59,8 @@ pub(crate) struct SurfaceKeywords {
     /// The two tokens of a quantifier group's head, `EXPR FOR ALL #[<names>] …`.
     pub(crate) for_: StaticName<KeywordSymbol>,
     pub(crate) all: StaticName<KeywordSymbol>,
-    /// A bound, `<Name> UNDER <bound>`: in a `FOR ALL` group.
+    /// A bound, `<Name> UNDER <bound>`, in a `FOR ALL` group; and a `MATCH`'s union clause,
+    /// `MATCH <scrutinee> UNDER <union> WITH …`.
     pub(crate) under: StaticName<KeywordSymbol>,
     pub(crate) arrow: StaticName<KeywordSymbol>,
     pub(crate) op: StaticName<KeywordSymbol>,
@@ -287,11 +288,12 @@ const fn every_overload_within(types: &[KType], kind: KType) -> bool {
 
 /// The roles whose reading fixes the syntax that fills them, and so the slot's type: every body is
 /// a `Block`, an `EXPR` head an `Expression`, a quoted symbol a `Keyword`, a field label a code
-/// kind no larger than a `Name`, an arm set a `Dict(TypeCode, Block)` under type guards and a
-/// `Dict(Name, Block)` under labels, a union's variants a `Dict(Name, TypeCode)`, a signature's
-/// members a `List(Declaration)`, a representation `TypeCode`, a `FOR ALL` group a list of names or
-/// a dict of names to bounds, and a binder name a code kind no larger than an expression. A
-/// binding's right-hand side is classified where it lands, so it is `Any`.
+/// kind no larger than a `Name`, an arm set a `Dict(TypeCode | Literal, Block)` under type and
+/// value guards and a `Dict(Name, Block)` under labels, a union's variants a
+/// `Dict(Name, TypeCode)`, a signature's members a `List(Declaration)`, a representation
+/// `TypeCode`, a `FOR ALL` group a list of names or a dict of names to bounds, and a binder name a
+/// code kind no larger than an expression. A binding's right-hand side is classified where it
+/// lands, so it is `Any`.
 const fn roles_agree_with_code_types(table: &[BuiltinShape]) -> bool {
     let mut entry = 0;
     while entry < table.len() {
@@ -305,7 +307,7 @@ const fn roles_agree_with_code_types(table: &[BuiltinShape]) -> bool {
                     Role::Data => every_overload_is(types, KType::KEYWORD),
                     Role::Field => every_overload_within(types, KType::NAME),
                     Role::Branches(Heads::Types) => {
-                        every_overload_is(types, KType::DICT_TYPE_CODE_BLOCK)
+                        every_overload_is(types, KType::DICT_GUARD_BLOCK)
                     }
                     Role::Branches(Heads::Labels) => {
                         every_overload_is(types, KType::DICT_NAME_BLOCK)
@@ -393,7 +395,7 @@ pub enum BuiltinShapeId {
     GroupHeadPairwiseFoldLeft,
     GroupHeadPairwiseFoldRight,
     Match,
-    MatchOver,
+    MatchUnder,
     Try,
     Catch,
     UsingScope,
@@ -485,7 +487,7 @@ const LIST_OF_NAME: KType = KType::LIST_OF_NAME;
 const LIST_OF_EXPRESSION: KType = KType::LIST_OF_EXPRESSION;
 const LIST_OF_DECLARATION: KType = KType::LIST_OF_DECLARATION;
 const DICT_NAME_BLOCK: KType = KType::DICT_NAME_BLOCK;
-const DICT_TYPE_CODE_BLOCK: KType = KType::DICT_TYPE_CODE_BLOCK;
+const DICT_GUARD_BLOCK: KType = KType::DICT_GUARD_BLOCK;
 const DICT_NAME_TYPE_CODE: KType = KType::DICT_NAME_TYPE_CODE;
 /// A `FOR ALL` group: a list of names, or a dict of names to the code of their bounds.
 const QUANTIFIER_CODE: KType = KType::QUANTIFIER_CODE;
@@ -1504,30 +1506,26 @@ const BUILTIN_SHAPE_SPEC: &[BuiltinShape] = &[
     },
     // ---------- the control shapes ----------
     //
-    // MATCH <scrutinee> -> <result type> WITH <branches>.
+    // MATCH <scrutinee> WITH <arms>: each guard a type or a scalar literal.
     BuiltinShape {
         id: BuiltinShapeId::Match,
         elements: &[
             Kw(&KEYWORDS.match_),
             slot(Argument, &[ANY]),
-            Kw(&KEYWORDS.arrow),
-            slot(Te, &[PROPER_TYPE]),
             Kw(&KEYWORDS.with),
-            slot(Branches(Heads::Types), &[DICT_TYPE_CODE_BLOCK]),
+            slot(Branches(Heads::Types), &[DICT_GUARD_BLOCK]),
         ],
         returns: &[ANY],
         binder: None,
         reserved: false,
     },
-    // MATCH <scrutinee> OVER <union> -> <result type> WITH <branches>.
+    // MATCH <scrutinee> UNDER <union> WITH <arms>: each guard a variant's label.
     BuiltinShape {
-        id: BuiltinShapeId::MatchOver,
+        id: BuiltinShapeId::MatchUnder,
         elements: &[
             Kw(&KEYWORDS.match_),
             slot(Argument, &[ANY]),
-            Kw(&KEYWORDS.over),
-            slot(Te, &[PROPER_TYPE]),
-            Kw(&KEYWORDS.arrow),
+            Kw(&KEYWORDS.under),
             slot(Te, &[PROPER_TYPE]),
             Kw(&KEYWORDS.with),
             slot(Branches(Heads::Labels), &[DICT_NAME_BLOCK]),

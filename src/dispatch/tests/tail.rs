@@ -1,6 +1,7 @@
 //! A keyworded self-call in tail position hops to the callee's frame: however deep the recursion,
-//! the cells live at once stay constant. A call by name, in tail position or not, binds each
-//! parameter to the field of its argument record the parameter names.
+//! the cells live at once stay constant, through `MATCH` arms in tail position too. A call by name,
+//! in tail position or not, binds each parameter to the field of its argument record the parameter
+//! names.
 
 use std::cell::Cell;
 
@@ -259,4 +260,79 @@ fn a_call_by_name_binds_each_parameter_to_the_field_it_names_past_a_hidden_one()
                 LET g = (FN :{r :Any} -> Any = #(f r))\n\
                 PRINT (g {r = ({a = 5, x = 7} :! :{x :Number})})\n";
     assert_eq!(super::run(tail), "9\n7");
+}
+
+/// A program whose `DOWN` counts down a `Nat` chain of `depth` links through `body`'s `MATCH` arms.
+fn nat_chain(depth: u32, body: &str) -> String {
+    let mut source = format!(
+        "UNION Nat = #{{Zero: Null, Succ: Nat}}\n\
+         EXPR #(DOWN n :Nat) -> Str = #({body})\n\
+         LET n0 = (Nat.Zero null)\n"
+    );
+    for at in 1..=depth {
+        source.push_str(&format!("LET n{at} = (Nat.Succ n{})\n", at - 1));
+    }
+    source.push_str(&format!("PRINT (DOWN n{depth})"));
+    source
+}
+
+#[test]
+fn a_recursion_through_tail_arms_holds_its_cells_constant_however_deep() {
+    // The frame hands its `MATCH` off under its contract, the `MATCH` its arm, and the arm its
+    // call, which hops to `DOWN`'s next frame.
+    let (deep, shallow) = if cfg!(miri) { (3, 2) } else { (256, 8) };
+    for body in [
+        "MATCH n UNDER Nat WITH #{Zero: (\"done\"), Succ: (DOWN it)}",
+        "MATCH n UNDER Nat WITH #{Zero: (\"done\"), \
+         Succ: (MATCH it UNDER Nat WITH #{Zero: (\"one\"), Succ: (DOWN it)})}",
+    ] {
+        assert_eq!(
+            peak_of(&nat_chain(deep, body)),
+            peak_of(&nat_chain(shallow, body)),
+            "{body}"
+        );
+    }
+    // An arm whose last statement binds waits on its call, so each round holds a frame.
+    let bound = "MATCH n UNDER Nat WITH #{Zero: (\"done\"), Succ: ((LET r = (DOWN it)) (r))}";
+    assert!(peak_of(&nat_chain(deep, bound)) > peak_of(&nat_chain(shallow, bound)));
+}
+
+#[test]
+fn an_arm_owes_its_frames_contract_whether_or_not_it_tails() {
+    // An arm whose last statement binds runs as a child, and the `MATCH` holds its value to the
+    // contract; a tail arm owes the contract itself.
+    for arms in [
+        "#{Number: (LET r = it), _: (LET r = \"s\")}",
+        "#{Number: (it), _: (\"s\")}",
+    ] {
+        let f = format!("EXPR #(PIN x :Any) -> Number = #(MATCH x WITH {arms})\n");
+        assert_eq!(super::run(&format!("{f}PRINT (PIN 1)")), "1");
+        assert_eq!(
+            super::run(&format!("{f}PRINT (PIN \"t\")")),
+            "error: :(FN :{x :Any} -> Number) returned Str, which does not satisfy Number"
+        );
+    }
+}
+
+#[test]
+fn a_tail_arms_call_reads_its_route_and_derives_none() {
+    // Each hop of `RUNS` into itself is a tail arm's call, which reads its route and stays under
+    // its frame's settlement: four, one per link.
+    let runs = "EXPR #(PICK x :Number) -> Str = #(\"n\")\n\
+                EXPR #(RUNS k :Counter link :Any) -> Number = #(MATCH link WITH \
+                #{Link: ((PRINT (PICK k.zero)) (RUNS k (ATTR it next))), Null: (7)})\n\
+                LET go = (FN :{k :Counter} -> Number = #(RUNS k chain))\n";
+    let (printed, derived, hopped) = routed(4, &format!("{runs}PRINT (go {{k = ints}})\n"));
+    assert_eq!(printed, format!("{}7", "n\n".repeat(4)));
+    assert_eq!((derived, hopped), (0, 4));
+}
+
+#[test]
+fn a_match_in_a_frame_called_through_a_barrier_runs_its_arm_as_a_child() {
+    // The frame does not tail, so its value crosses the barrier, which hides `y`.
+    let source = "SIG Shower = #[(VAL show :(FN :{} -> :{x :Number}))]\n\
+                  MODULE m = (LET show = (FN :{} -> :{x :Number, y :Str} = \
+                  #(MATCH 1 WITH #{Number: ({x = 1, y = \"leak\"})})))\n\
+                  LET v = (m :| Shower)\nPRINT (v.show {})";
+    assert_eq!(super::run(source), "{x = 1}");
 }

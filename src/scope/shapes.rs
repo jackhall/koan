@@ -679,29 +679,46 @@ impl Shapes<'_> {
 }
 
 impl<'graph> Shapes<'graph> {
-    /// The node of the tail call `shape`'s last statement makes, where `shape` is a callable or a
-    /// quote's code and the statement is a call by name or a keyworded use.
+    /// The node of the tail call `shape`'s last statement makes, where `shape` is a callable, a
+    /// quote's code or a tail arm's block and the statement is a call by name or a keyworded use.
     pub fn tail_call(
         &self,
         shape: &'graph BodyShape<'graph>,
     ) -> Option<&'graph KExpression<'graph>> {
-        tails::tail_call(shape)
+        tails::tail_call(self, shape)
     }
 
-    /// Whether a tail call of the callable `shape` whose callee is `callee` hops into the frame's
-    /// own body: a self tail edge of a body whose name does not escape.
-    fn hops(&self, shape: &BodyShape<'graph>, callee: Option<&BodyShape<'graph>>) -> bool {
-        callee.is_some_and(|callee| callee.segment() == shape.segment())
-            && !self.escapes(shape.segment())
+    /// The callable or quote's code whose tail statement `shape`'s last statement is: `shape`
+    /// itself, or for a tail arm's block, the body its `MATCH`, through every tail arm out, ends.
+    pub fn tail_owner(
+        &self,
+        shape: &'graph BodyShape<'graph>,
+    ) -> Option<&'graph BodyShape<'graph>> {
+        tails::tail_owner(self, shape)
+    }
+
+    /// Whether a tail call in `shape`, a callable or a tail arm's block in one, whose callee is
+    /// `callee` hops into the frame's own body: a self tail edge of a body whose name does not
+    /// escape.
+    fn hops(&self, shape: &'graph BodyShape<'graph>, callee: Option<&BodyShape<'graph>>) -> bool {
+        let Some(owner) = tails::tail_owner(self, shape) else {
+            return false;
+        };
+        callee.is_some_and(|callee| callee.segment() == owner.segment())
+            && !self.escapes(owner.segment())
     }
 
     /// [`hops`](Self::hops) for a call by name of `head` in `shape`.
-    pub fn hops_by_name(&self, shape: &BodyShape<'graph>, head: &ExpressionPart<'_>) -> bool {
+    pub fn hops_by_name(
+        &self,
+        shape: &'graph BodyShape<'graph>,
+        head: &ExpressionPart<'_>,
+    ) -> bool {
         self.hops(shape, tails::head_callable(self, shape, head))
     }
 
     /// [`hops`](Self::hops) for a keyworded use's candidate at `coordinate` in `shape`.
-    pub fn hops_at(&self, shape: &BodyShape<'graph>, coordinate: Coordinate) -> bool {
+    pub fn hops_at(&self, shape: &'graph BodyShape<'graph>, coordinate: Coordinate) -> bool {
         self.hops(shape, tails::candidate_callable(self, shape, coordinate))
     }
 
