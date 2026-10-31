@@ -69,7 +69,7 @@ use crate::memory::{Active, Bump, BumpAllocator, BumpVec, Writer, collect, resid
 use crate::parse::BuiltinShapeId;
 use crate::parse::Role;
 use crate::parse::{
-    ExpressionPart, KExpression, KTemplate, ListItem, TemplateSlot, template_fields,
+    ExpressionPart, KExpression, KLiteral, KTemplate, ListItem, TemplateSlot, template_fields,
 };
 use crate::program::{
     CallKind, Contract, Evaluated, Exit, Handed, KBirth, KBundle, KState, Passing, block,
@@ -830,8 +830,11 @@ fn container<'step, 'graph, 'here>(
     .filter(|typed| typed.is_exact())
     .and_then(|typed| at.types.concrete(typed.upper));
     let symbols = at.program.symbols();
-    let written = match written_part(at, part) {
-        Some(ExpressionPart::Template(template)) => Some(template.pieces),
+    let written = match part {
+        ExpressionPart::Template(_) => match written_part(at, part) {
+            Some(ExpressionPart::Template(template)) => Some(template.pieces),
+            _ => None,
+        },
         _ => None,
     };
     finish_built(step, at, &parts, |writer, types, values| {
@@ -1567,7 +1570,12 @@ fn lowered<'graph, 'here>(
     part: &ExpressionPart<'_>,
     scratch: &Bump,
 ) -> Option<KValue<'graph, 'here>> {
-    match written_part(at, part) {
+    // A scalar has no text to share, and a part that does not lower has nothing to find.
+    let shares = match part {
+        ExpressionPart::Literal(literal) => matches!(literal, KLiteral::String(_)),
+        _ => KValue::lowers(part),
+    };
+    match shares.then(|| written_part(at, part)).flatten() {
         Some(part) => Value::lower_shared(writer, part, &at.types, scratch),
         None => Value::lower_part(writer, part, &at.types, scratch),
     }

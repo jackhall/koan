@@ -21,6 +21,11 @@ impl<'cell, X: Knotted> Value<'cell, X> {
         lowers(part).then(|| lower(writer, part, &|text| writer.text(text), types, scratch))
     }
 
+    /// Whether [`lower_part`](Self::lower_part) takes `part`.
+    pub fn lowers(part: &ExpressionPart<'_>) -> bool {
+        lowers(part)
+    }
+
     /// [`lower_part`](Self::lower_part) of a part in storage that outlives the region, such as
     /// the program's: each string shares its text there rather than copying it in.
     pub fn lower_shared<'p: 'cell>(
