@@ -1,46 +1,49 @@
-# A variant's union in its identity
+# A construction through a union binder types at its union
 
-**Problem.** A variant's identity is its name, kind and payload alone: a
-non-recursive member declared inside a group unifies with its standalone twin
-([identity](../../lattice/src/types/identity.md#recursive-groups-identity-is-the-scc-not-the-declaration)).
-So under `UNION Maybe = #{Some: Number, None: Null}`,
-`UNION Opt = #{Some: Number, Nil: Null}` and `NEWTYPE Some = Number`,
-`Maybe.Some`, `Opt.Some` and the newtype `Some` are one type:
-`LET a :Opt = (Maybe.Some 3)` and `LET b :Maybe = (Some 4)` both load and run.
-A value built by a variant's constructor carries the variant, never its union,
-so a `MATCH … UNDER` clause over a `FOR ALL` name that a call binds to such a
-value reads a type that is no union: under
+**Problem.** A union variant construction is at most `Any`
+([static types](../../src/dispatch/README.md#static-types)), so the load knows
+nothing of `(Maybe.Some 3)` and a call reads its carried type, the variant
+`Some`, never its union. A `MATCH … UNDER` clause over a `FOR ALL` name such a
+call binds reads a type that is no union: under
 `EXPR FOR ALL #[Un] #(PICK x :Un) -> Any = #(MATCH x UNDER Un WITH #{Some: (it), _: (0)})`,
 `PICK (Maybe.Some 3)` is refused as `` `MATCH … UNDER` takes a union, and Some
 is not one; a lone variant is not its union ``
 ([a union's variants](../../src/elaborate/README.md#a-unions-variants)), while
-`PICK m` over `LET m :Maybe = (Maybe.Some 3)` runs.
+`PICK m` over `LET m :Maybe = (Maybe.Some 3)` runs. The user spelled `Maybe`
+once already; being made to repeat it in `LET m :Maybe = (Maybe.Some 3)` is
+surprising.
 
 **Acceptance criteria.**
 
-- A union variant's type identity includes its declaring union: the binder and
-  its sibling variants. `Maybe.Some`, `Opt.Some` and a `NEWTYPE Some = Number`
-  are three distinct types.
-- `LET a :Opt = (Maybe.Some 3)` and `LET b :Maybe = (Some 4)`, with
-  `NEWTYPE Some = Number`, are each refused.
-- A `MATCH … UNDER` clause reads a variant as its declaring union, so
-  `PICK (Maybe.Some 3)` over the `PICK` above prints `3`.
-- The lattice's identity design states the rule for a union's variants in place
-  of the standalone-twin rule.
+- A construction through a union binder is at most the union the path reaches
+  the variant through: `(Maybe.Some 3)` is at most `Maybe`, so
+  `PICK (Maybe.Some 3)` over the `PICK` above prints `3`, and
+  `LET x :Maybe = (Maybe.Some 3)` and `LET x :(Maybe | Number) = (Maybe.Some 3)`
+  are *always* at load.
+- A construction through a parameterized union's variant is at most the union
+  applied at what the payload's static upper end pins, each parameter the
+  payload says nothing about at `Never`: `(Option.Some 3)` is at most
+  `(Number -> Option)` and `(Tree.Leaf null)` at most `(Never -> Tree)`.
+- A construction through a `NEWTYPE` is unchanged: with `NEWTYPE Some = Number`,
+  `(Some 4)` is `Some`.
+- A tag projection reads through a variant's payload as a field projection
+  does: under `UNION Shape = #{Sized: Maybe, Flat: Null}`, `Shape.Sized.Some`
+  names `Maybe`'s `Some`, and `(Shape.Sized.Some 3)` is at most `Maybe`, the
+  union the path reaches the variant through — it builds no `Sized`.
+- The [static types](../../src/dispatch/README.md#static-types) construction
+  bullet states the rule.
 
 **Directions.**
 
-- *Whether to make the change — open.* It changes the
-  [type lattice](../../lattice/src/types/README.md)'s identity rule, which needs
-  the user's approval before work starts; the alternative is to keep the
-  refusal of a clause bound to a lone variant.
-- *What a variant's digest folds in — open.* The declaring binder's name alone,
-  or the binder and each sibling's name, kind and payload, which a group's
-  seal already presents. Recommended: the binder and its siblings, as the
-  ruling states it.
+- *Identity is unchanged — decided.* A variant's identity stays its name, kind
+  and payload ([identity](../../lattice/src/types/identity.md#recursive-groups-identity-is-the-scc-not-the-declaration)):
+  `Maybe.Some`, `Opt.Some` and a `NEWTYPE Some` are one handle, and
+  `LET a :Opt = (Maybe.Some 3)` stays a *maybe* the run admits. The union a
+  construction is reached through is a fact of the path spelled, read by the
+  load, not of the type.
 
 ## Dependencies
 
-**Requires:** none — union variants and `MATCH … UNDER` have shipped.
+**Requires:** none — union variants, families and `MATCH … UNDER` have shipped.
 
 **Unblocks:** none — a leaf.

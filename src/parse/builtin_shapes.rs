@@ -825,7 +825,7 @@ const BUILTIN_SHAPE_SPEC: &[BuiltinShape] = &[
         }),
         reserved: false,
     },
-    // UNION <name> = <schema> and UNION (<P>… AS <Name>) = <schema> (the parameterized union shares
+    // UNION <name> = <schema> and UNION (<P>… -> <Name>) = <schema> (the parameterized union shares
     // the key).
     BuiltinShape {
         id: BuiltinShapeId::Union,

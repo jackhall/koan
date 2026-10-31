@@ -103,36 +103,54 @@ pub(crate) fn identifier_part_binder_name(expr: &KExpression<'_>) -> Option<Bind
     }
 }
 
-/// Placeholder extractor for a name slot that takes a bare name or a declarator — a `NEWTYPE`
-/// family and `UNION`: the bare form's name is the `Type` part at `parts[1]`; the
-/// declarator's is the *last* inner part of the parenthesized `(Param AS Name)` expression. A
-/// bounded declarator, `(<declarator> UNDER <bound>)`, names what its declarator names.
+/// Placeholder extractor for a name slot that takes a bare name or a family head — a `NEWTYPE`
+/// family and `UNION`: the name [`declared_type_name`] reads off `parts[1]`.
 pub(crate) fn type_decl_binder_name(expr: &KExpression<'_>) -> Option<BinderSymbol> {
-    let part = &expr.parts.get(1)?.value;
-    let declarator = bounded(part).map_or(part, |(declarator, _)| declarator);
-    match *declarator {
-        ExpressionPart::Type(t) => Some(BinderSymbol::Type(t)),
-        ExpressionPart::Expression(inner) => match inner.parts.last()?.value {
-            ExpressionPart::Type(t) => Some(BinderSymbol::Type(t)),
-            _ => None,
-        },
-        _ => None,
-    }
+    declared_type_name(&expr.parts.get(1)?.value).map(BinderSymbol::Type)
 }
 
-/// The parameter names a `(<P>… AS <Name>)` declarator writes, in written order: every `Type`
-/// part before the last. Nothing for any other part.
+/// The name a `UNION` / `NEWTYPE` name slot's part declares: a bare type name, a family head's
+/// name, or either under `UNDER` — a bounded declarator names what its declarator names.
+pub(crate) fn declared_type_name(part: &ExpressionPart<'_>) -> Option<TypeSymbol> {
+    let declarator = bounded(part).map_or(part, |(declarator, _)| declarator);
+    type_name(declarator).or_else(|| family_head(declarator).map(|(_, name)| name))
+}
+
+/// A `(<P>… -> <Name>)` family head as written: its parameter parts, every one a `Type`, and the
+/// name it declares. Any other part is no head.
+pub(crate) fn family_head<'g>(
+    part: &ExpressionPart<'g>,
+) -> Option<(&'g [Spanned<ExpressionPart<'g>>], TypeSymbol)> {
+    let ExpressionPart::Expression(run) = part else {
+        return None;
+    };
+    let [params @ .., arrow, name] = run.parts else {
+        return None;
+    };
+    let ExpressionPart::Type(name) = name.value else {
+        return None;
+    };
+    let arrow =
+        matches!(arrow.value, ExpressionPart::Keyword(symbol) if symbol == KEYWORDS.arrow.symbol());
+    let typed = (params.iter()).all(|part| type_name(&part.value).is_some());
+    (arrow && typed && !params.is_empty()).then_some((params, name))
+}
+
+/// The parameter names a `(<P>… -> <Name>)` family head writes, in written order. Nothing for any
+/// other part.
 pub(crate) fn declarator_parameters<'g>(
     part: &ExpressionPart<'g>,
 ) -> impl Iterator<Item = TypeSymbol> + 'g {
-    let parts: &'g [Spanned<ExpressionPart<'g>>] = match part {
-        ExpressionPart::Expression(run) => run.parts.split_last().map_or(&[], |(_, before)| before),
-        _ => &[],
-    };
-    parts.iter().filter_map(|part| match part.value {
+    let params = family_head(part).map_or(&[][..], |(params, _)| params);
+    params.iter().filter_map(|part| type_name(&part.value))
+}
+
+/// The name a bare `Type` part spells.
+fn type_name(part: &ExpressionPart<'_>) -> Option<TypeSymbol> {
+    match *part {
         ExpressionPart::Type(name) => Some(name),
         _ => None,
-    })
+    }
 }
 
 /// The declarator and bound of a `<declarator> UNDER <bound>` run: exactly three parts, the middle

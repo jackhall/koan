@@ -70,7 +70,8 @@ use crate::parse::{
 };
 use crate::parse::{BuiltinShape, BuiltinShapeId, ShapeElement, builtin_shape_for};
 use crate::parse::{
-    ExpressionPart, KExpression, KeyElement, ListItem, Mark, type_decl_binder_name,
+    ExpressionPart, KExpression, KeyElement, ListItem, Mark, declared_type_name,
+    type_decl_binder_name,
 };
 use crate::source::SourceRef;
 use crate::symbols::{
@@ -255,8 +256,8 @@ fn written_guard<'graph>(
 /// written — as a quote, as bare syntax or as a container of quotes — is written as the reading
 /// says, and admits one of its slot's types by [`admits_part`], the one admission rule — a type
 /// expression's and an in-place operand's type is
-/// the value it denotes, so only their spelling is checked. A binder name is a bare name, or a bare
-/// declarator group for `UNION` and `NEWTYPE`. Code written where a quote or a container of
+/// the value it denotes, so only their spelling is checked. A binder name is a bare name, or a family
+/// head `(<P>… -> <Name>)` for `UNION` and `NEWTYPE`. Code written where a quote or a container of
 /// quotes is wanted is `Unquoted`, a quote where bare syntax is wanted `Malformed`, and a part
 /// whose syntax fills no slot type `Inadmissible`. The readers after it assume a well-formed part.
 fn written_as_read<'e>(
@@ -290,7 +291,7 @@ fn written_as_read<'e>(
             Reading::Quote | Reading::Code => quoted(part),
             Reading::Bare if *role == Role::Name => match part {
                 ExpressionPart::Identifier(_) | ExpressionPart::Type(_) => true,
-                ExpressionPart::Expression(_) => declarator,
+                ExpressionPart::Expression(_) => declarator && declared_type_name(part).is_some(),
                 _ => false,
             },
             Reading::Bare => !quoted(part),

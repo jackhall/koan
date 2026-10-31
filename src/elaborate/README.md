@@ -100,7 +100,7 @@ registry's own doors:
   `NoSuchMember`;
 - `Pair {Key = Number}` is a declared type constructor applied to its arguments
   by the parameter names the family declares — every parameter named once and no
-  name it does not declare — and `Number AS Wrap` is the same application spelled
+  name it does not declare — and `Number -> Wrap` is the same application spelled
   as arity-one sugar, reading the family's sole parameter name off the family. A
   union whose members all take one parameter set — a
   [parameterized union](#families)'s binder — applies member by member:
@@ -249,14 +249,14 @@ its members are declared in, and hands back one handle per member, in member
 order:
 
 - `NEWTYPE Distance = Number` — a newtype over its representation;
-- `NEWTYPE (Key Val AS Pair)` — a constructor family: a `TypeConstructor`
+- `NEWTYPE (Key Val -> Pair)` — a constructor family: a `TypeConstructor`
   member over its declared parameter names, so an application has a declared
   referent a koan program can write. A one-parameter family wraps a payload of
   its parameter's type; a wider one constructs nothing;
 - `UNION Maybe = #{Some: Number, None: Null}` — the canonical union of one
   member per variant, the binder owning them all: each key quotes a tag, and each
   value the payload's type;
-- `UNION (Elem AS Option) = #{Some: Elem, None: Null}` — the same, each variant a
+- `UNION (Elem -> Option) = #{Some: Elem, None: Null}` — the same, each variant a
   [family](#families) over the declarator's parameters;
 - `SIG HasLabel = #[(VAL label :Str)]` — a signature;
 - `LET Alias = Number` in the type channel — its right-hand side's type.
@@ -266,7 +266,7 @@ node the shape recorded for it — [`BodyShape::declarations`](../scope/README.m
 by slot — and off that node's own
 [builtin shape](../parse/README.md#the-builtin-shape-table-one-typed-entry-every-fact)
 roles, so the table stays the one authority on what a form's parts are and a
-`NEWTYPE (… AS …)`, which has no definition part, needs no case of its own.
+`NEWTYPE (… -> …)`, which has no definition part, needs no case of its own.
 
 **The caller binds.** The door takes no writer: it hands back `Copy` handles, and
 minting each member's type value and naming the region it lives in are the layer
@@ -300,7 +300,7 @@ window. This is the type channel's restatement of the nominal cut
 A family member's schema is the type a construction through it wraps — its
 **representation** — written over one quantifier per parameter, the parameters
 indexed in symbol order, which is the order the member stores them in. A
-`NEWTYPE (Type AS Boxed)` family's representation is its one quantifier; a wider
+`NEWTYPE (Type -> Boxed)` family's representation is its one quantifier; a wider
 `NEWTYPE` family has none, since a payload would have nothing to infer a second
 argument from.
 
@@ -315,13 +315,13 @@ list — is refused rather than given an unsound order.
 
 A fellow carries the parameter names of the family it names, so a family
 applies itself or a fellow family inside its own component while the window is
-still open: `UNION (Elem AS Tree) = #{Leaf: Null, Node: :{value :Elem, left :(Elem AS Tree), right :(Elem AS Tree)}}`
+still open: `UNION (Elem -> Tree) = #{Leaf: Null, Node: :{value :Elem, left :(Elem -> Tree), right :(Elem -> Tree)}}`
 and a `Tree`/`Forest` ring both declare. Applying a union binder per member is
 the elaborator's alone: the lattice's own `constructor_param_names` answers
 nothing for a union.
 
 [`builtin_result`](builtin.rs) seals the builtin `Result` through the window
-`UNION (Ok Error AS Result) = #{Ok: Ok, Error: Error}` seals through, so the
+`UNION (Ok Error -> Result) = #{Ok: Ok, Error: Error}` seals through, so the
 builtin and a declared `Result` are one handle.
 
 What a construction through a family carries is the construction rule's
@@ -541,7 +541,7 @@ refuses where it reads the arm set.
 A `MATCH … UNDER` clause's variants are the members of its `Union` type node, in
 stored order ([`variants`](variants.rs)). A label names the member of its name: a
 declared variant by its own name, and a variant applied to arguments,
-`:(Number AS Option)`'s `Some`, by its constructor's. A structural member,
+`:(Number -> Option)`'s `Some`, by its constructor's. A structural member,
 `Number` in `:(Maybe | Number)`, has no name, so no label names it and only `_`
 covers it. [`arms_under`](variants.rs) checks each `MATCH … UNDER` whose clause
 the walk closes, beside the guards: a clause that is no `Union` node refuses as
@@ -554,9 +554,16 @@ one over a `FOR ALL` name — before any arm is selected under it, never where t
 A variant's identity is its name, kind and payload, not its union: it unifies
 with its standalone twin ([identity](../../lattice/src/types/identity.md)). So a
 one-variant `UNION` is the same type as its variant, and is refused where it is
-declared, and a clause over a `FOR ALL` name a call binds to a freshly built
-variant — `PICK (Maybe.Some 3)` over `MATCH x UNDER Un` — reads the variant,
-which is no union, and refuses as `NotUnion`.
+declared, and a lone variant is no union. The union a construction belongs to
+is a fact of the path that spells it: a construction through a union binder is
+at most the union the path reaches the variant through — `(Maybe.Some 3)` at
+most `Maybe`, `(Shape.Sized.Some 3)` at most `Maybe` where `Sized`'s payload is
+`Maybe`, and a construction through a [family](#families)'s variant at most the
+union applied at what the payload's static upper end pins, each parameter the
+payload says nothing about at `Never` — while the value still carries the
+variant ([static types](../dispatch/README.md#static-types)). So a clause over a
+`FOR ALL` name a call binds at such a construction — `PICK (Maybe.Some 3)` over
+`MATCH x UNDER Un` — reads the union, and the check runs under it.
 
 **Refusals.** A closed type that does not elaborate refuses the load as
 `ShapeError::Type`, located at the part the refusal is about, else at the type

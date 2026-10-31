@@ -27,7 +27,7 @@ fn boxed_at(
 fn a_nested_family_construction_takes_its_solved_application() {
     with_fixture(|fixture| {
         let lines = fixture.parse(
-            "NEWTYPE (Type AS Boxed)\nLET a = [(Boxed 7) f]\nLET f = (FN :{} -> Any = #(a))",
+            "NEWTYPE (Type -> Boxed)\nLET a = [(Boxed 7) f]\nLET f = (FN :{} -> Any = #(a))",
         );
         fixture.in_cell(pin, |context| {
             let types = &fixture.tiers.of(context);
@@ -51,7 +51,7 @@ fn a_nested_family_construction_takes_its_solved_application() {
 fn a_family_node_derives_its_type_from_its_payload() {
     with_fixture(|fixture| {
         let lines = fixture
-            .parse("NEWTYPE (Type AS Boxed)\nLET a = (Boxed [f])\nLET f = (FN :{} -> Any = #(a))");
+            .parse("NEWTYPE (Type -> Boxed)\nLET a = (Boxed [f])\nLET f = (FN :{} -> Any = #(a))");
         fixture.in_cell(pin, |context| {
             let types = &fixture.tiers.of(context);
             let activation = fixture.run(context.writer(), types, &lines, &[]);
@@ -69,7 +69,7 @@ fn a_family_node_derives_its_type_from_its_payload() {
 #[test]
 fn a_cycle_through_a_family_construction_alone_refuses() {
     with_fixture(|fixture| {
-        let lines = fixture.parse("NEWTYPE (Type AS Boxed)\nLET a = (Boxed [a])");
+        let lines = fixture.parse("NEWTYPE (Type -> Boxed)\nLET a = (Boxed [a])");
         fixture.in_cell(pin, |context| {
             let types = &fixture.tiers.of(context);
             let writer = context.writer();
@@ -88,9 +88,9 @@ fn a_cycle_through_a_family_construction_alone_refuses() {
 fn a_family_construction_the_rule_refuses_refuses_the_tie() {
     with_fixture(|fixture| {
         let lines = fixture.parse(
-            "UNION (Elem AS Opt) = #{Some: :{value :Elem}, None: Null}\nLET SomeOf = :(Opt.Some)\n\
+            "UNION (Elem -> Opt) = #{Some: :{value :Elem}, None: Null}\nLET SomeOf = :(Opt.Some)\n\
              LET a = (SomeOf {other = f})\nLET f = (FN :{} -> Any = #(a))\n\
-             NEWTYPE (Key Val AS Pair)\nLET c = (Pair [g])\nLET g = (FN :{} -> Any = #(c))",
+             NEWTYPE (Key Val -> Pair)\nLET c = (Pair [g])\nLET g = (FN :{} -> Any = #(c))",
         );
         fixture.in_cell(pin, |context| {
             let types = &fixture.tiers.of(context);

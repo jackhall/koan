@@ -7,7 +7,7 @@ use crate::type_lattice::KType;
 use super::super::{variant_label, variant_named, variants};
 use super::{Program, brought};
 
-const OPTION: &str = "UNION (Elem AS Option) = #{Some: Elem, None: Null}";
+const OPTION: &str = "UNION (Elem -> Option) = #{Some: Elem, None: Null}";
 
 /// The labels of `union`'s variants, in stored order.
 fn labels(program: &Program<'_, '_, '_>, union: KType) -> Vec<String> {
@@ -25,7 +25,7 @@ fn a_unions_variants_are_its_members_each_named_by_its_label() {
     brought(
         &format!(
             "UNION Maybe = #{{Some: Number, None: Null}}\n{OPTION}\n\
-             LET NumberOption = :(Number AS Option)\nLET Mixed = :(Maybe | Number)\n\
+             LET NumberOption = :(Number -> Option)\nLET Mixed = :(Maybe | Number)\n\
              NEWTYPE Meters = Number"
         ),
         |program| {

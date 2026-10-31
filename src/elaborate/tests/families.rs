@@ -13,9 +13,9 @@ use super::super::{builtin_error, builtin_result};
 use super::{Program, brought, declared};
 use crate::scope::Elaboration;
 
-const RESULT: &str = "UNION (Ok Error AS Result) = #{Ok: Ok, Error: Error}";
-const OPTION: &str = "UNION (Elem AS Option) = #{Some: Elem, None: Null}";
-const TREE: &str = "UNION (Elem AS Tree) = #{Leaf: Null, Node: :{value :Elem, left :(Elem AS Tree), right :(Elem AS Tree)}}";
+const RESULT: &str = "UNION (Ok Error -> Result) = #{Ok: Ok, Error: Error}";
+const OPTION: &str = "UNION (Elem -> Option) = #{Some: Elem, None: Null}";
+const TREE: &str = "UNION (Elem -> Tree) = #{Leaf: Null, Node: :{value :Elem, left :(Elem -> Tree), right :(Elem -> Tree)}}";
 
 /// The variant `tag` of the union `binder` is bound to.
 fn variant(program: &Program<'_, '_, '_>, binder: &str, tag: &str) -> KType {
@@ -121,7 +121,7 @@ fn a_union_head_applies_per_variant() {
     brought(
         &format!(
             "{RESULT}\n{OPTION}\nLET Both = :(Result {{Ok = Number, Error = Str}})\n\
-             LET NumberOption = :(Number AS Option)\n\
+             LET NumberOption = :(Number -> Option)\n\
              LET Just = :(Result.Ok {{Ok = Number, Error = Str}})"
         ),
         |program| {
@@ -155,10 +155,10 @@ fn a_union_head_applies_per_variant() {
 fn constructing_through_a_family_solves_its_parameters() {
     brought(
         &format!(
-            "{RESULT}\n{OPTION}\nNEWTYPE (Type AS Boxed)\n\
+            "{RESULT}\n{OPTION}\nNEWTYPE (Type -> Boxed)\n\
              LET Both = :(Result {{Ok = Number, Error = Str}})\n\
              LET Strings = :(Result {{Ok = Str, Error = Str}})\n\
-             LET NumberOption = :(Number AS Option)\nLET BoxedNumber = :(Number AS Boxed)"
+             LET NumberOption = :(Number -> Option)\nLET BoxedNumber = :(Number -> Boxed)"
         ),
         |program| {
             let (types, scratch) = (program.types, program.scratch);
@@ -232,8 +232,8 @@ fn a_tree_is_a_recursive_family() {
         );
     });
     brought(
-        "UNION (Elem AS Tree) = #{Leaf: Null, Branch: :{value :Elem, kids :(Elem AS Forest)}}\n\
-         UNION (Elem AS Forest) = #{Nil: Null, Cons: :{head :(Elem AS Tree), tail :(Elem AS Forest)}}",
+        "UNION (Elem -> Tree) = #{Leaf: Null, Branch: :{value :Elem, kids :(Elem -> Forest)}}\n\
+         UNION (Elem -> Forest) = #{Nil: Null, Cons: :{head :(Elem -> Tree), tail :(Elem -> Forest)}}",
         |program| {
             let (_, params) = family(&program, variant(&program, "Forest", "Cons"));
             assert_eq!(params, [program.type_name("Elem")]);
@@ -247,16 +247,16 @@ fn a_family_declaration_is_refused() {
     for (source, left) in [
         // An application is covariant in its arguments.
         (
-            "UNION (Elem AS Sink) = #{Take: :(FN :{x :Elem} -> Null), None: Null}",
+            "UNION (Elem -> Sink) = #{Take: :(FN :{x :Elem} -> Null), None: Null}",
             "Sink",
         ),
         (
-            "UNION (Elem Elem AS Twice) = #{One: Elem, None: Null}",
+            "UNION (Elem Elem -> Twice) = #{One: Elem, None: Null}",
             "Twice",
         ),
         // A family's parameters take no bound.
         (
-            "UNION ((Elem AS Opt) UNDER Any) = #{Some: Number, None: Null}",
+            "UNION ((Elem -> Opt) UNDER Any) = #{Some: Number, None: Null}",
             "Opt",
         ),
         (
@@ -278,14 +278,14 @@ fn a_family_declaration_is_refused() {
     }
     // A parameter at a covariant position declares, however many flips put it there.
     for source in [
-        "UNION (Elem AS Source) = #{Give: :(FN :{} -> Elem), None: Null}",
-        "UNION (Elem AS Wrapper) = #{Nest: :(FN :{f :(FN :{x :Elem} -> Null)} -> Null), None: Null}",
+        "UNION (Elem -> Source) = #{Give: :(FN :{} -> Elem), None: Null}",
+        "UNION (Elem -> Wrapper) = #{Nest: :(FN :{f :(FN :{x :Elem} -> Null)} -> Null), None: Null}",
     ] {
         brought(source, |_| ());
     }
     // A construction solves the parameters from its payload, which either member admits alike.
     declared(
-        "UNION (Left Right AS Either) = #{One: :(Left | Right), None: Null}",
+        "UNION (Left Right -> Either) = #{One: :(Left | Right), None: Null}",
         |program, brought| {
             assert!(
                 matches!(brought, Err(Elaboration::TiedUnion { .. })),

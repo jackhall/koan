@@ -24,7 +24,7 @@
 //! `EXPR #(head) -> Ret` with and without `FOR ALL` and ranked where a signature member writes an
 //! integer in a slot's place, a union `A | B` and a meet `A & B` of members, a record type `:{…}`, a union member `Union.Tag`,
 //! the declared type of a record's field `Record.field`, and a constructor application `Pair {Key =
-//! Number}` with its arity-one sugar `Number AS Wrap`. A name a `FOR ALL` group declares is that
+//! Number}` with its arity-one sugar `Number -> Wrap`. A name a `FOR ALL` group declares is that
 //! group's quantifier, bounded by what `(Name UNDER <bound>)` writes or else by `Any`, and is never
 //! a mention; a `SIG`'s head group (`SIG <Name> FOR ALL <group> = …`) bounds each head parameter
 //! the same way. Every other spelling is [`Unsupported`].

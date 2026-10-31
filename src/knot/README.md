@@ -241,7 +241,7 @@ solves from its payload's memo. So the tie derives memos over the strongly
 connected components of the edges between derived nodes, referents first,
 reading a declared memo at every cut. A cycle of derived nodes alone has no
 finite type and refuses the tie as `TypeCycle`, naming the members whose
-right-hand sides hold it: `LET a = (Boxed [a])` over `NEWTYPE (Type AS Boxed)`
+right-hand sides hold it: `LET a = (Boxed [a])` over `NEWTYPE (Type -> Boxed)`
 refuses, while `LET a = (Boxed [f])` with `f` a function capturing `a` ties
 with `a : :(Boxed {Type = LIST OF <f's type>})`. A spread contributes its
 source's element type to its list's memo, and its edge is an edge between

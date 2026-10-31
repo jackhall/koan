@@ -57,7 +57,7 @@ pub(super) enum Desc {
 
 /// The nominal types [`retyped_type`] draws from, declared ahead of a program that names them.
 pub(super) const NOMINALS: &str = "NEWTYPE Boxed = Number\n\
-                                   NEWTYPE (Type AS Wrap)\n\
+                                   NEWTYPE (Type -> Wrap)\n\
                                    UNION Maybe = #{Some: Number, None: Null}";
 
 pub(super) fn desc() -> BoxedStrategy<Desc> {
@@ -250,7 +250,7 @@ pub(super) fn spelled(desc: &Desc, variables: &[&str]) -> String {
         Desc::Union(a, b) => format!("({} | {})", spelled(a, variables), spelled(b, variables)),
         Desc::Dict(value) => format!(":(MAP Str -> {})", spelled(value, variables)),
         Desc::Boxed => "Boxed".to_string(),
-        Desc::Wrapped(inner) => format!(":({} AS Wrap)", spelled(inner, variables)),
+        Desc::Wrapped(inner) => format!(":({} -> Wrap)", spelled(inner, variables)),
         Desc::Maybe => "Maybe".to_string(),
         Desc::MaybeSome => "Maybe.Some".to_string(),
     }

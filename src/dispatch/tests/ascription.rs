@@ -70,7 +70,7 @@ fn an_ascription_a_value_misses_is_a_fault() {
 
 #[test]
 fn a_tagged_value_takes_the_application_it_lies_under() {
-    let source = "NEWTYPE (Type AS Boxed)\n\
+    let source = "NEWTYPE (Type -> Boxed)\n\
                   LET b = (Boxed 7)\n\
                   EXPR #(KIND x :(Boxed {Type = :(Number | Str)})) -> Str = #(\"number or str\")\n\
                   EXPR #(KIND x :Boxed) -> Str = #(\"boxed\")\n\
@@ -297,7 +297,7 @@ fn a_call_is_exact_at_its_callee_s_return() {
          LET anys = (FN :{{}} -> :(LIST OF Any) = #([1]))\n\
          EXPR FOR ALL #[Elt] #(SAME xs :(LIST OF Elt)) -> :(LIST OF Elt) = #(xs)\n\
          LET ys = ([1] :! (LIST OF (Number | Str)))\n\
-         NEWTYPE (Type AS Boxed)\n\
+         NEWTYPE (Type -> Boxed)\n\
          EXPR #(BOX) -> Boxed = #((Boxed 7))\n\
          LET keyworded = (ANYS)\n\
          LET by_name = (anys {{}})\n\
@@ -405,7 +405,7 @@ fn a_call_in_tail_position_is_typed_as_any_call() {
 #[test]
 fn a_container_or_nominal_parameter_is_exact() {
     loaded(
-        "NEWTYPE (Type AS Boxed)\n\
+        "NEWTYPE (Type -> Boxed)\n\
          NEWTYPE Distance = Number\n\
          UNION Maybe = #{Some: Number, None: Null}\n\
          LET f = (FN :{xs :(LIST OF Any), r :{x :Number}, d :(MAP Str -> Number), \
@@ -440,7 +440,7 @@ fn a_container_or_nominal_parameter_is_exact() {
 }
 
 /// The `KIND` overloads a nominal test dispatches a boxed value through.
-const KIND: &str = "NEWTYPE (Type AS Boxed)\n\
+const KIND: &str = "NEWTYPE (Type -> Boxed)\n\
                     UNION Maybe = #{Some: Number, None: Null}\n\
                     EXPR #(KIND x :(Boxed {Type = :(Number | Str)})) -> Str = #(\"number or str\")\n\
                     EXPR #(KIND x :Boxed) -> Str = #(\"boxed\")\n";

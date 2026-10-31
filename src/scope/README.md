@@ -438,7 +438,7 @@ inside one of its heads declares its quantifiers, bounded or not;
 a manifest `LET` member declares its name, so a later `VAL` naming it is no
 mention either; a union's tags name its variants and are no mentions, while
 each payload quote is read as a type expression; and a parameterized
-`UNION (Elem AS Option) = #{Some: Elem, …}` declares `Elem` in its declarator,
+`UNION (Elem -> Option) = #{Some: Elem, …}` declares `Elem` in its declarator,
 so a variant payload naming it is no mention. Every name a definition declares is the definition's own, and
 the declaration door resolves it against the definition it is elaborating.
 
@@ -1412,8 +1412,10 @@ program only for a `$` name nothing binds where the quote is written:
 - a **lone variant** — a `UNION` declaring one variant, whose message points at
   `NEWTYPE`;
 - a **malformed** form — a quote where bare syntax is read (`LET #(x) = 1`,
-  `MODULE m = #(…)`, `CATCH #(x)`), or a body that is not the shape its form
-  declares;
+  `MODULE m = #(…)`, `CATCH #(x)`), a body that is not the shape its form
+  declares, or a `UNION` or `NEWTYPE` name slot that is neither a bare name nor
+  a family head — one or more type names, `->`, then the name it declares
+  (`NEWTYPE (Key Val Pair)`);
 - a **dict default** — a value dict holding a `_` key, refused until its default
   has a reading (see [Open work](#open-work)); an arm set's `_` is its default
   arm;

@@ -54,7 +54,7 @@ pub(crate) fn declare_quantifiers(part: &ExpressionPart<'_>, into: &mut BumpVec<
     into.extend(quantifier_entries(part).filter_map(|entry| entry.name.map(BinderSymbol::Type)));
 }
 
-/// Push every type parameter a `(<P>… AS <Name>)` declarator names onto `into` — a parameterized
+/// Push every type parameter a `(<P>… -> <Name>)` family head names onto `into` — a parameterized
 /// `UNION`'s, which its variants' payloads read.
 pub(crate) fn declare_family_parameters(
     part: &ExpressionPart<'_>,

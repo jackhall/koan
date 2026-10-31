@@ -53,7 +53,7 @@ static OK: StaticName<TypeSymbol> = crate::static_name!(TypeSymbol, "Ok");
 static ERROR: StaticName<TypeSymbol> = crate::static_name!(TypeSymbol, "Error");
 static MESSAGE: StaticName<ValueSymbol> = crate::static_name!(ValueSymbol, "message");
 
-/// The builtin `Result`: the union `UNION (Ok Error AS Result) = (Ok :Ok Error :Error)` declares,
+/// The builtin `Result`: the union `UNION (Ok Error -> Result) = (Ok :Ok Error :Error)` declares,
 /// sealed through the window that declaration seals through, its names recorded in `symbols`.
 /// Each variant is a family over both parameters wrapping the one it is named for.
 pub fn builtin_result(

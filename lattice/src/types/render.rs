@@ -390,7 +390,7 @@ fn write_param_record<'run>(
     Ok(())
 }
 
-/// `FOR ALL #{Elt: Number} #(PURE _ :Elt) -> :(Elt AS Wrap)` — an expression shape's surface below
+/// `FOR ALL #{Elt: Number} #(PURE _ :Elt) -> :(Elt -> Wrap)` — an expression shape's surface below
 /// the `:(EXPR …)` wrapper. The one spelling of a shape, shared by the type surface and by the head
 /// a signature's rendered member is named with, so a declaration and the error naming it read
 /// alike.

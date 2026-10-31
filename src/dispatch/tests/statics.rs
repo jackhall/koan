@@ -196,7 +196,7 @@ fn a_construction_has_the_identity_it_builds() {
         "Meters"
     );
     assert_eq!(
-        top("NEWTYPE (Type AS Boxed)\nLET b = (Boxed 7)", "b"),
+        top("NEWTYPE (Type -> Boxed)\nLET b = (Boxed 7)", "b"),
         ":(Boxed {Type = Number})"
     );
 }

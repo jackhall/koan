@@ -317,10 +317,13 @@ fn a_bound_is_read_off_its_declarator() {
         |source: &str| type_decl_binder_name(&parse_one(brand, source)).map(|name| name.symbol());
     assert_eq!(declared("TYPE (Elt UNDER Value)"), Some(Symbol::of("Elt")));
     assert_eq!(
-        declared("TYPE ((Elem AS Wrap) UNDER Value)"),
+        declared("TYPE ((Elem -> Wrap) UNDER Value)"),
         Some(Symbol::of("Wrap"))
     );
-    assert_eq!(declared("TYPE (Elem AS Wrap)"), Some(Symbol::of("Wrap")));
+    assert_eq!(declared("TYPE (Elem -> Wrap)"), Some(Symbol::of("Wrap")));
+    // A head is parameters, `->`, then the name: no other connector, and none missing.
+    assert_eq!(declared("TYPE (Elem AS Wrap)"), None);
+    assert_eq!(declared("TYPE (Elem Wrap)"), None);
 
     let group = |source: &str| entries(&parse_one(brand, source).parts[3].value);
     let (elt, key) = (Symbol::of("Elt"), Symbol::of("Key"));

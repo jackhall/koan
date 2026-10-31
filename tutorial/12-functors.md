@@ -398,20 +398,20 @@ both
 A module defining `PUSH` only at `Number` fits `Stack` and
 `Stack WITH {Elt = Number}`, but not `Stack WITH {Elt = Str}`.
 
-## Declaring a type constructor: `NEWTYPE (Type AS Wrap)`
+## Declaring a type constructor: `NEWTYPE (Type -> Wrap)`
 
-A type that takes a type is a **type constructor**: `NEWTYPE (Type AS Wrapper)`
-declares one named `Wrapper`. It reads like the application `:(Number AS Wrapper)` with the
+A type that takes a type is a **type constructor**: `NEWTYPE (Type -> Wrapper)`
+declares one named `Wrapper`. It reads like the application `:(Number -> Wrapper)` with the
 concrete type replaced by the placeholder `Type`.
 
 Once declared, `Wrapper` wraps a value of any type, and the result carries the
-*applied* type `:(<value's type> AS Wrapper)` — so you can dispatch on what's inside
+*applied* type `:(<value's type> -> Wrapper)` — so you can dispatch on what's inside
 the box:
 
 ```koan
-NEWTYPE (Type AS Boxed)
-EXPR #(OPEN b :(Number AS Boxed)) -> Str = #("a boxed number")
-EXPR #(OPEN b :(Str AS Boxed)) -> Str = #("a boxed string")
+NEWTYPE (Type -> Boxed)
+EXPR #(OPEN b :(Number -> Boxed)) -> Str = #("a boxed number")
+EXPR #(OPEN b :(Str -> Boxed)) -> Str = #("a boxed string")
 PRINT (OPEN (Boxed (7)))
 PRINT (OPEN (Boxed ("hi")))
 ```
@@ -421,17 +421,17 @@ a boxed number
 a boxed string
 ```
 
-`Boxed (7)` builds a value whose type is `:(Number AS Boxed)`, and `Boxed ("hi")`
-one of type `:(Str AS Boxed)`, so the two `OPEN` overloads dispatch on the boxed
+`Boxed (7)` builds a value whose type is `:(Number -> Boxed)`, and `Boxed ("hi")`
+one of type `:(Str -> Boxed)`, so the two `OPEN` overloads dispatch on the boxed
 type exactly as ordinary overloads dispatch on a plain argument type.
 
 ## More than one parameter: `:(Ctor {Name = Type, …})`
 
-A constructor can take several parameters — list them all before the `AS`. Applying
+A constructor can take several parameters — list them all before the `->`. Applying
 one binds each parameter by name, in a brace literal:
 
 ```koan
-NEWTYPE (Key Val AS Pair)
+NEWTYPE (Key Val -> Pair)
 LET NumToStr = :(Pair {Key = Number, Val = Str})
 PRINT NumToStr
 ```
@@ -445,35 +445,39 @@ the same type. Supplying a key the constructor doesn't declare, or leaving one o
 is an error that names the offending keys. The built-in `Result` is applied the same
 way: `:(Result {Ok = Number, Error = Str})`.
 
-`:(Number AS Boxed)` is shorthand for the one-parameter case — it fills the
+`:(Number -> Boxed)` is shorthand for the one-parameter case — it fills the
 constructor's only parameter, so it means exactly `:(Boxed {Type = Number})`. A
 constructor with two or more parameters has to use the brace form, and it can only be
 used in *type* position: `Boxed (7)` wraps one value and infers one type argument, so
 there is nothing for a second parameter to be inferred from.
 
-## Unions over type parameters: `UNION (Elem AS Option)`
+A bare `->` in a type is always this application: a function type starts with `FN`,
+as in `:(FN :{x :Number} -> Str)`. An argument that is itself a function or map type
+goes in parentheses of its own — `:((MAP Str -> Number) -> Boxed)`.
 
-A union can take type parameters too. List them before the `AS`, as for
+## Unions over type parameters: `UNION (Elem -> Option)`
+
+A union can take type parameters too. List them before the `->`, as for
 `NEWTYPE`, and name them in the variants' payload types:
 
 ```koan
-UNION (Elem AS Option) = #{Some: Elem, None: Null}
-UNION (Elem AS Tree) = #{Leaf: Null, Node: :{value :Elem, left :(Elem AS Tree), right :(Elem AS Tree)}}
+UNION (Elem -> Option) = #{Some: Elem, None: Null}
+UNION (Elem -> Tree) = #{Leaf: Null, Node: :{value :Elem, left :(Elem -> Tree), right :(Elem -> Tree)}}
 ```
 
 Each variant is a type constructor over *all* of the union's parameters, and a
 payload may apply the union itself, as `Tree`'s `Node` does. Applying the union
-applies every variant at once: `:(Number AS Option)` admits a `Some` holding a
+applies every variant at once: `:(Number -> Option)` admits a `Some` holding a
 number and a `None`, and `:(Result {Ok = Number, Error = Str})` either variant of
 the built-in `Result`, which is declared this way:
-`UNION (Ok Error AS Result) = #{Ok: Ok, Error: Error}`.
+`UNION (Ok Error -> Result) = #{Ok: Ok, Error: Error}`.
 
 A value built through a variant infers each parameter from its payload, and a
 parameter the payload says nothing about is `Never`. `Option.Some 1` has type
 `:(Option.Some {Elem = Number})`, and `Option.None null` has type
 `:(Option.None {Elem = Never})`. An applied constructor accepts anything built at
-narrower arguments, so that `None` fits `:(Number AS Option)` and
-`:(Str AS Option)` alike, and every one of these values fits the bare `Option`.
+narrower arguments, so that `None` fits `:(Number -> Option)` and
+`:(Str -> Option)` alike, and every one of these values fits the bare `Option`.
 A payload that can't be read as the variant's type — a `Tree.Node` whose record
 has no `left` field, or whose `value` is a number while its `left` holds strings
 — is an error naming the variant and the payload's type.
@@ -491,8 +495,8 @@ same way at *every* type, write it once and quantify over the type instead. A
 head, and the names it lists can be used by the slots and the return:
 
 ```koan
-NEWTYPE (Type AS Boxed)
-EXPR FOR ALL #[Elt] #(BOX x :Elt) -> :(Elt AS Boxed) = #(Boxed (x))
+NEWTYPE (Type -> Boxed)
+EXPR FOR ALL #[Elt] #(BOX x :Elt) -> :(Elt -> Boxed) = #(Boxed (x))
 PRINT (BOX 7)
 PRINT (BOX "hi")
 ```
@@ -504,7 +508,7 @@ PRINT (BOX "hi")
 
 One definition answered both calls. Each call works out what `Elt` stands for from
 the type of the argument you passed — `BOX 7` reads `Elt = Number` and returns a
-`:(Number AS Boxed)`, `BOX "hi"` reads `Elt = Str`. Nothing is written at the call
+`:(Number -> Boxed)`, `BOX "hi"` reads `Elt = Str`. Nothing is written at the call
 site to say so, and the body can use `Elt` as an ordinary type name. A name your
 arguments never mention has nothing to be worked out from, so it stands for its
 [bound](#bounding-a-type-parameter) — `Any`, unless you give it another.

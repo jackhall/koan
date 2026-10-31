@@ -16,7 +16,7 @@ use crate::parse::BuiltinShapeId;
 use crate::parse::{DefinitionKind, Role};
 use crate::parse::{ExpressionPart, KExpression};
 use crate::parse::{
-    bounded, declarator_parameters, quoted_body, quoted_part, symbol_from_quote_body,
+    bounded, declarator_parameters, family_head, quoted_body, quoted_part, symbol_from_quote_body,
 };
 use crate::scope::{BodyShape, BuiltinGroup, Component, Elaboration, Site, Which, is_equality};
 use crate::symbols::{KeywordSymbol, TypeSymbol};
@@ -45,7 +45,7 @@ pub fn declares_nominal(node: &KExpression<'_>) -> bool {
 }
 
 /// One `KType` per member of `component`, in member order: a `NEWTYPE`'s newtype over its
-/// representation, a `NEWTYPE (Key Val AS Pair)`'s constructor family, a `UNION`'s canonical union
+/// representation, a `NEWTYPE (Key Val -> Pair)`'s constructor family, a `UNION`'s canonical union
 /// over its variants — each variant a family over the union's parameters when its declarator names
 /// any — a `SIG`'s signature, and a `LET` of a type name's type expression.
 ///
@@ -258,13 +258,13 @@ enum Declared<'graph, 'x> {
         repr: &'graph ExpressionPart<'graph>,
     },
     /// `UNION <Name> = #{<Tag>: <payload>, …}`: one window member per variant, the binder itself
-    /// denoting their union. `UNION (<P>… AS <Name>) = …` declares `params`, symbol-sorted, and
+    /// denoting their union. `UNION (<P>… -> <Name>) = …` declares `params`, symbol-sorted, and
     /// makes each variant a family over them; a bare name declares none.
     Union {
         variants: &'x [(TypeSymbol, &'graph ExpressionPart<'graph>)],
         params: &'x [TypeSymbol],
     },
-    /// `NEWTYPE (<P>… AS <Name>)`: one window member, a constructor family over its declared
+    /// `NEWTYPE (<P>… -> <Name>)`: one window member, a constructor family over its declared
     /// parameter names, symbol-sorted — the identity wrapper over its argument, which a
     /// construction builds only when there is one parameter.
     Family { params: &'x [TypeSymbol] },
@@ -333,8 +333,9 @@ impl<'graph, 'x> Declaration<'graph, 'x> {
             _ => return Err(unsupported),
         };
         let name = match form.id {
-            BuiltinShapeId::NewTypeDeclaration => last_type_name(name_part),
-            BuiltinShapeId::Union if declarator => last_type_name(name_part),
+            BuiltinShapeId::NewTypeDeclaration | BuiltinShapeId::Union if declarator => {
+                family_head(name_part).map(|(_, name)| name)
+            }
             _ => match name_part {
                 ExpressionPart::Type(name) => Some(*name),
                 _ => None,
@@ -438,7 +439,7 @@ fn variants<'graph, 'x>(
     Some(pairs.leak())
 }
 
-/// The parameter names of a `(<P>… AS <Name>)` declarator, symbol-sorted — the order a family's
+/// The parameter names of a `(<P>… -> <Name>)` declarator, symbol-sorted — the order a family's
 /// quantifiers index. A repeated name, or none, is refused.
 fn parameters<'x>(
     part: &ExpressionPart<'_>,
@@ -453,17 +454,6 @@ fn parameters<'x>(
     }
     names.sort_unstable();
     (!names.is_empty()).then(|| &*names.leak())
-}
-
-/// The name a `(<P>… AS <Name>)` declarator binds: the run's last `Type` part.
-fn last_type_name(part: &ExpressionPart<'_>) -> Option<TypeSymbol> {
-    let ExpressionPart::Expression(run) = part else {
-        return None;
-    };
-    match run.parts.last()?.value {
-        ExpressionPart::Type(name) => Some(name),
-        _ => None,
-    }
 }
 
 /// A `SIG`'s signature over its head group and its body's declarators, in source order.

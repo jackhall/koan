@@ -381,7 +381,7 @@ fn a_non_commuting_spelling_is_left_for_the_run() {
                   (:(Elt & Number)) \
                   (:(Elt.x)) \
                   (:(FN :{y :Number, z :Elt} -> Number)) \
-                  (:(Number AS Elt)) \
+                  (:(Number -> Elt)) \
                   (:(Elt NEEDING #[y])) \
                   (:(Number & Str)))";
     loaded(source, |program| {

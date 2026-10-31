@@ -3,7 +3,7 @@
 A head parameter or a `FOR ALL` name ranging over a type constructor, and a
 constructor application that leaves a parameter open.
 
-**Problem.** A family — `NEWTYPE (Type AS Wrap)`, or a parameterized `UNION` —
+**Problem.** A family — `NEWTYPE (Type -> Wrap)`, or a parameterized `UNION` —
 is applied only at a declared referent: the
 [elaborator](../../src/elaborate/README.md#what-a-type-expression-is) refuses an
 application whose head names a `FOR ALL` variable or a signature's head
@@ -20,10 +20,10 @@ spelling, `#{Elt: Number}`, writes a bound per name and nothing else
 **Acceptance criteria.**
 
 - A quantifier group declares a family variable as a declarator declares a
-  family: `SIG Monad FOR ALL #[(Type AS Wrap)] = #[…]` and
-  `EXPR FOR ALL #[Elt (Type AS Wrap)] …` declare `Wrap` over one parameter, and
-  `(Key Val AS Wrap)` over two, named.
-- An application headed by a family variable elaborates: `:(Elt AS Wrap)` as the
+  family: `SIG Monad FOR ALL #[(Type -> Wrap)] = #[…]` and
+  `EXPR FOR ALL #[Elt (Type -> Wrap)] …` declare `Wrap` over one parameter, and
+  `(Key Val -> Wrap)` over two, named.
+- An application headed by a family variable elaborates: `:(Elt -> Wrap)` as the
   one-parameter shorthand, and `:(Wrap {Key = Elt, Val = Str})` pairing by the
   names the variable declares, which fall positionally onto the solved family's
   parameters in its declared order.
@@ -32,8 +32,8 @@ spelling, `#{Elt: Number}`, writes a bound per name and nothing else
   handle, and every other member is checked under that solution. A member's
   type contributes nothing to a family variable's solve.
 - Substituting a family for a variable head rebuilds the application through
-  the door a written application goes through, so `:(Elt AS Wrap)` under
-  `Wrap = Option` is the one handle `:(Elt AS Option)` elaborates to, a
+  the door a written application goes through, so `:(Elt -> Wrap)` under
+  `Wrap = Option` is the one handle `:(Elt -> Option)` elaborates to, a
   parameterized union's variants applied at once.
 - A `FOR ALL` family variable on a callable is solved where a slot pins it
   through a signature application, `#(LIFT m :(Monad WITH {Wrap = Wrap}) …)`,
@@ -44,7 +44,7 @@ spelling, `#{Elt: Number}`, writes a bound per name and nothing else
   instances through that one slot.
 - A constructor application may leave a parameter open, and the result is a
   family over the parameters left open: `Result` pinned at `Error = Str` is a
-  one-parameter family over `Ok`, and stands where `(Type AS Wrap)` is asked.
+  one-parameter family over `Ok`, and stands where `(Type -> Wrap)` is asked.
 - An application headed by a family variable is covariant in its arguments, as
   every family is in its parameters.
 
@@ -58,7 +58,7 @@ spelling, `#{Elt: Number}`, writes a bound per name and nothing else
   `type 'a t = 'a option` does (Leroy, *Manifest types, modules, and separate
   compilation*, 1994).
 - *The dict spelling — open.* A family takes no bound, so whether
-  `#{Elt: Number, (Type AS Wrap): Any}` is admitted at the bound `Any` alone, or
+  `#{Elt: Number, (Type -> Wrap): Any}` is admitted at the bound `Any` alone, or
   a family variable is written only in the list spelling.
 - *The partial application's spelling — open.* `:(Result {Error = Str})`, which
   relaxes the refusal of an application missing a key, or an explicit marker for

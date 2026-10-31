@@ -272,7 +272,7 @@ fn an_arms_it_dispatches_at_its_guard() {
 
 #[test]
 fn a_match_under_a_union_unwraps_the_variant() {
-    let option = "UNION (Elem AS Option) = #{Some: Elem, None: Null}";
+    let option = "UNION (Elem -> Option) = #{Some: Elem, None: Null}";
     assert_eq!(
         run(&format!(
             "{option}\nPRINT (MATCH (Option.Some 1) UNDER Option WITH #{{Some: (it), None: (0)}})"
@@ -281,7 +281,7 @@ fn a_match_under_a_union_unwraps_the_variant() {
     );
     assert_eq!(
         run(&format!(
-            "{option}\nLET f = (FN :{{x :(Number AS Option)}} -> Number = #(MATCH x UNDER (Number AS Option) WITH #{{Some: (it), None: (0)}}))\n\
+            "{option}\nLET f = (FN :{{x :(Number -> Option)}} -> Number = #(MATCH x UNDER (Number -> Option) WITH #{{Some: (it), None: (0)}}))\n\
              PRINT (f {{x = (Option.Some 2)}})\nPRINT (f {{x = (Option.None null)}})"
         )),
         "2\n0"

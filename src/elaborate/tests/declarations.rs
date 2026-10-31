@@ -243,8 +243,8 @@ fn a_bodyless_head_spells_the_shape_its_definition_spells() {
 #[test]
 fn a_declared_family_is_applied_by_member_name() {
     brought(
-        "NEWTYPE (Key Val AS Pair)\nNEWTYPE (Held AS Boxed)\n\
-         LET NumToStr = :(Pair {Key = Number, Val = Str})\nLET BoxedNum = :(Number AS Boxed)",
+        "NEWTYPE (Key Val -> Pair)\nNEWTYPE (Held -> Boxed)\n\
+         LET NumToStr = :(Pair {Key = Number, Val = Str})\nLET BoxedNum = :(Number -> Boxed)",
         |program| {
             let pair = program.bound("Pair");
             assert!(matches!(
@@ -291,15 +291,17 @@ fn a_declaration_the_door_cannot_elaborate_refuses_and_binds_nothing() {
             "Chained",
         ),
         // A repeated parameter name gives a family two slots under one label.
-        ("NEWTYPE (Key Key AS Pair)", "Pair"),
+        ("NEWTYPE (Key Key -> Pair)", "Pair"),
         // An argument the family does not declare.
         (
-            "NEWTYPE (Key AS Wrap)\nLET Bad = :(Wrap {Other = Number})",
+            "NEWTYPE (Key -> Wrap)\nLET Bad = :(Wrap {Other = Number})",
             "Bad",
         ),
+        // The arity-one sugar is spelled with `->`, not `AS`.
+        ("NEWTYPE (Key -> Wrap)\nLET Bad = :(Number AS Wrap)", "Bad"),
         // The arity-one sugar against a family of arity two.
         (
-            "NEWTYPE (Key Val AS Pair)\nLET Bad = :(Number AS Pair)",
+            "NEWTYPE (Key Val -> Pair)\nLET Bad = :(Number -> Pair)",
             "Bad",
         ),
         // A repeated tag gives a union two variants under one name.

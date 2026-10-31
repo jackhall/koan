@@ -126,10 +126,10 @@ the link in each section to the relevant chapter.
 | `FOR ALL #{<Name>: <Type>, ...}` | Bounded type parameters, each name to its bound, on a definition or a `SIG`'s head; a name in a `#[…]` group is bounded by `Any`. See [12](12-functors.md#bounding-a-type-parameter). |
 | `:(<Type> & <Type>)`          | Meet — a value of both types; mixes with `\|` only through parentheses. |
 | `<value> :! <Type>`           | Ascription: check a value against a type and view it at that type. |
-| `NEWTYPE (Key Val AS Pair)`   | A type constructor with one or more parameters.    |
-| `UNION (Elem AS Option) = #{<Tag>: <Type>, ...}` | A union over type parameters; each variant is a constructor over all of them. See [12](12-functors.md#unions-over-type-parameters-union-elem-as-option). |
+| `NEWTYPE (Key Val -> Pair)`   | A type constructor with one or more parameters.    |
+| `UNION (Elem -> Option) = #{<Tag>: <Type>, ...}` | A union over type parameters; each variant is a constructor over all of them. See [12](12-functors.md#unions-over-type-parameters-union-elem---option). |
 | `:(Pair {Key = Number, Val = Str})` | Apply a type constructor, binding each parameter by name. |
-| `:(Number AS Wrap)`           | Shorthand for applying a one-parameter constructor.|
+| `:(Number -> Wrap)`           | Shorthand for applying a one-parameter constructor. A bare `<Type> -> <Ctor>` in a type is this application, not a function type, which is spelled `:(FN :{<params>} -> <Result>)`; parenthesize an argument that is a function or map type: `:((MAP Str -> Number) -> Wrap)`. |
 
 Token rule throughout: **keywords** are ≥2 uppercase letters with no lowercase;
 **type names** are uppercase-leading with ≥1 lowercase letter; **identifiers**

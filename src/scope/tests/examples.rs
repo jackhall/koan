@@ -633,11 +633,11 @@ fn a_parameterized_union_declares_its_parameters() {
     // mention of the enclosing shape, while any other type a payload names still is.
     for (source, own) in [
         (
-            "UNION (Elem AS Option) = #{Some: Elem, None: Null}",
+            "UNION (Elem -> Option) = #{Some: Elem, None: Null}",
             &["Elem"][..],
         ),
         (
-            "UNION (Ok Error AS Result) = #{Ok: Ok, Error: Error}",
+            "UNION (Ok Error -> Result) = #{Ok: Ok, Error: Error}",
             &["Ok", "Error"],
         ),
     ] {
@@ -659,7 +659,7 @@ fn a_parameterized_union_declares_its_parameters() {
         });
     }
     shaped(
-        "UNION (Elem AS Option) = #{Some: Elem, None: Null}",
+        "UNION (Elem -> Option) = #{Some: Elem, None: Null}",
         |fixture, _, shape| {
             let shape = shape.expect("the program shapes");
             mention_of(

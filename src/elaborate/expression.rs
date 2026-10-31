@@ -35,9 +35,6 @@ struct Connectors {
     map: StaticName<KeywordSymbol>,
     union: StaticName<KeywordSymbol>,
     meet: StaticName<KeywordSymbol>,
-    /// Arity-one constructor application. A connector of the type language, not a table keyword:
-    /// the surrounding `:(…)` is what puts it in type context.
-    as_: StaticName<KeywordSymbol>,
 }
 
 static CONNECTORS: Connectors = Connectors {
@@ -46,7 +43,6 @@ static CONNECTORS: Connectors = Connectors {
     map: crate::static_name!(KeywordSymbol, "MAP"),
     union: crate::static_name!(KeywordSymbol, "|"),
     meet: crate::static_name!(KeywordSymbol, "&"),
-    as_: crate::static_name!(KeywordSymbol, "AS"),
 };
 
 /// `part` as a type, its names read through `reader`: every name is the mention `reader`'s shape
@@ -422,8 +418,9 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, '_, 'x, '_, R> {
             3 if keyword(0, &CONNECTORS.list) && keyword(1, &CONNECTORS.of) => {
                 Ok(self.types.list(self.part(&parts[2].value, groups)?))
             }
-            // `Type AS Ctor` — the arity-one sugar for the application above.
-            3 if keyword(1, &CONNECTORS.as_) => {
+            // `Type -> Ctor` — the arity-one sugar for the application above. A function type
+            // starts with `FN`, so a bare `->` here is always an application.
+            3 if keyword(1, &KEYWORDS.arrow) => {
                 let constructor =
                     self.closed_concrete(site, || self.part(&parts[2].value, groups))?;
                 let [param] = self.param_names(constructor).ok_or(unsupported)? else {

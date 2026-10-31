@@ -44,7 +44,7 @@ fn a_payload_is_read_at_its_identitys_representation() {
              LET p = (Point {x = 1, y = 2, z = 3})\n\
              PRINT p\n\
              PRINT (p == (Point {x = 1, y = 2}))\n\
-             NEWTYPE (Type AS Boxed)\n\
+             NEWTYPE (Type -> Boxed)\n\
              LET b = ((Boxed {x = 1, y = 2}) :! (Boxed {Type = :{x :Number}}))\n\
              PRINT b"),
         "Point({x = 1, y = 2})\ntrue\n:(Boxed {Type = :{x :Number}})({x = 1})"
@@ -142,7 +142,7 @@ fn a_field_read_through_a_tagged_value_sees_its_representation() {
         "1\nerror: Point has no field z"
     );
     assert_eq!(
-        run("NEWTYPE (Type AS Boxed)\n\
+        run("NEWTYPE (Type -> Boxed)\n\
              LET b = ((Boxed {x = 1, y = 2}) :! (Boxed {Type = :{x :Number}}))\n\
              PRINT b.y"),
         "error: :(Boxed {Type = :{x :Number}}) has no field y"

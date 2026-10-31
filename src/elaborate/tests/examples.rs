@@ -170,7 +170,7 @@ fn a_name_reads_not_a_type_and_application_is_unsupported() {
     let source = "\
 LET Data = Str
 LET Wrong = :(LIST OF Data)
-LET Applied = :(Number AS Wrap)";
+LET Applied = :(Number -> Wrap)";
     with_program(
         source,
         shapes,

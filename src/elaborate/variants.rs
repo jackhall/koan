@@ -1,6 +1,6 @@
 //! A union's variants, as a `MATCH … UNDER` clause names them: the members of the clause's
 //! `Union` node, in stored order. A label names the member of its name: a declared variant by its
-//! own name, and a variant applied to arguments, as `:(Number AS Option)` applies each, by its
+//! own name, and a variant applied to arguments, as `:(Number -> Option)` applies each, by its
 //! constructor's. A structural member, `Number` in `:(Maybe | Number)`, has no name, so no label
 //! names it. Read through the lattice's public node doors only.
 //!

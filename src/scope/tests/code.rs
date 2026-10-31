@@ -262,6 +262,31 @@ fn a_part_not_written_as_its_role_reads_it_is_refused() {
             },
             "#{}",
         ),
+        // A family head is parameters, `->`, then the name.
+        (
+            "NEWTYPE (Key Val AS Pair)",
+            ShapeError::Malformed {
+                form: BuiltinShapeId::NewTypeDeclaration,
+                at,
+            },
+            "(Key Val AS Pair)",
+        ),
+        (
+            "NEWTYPE (Key Val Pair)",
+            ShapeError::Malformed {
+                form: BuiltinShapeId::NewTypeDeclaration,
+                at,
+            },
+            "(Key Val Pair)",
+        ),
+        (
+            "UNION (Elem AS Option) = #{Some: Elem, None: Null}",
+            ShapeError::Malformed {
+                form: BuiltinShapeId::Union,
+                at,
+            },
+            "(Elem AS Option)",
+        ),
         (
             "NEWTYPE Dist = (LIST OF Number)",
             ShapeError::Inadmissible {
@@ -447,7 +472,7 @@ fn a_match_declares_no_result_and_names_its_union_under() {
 fn a_union_of_one_variant_is_refused_where_it_is_declared() {
     for (source, name) in [
         ("UNION One = #{Only: Number}", "One"),
-        ("UNION (Elem AS Wrap) = #{Wrapped: Elem}", "Wrap"),
+        ("UNION (Elem -> Wrap) = #{Wrapped: Elem}", "Wrap"),
     ] {
         shaped(source, |fixture, _, shape| {
             let expected = type_name(name, fixture.symbols);
@@ -541,8 +566,8 @@ fn a_unions_payloads_are_type_expressions_and_its_tags_name_nothing() {
 #[test]
 fn a_unions_family_parameters_are_declared_on_both_walks() {
     for source in [
-        "UNION (Elem AS Tree) = #{Leaf: Elem, Empty: Null}",
-        "SIG Sg = #[(UNION (Elem AS Tree) = #{Leaf: Elem, Empty: Null})]",
+        "UNION (Elem -> Tree) = #{Leaf: Elem, Empty: Null}",
+        "SIG Sg = #[(UNION (Elem -> Tree) = #{Leaf: Elem, Empty: Null})]",
     ] {
         shaped(source, |fixture, _, shape| {
             let shape = shape.expect("the program shapes");

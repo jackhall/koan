@@ -430,7 +430,7 @@ fn a_nested_capture_of_an_enclosing_edge_reads_the_sibling_value() {
 #[test]
 fn an_unsupported_signature_refuses_the_load() {
     with_fixture(|fixture| {
-        let refused = fixture.parsed("LET f = (FN :{x :(Number AS Any)} -> Number = #(x))");
+        let refused = fixture.parsed("LET f = (FN :{x :(Number -> Any)} -> Number = #(x))");
         assert_eq!(
             refused.err().as_deref(),
             Some("<input>:1:17: this type expression is not supported")

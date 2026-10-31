@@ -43,7 +43,7 @@ subdirectory's README carries its own slice.
 - [A nested projection](gradual-typing/nested-projection.md)
 - [A pin over a variable](gradual-typing/pins-over-variables.md)
 - [Return contracts](gradual-typing/return-contracts.md)
-- [A variant's union in its identity](gradual-typing/variant-union-identity.md)
+- [A construction through a union binder types at its union](gradual-typing/variant-union-identity.md)
 - [Agents](rewrite/agents.md)
 - [The build image](rewrite/build-image.md)
 - [Comments](rewrite/comments.md)
