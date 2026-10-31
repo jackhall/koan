@@ -56,6 +56,20 @@ fn eval_runs_code_whose_dollar_names_bind_where_the_quote_is_written() {
     );
 }
 
+/// A container literal of filled code, holding a `$` name beside a hole, is built in its home and
+/// checked against its static type there, which the fill's instance types reach.
+#[test]
+fn a_filled_quote_s_container_literal_holds_its_dollar_name_and_its_fill() {
+    assert_eq!(
+        run("LET x = 3\nLET q = #([$x x])\nPRINT (EVAL (q USING {x = 9}) -> Any)"),
+        "[3, 9]"
+    );
+    assert_eq!(
+        run("LET x = 3\nLET q = #({a = $x, b = x})\nPRINT (EVAL (q USING {x = 9}) -> Any)"),
+        "{a = 3, b = 9}"
+    );
+}
+
 #[test]
 fn an_unmarked_use_selects_among_builtins_and_what_is_composed_ahead_of_it() {
     assert_eq!(

@@ -70,6 +70,10 @@ fn a_brace_reads_names_where_the_template_is() {
         run("LET greet = #(%\"Hi {name}\")\nPRINT (EVAL greet -> Str)"),
         "error: unbound name 'name'"
     );
+    assert_eq!(
+        run("LET x = 3\nLET q = #(%\"%{$x}{x}\")\nPRINT (EVAL (q USING {x = 9}) -> Any)"),
+        "{strings = [, 9], values = [3]}"
+    );
     assert!(run("LET s = %\"{s}\"").starts_with("load: "));
 }
 

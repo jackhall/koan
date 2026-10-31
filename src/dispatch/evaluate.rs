@@ -1533,8 +1533,8 @@ fn carried_under_static<'step, 'graph, 'here>(
     };
     let facts = at.view.facts();
     let expected = match node {
-        Evaluated::Part(site) => facts.value_type(&at.types, shape, site),
-        Evaluated::Statement(index) => facts.statement_type(&at.types, shape, index as usize),
+        Evaluated::Part(site) => facts.value_type(types, shape, site),
+        Evaluated::Statement(index) => facts.statement_type(types, shape, index as usize),
     };
     let Some(expected) = expected else {
         return;
