@@ -13,12 +13,11 @@ prerequisites and the items it unblocks.
 Work is grouped into project subdirectories, each a coherent body of work whose items
 share design constraints and ship together. Each has a README naming what the project
 buys the language and listing its ready-to-start items. The projects are
-[rewrite/](rewrite/README.md), the runtime's layers, and the four bodies of work
+[rewrite/](rewrite/README.md), the runtime's layers, and the three bodies of work
 that build on it:
 [conditionals/](conditionals/README.md),
-[gradual-build/](gradual-build/README.md),
-[gradual-typing/](gradual-typing/README.md) and
-[metaprogramming/](metaprogramming/README.md).
+[gradual-build/](gradual-build/README.md) and
+[gradual-typing/](gradual-typing/README.md).
 
 The cell substrate Koan embeds carries its own roadmap,
 [cellgraph/roadmap/](../cellgraph/roadmap/README.md). Items cross-link across

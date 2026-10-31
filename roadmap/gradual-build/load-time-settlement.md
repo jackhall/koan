@@ -60,10 +60,7 @@ already leave out a parameter every tail edge passes on bare
 
 ## Dependencies
 
-Sequenced after the [metaprogramming](../metaprogramming/README.md) and
-[conditionals](../conditionals/README.md) projects: composed code is the one
-binding no load can trace, and its compositions must stand before the
-settlement tier beneath them is taken away.
+Sequenced after the [conditionals](../conditionals/README.md) project.
 
 **Requires:** none.
 
