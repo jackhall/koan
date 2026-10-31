@@ -396,11 +396,23 @@ f (1 + 2) 3
 ```
 
 Each piece keeps the `$` bindings its own quote gave it, and a binder in one
-piece fills a hole in another, as if they had been written together. A splice
-stands only among a quote's parts: an element that is not code is an error, and
-so is a splice in a list literal, a type or a `$(…)`, or in a parenthesized
-group a literal's element or a template's brace holds. To spread a list's
-*value* when the code runs, write `..$xs` in a list literal inside the quote:
+piece fills a hole in another, as if they had been written together. A
+parenthesized group splices the same way wherever it is written, even as a list
+literal's element or as a template's brace:
+
+```koan
+LET parts = [#(1 + 2)]
+PRINT (EVAL #(%"sum {$..parts}") -> Str)
+```
+
+```text
+sum 3
+```
+
+A splice stands only among a quote's parts: an element that is not code is an
+error, and so is a splice written straight into a list literal, or anywhere in a
+type or a `$(…)`. To spread a list's *value* when the code runs, write `..$xs`
+in a list literal inside the quote:
 
 ```koan
 LET xs = [1 2]

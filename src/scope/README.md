@@ -947,11 +947,13 @@ according to its kind. A computed list enters by `LET` first. `\..xs` has no
 reading, since a `\` name binds where a body is built, to a slot whose value
 arrives with each call. A spread is one level deep, as Lisp's `,@xs` and
 Julia's `$(xs...)` are, and a spliced part [composes](#composition) as any part
-does. A splice stands only as a part of an expression: a list or brace literal,
-a type expression and a marked use hold none. Composing stops at a literal, so
-a group a literal's element or a [template](../parse/README.md#templates)'s
-brace holds composes nothing, and the parse refuses one holding a splice; a
-quote written there composes as its own. Where the load can tell that
+does. A splice stands only as a part of an expression: a list or brace literal
+holds none as an element, and a type expression and a marked use hold none
+anywhere under them. A splice in a group a literal's element or a
+[template](../parse/README.md#templates)'s brace holds composes as one in a
+paren group does, and so does one in a quote a builtin reads as written there,
+such as a `MATCH` arm in `#{…}`; a quote value written there composes as its
+own. Where the load can tell that
 `xs` is never a list of code it refuses the program, and otherwise a list that
 is not one is an error value where the quote is born.
 
@@ -991,8 +993,10 @@ code's root past every quote around it, and prints as written.
 A node holding a splice has no expression shape until the quote is born, so the
 load cannot tell whether a quote part beside the splice will be a quote value
 or a builtin's body. The quote therefore binds, where it is written, every `$`
-name such a part would own, as it binds its own. A part the splice makes a
-builtin's body keeps those bindings; a part left a quote value binds its `$`
+name such a part would own, as it binds its own, and reads a quote a literal
+beside the splice holds the same way: with `a` bound to `[#(1)]` and `b` to
+`[#(2)]`, `#(f $..a [#($..b)])` is the quote of `f 1 [#(2)]`. A part the splice
+makes a builtin's body keeps those bindings; a part left a quote value binds its `$`
 names where that quote is born, as any quote value does. A name nothing binds
 where the quote is written is refused at load, so with no `y` in sight
 
@@ -1514,8 +1518,5 @@ type outside the one error that lists names, and on a retired lifetime name.
 
 - [Dict defaults](../../roadmap/rewrite/dict-defaults.md) — a value dict's `_`
   default, which lifts the dict-default refusal.
-- [Composing inside literals](../../roadmap/metaprogramming/composing-inside-literals.md)
-  — a splice in a group a literal or a template brace holds, composed as in a
-  paren group.
 - [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — `CLOSE
   OVER`, and a warning for an unmarked keyworded use in a quote.

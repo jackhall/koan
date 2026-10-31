@@ -174,7 +174,10 @@ impl<'graph, 'cell> LiteralView<'graph, 'cell> {
             .map(|(_, _, view)| view.exact())
             .sum::<u64>();
         parts.weight = u32::try_from(u64::from(parts.weight) + laid).unwrap_or(u32::MAX);
-        parts.deepest = literal.depth(&part.value, &mut 0);
+        let mut next = 0;
+        parts.deepest = literal.depth(&part.value, &mut next);
+        // A child out of the walk's order would be laid as written, its splice and all.
+        assert_eq!(next, children.len(), "the composer keeps its walk's order");
         literal.summary = CodeSummary {
             parts,
             flat: 0,
@@ -840,7 +843,7 @@ impl<'to, 'graph, 'cell> Laying<'to, '_, 'graph, 'cell, '_> {
                     let written = (literal.before, written);
                     let value =
                         self.literal(&literal.part.value, literal, written, quoted, &mut next);
-                    debug_assert_eq!(next, literal.children.len(), "every composed element lays");
+                    assert_eq!(next, literal.children.len(), "every composed element lays");
                     (value, literal.part.span)
                 }
             };

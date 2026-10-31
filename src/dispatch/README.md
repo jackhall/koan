@@ -1206,7 +1206,11 @@ several, each element keeping its bindings, a quote part beside a splice bound
 where it is written, the load's and the birth's refusals, the depth limit,
 a loop growing code in O(n log n) region bytes, `BUILD` and the unbuilt type,
 and `USING`'s filled marks surviving a splice and never rebound;
-[spreads](tests/spreads.rs) — a spread literal's elements and static
+[literal splices](tests/literal_splices.rs) — a splice in a group a list, dict
+or record literal's element or a template's brace holds, or in a written arm in
+`#{…}`, composing as in a paren group at its level, with its bindings, under
+the load's and the birth's refusals and the depth limit, and refused anywhere
+under a marked use; [spreads](tests/spreads.rs) — a spread literal's elements and static
 type, a spread refused at load and faulting at run, a quote spreading a
 list unequal to one holding it, a recursive list spreading lists from outside
 its group and fellow members, a spread cycle and a spread of no list refusing

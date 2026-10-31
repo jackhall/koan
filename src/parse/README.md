@@ -131,14 +131,10 @@ counts its own groups against `MAX_DEPTH`, and a template's stored depth is one
 over its deepest brace's ([the depth limit](#the-syntax-depth-limit)), so syntax
 nested through braces is refused as any other syntax is.
 
-Composing a quote stops at a literal: it splices into the groups of the
-expression it stands in, and a list, dict or record literal's element or a
-template's brace is none of them. So a group such an element or brace holds,
-whose node holds a `$..` splice among its own groups, is refused at that group
-or brace, while a quote written there composes as its own quote:
-`#(%"{#($..p)}")` and `#([#($..p)])` load, as do the quoted elements of a
-`#[…]` literal. [Composing inside literals](../../roadmap/metaprogramming/composing-inside-literals.md)
-is the work that lets such a splice compose as it does in a paren group.
+Since a brace is a paren group, a `$..` splice in one composes when its quote
+is born as one in a paren group does
+([splicing](../scope/README.md#splicing)): with `parts` bound to
+`[#(1 + 2)]`, `#(%"sum {$..parts}")` is the quote of `%"sum {1 + 2}"`.
 
 ## The AST: borrowed, `Copy`, and splice-free
 
