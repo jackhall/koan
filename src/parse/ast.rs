@@ -280,6 +280,40 @@ pub fn template_fields() -> [BinderSymbol; 2] {
 }
 
 impl<'a> ExpressionPart<'a> {
+    /// Child `at` of this part: a nested expression's parts, a list's items, a template's braces, a
+    /// dict's keys and values in turn, a record's values. `None` past the last, and for a part that
+    /// nests nothing. The answer lies in the part's own storage, never a copy, so its address names
+    /// the element.
+    pub fn child(&self, at: usize) -> Option<&'a ExpressionPart<'a>> {
+        match self {
+            ExpressionPart::Expression(node)
+            | ExpressionPart::SigiledTypeExpr(node)
+            | ExpressionPart::RecordType(node)
+            | ExpressionPart::QuotedExpression(node)
+            | ExpressionPart::MarkedUse(_, node)
+            | ExpressionPart::FilledUse(_, _, node) => node.parts.get(at).map(|part| &part.value),
+            ExpressionPart::ListLiteral(items) => items.get(at).map(ListItem::part),
+            ExpressionPart::Template(template) => template.slots.get(at).map(TemplateSlot::part),
+            ExpressionPart::DictLiteral(pairs) => pairs
+                .get(at / 2)
+                .map(|(key, value)| if at.is_multiple_of(2) { key } else { value }),
+            ExpressionPart::RecordLiteral(fields) => fields.get(at).map(|(_, value)| value),
+            _ => None,
+        }
+    }
+
+    /// Whether this part is a list, dict or record literal or a template: a part whose
+    /// [children](Self::child) are elements, not a node's parts.
+    pub fn is_literal(&self) -> bool {
+        matches!(
+            self,
+            ExpressionPart::ListLiteral(_)
+                | ExpressionPart::Template(_)
+                | ExpressionPart::DictLiteral(_)
+                | ExpressionPart::RecordLiteral(_)
+        )
+    }
+
     /// The structural family this part belongs to — what dispatch-shape classification reads.
     pub fn class(&self) -> PartClass {
         match self {
@@ -1090,25 +1124,11 @@ fn owned_part<'a>(
         | ExpressionPart::RecordType(node)
         | ExpressionPart::MarkedUse(_, node)
         | ExpressionPart::FilledUse(_, _, node) => node.each_owned(visit),
-        ExpressionPart::ListLiteral(items) => {
-            for item in items.iter() {
-                owned_part(item.part(), written, visit);
-            }
-        }
-        ExpressionPart::Template(template) => {
-            for slot in template.slots.iter() {
-                owned_part(slot.part(), written, visit);
-            }
-        }
-        ExpressionPart::DictLiteral(pairs) => {
-            for (key, value) in pairs.iter() {
-                owned_part(key, written, visit);
-                owned_part(value, written, visit);
-            }
-        }
-        ExpressionPart::RecordLiteral(fields) => {
-            for (_, value) in fields.iter() {
-                owned_part(value, written, visit);
+        literal if literal.is_literal() => {
+            let mut at = 0;
+            while let Some(element) = literal.child(at) {
+                owned_part(element, written, visit);
+                at += 1;
             }
         }
         _ => {}

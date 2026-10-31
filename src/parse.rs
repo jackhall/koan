@@ -40,7 +40,7 @@ use crate::memory::ProgramBrand;
 use crate::source::{self, CurrentFileGuard, FileId, SourceFile};
 use crate::symbols::SymbolInterner;
 
-pub use copy::{Quoted, Remark, copied, remarked, remarked_whole};
+pub use copy::{Quoted, Remark, copied, literal_laid, remarked, remarked_whole};
 pub use depth::MAX_SYNTAX_DEPTH;
 pub use error::ParseError;
 
