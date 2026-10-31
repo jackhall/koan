@@ -59,6 +59,28 @@ fn a_malformed_brace_is_refused_where_it_is_written() {
     assert_eq!(at, span(3, 6));
 }
 
+/// Composing stops at a literal, so a splice in a group a literal holds, or in a template's brace,
+/// is refused at the group or brace; one in a quote nested there belongs to that quote.
+#[test]
+fn a_splice_under_a_literal_is_refused() {
+    let refused = |source: &str| {
+        let program = program_storage();
+        let error = parse(program.brand(), &SymbolInterner::new(), source).unwrap_err();
+        assert!(
+            error.message.contains("a template's brace is none"),
+            "{}",
+            error.message
+        );
+        error.span
+    };
+    let span = |start, end| Some(Span { start, end });
+    assert_eq!(refused(r#"#(%"a{$..p}")"#), span(5, 11));
+    assert_eq!(refused("#([($..p)])"), span(3, 9));
+    assert_eq!(refused("#({a = (f ($..p))})"), span(7, 17));
+    assert!(tree(r#"#(%"{#($..p)}")"#).is_ok());
+    assert!(tree("#([#($..p)])").is_ok());
+}
+
 #[test]
 fn only_a_glued_percent_makes_a_template() {
     assert_eq!(tree(r#"% "x""#).unwrap(), "[t(%) s(x)]");

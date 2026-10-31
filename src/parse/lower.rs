@@ -62,6 +62,11 @@ const NOT_AN_ITEM: &str = "`..` spreads a list only as an item of a list literal
 /// Why a splice was refused where it was written, or for what its operand is.
 const SPLICE_IN_LITERAL: &str = "`$..` splices code into an expression, and a literal holds \
                                  none; a list literal spreads with `..`";
+/// Why a splice in a group a literal or a template brace holds was refused: composing stops at
+/// the literal.
+const SPLICE_UNDER_LITERAL: &str = "`$..` splices code into the groups of the expression it \
+                                    stands in, and a literal's element or a template's brace is \
+                                    none";
 const SPLICE_IN_TYPE: &str = "a type expression holds no splice";
 const SPLICE_OPERAND: &str = "the operand of `$..` is a name";
 const BUILT_SPLICE: &str = "`\\..` has no reading: a `\\` name binds where the code is built, to a value \
@@ -343,6 +348,12 @@ impl<'a, 's> Lower<'a, '_, 's> {
             return Err(ParseError::new(SPLICE_IN_LITERAL, part.span));
         }
         if !matches!(context, Context::Expression)
+            && let ExpressionPart::Expression(node) = part.value
+            && node.composes()
+        {
+            return Err(ParseError::new(SPLICE_UNDER_LITERAL, part.span));
+        }
+        if !matches!(context, Context::Expression)
             && let ExpressionPart::Keyword(symbol) = part.value
             && !(symbol == WILDCARD.symbol()
                 && matches!(context, Context::Brace(dict) if dict.admits_wildcard()))
@@ -511,8 +522,13 @@ impl<'a, 's> Lower<'a, '_, 's> {
             let Node::Group { items: inner, .. } = &brace.node else {
                 unreachable!("a balanced brace reads as a group")
             };
-            let node = self.lower_body(inner, brace_span, wrappers)?;
-            let part = ExpressionPart::Expression(self.program.alloc_node(node));
+            let node = self
+                .program
+                .alloc_node(self.lower_body(inner, brace_span, wrappers)?);
+            if node.composes() {
+                return Err(ParseError::new(SPLICE_UNDER_LITERAL, Some(brace_span)));
+            }
+            let part = ExpressionPart::Expression(node);
             slots.push(match kept {
                 true => TemplateSlot::Kept(part),
                 false => TemplateSlot::Rendered(part),

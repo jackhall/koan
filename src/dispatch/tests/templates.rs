@@ -9,11 +9,11 @@ use super::run;
 fn a_template_renders_each_brace_into_its_text() {
     let source = "LET name = \"bob\"\nLET view = (JOIN [\"ab\" \"cd\"])\n\
                   PRINT %\"Hello, {name}!\"\n\
-                  PRINT %\"{1 + 2} {[1 'a']} { {x = 1} } {view}\"\n\
+                  PRINT %\"{1 + 2} {[1 'a']} { {x = 1} } {view} { ({a = 1}).a }\"\n\
                   PRINT %\"{{x}} %{{\"\nPRINT %\"a\"\nPRINT %''";
     assert_eq!(
         run(source),
-        "Hello, bob!\n3 [1, a] {x = 1} abcd\n{x} %{\na\n"
+        "Hello, bob!\n3 [1, a] {x = 1} abcd 1\n{x} %{\na\n"
     );
 }
 
