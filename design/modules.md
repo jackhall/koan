@@ -268,5 +268,5 @@ equal content give two types; koan keys it on content, so they give one.
 
 ## Open work
 
-- [Effects](../roadmap/rewrite/effects.md) — effect rows, composite effects, and
+- [Effects](../roadmap/features/effects.md) — effect rows, composite effects, and
   a module bound from an action as a leaf.

@@ -369,7 +369,7 @@ fixed:
   `BOX "s"` exactly `LIST OF Str`, each use solving the head's `Elt` afresh.
   Through a `:|` view the call is at most the head's return, though the run
   retypes it there too
-  ([unplanned work](../../roadmap/gradual-typing/README.md#unplanned-work)).
+  ([unplanned work](../../roadmap/types/README.md#unplanned-work)).
   A surfaced key is a spread over every function the module offers there, so
   its verdict is at most *maybe*, and *never* only where one body definition or
   one closed signature head is the whole of the key;
@@ -994,7 +994,7 @@ member (`elaborate::applied_member`). No static type holds an application
 pinning a parameter to a path: the lattice reads a pin through its bounds
 covariantly where the order compares pins invariantly, so such a type read
 through its bounds would be no upper end
-([a pin over a variable](../../roadmap/gradual-typing/pins-over-variables.md)).
+([a pin over a variable](../../roadmap/types/pins-over-variables.md)).
 
 **Closed views at load.** At a `:|` site over a closed tree the walk calls the
 view door's type half,
@@ -1401,7 +1401,7 @@ registration whose shape is rigid or unknown is never checked, nor is a
 `USING … SCOPE` block's surfaced head, which births no callable: the definition
 answering it is the module's own, checked where the module is built. A
 registration a builtin beats at some operand type is simply never selected there — nothing reports it, since
-koan has no warning channel ([unplanned work](../../roadmap/rewrite/README.md#unplanned-work)).
+koan has no warning channel ([unplanned work](../../roadmap/features/README.md#unplanned-work)).
 
 ## The import rule
 
@@ -1751,14 +1751,14 @@ tutorial snippet is checked against its shown output by
 
 ## Open work
 
-- [Invariance around a tail cycle](../../roadmap/gradual-build/cycle-invariance.md)
+- [Invariance around a tail cycle](../../roadmap/one-build/cycle-invariance.md)
   — an argument built over invariant leaves classed invariant.
-- [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — a
+- [The features project's unplanned work](../../roadmap/features/README.md#unplanned-work) — a
   warning for an overload never selected.
-- [A pin over a variable](../../roadmap/gradual-typing/pins-over-variables.md)
+- [A pin over a variable](../../roadmap/types/pins-over-variables.md)
   — a static type pinning a parameter to a path, so a member read through a
   signature leaving a head parameter unpinned is exact, and a quantified
   callable's parameter at an application over its own group.
-- [Gradual typing's unplanned work](../../roadmap/gradual-typing/README.md#unplanned-work)
+- [The types project's unplanned work](../../roadmap/types/README.md#unplanned-work)
   — the overlap check skipping a quantified registration, and a keyworded
   member through a view at most its return at load.

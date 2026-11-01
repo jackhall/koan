@@ -227,10 +227,10 @@ changes what a reader sees and which overload runs.
 
 ## Open work
 
-- [Gradual typing](../roadmap/gradual-typing/README.md) — the project's open
+- [Types](../roadmap/types/README.md) — the project's open
   items.
-- [Dependent signatures](../roadmap/gradual-typing/dependent-signatures.md)
-- [A nested projection](../roadmap/gradual-typing/nested-projection.md)
-- [A pin over a variable](../roadmap/gradual-typing/pins-over-variables.md)
-- [What a barrier rebuilds](../roadmap/gradual-typing/barrier-coercion.md)
-- [A carried union at a contravariant position](../roadmap/gradual-typing/contravariant-union-solve.md)
+- [Dependent signatures](../roadmap/types/dependent-signatures.md)
+- [A nested projection](../roadmap/types/nested-projection.md)
+- [A pin over a variable](../roadmap/types/pins-over-variables.md)
+- [What a barrier rebuilds](../roadmap/types/barrier-coercion.md)
+- [A carried union at a contravariant position](../roadmap/types/contravariant-union-solve.md)

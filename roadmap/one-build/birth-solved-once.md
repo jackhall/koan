@@ -41,6 +41,10 @@ the same answer more than once:
   request's binding image ([`BindingImage`](../../src/values/settlement.rs)),
   which carries the binding's types, carries the solution with them.
   Recommended: the request's image.
+  [Settlements retired](settlements-retired.md) removes the asker's seek
+  and the solve it runs — under a traced binding the frame reads the
+  solution off the layer, under an untraced one it solves at its entry alone
+  — so landed after it, this bullet is moot and the other two stand.
 - *The caching bit — open.* A `bool` on `Runner`, set when the runner is
   built; or a field of the activation, which every runner of a body shares.
   Recommended: on `Runner`.

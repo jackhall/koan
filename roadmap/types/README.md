@@ -1,4 +1,4 @@
-# Gradual typing
+# Types
 
 What a type can say, and what type a value has. Generic code is typed as far
 as its static types reach and checked by the call for the rest, so the items
@@ -10,8 +10,8 @@ barrier, and keep a solve blind to the order a union's members are written
 in. What it buys the language: a program that states its types
 is refused early where they decide it, and a program that leaves them out
 still runs, each call checking what the load could not. Where the load's pass
-runs, and where what it settles lives, is the
-[gradual build](../gradual-build/README.md) project's.
+runs, and where what it settles lives, is
+[one build](../one-build/README.md)'s.
 
 [The design](../../design/gradual-typing.md) follows a type from its
 declaration to a call. The pieces sit in the [type lattice](../../lattice/src/types/README.md), the
@@ -87,3 +87,15 @@ as surprises, not scheduled.
   `GET` returns a field `Viewed`'s head hides, with `v = (m :| Viewed)`,
   `USING v SCOPE (ATTR (GET 1) y)` loads and faults `has no field y` at the run
   where the same read through a header refuses the load.
+- **Anonymous structural recursion in types.** A data cycle ties only through
+  a callable or a tagged nominal value
+  ([the tie](../../src/knot/README.md#the-tie)), so `LET a = [1 a]` or a ring of
+  plain records needs a nominal declaration. Structural `μ`-types in the
+  [type lattice](../../lattice/src/types/README.md) would admit them without
+  breaking a program the nominal cut admits.
+- **The unfilled typing is a flag every write consults.** A quote's code is
+  typed a second time with its unmarked holes empty, and the walk
+  ([`walk.rs`](../../src/dispatch/walk.rs)) checks `unfilled` wherever that
+  typing would keep a fact; `solved_from` falls back to carried types on a
+  length mismatch rather than refusing. A typing whose writes have nowhere to
+  land would let the types carry what the flag carries.

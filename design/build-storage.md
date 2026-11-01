@@ -173,8 +173,16 @@ what the load left undecided. A value crossing between agents adopts its
 carried type into the receiver's chain, free when the type is a load type,
 since its handle says so. The program's memory is the frozen load plus, per
 agent, its budget and its stack
-([agents](../roadmap/rewrite/agents.md)).
+([agents](../roadmap/features/agents.md)).
 
 ## Open work
 
-- [Agents](../roadmap/rewrite/agents.md) — threads sharing the frozen load.
+- [Agents](../roadmap/features/agents.md) — threads sharing the frozen load.
+- [One layer, wherever laid](../roadmap/one-build/one-layer.md) — one form
+  for a laid layer wherever it rests.
+- [Settlements retired](../roadmap/one-build/settlements-retired.md) — the
+  arena holding compositions alone.
+- [What the agent tier keeps](../roadmap/one-build/agent-tier-keeps.md) — the
+  tier's content once nothing settles into it.
+- [The build image](../roadmap/one-build/build-image.md) — the frozen load
+  and program storage written out and resumed from.

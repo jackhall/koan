@@ -690,12 +690,18 @@ and the scheduler hands a step its door and no more.
 
 ## Open work
 
-- [Setting the build budget](../../roadmap/gradual-build/bound-settings.md)
+- [Setting the build budget](../../roadmap/features/bound-settings.md)
   — the budget as a setting a user names.
-- [Warm composed types](../../roadmap/gradual-build/warm-composed-types.md)
+- [Warm composed types](../../roadmap/one-build/warm-composed-types.md)
   — the types a settlement under a composition derives, kept warm.
-- [A birth solved once](../../roadmap/gradual-build/birth-solved-once.md) —
+- [A birth solved once](../../roadmap/one-build/birth-solved-once.md) —
   a call by name keyed on a `FOR ALL` name solving its group once.
-- [Settling traceable bindings at load](../../roadmap/gradual-build/load-time-settlement.md)
-  — a keyed call whose sites the load can trace settled at load, leaving the
-  arena compositions alone.
+- [One layer, wherever laid](../../roadmap/one-build/one-layer.md) — one
+  form for a laid layer in program storage, an arena node or a region.
+- [The trace](../../roadmap/one-build/the-trace.md) — per call site, the
+  binding the load can name.
+- [Traced layers at load](../../roadmap/one-build/traced-layers-at-load.md)
+  — a keyed body's facts under each traced binding laid by the load.
+- [Settlements retired](../../roadmap/one-build/settlements-retired.md) — an
+  untraced binding decided in the activation, the arena holding compositions
+  alone.

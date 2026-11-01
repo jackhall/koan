@@ -37,4 +37,7 @@ anything the program declared.
 - [`LoadError`](../../src/program/record.rs) — shipped: the refused load's
   rendered shape error this item retires.
 
-**Unblocks:** none — a leaf.
+**Unblocks:**
+
+- [The build image](build-image.md) — program storage held apart from a
+  graph, which a run from an image stands up before its graph.

@@ -744,6 +744,8 @@ observes it records in `tests/native.rs` for the test around it to read back.
 
 ## Open work
 
-- [Setting the build budget](../../roadmap/gradual-build/bound-settings.md)
+- [Setting the build budget](../../roadmap/features/bound-settings.md)
   — the budget as a setting a user names.
-- [Agents](../../roadmap/rewrite/agents.md) — an arena per agent.
+- [Agents](../../roadmap/features/agents.md) — an arena per agent.
+- [Settlements retired](../../roadmap/one-build/settlements-retired.md) — the
+  arena holding compositions alone, with no key, pin, held count or stamp.

@@ -519,7 +519,7 @@ leaves [its check](#a-unions-variants) to the binding that closes it. A type bin
 never rigid: its readers across a callable boundary could not reach the
 coordinates its variables are read at, and a sealed nominal is a leaf
 substitution never enters, so a `NEWTYPE` over a `FOR ALL` name is a different
-type each call ([unplanned work](../../roadmap/gradual-typing/README.md#unplanned-work)).
+type each call ([unplanned work](../../roadmap/types/README.md#unplanned-work)).
 The declaration door therefore reads through the load-time reader in a mode that
 answers every run-bound name *unknown*.
 
@@ -711,13 +711,13 @@ every fact through its `TypeContext`.
 
 ## Open work
 
-- [A parameterized union's variant takes only the parameters its payload names](../../roadmap/gradual-typing/variant-parameters.md)
+- [A parameterized union's variant takes only the parameters its payload names](../../roadmap/types/variant-parameters.md)
   — `Result.Error` a family over `Error` alone.
-- [Families as parameters](../../roadmap/rewrite/families-as-parameters.md) —
+- [Families as parameters](../../roadmap/features/families-as-parameters.md) —
   higher-kinded head parameters, and a constructor application leaving a
   parameter unpinned.
-- [A pin over a variable](../../roadmap/gradual-typing/pins-over-variables.md)
+- [A pin over a variable](../../roadmap/types/pins-over-variables.md)
   — a pin's variable read through its bounds as the order compares pins.
-- [Unplanned work](../../roadmap/gradual-typing/README.md#unplanned-work) — a
+- [Unplanned work](../../roadmap/types/README.md#unplanned-work) — a
   family's variance, which no declaration states, and a nominal over a
   run-bound type declared per call.

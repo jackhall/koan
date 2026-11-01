@@ -371,7 +371,7 @@ released with that branch.
 
 ## Open work
 
-- [Invariance around a tail cycle](../roadmap/gradual-build/cycle-invariance.md)
+- [Invariance around a tail cycle](../roadmap/one-build/cycle-invariance.md)
   — an argument built over invariant leaves classed invariant.
-- [Presizing a branch](../roadmap/gradual-build/branch-presizing.md) — a branch
+- [Presizing a branch](../roadmap/performance/branch-presizing.md) — a branch
   laid at a predicted size.

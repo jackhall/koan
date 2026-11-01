@@ -753,8 +753,8 @@ module value by its digest tree. The two-program test,
 
 ## Open work
 
-- [A refused program stays loaded](../../roadmap/rewrite/refused-programs-stay-loaded.md)
+- [A refused program stays loaded](../../roadmap/one-build/refused-programs-stay-loaded.md)
   — a refused load kept, so its shape error renders on demand rather than once.
-- [One cell per frame](../../roadmap/rewrite/one-cell-per-frame.md) — a
+- [One cell per frame](../../roadmap/one-build/one-cell-per-frame.md) — a
   called body run in its frame's own cell, parking only on a spawned frame,
   with no hand-off.

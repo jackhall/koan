@@ -1598,7 +1598,7 @@ type outside the one error that lists names, and on a retired lifetime name.
 
 ## Open work
 
-- [Dict defaults](../../roadmap/rewrite/dict-defaults.md) — a value dict's `_`
+- [Dict defaults](../../roadmap/features/dict-defaults.md) — a value dict's `_`
   default, which lifts the dict-default refusal.
-- [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — `CLOSE
+- [The features project's unplanned work](../../roadmap/features/README.md#unplanned-work) — `CLOSE
   OVER`, and a warning for an unmarked keyworded use in a quote.

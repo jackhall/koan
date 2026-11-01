@@ -696,6 +696,6 @@ bound run, one binding an edge to itself.
 
 ## Open work
 
-- [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) —
+- [The features project's unplanned work](../../roadmap/features/README.md#unplanned-work) —
   union-variant construction in a cycle, and a cycle through a family
   construction, which has no cut.

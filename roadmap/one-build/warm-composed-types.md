@@ -23,7 +23,9 @@ again each hop, as a run-content binding does.
   on the binding event, which a hop's hand-off carries; or a tier the
   settlement under the composition owns, evicted with it, which revisits the
   rule that no arena node holds a type; or the composition's facts naming the
-  derived term once, so a frame mints it from the term in O(1).
+  derived term once, so a frame mints it from the term in O(1). Whether a
+  composition has layers of its own to hold one is the project's
+  [Compositions](README.md#open-choices) choice.
 
 ## Dependencies
 

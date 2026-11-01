@@ -330,6 +330,6 @@ open a module and call through a barrier are
 
 ## Open work
 
-- [What a barrier rebuilds](../../../roadmap/gradual-typing/barrier-coercion.md)
+- [What a barrier rebuilds](../../../roadmap/types/barrier-coercion.md)
   — a nested slot pinned to a type over the enclosing parameter, a cyclic data
   member and a dict's keys, each coerced through a barrier.

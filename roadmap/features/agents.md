@@ -39,7 +39,7 @@ are the drain's, and every region is one thread's.
   or a channel value. Nothing is ruled.
 - *Per-agent rebuild — open.* An agent always rebuilds its settlements,
   or seeds one from another agent's record through the
-  [build image](build-image.md). Recommended: always rebuilt, so no books
+  [build image](../one-build/build-image.md). Recommended: always rebuilt, so no books
   are shared.
 - *What is shared — decided.* The frozen load alone, by construction
   ([build storage](../../design/build-storage.md#the-frozen-load)).
