@@ -27,8 +27,9 @@ use crate::symbols::BinderSymbol;
 use crate::type_lattice::KType;
 use crate::values::{Chain, Circular, Knotted as _, Link, TypeValue, Value};
 
-use super::super::{KActivation, KValue, KValueFamily, Knotted, Supplied, Untieable, tie};
+use super::super::{KActivation, KValue, KValueFamily, Knotted, Supplied, tie};
 use super::{Fixture, TestGraph, copy, with_fixture};
+use crate::scope::Untieable;
 use crate::scope::tests::plan;
 
 /// Whether two words are the same binding: bit-identical scalars, one type, one knot node.

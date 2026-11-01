@@ -33,6 +33,14 @@ pub(crate) fn case_share(numerator: u32, denominator: u32) -> u32 {
     (proptest::prelude::ProptestConfig::default().cases * numerator / denominator).max(64)
 }
 
+/// An extent no registered file holds, for a suite below the parser that builds a refusal.
+pub(crate) fn nowhere() -> crate::source::SourceRef {
+    crate::source::SourceRef {
+        span: crate::source::Span { start: 3, end: 7 },
+        file: crate::source::FileId(0),
+    }
+}
+
 /// The syntax of the quote `#(1)`, copied into storage of its own, as a composition owns its
 /// syntax: what a suite below the parser builds a composition over.
 pub(crate) fn composed_syntax() -> crate::scope::ComposedSyntax {

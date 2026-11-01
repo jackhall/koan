@@ -11,7 +11,8 @@
 //! The interner is therefore *not* a lookup authority. Comparisons and probes go straight through
 //! symbol bits; the table is written only where a syntactic name is constructed and read only
 //! where one is rendered. Its growth is bounded by the run's source text. The load's table freezes
-//! at the load's end, and a name recorded after it lands in the agent's overlay.
+//! at the load's end, and a name recorded after it lands in the agent's overlay. Below both may lie
+//! a [`StaticTexts`] tier compiled into the binary, which a record never writes.
 //!
 //! See [README.md](symbols/README.md): identity is a content digest, the interner is not an
 //! authority.
@@ -20,6 +21,8 @@ use std::borrow::Borrow;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::hash::{BuildHasherDefault, Hasher};
+
+use crate::bump::{FrozenTable, Keyed};
 
 /// A symbol's content identity: the low 128 bits of a BLAKE3 hash of its UTF-8 bytes.
 ///
@@ -49,8 +52,9 @@ const MISSING_SYMBOL: &str = "<symbol>";
 
 /// The program's digest → text side table for symbols, in two tiers: the load's table, frozen at
 /// the load's end ([`freeze`](Self::freeze)), and the agent's overlay, which holds each text first
-/// recorded after it — a name `EVAL` parses at the run. A render reads the overlay, then the load's
-/// table; a symbol is its text's digest, so the two never disagree.
+/// recorded after it — a name `EVAL` parses at the run. Both may rest on a [`StaticTexts`] tier
+/// ([`resting_on`](Self::resting_on)), whose texts a record skips. A render reads the overlay, the
+/// load's table, then the static tier; a symbol is its text's digest, so the tiers never disagree.
 ///
 /// Interior mutability by `RefCell`, matching the type lattice's tiers beside it: construction
 /// sites hold a shared `&RunRegistries` and still need to record text. Never borrowed across a call
@@ -61,6 +65,7 @@ pub struct SymbolInterner {
     texts: RefCell<TextMap>,
     overlay: RefCell<TextMap>,
     frozen: Cell<bool>,
+    image: Option<&'static StaticTexts>,
 }
 
 /// One tier of a [`SymbolInterner`]: each recorded text under its symbol.
@@ -69,6 +74,15 @@ type TextMap = HashMap<Symbol, Box<str>, IdentityBuildHasher>;
 impl SymbolInterner {
     pub fn new() -> Self {
         SymbolInterner::default()
+    }
+
+    /// An empty interner resting on `image`: a text the image holds renders without being
+    /// recorded, and recording it writes nothing.
+    pub fn resting_on(image: &'static StaticTexts) -> Self {
+        SymbolInterner {
+            image: Some(image),
+            ..SymbolInterner::default()
+        }
     }
 
     /// Record `text` under its symbol and hand the symbol back. Insert-if-absent: equal text
@@ -82,8 +96,12 @@ impl SymbolInterner {
     /// Record `text` under `symbol`, the digest the caller already holds. The one write door the
     /// public ones funnel through: a caller that classified the text has minted its digest
     /// already, so the recording costs a map lookup and no second hash.
-    /// After the freeze, a text the load's table lacks goes into the overlay.
+    /// After the freeze, a text the load's table lacks goes into the overlay. A text the static
+    /// tier holds is recorded nowhere.
     fn record_text(&self, symbol: Symbol, text: &str) {
+        if self.image.is_some_and(|image| image.get(symbol).is_some()) {
+            return;
+        }
         if !self.frozen.get() {
             let mut texts = self.texts.borrow_mut();
             texts.entry(symbol).or_insert_with(|| text.into());
@@ -99,15 +117,16 @@ impl SymbolInterner {
         assert!(!self.frozen.replace(true), "a symbol table freezes once");
     }
 
-    /// `read` over the text recorded for `symbol` — the overlay's, then the load's — under both
-    /// borrows, released as it returns.
+    /// `read` over the text recorded for `symbol` — the overlay's, the load's, then the static
+    /// tier's — under both borrows, released as it returns.
     fn with_text<R>(&self, symbol: Symbol, read: impl FnOnce(Option<&str>) -> R) -> R {
         let (overlay, texts) = (self.overlay.borrow(), self.texts.borrow());
         read(
             overlay
                 .get(&symbol)
                 .or_else(|| texts.get(&symbol))
-                .map(|text| &**text),
+                .map(|text| &**text)
+                .or_else(|| self.image?.get(symbol)),
         )
     }
 
@@ -151,9 +170,17 @@ impl SymbolInterner {
         })
     }
 
-    /// How many distinct symbols this run has recorded, in both tiers.
+    /// How many distinct symbols this run has recorded, in both tiers; the static tier's texts are
+    /// not counted.
     pub fn len(&self) -> usize {
         self.texts.borrow().len() + self.overlay_len()
+    }
+
+    /// Whether the load's table or the overlay holds `symbol`'s text; the static tier is not read.
+    /// Tests read it — koan's among them, through the `counters` feature.
+    #[cfg(any(test, feature = "counters"))]
+    pub fn records(&self, symbol: Symbol) -> bool {
+        self.texts.borrow().contains_key(&symbol) || self.overlay.borrow().contains_key(&symbol)
     }
 
     /// How many distinct symbols the overlay holds: texts first recorded after the freeze.
@@ -193,19 +220,101 @@ impl std::fmt::Display for SymbolDisplay<'_> {
     }
 }
 
+/// A symbol's text compiled into the binary: an entry of a [`StaticTexts`] tier.
+pub struct StaticText {
+    symbol: Symbol,
+    text: &'static str,
+}
+
+impl StaticText {
+    /// The entry for `text` under `symbol`, which must be `Symbol::of(text)`: BLAKE3 is not
+    /// `const`, so a generated image writes the digest as a literal and a golden test checks it.
+    #[doc(hidden)]
+    pub const fn imaged(symbol: u128, text: &'static str) -> Self {
+        StaticText {
+            symbol: Symbol(symbol),
+            text,
+        }
+    }
+
+    pub fn symbol(&self) -> Symbol {
+        self.symbol
+    }
+
+    pub fn text(&self) -> &'static str {
+        self.text
+    }
+}
+
+impl Keyed for StaticText {
+    type Key = Symbol;
+
+    fn key(&self) -> Symbol {
+        self.symbol
+    }
+
+    fn word(key: Symbol) -> u64 {
+        key.0 as u64
+    }
+}
+
+/// A tier of texts compiled into the binary, which a [`SymbolInterner`] may rest on: a frozen table
+/// of [`StaticText`]s, read after the interner's own tiers and never written.
+pub struct StaticTexts {
+    table: FrozenTable<'static, StaticText>,
+}
+
+impl StaticTexts {
+    /// The tier over `table`.
+    #[doc(hidden)]
+    pub const fn imaged(table: FrozenTable<'static, StaticText>) -> Self {
+        StaticTexts { table }
+    }
+
+    /// The text the tier holds for `symbol`.
+    pub fn get(&self, symbol: Symbol) -> Option<&'static str> {
+        self.table.get(symbol).map(StaticText::text)
+    }
+
+    /// Visit every text, in slot order.
+    pub fn each(&self, visit: impl FnMut(&'static StaticText)) {
+        self.table.each(visit);
+    }
+
+    pub fn len(&self) -> usize {
+        self.table.len()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.table.is_empty()
+    }
+}
+
 /// The lexical Type-token classifier: first char ASCII-uppercase plus at least one
 /// ASCII-lowercase elsewhere (`IntOrd`, `Ordered`, `Carrier`). The single canonical
 /// predicate for "this name classifies as a Type token" — the parser uses it to tag a
 /// `Type` part, the type-language partition (type members vs value slots in a SIG) reuses it, and [`TypeSymbol`] mints against it. See [README.md](symbols/README.md).
-pub fn is_type_name(tok: &str) -> bool {
-    let mut chars = tok.chars();
-    let Some(first) = chars.next() else {
-        return false;
-    };
-    if !first.is_ascii_uppercase() {
+///
+/// `const`, so a generated image checks a text's class as it compiles. It reads bytes: an ASCII
+/// byte appears in UTF-8 only as itself, so it answers what a test of `char`s would.
+pub const fn is_type_name(tok: &str) -> bool {
+    let bytes = tok.as_bytes();
+    if bytes.is_empty() || !bytes[0].is_ascii_uppercase() {
         return false;
     }
-    chars.any(|c| c.is_ascii_lowercase())
+    let mut index = 1;
+    while index < bytes.len() {
+        if bytes[index].is_ascii_lowercase() {
+            return true;
+        }
+        index += 1;
+    }
+    false
+}
+
+/// True iff `text` classifies as a value token: neither keyword-class nor Type-class.
+pub const fn is_value_name(text: &str) -> bool {
+    !is_keyword_token(text) && !is_type_name(text)
 }
 
 /// Suggest a value-classified rewrite of a Type-classified binder name: `IntOrd` → `int_ord`. Each
@@ -269,8 +378,17 @@ macro_rules! classified_symbol {
             /// that symbol rather than re-classifying a spelling.
             #[doc(hidden)]
             pub fn classify(text: &str) -> Option<Self> {
-                let classifies: fn(&str) -> bool = $classifies;
-                classifies(text).then(|| $name(Symbol::of(text)))
+                $classifies(text).then(|| $name(Symbol::of(text)))
+            }
+
+            /// The symbol of a static tier's `text`, its class checked as the image compiles.
+            #[doc(hidden)]
+            pub const fn imaged(text: &'static StaticText) -> Self {
+                assert!(
+                    $classifies(text.text),
+                    concat!("an imaged text classifies as ", $class)
+                );
+                $name(text.symbol)
             }
 
             #[doc = concat!("Classify `text` as ", $class, " **and** record it for rendering.")]
@@ -303,7 +421,7 @@ classified_symbol!(
     /// A **value** binding name: a token that is neither keyword-class nor Type-class (`xs`,
     /// `int_ord`, `it`). The key type of every value-side binding table.
     ValueSymbol,
-    |text| !is_keyword_token(text) && !is_type_name(text),
+    is_value_name,
     "a value token"
 );
 
@@ -549,14 +667,21 @@ pub enum BindKind {
 /// pure-symbol tokens (no ASCII letters) are always
 /// keywords; alphabetic tokens are keywords iff they have at least two ASCII-uppercase letters and
 /// no ASCII-lowercase letters.
-pub fn is_keyword_token(s: &str) -> bool {
-    let has_letter = s.chars().any(|c| c.is_ascii_alphabetic());
-    if !has_letter {
-        return true;
+///
+/// `const`, reading bytes, as [`is_type_name`] is.
+pub const fn is_keyword_token(s: &str) -> bool {
+    let bytes = s.as_bytes();
+    let (mut upper, mut lower) = (0, false);
+    let mut index = 0;
+    while index < bytes.len() {
+        if bytes[index].is_ascii_uppercase() {
+            upper += 1;
+        } else if bytes[index].is_ascii_lowercase() {
+            lower = true;
+        }
+        index += 1;
     }
-    let upper_count = s.chars().filter(|c| c.is_ascii_uppercase()).count();
-    let has_lower = s.chars().any(|c| c.is_ascii_lowercase());
-    upper_count >= 2 && !has_lower
+    !lower && (upper == 0 || upper >= 2)
 }
 
 /// The hasher every 128-bit-digest-keyed map runs: the interner here, the classified scope

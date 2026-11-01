@@ -28,7 +28,7 @@ fn replayed(source: &str, budget: BuildBudget) -> (String, Tiers) {
         .unwrap_or_else(|error| panic!("the program loads: {error}"));
     TIERS.with(|tiers| tiers.set(Tiers::default()));
     substrate
-        .with(|running| running.run())
+        .with(|running| running.ran())
         .expect("the program runs");
     let printed = WRITTEN.with(|written| written.borrow().join("\n"));
     (printed, TIERS.with(Cell::get))

@@ -23,6 +23,18 @@ use super::typed::{
     UseStatics,
 };
 
+/// `error` laid again through `lay`, every slice it reaches copied: what a settlement, a
+/// composition or an activation keeps of the refusal its walk reached. What resolves its types is
+/// the caller's to adopt.
+pub(crate) fn relaid_error<'to>(
+    lay: impl Lays<'to>,
+    scratch: BumpAllocator<'_>,
+    error: &ShapeError<'_>,
+) -> &'to ShapeError<'to> {
+    let relay = Relay::new(lay, scratch, Binding::EMPTY);
+    resident(lay, relay.error(error))
+}
+
 /// A copier laying records through `lay`, flattening frontiers under `binding` with a memo of
 /// each frontier's unknowns, by identity, in `scratch`.
 pub(crate) struct Relay<'to, 'x, 'bind, L> {

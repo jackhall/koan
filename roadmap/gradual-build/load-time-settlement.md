@@ -60,8 +60,6 @@ already leave out a parameter every tail edge passes on bare
 
 ## Dependencies
 
-Sequenced after the [conditionals](../conditionals/README.md) project.
-
 **Requires:** none.
 
 **Unblocks:** none — a leaf.

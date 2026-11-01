@@ -22,7 +22,7 @@ pub(super) fn composed(source: &str) -> (String, Tiers, usize) {
             .unwrap_or_else(|error| panic!("the program loads: {error}"));
     TIERS.with(|tiers| tiers.set(Tiers::default()));
     substrate
-        .with(|running| running.run())
+        .with(|running| running.ran())
         .expect("the program runs");
     let live = substrate.with(|running| running.scheduler().graph().live_compositions());
     let printed = WRITTEN.with(|written| written.borrow().join("\n"));
@@ -81,7 +81,7 @@ fn looped(source: &str, budget: BuildBudget) -> Looped {
     TIERS.with(|tiers| tiers.set(Tiers::default()));
     let (laid, storage) = (ADOPT_LAID.with(Cell::get), substrate.storage_bytes());
     substrate
-        .with(|running| running.run())
+        .with(|running| running.ran())
         .expect("the program runs");
     let tiers = TIERS.with(Cell::get);
     Looped {
@@ -153,7 +153,9 @@ fn composed_code_that_does_not_type_refuses_at_its_eval_worded_as_the_load() {
             "LET q = {code}\nLET qs = [q]\nEVAL #($..qs) -> Any"
         ));
         assert!(written.starts_with("error: "), "`{code}`: {written}");
-        assert_eq!(composed, written, "`{code}`");
+        // Each fault's trace names its own `EVAL`.
+        let message = |printed: &str| printed.split("\n  in `EVAL` ").next().map(str::to_string);
+        assert_eq!(message(&composed), message(&written), "`{code}`");
     }
 }
 
@@ -276,7 +278,7 @@ pub(super) fn smallest(source: &str) -> (String, Tiers) {
         .unwrap_or_else(|error| panic!("the program loads: {error}"));
     TIERS.with(|tiers| tiers.set(Tiers::default()));
     substrate
-        .with(|running| running.run())
+        .with(|running| running.ran())
         .expect("the program runs");
     let printed = WRITTEN.with(|written| written.borrow().join("\n"));
     (printed, TIERS.with(Cell::get))
@@ -401,7 +403,7 @@ fn pinned(source: &str, budget: BuildBudget) -> (String, Tiers, (usize, usize)) 
         .unwrap_or_else(|error| panic!("the program loads: {error}"));
     TIERS.with(|tiers| tiers.set(Tiers::default()));
     substrate
-        .with(|running| running.run())
+        .with(|running| running.ran())
         .expect("the program runs");
     let under = substrate.with(|running| running.scheduler().graph().under_compositions());
     let printed = WRITTEN.with(|written| written.borrow().join("\n"));

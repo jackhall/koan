@@ -33,7 +33,7 @@ use crate::parse::{ExpressionPart, KExpression, parse};
 use crate::symbols::{SymbolInterner, TypeSymbol};
 use crate::type_lattice::{
     Agent, DeclaredType, Halves, KType, Parametric, RecursiveGroupWindow, RelativeSchema,
-    RootBuilder,
+    RootBuilder, SEED,
 };
 use crate::values::{
     Circular, CodeView, DeepCopy, Knotted, KnottedFamily, MemoBits, Resolved, Seen, TypeTiers,
@@ -105,7 +105,7 @@ impl<'graph> TestTypes<'graph> {
     /// A builder laid in `bump`.
     pub fn new(bump: &'graph Bump) -> Self {
         TestTypes {
-            builder: RootBuilder::in_region(bump),
+            builder: RootBuilder::over(bump, &SEED),
             agent: Agent::in_region(bump),
             tiers: std::cell::Cell::new(None),
         }
@@ -244,7 +244,7 @@ impl<'graph> TestTypes<'graph> {
 /// builds its graph over.
 pub(crate) fn seeded_tiers(bump: &Bump) -> TypeTiers<'_> {
     TypeTiers {
-        frozen: RootBuilder::in_region(bump).freeze(),
+        frozen: RootBuilder::over(bump, &SEED).freeze(),
         agent: Agent::in_region(bump),
     }
 }
@@ -255,7 +255,7 @@ pub(crate) fn reading<'graph: 'tier, 'tier>(
     tiers: TypeTiers<'graph>,
     bump: &'tier Bump,
 ) -> Types<'tier, 'tier> {
-    tiers.chain(Halves::alone(Half::load(RootBuilder::in_region(bump))))
+    tiers.chain(Halves::alone(Half::load(RootBuilder::over(bump, &SEED))))
 }
 
 /// A continuation family for a graph whose cells only store.

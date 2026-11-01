@@ -1,10 +1,10 @@
 //! Whole programs under the drain: unit order, where a value is built, the slab holding the root
 //! alone, calls and recursion, components, eager parts, module bodies, lambdas — born where they
-//! are written, returned from a frame, and held in a knot — quotes run by `EVAL`, error values,
+//! are written, returned from a frame, and held in a knot — quotes run by `EVAL`, faults,
 //! the contract a frame ends under, and the tail a frame hands its last statement to.
 
 use crate::program::body::SUPPLIED_WAKES;
-use crate::program::{CellSubstrate, Outcome};
+use crate::program::{CellSubstrate, Ran};
 use crate::type_lattice::KType;
 
 use super::evaluator::{Mini, contribute, recorded, reset};
@@ -29,7 +29,7 @@ fn address(described: &str) -> &str {
 fn independent_statements_run_in_source_order_without_interleaving() {
     let mut substrate = loaded("LET a = 1\n(5 MINUS 4)\nLET b = 3\n(9)", 2);
     reset();
-    substrate.with(|running| running.run().expect("the program runs"));
+    substrate.with(|running| running.ran().expect("the program runs"));
     assert_eq!(
         recorded(),
         [
@@ -75,7 +75,7 @@ fn a_top_level_binding_is_built_in_the_root_from_the_start() {
         2,
     );
     reset();
-    substrate.with(|running| running.run().expect("the program runs"));
+    substrate.with(|running| running.ran().expect("the program runs"));
     let built: Vec<String> = recorded()
         .into_iter()
         .filter_map(|seen| seen.strip_prefix("built ").map(str::to_string))
@@ -102,7 +102,7 @@ fn a_result_built_in_its_own_region_crosses_into_the_root_at_the_verdicts_price(
     );
     let mut substrate = loaded(&source, 2);
     reset();
-    substrate.with(|running| running.run().expect("the program runs"));
+    substrate.with(|running| running.ran().expect("the program runs"));
     let built: Vec<String> = recorded()
         .into_iter()
         .filter_map(|seen| seen.strip_prefix("built ").map(str::to_string))
@@ -130,7 +130,7 @@ fn a_called_bodys_evaluations_are_tenants_of_the_frame() {
         2,
     );
     reset();
-    substrate.with(|running| running.run().expect("the program runs"));
+    substrate.with(|running| running.ran().expect("the program runs"));
     let seen = recorded();
     let built = seen
         .iter()
@@ -234,10 +234,7 @@ fn a_quantified_definition_is_called_by_name() {
 /// Run `substrate`'s program to completion and hand back every type value its bodies read.
 fn read_types(substrate: &mut CellSubstrate) -> Vec<String> {
     reset();
-    assert_eq!(
-        substrate.with(|running| running.run()),
-        Ok(Outcome::Completed)
-    );
+    assert_eq!(substrate.with(|running| running.ran()), Ok(Ran::Completed));
     recorded()
         .into_iter()
         .filter(|seen| seen.starts_with("read ") && !seen.contains("0x"))
@@ -266,9 +263,9 @@ fn contributions_for_other_parameters_misname_the_call() {
     );
     reset();
     contribute(vec![None, Some(KType::NUMBER)]);
-    let outcome = substrate.with(|running| running.run());
+    let outcome = substrate.with(|running| running.ran());
     reset();
-    assert_eq!(outcome, Ok(Outcome::Uncaught));
+    assert_eq!(outcome, Ok(Ran::Uncaught));
     let [error] = &written()[..] else {
         panic!("one error written");
     };
@@ -345,7 +342,7 @@ fn a_capitalized_name_holds_only_a_type() {
         output(),
     ) {
         Err(_) => true,
-        Ok(mut substrate) => substrate.with(|running| running.run()) != Ok(Outcome::Completed),
+        Ok(mut substrate) => substrate.with(|running| running.ran()) != Ok(Ran::Completed),
     };
     assert!(!refused("LET Foo = Number"), "a type under a type name");
     assert!(refused("LET Foo = 1"), "a number under a type name");
@@ -364,16 +361,19 @@ fn a_call_whose_argument_does_not_fit_its_parameter_is_refused() {
         2,
     );
     assert_eq!(
-        substrate.with(|running| running.run()),
-        Ok(Outcome::Uncaught),
-        "an argument its parameter does not admit raises an error value"
+        substrate.with(|running| running.ran()),
+        Ok(Ran::Uncaught),
+        "an argument its parameter does not admit faults"
     );
     let [error] = &written()[..] else {
         panic!("one error written");
     };
     assert!(
         error.starts_with("error: :(FN FOR ALL #[Held]")
-            && error.ends_with("cannot be called with :{x :Number}"),
+            && error.ends_with(
+                "cannot be called with :{x :Number}\n  in :(FN FOR ALL #[Held] :{x :(LIST OF \
+                 Held)} -> Held) (first 7) at <test>:2:9"
+            ),
         "{error}"
     );
 }
@@ -411,8 +411,8 @@ fn a_bounded_type_parameter_refuses_an_argument_outside_its_bound() {
     ] {
         let mut substrate = loaded(source, 2);
         assert_eq!(
-            substrate.with(|running| running.run()),
-            Ok(Outcome::Uncaught),
+            substrate.with(|running| running.ran()),
+            Ok(Ran::Uncaught),
             "`{source}` refuses"
         );
     }
@@ -432,7 +432,7 @@ fn a_type_parameter_no_argument_reaches_binds_its_bound() {
 fn a_lambda_reads_a_later_binding_when_it_is_born() {
     let mut substrate = loaded("(FN :{y :Number} -> Number = #(later))\nLET later = 5", 2);
     reset();
-    substrate.with(|running| running.run().expect("the program runs"));
+    substrate.with(|running| running.ran().expect("the program runs"));
     let seen = recorded();
     assert_eq!(seen.len(), 2, "{seen:?}");
     assert_eq!(seen[0], "literal 5", "the unit binding `later` runs first");
@@ -468,7 +468,7 @@ fn a_lambda_returned_from_a_frame_keeps_its_captures() {
     );
     let mut substrate = loaded(&source, 2);
     reset();
-    substrate.with(|running| running.run().expect("the program runs"));
+    substrate.with(|running| running.ran().expect("the program runs"));
     let seen = recorded();
     // Each birth's knot and captured list, in birth order: `pinned`'s, then `copied`'s.
     let born: Vec<(String, String)> = seen
@@ -525,7 +525,7 @@ fn a_lambda_in_a_knot_reads_its_fellow_through_an_edge() {
         2,
     );
     reset();
-    substrate.with(|running| running.run().expect("the program runs"));
+    substrate.with(|running| running.ran().expect("the program runs"));
     assert!(
         !recorded().iter().any(|seen| seen.starts_with("born ")),
         "the tie never asks for the `FN`"
@@ -549,7 +549,7 @@ fn a_lambda_part_is_supplied_to_a_tie() {
     );
     SUPPLIED_WAKES.with(|wakes| wakes.set(0));
     reset();
-    substrate.with(|running| running.run().expect("the program runs"));
+    substrate.with(|running| running.ran().expect("the program runs"));
     assert_eq!(SUPPLIED_WAKES.with(|wakes| wakes.get()), 1);
     let born: Vec<String> = recorded()
         .into_iter()
@@ -578,12 +578,12 @@ fn a_hole_is_unbound_when_eval_runs_whatever_the_callee_declares() {
     ] {
         let mut substrate = loaded(&format!("{twice}\nLET r = (twice #(x MINUS 1))"), 4);
         reset();
-        let outcome = substrate.with(|running| running.run());
-        assert_eq!(outcome, Ok(Outcome::Uncaught), "{twice}");
+        let outcome = substrate.with(|running| running.ran());
+        assert_eq!(outcome, Ok(Ran::Uncaught), "{twice}");
         assert_eq!(
             written(),
             ["error: unbound name 'x'"],
-            "the refusal is an error value the top level reports"
+            "the refusal is a fault the top level reports"
         );
     }
 }
@@ -593,10 +593,7 @@ fn a_hole_is_unbound_when_eval_runs_whatever_the_callee_declares() {
 #[test]
 fn a_required_keyworded_hole_is_unbound_when_eval_runs() {
     let mut substrate = loaded(&format!("{TWICE}\nLET r = (twice #(NOPE 1))"), 4);
-    assert_eq!(
-        substrate.with(|running| running.run()),
-        Ok(Outcome::Uncaught)
-    );
+    assert_eq!(substrate.with(|running| running.ran()), Ok(Ran::Uncaught));
     assert_eq!(written(), ["error: unbound key (NOPE _)"]);
 }
 
@@ -618,7 +615,7 @@ fn a_function_built_from_code_carries_its_bindings_as_captures() {
          LET a = (make 1)\nLET b = (make 1)\nLET c = (make 2)",
         4,
     );
-    substrate.with(|running| running.run().expect("the program runs"));
+    substrate.with(|running| running.ran().expect("the program runs"));
     assert_eq!(compare_back(&mut substrate, "a", "b"), "Ok(true)");
     assert_eq!(compare_back(&mut substrate, "a", "c"), "Ok(false)");
 }
@@ -651,10 +648,7 @@ fn a_malformed_quote_loads_and_its_error_is_reported_when_eval_runs_it() {
         "LET r = (EVAL #((LET x = 1) (LET x = 2) (PRINT x)) -> Any)",
         4,
     );
-    assert_eq!(
-        substrate.with(|running| running.run()),
-        Ok(Outcome::Uncaught)
-    );
+    assert_eq!(substrate.with(|running| running.ran()), Ok(Ran::Uncaught));
     let [error] = &written()[..] else {
         panic!("one error written");
     };
@@ -673,12 +667,9 @@ fn a_marked_type_name_in_a_signature_the_code_writes_binds_where_the_quote_is_wr
 }
 
 #[test]
-fn a_refused_tie_is_an_error_value_that_ends_the_program_uncaught() {
+fn a_refused_tie_faults_and_ends_the_program_uncaught() {
     let mut substrate = loaded("LET before = 1\nLET a = [b]\nLET b = [a]\nLET after = 2", 2);
-    assert_eq!(
-        substrate.with(|running| running.run()),
-        Ok(Outcome::Uncaught)
-    );
+    assert_eq!(substrate.with(|running| running.ran()), Ok(Ran::Uncaught));
     let [error] = &written()[..] else {
         panic!("one error written");
     };
@@ -735,20 +726,23 @@ fn a_tail_chain_returns_at_the_outermost_contract() {
 }
 
 #[test]
-fn a_return_that_misses_its_declared_type_is_an_error_value() {
+fn a_return_that_misses_its_declared_type_faults() {
     for body in ["#(n)", "#((LET m = n))"] {
         let mut substrate = loaded(
             &format!("LET f = (FN :{{n :Any}} -> Str = {body})\nLET r = (f 1)"),
             2,
         );
         assert_eq!(
-            substrate.with(|running| running.run()),
-            Ok(Outcome::Uncaught),
+            substrate.with(|running| running.ran()),
+            Ok(Ran::Uncaught),
             "{body}"
         );
         assert_eq!(
             written(),
-            ["error: :(FN :{n :Any} -> Str) returned Number, which does not satisfy Str"],
+            [
+                "error: :(FN :{n :Any} -> Str) returned Number, which does not satisfy Str\n  in :(FN \
+              :{n :Any} -> Str) (f 1) at <test>:2:9"
+            ],
             "{body}"
         );
     }

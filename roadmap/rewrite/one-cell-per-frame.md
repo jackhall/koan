@@ -55,10 +55,6 @@ and stays dead but undisposed until that child disposes
 
 ## Dependencies
 
-Sequenced after the [conditionals](../conditionals/README.md) project, which
-adds kinds of node the evaluator runs: one machine written after it is written
-once.
-
 **Requires:** none.
 
 **Unblocks:** none — a leaf.

@@ -4,6 +4,9 @@
 /// The build: what the program's text decides, held beside the run tree. Here, the key a
 /// settlement is found by.
 pub mod build;
+/// Every type the builtin table names, generated once and compiled in: the tier a load's root
+/// rests on.
+pub mod builtin_image;
 /// The language koan's programs run under: the builtin table, keyword selection over a use's
 /// candidates, and the step every evaluation runs.
 pub mod dispatch;

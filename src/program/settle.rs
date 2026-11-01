@@ -31,8 +31,6 @@
 //! program's. See
 //! [build/README.md](../build/README.md).
 
-use std::fmt::Write as _;
-
 use smallvec::SmallVec;
 
 use crate::build::{Layer, LoadStore, fold, key_of};
@@ -41,8 +39,8 @@ use crate::memory::{Bump, BumpBackedSet, BumpVec, ProgramBrand, Writer, bump_set
 use crate::parse::KExpression;
 use crate::scheduler::{Ask, Asked, Seek, Sought};
 use crate::scope::{
-    Address, Binding, Bound, Composition, Facts, Keyed, Level, Settlement, Shapes, Slot, Tree,
-    Unknown, quote_paths,
+    Address, Binding, Bound, Composition, Facts, Keyed, Level, Named, Settlement, Shapes, Slot,
+    Tree, Unknown, quote_paths, relaid_error,
 };
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::{DeclaredType, KType, Parametric, Term, TypeDigest, TypeNode};
@@ -389,11 +387,10 @@ pub(crate) fn settled<'a, 'graph, L: Language>(
         ask.body,
     );
     let below = parent.top();
-    Some(match walked {
+    let mut named: BumpVec<'_, DeclaredType<Parametric>> = BumpVec::new_in(&scratch);
+    let settlement = match walked {
         Ok(()) => {
-            let resting = tiers.resting();
             let (units, closings) = layer.writes().sorted(&scratch);
-            let mut named: BumpVec<'_, DeclaredType<Parametric>> = BumpVec::new_in(&scratch);
             let mut name = |kt| named.push(kt);
             units
                 .iter()
@@ -401,20 +398,23 @@ pub(crate) fn settled<'a, 'graph, L: Language>(
             closings
                 .iter()
                 .for_each(|(_, (closing, _))| closing.each_type(&mut name));
-            let settlement = Settlement::of(bump, &scratch, shapes, below, binding, layer.writes());
-            if !composed {
-                named.iter().for_each(|kt| resting.adopt_from(&types, *kt));
-                return Some(settlement);
-            }
-            // A term of each type a frame under it reads that the agent tier lacks.
-            settlement.termed(exported(&types, &resting, &named, bump, &scratch))
+            Settlement::of(bump, &scratch, shapes, below, binding, layer.writes())
         }
+        // The refusal's types rest as its records' would.
         Err(error) => {
-            let display = error.display(program.symbols(), &types);
-            let refusal = rendered(bump, &scratch, format_args!("{display}"));
+            let refusal = relaid_error(bump, &scratch, &error);
+            refusal.each_named(&mut |kt| named.push(kt));
             Settlement::refused(below, binding, refusal)
         }
-    })
+    };
+    // What a frame under it reads rests in the agent tier under the root, and is termed — a term
+    // of each type the agent tier lacks — under a composition.
+    let resting = tiers.resting();
+    if !composed {
+        named.iter().for_each(|kt| resting.adopt_from(&types, *kt));
+        return Some(settlement);
+    }
+    Some(settlement.termed(exported(&types, &resting, &named, bump, &scratch)))
 }
 
 /// The composition of the code `syntax`, composed at run time — binding `parameters`, where it is
@@ -456,13 +456,11 @@ pub(crate) fn composed<'a, 'graph, L: Language>(
         writer,
         unfolded.folded(writer, fold(unfolded, writer, &scratch)),
     );
-    let refused = |display: std::fmt::Arguments<'_>| rendered(bump, &scratch, display);
     let refusal = match walked {
-        Err(error) => Some(refused(format_args!("{}", error.display(symbols, &types)))),
-        Ok(()) => (facts
-            .typing_refusal(&types, root)
-            .or_else(|| facts.overlap(&types, root)))
-        .map(|error| refused(format_args!("{}", error.display(symbols, &types)))),
+        Err(error) => Some(relaid_error(bump, &scratch, &error)),
+        Ok(()) => (facts.typing_refusal(&types, root))
+            .or_else(|| facts.overlap(&types, root))
+            .map(|error| relaid_error(bump, &scratch, error)),
     };
     // Each type a frame under the composition reads, as a term where the agent tier lacks it.
     let resting = tiers.resting();
@@ -471,6 +469,7 @@ pub(crate) fn composed<'a, 'graph, L: Language>(
         named.push(DeclaredType::from(shape.code_type()));
     }
     facts.each_type(&mut |kt| named.push(kt));
+    refusal.each_named(&mut |kt| named.push(kt));
     let quotes = quote_paths(writer, &scratch, shapes, syntax);
     Composition::new(
         syntax,
@@ -498,21 +497,4 @@ fn exported<'a>(
         }
     }
     Keyed::sorted(bump, &mut terms)
-}
-
-/// `display` rendered into `bump`: a refusal kept worded as the load words it.
-fn rendered<'a>(bump: &'a Bump, scratch: &Bump, display: std::fmt::Arguments<'_>) -> &'a str {
-    let mut text = Text(BumpVec::new_in(scratch));
-    text.write_fmt(display).expect("a refusal renders");
-    bump.alloc_str(std::str::from_utf8(&text.0).expect("rendered as UTF-8"))
-}
-
-/// Text rendered into a scratch bump.
-pub(super) struct Text<'x>(pub(super) BumpVec<'x, u8>);
-
-impl std::fmt::Write for Text<'_> {
-    fn write_str(&mut self, text: &str) -> std::fmt::Result {
-        self.0.extend_from_slice(text.as_bytes());
-        Ok(())
-    }
 }

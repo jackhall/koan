@@ -4,10 +4,10 @@
 //! computes are laid in the composition's own storage, as the load's are in program storage. Beside
 //! them it keeps a [`Term`] of each type its shapes or records name that the root and the agent
 //! tier do not hold, which a frame under it mints into its own chain, so the composition rests
-//! nothing in the agent tier; the wording of the refusal its code reached, if any, which the
-//! `EVAL` running it reports; and the path through the code's syntax to each quote nested in it,
-//! so a quote born of composed code reads its syntax inside the root code value's, which outlives
-//! the composition.
+//! nothing in the agent tier; the refusal its code reached, if any, its types termed beside the
+//! facts', which the `EVAL` running it faults with; and the path through the code's syntax to each
+//! quote nested in it, so a quote born of composed code reads its syntax inside the root code
+//! value's, which outlives the composition.
 //!
 //! The arena owns one per syntax digest. A step under it reads it through [`Facts`](super::Facts),
 //! as the base of its chain in place of the load.
@@ -24,7 +24,7 @@ use crate::values::ContentDigest;
 
 use super::keyed::Keyed;
 use super::records::{ComposedRoot, LoadFacts};
-use super::shape::{Located, Segment, ShapeKind};
+use super::shape::{Located, Segment, ShapeError, ShapeKind};
 use super::shapes::Shapes;
 
 /// What composed code's copied syntax is laid in: program storage of its own, beside the syntax
@@ -101,7 +101,7 @@ pub struct Composition<'a> {
     syntax: &'a KExpression<'a>,
     facts: &'a LoadFacts<'a>,
     terms: Keyed<'a, (TypeDigest, Term<'a>)>,
-    refusal: Option<&'a str>,
+    refusal: Option<&'a ShapeError<'a>>,
     /// Each code shape's path through the root's syntax, by segment: empty for a body that is no
     /// nested quote's.
     quotes: &'a [&'a [u32]],
@@ -112,7 +112,7 @@ impl<'a> Composition<'a> {
         syntax: &'a KExpression<'a>,
         facts: &'a LoadFacts<'a>,
         terms: Keyed<'a, (TypeDigest, Term<'a>)>,
-        refusal: Option<&'a str>,
+        refusal: Option<&'a ShapeError<'a>>,
         quotes: &'a [&'a [u32]],
     ) -> Self {
         Composition {
@@ -140,8 +140,8 @@ impl<'a> Composition<'a> {
         self.terms
     }
 
-    /// The wording of the refusal its code reached, as the load words one.
-    pub fn refusal(&self) -> Option<&'a str> {
+    /// The refusal its code reached, its types termed beside its facts'.
+    pub fn refusal(&self) -> Option<&'a ShapeError<'a>> {
         self.refusal
     }
 

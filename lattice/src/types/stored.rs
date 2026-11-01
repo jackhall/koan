@@ -50,9 +50,21 @@ use super::tiers::lay_one;
 /// `Quantified`, any rigid variable, anything parametric, an opaque carrier, and the two
 /// porosity answers ([type tiers](../../../design/type-tiers.md#porosity)).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub(super) struct Flags(u8);
+pub struct Flags(u8);
 
 impl Flags {
+    /// The flags whose byte is `bits`: how a generated image writes a node's flags.
+    #[doc(hidden)]
+    pub const fn imaged(bits: u8) -> Self {
+        Flags(bits)
+    }
+
+    /// The flags' byte, for the emitter that writes it.
+    #[cfg(any(test, feature = "generator"))]
+    pub(super) fn bits(self) -> u8 {
+        self.0
+    }
+
     pub(super) const NONE: Self = Flags(0);
     /// A `Quantified` position is reachable without crossing a scheme.
     pub(super) const QUANTIFIED: Self = Flags(1);
@@ -91,9 +103,9 @@ impl std::ops::BitOr for Flags {
 
 /// A stored node's content: [`TypeNode`]'s variants in its order, each child and each concrete
 /// field a reference to its node, and a [`Flags`] byte in each variant whose children decide its
-/// probe answers.
+/// probe answers. Nominally `pub` so a generated image can spell one ([image.rs](super::image)).
 #[derive(Clone, Copy)]
-pub(super) enum Content<'run> {
+pub enum Content<'run> {
     Number,
     Str,
     Bool,
@@ -236,6 +248,15 @@ impl<'run> StoredNode<'run> {
         }
     }
 
+    /// `content` under the handle whose word is `handle`, as a generated image writes a node. Its
+    /// node lies in the root; the image's golden test checks the rest of the word.
+    #[doc(hidden)]
+    pub const fn imaged(handle: u128, content: Content<'run>) -> Self {
+        let handle = Handle::from_bits(handle);
+        assert!(handle.in_root(), "an imaged node lies in the root");
+        StoredNode { handle, content }
+    }
+
     /// `content` under `handle` as another chain laid it: a copy keeps its source's handle.
     pub(super) fn copied(handle: Handle, content: Content<'run>) -> Self {
         StoredNode { handle, content }
@@ -246,8 +267,9 @@ impl<'run> StoredNode<'run> {
         self.handle.digest()
     }
 
-    /// The node's handle: its digest under its two flags.
-    pub(super) fn handle(&self) -> Handle {
+    /// The node's handle: its digest under its two flags. `const`, since a generated image reads
+    /// it.
+    pub(super) const fn handle(&self) -> Handle {
         self.handle
     }
 

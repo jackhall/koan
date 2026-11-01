@@ -52,8 +52,8 @@ Read them in order the first time through — each builds on the last.
    record projection.
 8. [Newtypes](08-newtypes.md) — fresh nominal identities over a representation,
    and mutually recursive types.
-9. [Errors](09-errors.md) — error values, catching with `TRY`, capturing with
-   `CATCH`, and `Result`.
+9. [Errors](09-errors.md) — errors and their traces, catching with `TRY`,
+   capturing with `CATCH`, and `Result`.
 10. [Quoting and evaluating](10-quoting.md) — capturing an expression as data
     with `#`, running it with `EVAL`, binding its names with `$`, `\` and
     `USING`, passing code to a function you wrote, and splicing, reading and

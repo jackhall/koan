@@ -63,3 +63,15 @@ as surprises, not scheduled.
   - The shape lays each written member chain's labels together, so a leaf on a
     parameter borrows its chain from the shape and any other leaf joins its own
     chain to them once per root, whatever order the parts are read in.
+- **A construction checked twice.** Every construction solves the construction
+  rule (`values::construction`) twice: once as its step's early refusal check
+  (`dispatch/evaluate.rs` `apply`), and again in the home build, where
+  `Tagged::construct` `.expect`s the two to agree. A construction owing a
+  frame's contract also builds, crosses and keeps through `built_in_home`
+  rather than finishing in one `finish_in_home`. Measured against the code
+  before faults (release, 200k iterations, median of five), a construction loop
+  costs about 0.15 µs (2%) more per construction and a tail-returned
+  construction about 0.25 µs (2.5%). A per-site load verdict that the
+  construction always succeeds, or that the value meets the contract, would
+  skip the check where the load proved it, as a tail call already does with
+  the load's verdict.

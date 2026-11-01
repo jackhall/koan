@@ -1,5 +1,5 @@
 //! Whole programs over what dispatch evaluates: literals, containers, names, combined definitions,
-//! lambdas, type parameters, frames' contracts, record access, construction, blocks, error values,
+//! lambdas, type parameters, frames' contracts, record access, construction, blocks, faults,
 //! and programs nested to the syntax depth limit, run on the stack the interpreter sizes for it.
 
 use super::run;
@@ -94,12 +94,12 @@ fn a_frame_s_value_carries_its_declared_return() {
 }
 
 #[test]
-fn a_return_that_misses_its_declared_type_is_an_error_value() {
+fn a_return_that_misses_its_declared_type_faults() {
     assert_eq!(
         run(
             "LET r = ({v = \"s\"} :! :{v :Any})\nEXPR #(BAD) -> Number = #(r.v)\nPRINT (BAD)\nPRINT \"after\""
         ),
-        "error: :(FN :{} -> Number) returned Str, which does not satisfy Number"
+        "error: :(FN :{} -> Number) returned Str, which does not satisfy Number\n  in :(FN :{} -> Number) (BAD) at <test>:3:7"
     );
     assert_eq!(
         run("EXPR #(BAD) -> Number = #(\"s\")\nPRINT (BAD)"),
@@ -176,7 +176,7 @@ fn a_call_by_name_admits_its_arguments_and_solves_its_own_group() {
             "LET call = (FN :{f :(FN :{x :Number} -> Str), y :Any} -> Str = #(f {x = y}))\n\
              PRINT (call {f = (FN :{x :Number} -> Str = #(\"ran\")), y = \"s\"})"
         ),
-        "error: :(FN :{x :Number} -> Str) cannot be called with :{x :Str}",
+        "error: :(FN :{x :Number} -> Str) cannot be called with :{x :Str}\n  in :(FN :{x :Number} -> Str) (f {x = y}) at <test>:1:65\n  in :(FN :{f :(FN :{x :Number} -> Str) y :Any} -> Str) (call {f = (FN :{x :Number} -> Str = #(\"ran\")), y = \"s\"}) at <test>:2:7",
         "a callee the load knows at most is the call's to admit"
     );
     let pair = |call: &str| {
@@ -265,7 +265,7 @@ fn an_uncaught_error_ends_the_program_with_its_message() {
 }
 
 #[test]
-fn every_evaluation_passes_an_error_it_receives_through_unchanged() {
+fn every_evaluation_passes_a_fault_it_receives_through_unchanged() {
     assert_eq!(
         run("LET r = ({v = \"s\"} :! :{v :Any})\n\
              EXPR #(ONE x :Number) -> Number = #(x)\n\
@@ -276,13 +276,13 @@ fn every_evaluation_passes_an_error_it_receives_through_unchanged() {
         run(
             "LET r = ({v = \"a\"} :! :{v :Any})\nEXPR #(DEEP) -> Number = #(1 + r.v)\nPRINT {n = (DEEP)}"
         ),
-        "error: no overload of `_ + _` admits (Number, Str)",
+        "error: no overload of `_ + _` admits (Number, Str)\n  in :(FN :{} -> Number) (DEEP) at <test>:3:12",
         "through a frame's contract"
     );
 }
 
 #[test]
-fn a_dict_key_that_is_no_scalar_is_an_error_value() {
+fn a_dict_key_that_is_no_scalar_faults() {
     assert_eq!(
         run("LET k = [1]\nPRINT {k: 1}"),
         "error: :(LIST OF Number) cannot be a dict key"

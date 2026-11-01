@@ -13,7 +13,7 @@
 
 use std::marker::PhantomData;
 
-use crate::knot::KValue;
+use crate::knot::{KRegionHeader, KValue};
 use crate::memory::{
     CellHandle, Covariant, CrossedOperand, Dormant, DropFree, Header, Reattachable,
     ReattachableOverBoth, Writer, reattachable,
@@ -21,7 +21,6 @@ use crate::memory::{
 use crate::scheduler::action::{Action, Step, Use};
 use crate::scheduler::kept::{Kept, KeptPart};
 use crate::scheduler::seek::Requested;
-use crate::scope::RegionHeader;
 use crate::values::{ArenaRef, ContentDigest, TypeTiers};
 
 /// What a scheduler runs: the layer above it, as one bundle — the family a cell is born holding,
@@ -53,8 +52,8 @@ pub trait StepBundle<'graph>: 'graph {
     /// veneer calls it only from inside a priced crossing.
     fn cross<'cell>(
         writer: Writer<'cell, '_>,
-        header: Header<'graph, 'cell, '_, RegionHeader>,
-        view: &CrossedOperand<'graph, 'cell, '_, Self::Birth, RegionHeader>,
+        header: Header<'graph, 'cell, '_, KRegionHeader>,
+        view: &CrossedOperand<'graph, 'cell, '_, Self::Birth, KRegionHeader>,
         born: Born,
         tiers: TypeTiers<'graph>,
     ) -> BirthAt<'graph, 'cell, Self>
@@ -124,8 +123,8 @@ pub trait StepBundle<'graph>: 'graph {
     /// the skeleton's own values. Only a birth `handings` answers for reaches here.
     fn hop<'cell>(
         writer: Writer<'cell, '_>,
-        header: Header<'graph, 'cell, '_, RegionHeader>,
-        view: &CrossedOperand<'graph, 'cell, '_, Self::Birth, RegionHeader>,
+        header: Header<'graph, 'cell, '_, KRegionHeader>,
+        view: &CrossedOperand<'graph, 'cell, '_, Self::Birth, KRegionHeader>,
         handed: &[KValue<'graph, 'cell>],
         kept: &[Kept<'graph>],
         tiers: TypeTiers<'graph>,

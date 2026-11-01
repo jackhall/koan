@@ -8,9 +8,10 @@ use crate::type_lattice::{ContentKey, KType, Members, TypeNode};
 use crate::values::tests::parts;
 use crate::values::{Knotted as _, Record, Resolved, Value};
 
-use super::super::coerce::{Coercion, CoercionRefused, Substitution, coerce};
+use super::super::coerce::{Coercion, Substitution, coerce};
 use super::super::view::{Unascribable, ascribe};
 use super::{member, module};
+use crate::scope::CoercionRefused;
 
 const BAG: &str = "\
 SIG Bag FOR ALL #[Carrier] = #[\

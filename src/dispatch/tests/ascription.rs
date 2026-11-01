@@ -97,7 +97,7 @@ fn a_module_ascribed_no_signature_is_held_to_it_as_a_value() {
         run("MODULE m = (LET x = 1)\n\
              EXPR FOR ALL #[Elt] #(VIEW x :Elt) -> Any = #(m :| Elt)\n\
              PRINT (VIEW 1)"),
-        "error: <test>:2:46: Number is no signature"
+        "error: <test>:2:46: Number is no signature\n  in :(FN FOR ALL #[Elt] :{x :Elt} -> Any) (VIEW 1) at <test>:3:7"
     );
 }
 
@@ -168,7 +168,7 @@ fn a_tail_chain_returns_at_the_outermost_contract() {
              EXPR #(INNER) -> Number = #(r.v)\n\
              EXPR #(OUTER) -> Any = #(INNER)\n\
              PRINT (OUTER)"),
-        "error: :(FN :{} -> Number) returned Str, which does not satisfy Number",
+        "error: :(FN :{} -> Number) returned Str, which does not satisfy Number\n  in :(FN :{} -> Number) (INNER) at <test>:3:25\n  in :(FN :{} -> Any) (OUTER) at <test>:4:7",
         "a miss names the innermost callee"
     );
 }
@@ -184,7 +184,7 @@ fn eval_holds_its_value_to_its_declared_return() {
     );
     assert_eq!(
         run("PRINT (EVAL (#(x) USING {x = \"a\"}) -> Number)"),
-        "error: `EVAL`'s code returned Str, which does not satisfy Number"
+        "error: `EVAL`'s code returned Str, which does not satisfy Number\n  in `EVAL` (EVAL (#(x) USING {x = \"a\"}) -> Number) at <test>:1:7"
     );
     assert_eq!(
         run(&format!(
@@ -196,13 +196,15 @@ fn eval_holds_its_value_to_its_declared_return() {
     );
     assert_eq!(
         run("EXPR #(RUN c :Any) -> Any = #(EVAL c -> Any)\nPRINT \"loaded\"\nRUN 1"),
-        "loaded\nerror: Number is not code for `EVAL` to run"
+        "loaded\nerror: Number is not code for `EVAL` to run\n  in :(FN :{c :Any} -> Any) (RUN 1) at <test>:3:1"
     );
     let run_at = "EXPR FOR ALL #[Elt] #(RUN c :Code AT x :Elt) -> Elt = #(EVAL c -> Elt)\n";
     assert_eq!(run(&format!("{run_at}PRINT (RUN #(1) AT 2)")), "1");
     assert_eq!(
         run(&format!("{run_at}PRINT (RUN #(\"a\") AT 2)")),
-        "error: `EVAL`'s code returned Str, which does not satisfy Number",
+        "error: `EVAL`'s code returned Str, which does not satisfy Number\n  in `EVAL` (EVAL c -> Elt) \
+         at <test>:1:56\n  in :(FN FOR ALL #[Elt] :{c :Code x :Elt} -> Elt) (RUN #(\"a\") AT 2) at \
+         <test>:2:7",
         "the declared return is read under the call's solution"
     );
 }

@@ -12,7 +12,7 @@ use std::cell::RefCell;
 use crate::knot::{KValue, Knotted};
 use crate::memory::Bump;
 use crate::program::record::Program;
-use crate::program::{CellSubstrate, KBirth, KBundle, KState, Outcome, Output};
+use crate::program::{CellSubstrate, KBirth, KBundle, KState, Output, Ran};
 use crate::scheduler::{Action, Step, StepError};
 use crate::scope::{Coordinate, Target};
 use crate::type_lattice::display_name;
@@ -56,8 +56,8 @@ fn loaded(source: &str, cap: u32) -> CellSubstrate {
 /// and hand back what each read.
 fn run_and_read(substrate: &mut CellSubstrate, names: &[&str]) -> Vec<String> {
     assert_eq!(
-        substrate.with(|running| running.run()),
-        Ok(Outcome::Completed),
+        substrate.with(|running| running.ran()),
+        Ok(Ran::Completed),
         "{:?}",
         written()
     );

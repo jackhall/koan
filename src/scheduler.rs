@@ -23,6 +23,7 @@
 
 mod action;
 mod arena;
+mod beside;
 mod continuation;
 mod delivery;
 mod drain;
@@ -39,6 +40,7 @@ pub use action::{
     Action, Hold, Holding, MemoHome, Placement, Received, Request, Slot, Step, StepError, Taken,
     Use,
 };
+pub use beside::Beside;
 pub use continuation::{BirthAt, Born, NativeStep, StateAt, StepBundle, Work};
 #[cfg(test)]
 pub(crate) use drain::{CACHING, HOPS, HopSample, LAID, REGION_WRITTEN, SKELETONS, TIERS, Tiers};

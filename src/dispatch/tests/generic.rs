@@ -441,7 +441,7 @@ fn several_always_candidates_one_rigid_are_ranked_at_the_call() {
     assert_eq!(
         run(&format!("{source}\nPRINT (OUTER 1)")),
         "error: <test>:4:3: ambiguous call of `INNER _`: 2 overloads admit (Number) and none \
-         ranks first"
+         ranks first\n  in :(FN FOR ALL #{Elt: Number} :{x :Elt} -> :(Elt | Str)) (OUTER 1) at <test>:6:7"
     );
 }
 

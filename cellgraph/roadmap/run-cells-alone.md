@@ -5,7 +5,7 @@ Cellgraph's surface now that no build cell is a cell.
 **Problem.** Cellgraph grew doors for one embedder's build tree, which koan
 now keeps outside the graph in
 [its build arena](../../src/scheduler/README.md#the-build-arena):
-`enter_beside`, `peek` and `is_childless` have no koan caller, and the named
+`is_childless` has no koan caller, and the named
 and copied lends of [`lend.rs`](../src/lend.rs), counted tenant lends with
 their `held`/`unheld` books, [`lend_cycle`](../src/graph/lend_cycle.rs),
 and the `'lent` brand that gives `StepContext` ten
@@ -15,7 +15,7 @@ takes a counted lend of its parent's scratch that no chain reads
 
 **Acceptance criteria.**
 
-- Cellgraph's public surface holds no `enter_beside`, `peek`, `is_childless`,
+- Cellgraph's public surface holds no `is_childless`,
   `Lend`, `Lent` or `'lent`, no counted tenant lend, no `held`/`unheld`
   books and no `lend_cycle`, and
   [`tests/surface.rs`](../tests/surface.rs) names what remains.
@@ -29,6 +29,10 @@ takes a counted lend of its parent's scratch that no chain reads
 
 - *A tenant's own scratch — decided.* Not needed: a tenant borrows nothing,
   so nothing is counted on its host's scratch and no lend outlives a release.
+- *Reading a kept cell — decided.* `peek` and `enter_beside` stay: koan
+  reads a kept cell's header between steps to print an uncaught fault, and in a
+  catcher's step to build an `Error`
+  ([kept cells](../../src/scheduler/README.md#faults)).
 - *The header projection — decided.* `Projects`/`Projected` stay: koan's
   [region header](../../src/scope/header.rs) holds a half's decision memo
   beside its type branch, and `values` reads the branch through the projection.

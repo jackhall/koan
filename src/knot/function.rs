@@ -41,7 +41,8 @@ use crate::values::{
     ArenaRef, Chain, ContentDigest, Knotted as _, Link, List, Record, Retyped, Seen, Value, Weight,
 };
 
-use super::{Coerced, KReading, KValue, Knotted, Node, Untieable, composed, flattened};
+use super::{Coerced, KReading, KValue, Knotted, Node, composed, flattened};
+use crate::scope::Untieable;
 
 /// A function: what one knot node holds.
 pub struct Function<'graph, 'cell, X> {

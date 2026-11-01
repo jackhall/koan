@@ -41,7 +41,8 @@ use crate::values::{
     list_type, part_ktype, record_type, retype_target_as, solves_identity,
 };
 
-use super::{Eager, KReading, KValue, Knotted, Supplied, Untieable};
+use super::{Eager, KReading, KValue, Knotted, Supplied};
+use crate::scope::Untieable;
 
 /// One part of a data member's right-hand side, read and not yet written.
 pub(super) enum Staged<'step, 'graph, 'cell, 'x> {

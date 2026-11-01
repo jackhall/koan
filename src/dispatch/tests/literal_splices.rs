@@ -74,9 +74,11 @@ fn a_splice_under_a_literal_takes_its_level_from_its_parts() {
         )),
         "[((LET x = 4) (x))]\nPRINT ((LET x = 4) (x))"
     );
+    // The two faults differ only in the `EVAL` call their trace line names.
+    let message = |printed: String| printed.split("\n  in ").next().map(str::to_string);
     assert_eq!(
-        run(&format!("{stmts}EVAL #([($..stmts)]) -> Any")),
-        run(&format!("{stmts}EVAL #(PRINT ($..stmts)) -> Any")),
+        message(run(&format!("{stmts}EVAL #([($..stmts)]) -> Any"))),
+        message(run(&format!("{stmts}EVAL #(PRINT ($..stmts)) -> Any"))),
     );
     assert_eq!(
         run("LET args = [#(a + b), #(c)]\nPRINT #([(f $..args)])"),
@@ -127,7 +129,7 @@ fn nested_in_lists(n: usize) -> String {
 }
 
 #[test]
-fn composing_through_literals_past_the_depth_limit_is_an_error_value() {
+fn composing_through_literals_past_the_depth_limit_faults() {
     on_its_stack(|| {
         let most = (MAX_SYNTAX_DEPTH - 1) / 2;
         assert_eq!(run(&nested_in_lists(most)), "9");
@@ -147,10 +149,8 @@ fn a_splice_in_a_written_quote_of_a_container_literal_composes_into_the_quote_ar
         "MATCH (42) WITH {#(Number): #(PRINT \"got\")}"
     );
     assert_eq!(
-        run(&format!(
-            "{ys}PRINT #(TRY (42) -> :Str WITH #{{Ok: ($..ys)}})"
-        )),
-        "TRY (42) -> Str WITH {#(Ok): #(PRINT \"got\")}"
+        run(&format!("{ys}PRINT #(TRY (42) WITH #{{Ok: ($..ys)}})")),
+        "TRY (42) WITH {#(Ok): #(PRINT \"got\")}"
     );
     assert_eq!(
         run("LET xs = [1]\nLET q = #(MATCH (42) WITH #{Number: ($..xs)})"),

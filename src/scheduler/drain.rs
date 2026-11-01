@@ -34,15 +34,17 @@
 
 use smallvec::SmallVec;
 
-use crate::knot::KValueFamily;
+use crate::knot::{KLink, KRegionHeader, KValueFamily};
 use crate::memory::{
-    Active, CellGraph, CellHandle, CreateError, CrossedOperand, Dormant, Erased, FIRST_CHUNK, Lend,
-    Operand, Ready, RedeemError, ReleaseAbsorption, ReleaseError, SlabHandle,
+    Active, Bump, CellGraph, CellHandle, CreateError, CrossedOperand, Dormant, Erased, FIRST_CHUNK,
+    Lend, Operand, Ready, RedeemError, ReleaseAbsorption, ReleaseError, ReleaseTreeError,
+    SlabHandle,
 };
 use crate::scheduler::action::{
     Action, Asked, Context, Kind, Placement, Spawns, Step, StepError, Tailing, Use,
 };
 use crate::scheduler::arena::{BuildArena, Composed, Settled};
+use crate::scheduler::beside::{KeptHeader, ReadsBeside};
 use crate::scheduler::continuation::{
     Arrival, BirthAt, Born, Continuation, ContinuationFamily, NativeStep, Provenance, Report,
     Rested, StateAt, StepBundle, Work,
@@ -50,13 +52,11 @@ use crate::scheduler::continuation::{
 use crate::scheduler::delivery::KDelivery;
 use crate::scheduler::kept::Kept;
 use crate::scheduler::seek::{Compose, Lending, Replayed, Requested, Seek, Settles, Unsettled};
-#[cfg(test)]
-use crate::scope::HalfHeader;
-use crate::scope::{Facts, LoadFacts, RegionHeader};
+use crate::scope::{Facts, HalfHeader, LoadFacts, Named};
 #[cfg(test)]
 use crate::type_lattice::Branch;
 use crate::type_lattice::Halves;
-use crate::values::{ArenaRef, BuildBudget, ContentDigest, Half, TypeTiers};
+use crate::values::{ArenaRef, BuildBudget, Chain, ContentDigest, Half, KeptCell, TypeTiers};
 
 /// What a loop cell may hold past twice its live bytes before a hop compacts it: a region's first
 /// chunk, within which growth is noise.
@@ -73,7 +73,7 @@ const COMPACTION_FLOOR: usize = FIRST_CHUNK;
 /// from the graph they run over rather than from a program or a static, the load's facts every
 /// step's door reads beneath its cell's layers, and the build arena its frames run under.
 pub struct Graph<'graph, B: StepBundle<'graph>> {
-    cells: CellGraph<'graph, ContinuationFamily<B>, B::Scratch, KDelivery, RegionHeader>,
+    cells: CellGraph<'graph, ContinuationFamily<B>, B::Scratch, KDelivery, KRegionHeader>,
     tiers: TypeTiers<'graph>,
     facts: &'graph LoadFacts<'graph>,
     arena: BuildArena<'graph>,
@@ -114,6 +114,39 @@ impl<'graph, B: StepBundle<'graph>> Graph<'graph, B> {
     /// Give a root back. Refused for a root that is not live.
     pub fn release_root(&mut self, root: SlabHandle) -> Result<(), ReleaseError> {
         self.cells.release(root, ReleaseAbsorption::IntoHolder)
+    }
+
+    /// Read the link a kept cell's region header holds, between steps, beside a chain over this
+    /// graph's tiers in which every type the link names resolves, adopted from the cell's branch
+    /// into a tier of its own: `cellgraph`'s `peek`, at a brand this call quantifies, so nothing
+    /// read here is laid anywhere and no kept cell is ever pinned — a pin would fold its region
+    /// into the reader when it is released. `None` for a cell no longer live or holding no link.
+    pub fn read_kept<R>(
+        &self,
+        kept: KeptCell,
+        read: impl for<'p> FnOnce(&'p KLink<'graph, 'p>, &Chain<'_, '_, '_, '_>) -> R,
+    ) -> Option<R> {
+        let (cell, _) = kept.opened();
+        let tiers = self.tiers;
+        let peeked = self.cells.peek(cell, |header, _| {
+            let half: &HalfHeader<'_, _> = header.value();
+            let link = half.link()?;
+            let bump = Bump::new();
+            let types = tiers.settling(&bump);
+            let branch = half.branch();
+            link.each_named(&mut |kt| types.adopt(branch, kt));
+            Some(read(link, &types))
+        });
+        peeked.ok().flatten().flatten()
+    }
+
+    /// Release a kept cell and its borrow of the arena node it ran under. Kept cells release in
+    /// any order: an ancestor's release outlives the call until the kept cells under it dispose.
+    pub fn release_kept(&mut self, kept: KeptCell) -> Result<(), ReleaseTreeError> {
+        let (cell, arena) = kept.opened();
+        self.cells.release_tree(cell)?;
+        self.arena.release(arena);
+        Ok(())
     }
 
     /// Whether every cell of this graph, roots included, has been reclaimed.
@@ -180,7 +213,7 @@ impl<'graph, B: StepBundle<'graph>> Graph<'graph, B> {
     #[cfg(test)]
     pub(super) fn cells(
         &mut self,
-    ) -> &mut CellGraph<'graph, ContinuationFamily<B>, B::Scratch, KDelivery, RegionHeader> {
+    ) -> &mut CellGraph<'graph, ContinuationFamily<B>, B::Scratch, KDelivery, KRegionHeader> {
         &mut self.cells
     }
 }
@@ -344,6 +377,9 @@ type Placing<'graph> = (
 enum Entry<'graph, B: StepBundle<'graph>> {
     /// A live cell with a step to run: a woken consumer, or a root work.
     Live(CellHandle),
+    /// A live cell to enter beside `kept`, a cell a fault kept, which is released once the step
+    /// has run ([`Step::read_beside`](crate::scheduler::Step::read_beside)).
+    Beside { cell: CellHandle, kept: KeptCell },
     /// A request not yet born: the provenance the drain filled for it, the request at rest, the
     /// arena node its asker runs under, the cell it is born under and how its birth crosses.
     /// `release_after` is a tail's predecessor, released with its borrow of that arena node once
@@ -382,9 +418,9 @@ where
     ///
     /// Everything else the drain runs is a descendant the root work asked for. The root work
     /// reports to nobody, so its end is success and the stack emptying first is
-    /// [`DrainStalled::Unfinished`]. A koan error is a tagged value and travels between cells as
-    /// data, so no `Result` passes from one cell to another and these are the only errors the
-    /// scheduler defines.
+    /// [`DrainStalled::Unfinished`]. A program's refusal is a
+    /// [fault](crate::scheduler::Step::fault), delivered as a value is, so these are the only
+    /// errors the scheduler defines.
     pub fn run(
         &mut self,
         work: Work<'graph, 'graph, B>,
@@ -451,8 +487,13 @@ where
         )?;
         self.ready.push(Entry::Live(root));
         while let Some(entry) = self.ready.pop() {
+            let mut beside = None;
             let (cell, release_after, release_loop) = match entry {
                 Entry::Live(cell) => (cell, None, None),
+                Entry::Beside { cell, kept } => {
+                    beside = Some(kept);
+                    (cell, None, None)
+                }
                 Entry::Unborn {
                     provenance,
                     asked,
@@ -467,7 +508,15 @@ where
                     (cell, release_after, release_loop)
                 }
             };
-            let (action, provenance, arena) = self.step(cell)?;
+            let (action, provenance, arena) = self.step(cell, beside)?;
+            // What the step read of the kept cell it ran beside it has copied by value.
+            if let Some(kept) = beside {
+                (self.graph)
+                    .release_kept(kept)
+                    .map_err(|_| DrainStalled::Unreleasable)?;
+                #[cfg(test)]
+                self.census.retired();
+            }
             // A hop's successor has woken what its predecessor kept, and borrows its arena node,
             // so the predecessor can go — and the loop cell it compacted away from after it.
             if let Some((predecessor, arena)) = release_after {
@@ -494,7 +543,30 @@ where
                         self.ready.push(Entry::Live(provenance.parent));
                     }
                 }
+                Kind::Faulted { kept } => {
+                    // A kept cell keeps its arena borrow; a loop cell above it outlives the call
+                    // under it until it is released.
+                    if !kept {
+                        self.retire(cell, arena)?;
+                    }
+                    if let Some(loop_cell) = provenance.loop_cell {
+                        self.release_loop(loop_cell)?;
+                    }
+                    // What the consumer asked for after this cell lies unborn on top of the
+                    // stack, the drain being depth-first: it never runs.
+                    while let Some(Entry::Unborn {
+                        provenance: asked,
+                        release_after: None,
+                        ..
+                    }) = self.ready.last()
+                        && asked.parent == provenance.parent
+                    {
+                        self.ready.pop();
+                    }
+                    self.ready.push(Entry::Live(provenance.parent));
+                }
                 Kind::Park => self.asked_by(cell, provenance, arena),
+                Kind::Beside(kept) => self.ready.push(Entry::Beside { cell, kept }),
                 Kind::Tail(asked, tailing) => {
                     let mut provenance = provenance;
                     let mut release_loop = None;
@@ -890,20 +962,39 @@ where
         image.handles().all(|kt| resting.resolves(kt))
     }
 
-    /// Enter one cell, wake its state, and run the step its continuation names. Hands back the
-    /// provenance and arena node it read off the continuation.
+    /// Enter one cell, wake its state, and run the step its continuation names — beside `kept`'s
+    /// region header where it names a kept cell. Hands back the provenance and arena node it read
+    /// off the continuation.
     fn step(
         &mut self,
         cell: CellHandle,
+        kept: Option<KeptCell>,
     ) -> Result<(Action<'graph, B>, Provenance, ArenaRef), DrainStalled> {
         self.spawns.clear();
         // `enter` borrows the graph exclusively and the step borrows the buffer, so the two are
         // taken as separate fields rather than through `self`.
         let Scheduler { graph, spawns, .. } = self;
         let (tiers, facts, books) = (graph.tiers, graph.facts, &graph.arena);
+        let Some(kept) = kept else {
+            return (graph.cells)
+                .enter(cell, |context| {
+                    run_step::<B>((context, cell), tiers, (facts, books), spawns, None)
+                })
+                .map_err(|_| DrainStalled::Unenterable);
+        };
         (graph.cells)
-            .enter(cell, |context| {
-                run_step::<B>(context, tiers, (facts, books), spawns)
+            .enter_beside(cell, kept.opened().0, |context, header, _| {
+                let header = KeptHeader {
+                    half: header.map(Active::into_value),
+                    tiers,
+                };
+                run_step::<B>(
+                    (context, cell),
+                    tiers,
+                    (facts, books),
+                    spawns,
+                    Some(&header),
+                )
             })
             .map_err(|_| DrainStalled::Unenterable)
     }
@@ -988,10 +1079,14 @@ where
 /// One step of `cell`'s continuation, inside its entry: wake its state, run the step function,
 /// and tally.
 fn run_step<'graph, 'step, 'here, 'scratch, 'lent, B: StepBundle<'graph>>(
-    context: &mut Context<'graph, 'step, 'here, 'scratch, 'lent, B>,
+    (context, cell): (
+        &mut Context<'graph, 'step, 'here, 'scratch, 'lent, B>,
+        CellHandle,
+    ),
     tiers: TypeTiers<'graph>,
     (load, books): (&'graph LoadFacts<'graph>, &BuildArena<'graph>),
     spawns: &mut Spawns<'graph, B>,
+    beside: Option<&dyn ReadsBeside<'graph>>,
 ) -> (Action<'graph, B>, Provenance, ArenaRef)
 where
     'graph: 'step + 'here + 'lent,
@@ -1043,13 +1138,12 @@ where
         None => (Facts::under(load, door.top), None),
     };
     let step = step(Step::new(
-        context,
+        (context, cell),
         tiers,
         facts,
         &provenance,
         (arena, composed, arrival, sought),
-        books,
-        spawns,
+        (books, spawns, beside),
         state,
         scratch,
     ));

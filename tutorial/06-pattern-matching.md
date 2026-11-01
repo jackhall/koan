@@ -57,6 +57,7 @@ PRINT (twice {x = "four"})
 ```text
 8
 error: Str does not satisfy its ascription Number
+  in :(FN :{x :Any} -> Any) (twice {x = "four"}) at <input>:3:7
 ```
 
 ## Matching on a type or a value

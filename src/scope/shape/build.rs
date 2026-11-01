@@ -255,8 +255,7 @@ fn written_guard<'graph>(
 /// The static check of a builtin node, before any part is walked: each part its role reads as
 /// written — as a quote, as bare syntax or as a container of quotes — is written as the reading
 /// says, and admits one of its slot's types by [`admits_part`], the one admission rule — a type
-/// expression's and an in-place operand's type is
-/// the value it denotes, so only their spelling is checked. A binder name is a bare name, or a family
+/// expression's type is the value it denotes, so only its spelling is checked. A binder name is a bare name, or a family
 /// head `(<P>… -> <Name>)` for `UNION` and `NEWTYPE`. Code written where a quote or a container of
 /// quotes is wanted is `Unquoted`, a quote where bare syntax is wanted `Malformed`, and a part
 /// whose syntax fills no slot type `Inadmissible`. The readers after it assume a well-formed part.
@@ -330,9 +329,8 @@ fn written_as_read<'e>(
                 _ => ShapeError::Malformed { form: form.id, at },
             });
         }
-        // A type expression and an in-place operand are typed by the value they denote, so only
-        // their spelling is checked here.
-        let typed_by_code = !matches!(role, Role::TypeExpression | Role::InPlace);
+        // A type expression is typed by the value it denotes, so only its spelling is checked here.
+        let typed_by_code = *role != Role::TypeExpression;
         if typed_by_code
             && !slot_types
                 .iter()
@@ -1779,9 +1777,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                     self.in_type = in_type;
                     walked?
                 }
-                Role::Argument | Role::InPlace => {
-                    self.walk_part(level, statement, part, State::Eager)?
-                }
+                Role::Argument => self.walk_part(level, statement, part, State::Eager)?,
                 Role::TypeExpression => {
                     if self.in_type == 0 && !types_with_its_binder(form) {
                         self.record_type(level, statement, part, None);
@@ -2124,7 +2120,6 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 Role::Field if role.label_reads(part).is_some() => {}
                 Role::Rhs
                 | Role::Argument
-                | Role::InPlace
                 | Role::Field
                 | Role::TypeExpression
                 | Role::Signature
@@ -2225,7 +2220,7 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             BodyKind::Lambda => signature_names,
             BodyKind::Operator => &operator,
             BodyKind::UnaryOperator => &unary,
-            BodyKind::Module | BodyKind::Surfaced => &[],
+            BodyKind::Module | BodyKind::Surfaced | BodyKind::Caught => &[],
         };
         // A callable's body is a written quote, or any other part, read as code where the callable
         // is born; an in-place body is a bare group. The static check has already refused any
@@ -2244,10 +2239,11 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
             },
         };
         // A module body has no callable type, so it records no form; it is still what its binder
-        // births. A `USING` body is a block of the enclosing shape and births nothing.
+        // births. A block — a `USING`, `TRY` or `CATCH` body — is a part of the enclosing shape and
+        // births nothing.
         let site = self.site(level, part);
-        let callable = !matches!(kind, BodyKind::Surfaced | BodyKind::Module);
-        if kind != BodyKind::Surfaced {
+        let callable = kind.is_callable();
+        if kind.opens() != Opens::Block {
             // Every binder of the statement births the one body: a combined form's name and each
             // registration alike.
             let draft = &mut self.chain[level];

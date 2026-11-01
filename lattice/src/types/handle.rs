@@ -34,7 +34,7 @@ use super::chain::TypeChain;
 use super::digest::{DIGEST_BITS, TypeDigest};
 use super::kind::KKind;
 use super::node::{Group, TypeNode};
-use super::stored::{Content, Linked};
+use super::stored::{Content, Linked, StoredNode};
 use super::tiers::Habitat;
 
 /// A handle to one interned type: the content digest of its [`TypeNode`] under two flags,
@@ -354,12 +354,31 @@ impl KType {
     pub const fn within_code(self, kind: KType) -> bool {
         self.0.within_code(kind.0)
     }
+
+    /// The handle of `node`, a node of a generated image, which lies in the root and is concrete.
+    #[doc(hidden)]
+    pub const fn imaged(node: &'static StoredNode<'static>) -> KType {
+        let handle = node.handle();
+        assert!(
+            handle.in_root() && handle.is_concrete(),
+            "an imaged type lies in the root and is concrete"
+        );
+        KType(handle)
+    }
 }
 
 impl Parametric {
     /// This type's content digest — its identity.
     pub const fn digest(self) -> TypeDigest {
         self.0.digest()
+    }
+
+    /// The handle of `node`, a node of a generated image, which lies in the root.
+    #[doc(hidden)]
+    pub const fn imaged(node: &'static StoredNode<'static>) -> Parametric {
+        let handle = node.handle();
+        assert!(handle.in_root(), "an imaged node lies in the root");
+        Parametric(handle)
     }
 }
 
@@ -589,12 +608,17 @@ pub(super) fn leaf_name<'run, H: Naming<'run>>(
     })
 }
 
-/// Declares each fixed handle as a `KType` constant the rest of koan names.
+/// Declares each fixed handle as a `KType` constant the rest of koan names, and [`FIXED`], each
+/// beside its name, which the image emitter names a seed node by.
 macro_rules! fixed_handles {
     ($($(#[$doc:meta])* $name:ident = $digest:literal;)*) => {
         impl KType {
             $($(#[$doc])* pub const $name: KType = KType(Handle::new(TypeDigest($digest), true, true));)*
         }
+
+        /// Every fixed handle beside its name.
+        #[cfg(any(test, feature = "generator"))]
+        pub(super) const FIXED: &[(&str, KType)] = &[$((stringify!($name), KType::$name)),*];
     };
 }
 
@@ -610,12 +634,11 @@ macro_rules! raw_twins {
 // --- Fixed handles ---
 //
 // The twenty leaves, the five `OfKind` values, `List<Any>`, `Dict<Any, Any>`, the code
-// composites, the empty record and the empty signature name content every root pre-seeds
-// (`RootBuilder::in_region`), so their digests are known at compile time and lowering a
-// builtin type name needs no chain in hand. The literals below are the digest recipe's
-// output; `constants_match_freshly_interned_nodes` in the golden module recomputes each one
-// from its own node, so a recipe change fails loudly here rather than silently re-identifying a
-// leaf.
+// composites, the empty record and the empty signature name every node of the seed image every
+// root rests on ([image.rs](image.rs)), so their digests are known at compile time and lowering a
+// builtin type name needs no chain in hand. The literals below are the digest recipe's output;
+// `constants_match_freshly_interned_nodes` in the golden module recomputes each one from its own
+// node, so a recipe change fails loudly here rather than silently re-identifying a leaf.
 fixed_handles! {
     NUMBER = 0x221d67f1_7aa25f92_e072c1bb_1f72fc48;
     STR = 0x1a8a6add_c7627c0f_ae4be842_dfbe13ab;
@@ -674,6 +697,8 @@ fixed_handles! {
     LIST_OF_DECLARATION = 0x1d49374c_42ceaa3f_eefd92f2_d2a5ad70;
     /// `Dict<Name, Block>` — a `MATCH … UNDER` or `TRY` arm set, each guard a label.
     DICT_NAME_BLOCK = 0x162f630b_16626d22_68df48ae_99aab59a;
+    /// `TypeCode | Literal` — the code a `MATCH … WITH` guard is written as. Not spellable.
+    GUARD_CODE = 0x26744fb4_ee85546c_8b8c1ff9_fc9283f2;
     /// `Dict<TypeCode | Literal, Block>` — a `MATCH … WITH` arm set, each guard a type or a scalar
     /// literal.
     DICT_GUARD_BLOCK = 0x0bae0cc8_db677a61_fdd9a0b0_fe0c8312;
@@ -689,11 +714,11 @@ fixed_handles! {
 raw_twins! {
     NEVER, ANY, ANY_VALUE, ANY_CODE, ANY_TYPE, EMPTY_SIGNATURE, IDENTIFIER, SYMBOL,
     TYPE_NAME_TOKEN, EXPRESSION, SIGILED_TYPE_EXPR, RECORD_TYPE, LITERAL, BLOCK, DECLARATION,
-    BINDER, NAME, KEYWORD, LIST_OF_NAME, DICT_NAME_TYPE_CODE,
+    BINDER, NAME, KEYWORD,
 }
 
 impl KType {
-    /// The type-accepting slot admitting `kind` — one of the pre-seeded `OfKind` handles.
+    /// The type-accepting slot admitting `kind` — one of the seed's `OfKind` handles.
     pub const fn of_kind(kind: KKind) -> KType {
         match kind {
             KKind::ProperType => KType::PROPER_TYPE,
@@ -706,7 +731,7 @@ impl KType {
 
     /// Look up a `KType` by the name a user can write in source (e.g. `Number`, `List`). Every
     /// name here lowers to a fixed handle, so the lookup needs no chain: the content each one
-    /// names is pre-seeded into every root at construction.
+    /// names lies in the seed image every root rests on.
     pub fn from_symbol(name: TypeSymbol) -> Option<KType> {
         builtin_types()
             .into_iter()
@@ -773,7 +798,7 @@ fn kind_of_node(node: Linked<'_>) -> KKind {
 /// `Never` names the lattice bottom, so a slot written `:Never` is legal and admits nothing.
 ///
 /// Each name is a [`StaticName`], so its symbol is minted at first read and loaded thereafter:
-/// seeding a second run's root re-registers the same names without hashing a spelling.
+/// registering them in a second run re-registers the same names without hashing a spelling.
 pub fn builtin_types() -> [(&'static StaticName<TypeSymbol>, KType); 21] {
     [
         (&NUMBER_NAME, KType::NUMBER),

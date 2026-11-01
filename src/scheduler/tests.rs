@@ -8,6 +8,7 @@ mod bundle;
 mod continuation;
 mod delivery;
 mod drain;
+mod faults;
 mod gather;
 mod load;
 mod native;

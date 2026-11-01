@@ -25,6 +25,7 @@ use crate::parse::{
     BUILTIN_SHAPES, ExpressionPart, KEYWORDS, KExpression, KeyElement, PartsSummary, Quoted,
     Remark, Scope, Spanned, WrittenSlots, builtin_shape_for, literal_laid, remarked,
 };
+use crate::scope::ComposeRefused;
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::KType;
 use crate::values::view::{self, Leaf, Summary};
@@ -966,17 +967,6 @@ impl<'graph, 'cell> Remark for Remarking<'_, '_, '_, 'graph, 'cell, '_> {
             },
         }
     }
-}
-
-/// Why a quote holding a splice could not compose where it was born.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum ComposeRefused {
-    /// A splice's operand is no list.
-    NotAList { value: KType },
-    /// A spliced element is no code.
-    NotCode { element: KType },
-    /// The composed code nests deeper than the syntax depth limit.
-    TooDeep,
 }
 
 /// The view a composing quote of `body` composes where it is born, `staged` its bindings read

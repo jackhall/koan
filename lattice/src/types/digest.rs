@@ -32,13 +32,24 @@ use crate::symbols::{BinderSymbol, Symbol, TypeSymbol};
 
 use super::handle::{KType, Naming};
 use super::kind::KKind;
-use super::node::{ContentKey, NodeSchema, TypeNode};
+#[cfg(any(test, feature = "generator"))]
+use super::node::TypeNode;
+use super::node::{ContentKey, NodeSchema};
 use super::schema::{SigOrigin, SigSchema};
 use super::shape::{DeferredReturnSurface, DispatchTokenElement};
 
 /// A type's content identity: the low 126 bits of a BLAKE3 hash of its content.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug, PartialOrd, Ord)]
 pub struct TypeDigest(pub(super) u128);
+
+impl TypeDigest {
+    /// The digest whose bits are `bits`, as a generated image writes one.
+    #[doc(hidden)]
+    pub const fn imaged(bits: u128) -> Self {
+        assert!(bits & !DIGEST_BITS == 0, "a digest holds no flag bit");
+        TypeDigest(bits)
+    }
+}
 
 /// The bits of a word a digest keeps: the low 126. A handle keeps its two flags in the top two
 /// ([`Handle`](super::handle::Handle)), so no digest holds a flag.
@@ -56,15 +67,25 @@ impl std::fmt::LowerHex for TypeDigest {
 // identical trailing payloads. These values are identity-load-bearing: never reorder or reuse a
 // retired one. The tag table is hand-written because the tags *are* the identity;
 // `tag_table_covers_every_variant` in the golden module pins that every node kind has one.
+#[cfg(any(test, feature = "generator"))]
 const TAG_NUMBER: u8 = 0x01;
+#[cfg(any(test, feature = "generator"))]
 const TAG_STR: u8 = 0x02;
+#[cfg(any(test, feature = "generator"))]
 const TAG_BOOL: u8 = 0x03;
+#[cfg(any(test, feature = "generator"))]
 const TAG_NULL: u8 = 0x04;
+#[cfg(any(test, feature = "generator"))]
 const TAG_IDENTIFIER: u8 = 0x05;
+#[cfg(any(test, feature = "generator"))]
 const TAG_EXPRESSION: u8 = 0x06;
+#[cfg(any(test, feature = "generator"))]
 const TAG_SIGILED_TYPE_EXPR: u8 = 0x07;
+#[cfg(any(test, feature = "generator"))]
 const TAG_RECORD_TYPE: u8 = 0x08;
+#[cfg(any(test, feature = "generator"))]
 const TAG_ANY: u8 = 0x09;
+#[cfg(any(test, feature = "generator"))]
 const TAG_OF_KIND: u8 = 0x0A;
 const TAG_LIST: u8 = 0x0B;
 const TAG_DICT: u8 = 0x0C;
@@ -83,18 +104,29 @@ const TAG_RECURSIVE_SET: u8 = 0x1B;
 const TAG_SIG_CONTENT: u8 = 0x1C;
 // 0x1D is retired: it tagged the deep canonicalizing walk's self-reference leaf, which no longer
 // exists — projection's sentinel re-sourcing makes an own-member reference content-determined.
+#[cfg(any(test, feature = "generator"))]
 const TAG_SYMBOL: u8 = 0x1E;
+#[cfg(any(test, feature = "generator"))]
 const TAG_TYPE_NAME_TOKEN: u8 = 0x1F;
+#[cfg(any(test, feature = "generator"))]
 const TAG_NEVER: u8 = 0x20;
 const TAG_EXPRESSION_SHAPE: u8 = 0x21;
 const TAG_QUANTIFIED: u8 = 0x22;
+#[cfg(any(test, feature = "generator"))]
 const TAG_ANY_VALUE: u8 = 0x23;
+#[cfg(any(test, feature = "generator"))]
 const TAG_ANY_CODE: u8 = 0x24;
+#[cfg(any(test, feature = "generator"))]
 const TAG_LITERAL: u8 = 0x25;
+#[cfg(any(test, feature = "generator"))]
 const TAG_BLOCK: u8 = 0x26;
+#[cfg(any(test, feature = "generator"))]
 const TAG_BINDER: u8 = 0x27;
+#[cfg(any(test, feature = "generator"))]
 const TAG_NAME: u8 = 0x28;
+#[cfg(any(test, feature = "generator"))]
 const TAG_KEYWORD: u8 = 0x29;
+#[cfg(any(test, feature = "generator"))]
 const TAG_DECLARATION: u8 = 0x2A;
 const TAG_CODE_NEEDING: u8 = 0x2B;
 const TAG_LEXICAL: u8 = 0x2C;
@@ -190,6 +222,7 @@ fn kkind_tag(k: KKind) -> u8 {
 /// Every per-shape builder below is also reachable from the chain, so each door interns
 /// probe-first: an arm here is its builder over the node's own fields, so a digest taken off a
 /// caller's borrowed slices equals the digest of the node those slices would build.
+#[cfg(any(test, feature = "generator"))]
 pub(super) fn node_digest<'run, C: Naming<'run>>(
     scratch: BumpAllocator<'_>,
     node: &TypeNode<'run, C>,
@@ -263,11 +296,13 @@ pub(super) fn node_digest<'run, C: Naming<'run>>(
 }
 
 /// A leaf type: its domain tag and nothing else.
+#[cfg(any(test, feature = "generator"))]
 fn leaf_digest(tag: u8) -> TypeDigest {
     DigestHasher::new(tag).finish()
 }
 
 /// A kind-carrying slot: the tag plus the stable [`kkind_tag`] byte.
+#[cfg(any(test, feature = "generator"))]
 fn of_kind_digest(kind: KKind) -> TypeDigest {
     DigestHasher::new(TAG_OF_KIND)
         .byte(kkind_tag(kind))
@@ -617,7 +652,7 @@ fn feed_record<'run, H: Naming<'run>>(
 /// [`TypeNode::Sibling`] into the component's own canonical order, cross-component references as
 /// the referent's finished member handle.
 #[derive(Clone, Copy)]
-pub(super) struct ComponentMember<'m> {
+pub struct ComponentMember<'m> {
     pub name: TypeSymbol,
     pub kind: KKind,
     pub schema: NodeSchema<'m>,

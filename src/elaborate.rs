@@ -9,11 +9,12 @@
 //! registration — what the registration's bucket holds: the expression shape ranked by the
 //! registration's classes, and how a keyworded call binds its slots. [`type_declarations`](declaration::type_declarations) takes a
 //! whole component of type binders and hands back one handle per member, sealing a group of
-//! mutually recursive declarations in one window. [`builtin_shape_types`] interns a builtin
-//! bucket's own overloads — the `static` slot types of a
-//! [`BUILTIN_SHAPES`](crate::parse::BUILTIN_SHAPES) entry — as one handle apiece,
-//! and [`builtin_result`] and [`builtin_error`] seal the builtin nominals. [`self_signature`] reads a
-//! module's own signature off the activation its body ran in.
+//! mutually recursive declarations in one window. In tests alone, `builtin_shape_types` interns a
+//! builtin bucket's own overloads — the `static` slot types of a
+//! [`BUILTIN_SHAPES`](crate::parse::BUILTIN_SHAPES) entry — as one handle apiece, and
+//! `builtin_result` and `builtin_error` seal the builtin nominals: the recipe the builtin image is
+//! generated from, which every load rests on.
+//! [`self_signature`] reads a module's own signature off the activation its body ran in.
 //!
 //! The load's walk runs each of those doors unit by unit through the type half ([`unit`]): a
 //! reader that reads no activation, over a [`TypeContext`] the walk implements, which fixes each
@@ -38,6 +39,7 @@
 //!
 //! [`Unsupported`]: crate::scope::Elaboration::Unsupported
 
+#[cfg(test)]
 mod builtin;
 mod declaration;
 mod expression;
@@ -52,6 +54,7 @@ mod variants;
 #[cfg(test)]
 mod tests;
 
+#[cfg(test)]
 pub use builtin::{builtin_error, builtin_result, builtin_shape_types};
 pub use declaration::declares_nominal;
 pub use expression::{applied_union, declared_field, declared_variant, tag_union};

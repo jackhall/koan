@@ -505,13 +505,17 @@ impl<'step> Facts<'step> {
         self.0.bound(unknown).is_some()
     }
 
-    /// The wording of the refusal the innermost settlement's walk reached, else the refusal of the
-    /// composed code the chain rests on, if either reached one.
-    pub fn refusal(&self) -> Option<&'step str> {
-        match self.0.top {
+    /// The refusal the innermost settlement's walk reached, else the refusal of the composed code
+    /// the chain rests on, if either reached one, its types resolving in `types`.
+    pub fn refusal(&self, types: &Chain<'_, '_, '_, '_>) -> Option<&'step ShapeError<'step>> {
+        let refusal = match self.0.top {
             Some(top) => top.refusal(),
-            None => self.0.composition?.refusal(),
-        }
+            None => self
+                .0
+                .composition
+                .and_then(|composition| composition.refusal()),
+        };
+        self.minted(types, refusal)
     }
 }
 

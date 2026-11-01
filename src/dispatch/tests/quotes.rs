@@ -41,7 +41,7 @@ fn eval_runs_code_whose_dollar_names_bind_where_the_quote_is_written() {
     );
     assert_eq!(
         run(&format!("{TWICE}LET x = \"caller\"\nTWICE #(PRINT x)")),
-        "error: unbound name 'x'"
+        "error: unbound name 'x'\n  in :(FN :{body :Expression} -> Any) (TWICE #(PRINT x)) at <test>:6:1"
     );
     assert_eq!(
         run(&format!("{TWICE}TWICE (PRINT \"hi\")")),
@@ -169,7 +169,7 @@ fn a_dollar_group_over_an_operator_run_marks_every_use_the_chain_builds() {
         run(&format!(
             "{less}LET q = #(x < y < z)\nPRINT (EVAL (q USING {words}) -> Any)"
         )),
-        "error: no overload of `_ < _` admits (Str, Str)",
+        "error: no overload of `_ < _` admits (Str, Str)\n  in `EVAL` (EVAL (q USING {x = \"a\", y = \"b\", z = \"c\"}) -> Any) at <test>:3:7",
         "unmarked, the `<` uses see only the builtin"
     );
 }
@@ -309,6 +309,9 @@ fn an_eval_of_a_written_quote_runs_no_overlap_check() {
     assert!(at_load > 0, "the load checks the quote's registration");
     let before = checks();
     let printed = run(source);
-    assert!(printed.ends_with("already takes"), "{printed}");
+    assert!(
+        printed.ends_with("already takes\n  in `EVAL` (EVAL q -> Any) at <test>:2:1"),
+        "{printed}"
+    );
     assert_eq!(checks() - before, at_load, "the run checks nothing");
 }

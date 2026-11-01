@@ -237,7 +237,7 @@ fn computed_targets(source: &str) -> (String, usize) {
     .unwrap_or_else(|error| panic!("the program loads: {error}"));
     TARGETS.with(|targets| targets.set(0));
     substrate
-        .with(|running| running.run())
+        .with(|running| running.ran())
         .expect("the program runs");
     let printed = super::WRITTEN.with(|written| written.borrow().join("\n"));
     (printed, TARGETS.with(std::cell::Cell::get))

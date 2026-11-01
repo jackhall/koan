@@ -5,9 +5,9 @@
 use crate::type_lattice::KType;
 use crate::values::{Chain, Circular, ConstructionRefused, Knotted as _, Link, Value};
 
-use super::super::Untieable;
 use super::birth::tie_of;
 use super::{Fixture, bound, callable, circular, declared, pin, with_fixture};
+use crate::scope::Untieable;
 
 /// `family` applied at `Type = argument`.
 fn boxed_at(

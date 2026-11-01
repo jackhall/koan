@@ -406,7 +406,7 @@ fn a_call_through_an_opaque_view_crosses_its_barrier_both_ways() {
              PRINT (call {{v = (ints :| Counter)}})"
         )),
         "error: :(FN :{x :Carrier} -> Carrier) cannot be called with :{x :Number}: it is not \
-         sealed under Carrier",
+         sealed under Carrier\n  in :(FN :{x :Carrier} -> Carrier) (v.succ {x = 1}) at <test>:3:36\n  in :(FN :{v :Any} -> Any) (call {v = (ints :| Counter)}) at <test>:4:7",
         "an argument the view never sealed"
     );
     let stepping = "SIG Stepper FOR ALL #[Carrier] = \
@@ -454,7 +454,9 @@ fn a_sealed_member_is_opaque_outside_its_view_whatever_its_bound() {
     };
     // `USE c` settles at `c`'s closed tree, which refuses as a load would.
     let refused_plus = "error: <test>:4:34: no overload of `_ + _` admits these \
-                        arguments:\n  Carrier, which can never satisfy Number";
+                        arguments:\n  Carrier, which can never satisfy Number\n  in :(FN :{m :SIG \
+                        FOR ALL #{Carrier: Number} (zero: Carrier, succ: :(FN :{x :Carrier} -> \
+                        Carrier))} -> Any) (USE c) at <test>:10:7";
     let refused_take = "no overload of `TAKE _` admits this argument:\n  SIG (Carrier: Carrier, \
                         zero: Carrier, succ: :(FN :{x :Carrier} -> Carrier)), which can never \
                         satisfy SIG (zero: Number)";
@@ -463,7 +465,9 @@ fn a_sealed_member_is_opaque_outside_its_view_whatever_its_bound() {
     // settlement refuses as a load would.
     let ran_take = "error: <test>:9:35: no overload of `TAKE _` admits this argument:\n  SIG FOR \
                     ALL #{Carrier: Number} (zero: Carrier, succ: :(FN :{x :Carrier} -> Carrier)) \
-                    WITH {Carrier = Carrier}, which can never satisfy SIG (zero: Number)";
+                    WITH {Carrier = Carrier}, which can never satisfy SIG (zero: Number)\n  in :(FN \
+                    :{p :SIG FOR ALL #{Carrier: Number} (zero: Carrier, succ: :(FN :{x :Carrier} \
+                    -> Carrier))} -> Any) (PASS c) at <test>:10:7";
     for (program, printed) in [
         (
             "PRINT (c.zero + 1)",
@@ -523,7 +527,7 @@ fn an_opaque_view_of_an_opaque_view_reseals_and_stacks_its_barriers() {
              PRINT (call {e = d, z = c.zero})"
         )),
         "error: :(FN :{x :Carrier} -> Carrier) cannot be called with :{x :Carrier}: its value \
-         does not satisfy Carrier"
+         does not satisfy Carrier\n  in :(FN :{x :Carrier} -> Carrier) (e.succ {x = z}) at <test>:6:44\n  in :(FN :{e :Any z :Any} -> Any) (call {e = d, z = c.zero}) at <test>:7:7"
     );
 }
 
@@ -577,7 +581,7 @@ fn an_argument_crossing_a_union_slot_inwards_unseals_by_the_member_over_the_carr
              PRINT (call {{w = v}})"
         )),
         "error: :(FN :{x :(Carrier | Str)} -> Str) cannot be called with :{x :Number}: no member \
-         of its union admits it"
+         of its union admits it\n  in :(FN :{x :(Carrier | Str)} -> Str) (w.show {x = 1}) at <test>:4:36\n  in :(FN :{w :Any} -> Any) (call {w = v}) at <test>:5:7"
     );
 }
 
@@ -763,7 +767,7 @@ fn a_carrier_is_keyed_on_content() {
              PRINT (call {{f = a.succ, z = c.zero}})"
         )),
         "true\nfalse\nerror: :(FN :{x :Carrier} -> Carrier) cannot be called with \
-         :{x :Carrier}: it is not sealed under Carrier",
+         :{x :Carrier}: it is not sealed under Carrier\n  in :(FN :{x :Carrier} -> Carrier) (f {x = z}) at <test>:8:44\n  in :(FN :{f :Any z :Any} -> Any) (call {f = a.succ, z = c.zero}) at <test>:11:7",
         "modules of equal content share a carrier, and of other content do not"
     );
     assert_eq!(

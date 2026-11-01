@@ -241,7 +241,13 @@ fn a_statement_binding_that_cannot_type_faults_where_the_load_would() {
          PRINT (USE 1)\n"
     );
     let ran = ran_under(2, &run, BuildBudget::default());
-    let fault = ran.printed.strip_prefix("error: ").expect("the run faults");
+    let (fault, trace) = (ran.printed.strip_prefix("error: "))
+        .and_then(|printed| printed.split_once("\n  in "))
+        .expect("the run faults in `USE`'s frame");
+    assert!(
+        trace.starts_with(":(FN :{n :Number} -> Any) (USE 1) at "),
+        "{trace}"
+    );
     let refused = super::run(&super::caching::program(2, &declared));
     let refused = refused
         .strip_prefix("load: ")

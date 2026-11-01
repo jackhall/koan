@@ -20,9 +20,8 @@ knot node of its own whose members are read by slot, and
 [the program](../../src/program/README.md) above them all turns a loaded koan
 program into work for the drain. The items here complete the path to running a
 program: the lattice, value, scope and callable pieces dispatch rests on;
-dispatch over all of them; and module programs and yielding iterators above dispatch. Three bodies of work that build on dispatch have projects of
-their own: [conditionals](../conditionals/README.md) (matching, faults and catching),
-[gradual build](../gradual-build/README.md) (what the load fixes, what a
+dispatch over all of them; and module programs and yielding iterators above dispatch. Two bodies of work that build on dispatch have projects of
+their own: [gradual build](../gradual-build/README.md) (what the load fixes, what a
 binding settles, and where each lives) and
 [gradual typing](../gradual-typing/README.md). What it buys the language: one runtime whose
 every layer was designed knowing the layers above it, with the old runtime's
@@ -107,8 +106,9 @@ as surprises, not scheduled.
   length mismatch rather than refusing. A typing whose writes have nowhere to
   land would let the types carry what the flag carries.
 - **Refusals are re-listed layer to layer.**
-  [`errors.rs`](../../src/dispatch/errors.rs) re-lists `view::Unascribable` one
-  to one and hand-maps it with an `unreachable!` arm;
+  [`Fault`](../../src/scope/fault.rs) re-lists `view::Unascribable` one to one,
+  and [`evaluate.rs`](../../src/dispatch/evaluate.rs) hand-maps it with an
+  `unreachable!` arm;
   [`ShapeError`](../../src/scope/shape.rs) holds dispatch's static refusals
   beside two elaborator ones, so every new static check edits `scope`; the module
   coercion builds `SealRefused::NotSealed`, which `values` never does, and
@@ -159,13 +159,6 @@ as surprises, not scheduled.
   its payload is read, so the tie cuts there, and the payload is checked
   against the representation with the arguments substituted in. Today an
   applied head constructs nothing.
-- **`CATCH`'s declared return is `Any`.** The first runtime declared
-  `Result {Ok = Any, Error = KError}`. The rewrite declares `Result`
-  ([`builtin_result`](../../src/elaborate/builtin.rs)) but no `KError`, and a
-  [builtin shape](../../src/parse/builtin_shapes.rs)'s return rests in a
-  `static`, which cannot hold an application over declared types.
-  [Catching errors](../conditionals/catching.md) names `Result`
-  there, and has to get past that.
 - **A value's weight counts a knot once per reference.** A knot member weighs
   its whole knot ([weight](../../src/values/README.md#weight)), and a
   composite's weight is the sum of its cells', so a value holding two members

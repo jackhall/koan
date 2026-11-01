@@ -32,6 +32,7 @@ mod channels;
 mod closure;
 mod composition;
 mod facts;
+mod fault;
 mod filled;
 mod groups;
 mod header;
@@ -56,6 +57,7 @@ pub(crate) mod tests;
 pub(crate) use records::RecordSource;
 #[cfg(test)]
 pub(crate) use records::{RIGID_AT_RUN, TERM_PROBES, rigid_at_run};
+pub(crate) use relay::relaid_error;
 pub(crate) use shape::IMPLICIT;
 pub(crate) use signature::{pair_label, traced_quote};
 pub(crate) use spelling::{PathSpelling, SpelledRoot, path_spelling, tag_projection};
@@ -65,6 +67,11 @@ pub use builtins::Builtins;
 pub use closure::ClosureBindings;
 pub use composition::{ComposedSyntax, Composition, quote_paths};
 pub use facts::{Address, Binding, Bound, Cut, Frontier, Store, UnitId, Unknown};
+pub use fault::{
+    Bottom, CodeRefused, CodeRefusedDisplay, CoercionRefused, ComposeRefused, ErrorField, Fault,
+    FaultDisplay, FaultKind, Field, Hop, Inner, Line, Link, RefusedConstruction, Trace, Untieable,
+    UntieableDisplay, UsingRefused, refused_construction, ungrouped,
+};
 pub use filled::{FilledSites, filled_sites};
 pub use groups::{BuiltinGroup, GroupFrame, is_equal, is_equality, is_unequal};
 pub use header::{HalfHeader, RegionHeader};

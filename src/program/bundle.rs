@@ -11,13 +11,14 @@
 
 use std::cell::Cell;
 
-use crate::knot::{KActivationView, KValue, Knotted, KnottedFamily};
+use crate::knot::{KActivationView, KRegionHeader, KValue, Knotted, KnottedFamily};
 use crate::memory::{
     CrossedOperand, DropFree, Header, Writer, collect, covariant, reattachable, resident,
 };
+use crate::parse::SourceRef;
 use crate::scheduler::{Born, Kept, KeptPart, MemoHome, StepBundle};
-use crate::scope::RegionHeader;
 use crate::scope::{CaptureSlot, ComposedRoot, Level, Segment, Site, Slot, Stamp};
+use crate::scope::{Hop, Named};
 use crate::symbols::{BinderSymbol, Symbol};
 use crate::type_lattice::{DeclaredType, Halves, KType};
 use crate::values::{
@@ -25,7 +26,7 @@ use crate::values::{
 };
 
 use super::body::Runner;
-use super::record::{CallKind, Contract, Evaluated, Program};
+use super::record::{CallKind, Contract, Evaluated, Owed, Program};
 
 /// The bundle a koan program's steps run over.
 pub struct KBundle;
@@ -40,8 +41,9 @@ pub enum KBirth<'graph, 'cell> {
     /// parameter from its entry in `contributed`, one per parameter in symbol order where the load
     /// recorded any, and from its argument's carried type where that entry is `None` or there are
     /// none. `handed` are the digest memos the caller hands on with arguments it passed bare.
-    /// `owed` is the contract of the evaluation that tailed into this frame: `None` when the frame
-    /// was spawned. `inherit` is where the asker's decision memo rests, which seeds the frame's
+    /// `call` is the extent of the call's node. `owed` is what the evaluation that tailed into this
+    /// frame owed, its hop table counting the frame the hop replaced: `None` when the frame was
+    /// spawned. `inherit` is where the asker's decision memo rests, which seeds the frame's
     /// where its home holds none. `level` is the request of the settlement the frame seeks, which a
     /// callable born under it records in its stamp: kept by a hop under its frame's own
     /// settlement; `None` for any other frame, which lays its own from the request the drain
@@ -57,7 +59,8 @@ pub enum KBirth<'graph, 'cell> {
         kind: CallKind,
         contributed: &'cell [Option<KType>],
         handed: &'cell [Handed],
-        owed: Option<Contract>,
+        call: SourceRef,
+        owed: Option<Owed<'cell>>,
         inherit: Option<MemoHome>,
         level: Option<&'cell Level<'cell, Knotted<'graph, 'cell>>>,
         passing: Option<&'cell Passing<'graph, 'cell>>,
@@ -65,12 +68,14 @@ pub enum KBirth<'graph, 'cell> {
     },
     /// An `EVAL`: the frame's first step lays the code's activation down over the bindings it
     /// carries and the names `offered`, a record of them by name, supplies — and `contract`, the
-    /// `EVAL`'s declared return, which the frame owes. `inherit` as a call's.
+    /// `EVAL`'s declared return, which the frame owes. `call` is the extent of the `EVAL`'s node,
+    /// and `inherit` as a call's.
     Eval {
         program: &'graph Program<'graph>,
         code: KValue<'graph, 'cell>,
         offered: KValue<'graph, 'cell>,
         contract: Contract,
+        call: SourceRef,
         inherit: Option<MemoHome>,
     },
     /// A `USING` or a `BUILD` over code composed at run time: one step, under the code's
@@ -82,25 +87,25 @@ pub enum KBirth<'graph, 'cell> {
         source: Option<KValue<'graph, 'cell>>,
     },
     /// An evaluation: what it evaluates, and the view of the activation it reads names through.
-    /// A frame's tail hands its last statement over with the frame's `contract`, which the
+    /// A frame's tail hands its last statement over with what the frame owes, which the
     /// evaluation then owes its value. `within` is what its frame runs within.
     Evaluate {
         program: &'graph Program<'graph>,
         node: Evaluated,
         view: KActivationView<'graph, 'cell>,
-        contract: Option<Contract>,
+        owed: Option<Owed<'cell>>,
         within: Within<'graph, 'cell>,
     },
     /// A block — a synthesized block part's shape, a `USING … SCOPE` body or a `MATCH` arm — run
     /// beside the view of the activation it sits in, its last statement's value its own, its
-    /// parameters bound as `entered` says. A tail arm a `MATCH` hands off owes the `MATCH`'s
-    /// `contract`, and tails its last statement as a frame does. `within` as an evaluation's.
+    /// parameters bound as `entered` says. A tail arm a `MATCH` hands off owes what the `MATCH`
+    /// owes, and tails its last statement as a frame does. `within` as an evaluation's.
     Block {
         program: &'graph Program<'graph>,
         segment: Segment,
         enclosing: KActivationView<'graph, 'cell>,
         entered: Entered<'graph, 'cell>,
-        contract: Option<Contract>,
+        owed: Option<Owed<'cell>>,
         within: Within<'graph, 'cell>,
     },
     /// What the top level leaves at rest when it ends: its activation's view, for a later root
@@ -315,6 +320,29 @@ pub enum KState<'graph, 'cell> {
         birth: KBirth<'graph, 'cell>,
         stage: u32,
     },
+    /// A `TRY` or `CATCH` evaluation copying a caught fault out, between the steps it reads kept
+    /// cells beside: what it was born with, and what it has copied so far.
+    Catching {
+        birth: KBirth<'graph, 'cell>,
+        caught: Catching<'graph, 'cell>,
+    },
+}
+
+/// What a `TRY` or `CATCH` has copied out of a caught fault as it walks its links outermost first
+/// ([dispatch/README.md § Catching](../dispatch/README.md#catching)): the arm a `TRY` runs, each
+/// frame record emitted so far, laid in its own region, the innermost at the head, and the trace
+/// line still merging, beside its callee as named.
+#[derive(Clone, Copy)]
+pub struct Catching<'graph, 'cell> {
+    pub arm: Option<u16>,
+    pub frames: Option<&'cell FrameLink<'graph, 'cell>>,
+    pub pending: Option<(Hop, &'cell str)>,
+}
+
+/// One frame record of a caught fault, and the records emitted before it.
+pub struct FrameLink<'graph, 'cell> {
+    pub frame: KValue<'graph, 'cell>,
+    pub next: Option<&'cell FrameLink<'graph, 'cell>>,
 }
 
 /// The family of [`KBirth`].
@@ -376,6 +404,7 @@ impl<'graph> StepBundle<'graph> for KBundle {
                 values.plus(level).bytes()
                     + size_of_val(*contributed)
                     + size_of_val(*handed)
+                    + owed.map_or(0, |owed| size_of_val(owed.hops))
                     + kept.map_or(0, |kept| size_of_val(kept.arguments))
             }
             KBirth::Eval { code, offered, .. } => code.weight().plus(offered.weight()).bytes(),
@@ -392,8 +421,8 @@ impl<'graph> StepBundle<'graph> for KBundle {
     /// is rebuilt, each type its values carry adopted from the home's branch.
     fn cross<'cell>(
         writer: Writer<'cell, '_>,
-        header: Header<'graph, 'cell, '_, RegionHeader>,
-        view: &CrossedOperand<'graph, 'cell, '_, KBirthFamily, RegionHeader>,
+        header: Header<'graph, 'cell, '_, KRegionHeader>,
+        view: &CrossedOperand<'graph, 'cell, '_, KBirthFamily, KRegionHeader>,
         born: Born,
         tiers: TypeTiers<'graph>,
     ) -> KBirth<'graph, 'cell>
@@ -428,12 +457,18 @@ impl<'graph> StepBundle<'graph> for KBundle {
                     kind,
                     contributed,
                     handed,
+                    call,
                     owed,
                     inherit,
                     level,
                     ..
                 } => {
                     let types = tiers.chain(Halves::alone(Half::of(writer, header)));
+                    if let (Some(owed), CrossedOperand::Copied { home, .. }) = (owed, view) {
+                        owed.line().each_named(&mut |kt| {
+                            home.read(|header, _| types.adopt(header.into_value().branch(), kt));
+                        });
+                    }
                     let [callee, arguments] = copy_severed::<_, KnottedFamily, _, 2>(
                         writer,
                         &types,
@@ -448,7 +483,8 @@ impl<'graph> StepBundle<'graph> for KBundle {
                         kind,
                         contributed: collect(writer, contributed.iter().copied()),
                         handed: collect(writer, handed.iter().copied()),
-                        owed,
+                        call,
+                        owed: owed.map(|owed| relaid_owed(writer, owed)),
                         level: copied_level(writer, &types, view, level),
                         inherit,
                         passing: None,
@@ -460,6 +496,7 @@ impl<'graph> StepBundle<'graph> for KBundle {
                     code,
                     offered,
                     contract,
+                    call,
                     inherit,
                 } => {
                     let types = tiers.chain(Halves::alone(Half::of(writer, header)));
@@ -474,6 +511,7 @@ impl<'graph> StepBundle<'graph> for KBundle {
                         code,
                         offered,
                         contract,
+                        call,
                         inherit,
                     }
                 }
@@ -634,6 +672,7 @@ impl<'graph> StepBundle<'graph> for KBundle {
             kind,
             contributed,
             handed,
+            call,
             owed,
             inherit,
             level,
@@ -650,6 +689,7 @@ impl<'graph> StepBundle<'graph> for KBundle {
             kind,
             contributed,
             handed,
+            call,
             owed,
             inherit,
             level,
@@ -663,8 +703,8 @@ impl<'graph> StepBundle<'graph> for KBundle {
     /// type a copied one held a value at is adopted from its home where a restamp needs it.
     fn hop<'cell>(
         writer: Writer<'cell, '_>,
-        header: Header<'graph, 'cell, '_, RegionHeader>,
-        view: &CrossedOperand<'graph, 'cell, '_, KBirthFamily, RegionHeader>,
+        header: Header<'graph, 'cell, '_, KRegionHeader>,
+        view: &CrossedOperand<'graph, 'cell, '_, KBirthFamily, KRegionHeader>,
         handed: &[KValue<'graph, 'cell>],
         kept: &[Kept<'graph>],
         tiers: TypeTiers<'graph>,
@@ -721,6 +761,7 @@ fn successor<'graph, 'cell>(
         kind,
         contributed,
         handed: memos,
+        call,
         owed,
         inherit,
         passing: Some(passing),
@@ -752,11 +793,30 @@ fn successor<'graph, 'cell>(
         kind: *kind,
         contributed: collect(writer, contributed.iter().copied()),
         handed: collect(writer, memos.iter().copied()),
-        owed: *owed,
+        call: *call,
+        owed: owed.map(|owed| {
+            let hops = owed.hops.iter().map(|hop| hop.callee);
+            for callee in std::iter::once(owed.contract.callee).chain(hops).flatten() {
+                if !types.resolves(callee) {
+                    adopt(callee);
+                }
+            }
+            relaid_owed(writer, owed)
+        }),
         inherit: *inherit,
         level,
         passing: None,
         kept: Some(keeps(writer, passing, kept)),
+    }
+}
+
+/// `owed` laid through `writer`, its hop table copied: what a birth crossing by a copy or a
+/// skeleton hands on.
+fn relaid_owed<'cell>(writer: Writer<'cell, '_>, owed: Owed<'_>) -> Owed<'cell> {
+    Owed {
+        contract: owed.contract,
+        call: owed.call,
+        hops: collect(writer, owed.hops.iter().copied()),
     }
 }
 
@@ -782,7 +842,7 @@ fn keeps<'graph, 'cell>(
 fn copied_level<'graph, 'cell, 'severed>(
     writer: Writer<'cell, '_>,
     types: &crate::values::Chain<'cell, 'cell, '_, '_>,
-    view: &CrossedOperand<'graph, 'cell, 'severed, KBirthFamily, RegionHeader>,
+    view: &CrossedOperand<'graph, 'cell, 'severed, KBirthFamily, KRegionHeader>,
     level: Option<&'severed Level<'severed, Knotted<'graph, 'severed>>>,
 ) -> Option<&'cell Level<'cell, Knotted<'graph, 'cell>>> {
     level.map(|level| {

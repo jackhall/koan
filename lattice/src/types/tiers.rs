@@ -1,12 +1,15 @@
 //! The tiers a type lives in: the [`Frozen`] load every agent shares, the [`Agent`] tier one agent
-//! lays above it, and a [`Branch`] per habitat half the run builds in. A [`TypeChain`] reads and
-//! writes them.
+//! lays above it, and a [`Branch`] per habitat half the run builds in. A
+//! [`TypeChain`](super::chain::TypeChain) reads and writes them.
 //!
 //! - The **frozen load** holds the load's types and outlives every run. While the load runs, its
 //!   [`RootBuilder`] grows a hashbrown table and a lossless verdict table in the bump it is laid in;
 //!   the load's end ([`RootBuilder::freeze`]) lays both into [`FrozenTable`]s, runs laid once and
 //!   never written. The frozen load has no intern door and no record door, holds no cell, and so
-//!   is `Sync`; it is covariant, so a chain holds it at its own lifetime.
+//!   is `Sync`; it is covariant, so a chain holds it at its own lifetime. The builder and the
+//!   frozen load rest on a generated image ([image.rs](super::image)), a `Frozen` compiled into the
+//!   binary whose nodes a probe reads after their own; an image holds no verdict, so its table is
+//!   never read.
 //! - The **agent tier** holds what one agent rests above the load: insert-only nodes laid alone in
 //!   its bump, which never move, indexed by a hashbrown table there, and a lossless verdict table.
 //!   It is released whole at the agent's death.
@@ -42,10 +45,16 @@ use crate::bump::{
 };
 use crate::symbols::IdentityBuildHasher;
 
+#[cfg(test)]
 use super::chain::TypeChain;
-use super::digest::{TypeDigest, node_digest};
+use super::digest::TypeDigest;
+#[cfg(test)]
+use super::digest::node_digest;
+#[cfg(test)]
 use super::node::TypeNode;
-use super::stored::{Content, Flags, Linked, StoredNode};
+#[cfg(test)]
+use super::stored::{Content, Flags};
+use super::stored::{Linked, StoredNode};
 use super::verdicts::{Answer, VerdictEntry, VerdictKey};
 
 /// The root builder's node table: a reference to each stored node, bucket array in its bump.
@@ -156,16 +165,30 @@ fn record_in<'t>(
 /// load.
 pub struct RootBuilder<'g> {
     grown: Grown<'g>,
+    /// The tier the load rests on, read after the builder's own table.
+    below: Option<&'g Frozen<'g>>,
     never: Linked<'g>,
     any: Linked<'g>,
     frozen: Cell<bool>,
 }
 
 impl<'g> RootBuilder<'g> {
-    /// A builder over `bump`, laid there, seeded with the fixed handles — the leaves, the `OfKind`
-    /// values, `List<Any>`, `Dict<Any, Any>`, the empty signature and the code composites — so the
-    /// constants those names lower to resolve in a load that holds nothing else.
-    pub fn in_region(bump: BumpAllocator<'g>) -> &'g Self {
+    /// A builder over `bump`, laid there, resting on `below`: a probe reads the builder's own
+    /// table, then `below`'s, and `Never` and `Any` are `below`'s.
+    pub fn over(bump: BumpAllocator<'g>, below: &'g Frozen<'g>) -> &'g Self {
+        bump.alloc(RootBuilder {
+            grown: Grown::new(bump, bump_hash_table(bump)),
+            below: Some(below),
+            never: below.never(),
+            any: below.any(),
+            frozen: Cell::new(false),
+        })
+    }
+
+    /// `test`-only: a builder over `bump`, laid there, resting on nothing and holding `Never` and
+    /// `Any` alone: where the seed's recipe starts.
+    #[cfg(test)]
+    pub(super) fn bare(bump: BumpAllocator<'g>) -> &'g Self {
         let mut nodes = bump_hash_table(bump);
         let mut lay_leaf = |leaf: TypeNode<'g, Linked<'g>>| -> Linked<'g> {
             let digest = node_digest(bump, &leaf);
@@ -178,14 +201,13 @@ impl<'g> RootBuilder<'g> {
             node
         };
         let (never, any) = (lay_leaf(TypeNode::Never), lay_leaf(TypeNode::Any));
-        let builder = bump.alloc(RootBuilder {
+        bump.alloc(RootBuilder {
             grown: Grown::new(bump, nodes),
+            below: None,
             never,
             any,
             frozen: Cell::new(false),
-        });
-        TypeChain::building(&*builder).seed_constants(bump);
-        builder
+        })
     }
 
     /// End the load: lay its nodes and its verdicts into the [`Frozen`] load's read-only tables,
@@ -202,6 +224,7 @@ impl<'g> RootBuilder<'g> {
         bump.alloc(Frozen {
             nodes: FrozenTable::placed(bump, nodes.len(), nodes.iter().copied()),
             verdicts,
+            below: self.below,
             never: self.never,
             any: self.any,
         })
@@ -215,8 +238,9 @@ impl<'g> RootBuilder<'g> {
         self.any
     }
 
+    /// The node under `digest` in the builder's own table, else in the tier it rests on.
     pub(super) fn find(&self, digest: TypeDigest) -> Option<Linked<'g>> {
-        self.grown.find(digest)
+        self.grown.find(digest).or_else(|| self.below?.find(digest))
     }
 
     pub(super) fn insert(&self, node: Linked<'g>) {
@@ -224,6 +248,7 @@ impl<'g> RootBuilder<'g> {
         self.grown.insert(node);
     }
 
+    /// How many nodes the builder's own table holds, the tier it rests on uncounted.
     pub(super) fn len(&self) -> usize {
         self.grown.len()
     }
@@ -270,6 +295,9 @@ impl<'g> Habitat<'g> for &'g RootBuilder<'g> {
 pub struct Frozen<'g> {
     nodes: FrozenTable<'g, StoredNode<'g>>,
     verdicts: FrozenTable<'g, VerdictEntry>,
+    /// The tier this one rests on, whose nodes a probe reads after its own. Its verdicts are not
+    /// read: a tier something rests on is an image, which holds none.
+    below: Option<&'g Frozen<'g>>,
     never: Linked<'g>,
     any: Linked<'g>,
 }
@@ -281,24 +309,63 @@ const _: fn() = || {
 };
 
 impl<'g> Frozen<'g> {
-    /// A load over `bump` holding the fixed handles and nothing else: a builder seeded and frozen
-    /// at once. What a test that needs no load builds its chains over.
-    pub fn seeded(bump: BumpAllocator<'g>) -> &'g Self {
-        RootBuilder::in_region(bump).freeze()
+    /// A generated image over `nodes`, resting on nothing, whose bottom and top are `never` and
+    /// `any`: the seed ([image.rs](super::image)). An image holds no verdict.
+    #[doc(hidden)]
+    pub const fn imaged_root(
+        nodes: FrozenTable<'g, StoredNode<'g>>,
+        never: Linked<'g>,
+        any: Linked<'g>,
+    ) -> Self {
+        Frozen {
+            nodes,
+            verdicts: FrozenTable::EMPTY,
+            below: None,
+            never,
+            any,
+        }
     }
 
-    /// How many nodes the load holds. Tests read it — koan's among them, which is why it is not
-    /// `cfg(test)`: that does not reach a dependency.
+    /// A generated image over `nodes`, resting on `below`, whose bottom and top it shares.
+    #[doc(hidden)]
+    pub const fn imaged_over(
+        nodes: FrozenTable<'g, StoredNode<'g>>,
+        below: &'g Frozen<'g>,
+    ) -> Self {
+        Frozen {
+            nodes,
+            verdicts: FrozenTable::EMPTY,
+            below: Some(below),
+            never: below.never,
+            any: below.any,
+        }
+    }
+
+    /// The tier this one rests on.
+    #[cfg(any(test, feature = "generator"))]
+    pub(super) fn below(&self) -> Option<&'g Frozen<'g>> {
+        self.below
+    }
+
+    /// The tier's own nodes, without the tier it rests on.
+    #[cfg(any(test, feature = "generator"))]
+    pub(super) fn nodes(&self) -> &FrozenTable<'g, StoredNode<'g>> {
+        &self.nodes
+    }
+
+    /// How many nodes the tier's own layer holds, the tier it rests on uncounted. Tests read it —
+    /// koan's among them, which is why it is not `cfg(test)`: that does not reach a dependency.
     pub fn len(&self) -> usize {
         self.nodes.len()
     }
 
-    /// Every digest the load holds, in no particular order. Tests read it — koan's among them.
+    /// Every digest the tier's own layer holds, in no particular order. Tests read it — koan's
+    /// among them.
     pub fn each_digest(&self, mut each: impl FnMut(TypeDigest)) {
         self.nodes.each(|node| each(node.digest()));
     }
 
-    /// Whether the load holds no node; never, since `Never` and `Any` are laid before it exists.
+    /// Whether the tier's own layer holds no node.
     pub fn is_empty(&self) -> bool {
         self.nodes.is_empty()
     }
@@ -311,17 +378,20 @@ impl<'g> Frozen<'g> {
         self.any
     }
 
+    /// The node under `digest` in the tier's own table, else in the tier it rests on.
     pub(super) fn find(&self, digest: TypeDigest) -> Option<Linked<'g>> {
-        self.nodes.get(digest)
+        self.nodes.get(digest).or_else(|| self.below?.find(digest))
     }
 
+    /// The tier's own recorded verdict for `key`.
     pub(super) fn verdict(&self, key: VerdictKey) -> Option<Answer> {
         self.verdicts.get(key).map(VerdictEntry::answer)
     }
 
-    /// `test`-only: how many verdicts the load holds.
-    #[cfg(test)]
-    pub(super) fn verdict_count(&self) -> usize {
+    /// How many verdicts the tier's own layer holds. Tests read it — koan's among them, through the
+    /// `counters` feature, since `cfg(test)` does not reach a dependency.
+    #[cfg(any(test, feature = "counters"))]
+    pub fn verdict_count(&self) -> usize {
         self.verdicts.len()
     }
 }

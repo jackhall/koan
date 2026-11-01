@@ -205,7 +205,7 @@ fn a_part_not_written_as_its_role_reads_it_is_refused() {
             },
             "#{1: (it)}",
         ),
-        // A union clause and a `TRY` or `CATCH` operand are bare: a quote there is refused.
+        // A union clause and a `TRY` or `CATCH` body are bare: a quote there is refused.
         (
             "UNION Mb = #{Some: Number, None: Null}\nMATCH 1 UNDER #(Mb) WITH #{_: (it)}",
             ShapeError::Malformed {
@@ -215,7 +215,7 @@ fn a_part_not_written_as_its_role_reads_it_is_refused() {
             "#(Mb)",
         ),
         (
-            "TRY #(1) -> :Number WITH #{_: (0)}",
+            "TRY #(1) WITH #{_: (0)}",
             ShapeError::Malformed {
                 form: BuiltinShapeId::Try,
                 at,
@@ -541,6 +541,68 @@ fn an_arm_is_in_tail_position_exactly_where_its_match_is() {
             assert!(!arm.tail, "a module body is no tail body");
         },
     );
+}
+
+#[test]
+fn a_caught_body_is_a_block_with_no_parameters() {
+    shaped(
+        "LET q = 1\nTRY (LET y = q) WITH #{_: (0)}\nCATCH (LET z = q)",
+        |fixture, lines, shape| {
+            let shape = shape.expect("the program shapes");
+            for (line, binder) in [(&lines[1], "y"), (&lines[2], "z")] {
+                let body = shape
+                    .nested(shape.site(&line.parts[1].value))
+                    .expect("a caught body has a shape");
+                assert_eq!(body.kind(), ShapeKind::Block);
+                assert_eq!(body.slots(), 1, "the body declares only its own binder");
+                assert!(
+                    body.slot(BinderSymbol::Value(value_name(binder, fixture.symbols)))
+                        .is_some()
+                );
+                assert!(body.arm().is_none() && body.form().is_none());
+            }
+        },
+    );
+    for (source, name) in [
+        ("TRY (LET y = 1) WITH #{_: (0)}\ny", "y"),
+        ("CATCH (LET z = 1)\nz", "z"),
+    ] {
+        shaped(source, |fixture, _, shape| {
+            let expected = BinderSymbol::Value(value_name(name, fixture.symbols));
+            let error = shape.err().expect("a binder in the body is gone after it");
+            assert!(
+                matches!(error, ShapeError::Unbound { name, .. } if name == expected),
+                "{source}: {error:?}"
+            );
+        });
+    }
+}
+
+#[test]
+fn a_try_arm_is_in_tail_position_where_the_try_is_and_its_body_never() {
+    let source = "LET f = (FN :{x :Number} -> Number = \
+                  #(TRY (MATCH x WITH #{Number: (it)}) WITH #{_: (0)}))";
+    shaped(source, |fixture, lines, shape| {
+        let shape = shape.unwrap_or_else(|error| {
+            panic!(
+                "`{source}` shapes: {}",
+                error.display(fixture.symbols, fixture.types)
+            )
+        });
+        let body = lambda_body(shape, &lines[0]);
+        let mut tails = Vec::new();
+        for (_, nested) in body.nested_shapes() {
+            match nested.arm() {
+                Some(arm) => tails.push(("TRY", arm.tail)),
+                None => {
+                    let arm = nested.nested_shapes()[0].1.arm().expect("a MATCH arm");
+                    tails.push(("MATCH", arm.tail));
+                }
+            }
+        }
+        tails.sort();
+        assert_eq!(tails, [("MATCH", false), ("TRY", true)]);
+    });
 }
 
 #[test]

@@ -21,6 +21,12 @@ allocator-api2 = "0.2.21"
 # Counters koan's tests read across the crate boundary, where `cfg(test)` does not reach. Off by
 # default, so the shipped interpreter carries none; koan's dev-dependency turns it on.
 counters = []
+# Compiles each generated image's hand-written stub in its place, so its generator runs when the
+# generated file does not compile: after a change to the stored layout it spells.
+bootstrap-image = []
+# The image generator — the emitter, the digest checks and the golden compare — which koan's tests
+# call across the crate boundary. Off by default, so the shipped interpreter carries none of it.
+generator = []
 
 [dev-dependencies]
 # Generated type trees for the lattice's laws and generated spellings for the symbol classes.

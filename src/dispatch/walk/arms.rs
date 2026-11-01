@@ -1,5 +1,6 @@
 //! The walk's rule for a `MATCH`: its static type, each arm's `it`, the union clause's variants and
-//! which arms a run can take.
+//! which arms a run can take. A `TRY`'s arms are read here too, as a `MATCH … UNDER Error`'s
+//! ([catching.rs](catching.rs)).
 //!
 //! Each arm's guard is read as a type: a type guard's recorded expression, a value guard's scalar
 //! type, a label's variant of the closed union clause, and none for `_`. Its `it` is the
@@ -56,8 +57,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         node: &'graph KExpression<'graph>,
         under_union: bool,
     ) -> Result<Interval, ShapeError<'o>> {
-        let shape = self.chain[level].shape;
-        let (types, scratch) = (self.types, self.scratch);
+        let types = self.types;
         let scrutinee = self.part(level, &node.parts[1].value)?;
         let clause = match under_union {
             true => self.declared(level, &node.parts[3].value),
@@ -66,6 +66,23 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         let union = clause
             .and_then(|clause| types.concrete(clause))
             .filter(|union| variants(types, *union).is_some());
+        self.armed(level, node, scrutinee, clause, union, under_union)
+    }
+
+    /// The arms of the `MATCH` or `TRY` `node` over a scrutinee of the static type `scrutinee`,
+    /// under the union `clause` where `under_union` (`union` where the load closed it): each arm
+    /// typed with its `it`, the arms narrowed, and the kept arms' types spanned.
+    pub(super) fn armed(
+        &mut self,
+        level: usize,
+        node: &'graph KExpression<'graph>,
+        scrutinee: Interval,
+        clause: Option<Parametric>,
+        union: Option<KType>,
+        under_union: bool,
+    ) -> Result<Interval, ShapeError<'o>> {
+        let shape = self.chain[level].shape;
+        let (types, scratch) = (self.types, self.scratch);
         let arms: BumpVec<'_, &'graph BodyShape<'graph>> = {
             let mut arms = BumpVec::new_in(scratch);
             arms.extend(arm_shapes(shape, node));
@@ -323,9 +340,10 @@ fn outranks(
     guard_outranks(types, scratch, (a.guard, closed(a)), (b.guard, closed(b)))
 }
 
-/// The static types `typed` of a `MATCH`'s kept arms spanned: the plain union of their upper ends,
-/// over the lattice meet of their lower ends where every one is closed and `Never` otherwise.
-fn spanned(
+/// The static types `typed` spanned — a `MATCH`'s kept arms', or a `TRY`'s body's beside its kept
+/// arms': the plain union of their upper ends, over the lattice meet of their lower ends where every
+/// one is closed and `Never` otherwise.
+pub(super) fn spanned(
     types: &crate::values::Chain<'_, '_, '_, '_>,
     scratch: crate::memory::BumpAllocator<'_>,
     typed: &[Interval],

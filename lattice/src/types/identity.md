@@ -13,8 +13,8 @@ width is chosen so an accidental collision is less likely than a hardware fault,
 which is what makes digest equality *be* type equality with no repair path.
 
 The word's top two bits are flags, not digest: **in-root**, whether the node
-lies in the root — on the load's chain, the root builder — which is closed
-after the load, so the bit is fixed for the program's life; and **concrete**,
+lies in the root — the frozen load or an image below it, or on the load's
+chain, the root builder or an image — which is closed after the load, so the bit is fixed for the program's life; and **concrete**,
 whether nothing parametric is reachable from the node. A digest is the low 126
 bits of its hash by construction, so no flag reaches a recipe, a child digest
 or a verdict key, and a type's identity is its content wherever it lies. A
@@ -107,7 +107,18 @@ builds, for the life of the program. While the load runs, a `RootBuilder`
 grows it in a bump its owner keeps for it; the load's end freezes it into a
 `Frozen`, laid in that bump, which has no intern door and no record door, so
 the run reads it and never writes it. It holds no cell, so it is `Sync` and
-every agent may read one load from its own thread. The **agent tier**
+every agent may read one load from its own thread. The root is a stack: the
+frozen load, and its builder while the load runs, rest on **images**, frozen
+tiers compiled into the binary ([image.rs](image.rs)) — the embedder's builtin image,
+which rests in turn on the lattice's **seed**, the nodes its fixed handles
+name. A `Frozen` names the tier below it, and a probe of the root reads each
+table in turn, its own first, so the load holds only what its program adds,
+and content an image holds interns as the image's node. An image is generated
+Rust source, checked in: a `static` per node whose children are references to
+other statics, its table a static run of slots, and the texts of the symbols it
+names a static tier below the interner's own. The linker fills each reference
+in, so nothing runs to stand an image up and nothing writes it. The **agent
+tier**
 (`Agent`) holds what one agent rests above the load: insert-only, each node
 laid alone in the agent's bump, where it never moves, and released whole at
 the agent's death. A **branch** holds the types the
@@ -251,7 +262,9 @@ the load's bump, where its grown build and its stranded bucket arrays are paid
 once. The freeze lays one run for its nodes and places each into it as a
 digest table would, a [`FrozenTable`](../bump/frozen_table.rs): the same slots,
 probed the same way, but a plain slice filled while it is exclusively held and
-never written after, so the frozen load holds no cell. The
+never written after, so the frozen load holds no cell. An image's table is a
+`FrozenTable` over a static run, its slots placed the same way when it is
+generated. The
 agent tier's is a hashbrown table over the agent's bump, whose miss is one
 group probe of control bytes, since every intern that misses the frozen load
 probes it next. An intern, which has a digest and no flags, probes the frozen
@@ -306,7 +319,9 @@ agent types. Any other is recorded in the table of the shortest-lived branch
 holding one of its two types — the branch a lookup finds it in — so a verdict
 over a branch's type is released with the branch. A verdict over two load
 types is therefore read from the frozen load's table, then the agent tier's,
-and any other from the own branch's, the region's, then the agent tier's.
+and any other from the own branch's, the region's, then the agent tier's. An
+image's type is a load type here, and an image carries no verdicts, so a
+verdict is read from the load's own table, never an image's.
 The root builder's and the agent tier's tables are
 [`DigestTable`](../bump/digest_table.rs)s of verdict entries laid in their
 bump at the first verdict, and a branch's laid in its half, each growing and

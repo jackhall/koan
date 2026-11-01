@@ -1,6 +1,6 @@
 //! Splicing: a quote holding `$..xs` composed when it is born, at statement level or part level,
 //! each element keeping its own bindings; what the load refuses of a splice and what its birth
-//! answers as an error value; and the depth limit composed code is held to.
+//! answers as a fault; and the depth limit composed code is held to.
 
 use std::cell::Cell;
 
@@ -99,7 +99,7 @@ fn an_elements_inner_quote_made_a_builtins_body_is_unbound() {
                   LET g = #(FN :{a :Number} -> Any = $..qs)\nPRINT g\nEVAL g -> Any";
     assert_eq!(
         run(source),
-        "FN :{a Number} -> Any = #(PRINT $x)\nerror: unbound name 'x'"
+        "FN :{a Number} -> Any = #(PRINT $x)\nerror: unbound name 'x'\n  in `EVAL` (EVAL g -> Any) at <test>:5:1"
     );
 }
 
@@ -154,16 +154,17 @@ fn a_splice_naming_a_fellow_member_is_refused() {
 }
 
 #[test]
-fn a_splice_of_no_list_or_of_no_code_is_an_error_value() {
+fn a_splice_of_no_list_or_of_no_code_faults() {
     for splice in ["$..x", "[($..x)]"] {
         let splicer = format!("LET f = (FN :{{x :Any}} -> Any = #(#(PRINT {splice})))\n");
         assert_eq!(
             run(&format!("{splicer}PRINT (f {{x = 5}})")),
-            "error: `$..` splices a list of code, and Number is none"
+            "error: `$..` splices a list of code, and Number is none\n  in :(FN :{x :Any} -> Any) (f {x = 5}) at <test>:2:7"
         );
         assert_eq!(
             run(&format!("{splicer}PRINT (f {{x = [1]}})")),
-            "error: a spliced element is no code: Number"
+            "error: a spliced element is no code: Number\n  in :(FN :{x :Any} -> Any) (f {x = [1]}) at \
+             <test>:2:7"
         );
     }
 }
@@ -175,7 +176,7 @@ fn composed_code_is_typed_by_the_walk_before_it_runs() {
     assert_eq!(
         run(source),
         "loaded\nerror: <test>:1:14: this overload of `_ + _` takes operands the builtin \
-         :(EXPR #(_ :Number + _ :Number) -> Number) already takes"
+         :(EXPR #(_ :Number + _ :Number) -> Number) already takes\n  in `EVAL` (EVAL #($..regs) -> Any) at <test>:3:1"
     );
 }
 
@@ -203,7 +204,7 @@ pub(super) const TOO_DEEP: &str =
     "error: composed code nests deeper than the syntax depth limit of 1024";
 
 #[test]
-fn composing_past_the_depth_limit_is_an_error_value() {
+fn composing_past_the_depth_limit_faults() {
     on_its_stack(|| {
         assert_eq!(run(&nested(MAX_SYNTAX_DEPTH)), "9");
         assert_eq!(run(&nested(MAX_SYNTAX_DEPTH + 1)), TOO_DEEP);
@@ -213,7 +214,7 @@ fn composing_past_the_depth_limit_is_an_error_value() {
 /// One flat node whose operator run alone passes the limit: `0 + 1 + 1 …`, the run's rewrite
 /// nesting three levels past its operators.
 #[test]
-fn an_operator_run_spliced_past_the_depth_limit_is_an_error_value() {
+fn an_operator_run_spliced_past_the_depth_limit_faults() {
     on_its_stack(|| {
         let program = |n| {
             let ops = vec!["#(+), #(1)"; n].join(", ");
@@ -233,7 +234,7 @@ fn written(source: &str) -> (String, usize) {
             .unwrap_or_else(|error| panic!("the program loads: {error}"));
     REGION_WRITTEN.with(|written| written.set(0));
     substrate
-        .with(|running| running.run())
+        .with(|running| running.ran())
         .expect("the program runs");
     let printed = WRITTEN.with(|written| written.borrow().join("\n"));
     (printed, REGION_WRITTEN.with(Cell::get))
@@ -272,7 +273,7 @@ fn a_needing_parameter_admits_spliced_code_only_once_built() {
     assert_eq!(
         run(source),
         "6\nerror: :(FN :{c ::(Block NEEDING #[y])} -> Any) cannot be called with \
-         :{c ::(UNBUILT Block)}"
+         :{c ::(UNBUILT Block)}\n  in :(FN :{c ::(Block NEEDING #[y])} -> Any) (take {c = s}) at <test>:5:1"
     );
 }
 
@@ -290,7 +291,7 @@ fn build_never_refuses() {
                   PRINT \"built\"\nEVAL b -> Any";
     assert_eq!(
         run(source),
-        "built\nerror: <test>:1:27: `x` is bound twice; first at <test>:1:13"
+        "built\nerror: <test>:1:27: `x` is bound twice; first at <test>:1:13\n  in `EVAL` (EVAL b -> Any) at <test>:4:1"
     );
 }
 
@@ -298,7 +299,10 @@ fn build_never_refuses() {
 #[test]
 fn an_eval_of_unbuilt_code_offers_no_backslash_name() {
     let source = "LET w = 5\nLET xs = [#(PRINT \\w)]\nEVAL #($..xs) -> Any";
-    assert_eq!(run(source), "error: unbound name 'w'");
+    assert_eq!(
+        run(source),
+        "error: unbound name 'w'\n  in `EVAL` (EVAL #($..xs) -> Any) at <test>:3:1"
+    );
 }
 
 /// R5: `USING` marks each hole it fills, so the fill goes wherever the code goes and no binder

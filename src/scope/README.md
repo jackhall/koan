@@ -94,11 +94,11 @@ every `FOR ALL` type parameter — or `left` and `right` for a binary `OP` and
 a *module* shape: it captures, since its activation outlives the frame that
 births it, but it is not a deferring boundary, because its statements run when
 the statement holding it runs. A `MATCH` or `TRY` arm, a `USING … SCOPE` body,
-and the block a [pairwise rewrite](#operator-groups) synthesizes to hoist
-a shared operand, is a *block* shape: an arm's one parameter is `it`, a `USING`
-body's are
-the names its operand surfaces (below), a synthesized block's are the anonymous
-slots its hoists bind, its statements count
+a `TRY` or `CATCH` body, and the block a [pairwise rewrite](#operator-groups)
+synthesizes to hoist a shared operand, is a *block* shape: an arm's one
+parameter is `it`, a `USING` body's are
+the names its operand surfaces (below), a `TRY` or `CATCH` body has none, a
+synthesized block's are the anonymous slots its hoists bind, its statements count
 from `1`, its activation is laid down in the same frame as the enclosing one,
 and instead of captures it holds a pointer to the enclosing activation. A name
 declared in the block shadows the enclosing one from the next statement on and
@@ -124,10 +124,10 @@ parts it checks each part the node's roles read as written
 an `EXPR` head is a quote, and a callable's body a quote or a part evaluated
 to code; an arm set, a union's variants, a `FOR ALL` group and a `SIG` body are
 a list or dict of quotes; a
-binder name, an in-place body, a type expression and a `TRY` or `CATCH` operand
-are bare; and each admits one of its slot's code types. A type expression's and
-an in-place operand's slot type is the value it denotes, so only their spelling
-is checked. One static check does it, against the table's own types through
+binder name, an in-place body — a `MODULE`, `GROUP`, `USING … SCOPE`, `TRY` or
+`CATCH` body — and a type expression are bare; and each admits one of its
+slot's code types. A type expression's slot type is the value it denotes, so
+only its spelling is checked. One static check does it, against the table's own types through
 [`admits_part`](../values/admission.rs) over the program's registry — the one
 rule a raw part is admitted by anywhere — so no position list and no second
 admission rule sits beside the table; the readers after it assume a well-formed
@@ -157,7 +157,9 @@ the `_` arm — and whether the arm's last statement is in tail position. It is
 exactly where the `MATCH` or `TRY` is: at the root of a body's last statement,
 binding nothing, in a tail body. A callable's body is a tail body and an arm's
 is when its own tail is; the program, a module, a `USING` body and a
-synthesized block are not. A label, a value guard or `_` written twice in one
+synthesized block are not, and neither is a `TRY` or `CATCH` body
+(`BodyKind::Caught`), whose fault goes to the `TRY` or `CATCH` rather than to
+the enclosing frame: a tail call in it would hop out past its catcher. A label, a value guard or `_` written twice in one
 arm set is refused as `RepeatedGuard` where the builder reads the set, a value
 guard compared by value, so `1` and `1.0` are one; a type written twice is
 refused where the walk types it, by handle
@@ -665,7 +667,7 @@ table sorted by its key:
   registration's expression shape, by slot, and each recorded **type
   expression**'s type, by site — a `:(…)` or `:{…}` in value position, a type
   part of an expression shape that births no callable — a `MATCH … UNDER`'s
-  union clause, a `TRY`'s result, an ascription's type — and each
+  union clause, an ascription's type — and each
   `MATCH … WITH` type guard. A callable's signature, a declaration's definition and
   a type `LET`'s right-hand side are not recorded: they are typed with their
   callable or binder, and a type nested in a recorded one is part of it;
@@ -977,7 +979,7 @@ paren group does, and so does one in a quote a builtin reads as written there,
 such as a `MATCH` arm in `#{…}`; a quote value written there composes as its
 own. Where the load can tell that
 `xs` is never a list of code it refuses the program, and otherwise a list that
-is not one is an error value where the quote is born.
+is not one is a fault where the quote is born.
 
 The level a splice acts at is read from the parts around it, never from the
 lines, since a block is any node of two or more groups
@@ -1497,6 +1499,46 @@ candidate admits is worded at load one candidate per line, each argument by
 the end of its static type that decides (`ShapeError::NoAdmittingCandidate`),
 and at run by `selection_refused`'s list of the arguments' types.
 
+## Faults
+
+A running program's refusals are [faults](../program/README.md#faults-and-output),
+and their vocabulary is this module's, in `fault.rs`, beside `ShapeError`'s. A **`Fault`** is one of a closed set of kinds — one per
+refusal the run meets: dispatch's (no overload admitting the arguments, an
+ambiguity, no `MATCH` arm admitting its scrutinee, a missing field or member, a
+view or an ascription refused, …), the frame's (no callable, arguments that
+misname or do not fit, an unsolvable group, a return or an annotation missed, a
+value that cannot cross a view's barrier, code refused), the lower layers'
+(a construction misfit, a type expression that does not elaborate, a `USING`
+or a composition refused) — and `Refused`, a build refusal the run meets,
+carrying its `ShapeError`. Each kind holds structured fields — types, names,
+symbols, code, extents, values, and the refusal enums the layers below report,
+`CoercionRefused`, `ComposeRefused`, `UsingRefused` and `CodeRefused` among
+them, which live here so a kind can carry them — and no rendered text. A field
+naming what a value at the raise carries holds that value — the record a
+missing field is read off, the operands `==` cannot compare, the arguments no
+overload admits — laid in the region the fault is raised in, or pinned there,
+so the fault keeps it where it lies. This module names no knot, so `Fault` is
+generic over the knotted type its values hold, as a stamp is, and so are
+`Link` and `Inner`; [`KFault`](../knot.rs) names it over koan's.
+`Fault::display` words every kind, through the interner and a chain, as
+`ShapeError::display` does: what the [dispatch](../dispatch/README.md#errors)
+table lists, and a `Refused` fault as its `ShapeError` renders, every line.
+A `Fault` is [`Named`](record_types.rs): `each_named` visits every type it
+names, and `values` every value it holds, which a caching body's exit adopts
+(`Exit::named`). Each kind is a `FaultKind`, a tag naming no field, whose name
+is the kind's variant of the builtin `Error`
+([catching](../dispatch/README.md#catching)).
+
+A fault's way out is a chain of **links**, each laid in a region it passed
+through. A `Link` holds a `Line` — the callee's type, none for an `EVAL`
+frame, the call's extent, and the chain's hop table of `Hop`s, a callee, a call
+and a count each — where its cell owes one, and an `Inner`: the fault itself,
+a link of the same region, or the brand-free `KeptCell` of the kept cell below,
+whose region header holds the next link, beside the fault's `FaultKind`. A cell
+that ends with a fault hands its consumer an `Inner`
+([the scheduler](../scheduler/README.md#faults)), and `Inner::kind` reads the
+kind off it without reading a kept cell: what a `TRY` selects by.
+
 ## Memory
 
 An activation is `Drop`-free and laid down in its frame's region, so a frame's
@@ -1532,8 +1574,9 @@ across shapes.
 
 What a koan graph keeps per habitat half is `scope`'s record, the
 [region header](header.rs) (`RegionHeader`, whose record is a `HalfHeader`):
-the half's type branch, and the [decision memo](memo.rs) of the cells whose
-results are built in the half beside how many entries it has laid.
+the half's type branch, the [decision memo](memo.rs) of the cells whose
+results are built in the half beside how many entries it has laid, and, in a
+kept cell's region, the outermost [link](#faults) of the fault it ended with.
 `values` reads the branch alone, through the projection `RegionHeader`
 defines, and the record is laid by the first door that interns into the half
 or lays a memo, so a half that needs neither stays untouched. What a step

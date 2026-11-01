@@ -12,8 +12,8 @@
 //!
 //! Born under a frame's [`Contract`], it owes the frame its value: a `WHEN` tails into its branch
 //! with the contract, a call whose callee's declared return satisfies it tails into the callee's
-//! frame, and every other value is held to it where it is finished. An `EVAL` refused, or an
-//! error value received from a call, finishes with the error value.
+//! frame, and every other value is held to it where it is finished. An `EVAL` refused, or a
+//! fault received from a call, ends the evaluation with that fault.
 //!
 //! A step is a bare `fn`, so what it observes it records in a thread-local for the test around it.
 
@@ -24,13 +24,15 @@ use crate::memory::{Active, Bump, BumpAllocator, Writer, collect};
 use crate::parse::BuiltinShapeId;
 use crate::parse::{ExpressionPart, KExpression, KLiteral, Spanned};
 use crate::program::{
-    CallKind, Contract, Evaluated, KBirth, KBundle, KState, Language, Program, call, eval,
+    CallKind, Contract, Evaluated, KBirth, KBundle, KState, Language, Owed, Program, call, eval,
 };
 use crate::scheduler::{
-    Action, Held, NativeStep, Placement, Received, Request, Slot as Asked, Step, StepError, Taken,
-    Use,
+    Action, Held, Hold, NativeStep, Placement, Received, Request, Slot as Asked, Step, StepError,
+    Taken, Use,
 };
-use crate::scope::{BodyShape, Builtins, CaptureSlot, Code, Located, Offer, Position, Site, Slot};
+use crate::scope::{
+    BodyShape, Builtins, CaptureSlot, Code, Inner, Located, Offer, Position, Site, Slot,
+};
 use crate::symbols::{KeywordSymbol, SymbolInterner, TypeSymbol, ValueSymbol};
 use crate::type_lattice::KType;
 use crate::values::{Chain, Circular, Knotted as _, Link, List, Record, TypeValue, Value};
@@ -126,7 +128,7 @@ impl Language for Mini {
 enum Form<'step> {
     Leaf(&'step ExpressionPart<'step>),
     Lambda(&'step KExpression<'step>),
-    Call(&'step [Spanned<ExpressionPart<'step>>]),
+    Call(&'step KExpression<'step>),
 }
 
 fn form<'step>(shape: &'step BodyShape<'step>, node: Evaluated) -> Form<'step> {
@@ -156,7 +158,7 @@ fn of_node<'step>(expression: &'step KExpression<'step>) -> Form<'step> {
     }
     match expression.parts {
         [only] => of_part(&only.value),
-        parts => Form::Call(parts),
+        _ => Form::Call(expression),
     }
 }
 
@@ -224,23 +226,24 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'
     let (birth, stage) = match state {
         KState::Born(birth) => (birth, 0),
         KState::Evaluating { birth, stage } => (birth, stage),
-        KState::Runner(_) => return step.failed(StepError::Refused),
+        KState::Runner(_) | KState::Catching { .. } => return step.failed(StepError::Refused),
     };
     let KBirth::Evaluate {
         program,
         node,
         view,
-        contract,
+        owed,
         ..
     } = birth
     else {
         return step.failed(StepError::Refused);
     };
+    let contract = owed.map(|owed| owed.contract);
     let (door, facts) = step.door();
     let view = view.reading(&door, facts);
     let types = &step.types();
     let scratch = Bump::new();
-    let parts = match form(view.shape(), node) {
+    let written = match form(view.shape(), node) {
         Form::Leaf(part @ ExpressionPart::Literal(literal)) => {
             if let KLiteral::Number(number) = literal {
                 record(format!("literal {number}"));
@@ -255,16 +258,7 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'
             let written = program.written();
             let member = quote(step.writer(), &view, written, part, types, &scratch)
                 .expect("a test's quote composes");
-            return {
-                let writer = step.writer();
-                step.finish(held(
-                    program,
-                    contract,
-                    writer,
-                    types,
-                    Value::Knotted(member),
-                ))
-            };
+            return finished(step, program, owed, types, Value::Knotted(member));
         }
         // A Type-class name reads through the activation like any other mention: a frame binds
         // its callee's type parameters, so `Elt` inside a quantified body is an ordinary read.
@@ -283,10 +277,7 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'
                 }
                 _ => {}
             }
-            return {
-                let writer = step.writer();
-                step.finish(held(program, contract, writer, types, value))
-            };
+            return finished(step, program, owed, types, value);
         }
         Form::Leaf(ExpressionPart::ListLiteral(items)) => {
             if items
@@ -327,7 +318,7 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'
             // Built here and crossed into the home at the verdict's price.
             let list = List::new(writer, cells.into_iter(), types, &scratch);
             record(format!("built {:p}", list));
-            return step.finish(held(program, contract, writer, types, Value::List(list)));
+            return finished(step, program, owed, types, Value::List(list));
         }
         Form::Leaf(_) => return step.failed(StepError::Refused),
         Form::Lambda(node) => {
@@ -349,17 +340,11 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'
                 return step.failed(StepError::Refused);
             };
             record(format!("born {}", born(member, program, types)));
-            return step.finish(held(
-                program,
-                contract,
-                writer,
-                types,
-                Value::Knotted(member),
-            ));
+            return finished(step, program, owed, types, Value::Knotted(member));
         }
-        Form::Call(parts) => parts,
+        Form::Call(written) => written,
     };
-    match (parts, stage) {
+    match (written.parts, stage) {
         ([when, condition, then, _, otherwise, _], 0)
             if keyword(when, "WHEN") && keyword(then, "THEN") && keyword(otherwise, "ELSE") =>
         {
@@ -372,19 +357,21 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'
             park(step, asked, birth, 1)
         }
         ([_, _, _, taken, _, other], 1) => {
-            let Some(Ok(condition)) = step.results().next() else {
+            let received = step.results().next();
+            let Some(Ok(condition)) = received else {
                 return step.failed(StepError::Unredeemable);
             };
             let holds = match condition {
                 Received::Scratch(value) => truthy(&value),
                 Received::Here(held) => truthy(&held.value),
+                Received::Fault(inner) => return step.fault(owed.map(|owed| owed.line()), inner),
             };
             let branch = if holds { taken } else { other };
             if contract.is_some() {
                 let work = program.evaluate(
                     Evaluated::Part(view.shape().site(&branch.value)),
                     view.view(),
-                    contract,
+                    owed,
                     crate::program::Within::TOP,
                 );
                 return step.hand_off(work);
@@ -432,16 +419,13 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'
                 return step.failed(StepError::Refused);
             };
             match list.links().next() {
-                Some(Link::Edge(edge)) => {
-                    let writer = step.writer();
-                    step.finish(held(
-                        program,
-                        contract,
-                        writer,
-                        types,
-                        Value::Knotted(holder.sibling(edge)),
-                    ))
-                }
+                Some(Link::Edge(edge)) => finished(
+                    step,
+                    program,
+                    owed,
+                    types,
+                    Value::Knotted(holder.sibling(edge)),
+                ),
                 _ => step.failed(StepError::Refused),
             }
         }
@@ -477,7 +461,7 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'
                 types,
                 code,
                 Value::Record(offered),
-                KType::ANY,
+                (KType::ANY, written.source),
                 None,
                 Use::Forwards,
             ) {
@@ -488,8 +472,11 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'
                 Err(refused) => {
                     let message = refused.display(program.symbols(), types).to_string();
                     record(format!("refused {message}"));
-                    let error = program.error(step.writer(), types, message);
-                    step.finish(error)
+                    let fault = crate::memory::resident(
+                        step.writer(),
+                        refused.relaid(step.writer(), &scratch),
+                    );
+                    step.fault(None, Inner::Fault(fault))
                 }
             }
         }
@@ -503,11 +490,13 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'
             park(step, asked, birth, 1)
         }
         ([head, _], 1) => {
-            let Some(Ok(Received::Here(Held {
-                value: argument, ..
-            }))) = step.results().next()
-            else {
-                return step.failed(StepError::Unredeemable);
+            let received = step.results().next();
+            let argument = match received {
+                Some(Ok(Received::Here(Held { value, .. }))) => value,
+                Some(Ok(Received::Fault(inner))) => {
+                    return step.fault(owed.map(|owed| owed.line()), inner);
+                }
+                _ => return step.failed(StepError::Unredeemable),
             };
             let Some(callee) = read(&view, &head.value) else {
                 return step.failed(StepError::Refused);
@@ -527,17 +516,17 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'
                     CallKind::ByName,
                     contributed,
                     &[],
-                    owed,
+                    (written.source, owed),
                     None,
                     None,
                     Use::Forwards,
                 )
             };
-            if let Some(contract) = contract
+            if let Some(owed) = owed
                 && (callee.as_callable().and_then(Knotted::function))
-                    .is_some_and(|function| contract.kept_by(types, function.ktype(), None))
+                    .is_some_and(|function| owed.contract.kept_by(types, function.ktype(), None))
             {
-                let request = request(Some(contract));
+                let request = request(Some(owed.hopped(step.writer())));
                 return step.tail(request.work);
             }
             let asked = step.spawn(request(None));
@@ -547,9 +536,9 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'
             let received = step.results().next();
             match received {
                 Some(Ok(Received::Here(Held { value, .. }))) => {
-                    let writer = step.writer();
-                    step.finish(held(program, contract, writer, types, value))
+                    finished(step, program, owed, types, value)
                 }
+                Some(Ok(Received::Fault(inner))) => step.fault(owed.map(|owed| owed.line()), inner),
                 _ => step.failed(StepError::Unredeemable),
             }
         }
@@ -608,7 +597,8 @@ fn parameter<'step>(
         .find(|name| shape.slot(*name).map(|(_, at)| at) == Some(Position::PARAMETER))
 }
 
-/// `value` held to `contract`, when the evaluation was born under one.
+/// `value`, built fresh, held to `contract`, when the evaluation was born under one: the
+/// miniature's fresh values keep every contract its tests owe.
 fn held<'graph, 'cell>(
     program: &Program<'graph>,
     contract: Option<Contract>,
@@ -617,7 +607,28 @@ fn held<'graph, 'cell>(
     value: KValue<'graph, 'cell>,
 ) -> KValue<'graph, 'cell> {
     match contract {
-        Some(contract) => program.fulfilled(writer, types, value, contract),
+        Some(contract) => (program.fulfilled(writer, types, value, contract))
+            .expect("a fresh value of the miniature's keeps its contract"),
         None => value,
+    }
+}
+
+/// Finish with `value` held to what the evaluation owes, or end with the fault its miss raises.
+fn finished<'graph, 'here, S: Hold, X: Hold>(
+    step: Step<'_, 'graph, '_, 'here, '_, '_, KBundle, S, X>,
+    program: &Program<'graph>,
+    owed: Option<Owed<'here>>,
+    types: &Chain<'_, 'here, '_, '_>,
+    value: KValue<'graph, 'here>,
+) -> Action<'graph, KBundle> {
+    let Some(owed) = owed else {
+        return step.finish(value);
+    };
+    match program.fulfilled(step.writer(), types, value, owed.contract) {
+        Ok(value) => step.finish(value),
+        Err(fault) => {
+            let fault = crate::memory::resident(step.writer(), fault);
+            step.fault(Some(owed.line()), Inner::Fault(fault))
+        }
     }
 }

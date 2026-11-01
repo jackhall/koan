@@ -12,10 +12,11 @@ use crate::values::{Chain, Circular, ConstructionRefused, KeyRejected, Link};
 use crate::values::{Knotted as _, Value, Weight};
 
 use super::super::function::Typing;
-use super::super::{Eager, KActivation, KValue, Knotted, Node, Supplied, Untieable, tie};
+use super::super::{Eager, KActivation, KValue, Knotted, Node, Supplied, tie};
 use super::{
     Fixture, at_key, bound, callable, circular, declared, follow, pin, registered, with_fixture,
 };
+use crate::scope::Untieable;
 
 /// The component `name` belongs to, tied again with `eager` — a refusal the runner left for the
 /// test to see.

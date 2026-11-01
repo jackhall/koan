@@ -122,7 +122,7 @@ fn two_admitting_candidates_neither_ranks_first_are_ambiguous_wherever_declared(
              PICK r.v\n\
              )\n\
              PRINT (INNER)"),
-        expected,
+        format!("{expected}\n  in :(FN :{{}} -> Str) (INNER) at <test>:7:7"),
         "no scope shadows another's overload"
     );
 }
@@ -227,7 +227,7 @@ fn code_an_eval_runs_is_checked_for_overlaps_where_it_runs() {
     assert_eq!(
         run(source),
         "loaded\nerror: <test>:1:11: this overload of `_ + _` takes operands the builtin \
-         :(EXPR #(_ :Number + _ :Number) -> Number) already takes"
+         :(EXPR #(_ :Number + _ :Number) -> Number) already takes\n  in `EVAL` (EVAL q -> Any) at <test>:3:1"
     );
 }
 

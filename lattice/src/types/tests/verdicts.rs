@@ -9,6 +9,7 @@
 use crate::bump::Bump;
 use crate::symbols::{BinderSymbol, SymbolInterner};
 
+use crate::types::SEED;
 use crate::types::chain::TypeChain;
 use crate::types::digest::TypeDigest;
 use crate::types::handle::{Handle, KType, TypeHandle};
@@ -105,7 +106,7 @@ fn a_shared_fold_never_answers_for_another_key() {
 #[test]
 fn the_loads_verdict_table_keeps_every_verdict() {
     let (load, region) = (Bump::new(), Bump::new());
-    let builder = RootBuilder::in_region(&load);
+    let builder = RootBuilder::over(&load, &SEED);
     let building = TypeChain::building(builder);
     let seeded = building.load_verdict_count();
     let n = 4096;

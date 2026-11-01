@@ -21,89 +21,15 @@
 use crate::knot::{KValue, Knotted};
 use crate::memory::{BumpAllocator, BumpVec, Writer};
 use crate::symbols::{BinderSymbol, TypeSymbol};
-use std::fmt;
 
-use crate::scope::{IMPLICIT, ParameterBinding};
-use crate::symbols::SymbolInterner;
+use crate::scope::{CoercionRefused, IMPLICIT, ParameterBinding};
 use crate::type_lattice::{
     DeclaredType, DispatchTokenElement, KType, Members, Parametric, Record as TypeRecord,
-    SchemaDraft, TypeNode, display_name, satisfied_by, substitute_parameters,
+    SchemaDraft, TypeNode, satisfied_by, substitute_parameters,
 };
 use crate::values::{Chain, Dict, List, Record, SealRefused, Tagged, Value, satisfies};
 
 use super::{Coerced, ModuleContent, Operator, view};
-
-/// Why a member could not take the view's type.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum CoercionRefused {
-    /// The admission barrier refused the carrier or the witness.
-    Seal(SealRefused),
-    /// A slot declared a function type and the member is no function.
-    NotAFunction,
-    /// A slot declared a signature and the member is no module.
-    NotAModule,
-    /// A nested module could not take the view its slot declares.
-    Nested,
-    /// A union slot: no declared member's source side admits the value.
-    NoUnionMember,
-    /// A union slot: two members naming a head parameter the view hides admit the value, so
-    /// neither says which the value is.
-    TiedUnion,
-    /// A declared type this walk has no arm for, or a value whose shape does not match the arm
-    /// its declaration took. A **cyclic data value** lands here: a container that is a knot's data
-    /// node is a knot member, not a container word, and nothing yet rebuilds one through a
-    /// barrier.
-    Unsupported(DeclaredType<Parametric>),
-}
-
-impl CoercionRefused {
-    /// The refusal worded for a message, its types rendered through `types` and `symbols`.
-    pub fn display<'a>(
-        self,
-        types: &'a Chain<'_, '_, '_, '_>,
-        symbols: &'a SymbolInterner,
-    ) -> impl fmt::Display + 'a {
-        CoercionRefusedDisplay {
-            refused: self,
-            types,
-            symbols,
-        }
-    }
-}
-
-/// A [`CoercionRefused`] beside the registry and interner it renders through.
-struct CoercionRefusedDisplay<'a, 'run, 'p, 'reg> {
-    refused: CoercionRefused,
-    types: &'a Chain<'run, 'p, 'reg, 'a>,
-    symbols: &'a SymbolInterner,
-}
-
-impl fmt::Display for CoercionRefusedDisplay<'_, '_, '_, '_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let name = |handle: KType| display_name(handle, self.types, self.symbols);
-        match self.refused {
-            CoercionRefused::Seal(SealRefused::NotACarrier(identity)) => {
-                write!(f, "{} is no carrier", name(identity))
-            }
-            CoercionRefused::Seal(SealRefused::Misfit { witness, .. }) => {
-                write!(f, "its value does not satisfy {}", name(witness))
-            }
-            CoercionRefused::Seal(SealRefused::NotSealed { carrier }) => {
-                write!(f, "it is not sealed under {}", name(carrier))
-            }
-            CoercionRefused::NotAFunction => f.write_str("it is no function"),
-            CoercionRefused::NotAModule => f.write_str("it is no module"),
-            CoercionRefused::Nested => f.write_str("its module does not fit its view"),
-            CoercionRefused::NoUnionMember => f.write_str("no member of its union admits it"),
-            CoercionRefused::TiedUnion => {
-                f.write_str("two members of its union over hidden types admit it")
-            }
-            CoercionRefused::Unsupported(_) => {
-                f.write_str("nothing carries a value of its shape across the view")
-            }
-        }
-    }
-}
 
 /// One side of a coercion: what a signature's head parameters are bound to, interned as a
 /// signature declaring each binding a manifest member — the handle a barrier holds — beside

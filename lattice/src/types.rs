@@ -57,6 +57,8 @@ mod chain;
 mod component;
 mod digest;
 mod handle;
+#[doc(hidden)]
+pub mod image;
 mod kind;
 mod lattice;
 mod node;
@@ -90,6 +92,7 @@ pub use digest::TypeDigest;
 pub use handle::{
     DeclaredType, DeclaredView, KType, Parametric, Scheme, TypeHandle, builtin_types,
 };
+pub use image::seed::IMAGE as SEED;
 pub use kind::KKind;
 pub use node::{ContentKey, Group, NodeSchema, TypeNode, Variable};
 pub use operators::{FoldDirection, ReductionMode};

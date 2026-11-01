@@ -295,20 +295,19 @@ the shape builder reads its part (`Role::reading`), one of five ways: as a writt
 for a callable's body, which runs later — a written quote, or any other part,
 evaluated to code where the callable is born
 ([building code](../scope/README.md#building-code)); as **bare** syntax, for a
-part that declares or runs where it is written, once — a binder name, an in-place `MODULE`, `GROUP` or `USING` body,
-`NEWTYPE`'s representation, a type expression (`Role::TypeExpression`), a `TRY`
-or `CATCH` operand (`Role::InPlace`); as a **container** of quotes, for a part
+part that declares or runs where it is written, once — a binder name, an in-place `MODULE`, `GROUP`,
+`USING`, `TRY` or `CATCH` body, `NEWTYPE`'s representation, a type expression
+(`Role::TypeExpression`); as a **container** of quotes, for a part
 that names things as data — an arm set, a union's variants, a `FOR ALL` group, and a `SIG`
 body or the heads a bodyless `GROUP` declares (`DefinitionKind::Members`); or
 **evaluated**. `ATTR`'s label (`Role::Field`) is the one hybrid: a bare name is
 the label itself (`Role::label_reads`), and any other part is evaluated. A body slot's
 `BodyKind` says what the builder opens for it (`BodyKind::opens`): a callable's body, a module's
-or a block. The slot's type says what
+or a block — a `USING` body's (`Surfaced`) or a `TRY` or `CATCH` body's (`Caught`). The slot's type says what
 syntax fills it — a code kind, or a container of code kinds, for a part read as
 written, and a value type for one evaluated — and no slot keeps a part raw. A
-type expression and an in-place operand are the exceptions: they are bare, but
-their slot type is the value they denote, so the builder checks their spelling
-alone. A callable's body slot is typed `Block`, which a written quote is
+type expression is the exception: it is bare, but its slot type is the value it
+denotes, so the builder checks its spelling alone. A callable's body slot is typed `Block`, which a written quote is
 admitted against; any other part there is typed by the value it evaluates to,
 where the program loads. The table only states those types: the shape
 builder's static check ([scope](../scope/README.md#three-tiers)) admits a written part against them
@@ -322,9 +321,9 @@ slot is typed by is a pinned constant of the same kind: the code containers
 `List(Name)`, `List(Declaration)`, `Dict(TypeCode | Literal, Block)`,
 `Dict(Name, Block)` and `Dict(Name, TypeCode)`, the union `TypeCode`, a `FOR ALL` group's union
 `List(Name) | Dict(Name, TypeCode)` (`KType::QUANTIFIER_CODE`), and the empty
-record. Each is stated once, in the registry's seeding, which every registry
-runs; a test asks a fresh registry for every slot type and return, so a table
-type no registry seeds fails there.
+record. Each is a node of the lattice's seed, the image every root rests on;
+a test asks a fresh registry for every slot type and return, so a table type
+the seed lacks fails there.
 
 **Two laws hold the table together at build time**, asserted over the spec as
 `const` and so a compile error rather than a test failure:
@@ -332,8 +331,8 @@ type no registry seeds fails there.
 - every slot of an entry types exactly as many overloads as the entry returns, and
   every bucket has at least one — a slot one type short would leave an overload
   untyped there, and nothing downstream could say which;
-- every slot the builder reads as written, save a type expression and an
-  in-place operand, is typed by its reading's code type in every overload
+- every slot the builder reads as written, save a type expression, is typed by
+  its reading's code type in every overload
   (`roles_agree_with_code_types`): a body `Block`, a head `Expression`, a symbol
   `Keyword`, a label `Name`, an arm set `Dict(TypeCode | Literal, Block)` under
   type and value guards (`MATCH … WITH`) and `Dict(Name, Block)` under labels
@@ -426,7 +425,7 @@ like deep parentheses, with no cap on run length of its own.
 
 Code composed at run time is held to the same limit where it is composed: a
 [code view](../values/README.md#views) stores each node's depth as a node does,
-and a splice that would nest past the limit is an error value naming it, so no
+and a splice that would nest past the limit is a fault naming it, so no
 walk ever meets syntax deeper than a parse admits.
 
 The limit is sized against a known stack: a host runs a program on a thread of

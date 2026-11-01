@@ -1,7 +1,8 @@
 # Type tiers
 
-A type the load builds lives in the frozen load for the life of the program,
-and every agent reads it. A type the build rests lives in the agent tier for
+A builtin type lives in the builtin image, compiled into the binary, which
+the frozen load rests on. A type the load builds lives in the frozen load for
+the life of the program, and every agent reads it. A type the build rests lives in the agent tier for
 the life of the agent. A type the run builds lives in one of two shorter
 tiers, chosen by what can still reach it, and is released with that tier: a
 region's branch with the region, a scratch branch with its habitat's reset.
@@ -20,10 +21,11 @@ where each rests it.
 
 | tier | lives from | to | holds |
 |---|---|---|---|
+| builtin image | the binary | — | the lattice's fixed handles and the builtin types, below the frozen load and probed after it; no verdicts |
 | frozen load | the load | the program's end | every type the load builds, shared by every agent |
 | agent tier | the agent's birth | its death | every type the agent's settlements under the root rest: a binding's type nodes and the types the settlement's facts name, among them what the invariant sites of a caching frame keyed on that binding mint |
-| region branch | the region's birth | its death | a porous body's run-built types, and what a caching body's exits carry |
-| scratch branch | the habitat's reset | its next reset | a step's scratch types, and every type a caching body builds |
+| region branch | the region's birth | its death | a porous body's run-built types, what a caching body's exits carry, and what a catcher copies in |
+| scratch branch | the habitat's reset | its next reset | a step's scratch types, and every other type a caching body builds |
 
 A handle's identity is its content's digest, so it names one type in every
 tier, and a reset moves where a type resolves, never what it is. Every branch's table is a
@@ -166,8 +168,8 @@ nothing.
 A porous body interns into the branch of the habitat its writer lays into —
 its region, or its host's for a `Shares` tenant — through the header door
 beside the writer, so interning into another habitat's branch does not
-compile. A caching body interns every type it builds into a scratch tier, and
-routes a mint site at the load by what the site's
+compile. A caching body interns every type it builds outside a catcher into a
+scratch tier, and routes a mint site at the load by what the site's
 [content tree](modules.md#the-load-and-the-run) says it mints; a nominal
 declared per call is classed alike by the type binders its declaration reads:
 
@@ -203,6 +205,14 @@ declared per call is classed alike by the type binders its declaration reads:
 A composite site follows its children: warm where its static type reaches
 invariant carriers alone, cold otherwise, a type that reaches a carrier the
 load cannot name included.
+
+A catcher is the exception. A `TRY` or `CATCH` builds its `Error` on the
+region's chain, since its frame records persist across the steps its walk
+takes, and a value it copies in beside a kept cell
+([the catcher](../src/dispatch/README.md#catching)) adopts its types into the
+region's branch, not the scratch tier, in a caching body too. The region still
+holds flat across a caching loop's passes, a `Fresh` loop's and a `Shares`
+loop's alike.
 
 A caching body runs every step on one chain over the frozen load, the agent
 tier, the region its writer lays into and the scratch it writes — its own

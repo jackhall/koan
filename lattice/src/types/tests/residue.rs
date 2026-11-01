@@ -717,7 +717,7 @@ fn the_code_kinds_form_a_tree_under_code() {
     );
 
     let list_of_code = types.list(Handle::ANY_CODE);
-    assert!(below(Handle::LIST_OF_NAME, list_of_code));
+    assert!(below(KType::LIST_OF_NAME.raw(), list_of_code));
     assert!(below(list_of_code, Handle::ANY_VALUE));
     assert!(below(
         KType::LIST_OF_DECLARATION.raw(),

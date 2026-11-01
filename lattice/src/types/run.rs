@@ -41,6 +41,15 @@ impl<'run, H> Run<'run, H> {
         }
     }
 
+    /// The run over `nodes`, as a generated image writes one.
+    #[doc(hidden)]
+    pub const fn imaged(nodes: &'run [Linked<'run>]) -> Self {
+        Run {
+            nodes,
+            view: PhantomData,
+        }
+    }
+
     /// The slice of references.
     pub(super) fn raw(self) -> &'run [Linked<'run>] {
         self.nodes
@@ -89,6 +98,15 @@ impl<H> Copy for Elements<'_, H> {}
 impl<'run, H> Elements<'run, H> {
     /// The run over `elements`, which already live where the node does.
     pub(super) fn over(elements: &'run [StoredElement<'run>]) -> Self {
+        Elements {
+            elements,
+            view: PhantomData,
+        }
+    }
+
+    /// The run over `elements`, as a generated image writes one.
+    #[doc(hidden)]
+    pub const fn imaged(elements: &'run [StoredElement<'run>]) -> Self {
         Elements {
             elements,
             view: PhantomData,

@@ -13,10 +13,10 @@
 //! evaluation runs; the embedder supplies the [`Output`] sinks at load, and a run reports its
 //! [`Outcome`].
 //!
-//! **Imports.** Outside `#[cfg(test)]` this module names `crate::build`, `crate::elaborate`, `crate::knot`,
-//! `crate::memory`, `crate::parse`, `crate::scheduler`, `crate::scope`, `crate::symbols`,
-//! `crate::type_lattice` and `crate::values`; [`tests::boundary`] reads the source to hold it
-//! there.
+//! **Imports.** Outside `#[cfg(test)]` this module names `crate::build`, `crate::builtin_image`,
+//! `crate::knot`, `crate::memory`, `crate::parse`, `crate::scheduler`, `crate::scope`,
+//! `crate::symbols`, `crate::type_lattice` and `crate::values`; [`tests::boundary`] reads the
+//! source to hold it there.
 //!
 //! See [program/README.md](program/README.md).
 
@@ -31,18 +31,18 @@ mod substrate;
 #[cfg(test)]
 pub(crate) mod tests;
 
-pub use body::{CodeRefused, Runner, block, call, entered_block, eval, run, under_composition};
+pub use body::{Runner, block, call, entered_block, eval, run, under_composition};
 pub use bundle::{
-    ArmKept, Entered, FrameKept, Handed, KBirth, KBirthFamily, KBundle, KScratchFamily, KState,
-    KStateFamily, Keeps, Passing, Within,
+    ArmKept, Catching, Entered, FrameKept, FrameLink, Handed, KBirth, KBirthFamily, KBundle,
+    KScratchFamily, KState, KStateFamily, Keeps, Passing, Within,
 };
 pub use exit::Exit;
-pub use record::{
-    CallKind, Contract, Evaluated, Language, LoadError, Outcome, Output, Program, kept,
-};
+pub use record::{CallKind, Contract, Evaluated, Language, LoadError, Output, Owed, Program, kept};
 #[cfg(test)]
 pub(crate) use settle::LEVELS;
 pub use settle::{called_function, seek};
 #[cfg(test)]
+pub(crate) use substrate::Ran;
+#[cfg(test)]
 pub(crate) use substrate::walked;
-pub use substrate::{CellSubstrate, Running, STACK_BYTES};
+pub use substrate::{CellSubstrate, Outcome, Running, STACK_BYTES, Uncaught};

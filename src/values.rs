@@ -65,8 +65,8 @@ pub use circular::{Binding, Circular, CodeView, FunctionIdentity, Resolved, bind
 #[cfg(test)]
 pub use crossing::{ADOPTED, COPIED, EXIT_WALKS, PARTS_ENTERED, PARTS_SKIPPED};
 pub use crossing::{
-    COPY_RATIO, adopt_value, copy_severed, cross, cross_here, cross_view, cross_view_against,
-    cross_views, verdict,
+    COPY_RATIO, adopt_value, copy_beside, copy_severed, cross, cross_here, cross_view,
+    cross_view_against, cross_views, verdict,
 };
 #[cfg(debug_assertions)]
 pub use crossing::{check_habitat, check_pinned_habitat};
@@ -85,7 +85,7 @@ pub use list::{LinkedPiece, List, Piece};
 pub use record::Record;
 pub use retyped::Retyped;
 pub(crate) use settled::stamp_knot;
-pub use settlement::{ArenaRef, BindingImage, BuildBudget, KeyedTypes, SettlementKey};
+pub use settlement::{ArenaRef, BindingImage, BuildBudget, KeptCell, KeyedTypes, SettlementKey};
 #[cfg(test)]
 pub(crate) use surface::TARGETS;
 pub use surface::{

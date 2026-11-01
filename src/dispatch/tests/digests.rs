@@ -6,7 +6,7 @@ use crate::program::tests::stores::frame_bound_back;
 use crate::program::tests::{digest_back, syntax_back};
 use std::cell::RefCell;
 
-use crate::program::{CellSubstrate, KBirth, KBundle, KState, Outcome};
+use crate::program::{CellSubstrate, KBirth, KBundle, KState, Ran};
 use crate::scheduler::{Action, Step, StepError};
 use crate::scope::HalfHeader;
 use crate::type_lattice::TypeDigest;
@@ -46,10 +46,7 @@ fn digests<const N: usize>(source: &str, names: [&str; N]) -> [String; N] {
     let mut substrate =
         CellSubstrate::load::<Koan>(source, "<test>", 8, BuildBudget::default(), output())
             .unwrap_or_else(|error| panic!("the program loads: {error}"));
-    assert_eq!(
-        substrate.with(|running| running.run()),
-        Ok(Outcome::Completed)
-    );
+    assert_eq!(substrate.with(|running| running.ran()), Ok(Ran::Completed));
     names.map(|name| digest_back(&mut substrate, name))
 }
 
@@ -193,7 +190,7 @@ PRINT (MOVE 1 TO 1)"##;
             CellSubstrate::load::<Koan>(PROGRAM, "<test>", 8, BuildBudget::default(), output())
                 .unwrap_or_else(|error| panic!("the program loads: {error}"));
         substrate.with(|running| {
-            assert_eq!(running.run(), Ok(Outcome::Completed));
+            assert_eq!(running.ran(), Ok(Ran::Completed));
             running
                 .inspect(interned_digests)
                 .expect("the inspection runs to completion");
@@ -263,10 +260,7 @@ fn a_frame_binds_a_type_value_and_a_module_value_by_its_content() {
         output(),
     )
     .unwrap_or_else(|error| panic!("the program loads: {error}"));
-    assert_eq!(
-        substrate.with(|running| running.run()),
-        Ok(Outcome::Completed)
-    );
+    assert_eq!(substrate.with(|running| running.ran()), Ok(Ran::Completed));
     assert_eq!(frame_bound_back(&mut substrate, "e"), "type Number");
     let digest = digest_back(&mut substrate, "m");
     let bound = frame_bound_back(&mut substrate, "m");
@@ -288,10 +282,7 @@ fn a_composed_quote_and_its_written_quote_have_the_same_syntax_digest() {
         output(),
     )
     .unwrap_or_else(|error| panic!("the program loads: {error}"));
-    assert_eq!(
-        substrate.with(|running| running.run()),
-        Ok(Outcome::Completed)
-    );
+    assert_eq!(substrate.with(|running| running.ran()), Ok(Ran::Completed));
     let written = syntax_back(&mut substrate, "q");
     let composed = syntax_back(&mut substrate, "c");
     let digest = written.strip_prefix("written ").expect("q is written");

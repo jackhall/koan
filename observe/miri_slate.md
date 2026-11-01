@@ -246,6 +246,17 @@ cell's region; what this pins is the ordering between two.
   a stack of births and releases: tree cells born one path at a time under one root work, each
   delivering into its parked parent's scratch run before it is released — two levels, seven cells,
   under Miri.
+- `kept_cells_release_parent_first`
+  a fault kept two cells deep, each region header holding its link, read through `peek` at a
+  brand of the call's, then the parent released while the child is live and the child after it:
+  a dead parent's region outlives its release under a kept child, and both go with the root.
+- `a_kept_hop_keeps_its_loop_cell_until_it_is_released`
+  a hop under a loop cell ends with a fault: the loop cell is released at once, dead but
+  undisposed under the kept hop, and its region goes only when the hop does.
+- `a_kept_cell_read_beside_is_released_after_the_step`
+  a consumer ends with `read_beside` on the cell its child's fault kept: the drain enters it again
+  through `enter_beside`, the step reads the kept link at a brand of the read's own and adopts the
+  type it names into its own chain, and the drain releases the kept cell once that step ends.
 
 **Self-contained substrate** ([src/program/substrate.rs](../src/program/substrate.rs)) — program
 storage, the types' load and agent-tier bumps and the interner in `self_cell`'s owner, and in its
@@ -269,6 +280,10 @@ shorter brand than the one it was bound at.
   every unit kind in one program, on a one-cell slab, read back after the drain.
 - `an_eager_part_is_supplied_by_site_in_one_wake`
   a cyclic data member whose two eager parts are evaluated at one park and tied by site.
+- `an_uncaught_fault_keeps_its_frames_until_its_outcome_drops`
+  a fault raised three frames deep, each frame and evaluation it passed through kept with its link
+  in its region header, read back between steps while the outcome holds them, then released by the
+  outcome's drop in the order the links run, the run root after: the graph ends empty.
 - `a_call_binds_each_type_parameter_to_its_solution`
   a quantified lambda called twice: each frame reads the callee's quantifier map out of the knot's
   region, solves the group against the argument's carried type, and lays the solution down as a type
@@ -317,6 +332,18 @@ in a tenant's storage and crossed into the callee's birth.
   a `USING … SCOPE` block run as a frame over a view's surfaced members: a keyworded member behind
   a barrier reached by its key, over a value member the block reads, its result crossing the
   block's frame and the barrier both, every captured byte read back.
+- `a_caught_value_outlives_its_released_frames`
+  a `TRY` reads the kept cell of a frame that compared two records holding a module, entered
+  beside it: the records are deep-copied into the `TRY`'s region as the `Error`'s fields before
+  the drain releases the cell, and read back after through the arm's value.
+- `a_caught_fault_releases_its_frames`
+  a fault three frames deep caught by a `TRY` and by a `CATCH`, each walking the kept cells
+  outermost first, one step beside each, its frame lines laid in its own region across the steps:
+  every kept cell is released by the drain, and the graph ends empty.
+- `a_try_in_a_caching_body_catches`
+  a `TRY` and a `CATCH` in a caching body, each building its `Error` on the region's chain beside
+  the body's scratch tier, the `CATCH`'s `Result` read by the `TRY`'s arm and left through the
+  frame's exit.
 
 **Region header** ([src/scope/header.rs](../src/scope/header.rs),
 [src/values/habitat.rs](../src/values/habitat.rs)) — a half's header, laid by the first door that
@@ -359,9 +386,9 @@ holds its own copy laid by the crossing.
 Prepended by `python3 tools/miri.py --log` on a clean run, trimmed to five.
 
 <!-- slate-durations:start -->
+- 2026-11-01: 1453s — 53 tests, 0 leaks, 0 UB
+- 2026-11-01: 4181s — 53 tests, 0 leaks, 0 UB
+- 2026-10-31: 1680s — 49 tests, 0 leaks, 0 UB
 - 2026-10-31: 1478s — 46 tests, 0 leaks, 0 UB
 - 2026-10-29: 1461s — 45 tests, 0 leaks, 0 UB
-- 2026-10-29: 1455s — 45 tests, 0 leaks, 0 UB
-- 2026-10-29: 1489s — 45 tests, 0 leaks, 0 UB
-- 2026-10-25: 1979s — 41 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

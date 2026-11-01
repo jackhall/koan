@@ -76,6 +76,16 @@ impl<'run> Component<'run> {
         )
     }
 
+    /// A component over `members`, whose schemas are absolute, by value: how a generated image
+    /// writes one as a `static`. Nothing writes it after, so it is never tied.
+    #[doc(hidden)]
+    pub const fn imaged(digest: TypeDigest, members: &'run [ComponentMember<'run>]) -> Self {
+        Self {
+            digest,
+            members: Tied::new(members),
+        }
+    }
+
     /// The members, in canonical order.
     pub(super) fn members(&self) -> &'run [ComponentMember<'run>] {
         self.members.get()
@@ -90,8 +100,9 @@ impl<'run> Component<'run> {
 /// a shorter lifetime, so a write through such a view could store a slice that dies first; hence the
 /// one write, [`set`](Self::set), is private here, and its one caller, [`Component::tie`], writes
 /// once, into the component it has just laid, a slice of that component's own `'run` and of the
-/// same length. The write is relaxed: every reader on another thread is spawned after the load's
-/// last write, and a spawn synchronizes.
+/// same length. A component an image holds is built by [`Component::imaged`] and never tied. The
+/// write is relaxed: every reader on another thread is spawned after the load's last write, and a
+/// spawn synchronizes.
 struct Tied<'run, T> {
     ptr: AtomicPtr<()>,
     len: usize,
@@ -99,7 +110,7 @@ struct Tied<'run, T> {
 }
 
 impl<'run, T> Tied<'run, T> {
-    fn new(slice: &'run [T]) -> Self {
+    const fn new(slice: &'run [T]) -> Self {
         Self {
             ptr: AtomicPtr::new(slice.as_ptr() as *mut ()),
             len: slice.len(),

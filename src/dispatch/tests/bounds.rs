@@ -49,7 +49,7 @@ fn ran(source: &str, budget: BuildBudget) -> (String, Tiers, usize) {
         .unwrap_or_else(|error| panic!("the program loads: {error}"));
     TIERS.with(|tiers| tiers.set(Tiers::default()));
     substrate
-        .with(|running| running.run())
+        .with(|running| running.ran())
         .expect("the program runs");
     let unheld = substrate.with(|running| running.scheduler().graph().unheld_bytes());
     let printed = WRITTEN.with(|written| written.borrow().join("\n"));

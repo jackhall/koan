@@ -22,15 +22,15 @@ use crate::memory::{
 };
 use crate::parse::{ExpressionPart, KExpression, Mark, Quoted, Remark, Scope, remarked_whole};
 use crate::scope::{
-    self, BodyShape, CaptureSlot, CaptureSource, CodeSyntax, ComposedRoot, Facts, FilledSites,
-    ShapeKind, Site, Written, filled_sites,
+    self, BodyShape, CaptureSlot, CaptureSource, CodeSyntax, ComposeRefused, ComposedRoot, Facts,
+    FilledSites, ShapeKind, Site, UsingRefused, Written, filled_sites,
 };
-use crate::symbols::{BinderSymbol, KeySymbol, SymbolInterner};
+use crate::symbols::{BinderSymbol, KeySymbol};
 use crate::type_lattice::{KType, TypeNode};
 use crate::values::digest::{DigestHasher, Tag, syntax_digest};
 use crate::values::{self, Chain, CodeView, ContentDigest, Link, List, Seen, Value, Weight};
 
-use super::view::{self, CodeTree, ComposeRefused, Env, composed, materialized};
+use super::view::{self, CodeTree, Env, composed, materialized};
 use super::{KActivationView, KReading, KValue, Knotted, Node};
 
 /// One binding the code carries, at its scope and name.
@@ -527,49 +527,6 @@ pub(crate) fn flattened<'graph: 'cell, 'cell>(
     let flat = materialized(writer, tree, &scratch);
     let syntax = composed_syntax(flat.body);
     one_node(writer, (syntax, node.ktype), &flat.bindings, types)
-}
-
-/// Why a `USING` refused to fill a code's holes.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum UsingRefused {
-    /// The module's registrations at `key` rank its slots other than the code's own candidates at
-    /// `key` do.
-    Ranking { key: KeySymbol },
-    /// A filled use's holder would nest the code deeper than the syntax depth limit.
-    TooDeep,
-}
-
-impl UsingRefused {
-    /// The refusal as the error `USING` raises words it, its names read through `symbols`.
-    pub fn display(self, symbols: &SymbolInterner) -> impl std::fmt::Display + '_ {
-        UsingRefusal {
-            refused: self,
-            symbols,
-        }
-    }
-}
-
-/// [`UsingRefused::display`]'s view.
-struct UsingRefusal<'x> {
-    refused: UsingRefused,
-    symbols: &'x SymbolInterner,
-}
-
-impl std::fmt::Display for UsingRefusal<'_> {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self.refused {
-            UsingRefused::Ranking { key } => write!(
-                f,
-                "{} is ranked two ways",
-                self.symbols.display(key.symbol())
-            ),
-            UsingRefused::TooDeep => write!(
-                f,
-                "composed code nests deeper than the syntax depth limit of {}",
-                crate::parse::MAX_SYNTAX_DEPTH
-            ),
-        }
-    }
 }
 
 /// `code USING source`: composed code in `writer`'s region whose holes `source` fills, each a

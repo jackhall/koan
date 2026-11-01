@@ -18,7 +18,7 @@ use super::typed::{
 };
 
 /// What the visitor hands each type to.
-type Each<'e> = dyn FnMut(DeclaredType<Parametric>) + 'e;
+pub(crate) type Each<'e> = dyn FnMut(DeclaredType<Parametric>) + 'e;
 
 impl UnitFacts<'_> {
     /// Hand `each` every type this record names.

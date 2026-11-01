@@ -88,6 +88,9 @@ runs the step its continuation names, and acts on the `Kind` the returned
 - `Tail` — the drain pushes the successor, born under this cell for a
   hand-off and beside it for a hop or a rebirth ([tail hops](#tail-hops)),
   and releases this cell once that successor's first step has run.
+- `Faulted` — the step ended with a fault: the drain keeps a tree cell
+  (`kept`) and retires a tenant as a finish does, abandons what its consumer
+  asked for and has not yet run, and pushes the consumer ([faults](#faults)).
 - `Failed` — the drain abandons the work.
 
 A stack makes the drain **depth-first**. The child asked first runs to
@@ -112,10 +115,9 @@ nothing will fill. A birth, an enter or a release the substrate refuses is a
 `DrainStalled::Step` — among them a step that asked for children and ended
 without parking on them, `StepError::Unparked`, and a step the layer above
 refused, `StepError::Refused`, whose reason is that layer's. These are the only
-errors the scheduler defines. A koan
-error is a [tagged value](../values/README.md#what-a-value-is) and travels
-between cells as data, so no `Result` passes from one cell to another and a
-consumer checks the results it reads.
+errors the scheduler defines. A program's refusal is no error of the
+scheduler's: it is a [fault](#faults), which a step ends with as it would a
+value and its consumer receives in the slot a value would fill.
 
 A view dropped before its root work ended abandons what is on its stack. The
 graph keeps the cells already born, under the root they were born under, and
@@ -163,7 +165,11 @@ previous step parked, and exposes:
   take hands the value back beside the `Step` in its `Taken` form, which has no
   second take to call. A step that never takes its scratch state leaves it in
   the `Step`, and the end hands its bump back unless the step parks again;
-- `results`, the children's results it parked on;
+- `results`, the children's results it parked on, a fault among them
+  ([faults](#faults));
+- `beside`, at a step the drain entered beside a kept cell, that cell's link
+  and a chain in which every type it names resolves, at a brand of its own
+  ([faults](#faults));
 - `spawn`, to ask for a child; `spawn_seeking`, to ask for one born under the
   arena node a `Seek` finds or builds; and `spawn_composing`, to ask for one
   born under the composition of code composed at run time
@@ -173,9 +179,13 @@ previous step parked, and exposes:
   frame to lay its level from ([below](#the-build-arena)), taken once;
 - `kept_here`, which keeps a value the cell holds at the cell itself
   ([below](#kept-and-held-values));
+- `built_in_home`, which builds a value in the cell's home as
+  `finish_in_home` does but ends nothing: it hands the value back held beside
+  its carrier, kept at the home, so the step can check it — against a contract
+  it owes — before it finishes with it or ends with a [fault](#faults);
 - the ends — `park`, `hand_off`, `tail`, `tail_seeking`, `tail_under`,
-  `bounce`, `rebuild`, `replay`, `finish_fresh`, `finish_in_home`, `finish`,
-  `done`, `leave` and `failed`.
+  `bounce`, `rebuild`, `replay`, `read_beside`, `finish_fresh`,
+  `finish_in_home`, `finish`, `fault`, `done`, `leave` and `failed`.
 
 **No step names a place that is not its own.** There is no handle among those
 doors — not the cell's own, not its consumer's, not its result's home — and no
@@ -338,6 +348,53 @@ field of one, places nothing new in its caller.
 
 The outstanding count lives in the receipt run, each producer carries its slot
 in its `Provenance`, and a tail hop hands the provenance to its successor.
+
+## Faults
+
+A step that cannot produce its value ends with `fault`, handing it the line
+its frame owes, if any, and what lies inside — the [program's](../program/README.md#faults-and-output)
+fault itself, a link laid in the same write home, or the kept cell below
+(`Inner`, in [`scope`](../scope/README.md#faults)). The veneer lays the link in
+the cell's write home, and what happens next turns on the cell's kind:
+
+- **A tree cell is kept.** Its region header takes the link, and its consumer's
+  slot is filled with a `KeptCell` naming it — a brand-free token over the
+  cell and the arena node it borrows, made and opened only here, beside
+  [`ArenaRef`](../values/README.md#crossing). The drain neither releases the
+  cell nor lets go of its arena borrow. A loop cell above it is released as
+  at delivery, and outlives the call under its kept hop.
+- **A tenant is released as ever**, since it owns no region. Its write home is
+  its consumer's, so it hands the link — or, with no line, what lay inside —
+  by a borrow of that home, crossing nothing.
+
+A fault is never pinned, copied or crossed. Its consumer reads it among its
+results, `Received::Fault`, and `results` yields nothing after it. A kept cell
+is handed on beside its fault's kind (`Inner::Below`), so a consumer learns the
+kind without reading the cell.
+
+**A fault stops its siblings.** The drain is depth-first, so the requests a
+park asked for after the child that faulted lie unborn on the stack directly
+above the consumer's other work. The drain drops every one of them and pushes
+the consumer, though its receipt run is incomplete: a part after a failing one
+never runs.
+
+**Reading and releasing kept cells.** A kept cell's region header is read at
+a brand the read quantifies, beside a type chain reading the graph's tiers and
+the cell's branch, so nothing read there is laid anywhere and no kept cell is
+ever pinned — a pin would fold its region into the reader when it is released.
+Between steps the host reads one through `Graph::read_kept`, `cellgraph`'s
+[`peek`](../../cellgraph/README.md#verbs), to print an uncaught fault. A
+catcher reads one inside a step of its own: it ends with
+`read_beside(kept, work)`, and the drain enters its cell again beside the kept
+cell, through `cellgraph`'s `enter_beside`, running `work`, whose `beside` door
+hands it the link. What the step takes from the link reaches its own region
+only as a copy by value — a value by the deep copy a crossing makes, its types
+adopted from the kept cell's branch — and the drain releases the kept cell once
+that step ends, whatever it ends with. `Graph::release_kept` releases a kept
+cell and its arena borrow; kept cells release in any order, an ancestor's
+release outliving the call until the kept cells under it dispose, so a value a
+fault holds in a cell below stays readable after the cells above it are
+released.
 
 ## The continuation
 
@@ -674,7 +731,13 @@ no layer of koan's above present. They hold, each with a workload of its own:
   creation to its release, every run cell born under a settlement carrying
   its reference, and a missed settlement relaying the image of a binding its
   asker minted, read by a frame after the asker is gone
-  ([tests/seek.rs](tests/seek.rs)).
+  ([tests/seek.rs](tests/seek.rs));
+- faults: a tree cell that faults kept live after its consumer finishes, its
+  link read back through `read_kept`, a fault in a park's first child leaving
+  the second unborn, a kept chain released parent first and child first, and
+  a kept hop keeping its loop cell until it is released, and a kept cell read
+  beside a step, released once that step ends
+  ([tests/faults.rs](tests/faults.rs)).
 
 A native step is a bare `fn` and carries no closure state, so what a step
 observes it records in `tests/native.rs` for the test around it to read back.

@@ -7,6 +7,7 @@ mod families;
 mod generators;
 mod golden;
 mod heap;
+mod image;
 mod intervals;
 mod levels;
 mod properties;
@@ -19,27 +20,24 @@ mod verdicts;
 
 use crate::bump::BumpAllocator;
 use crate::symbols::{BinderSymbol, TypeSymbol};
-use crate::types::tiers::{Agent, BumpHalf, Frozen, RootBuilder};
+use crate::types::SEED;
+use crate::types::tiers::{Agent, BumpHalf, RootBuilder};
 
 use super::chain::TypeChain;
 use super::handle::{Handle, KType, Parametric, wrap};
 use super::shape::DispatchTokenElement;
 use super::tiers::Habitat;
 
-/// A chain over a branch of a freshly seeded load in `region`, beside an empty agent tier, so what a
-/// test interns lands in the branch over the load's constants. The suite's default fixture.
+/// A chain over a branch in `region`, reading the seed image and an empty agent tier, so what a
+/// test interns lands in the branch over the fixed handles' nodes. The suite's default fixture.
 pub(super) fn tiered(region: BumpAllocator<'_>) -> TypeChain<'_, BumpHalf<'_>> {
-    TypeChain::new(
-        Frozen::seeded(region),
-        Agent::in_region(region),
-        BumpHalf::new(region),
-    )
+    TypeChain::new(&SEED, Agent::in_region(region), BumpHalf::new(region))
 }
 
 /// The load's chain over a fresh root builder in `region`: one table, for a test about the root's
 /// own table.
 pub(super) fn building(region: BumpAllocator<'_>) -> TypeChain<'_, &RootBuilder<'_>> {
-    TypeChain::building(RootBuilder::in_region(region))
+    TypeChain::building(RootBuilder::over(region, &SEED))
 }
 
 /// The two scheme doors over raw positions, answering the raw handle and the quantifier map — how

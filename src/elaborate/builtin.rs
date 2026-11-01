@@ -1,5 +1,7 @@
-//! A builtin shape's overloads, interned as lattice handles, the builtin `Result` family, and the
-//! builtin `Error` nominal a koan error value is tagged with.
+//! A builtin shape's overloads, interned as lattice handles, and the builtin `Result` and `Error`
+//! unions: the recipe the builtin image is generated from
+//! ([builtin_image.rs](../builtin_image.rs)), compiled for tests alone. A load builds none of
+//! them; it reads the image's constants.
 //!
 //! [`BUILTIN_SHAPES`](crate::parse::BUILTIN_SHAPES) states each bucket's overloads
 //! as `static` data — a `const` [`KType`] per slot per overload, and one return apiece — because
@@ -14,6 +16,7 @@
 
 use crate::memory::{BumpAllocator, BumpVec};
 use crate::parse::{BuiltinShape, ShapeElement};
+use crate::scope::{FaultKind, Field};
 use crate::symbols::{BinderSymbol, StaticName, SymbolInterner, TypeSymbol, ValueSymbol};
 use crate::type_lattice::{
     DispatchTokenElement, KKind, KType, RecursiveGroupWindow, RelativeSchema,
@@ -94,21 +97,53 @@ pub fn builtin_result(
         .expect("the last fill seals the union")
 }
 
-/// The builtin `Error`: the nominal `NEWTYPE Error = :{message :Str}` declares, sealed through the
-/// window that declaration seals through, its names recorded in `symbols`. A koan error value is a
-/// tagged value of it.
+/// The builtin `Error`: the union a declaration listing one variant per [`FaultKind`], in
+/// [`FaultKind::ALL`]'s order, each over the kind's fields beside `message` and `frames`, would
+/// seal, sealed through the window that declaration seals through, its names recorded in `symbols`
+/// ([catching](../dispatch/README.md#catching)).
 pub fn builtin_error(
     types: &Chain<'_, '_, '_, '_>,
     symbols: &SymbolInterner,
     scratch: BumpAllocator<'_>,
 ) -> KType {
     let error = symbols.record(&ERROR);
-    let message = BinderSymbol::Value(symbols.record(&MESSAGE));
-    let payload = types.record(scratch, &[(message, KType::STR)]);
-    let window =
-        RecursiveGroupWindow::for_component(scratch, &[(error, None, KKind::NewType)], &[]);
-    window
-        .fill_member(0, RelativeSchema::NewType(payload), types, scratch)
-        .and_then(|sealed| sealed.member(0))
-        .expect("the only fill seals the newtype")
+    let field = |name| BinderSymbol::Value(ValueSymbol::declared(name, symbols).expect("a name"));
+    let frame = types.record(
+        scratch,
+        &[
+            (field("callee"), KType::STR),
+            (field("call"), KType::STR),
+            (field("at"), KType::STR),
+            (field("count"), KType::NUMBER),
+        ],
+    );
+    let frames = types.list(frame);
+    let mut members = BumpVec::with_capacity_in(FaultKind::ALL.len(), scratch);
+    members.extend(FaultKind::ALL.iter().map(|kind| {
+        let label = TypeSymbol::declared(kind.name(), symbols).expect("a kind names a type");
+        (label, Some(error), KKind::NewType)
+    }));
+    let owned: &[usize] = scratch.alloc_slice_fill_iter(0..members.len());
+    let window = RecursiveGroupWindow::for_component(scratch, &members, &[(error, owned)]);
+    let mut sealed = None;
+    for (index, kind) in FaultKind::ALL.into_iter().enumerate() {
+        let mut fields = BumpVec::with_capacity_in(kind.fields().len() + 2, scratch);
+        fields.push((BinderSymbol::Value(symbols.record(&MESSAGE)), KType::STR));
+        fields.push((field("frames"), frames));
+        fields.extend(kind.fields().iter().map(|(name, declared)| {
+            let declared = match declared {
+                Field::Any => KType::ANY,
+                Field::Str => KType::STR,
+                Field::Number => KType::NUMBER,
+                Field::Type => KType::of_kind(KKind::AnyType),
+                Field::ListOfAny => KType::LIST_OF_ANY,
+            };
+            (field(name), declared)
+        }));
+        let payload = types.record(scratch, &fields);
+        sealed = window.fill_member(index, RelativeSchema::NewType(payload), types, scratch);
+    }
+    sealed
+        .and_then(|sealed| sealed.binder_type(error))
+        .expect("the last fill seals the union")
 }

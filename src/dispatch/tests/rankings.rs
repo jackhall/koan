@@ -134,7 +134,7 @@ fn a_module_ranked_in_written_order_does_not_satisfy_a_member_ranked_otherwise()
             CellSubstrate::load::<Koan>(&source, "<test>", 8, BuildBudget::default(), output())
                 .unwrap_or_else(|error| panic!("`{source}` loads: {error}"));
         substrate.with(|running| {
-            running.run().expect("the program runs");
+            running.ran().expect("the program runs");
             running.inspect(ascribing).expect("the inspection runs");
         });
         ASCRIBED.with(|ascribed| ascribed.borrow().clone())
@@ -162,7 +162,7 @@ fn ranking(source: &str) -> (String, usize) {
             .unwrap_or_else(|error| panic!("the program loads: {error}"));
     RANKED.with(|ranked| ranked.set(0));
     substrate
-        .with(|running| running.run())
+        .with(|running| running.ran())
         .expect("the program runs");
     let written = super::WRITTEN.with(|written| written.borrow().join("\n"));
     (written, RANKED.with(std::cell::Cell::get))

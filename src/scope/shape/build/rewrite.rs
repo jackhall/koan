@@ -191,7 +191,6 @@ impl<'graph, 'x> Builder<'graph, 'x, '_> {
                     let rewritten = match role {
                         Role::Rhs
                         | Role::Argument
-                        | Role::InPlace
                         | Role::TypeExpression
                         | Role::Definition(DefinitionKind::Plain) => {
                             self.rewrite_part(&part.value)?

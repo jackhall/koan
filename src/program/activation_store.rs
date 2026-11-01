@@ -14,14 +14,15 @@
 
 use crate::build::Layer;
 use std::cell::Cell;
-use std::fmt::Write as _;
 
-use crate::memory::{Bump, BumpAllocator, BumpVec, Lays, Writer, collect, resident};
-use crate::scope::{Activated, Binding, Bound, Facts, RecordSource, Segment, Tree, Unknown};
+use crate::memory::{Bump, BumpAllocator, BumpVec, Lays, Writer, resident};
+use crate::scope::{
+    Activated, Binding, Bound, Facts, RecordSource, Segment, ShapeError, Tree, Unknown,
+    relaid_error,
+};
 use crate::values::{Chain, ContentDigest, Knotted, Value};
 
 use super::record::{Language, Program};
-use super::settle::Text;
 
 /// What a frame's slot holding `value` binds its unknown to: a type value its type, and a module
 /// value its carried type over its content, by digest. `None` for any other value. The digest is
@@ -74,7 +75,7 @@ pub(super) type Activate<'graph> =
         &[(Unknown, Bound<'bind>)],
         bool,
         Segment,
-    ) -> Result<Activated<'here>, &'here str>;
+    ) -> Result<Activated<'here>, &'here ShapeError<'here>>;
 
 /// [`activated`] laying through a frame's region writer: what the program holds.
 #[allow(clippy::too_many_arguments)]
@@ -87,7 +88,7 @@ pub(super) fn activated_in<'here, L: Language>(
     own: &[(Unknown, Bound<'_>)],
     rewakes: bool,
     at: Segment,
-) -> Result<Activated<'here>, &'here str> {
+) -> Result<Activated<'here>, &'here ShapeError<'here>> {
     activated::<L>(program, writer, facts, types, below, own, rewakes, at)
 }
 
@@ -95,7 +96,7 @@ pub(super) fn activated_in<'here, L: Language>(
 /// `below`, its cell's and enclosers' earlier events: `L`'s walk rooted at the body, laid through
 /// `lay` and interned through `types`, the frame's chain. It wakes the units whose records name
 /// what `own` binds, or, where it `rewakes`, any name `facts` bind too. A refusal the walk reaches
-/// is the message the cell faults with, worded as the load words it.
+/// is laid through `lay`, for the cell to fault with as the load would; its types lie in `types`.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn activated<'here, L: Language>(
     program: &Program<'_>,
@@ -106,7 +107,7 @@ pub(crate) fn activated<'here, L: Language>(
     own: &[(Unknown, Bound<'_>)],
     rewakes: bool,
     at: Segment,
-) -> Result<Activated<'here>, &'here str> {
+) -> Result<Activated<'here>, &'here ShapeError<'here>> {
     #[cfg(test)]
     DECIDED.with(|decided| decided.set(decided.get() + 1));
     let (bump, scratch) = (Bump::new(), Bump::new());
@@ -140,11 +141,6 @@ pub(crate) fn activated<'here, L: Language>(
             own,
             layer.writes(),
         )),
-        Err(error) => {
-            let mut text = Text(BumpVec::new_in(&scratch));
-            write!(text, "{}", error.display(program.symbols(), types)).expect("a refusal renders");
-            let laid = collect(lay, text.0.iter().copied());
-            Err(std::str::from_utf8(laid).expect("rendered as UTF-8"))
-        }
+        Err(error) => Err(relaid_error(lay, &scratch, &error)),
     }
 }

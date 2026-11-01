@@ -306,3 +306,26 @@ fn a_key_is_its_run() {
         "_ LOG _ TO _"
     );
 }
+
+/// An interner resting on a static tier renders the tier's names without recording them, and
+/// declaring one records nothing; a name the tier lacks is recorded as before.
+#[test]
+fn a_static_tier_renders_names_it_never_records() {
+    let bump: &'static crate::bump::Bump = Box::leak(Box::new(crate::bump::Bump::new()));
+    let texts = ["Error", "ok", "TRY"]
+        .map(|text| &*bump.alloc(StaticText::imaged(Symbol::of(text).0, text)));
+    let tier: &'static StaticTexts = Box::leak(Box::new(StaticTexts::imaged(
+        crate::bump::FrozenTable::placed(bump, texts.len(), texts),
+    )));
+    let symbols = SymbolInterner::resting_on(tier);
+    for text in texts {
+        assert_eq!(symbols.render(text.symbol()), text.text());
+    }
+    let error = TypeSymbol::declared("Error", &symbols).expect("a Type token");
+    assert_eq!(symbols.render(error.symbol()), "Error");
+    assert!(!symbols.records(error.symbol()));
+    assert_eq!(symbols.len(), 0);
+    let fresh = symbols.intern("fresh");
+    assert!(symbols.records(fresh));
+    assert_eq!(symbols.len(), 1);
+}

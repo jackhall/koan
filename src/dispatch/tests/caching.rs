@@ -58,15 +58,23 @@ fn ran(depth: u32, source: &str) -> Ran {
 
 /// Run [`program`] at `depth` over `source`, its unheld settlements within `budget`.
 pub(super) fn ran_under(depth: u32, source: &str, budget: BuildBudget) -> Ran {
+    ran_times(depth, source, budget, 1)
+}
+
+/// [`ran_under`], the program run `runs` times over one substrate, the counts and the printed
+/// lines summed over every run.
+pub(super) fn ran_times(depth: u32, source: &str, budget: BuildBudget, runs: usize) -> Ran {
     let program = program(depth, source);
     WRITTEN.with(|written| written.borrow_mut().clear());
     let mut substrate = CellSubstrate::load::<Koan>(&program, "<test>", 2, budget, output())
         .unwrap_or_else(|error| panic!("the program loads: {error}"));
     let before = substrate.with(|running| running.program().tiers().frozen.len());
     TIERS.with(|tiers| tiers.set(Tiers::default()));
-    substrate
-        .with(|running| running.run())
-        .expect("the program runs");
+    for _ in 0..runs {
+        substrate
+            .with(|running| running.ran())
+            .expect("the program runs");
+    }
     let after = substrate.with(|running| running.program().tiers().frozen.len());
     let live = substrate.with(|running| running.scheduler().graph().live_settlements());
     Ran {
@@ -79,7 +87,7 @@ pub(super) fn ran_under(depth: u32, source: &str, budget: BuildBudget) -> Ran {
 
 /// How many frame bodies [`PRELUDE`] and `source` write cache: what a test reads to see it runs
 /// the bodies it means to.
-fn caching(source: &str) -> usize {
+pub(super) fn caching(source: &str) -> usize {
     fn count(program: &Program<'_>, shape: &BodyShape<'_>) -> usize {
         (shape.nested_shapes().iter())
             .map(|(_, nested)| {
@@ -959,7 +967,7 @@ fn laid(program: &str) -> Vec<(&'static str, usize, usize)> {
         kinds
     });
     LAID.with(|laid| laid.borrow_mut().clear());
-    let _ = substrate.with(|running| running.run());
+    let _ = substrate.with(|running| running.ran());
     LAID.with(|laid| {
         (laid.borrow().iter())
             .map(|(shape, &(scratch, warm))| {
@@ -1267,7 +1275,7 @@ pub(super) fn runs(
             WRITTEN.with(|written| written.borrow_mut().clear());
             TIERS.with(|tiers| tiers.set(Tiers::default()));
             substrate
-                .with(|running| running.run())
+                .with(|running| running.ran())
                 .expect("the program runs");
             let table = substrate.with(|running| {
                 let table = running.scheduler().graph().children_of(ArenaRef::ROOT);
@@ -1456,7 +1464,7 @@ fn allocations(source: &str) -> u64 {
             .unwrap_or_else(|error| panic!("the program loads: {error}"));
     let before = crate::tests::allocation_count();
     substrate
-        .with(|running| running.run())
+        .with(|running| running.ran())
         .expect("the program runs");
     crate::tests::allocation_count() - before
 }
@@ -1669,4 +1677,36 @@ fn a_type_composed_at_run_keys_no_settlement_and_its_asker_settles_once() {
         "a written module's types are the root's: only the application its parameter's retype \
          stamps, which the frame binds it at, is relayed"
     );
+}
+
+#[test]
+fn a_fresh_loop_catching_a_fault_over_new_content_each_hop_holds_flat() {
+    // Each hop catches a fault naming a module built over its link, read beside the kept cell
+    // `BOOM` ended in, so its record's type is new each hop.
+    let source = "EXPR #(BOOM p :Any) -> Any = #(p.field)\n\
+                  EXPR #(LOOP link :Link) -> Number = \
+                  #((MODULE m OVER #[link] = (LET held = link)) (LET seen = (m :| Holder)) \
+                  (LET c = (CATCH (BOOM {held = m}))) (LOOP (ATTR link next)))\n\
+                  EXPR #(LOOP end :Null) -> Number = #(7)\n\
+                  PRINT (LOOP chain)";
+    assert_eq!(caching(source), 1);
+    let [few, many] = at_ends(source);
+    assert_eq!((few.printed.as_str(), few.root), ("7", 0));
+    assert_eq!(few, many);
+}
+
+#[test]
+fn a_shares_loop_catching_a_fault_over_new_content_each_hop_holds_its_hosts_region_flat() {
+    // A `Str`-returning loop's hops are co-tenants of one host, so what each catches lands in the
+    // host's region.
+    let source = "EXPR #(BOOM p :Any) -> Any = #(p.field)\n\
+                  EXPR #(LOOP link :Link) -> Str = \
+                  #((MODULE m OVER #[link] = (LET held = link)) (LET seen = (m :| Holder)) \
+                  (LET c = (CATCH (BOOM {held = m}))) (LOOP (ATTR link next)))\n\
+                  EXPR #(LOOP end :Null) -> Str = #(\"done\")\n\
+                  PRINT (LOOP chain)";
+    assert_eq!(caching(source), 1);
+    let [few, many] = at_ends(source);
+    assert_eq!((few.printed.as_str(), few.root), ("done", 0));
+    assert_eq!(few, many);
 }

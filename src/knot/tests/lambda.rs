@@ -8,9 +8,10 @@ use crate::symbols::TypeSymbol;
 use crate::type_lattice::{DeclaredType, KType};
 use crate::values::{Chain, Circular, Knotted as _, Link, Value};
 
-use super::super::{KActivation, Knotted, Untieable, lambda};
+use super::super::{KActivation, Knotted, lambda};
 use super::birth::tie_with;
 use super::{Fixture, bound, callable, circular, follow, pin, with_fixture};
+use crate::scope::Untieable;
 
 /// The `FN` node statement `statement` of `shape` is.
 fn statement_lambda<'graph>(

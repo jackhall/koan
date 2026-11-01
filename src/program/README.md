@@ -71,8 +71,10 @@ and leave with them.
 **Setup runs in the builder.** `CellSubstrate::load::<L>` does all of it inside
 `self_cell`'s builder closure, which sees the same `'graph` every later call
 does: it parses the source into program storage, lays a root builder in the
-owner's bump and builds every load-time type through one chain over it, has
-`L` lay the builtin table down, builds the program's shapes over that table,
+owner's bump, resting on the [builtin image](../builtin_image.rs), and builds
+every load-time type through one chain over it — the builtin types are the
+image's, so the load builds none of them — has `L` lay the builtin table down,
+builds the program's shapes over that table,
 has `L` run [its walk](../build/README.md#the-one-walk) over them into the
 load's store — the [type half](../elaborate/README.md#the-type-channel-at-load)
 and the value half unit by unit — and folds the records, lays the
@@ -100,7 +102,7 @@ index into it.
 
 [`Program`](record.rs) is what a loaded program's steps read, at `'graph`: the
 top level's shape, the builtin table, the type tiers and the interner, the
-evaluator's step, the output sinks and the sealed `Error` type. It rests in program storage beside the table, written through
+evaluator's step, the output sinks and the builtin image's `Result` and `Error` unions. It rests in program storage beside the table, written through
 `cellgraph`'s [`Storage`](../memory/README.md#two-tiers-and-why-the-boundary-falls-where-it-does)
 writer, so every step names it by a `'graph` borrow that crosses at no price.
 The builtin table is there for the same reason: it is covariant in its cell
@@ -409,6 +411,20 @@ own contract, and the block tails its last statement as a frame does
 (`Runner::tail_body`), so a recursion through tail arms holds a constant number
 of cells. Every other block runs as a child and never tails.
 
+**What a tail owes travels as an `Owed`**: the contract, the extent of the
+frame's call — every call's and `EVAL`'s birth carries the extent of its node —
+and the frame's hop table, the frames tail hops replaced in its chain, one
+entry per callee and call site, most recently reached first. A frame builds
+its own from its callee, its call and the table its birth carries, empty for a
+spawned frame; a hand-off and a tail arm owe their frame's. A hop moves the
+line of the frame it replaces — the owed contract's callee at the owed call —
+to the front of the table, counting it once more, and hands the table to the
+callee's frame, whose own call is the hop's. A hand-off replaces no frame and
+counts nothing. The table crosses into each hop's successor as the birth does,
+its types with it, and holds at most one entry per callee and tail site the
+program has, so a loop still runs in constant space. The line a faulting cell
+owes is read off its `Owed` ([faults](#faults-and-output)).
+
 **A frame keeps what it was handed.** A frame called with no barrier before its
 callee lays a table in its region at its first step (`FrameKept`): a
 [kept](../scheduler/README.md#kept-and-held-values) carrier at the true home of
@@ -560,37 +576,80 @@ A running program's refusals are **faults**: an evaluation, a frame and a block
 each finish with a value or a fault, and a fault is no koan value. User code
 raises none — a function that can fail returns a `Result` — so nothing in the
 language reads a fault between its raise and where it is caught, and it
-travels as the runtime's own: one of a closed set of kinds, each carrying
-structured fields — types, names, code, or where a value lies in a frame the
-fault keeps — and no rendered text. Every unit that receives one — an
-evaluation's outcome, an eager part a tie named — stops the body with it, and
-so does every refusal the program is to blame for: a tie or a declaration
-refused, a callee that is no function, arguments that do not fit it. A frame
-finishes with the fault; a block does the same. `StepError::Refused` is left
-for invariant breaks alone.
+travels as the runtime's own: a [`Fault`](../scope/README.md#faults), one of a
+closed set of kinds, each carrying structured fields — types, names, code, or
+a value, which lies in a frame the fault keeps — and no rendered text. A
+refusal the build's walk reaches while the program runs — an `EVAL`'s written
+quote's, composed code's, a settlement's or an activation's — is one kind,
+`Refused`, carrying the `ShapeError` itself: a settlement or a composition
+keeps the refusal as it keeps its records, its types rested or termed beside
+them ([settlements](#settlements-and-activations)), and an activation lays it
+in its frame. Every unit that receives a fault — an evaluation's outcome, an
+eager part a tie named — stops the body with it, and so does every refusal the
+program is to blame for: a tie or a declaration refused, a callee that is no
+function, arguments that do not fit it. A part that faults stops the parts
+after it: what the same park asked for and has not yet run never runs
+([the scheduler](../scheduler/README.md#faults)). A frame finishes with the
+fault; a block does the same. `StepError::Refused` is left for invariant
+breaks alone.
 
-**A fault keeps the frames it passes through.** A frame that finishes with a
-fault is not released: its region holds what the fault's fields locate and what
-its trace names, until a `TRY` or a `CATCH`
-[catches](../dispatch/README.md#catching) the fault or the host drops the
+**A fault keeps the frames it passes through.** Each cell that passes a fault
+on lays a link in its write home: its trace line, where it owes one, and what
+lies inside it — the fault, a link of the same region, or the kept cell below.
+A tree cell that ends with a fault is not released: its region header holds
+its link, and its consumer is handed a brand-free handle of it; a tenant owns
+no region and is released as ever. So the kept regions hold the fault's
+values and what its trace names, until a `TRY` or a `CATCH`
+[catches](../dispatch/README.md#catching) the fault — copying them into the
+`Error` it builds, then releasing each kept cell — or the host drops the
 uncaught outcome holding it. Only frames live at the raise are kept, and a
 [`release`](../../cellgraph/README.md#verbs) outlives its call until the tree
-cells under it dispose, so the catcher releases them in any order. A frame a
-tail hop replaced is gone; the frame that replaced it counts it, per callee.
+cells under it dispose, so the catcher releases them in any order, and a tail
+loop's loop cell stays whole and undisposed under its kept hop. A reader walks
+the links through the scheduler's read doors, at a brand of its own — the host
+between steps, a catcher in a step entered beside each kept cell
+([kept cells](../scheduler/README.md#faults)) — and never pins a kept cell: a
+pin would fold its region into the reader when released.
+A fault leaving a caching body has its types and its values adopted into the
+region at the exit it leaves by, as a value does ([`Exit`](exit.rs)).
 
-At the top level, the runner renders an uncaught fault through the program:
-`error: <message>` to the error sink, from the fault's fields, and beneath it
-one line per live frame it passed through, innermost first, naming the callee
-and the `path:line:col` of the call, with a callee tail hops reached more than
-once shown as one line with its count. It marks the run uncaught and leaves its
-view at rest as it always does, so the bindings bound before the fault stay
-inspectable.
+**A trace line is owed with the contract.** A cell owing a contract owes its
+frame's line: the callee's type — none for an `EVAL` frame — the extent of the
+call, and the frames tail hops replaced in its chain, counted per callee and
+call site, most recently reached first
+([frames](#frames-contracts-and-tails)). A frame that tailed is gone, so its
+hand-off owes its line.
+
+At the top level, an uncaught fault is rendered through the program:
+`error: <message>` to the error sink, from the fault's fields — a `Refused`
+fault's message is every line its `ShapeError` renders, led by its
+`path:line:col`, as the load prints it — and beneath it the trace, innermost
+first:
+
+```text
+error: :{y :Number} has no field z
+  in :(FN :{p :Any} -> Number) (walk {p = rest}) at <input>:2:41 ×999
+  in :(FN :{p :Any} -> Number) (walk {p = start}) at <input>:4:7
+```
+
+A line names the callee's type — `` `EVAL` `` for an `EVAL` frame — the call
+as written and the call's `path:line:col`, and counts the chain's frames at
+that callee and call where there are more than one, the live frame among them.
+Adjacent lines naming the same callee and call merge, their counts summed, so
+a recursion outside tail position prints one line at its recursive call, above
+the entry call's line. Blocks and builtins are no
+frames, and a fault raised at the top level outside any call prints no line. A
+fault the top level raises itself — a tie, a declaration or an annotation
+refused there — is rendered in its own step and keeps nothing. Either way the
+run is marked uncaught and the top level leaves its view at rest as it always
+does, so the bindings bound before the fault stay inspectable.
 
 `load` takes an [`Output`](record.rs) of two sinks, `print` and `error`, which
 the program record holds; the builtin `PRINT` writes through the first.
 `Running::run` answers an `Outcome`: `Completed`, or `Uncaught` when a fault
-reached the top level, holding the fault and the frames it kept until the host
-drops it.
+reached the top level, which borrows the running state and holds the cells the
+fault kept until the host drops it; its drop releases them, so an `inspect`
+after an uncaught run follows that drop.
 
 **One placement for a call.** [`call`](body.rs) is what an evaluator asks for
 to call a function: a frame running the callee's body, always `Fresh`, in a
@@ -608,10 +667,11 @@ drain finds by the code's syntax digest or builds over the copy the frame's
 first step hands it. A written quote's refusals are found before anything is
 spawned; composed code's, by its frame under the composition. The
 evaluator hands it the names the `EVAL` offers, read at the coordinates the
-shape recorded for its operand (`BodyShape::offers`), as a record. It refuses
-with a `CodeRefused`: `Shape` for code whose shape kept an error, `Unbound`
-for the first name hole, `\` name the `EVAL` does not
-offer, or keyworded hole some use in the code selects from alone, and
+shape recorded for its operand (`BodyShape::offers`), as a record. Code whose
+shape kept an error faults with `Refused`, carrying that `ShapeError`; other
+code it refuses faults with a `CodeRefused`: `Unbound` for the first name
+hole, `\` name the `EVAL` does not offer, or keyworded hole some use in the
+code selects from alone, and
 `QuantifiedRead` for a `$` name at composed code's entry bound to a
 quantified function and read other than as a call's head. An overlap the
 code's registrations make is a load fact of a written quote, reported here,
@@ -646,9 +706,9 @@ substrate still runs a later root work, and is otherwise only ever dropped.
 
 ## Imports and tests
 
-Outside `#[cfg(test)]` this module names `crate::build`, `crate::elaborate`, `crate::knot`,
-`crate::memory`, `crate::parse`, `crate::scheduler`, `crate::scope`,
-`crate::symbols`, `crate::type_lattice` and `crate::values`.
+Outside `#[cfg(test)]` this module names `crate::build`, `crate::builtin_image`,
+`crate::knot`, `crate::memory`, `crate::parse`, `crate::scheduler`,
+`crate::scope`, `crate::symbols`, `crate::type_lattice` and `crate::values`.
 `tests/boundary.rs` reads the source to hold the rule there.
 
 The suites run over the [miniature evaluator](tests/evaluator.rs), which records
@@ -693,10 +753,6 @@ module value by its digest tree. The two-program test,
 
 ## Open work
 
-- [Faults and call traces](../../roadmap/conditionals/faults.md) — faults apart
-  from values, the frames they keep, and the trace an uncaught one prints.
-- [Catching errors](../../roadmap/conditionals/catching.md) — `TRY` and `CATCH`,
-  which build an `Error` from a fault and release its frames.
 - [A refused program stays loaded](../../roadmap/rewrite/refused-programs-stay-loaded.md)
   — a refused load kept, so its shape error renders on demand rather than once.
 - [One cell per frame](../../roadmap/rewrite/one-cell-per-frame.md) — a

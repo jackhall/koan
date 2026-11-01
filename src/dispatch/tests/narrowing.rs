@@ -34,8 +34,9 @@ proptest! {
                 narrowed,
                 rendered.source
             );
+            let message = whole.split("\n  in ").next().unwrap_or_default();
             prop_assert!(
-                whole.starts_with("error: ") && !whole.contains('\n'),
+                whole.starts_with("error: ") && !message.contains('\n'),
                 "{} unnarrowed ran {:?}\nin\n{}",
                 narrowed,
                 whole,

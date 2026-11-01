@@ -108,7 +108,7 @@ fn a_record_naming_neither_bound_is_refused_where_the_load_can_tell_and_faults_o
     assert_eq!(
         run("LET f = (FN :{v :Any} -> Any = #([1 2] v))\nPRINT (f {v = {x = 1}})"),
         "error: :(LIST OF Number) is read by a `Number` or by a slice record naming `from` or \
-         `to` as `Number`s, not by :{x :Number}"
+         `to` as `Number`s, not by :{x :Number}\n  in :(FN :{v :Any} -> Any) (f {v = {x = 1}}) at <test>:2:7"
     );
 }
 
@@ -123,7 +123,9 @@ fn a_dict_applied_to_a_key_looks_it_up() {
         error("Str", "z"),
         error("Number", "7"),
         ok("Number", "1"),
-        "error: :(LIST OF Number) cannot be a dict key".to_string(),
+        "error: :(LIST OF Number) cannot be a dict key\n  in :(FN :{k :Any} -> Any) (f {k = [1]}) at \
+         <test>:7:7"
+            .to_string(),
     ];
     assert_eq!(run(source), expected.join("\n"));
     assert_eq!(

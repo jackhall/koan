@@ -7,12 +7,14 @@ mod ascription;
 mod boundary;
 mod bounds;
 mod caching;
+mod catching;
 mod classes;
 mod compositions;
 mod constructions;
 mod contributions;
 mod digests;
 mod door;
+mod faults;
 mod frontiers;
 mod functions;
 mod generate;
@@ -53,7 +55,7 @@ mod views;
 
 use std::cell::RefCell;
 
-use crate::program::{CellSubstrate, Outcome, Output};
+use crate::program::{CellSubstrate, Output, Ran};
 
 use super::Koan;
 use super::walk::{LoadCounts, counted};
@@ -84,10 +86,10 @@ fn run(source: &str) -> String {
             Ok(substrate) => substrate,
             Err(error) => return format!("load: {error}"),
         };
-    let outcome = substrate.with(|running| running.run());
+    let outcome = substrate.with(|running| running.ran());
     let written = WRITTEN.with(|written| std::mem::take(&mut *written.borrow_mut()));
     match outcome {
-        Ok(Outcome::Completed | Outcome::Uncaught) => written.join("\n"),
+        Ok(Ran::Completed | Ran::Uncaught) => written.join("\n"),
         Err(stalled) => format!("stalled: {stalled:?} after {written:?}"),
     }
 }

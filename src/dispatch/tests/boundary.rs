@@ -1,11 +1,12 @@
 //! The import boundary, as a test over this module's own source.
 //!
-//! `dispatch` stands over the program and every layer below it — `elaborate`, `knot`, `memory`,
-//! `parse`, `program`, `scheduler`, `scope`, `source`, `symbols`, `type_lattice` and `values` — and
-//! nothing names it but the embedder.
+//! `dispatch` stands over the program and every layer below it — `builtin_image`, `elaborate`,
+//! `knot`, `memory`, `parse`, `program`, `scheduler`, `scope`, `source`, `symbols`, `type_lattice`
+//! and `values` — and nothing names it but the embedder.
 
 /// The path prefixes `dispatch` may name.
 const PREFIXES: &[&str] = &[
+    "crate::builtin_image",
     "crate::dispatch",
     "crate::elaborate",
     "crate::knot",

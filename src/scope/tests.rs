@@ -7,6 +7,7 @@ mod code;
 mod dispatch;
 mod examples;
 mod facts;
+mod fault;
 mod groups;
 mod header;
 pub(crate) mod plan;

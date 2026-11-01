@@ -1,23 +1,26 @@
-//! The substrate: an owner that borrows nothing, and the running state that borrows it.
+//! The substrate: an owner that borrows nothing, and the running state that borrows it. A run whose
+//! top level a kept fault reached renders it once the drain ends, walking the links of the cells it
+//! kept, and answers an [`Uncaught`] that holds those cells until the host drops it.
 
 use std::cell::Cell;
 
 use self_cell::self_cell;
 
-use crate::elaborate::{builtin_error, builtin_result};
+use crate::builtin_image;
 use crate::knot::KBuiltins;
 use crate::memory::{
     Bump, BumpAllocator, ProgramBrand, ProgramStorage, SlabHandle, program_storage, resident,
 };
 use crate::parse::parse_with_path;
 use crate::scheduler::{DrainStalled, Graph, NativeStep, Placement, Resting, Scheduler, Work};
+use crate::scope::{Inner, Link, Trace};
 use crate::symbols::SymbolInterner;
 use crate::type_lattice::{Agent, Halves, RootBuilder};
-use crate::values::{BuildBudget, Chain, Half, TypeTiers, Types};
+use crate::values::{BuildBudget, Chain, Half, KeptCell, TypeTiers, Types};
 
 use super::body;
 use super::bundle::{KBirth, KBundle};
-use super::record::{Language, LoadError, Outcome, Output, Program};
+use super::record::{Ending, Language, LoadError, Output, Program};
 
 /// The stack a program's load and run need: the walks over parsed syntax recurse once per nested
 /// part, so a program nested [`MAX_SYNTAX_DEPTH`](crate::parse::MAX_SYNTAX_DEPTH) deep fits in it
@@ -60,22 +63,62 @@ impl<'graph> Running<'graph> {
 
     /// Run the program: the body runner born as a tenant of the root, so the top level's bindings
     /// are written in the root's region. What it leaves at rest is kept for [`inspect`](Self::inspect);
-    /// a second run runs the program again and replaces it. A run whose top level received an
-    /// error value wrote its message to the error sink, and is [`Outcome::Uncaught`].
-    pub fn run(&mut self) -> Result<Outcome, DrainStalled> {
+    /// a second run runs the program again and replaces it. A run whose top level a fault reached
+    /// wrote its diagnostic to the error sink, and is [`Outcome::Uncaught`], holding the cells the
+    /// fault kept until it is dropped.
+    pub fn run(&mut self) -> Result<Outcome<'_, 'graph>, DrainStalled> {
         let work = Work {
             step: body::run,
             state: KBirth::Program {
                 program: self.program,
             },
         };
-        let uncaught = self.program.uncaught();
-        uncaught.set(false);
+        let ending = self.program.ending();
+        ending.set(Ending::Completed);
         self.resting = Scheduler::over(&mut self.graph).run(work, self.root, Placement::Shares)?;
-        Ok(if uncaught.get() {
-            Outcome::Uncaught
-        } else {
-            Outcome::Completed
+        let outermost = match ending.get() {
+            Ending::Completed => return Ok(Outcome::Completed),
+            Ending::Rendered => None,
+            Ending::Kept(outermost) => {
+                let scratch = Bump::new();
+                (self.program.output().error)(self.traced(outermost, &scratch).rendered());
+                Some(outermost)
+            }
+        };
+        Ok(Outcome::Uncaught(Uncaught {
+            running: self,
+            outermost,
+        }))
+    }
+
+    /// The diagnostic of the uncaught fault whose outermost kept cell is `outermost`, gathered in
+    /// `scratch` by walking its links from cell to cell, each read through its own region's chain.
+    fn traced<'x>(&self, outermost: KeptCell, scratch: &'x Bump) -> Trace<'x> {
+        let mut trace = Trace::new(scratch);
+        let mut next = Some(outermost);
+        while let Some(cell) = next.take() {
+            next = (self.graph)
+                .read_kept(cell, |link, types| {
+                    trace.gathered(Inner::Link(link), self.symbols, types)
+                })
+                .flatten();
+        }
+        trace
+    }
+
+    /// Give the run root back, and answer whether the graph is then empty: what a test reads to see
+    /// a run leave no cell behind. The substrate runs nothing after.
+    #[cfg(test)]
+    pub(crate) fn emptied(&mut self) -> bool {
+        self.graph.release_root(self.root).is_ok() && self.graph.is_empty()
+    }
+
+    /// [`run`](Self::run), ended: how the run ended, with any cell an uncaught fault kept released.
+    #[cfg(test)]
+    pub(crate) fn ran(&mut self) -> Result<Ran, DrainStalled> {
+        Ok(match self.run()? {
+            Outcome::Completed => Ran::Completed,
+            Outcome::Uncaught(_) => Ran::Uncaught,
         })
     }
 
@@ -110,6 +153,82 @@ impl<'graph> Running<'graph> {
     pub fn symbols(&self) -> &'graph SymbolInterner {
         self.symbols
     }
+}
+
+/// How a program's run ended: completed, or with an uncaught fault.
+pub enum Outcome<'a, 'graph> {
+    Completed,
+    Uncaught(Uncaught<'a, 'graph>),
+}
+
+impl Outcome<'_, '_> {
+    /// Whether a fault reached the top level.
+    pub fn is_uncaught(&self) -> bool {
+        matches!(self, Outcome::Uncaught(_))
+    }
+}
+
+/// A run a fault ended uncaught: it borrows the running state, so nothing reads it until this is
+/// dropped, and holds the cells the fault kept — the outermost, whose link leads to the rest —
+/// which its drop releases. A fault the top level raised itself kept none.
+pub struct Uncaught<'a, 'graph> {
+    running: &'a mut Running<'graph>,
+    outermost: Option<KeptCell>,
+}
+
+impl Uncaught<'_, '_> {
+    /// How many cells the fault kept that are still live: every one, until this is dropped.
+    #[cfg(test)]
+    pub(crate) fn kept_live(&self) -> usize {
+        let (mut live, mut next) = (0, self.outermost);
+        while let Some(kept) = next {
+            next = match self.running.graph.read_kept(kept, |link, _| below(link)) {
+                Some(below) => {
+                    live += 1;
+                    below
+                }
+                None => None,
+            };
+        }
+        live
+    }
+}
+
+impl Drop for Uncaught<'_, '_> {
+    /// Release every cell the fault kept, each read for the next before it goes; kept cells
+    /// release in any order.
+    fn drop(&mut self) {
+        let graph = &mut self.running.graph;
+        let mut next = self.outermost.take();
+        while let Some(kept) = next {
+            next = (graph.read_kept(kept, |link, _| below(link))).flatten();
+            let released = graph.release_kept(kept);
+            debug_assert!(
+                released.is_ok(),
+                "a kept cell is live until its outcome drops"
+            );
+        }
+    }
+}
+
+/// The kept cell below `link`'s region, if its fault passed through one.
+fn below<V>(link: &Link<'_, V>) -> Option<KeptCell> {
+    let mut link = link;
+    loop {
+        match link.inner {
+            Inner::Link(inner) => link = inner,
+            Inner::Below { kept, .. } => return Some(kept),
+            Inner::Fault(_) => return None,
+        }
+    }
+}
+
+/// How a run ended, with nothing held: what a test compares.
+#[cfg(test)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Ran {
+    Completed,
+    Uncaught,
 }
 
 self_cell!(
@@ -170,7 +289,7 @@ impl CellSubstrate {
             storage: program_storage(),
             registry: Bump::new(),
             agent: Bump::new(),
-            symbols: SymbolInterner::new(),
+            symbols: SymbolInterner::resting_on(&builtin_image::SYMBOLS),
         };
         Joined::try_new(owner, |owner| {
             let brand = owner.storage.brand();
@@ -180,7 +299,7 @@ impl CellSubstrate {
             let (graph, root, program) = Graph::load(cap, budget, || {
                 // Everything the root owns is laid in the owner's registry arena, which releases it
                 // whole. The load's chain never leaves the load: its end freezes the root.
-                let builder = RootBuilder::in_region(&owner.registry);
+                let builder = RootBuilder::over(&owner.registry, &builtin_image::IMAGE);
                 let types: &Chain<'_, '_, '_, '_> =
                     &Types::building(Halves::alone(Half::load(builder)));
                 let scratch = Bump::new();
@@ -199,8 +318,6 @@ impl CellSubstrate {
                 .map_err(refused)?;
                 let walked = walked::<L>(shapes, builtins, types, brand.writer(), &scratch)
                     .map_err(refused)?;
-                let error = builtin_error(types, &owner.symbols, &scratch);
-                let result = builtin_result(types, &owner.symbols, &scratch);
                 let tiers = TypeTiers {
                     frozen: builder.freeze(),
                     agent: Agent::in_region(&owner.agent),
@@ -213,7 +330,11 @@ impl CellSubstrate {
                         walked,
                         builtins,
                         tiers,
-                        (error, result),
+                        (
+                            builtin_image::RESULT,
+                            builtin_image::ERROR,
+                            builtin_image::ERROR_VARIANTS,
+                        ),
                         &owner.symbols,
                         (
                             L::evaluator(),
@@ -222,7 +343,7 @@ impl CellSubstrate {
                             super::activation_store::activated_in::<L>,
                         ),
                         output,
-                        &writer.fill(1, |_| Cell::new(false))[0],
+                        &writer.fill(1, |_| Cell::new(Ending::Completed))[0],
                     ),
                 );
                 Ok((tiers, (walked, program), program))

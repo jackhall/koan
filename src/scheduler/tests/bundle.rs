@@ -7,10 +7,9 @@
 //! A test seeds a root of its own over a local bump and builds its graph over it; the drain hands
 //! it to every step and crossing, so a bare `fn` step reads types with no program around it.
 
-use crate::knot::{KValue, KValueFamily};
+use crate::knot::{KRegionHeader, KValue, KValueFamily};
 use crate::memory::{CrossedOperand, Header, Writer, reattachable};
 use crate::scheduler::{Action, Born, Graph, NativeStep, Step, StepBundle};
-use crate::scope::RegionHeader;
 use crate::type_lattice::Halves;
 use crate::values::Half;
 
@@ -34,8 +33,8 @@ impl<'graph> StepBundle<'graph> for Native {
     /// the value crossing.
     fn cross<'cell>(
         writer: Writer<'cell, '_>,
-        header: Header<'graph, 'cell, '_, RegionHeader>,
-        view: &CrossedOperand<'graph, 'cell, '_, KValueFamily, RegionHeader>,
+        header: Header<'graph, 'cell, '_, KRegionHeader>,
+        view: &CrossedOperand<'graph, 'cell, '_, KValueFamily, KRegionHeader>,
         born: Born,
         tiers: crate::values::TypeTiers<'graph>,
     ) -> KValue<'graph, 'cell>
@@ -67,6 +66,15 @@ impl<'graph> StepBundle<'graph> for Native {
         'graph: 'cell,
     {
         birth
+    }
+
+    /// A hop born holding `true` threads nothing of weight, but threads: its loop runs under a
+    /// loop cell, which no other test birth asks for.
+    fn threads<'cell>(birth: &KValue<'graph, 'cell>) -> Option<usize>
+    where
+        'graph: 'cell,
+    {
+        matches!(birth, KValue::Bool(true)).then_some(0)
     }
 }
 

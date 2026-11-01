@@ -16,6 +16,7 @@ const PREFIXES: &[&str] = &[
     "crate::tests::boundary",
     "crate::tests::case_share",
     "crate::tests::composed_syntax",
+    "crate::tests::nowhere",
     "crate::type_lattice",
     "crate::values",
 ];
@@ -56,9 +57,9 @@ const OWNING_ALLOWED: &[(&str, &str)] = &[
     ("src/scheduler/drain.rs", "RefCell<Vec<HopSample>>"),
 ];
 
-/// The cellgraph doors no drain opens between steps: a peek into a cell's header, an entry beside
-/// another cell, and a lend naming a cell.
-const BETWEEN_STEPS: &[&str] = &["peek", "enter_beside", "create_tenant_lent", "Lend::Named"];
+/// The cellgraph doors no drain opens between steps: a peek into a cell's header and a lend naming
+/// a cell.
+const BETWEEN_STEPS: &[&str] = &["peek", "create_tenant_lent", "Lend::Named"];
 
 /// What no public method of `Step` may spell: a handle, a carrier door, or a carrier.
 const STEP_MAY_NOT_NAME: &[&str] = &[
@@ -81,9 +82,9 @@ fn scheduler_names_only_the_layers_below_it_holds_no_heap_and_spells_the_stack_l
     crate::tests::boundary::holds("scheduler", PREFIXES, OWNING_ALLOWED);
 }
 
-/// Only the scheduler and `values` open an `ArenaRef` or make one from a slot: every other module
-/// holds and passes the token, so a step can hand the drain only an arena node the scheduler named
-/// to it.
+/// Only the scheduler and `values` open an `ArenaRef` or a `KeptCell`, or make one: every other
+/// module holds and passes the token, so a step can hand the drain only an arena node the
+/// scheduler named to it, and a reader reaches a kept cell only through the graph's read door.
 #[test]
 fn only_the_scheduler_and_values_open_an_arena_ref() {
     let source = std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/src"));
@@ -99,19 +100,23 @@ fn only_the_scheduler_and_values_open_an_arena_ref() {
         .filter(|file| {
             let text = std::fs::read_to_string(file).expect("a source file reads");
             let code = crate::tests::boundary::strip_comments_and_strings(&text);
-            code.contains("ArenaRef::of") || code.contains(".opened()")
+            code.contains("ArenaRef::of")
+                || code.contains("KeptCell::of")
+                || code.contains(".opened()")
         })
         .collect();
     assert!(files.len() > 100, "the walk found the crate's sources");
     assert!(
         offenders.is_empty(),
-        "a module outside the scheduler opens an `ArenaRef`: {offenders:?}"
+        "a module outside the scheduler opens an `ArenaRef` or a `KeptCell`: {offenders:?}"
     );
 }
 
 /// The drain keeps settlements as books beside the cell graph, so between steps it reaches no cell
 /// but through a birth or a release: every `Fresh` cell borrows its parent's scratch and every
-/// `Shares` one is its host's tenant.
+/// `Shares` one is its host's tenant. The one door that reads a cell between steps is the graph's
+/// own read of a kept cell, `Graph::read_kept`, which the graph's owner calls between drains; a step
+/// reads one only inside itself, entered beside it.
 #[test]
 fn the_drain_opens_no_cellgraph_door_between_steps() {
     let root = std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/src/scheduler"));
@@ -122,6 +127,7 @@ fn the_drain_opens_no_cellgraph_door_between_steps() {
         .flat_map(|file| {
             let text = std::fs::read_to_string(file).expect("a source file reads");
             let code = crate::tests::boundary::strip_comments_and_strings(&text);
+            let code = without_read_kept(&code);
             (BETWEEN_STEPS.iter())
                 .filter(|door| code.contains(*door))
                 .map(|door| format!("{}: {door}", file.display()))
@@ -133,6 +139,17 @@ fn the_drain_opens_no_cellgraph_door_between_steps() {
         offenders.is_empty(),
         "the scheduler opens a cellgraph door between steps: {offenders:?}"
     );
+}
+
+/// `code` without the body of `Graph::read_kept`, the kept cell's read door.
+fn without_read_kept(code: &str) -> String {
+    let Some(start) = code.find("pub fn read_kept") else {
+        return code.to_string();
+    };
+    let body = code[start..]
+        .find("\n    }\n")
+        .map_or(code.len(), |end| start + end);
+    format!("{}{}", &code[..start], &code[body..])
 }
 
 #[test]

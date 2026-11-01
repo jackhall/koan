@@ -9,8 +9,9 @@
 //! handed on through a loop is walked once
 //! ([type tiers](../../design/type-tiers.md#an-adoption-stops-at-a-settled-part)).
 
-use crate::knot::KnottedFamily;
+use crate::knot::{KLink, KnottedFamily};
 use crate::memory::BumpAllocator;
+use crate::scope::{Inner, Named};
 use crate::type_lattice::{DeclaredType, KType, Parametric};
 use crate::values::{Chain, Retype, Types, adopt_value};
 
@@ -53,6 +54,25 @@ impl<'a, 'tier, 'graph, 'here, 'reg> Exit<'a, 'tier, 'here, 'reg> {
     /// Adopt the type `kt`, which may be parametric: a record's.
     pub fn declared(&self, kt: DeclaredType<Parametric>) {
         self.region.adopt_from(self.body, kt);
+    }
+
+    /// Adopt every type `named` names.
+    pub fn named(&self, named: &impl Named) {
+        named.each_named(&mut |kt| self.declared(kt));
+    }
+
+    /// Adopt every type a fault's `link` names in this region, and every type each value its
+    /// fault holds here reaches: a kept cell below holds its own.
+    pub fn link(&self, link: &KLink<'graph, 'here>) {
+        self.named(link);
+        let mut inner = link.inner;
+        loop {
+            match inner {
+                Inner::Link(next) => inner = next.inner,
+                Inner::Fault(fault) => return fault.values(&mut |value| self.value(value)),
+                Inner::Below { .. } => return,
+            }
+        }
     }
 
     /// Adopt every type `contract` names.

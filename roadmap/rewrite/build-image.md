@@ -24,8 +24,9 @@ turns the things those keys name into an image, and nothing resumes from one.
 
 **Acceptance criteria.**
 
-- A build of a program writes an **image**: program storage, the type root and
-  every live arena node, each bump laid out as one contiguous range, with
+- A build of a program writes an **image**: program storage, the type root
+  above [the builtin image](../../src/builtin_image.rs) and every live arena
+  node, each bump laid out as one contiguous range, with
   every reference serialized as a pair — the ordinal of its storage in the
   image, the offset into that range — and every handle as its arena node's
   ordinal. The image carries the source text's digest.
@@ -46,7 +47,8 @@ turns the things those keys name into an image, and nothing resumes from one.
   require `!needs_drop` ([`Writer`](../../cellgraph/src/region.rs)) — and a
   Rust function pointer, such as a
   [builtin shape's](../../src/parse/builtin_shapes/binder.rs), serializes as
-  the builtin's index, never as an address.
+  the builtin's index, never as an address, and a reference into the builtin
+  image as the type's handle, resolved by a probe when the image is read.
 - An image whose source digest is not the program's is refused with an error
   naming the mismatch, and never resumes.
 
@@ -59,8 +61,8 @@ turns the things those keys name into an image, and nothing resumes from one.
   would trade the brand-and-lifetime discipline every region read rests on
   for an indirection on every read, to save work that happens once per
   image.
-- *What the image holds — decided.* Program storage, the type root and the
-  build arena, and never a run cell: the arena is by design what the text
+- *What the image holds — decided.* Program storage, the type root above the
+  builtin image, and the build arena, and never a run cell: the arena is by design what the text
   decides, and the program's values are the run's. A table in the image
   hashes by a content word — a `DigestTable`, the tiers' `slot_hash` — never
   by a process-seeded hasher; a seeded `hashbrown` table is rebuilt at load or
@@ -88,7 +90,10 @@ turns the things those keys name into an image, and nothing resumes from one.
 
 ## Dependencies
 
-**Requires:** none — the [build arena](../../src/scheduler/README.md#the-build-arena)
-it serializes stands.
+The [build arena](../../src/scheduler/README.md#the-build-arena) it serializes
+stands, and so does the [builtin image](../../src/builtin_image.rs), the lower
+layer of the root, into which it stubs a reference by its handle.
+
+**Requires:** none — what it serializes stands.
 
 **Unblocks:** none — a leaf.

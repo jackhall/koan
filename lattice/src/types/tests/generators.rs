@@ -36,6 +36,7 @@ use crate::symbols::{BinderSymbol, KeywordSymbol, SymbolInterner, TypeSymbol, Va
 use super::raw::RawRegistry;
 use super::raw::walk::visit;
 use super::raw::{lattice, substitute};
+use crate::types::SEED;
 use crate::types::chain::TypeChain;
 use crate::types::handle::{DeclaredType, Handle, KType, Parametric, Scheme, TypeHandle, wrap};
 use crate::types::kind::KKind;
@@ -162,13 +163,13 @@ impl World {
         let declare_value =
             |text: &str| ValueSymbol::declared(text, &symbols).expect("a value token");
         let arena = leaked_arena();
-        let builder = RootBuilder::in_region(arena);
+        let builder = RootBuilder::over(arena, &SEED);
         let types = Rc::new(TypeChain::building(WorldHalf::Building(builder)));
         let seeding = World {
             grounds: Rc::new(grounds_in(&types)),
             types,
             // Read by no seeding draw; the frozen load replaces it below.
-            frozen: Frozen::seeded(arena),
+            frozen: &SEED,
             binders: Rc::new(vec![
                 declare_binder("x"),
                 declare_binder("y"),

@@ -38,7 +38,7 @@ fn peak_walking(depth: u32) -> usize {
 }
 
 /// The most cells live at once while `source` runs.
-fn peak_of(source: &str) -> usize {
+pub(super) fn peak_of(source: &str) -> usize {
     let mut substrate =
         CellSubstrate::load::<Koan>(source, "<test>", 2, BuildBudget::default(), output())
             .unwrap_or_else(|error| panic!("the program loads: {error}"));
@@ -131,14 +131,14 @@ struct Walk {
     branch: usize,
 }
 
-/// The heap allocations `running.run()` makes over `source`.
+/// The heap allocations `running.ran()` makes over `source`.
 fn run_allocations(source: &str) -> u64 {
     let mut substrate =
         CellSubstrate::load::<Koan>(source, "<test>", 2, BuildBudget::default(), output())
             .unwrap_or_else(|error| panic!("the countdown loads: {error}"));
     let before = crate::tests::allocation_count();
     substrate
-        .with(|running| running.run())
+        .with(|running| running.ran())
         .expect("the countdown runs");
     crate::tests::allocation_count() - before
 }
@@ -153,7 +153,7 @@ fn walking(depth: u32, body: &str) -> Walk {
             .unwrap_or_else(|error| panic!("the countdown loads: {error}"));
     let before = substrate.with(|running| running.program().tiers().frozen.len());
     substrate
-        .with(|running| running.run())
+        .with(|running| running.ran())
         .expect("the countdown runs");
     let after = substrate.with(|running| running.program().tiers().frozen.len());
     substrate
@@ -309,7 +309,7 @@ fn an_arm_owes_its_frames_contract_whether_or_not_it_tails() {
         assert_eq!(super::run(&format!("{f}PRINT (PIN 1)")), "1");
         assert_eq!(
             super::run(&format!("{f}PRINT (PIN \"t\")")),
-            "error: :(FN :{x :Any} -> Number) returned Str, which does not satisfy Number"
+            "error: :(FN :{x :Any} -> Number) returned Str, which does not satisfy Number\n  in :(FN :{x :Any} -> Number) (PIN \"t\") at <test>:2:7"
         );
     }
 }

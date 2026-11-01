@@ -262,7 +262,7 @@ impl<'graph> Running<'graph> {
         own: Binding<'l>,
         at: Segment,
         bump: &'l Bump,
-    ) -> Result<Facts<'l>, &'l str>
+    ) -> Result<Facts<'l>, &'l crate::scope::ShapeError<'l>>
     where
         'graph: 'l,
     {

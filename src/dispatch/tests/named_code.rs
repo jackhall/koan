@@ -306,7 +306,7 @@ EXPR #(LIFT code :Code) -> Any = #(FN :{x :Number} -> Number = code)
 LET g = (LIFT #(x + \\y))
 PRINT \"born\"
 PRINT (g {x = 4})"),
-        "born\nerror: unbound name 'y'"
+        "born\nerror: unbound name 'y'\n  in :(FN :{x :Number} -> Number) (g {x = 4}) at <test>:5:7"
     );
 }
 
@@ -319,7 +319,7 @@ LET g = (LIFT #(x + k))
 PRINT \"born\"
 PRINT (g {x = 4})"
         ),
-        "born\nerror: unbound name 'k'"
+        "born\nerror: unbound name 'k'\n  in :(FN :{x :Number} -> Number) (g {x = 4}) at <test>:4:7"
     );
 }
 
@@ -369,7 +369,7 @@ fn a_body_found_not_code_where_the_callable_is_born_is_an_error_there() {
 LET g = (LIFT 5)
 PRINT \"unreached\""
         ),
-        "error: this body is Number, which is not code for a callable to run"
+        "error: this body is Number, which is not code for a callable to run\n  in :(FN :{code :Any} -> Any) (LIFT 5) at <test>:2:9"
     );
 }
 
@@ -532,14 +532,15 @@ LET f = (LIFT #(x + \"s\"))
 PRINT \"born\"
 PRINT (f {x = 1})"
         ),
-        "born\nerror: no overload of `_ + _` admits (Number, Str)"
+        "born\nerror: no overload of `_ + _` admits (Number, Str)\n  in :(FN :{x :Number} -> Number) (f {x = 1}) at <test>:4:7"
     );
     assert_eq!(
         run(
             "EXPR #(LIFT code :Code) -> Any = #(FN :{x :Number} -> Number = code)
 PRINT ((LIFT #(\"s\")) {x = 1})"
         ),
-        "error: :(FN :{x :Number} -> Number) returned Str, which does not satisfy Number"
+        "error: :(FN :{x :Number} -> Number) returned Str, which does not satisfy Number\n  in \
+         :(FN :{x :Number} -> Number) ((LIFT #(\"s\")) {x = 1}) at <test>:2:7"
     );
 }
 

@@ -9,8 +9,9 @@ use crate::type_lattice::display_name;
 use crate::values::tests::parts;
 use crate::values::{Binding, Chain, Knotted as _, Link, Value};
 
-use super::super::{Knotted, UsingRefused, using};
+use super::super::{Knotted, using};
 use super::{Fixture, bound, pin, with_fixture};
+use crate::scope::UsingRefused;
 
 /// The quote bound under `name`.
 fn code<'graph, 'cell>(

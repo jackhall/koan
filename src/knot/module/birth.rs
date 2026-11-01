@@ -10,8 +10,9 @@
 //! it, and lays the registrations after them in slot order. Nothing assumes the body's slot order.
 
 use crate::elaborate::{member_count, schema_member, schema_of, self_signature};
-use crate::knot::{Eager, KActivation, KReading, Knotted, Node, Supplied, Untieable};
+use crate::knot::{Eager, KActivation, KReading, Knotted, Node, Supplied};
 use crate::memory::{BumpAllocator, BumpVec, Knot, Writer};
+use crate::scope::Untieable;
 use crate::scope::{
     Activation, ClosureBindings, Component, Coordinate, ShapeKind, Slot, Target, Written,
 };

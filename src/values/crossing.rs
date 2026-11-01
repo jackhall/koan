@@ -263,6 +263,41 @@ pub fn copy_severed<
     copies
 }
 
+/// Values read beside a step out of a kept cell's region, rebuilt through `writer`, all through one
+/// copy, every type they carry adopted into `types` from that region's branch. The header is the
+/// proof: its brand is the one `enter_beside` alone hands out, quantified with no relation to the
+/// step's, so nothing read there was laid at the writer's brand and this deep copy is the only way
+/// in.
+pub fn copy_beside<
+    'graph,
+    'cell,
+    'beside,
+    'list,
+    XF: KnottedFamily<'graph>,
+    H: Projects<'graph, Projection = BranchCell>,
+>(
+    writer: Writer<'cell, '_>,
+    types: &Chain<'cell, 'cell, '_, '_>,
+    header: Active<'graph, 'beside, H>,
+    values: &[Value<'beside, XF::Closed<'beside>>],
+    scratch: BumpAllocator<'list>,
+) -> BumpVec<'list, Value<'cell, XF::Closed<'cell>>>
+where
+    'graph: 'beside,
+{
+    let source = H::project(header.into_value()).get();
+    let copies = rebuilt::<XF, _>(writer, types, source, |copy| {
+        let mut copies = BumpVec::with_capacity_in(values.len(), scratch);
+        copies.extend(values.iter().map(copy));
+        copies
+    });
+    #[cfg(debug_assertions)]
+    for copy in &copies {
+        check_habitat::<XF>(types, copy);
+    }
+    copies
+}
+
 /// `values` rebuilt through `writer`, all through one copy, each type a part carries adopted into
 /// `types` from `home`'s branch, the half they were read in.
 fn copied<
@@ -281,28 +316,31 @@ fn copied<
 where
     'graph: 'from,
 {
-    home.read(|header, _| {
-        rebuilt::<XF, N>(writer, types, H::project(header.into_value()).get(), values)
-    })
-    .unwrap_or_else(|| rebuilt::<XF, N>(writer, types, None, values))
+    let all = |source: Option<&Branch<'_>>| {
+        rebuilt::<XF, _>(writer, types, source, |copy| values.map(copy))
+    };
+    home.read(|header, _| all(H::project(header.into_value()).get()))
+        .unwrap_or_else(|| all(None))
 }
 
-/// [`copied`], its types adopted from `source`, the home's branch, or from nowhere where the home
-/// laid none.
-fn rebuilt<'graph, 'cell, 'from, XF: KnottedFamily<'graph>, const N: usize>(
+/// What `copy` builds handing each value it copies to one copy through `writer`, its types adopted
+/// from `source`, the home's branch, or from nowhere where the home laid none.
+fn rebuilt<'graph, 'cell, 'from, XF: KnottedFamily<'graph>, R>(
     writer: Writer<'cell, '_>,
     types: &Chain<'cell, 'cell, '_, '_>,
     source: Option<&Branch<'_>>,
-    values: [&Value<'from, XF::Closed<'from>>; N],
-) -> [Value<'cell, XF::Closed<'cell>>; N]
+    copy: impl FnOnce(
+        &mut dyn FnMut(&Value<'from, XF::Closed<'from>>) -> Value<'cell, XF::Closed<'cell>>,
+    ) -> R,
+) -> R
 where
-    'graph: 'from,
+    'graph: 'from + 'cell,
 {
     let scratch = Bump::new();
     let mut copying = Copying::<XF>::new(writer, types, source, &scratch);
     #[cfg(test)]
     let before = writer.in_use();
-    let copies = values.map(|value| copying.value(value));
+    let copies = copy(&mut |value| copying.value(value));
     #[cfg(test)]
     COPIED.with(|copied| copied.set(copied.get() + writer.in_use() - before));
     copies

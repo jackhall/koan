@@ -2,7 +2,7 @@
 //! the ascription's site once the load ends, and a closed tree's digest against the run's.
 
 use crate::program::tests::digest_back;
-use crate::program::{CellSubstrate, Outcome, Program};
+use crate::program::{CellSubstrate, Program, Ran};
 use crate::scope::{BodyShape, Leaf, Tree};
 
 use super::statics::{body, loaded, slot};
@@ -133,10 +133,7 @@ fn a_view_over_a_module_of_literals_is_closed_at_the_run_s_digest() {
     let mut substrate =
         CellSubstrate::load::<Koan>(&source, "<test>", 8, BuildBudget::default(), output())
             .unwrap_or_else(|error| panic!("the program loads: {error}"));
-    assert_eq!(
-        substrate.with(|running| running.run()),
-        Ok(Outcome::Completed)
-    );
+    assert_eq!(substrate.with(|running| running.ran()), Ok(Ran::Completed));
     let (closed, same, digest) = substrate.with(|running| {
         let program = running.program();
         let shape = program.shape();
@@ -178,10 +175,7 @@ fn ran<R>(
     let mut substrate =
         CellSubstrate::load::<Koan>(source, "<test>", 8, BuildBudget::default(), output())
             .unwrap_or_else(|error| panic!("the program loads: {error}"));
-    assert_eq!(
-        substrate.with(|running| running.run()),
-        Ok(Outcome::Completed)
-    );
+    assert_eq!(substrate.with(|running| running.ran()), Ok(Ran::Completed));
     let inspected = substrate.with(|running| inspect(running.program()));
     (inspected, substrate)
 }

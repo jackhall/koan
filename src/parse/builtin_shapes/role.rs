@@ -22,9 +22,6 @@ pub enum Role {
     Argument,
     /// A type expression, read where the shape runs.
     TypeExpression,
-    /// A `TRY` or `CATCH` operand: code that runs where it is written, once, as a part of the
-    /// enclosing shape.
-    InPlace,
     /// A `FN`'s `:{…}` schema: names declared by the body, types read where the shape runs.
     Signature,
     /// An `EXPR` head: a quote whose names the body declares as parameters, with the types read
@@ -87,7 +84,6 @@ impl Role {
             Role::Definition(DefinitionKind::Plain)
             | Role::Name
             | Role::TypeExpression
-            | Role::InPlace
             | Role::Keyword => Reading::Bare,
             Role::Branches(_)
             | Role::Quantifiers
@@ -132,6 +128,8 @@ pub enum BodyKind {
     Module,
     /// A `USING` body: a block whose parameters are the names its operand surfaces.
     Surfaced,
+    /// A `TRY` or `CATCH` body: a block with no parameters, never in tail position.
+    Caught,
 }
 
 /// What a body slot opens: the kind of body shape the builder makes of it.
@@ -151,7 +149,7 @@ impl BodyKind {
         match self {
             BodyKind::Lambda | BodyKind::Operator | BodyKind::UnaryOperator => Opens::Callable,
             BodyKind::Module => Opens::Module,
-            BodyKind::Surfaced => Opens::Block,
+            BodyKind::Surfaced | BodyKind::Caught => Opens::Block,
         }
     }
 

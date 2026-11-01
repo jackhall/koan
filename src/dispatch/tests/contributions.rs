@@ -44,7 +44,7 @@ fn an_argument_the_load_knows_nothing_of_contributes_its_carried_type() {
     );
     assert_eq!(
         run(&with("1 AND #(true)", "PAIR a WITH e")),
-        "error: no overload of `PAIR _ WITH _` admits (Number, Bool)"
+        "error: no overload of `PAIR _ WITH _` admits (Number, Bool)\n  in :(FN :{a :(Number | Str) q :Code} -> Type) (USE 1 AND #(true)) at <test>:6:7"
     );
     assert_eq!(
         run(&with("\"s\" AND #(\"s\")", "PAIR e WITH a")),
@@ -390,7 +390,7 @@ fn a_later_slot_reads_an_earlier_lexical_solution_at_its_ends() {
         run(&source),
         "paired\nerror: <test>:2:50: no overload of `PAIR _ WITH _` admits these \
          arguments:\n  (Number, Str), which can never satisfy :(EXPR FOR ALL #[Elt] #(PAIR _ :Elt \
-         WITH _ :Elt) -> Str)"
+         WITH _ :Elt) -> Str)\n  in :(FN FOR ALL #[Outer] :{m :Outer} -> Str) (WRAP 1) at <test>:6:7"
     );
 }
 

@@ -12,6 +12,7 @@ decides, [the scheduler](../src/scheduler/README.md), which runs, and
 
 | tier | brand | written | holds | released |
 |---|---|---|---|---|
+| builtin image | `'static`, one per binary, `Sync` | by no one: generated Rust source, compiled in | the lattice's fixed handles, every builtin overload's shape type, `Result` and `Error`, and the texts of the names they hold; no verdicts | never |
 | frozen load | `'load`, one per program, `Sync` | by the load alone, frozen at its end | load content: every type the load builds, its verdicts, the shape, builtins, symbols, sources, the facts it decides | at the program's end |
 | agent tier | `'agent`, one per agent | insert-only, by a settlement under the root at its rest | what the agent's settlements under the root rest: their types and verdicts; verdicts over load pairs the load's table lacks; the agent's symbol overlay | at the agent's death, whole |
 | region, scratch | `'here`, `'scratch` | as [type tiers](type-tiers.md) says | runtime types: what a frame builds, mints in a loop, a deepening list | with the region; at the habitat's reset |
@@ -61,10 +62,10 @@ reference anywhere in it.
 
 | part | holds | `Sync` by |
 |---|---|---|
-| the root | the load's type nodes and its verdict table | a node index that is a run of (digest word, node) slots, probed as the building table is but never written; the verdict table read-only |
+| the root | the load's type nodes and its verdict table, resting on the builtin image | a node index that is a run of (digest word, node) slots, probed as the building table is but never written; the verdict table read-only |
 | the shape | the parsed body and its sites | plain after the load, since every decision is a fact |
 | builtins | signatures, knot weights | computed at the load, stored plain |
-| symbols | the text of every source name, keyed by digest | read-only; a name `EVAL` parses goes in the agent's overlay |
+| symbols | the text of every source name, keyed by digest, above the builtin image's static tier | read-only; a name `EVAL` parses goes in the agent's overlay |
 | sources | the file registry | owned by the load, so any agent resolves a file id |
 | facts | what the load decides, keyed by site | plain tables |
 
@@ -107,9 +108,9 @@ the verdicts it reached; and a run's verdict over load or agent types, which
 no run may write into the load's table. A run cell reads the agent tier,
 records verdicts there and interns no type into it: a type the run builds
 lives in the run's halves. The agent's symbol overlay,
-the names its `EVAL`s parse, sits beside it; a render reads the overlay, then
-the frozen table, and the two never disagree, since a symbol is its text's
-digest.
+the names its `EVAL`s parse, sits beside it; a render reads the overlay, the
+frozen table, then the builtin image's texts, and they never disagree, since a
+symbol is its text's digest.
 
 ## Settlements and compositions
 

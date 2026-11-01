@@ -139,7 +139,7 @@ const RECORDED_READINGS: &[(BuiltinShapeId, &[(usize, Reading)])] = &[
     ),
     (BuiltinShapeId::Match, &[(3, C)]),
     (BuiltinShapeId::MatchUnder, &[(3, B), (5, C)]),
-    (BuiltinShapeId::Try, &[(1, B), (3, B), (5, C)]),
+    (BuiltinShapeId::Try, &[(1, B), (3, C)]),
     (BuiltinShapeId::Catch, &[(1, B)]),
     (BuiltinShapeId::UsingScope, &[(3, B)]),
     (BuiltinShapeId::AscribeOpaque, &[(2, B)]),
@@ -301,11 +301,11 @@ fn every_binder_form_key_classifies_keyworded() {
     }
 }
 
-/// Every slot type and return the table states names a node every registry pre-seeds, so a
-/// container-typed slot whose handle no registry seeds fails here, not at every program that
-/// writes it.
+/// Every slot type and return the table states names a node of the seed every root rests on, so a
+/// container-typed slot whose handle the seed lacks fails here, not at every program that writes
+/// it.
 #[test]
-fn every_slot_type_names_a_seeded_node() {
+fn every_slot_type_names_a_seed_node() {
     let region = Bump::new();
     let types = crate::values::tests::TestTypes::new(&region).load();
     for shape in BUILTIN_SHAPES {

@@ -1,10 +1,13 @@
 # Errors
 
-When something goes wrong while a program runs, Koan raises an **error value**
-carrying a message. Every expression that receives an error value passes it on
-unchanged, so an error raised deep inside a call surfaces as the value of the
-statement that made the call. An uncaught error stops the program and prints its
-message to standard error:
+When something goes wrong while a program runs, Koan raises an **error**. An
+error is not a value: nothing receives it and carries on. It leaves the
+expression that raised it, and every call that expression sits in, until
+something catches it, and the parts of an expression after the one that failed
+never run. An uncaught error stops the program and prints its message to
+standard error, and beneath it the **trace**: one line per call the error came
+out of, innermost first, each naming the function's type, the call as you wrote
+it, and where the call is:
 
 ```koan
 EXPR #(BOOM p :Any) -> Number = #(p.z + 1)
@@ -16,7 +19,12 @@ PRINT "after"
 ```text
 before
 error: :{x :Number} has no field z
+  in :(FN :{p :Any} -> Number) (BOOM {x = 1}) at <input>:3:7
 ```
+
+An error raised outside any call prints no trace line. A call that runs many
+times from one place — a function looping through calls to itself — prints one
+line with a count, such as `×1000`, rather than a line per call.
 
 Some mistakes need no run to be found. A call that no overload can ever accept,
 a field read the record's type rules out, or a function body that can never
@@ -35,73 +43,123 @@ error: <input>:2:7: no overload of `_ + _` admits these arguments:
 
 ## Catching errors with `TRY`
 
-`TRY (<expr>) -> :<Type> WITH #{<branches>}` runs `<expr>` in a catching context
-and dispatches to a branch based on the result. Unlike `MATCH`, it declares a
-result type, and every branch must produce that type. The branches are a dict of
-quotes, `#{<head>: (<body>), …}`, and the heads are:
+`TRY <body> WITH #{<arms>}` runs its body, a parenthesized block. If the body
+produces a value, that value is the `TRY`'s. If it raises an error, the `TRY`
+picks an arm by the error's **kind** and runs it instead, its value standing in
+for the body's. The arms are a dict of quotes, as a `MATCH`'s are, and each
+head is:
 
-- `Ok` — the expression succeeded; `it` is its value.
-- an **error-kind name** — the matching error was caught; `it` is the error's
-  payload record.
-- `_` — a default branch catching every kind you did not name.
-
-Unlike `MATCH … UNDER`, a `TRY` need not cover every kind: an error no branch
-names is simply re-raised, so `_` is optional. Anything else in head position —
-a boolean literal, a name that is not an error kind — is an error at the form.
+- an **error-kind name**, such as `NoField` — the arm for that kind; `it` is a
+  record describing the error.
+- `_` — the arm for every kind no other head names.
 
 ```koan
-TRY (PRINT "working") -> :Str WITH #{Ok: (PRINT "all good")}
+EXPR #(GRAB p :Any) -> Any = #(p.z)
+PRINT (TRY (GRAB {x = 1}) WITH #{NoField: ("no z here")})
+PRINT (TRY (GRAB {z = 2}) WITH #{NoField: ("no z here")})
 ```
 
 ```text
-working
-all good
+no z here
+2
 ```
 
-When an error is caught, `it` holds a record of fields describing the error. You
-can print it whole:
+A head that names no error kind is refused when the program loads.
+
+### What `it` holds
+
+A caught error's `it` is an ordinary record. Every kind's record has
+`message`, the text an uncaught error prints after `error: `, and `frames`, the
+lines its trace prints, innermost first, each a record of the callee's type,
+the call as written, where it is, and how many calls the line counts. Beside
+those, each kind has fields of its own: a `NoField` holds `of`, the value that
+lacked the field, and `field`, the field's name.
 
 ```koan
-TRY (mystery) -> :Str WITH #{Ok: (PRINT "ok"), UnboundName: (PRINT it)}
+EXPR #(GRAB p :Any) -> Any = #(p.z)
+TRY (GRAB {x = 1}) WITH #{NoField: (PRINT it)}
 ```
 
 ```text
-{frames = [], name = mystery}
+{field = z, frames = [{at = <input>:2:5, call = GRAB {x = 1}, callee = :(FN :{p :Any} -> Any), count = 1}], message = :{x :Number} has no field z, of = {x = 1}}
 ```
 
-It is an ordinary record, so you can read a single field off it:
+Read one field off it as off any record:
 
 ```koan
-TRY (mystery) -> :Str WITH #{Ok: (PRINT "ok"), UnboundName: (PRINT it.name)}
+EXPR #(GRAB p :Any) -> Any = #(p.z)
+TRY (GRAB {x = 1}) WITH #{NoField: ((PRINT it.message) (PRINT it.of))}
 ```
 
 ```text
-mystery
+:{x :Number} has no field z
+{x = 1}
 ```
 
-Every kind's record carries `frames`, the call stack the error passed through;
-[the error kinds you can catch](#the-error-kinds-you-can-catch) lists the rest per kind.
-
-A named branch always wins over `_`, regardless of order, so you can handle
-specific kinds and let the default mop up the rest:
+The values an error names are the values the failing code held, so `it.of`
+above is the record itself, not its type. `frames` lists every call between
+the error and the `TRY`:
 
 ```koan
-TRY (mystery) -> :Str WITH #{
-  TypeMismatch: (PRINT "type problem")
-  _: (PRINT "something failed")
-}
+EXPR #(GRAB p :Any) -> Any = #(p.z)
+EXPR #(OUTER p :Any) -> Any = #((LET got = (GRAB p)) (got))
+TRY (OUTER {x = 1}) WITH #{NoField: (PRINT it.frames)}
 ```
 
 ```text
-something failed
+[{at = <input>:2:44, call = GRAB p, callee = :(FN :{p :Any} -> Any), count = 1}, {at = <input>:3:5, call = OUTER {x = 1}, callee = :(FN :{p :Any} -> Any), count = 1}]
 ```
 
-Because the whole `TRY` produces a value of its result type, it's a clean way to
-supply a fallback:
+[The error kinds a running program meets](#the-error-kinds-a-running-program-meets)
+lists the ones you will catch most often, with their fields.
+
+### Choosing an arm
+
+A named arm always wins over `_`, whatever their order, so you can handle the
+kinds you expect and let `_` take the rest:
 
 ```koan
-LET safe =
-  TRY (mystery) -> :Str WITH #{Ok: (it), _: ("default")}
+EXPR #(GRAB p :Any) -> Any = #(p.z)
+EXPR #(SIZE p :Any) -> Any = #(MATCH p WITH #{Number: (it), Str: (LENGTH it)})
+PRINT (TRY (SIZE true) WITH #{
+  NoField: ("a field")
+  _: ("something else")
+})
+PRINT (TRY (GRAB 1) WITH #{
+  _: ("something else")
+  NoField: ("a field")
+})
+```
+
+```text
+something else
+a field
+```
+
+A `TRY` need not name every kind. An error of a kind none of its arms takes is
+not caught: it leaves the `TRY` as it came, trace and all, as if the `TRY` were
+not there:
+
+```koan
+EXPR #(GRAB p :Any) -> Any = #(p.z)
+PRINT (TRY (GRAB {x = 1}) WITH #{NoArm: ("no arm")})
+PRINT "after"
+```
+
+```text
+error: :{x :Number} has no field z
+  in :(FN :{p :Any} -> Any) (GRAB {x = 1}) at <input>:2:12
+```
+
+An error raised inside an arm is not caught by that arm's `TRY`; it leaves the
+`TRY` like any other error.
+
+Because the `TRY` produces whichever value its body or its arm does, it is a
+clean way to supply a fallback:
+
+```koan
+EXPR #(GRAB p :Any) -> Any = #(p.z)
+LET safe = (TRY (GRAB {x = 1}) WITH #{_: ("default")})
 PRINT safe
 ```
 
@@ -109,71 +167,64 @@ PRINT safe
 default
 ```
 
-If a caught error has no matching branch and there's no `_`, the original error
-is re-raised. If the expression *succeeds* but there's no `Ok` branch, that's a
-`shape error`.
+Its type spans the body's and the arms', as a `MATCH`'s spans its arms'. To
+hold it to one type, ascribe it: `(TRY … WITH …) :! :Str`.
 
-### The error kinds you can catch
+### The error kinds a running program meets
 
-Each error kind carries its own payload fields, which `it` binds as a record.
-The kinds you'll meet most are unbound names and failed dispatch:
+| Kind           | Raised when                                        | Fields beside `message` and `frames` |
+|----------------|----------------------------------------------------|--------------------------------------|
+| `NoField`      | a record has no field of the name read             | `of`, `field`                        |
+| `NoOverload`   | no overload admits a call's arguments              | `key`, `arguments`                   |
+| `NoArm`        | no arm of a `MATCH` admits its value               | `scrutinee`, `union`                 |
+| `Incomparable` | two values cannot be compared                      | `left`, `right`                      |
+| `Returned`     | a function returns a value outside its return type | `callee`, `value`, `returns`         |
+| `Unascribable` | a value does not satisfy its `:!` ascription       | `value`, `ascribed`                  |
 
-| Kind                | Meaning                                  | Payload fields                |
-|---------------------|------------------------------------------|-------------------------------|
-| `UnboundName`       | a name with no binding                   | `it.name`                     |
-| `DispatchFailed`    | no function matched the expression's shape | `it.expr`, `it.reason`      |
-| `TypeMismatch`      | a value's type didn't match what was required | `it.arg`, `it.expected`, `it.got` |
-| `MissingArg`        | a required named argument was absent     | `it.name`                     |
-| `ArityMismatch`     | wrong number of arguments                | `it.expected`, `it.got`       |
-| `AmbiguousDispatch` | more than one function matched equally    | `it.expr`, `it.candidates`    |
-| `ShapeError`        | a structural rule was violated            | `it.message`                  |
-| `ParseError`        | the source didn't parse                   | `it.message`                  |
+Most of these the load already refuses wherever it can see the types; at run
+time they come from values whose type is `Any`, or a union, until they arrive:
 
-Every error branch's `it` also carries a `frames` field — the call trace as a
-list of strings.
+```koan
+EXPR #(HALF n :Any) -> Number = #(n)
+PRINT (TRY (HALF "two") WITH #{Returned: (it.message)})
+LET pair = ({k = 1} :! :{k :Any})
+PRINT (TRY (MATCH pair.k WITH #{Str: (it)}) WITH #{NoArm: (it.scrutinee)})
+```
 
-The dispatcher-internal kinds (`Rebind`, `DuplicateDeclaration`,
-`DuplicateOverload`, `TypeClassBindingExpectsType`, `SchedulerDeadlock`) are
-catchable by name too, with a flattened `{kind, message, frames}` payload; `_`
-reaches them like any other kind you did not name.
+```text
+:(FN :{n :Any} -> Number) returned Str, which does not satisfy Number
+1
+```
+
+Every kind is a variant of the built-in union `Error`, named as the kind is.
 
 ## Turning errors into values with `CATCH`
 
-`TRY` branches immediately. Sometimes you'd rather capture an outcome as a
-*value* and keep going. `CATCH (<expr>)` runs the expression and returns a
-[`Result`](#result): `Ok` with the value on success, `Error` with the payload on
-failure — without stopping the program:
+`TRY` branches at once. Sometimes you would rather keep the outcome as a value
+and decide later. `CATCH <body>` runs its body and produces a
+[`Result`](#result): `Result.Ok` of the value when the body succeeds, and
+`Result.Error` of the error when it fails, the error being its `Error` variant
+over the same record a `TRY`'s `it` holds:
 
 ```koan
-PRINT (CATCH (PRINT "hi"))
+EXPR #(GRAB p :Any) -> Any = #(p.z)
+PRINT (CATCH (GRAB {z = 2}))
+PRINT (CATCH (GRAB {x = 1}))
 ```
 
 ```text
-hi
-Ok(hi)
+:(Ok {Error = Never, Ok = Number})(2)
+:(Error {Error = NoField, Ok = Never})(NoField({field = z, frames = [{at = <input>:3:14, call = GRAB {x = 1}, callee = :(FN :{p :Any} -> Any), count = 1}], message = :{x :Number} has no field z, of = {x = 1}}))
 ```
 
-The inner `PRINT` runs and returns `"hi"`, which `CATCH` wraps as `Ok`. On
-failure you get an `Error` carrying the error's payload instead, and the
-program keeps running:
-
-```koan
-LET outcome = (CATCH (mystery))
-PRINT "still going"
-```
-
-```text
-still going
-```
-
-Use `CATCH` when you want to hold the outcome as a value and hand it on; use
-`TRY` when you want to branch on it right away.
+`CATCH` takes every kind. Use it when you want to hold the outcome and hand it
+on; use `TRY` when you want to branch on it right away.
 
 ## Result
 
 `Result` is a built-in union with two variants, `Ok` and `Error`, available
-without declaring it. Its error variant is spelled `Error`, not `Err`. Like any
-union, you reach a variant by projecting it off the union's name:
+without declaring it. Like any union, you reach a variant by projecting it off
+the union's name:
 
 ```koan
 PRINT (Result.Ok 1)
@@ -181,37 +232,39 @@ PRINT (Result.Error "boom")
 ```
 
 ```text
-Ok(1)
-Error(boom)
+:(Ok {Error = Never, Ok = Number})(1)
+:(Error {Error = Str, Ok = Never})(boom)
 ```
 
-And like any union, you take one apart with `MATCH … UNDER`:
+And like any union, you take one apart with `MATCH … UNDER`. A `CATCH`'s error
+is a value of `Error`, which you take apart the same way:
 
 ```koan
-MATCH (CATCH (mystery)) UNDER Result WITH #{
-  Ok: (PRINT "worked")
-  Error: (PRINT "failed")
-}
+EXPR #(GRAB p :Any) -> Any = #(p.z)
+LET outcome = (CATCH (GRAB {x = 1}))
+PRINT (MATCH outcome UNDER Result WITH #{
+  Ok: ("worked")
+  Error: (MATCH it UNDER Error WITH #{NoField: (it.message), _: ("other")})
+})
 ```
 
 ```text
-failed
+:{x :Number} has no field z
 ```
 
-## Branch scoping
+## Scoping
 
-The `TRY` body and each branch are their own scopes. A name bound inside a
-branch is local to it and gone afterward:
+A `TRY` or `CATCH` body is a block, and so is each arm: a name bound inside one
+is local to it and gone afterward.
 
 ```koan
-TRY (PRINT "x") -> :Str WITH #{Ok: ((LET note = "local") (PRINT note))}
-note
+EXPR #(GRAB p :Any) -> Any = #(p.z)
+TRY ((LET inside = 1) (GRAB {x = inside})) WITH #{_: ((LET note = "local") (PRINT note))}
+PRINT note
 ```
 
 ```text
-x
-local
-error: unbound name 'note'
+error: <input>:3:7: `note` names no binding visible here
 ```
 
 Next: [Quoting and evaluating](10-quoting.md).

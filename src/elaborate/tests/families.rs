@@ -3,15 +3,17 @@
 //! through a variant, a recursive family, and the declarations the door refuses. The harness has no
 //! `Never` builtin, so expected applications are built here.
 
-use crate::symbols::{BinderSymbol, TypeSymbol};
+use crate::memory::BumpAllocator;
+use crate::symbols::{BinderSymbol, SymbolInterner, TypeSymbol};
 use crate::type_lattice::{
     KKind, KType, NodeSchema, Parametric, TypeHandle, TypeNode, is_subtype_of,
 };
-use crate::values::construction;
+use crate::values::{Chain, construction};
 
 use super::super::{builtin_error, builtin_result};
-use super::{Program, brought, declared};
+use super::{Held, Program, brought, declared, with_program};
 use crate::scope::Elaboration;
+use crate::scope::{FaultKind, Field};
 
 const RESULT: &str = "UNION (Ok Error -> Result) = #{Ok: Ok, Error: Error}";
 const OPTION: &str = "UNION (Elem -> Option) = #{Some: Elem, None: Null}";
@@ -108,12 +110,47 @@ fn the_builtin_result_is_the_declared_one() {
 
 #[test]
 fn the_builtin_error_is_the_declared_one() {
-    brought("NEWTYPE Error = :{message :Str}", |program| {
-        assert_eq!(
-            builtin_error(program.types, program.symbols, program.scratch),
-            program.bound("Error")
-        );
-    });
+    // The declaration lists each fault kind's variant in `FaultKind::ALL`'s order, over its fields.
+    let variants: Vec<String> = FaultKind::ALL
+        .iter()
+        .map(|kind| {
+            let mut fields = vec![
+                String::from("message :Str"),
+                String::from("frames :(LIST OF :{callee :Str, call :Str, at :Str, count :Number})"),
+            ];
+            fields.extend(kind.fields().iter().map(|(name, declared)| {
+                let declared = match declared {
+                    Field::Any => ":Any",
+                    Field::Str => ":Str",
+                    Field::Number => ":Number",
+                    Field::Type => ":Type",
+                    Field::ListOfAny => ":(LIST OF Any)",
+                };
+                format!("{name} {declared}")
+            }));
+            format!("{}: :{{{}}}", kind.name(), fields.join(", "))
+        })
+        .collect();
+    let declaration = format!("UNION Error = #{{{}}}", variants.join(", "));
+    fn any_type(
+        _: &Chain<'_, '_, '_, '_>,
+        _: BumpAllocator<'_>,
+        _: &SymbolInterner,
+    ) -> Vec<(&'static str, KType)> {
+        vec![("Type", KType::of_kind(KKind::AnyType))]
+    }
+    with_program(
+        &declaration,
+        any_type,
+        |_, _, _| Held::Empty,
+        |program| {
+            program.declare().expect("the declaration seals");
+            assert_eq!(
+                builtin_error(program.types, program.symbols, program.scratch),
+                program.bound("Error")
+            );
+        },
+    );
 }
 
 #[test]

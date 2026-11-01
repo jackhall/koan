@@ -6,7 +6,7 @@ use std::num::NonZeroUsize;
 use smallvec::SmallVec;
 
 use crate::scheduler::arena::{BuildArena, Composed, Settled, Under};
-use crate::scope::{Binding, Composition, Facts, Keyed, LoadFacts, Settlement};
+use crate::scope::{Binding, Composition, Facts, Keyed, LoadFacts, Settlement, ShapeError};
 use crate::values::digest::{DigestHasher, Tag};
 use crate::values::{ArenaRef, BuildBudget, SettlementKey};
 
@@ -193,36 +193,40 @@ fn a_child_settlement_keeps_its_parent_and_releases_it_last() {
 
 #[test]
 fn a_pinned_composition_outlives_its_last_pinner() {
-    // A composition whose facts hold a wording laid in its own bump.
+    // A composition whose facts hold a refusal laid in its own bump.
+    let at = crate::tests::nowhere();
     let composition = std::rc::Rc::new(Composed::build(
         crate::tests::composed_syntax(),
         |syntax, bump, _| {
-            let wording = &*bump.alloc_str("held");
+            let refusal = &*bump.alloc(ShapeError::NoKeyword { at });
             Composition::new(
                 syntax.syntax(),
                 &LoadFacts::EMPTY,
                 Keyed::EMPTY,
-                Some(wording),
+                Some(refusal),
                 &[],
             )
         },
     ));
-    // A settlement pinning it, whose facts read that wording out of the composition's bump.
+    // A settlement pinning it, whose facts read that refusal out of the composition's bump.
     let pinner = Settled::build(
         Under::Root,
         SmallVec::from_iter([std::rc::Rc::clone(&composition)]),
         &LoadFacts::EMPTY,
         |_, _, pinned, _| {
-            let wording = pinned[0]
+            let refusal = pinned[0]
                 .refusal()
-                .expect("the composition holds a wording");
-            Some(Settlement::refused(None, Binding::EMPTY, wording))
+                .expect("the composition holds a refusal");
+            Some(Settlement::refused(None, Binding::EMPTY, refusal))
         },
     )
     .expect("a pinner settles");
     // The arena's handle on the composition goes first; the pinner still reads it, and releases
     // it last.
     drop(composition);
-    assert_eq!(pinner.facts().refusal(), Some("held"));
+    assert!(matches!(
+        pinner.facts().refusal(),
+        Some(ShapeError::NoKeyword { at: held }) if *held == at
+    ));
     drop(pinner);
 }

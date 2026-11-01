@@ -159,7 +159,7 @@ pub fn callable_type<'graph, 'x, R: Reads<'graph> + ?Sized>(
                 registered,
             })
         }
-        BodyKind::Module | BodyKind::Surfaced => Err(unsupported),
+        BodyKind::Module | BodyKind::Surfaced | BodyKind::Caught => Err(unsupported),
     }
 }
 

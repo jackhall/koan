@@ -160,7 +160,7 @@ impl Elaboration {
         }
     }
 
-    /// The refusal as an error value's message, with its names spelled through `symbols` and its
+    /// The refusal as a message, with its names spelled through `symbols` and its
     /// types through `types`.
     pub fn display<'x, 'run, 'p, 'reg>(
         &'x self,

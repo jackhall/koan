@@ -70,6 +70,16 @@ impl<'run, H> Record<'run, H> {
         }
     }
 
+    /// A record over `fields`, as a generated image writes one: the emitter wrote the fields of a
+    /// record the chain built, so they are unique.
+    #[doc(hidden)]
+    pub const fn imaged(fields: &'run [(BinderSymbol, Linked<'run>)]) -> Self {
+        Record {
+            fields,
+            view: PhantomData,
+        }
+    }
+
     /// Fields in declaration order, each type by reference.
     pub(super) fn raw(self) -> &'run [(BinderSymbol, Linked<'run>)] {
         self.fields

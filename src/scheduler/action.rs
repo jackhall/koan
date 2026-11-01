@@ -23,26 +23,28 @@
 
 use smallvec::SmallVec;
 
+use crate::knot::{KInner, KRegionHeader};
 use crate::knot::{KValue, KValueFamily};
 use crate::memory::Projects;
 use crate::memory::{
     Active, CellHandle, CrossedOperand, DeliverError, Delivered, Dormant, Erased, Header, Operand,
-    Ready, ReattachableOverBoth, Receipt, Stale, StepContext, Writer,
+    Ready, ReattachableOverBoth, Receipt, Stale, StepContext, Writer, resident,
 };
 use crate::scheduler::arena::BuildArena;
+use crate::scheduler::beside::{Beside, ReadsBeside};
 use crate::scheduler::continuation::{
     Arrival, BirthAt, Born, Continuation, ContinuationFamily, NativeStep, Provenance, Report,
     Rested, StateAt, StepBundle, Work,
 };
-use crate::scheduler::delivery::KDelivery;
+use crate::scheduler::delivery::{Fill, FillFamily, KDelivery};
 use crate::scheduler::kept::{Held, Kept, KeptPart};
 use crate::scheduler::seek::{Compose, Lending, Replayed, Requested, Seek};
 use crate::scope::{
-    Code, ComposedRoot, ComposedSyntax, Entry, EntryFamily, Facts, HalfHeader, MemoFamily, MemoKey,
-    RegionHeader,
+    Code, ComposedRoot, ComposedSyntax, Entry, EntryFamily, Facts, HalfHeader, Inner, Line, Link,
+    MemoFamily, MemoKey,
 };
 use crate::type_lattice::Halves;
-use crate::values::{ArenaRef, Chain, ContentDigest, Half, TypeTiers, Types};
+use crate::values::{ArenaRef, Chain, ContentDigest, Half, KeptCell, TypeTiers, Types};
 
 /// The raw context a step runs in: every door `cellgraph` hands one, over the bundle's families.
 /// Only a [`Step`] and the drain hold one.
@@ -55,7 +57,7 @@ pub(super) type Context<'graph, 'step, 'here, 'scratch, 'lent, B> = StepContext<
     ContinuationFamily<B>,
     <B as StepBundle<'graph>>::Scratch,
     KDelivery,
-    RegionHeader,
+    KRegionHeader,
 >;
 
 /// A bundle's scratch state at a step's two brands.
@@ -102,6 +104,13 @@ pub(super) enum Kind<'graph, B: StepBundle<'graph>> {
     /// cell once the successor's first step has run. The successor inherits this cell's provenance
     /// verbatim, so the `Use` its request carries is never read.
     Tail(Asked<'graph, B>, Tailing),
+    /// Parked to be entered again at once beside `kept`, a cell a fault kept, whose region header
+    /// the successor step reads; the drain releases `kept` once that step ends.
+    Beside(KeptCell),
+    /// The step ended with a fault, delivered to its consumer. The drain drops what the consumer
+    /// asked for and has not yet run, and pushes the consumer; it keeps a tree cell, `kept`, and
+    /// its borrow of its arena node, and releases a tenant as a finish does.
+    Faulted { kept: bool },
     /// A root work's end that leaves a birth at rest in its home, for the graph's owner to resume a
     /// later root work from. The drain releases the cell and hands the carrier back out of `run`.
     Left(Dormant<'graph, B::Birth>),
@@ -140,8 +149,8 @@ impl<'graph, B: StepBundle<'graph>> Action<'graph, B> {
 /// children through [`spawn`](Self::spawn), reads what they delivered through
 /// [`results`](Self::results), and ends through one of [`park`](Self::park),
 /// [`tail`](Self::tail), [`finish_fresh`](Self::finish_fresh),
-/// [`finish_in_home`](Self::finish_in_home), [`finish`](Self::finish), [`done`](Self::done),
-/// [`leave`](Self::leave) and [`failed`](Self::failed) — each takes the `Step` by value, and they
+/// [`finish_in_home`](Self::finish_in_home), [`finish`](Self::finish), [`fault`](Self::fault),
+/// [`done`](Self::done), [`leave`](Self::leave) and [`failed`](Self::failed) — each takes the `Step` by value, and they
 /// are the only way to build an [`Action`], so a step ends exactly once and nothing follows its
 /// end. It cannot store a slot, register a run, cross a value or fill a receipt except as one of
 /// those does, and it never learns a handle, so it cannot deliver anywhere but where the drain
@@ -229,6 +238,8 @@ pub struct Step<
     'lent: 'scratch,
 {
     context: &'a mut Context<'graph, 'step, 'here, 'scratch, 'lent, B>,
+    /// The cell the step runs in, which a fault keeps.
+    cell: CellHandle,
     /// The type tiers of the graph this step runs over, which every chain it builds reads first.
     tiers: TypeTiers<'graph>,
     /// What the cell's door reads: the settlement it runs under, if any, over the load.
@@ -246,6 +257,8 @@ pub struct Step<
     /// The books the cell's arena node is kept in, which the step reads liveness from.
     books: &'a BuildArena<'graph>,
     spawns: &'a mut Spawns<'graph, B>,
+    /// The kept cell's header, where the drain entered this step beside one.
+    beside: Option<&'a dyn ReadsBeside<'graph>>,
     state: S::Of<StateAt<'graph, 'here, B>>,
     scratch: X::Of<Option<ScratchAt<'graph, 'here, 'scratch, B>>>,
 }
@@ -285,7 +298,10 @@ where
     /// carrier of a birth it woke pinned, and both slots the cell parked in.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn new(
-        context: &'a mut Context<'graph, 'step, 'here, 'scratch, 'lent, B>,
+        (context, cell): (
+            &'a mut Context<'graph, 'step, 'here, 'scratch, 'lent, B>,
+            CellHandle,
+        ),
         tiers: TypeTiers<'graph>,
         facts: Facts<'a>,
         provenance: &'a Provenance,
@@ -295,13 +311,17 @@ where
             Arrival,
             Option<Box<Requested<'graph>>>,
         ),
-        books: &'a BuildArena<'graph>,
-        spawns: &'a mut Spawns<'graph, B>,
+        (books, spawns, beside): (
+            &'a BuildArena<'graph>,
+            &'a mut Spawns<'graph, B>,
+            Option<&'a dyn ReadsBeside<'graph>>,
+        ),
         state: StateAt<'graph, 'here, B>,
         scratch: Option<ScratchAt<'graph, 'here, 'scratch, B>>,
     ) -> Self {
         Step {
             context,
+            cell,
             tiers,
             facts,
             provenance,
@@ -311,6 +331,7 @@ where
             sought,
             books,
             spawns,
+            beside,
             state,
             scratch,
         }
@@ -336,6 +357,7 @@ where
     ) {
         let Step {
             context,
+            cell,
             tiers,
             facts,
             provenance,
@@ -345,11 +367,13 @@ where
             sought,
             books,
             spawns,
+            beside,
             state,
             scratch,
         } = self;
         let step = Step {
             context,
+            cell,
             tiers,
             facts,
             provenance,
@@ -359,6 +383,7 @@ where
             sought,
             books,
             spawns,
+            beside,
             state: (),
             scratch,
         };
@@ -385,6 +410,7 @@ where
     ) {
         let Step {
             context,
+            cell,
             tiers,
             facts,
             provenance,
@@ -394,11 +420,13 @@ where
             sought,
             books,
             spawns,
+            beside,
             state,
             scratch,
         } = self;
         let step = Step {
             context,
+            cell,
             tiers,
             facts,
             provenance,
@@ -408,6 +436,7 @@ where
             sought,
             books,
             spawns,
+            beside,
             state,
             scratch: (),
         };
@@ -434,7 +463,7 @@ where
 
     /// The header door of this cell's write home — its region, or its host's for a tenant — at
     /// its own brand: where the branch of the types the step builds there rests.
-    pub fn header(&self) -> Header<'graph, 'here, 'step, RegionHeader> {
+    pub fn header(&self) -> Header<'graph, 'here, 'step, KRegionHeader> {
         self.context.header()
     }
 
@@ -615,7 +644,7 @@ where
                     home.0,
                     &operand,
                     |writer, header, views| {
-                        let half = header.get_or_lay(|| RegionHeader::lay(writer));
+                        let half = header.get_or_lay(|| KRegionHeader::lay(writer));
                         if let (
                             None,
                             CrossedOperand::Pinned {
@@ -667,7 +696,7 @@ where
         home: MemoHome,
         lay: impl for<'cell> FnOnce(
             Writer<'cell, '_>,
-            &'cell HalfHeader<'cell>,
+            &'cell HalfHeader<'cell, KValue<'graph, 'cell>>,
             &Types<'cell, '_>,
         ) -> Option<&'cell Entry<'cell>>,
     ) -> Option<&'here Entry<'here>> {
@@ -675,7 +704,7 @@ where
         let laid = self
             .context
             .alloc_into::<EntryFamily, EntryFamily>(home.0, &[], |writer, header, _| {
-                let half = header.get_or_lay(|| RegionHeader::lay(writer));
+                let half = header.get_or_lay(|| KRegionHeader::lay(writer));
                 let types = tiers.chain(Halves::alone(Half::of(writer, header)));
                 Active::new(lay(writer, half, &types))
             })
@@ -711,10 +740,27 @@ where
         }
     }
 
+    /// Read the kept cell this step was entered beside, through `read`, at a brand the read
+    /// quantifies: `None` where the drain entered the step beside none, or the cell holds no link.
+    pub fn beside<R>(
+        &self,
+        read: impl for<'x, 'kept> FnOnce(Beside<'x, 'kept, 'graph>) -> R,
+    ) -> Option<R> {
+        let reader = self.beside?;
+        let (mut read, mut out) = (Some(read), None);
+        reader.read(&mut |beside| {
+            if let Some(read) = read.take() {
+                out = Some(read(beside));
+            }
+        });
+        out
+    }
+
     /// The results of the children this cell parked on, in the order it asked for them: a scratch
     /// fill at `'scratch`, a carrier fill redeemed and crossed to `'here`, its types made to
-    /// resolve over the graph's type tiers. Each slot is taken as it is read, so a second pass finds
-    /// it empty.
+    /// resolve over the graph's type tiers, or what lies inside a fault, after which nothing is
+    /// yielded: the children asked for after a faulting one never ran. Each slot is taken as it is
+    /// read, so a second pass finds it empty.
     pub fn results(
         &mut self,
     ) -> impl Iterator<Item = Result<Received<'graph, 'here, 'scratch>, StepError>> {
@@ -737,18 +783,18 @@ where
         let tiers = self.tiers;
         let context = &mut *self.context;
         let count = context.receipt_count().unwrap_or(0);
-        (0..count).map(move |slot| match context.receipt(slot) {
-            Ok(Receipt::Value(value)) => Ok(Received::Scratch(value)),
-            Ok(Receipt::Carrier(Ok(carrier))) => {
-                let (value, pinned) = crate::values::cross_here(context, &carrier, tiers, check);
-                // A pinned value is the carrier's own storage, so the carrier is where it rests.
-                let kept = pinned.then(|| KeptPart {
-                    kept: Kept(context.keep(carrier)),
-                    path: &[],
-                });
-                Ok(Received::Here(Held { value, kept }))
+        let mut faulted = false;
+        (0..count).map_while(move |slot| {
+            if faulted {
+                return None;
             }
-            _ => Err(StepError::Unredeemable),
+            let received = match context.receipt(slot) {
+                Ok(Receipt::Value(value)) => Ok(Received::Scratch(value)),
+                Ok(Receipt::Carrier(Ok(carrier))) => received(context, &carrier, tiers, check),
+                _ => Err(StepError::Unredeemable),
+            };
+            faulted = matches!(received, Ok(Received::Fault(_)));
+            Some(received)
         })
     }
 
@@ -789,6 +835,34 @@ where
             self.context.store_scratch_state(scratch);
         }
         Action(Kind::Park)
+    }
+
+    /// Park to be entered again at once beside `kept`, a cell a fault kept, running `step` over
+    /// `state`: its [`beside`](Step::beside) door reads `kept`'s link, and the drain releases
+    /// `kept` once that step ends, whatever it ends with. Refused, as a park is, for a step that
+    /// asked for children.
+    pub fn read_beside(
+        self,
+        kept: KeptCell,
+        step: NativeStep<'graph, B>,
+        state: StateAt<'graph, 'here, B>,
+        scratch: Option<ScratchAt<'graph, 'here, 'scratch, B>>,
+    ) -> Action<'graph, B> {
+        if !self.spawns.is_empty() {
+            return self.failed(StepError::Unparked);
+        }
+        self.context.store_successor(Continuation {
+            step,
+            provenance: *self.provenance,
+            arena: self.arena,
+            arrival: Arrival::Placed,
+            sought: None,
+            state: Rested::Awake(state),
+        });
+        if let Some(scratch) = scratch {
+            self.context.store_scratch_state(scratch);
+        }
+        Action(Kind::Beside(kept))
     }
 
     /// Hand this frame's last statement to a successor born under this cell, as its tree child:
@@ -971,7 +1045,7 @@ where
             // The witness is minted here: `CrossedOperand` declares `'graph: 'cell`, so the slice
             // argument's type implies the bound the witness states. Were that where-clause to go,
             // this would stop compiling — a compile error, never unsoundness.
-            |writer, header, _: &[CrossedOperand<'graph, '_, '_, KValueFamily, RegionHeader>]| {
+            |writer, header, _: &[CrossedOperand<'graph, '_, '_, KValueFamily, KRegionHeader>]| {
                 build(
                     writer,
                     &tiers.chain(Halves::alone(Half::of(writer, header))),
@@ -1023,11 +1097,38 @@ where
         self.placed(report, operands, carriers, check, build)
     }
 
+    /// Build what `build` builds over `operands` in this cell's home, as
+    /// [`finish_in_home`](Self::finish_in_home) builds it, and hold it here beside its carrier
+    /// kept at the home, where it pins: what a step checks before it finishes with it or ends with
+    /// a fault. The home is this cell or above it, so the value pins free. `None` where the home
+    /// is gone.
+    pub fn built_in_home(
+        &mut self,
+        operands: &[Held<'graph, 'here>],
+        build: impl for<'their> FnOnce(
+            Writer<'their, '_>,
+            &Types<'their, '_>,
+            &[KValue<'graph, 'their>],
+            &'their &'graph (),
+        ) -> Active<'graph, 'their, KValueFamily>,
+    ) -> Option<Held<'graph, 'here>> {
+        let carriers = (operands.iter())
+            .map(|held| self.held_carrier(held))
+            .collect();
+        let placed = self.place(operands, carriers, None, build).ok()?;
+        let (value, pinned) = crate::values::cross_here(self.context, &placed, self.tiers, None);
+        let kept = pinned.then(|| KeptPart {
+            kept: Kept(self.context.keep(placed)),
+            path: &[],
+        });
+        Some(Held { value, kept })
+    }
+
     /// Build what `build` builds over `operands`, crossing from `carriers`, one each, in this
     /// cell's home, and file it in the slot `report` names: [`finish_in_home`](Self::finish_in_home)
     /// once each operand's carrier is in hand.
     fn placed(
-        self,
+        mut self,
         report: Report,
         operands: &[Held<'graph, 'here>],
         carriers: SmallVec<[Ready<'graph, 'step, KValueFamily>; 4]>,
@@ -1039,6 +1140,24 @@ where
             &'their &'graph (),
         ) -> Active<'graph, 'their, KValueFamily>,
     ) -> Action<'graph, B> {
+        let placed = self.place(operands, carriers, check, build);
+        self.file(report, placed)
+    }
+
+    /// What `build` builds over `operands`, crossing from `carriers`, one each, placed in this
+    /// cell's home.
+    fn place(
+        &mut self,
+        operands: &[Held<'graph, 'here>],
+        carriers: SmallVec<[Ready<'graph, 'step, KValueFamily>; 4]>,
+        check: Option<&Chain<'_, '_, '_, '_>>,
+        build: impl for<'their> FnOnce(
+            Writer<'their, '_>,
+            &Types<'their, '_>,
+            &[KValue<'graph, 'their>],
+            &'their &'graph (),
+        ) -> Active<'graph, 'their, KValueFamily>,
+    ) -> Result<Ready<'graph, 'step, KValueFamily>, Stale<CellHandle>> {
         let tiers = self.tiers;
         // A type a restamp carries that only this cell's chain resolves is adopted from it.
         let own = self.types();
@@ -1055,7 +1174,8 @@ where
                 },
             })
             .collect();
-        let placed = self.context.alloc_into::<KValueFamily, KValueFamily>(
+
+        self.context.alloc_into::<KValueFamily, KValueFamily>(
             self.provenance.home,
             &crossing,
             |writer, header, views| {
@@ -1074,8 +1194,7 @@ where
                     .collect();
                 build(writer, &types, &values, &&())
             },
-        );
-        self.file(report, placed)
+        )
     }
 
     /// Finish with `value`, delivered as a carrier. A value held with a kept part whose home is
@@ -1211,8 +1330,8 @@ where
         Action(Kind::Finished { completed: false })
     }
 
-    /// Could not proceed. A koan error is a tagged value and travels between cells as data, so this
-    /// is the machinery's own failure and it stalls the drain.
+    /// Could not proceed. A program's refusal is a [fault](Self::fault), so this is the
+    /// machinery's own failure and it stalls the drain.
     pub fn failed(self, error: StepError) -> Action<'graph, B> {
         Action(Kind::Failed(error))
     }
@@ -1240,14 +1359,68 @@ where
         report: Report,
         placed: Result<Ready<'graph, 'step, KValueFamily>, Stale<CellHandle>>,
     ) -> Action<'graph, B> {
-        let Ok(placed) = placed else {
+        let filled = placed.ok().and_then(|placed| {
+            self.context
+                .project::<KValueFamily, FillFamily>(&placed, |value, _| {
+                    Some(Active::new(Fill::Value(value.value())))
+                })
+        });
+        let Some(filled) = filled else {
             return self.failed(StepError::Stale);
         };
-        let carrier = self.context.keep(placed);
+        let carrier = self.context.keep(filled);
         let filled = self
             .context
             .deliver_carrier(self.provenance.parent, report.slot, carrier);
         Action::settle(filled)
+    }
+
+    /// End with a fault: `inner`, what lies inside it, beside `line`, the trace line this cell's
+    /// frame owes, if any. A tree cell is kept — the link is laid in its region and its header
+    /// takes it — and its consumer is handed a [`KeptCell`] naming it beside the fault's kind, filed in the consumer itself
+    /// so that redeeming it pins nothing below. A tenant owns no region and is released as ever:
+    /// its write home is its consumer's, so it hands the link, or with no line `inner` itself,
+    /// from there, crossing nothing. Refused for a cell asked for nobody, and for a step that
+    /// asked for children without parking on them.
+    pub fn fault(
+        self,
+        line: Option<Line<'here>>,
+        inner: KInner<'graph, 'here>,
+    ) -> Action<'graph, B> {
+        let report = match self.report() {
+            Ok(report) => report,
+            Err(error) => return self.failed(error),
+        };
+        let writer = self.writer();
+        let kind = inner.kind();
+        let (carrier, kept) = match self.cell {
+            CellHandle::Tree(handle) => {
+                let link = resident(writer, Link { line, inner });
+                (self.header().get_or_lay(|| KRegionHeader::lay(writer))).set_link(link);
+                let kept = KeptCell::of(handle, self.arena);
+                let placed = self.context.alloc_into::<FillFamily, FillFamily>(
+                    self.provenance.parent,
+                    &[],
+                    |_, _, _| Active::new(Fill::Fault(Inner::Below { kept, kind })),
+                );
+                let Ok(placed) = placed else {
+                    return self.failed(StepError::Stale);
+                };
+                (self.context.keep(placed), true)
+            }
+            CellHandle::Tenant(_) | CellHandle::Slab(_) => {
+                let inner = match line {
+                    None => inner,
+                    Some(_) => Inner::Link(resident(writer, Link { line, inner })),
+                };
+                let lifted = self.context.lift::<FillFamily>(Fill::Fault(inner));
+                (self.context.keep(lifted), false)
+            }
+        };
+        match (self.context).deliver_carrier(self.provenance.parent, report.slot, carrier) {
+            Ok(_) => Action(Kind::Faulted { kept }),
+            Err(_) => self.failed(StepError::Undeliverable),
+        }
     }
 }
 
@@ -1333,6 +1506,51 @@ where
     /// A carrier fill, redeemed and crossed to this cell's own brand, beside the carrier it came
     /// in, kept, where it was pinned.
     Here(Held<'graph, 'here>),
+    /// What lies inside the fault a child ended with, pinned at this cell's own brand.
+    Fault(KInner<'graph, 'here>),
+}
+
+/// One carrier fill read back at the consumer's brand: a fault pinned as it lies, or a value
+/// crossed as [`results`](Step::results) crosses one.
+fn received<'graph, 'step, 'here, 'scratch, 'lent, B: StepBundle<'graph>>(
+    context: &mut Context<'graph, 'step, 'here, 'scratch, 'lent, B>,
+    carrier: &Ready<'graph, 'step, FillFamily>,
+    tiers: TypeTiers<'graph>,
+    check: Option<&Chain<'_, '_, '_, '_>>,
+) -> Result<Received<'graph, 'here, 'scratch>, StepError>
+where
+    'graph: 'step + 'here + 'lent,
+    'here: 'scratch,
+    'lent: 'scratch,
+{
+    if let Fill::Fault(_) = context.read(carrier).value() {
+        // Filed in this cell or above it, so it pins free.
+        let operand = [Operand {
+            carrier,
+            copy_bytes: usize::MAX,
+        }];
+        let inner = context.alloc_here::<_, FillFamily>(&operand, |_, _, views| match views[0] {
+            CrossedOperand::Pinned {
+                view: Fill::Fault(inner),
+                ..
+            } => Some(inner),
+            _ => None,
+        });
+        return inner.map(Received::Fault).ok_or(StepError::Unredeemable);
+    }
+    let carrier =
+        (context.project::<FillFamily, KValueFamily>(carrier, |fill, _| match fill.value() {
+            Fill::Value(value) => Some(Active::new(value)),
+            Fill::Fault(_) => None,
+        }))
+        .ok_or(StepError::Unredeemable)?;
+    let (value, pinned) = crate::values::cross_here(context, &carrier, tiers, check);
+    // A pinned value is the carrier's own storage, so the carrier is where it rests.
+    let kept = pinned.then(|| KeptPart {
+        kept: Kept(context.keep(carrier)),
+        path: &[],
+    });
+    Ok(Received::Here(Held { value, kept }))
 }
 
 /// A request at rest: what the drain's buffer holds and a tail carries, the state already put to
@@ -1389,8 +1607,8 @@ impl<'graph, B: StepBundle<'graph>> Spawns<'graph, B> {
     }
 }
 
-/// What a step reports when it cannot proceed. A koan error is a tagged value and travels between
-/// cells as data; this is the machinery's own failure, not the program's.
+/// What a step reports when it cannot proceed: the machinery's own failure, not the program's,
+/// which is a [fault](Step::fault).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum StepError {
     /// The home a result was bound for is no longer live.

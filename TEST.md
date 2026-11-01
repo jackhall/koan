@@ -165,6 +165,27 @@ within every fact and skips a use or settled check in a statement typed `Never`,
 law lets a refusal met on the way agree with a whole binding that types `Never` the statement
 holding the refused site.
 
+## Generated images
+
+Two checked-in files are generated, never edited: the lattice's seed
+([`seed.rs`](lattice/src/types/image/seed.rs)) and koan's builtin image
+([`generated.rs`](src/builtin_image/generated.rs)). Each has a golden test that
+rebuilds it through its recipe and fails when the file is stale, and that
+rewrites the file when `UPDATE_IMAGE` is set. Regenerate the seed first:
+
+```sh
+UPDATE_IMAGE=1 cargo test -p lattice the_seed_image_is_fresh
+UPDATE_IMAGE=1 cargo test -p koan --lib the_builtin_image_is_fresh
+```
+
+Name the package: without `-p`, cargo selects every default workspace member
+and turns a `--features` flag on in each that has the feature. After a change
+to the stored layout a generated file spells, it no longer compiles; add
+`--features bootstrap-image` to each command, which compiles a hand-written stub
+in its place ([the image module](lattice/src/types/image.rs) § Regenerating).
+The generator itself is test-only: the lattice compiles it for its own tests and
+under its `generator` feature, which koan's dev-dependency turns on.
+
 ## Tutorial snippets
 
 Every runnable code block in [`tutorial/`](tutorial/README.md) is checked against

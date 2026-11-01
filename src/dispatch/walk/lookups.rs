@@ -28,7 +28,7 @@ use super::super::lookup::bound;
 use super::Bound;
 
 /// The `Result` parameter `name` names, as a construction's argument.
-fn variant(name: &str) -> BinderSymbol {
+pub(super) fn variant(name: &str) -> BinderSymbol {
     BinderSymbol::Type(TypeSymbol::classify(name).expect("a Type token"))
 }
 

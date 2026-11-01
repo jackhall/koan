@@ -29,15 +29,13 @@ use std::cell::Cell;
 
 use crate::memory::{BumpAllocator, BumpVec, Knot, KnotPlan, Writer};
 use crate::parse::ExpressionPart;
-use crate::scope::{BodyShape, Component, Located, ShapeKind, Stamp, Written};
+use crate::scope::{BodyShape, Component, Located, ShapeKind, Stamp, Untieable, Written};
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::{DeclaredType, KType, satisfied_by};
 use crate::values::{ArenaRef, Chain, Retype, Weight, retype_target_as};
 
 use super::data::{self, Stager};
-use super::{
-    Eager, Function, KReading, Knotted, Node, Supplied, Untieable, code, function, module,
-};
+use super::{Eager, Function, KReading, Knotted, Node, Supplied, code, function, module};
 
 /// A knot [`tie`] laid down, beside each member's annotation as the tie resolved it, by member
 /// index: `None` where the member states none, or it does not resolve. The caller holds each slot

@@ -30,10 +30,12 @@
 //! [`Incomparable`](crate::values::Incomparable).
 //!
 //! **What sits where.** This file is the vocabulary every node kind shares: the member, the node,
-//! the value and activation spelled at it, and the [`Supplied`] and [`Untieable`] a birth answers
-//! with. [`function`], [`builtin`], [`code`] and [`module`] each own one node kind — its payload, its doors and,
-//! for a module, everything that reads one by name — and none names another; [`data`] owns
-//! the data node; [`tie`](crate::knot::tie()) births a component over them, and `copy` re-ties a whole knot.
+//! the value and activation spelled at it, and the [`Supplied`] a birth answers with — and
+//! [`Untieable`](crate::scope::Untieable) where it refuses, which `scope` words beside every fault.
+//! [`function`], [`builtin`], [`code`] and [`module`] each own one node kind — its payload, its
+//! doors and, for a module, everything that reads one by name — and none names another; [`data`]
+//! owns the data node; [`tie`](crate::knot::tie()) births a component over them, and `copy` re-ties
+//! a whole knot.
 //! A submodule reaches this vocabulary through the facade, never a sibling.
 //!
 //! **Imports.** Outside doc comments and `#[cfg(test)]` this module names `crate::elaborate`,
@@ -56,7 +58,7 @@ pub(crate) mod view;
 pub(crate) mod tests;
 
 pub use builtin::{BuiltinFunction, builtin};
-pub use code::{Code, UsingRefused, built, composed_code, quote, using};
+pub use code::{Code, built, composed_code, quote, using};
 pub(crate) use code::{code_length, code_part, code_slice, flattened};
 #[cfg(test)]
 pub(crate) use function::INSTANTIATED;
@@ -65,21 +67,21 @@ pub use function::{
 };
 pub use module::{Born, Coerced, Module, body_activation};
 pub use tie::{Tied, tie};
-pub use view::ComposeRefused;
 
 use std::cell::Cell;
 use std::fmt;
 
 use crate::memory::{BumpAllocator, DropFree, Edge, Knot, Member, Writer, covariant, reattachable};
 use crate::parse::ExpressionPart;
-use crate::scope::Elaboration;
-use crate::scope::{Activation, ActivationView, BodyRef, Builtins, Reading, Site};
-use crate::symbols::{BinderSymbol, SymbolInterner};
-use crate::type_lattice::{DeclaredType, KType, display_name};
+use crate::scope::{
+    Activation, ActivationView, BodyRef, Builtins, Fault, Inner, Link, Reading, RegionHeader, Site,
+};
+use crate::symbols::BinderSymbol;
+use crate::type_lattice::{DeclaredType, KType};
 use crate::values::digest::{DigestHasher, Tag};
 use crate::values::{
-    self, Chain, Circular, CodeView, ConstructionRefused, ContentDigest, FunctionIdentity,
-    KeyRejected, MemoBits, Resolved, Seen, Value, ValueCarrier, ValueFamily, Weight,
+    self, Chain, Circular, CodeView, ContentDigest, FunctionIdentity, MemoBits, Resolved, Seen,
+    Value, ValueCarrier, ValueFamily, Weight,
 };
 
 /// The payload of a knot node.
@@ -440,154 +442,6 @@ pub enum Supplied<'graph, 'cell> {
 pub type Eager<'e, 'graph, 'cell> =
     dyn FnMut(Site, Option<&ExpressionPart<'_>>) -> Option<Supplied<'graph, 'cell>> + 'e;
 
-/// Why a birth refused: a component [`tie`] could not tie, or a lambda [`lambda`] could not birth.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Untieable<'x> {
-    /// A member's signature did not elaborate.
-    Type(Elaboration),
-    /// A member that is neither a callable binder, nor a module binder, nor a `LET` of a value name
-    /// whose right-hand side, through one-part groups, is a list, dict or record literal or a
-    /// nominal construction.
-    Opaque { name: BinderSymbol },
-    /// Data member `name`'s right-hand side has a part at `site` the caller must evaluate first.
-    Eager { name: BinderSymbol, site: Site },
-    /// A dict key in data member `name` at `site` evaluated to something no key can be.
-    Key {
-        name: BinderSymbol,
-        site: Site,
-        rejected: KeyRejected,
-    },
-    /// A construction at `site` in data member `name` the construction rule refuses.
-    Construction {
-        name: BinderSymbol,
-        site: Site,
-        refused: ConstructionRefused,
-    },
-    /// Derived nodes — containers and constructions through a family — that reach one another with
-    /// no function node or cut between them, so no finite type memoizes them: the members whose
-    /// right-hand sides hold them, in component order.
-    TypeCycle { names: &'x [BinderSymbol] },
-    /// A spread at `site` in data member `name` of what is no list: a value of another kind, a
-    /// function, or a fellow member that is no list.
-    NotAList { name: BinderSymbol, site: Site },
-    /// A callable's untraced body evaluated to `value`, a value of this type, which is no code.
-    NotCode { value: KType },
-}
-
-impl<'x> Untieable<'x> {
-    /// The refusal as an error value's message, with its names spelled through `symbols` and its
-    /// types through `types`.
-    pub fn display<'d, 'run, 'p, 'reg>(
-        &'d self,
-        symbols: &'d SymbolInterner,
-        types: &'d Chain<'run, 'p, 'reg, '_>,
-    ) -> UntieableDisplay<'d, 'x, 'run, 'p, 'reg> {
-        UntieableDisplay {
-            error: self,
-            symbols,
-            types,
-        }
-    }
-}
-
-/// An [`Untieable`] beside the interner and registry it renders through.
-pub struct UntieableDisplay<'d, 'x, 'run, 'p, 'reg> {
-    error: &'d Untieable<'x>,
-    symbols: &'d SymbolInterner,
-    types: &'d Chain<'run, 'p, 'reg, 'd>,
-}
-
-impl fmt::Display for UntieableDisplay<'_, '_, '_, '_, '_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let name = |name: &BinderSymbol| self.symbols.display(name.symbol());
-        let ktype = |handle: &KType| display_name(*handle, self.types, self.symbols);
-        match self.error {
-            Untieable::Type(error) => write!(f, "{}", error.display(self.symbols, self.types)),
-            Untieable::Opaque { name: member } => {
-                write!(f, "`{}` is bound to nothing a knot holds", name(member))
-            }
-            Untieable::Eager { name: member, .. } => {
-                write!(f, "`{}` needs a part evaluated first", name(member))
-            }
-            Untieable::Key { rejected, .. } => match rejected {
-                KeyRejected::NotAScalar(handle) => {
-                    write!(f, "{} cannot be a dict key", ktype(handle))
-                }
-                KeyRejected::NaN => f.write_str("NaN cannot be a dict key"),
-            },
-            Untieable::Construction { refused, .. } => write!(
-                f,
-                "{}",
-                refused_construction(refused, self.symbols, self.types)
-            ),
-            Untieable::NotCode { value } => write!(
-                f,
-                "this body is {}, which is not code for a callable to run",
-                ktype(value)
-            ),
-            Untieable::NotAList { name: member, .. } => {
-                write!(f, "`..` in `{}` spreads what is not a list", name(member))
-            }
-            Untieable::TypeCycle { names } => {
-                f.write_str("these bindings build values of no finite type:")?;
-                for member in names.iter() {
-                    write!(f, " `{}`", name(member))?;
-                }
-                Ok(())
-            }
-        }
-    }
-}
-
-/// A construction the construction rule refused, as an error value's message: what a tie of a
-/// data member and an evaluated construction both report.
-pub fn refused_construction<'d, 'run, 'p, 'reg>(
-    refused: &'d ConstructionRefused,
-    symbols: &'d SymbolInterner,
-    types: &'d Chain<'run, 'p, 'reg, '_>,
-) -> RefusedConstruction<'d, 'run, 'p, 'reg> {
-    RefusedConstruction {
-        refused,
-        symbols,
-        types,
-    }
-}
-
-/// A [`ConstructionRefused`] beside the interner and registry it renders through.
-pub struct RefusedConstruction<'d, 'run, 'p, 'reg> {
-    refused: &'d ConstructionRefused,
-    symbols: &'d SymbolInterner,
-    types: &'d Chain<'run, 'p, 'reg, 'd>,
-}
-
-impl fmt::Display for RefusedConstruction<'_, '_, '_, '_> {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        let ktype = |handle: &KType| display_name(*handle, self.types, self.symbols);
-        match self.refused {
-            ConstructionRefused::NotConstructible(head) => {
-                write!(f, "{} is not callable", ktype(head))
-            }
-            ConstructionRefused::Misfit {
-                identity,
-                representation,
-                payload,
-            } => write!(
-                f,
-                "{} cannot wrap {}: its representation is {}",
-                ktype(identity),
-                ktype(payload),
-                ktype(representation)
-            ),
-            ConstructionRefused::Unsolved { family, payload } => write!(
-                f,
-                "{} cannot be solved against {}",
-                ktype(family),
-                ktype(payload)
-            ),
-        }
-    }
-}
-
 /// The family of [`Knotted`], which `values` crosses a callable through.
 pub struct KnottedFamily;
 
@@ -604,6 +458,18 @@ pub type KValueFamily = ValueFamily<KnottedFamily>;
 // A value crosses between cells, so its family carries the covariance witness the crossing doors
 // ask for.
 covariant!(KValueFamily);
+
+/// A fault whose values may hold functions.
+pub type KFault<'graph, 'cell> = Fault<'cell, KValue<'graph, 'cell>>;
+
+/// A link of a [`KFault`]'s way out.
+pub type KLink<'graph, 'cell> = Link<'cell, KValue<'graph, 'cell>>;
+
+/// What lies inside a [`KLink`].
+pub type KInner<'graph, 'cell> = Inner<'cell, KValue<'graph, 'cell>>;
+
+/// The region header a koan graph keeps, its fault's values holding functions.
+pub type KRegionHeader = RegionHeader<KnottedFamily>;
 
 /// A carrier of a [`KValue`].
 pub type KValueCarrier<'graph, 'home> = ValueCarrier<'graph, 'home, KnottedFamily>;

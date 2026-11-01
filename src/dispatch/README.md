@@ -22,9 +22,9 @@ quotes, splices composed where a quote is born, `EVAL`, `USING` and `BUILD`
 over code — the last two, over composed code, in a one-step frame under its
 composition, where its shape lies — modules —
 a `MODULE` or `GROUP` binder, `:!` and `:|`, a member read and
-`USING … SCOPE` — `MATCH`, and uncaught faults.
-[Catching errors](#catching) owns `TRY` and `CATCH`; a node dispatch has
-no reading for is a fault.
+`USING … SCOPE` — `MATCH`, `TRY` and `CATCH`, and faults, caught
+([catching](#catching)) or not. A node dispatch has no reading for is a
+fault.
 
 ## What a node is
 
@@ -88,6 +88,11 @@ never the parse — as one of:
   `MATCH <scrutinee> UNDER <union> WITH <arms>`: the scrutinee, evaluated,
   selecting one arm, which runs as a block entered on its `it`
   ([matching](#matching)); its value is the arm's;
+- a **`TRY <body> WITH <arms>`**: the body run as a block; its value is the
+  body's, or, where the body faults with a kind an arm takes, that arm's, run
+  as a block entered on the fault's `Error` record ([catching](#catching));
+- a **`CATCH <body>`**: the body run as a block; its value is `Result.Ok` of
+  the body's, or `Result.Error` of the `Error` its fault makes;
 - a **bucket declaration**, whose value is `null`;
 - a **keyworded call**: a node the shape holds a candidate list for;
 - an **application** `(head argument)`: a construction when the head is a type —
@@ -112,7 +117,9 @@ never the parse — as one of:
 A part a node needs is read in place when it is a literal, a name or a quote,
 and otherwise asked for — a `Shares` tenant of the evaluation's cell, kept —
 all at one park. **A fault is passed through**: an evaluation that receives
-one from a part finishes with it, unchanged, before doing anything else.
+one from a part finishes with it, unchanged, before doing anything else, and
+the parts it asked for after that one never run
+([faults](../scheduler/README.md#faults)).
 
 **A value is held beside where it rests.** Each operand is a
 [`Held`](../scheduler/README.md#kept-and-held-values): the value, and the kept
@@ -139,7 +146,9 @@ lattice's builtin types, `Error` and `Result`, which every read answers. Its **o
 each a [builtin node](../knot/README.md#a-builtin-overload) over the expression
 shape it is registered at, whose `id` names its native — grouped by bucket key,
 so every keyworded use at a key lists them first among its candidates. Every
-overload ranks its slots in written order.
+overload ranks its slots in written order. `Error`, `Result` and every
+overload's shape type are the [builtin image](../builtin_image.rs)'s, read from
+the constants it names, so laying the table interns no type.
 
 - `PRINT` over `Any` renders its operand, hands the text to the program's
   `print` sink, and returns the string it printed.
@@ -147,8 +156,8 @@ overload ranks its slots in written order.
   returning `Bool`.
 - `AND` over `Bool` and `NOT` over `Bool`. There is no builtin `OR` and no unary
   minus.
-- `==` over `Any`, structural; operands that cannot be compared are an error
-  value. `!=` has no bucket: the shape rewrites `a != b` to `NOT (a == b)`.
+- `==` over `Any`, structural; operands that cannot be compared are an
+  `Incomparable` fault. `!=` has no bucket: the shape rewrites `a != b` to `NOT (a == b)`.
 - `|` and `&` over types, the infix pair and the unary list form an operator run
   of them is rewritten to, each returning a type value.
 - `LENGTH` over a list, a dict, a string or code, returning a `Number`: a
@@ -174,7 +183,7 @@ overload ranks its slots in written order.
   lacks is a fault, and so is a quantified one read where the load recorded no
   type to instantiate it at. `FROM` restamps a record
   at the projection of its carried type onto the fields it names, each once,
-  sharing the record's runs; a name that type does not name is an error value,
+  sharing the record's runs; a name that type does not name is a fault,
   as it is to `ATTR`. `USING` fills a code's holes through the
   [`USING` door](../knot/README.md#a-quote), and answers composed code whose
   filled holes are filled marks.
@@ -435,6 +444,8 @@ fixed:
   refuses the load as `SIG (pi: Number) has no member tau`;
 - a `MATCH` spans the static types of the arms the load keeps
   ([matching](#matching)), and is `Never` over a scrutinee that is `Never`;
+- a `TRY` spans its body's static type and its kept arms', and a `CATCH` is
+  `Result` applied at its body's and `Error` ([catching](#catching));
 - a call in tail position is typed as any other call: its node never finishes,
   since the frame it tails into returns at the enclosing contract, so no
   carried type is read against it;
@@ -1161,9 +1172,11 @@ owes the frame's [`Contract`](../program/record.rs). When it selects a
 registration whose declared return, substituted by the call's solution,
 satisfies the contract — or calls an unquantified function by name whose return
 does, the one answer [`Contract::kept_by`](../program/record.rs) gives both — it hands its cell to the callee's frame by a tail rather than spawning
-it, handing the frame the contract it owes, so a keyworded self-call in tail
-position holds a constant number of cells however deep it recurses, and a chain
-of tail hops returns at the outermost declared return. A tail `MATCH` arm's last
+it, handing the frame the contract it owes — with the hop table that counts
+the frame this hop replaces, for the trace a fault prints
+([`Owed`](../program/README.md#frames-contracts-and-tails)) — so a keyworded
+self-call in tail position holds a constant number of cells however deep it
+recurses, and a chain of tail hops returns at the outermost declared return. A tail `MATCH` arm's last
 statement is one of its callable's tail statements: the evaluation hands the arm
 off owing its contract, and the arm's tail call hops as the callable's own
 would, its route recorded and its return read off the callable that owns it.
@@ -1216,8 +1229,9 @@ that is no code is a fault, `` Number is not code for `EVAL` to run ``.
 A refusal while a program runs is a [fault](../program/README.md#faults-and-output):
 one of a closed set of kinds, each carrying the fields its message renders from
 when it is printed or caught, and an uncaught one ends the program with
-`error: <message>` and its trace. [`errors`](errors.rs) words what only
-dispatch decides:
+`error: <message>` and its trace. The kinds and their wording are
+[`scope`'s](../scope/README.md#faults), beside the load's refusals; the run
+raises these:
 
 | Situation | Message |
 |---|---|
@@ -1267,19 +1281,105 @@ binds.
 
 ## Catching
 
-`TRY` and `CATCH` are where a fault becomes a koan value. Each runs its
-operand as a block, whose shape records that its fault goes to them rather
-than to the enclosing frame, so a `TRY` body is never in tail position. The
-value is the builtin union `Error`: one variant per fault kind, over a record of
-that kind's fields and `frames`, the trace an uncaught fault prints. Its
-variants are not parameterized, so a field whose type varies with the refusal,
-such as a missing key, is `Any`. A field may hold a value: the fault kept the
-frame it lies in, and the catcher copies it out as a return is copied. Once the
-`Error` is built, the catcher releases the frames the fault kept.
+`TRY <body> WITH <arms>` and `CATCH <body>` are where a fault becomes a koan
+value. Each runs its body as a block of its own, a child of its evaluation, so
+the body's fault reaches the `TRY` or `CATCH` as the block's result rather than
+the enclosing frame: the body is never in tail position
+([three tiers](../scope/README.md#three-tiers)), and no call in it hops out
+past its catcher. A body that yields a value yields it: a `TRY` finishes with
+the value, and a `CATCH` with `Result.Ok` of it.
 
-`TRY` selects an arm by the variant as `MATCH … UNDER Error` does, binding `it`
-to its record, and a body that yields no fault yields its value. `CATCH` yields
-`Result.Ok` of its body's value or `Result.Error` of the `Error`.
+**The value is the builtin union `Error`**, one variant per fault kind, each
+named as its [`FaultKind`](../scope/README.md#faults) is, over a record of the
+kind's fields beside two every variant has: `message`, the `Str` an uncaught
+fault prints after `error: `, and `frames`, the lines its trace prints —
+merged as they print, innermost first — each a record
+`{callee :Str, call :Str, at :Str, count :Number}`: the callee as the line
+names it, `` `EVAL` `` for an `EVAL` frame, the call as written, its
+`path:line:col`, and the frames the line counts. A kind's own fields map one
+to one:
+
+- a field naming what a value at the raise carries holds that value, at `Any`;
+- a type the program wrote or declared — an ascription, an annotation, a
+  return, a union clause — is a type value, at `Type`, or at `Any` where it
+  may be absent, `null` there;
+- a name, a key or a node is a `Str`, worded as the message words it, and a
+  count a `Number`;
+- a function type named without its function at hand, a return miss's callee,
+  is a `Str` as a trace line names it, since a quantified type is no type
+  value;
+- a refusal a lower layer reports adds no field, its wording being `message`'s,
+  save a name every one of its kinds carries.
+
+Its variants are not parameterized, so a field whose type varies with the
+refusal, such as a rejected key, is `Any`. Beside `message` and `frames`:
+
+| Variant | Fields |
+|---|---|
+| `NoOverload` | `key :Str`, `arguments :(LIST OF Any)` |
+| `AmbiguousOverloads` | `key :Str`, `arguments :(LIST OF Any)`, `count :Number` |
+| `NoArm` | `scrutinee :Any`, `union :Any` |
+| `AmbiguousArms` | `scrutinee :Any`, `count :Number` |
+| `NoField` | `of :Any`, `field :Str` |
+| `NoMember` | `of :Any`, `member :Str` |
+| `Incomparable` | `left :Any`, `right :Any` |
+| `NotAModule` | `value :Any` |
+| `NotASignature` | `ascribed :Type` |
+| `Coercion` | `name :Str` |
+| `QuantifiedMember` | `name :Str` |
+| `BarrierInstance` | `name :Str` |
+| `Unascribable` | `value :Any`, `ascribed :Type` |
+| `NotCode` | `value :Any` |
+| `Uncomposed` | none |
+| `Unfilled` | none |
+| `NotAKey` | `key :Any` |
+| `NotAList` | `value :Any` |
+| `Unreadable` | `head :Any`, `argument :Any` |
+| `Unevaluable` | `node :Str` |
+| `NotCallable` | `callee :Any` |
+| `Misnamed` | `callee :Any`, `arguments :Any` |
+| `Unfit` | `callee :Any`, `arguments :Any` |
+| `Unsolved` | `callee :Any`, `arguments :Any` |
+| `Returned` | `callee :Str`, `value :Any`, `returns :Type` |
+| `Annotated` | `value :Any`, `annotation :Type` |
+| `CrossedOut` | none |
+| `Unrunnable` | `name :Str` |
+| `Untied` | none |
+| `Unconstructible` | none |
+| `Unelaborated` | none |
+| `Refused` | none |
+
+**A `TRY` selects by kind before it reads.** The kind travels beside the fault
+([faults](../scheduler/README.md#faults)), so the `TRY` selects an arm by it
+as `MATCH … UNDER Error` selects by a variant ([matching](#matching)), reading
+no kept cell: a label names a kind, and `_` takes every kind no label names. A
+kind no arm takes is not caught — the `TRY` ends with the fault as it came,
+having read and released nothing — so a `TRY` names only the kinds it handles.
+`CATCH` takes every kind.
+
+**The catcher copies the fault out.** What it reads lies in the regions the
+fault passed through: a tenant's links in its own write home, read in place,
+and each kept cell's in that cell, read in a step entered beside it
+([kept cells](../scheduler/README.md#faults)), outermost first. Each step
+copies by value what it needs into its own region — each line, worded through
+the kept cell's chain, and at the innermost the fault's fields, a value by the
+deep copy a crossing makes and a type adopted from the cell's branch — and the
+drain releases the kept cell once the step ends, so once the `Error` is built
+every frame the fault kept is released. A `TRY` then runs its arm as a
+`MATCH` arm runs, `it` the variant's record, built in the `TRY`'s home and
+kept nowhere else, the arm handed off owing the evaluation's contract where the
+`TRY` is in tail position. A `CATCH` finishes with `Result.Error` of the
+`Error`.
+
+**At load** a `TRY`'s arms are typed as a `MATCH … UNDER Error`'s over a
+scrutinee anywhere under `Error` ([`walk/arms.rs`](walk/arms.rs)): a label's
+arm is *maybe* and `_`'s *always*, `it` under a label the variant's record and
+under `_` the union of the records no label names. A label naming no kind
+refuses the load, `NoVariant`, and no coverage is asked. A `TRY` declares no
+result: its static type spans its body's and its kept arms', as a `MATCH`'s
+spans its arms', and a reader who wants one checked ascribes it. A `CATCH` is
+`Result` applied at its body's static upper end and `Error`, over `Never`
+below, as a read's `Result` is built.
 
 ## The overlap check
 
@@ -1305,8 +1405,9 @@ koan has no warning channel ([unplanned work](../../roadmap/rewrite/README.md#un
 
 ## The import rule
 
-Outside `#[cfg(test)]` this module names `crate::elaborate`, `crate::knot`,
-`crate::memory`, `crate::parse`, `crate::program`, `crate::scheduler`,
+Outside `#[cfg(test)]` this module names `crate::builtin_image`,
+`crate::elaborate`, `crate::knot`, `crate::memory`, `crate::parse`,
+`crate::program`, `crate::scheduler`,
 `crate::scope`, `crate::symbols`, `crate::type_lattice` and `crate::values`;
 [`tests::boundary`](tests/boundary.rs) reads the source to hold it there,
 and holds the walk's rules to reaching every load-time fact through its
@@ -1376,7 +1477,7 @@ builtin library, combined definitions, lambdas, type parameters, a module's
 quantified function run through a call, a call by name refused at load,
 modules fitting a signature's quantified head
 and each application their overloads answer, contracts,
-record access, construction, error values, and a program nested to the
+record access, construction, faults, and a program nested to the
 [syntax depth limit](../parse/README.md#the-syntax-depth-limit) in each nesting
 shape run on a [`STACK_BYTES`](../program/README.md#the-stack) thread, one
 level more refused at load; [quotes](tests/quotes.rs) —
@@ -1577,7 +1678,8 @@ entered, a loop passing on a member of a received chain adopting a hop at a
 time, a member of a received value reached through a call's result not entered
 whatever its length, and a loop handing a callee a module built over its link
 each hop, caching and flat, a `Number`-returning callee viewing it at an invariant site
-included;
+included, and a `Fresh` loop and a `Shares` loop each catching a fault over new content each hop,
+the region flat;
 [tail](tests/tail.rs), a keyworded tail
 recursion holding its cells constant, which is on the
 [Miri slate](../../observe/miri_slate.md), a tail call reading its route, and
@@ -1625,18 +1727,30 @@ composition and the pins they take; [replay](tests/replay.rs) — a call
 through a stale handle rebuilding its chain, borrowing every level it reaches
 and the composition its chain pins, born warm, a non-keying callable borrowing
 the settlement its handle names, and the stamp no part of a closure's content,
-one of them on the [Miri slate](../../observe/miri_slate.md); and
+one of them on the [Miri slate](../../observe/miri_slate.md);
 [bounds](tests/bounds.rs) — build memory no frame holds within the budget, and
-what frames hold linear in distinct arena nodes, not nesting depth. Every runnable
+what frames hold linear in distinct arena nodes, not nesting depth; and
+[faults](tests/faults.rs) — a value of `Error` raising nothing, a part or a
+tie's eager part that faults stopping the parts after it, an uncaught fault's
+frames kept until its outcome drops (on the Miri slate), the values a fault
+names kept where they lie, and exact traces: two calls deep, outside
+any call, a frame's last statement, a tail arm, an `EVAL` frame, a return
+miss, a tail loop counted at its tail site in constant cells, mutual tail
+recursion and a recursion outside tail position; and
+[catching](tests/catching.rs) — a `TRY` and a `CATCH` typed at load and a
+label naming no kind refused, a body's value passing through, a caught
+`Error`'s fields and frames — merged as the trace merges them, a tail loop's
+and a recursion's included — a kind no arm takes passing on with its trace, a
+label outranking `_`, nested `TRY`s, a fault in an arm not caught by its
+`TRY`, a body that is a block and never a tail, a tail arm hopping in constant
+cells, `CATCH`'s `Result` taken apart, and, on the Miri slate, a caught value
+outliving its released frames, every kept cell released with the graph left
+empty, and a `TRY` and a `CATCH` in a caching body. Every runnable
 tutorial snippet is checked against its shown output by
 `tools/verify_snippets.py` through the binary.
 
 ## Open work
 
-- [Faults and call traces](../../roadmap/conditionals/faults.md) — faults apart from
-  values, and the trace an uncaught one prints.
-- [Catching errors](../../roadmap/conditionals/catching.md) — `TRY`, `CATCH`, `Error`
-  and `Result`.
 - [Invariance around a tail cycle](../../roadmap/gradual-build/cycle-invariance.md)
   — an argument built over invariant leaves classed invariant.
 - [Unplanned work](../../roadmap/rewrite/README.md#unplanned-work) — a

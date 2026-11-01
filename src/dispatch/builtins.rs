@@ -16,29 +16,28 @@
 //! as their [`BUILTIN_SHAPES`] entry types it. Every overload ranks its slots in written order.
 //!
 //! A native runs over operands its overload's shape admitted, so it reads each one as the type its
-//! slot declares. What it refuses of a value it admitted is an error value. It reads a container or
+//! slot declares. What it refuses of a value it admitted is a fault. It reads a container or
 //! tagged value through [the door](crate::values::Surface), so what it returns already carries the
 //! type its [type rule](super::rules) gives: `ATTR` restamps the field at the type its record's type
 //! names, through each tagged layer at its representation, and `FROM` restamps the record at the
 //! fields it names. `ATTR` over a module reads the member at its layout index, a quantified one
 //! made into the instance the load solved at the read.
 
-use crate::elaborate::{
-    builtin_error, builtin_result, builtin_shape_types, declared_field, declared_variant,
-};
+use crate::builtin_image;
+use crate::elaborate::{declared_field, declared_variant};
+use crate::knot::KFault;
 use crate::knot::module::layout;
-use crate::knot::{
-    KBuiltins, KValue, UsingRefused, barrier_instance, builtin, header_instance, instance, using,
-};
+use crate::knot::{KBuiltins, KValue, barrier_instance, builtin, header_instance, instance, using};
 use crate::memory::{Bump, BumpAllocator, BumpVec, Writer};
 use crate::parse::{BUILTIN_SHAPES, BuiltinShapeId, KExpression, ShapeElement};
 use crate::scheduler::Held;
-use crate::scope::{Builtins, InstanceRead};
+use crate::scope::{Builtins, Fault, InstanceRead};
 use crate::symbols::{BinderSymbol, KeywordSymbol, Symbol, SymbolInterner, TypeSymbol};
-use crate::type_lattice::{DispatchTokenElement, KType, TypeNode, builtin_types, meet};
+#[cfg(test)]
+use crate::type_lattice::DispatchTokenElement;
+use crate::type_lattice::{KType, TypeNode, builtin_types, meet};
 use crate::values::{Chain, Circular, Concatenation, Seen, TypeValue, Value, record_type};
 
-use super::errors::Raised;
 use super::rules;
 use super::{Evaluation, Operand};
 
@@ -131,20 +130,43 @@ const _: () = {
 /// What a slot of an operator overload takes.
 #[derive(Clone, Copy)]
 enum Takes {
-    Is(KType),
-    ListOf(KType),
+    Is(
+        #[cfg_attr(
+            not(test),
+            expect(dead_code, reason = "read by the builtin image's recipe alone")
+        )]
+        KType,
+    ),
+    ListOf(
+        #[cfg_attr(
+            not(test),
+            expect(dead_code, reason = "read by the builtin image's recipe alone")
+        )]
+        KType,
+    ),
 }
 
 /// One element of an operator overload's shape.
 #[derive(Clone, Copy)]
 enum Element {
     Keyword(&'static str),
-    Slot(Takes),
+    Slot(
+        #[cfg_attr(
+            not(test),
+            expect(dead_code, reason = "read by the builtin image's recipe alone")
+        )]
+        Takes,
+    ),
 }
 
-/// An operator overload: its shape's elements, its return, and what it runs.
+/// An operator overload: its shape's elements, its return, and what it runs. The load reads its
+/// shape type from the builtin image, and its keywords for its key.
 struct Overload {
     elements: &'static [Element],
+    #[cfg_attr(
+        not(test),
+        expect(dead_code, reason = "read by the builtin image's recipe alone")
+    )]
     returns: KType,
     native: Native,
 }
@@ -286,19 +308,35 @@ const _: () = {
                 }
         );
         assert!(natives == 0 || !shape.reserved);
+        // The builtin image holds a shape type per overload, so `table`'s zip drops none.
+        #[cfg(not(feature = "bootstrap-image"))]
+        assert!(builtin_image::SHAPE_TYPES[index].len() == natives);
         index += 1;
     }
 };
 
+// The builtin image holds a shape type per native overload, in `OVERLOADS` order.
+#[cfg(not(feature = "bootstrap-image"))]
+const _: () = assert!(builtin_image::OVERLOAD_TYPES.len() == OVERLOADS.len());
+
 /// The builtin `Result` the table binds: what every read answers.
 pub(super) fn result_type(builtins: &KBuiltins<'_, '_>) -> KType {
-    let result = TypeSymbol::classify("Result").expect("a Type token");
-    let index =
-        (builtins.lookup(BinderSymbol::Type(result))).expect("the builtin table binds `Result`");
+    builtin_type(builtins, "Result")
+}
+
+/// The builtin `Error` the table binds: what a `TRY`'s arms take and a `CATCH` answers.
+pub(super) fn error_type(builtins: &KBuiltins<'_, '_>) -> KType {
+    builtin_type(builtins, "Error")
+}
+
+/// The type the builtin table binds `name` to.
+fn builtin_type(builtins: &KBuiltins<'_, '_>, name: &str) -> KType {
+    let name = TypeSymbol::classify(name).expect("a Type token");
+    let index = (builtins.lookup(BinderSymbol::Type(name))).expect("the builtin table binds it");
     builtins
         .get(index)
         .as_type()
-        .expect("`Result` names a type")
+        .expect("the binding names a type")
         .handle()
 }
 
@@ -316,29 +354,20 @@ pub(super) fn table<'graph>(
     }
     names.push((
         TypeSymbol::declared("Error", symbols).expect("a Type token"),
-        type_value(builtin_error(types, symbols, scratch)),
+        type_value(builtin_image::ERROR),
     ));
     names.push((
         TypeSymbol::declared("Result", symbols).expect("a Type token"),
-        type_value(builtin_result(types, symbols, scratch)),
+        type_value(builtin_image::RESULT),
     ));
 
     let mut overloads = BumpVec::new_in(scratch);
-    for overload in OVERLOADS {
-        let keyword = |text| KeywordSymbol::declared(text, symbols).expect("an operator keyword");
-        let mut elements = BumpVec::with_capacity_in(overload.elements.len(), scratch);
-        elements.extend(overload.elements.iter().map(|element| match element {
-            Element::Keyword(text) => DispatchTokenElement::Keyword(keyword(*text)),
-            Element::Slot(Takes::Is(slot)) => DispatchTokenElement::Slot(*slot),
-            Element::Slot(Takes::ListOf(item)) => DispatchTokenElement::Slot(types.list(*item)),
+    for (overload, shape) in OVERLOADS.iter().zip(builtin_image::OVERLOAD_TYPES) {
+        let key = symbols.record_key(overload.elements.iter().map(|element| match element {
+            Element::Keyword(text) => Some(operator_keyword(text, symbols)),
+            Element::Slot(_) => None,
         }));
-        // The key reads the keywords back off `elements`: each is a digest, minted once.
-        let key = symbols.record_key(elements.iter().map(|element| match element {
-            DispatchTokenElement::Keyword(keyword) => Some(*keyword),
-            DispatchTokenElement::Slot(_) => None,
-        }));
-        let shape = types.shape_type(&elements, &[], overload.returns);
-        let function = builtin(writer, shape, overload.native as u32);
+        let function = builtin(writer, *shape, overload.native as u32);
         overloads.push((key, Value::Knotted(function)));
     }
     for shape in BUILTIN_SHAPES.iter().filter(|shape| shape.dispatched()) {
@@ -346,7 +375,7 @@ pub(super) fn table<'graph>(
             ShapeElement::Keyword(name) => Some(symbols.record(*name)),
             ShapeElement::Slot { .. } => None,
         }));
-        let handles = builtin_shape_types(shape, types, scratch);
+        let handles = builtin_image::SHAPE_TYPES[shape.id as usize];
         for (handle, native) in handles.iter().zip(natives_of(shape.id)) {
             let function = builtin(writer, *handle, *native as u32);
             overloads.push((key, Value::Knotted(function)));
@@ -355,8 +384,37 @@ pub(super) fn table<'graph>(
     Builtins::new(writer, scratch, &[], &names, &overloads)
 }
 
+/// The shape type of each overload in [`OVERLOADS`], in order: the recipe the builtin image is
+/// generated from.
+#[cfg(test)]
+pub(crate) fn overload_types<'x>(
+    types: &Chain<'_, '_, '_, '_>,
+    symbols: &SymbolInterner,
+    scratch: BumpAllocator<'x>,
+) -> &'x [KType] {
+    let mut shapes = BumpVec::with_capacity_in(OVERLOADS.len(), scratch);
+    for overload in OVERLOADS {
+        let mut elements = BumpVec::with_capacity_in(overload.elements.len(), scratch);
+        elements.extend(overload.elements.iter().map(|element| match element {
+            Element::Keyword(text) => {
+                DispatchTokenElement::Keyword(operator_keyword(text, symbols))
+            }
+            Element::Slot(Takes::Is(slot)) => DispatchTokenElement::Slot(*slot),
+            Element::Slot(Takes::ListOf(item)) => DispatchTokenElement::Slot(types.list(*item)),
+        }));
+        shapes.push(types.shape_type(&elements, &[], overload.returns));
+    }
+    shapes.leak()
+}
+
+/// The keyword an operator overload spells `text`, declared in `symbols`.
+fn operator_keyword(text: &str, symbols: &SymbolInterner) -> KeywordSymbol {
+    KeywordSymbol::declared(text, symbols).expect("an operator keyword")
+}
+
 /// Run `native` over the operands its overload admitted, for the call `node` evaluated through
-/// `at`, building in `writer`'s region and taking transients from `scratch`.
+/// `at`, building in `writer`'s region and taking transients from `scratch`: its value, or the
+/// fault it raises.
 pub(super) fn run<'graph, 'here>(
     native: Native,
     at: &Evaluation<'_, 'graph, 'here, '_, '_, '_>,
@@ -364,7 +422,7 @@ pub(super) fn run<'graph, 'here>(
     writer: Writer<'here, '_>,
     operands: &[Operand<'graph, 'here>],
     scratch: &Bump,
-) -> KValue<'graph, 'here> {
+) -> Result<KValue<'graph, 'here>, KFault<'graph, 'here>> {
     let program = at.program;
     let types = &at.types;
     let value = |index: usize| {
@@ -387,8 +445,7 @@ pub(super) fn run<'graph, 'here>(
             .handle()
     };
     let type_value = |handle| Value::Type(TypeValue::new(writer, handle, types));
-    let raise = |raised: Raised<'_>| raised.raise(program, writer, types);
-    match native {
+    Ok(match native {
         Native::Print => {
             let mut prose = writer.prose();
             value(0)
@@ -412,10 +469,9 @@ pub(super) fn run<'graph, 'here>(
             let (left, right) = (value(0), value(1));
             match left.equals(&right, types, scratch) {
                 Ok(equal) => Value::Bool(equal),
-                Err(_) => raise(Raised::Incomparable {
-                    left: left.concrete_ktype(),
-                    right: right.concrete_ktype(),
-                }),
+                Err(_) => {
+                    return Err(Fault::Incomparable { left, right });
+                }
             }
         }
         Native::Union => type_value(types.union_of(scratch, &[handle(value(0)), handle(value(1))])),
@@ -448,8 +504,8 @@ pub(super) fn run<'graph, 'here>(
             let retype = facts.retype(&at.types, at.view.shape(), site);
             let Some(member) = layout::member(writer, value(0), (name, retype), types, scratch)
             else {
-                return raise(Raised::NoMember {
-                    of: value(0).concrete_ktype(),
+                return Err(Fault::NoMember {
+                    of: value(0),
                     member: name.symbol(),
                 });
             };
@@ -476,13 +532,17 @@ pub(super) fn run<'graph, 'here>(
                     Some(barrier) if barrier.coerced().is_some() => {
                         Value::Knotted(barrier_instance(writer, barrier, solution, types, scratch))
                     }
-                    _ => raise(Raised::BarrierInstance {
-                        name: name.symbol(),
-                    }),
+                    _ => {
+                        return Err(Fault::BarrierInstance {
+                            name: name.symbol(),
+                        });
+                    }
                 },
-                None if member.ktype().as_type().is_none() => raise(Raised::QuantifiedMember {
-                    name: name.symbol(),
-                }),
+                None if member.ktype().as_type().is_none() => {
+                    return Err(Fault::QuantifiedMember {
+                        name: name.symbol(),
+                    });
+                }
                 None => member,
             }
         }
@@ -492,28 +552,33 @@ pub(super) fn run<'graph, 'here>(
             if let Some(owner) = record.as_type() {
                 let owner = owner.handle();
                 return match declared_field(types, scratch, owner, name) {
-                    Some(declared) => type_value(declared),
-                    None => raise(Raised::NoField {
-                        of: owner,
+                    Some(declared) => Ok(type_value(declared)),
+                    None => Err(Fault::NoField {
+                        of: record,
                         field: name,
                     }),
                 };
             }
-            field(record, name, writer, types, scratch).unwrap_or_else(|| {
-                raise(Raised::NoField {
-                    of: record.concrete_ktype(),
-                    field: name,
-                })
-            })
+            match field(record, name, writer, types, scratch) {
+                Some(value) => value,
+                None => {
+                    return Err(Fault::NoField {
+                        of: record,
+                        field: name,
+                    });
+                }
+            }
         }
         Native::Variant => {
             let (union, name) = (handle(value(0)), label(operands[1]).symbol());
             match declared_variant(types, scratch, union, name) {
                 Some(variant) => type_value(variant),
-                None => raise(Raised::NoMember {
-                    of: union,
-                    member: name,
-                }),
+                None => {
+                    return Err(Fault::NoMember {
+                        of: value(0),
+                        member: name,
+                    });
+                }
             }
         }
         // A projection restamps the record at the fields it names, sharing its runs.
@@ -534,8 +599,8 @@ pub(super) fn run<'graph, 'here>(
                 match fields.get(name.symbol()) {
                     Some(ktype) => projected.push((name, ktype)),
                     None => {
-                        return raise(Raised::NoField {
-                            of: record.concrete_ktype(),
+                        return Err(Fault::NoField {
+                            of: record,
                             field: name.symbol(),
                         });
                     }
@@ -556,10 +621,7 @@ pub(super) fn run<'graph, 'here>(
                 scratch,
             ) {
                 Ok(filled) => Value::Knotted(filled),
-                Err(UsingRefused::Ranking { key }) => raise(Raised::RankedTwice { key }),
-                Err(UsingRefused::TooDeep) => raise(Raised::Uncomposed {
-                    refused: crate::knot::ComposeRefused::TooDeep,
-                }),
+                Err(refused) => return Err(Fault::Unfilled(refused)),
             }
         }
         // A list's or a dict's count is its memo, a view's included; a string counts code points,
@@ -596,7 +658,7 @@ pub(super) fn run<'graph, 'here>(
             }
             joined.finish(writer)
         }
-    }
+    })
 }
 
 /// The elements of a list a slot admitted, read through its surface into `scratch`.

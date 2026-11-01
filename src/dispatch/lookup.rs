@@ -15,15 +15,16 @@
 //! The evaluator builds a read in the evaluation's home over its head and argument, as it builds a
 //! construction ([evaluate.rs](super::evaluate)); the load types it ([walk/lookups.rs](walk/lookups.rs)).
 //! An argument the load could not refuse — a record naming neither bound, a bound or an index of
-//! another type, a dict key no dict holds — is an error value here.
+//! another type, a dict key no dict holds — is a fault here: [`reading`] decides it before the
+//! read is built, and hands the build how the argument reads.
 
+use crate::knot::KFault;
 use crate::knot::{KValue, Knotted, code_length, code_part, code_slice};
 use crate::memory::{BumpAllocator, Writer};
 use crate::program::Program;
+use crate::scope::Fault;
 use crate::symbols::{Symbol, TypeSymbol, ValueSymbol};
 use crate::values::{Chain, Circular, Key, List, Seen, Tagged, Text, Value, construction};
-
-use super::errors::Raised;
 
 /// The `Result` variant `name` names: `Ok` or `Error`.
 fn variant_name(name: &str) -> Symbol {
@@ -64,14 +65,60 @@ pub(super) fn readable(value: KValue<'_, '_>) -> bool {
     head(value).is_some()
 }
 
-/// `head`, a [`readable`] value, read by `argument`, in `writer`'s region: the `Result` of
-/// the read, or an error value where the argument reads nothing.
+/// How a read takes its argument: as a dict's key, an index, or a slice's bounds, each an open end
+/// where `None`. Decided by the argument alone, so it is asked before the read is built in its
+/// home, and handed to the build as plain data.
+#[derive(Clone, Copy)]
+pub(super) enum Reading {
+    Key,
+    Index(f64),
+    Slice(Option<f64>, Option<f64>),
+}
+
+/// How `container`, a [`readable`] value, reads `argument` — or the fault the read raises: a dict
+/// read by what no key can be, or another head read by neither a `Number` nor a slice record
+/// naming `from` or `to` as `Number`s.
+pub(super) fn reading<'graph, 'cell>(
+    container: KValue<'graph, 'cell>,
+    argument: KValue<'graph, 'cell>,
+    types: &Chain<'_, '_, '_, '_>,
+    scratch: BumpAllocator<'_>,
+) -> Result<Reading, KFault<'graph, 'cell>> {
+    let shape = head(container).expect("a read's head is readable");
+    if let Head::Dict = shape {
+        return Key::admits(&argument)
+            .map(|()| Reading::Key)
+            .map_err(|_| Fault::NotAKey { key: argument });
+    }
+    if let Value::Number(index) = argument {
+        return Ok(Reading::Index(index));
+    }
+    // A record naming `from` or `to` is a slice record, whatever else it names.
+    let named =
+        |name| (Seen::of(argument).field(bound(name), types, scratch)).map(|seen| seen.value());
+    let number = |bound: Option<KValue<'_, '_>>| match bound {
+        None => Ok(None),
+        Some(Value::Number(number)) => Ok(Some(number)),
+        Some(_) => Err(()),
+    };
+    let (from, to) = (named("from"), named("to"));
+    match (number(from), number(to)) {
+        (Ok(from), Ok(to)) if from.is_some() || to.is_some() => Ok(Reading::Slice(from, to)),
+        _ => Err(Fault::Unreadable {
+            head: container,
+            argument,
+        }),
+    }
+}
+
+/// `head`, a [`readable`] value, read by `argument` as `reading` says, in `writer`'s region: the
+/// `Result` of the read.
 pub(super) fn read<'graph, 'cell>(
     program: &Program<'graph>,
     writer: Writer<'cell, '_>,
     types: &Chain<'_, 'cell, '_, '_>,
-    container: KValue<'graph, 'cell>,
-    argument: KValue<'graph, 'cell>,
+    (container, argument): (KValue<'graph, 'cell>, KValue<'graph, 'cell>),
+    reading: Reading,
     scratch: BumpAllocator<'_>,
 ) -> KValue<'graph, 'cell> {
     let variant = |name| {
@@ -84,54 +131,36 @@ pub(super) fn read<'graph, 'cell>(
             .expect("a `Result` variant wraps any value");
         Value::Tagged(Tagged::hold(writer, value, identity, types))
     };
-    let unreadable = || {
-        Raised::Unreadable {
-            head: container.concrete_ktype(),
-            argument: argument.concrete_ktype(),
-        }
-        .raise(program, writer, types)
-    };
     let shape = head(container).expect("a read's head is readable");
-    if let Head::Dict = shape {
-        let key = match Key::of(&argument, writer) {
-            Ok(key) => key,
-            Err(rejected) => return Raised::NotAKey { rejected }.raise(program, writer, types),
-        };
-        let entries = container.surface(types, scratch).expect("a dict opens");
-        return match entries.key_index(&key) {
-            Some(at) => answer(
-                "Ok",
-                entries.child(at, types, scratch).restamped(writer, types),
-            ),
-            None => answer("Error", argument),
-        };
-    }
-    if let Value::Number(index) = argument {
-        let at = whole(index).and_then(|at| usize::try_from(at).ok());
-        let read = at.and_then(|at| match shape {
-            Head::Str(text) => text.code_point(writer, at),
-            Head::Code(code) => code_part(writer, code, at, types).map(Value::Knotted),
-            _ => {
-                let items = container.surface(types, scratch).expect("a list opens");
-                (at < items.len()).then(|| items.child(at, types, scratch).restamped(writer, types))
-            }
-        });
-        return match read {
-            Some(value) => answer("Ok", value),
-            None => answer("Error", argument),
-        };
-    }
-    // A record naming `from` or `to` is a slice record, whatever else it names.
-    let named =
-        |name| (Seen::of(argument).field(bound(name), types, scratch)).map(|seen| seen.value());
-    let (from, to) = (named("from"), named("to"));
-    if from.is_none() && to.is_none() {
-        return unreadable();
-    }
-    let number = |bound: Option<KValue<'graph, 'cell>>, open: f64| match bound {
-        None => Some(open),
-        Some(Value::Number(number)) => Some(number),
-        Some(_) => None,
+    let (from, to) = match reading {
+        Reading::Key => {
+            let key = Key::of(&argument, writer).expect("a key the reading admitted");
+            let entries = container.surface(types, scratch).expect("a dict opens");
+            return match entries.key_index(&key) {
+                Some(at) => answer(
+                    "Ok",
+                    entries.child(at, types, scratch).restamped(writer, types),
+                ),
+                None => answer("Error", argument),
+            };
+        }
+        Reading::Index(index) => {
+            let at = whole(index).and_then(|at| usize::try_from(at).ok());
+            let read = at.and_then(|at| match shape {
+                Head::Str(text) => text.code_point(writer, at),
+                Head::Code(code) => code_part(writer, code, at, types).map(Value::Knotted),
+                _ => {
+                    let items = container.surface(types, scratch).expect("a list opens");
+                    (at < items.len())
+                        .then(|| items.child(at, types, scratch).restamped(writer, types))
+                }
+            });
+            return match read {
+                Some(value) => answer("Ok", value),
+                None => answer("Error", argument),
+            };
+        }
+        Reading::Slice(from, to) => (from, to),
     };
     // A string is counted, and its crumbs laid, in the one scan its slice needs.
     let anchored = match shape {
@@ -146,9 +175,7 @@ pub(super) fn read<'graph, 'cell>(
             .expect("a list opens")
             .len(),
     };
-    let (Some(from), Some(to)) = (number(from, 0.0), number(to, len as f64)) else {
-        return unreadable();
-    };
+    let (from, to) = (from.unwrap_or(0.0), to.unwrap_or(len as f64));
     let (from, to) = match (whole(from), whole(to)) {
         (None, _) => return answer("Error", Value::Number(from)),
         (_, None) => return answer("Error", Value::Number(to)),

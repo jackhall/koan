@@ -15,7 +15,7 @@ use std::num::NonZeroUsize;
 use self_cell::self_cell;
 use smallvec::SmallVec;
 
-use crate::memory::{Bump, LaysRuns};
+use crate::memory::{Bump, LaysRuns, TreeHandle};
 use crate::type_lattice::{Branch, DeclaredType, Habitat, KType, Own, Parametric, TypeChain};
 
 use super::{ContentDigest, Knotted, TypeTiers, Value};
@@ -200,5 +200,26 @@ impl ArenaRef {
     /// The slot and generation this names, or `None` for the root.
     pub(crate) fn opened(self) -> Option<(u32, u32)> {
         self.0
+    }
+}
+
+/// A tree cell a fault keeps, beside the arena node it borrows: opaque and brand-free, so a fault's
+/// link may name it from any region. Only the scheduler makes or opens one, as it does an
+/// [`ArenaRef`] ([scheduler/README.md](../scheduler/README.md#faults)).
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct KeptCell {
+    cell: TreeHandle,
+    arena: ArenaRef,
+}
+
+impl KeptCell {
+    /// The kept tree cell `cell`, which borrows `arena`.
+    pub(crate) fn of(cell: TreeHandle, arena: ArenaRef) -> Self {
+        KeptCell { cell, arena }
+    }
+
+    /// The kept tree cell and the arena node it borrows.
+    pub(crate) fn opened(self) -> (TreeHandle, ArenaRef) {
+        (self.cell, self.arena)
     }
 }

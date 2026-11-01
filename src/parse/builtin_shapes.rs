@@ -466,8 +466,8 @@ const fn slot(role: Role, types: &'static [KType]) -> ShapeElement {
 }
 
 use Role::{
-    Argument, Body, Branches, Captures, Data, Definition, Field, Head, InPlace, Name, Quantifiers,
-    Rhs, Signature, TypeExpression as Te, Unsupported,
+    Argument, Body, Branches, Captures, Data, Definition, Field, Head, Name, Quantifiers, Rhs,
+    Signature, TypeExpression as Te, Unsupported,
 };
 
 // The slot types the table spells, each a `const` handle named as the lattice names it, so an
@@ -1534,14 +1534,12 @@ const BUILTIN_SHAPE_SPEC: &[BuiltinShape] = &[
         binder: None,
         reserved: false,
     },
-    // TRY <body> -> <result type> WITH <branches>.
+    // TRY <body> WITH <branches> — the body is a block with no parameters, never in tail position.
     BuiltinShape {
         id: BuiltinShapeId::Try,
         elements: &[
             Kw(&KEYWORDS.try_),
-            slot(InPlace, &[ANY]),
-            Kw(&KEYWORDS.arrow),
-            slot(Te, &[PROPER_TYPE]),
+            slot(Body(BodyKind::Caught), &[BLOCK]),
             Kw(&KEYWORDS.with),
             slot(Branches(Heads::Labels), &[DICT_NAME_BLOCK]),
         ],
@@ -1549,10 +1547,10 @@ const BUILTIN_SHAPE_SPEC: &[BuiltinShape] = &[
         binder: None,
         reserved: false,
     },
-    // CATCH <body>.
+    // CATCH <body> — the body is a block, as a `TRY`'s is.
     BuiltinShape {
         id: BuiltinShapeId::Catch,
-        elements: &[Kw(&KEYWORDS.catch), slot(InPlace, &[ANY])],
+        elements: &[Kw(&KEYWORDS.catch), slot(Body(BodyKind::Caught), &[BLOCK])],
         returns: &[ANY],
         binder: None,
         reserved: false,

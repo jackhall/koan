@@ -1251,8 +1251,10 @@ mod laws {
             let facts = (door.running)
                 .settle::<Koan>(&ask(door, &case.bound), door.bump)
                 .expect("every module the case binds has a tree in the load");
-            match facts.refusal() {
-                Some(refusal) => Err(unlocated(refusal)),
+            match facts.refusal(door.types) {
+                Some(refusal) => Err(unlocated(
+                    &refusal.display(door.symbols(), door.types).to_string(),
+                )),
                 None => Ok(render_over(
                     &facts,
                     door.types,
@@ -1277,7 +1279,9 @@ mod laws {
                     door.symbols(),
                     &left_out(&case.bound),
                 )),
-                Err(refusal) => Err(unlocated(refusal)),
+                Err(refusal) => Err(unlocated(
+                    &refusal.display(door.symbols(), door.types).to_string(),
+                )),
             }
         })
     }
@@ -1462,7 +1466,7 @@ mod laws {
             let mut substrate = CellSubstrate::load::<Koan>(&case.render(), "<test>", 8, BuildBudget::default(), output())
                 .expect("the program loads");
             let framed = substrate.with(|running| {
-                running.run().expect("the program runs");
+                running.ran().expect("the program runs");
                 let (root, symbols) = (running.program().shapes().root(), running.symbols());
                 let body = subject(root);
                 let slots: Vec<_> = (case.bound.entries().iter())

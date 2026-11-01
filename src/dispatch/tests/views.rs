@@ -4,7 +4,7 @@
 
 use std::cell::Cell;
 
-use crate::program::{CellSubstrate, KBirth, KBundle, KState, Outcome};
+use crate::program::{CellSubstrate, KBirth, KBundle, KState, Ran};
 use crate::scheduler::{Action, Step, StepError};
 
 use super::super::Koan;
@@ -40,10 +40,7 @@ fn branch_after(source: &str) -> usize {
     let mut substrate =
         CellSubstrate::load::<Koan>(source, "<test>", 2, BuildBudget::default(), output())
             .unwrap_or_else(|error| panic!("the program loads: {error}"));
-    assert_eq!(
-        substrate.with(|running| running.run()),
-        Ok(Outcome::Completed)
-    );
+    assert_eq!(substrate.with(|running| running.ran()), Ok(Ran::Completed));
     substrate
         .with(|running| running.inspect(branch_length))
         .expect("the inspection runs");

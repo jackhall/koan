@@ -60,6 +60,7 @@ use crate::symbols::{BinderSymbol, Symbol, TypeSymbol};
 use super::component::Component;
 use super::digest::{self, ComponentMember, TypeDigest, schema_content_digest};
 use super::handle::{DeclaredType, Handle, KType, Naming, Parametric, TypeHandle, wrap};
+#[cfg(test)]
 use super::kind::KKind;
 use super::node::{ContentKey, Group, NodeSchema, TypeNode};
 use super::numbering;
@@ -297,14 +298,15 @@ impl<'t, H: Habitat<'t>> TypeChain<'t, H> {
             .set(self.branch_verdict_probes.get() + 1);
     }
 
-    /// Intern every constant node, so a fixed handle always resolves. `scratch` serves the doors
-    /// that sort or flatten.
+    /// The seed's recipe: intern every constant node, from which the seed image every root rests on
+    /// is generated ([image.rs](super::image)). `scratch` serves the doors that sort or flatten.
     ///
     /// A constant whose content needs no canonicalizing is laid under its fixed handle's literal
-    /// digest instead of a recomputed one, sparing every root some thirty digests:
+    /// digest instead of a recomputed one, sparing the recipe some thirty digests:
     /// `constants_match_freshly_interned_nodes` recomputes each literal from its node, so the two
     /// cannot drift. The unions, the empty signature and the empty record go through their doors,
     /// which canonicalize what they digest.
+    #[cfg(test)]
     pub(super) fn seed_constants(&self, scratch: BumpAllocator<'_>) {
         let lay = |constant: KType, node: TypeNode<'t, Linked<'t>>| {
             self.intern_digested(constant.digest(), || node);
@@ -372,10 +374,7 @@ impl<'t, H: Habitat<'t>> TypeChain<'t, H> {
         dict(KType::DICT_NAME_TYPE_CODE, Handle::NAME, type_code);
         let guard_code = self.union_of(scratch, &[type_code, Handle::LITERAL]);
         dict(KType::DICT_GUARD_BLOCK, guard_code, Handle::BLOCK);
-        self.union_of(
-            scratch,
-            &[Handle::LIST_OF_NAME, Handle::DICT_NAME_TYPE_CODE],
-        );
+        self.union_of(scratch, &[KType::LIST_OF_NAME, KType::DICT_NAME_TYPE_CODE]);
         self.record::<Handle>(scratch, &[]);
     }
 
@@ -671,10 +670,10 @@ impl<'t, H: Habitat<'t>> TypeChain<'t, H> {
     /// ```compile_fail,E0308
     /// use lattice::bump::Bump;
     /// use lattice::symbols::{SymbolInterner, TypeSymbol};
-    /// use lattice::types::{KType, RootBuilder, TypeChain};
+    /// use lattice::types::{KType, RootBuilder, SEED, TypeChain};
     ///
     /// let region = Bump::new();
-    /// let types = TypeChain::building(RootBuilder::in_region(&region));
+    /// let types = TypeChain::building(RootBuilder::over(&region, &SEED));
     /// let symbols = SymbolInterner::new();
     /// let name = TypeSymbol::declared("Elt", &symbols).expect("a Type token");
     /// let variable = types.lexical(0, name, KType::ANY);

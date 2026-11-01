@@ -46,8 +46,8 @@ the link in each section to the relevant chapter.
 |---------------------------------------------------|-----------------------------------|
 | `MATCH <value> UNDER <Union> WITH #{<Tag>: (<body>), ...}` | Branch on a union's variants; every variant needs an arm unless a `_` arm defaults the rest, and `it` is the payload. |
 | `MATCH <value> WITH #{<Type or literal>: (<body>), ...}` | Branch on the value; each guard is a type or a scalar literal, the most specific admitting one runs, and `it` is the value at the guard's type. |
-| `TRY (<expr>) -> :<Type> WITH #{<Tag>: (<body>), ...}`    | Catch errors; arms are `Ok`, error-kind names, and `_`. Uncaught kinds re-raise. |
-| `CATCH (<expr>)`                                   | Run an expression, returning a `Result` value. |
+| `TRY (<body>) WITH #{<Kind>: (<arm>), ...}`        | Run a block; an error of a kind an arm names (or `_`) runs that arm, `it` the error's record. A kind no arm takes passes on. |
+| `CATCH (<body>)`                                   | Run a block, producing `Result.Ok` of its value or `Result.Error` of its error. |
 | `Result.Ok <value>`, `Result.Error <value>`       | Built-in result union's variants, reached by projection. |
 
 ## Quoting — see [10](10-quoting.md)

@@ -8,7 +8,7 @@ use crate::memory::{
 };
 use crate::scope::RegionHeader;
 use crate::type_lattice::{Habitat, Own};
-use crate::values::Half;
+use crate::values::{Half, NoKnot};
 
 /// A continuation family for a graph whose cells only store.
 struct Unit;
@@ -20,7 +20,7 @@ fn pin(_: Prices) -> Verdict {
 
 #[test]
 fn a_region_header_is_laid_on_the_first_intern_and_holds_the_branch() {
-    let mut graph: CellGraph<'static, Unit, NoScratch, NoDelivery, RegionHeader> =
+    let mut graph: CellGraph<'static, Unit, NoScratch, NoDelivery, RegionHeader<NoKnot>> =
         CellGraph::new(1, pin);
     let parent = graph.create(None).unwrap();
     graph

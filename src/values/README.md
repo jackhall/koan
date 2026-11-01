@@ -419,7 +419,10 @@ What the build arena's books are keyed and bounded by lives in
 budget, and `ArenaRef`, the opaque handle naming an arena node above the
 scheduler — a slot and its generation — opened only by `values` and the
 scheduler
-([the build module](../build/README.md#references-between-frames-and-the-arena)). A
+([the build module](../build/README.md#references-between-frames-and-the-arena)),
+and `KeptCell`, the brand-free handle of a tree cell a fault keeps beside the
+arena node it borrows, which only the scheduler makes and opens
+([faults](../scheduler/README.md#faults)). A
 [`Chain`](habitat.rs) carries a pairing brand naming the writer it serves
 beside the brand its tiers sit at, so a value door handed one half's writer and
 a chain paired to another does not compile. [`Types`](habitat.rs) is the chain

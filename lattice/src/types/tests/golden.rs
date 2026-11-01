@@ -133,6 +133,11 @@ fn constants_match_freshly_interned_nodes() {
             types.dict(KType::NAME, KType::BLOCK),
         ),
         (
+            "GUARD_CODE",
+            KType::GUARD_CODE,
+            types.union_of(region, &[type_code, KType::LITERAL]),
+        ),
+        (
             "DICT_GUARD_BLOCK",
             KType::DICT_GUARD_BLOCK,
             types.dict(

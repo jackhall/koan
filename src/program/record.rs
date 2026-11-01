@@ -1,28 +1,28 @@
 //! The program record: what a loaded program's steps read at `'graph`, and what the embedder above
 //! `program` supplies for it — the builtin table, the load-time check, the step every evaluation
-//! runs, and the sinks a program's output and uncaught error are written to.
+//! runs, and the sinks a program's output and uncaught fault are written to.
 //!
-//! An **error value** is `Error` over `{message = "<text>"}`: [`Program::error`] builds one, and
-//! [`Program::message`] tells one from any other value. A [`Contract`] is what a tail hands the
-//! evaluation that finishes a frame: the frame's substituted return, which
-//! [`Program::fulfilled`] checks a value against and retypes it to.
+//! A [`Contract`] is what a tail hands the evaluation that finishes a frame: the frame's
+//! substituted return, which [`Program::fulfilled`] checks a value against and retypes it to, and
+//! whose miss is a [fault](crate::scope::Fault). It travels as an [`Owed`], beside the extent of
+//! the frame's call and its hop table, which the trace line a faulting cell owes is read off.
 
 use std::cell::Cell;
 use std::fmt;
 
+use crate::knot::KFault;
 use crate::knot::{KActivationView, KBuiltins, KValue};
 use crate::memory::{Bump, BumpAllocator, ProgramBrand, Writer};
+use crate::parse::SourceRef;
 use crate::parse::{KExpression, ParseError};
 use crate::scheduler::{Ask, NativeStep, Settles, Work};
 use crate::scope::{
-    BodyShape, ComposedRoot, ComposedSyntax, Composition, Facts, LoadFacts, Segment, Settlement,
-    ShapeError, Shapes, Site, Slot, Store, Written,
+    BodyShape, ComposedRoot, ComposedSyntax, Composition, Facts, Fault, FaultKind, Hop, Line,
+    LoadFacts, Segment, Settlement, ShapeError, Shapes, Site, Slot, Store, Written,
 };
 use crate::symbols::{BinderSymbol, SymbolInterner};
-use crate::type_lattice::{
-    DeclaredType, KType, TypeNode, display_name, satisfied_by, substitute_quantified,
-};
-use crate::values::{Chain, Record, Retype, Tagged, Text, TypeTiers, Value, satisfies};
+use crate::type_lattice::{DeclaredType, KType, TypeNode, satisfied_by, substitute_quantified};
+use crate::values::{Chain, KeptCell, Retype, TypeTiers, satisfies};
 
 use super::activation_store::Activate;
 use super::bundle::{KBirth, KBundle, Within};
@@ -65,20 +65,22 @@ pub trait Language {
     }
 }
 
-/// Where a program's output goes: `print` takes what `PRINT` renders, and `error` the message of
-/// the error that ended the program. The embedder supplies both at load.
+/// Where a program's output goes: `print` takes what `PRINT` renders, and `error` the diagnostic
+/// of the fault that ended the program. The embedder supplies both at load.
 #[derive(Clone, Copy)]
 pub struct Output {
     pub print: fn(&str),
     pub error: fn(&str),
 }
 
-/// How a program's run ended.
+/// How the top level of a program's last run ended: completed, or with an uncaught fault — one it
+/// raised itself and rendered in its own step, or one a cell below it kept, which the run renders
+/// once the drain ends. Laid in program storage, and without drop glue.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Outcome {
+pub(super) enum Ending {
     Completed,
-    /// A top-level unit received an error value, which was written to the error sink.
-    Uncaught,
+    Rendered,
+    Kept(KeptCell),
 }
 
 /// What the evaluation finishing a frame owes it: a value satisfying `returns`, the frame's
@@ -97,6 +99,44 @@ pub struct Contract {
     /// either is quantified, so the order does not promise the node's return lies under the shown
     /// one.
     pub checked: bool,
+}
+
+/// What a tail owes, and so the trace line a cell owing it ends a fault with: the frame's
+/// contract, the extent of its call, and its hop table — the frames tail hops replaced in its
+/// chain, one entry per callee and call site, most recently reached first.
+#[derive(Clone, Copy, Debug)]
+pub struct Owed<'cell> {
+    pub contract: Contract,
+    pub call: SourceRef,
+    pub hops: &'cell [Hop],
+}
+
+impl<'cell> Owed<'cell> {
+    /// The trace line the frame this is owed for prints.
+    pub fn line(&self) -> Line<'cell> {
+        Line {
+            callee: self.contract.callee,
+            call: self.call,
+            hops: self.hops,
+        }
+    }
+
+    /// What a tail hop out of the frame this is owed for hands its successor, laid through
+    /// `writer`: the hop table with the frame's own callee and call moved to the front, counting
+    /// one frame more there.
+    pub fn hopped<'w>(&self, writer: Writer<'w, '_>) -> Owed<'w> {
+        let (live, mut rest) = self.line().folded();
+        let len = self.hops.len() + usize::from(live.count == 1);
+        let hops = writer.fill(len, |index| match index {
+            0 => live,
+            _ => rest.next().expect("the table less its live entry"),
+        });
+        Owed {
+            contract: self.contract,
+            call: self.call,
+            hops,
+        }
+    }
 }
 
 impl Contract {
@@ -210,8 +250,8 @@ impl<'graph> Settles<'graph> for Program<'graph> {
 
 /// A loaded program's facts, laid down in program storage: its shape, its builtin table, the tiers
 /// of the types the load built and the interner its names live in, the step that evaluates a
-/// node and the walk a miss settles through, the sinks it writes to, the builtin `Error` type, and
-/// whether its last run ended uncaught. `Copy` and without drop glue, so it rests in program
+/// node and the walk a miss settles through, the sinks it writes to, the builtin `Result` and
+/// `Error` unions, and how its last run ended. `Copy` and without drop glue, so it rests in program
 /// storage beside the table it names; it is the door the graph settles a miss through.
 #[derive(Clone, Copy)]
 pub struct Program<'graph> {
@@ -224,11 +264,12 @@ pub struct Program<'graph> {
     compose: Compose<'graph>,
     activate: Activate<'graph>,
     output: Output,
-    error: KType,
     result: KType,
-    /// Set by the top level when a unit receives an error value; laid down in program storage, and
-    /// a `Cell<bool>` has no drop glue.
-    uncaught: &'graph Cell<bool>,
+    error: KType,
+    /// Each fault kind's variant of `error`, by [`FaultKind`] index.
+    variants: &'graph [KType],
+    /// Set by the top level when a fault reaches it; laid down in program storage.
+    ending: &'graph Cell<Ending>,
 }
 
 impl<'graph> Program<'graph> {
@@ -237,7 +278,7 @@ impl<'graph> Program<'graph> {
         facts: &'graph LoadFacts<'graph>,
         builtins: &'graph KBuiltins<'graph, 'graph>,
         tiers: TypeTiers<'graph>,
-        (error, result): (KType, KType),
+        (result, error, variants): (KType, KType, &'graph [KType]),
         symbols: &'graph SymbolInterner,
         (evaluator, settle, compose, activate): (
             NativeStep<'graph, KBundle>,
@@ -246,7 +287,7 @@ impl<'graph> Program<'graph> {
             Activate<'graph>,
         ),
         output: Output,
-        uncaught: &'graph Cell<bool>,
+        ending: &'graph Cell<Ending>,
     ) -> Self {
         Program {
             facts,
@@ -258,9 +299,10 @@ impl<'graph> Program<'graph> {
             compose,
             activate,
             output,
-            error,
             result,
-            uncaught,
+            error,
+            variants,
+            ending,
         }
     }
 
@@ -320,18 +362,23 @@ impl<'graph> Program<'graph> {
         self.output
     }
 
-    /// The builtin nominal `Error`, whose representation is `{message :Str}`.
-    pub fn error_type(&self) -> KType {
-        self.error
-    }
-
     /// The builtin union `Result`, whose variants are `Ok` and `Error`: what every read answers.
     pub fn result_type(&self) -> KType {
         self.result
     }
 
-    pub(super) fn uncaught(&self) -> &'graph Cell<bool> {
-        self.uncaught
+    /// The builtin union `Error`, one variant per fault kind: what a `TRY` or `CATCH` builds.
+    pub fn error_type(&self) -> KType {
+        self.error
+    }
+
+    /// The variant of `Error` a fault of `kind` is caught as.
+    pub fn error_variant(&self, kind: FaultKind) -> KType {
+        self.variants[kind as usize]
+    }
+
+    pub(super) fn ending(&self) -> &'graph Cell<Ending> {
+        self.ending
     }
 
     /// The one door every evaluation is asked through: `node`, read through `view`, as a child the
@@ -342,7 +389,7 @@ impl<'graph> Program<'graph> {
         &'graph self,
         node: Evaluated,
         view: KActivationView<'graph, 'here>,
-        contract: Option<Contract>,
+        owed: Option<Owed<'here>>,
         within: Within<'graph, 'here>,
     ) -> Work<'graph, 'here, KBundle> {
         Work {
@@ -351,93 +398,45 @@ impl<'graph> Program<'graph> {
                 program: self,
                 node,
                 view,
-                contract,
+                owed,
                 within,
             },
         }
     }
 
-    /// An error value carrying `message`, rendered into `writer`'s region, its types in `types`.
-    pub fn error<'cell>(
-        &self,
-        writer: Writer<'cell, '_>,
-        types: &Chain<'_, 'cell, '_, '_>,
-        message: impl fmt::Display,
-    ) -> KValue<'graph, 'cell> {
-        let scratch = Bump::new();
-        let field = BinderSymbol::declared("message", self.symbols).expect("a value name");
-        let text = Value::Str(rendered(writer, message));
-        let payload = Record::new(writer, &[(field, text)], types, &scratch);
-        Value::Tagged(Tagged::hold(
-            writer,
-            Value::Record(payload),
-            self.error,
-            types,
-        ))
-    }
-
-    /// The message `value` carries, if it is an error value, read through `types`.
-    pub fn message<'cell>(
-        &self,
-        value: &KValue<'graph, 'cell>,
-        types: &Chain<'_, '_, '_, '_>,
-    ) -> Option<Text<'cell>> {
-        let Value::Tagged(tagged) = value else {
-            return None;
-        };
-        if tagged.ktype() != self.error {
-            return None;
-        }
-        let field = BinderSymbol::declared("message", self.symbols)?.symbol();
-        let scratch = Bump::new();
-        let payload = value.surface(types, &scratch)?.child(0, types, &scratch);
-        payload.field(field, types, &scratch)?.value().as_text()
-    }
-
-    /// `value` held to `contract`: an error value passes unchanged, a value satisfying the
-    /// contract's return is retyped to its `retype`, and anything else is the error naming the
-    /// miss.
+    /// `value` held to `contract`: a value satisfying the contract's return is retyped to its
+    /// `retype`, and anything else is the fault naming the miss.
     pub fn fulfilled<'cell>(
         &self,
         writer: Writer<'cell, '_>,
         types: &Chain<'_, 'cell, '_, '_>,
         value: KValue<'graph, 'cell>,
         contract: Contract,
-    ) -> KValue<'graph, 'cell> {
-        if self.message(&value, types).is_some() {
-            return value;
-        }
+    ) -> Result<KValue<'graph, 'cell>, KFault<'graph, 'cell>> {
         let scratch = Bump::new();
         let returns = match contract.checked {
             true if satisfies(contract.returns, &value, types, &scratch) => contract.retype,
             _ => contract.returns,
         };
         if satisfies(returns, &value, types, &scratch) {
-            return value.retyped_as(writer, contract.retype, contract.restamp, types, &scratch);
-        }
-        let name = |handle: DeclaredType<KType>| display_name(handle, types, self.symbols);
-        let (value, returns) = (name(value.ktype()), name(returns.into()));
-        match contract.callee {
-            Some(callee) => self.error(
+            return Ok(value.retyped_as(
                 writer,
+                contract.retype,
+                contract.restamp,
                 types,
-                format_args!(
-                    "{} returned {value}, which does not satisfy {returns}",
-                    name(callee)
-                ),
-            ),
-            None => self.error(
-                writer,
-                types,
-                format_args!("`EVAL`'s code returned {value}, which does not satisfy {returns}"),
-            ),
+                &scratch,
+            ));
         }
+        Err(Fault::Returned {
+            callee: contract.callee,
+            value,
+            returns,
+        })
     }
 
-    /// `value`, bound by `LET <name> <type> = …`, held to `annotation`: an error value passes
-    /// unchanged, a value satisfying it — `settled` where the load showed it always does — is
-    /// retyped to it, by the load's record of the retype where it holds one, and anything else is
-    /// the error naming the miss.
+    /// `value`, bound by `LET <name> <type> = …`, held to `annotation`: a value satisfying it —
+    /// `settled` where the load showed it always does — is retyped to it, by the load's record of
+    /// the retype where it holds one, and anything else is the fault naming the miss.
     pub fn annotated<'cell>(
         &self,
         writer: Writer<'cell, '_>,
@@ -445,28 +444,16 @@ impl<'graph> Program<'graph> {
         value: KValue<'graph, 'cell>,
         (annotation, retype): (KType, Option<Retype>),
         settled: bool,
-    ) -> KValue<'graph, 'cell> {
-        if self.message(&value, types).is_some() {
-            return value;
-        }
+    ) -> Result<KValue<'graph, 'cell>, KFault<'graph, 'cell>> {
         let scratch = Bump::new();
         debug_assert!(
             !settled || satisfies(annotation, &value, types, &scratch),
             "a settled annotation always holds"
         );
         if settled || satisfies(annotation, &value, types, &scratch) {
-            return value.retyped_as(writer, annotation, retype, types, &scratch);
+            return Ok(value.retyped_as(writer, annotation, retype, types, &scratch));
         }
-        let name = |handle: DeclaredType<KType>| display_name(handle, types, self.symbols);
-        self.error(
-            writer,
-            types,
-            format_args!(
-                "{} does not satisfy its annotation {}",
-                name(value.ktype()),
-                name(annotation.into())
-            ),
-        )
+        Err(Fault::Annotated { value, annotation })
     }
 
     /// The top-level slot `name` binds, if the program declares it.

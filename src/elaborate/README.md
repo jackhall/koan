@@ -323,9 +323,16 @@ and a `Tree`/`Forest` ring both declare. Applying a union binder per member is
 the elaborator's alone: the lattice's own `constructor_param_names` answers
 nothing for a union.
 
+The builtin `Result` and `Error` lie in the
+[builtin image](../builtin_image.rs), generated from two recipes here; a load reads the
+image's handles and runs neither.
 [`builtin_result`](builtin.rs) seals the builtin `Result` through the window
 `UNION (Ok Error -> Result) = #{Ok: Ok, Error: Error}` seals through, so the
 builtin and a declared `Result` are one handle.
+[`builtin_error`](builtin.rs) seals the builtin `Error` alike, through the
+window a `UNION Error = #{…}` listing one variant per fault kind, each over its
+record ([catching](../dispatch/README.md#catching)), seals through, so the
+builtin and that declared twin are one handle.
 
 What a construction through a family carries is the construction rule's
 ([values](../values/README.md#what-a-value-is)).
@@ -392,12 +399,13 @@ overloads as `static` data — a slot type per slot per overload, one return api
 — because the parser probes that table before any registry exists.
 [`builtin_shape_types`](builtin.rs) is the one door that turns such an entry into
 [`ExpressionShape`](../../lattice/src/types/vocabulary.md#the-node-vocabulary) handles: one
-per overload, in overload order. A reserved bucket interns nothing — its slot
+per overload, in overload order. It is a recipe: the builtin image is generated
+from it, and a load reads each overload's handle from the image. A reserved bucket interns nothing — its slot
 types exist to keep its parts raw so its miss stays a miss, not to name a callable
 anything can reach.
 
-Every slot type and return already rests in the table as a `const` handle the
-registry pre-seeds ([the type lattice](../../lattice/src/types/README.md#the-boundary-and-why-the-build-holds-it)),
+Every slot type and return already rests in the table as a `const` handle
+naming a node of the lattice's seed ([the type lattice](../../lattice/src/types/README.md#the-boundary-and-why-the-build-holds-it)),
 so the door interns no slot type: it assembles an overload's handles and keywords
 into one `ExpressionShape`. Nothing here reads a name, so nothing here fails: an
 entry is not a type expression, and a `NotAType` has no meaning over `static`
@@ -672,7 +680,7 @@ a member carrying the type its value carries rather than one walked from its
 contents, a `GROUP` body's self-signature carrying the group it declares and
 fitting the signature stating it.
 [`tests/families.rs`](tests/families.rs) declares parameterized unions: a
-family per variant, the builtin `Result` equal to the declared one, a union head
+family per variant, the builtin `Result` and `Error` each equal to the declared one, a union head
 applied per variant, constructions through a variant ordered against
 applications and the bare family, a recursive family and a ring of two, and
 each family refusal, a payload union whose members tie included.

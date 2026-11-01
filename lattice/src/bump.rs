@@ -28,7 +28,7 @@ mod digest_table;
 mod frozen_table;
 
 pub use components::strongly_connected_components;
-pub use digest_table::{DigestTable, Keyed, LaysRuns};
+pub use digest_table::{DigestTable, Keyed, LaysRuns, Slot};
 pub use frozen_table::FrozenTable;
 
 /// The arena the tier allocates from; its owner releases it whole.

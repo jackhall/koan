@@ -50,8 +50,9 @@ use crate::type_lattice::{
 };
 use crate::values::{Chain, ContentDigest, Digests, TypeValue, Value, fit_solution};
 
-use super::coerce::{Coercion, CoercionRefused, Substitution, coerce};
+use super::coerce::{Coercion, Substitution, coerce};
 use super::{Born, Module, ModuleContent, Operator, layout};
+use crate::scope::CoercionRefused;
 
 /// Which operator a program ascribes by: `:!` retypes the value to the type, `:|` views a module
 /// through a signature. Only `:|` comes through this door.

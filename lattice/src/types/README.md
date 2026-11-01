@@ -80,8 +80,9 @@ composite the table spells — the code containers `List(Name)`,
 `List(Declaration)`, `Dict(TypeCode, Block)`, `Dict(Name, Block)` and
 `Dict(Name, TypeCode)`, the unions `TypeCode` and `List(Name) | Dict(Name,
 TypeCode)` (`QUANTIFIER_CODE`, a `FOR ALL` group), and the empty record — is
-pinned the same way, and every root is seeded with them as it is built, so the
-table's static data names no type a chain must first intern.
+pinned the same way. Each fixed handle names a node of the lattice's seed, the
+image every root rests on ([storage](identity.md#storage-a-root-and-its-branches)),
+so the table's static data names no type a chain must first intern.
 `KType::same_as` is the equality that comparison uses, handle against handle in
 `const` context, where the derived `PartialEq` cannot go. Nothing but the handles,
 that comparison and the code order's walk over them ([The code
@@ -101,7 +102,9 @@ property the drivers exist for. Adding any variant, leaf or compound, is also a
 compile error at [`family_top`](order.rs), [`leaf_name`](handle.rs) and
 [`TypeNode::group`](node.rs), which have no wildcard arm, so no type goes
 without a family, no leaf without its spelling, and no binder without its
-group.
+group. It is a compile error too at the image emitter
+([image/generator.rs](image/generator.rs)), which writes stored content as Rust
+source and panics at generation on a variant no image holds.
 
 Ask first whether the walk is unary or binary, then whether it rebuilds. Every
 driver walks nodes by reference, from node to child, so a walk looks up no

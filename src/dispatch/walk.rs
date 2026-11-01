@@ -195,6 +195,7 @@ use crate::values::{
 
 mod arms;
 mod caching;
+mod catching;
 mod lookups;
 mod paths;
 mod reads;
@@ -3442,6 +3443,8 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             Form::Eval(node) => self.eval(level, node)?,
             Form::Using(node) => self.using(level, node)?,
             Form::Match { node, under } => self.matched(level, node, under)?,
+            Form::Try(node) => self.tried(level, node)?,
+            Form::Catch(node) => self.caught(level, node)?,
             Form::Member {
                 node,
                 list,

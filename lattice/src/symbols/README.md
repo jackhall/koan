@@ -25,13 +25,18 @@ uniformly distributed, so re-hashing would only cost cycles.
 
 ## The load's table and the overlay
 
-The interner keeps its texts in two maps. The load records every name it
-constructs in the load's table, which `freeze` closes at the load's end; a
-text first recorded after that — a name an `EVAL` parses at the run — lands
-in the overlay beside it, and a text the load's table already holds adds
-nothing there. A render and `compare_texts` read the overlay, then the load's
-table. A symbol is its text's digest, so the two maps never disagree: the
-split decides where a text is kept, never what a symbol names.
+The interner keeps its texts in two maps, and may rest on a third, static
+tier. The load records every name it constructs in the load's table, which
+`freeze` closes at the load's end; a text first recorded after that — a name an
+`EVAL` parses at the operator run — lands in the overlay beside it, and a text
+the load's table already holds adds nothing there. An interner made
+`resting_on` a builtin image's texts — generated with the image, a static run
+of slots ([storage](../types/identity.md#storage-a-root-and-its-branches)) —
+renders every name the image's types name though no load recorded it, and a
+text that tier holds adds nothing to either map. A render and `compare_texts`
+read the overlay, the load's table, then the image's tier. A symbol is its
+text's digest, so the tiers never disagree: the split decides where a text is
+kept, never what a symbol names.
 
 ## A symbol carries its binding class
 
@@ -62,6 +67,11 @@ touch, and a spelling that does not classify panics there, naming itself and
 the class it failed. `SymbolInterner::record` reads the memo and records the
 spelling, so a diagnostic can still render the name, at the cost of one map
 lookup and no hash.
+
+A builtin image's names are fixed by its generator. Each text is a `static`
+beside its symbol, and each classified symbol in the image is built from that
+static, its class predicate checked when the image compiles. BLAKE3 cannot run
+at compile time, so a golden test checks each text's digest.
 
 ## Testing
 

@@ -233,14 +233,14 @@ fn a_match_runs_the_most_specific_admitting_arm() {
 fn a_match_no_arm_of_which_admits_at_run_faults() {
     assert_eq!(
         run("LET f = (FN :{x :Any} -> Any = #(MATCH x WITH #{Str: (1)}))\nPRINT (f {x = 1})"),
-        "error: no arm of `MATCH` admits Number"
+        "error: no arm of `MATCH` admits Number\n  in :(FN :{x :Any} -> Any) (f {x = 1}) at <test>:2:7"
     );
     assert_eq!(
         run(
             "LET f = (FN :{x :Any} -> Any = #(MATCH x WITH #{:(Number | Str): (1), :(Number | Bool): (2)}))\n\
              PRINT (f {x = 1})"
         ),
-        "error: ambiguous `MATCH`: 2 arms admit Number and none ranks first"
+        "error: ambiguous `MATCH`: 2 arms admit Number and none ranks first\n  in :(FN :{x :Any} -> Any) (f {x = 1}) at <test>:2:7"
     );
 }
 

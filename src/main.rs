@@ -1,6 +1,6 @@
 //! The interpreter: read a program from the file its first argument names, or from stdin, load it
 //! under [`Koan`](koan::dispatch::Koan) and run it. `PRINT` writes to stdout; a refused load, or the
-//! error value that ended the program, writes `error: <message>` to stderr and exits non-zero.
+//! uncaught fault that ended the program, writes `error: <message>` to stderr and exits non-zero.
 //! The load and the run happen on a thread of [`STACK_BYTES`], the stack the language sizes its
 //! syntax depth limit against.
 
@@ -8,7 +8,7 @@ use std::io::{Read, Write};
 use std::process::ExitCode;
 
 use koan::dispatch::Koan;
-use koan::program::{CellSubstrate, Outcome, Output, STACK_BYTES};
+use koan::program::{CellSubstrate, Output, STACK_BYTES};
 use koan::values::BuildBudget;
 
 // The dhat attribution profiler owns the global allocator outright: it wraps the system
@@ -73,10 +73,10 @@ fn load_and_run(source: &str, path: &str) -> ExitCode {
                 return ExitCode::FAILURE;
             }
         };
-    let outcome = substrate.with(|running| running.run());
+    let outcome = substrate.with(|running| running.run().map(|outcome| outcome.is_uncaught()));
     match outcome {
-        Ok(Outcome::Completed) => ExitCode::SUCCESS,
-        Ok(Outcome::Uncaught) => ExitCode::FAILURE,
+        Ok(false) => ExitCode::SUCCESS,
+        Ok(true) => ExitCode::FAILURE,
         Err(stalled) => {
             eprintln!("error: the program stalled ({stalled:?})");
             ExitCode::FAILURE

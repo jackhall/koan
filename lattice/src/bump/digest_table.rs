@@ -47,8 +47,9 @@ pub trait Keyed {
 }
 
 /// One slot: the key's low word beside the entry. Empty when `entry` is `None`; the word of an
-/// empty slot is never read. A [`FrozenTable`](super::FrozenTable) holds the same slots.
-pub(super) struct Slot<'r, N> {
+/// empty slot is never read. A [`FrozenTable`](super::FrozenTable) holds the same slots, and a
+/// generated image writes them.
+pub struct Slot<'r, N> {
     word: u64,
     entry: Option<&'r N>,
 }
@@ -63,10 +64,19 @@ impl<N> Clone for Slot<'_, N> {
 impl<N> Copy for Slot<'_, N> {}
 
 impl<'r, N> Slot<'r, N> {
-    pub(super) const EMPTY: Self = Slot {
+    pub const EMPTY: Self = Slot {
         word: 0,
         entry: None,
     };
+
+    /// The slot holding `entry` under `word`, as a generated image writes one.
+    #[doc(hidden)]
+    pub const fn imaged(word: u64, entry: &'r N) -> Self {
+        Slot {
+            word,
+            entry: Some(entry),
+        }
+    }
 
     /// The slot holding `entry`, whose key the caller has read as `key`.
     pub(super) fn of(key: N::Key, entry: &'r N) -> Self
@@ -80,12 +90,12 @@ impl<'r, N> Slot<'r, N> {
     }
 
     /// The entry the slot holds, or `None` where it is empty.
-    pub(super) fn entry(self) -> Option<&'r N> {
+    pub(crate) fn entry(self) -> Option<&'r N> {
         self.entry
     }
 
     /// The key's low word the slot stores; its home.
-    pub(super) fn word(self) -> u64 {
+    pub(crate) fn word(self) -> u64 {
         self.word
     }
 }

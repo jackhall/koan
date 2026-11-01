@@ -9,7 +9,8 @@ use crate::values::{Incomparable, Knotted as _, Resolved, Value};
 
 use crate::knot::module::layout;
 use crate::knot::tests::{Fixture, bound, callable, declared, pin, with_fixture};
-use crate::knot::{KActivation, Knotted, Untieable, tie};
+use crate::knot::{KActivation, Knotted, tie};
+use crate::scope::Untieable;
 
 /// The module bound under `name`, and its node.
 fn module<'graph, 'cell>(

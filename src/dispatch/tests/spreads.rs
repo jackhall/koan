@@ -25,7 +25,7 @@ fn a_spread_of_what_is_no_list_is_refused_where_the_load_can_tell_and_faults_oth
     );
     assert_eq!(
         run("LET f = (FN :{v :Any} -> Any = #([..v]))\nPRINT (f {v = 5})"),
-        "error: `..` spreads a list, and Number is none"
+        "error: `..` spreads a list, and Number is none\n  in :(FN :{v :Any} -> Any) (f {v = 5}) at <test>:2:7"
     );
 }
 

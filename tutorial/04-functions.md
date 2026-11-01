@@ -99,10 +99,11 @@ LOOSE 5
 
 ```text
 error: :(FN :{x :Any} -> Str) returned Number, which does not satisfy Str
+  in :(FN :{x :Any} -> Str) (LOOSE 5) at <input>:2:1
 ```
 
-The message names the function by its type; [Errors](09-errors.md) covers what an
-error is.
+The message names the function by its type, and the line beneath it the call
+the error came out of; [Errors](09-errors.md) covers what an error is.
 
 This has one consequence worth internalizing early: **`PRINT` evaluates to the
 string it printed**, not to null. So a function whose body is a `PRINT` returns

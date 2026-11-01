@@ -8,10 +8,10 @@
 //! [`Term`] of each type they name that the root and the agent tier do not hold, which a frame
 //! under it mints, as one under the composition mints the composition's.
 //!
-//! A settlement whose walk reached a refusal keeps the refusal's wording instead of records, so a
-//! frame born under it faults as the load would, and a second ask refuses alike. The arena owns
-//! each settlement beside its parent; a step reads one only through [`Facts`](super::Facts), at
-//! its own lifetime.
+//! A settlement whose walk reached a refusal keeps the refusal instead of records, its types rested
+//! or termed as its records' would be, so a frame born under it faults as the load would, and a
+//! second ask refuses alike. The arena owns each settlement beside its parent; a step reads one
+//! only through [`Facts`](super::Facts), at its own lifetime.
 //!
 //! An [`Activated`] layer is what a frame decides in its own activation at one binding event: the
 //! walk rooted at its body under the names the event bound, over everything the frame read below.
@@ -25,6 +25,7 @@ use super::facts::{Binding, Bound, Unknown};
 use super::keyed::Keyed;
 use super::records::Records;
 use super::relay::Relay;
+use super::shape::ShapeError;
 use super::shapes::Shapes;
 use super::writes::KeyedWrites;
 
@@ -33,7 +34,7 @@ use super::writes::KeyedWrites;
 pub struct Settlement<'a> {
     parent: Option<&'a Settlement<'a>>,
     records: Records<'a>,
-    refusal: Option<&'a str>,
+    refusal: Option<&'a ShapeError<'a>>,
     /// By the type's digest. Empty under the root.
     terms: Keyed<'a, (TypeDigest, Term<'a>)>,
 }
@@ -68,11 +69,11 @@ impl<'a> Settlement<'a> {
         }
     }
 
-    /// A settlement whose walk under `binding` refused, worded `refusal`: it holds no record.
+    /// A settlement whose walk under `binding` reached `refusal`: it holds no record.
     pub fn refused(
         parent: Option<&'a Settlement<'a>>,
         binding: Binding<'a>,
-        refusal: &'a str,
+        refusal: &'a ShapeError<'a>,
     ) -> Self {
         Settlement {
             parent,
@@ -94,8 +95,8 @@ impl<'a> Settlement<'a> {
         self.terms
     }
 
-    /// The wording of the refusal its walk reached, if it reached one.
-    pub fn refusal(&self) -> Option<&'a str> {
+    /// The refusal its walk reached, if it reached one.
+    pub fn refusal(&self) -> Option<&'a ShapeError<'a>> {
         self.refusal
     }
 

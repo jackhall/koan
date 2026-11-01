@@ -7,7 +7,7 @@ use crate::scope::{
     BodyShape, Mint, Narrowing, Segment, ShapeKind, Site, Slot, UnitIndex, Unknown, Written,
 };
 
-use super::caching::{PRELUDE, Ran, SMALLEST, every_shape, minted, program, ran_under};
+use super::caching::{PRELUDE, Ran, SMALLEST, every_shape, minted, program, ran_times, ran_under};
 use super::frontiers::{quantified, seam, unknown};
 use super::statics::{body, loaded, slot};
 use crate::values::BuildBudget;
@@ -543,26 +543,40 @@ fn fault(printed: &str) -> &str {
 #[test]
 fn a_refusal_a_settlement_reaches_faults_the_asker_worded_as_the_load_words_it() {
     // `Elt := Number` makes `PICK x` certainly ambiguous: a load with `x` declared at `Number`
-    // refuses, and a frame under the settlement faults with that refusal. The second field's ask
-    // finds the refused settlement under the key and is born under it too.
-    let ran = ran(&format!(
-        "{TWINS}{TWIN_WRAP}PRINT {{a = (WRAP 1), b = (WRAP 2)}}\n"
-    ));
-    assert_eq!(fault(&ran.printed), declared_refusal());
+    // refuses, and a frame under the settlement faults with that refusal. The fault ends the run,
+    // so a second run's ask finds the refused settlement under the key and is born under it too.
+    let ran = ran_times(
+        2,
+        &format!("{TWINS}{TWIN_WRAP}PRINT (WRAP 1)\n"),
+        BuildBudget::default(),
+        2,
+    );
+    for printed in ran
+        .printed
+        .lines()
+        .filter(|line| !line.starts_with("  in "))
+    {
+        assert_eq!(fault(printed), declared_refusal());
+    }
     assert_eq!((ran.tiers.sought, ran.tiers.settled), (2, 1));
 }
 
 #[test]
 fn a_settlements_facts_and_refusals_are_the_same_after_its_eviction() {
-    // The fields' frames run one after another, `WRAP "s"`'s between the two at `Number`: past the
-    // smallest budget, its miss evicts the refused settlement, and the next miss settles it again,
-    // refusing alike.
-    let source =
-        format!("{TWINS}{TWIN_WRAP}PRINT {{a = (WRAP 1), b = (WRAP \"s\"), c = (WRAP 2)}}\n");
-    let tight = ran_under(2, &source, SMALLEST);
-    let roomy = ran(&source);
+    // Each run asks at `Str` and then at `Number`, which refuses and ends it: past the smallest
+    // budget, each miss evicts the other's settlement, so the second run settles the refused one
+    // again, refusing alike.
+    let source = format!("{TWINS}{TWIN_WRAP}PRINT (WRAP \"s\")\nPRINT (WRAP 1)\n");
+    let tight = ran_times(2, &source, SMALLEST, 2);
+    let roomy = ran_times(2, &source, BuildBudget::default(), 2);
     assert_eq!(tight.printed, roomy.printed);
-    assert_eq!(fault(&tight.printed), declared_refusal());
-    assert_eq!((tight.tiers.settled, tight.tiers.evicted), (3, 2));
+    let faults: Vec<_> = (tight.printed.lines())
+        .filter(|line| line.starts_with("error: "))
+        .collect();
+    assert_eq!(faults.len(), 2, "each run faults once");
+    faults
+        .iter()
+        .for_each(|printed| assert_eq!(fault(printed), declared_refusal()));
+    assert_eq!((tight.tiers.settled, tight.tiers.evicted), (4, 3));
     assert_eq!((roomy.tiers.settled, roomy.tiers.evicted), (2, 0));
 }

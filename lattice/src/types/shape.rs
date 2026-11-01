@@ -34,7 +34,7 @@ pub enum DispatchTokenElement<H = Handle> {
 /// the priority class it ranks in. The class costs nothing: it sits in the padding beside the
 /// reference.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub(super) enum StoredElement<'run> {
+pub enum StoredElement<'run> {
     Keyword(KeywordSymbol),
     Slot(Linked<'run>, u16),
 }

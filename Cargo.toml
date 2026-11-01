@@ -21,6 +21,10 @@ path = "src/main.rs"
 # The dhat attribution profiler: owns the binary's global allocator and writes `dhat-heap.json`
 # (`tools/dhat_diff.py`).
 dhat = ["dep:dhat"]
+# Compiles the builtin image's hand-written stub in the generated file's place, so its generator
+# runs when the generated file does not compile. It does not turn on the lattice's feature of the
+# same name: the seed regenerates first, in its own crate.
+bootstrap-image = []
 
 [dependencies]
 # The cell tier's substrate: cells, their regions, the carrier states and the liveness matrix.
@@ -42,8 +46,9 @@ dhat = { version = "0.3.3", optional = true }
 
 [dev-dependencies]
 proptest = "1"
-# The lattice's and the cell graph's test counters, which koan's tests read.
-lattice = { path = "lattice", features = ["counters"] }
+# The lattice's and the cell graph's test counters, which koan's tests read, and the lattice's
+# image generator, which the builtin image's golden test runs.
+lattice = { path = "lattice", features = ["counters", "generator"] }
 cellgraph = { path = "cellgraph", features = ["counters"] }
 
 # Optimize lightly in the dev and test profiles: the property suites and the deep-chain tests run

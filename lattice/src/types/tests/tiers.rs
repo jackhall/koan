@@ -6,6 +6,7 @@
 use crate::bump::Bump;
 use crate::symbols::{BinderSymbol, SymbolInterner, TypeSymbol};
 
+use crate::types::SEED;
 use crate::types::chain::TypeChain;
 use crate::types::handle::{KType, TypeHandle};
 use crate::types::kind::KKind;
@@ -56,7 +57,7 @@ fn a_frozen_load_reads_alike_from_two_threads() {
     let symbols = SymbolInterner::new();
     let ([x, y], [wrapper, other]) = declared(&symbols);
     let (load, host, scratch) = (Bump::new(), Bump::new(), Bump::new());
-    let builder = RootBuilder::in_region(&load);
+    let builder = RootBuilder::over(&load, &SEED);
     let building = TypeChain::building(builder);
     let record = building.record(&scratch, &[(x, KType::NUMBER), (y, KType::STR)]);
     let union = building.union_of(&scratch, &[KType::NUMBER, KType::STR]);
@@ -125,7 +126,7 @@ fn record_named<'t>(
 fn a_second_read_through_a_link_probes_no_link() {
     let symbols = SymbolInterner::new();
     let (root_region, home_region, region) = (Bump::new(), Bump::new(), Bump::new());
-    let root = Frozen::seeded(&root_region);
+    let root = &SEED;
     let agent = Agent::in_region(&root_region);
     let home = TypeChain::new(root, agent, BumpHalf::new(&home_region));
     let minted = record_named(&home, &symbols, "x");
@@ -151,7 +152,7 @@ fn a_second_read_through_a_link_probes_no_link() {
 fn an_intern_lays_content_its_link_holds() {
     let symbols = SymbolInterner::new();
     let (root_region, home_region, region) = (Bump::new(), Bump::new(), Bump::new());
-    let root = Frozen::seeded(&root_region);
+    let root = &SEED;
     let agent = Agent::in_region(&root_region);
     let home = TypeChain::new(root, agent, BumpHalf::new(&home_region));
     let minted = record_named(&home, &symbols, "x");
@@ -185,7 +186,7 @@ fn an_intern_lays_content_its_link_holds() {
 fn a_merge_enters_what_its_source_reaches_through_its_link() {
     let symbols = SymbolInterner::new();
     let regions = [Bump::new(), Bump::new(), Bump::new(), Bump::new()];
-    let root = Frozen::seeded(&regions[0]);
+    let root = &SEED;
     let agent = Agent::in_region(&regions[0]);
     let spawner = TypeChain::new(root, agent, BumpHalf::new(&regions[1]));
     let inherited = record_named(&spawner, &symbols, "x");
@@ -235,7 +236,7 @@ fn a_merge_checks_as_many_steps_however_deep_its_destination() {
     let symbols = SymbolInterner::new();
     for depth in [4, 64] {
         let regions: Vec<Bump> = (0..depth + 6).map(|_| Bump::new()).collect();
-        let root = Frozen::seeded(&regions[0]);
+        let root = &SEED;
         let agent = Agent::in_region(&regions[0]);
         let mut line: Vec<TypeChain<'_, BumpHalf<'_>>> = Vec::new();
         for (level, region) in regions[1..=depth + 1].iter().enumerate() {
@@ -283,7 +284,7 @@ fn a_merge_into_a_scratch_habitat_stops_at_its_region() {
     let symbols = SymbolInterner::new();
     let (root_region, region, child_region, scratch_region) =
         (Bump::new(), Bump::new(), Bump::new(), Bump::new());
-    let root = Frozen::seeded(&root_region);
+    let root = &SEED;
     let agent = Agent::in_region(&root_region);
     let region_half = BumpHalf::new(&region);
     let types = TypeChain::new(root, agent, region_half);
@@ -305,7 +306,7 @@ fn a_merge_into_a_scratch_habitat_stops_at_its_region() {
 fn a_laid_branch_takes_no_link() {
     let symbols = SymbolInterner::new();
     let (root_region, home_region, region) = (Bump::new(), Bump::new(), Bump::new());
-    let root = Frozen::seeded(&root_region);
+    let root = &SEED;
     let agent = Agent::in_region(&root_region);
     let home = TypeChain::new(root, agent, BumpHalf::new(&home_region));
     let _ = record_named(&home, &symbols, "x");
@@ -319,7 +320,7 @@ fn a_laid_branch_takes_no_link() {
 fn a_birth_links_its_home_unless_its_branch_is_laid() {
     let symbols = SymbolInterner::new();
     let regions = [Bump::new(), Bump::new(), Bump::new(), Bump::new()];
-    let root = Frozen::seeded(&regions[0]);
+    let root = &SEED;
     let agent = Agent::in_region(&regions[0]);
     let host = TypeChain::new(root, agent, BumpHalf::new(&regions[1]));
     let held = record_named(&host, &symbols, "x");
@@ -356,7 +357,7 @@ fn a_branch_verdict_is_recorded_in_the_branch() {
     let symbols = SymbolInterner::new();
     let (root_region, region, other_region, scratch) =
         (Bump::new(), Bump::new(), Bump::new(), Bump::new());
-    let root = Frozen::seeded(&root_region);
+    let root = &SEED;
     let agent = Agent::in_region(&root_region);
     let types = TypeChain::new(root, agent, BumpHalf::new(&region));
     let (x, y) = (
@@ -377,7 +378,7 @@ fn a_branch_verdict_is_recorded_in_the_branch() {
 #[test]
 fn a_load_verdict_is_kept_by_the_load() {
     let (root_region, region, scratch) = (Bump::new(), Bump::new(), Bump::new());
-    let builder = RootBuilder::in_region(&root_region);
+    let builder = RootBuilder::over(&root_region, &SEED);
     let building = TypeChain::building(builder);
     assert!(is_subtype_of(
         &building,
@@ -404,7 +405,7 @@ fn a_scratch_chain_records_a_region_verdict_in_the_region() {
         Bump::new(),
         Bump::new(),
     );
-    let root = Frozen::seeded(&root_region);
+    let root = &SEED;
     let agent = Agent::in_region(&root_region);
     let region_half = BumpHalf::new(&region);
     let types = TypeChain::new(root, agent, region_half);
@@ -432,7 +433,7 @@ fn an_adopt_from_a_chain_reads_its_region_and_own_tiers() {
     let symbols = SymbolInterner::new();
     let (root_region, region, scratch_region, there_region) =
         (Bump::new(), Bump::new(), Bump::new(), Bump::new());
-    let root = Frozen::seeded(&root_region);
+    let root = &SEED;
     let agent = Agent::in_region(&root_region);
     let region_half = BumpHalf::new(&region);
     let types = TypeChain::new(root, agent, region_half);
@@ -458,7 +459,7 @@ fn an_adopt_from_a_chain_reads_through_its_link() {
     let symbols = SymbolInterner::new();
     let (root_region, home_region, region, there_region) =
         (Bump::new(), Bump::new(), Bump::new(), Bump::new());
-    let root = Frozen::seeded(&root_region);
+    let root = &SEED;
     let agent = Agent::in_region(&root_region);
     let home = TypeChain::new(root, agent, BumpHalf::new(&home_region));
     let inner = record_named(&home, &symbols, "x");
@@ -477,7 +478,7 @@ fn an_adopt_from_a_chain_reads_through_its_link() {
 fn in_root_finds_a_root_type_and_not_a_branch_type() {
     let symbols = SymbolInterner::new();
     let (root_region, region) = (Bump::new(), Bump::new());
-    let root = Frozen::seeded(&root_region);
+    let root = &SEED;
     let agent = Agent::in_region(&root_region);
     let types = TypeChain::new(root, agent, BumpHalf::new(&region));
     let minted = record_named(&types, &symbols, "x");
@@ -527,7 +528,7 @@ fn a_branch_handle_is_looked_up_past_the_root() {
 fn in_root_and_concrete_read_the_handle_alone() {
     let symbols = SymbolInterner::new();
     let (root_region, region) = (Bump::new(), Bump::new());
-    let root = Frozen::seeded(&root_region);
+    let root = &SEED;
     let agent = Agent::in_region(&root_region);
     let types = TypeChain::new(root, agent, BumpHalf::new(&region));
     let minted = record_named(&types, &symbols, "x");
@@ -558,7 +559,7 @@ fn in_root_and_concrete_read_the_handle_alone() {
 #[test]
 fn adopting_a_root_handle_lays_and_probes_nothing() {
     let (root_region, source_region, region) = (Bump::new(), Bump::new(), Bump::new());
-    let root = Frozen::seeded(&root_region);
+    let root = &SEED;
     let agent = Agent::in_region(&root_region);
     let source = TypeChain::new(root, agent, BumpHalf::new(&source_region));
     let types = TypeChain::new(root, agent, BumpHalf::new(&region));
@@ -573,7 +574,7 @@ fn an_adopt_hits_where_the_chain_resolves_and_lays_where_it_lacks() {
     use crate::types::{ADOPT_HITS, ADOPT_LAID};
     let symbols = SymbolInterner::new();
     let (root_region, source_region, region) = (Bump::new(), Bump::new(), Bump::new());
-    let root = Frozen::seeded(&root_region);
+    let root = &SEED;
     let agent = Agent::in_region(&root_region);
     let source = TypeChain::new(root, agent, BumpHalf::new(&source_region));
     let types = TypeChain::new(root, agent, BumpHalf::new(&region));
@@ -606,9 +607,9 @@ fn record_in<'t, H: Habitat<'t>>(
 #[test]
 fn an_agent_tier_hands_out_nodes_that_never_move() {
     let symbols = SymbolInterner::new();
-    let (load, tier) = (Bump::new(), Bump::new());
+    let tier = Bump::new();
     let agent = Agent::in_region(&tier);
-    let resting = TypeChain::resting(Frozen::seeded(&load), agent);
+    let resting = TypeChain::resting(&SEED, agent);
     let first = record_in(&resting, &symbols, "x");
     assert!(!resting.in_root(first), "an agent node is no load node");
     let node = resting.locate(first.raw()).expect("the agent holds it");
@@ -624,8 +625,8 @@ fn an_agent_tier_hands_out_nodes_that_never_move() {
 #[test]
 fn a_region_node_references_an_agent_node() {
     let symbols = SymbolInterner::new();
-    let (load, tier, region) = (Bump::new(), Bump::new(), Bump::new());
-    let (frozen, agent) = (Frozen::seeded(&load), Agent::in_region(&tier));
+    let (tier, region) = (Bump::new(), Bump::new());
+    let (frozen, agent) = (&SEED, Agent::in_region(&tier));
     let resting = TypeChain::resting(frozen, agent);
     let record = record_in(&resting, &symbols, "x");
     let types = TypeChain::new(frozen, agent, BumpHalf::new(&region));
@@ -648,8 +649,8 @@ fn a_region_node_references_an_agent_node() {
 #[test]
 fn an_intern_finds_the_agent_before_the_branch() {
     let symbols = SymbolInterner::new();
-    let (load, tier, region) = (Bump::new(), Bump::new(), Bump::new());
-    let (frozen, agent) = (Frozen::seeded(&load), Agent::in_region(&tier));
+    let (tier, region) = (Bump::new(), Bump::new());
+    let (frozen, agent) = (&SEED, Agent::in_region(&tier));
     let rested = record_in(&TypeChain::resting(frozen, agent), &symbols, "x");
     let types = TypeChain::new(frozen, agent, BumpHalf::new(&region));
     assert_eq!(record_in(&types, &symbols, "x"), rested);
@@ -658,14 +659,8 @@ fn an_intern_finds_the_agent_before_the_branch() {
 
 #[test]
 fn a_run_verdict_over_two_load_types_lands_in_the_agent() {
-    let (load, tier, region, other, scratch) = (
-        Bump::new(),
-        Bump::new(),
-        Bump::new(),
-        Bump::new(),
-        Bump::new(),
-    );
-    let (frozen, agent) = (Frozen::seeded(&load), Agent::in_region(&tier));
+    let (tier, region, other, scratch) = (Bump::new(), Bump::new(), Bump::new(), Bump::new());
+    let (frozen, agent) = (&SEED, Agent::in_region(&tier));
     let types = TypeChain::new(frozen, agent, BumpHalf::new(&region));
     let (number, string) = (KType::NUMBER.raw(), KType::STR.raw());
     assert_eq!(types.verdict(number, string, Relation::Subtype), None);
@@ -682,8 +677,8 @@ fn a_run_verdict_over_two_load_types_lands_in_the_agent() {
 #[test]
 fn a_verdict_over_a_load_and_an_agent_type_lands_in_the_agent() {
     let symbols = SymbolInterner::new();
-    let (load, tier, region, scratch) = (Bump::new(), Bump::new(), Bump::new(), Bump::new());
-    let (frozen, agent) = (Frozen::seeded(&load), Agent::in_region(&tier));
+    let (tier, region, scratch) = (Bump::new(), Bump::new(), Bump::new());
+    let (frozen, agent) = (&SEED, Agent::in_region(&tier));
     let record = record_in(&TypeChain::resting(frozen, agent), &symbols, "x");
     let types = TypeChain::new(frozen, agent, BumpHalf::new(&region));
     assert!(!is_subtype_of(&types, &scratch, record, KType::NUMBER));
@@ -694,8 +689,8 @@ fn a_verdict_over_a_load_and_an_agent_type_lands_in_the_agent() {
 #[test]
 fn a_verdict_over_an_agent_type_and_a_branch_type_lands_in_the_branch() {
     let symbols = SymbolInterner::new();
-    let (load, tier, region, scratch) = (Bump::new(), Bump::new(), Bump::new(), Bump::new());
-    let (frozen, agent) = (Frozen::seeded(&load), Agent::in_region(&tier));
+    let (tier, region, scratch) = (Bump::new(), Bump::new(), Bump::new());
+    let (frozen, agent) = (&SEED, Agent::in_region(&tier));
     let rested = record_in(&TypeChain::resting(frozen, agent), &symbols, "x");
     let types = TypeChain::new(frozen, agent, BumpHalf::new(&region));
     let minted = record_in(&types, &symbols, "y");
@@ -709,8 +704,8 @@ fn a_verdict_over_an_agent_type_and_a_branch_type_lands_in_the_branch() {
 #[should_panic(expected = "names no interned node")]
 fn a_resting_chain_reads_no_branch() {
     let symbols = SymbolInterner::new();
-    let (load, tier, region) = (Bump::new(), Bump::new(), Bump::new());
-    let (frozen, agent) = (Frozen::seeded(&load), Agent::in_region(&tier));
+    let (tier, region) = (Bump::new(), Bump::new());
+    let (frozen, agent) = (&SEED, Agent::in_region(&tier));
     let minted = record_in(
         &TypeChain::new(frozen, agent, BumpHalf::new(&region)),
         &symbols,

@@ -282,7 +282,11 @@ fn a_quantified_member_through_a_module_is_instanced_where_the_load_names_its_pa
             "{MAPPER}EXPR #(USEIT m :Mapper) -> Any = \
              #(EVAL #({wanted} = $m.apply) -> Any)\nPRINT (USEIT nums)"
         )),
-        format!("error: <test>:5:92: `apply` {unpinned}")
+        format!(
+            "error: <test>:5:92: `apply` {unpinned}\n  in :(FN :{{m :SIG FOR ALL #{{Carrier: Any}} \
+             (seed: Carrier, apply: :(FN FOR ALL #[Elt] :{{x :Carrier y :Elt}} -> Elt))}} -> Any) \
+             (USEIT nums) at <test>:6:7"
+        )
     );
     assert_eq!(
         run(&format!(

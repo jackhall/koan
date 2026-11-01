@@ -117,6 +117,7 @@ fn record_received(received: Result<Received<'_, '_, '_>, StepError>) -> Result<
     match received? {
         Received::Scratch(value) => record(format!("read scratch {}", where_text(value))),
         Received::Here(held) => record(format!("read here {}", where_text(held.value))),
+        Received::Fault(_) => return Err(StepError::Unredeemable),
     }
     Ok(())
 }

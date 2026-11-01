@@ -8,7 +8,7 @@
 //! types class by class — a quantified one's group solved from what the load knows of each
 //! argument, and from its carried type where the load knows nothing — and ranks the survivors by
 //! the type lattice's per-class verdicts;
-//! a lone survivor runs, a builtin wins a tie, and anything else is an error value. A builtin
+//! a lone survivor runs, a builtin wins a tie, and anything else is a fault. A builtin
 //! overload is a function value like any other, whose body is a native. Where the program loads,
 //! each use's candidates are narrowed by its arguments' static types, and chosen where one is left
 //! that admits them.
@@ -21,21 +21,20 @@
 //! - [`walk`] is the load's one walk: every fact the load decides, unit by unit, into a store. It
 //!   types every value expression and binder, and narrows and selects each keyworded use's
 //!   candidates by those types.
-//! - [`errors`] renders the messages of the error values dispatch raises.
 //!
 //! This file holds the vocabulary they share: what one evaluation is born over, and what one of
 //! a call's operands came to. A submodule reaches it, and its siblings, through here.
 //!
-//! **Imports.** Outside `#[cfg(test)]` this module names `crate::elaborate`, `crate::knot`,
-//! `crate::memory`, `crate::parse`, `crate::program`, `crate::scheduler`, `crate::scope`,
-//! `crate::symbols`, `crate::type_lattice` and `crate::values`; `tests::boundary` reads the source
-//! to hold it there.
+//! **Imports.** Outside `#[cfg(test)]` this module names `crate::builtin_image`,
+//! `crate::elaborate`, `crate::knot`, `crate::memory`, `crate::parse`, `crate::program`,
+//! `crate::scheduler`, `crate::scope`, `crate::symbols`, `crate::type_lattice` and
+//! `crate::values`; `tests::boundary` reads the source to hold it there.
 //!
 //! See [dispatch/README.md](dispatch/README.md).
 
 mod builtins;
+mod caught;
 mod check;
-mod errors;
 mod evaluate;
 mod lookup;
 mod rules;
@@ -45,10 +44,13 @@ mod walk;
 #[cfg(test)]
 mod tests;
 
+#[cfg(test)]
+pub(crate) use builtins::overload_types;
+
 use crate::knot::{KBuiltins, KReading, KValue};
 use crate::memory::{BumpAllocator, Writer};
 use crate::parse::{ExpressionPart, KExpression};
-use crate::program::{Contract, KBirth, KBundle, Language, Program, Within};
+use crate::program::{Contract, KBirth, KBundle, Language, Owed, Program, Within};
 use crate::scheduler::{Held, NativeStep};
 use crate::scope::{Code, Segment, ShapeError, Shapes, Store};
 use crate::symbols::{BinderSymbol, SymbolInterner};
@@ -86,18 +88,24 @@ impl Language for Koan {
 }
 
 /// What one evaluation is born over: the program, the view it reads names through beside the
-/// step's door, the contract
-/// it owes a frame it finishes, what it runs [within](KBirth::Evaluate), and the birth it parks with
-/// — beside the chain the step reads and interns types through, built at the step's entry and
-/// never parked.
+/// step's door, what it owes a frame it finishes, what it runs [within](KBirth::Evaluate), and
+/// the birth it parks with — beside the chain the step reads and interns types through, built at
+/// the step's entry and never parked.
 struct Evaluation<'step, 'graph, 'here, 'tier, 'reg, 'door> {
     program: &'graph Program<'graph>,
     code: Code<'step>,
     view: KReading<'step, 'graph, 'here>,
-    contract: Option<Contract>,
+    owed: Option<Owed<'here>>,
     within: Within<'graph, 'here>,
     birth: KBirth<'graph, 'here>,
     types: Chain<'tier, 'here, 'reg, 'door>,
+}
+
+impl Evaluation<'_, '_, '_, '_, '_, '_> {
+    /// The contract the evaluation owes a frame it finishes, if it owes one.
+    fn contract(&self) -> Option<Contract> {
+        self.owed.map(|owed| owed.contract)
+    }
 }
 
 /// What one of a call's operands came to: a value, beside the kept part it is where it has one, or

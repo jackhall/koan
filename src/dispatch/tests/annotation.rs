@@ -52,7 +52,7 @@ fn an_annotation_the_value_s_lower_end_lies_outside_refuses_the_load() {
 }
 
 #[test]
-fn an_annotation_the_value_misses_at_run_is_an_error_value() {
+fn an_annotation_the_value_misses_at_run_faults() {
     assert_eq!(
         run("LET make = (FN :{} -> Any = #({v = \"s\"}))\n\
              LET n :{v :Number} = (make {})\nPRINT \"bound\""),
