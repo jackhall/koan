@@ -13,7 +13,7 @@ This command is doc-only. You do not write code, run cargo, or commit.
 
 - **Read-only**: every file that is not markdown — source, tests, `Cargo.toml`, `Cargo.lock`, `tools/` (you may *invoke* `tools/doclinks.py`, but do not edit it), `.claude/` settings and hooks.
 - **Write allowed** in any markdown file: `README.md`, `tutorial/`, `roadmap/`, a module's `README.md` design doc under `src/` or an embedded crate, and working notes in `scratch/`. The `documentation` skill's partition rules still apply.
-- **Scratch notes.** When the session works from a notes file in `scratch/` (gitignored), keep it current: fold each captured ruling into it, and list its update in the synthesis proposal beside the tracked docs.
+- **Scratch notes.** When the session works from a notes file in `scratch/` (gitignored), fold each captured ruling into it, and list its update in the synthesis proposal beside the tracked docs. Update it at a ruling, at synthesis or when the user asks — not after each round of analysis.
 - **No** `cargo` commands. **No** implementing the work yourself, and **no** invocation of the `Plan` or `shepherd` agents — those are `/work-item`'s lane.
 - If the user mid-discussion asks you to do anything that violates these, refuse and remind them this is a doc-only workflow. They can run `/work-item` or a normal session for code changes.
 
@@ -23,7 +23,7 @@ This command is doc-only. You do not write code, run cargo, or commit.
 
 Open the conversation directly. Do not interrogate the user about scope before they've said anything — the session is exploratory by design.
 
-- If `$ARGUMENTS` is a doc path: name it in your opening line as the apparent starting point, but do not force the discussion to stay there. Do not preemptively read the file or its dependents — read it only when the conversation calls for it.
+- If `$ARGUMENTS` is a doc path (or a phrase that clearly names one): read it and the docs it cites before your opening message, then open with a concrete list of what looks stale or open. Do not force the discussion to stay there.
 - If `$ARGUMENTS` is a topic phrase: open with that phrase as the starting hint.
 - If `$ARGUMENTS` is empty: open with an invitation for the user to name what they want to discuss.
 

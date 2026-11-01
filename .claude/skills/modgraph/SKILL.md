@@ -80,6 +80,7 @@ The score before/after gap is what to optimize under either mode: a rewrite is w
 
 ## Pitfalls
 
+- **Not a gate for big reshuffles.** For a large structural change (a new top-level module, a multi-file move) the score can't see the legibility gain and charges facade artifacts. Use modgraph there only to enumerate dependency edges, and present edge inventories rather than score deltas.
 - **Score deltas, not absolutes.** The defaults are calibrated, but the absolute number depends on tree shape. Always compare current vs. proposed under the same flags.
 - **Stale `observe/modules.dot`.** If you edited code since the last regen, scoring against the tracked DOT compares the old structure to itself. Run `regen` (Recipe 1) before trusting a delta.
 - **Re-export correction means "where it's written, not where it's defined."** A facade-routed import (`use crate::parse::KExpression`) attributes to the facade; only a deep import (`use crate::parse::ast::…`) is charged as deep coupling. Merging files to lower `fan` games nothing if consumers already import through a facade — fix the layout or the import, not the file boundary.

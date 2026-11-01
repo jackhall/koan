@@ -41,6 +41,19 @@ would memory safety.
 7. **One type, one handle.** Canonical shapes are part of identity.
 8. **The laws are the tests.**
 
+In dispatch:
+
+- **A value is matched by a type; a kind classifies only type values.** To
+  accept "any value of family X", use `Any` and check in the body; never add a
+  `KType` variant for a value-side match or route it through `OfKind`.
+- **Trust the carried type.** Admission compares a container's carried element
+  type with the slot and never walks its elements. A typed argument that does
+  not satisfy a slot is a non-match that falls through to other overloads and
+  outer scopes, not a bind-time error.
+- **Reason about function subtyping against call-by-name** (`f (a = 1)`), where
+  contravariant parameters (width and depth) and a covariant return are sound,
+  not against the keyworded path.
+
 ## Before a change
 
 Answer each in your plan, in a sentence:
