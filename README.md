@@ -73,7 +73,7 @@ which parses it, loads it and runs it under [dispatch](src/dispatch/README.md)'s
 
 Entry point: `parse` in [src/parse.rs](src/parse.rs). It runs in two phases, splitting layout from vocabulary:
 
-1. [sexlex](sexlex/README.md) — the workspace crate that reads the text into a layout tree of atoms, strings, commas and groups. Whitespace separates, three bracket families group, quotes delimit strings, indentation nests lines, and adjacency between siblings is recorded rather than interpreted. It knows no koan.
+1. [sexlex](sexlex/README.md) — the workspace crate that reads the text into a layout tree of atoms, strings, commas and groups. Whitespace separates, a `;` starts a comment that runs to the end of its line, three bracket families group, quotes delimit strings, indentation nests lines, and adjacency between siblings is recorded rather than interpreted. It knows no koan.
 2. [lower.rs](src/parse/lower.rs) — walk that tree into `KExpression`s. This is where koan's vocabulary enters: sigils (`#`, `:`, and the `$` and `\` marks) and the groups they take — `#` glued to a list or dict literal quotes each element, a mark glued to a paren wraps one keyworded use — the layout-line peel (a written paren is always kept), brace pairing, collection adjacency, and spans.
 
 Two files serve the lowering:

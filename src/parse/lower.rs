@@ -16,8 +16,9 @@
 //! word runs. A **spread** is `..` glued to a name or a paren group, and is a list literal's item
 //! and nothing else: lowering refuses it anywhere else, inside `#[…]` included, so no other part
 //! holds one. A **template** is `%` glued to a string: its text is read for `{…}` and `%{…}`
-//! braces, and each brace's text is read on its own ([`sexlex::read_at`]) and lowered as a paren
-//! group with the same contents is. Everything else is an atom, which [`super::atom`] classifies.
+//! braces, and each brace is read as code by [`sexlex::read_group_at`], which stops at the `}`
+//! balancing it, and lowered as a paren group with the same contents is. Everything else is an
+//! atom, which [`super::atom`] classifies.
 //! The one fact lowering records beyond the tree is the spelling of each bucket key a `NEEDING`
 //! list names, since past the parse a key is its symbol.
 //!
@@ -443,8 +444,8 @@ impl<'a, 's> Lower<'a, '_, 's> {
         ))
     }
 
-    /// A template, `%` glued to `string`: its text read for braces, each brace's text read on its
-    /// own and lowered as a paren group with the same contents is. See
+    /// A template, `%` glued to `string`: its text read for braces, each brace read as code to the
+    /// `}` balancing it and lowered as a paren group with the same contents is. See
     /// [README.md](README.md) § Templates.
     fn template(
         &self,
@@ -484,43 +485,28 @@ impl<'a, 's> Lower<'a, '_, 's> {
                 continue;
             }
             let open = if kept { at + 1 } else { at };
-            let Some(close) = brace_close(body, open) else {
-                return Err(ParseError::new(
-                    "this brace in a template has no closing `}`",
-                    Some(span(open, body.len())),
-                ));
+            // `sexlex` reads the brace as code and stops at the `}` that balances it.
+            let brace = sexlex::read_group_at(&body[open..], base + open as u32)
+                .map_err(|e| ParseError::new(e.to_string(), Some(e.span)))?;
+            let Node::Group { items: inner, .. } = &brace.node else {
+                unreachable!("a brace reads as a group")
             };
-            let brace_span = span(open, close + 1);
-            if body[open + 1..close].trim().is_empty() {
+            if inner.is_empty() {
                 return Err(ParseError::new(
                     "a template's brace holds an expression",
-                    Some(brace_span),
+                    Some(brace.span),
                 ));
             }
-            let read = sexlex::read_at(&body[open..=close], brace_span.start)
-                .map_err(|e| ParseError::new(e.to_string(), Some(e.span)))?;
-            let [line] = &read[..] else {
-                unreachable!("a brace read alone is one line")
-            };
-            let Node::Group { items, .. } = &line.node else {
-                unreachable!("a line is a layout group")
-            };
-            let [brace] = &items[..] else {
-                unreachable!("a balanced brace is the line's one item")
-            };
-            let Node::Group { items: inner, .. } = &brace.node else {
-                unreachable!("a balanced brace reads as a group")
-            };
             let node = self
                 .program
-                .alloc_node(self.lower_body(inner, brace_span, wrappers)?);
+                .alloc_node(self.lower_body(inner, brace.span, wrappers)?);
             let part = ExpressionPart::Expression(node);
             slots.push(match kept {
                 true => TemplateSlot::Kept(part),
                 false => TemplateSlot::Rendered(part),
             });
             pieces.push(writer.text(&std::mem::take(&mut piece)));
-            at = close + 1;
+            at = (brace.span.end - base) as usize;
         }
         pieces.push(writer.text(&piece));
         // The record a kept brace makes renders its field names.
@@ -1001,32 +987,6 @@ fn mark_of(sigil: char) -> Option<Mark> {
         '\\' => Some(Mark::Built),
         _ => None,
     }
-}
-
-/// The byte offset of the `}` closing the brace that opens at `open` in a template's `body`,
-/// counting nested braces and skipping quoted strings as `sexlex` reads them.
-fn brace_close(body: &str, open: usize) -> Option<usize> {
-    let (mut depth, mut quote, mut escaped) = (0, None, false);
-    for (offset, c) in body[open..].char_indices() {
-        match quote {
-            Some(_) if escaped => escaped = false,
-            Some(_) if c == '\\' => escaped = true,
-            Some(q) if c == q => quote = None,
-            Some(_) => {}
-            None => match c {
-                '\'' | '"' => quote = Some(c),
-                '{' => depth += 1,
-                '}' => {
-                    depth -= 1;
-                    if depth == 0 {
-                        return Some(open + offset);
-                    }
-                }
-                _ => {}
-            },
-        }
-    }
-    None
 }
 
 /// Whether a layout line leads with `#`, the one sigil that quotes a line.

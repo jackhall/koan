@@ -3,6 +3,7 @@
 //! line and its children, the paren arm of [`Reader::group`] for an indentation-sensitive `(`,
 //! and the flat arm for `[` / `{` (and any `(` nested inside them), which ignores line breaks.
 //! [`Reader::inline_items`] reads one line's run of items and performs the trailing-comma join.
+//! [`read_group`] reads the one group a source opens with.
 //!
 //! A closer is owned by the innermost bracketed group; a layout group never owns one, so a `)`
 //! arriving inside a layout line ends that line (and every layout group above it up to the paren)
@@ -11,12 +12,12 @@
 //! The descent recurses once per open group, so [`Reader::open`] refuses a group past
 //! [`MAX_DEPTH`] rather than let deep source overflow the stack.
 
-use crate::lex::{Token, lex};
+use crate::lex::{Extent, Token, lex};
 use crate::{Error, ErrorKind, Item, Kind, MAX_DEPTH, Node, Span};
 
 pub(crate) fn read(source: &str) -> Result<Vec<Item<'_>>, Error> {
     let mut reader = Reader {
-        tokens: lex(source)?,
+        tokens: lex(source, Extent::Whole)?,
         pos: 0,
         layout_indent: 0,
         flat: 0,
@@ -44,6 +45,21 @@ pub(crate) fn read(source: &str) -> Result<Vec<Item<'_>>, Error> {
         }
     }
     Ok(top)
+}
+
+/// The one bracketed group `source` opens with, read as [`read`] reads it on a line of its own.
+/// Lexing stopped at the closer balancing it.
+pub(crate) fn read_group(source: &str) -> Result<Item<'_>, Error> {
+    let mut reader = Reader {
+        tokens: lex(source, Extent::Group)?,
+        pos: 0,
+        layout_indent: 0,
+        flat: 0,
+        depth: 0,
+    };
+    // The opener starts the source's first line, at indentation zero.
+    reader.take_joined_line();
+    reader.group()
 }
 
 struct Reader<'s> {

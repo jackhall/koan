@@ -45,3 +45,13 @@ fn bracket_continuation_with_bare_sigil() {
         "got: {error}"
     );
 }
+
+// --- Comments ---
+
+#[test]
+fn comments_are_layout() {
+    assert_eq!(
+        top("; heading\nPRINT 1 ; trailing\n  ; indented\nPRINT 'a;b'").unwrap(),
+        top("PRINT 1\nPRINT 'a;b'").unwrap()
+    );
+}

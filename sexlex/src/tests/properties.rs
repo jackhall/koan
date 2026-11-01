@@ -199,14 +199,32 @@ fn spaces(out: &mut String, n: usize) {
     out.extend(std::iter::repeat_n(' ', n));
 }
 
-/// Blank lines and trailing whitespace between lines are layout noise.
+/// Blank lines, comment-only lines and trailing whitespace between lines are layout noise.
 fn line_noise(out: &mut String, tape: &mut Tape) {
-    match tape.pick(4) {
+    match tape.pick(6) {
         1 => out.push_str("   \n"),
         2 => out.push('\n'),
         3 => out.push_str("\t\n"),
+        4 => out.push_str("   ; ( ] ' \"\n"),
+        5 => out.push_str("\t; note\n"),
         _ => {}
     }
+}
+
+/// A comment at a line's end. It holds unmatched brackets and quotes, which a comment makes
+/// inert. Generated atoms and string bodies hold no `;`, so in rendered source every `;` starts a
+/// comment.
+const COMMENT: &str = " ; a ( ] } ' \" note";
+
+/// End a line, maybe after a comment.
+fn line_end(out: &mut String, tape: &mut Tape) {
+    match tape.pick(3) {
+        1 => out.push_str(COMMENT),
+        // Glued straight onto the item before it.
+        2 => out.push_str(";)'"),
+        _ => {}
+    }
+    out.push('\n');
 }
 
 fn render_source(items: &[Item<'_>], tape: &mut Tape) -> String {
@@ -244,7 +262,7 @@ fn render_layout(line: &Item<'_>, indent: usize, tape: &mut Tape, out: &mut Stri
     if tape.pick(3) == 1 {
         out.push_str("  ");
     }
-    out.push('\n');
+    line_end(out, tape);
     let step = 2 + 2 * tape.pick(2);
     for child in children {
         render_layout(child, indent + step, tape, out);
@@ -263,7 +281,7 @@ fn render_inline(items: &[Item<'_>], indent: usize, tape: &mut Tape, out: &mut S
         match tape.pick(4) {
             1 => spaces(out, 3),
             2 if comma => {
-                out.push('\n');
+                line_end(out, tape);
                 line_noise(out, tape);
                 spaces(out, tape.pick(6));
             }
@@ -276,7 +294,7 @@ fn render_flat(items: &[Item<'_>], tape: &mut Tape, out: &mut String) {
     for (i, item) in items.iter().enumerate() {
         let glued_to_previous = i > 0 && items[i - 1].glued;
         if !glued_to_previous && tape.pick(3) == 1 {
-            out.push('\n');
+            line_end(out, tape);
             line_noise(out, tape);
             spaces(out, tape.pick(5));
         }
@@ -287,7 +305,7 @@ fn render_flat(items: &[Item<'_>], tape: &mut Tape, out: &mut String) {
         out.push(' ');
     }
     if tape.pick(3) == 1 {
-        out.push('\n');
+        line_end(out, tape);
         spaces(out, tape.pick(5));
     }
 }
@@ -314,22 +332,26 @@ fn render_item(item: &Item<'_>, indent: usize, tape: &mut Tape, out: &mut String
             if children.is_empty() {
                 if tape.pick(3) == 1 {
                     // The closer on its own line, at or beyond the opening line's indentation.
-                    out.push('\n');
+                    line_end(out, tape);
                     spaces(out, indent + 2 * tape.pick(3));
                 }
                 out.push(close);
                 return;
             }
-            out.push('\n');
+            line_end(out, tape);
             let step = 2 + 2 * tape.pick(2);
             for child in children {
                 render_layout(child, indent + step, tape, out);
             }
             match tape.pick(3) {
                 1 => {
-                    // The closer at the end of the last body line.
+                    // The closer at the end of the last body line, before any comment there.
                     let popped = out.pop();
                     debug_assert_eq!(popped, Some('\n'));
+                    let line_start = out.rfind('\n').map_or(0, |at| at + 1);
+                    if let Some(at) = out[line_start..].find(';') {
+                        out.truncate(line_start + at);
+                    }
                 }
                 2 => spaces(out, indent + 2 * tape.pick(3)),
                 _ => spaces(out, indent),
@@ -402,6 +424,19 @@ fn string_spans(items: &[Item<'_>], out: &mut Vec<Span>) {
     }
 }
 
+/// Shift every span in `items`, nested ones included, by `base`.
+fn shifted(items: &mut [Item<'_>], base: u32) {
+    for item in items {
+        item.span = Span {
+            start: item.span.start + base,
+            end: item.span.end + base,
+        };
+        if let Node::Group { items, .. } = &mut item.node {
+            shifted(items, base);
+        }
+    }
+}
+
 // --- Properties ---
 
 proptest! {
@@ -437,7 +472,8 @@ proptest! {
         check_spans(&parsed, &source, None);
     }
 
-    /// Deleting any closer, or inserting a closer anywhere outside a string, is rejected.
+    /// Deleting any closer, or inserting a closer anywhere outside a string or a comment, is
+    /// rejected.
     #[test]
     fn an_unbalanced_edit_is_rejected(
         mut tree in trees(),
@@ -466,40 +502,51 @@ proptest! {
             .iter()
             .any(|s| position as u32 > s.start && (position as u32) < s.end);
         if !inside_string && source.is_char_boundary(position) {
-            let mut inserted = source.clone();
-            inserted.insert(position, closer);
-            prop_assert!(read(&inserted).is_err(), "closer inserted:\n{}", inserted);
+            let line_start = source[..position].rfind('\n').map_or(0, |at| at + 1);
+            let inside_comment = source[line_start..position].contains(';');
+            if !inside_comment {
+                let mut inserted = source.clone();
+                inserted.insert(position, closer);
+                prop_assert!(read(&inserted).is_err(), "closer inserted:\n{}", inserted);
+            }
         }
     }
 
-    /// Reading a slice at a base reads it as `read` does, every span shifted by the base.
+    /// A group read at a base reads as `read` reads the group's own text on a line of its own,
+    /// every span shifted by the base, and nothing past the group's closer is read.
     #[test]
-    fn read_at_shifts_every_span(source in "[ ()\\[\\]{},'\"\\na-z#:\\\\]{0,40}", base in 0u32..1000) {
-        fn shifted(items: &mut [Item<'_>], base: u32) {
-            for item in items {
-                item.span = Span { start: item.span.start + base, end: item.span.end + base };
-                if let Node::Group { items, .. } = &mut item.node {
-                    shifted(items, base);
-                }
+    fn read_group_at_reads_one_group_as_read_does(
+        rest in "[ ()\\[\\]{},'\";\\na-z#:\\\\]{0,40}",
+        base in 0u32..1000,
+    ) {
+        let text = format!("{{{rest}");
+        match (crate::read_group_at(&text, base), crate::read_group_at(&text, 0)) {
+            (Ok(at_base), Ok(mut group)) => {
+                let end = group.span.end as usize;
+                // The group's own text reads as a line holding just the group.
+                let line = read(&text[..end]).unwrap_or_else(|e| panic!("{text:?}: {e}"));
+                let [Item { node: Node::Group { items, .. }, .. }] = &line[..] else {
+                    panic!("{text:?} read as more than one line")
+                };
+                prop_assert_eq!(&items[..], std::slice::from_ref(&group));
+                // Text past the closer is never read, even text that would not read.
+                let tail = format!("{}' ) ]", &text[..end]);
+                prop_assert_eq!(crate::read_group_at(&tail, 0), Ok(group.clone()));
+                shifted(std::slice::from_mut(&mut group), base);
+                prop_assert_eq!(at_base, group);
             }
-        }
-        let expected = read(&source).map(|mut items| {
-            shifted(&mut items, base);
-            items
-        });
-        match (crate::read_at(&source, base), expected) {
-            (Ok(read), Ok(expected)) => prop_assert_eq!(read, expected),
-            (Err(read), Err(expected)) => prop_assert_eq!(
-                read.span,
-                Span { start: expected.span.start + base, end: expected.span.end + base }
+            (Err(at_base), Err(error)) => prop_assert_eq!(
+                at_base.span,
+                Span { start: error.span.start + base, end: error.span.end + base }
             ),
-            (read, expected) => prop_assert!(false, "{:?} against {:?}", read, expected),
+            (at_base, at_zero) => prop_assert!(false, "{:?} against {:?}", at_base, at_zero),
         }
     }
 
     /// Arbitrary text never panics the reader.
     #[test]
-    fn arbitrary_text_never_panics(source in "[ ()\\[\\]{},'\"\\n\\ta-z#:\\\\]{0,40}") {
+    fn arbitrary_text_never_panics(source in "[ ()\\[\\]{},'\";\\n\\ta-z#:\\\\]{0,40}") {
         let _ = read(&source);
+        let _ = crate::read_group_at(&format!("{{{source}"), 0);
     }
 }

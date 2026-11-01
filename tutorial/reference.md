@@ -3,6 +3,12 @@
 Every surface form on one page. For explanations and runnable examples, follow
 the link in each section to the relevant chapter.
 
+## Comments — see [1](01-getting-started.md#comments)
+
+| Form                          | Meaning                                            |
+|-------------------------------|----------------------------------------------------|
+| `; <text>`                    | A comment, running to the end of its line. A `;` inside a string is text. |
+
 ## Binding and output — see [3](03-names-and-dispatch.md)
 
 | Form                          | Meaning                                            |

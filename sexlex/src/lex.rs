@@ -1,6 +1,10 @@
 //! Flat token stream over the source. Each non-blank line opens with a [`Token::Line`] carrying
 //! its indentation; every other token records whether whitespace preceded it, which is all the
-//! reader needs to compute [`Item::glued`](crate::Item::glued). Blank lines produce nothing.
+//! reader needs to compute [`Item::glued`](crate::Item::glued). Blank lines produce nothing. A `;`
+//! outside a string starts a comment, skipped to the end of its line, and a line holding only
+//! whitespace and a comment is blank. Lexing one group ([`Extent::Group`]) stops after the closer
+//! that balances the first opener, or at a closer that matches no open group, so text past the
+//! group, which may not be code, is never lexed.
 //!
 //! The scan reads the source a byte at a time and carves each token's text off the front of what is
 //! left ([`Rest`]), never out of the whole source. Under Miri's tree borrows, a slice taken from the
@@ -51,9 +55,13 @@ fn span(start: usize, end: usize) -> Span {
     }
 }
 
-/// The characters that end an atom.
+/// The characters that end an atom: whitespace, punctuation, and the `;` that starts a comment.
 fn is_break(c: char) -> bool {
-    c.is_whitespace() || matches!(c, '(' | ')' | '[' | ']' | '{' | '}' | ',' | '\'' | '"')
+    c.is_whitespace()
+        || matches!(
+            c,
+            '(' | ')' | '[' | ']' | '{' | '}' | ',' | '\'' | '"' | ';'
+        )
 }
 
 /// What is left of the source past the last token text carved from it.
@@ -73,11 +81,6 @@ impl<'s> Rest<'s> {
         carved
     }
 
-    /// The source from `start` to `end`, left in place. `start` is at or past the last carve's end.
-    fn peek(&self, start: usize, end: usize) -> &'s str {
-        &self.text[start - self.at..end - self.at]
-    }
-
     /// The char at `pos`, a char boundary short of the source's end and at or past the last carve's
     /// end: the byte there when it is ASCII.
     fn char_at(&self, bytes: &[u8], pos: usize) -> char {
@@ -89,7 +92,17 @@ impl<'s> Rest<'s> {
     }
 }
 
-pub(crate) fn lex(source: &str) -> Result<Vec<Token<'_>>, Error> {
+/// How much of a source [`lex`] reads.
+#[derive(Copy, Clone, PartialEq, Eq)]
+pub(crate) enum Extent {
+    /// All of it.
+    Whole,
+    /// Up to and including the closer that balances the source's first opener, or the first closer
+    /// that does not match the innermost open group.
+    Group,
+}
+
+pub(crate) fn lex(source: &str, extent: Extent) -> Result<Vec<Token<'_>>, Error> {
     let bytes = source.as_bytes();
     let len = bytes.len();
     let mut rest = Rest {
@@ -100,6 +113,8 @@ pub(crate) fn lex(source: &str) -> Result<Vec<Token<'_>>, Error> {
     let mut pos = 0;
     let mut spaced = true;
     let mut at_line_start = true;
+    // The open groups' kinds, kept only when lexing one group.
+    let mut open = Vec::new();
 
     while pos < len {
         if at_line_start {
@@ -111,12 +126,21 @@ pub(crate) fn lex(source: &str) -> Result<Vec<Token<'_>>, Error> {
                 }
                 pos += 1;
             }
-            let mut line_end = pos;
-            while line_end < len && bytes[line_end] != b'\n' {
-                line_end += 1;
+            // A line of nothing but whitespace and a comment is blank. Scanning to the line's end
+            // only for a blank line keeps a group read from the middle of a long line linear.
+            let mut content = pos;
+            while content < len && bytes[content] != b'\n' {
+                let c = rest.char_at(bytes, content);
+                if !c.is_whitespace() {
+                    break;
+                }
+                content += c.len_utf8();
             }
-            if rest.peek(pos, line_end).trim().is_empty() {
-                pos = (line_end + 1).min(len);
+            if content == len || matches!(bytes[content], b'\n' | b';') {
+                while content < len && bytes[content] != b'\n' {
+                    content += 1;
+                }
+                pos = (content + 1).min(len);
                 continue;
             }
             out.push(Token::Line {
@@ -138,6 +162,13 @@ pub(crate) fn lex(source: &str) -> Result<Vec<Token<'_>>, Error> {
                 spaced = true;
                 pos += c.len_utf8();
             }
+            ';' => {
+                // A comment runs to the end of its line; the `'\n'` arm ends the line.
+                while pos < len && bytes[pos] != b'\n' {
+                    pos += 1;
+                }
+                spaced = true;
+            }
             '(' | '[' | '{' => {
                 let kind = match c {
                     '(' => Kind::Paren,
@@ -149,6 +180,9 @@ pub(crate) fn lex(source: &str) -> Result<Vec<Token<'_>>, Error> {
                     span: span(pos, pos + 1),
                     spaced,
                 });
+                if extent == Extent::Group {
+                    open.push(kind);
+                }
                 pos += 1;
                 spaced = false;
             }
@@ -164,6 +198,11 @@ pub(crate) fn lex(source: &str) -> Result<Vec<Token<'_>>, Error> {
                 });
                 pos += 1;
                 spaced = false;
+                if extent == Extent::Group && (open.pop() != Some(kind) || open.is_empty()) {
+                    // The group's closer, or a mismatch the reader reports: nothing past it is
+                    // lexed.
+                    return Ok(out);
+                }
             }
             ',' => {
                 out.push(Token::Comma {

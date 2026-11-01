@@ -74,8 +74,6 @@ Koan is young, and some things you might reach for aren't here:
   Computation is expressed through functions and dispatch.
 - **No loops.** Recursion is the iteration model (see
   [Pattern matching](06-pattern-matching.md)).
-- **No comments.** `#` is the [quoting](10-quoting.md) sigil, not a comment
-  marker.
 - **No user-declared traits or interfaces** beyond what unions, records, and the
   module system provide.
 

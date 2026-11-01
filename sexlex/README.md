@@ -25,7 +25,9 @@ sexlex is the first job alone. It knows exactly five things, stated precisely by
 the crate doc on [src/lib.rs](src/lib.rs):
 
 1. **Whitespace separates.** A token is a maximal run of anything that is not
-   whitespace, a bracket, a quote or a comma.
+   whitespace, a bracket, a quote, a comma or a `;`. A `;` outside a string
+   starts a comment, which runs to the end of its line and separates as
+   whitespace does.
 2. **Three bracket families group.** `(...)`, `[...]` and `{...}` become
    `Paren` / `Bracket` / `Brace` groups; a comma is its own item.
 3. **Quotes delimit strings.** `'...'` and `"..."`, body kept verbatim, a
@@ -70,11 +72,15 @@ The tree **borrows the source it was read from**: an atom is a `&'s str` into
 the input, a string body is the bytes between the quotes untouched, and every
 span is a byte range into that same text. So reading allocates the tree and
 nothing else, and the language above can hold the borrow for as long as it holds
-the source. `read_at(text, base)` reads a slice of a larger source starting at
-byte `base` as `read` reads a source, with every span — an error's and its
-opener's included — shifted by `base`, so a language that finds a nested source
-inside a string can read it with spans indexing the whole file. Escape processing is deliberately *not* done here — `body` is raw,
-because what `\n` means is vocabulary.
+the source. `read_group_at(text, base)` reads the one bracketed group that
+`text`, a slice of a larger source starting at byte `base`, opens with. It reads
+the group as `read` reads it on a line of its own, shifts every span — an
+error's and its opener's included — by `base`, and stops at the closer that
+balances the opener. So a language that finds code inside a string reads it with
+spans indexing the whole file, the lexer's own string and comment rules decide
+where the code ends, and the text after it is never read. Escape processing is
+deliberately *not* done here — `body` is raw, because what `\n` means is
+vocabulary.
 
 A group's span covers its whole extent: a bracketed group from opener through
 closer, a string across both quotes, a layout group from its first item's start
@@ -92,7 +98,7 @@ reader settles what the *lines* mean, and neither has to reason about the other.
 **The lexer** emits one `Token::Line` per non-blank line carrying that line's
 indentation (and the position of the first tab in it, if any), then one token per
 item, each recording whether whitespace preceded it. Blank lines produce nothing
-at all, so a blank line inside a block never ends it. Two decisions live here:
+at all, so a blank line inside a block never ends it. Three decisions live here:
 
 - The lexer *measures* indentation but does not *judge* it. A tab is reported as
   a span and an odd width is passed through, because whether either matters
@@ -103,6 +109,17 @@ at all, so a blank line inside a block never ends it. Two decisions live here:
   which reads it from the *following* token. That inversion is why a `Vec` of
   tokens and not a streaming lexer: the glue bit of an item is a fact about the
   item after it.
+- A comment is skipped here and nowhere else. A `;` outside a string ends the
+  token before it and runs to the end of its line, and a line holding only
+  whitespace and a comment is blank, so a comment never reaches the reader and a
+  comment-only line neither opens nor closes a block. The rule cannot live in a
+  language above: a comment may hold an unmatched quote or bracket, and only the
+  pass deciding where strings and groups begin can skip it.
+
+Lexing for `read_group_at`, the lexer stops after the closer that balances the
+first opener, or at a closer that does not match the innermost open group, which
+the reader then reports as a mismatch. So the text past the group is never
+lexed: it may be a template's text, an unmatched quote included.
 
 **The reader** is recursive descent with two pieces of state: `layout_indent`,
 the indentation of the layout line currently being read, and `flat`, the depth of
@@ -190,10 +207,11 @@ The rules are pinned two ways, in [src/tests](src/tests.rs):
   input, one rendered tree or one error message, per rule and per corner.
 - **`properties`** generates random trees, renders them back out under *random
   layouts* — closer placement, body indentation depth, bracket line breaks, comma
-  continuations, blank lines — and checks three laws: the tree reads back
-  unchanged (layout never changes structure), every span slices to its own text,
-  and any unbalancing edit is rejected. A fourth checks `read_at` against
-  `read` with every span shifted.
+  continuations, blank lines, comments — and checks three laws: the tree reads
+  back unchanged (layout never changes structure), every span slices to its own
+  text, and any unbalancing edit outside a string or a comment is rejected. A
+  fourth checks `read_group_at` against `read` of the group's own text, with
+  every span shifted, and that nothing past the group's closer is read.
 
 The first law is the crate's whole contract stated as a property, and the third
 is what makes the error set's totality checkable rather than asserted.

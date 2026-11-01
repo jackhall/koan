@@ -1,11 +1,14 @@
 //! Whitespace-sensitive s-expressions with glue: the layout half of a parser, with no vocabulary.
 //!
 //! [`read`] turns source text into a tree of [`Item`]s and knows exactly five things about it
-//! ([`read_at`] reads a slice of a larger source, its spans indexing that source):
+//! ([`read_group_at`] reads the one group a slice of a larger source opens with, its spans indexing
+//! that source):
 //!
 //! 1. **Whitespace separates.** A token is a maximal run of anything that is not whitespace, a
-//!    bracket, a quote or a comma. Nothing else splits a token, so `:Number`, `a.b`, `->` and `#`
-//!    are all single atoms and the language on top decides what they mean.
+//!    bracket, a quote, a comma or a `;`. A `;` outside a string starts a comment, which runs to
+//!    the end of its line and separates as whitespace does. Nothing else splits a token, so
+//!    `:Number`, `a.b`, `->` and `#` are all single atoms and the language on top decides what they
+//!    mean.
 //! 2. **Three bracket families group.** `(...)`, `[...]` and `{...}` become
 //!    [`Kind::Paren`] / [`Kind::Bracket`] / [`Kind::Brace`] groups. A comma is its own
 //!    [`Node::Comma`] item.
@@ -14,9 +17,10 @@
 //! 4. **Adjacency is recorded, not interpreted.** Every item carries [`Item::glued`]: whether the
 //!    next sibling followed it with no whitespace between. A sigil is simply an atom glued to the
 //!    group after it, so this crate never needs to know which atoms are sigils.
-//! 5. **Indentation groups lines.** Each non-blank line is a [`Kind::Layout`] group; a deeper line
-//!    nests inside the line above it and a dedent closes. Indentation is spaces only, in even
-//!    widths. Three regimes suspend the line-becomes-group rule:
+//! 5. **Indentation groups lines.** Each non-blank line is a [`Kind::Layout`] group, and a line
+//!    holding only a comment is blank; a deeper line nests inside the line above it and a dedent
+//!    closes. Indentation is spaces only, in even widths. Three regimes suspend the
+//!    line-becomes-group rule:
 //!    - inside an open `[` or `{`, lines join flat and indentation is ignored entirely;
 //!    - a line ending in `,` joins the next non-blank line flat, whatever its indentation;
 //!    - inside an open `(`, a deeper line nests as its own layout group (one per line), a
@@ -212,34 +216,51 @@ pub fn read(source: &str) -> Result<Vec<Item<'_>>, Error> {
     reader::read(source)
 }
 
-/// Read `text`, a slice of a larger source starting at byte `base`, as [`read`] reads a source:
-/// every span, an error's included, is shifted by `base`, so it indexes the larger source.
-pub fn read_at(text: &str, base: u32) -> Result<Vec<Item<'_>>, Error> {
-    let shift = |span: &mut Span| {
-        span.start += base;
-        span.end += base;
-    };
-    fn shifted(items: &mut [Item<'_>], shift: &impl Fn(&mut Span)) {
-        for item in items {
-            shift(&mut item.span);
-            if let Node::Group { items, .. } = &mut item.node {
-                shifted(items, shift);
-            }
+/// Read the one bracketed group that `text`, a slice of a larger source starting at byte `base`,
+/// opens with, as [`read`] reads it on a line of its own. Every span, an error's included, is
+/// shifted by `base`. The read stops at the closer that balances the opener, so the group's span
+/// says where it ended and nothing after it is read.
+///
+/// # Panics
+///
+/// If `text` does not start with `(`, `[` or `{`.
+pub fn read_group_at(text: &str, base: u32) -> Result<Item<'_>, Error> {
+    assert!(
+        text.starts_with(['(', '[', '{']),
+        "a group's text opens with a bracket"
+    );
+    match reader::read_group(text) {
+        Ok(mut group) => {
+            shift_items(std::slice::from_mut(&mut group), base);
+            Ok(group)
+        }
+        Err(error) => Err(shift_error(error, base)),
+    }
+}
+
+/// Shift every span in `items`, nested ones included, by `base`.
+fn shift_items(items: &mut [Item<'_>], base: u32) {
+    for item in items {
+        shift(&mut item.span, base);
+        if let Node::Group { items, .. } = &mut item.node {
+            shift_items(items, base);
         }
     }
-    match read(text) {
-        Ok(mut items) => {
-            shifted(&mut items, &shift);
-            Ok(items)
+}
+
+/// Shift every span `error` holds by `base`.
+fn shift_error(mut error: Error, base: u32) -> Error {
+    shift(&mut error.span, base);
+    match &mut error.kind {
+        ErrorKind::MismatchedCloser { opener, .. } | ErrorKind::CloserDedented { opener } => {
+            shift(opener, base)
         }
-        Err(mut error) => {
-            shift(&mut error.span);
-            match &mut error.kind {
-                ErrorKind::MismatchedCloser { opener, .. }
-                | ErrorKind::CloserDedented { opener } => shift(opener),
-                _ => {}
-            }
-            Err(error)
-        }
+        _ => {}
     }
+    error
+}
+
+fn shift(span: &mut Span, base: u32) {
+    span.start += base;
+    span.end += base;
 }

@@ -215,6 +215,11 @@ A string inside a brace takes the other quote, since the template's own quote
 would end it. `%{` always opens a brace of the second kind, below, so a `%`
 just before a brace is written as a string of its own, `{'%'}{n}`.
 
+A `;` in a template's text is text, but a brace is code, so a `;` inside one
+starts a comment that runs to the end of its line, the closing `}` included.
+`%"{x ; why}"` is an unclosed brace; a comment fits only in a brace that spans
+lines.
+
 A program writing text for another language — SQL, HTML, a shell command —
 must treat the values it splices in apart from the text it trusts. A `%{…}`
 brace **keeps** its value apart: a template holding one is a record of

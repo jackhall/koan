@@ -723,6 +723,6 @@ A meet must know both of its sides when the program loads, so neither may name a
 ---
 
 That completes the tour of the language as it stands. For the shape of what's
-not built yet — arithmetic and comparison operators, loops, comments,
+not built yet — arithmetic and comparison operators, loops,
 user-declared traits — see the project's roadmap. Back to the
 [README](README.md) for the full chapter list.

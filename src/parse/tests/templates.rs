@@ -1,6 +1,7 @@
 //! Templates: `%` glued to a string, its `{…}` and `%{…}` braces each lowered as a paren group
 //! with the same contents, `{{` and `}}` read as one brace, and the errors a malformed brace is
-//! refused with, each spanning what it names.
+//! refused with, each spanning what it names. A brace is read as code by `sexlex`, so a comment in
+//! it runs to its line's end.
 
 use crate::memory::program_storage;
 use crate::parse::{ExpressionPart, parse};
@@ -52,11 +53,42 @@ fn a_malformed_brace_is_refused_where_it_is_written() {
     assert!(message.contains("written `}}`"), "{message}");
     assert_eq!(at, span(3, 4));
     let (message, at) = refused(r#"%"a{x b""#);
-    assert!(message.contains("no closing"), "{message}");
-    assert_eq!(at, span(3, 7));
+    assert!(message.contains("unclosed '{'"), "{message}");
+    assert_eq!(at, span(3, 4));
     let (message, at) = refused(r#"%"a{ }""#);
     assert!(message.contains("holds an expression"), "{message}");
     assert_eq!(at, span(3, 6));
+    // A brace with mismatched brackets is refused there, whatever text follows it.
+    let (message, at) = refused(r#"%"a{(x} don't""#);
+    assert!(message.contains("does not match"), "{message}");
+    assert_eq!(at, span(6, 7));
+    // A comment in a brace runs to its line's end, the `}` included.
+    let (message, at) = refused(r#"%"a{x ; y}""#);
+    assert!(message.contains("unclosed '{'"), "{message}");
+    assert_eq!(at, span(3, 4));
+    let (message, at) = refused("%\"a{ ; y\n}\"");
+    assert!(message.contains("holds an expression"), "{message}");
+    assert_eq!(at, span(3, 10));
+}
+
+#[test]
+fn a_brace_is_code_and_its_template_text_is_not() {
+    // A `;` in the text, or in a string inside a brace, is text.
+    assert_eq!(
+        tree(r#"%"a;b{x}c;""#).unwrap(),
+        "[T[s(a;b) {[t(x)]} s(c;)]]"
+    );
+    assert_eq!(
+        tree(r#"%"{(f 'a;b')}""#).unwrap(),
+        "[T[s() {[[t(f) s(a;b)]]} s()]]"
+    );
+    // A comment fits in a brace that spans lines.
+    assert_eq!(tree("%\"{x ; why\n}\"").unwrap(), "[T[s() {[t(x)]} s()]]");
+    // Text past a brace is never read as code, an unmatched quote included.
+    assert_eq!(
+        tree(r#"%"{x} don't""#).unwrap(),
+        "[T[s() {[t(x)]} s( don't)]]"
+    );
 }
 
 /// A splice in a group a literal holds, or in a template's brace, composes as one in a paren group

@@ -28,10 +28,10 @@ The split is the design decision the rest of the module rests on: **layout is
 decided without vocabulary, and vocabulary is applied without re-deciding
 layout.**
 
-`sexlex` settles what nests inside what — whitespace separation, three bracket
-families, quoted strings, adjacency recorded as a glue bit, and indentation with
-its three suspending regimes. It never asks which atoms are keywords or which
-glued prefixes are sigils.
+`sexlex` settles what nests inside what — whitespace separation, comments,
+three bracket families, quoted strings, adjacency recorded as a glue bit, and
+indentation with its three suspending regimes. It never asks which atoms are
+keywords or which glued prefixes are sigils.
 
 Lowering is where koan's vocabulary enters, and eight rules cover it
 ([lower.rs](lower.rs)):
@@ -105,15 +105,21 @@ as a dict's key, which names the dict's default.
 
 A template's text is read in [lower.rs](lower.rs), left to right: `{{` and
 `}}` are one literal brace each, `{…}` is a **rendered** brace, `%{…}` a
-**kept** one, and `%{{` a `%` before a literal `{`. A `}` alone in the text, a
-brace with no closing `}`, and a brace holding only whitespace are parse
-errors spanning what they name. Text outside the braces is raw, as a string's
-body is. A brace closes at the `}` that balances it, counting nested braces and
-skipping quoted strings as `sexlex` reads them, and its text is then read on its
-own by [`sexlex::read_at`](../../sexlex/README.md), whose spans index the
-file, and lowered as a paren group with the same contents is. So a brace holds
-one expression: `{x}` is `(x)`, `{a + b}` is `(a + b)`, and a brace whose
-expression opens with a brace is spaced off, `{ {a = 1} }`, since `{{` is text.
+**kept** one, and `%{{` a `%` before a literal `{`. Text outside the braces is
+raw, as a string's body is, so a `;` there is text. A brace is code:
+[`sexlex::read_group_at`](../../sexlex/README.md) reads it from its `{`, with
+spans indexing the file, and stops at the `}` that balances it, so `sexlex`'s
+own rules for strings and comments decide where a brace ends, and the text after
+it is never lexed. The brace is then lowered as a paren group with the same
+contents is. So a brace holds one expression: `{x}` is `(x)`, `{a + b}` is
+`(a + b)`, and a brace whose expression opens with a brace is spaced off,
+`{ {a = 1} }`, since `{{` is text. A comment in a brace runs to the end of its
+line as one in a paren does, the `}` included, so `%"{x ; why}"` is an unclosed
+brace and a comment fits only in a brace that spans lines.
+
+A `}` alone in the text is a parse error spanning it, and a brace holding no
+expression is one spanning the brace. A brace that never closes is `sexlex`'s
+unclosed-group error at its `{`.
 
 The part is `Template`, a `KTemplate` of `pieces`, the text between the braces
 with each doubled brace read as one, and `slots`, one `TemplateSlot` per brace,

@@ -2,7 +2,7 @@
 
 Koan is a small, expression-oriented language. You write a program as a
 sequence of expressions, and Koan runs them top to bottom. There are no
-statements, no semicolons, and no `main` function — every line is an
+statements, no statement terminators, and no `main` function — every line is an
 expression that produces a value.
 
 This chapter covers how to run a program and how source is structured. The
@@ -124,12 +124,28 @@ body of a function, the branches of a match — is quoted instead, written
 are introduced in their own chapters; every `(...)` you write without a `#` runs
 eagerly.
 
-## A note on comments
+## Comments
 
-Koan has no comment syntax yet. The `#` character is reserved for
-[quoting expressions](10-quoting.md), not for comments, so a stray `#` in your
-source is a parse error rather than an ignored line. In this tutorial, any
-explanation of a snippet lives in the prose around it, and expected output is
-shown in a separate block underneath.
+A `;` starts a comment, which runs to the end of its line. A comment can
+follow an expression or stand on a line of its own; either way koan ignores
+it. A line holding only a comment is skipped like a blank line, so it never
+opens or closes an indented block, whatever its indentation. A `;` inside a
+string is part of the text:
+
+```koan
+; Greet someone.
+LET name = "world" ; any name will do
+PRINT name
+PRINT "a;b"
+```
+
+```text
+world
+a;b
+```
+
+The `#` character is not a comment: it is reserved for
+[quoting expressions](10-quoting.md), so a stray `#` in your source is a parse
+error rather than an ignored line.
 
 Next: [Values and types](02-values-and-types.md).
