@@ -1,15 +1,15 @@
 //! A keyworded self-call in tail position hops to the callee's frame: however deep the recursion,
 //! the cells live at once stay constant, through `MATCH` arms in tail position too. A call by name,
 //! in tail position or not, binds each parameter to the field of its argument record the parameter
-//! names.
+//! names. A frame parks only on the frames it spawns: every other part runs in its own step.
 
 use std::cell::Cell;
 
 use crate::program::{CellSubstrate, KBirth, KBundle, KState, run as body};
-use crate::scheduler::{Action, Placement, Step, StepError, Work};
+use crate::scheduler::{Action, BORN, FRAMES, PARKS, Placement, Step, StepError, Work};
 
 use super::super::Koan;
-use super::output;
+use super::{output, run};
 use crate::values::BuildBudget;
 
 /// A program whose `WALK` follows a chain of `depth` links, each a newtype over a record naming the
@@ -278,8 +278,8 @@ fn nat_chain(depth: u32, body: &str) -> String {
 
 #[test]
 fn a_recursion_through_tail_arms_holds_its_cells_constant_however_deep() {
-    // The frame hands its `MATCH` off under its contract, the `MATCH` its arm, and the arm its
-    // call, which hops to `DOWN`'s next frame.
+    // The frame runs its `MATCH` in tail position under its contract, the `MATCH` its arm, and
+    // the arm its call, which hops to `DOWN`'s next frame.
     let (deep, shallow) = if cfg!(miri) { (3, 2) } else { (256, 8) };
     for body in [
         "MATCH n UNDER Nat WITH #{Zero: (\"done\"), Succ: (DOWN it)}",
@@ -335,4 +335,49 @@ fn a_match_in_a_frame_called_through_a_barrier_runs_its_arm_as_a_child() {
                   #(MATCH 1 WITH #{Number: ({x = 1, y = \"leak\"})})))\n\
                   LET v = (m :| Shower)\nPRINT (v.show {})";
     assert_eq!(super::run(source), "{x = 1}");
+}
+
+/// The cells born, the frames among them and the parks handled while `defs` and `main` run, past
+/// what `defs` counts printing `0`; `main` must print `printed`.
+fn counted_past_baseline(defs: &str, main: &str, printed: &str) -> [usize; 3] {
+    let counted = |main: &str, expected: &str| {
+        BORN.with(|born| born.set(0));
+        FRAMES.with(|frames| frames.set(0));
+        PARKS.with(|parks| parks.set(0));
+        assert_eq!(run(&format!("{defs}{main}")), expected);
+        [
+            BORN.with(Cell::get),
+            FRAMES.with(Cell::get),
+            PARKS.with(Cell::get),
+        ]
+    };
+    let (ran, baseline) = (counted(main, printed), counted("PRINT 0\n", "0"));
+    [0, 1, 2].map(|at| ran[at] - baseline[at])
+}
+
+#[test]
+fn a_frame_parks_only_on_the_frames_it_spawns() {
+    // `BODY` spawns four frames — `ID` in the hoisted block, `BOOM`, and `ID` twice in the tie —
+    // and tails into a fifth from its tail arm. Every other part runs in its own step.
+    let defs = "LET r = ({v = \"s\"} :! :{v :Any})\n\
+                MODULE lib = (LET h = 1)\n\
+                EXPR #(ID x :Any) -> Any = #(x)\n\
+                EXPR #(BOOM p :Any) -> Any = #(p.field)\n\
+                EXPR #(BODY n :Number) -> Any = #(\
+                (LET a = [[n (n + 1)] {k = [n]}]) \
+                (LET b = (1 < (ID 2) < 3)) \
+                (LET c = (MATCH n WITH #{Number: [it it]})) \
+                (LET d = (TRY (1 + r.v) WITH #{_: (0)})) \
+                (LET e = (TRY (BOOM 1) WITH #{_: (0)})) \
+                (LET f = (CATCH (1 + r.v))) \
+                (LET g = (USING lib SCOPE (h))) \
+                (LET p = [(ID 3) q (ID 4)]) (LET q = (FN :{} -> Any = #(p))) \
+                (MODULE inner OVER #[n] = (LET z = [n])) \
+                (MATCH n WITH #{Number: (ID inner)}))\n";
+    let [cells, frames, parks] =
+        counted_past_baseline(defs, "PRINT (BODY 1)\n", "SIG (z: :(LIST OF Number))");
+    assert_eq!(cells, frames, "no cell is born but a frame");
+    // `BODY`, its four spawns and its tail; the statement parks on `BODY`, `BODY` on its spawns.
+    assert_eq!(frames, 6);
+    assert_eq!(parks, 1 + 4);
 }

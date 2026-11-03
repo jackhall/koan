@@ -1,8 +1,7 @@
 //! A caught fault copied out into an `Error` ([README.md § Catching](README.md#catching)).
 //!
-//! A `TRY` or `CATCH` runs its body as a block, a child of its evaluation, and parks at
-//! [`CAUGHT`]. A value finishes it — a `CATCH`'s as `Result.Ok` of it. A fault a `TRY`'s arms do
-//! not take by its kind is handed on as it came, read and released nowhere. Any other fault is
+//! A `TRY` or `CATCH` runs its body as a block and resumes at [`CAUGHT`]. A value finishes it — a
+//! `CATCH`'s as `Result.Ok` of it. A fault a `TRY`'s arms do not take by its kind is handed on as it came, read and released nowhere. Any other fault is
 //! walked outermost first: the links in the evaluation's own home read in place, and each kept cell's
 //! in a step entered beside it at [`GATHERING`], which the drain releases the cell after. Each
 //! trace line is merged as [`Trace`](crate::scope::Trace) merges it ([`Hop::merges`]) and emitted as a
@@ -15,8 +14,8 @@ use crate::elaborate::arm_shapes;
 use crate::knot::{KFault, KInner, KValue};
 use crate::memory::{Bump, BumpAllocator, BumpVec, Writer, resident};
 use crate::parse::{ExpressionPart, KExpression};
-use crate::program::{Catching, Entered, FrameLink, KBundle, KState, Program, entered_block};
-use crate::scheduler::{Action, Held, Received, StepError};
+use crate::program::{BlockEntry, Catching, Delivered, Entered, FrameLink, Next, Program};
+use crate::scheduler::{Held, StepError};
 use crate::scope::{Bottom, ErrorField, FaultKind, Guard, Hop, Inner, Line, ungrouped};
 use crate::symbols::{BinderSymbol, SymbolInterner, TypeSymbol};
 use crate::type_lattice::{KType, display_name};
@@ -24,22 +23,20 @@ use crate::values::{Chain, List, Record, Tagged, TypeValue, Value, construction,
 
 use super::Evaluation;
 use super::evaluate::{
-    BORN, CAUGHT, GATHERING, Taking, arm_guards, arm_ran, built, evaluate, faulted, finish,
-    finish_built, inside, park,
+    BORN, CAUGHT, GATHERING, Taking, arm_guards, arm_ran, built, finish, finish_built, inside,
+    ran_block,
 };
 use super::select;
 
-/// `TRY <body> WITH <arms>`, or, not `tries`, `CATCH <body>`, at `stage`, beside what it has
-/// `copied` of a caught fault where it is entered beside a kept cell.
+/// `TRY <body> WITH <arms>`, or, not `tries`, `CATCH <body>`, at the node's stage, beside what it
+/// has copied of a caught fault where it is entered beside a kept cell.
 pub(super) fn caught<'step, 'graph, 'here>(
-    mut step: Taking<'_, 'graph, '_, 'here, '_, '_>,
-    at: &Evaluation<'step, 'graph, 'here, '_, '_, '_>,
+    step: &mut Taking<'_, 'graph, '_, 'here, '_, '_>,
+    at: &Evaluation<'step, 'graph, 'here, '_, '_, '_, '_>,
     node: &'step KExpression<'step>,
     tries: bool,
-    stage: u32,
-    copied: Option<Catching<'graph, 'here>>,
-) -> Action<'graph, KBundle> {
-    match (stage, copied) {
+) -> Next<'graph, 'here> {
+    match (at.stage.get(), at.caught.get()) {
         (BORN, _) => {
             let shape = at.view.shape();
             let body = (shape.site_of_body(node))
@@ -47,48 +44,43 @@ pub(super) fn caught<'step, 'graph, 'here>(
                 .expect("a caught body is a block its shape holds");
             // A `CATCH`'s value wraps its body's, so the body's is asked for as a part.
             let use_ = if tries { inside(at) } else { built(at) };
-            let request = entered_block(
-                at.program,
-                body,
-                at.view.view(),
-                Entered::Plain,
-                None,
+            let entry = BlockEntry {
+                segment: body.segment(),
+                enclosing: at.view.view(),
+                entered: Entered::Plain,
+                owed: None,
                 use_,
-                at.within,
-            );
-            let asked = step.spawn(request);
-            park(step, at, asked, CAUGHT)
+                within: at.within,
+            };
+            ran_block(at, entry, CAUGHT)
         }
-        (CAUGHT, _) => {
-            let received = step.results_with(&at.types).next();
-            caught_body(step, at, node, tries, received)
-        }
+        (CAUGHT, _) => caught_body(step, at, node, tries, at.delivered.take()),
         (GATHERING, Some(copied)) => beside(step, at, node, copied),
-        _ => step.failed(StepError::Refused),
+        _ => Next::Failed(StepError::Refused),
     }
 }
 
 /// The body's outcome is in: a value finishes, and a fault is handed on or walked.
 fn caught_body<'step, 'graph, 'here>(
-    step: Taking<'_, 'graph, '_, 'here, '_, '_>,
-    at: &Evaluation<'step, 'graph, 'here, '_, '_, '_>,
+    step: &mut Taking<'_, 'graph, '_, 'here, '_, '_>,
+    at: &Evaluation<'step, 'graph, 'here, '_, '_, '_, '_>,
     node: &'step KExpression<'step>,
     tries: bool,
-    received: Option<Result<Received<'graph, 'here, '_>, StepError>>,
-) -> Action<'graph, KBundle> {
+    received: Option<Delivered<'graph, 'here>>,
+) -> Next<'graph, 'here> {
     match received {
-        Some(Ok(Received::Here(held))) if tries => finish(step, at, held),
-        Some(Ok(Received::Here(held))) => {
+        Some(Delivered::Value(held)) if tries => finish(step, at, held),
+        Some(Delivered::Value(held)) => {
             let program = at.program;
             finish_built(step, at, &[held], move |writer, types, values| {
                 result(program, writer, types, "Ok", values[0])
             })
         }
-        Some(Ok(Received::Fault(inner))) => {
+        Some(Delivered::Fault(inner)) => {
             let arm = match tries {
                 true => match chosen(at, node, inner.kind()) {
                     Some(arm) => Some(arm),
-                    None => return faulted(step, at, inner),
+                    None => return Next::Raised(inner),
                 },
                 false => None,
             };
@@ -99,15 +91,26 @@ fn caught_body<'step, 'graph, 'here>(
             };
             walked(step, at, node, copied, inner)
         }
-        _ => step.failed(StepError::Unredeemable),
+        None => Next::Failed(StepError::Unredeemable),
     }
+}
+
+/// Read the kept cell `kept` next, in a step entered beside it, carrying `copied` there.
+fn read_next<'graph, 'here>(
+    at: &Evaluation<'_, 'graph, 'here, '_, '_, '_, '_>,
+    kept: crate::values::KeptCell,
+    copied: Catching<'graph, 'here>,
+) -> Next<'graph, 'here> {
+    at.caught.set(Some(copied));
+    at.stage.set(GATHERING);
+    Next::Beside(kept)
 }
 
 /// The arm of the `TRY` `node` a fault of `kind` selects, as a `MATCH … UNDER Error` selects one
 /// over the load's record of the arms: a label naming the kind's variant, else `_`. `None` where
 /// none takes it.
 fn chosen(
-    at: &Evaluation<'_, '_, '_, '_, '_, '_>,
+    at: &Evaluation<'_, '_, '_, '_, '_, '_, '_>,
     node: &KExpression<'_>,
     kind: FaultKind,
 ) -> Option<u16> {
@@ -134,22 +137,16 @@ fn chosen(
 /// Walk `inner`, laid in the evaluation's own home, gathering its lines: to the fault, which ends
 /// the walk, or to the kept cell below, read in a step entered beside it.
 fn walked<'step, 'graph, 'here>(
-    step: Taking<'_, 'graph, '_, 'here, '_, '_>,
-    at: &Evaluation<'step, 'graph, 'here, '_, '_, '_>,
+    step: &mut Taking<'_, 'graph, '_, 'here, '_, '_>,
+    at: &Evaluation<'step, 'graph, 'here, '_, '_, '_, '_>,
     node: &'step KExpression<'step>,
     mut copied: Catching<'graph, 'here>,
     inner: KInner<'graph, 'here>,
-) -> Action<'graph, KBundle> {
+) -> Next<'graph, 'here> {
     // Frame records persist across the steps a walk takes, so they resolve in the region's chain.
     let (writer, symbols, region) = (step.writer(), at.program.symbols(), step.types());
     match inner.walked(|line| gathered(&mut copied, writer, &region, &at.types, symbols, line)) {
-        Bottom::Below(kept) => {
-            let state = KState::Catching {
-                birth: at.birth,
-                caught: copied,
-            };
-            step.read_beside(kept, evaluate, state, None)
-        }
+        Bottom::Below(kept) => read_next(at, kept, copied),
         Bottom::Fault(fault) => {
             let scratch = Bump::new();
             emitted(&mut copied, writer, &region);
@@ -184,11 +181,11 @@ enum Read<'graph, 'here> {
 /// Entered beside a kept cell: gather its links' lines, then read the kept cell below it, or build
 /// the `Error` record from the fault.
 fn beside<'step, 'graph, 'here>(
-    step: Taking<'_, 'graph, '_, 'here, '_, '_>,
-    at: &Evaluation<'step, 'graph, 'here, '_, '_, '_>,
+    step: &mut Taking<'_, 'graph, '_, 'here, '_, '_>,
+    at: &Evaluation<'step, 'graph, 'here, '_, '_, '_, '_>,
     node: &'step KExpression<'step>,
     mut copied: Catching<'graph, 'here>,
-) -> Action<'graph, KBundle> {
+) -> Next<'graph, 'here> {
     // What is read beside is copied into the region, whose chain the copy adopts its types into.
     let (writer, symbols, region) = (step.writer(), at.program.symbols(), step.types());
     let types = &region;
@@ -215,15 +212,9 @@ fn beside<'step, 'graph, 'here>(
         }
     });
     match read {
-        Some(Read::Below(kept)) => {
-            let state = KState::Catching {
-                birth: at.birth,
-                caught: copied,
-            };
-            step.read_beside(kept, evaluate, state, None)
-        }
+        Some(Read::Below(kept)) => read_next(at, kept, copied),
         Some(Read::Built(record, kind)) => ended(step, at, node, copied.arm, kind, record),
-        None => step.failed(StepError::Refused),
+        None => Next::Failed(StepError::Refused),
     }
 }
 
@@ -345,13 +336,13 @@ fn payload<'graph, 'here, 'from, 'list>(
 /// `MATCH … UNDER Error` runs one — a label's `it` retyped to its variant's record — and a `CATCH`
 /// (no `arm`) finishes with `Result.Error` of `Error.<kind>` over it.
 fn ended<'step, 'graph, 'here>(
-    step: Taking<'_, 'graph, '_, 'here, '_, '_>,
-    at: &Evaluation<'step, 'graph, 'here, '_, '_, '_>,
+    step: &mut Taking<'_, 'graph, '_, 'here, '_, '_>,
+    at: &Evaluation<'step, 'graph, 'here, '_, '_, '_, '_>,
     node: &'step KExpression<'step>,
     arm: Option<u16>,
     kind: FaultKind,
     record: KValue<'graph, 'here>,
-) -> Action<'graph, KBundle> {
+) -> Next<'graph, 'here> {
     let program = at.program;
     let Some(arm) = arm else {
         return finish_built(

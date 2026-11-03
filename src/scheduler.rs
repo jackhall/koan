@@ -43,7 +43,9 @@ pub use action::{
 pub use beside::Beside;
 pub use continuation::{BirthAt, Born, NativeStep, StateAt, StepBundle, Work};
 #[cfg(test)]
-pub(crate) use drain::{CACHING, HOPS, HopSample, LAID, REGION_WRITTEN, SKELETONS, TIERS, Tiers};
+pub(crate) use drain::{
+    BORN, CACHING, FRAMES, HOPS, HopSample, LAID, PARKS, REGION_WRITTEN, SKELETONS, TIERS, Tiers,
+};
 pub use drain::{DrainStalled, Graph, Resting, Scheduler};
 pub use kept::{Held, Kept, KeptPart};
 pub use seek::{Ask, Asked, Replayed, Requested, Seek, Settles, Sought};

@@ -3,7 +3,7 @@
 //! are written, returned from a frame, and held in a knot — quotes run by `EVAL`, faults,
 //! the contract a frame ends under, and the tail a frame hands its last statement to.
 
-use crate::program::body::SUPPLIED_WAKES;
+use crate::program::body::SUPPLIED_TIES;
 use crate::program::{CellSubstrate, Ran};
 use crate::type_lattice::KType;
 
@@ -122,9 +122,9 @@ fn a_result_built_in_its_own_region_crosses_into_the_root_at_the_verdicts_price(
 }
 
 #[test]
-fn a_called_bodys_evaluations_are_tenants_of_the_frame() {
-    // In a frame, `xs` is built by a tenant, at the frame's own brand, and the read after it finds
-    // it where it lies.
+fn a_called_bodys_evaluations_run_in_the_frames_own_step() {
+    // In a frame, `xs` is built in the frame's own step, at its own brand, and the read after it
+    // finds it where it lies.
     let mut substrate = loaded(
         "LET f = (FN :{n :Number} -> Any = #((LET xs = [n n]) (xs)))\nLET r = (f 7)",
         2,
@@ -163,12 +163,30 @@ fn an_eager_part_is_supplied_by_site_in_one_wake() {
          LET f = (FN :{x :Number} -> Any = #(a))",
         2,
     );
-    SUPPLIED_WAKES.with(|wakes| wakes.set(0));
+    SUPPLIED_TIES.with(|ties| ties.set(0));
     let read = run_and_read(&mut substrate, &["a"]);
-    assert_eq!(SUPPLIED_WAKES.with(|wakes| wakes.get()), 1);
+    assert_eq!(SUPPLIED_TIES.with(|ties| ties.get()), 1);
     assert!(
         read[0].starts_with("node in "),
         "`a` is a data node: {read:?}"
+    );
+}
+
+#[test]
+fn an_eager_part_in_a_frame_is_supplied_by_site_in_one_retry() {
+    let mut substrate = loaded(
+        "LET g = (FN :{x :Number} -> Number = #(x))\n\
+         LET h = (FN :{n :Number} -> Any = #(\
+         (LET a = [(g 1) f (g n)]) (LET f = (FN :{x :Number} -> Any = #(a))) (a)))\n\
+         LET r = (h 2)",
+        2,
+    );
+    SUPPLIED_TIES.with(|ties| ties.set(0));
+    let read = run_and_read(&mut substrate, &["r"]);
+    assert_eq!(SUPPLIED_TIES.with(|ties| ties.get()), 1);
+    assert!(
+        read[0].starts_with("node in "),
+        "`r` is a data node: {read:?}"
     );
 }
 
@@ -547,10 +565,10 @@ fn a_lambda_part_is_supplied_to_a_tie() {
         "LET k = 7\nLET a = [(FN :{} -> Number = #(k)) f]\nLET f = (FN :{} -> Any = #(a))",
         2,
     );
-    SUPPLIED_WAKES.with(|wakes| wakes.set(0));
+    SUPPLIED_TIES.with(|ties| ties.set(0));
     reset();
     substrate.with(|running| running.ran().expect("the program runs"));
-    assert_eq!(SUPPLIED_WAKES.with(|wakes| wakes.get()), 1);
+    assert_eq!(SUPPLIED_TIES.with(|ties| ties.get()), 1);
     let born: Vec<String> = recorded()
         .into_iter()
         .filter(|seen| seen.starts_with("born "))
@@ -580,9 +598,13 @@ fn a_hole_is_unbound_when_eval_runs_whatever_the_callee_declares() {
         reset();
         let outcome = substrate.with(|running| running.ran());
         assert_eq!(outcome, Ok(Ran::Uncaught), "{twice}");
+        // The `EVAL` is the frame's last statement, which owes the frame's line.
         assert_eq!(
             written(),
-            ["error: unbound name 'x'"],
+            [
+                "error: unbound name 'x'\n  in :(FN :{body :Expression} -> Any) \
+                 (twice #(x MINUS 1)) at <test>:3:9"
+            ],
             "the refusal is a fault the top level reports"
         );
     }
@@ -594,7 +616,13 @@ fn a_hole_is_unbound_when_eval_runs_whatever_the_callee_declares() {
 fn a_required_keyworded_hole_is_unbound_when_eval_runs() {
     let mut substrate = loaded(&format!("{TWICE}\nLET r = (twice #(NOPE 1))"), 4);
     assert_eq!(substrate.with(|running| running.ran()), Ok(Ran::Uncaught));
-    assert_eq!(written(), ["error: unbound key (NOPE _)"]);
+    assert_eq!(
+        written(),
+        [
+            "error: unbound key (NOPE _)\n  in :(FN :{body :Expression} -> Any) (twice #(NOPE 1)) \
+             at <test>:3:9"
+        ]
+    );
 }
 
 #[test]

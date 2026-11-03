@@ -184,7 +184,7 @@ fn a_loop_headed_by_a_tenant_hops_in_three_cells_and_a_flat_heap() {
 /// to the hop after it, so every byte the loop carries is written into a region that was somebody
 /// else's a moment ago.
 #[test]
-fn a_hand_off_redeems_out_of_the_region_the_drain_reclaims_next() {
+fn a_hop_redeems_out_of_the_region_the_drain_reclaims_next() {
     let fresh = run(3, start_fresh);
     assert_eq!(
         fresh.recorded,

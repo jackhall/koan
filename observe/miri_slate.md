@@ -73,12 +73,13 @@ silence the stale-anchor check; delete a redundant test instead.
   shorter brands and a module body's activation and the enclosing place are written into the
   running region mid-body. No `unsafe` of its own; the backing `unsafe` is `cellgraph`'s
   once-written run read, its reattach seam and its keep and redeem doors.
-- `src/dispatch/evaluate.rs` — the evaluator asks for a call's slots as tenants of its own cell,
-  builds the argument record from what they kept, and — its callee returning `Str`, so placed
-  `Shares` — hops to the callee's frame as a co-tenant of the frame it finishes, every hop a tenant
-  of one host, where the body runner's tail test hops `Fresh` frames over `Fresh` children. No
-  `unsafe` of its own; the backing `unsafe` is `cellgraph`'s tenant creation and release, its
-  keep and redeem doors and its reattach seam.
+- `src/dispatch/evaluate.rs` — the evaluator asks for a call's slots one at a time, each run in
+  its frame's own step and rested in its scratch across the step's parks, builds the argument
+  record from what they delivered, and — its callee returning `Str`, so placed `Shares` — hops to
+  the callee's frame as a co-tenant of the frame it finishes, every hop a tenant of one host, where
+  the body runner's tail test hops `Fresh` frames. No `unsafe` of its own; the backing `unsafe` is
+  `cellgraph`'s tenant creation and release, its scratch, keep and redeem doors and its reattach
+  seam.
 - `src/scope/header.rs` — a habitat half's region header is laid once, through its header door
   or the door `values` holds projected to its branch slot, and holds `Cell`s written after it is
   laid: the branch, and the decision memo of the cells whose results are built in the half,
@@ -209,11 +210,11 @@ destination's writer, and is read through its edges after the region it came fro
   and the string reads back.
 
 **Cells the drain creates and releases** ([src/scheduler/drain.rs](../src/scheduler/drain.rs)) — a
-tail hand-off waking its state across a release, a state kept in one cell and woken in another,
+tail hop waking its state across a release, a state kept in one cell and woken in another,
 and a producer's result filed into a consumer that outlives it. What the other groups pin is one
 cell's region; what this pins is the ordering between two.
 
-- `a_hand_off_redeems_out_of_the_region_the_drain_reclaims_next`
+- `a_hop_redeems_out_of_the_region_the_drain_reclaims_next`
   three hops at each placement: the veneer wakes each successor's state out of a predecessor the
   drain releases once that first step returns, and at `Fresh` that region comes straight back out
   of the pool for the hop behind it, so every carried byte is written where somebody else's was.
@@ -271,7 +272,8 @@ storage, the record borrowing the type tiers.
 
 **The top level on the scheduler** ([src/program/body.rs](../src/program/body.rs)) — the body
 runner performing a whole program under the drain: top-level bindings written in the root's region
-by a tenant of it, each evaluation a tree child of the root or a tenant of its frame, a recursion
+by a tenant of it, each top-level statement a child of the root, each called body's evaluations run
+in its frame's own step, a recursion
 deeper than the slab cap on tree cells, module bodies laid down inline, and a component tied from
 parts its evaluations built — each binding read later through a covariant view of an activation at a
 shorter brand than the one it was bound at.
@@ -295,24 +297,28 @@ shorter brand than the one it was bound at.
   with its capture deep-copied and the region reclaimed; each called after, reading its capture
   where it now lies.
 - `a_self_call_in_tail_position_holds_its_cells_constant_however_deep`
-  a frame tails its last statement into the evaluator with a view of its own activation: the
-  successor is a tenant of the frame's caller, so the crossing pins the frame's region before the
-  frame is released, and the evaluation reads through that view and tails into the next frame —
-  three hops under Miri, against two.
+  a frame evaluates its last statement in its own step through a view of its own activation and
+  tails into the next frame, born beside it under its caller, so the crossing pins the frame's
+  region before the frame is released — three hops under Miri, against two.
 
 **Dispatch** ([src/dispatch/evaluate.rs](../src/dispatch/evaluate.rs)) — the evaluator selecting a
 registration's function under a frame's contract and hopping to its frame, its argument record built
-in a tenant's storage and crossed into the callee's birth.
+in the frame's own step and crossed into the callee's birth.
 
 - `a_keyworded_self_call_in_tail_position_holds_its_cells_constant_however_deep`
   a keyworded call as a frame's last statement selects its own overload by the carried type of a
   link read through a newtype, and the evaluation owing the frame's contract tails into the next
   frame with the argument record it built — three hops under Miri, against two.
 - `a_recursion_through_tail_arms_holds_its_cells_constant_however_deep`
-  a frame hands its last statement, a `MATCH … UNDER`, off under its contract; the `MATCH` hands
-  its tail arm off as a block owing that contract, its `it` the payload of a parameter held one
+  a frame runs its last statement, a `MATCH … UNDER`, in its own step under its contract; the
+  `MATCH` runs its tail arm as a block owing that contract, its `it` the payload of a parameter held one
   `Payload` segment below the frame's kept carrier through the arm's carrier chain; the arm's call
   hops to the next frame — through a nested `MATCH` too — three hops under Miri, against two.
+- `every_loop_runs_one_cell_per_hop_beside_each_frame_it_spawns`
+  two loops a few hops past warm — a hop under its settlement through a helper frame, and one
+  seeking it that threads a list into the loop cell through `MATCH` arms: every node, block and
+  supply of a hop rests in its frame's scratch as a pending entry across the frame's parks, read
+  back at each wake, and no cell is born but a frame.
 - `an_instance_made_in_a_frame_is_called_where_it_lands`
   a quantified member of a two-member knot whose closure holds an edge to its sibling and a
   captured string, instantiated at a frame's last statement: its knot re-tied through the frame's
@@ -386,9 +392,9 @@ holds its own copy laid by the crossing.
 Prepended by `python3 tools/miri.py --log` on a clean run, trimmed to five.
 
 <!-- slate-durations:start -->
+- 2026-11-03: 2114s — 54 tests, 0 leaks, 0 UB
 - 2026-11-01: 1453s — 53 tests, 0 leaks, 0 UB
 - 2026-11-01: 4181s — 53 tests, 0 leaks, 0 UB
 - 2026-10-31: 1680s — 49 tests, 0 leaks, 0 UB
 - 2026-10-31: 1478s — 46 tests, 0 leaks, 0 UB
-- 2026-10-29: 1461s — 45 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

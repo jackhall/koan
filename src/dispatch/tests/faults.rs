@@ -117,7 +117,7 @@ fn a_fault_outside_any_call_prints_no_line() {
 
 #[test]
 fn a_frames_last_statement_owes_its_line() {
-    // The frame hands its last statement off, so the hand-off owes the frame's line.
+    // The frame runs its last statement in its own step, owing it the frame's line.
     assert_eq!(
         run(&format!(
             "{ANY_STR}EXPR #(LAST) -> Number = #((PRINT \"in\") (1 + r.v))\nPRINT (LAST)"

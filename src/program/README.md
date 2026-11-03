@@ -10,8 +10,8 @@ that keeps a program across calls — a language server, a REPL — keeps one of
 these, and repeats no setup order of its own.
 
 The layer above supplies what a program *means*: a [`Language`](record.rs),
-which lays the builtin table down, names the step every evaluation runs, and
-checks a built shape; [dispatch](../dispatch/README.md) is koan's.
+which lays the builtin table down, names the function every node in flight is
+evaluated by, and checks a built shape; [dispatch](../dispatch/README.md) is koan's.
 Everything here is the same for any language over it — where a binding lives,
 which cell performs a statement, in what order a body's units are performed —
 and nothing here names an expression form.
@@ -111,16 +111,21 @@ it with no door — a call pays nothing to reach a builtin. A table in the root'
 region would cost a redeem and a pinned placement in every cell that owns an
 environment.
 
-**`Program::evaluate` is the one door every evaluation is asked through.** It
-takes a node — a whole statement or one part of one — and the view of the
-activation it is read in, and hands back a `Work` the drain can create, born
-holding `KBirth::Evaluate`. The caller picks the placement and the `Use`; what
-the node means is the evaluator's. That keeps evaluating an expression
-dispatch's, and everything in this module below it free of expression forms.
+**The evaluator answers with instructions.** The language's evaluator is no
+step: it is a function the [evaluation stack](#the-evaluation-stack) calls on
+one node in flight, handed the step, the node and what was last delivered to
+it, and it answers with what the node needs next — a part evaluated, a block
+run, a frame it spawned and waits on, a tail, a kept cell read beside, its
+value or a fault. What the node means is the evaluator's; where each piece
+runs, and what the cell ends with, is this module's. That keeps evaluating an
+expression dispatch's, and everything in this module below it free of
+expression forms. `Program::evaluate` is the door a top-level statement's
+evaluation is asked through: it hands back a `Work` the drain can create,
+born holding `KBirth::Evaluate`, whose step is the body runner's.
 
 **`Language` is a trait**, with three methods generic over `'graph`: `builtins`,
 which lays the table down through program storage's writer, `evaluator`, the
-step an evaluation runs, and `facts`, the language's
+function the evaluation stack calls on a node, and `facts`, the language's
 [walk](../build/README.md#the-one-walk) over the program's shapes into any
 store it is handed — the load's, or a test's over the load's records — which
 may refuse the program, as dispatch's
@@ -145,9 +150,8 @@ a program's steps run over, with its three families:
   parameter is solved from, one per parameter in symbol order, none where it
   reads its argument's carried type;
   `Eval`, a quote's code, a record of the names its `EVAL` offers and the
-  contract its declared return makes; `Evaluate`, a node, the view it is read
-  through and the [contract](#frames-contracts-and-tails) it owes, if any; `Block`, a
-  synthesized block's shape and the view it sits in; `Composed`, a `USING` or
+  contract its declared return makes; `Evaluate`, a top-level statement's
+  node and the view it is read through; `Composed`, a `USING` or
   a `BUILD` over code composed at run time, which under the code's
   composition fills its holes from a source or, with none, carries it at the
   exact type its shape gives it; and `Inspect`, the view the top level leaves at rest. A `Call`
@@ -156,17 +160,21 @@ a program's steps run over, with its three families:
   the call hands its frame through kept parts (`Passing`), which every call
   lays; and, once the wake has kept each of those values, what the frame keeps
   of its callee and arguments (`Keeps`) — beside, in a `Call` or an `Eval`,
-  where its asker's decision memo rests. An `Evaluate` and a `Block` carry
-  what their frame runs **within**: whether it [routes](#caching-bodies), the
+  where its asker's decision memo rests. An `Evaluate` carries what its
+  frame runs **within**, as each node and block on a cell's evaluation stack
+  does: whether it [routes](#caching-bodies), the
   arena node it runs under and the stamp of its chain, the homes of its
   decision memo, under a composition the code's root, and the table of what
   its frame keeps ([frames](#frames-contracts-and-tails)). The family's
   `covariant!` witness is what checks that an activation's view is covariant
   in its brand.
 - **`KState`**, what a cell holds at a step and parks with: the birth on a
-  first step, the body runner between units, or an evaluator's resumption.
-- the **scratch** family, the sites a refused tie named, one per evaluation the
-  runner asked for, in the order asked.
+  first step, the cell's own body runner — the bottom of its evaluation stack
+  — or the mark of a top-level statement's evaluation cell, whose whole stack
+  rests in scratch.
+- the **scratch** family: the cell's [evaluation stack](#the-evaluation-stack)
+  above its bottom, or, at the top level, the sites a refused tie named, one
+  per evaluation the runner asked for, in the order asked.
 
 The body runner's activation binds, so it is invariant and cannot cross. It
 rides the parked state, which never crosses: a park stores it in the cell's own
@@ -177,8 +185,8 @@ until the end.
 
 **A view is never copied.** A birth holding a view is weighed at no bound, so
 the verdict always pins it: it borrows another cell's region, and an evaluation
-or an inspection — a frame's hand-off included — is born under the cell it
-views, where pinning costs nothing and pledges nothing.
+or an inspection is born under the cell it views, where pinning costs nothing
+and pledges nothing.
 A birth that is copied rebuilds what it carries: a `Call`'s callee and
 arguments, and an `Eval`'s code and offered names, are deep-copied through
 [`copy_severed`](../values/README.md#crossing), the crossing's door for a value
@@ -219,12 +227,15 @@ interpreter binary does, re-raising a panic on that thread as its own.
 
 ## The body runner
 
-[`run`](body.rs) is one step that performs the top level, every called body,
-the code every `EVAL` runs, and every block a pairwise operator run hoists an
-operand into. Its state is the activation, the next unit, and the stage it parked at.
-It claims nothing ahead, ties and binds each unit itself, and no unit has a
-cell of its own: a cell per unit would cost a create, an enter, a release and a
-receipt slot per statement per call, for statements that mostly never park.
+[`run`](body.rs) is the one step every cell runs: the top level, every called
+body, the code every `EVAL` runs, and a top-level statement's evaluation. A
+block — a hoisted operand, a `USING … SCOPE` body, a `MATCH` or `TRY` arm, a
+`TRY` or `CATCH` body — runs inside the step of the cell that reaches it, on
+its [evaluation stack](#the-evaluation-stack). Its state is the activation,
+the next unit, and the stage it parked at. It claims nothing ahead, ties and
+binds each unit itself, and no unit has a cell of its own: a cell per unit
+would cost a create, an enter, a release and a receipt slot per statement per
+call, for statements that mostly never park.
 Born as `KBirth::Program` it lays the top level's activation down; born as
 `KBirth::Call` it lays the callee's activation down in the frame's own cell and
 binds each value parameter from the argument record, which must name them
@@ -276,10 +287,10 @@ order the `FOR ALL` group was written. The group keeps every name, so each is
 bound to its solution, a name no argument reaches to its bound. A callee that is no function, an argument record
 that misnames a parameter, an argument that does not fit its parameter, and a
 group the arguments cannot solve are each a
-[fault](#faults-and-output). Born as `KBirth::Block` it lays a block's
-activation down beside the view it sits in, in the asker's own cell, and yields
-its last statement's value. A block is entered as its birth's `Entered` says
-(`entered_block`). A `USING … SCOPE` body is entered on a module: its
+[fault](#faults-and-output). A block's runner, pushed onto the stack, lays the
+block's activation down beside the view it sits in, in the same cell, and
+yields its last statement's value. A block is entered as its entry's
+`Entered` says (`entered_body`). A `USING … SCOPE` body is entered on a module: its
 parameters are bound to what the module surfaces
 ([entering a block](../knot/module/README.md#entering-a-using--scope-block))
 before its first unit runs, and since its shape and the module cannot disagree,
@@ -341,9 +352,10 @@ interleaving. Per unit:
 - **A cyclic component, or one whose members all birth a callable**, is
   [tied](../knot/README.md#the-tie) once, and every member's slot is bound from
   the knot. A tie refused on eager parts names them all at once: the runner
-  asks for one evaluation per part at one park, keeping their sites in scratch,
-  wakes once when the last receipt slot fills, and ties again with each value
-  supplied by site.
+  evaluates each part, then ties again once with each value supplied by site.
+  At the top level it asks for one `Fresh` evaluation per part at one park,
+  keeping their sites in scratch, and wakes once when the last receipt slot
+  fills; in a frame it gathers them one at a time on its stack.
 - **A lone data binder** is one evaluation of its right-hand side, asked with
   `Keeps`, and bound on the wake.
 - **An annotated binder**, `LET <name> <type> = <value>`, binds its value held
@@ -354,22 +366,76 @@ interleaving. Per unit:
   held the same way, and is already born at its annotation, so its slot binds
   the bare member.
 - **A statement that binds nothing** is one evaluation, asked with `Reads` —
-  save a frame's last unit, which the runner [tails](#frames-contracts-and-tails)
-  into, and a block's last statement, asked with `Forwards` so the value is
-  built where the block's result goes — `Keeps` in a
-  [caching body](#caching-bodies). A body whose last unit is a binder
-  yields that binding's value.
+  save a frame's or a block's last statement, whose value is the body's,
+  asked with `Forwards` so the value is built where the body's result goes —
+  `Keeps` in a [caching body](#caching-bodies) — and evaluated, in a frame or
+  a tail arm, in [tail position](#frames-contracts-and-tails). A body whose
+  last unit is a binder yields that binding's value.
 
-The only children the runner asks for are evaluations, through
-`Program::evaluate`, each handed the view of the runner's activation. The
-placement is the level's: at the top level an evaluation is a `Fresh` tree
-child, so everything it allocates beyond its value dies with it while the value
-is built in the root, its home, from the start — or crosses into it at the
-verdict's price, splicing its region in when pinned and reclaimed when copied.
-In a called body an evaluation is a `Shares` tenant of the frame, so what it
-builds is at the frame's `'here`, binding a slot is a plain write, and a reader
-reads it where it lies — save the hand-off of the frame's last statement, a
-tree child of the frame ([below](#frames-contracts-and-tails)).
+What the runner asks for is an evaluation, handed the view of the runner's
+activation, and where it runs is the level's. At the top level an evaluation is
+a `Fresh` tree child, asked through `Program::evaluate`, so everything it
+allocates beyond its value dies with it while the value is built in the root,
+its home, from the start — or crosses into it at the verdict's price, splicing
+its region in when pinned and reclaimed when copied. In a called body, the code
+an `EVAL` runs and a block, the runner pushes the evaluation onto its cell's
+[evaluation stack](#the-evaluation-stack) and runs it in its own step, so what
+it builds is at the frame's `'here`, binding a slot is a plain write, and a
+reader reads it where it lies.
+
+### The evaluation stack
+
+A frame runs as one cell. Its step drives an explicit stack over the body's
+shape ([stack.rs](stack.rs)): at the bottom the frame's own body runner,
+resting in the cell's continuation, and above it what is in flight — a node
+being evaluated, a block's runner, the eager parts of a tie being gathered —
+laid in the cell's scratch habitat, innermost first, and parked there as the
+cell's scratch state. A top-level statement's evaluation cell runs the same
+stack with that node at its bottom. The stack's dead entries therefore never
+sit in a region: the crossing verdict, which prices a pin by the bytes it keeps
+alive, never weighs them, and no pin splices them into a home. They die with
+the cell's scratch. A push lays the entry it covers there and a pop leaves it,
+so a frame's scratch grows by one entry per push for the frame's life. That is
+bounded by the text the frame runs only because every part and block the
+evaluator asks for is one node's, asked once: a builtin that ran a block once
+per element inside one frame, without a hop, would grow it with its data.
+
+Each round reads the top. A runner performs units, and pushes the evaluation of
+the next one, or the eager parts a tie named. A node is handed to the
+language's evaluator with what was last delivered to it, and answers with an
+instruction:
+
+- **a part**: its value is needed. The stack pushes the part as a node above it,
+  one part at a time, in source order, so evaluation order is the order of
+  asking and a part after a failing one is never asked;
+- **a block**: the stack enters it (`entered_body`) and pushes its runner;
+- **spawned**: the node asked for a frame — a call's, an `EVAL`'s, or a
+  `USING` or `BUILD` over composed code — and the cell parks on it. This is the
+  only way a frame's step parks;
+- **a value or a fault**: the stack pops the node and delivers it to the entry
+  below;
+- **a tail**: the node is in tail position and its call keeps the contract, so
+  the cell ends by hopping into the callee's frame, and everything below the
+  node dies with it;
+- **beside**: a `TRY` or `CATCH` reads a kept cell, and the cell is entered
+  again beside it with the stack as it stands.
+
+Every node carries the `Use` it would have been asked with, read relative to the
+cell (`Use::within`): a part asked with `Forwards` by a node bound for the loop
+cell is bound for the loop cell too. A node's value is placed where a child
+asked with that `Use` would have delivered it, through the scheduler's
+`built_as` and `crossed_as` ([what a step may name](../scheduler/README.md#what-a-step-may-name)),
+which end nothing and pin the value back free. So a value asked for with
+`Threads` is built in the loop's cell, one asked for with `Forwards` in the
+frame's home, and anything else at the frame's `'here` — while everything the
+evaluation allocates on the way stays at the frame's `'here`.
+
+A fault is delivered down the stack like a value: a node receiving one ends
+with it, a runner stops its block with it, and a `TRY` or `CATCH` catches it.
+What reaches the bottom ends the cell. Only the bottom owes anything: the
+frame's runner holds its value to the contract, crosses its barrier, adopts
+what leaves a caching body and lays its trace line, so a value or a fault
+passing through a block or a tail arm is held and lined once.
 
 Transients inside a step — the parts a tie named, the values supplied back to
 it — go on a local bump for that step, never a `Vec`.
@@ -384,20 +450,16 @@ member as [any retype](../values/README.md#the-type-memo-and-satisfies) is, and
 a value that does not satisfy it is a fault
 (`:(FN :{} -> Number) returned Str, which does not satisfy Number`).
 
-When a frame's last unit is a statement that binds nothing, the runner does not
-wait on it: it **tails** into the evaluator, handing it the contract, and the
-evaluation owes the frame's caller the value. The evaluation is the frame's
-**hand-off**, a tree child of the frame that inherits its provenance, so its
-view of the frame's activation pins free and its own successor is born beside
-the frame, never under it
-([tail hops](../scheduler/README.md#tail-hops)). The frame is released after
-the hand-off's first step and disposes when the hand-off does. An evaluation whose selected call's declared return satisfies the
-contract tails again, into the callee's frame, so a tail recursion N deep holds
-a constant number of cells. Whether it does is one answer,
+When a frame's last unit is a statement that binds nothing, the runner
+evaluates it in **tail position**, owing the frame's contract. An evaluation
+there whose selected call's declared return satisfies the contract **tails**:
+the frame's own cell ends by hopping into the callee's frame, born beside it
+([tail hops](../scheduler/README.md#tail-hops)), so a tail recursion N deep
+holds a constant number of cells. Whether it does is one answer,
 [`Contract::kept_by`](record.rs), for a keyworded call at its solved group and
 for a call by name, where only an unquantified callee keeps the contract, since
-its frame has not yet solved; any other value is held to the contract where the
-evaluation finishes. The hop hands the frame it reaches the contract it owes,
+its frame has not yet solved; any other value is delivered down the stack and
+held to the contract at the frame's end. The hop hands the frame it reaches the contract it owes,
 and the caller asked for the outermost callee's return: that frame's value is
 checked against its own callee's return, which a miss names, and retyped to the
 outermost return of the chain — the contract's `retype`. So beside
@@ -405,22 +467,22 @@ outermost return of the chain — the contract's `retype`. So beside
 returns a `LIST OF Any`. An `EVAL`'s frame owes the type the `EVAL` declares
 as a called frame owes its return; its contract names no callee, so a miss
 names the `EVAL`'s code (`` `EVAL`'s code returned Str, which does not satisfy
-Number ``). A frame called through a barrier never tails. A block tails only as
-a tail `MATCH` arm: the `MATCH`'s evaluation hands the arm's block off owing its
-own contract, and the block tails its last statement as a frame does
-(`Runner::tail_body`), so a recursion through tail arms holds a constant number
-of cells. Every other block runs as a child and never tails.
+Number ``). A frame called through a barrier never tails. A block is in tail
+position only as a tail `MATCH` arm: the `MATCH` in tail position runs the
+arm's block owing its own contract, and the block evaluates its last statement
+in tail position as a frame does (`Runner::tail_body`), so a recursion through
+tail arms holds a constant number of cells. Every other block's last statement
+delivers its value to the node that ran the block.
 
 **What a tail owes travels as an `Owed`**: the contract, the extent of the
 frame's call — every call's and `EVAL`'s birth carries the extent of its node —
 and the frame's hop table, the frames tail hops replaced in its chain, one
 entry per callee and call site, most recently reached first. A frame builds
 its own from its callee, its call and the table its birth carries, empty for a
-spawned frame; a hand-off and a tail arm owe their frame's. A hop moves the
+spawned frame; a tail arm owes its frame's. A hop moves the
 line of the frame it replaces — the owed contract's callee at the owed call —
 to the front of the table, counting it once more, and hands the table to the
-callee's frame, whose own call is the hop's. A hand-off replaces no frame and
-counts nothing. The table crosses into each hop's successor as the birth does,
+callee's frame, whose own call is the hop's. The table crosses into each hop's successor as the birth does,
 its types with it, and holds at most one entry per callee and tail site the
 program has, so a loop still runs in constant space. The line a faulting cell
 owes is read off its `Owed` ([faults](#faults-and-output)).
@@ -466,8 +528,7 @@ carrier of each; the skeleton and the predecessor's record die with the hop
 last statement in it, is asked for with `Use::Threads`, so it is built in the
 loop's cell where the frame's provenance names one: what a tail call hands on
 that the frame built outlives the hop, built over what it reaches where that
-rests, and everything else the frame and its hand-off build is reclaimed at
-the next hop. A callee a tail hands on bare — a function the frame tied, an
+rests, and everything else the frame builds is reclaimed at the next hop. A callee a tail hands on bare — a function the frame tied, an
 instance the call made, a spread candidate — threads too: it is copied into
 the loop cell once, and the loop's frames keep it, and every capture read
 through it, there. A loop's memory is therefore a constant times what its
@@ -479,8 +540,9 @@ hands every callee through a kept part builds no loop cell at all.
 A body the load found [caching](../dispatch/README.md#body-classes) lays its
 values in the region its writer lays into and its types in a scratch tier
 ([where each body interns](../../design/type-tiers.md#where-each-body-interns)).
-Each step picks one chain at its entry ([`run`](body.rs), and the evaluator's
-`evaluate`):
+Each step picks one chain at its entry ([`run`](body.rs)), and every body on
+its stack runs on it: a frame's blocks and inline module bodies are classed
+with the frame body that owns them, so they cache where it does:
 
 - the **caching chain** in a caching body, and in the own body of a caching
   frame that routes, which holds its scratch for its life at its first step.
@@ -488,9 +550,8 @@ Each step picks one chain at its entry ([`run`](body.rs), and the evaluator's
   scratch, and writes the scratch;
 - the region chain in every other body.
 
-The `routes` bit of the `Within` on each evaluation and block the frame asks
-for ([`KBirth`](bundle.rs)) carries the frame's routing down, and the hand-off
-of the last statement clears it. A frame under a settlement under the root
+The `routes` bit of the `Within` on each node and block of the frame's stack
+carries the frame's routing down. A frame under a settlement under the root
 reads an invariant site's types where the settlement rested them, in the agent
 tier, and adopts nothing there; a frame under none, or under a composition,
 mints them into its scratch, its warm tier and its cold tier at once.
@@ -499,10 +560,9 @@ A caching body asks for its blocks and its yielding statement with `Keeps`
 rather than `Forwards`, so a value leaves it only through an **exit**
 ([`Exit`](exit.rs)), where every type the value reaches is adopted into the
 region first: a call's callee, arguments, contributions and the contract a
-tail hands on, an `EVAL`'s code, offered record and declared type, a value
-owed a frame's contract, the frame's end, and — in a frame that routes — the
-hand-off of its last statement, which adopts the binders the shape lists
-that statement reading, and the frame's contract. The walk stops at a part
+tail hands on, an `EVAL`'s code, offered record and declared type, and the
+frame's end. A frame evaluates its last statement on its own chain, so a tail
+adopts only what the hop hands on. The walk stops at a part
 whose [memo bits](../values/README.md#weight) say its types already resolve
 there, handing over nothing for it, and marks what it walked settled, so a value
 the frame received or passes on is walked once
@@ -529,8 +589,8 @@ frame's first step once the frame is born under that settlement
 ([the scheduler](../scheduler/README.md#the-build-arena)). The frame relays the
 image into its region and lays the level there at entry, so the level's types
 resolve for a callable born under it whatever its asker was — under a
-composition, a tail call's asker is the dead hand-off, no ancestor of the
-frame. A hop under its frame's own settlement hands the frame's level on in its
+composition, a tail call's asker is the dead predecessor frame, no ancestor
+of the frame. A hop under its frame's own settlement hands the frame's level on in its
 birth. Nothing is laid in the asker, so a loop making a keyed call each hop
 leaves nothing per hop in its asker's region.
 
@@ -542,12 +602,13 @@ invariant types warm. A frame born under a settlement routes: it holds its
 scratch. Dispatch picks the door where it calls: a hop of the frame's own
 callee, keyed, from a frame under a settlement its route marks a hop,
 `tail_under` the frame's arena node; any other call `spawn_seeking` or
-`tail_seeking`; an `EVAL`, a `USING` or a `BUILD` of composed code `spawn_composing`; an
-evaluation or a block `spawn`; and a frame's last statement `hand_off`.
+`tail_seeking`; an `EVAL`, a `USING` or a `BUILD` of composed code `spawn_composing`;
+and a written quote's `EVAL` `spawn`. A part or a block is pushed onto the
+stack, and a top-level statement's evaluation is spawned by the top level.
 
 A frame's runner takes the arena node it runs under at its first step and
 hands it, with its stamp — the frame's level over its callee's — in its
-`Within`, to every evaluation and block it asks for, so a callable a tie or a
+`Within`, to every node and block on its stack, so a callable a tie or a
 lambda births in the frame, its blocks included, is born under it, seeks
 beneath it and replays its chain where it is gone. A frame under its own
 settlement whose body births no callable holds no level, and its `Within`
@@ -563,7 +624,7 @@ its entry, a statement seam, a block's entry, an `EVAL`'s captures — the
 runner decides in the frame's **activation**
 ([`activation_store`](activation_store.rs)): it reads the binding off its
 slots, walks the body over what it read below, relays the records into the
-frame's region and layers them on what every evaluation and block it asks for
+frame's region and layers them on what every node and block on its stack
 reads. It first looks the event up in its decision memo, and walks only where
 the memo holds no decision for those bindings
 ([the build module](../build/README.md#activations)). A refusal the walk
@@ -588,8 +649,9 @@ in its frame. Every unit that receives a fault — an evaluation's outcome, an
 eager part a tie named — stops the body with it, and so does every refusal the
 program is to blame for: a tie or a declaration refused, a callee that is no
 function, arguments that do not fit it. A part that faults stops the parts
-after it: what the same park asked for and has not yet run never runs
-([the scheduler](../scheduler/README.md#faults)). A frame finishes with the
+after it: a frame asks for its parts one at a time, so a part after a failing
+one is never asked, and at the top level what the same park asked for and has
+not yet run never runs ([the scheduler](../scheduler/README.md#faults)). A frame finishes with the
 fault; a block does the same. `StepError::Refused` is left for invariant
 breaks alone.
 
@@ -617,8 +679,9 @@ region at the exit it leaves by, as a value does ([`Exit`](exit.rs)).
 frame's line: the callee's type — none for an `EVAL` frame — the extent of the
 call, and the frames tail hops replaced in its chain, counted per callee and
 call site, most recently reached first
-([frames](#frames-contracts-and-tails)). A frame that tailed is gone, so its
-hand-off owes its line.
+([frames](#frames-contracts-and-tails)). Only the bottom of a cell's
+[evaluation stack](#the-evaluation-stack) lays it, so a fault passing through a
+block or a tail arm is lined once.
 
 At the top level, an uncaught fault is rendered through the program:
 `error: <message>` to the error sink, from the fault's fields — a `Refused`
@@ -655,8 +718,8 @@ after an uncaught run follows that drop.
 to call a function: a frame running the callee's body, always `Fresh`, in a
 region of its own. A result that is its argument, or a part of one, needs no
 shared region: the frame hands it back from where it rests
-([frames](#frames-contracts-and-tails)). Tenancy is left to a frame's own
-evaluations and blocks, and to `EVAL` and `USING` frames. A builtin's native
+([frames](#frames-contracts-and-tails)). Tenancy is left to `EVAL` and
+`USING` frames; a frame's own evaluations and blocks run in its step. A builtin's native
 step states its own placement in the request it makes.
 
 **Running code.** [`eval`](body.rs) is what an evaluator asks for to run code
@@ -718,8 +781,8 @@ without interleaving, a forward capture running its binder first, more
 statements than the slab cap, a binding built in the root from the start, a
 frame's result crossing into the root at the verdict's price, a call returning
 its argument handing back its storage, a called body's
-evaluations as tenants of the frame, a component bound from one knot, eager
-parts supplied by site in one wake, a recursion deeper than the slab cap, a
+evaluations run in the frame's own step, a component bound from one knot,
+eager parts supplied by site in one retry, at the top level and in a frame, a recursion deeper than the slab cap, a
 module body run inline, lambdas — born through the
 [lambda door](../knot/README.md#a-lambda) after a later binding they read,
 returned from a frame and called with their captures, held in a knot and
@@ -755,6 +818,3 @@ module value by its digest tree. The two-program test,
 
 - [A refused program stays loaded](../../roadmap/one-build/refused-programs-stay-loaded.md)
   — a refused load kept, so its shape error renders on demand rather than once.
-- [One cell per frame](../../roadmap/one-build/one-cell-per-frame.md) — a
-  called body run in its frame's own cell, parking only on a spawned frame,
-  with no hand-off.

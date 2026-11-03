@@ -4009,42 +4009,12 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
 
     /// Lay a finished draft down in program storage, its nested drafts first; `form` is the node
     /// holding a callable draft's body.
-    /// The slots a callable's, a code body's or a tail arm's last statement reads — directly,
-    /// through a nested block, or through a nested body's captures — beside every type slot,
-    /// sorted: what a frame or block that hands its last statement on keeps alive across the
-    /// hand-off. A type slot is listed whole, since a type capture the load's walk adds later reads
-    /// one at a birth no read here records. Empty for any other body, and for one with no
-    /// statements.
-    fn last_reads(&self, draft: &Draft<'graph, 'x>) -> &'graph [Slot] {
-        let Some(last) = draft.statements.checked_sub(1) else {
-            return &[];
-        };
-        if !draft.tail {
-            return &[];
-        }
-        let mut slots = BumpVec::new_in(self.scratch);
-        slots.extend(
-            (draft.reads.iter())
-                .filter(|(statement, _)| *statement == last)
-                .map(|(_, slot)| *slot),
-        );
-        slots.extend(
-            (0..draft.channels().len())
-                .map(|index| Slot(index as u32))
-                .filter(|slot| draft.is_type_slot(*slot)),
-        );
-        slots.sort_unstable();
-        slots.dedup();
-        collect(self.brand.writer(), slots.iter().copied())
-    }
-
     fn seal(
         &mut self,
         mut draft: Draft<'graph, 'x>,
         around: &[Sealing<'_>],
     ) -> &'graph BodyShape<'graph> {
         let writer = self.brand.writer();
-        let last_reads = self.last_reads(&draft);
         // The nested drafts take the segments before this one's, in program order: a frontier's
         // cut (`Cut`) rests on segments falling from the root inward along a chain.
         let segment = Segment(self.next_segment.get() + draft.descendants);
@@ -4231,7 +4201,6 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 unit_of_statement: collect(writer, draft.unit_of_statement.iter().copied()),
                 holds,
                 nested_starts: collect(writer, nested_starts.iter().copied()),
-                last_reads,
                 threaded: collect(writer, threaded.iter().copied()),
                 threaded_parts: collect(writer, threaded_parts.iter().copied()),
                 arm: draft.arm,

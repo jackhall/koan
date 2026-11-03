@@ -274,15 +274,15 @@ minting into the scratch it writes, as below.
 
 ## The scratch branch as a cache
 
-**Its span is one call.** The evaluation that asks for a call registers a
-receipt run in its host's scratch habitat and parks on it, and a receipt run
-holds that habitat's reset off until the registration that replaces it or the
-cell's death ([the cell](../cellgraph/README.md#the-cell)). So the host's
-scratch lives from the ask to the delivery, whatever the callee does in
-between, and resets at the first quiet step end after the evaluation wakes.
-The evaluations a body asks for are tenants of its cell and write its scratch,
-so the parts asked at one park — the operands of one operator run, the parts
-of one tie — are warm to each other. A called frame is a tree cell: a caching
+**Its span is one call.** The cell that asks for a call registers a receipt
+run in its scratch habitat and parks on it, and a receipt run holds that
+habitat's reset off until the registration that replaces it or the cell's
+death ([the cell](../cellgraph/README.md#the-cell)). So the scratch lives from
+the ask to the delivery, whatever the callee does in between, and resets at
+the first quiet step end after the cell wakes. A frame evaluates its whole
+body in its own step, its evaluation stack resting in that same scratch while
+it waits, so everything one frame evaluates is warm to everything else it
+evaluates. A called frame is a tree cell: a caching
 one holds its own scratch for its life, its warm and cold tier at once, and
 drops it with the frame. It reads no other cell's scratch, so a frame with no
 settlement is warm across its own statements alone, and each hop of a tail
@@ -313,12 +313,11 @@ function type with its carrier, the types a call by name contributes to its
 callee's solve, the contract a tail call or an `EVAL` hands on, and a
 barrier's four handles, the type the caller sees, the declared slot type and
 the two substitutions — its types are adopted into the region. A caching
-frame that hands its last statement to the evaluator — a tree child of the
-frame, writing its own region — departs while that statement runs, and its
-scratch with it, so the binders that statement reads, which the load lists,
-and the frame's contract are adopted at the hand-off. The adopt reads the
-whole chain the body ran on, since a type's children may lie both in the agent
-tier and in the frame's scratch.
+frame evaluates its last statement on its own chain, so a tail call out of it
+adopts only what the hop hands on — the callee, the arguments and the contract
+— and its end only its value. The adopt reads the whole chain the body ran on,
+since a type's children may lie both in the agent tier and in the frame's
+scratch.
 A sealed exit carries no minted content, but it may carry a
 composite over root types the body built in a scratch tier. What lingers is
 bounded by what the body hands out, never by what it minted.

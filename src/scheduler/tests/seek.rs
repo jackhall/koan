@@ -842,57 +842,6 @@ fn noted<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'grap
 }
 
 #[test]
-fn a_hand_off_successor_holds_its_frames_settlement_until_its_own_release() {
-    /// A frame keyed 1 that records its settlement and hands off to [`miss_then_note`].
-    fn frame<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
-        let (step, _) = step.state();
-        push_build(step.arena_ref(ArenaRef::ROOT));
-        let work = Work {
-            step: miss_then_note,
-            state: KValue::Null,
-        };
-        step.hand_off(work)
-    }
-    fn start<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
-        let request = fresh(frame, Use::Reads, KValue::Null);
-        let asked = step.spawn_seeking(request, seek(1, ArenaRef::ROOT));
-        step.park(asked, finished, KValue::Null, None)
-    }
-    reset();
-    fresh_tally();
-    let type_region = Bump::new();
-    let (mut graph, run) = loaded(&type_region, smallest());
-    let mut scheduler = Scheduler::over(&mut graph);
-    scheduler
-        .run(work(start, KValue::Null), run, Placement::Fresh)
-        .expect("the root work ends");
-    let [frame, _two, successor] = builds()[..] else {
-        panic!("three frames ran: {:?}", builds())
-    };
-    assert_ne!(frame, ArenaRef::ROOT);
-    assert_eq!(
-        successor, frame,
-        "the successor runs under its frame's settlement"
-    );
-    assert_eq!(
-        EVICTED_THEN.with(|then| then.borrow().clone()),
-        [0],
-        "the miss in the successor's life evicted nothing: the successor held the settlement"
-    );
-    assert!(
-        live(&scheduler, frame),
-        "nothing missed after the successor's release"
-    );
-    run_sequence(&mut scheduler, run, &[(3, false)], false);
-    assert!(
-        !live(&scheduler, frame),
-        "the next miss evicts it, held by no cell"
-    );
-    drop(scheduler);
-    torn_down(graph, run);
-}
-
-#[test]
 fn a_tenants_count_runs_from_its_creation_to_its_release() {
     fn start<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
         let request = shares(miss_then_note, Use::Reads, KValue::Null);

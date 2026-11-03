@@ -466,8 +466,9 @@ whose frontier the chain's keys do not cover stays unsettled.
   builds, or the arena node its callee was born under where it keys nothing;
   a tail successor of the same callee, whose name does not escape, the
   settlement its frame ran under, with no lookup; an `EVAL` of composed code
-  its composition; and an evaluation, a block, a hand-off and a tenant what
-  its asker runs under. A hand-off successor borrows before its predecessor
+  its composition; and a top-level statement's evaluation and a tenant what
+  its asker runs under, while a part or a block runs in its frame's own cell
+  and borrows nothing. A hop's successor borrows before its predecessor
   releases. A parent link holds every arena node above, so one count covers
   the whole chain. A step reads its arena node's shape and facts through its
   door at the step's own borrow and copies out indexes, digests and type

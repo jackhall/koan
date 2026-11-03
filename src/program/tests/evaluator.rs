@@ -10,26 +10,24 @@
 //! `ELSE`, `MINUS` and `FIRST` are no builtin shapes, so the shape builder walks them as plain
 //! calls; anything else is refused.
 //!
-//! Born under a frame's [`Contract`], it owes the frame its value: a `WHEN` tails into its branch
-//! with the contract, a call whose callee's declared return satisfies it tails into the callee's
-//! frame, and every other value is held to it where it is finished. An `EVAL` refused, or a
-//! fault received from a call, ends the evaluation with that fault.
+//! Owing a frame's contract, a node is in the frame's tail position: a `WHEN` evaluates its branch
+//! in its own place, owing the contract, a call whose callee's declared return satisfies it tails
+//! into the callee's frame, and every other value is held to it where the frame ends. An `EVAL`
+//! refused, or a fault received from a call, ends the evaluation with that fault.
 //!
 //! A step is a bare `fn`, so what it observes it records in a thread-local for the test around it.
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 
 use crate::knot::{KBuiltins, KReading, KValue, Knotted, lambda, quote};
 use crate::memory::{Active, Bump, BumpAllocator, Writer, collect};
 use crate::parse::BuiltinShapeId;
 use crate::parse::{ExpressionPart, KExpression, KLiteral, Spanned};
 use crate::program::{
-    CallKind, Contract, Evaluated, KBirth, KBundle, KState, Language, Owed, Program, call, eval,
+    CallKind, Delivered, Evaluated, Evaluator, KBundle, Language, Next, Node, Program, Tailed,
+    call, eval,
 };
-use crate::scheduler::{
-    Action, Held, Hold, NativeStep, Placement, Received, Request, Slot as Asked, Step, StepError,
-    Taken, Use,
-};
+use crate::scheduler::{Held, Seek, Step, StepError, Taken, Use};
 use crate::scope::{
     BodyShape, Builtins, CaptureSlot, Code, Inner, Located, Offer, Position, Site, Slot,
 };
@@ -108,7 +106,7 @@ impl Language for Mini {
         )
     }
 
-    fn evaluator<'graph>() -> NativeStep<'graph, KBundle> {
+    fn evaluator<'graph>() -> Evaluator<'graph> {
         evaluate
     }
 
@@ -207,58 +205,79 @@ fn truthy(value: &KValue<'_, '_>) -> bool {
     }
 }
 
-/// The value one received slot holds, wherever it was delivered.
-fn number(received: Received<'_, '_, '_>) -> Option<f64> {
-    match received {
-        Received::Scratch(Value::Number(number))
-        | Received::Here(Held {
-            value: Value::Number(number),
-            ..
-        }) => Some(number),
+/// The number a delivered value is.
+fn number(held: &Held<'_, '_>) -> Option<f64> {
+    match held.value {
+        Value::Number(number) => Some(number),
         _ => None,
     }
 }
 
-/// The step every evaluation runs.
-fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'graph, KBundle> {
-    let (step, state) = step.state();
-    let (mut step, _) = step.scratch();
-    let (birth, stage) = match state {
-        KState::Born(birth) => (birth, 0),
-        KState::Evaluating { birth, stage } => (birth, stage),
-        KState::Runner(_) | KState::Catching { .. } => return step.failed(StepError::Refused),
-    };
-    let KBirth::Evaluate {
-        program,
-        node,
-        view,
-        owed,
-        ..
-    } = birth
-    else {
-        return step.failed(StepError::Refused);
-    };
-    let contract = owed.map(|owed| owed.contract);
+/// Where a node's stage says it waits on the one child whose value is its own.
+const FINISHING: u32 = 2;
+
+/// The values of the parts at `sites`, each asked with its use one at a time in order, once all
+/// are delivered: what the node needs next until then, or the fault one ended with.
+#[expect(
+    clippy::result_large_err,
+    reason = "the answer is handed straight back, once per call"
+)]
+fn gathered<'graph, 'here, 'scratch>(
+    step: &Taking<'_, 'graph, '_, 'here, 'scratch, '_>,
+    node: &mut Node<'graph, 'here, 'scratch>,
+    delivered: Option<Delivered<'graph, 'here>>,
+    sites: &[(Site, Use)],
+) -> Result<Vec<Held<'graph, 'here>>, Next<'graph, 'here>> {
+    if node.received.is_empty() {
+        node.received = step.scratch_writer().fill(sites.len(), |_| Cell::new(None));
+    }
+    match delivered {
+        Some(Delivered::Value(held)) => match node.received.iter().find(|at| at.get().is_none()) {
+            Some(slot) => slot.set(Some(held)),
+            None => return Err(Next::Failed(StepError::Unredeemable)),
+        },
+        Some(Delivered::Fault(inner)) => return Err(Next::Raised(inner)),
+        None => {}
+    }
+    match node.received.iter().position(|at| at.get().is_none()) {
+        Some(next) => Err(Next::Part {
+            site: sites[next].0,
+            use_: sites[next].1,
+        }),
+        None => Ok(node.received.iter().filter_map(Cell::get).collect()),
+    }
+}
+
+/// The evaluator: what every node in flight is handed to.
+fn evaluate<'graph, 'here, 'scratch>(
+    step: &mut Taking<'_, 'graph, '_, 'here, 'scratch, '_>,
+    node: &mut Node<'graph, 'here, 'scratch>,
+    delivered: Option<Delivered<'graph, 'here>>,
+) -> Next<'graph, 'here> {
+    let program = node.program;
+    let owed = node.owed;
     let (door, facts) = step.door();
-    let view = view.reading(&door, facts);
+    let view = node.view.reading(&door, facts);
     let types = &step.types();
     let scratch = Bump::new();
-    let written = match form(view.shape(), node) {
+    let written = match form(view.shape(), node.node) {
         Form::Leaf(part @ ExpressionPart::Literal(literal)) => {
             if let KLiteral::Number(number) = literal {
                 record(format!("literal {number}"));
             }
-            return step.finish_fresh(|writer, types, _| {
+            // Built where the value goes from the start: a fresh result, placed operand-free.
+            let built = step.built_as(node.use_, &[], None, |writer, types, _, _| {
                 let value =
                     Value::lower_part(writer, part, types, &scratch).expect("a literal lowers");
-                Active::new(held(program, contract, writer, types, value))
+                Active::new(value)
             });
+            return built.map_or(Next::Failed(StepError::Stale), Next::Value);
         }
         Form::Leaf(part @ ExpressionPart::QuotedExpression(_)) => {
             let written = program.written();
             let member = quote(step.writer(), &view, written, part, types, &scratch)
                 .expect("a test's quote composes");
-            return finished(step, program, owed, types, Value::Knotted(member));
+            return finished(step, node, Value::Knotted(member));
         }
         // A Type-class name reads through the activation like any other mention: a frame binds
         // its callee's type parameters, so `Elt` inside a quantified body is an ordinary read.
@@ -268,7 +287,7 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'
             | ExpressionPart::MarkedName(..)),
         ) => {
             let Some(value) = read(&view, part) else {
-                return step.failed(StepError::Refused);
+                return Next::Failed(StepError::Refused);
             };
             match value {
                 Value::List(list) => record(format!("read {:p}", list)),
@@ -277,7 +296,7 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'
                 }
                 _ => {}
             }
-            return finished(step, program, owed, types, value);
+            return finished(step, node, value);
         }
         Form::Leaf(ExpressionPart::ListLiteral(items)) => {
             if items
@@ -285,15 +304,16 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'
                 .all(|item| matches!(item.part(), ExpressionPart::Literal(_)))
             {
                 // Built in the home from the start: a fresh result, placed operand-free.
-                return step.finish_fresh(|writer, types, _| {
+                let built = step.built_as(node.use_, &[], None, |writer, types, _, _| {
                     let cells = items.iter().map(|item| {
                         Value::lower_part(writer, item.part(), types, &scratch)
                             .expect("a literal lowers")
                     });
                     let list = List::new(writer, cells, types, &scratch);
                     record(format!("built {:p}", list));
-                    Active::new(held(program, contract, writer, types, Value::List(list)))
+                    Active::new(Value::List(list))
                 });
+                return built.map_or(Next::Failed(StepError::Stale), Next::Value);
             }
             let writer = step.writer();
             let mut cells = Vec::new();
@@ -301,7 +321,7 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'
                 match item {
                     ExpressionPart::Identifier(_) => match read(&view, item) {
                         Some(value) => cells.push(value),
-                        None => return step.failed(StepError::Refused),
+                        None => return Next::Failed(StepError::Refused),
                     },
                     ExpressionPart::QuotedExpression(_) => {
                         let written = program.written();
@@ -311,20 +331,20 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'
                     }
                     _ => match Value::lower_part(writer, item, types, &scratch) {
                         Some(value) => cells.push(value),
-                        None => return step.failed(StepError::Refused),
+                        None => return Next::Failed(StepError::Refused),
                     },
                 }
             }
             // Built here and crossed into the home at the verdict's price.
             let list = List::new(writer, cells.into_iter(), types, &scratch);
             record(format!("built {:p}", list));
-            return finished(step, program, owed, types, Value::List(list));
+            return finished(step, node, Value::List(list));
         }
-        Form::Leaf(_) => return step.failed(StepError::Refused),
-        Form::Lambda(node) => {
+        Form::Leaf(_) => return Next::Failed(StepError::Refused),
+        Form::Lambda(expression) => {
             let site = view
                 .shape()
-                .site_of_body(node)
+                .site_of_body(expression)
                 .expect("a lambda has a body");
             let writer = step.writer();
             let Ok(member) = lambda(
@@ -337,117 +357,89 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'
                 types,
                 &scratch,
             ) else {
-                return step.failed(StepError::Refused);
+                return Next::Failed(StepError::Refused);
             };
             record(format!("born {}", born(member, program, types)));
-            return finished(step, program, owed, types, Value::Knotted(member));
+            return finished(step, node, Value::Knotted(member));
         }
         Form::Call(written) => written,
     };
-    match (written.parts, stage) {
-        ([when, condition, then, _, otherwise, _], 0)
+    if node.stage == FINISHING {
+        return match delivered {
+            Some(Delivered::Value(Held { value, .. })) => finished(step, node, value),
+            Some(Delivered::Fault(inner)) => Next::Raised(inner),
+            None => Next::Failed(StepError::Unredeemable),
+        };
+    }
+    let site = |part: &Spanned<ExpressionPart<'_>>| view.shape().site(&part.value);
+    match written.parts {
+        [when, condition, then, taken, otherwise, other]
             if keyword(when, "WHEN") && keyword(then, "THEN") && keyword(otherwise, "ELSE") =>
         {
-            let asked = ask(
-                &mut step,
-                birth,
-                view.shape().site(&condition.value),
-                Use::Reads,
-            );
-            park(step, asked, birth, 1)
-        }
-        ([_, _, _, taken, _, other], 1) => {
-            let received = step.results().next();
-            let Some(Ok(condition)) = received else {
-                return step.failed(StepError::Unredeemable);
+            let condition = match gathered(step, node, delivered, &[(site(condition), Use::Reads)])
+            {
+                Ok(values) => values[0],
+                Err(next) => return next,
             };
-            let holds = match condition {
-                Received::Scratch(value) => truthy(&value),
-                Received::Here(held) => truthy(&held.value),
-                Received::Fault(inner) => return step.fault(owed.map(|owed| owed.line()), inner),
+            let branch = if truthy(&condition.value) {
+                taken
+            } else {
+                other
             };
-            let branch = if holds { taken } else { other };
-            if contract.is_some() {
-                let work = program.evaluate(
-                    Evaluated::Part(view.shape().site(&branch.value)),
-                    view.view(),
-                    owed,
-                    crate::program::Within::TOP,
-                );
-                return step.hand_off(work);
+            // Owing a contract, the branch is the node's tail: evaluated in its place.
+            if owed.is_some() {
+                *node = Node {
+                    node: Evaluated::Part(site(branch)),
+                    stage: 0,
+                    received: &[],
+                    ..*node
+                };
+                return evaluate(step, node, None);
             }
-            let asked = ask(
-                &mut step,
-                birth,
-                view.shape().site(&branch.value),
-                Use::Forwards,
-            );
-            park(step, asked, birth, 2)
+            node.stage = FINISHING;
+            Next::Part {
+                site: site(branch),
+                use_: Use::Forwards,
+            }
         }
-        ([left, minus, right], 0) if keyword(minus, "MINUS") => {
-            ask(&mut step, birth, view.shape().site(&left.value), Use::Reads);
-            let asked = ask(
-                &mut step,
-                birth,
-                view.shape().site(&right.value),
-                Use::Reads,
-            );
-            park(step, asked, birth, 1)
-        }
-        ([_, _, _], 1) => {
-            let operands: Vec<Option<f64>> = step
-                .results()
-                .map(|received| received.ok().and_then(number))
-                .collect();
-            let [Some(left), Some(right)] = operands[..] else {
-                return step.failed(StepError::Refused);
+        [left, minus, right] if keyword(minus, "MINUS") => {
+            let sites = [(site(left), Use::Reads), (site(right), Use::Reads)];
+            let operands = match gathered(step, node, delivered, &sites) {
+                Ok(values) => values,
+                Err(next) => return next,
             };
-            step.finish_fresh(move |writer, types, _| {
-                Active::new(held(
-                    program,
-                    contract,
-                    writer,
-                    types,
-                    Value::Number(left - right),
-                ))
-            })
+            let (Some(left), Some(right)) = (number(&operands[0]), number(&operands[1])) else {
+                return Next::Failed(StepError::Refused);
+            };
+            let built = step.built_as(node.use_, &[], None, move |_, _, _, _| {
+                Active::new(Value::Number(left - right))
+            });
+            built.map_or(Next::Failed(StepError::Stale), Next::Value)
         }
-        ([first, operand], 0) if keyword(first, "FIRST") => {
+        [first, operand] if keyword(first, "FIRST") => {
             let Some((holder, Circular::List(list))) =
                 read(&view, &operand.value).and_then(|value| value.as_circular())
             else {
-                return step.failed(StepError::Refused);
+                return Next::Failed(StepError::Refused);
             };
             match list.links().next() {
-                Some(Link::Edge(edge)) => finished(
-                    step,
-                    program,
-                    owed,
-                    types,
-                    Value::Knotted(holder.sibling(edge)),
-                ),
-                _ => step.failed(StepError::Refused),
+                Some(Link::Edge(edge)) => {
+                    finished(step, node, Value::Knotted(holder.sibling(edge)))
+                }
+                _ => Next::Failed(StepError::Refused),
             }
         }
-        ([head, operand, _, _], 0) if keyword(head, "EVAL") => {
-            let asked = ask(
-                &mut step,
-                birth,
-                view.shape().site(&operand.value),
-                Use::Keeps,
-            );
-            park(step, asked, birth, 3)
-        }
-        ([_, operand, _, _], 3) => {
-            let Some(Ok(Received::Here(Held { value: code, .. }))) = step.results().next() else {
-                return step.failed(StepError::Unredeemable);
+        [head, operand, _, _] if keyword(head, "EVAL") => {
+            let code = match gathered(step, node, delivered, &[(site(operand), Use::Keeps)]) {
+                Ok(values) => values[0].value,
+                Err(next) => return next,
             };
             let Some(code) = code.as_code() else {
-                return step.failed(StepError::Refused);
+                return Next::Failed(StepError::Refused);
             };
             let fields: Vec<_> = view
                 .shape()
-                .offers(view.shape().site(&operand.value))
+                .offers(site(operand))
                 .iter()
                 .map(|(name, offer)| match offer {
                     Offer::Name(at) => (*name, view.read(*at)),
@@ -463,11 +455,11 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'
                 Value::Record(offered),
                 (KType::ANY, written.source),
                 None,
-                Use::Forwards,
+                node.use_,
             ) {
                 Ok(request) => {
-                    let asked = step.spawn(request);
-                    park(step, asked, birth, 2)
+                    node.stage = FINISHING;
+                    Next::Spawned(step.spawn(request))
                 }
                 Err(refused) => {
                     let message = refused.display(program.symbols(), types).to_string();
@@ -476,33 +468,20 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'
                         step.writer(),
                         refused.relaid(step.writer(), &scratch),
                     );
-                    step.fault(None, Inner::Fault(fault))
+                    Next::Raised(Inner::Fault(fault))
                 }
             }
         }
-        ([_, argument], 0) => {
-            let asked = ask(
-                &mut step,
-                birth,
-                view.shape().site(&argument.value),
-                Use::Keeps,
-            );
-            park(step, asked, birth, 1)
-        }
-        ([head, _], 1) => {
-            let received = step.results().next();
-            let argument = match received {
-                Some(Ok(Received::Here(Held { value, .. }))) => value,
-                Some(Ok(Received::Fault(inner))) => {
-                    return step.fault(owed.map(|owed| owed.line()), inner);
-                }
-                _ => return step.failed(StepError::Unredeemable),
+        [head, argument] => {
+            let argument = match gathered(step, node, delivered, &[(site(argument), Use::Keeps)]) {
+                Ok(values) => values[0].value,
+                Err(next) => return next,
             };
             let Some(callee) = read(&view, &head.value) else {
-                return step.failed(StepError::Refused);
+                return Next::Failed(StepError::Refused);
             };
             let Some(parameter) = parameter(&door, callee) else {
-                return step.failed(StepError::Refused);
+                return Next::Failed(StepError::Refused);
             };
             let writer = step.writer();
             let arguments = Record::new(writer, &[(parameter, argument)], types, &scratch);
@@ -519,7 +498,7 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'
                     (written.source, owed),
                     None,
                     None,
-                    Use::Forwards,
+                    node.use_,
                 )
             };
             if let Some(owed) = owed
@@ -527,61 +506,23 @@ fn evaluate<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'
                     .is_some_and(|function| owed.contract.kept_by(types, function.ktype(), None))
             {
                 let request = request(Some(owed.hopped(step.writer())));
-                return step.tail(request.work);
+                let seek = Seek {
+                    parent: crate::values::ArenaRef::ROOT,
+                    settlement: None,
+                    hands_back: false,
+                };
+                return Next::Tail(Tailed::Seeking(request.work, seek));
             }
-            let asked = step.spawn(request(None));
-            park(step, asked, birth, 2)
+            node.stage = FINISHING;
+            Next::Spawned(step.spawn(request(None)))
         }
-        (_, 2) => {
-            let received = step.results().next();
-            match received {
-                Some(Ok(Received::Here(Held { value, .. }))) => {
-                    finished(step, program, owed, types, value)
-                }
-                Some(Ok(Received::Fault(inner))) => step.fault(owed.map(|owed| owed.line()), inner),
-                _ => step.failed(StepError::Unredeemable),
-            }
-        }
-        _ => step.failed(StepError::Refused),
+        _ => Next::Failed(StepError::Refused),
     }
 }
 
 /// A step that took both its states.
 type Taking<'a, 'graph, 'step, 'here, 'scratch, 'lent> =
     Step<'a, 'graph, 'step, 'here, 'scratch, 'lent, KBundle, Taken, Taken>;
-
-/// Ask for one child evaluating the part at `site` through the view `birth` holds, in a region of
-/// its own.
-fn ask<'graph, 'here>(
-    step: &mut Taking<'_, 'graph, '_, 'here, '_, '_>,
-    birth: KBirth<'graph, 'here>,
-    site: Site,
-    use_: Use,
-) -> Asked {
-    let KBirth::Evaluate { program, view, .. } = birth else {
-        unreachable!("an evaluator holds its evaluation's birth")
-    };
-    step.spawn(Request {
-        placement: Placement::Fresh,
-        use_,
-        work: program.evaluate(
-            Evaluated::Part(site),
-            view,
-            None,
-            crate::program::Within::TOP,
-        ),
-    })
-}
-
-/// Park on the children asked for, resuming at `stage`.
-fn park<'graph, 'here>(
-    step: Taking<'_, 'graph, '_, 'here, '_, '_>,
-    asked: Asked,
-    birth: KBirth<'graph, 'here>,
-    stage: u32,
-) -> Action<'graph, KBundle> {
-    step.park(asked, evaluate, KState::Evaluating { birth, stage }, None)
-}
 
 /// The name of `callee`'s one **value** parameter. A quantified callee's type-parameter slots are
 /// bound by the frame from its solved group, not by the caller, so they are skipped here.
@@ -597,38 +538,14 @@ fn parameter<'step>(
         .find(|name| shape.slot(*name).map(|(_, at)| at) == Some(Position::PARAMETER))
 }
 
-/// `value`, built fresh, held to `contract`, when the evaluation was born under one: the
-/// miniature's fresh values keep every contract its tests owe.
-fn held<'graph, 'cell>(
-    program: &Program<'graph>,
-    contract: Option<Contract>,
-    writer: crate::memory::Writer<'cell, '_>,
-    types: &Chain<'_, 'cell, '_, '_>,
-    value: KValue<'graph, 'cell>,
-) -> KValue<'graph, 'cell> {
-    match contract {
-        Some(contract) => (program.fulfilled(writer, types, value, contract))
-            .expect("a fresh value of the miniature's keeps its contract"),
-        None => value,
-    }
-}
-
-/// Finish with `value` held to what the evaluation owes, or end with the fault its miss raises.
-fn finished<'graph, 'here, S: Hold, X: Hold>(
-    step: Step<'_, 'graph, '_, 'here, '_, '_, KBundle, S, X>,
-    program: &Program<'graph>,
-    owed: Option<Owed<'here>>,
-    types: &Chain<'_, 'here, '_, '_>,
+/// Hand `value` on, placed where the node's `Use` says.
+fn finished<'graph, 'here>(
+    step: &mut Taking<'_, 'graph, '_, 'here, '_, '_>,
+    node: &Node<'graph, 'here, '_>,
     value: KValue<'graph, 'here>,
-) -> Action<'graph, KBundle> {
-    let Some(owed) = owed else {
-        return step.finish(value);
-    };
-    match program.fulfilled(step.writer(), types, value, owed.contract) {
-        Ok(value) => step.finish(value),
-        Err(fault) => {
-            let fault = crate::memory::resident(step.writer(), fault);
-            step.fault(Some(owed.line()), Inner::Fault(fault))
-        }
+) -> Next<'graph, 'here> {
+    match step.crossed_as(node.use_, Held::bare(value), None) {
+        Some(held) => Next::Value(held),
+        None => Next::Failed(StepError::Stale),
     }
 }

@@ -1111,33 +1111,6 @@ fn a_code_digest_is_blind_to_position_and_names_top_level_reads_by_binding() {
     });
 }
 
-/// A callable's last statement reads a parameter, a `LET` through a nested block and a third binder
-/// through a nested body's capture; a binder only an earlier statement reads is not listed, and a
-/// type parameter is listed whole.
-#[test]
-fn a_callables_last_reads_reach_through_blocks_and_captures() {
-    let source = "\
-LET f = (FN FOR ALL #[Elt] :{a :Number, b :Elt, c :Number} -> Any = #((LET u = b) (LET e = a) (LET g = c) ([(MATCH a WITH #{Number: ((e))}) (FN :{} -> Number = #(g))])))";
-    shaped(source, |fixture, lines, shape| {
-        let shape = shape.expect("the program shapes");
-        let body = nested_at(shape, &lines[0], 3, 8);
-        assert_eq!(body.kind(), ShapeKind::Callable);
-        let slot = |name: &str| body.slot(value(fixture, name)).unwrap().0;
-        let (elt, _) = body
-            .slot(BinderSymbol::Type(type_name("Elt", fixture.symbols)))
-            .expect("the type parameter has a slot");
-        let mut expected = [slot("a"), slot("e"), slot("g"), elt];
-        expected.sort_unstable();
-        assert_eq!(body.last_reads(), &expected[..]);
-        assert!(!body.last_reads().contains(&slot("u")));
-        assert!(!body.last_reads().contains(&slot("b")));
-    });
-}
-
-/// A callable's threaded set: the binders its last statement hands on that the frame built, each
-/// with what it was built over, less what the frame received — a parameter, or a binder bound bare
-/// to one — and the argument parts it hands on that are no name, no literal and no member read of
-/// a value received.
 #[test]
 fn a_callables_threaded_set_holds_what_its_frame_built_and_hands_on() {
     let source = "\

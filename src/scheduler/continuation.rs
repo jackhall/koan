@@ -247,9 +247,8 @@ pub enum Born {
 /// inherits its receipt" means. The drain fills it and a step never sees it: a [`Step`] holds the
 /// cell's copy privately, to park under and to deliver to.
 ///
-/// Three cells play three roles in a tail loop: `parent` receives the result, `loop_cell` — else
-/// `parent` — is where a hop or a rebirth is born, and a frame's hand-off is born under the frame
-/// itself.
+/// Two cells play the roles in a tail loop: `parent` receives the result, and `loop_cell` — else
+/// `parent` — is where a hop or a rebirth is born.
 #[derive(Clone, Copy)]
 pub(super) struct Provenance {
     /// The consumer this cell reports to — the cell it, or the first cell of its tail chain, was
@@ -264,7 +263,7 @@ pub(super) struct Provenance {
     pub home: CellHandle,
     /// The tree cell under `parent`, with no continuation, that a tail loop's hops are born under
     /// and its threaded values are built in, which outlives each hop: set by the drain at the hop
-    /// that first threads, and inherited by every hop and hand-off after. `None` for a spawned
+    /// that first threads, and inherited by every hop after. `None` for a spawned
     /// cell, and for a loop that threads nothing.
     pub loop_cell: Option<CellHandle>,
     /// Whether `home` is a loop cell: a value built there copies whatever is homed in a hop, at
@@ -273,6 +272,22 @@ pub(super) struct Provenance {
     /// The bytes `loop_cell` held at the first hop after it was filled — what its live values come
     /// to, their types included — which a hop compacts it against; `0` until that hop reads it.
     pub loop_base: usize,
+}
+
+impl Provenance {
+    /// Where a child `cell` asks with `use_` would be built, beside whether that place is a loop
+    /// cell: the cell's home under `Forwards`, its loop cell under `Threads` where it has one, and
+    /// the cell itself otherwise.
+    pub(super) fn target(&self, use_: Use, cell: CellHandle) -> (CellHandle, bool) {
+        match use_ {
+            Use::Forwards => (self.home, self.threads),
+            Use::Threads => match self.loop_cell {
+                Some(loop_cell) => (loop_cell, true),
+                None => (cell, false),
+            },
+            Use::Reads | Use::Keeps => (cell, false),
+        }
+    }
 }
 
 /// One slot of one consumer's receipt run, and what the consumer will do with what fills it.

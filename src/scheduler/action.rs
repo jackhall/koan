@@ -74,9 +74,6 @@ pub struct Action<'graph, B: StepBundle<'graph>>(Kind<'graph, B>);
 /// Where a tail's successor is born, and how its birth crosses.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub(super) enum Tailing {
-    /// Under this cell, as its tree child: a frame handing its last statement to an evaluation,
-    /// which views the frame's activation from below it.
-    HandOff,
     /// Beside this cell, under its loop cell or else the parent its provenance names: a hop into
     /// a call's frame, beside how much its birth threads ([`StepBundle::threads`]).
     Hop { threads: Option<usize> },
@@ -740,6 +737,11 @@ where
         }
     }
 
+    /// Whether the drain entered this step beside a kept cell, so it received nothing.
+    pub fn entered_beside(&self) -> bool {
+        self.beside.is_some()
+    }
+
     /// Read the kept cell this step was entered beside, through `read`, at a brand the read
     /// quantifies: `None` where the drain entered the step beside none, or the cell holds no link.
     pub fn beside<R>(
@@ -863,15 +865,6 @@ where
             self.context.store_scratch_state(scratch);
         }
         Action(Kind::Beside(kept))
-    }
-
-    /// Hand this frame's last statement to a successor born under this cell, as its tree child:
-    /// the evaluation, which views the frame's activation from below it, so the view pins free
-    /// and pledges nothing. It inherits this cell's provenance verbatim, so its value goes where
-    /// the frame's would have, and its own successor is born beside this cell. The birth is handed
-    /// over at `'here` and put to rest here, as a spawn's is.
-    pub fn hand_off(self, work: Work<'graph, 'here, B>) -> Action<'graph, B> {
-        self.tail_lending(Placement::Fresh, work, Lending::Parent, Tailing::HandOff)
     }
 
     /// Hand this cell's work to a successor born beside it, under the parent its provenance
@@ -1097,14 +1090,18 @@ where
         self.placed(report, operands, carriers, check, build)
     }
 
-    /// Build what `build` builds over `operands` in this cell's home, as
-    /// [`finish_in_home`](Self::finish_in_home) builds it, and hold it here beside its carrier
-    /// kept at the home, where it pins: what a step checks before it finishes with it or ends with
-    /// a fault. The home is this cell or above it, so the value pins free. `None` where the home
-    /// is gone.
-    pub fn built_in_home(
+    /// Build what `build` builds over `operands` where a child this cell asked with `use_` would
+    /// have built it — the cell itself, its home or its loop cell — as
+    /// [`finish_in_home`](Self::finish_in_home) builds it there, `check` reading each operand's
+    /// crossing, and hold it here beside its carrier, kept there: what a step evaluating a node in
+    /// place builds a value with, and what it checks before it finishes or ends with a fault. Each
+    /// such place is this cell or above it, so the value pins back free. Ends nothing. `None`
+    /// where the place is gone.
+    pub fn built_as(
         &mut self,
+        use_: Use,
         operands: &[Held<'graph, 'here>],
+        check: Option<&Chain<'_, '_, '_, '_>>,
         build: impl for<'their> FnOnce(
             Writer<'their, '_>,
             &Types<'their, '_>,
@@ -1112,16 +1109,81 @@ where
             &'their &'graph (),
         ) -> Active<'graph, 'their, KValueFamily>,
     ) -> Option<Held<'graph, 'here>> {
+        let target = self.provenance.target(use_, self.cell);
         let carriers = (operands.iter())
             .map(|held| self.held_carrier(held))
             .collect();
-        let placed = self.place(operands, carriers, None, build).ok()?;
-        let (value, pinned) = crate::values::cross_here(self.context, &placed, self.tiers, None);
+        let placed = self.place(target, operands, carriers, check, build).ok()?;
+        Some(self.pinned_back(placed, check))
+    }
+
+    /// `held` placed where a child this cell asked with `use_` would have delivered it, as
+    /// [`finish`](Self::finish) delivers a value to its home, and held here beside its carrier,
+    /// kept there; `check` reads a pinned value's types, as [`finish_with`](Self::finish_with)'s
+    /// does. In the cell itself a value is held beside its kept part, or kept here where it has
+    /// none. Ends nothing. `None` where the place is gone.
+    pub fn crossed_as(
+        &mut self,
+        use_: Use,
+        held: Held<'graph, 'here>,
+        check: Option<&Chain<'_, '_, '_, '_>>,
+    ) -> Option<Held<'graph, 'here>> {
+        let target = self.provenance.target(use_, self.cell);
+        if target.0 == self.cell {
+            if held.kept.is_some() {
+                return Some(held);
+            }
+            let kept = self.kept_here(held.value);
+            return Some(Held {
+                value: held.value,
+                kept: Some(KeptPart { kept, path: &[] }),
+            });
+        }
+        let placed = self.cross_into(target, held, check).ok()?;
+        Some(self.pinned_back(placed, check))
+    }
+
+    /// `held` crossed into `target`: its kept carrier handed on unchanged where it passes there at
+    /// its own type, and otherwise placed there from that carrier, or from the value lifted here.
+    fn cross_into(
+        &mut self,
+        target: (CellHandle, bool),
+        held: Held<'graph, 'here>,
+        check: Option<&Chain<'_, '_, '_, '_>>,
+    ) -> Result<Ready<'graph, 'step, KValueFamily>, Stale<CellHandle>> {
+        let carrier = held
+            .kept
+            .and_then(|part| self.kept_carrier(part, &held.value));
+        if let Some(carrier) = &carrier
+            && self.context.read(carrier).value().ktype() == held.value.ktype()
+            && let Some(passed) = self.context.pass_into(target.0, carrier)?
+        {
+            #[cfg(test)]
+            PASSED.with(|count| count.set(count.get() + 1));
+            return Ok(passed);
+        }
+        let carrier = carrier.unwrap_or_else(|| self.context.lift::<KValueFamily>(held.value));
+        self.place(
+            target,
+            &[held],
+            SmallVec::from_elem(carrier, 1),
+            check,
+            |_, _, values, _| Active::new(values[0]),
+        )
+    }
+
+    /// A value placed at this cell or above it, pinned back here beside its carrier, kept there.
+    fn pinned_back(
+        &mut self,
+        placed: Ready<'graph, 'step, KValueFamily>,
+        check: Option<&Chain<'_, '_, '_, '_>>,
+    ) -> Held<'graph, 'here> {
+        let (value, pinned) = crate::values::cross_here(self.context, &placed, self.tiers, check);
         let kept = pinned.then(|| KeptPart {
             kept: Kept(self.context.keep(placed)),
             path: &[],
         });
-        Some(Held { value, kept })
+        Held { value, kept }
     }
 
     /// Build what `build` builds over `operands`, crossing from `carriers`, one each, in this
@@ -1140,14 +1202,16 @@ where
             &'their &'graph (),
         ) -> Active<'graph, 'their, KValueFamily>,
     ) -> Action<'graph, B> {
-        let placed = self.place(operands, carriers, check, build);
+        let home = self.provenance.target(Use::Forwards, self.cell);
+        let placed = self.place(home, operands, carriers, check, build);
         self.file(report, placed)
     }
 
-    /// What `build` builds over `operands`, crossing from `carriers`, one each, placed in this
-    /// cell's home.
+    /// What `build` builds over `operands`, crossing from `carriers`, one each, placed in
+    /// `target`, beside whether it is a loop cell.
     fn place(
         &mut self,
+        (target, threads): (CellHandle, bool),
         operands: &[Held<'graph, 'here>],
         carriers: SmallVec<[Ready<'graph, 'step, KValueFamily>; 4]>,
         check: Option<&Chain<'_, '_, '_, '_>>,
@@ -1163,7 +1227,6 @@ where
         let own = self.types();
         let held_at: SmallVec<[_; 4]> = operands.iter().map(|held| held.value.ktype()).collect();
         // A loop cell copies whatever a hop homes, at any price, so no hop is pledged into it.
-        let threads = self.provenance.threads;
         let crossing: SmallVec<[_; 4]> = (carriers.iter().zip(operands))
             .map(|(carrier, held)| Operand {
                 carrier,
@@ -1176,7 +1239,7 @@ where
             .collect();
 
         self.context.alloc_into::<KValueFamily, KValueFamily>(
-            self.provenance.home,
+            target,
             &crossing,
             |writer, header, views| {
                 let types = tiers.chain(Halves::alone(Half::of(writer, header)));
@@ -1221,32 +1284,13 @@ where
         held: Held<'graph, 'here>,
         check: Option<&Chain<'_, '_, '_, '_>>,
     ) -> Action<'graph, B> {
-        let Some(carrier) = held
-            .kept
-            .and_then(|part| self.kept_carrier(part, &held.value))
-        else {
-            return self
-                .finish_in_home_against(&[held], check, |_, _, values, _| Active::new(values[0]));
-        };
         let report = match self.report() {
             Ok(report) => report,
             Err(error) => return self.failed(error),
         };
-        if self.context.read(&carrier).value().ktype() == held.value.ktype() {
-            match self.context.pass_into(self.provenance.home, &carrier) {
-                Ok(Some(passed)) => {
-                    #[cfg(test)]
-                    PASSED.with(|count| count.set(count.get() + 1));
-                    return self.file(report, Ok(passed));
-                }
-                Ok(None) => {}
-                Err(stale) => return self.file(report, Err(stale)),
-            }
-        }
-        let carriers = SmallVec::from_elem(carrier, 1);
-        self.placed(report, &[held], carriers, check, |_, _, values, _| {
-            Active::new(values[0])
-        })
+        let home = self.provenance.target(Use::Forwards, self.cell);
+        let placed = self.cross_into(home, held, check);
+        self.file(report, placed)
     }
 
     /// Keep `value`, which this cell holds at its own brand, here: what a cell keeps of a value it
@@ -1455,6 +1499,18 @@ pub enum Use {
     /// Keep it in the loop: the home is the spawner's loop cell, else the spawner — a value a
     /// frame's tail call hands on that the frame built, so it outlives the hop.
     Threads,
+}
+
+impl Use {
+    /// The use a part asked with `self`, by an evaluation itself asked with `asker`, has relative
+    /// to the cell both run in: a forwarded part goes where its asker's value goes, and any other
+    /// where it says.
+    pub fn within(self, asker: Use) -> Use {
+        match self {
+            Use::Forwards => asker,
+            other => other,
+        }
+    }
 }
 
 /// What a step asks the drain for: a [`Work`] and two hints. Never a place and never a destination.

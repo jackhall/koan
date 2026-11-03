@@ -75,7 +75,7 @@ struct Admitted<'x, 'graph, 'here> {
 /// ranked by `elimination`, which names them by their position among `candidates`, or, where it is
 /// open, by a table of the admitted ones built here.
 pub(super) fn selected<'x, 'graph, 'here>(
-    at: &Evaluation<'_, 'graph, 'here, '_, '_, '_>,
+    at: &Evaluation<'_, 'graph, 'here, '_, '_, '_, '_>,
     candidates: impl IntoIterator<Item = (Candidate, Verdict)>,
     points: &[Points<'_>],
     elimination: Elimination<'_>,
@@ -241,7 +241,7 @@ thread_local! {
 /// elimination and [`winner`] decide over those shapes.
 #[cfg(test)]
 pub(super) fn checked(
-    at: &Evaluation<'_, '_, '_, '_, '_, '_>,
+    at: &Evaluation<'_, '_, '_, '_, '_, '_, '_>,
     entries: &[(Candidate, Verdict)],
     table: &Table<'_>,
     scratch: &Bump,
@@ -394,7 +394,7 @@ fn registration<'here>(callee: KValue<'_, 'here>) -> Option<Registered<'here, KT
 /// types `arguments`: run without admitting, a quantified one's group solved by `points`, the
 /// load's, which a debug build checks against admitting it over `arguments` and `contributed`.
 pub(super) fn chosen<'x, 'graph, 'here>(
-    at: &Evaluation<'_, 'graph, 'here, '_, '_, '_>,
+    at: &Evaluation<'_, 'graph, 'here, '_, '_, '_, '_>,
     coordinate: Coordinate,
     points: &Points<'_>,
     arguments: &[KType],
@@ -465,7 +465,7 @@ fn admitted_at_run<'x>(
 /// over the arguments' types solves its group to. Not gated on `debug_assertions`: its callers are
 /// `debug_assert!`s, which type-check in every profile.
 fn agrees(
-    at: &Evaluation<'_, '_, '_, '_, '_, '_>,
+    at: &Evaluation<'_, '_, '_, '_, '_, '_, '_>,
     shape: DeclaredType<KType>,
     arguments: &[KType],
     contributed: &[Option<KType>],

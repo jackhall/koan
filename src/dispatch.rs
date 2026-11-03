@@ -1,5 +1,5 @@
-//! Dispatch: the [`Language`] koan's programs run under — the builtin table, the step every
-//! evaluation runs, and the load-time checks: the overlap check and static selection.
+//! Dispatch: the [`Language`] koan's programs run under — the builtin table, the evaluator every
+//! node in flight is handed to, and the load-time checks: the overlap check and static selection.
 //!
 //! A keyworded use's candidates are fixed where its shape is built: the builtin overloads at its
 //! bucket key, then each registration visible to it, then — in a quote's code — the functions a
@@ -14,7 +14,7 @@
 //! that admits them.
 //!
 //! - [`builtins`] lays the table down and runs the natives.
-//! - [`evaluate`] is the step: what a node is, and how its value is reached.
+//! - [`evaluate`] is the evaluator: what a node is, and how its value is reached.
 //! - [`select`] admits and ranks a call's candidates.
 //! - [`rules`] gives each native's type rule: what its call's arguments need and what it returns.
 //! - [`check`] refuses a registration that overlaps a builtin overload.
@@ -47,11 +47,13 @@ mod tests;
 #[cfg(test)]
 pub(crate) use builtins::overload_types;
 
+use std::cell::Cell;
+
 use crate::knot::{KBuiltins, KReading, KValue};
 use crate::memory::{BumpAllocator, Writer};
 use crate::parse::{ExpressionPart, KExpression};
-use crate::program::{Contract, KBirth, KBundle, Language, Owed, Program, Within};
-use crate::scheduler::{Held, NativeStep};
+use crate::program::{Catching, Delivered, Evaluated, Evaluator, Language, Owed, Program, Within};
+use crate::scheduler::{Held, Use};
 use crate::scope::{Code, Segment, ShapeError, Shapes, Store};
 use crate::symbols::{BinderSymbol, SymbolInterner};
 use crate::type_lattice::KType;
@@ -71,7 +73,7 @@ impl Language for Koan {
         builtins::table(writer, symbols, types, scratch)
     }
 
-    fn evaluator<'graph>() -> NativeStep<'graph, KBundle> {
+    fn evaluator<'graph>() -> Evaluator<'graph> {
         evaluate::evaluate
     }
 
@@ -87,25 +89,26 @@ impl Language for Koan {
     }
 }
 
-/// What one evaluation is born over: the program, the view it reads names through beside the
-/// step's door, what it owes a frame it finishes, what it runs [within](KBirth::Evaluate), and
-/// the birth it parks with — beside the chain the step reads and interns types through, built at
-/// the step's entry and never parked.
-struct Evaluation<'step, 'graph, 'here, 'tier, 'reg, 'door> {
+/// What one node in flight is evaluated over: the program, the view it reads names through beside
+/// the step's door, what it owes a frame it finishes, what it runs within, the
+/// node itself and the [`Use`] its value is placed by — beside the chain the step reads and
+/// interns types through, built at the step's entry and never parked, and how far the node got:
+/// its stage, the parts delivered to it so far, what a `TRY` or `CATCH` has copied of a fault, and
+/// what was last delivered, taken where it is read. The evaluator writes the first three back to
+/// the [`Node`](crate::program::Node) it was handed.
+struct Evaluation<'step, 'graph, 'here, 'tier, 'reg, 'door, 'scratch> {
     program: &'graph Program<'graph>,
     code: Code<'step>,
     view: KReading<'step, 'graph, 'here>,
     owed: Option<Owed<'here>>,
     within: Within<'graph, 'here>,
-    birth: KBirth<'graph, 'here>,
+    node: Evaluated,
+    use_: Use,
     types: Chain<'tier, 'here, 'reg, 'door>,
-}
-
-impl Evaluation<'_, '_, '_, '_, '_, '_> {
-    /// The contract the evaluation owes a frame it finishes, if it owes one.
-    fn contract(&self) -> Option<Contract> {
-        self.owed.map(|owed| owed.contract)
-    }
+    stage: Cell<u32>,
+    received: Cell<&'scratch [Cell<Option<Held<'graph, 'here>>>]>,
+    caught: Cell<Option<Catching<'graph, 'here>>>,
+    delivered: Cell<Option<Delivered<'graph, 'here>>>,
 }
 
 /// What one of a call's operands came to: a value, beside the kept part it is where it has one, or

@@ -1,8 +1,7 @@
 //! The threaded set of a callable's, a code body's or a tail arm's last statement: what a tail call
 //! it makes hands on that its frame built itself, so the frame builds it where it outlives the hop
 //! rather than in a region the next hop reclaims
-//! ([`BodyShape::threaded`](super::super::BodyShape::threaded)). Read off a draft at its seal, beside
-//! `last_reads`.
+//! ([`BodyShape::threaded`](super::super::BodyShape::threaded)). Read off a draft at its seal.
 //!
 //! A value the frame received — a parameter, a capture, a binder bound bare to one, or a member read
 //! of one through the builtin `ATTR` alone — is no member: it rests where it was handed from, and a

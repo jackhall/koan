@@ -85,9 +85,9 @@ runs the step its continuation names, and acts on the `Kind` the returned
 - `Park` — the step registered a receipt run and asked for children. The drain
   pushes their requests so the first asked is on top, and leaves the cell alone
   until its receipt run completes.
-- `Tail` — the drain pushes the successor, born under this cell for a
-  hand-off and beside it for a hop or a rebirth ([tail hops](#tail-hops)),
-  and releases this cell once that successor's first step has run.
+- `Tail` — the drain pushes the successor, born beside this cell
+  ([tail hops](#tail-hops)), and releases this cell once that successor's
+  first step has run.
 - `Faulted` — the step ended with a fault: the drain keeps a tree cell
   (`kept`) and retires a tenant as a finish does, abandons what its consumer
   asked for and has not yet run, and pushes the consumer ([faults](#faults)).
@@ -179,11 +179,16 @@ previous step parked, and exposes:
   frame to lay its level from ([below](#the-build-arena)), taken once;
 - `kept_here`, which keeps a value the cell holds at the cell itself
   ([below](#kept-and-held-values));
-- `built_in_home`, which builds a value in the cell's home as
-  `finish_in_home` does but ends nothing: it hands the value back held beside
-  its carrier, kept at the home, so the step can check it — against a contract
-  it owes — before it finishes with it or ends with a [fault](#faults);
-- the ends — `park`, `hand_off`, `tail`, `tail_seeking`, `tail_under`,
+- `built_as` and `crossed_as`, which place a value where a child the step
+  asked with a given [`Use`](#hints) would have delivered it — the cell
+  itself, its home, or its loop cell — and end nothing: `built_as` builds it
+  over operands as `finish_in_home` does, `crossed_as` crosses a held value
+  there as `finish` does, and each hands it back held beside its carrier,
+  kept there. Every such place is the cell or above it, so the value pins
+  back free. A step evaluating a node in place uses them to put each value
+  where a tenant asked with that `Use` would have put it, and to hold a value
+  back to check it before it ends;
+- the ends — `park`, `tail`, `tail_seeking`, `tail_under`,
   `bounce`, `rebuild`, `replay`, `read_beside`, `finish_fresh`,
   `finish_in_home`, `finish`, `fault`, `done`, `leave` and `failed`.
 
@@ -294,10 +299,10 @@ delayed reclaim, and soundness rests on the substrate's brands either way.
 | `Fresh` | `create_tree_lent` | its own, reclaimed whole at death | a result placed operand-free crosses free |
 | `Shares` | `create_tenant` | none — the spawner's, at the spawner's own brand | an embedded argument crosses free, because nothing crosses |
 
-A tail takes no placement. A hand-off and a hop are always `Fresh` tree cells
-— a hand-off a child of its frame, a hop a sibling of its predecessor under its
-loop cell or its parent — and only a rebirth (`bounce`, `rebuild`, `replay`)
-keeps the placement its cell was born at ([tail hops](#tail-hops)). Sibling
+A tail takes no placement. A hop is always a `Fresh` tree cell, a sibling of
+its predecessor under its loop cell or its parent, and only a rebirth
+(`bounce`, `rebuild`, `replay`) keeps the placement its cell was born at
+([tail hops](#tail-hops)). Sibling
 tree cells are `Apart`, so a hop's state homed in its predecessor crosses by a
 forced copy, while state homed in the loop cell, the caller's frame or above is
 `Under` and free. A tenant's scratch is its host's, so a tenant writes its
@@ -316,7 +321,11 @@ knows, and so where the result's **home** is.
 
 `Forwards` is destination passing: in `cons(1, f(z))` the call of `f` is asked
 for with `Forwards`, so `f` builds in the region `cons`'s result is bound for
-and `cons` embeds it at no price. The home travels down a chain of forwards and
+and `cons` embeds it at no price. A `Use` names a destination relative to the
+cell that asks, which is how a step's own `built_as` and `crossed_as` read it
+(`Provenance::target`): a part asked with `Forwards` by an evaluation asked
+with `Threads` is bound for the loop cell, and one asked with `Forwards` by
+an evaluation asked with `Keeps` for the cell itself (`Use::within`). The home travels down a chain of forwards and
 across a tail hop unchanged. `Threads` is what a frame asks a value of its
 body's [threaded set](../scope/README.md#the-threaded-set) with; a home it names in
 a loop cell copies whatever a hop homes, at any price, so no hop is ever
@@ -458,9 +467,8 @@ borrows freely.
   filled (`loop_base`), which compaction weighs it against
   ([tail hops](#tail-hops)). `None` for a spawned cell.
 
-So three cells play three roles: `parent` receives the result, `loop_cell` —
-else `parent` — births a hop or a rebirth, and a frame's hand-off is born under
-the frame itself. Every field is brand-free, so it survives a tail hop verbatim
+So two cells play three roles: `parent` receives the result, and
+`loop_cell` — else `parent` — births a hop or a rebirth. Every field is brand-free, so it survives a tail hop verbatim
 — which is what "the successor inherits its receipt" means. The drain fills it
 from how a request was handed over: given to `Step::spawn`, the child is born
 under the spawner and reports to the slot of its spawn position; given to a
@@ -487,13 +495,9 @@ the one the shape gave.
 
 A tail call is a create plus a release, in that order. The successor inherits
 its predecessor's provenance, and the predecessor is released once the
-successor holds everything that was homed in it. Three ends tail, each
+successor holds everything that was homed in it. Two kinds of end tail, each
 deciding where the successor is born:
 
-- **A hand-off** (`hand_off`): a frame hands its last statement to an
-  evaluation born under the frame, as its `Fresh` tree child. The evaluation
-  views the frame's activation from below it, so the view pins free and
-  pledges nothing.
 - **A hop** (`tail`, `tail_seeking`, `tail_under`): a call's frame born
   `Fresh` beside its predecessor, under the provenance's loop cell, else its
   parent.
@@ -514,9 +518,9 @@ The steps:
 Step 5 is why the release is not part of step 3: a released cell with no pledge
 reclaims its bump, and the bytes the successor is about to redeem would be
 gone. The successor is on top of the stack, so its round is the very next one
-and at most two hops of a loop are live at once — beside a frame released
-before the evaluation it handed off to, which stays dead but undisposed until
-that child disposes.
+and at most two hops of a loop are live at once. A frame evaluates its last
+statement in its own step and tails from its own cell, so no end births a cell
+under a frame about to die.
 
 Every cell a drain runs is born under a parent, so every cell can tail, and a
 successor is a tree cell or, for a rebirth, a tenant, never a slab cell. A slab
@@ -554,8 +558,8 @@ drain makes it at the first hop that threads (`Tailing::Hop` carrying the
 weight its birth threads, `StepBundle::threads`) when the provenance names
 none; the first frame's threaded values are copied into it once, there. A loop
 that threads nothing and hands every callee through a kept part — a walker, a
-scalar loop — gets none, and its hops stay siblings under its parent. Every hop and hand-off inherits the loop cell; a
-spawned cell never does.
+scalar loop — gets none, and its hops stay siblings under its parent. Every hop inherits the loop cell; a spawned cell
+never does.
 
 **Compaction.** A loop cell gains what each hop threads and keeps what earlier
 hops threaded, so a loop that rebuilds its state whole would grow it by a
@@ -590,8 +594,9 @@ A cell is born under an arena node, which the drain resolves at its creation
 from how it was asked for ([seek.rs](seek.rs)), and borrows it for its life,
 tenants included:
 
-- `spawn`, `hand_off` and `tail` ask for an evaluation, a block or a hand-off,
-  born under what its asker runs under.
+- `spawn` and `tail` ask for a cell born under what its asker runs under: a
+  top-level statement's evaluation, or the frame of a written quote's
+  `EVAL`.
 - `spawn_seeking` and `tail_seeking` ask for a call's frame, handing a `Seek`:
   the arena node the callee was born under and, where its body keys a
   settlement on content the load names, the binding's image beside the
@@ -624,7 +629,7 @@ tenants included:
   other composed code pins that code's composition; where it is gone, the
   frame's first step copies the module's syntax and asks again (`rebuild`).
 
-So no cell parks for its arena node. A hand-off successor borrows before its
+So no cell parks for its arena node. A hop's successor borrows before its
 predecessor's release, and every retire releases its cell's borrow.
 
 **Held and evicted.** An arena node is **held** while a run cell borrows it,
@@ -683,7 +688,11 @@ The tests drive the drain with native-step workloads over a test bundle, with
 no layer of koan's above present. They hold, each with a workload of its own:
 
 - a call at each placement, and a result at each `Use` through each end, read
-  back at the brand the table above gives it;
+  back at the brand the table above gives it; and `built_as` and `crossed_as`
+  at each `Use` — in the cell, in a child's home with no copy, and in a hop's
+  loop cell, an operand homed in the hop copied rather than pinned, and a
+  value already kept at its destination handed back unchanged
+  ([tests/doors.rs](tests/doors.rs));
 - depth-first order — two children asked in one park, each with children of its
   own, record their steps one subtree after the other — and the live path: a
   recursion asking two children per level peaks at cells in proportion to its
@@ -698,10 +707,10 @@ no layer of koan's above present. They hold, each with a workload of its own:
   of types holds only the one it reads, the deepest level of a recursion
   minting at every level holds as much at depth sixty-four as at eight, a
   tenant's hop reaches what its host read through its link, each way a deep
-  cell hands a value on — a hop and a hand-off from a tree cell and a tenant,
-  and a kept result — leaves the landing cell's branch the same at depth four
-  and sixteen, and a cycle of hand-offs and hops checks as many reach steps
-  however deep its host; and the caching chains: a `Shares` chain laying
+  cell hands a value on — a hop from a tree cell and a tenant, and a kept
+  result — leaves the landing cell's branch the same at depth four and
+  sixteen, and a cycle of hops checks as many reach steps however deep its
+  host; and the caching chains: a `Shares` chain laying
   in its host's scratch and leaving its region, and a held `Fresh` child
   reading its region and its own scratch, with no agent chain
   ([tests/branches.rs](tests/branches.rs));
@@ -726,8 +735,7 @@ no layer of koan's above present. They hold, each with a workload of its own:
   that seeks beneath it, a miss past the budget evicting the least recently
   used unheld settlement, a parent going after its child, a loop of hops
   holding its settlement through every miss, a call keying nothing running
-  under its callee's arena node, a hand-off successor holding its frame's
-  settlement until its own release, a tenant's count running from its
+  under its callee's arena node, a tenant's count running from its
   creation to its release, every run cell born under a settlement carrying
   its reference, and a missed settlement relaying the image of a binding its
   asker minted, read by a frame after the asker is gone

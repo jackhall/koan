@@ -41,7 +41,7 @@ use crate::memory::{
     SlabHandle,
 };
 use crate::scheduler::action::{
-    Action, Asked, Context, Kind, Placement, Spawns, Step, StepError, Tailing, Use,
+    Action, Asked, Context, Kind, Placement, Spawns, Step, StepError, Tailing,
 };
 use crate::scheduler::arena::{BuildArena, Composed, Settled};
 use crate::scheduler::beside::{KeptHeader, ReadsBeside};
@@ -209,6 +209,12 @@ impl<'graph, B: StepBundle<'graph>> Graph<'graph, B> {
         self.arena.unheld_bytes()
     }
 
+    /// The bytes a live slab or tree cell's region has handed out.
+    #[cfg(test)]
+    pub(crate) fn region_used(&self, cell: impl Into<CellHandle>) -> Option<usize> {
+        self.cells.region_used(cell).ok()
+    }
+
     /// The graph itself, for a test that drives the raw slot doors a step never reaches.
     #[cfg(test)]
     pub(super) fn cells(
@@ -320,6 +326,15 @@ pub(crate) struct HopSample {
     pub hop_region: usize,
     /// The weight of the values the successor's birth threads.
     pub threads: usize,
+    /// Bytes the tailing cell's own scratch has handed out; `0` for a tenant, whose scratch is its
+    /// host's.
+    pub hop_scratch: usize,
+    /// [`BORN`] at the tail.
+    pub cells: usize,
+    /// [`FRAMES`] at the tail.
+    pub frames: usize,
+    /// [`PARKS`] at the tail.
+    pub parks: usize,
 }
 
 #[cfg(test)]
@@ -329,6 +344,14 @@ thread_local! {
         const { std::cell::RefCell::new(Vec::new()) };
     /// How many hops' successors built their birth over the values a skeleton handed on.
     pub(crate) static SKELETONS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Cells a step asked for that the drain created — every spawn and every tail's successor,
+    /// not a root work or a loop cell: a count. Tests reset it.
+    pub(crate) static BORN: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Those of them that are a call's frame, sought, hopped under a settlement, replayed or
+    /// rebuilt: a count. Tests reset it.
+    pub(crate) static FRAMES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// Parks the drain has handled: a count. Tests reset it.
+    pub(crate) static PARKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 #[cfg(test)]
@@ -384,8 +407,7 @@ enum Entry<'graph, B: StepBundle<'graph>> {
     /// arena node its asker runs under, the cell it is born under and how its birth crosses.
     /// `release_after` is a tail's predecessor, released with its borrow of that arena node once
     /// this cell's first step has returned — the successor wakes its state out of the
-    /// predecessor's region, and borrows first. A frame released before the evaluation it handed
-    /// off to is dead but undisposed until that child disposes.
+    /// predecessor's region, and borrows first.
     Unborn {
         provenance: Provenance,
         asked: Asked<'graph, B>,
@@ -565,7 +587,11 @@ where
                     }
                     self.ready.push(Entry::Live(provenance.parent));
                 }
-                Kind::Park => self.asked_by(cell, provenance, arena),
+                Kind::Park => {
+                    #[cfg(test)]
+                    PARKS.with(|parks| parks.set(parks.get() + 1));
+                    self.asked_by(cell, provenance, arena)
+                }
                 Kind::Beside(kept) => self.ready.push(Entry::Beside { cell, kept }),
                 Kind::Tail(asked, tailing) => {
                     let mut provenance = provenance;
@@ -575,20 +601,14 @@ where
                         #[cfg(test)]
                         self.sample_hop(cell, provenance.parent, threads);
                     }
-                    // A hand-off is born under this cell; a hop or a rebirth beside it, under its
-                    // loop cell where it has one.
-                    let (under, born) = match tailing {
-                        Tailing::HandOff => (cell, Born::Child),
-                        Tailing::Hop { .. } | Tailing::Rebirth => {
-                            (provenance.loop_cell.unwrap_or(provenance.parent), Born::Hop)
-                        }
-                    };
+                    // A hop or a rebirth is born beside this cell, under its loop cell where it has
+                    // one.
                     self.ready.push(Entry::Unborn {
                         provenance,
                         asked,
                         asker: arena,
-                        under,
-                        born,
+                        under: provenance.loop_cell.unwrap_or(provenance.parent),
+                        born: Born::Hop,
                         release_after: Some(cell),
                         release_loop,
                     });
@@ -665,14 +685,7 @@ where
     fn asked_by(&mut self, cell: CellHandle, provenance: Provenance, arena: ArenaRef) {
         let Scheduler { ready, spawns, .. } = self;
         for (slot, asked) in spawns.take().rev() {
-            let (home, threads) = match asked.use_ {
-                Use::Forwards => (provenance.home, provenance.threads),
-                Use::Threads => match provenance.loop_cell {
-                    Some(loop_cell) => (loop_cell, true),
-                    None => (cell, false),
-                },
-                Use::Reads | Use::Keeps => (cell, false),
-            };
+            let (home, threads) = provenance.target(asked.use_, cell);
             ready.push(Entry::Unborn {
                 provenance: Provenance {
                     parent: cell,
@@ -705,6 +718,16 @@ where
         (parent, born): (CellHandle, Born),
         asker: ArenaRef,
     ) -> Result<CellHandle, DrainStalled> {
+        #[cfg(test)]
+        {
+            BORN.with(|born| born.set(born.get() + 1));
+            if matches!(
+                asked.lending,
+                Lending::Call(_) | Lending::Under(_) | Lending::Replay(_) | Lending::Pinning(..)
+            ) {
+                FRAMES.with(|frames| frames.set(frames.get() + 1));
+            }
+        }
         let arena = &mut self.graph.arena;
         let mut replayed = SmallVec::<[ArenaRef; 4]>::new();
         let replaying = matches!(asked.lending, Lending::Replay(_));
@@ -1058,6 +1081,13 @@ where
                 _ => 0,
             },
             threads: threads.unwrap_or(0),
+            hop_scratch: match cell {
+                CellHandle::Tree(_) => cells.scratch_used(cell).unwrap_or(0),
+                _ => 0,
+            },
+            cells: BORN.with(std::cell::Cell::get),
+            frames: FRAMES.with(std::cell::Cell::get),
+            parks: PARKS.with(std::cell::Cell::get),
         };
         HOPS.with(|hops| hops.borrow_mut().push(sample));
     }
@@ -1068,7 +1098,7 @@ where
     }
 
     /// The most cells the drain has held live at once — what a test reads to hold a loop of tail
-    /// hops to its hand-off and a recursion to its path. A root is not the drain's birth and is not
+    /// hops to a constant and a recursion to its path. A root is not the drain's birth and is not
     /// counted.
     #[cfg(test)]
     pub(crate) fn peak_live_cells(&self) -> usize {

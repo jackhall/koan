@@ -15,6 +15,10 @@
 //! The same loops through `MATCH` arms, the last tests here: a walk and a cons loop under
 //! `MATCH … WITH`, a walk and tutorial 06's `DOUBLE` under `MATCH … UNDER`, a helper returning an
 //! arm's `it`, and a `MATCH` over a scrutinee its frame builds.
+//!
+//! [`loop_programs`] lists every loop program here: each runs one cell per hop beside each frame
+//! the hop spawns, and parks only on those. `cells_and_bytes_per_hop`, ignored, prints what each
+//! costs per hop — the cells, frames and parks the drain counts beside the bytes it samples.
 
 use std::cell::Cell;
 
@@ -75,9 +79,10 @@ const PASS: &str = "EXPR #(NAME m :Counter xs :Any link :Link) -> Number = \
                     #((LET t = (TOUCH m)) (NEXT m PASSED (ATTR link next)))\n\
                     EXPR #(NAME m :Counter xs :Any end :Null) -> Number = #(0)\n";
 
-/// A list of `length` numbers, written out.
+/// A list of `length` numbers, written out. `repeat` lays it in a few doubling copies, where a
+/// per-element join costs Miri gigabytes at 10,000.
 fn numbers(length: usize) -> String {
-    format!("[{}]", vec!["7"; length].join(" "))
+    format!("[{}]", "7 ".repeat(length).trim_end())
 }
 
 /// How a loop hops: into itself, under its frame's settlement, or between two callees, seeking
@@ -779,5 +784,169 @@ fn a_match_over_a_scrutinee_its_frame_builds_threads_it() {
                 .all(|pair| pair[1] <= pair[0] + pair[0] / 4),
             "{form:?}: {per_hop:?} bytes per hop"
         );
+    }
+}
+
+/// One loop program the tests here run: what it is, its definitions and the main that starts it.
+struct Looping {
+    label: String,
+    defs: String,
+    main: String,
+}
+
+/// Every loop program the tests here run at `depth`, each body in both forms.
+fn loop_programs(depth: u32) -> Vec<Looping> {
+    let big = format!("LET big = {}\n", numbers(4));
+    let store = format!("MODULE store = (LET data = {})\n", numbers(4));
+    let view = format!("LET big = {}\n", numbers(10_000));
+    let payload = format!(
+        "{}EXPR #(PAYLOAD n :Nat) -> Nat = #(MATCH n UNDER Nat WITH #{{Succ: (it), Zero: (n)}})\n",
+        nat(depth)
+    );
+    let payload_walk = "EXPR #(NAME m :Counter n :Nat) -> Str = \
+                        #((LET t = (TOUCH m)) (MATCH n UNDER Nat WITH \
+                        #{Zero: (\"done\"), Succ: ((LET p = (PAYLOAD n)) (NEXT m p))}))\n";
+    let scrutinee = "EXPR #(NAME m :Counter acc :Any link :Link) -> Any = \
+                     #((LET t = (TOUCH m)) (MATCH {head = 1, tail = acc} WITH \
+                     #{Any: (NEXT m it (ATTR link next))}))\n\
+                     EXPR #(NAME m :Counter acc :Any end :Null) -> Any = #(ATTR acc head)\n";
+    let pass_big = PASS.replace("PASSED", "big");
+    let pass_member = PASS.replace("PASSED", "(ATTR store data)");
+    let bodies: [(&str, &str, &str, &str); 15] = [
+        ("walk", "", WALK, "ints chain"),
+        ("walk number", "", WALK_NUMBER, "ints chain"),
+        ("record", "", STEP, "ints {count = 0} chain"),
+        ("cons", "", ACC, "ints null chain"),
+        ("onward", "", ONWARD, "ints chain"),
+        ("pass big", &big, &pass_big, "ints null chain"),
+        ("pass member", &store, &pass_member, "ints null chain"),
+        ("view", &view, VIEW, "ints big chain"),
+        ("match walk", "", MATCH_WALK, "ints chain"),
+        ("match cons", "", MATCH_ACC, "ints null chain"),
+        ("nat walk", &nat(depth), NAT_WALK, "ints nat"),
+        ("double", &nat(depth), DOUBLE, "ints nat zero"),
+        ("double plain", &nat(depth), DOUBLE_PLAIN, "ints chain zero"),
+        ("payload", &payload, payload_walk, "ints nat"),
+        ("scrutinee", "", scrutinee, "ints null chain"),
+    ];
+    let mut programs = Vec::new();
+    for (label, prelude, body, arguments) in bodies {
+        for form in [Form::Selfward, Form::Mutual] {
+            let (defined, name) = defined(body, form);
+            programs.push(Looping {
+                label: format!("{label} {form:?}"),
+                defs: format!("{prelude}{defined}"),
+                main: format!("PRINT ({name} {arguments})\n"),
+            });
+        }
+    }
+    for form in [Form::Selfward, Form::Mutual] {
+        programs.push(Looping {
+            label: format!("kept list {form:?}"),
+            defs: kept_list(form, 4),
+            main: "PRINT (ENTRY ints chain)\n".to_string(),
+        });
+    }
+    let outer_main = format!("PRINT (OUTER ints {} chain)\n", numbers(4));
+    let entries = [
+        ("outer spawned", "(LET r = (INNER m null link)) (r)"),
+        ("outer tailed", "(INNER m null link)"),
+    ];
+    for (label, enter) in entries {
+        programs.push(Looping {
+            label: label.to_string(),
+            defs: outer(enter),
+            main: outer_main.clone(),
+        });
+    }
+    programs.push(Looping {
+        label: "tied helper".to_string(),
+        defs: "EXPR #(OUTER m :Counter ys :Any link :Link) -> Number = #(\
+               (EXPR #(INNER m :Counter l :Link) -> Number = \
+               #((LET t = (TOUCH m)) (LET u = ys) (INNER m (ATTR l next)))) \
+               (EXPR #(INNER m :Counter end :Null) -> Number = #(0)) (INNER m link))\n"
+            .to_string(),
+        main: outer_main,
+    });
+    programs
+}
+
+/// Each warm hop's figures, averaged over consecutive samples of the same host: the cells, frames
+/// and parks born or handled since the sample before, and what the sample read.
+fn per_hop(hops: &[HopSample]) -> [f64; 8] {
+    let pairs: Vec<_> = hops
+        .windows(2)
+        .filter(|pair| pair[0].host == pair[1].host)
+        .collect();
+    let mean = |figure: &dyn Fn(&HopSample, &HopSample) -> usize| {
+        let sum: usize = pairs.iter().map(|pair| figure(&pair[0], &pair[1])).sum();
+        sum as f64 / pairs.len().max(1) as f64
+    };
+    [
+        mean(&|before, at| at.cells - before.cells),
+        mean(&|before, at| at.frames - before.frames),
+        mean(&|before, at| at.parks - before.parks),
+        mean(&|_, at| at.threads),
+        mean(&|_, at| at.host_region),
+        mean(&|_, at| at.hop_region),
+        mean(&|_, at| at.hop_scratch),
+        mean(&|_, at| at.live),
+    ]
+}
+
+/// The loop programs Miri runs [`every_loop_runs_one_cell_per_hop_beside_each_frame_it_spawns`]
+/// over: a hop under its settlement through a helper frame, and one seeking it that threads a list
+/// through `MATCH` arms.
+const MIRI_LOOPS: [&str; 2] = ["onward Selfward", "match cons Mutual"];
+
+/// One cell per frame: between two warm tails of the same host no cell is born but a frame, and
+/// every park waits on a frame the hop spawned — all but the hop itself, which its tail births.
+/// Under Miri, a few of the loops a few hops past warm.
+#[test]
+fn every_loop_runs_one_cell_per_hop_beside_each_frame_it_spawns() {
+    let depth = if cfg!(miri) { WARM as u32 + 3 } else { 64 };
+    let programs = (loop_programs(depth).into_iter())
+        .filter(|program| !cfg!(miri) || MIRI_LOOPS.contains(&program.label.as_str()));
+    for program in programs {
+        let ran = measured(depth, &program.defs, &program.main);
+        assert!(ran.hops.len() > 1, "{}: warm hops sampled", program.label);
+        let pairs = (ran.hops.windows(2)).filter(|pair| pair[0].host == pair[1].host);
+        for pair in pairs {
+            let [before, at] = pair else { unreachable!() };
+            let frames = at.frames - before.frames;
+            assert_eq!(at.cells - before.cells, frames, "{}: cells", program.label);
+            assert_eq!(
+                at.parks - before.parks,
+                frames - 1,
+                "{}: parks",
+                program.label
+            );
+        }
+    }
+}
+
+/// What every loop program here costs per warm hop at depth 64, one table row each, beside the
+/// bytes it copies per hop between depths 64 and 256: what one cell per frame is measured by.
+#[test]
+#[ignore = "a measurement, printed: run with --ignored --nocapture"]
+fn cells_and_bytes_per_hop() {
+    println!(
+        "| loop | cells | frames | parks | threads | host_region | hop_region | hop_scratch | live | copied |"
+    );
+    println!("|---|---|---|---|---|---|---|---|---|---|");
+    for (at, program) in loop_programs(64).iter().enumerate() {
+        let ran = measured(64, &program.defs, &program.main);
+        let figures = per_hop(&ran.hops);
+        let copied = |depth: u32| {
+            let deep = &loop_programs(depth)[at];
+            let looped = measured(depth, &deep.defs, &deep.main).copied;
+            looped.saturating_sub(measured(depth, &deep.defs, "PRINT 0\n").copied)
+        };
+        let copied = (copied(256).saturating_sub(copied(64))) / (256 - 64);
+        let figures: Vec<String> = figures
+            .iter()
+            .map(|figure| format!("{figure:.1}"))
+            .collect();
+        println!("| {} | {} | {copied} |", program.label, figures.join(" | "));
     }
 }

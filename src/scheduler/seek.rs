@@ -116,7 +116,8 @@ impl<'graph> Settles<'graph> for Unsettled {
 
 /// What a request's cell runs under, resolved by the drain at its creation.
 pub(super) enum Lending<'graph> {
-    /// What its asker runs under, as an evaluation, a block or a hand-off does.
+    /// What its asker runs under, as a top-level statement's evaluation or a written quote's
+    /// `EVAL` does.
     Parent,
     /// A call's frame: the arena node its [`Seek`] finds or builds.
     Call(Seek<'graph>),

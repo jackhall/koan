@@ -2,10 +2,9 @@
 //! type it reaches is adopted into the region first, so nothing it reaches names that tier once
 //! the scratch resets ([type tiers](../../design/type-tiers.md#the-scratch-branch-as-a-cache)).
 //!
-//! The body runner adopts at a frame's end and at a held frame's hand-off of its last statement;
-//! the evaluator at each call into a frame, each `EVAL`, and where an evaluation owing a frame's
-//! contract finishes. The walk stops at a part whose memo bits say its types already resolve
-//! there, handing over nothing for it, and marks every value it walked settled after, so a value
+//! The body runner adopts at a frame's end; the evaluator at each call into a frame, each `EVAL`,
+//! and the contract a tail hands on. The walk stops at a part whose memo bits say its types
+//! already resolve there, handing over nothing for it, and marks every value it walked settled after, so a value
 //! handed on through a loop is walked once
 //! ([type tiers](../../design/type-tiers.md#an-adoption-stops-at-a-settled-part)).
 

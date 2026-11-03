@@ -27,6 +27,7 @@ use crate::values::{
 
 use super::body::Runner;
 use super::record::{CallKind, Contract, Evaluated, Owed, Program};
+use super::stack::Pending;
 
 /// The bundle a koan program's steps run over.
 pub struct KBundle;
@@ -86,26 +87,12 @@ pub enum KBirth<'graph, 'cell> {
         code: KValue<'graph, 'cell>,
         source: Option<KValue<'graph, 'cell>>,
     },
-    /// An evaluation: what it evaluates, and the view of the activation it reads names through.
-    /// A frame's tail hands its last statement over with what the frame owes, which the
-    /// evaluation then owes its value. `within` is what its frame runs within.
+    /// A top-level statement's evaluation: what it evaluates, the view of the activation it
+    /// reads names through, and what the top level runs within.
     Evaluate {
         program: &'graph Program<'graph>,
         node: Evaluated,
         view: KActivationView<'graph, 'cell>,
-        owed: Option<Owed<'cell>>,
-        within: Within<'graph, 'cell>,
-    },
-    /// A block — a synthesized block part's shape, a `USING … SCOPE` body or a `MATCH` arm — run
-    /// beside the view of the activation it sits in, its last statement's value its own, its
-    /// parameters bound as `entered` says. A tail arm a `MATCH` hands off owes what the `MATCH`
-    /// owes, and tails its last statement as a frame does. `within` as an evaluation's.
-    Block {
-        program: &'graph Program<'graph>,
-        segment: Segment,
-        enclosing: KActivationView<'graph, 'cell>,
-        entered: Entered<'graph, 'cell>,
-        owed: Option<Owed<'cell>>,
         within: Within<'graph, 'cell>,
     },
     /// What the top level leaves at rest when it ends: its activation's view, for a later root
@@ -128,7 +115,7 @@ pub enum Entered<'graph, 'cell> {
     Arm(KValue<'graph, 'cell>),
 }
 
-/// What a body runs within, handed to every evaluation and block it asks for: whether it runs in
+/// What a body runs within, handed to every node and block on its stack: whether it runs in
 /// the own body of a routing caching frame, whose caching chain it then interns through; the arena
 /// node its frame runs under, which a callable born in it is born under; where its frame's decision memo
 /// rests, which a block decides in; the memo a frame it calls seeds its own from; and the root of
@@ -251,15 +238,6 @@ impl<'graph, 'cell> Within<'graph, 'cell> {
     pub fn born(&self) -> (ArenaRef, Option<Stamp<'cell, Knotted<'graph, 'cell>>>) {
         (self.build, self.stamp)
     }
-
-    /// What the evaluation a frame hands its last statement to runs within: its own region, under
-    /// the frame, so it routes no more, and its frame's arena node stays.
-    pub fn handed_off(self) -> Self {
-        Within {
-            routes: false,
-            ..self
-        }
-    }
 }
 
 impl<'graph, 'cell> KBirth<'graph, 'cell> {
@@ -288,10 +266,6 @@ impl<'graph, 'cell> KBirth<'graph, 'cell> {
                 out(code);
                 source.iter().for_each(&mut *out);
             }
-            KBirth::Block {
-                entered: Entered::Surfaced(value, _) | Entered::Arm(value),
-                ..
-            } => out(value),
             _ => {}
         }
     }
@@ -309,23 +283,17 @@ pub struct Handed {
 
 /// What a cell holds at a step and parks with.
 #[derive(Clone, Copy)]
+#[expect(
+    clippy::large_enum_variant,
+    reason = "a parked state rests in its cell's continuation; boxing it would allocate per park"
+)]
 pub enum KState<'graph, 'cell> {
     /// A cell's first step: what it was born with.
     Born(KBirth<'graph, 'cell>),
     /// The body runner, between units.
     Runner(Runner<'graph, 'cell>),
-    /// An evaluator's resumption: what it was born with, and how far it got — which parts of the
-    /// node it has asked for is read again off the node itself.
-    Evaluating {
-        birth: KBirth<'graph, 'cell>,
-        stage: u32,
-    },
-    /// A `TRY` or `CATCH` evaluation copying a caught fault out, between the steps it reads kept
-    /// cells beside: what it was born with, and what it has copied so far.
-    Catching {
-        birth: KBirth<'graph, 'cell>,
-        caught: Catching<'graph, 'cell>,
-    },
+    /// An evaluation cell: its whole stack rests in scratch.
+    Evaluating,
 }
 
 /// What a `TRY` or `CATCH` has copied out of a caught fault as it walks its links outermost first
@@ -357,10 +325,18 @@ impl DropFree for KBirthFamily {}
 pub struct KStateFamily;
 reattachable!(KStateFamily => KState<'graph, 'cell>);
 
-/// The family of what a parked cell keeps in its scratch habitat: the sites a refused tie named,
-/// one per evaluation the runner asked for, in the order asked.
+/// What a parked cell keeps in its scratch habitat: at the top level, the sites a refused tie
+/// named, one per evaluation the runner asked for, in the order asked; in an evaluation cell, its
+/// evaluation stack, innermost first.
+#[derive(Clone, Copy)]
+pub enum KScratch<'graph, 'here, 'scratch> {
+    Supplying(&'scratch [Site]),
+    Stack(&'scratch Pending<'graph, 'here, 'scratch>),
+}
+
+/// The family of [`KScratch`].
 pub struct KScratchFamily;
-reattachable!(both KScratchFamily => &'scratch [Site]);
+reattachable!(both KScratchFamily => KScratch<'graph, 'here, 'scratch>);
 
 impl<'graph> StepBundle<'graph> for KBundle {
     type Birth = KBirthFamily;
@@ -368,8 +344,8 @@ impl<'graph> StepBundle<'graph> for KBundle {
     type Scratch = KScratchFamily;
 
     /// A view is weighed at no bound, so the verdict never copies one: it is a borrow of another
-    /// cell's region. An evaluation, a block or an inspection is born under the cell it views —
-    /// a frame's hand-off too — where pinning it costs nothing and pledges nothing.
+    /// cell's region. An evaluation or an inspection is born under the cell it views, where
+    /// pinning it costs nothing and pledges nothing.
     fn weight<'cell>(birth: &KBirth<'graph, 'cell>) -> usize
     where
         'graph: 'cell,
@@ -411,7 +387,7 @@ impl<'graph> StepBundle<'graph> for KBundle {
             KBirth::Composed { code, source, .. } => (source.iter())
                 .fold(code.weight(), |weight, source| weight.plus(source.weight()))
                 .bytes(),
-            KBirth::Evaluate { .. } | KBirth::Block { .. } | KBirth::Inspect { .. } => usize::MAX,
+            KBirth::Evaluate { .. } | KBirth::Inspect { .. } => usize::MAX,
         }
     }
 
@@ -549,7 +525,7 @@ impl<'graph> StepBundle<'graph> for KBundle {
                 }
                 // Only a forced copy could reach here with a view, and a view is born under the
                 // cell it views, whose crossing pins.
-                KBirth::Evaluate { .. } | KBirth::Block { .. } | KBirth::Inspect { .. } => {
+                KBirth::Evaluate { .. } | KBirth::Inspect { .. } => {
                     unreachable!("a birth holding a view is never copied")
                 }
             },

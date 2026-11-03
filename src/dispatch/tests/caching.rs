@@ -727,7 +727,18 @@ fn a_fresh_loop_over_an_invariant_module_holds_its_agent_tier_flat() {
         few.tiers.agent_verdicts > 0,
         "the view's verdicts are recorded warm, once across hops"
     );
-    assert_eq!(few, many);
+    // The loop's end frame holds its tail statement to the contract in its own scratch, so where
+    // it ends among the first, still warming hops — at the shallow depth — its scratch peaks
+    // higher; past them every hop lays the same, so the deeper run peaks no higher.
+    assert!(many.tiers.scratch_bytes <= few.tiers.scratch_bytes);
+    let warm = |ran: Ran| Ran {
+        tiers: Tiers {
+            scratch_bytes: 0,
+            ..ran.tiers
+        },
+        ..ran
+    };
+    assert_eq!(warm(few), warm(many));
 }
 
 #[test]
@@ -883,9 +894,9 @@ fn a_closure_a_quote_and_a_member_leave_a_caching_body_and_run_after_the_reset()
 }
 
 #[test]
-fn a_held_frame_hands_on_what_its_last_statement_reads() {
-    // The last statement reads `k`, built over a view of a local, inside a block: the read runs
-    // after the successor's first step, once the frame's scratch is gone.
+fn a_held_frames_tail_call_adopts_what_it_hands_on() {
+    // The last statement reads `k`, built over a view of a local, inside a block. It runs on the
+    // frame's own chain, so its tail call adopts only the callee, its arguments and the contract.
     let source = "EXPR #(SIZE x :Any) -> Number = #(1)\n\
                   EXPR #(HAND m :Counter) -> Number = \
                   #((LET w = m) (LET v = (w :| Counter)) (LET k = [v.zero]) \

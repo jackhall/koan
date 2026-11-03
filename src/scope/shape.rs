@@ -656,8 +656,6 @@ pub struct BodyShape<'graph> {
     holds: &'graph [UnitHolds<'graph>],
     /// Where each statement's nested shapes start in `nested_order`, by statement, then the end.
     nested_starts: &'graph [u32],
-    /// The slots a callable's or a code body's last statement reads, and every type slot, sorted.
-    last_reads: &'graph [Slot],
     /// The binders and the last statement's argument parts a tail call of this body hands on that
     /// its frame built itself, each sorted; see [`threaded`](BodyShape::threaded).
     threaded: &'graph [Slot],
@@ -976,15 +974,6 @@ impl<'graph> BodyShape<'graph> {
     pub fn nested_in(&self, index: usize) -> &'graph [(Site, &'graph BodyShape<'graph>)] {
         let (start, end) = (self.nested_starts[index], self.nested_starts[index + 1]);
         &self.nested.entries()[start as usize..end as usize]
-    }
-
-    /// The slots a callable's, a code body's or a tail arm's last statement reads — directly,
-    /// through a nested block or through a nested body's captures — and every type slot, sorted;
-    /// empty for any other body. A caching frame or block that hands its last statement on adopts
-    /// these slots' values into its region at the hand-off, since its scratch departs while the
-    /// statement still reads them.
-    pub fn last_reads(&self) -> &'graph [Slot] {
-        self.last_reads
     }
 
     /// The binders a callable's, a code body's or a tail arm's last statement hands on that its

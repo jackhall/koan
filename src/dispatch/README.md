@@ -52,8 +52,9 @@ never the parse — as one of:
   value spliced in as `PRINT` renders it, a string [view](../values/README.md#views)
   over its pieces and those texts, or, where a brace keeps its value, the record
   of the n + 1 strings around the kept values and those values;
-- a **block** a pairwise operator run hoisted an operand into, run through the
-  program's block door, whose value is its last statement's — which is how the
+- a **block** a pairwise operator run hoisted an operand into, run on the
+  cell's [evaluation stack](../program/README.md#the-evaluation-stack), whose
+  value is its last statement's — which is how the
   shared operand evaluates once;
 - a `FN`, born through the [lambda door](../knot/README.md#a-lambda), so a
   callable no binder names is born where it is evaluated, with the captures it
@@ -115,11 +116,15 @@ never the parse — as one of:
   each an unbuilt code view.
 
 A part a node needs is read in place when it is a literal, a name or a quote,
-and otherwise asked for — a `Shares` tenant of the evaluation's cell, kept —
-all at one park. **A fault is passed through**: an evaluation that receives
-one from a part finishes with it, unchanged, before doing anything else, and
-the parts it asked for after that one never run
-([faults](../scheduler/README.md#faults)).
+and otherwise asked for: evaluated above the node on the cell's
+[evaluation stack](../program/README.md#the-evaluation-stack), in the same
+step, one part at a time in source order, and kept where a child asked with
+its `Use` would have delivered it. The evaluator never ends a step: it answers
+each turn with what the node needs next, and parks the cell only for a frame
+it spawns — a call's, an `EVAL`'s, or a `USING` or `BUILD` over composed code.
+**A fault is passed through**: an evaluation that receives one from a part
+finishes with it, unchanged, before doing anything else, and the parts after
+that one are never asked for.
 
 **A value is held beside where it rests.** Each operand is a
 [`Held`](../scheduler/README.md#kept-and-held-values): the value, and the kept
@@ -1159,27 +1164,26 @@ payload segment appended
 arm's block keeps it in a chain beside the arms around it,
 [`ArmKept`](../program/bundle.rs), so a name read of `it` is held as a frame's
 binder is. An arm whose `MATCH` is in tail position — at the root of its body's
-last statement, which binds nothing, in a tail body — is handed off as a block
-owing the evaluation's contract, so a recursion through tail arms holds a
-constant number of cells ([tails](#tails-under-a-contract)); any other runs as
-a child, and its value finishes the `MATCH`'s evaluation, held to the contract
-there.
+last statement, which binds nothing, in a tail body — runs as a block in tail
+position, owing the frame's contract, so a recursion through tail arms holds a
+constant number of cells ([tails](#tails-under-a-contract)); any other arm's
+value finishes the `MATCH`'s evaluation.
 
 ## Tails under a contract
 
-An evaluation a frame [tails into](../program/README.md#frames-contracts-and-tails)
+An evaluation in a frame's [tail position](../program/README.md#frames-contracts-and-tails)
 owes the frame's [`Contract`](../program/record.rs). When it selects a
 registration whose declared return, substituted by the call's solution,
 satisfies the contract — or calls an unquantified function by name whose return
-does, the one answer [`Contract::kept_by`](../program/record.rs) gives both — it hands its cell to the callee's frame by a tail rather than spawning
-it, handing the frame the contract it owes — with the hop table that counts
+does, the one answer [`Contract::kept_by`](../program/record.rs) gives both — the
+frame's cell tails into the callee's frame rather than spawning it, handing the frame the contract it owes — with the hop table that counts
 the frame this hop replaces, for the trace a fault prints
 ([`Owed`](../program/README.md#frames-contracts-and-tails)) — so a keyworded
 self-call in tail position holds a constant number of cells however deep it
 recurses, and a chain of tail hops returns at the outermost declared return. A tail `MATCH` arm's last
-statement is one of its callable's tail statements: the evaluation hands the arm
-off owing its contract, and the arm's tail call hops as the callable's own
-would, its route recorded and its return read off the callable that owns it.
+statement is one of its callable's tail statements: the arm's block runs in
+tail position, owing the frame's contract, and the arm's tail call hops as the
+callable's own would, its route recorded and its return read off the callable that owns it.
 The load records each
 callable's tail call's **route**: per candidate, whether it keeps the frame's
 contract, where the frame's return and the candidate are closed, and whether
@@ -1199,8 +1203,10 @@ itself, so each field is handed on through its own kept part. The evaluation
 asks each argument part of the frame body's
 [threaded set](../scope/README.md#the-threaded-set) with `Use::Threads`, so
 what the frame built and hands on is built in the loop's cell, and a tail
-marks those arguments threaded in the skeleton. Any other value it finishes with is held to the contract: checked against the callee's own return,
-a miss naming it, and retyped to the contract's outermost return. A call through
+marks those arguments threaded in the skeleton. Any other value it finishes
+with is delivered to the frame's runner, which holds it to the contract at the
+frame's end: checked against the callee's own return, a miss naming it, and
+retyped to the contract's outermost return. A call through
 a view's barrier never tails: its value crosses the barrier where its frame
 ends.
 
@@ -1282,8 +1288,8 @@ binds.
 ## Catching
 
 `TRY <body> WITH <arms>` and `CATCH <body>` are where a fault becomes a koan
-value. Each runs its body as a block of its own, a child of its evaluation, so
-the body's fault reaches the `TRY` or `CATCH` as the block's result rather than
+value. Each runs its body as a block of its own, pushed above its node on the
+cell's evaluation stack, so the body's fault reaches the `TRY` or `CATCH` as the block's result rather than
 the enclosing frame: the body is never in tail position
 ([three tiers](../scope/README.md#three-tiers)), and no call in it hops out
 past its catcher. A body that yields a value yields it: a `TRY` finishes with
@@ -1358,8 +1364,8 @@ having read and released nothing — so a `TRY` names only the kinds it handles.
 `CATCH` takes every kind.
 
 **The catcher copies the fault out.** What it reads lies in the regions the
-fault passed through: a tenant's links in its own write home, read in place,
-and each kept cell's in that cell, read in a step entered beside it
+fault passed through: the links in the catcher's own write home, read in
+place, and each kept cell's in that cell, read in a step entered beside it
 ([kept cells](../scheduler/README.md#faults)), outermost first. Each step
 copies by value what it needs into its own region — each line, worded through
 the kept cell's chain, and at the innermost the fault's fields, a value by the
@@ -1367,8 +1373,8 @@ deep copy a crossing makes and a type adopted from the cell's branch — and the
 drain releases the kept cell once the step ends, so once the `Error` is built
 every frame the fault kept is released. A `TRY` then runs its arm as a
 `MATCH` arm runs, `it` the variant's record, built in the `TRY`'s home and
-kept nowhere else, the arm handed off owing the evaluation's contract where the
-`TRY` is in tail position. A `CATCH` finishes with `Result.Error` of the
+kept nowhere else, the arm in tail position, owing the frame's contract, where
+the `TRY` is. A `CATCH` finishes with `Result.Error` of the
 `Error`.
 
 **At load** a `TRY`'s arms are typed as a `MATCH … UNDER Error`'s over a
@@ -1673,7 +1679,7 @@ settlement rebuilt with the same answer, the allocations a birth keyed on
 a list costs, a table of what a loop hop's adoptions cost, counter by counter,
 over the suite's programs, every count held flat across three evenly spaced
 depths, and each exit — a retyped value, a closure, a quote, a knot
-member, a held frame's hand-off, a received list passed on without being
+member, a held frame's tail call, a received list passed on without being
 entered, a loop passing on a member of a received chain adopting a hop at a
 time, a member of a received value reached through a call's result not entered
 whatever its length, and a loop handing a callee a module built over its link

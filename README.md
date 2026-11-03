@@ -100,13 +100,16 @@ that refuses writes `error: <message>` and runs nothing.
 ### run — the drain
 
 [program](src/program/README.md) holds the loaded program as one owning value,
-and its body runner performs a body's units in order. Each unit is work on the
-[scheduler](src/scheduler/README.md)'s drain, where a unit of work is a
-[cellgraph](cellgraph/README.md) cell and every value it makes lives in that
-cell's region ([values](src/values/README.md); functions, modules and circular
-data are [knots](src/knot/README.md)). Dispatch's evaluator is the step every
-evaluation runs: it reads a node off its shape, evaluates its slots, ranks the
-candidates by the arguments' types and runs the one that wins. An error the
+and its body runner performs a body's units in order. The work runs on the
+[scheduler](src/scheduler/README.md)'s drain, where each top-level statement
+and each called function's frame is a [cellgraph](cellgraph/README.md) cell,
+and every value it makes lives in that cell's region
+([values](src/values/README.md); functions, modules and circular data are
+[knots](src/knot/README.md)). A frame evaluates its whole body in its own
+step, on an evaluation stack, and waits only on the frames it calls.
+Dispatch's evaluator is what the stack hands each node to: it reads a node off
+its shape, evaluates its slots, ranks the candidates by the arguments' types
+and runs the one that wins. An error the
 program does not catch ends the run.
 
 ## Source layout
@@ -281,7 +284,7 @@ src/
 │   ├── arena.rs          BuildArena — the build arena: settlements and compositions in slots with generations, their parent links, pins, borrower and held counts, and eviction by bytes, least recently used unheld leaf first, under the budget; Settled / Composed, an arena node's facts as a self_cell over its bump and the Rcs it reads
 │   ├── load.rs           Graph::load — the load door: the load run first, then one slab root, the run root, over the tiers, facts and settling door it returned
 │   ├── seek.rs           Seek — what an asker hands the drain to find a frame's arena node — the Settles door a miss runs through, and the Lending a request's cell is born with: its asker's, a seek, a replay, a composition
-│   ├── action.rs         Step — the only thing a step is handed: its writers, its state and scratch state, its door (the code and facts it reads at the step's borrow), spawn, spawn_seeking and spawn_composing, results, beside, arena_ref, kept_here and built_in_home, the decision memo's doors and the caching chain, the park / hand_off / tail / tail_seeking / tail_under / bounce / rebuild / replay / read_beside / finish_fresh / finish_in_home / finish / fault / done / leave / failed ends that alone build an Action (opaque, over the drain-only Kind); Placement, Use, Request, Received, Slot, the drain's Spawns buffer, StepError
+│   ├── action.rs         Step — the only thing a step is handed: its writers, its state and scratch state, its door (the code and facts it reads at the step's borrow), spawn, spawn_seeking and spawn_composing, results, beside, arena_ref, kept_here, built_as and crossed_as — which place a value where a child asked with a given Use would have and end nothing — the decision memo's doors and the caching chain, the park / tail / tail_seeking / tail_under / bounce / rebuild / replay / read_beside / finish_fresh / finish_in_home / finish / fault / done / leave / failed ends that alone build an Action (opaque, over the drain-only Kind); Placement, Use and the use a part has relative to its asker's cell, Request, Received, Slot, the drain's Spawns buffer, StepError
 │   ├── continuation.rs   StepBundle — the covariant birth family and its crossing, the parked state family, the scratch family and born, which the layer above supplies, and the hooks a call's handed values are woken and kept through; BirthAt / StateAt, NativeStep, Work, and the ContinuationFamily a cell parks: Continuation, Rested, Provenance
 │   ├── beside.rs         Beside — what a step entered beside a kept cell reads of it at a brand of its own: the kept link, a chain its types resolve in, and the doors that copy a value or adopt a type into the step's own region
 │   ├── kept.rs           Kept, KeptPart, Held — a value at rest at its true home, the part of it a path of label, capture, member and payload segments reaches, and a value a step holds beside the kept part it is
@@ -293,17 +296,18 @@ src/
 │   └── tests.rs          the generator, the_builtin_image_is_fresh, which builds the image through the recipes and rewrites generated.rs under UPDATE_IMAGE; the digest and text checks; an empty load interning no type and recording no verdict or image text
 ├── program.rs        pub mod program — a loaded program as one owning value and the body runner that performs it, over build, builtin_image, knot, memory, parse, scheduler, scope, symbols, type_lattice and values
 ├── program/
-│   ├── record.rs         Program — the record a loaded program's steps read at 'graph, and evaluate, the one door every evaluation is asked through; Language — the builtin table, evaluator and walk the layer above supplies; Output, Contract and whether a callee's return keeps it, Owed — what a tail owes, the trace line a faulting cell owes read off it, and the hop table a tail hop counts in; Evaluated, LoadError
-│   ├── bundle.rs         KBundle — koan's step bundle: the covariant KBirth (Program / Call / Eval / Using / Evaluate / Block / Inspect), Within — what an evaluation or block runs within, its arena node, stamp and its frame's kept table among it — FrameKept, what every call hands on through kept parts (Passing) and what its frame keeps (Keeps), the parked KState, Catching — what a TRY or CATCH has copied out of a caught fault between the steps it reads kept cells beside — and the sites a parked runner keeps in scratch
+│   ├── record.rs         Program — the record a loaded program's steps read at 'graph, and evaluate, the door a top-level statement's evaluation is asked through; Language — the builtin table, evaluator and walk the layer above supplies; Output, Contract and whether a callee's return keeps it, Owed — what a tail owes, the trace line a faulting cell owes read off it, and the hop table a tail hop counts in; Evaluated, LoadError
+│   ├── bundle.rs         KBundle — koan's step bundle: the covariant KBirth (Program / Call / Eval / Composed / Evaluate / Inspect), Within — what an evaluation or block runs within, its arena node, stamp and its frame's kept table among it — FrameKept, what every call hands on through kept parts (Passing) and what its frame keeps (Keeps), the parked KState, Catching — what a TRY or CATCH has copied out of a caught fault between the steps it reads kept cells beside — and KScratch, what a parked cell keeps in scratch: the eager-part sites the top level asked for, or its evaluation stack
 │   ├── exit.rs           Exit — a caching body's exit: what leaves it adopted into the region, up to a settled part
-│   ├── body.rs           run — the body runner, the one step that performs a body's units at the top level, in every frame and in a block, ending a frame under its contract or tailing its last statement; call, a frame always in a region of its own, and the table a frame keeps its callee, arguments and binders in; block; eval, the door that runs a quote's code; every refusal raised as a fault
+│   ├── body.rs           run — the body runner, the one step every cell runs, which performs a body's units at the top level, in every frame and in a block, answering each with what it needs next (turn), ending a frame under its contract or tailing its last statement; call, a frame always in a region of its own, and the table a frame keeps its callee, arguments and binders in; eval, the door that runs a quote's code; every refusal raised as a fault
+│   ├── stack.rs          the evaluation stack — a frame's body runner at its bottom and the nodes, blocks and eager-part gathers in flight above it, laid in the cell's scratch as Pending entries; Node, Next and the Evaluator the stack hands each node to, run until the cell parks on a frame it spawned, tails or ends
 │   ├── settle.rs         seek — what a call hands the drain, its key, binding image and request — settled, the walk a miss runs rooted at the callee's body, and composed, a composition's miss
 │   ├── activation_store.rs  activated — a frame's walk at a binding event the facts below leave unbound, its records relaid into the frame's region
 │   └── substrate.rs      CellSubstrate — program storage, the types' load and agent-tier bumps and the interner as self_cell's owner, and Running — the graph, its run root and the Program record at 'graph, with run — which renders an uncaught fault's trace and answers an Outcome, whose Uncaught holds the cells the fault kept until it is dropped — and inspect, reached through a closure per call; the load runs before the graph stands, builds the types' load and freezes it and the symbol table, and lays the agent tier
 ├── dispatch.rs       pub mod dispatch — Koan, the Language programs run under, and the vocabulary its submodules share
 └── dispatch/
     ├── builtins.rs       the builtin table — the lattice's types, Error, Result and every overload as a builtin node — and the natives the overloads run
-    ├── evaluate.rs       the evaluator step: what a node is, gathering its parts, a spread literal, an ascription, an EVAL, a MATCH, a keyworded call, an application, and finishing under a contract
+    ├── evaluate.rs       the evaluator: what a node is, asking for its parts one at a time, a spread literal, an ascription, an EVAL, a MATCH, a keyworded call, an application, and finishing under a contract
     ├── caught.rs         a TRY or CATCH at run: its body run as a block, a caught fault's kept cells read outermost first and copied out into an Error, then the TRY's arm or the CATCH's Result
     ├── lookup.rs         a read: a list, a dict or a string applied to an index, a slice record or a key, answering a Result
     ├── select.rs         admission and selection over a candidate list — the one tie rule and first-class elimination the load reads too — a keyworded call's argument record, and the arm a MATCH runs
@@ -403,7 +407,7 @@ from that module's top-of-file comment. The kept modules carry theirs:
 - [src/scheduler/README.md](src/scheduler/README.md) — the deferred-work drain:
   the depth-first ready stack and the root work, what a step may name, the
   placement and use hints, delivery, the continuation and the step bundle, how
-  a cell waits, and the tail hand-off.
+  a cell waits, and tail hops.
 - [src/program/README.md](src/program/README.md) — a loaded program: the owner
   and its dependent, the program record and the `Language` above it, koan's
   step bundle, the body runner that performs the top level and every

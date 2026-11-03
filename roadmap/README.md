@@ -36,6 +36,7 @@ subdirectory's README carries its own slice.
 - [Dict defaults](features/dict-defaults.md)
 - [Families as parameters](features/families-as-parameters.md)
 - [Yielding iterators](features/yielding-iterators.md)
+- [A program owns its source](one-build/a-program-owns-its-source.md)
 - [A birth solved once](one-build/birth-solved-once.md)
 - [One layer, wherever laid](one-build/one-layer.md)
 - [A refused program stays loaded](one-build/refused-programs-stay-loaded.md)

@@ -1,6 +1,6 @@
 //! The program record: what a loaded program's steps read at `'graph`, and what the embedder above
-//! `program` supplies for it — the builtin table, the load-time check, the step every evaluation
-//! runs, and the sinks a program's output and uncaught fault are written to.
+//! `program` supplies for it — the builtin table, the load-time check, the evaluator every node in
+//! flight is handed to, and the sinks a program's output and uncaught fault are written to.
 //!
 //! A [`Contract`] is what a tail hands the evaluation that finishes a frame: the frame's
 //! substituted return, which [`Program::fulfilled`] checks a value against and retypes it to, and
@@ -15,7 +15,7 @@ use crate::knot::{KActivationView, KBuiltins, KValue};
 use crate::memory::{Bump, BumpAllocator, ProgramBrand, Writer};
 use crate::parse::SourceRef;
 use crate::parse::{KExpression, ParseError};
-use crate::scheduler::{Ask, NativeStep, Settles, Work};
+use crate::scheduler::{Ask, Settles, Work};
 use crate::scope::{
     BodyShape, ComposedRoot, ComposedSyntax, Composition, Facts, Fault, FaultKind, Hop, Line,
     LoadFacts, Segment, Settlement, ShapeError, Shapes, Site, Slot, Store, Written,
@@ -26,10 +26,11 @@ use crate::values::{Chain, KeptCell, Retype, TypeTiers, satisfies};
 
 use super::activation_store::Activate;
 use super::bundle::{KBirth, KBundle, Within};
+use super::stack::Evaluator;
 
 /// What the layer above `program` supplies: the builtin table a shape resolves builtin names
-/// against, and the step that evaluates a node. Dispatch implements it; the tests implement a
-/// miniature.
+/// against, and the evaluator a node in flight is handed to. Dispatch implements it; the tests
+/// implement a miniature.
 ///
 /// A trait rather than a record of function pointers: a pointer ranked over `'graph` cannot name
 /// the bundle's projections (rustc #100013), and a method generic over `'graph` is handed the one
@@ -43,9 +44,9 @@ pub trait Language {
         scratch: BumpAllocator<'_>,
     ) -> &'graph KBuiltins<'graph, 'graph>;
 
-    /// The step an evaluation runs: born holding [`KBirth::Evaluate`], it turns the node into a
-    /// value delivered where the drain says.
-    fn evaluator<'graph>() -> NativeStep<'graph, KBundle>;
+    /// The function the evaluation stack calls on a node in flight: handed the
+    /// step, the node and what was last delivered to it, it answers with what the node needs next.
+    fn evaluator<'graph>() -> Evaluator<'graph>;
 
     /// Run the language's one walk over the body at `at` of `shapes` and every body nested in it,
     /// keeping every record it computes in `store` and interning through `types`: what the load
@@ -249,9 +250,9 @@ impl<'graph> Settles<'graph> for Program<'graph> {
 }
 
 /// A loaded program's facts, laid down in program storage: its shape, its builtin table, the tiers
-/// of the types the load built and the interner its names live in, the step that evaluates a
-/// node and the walk a miss settles through, the sinks it writes to, the builtin `Result` and
-/// `Error` unions, and how its last run ended. `Copy` and without drop glue, so it rests in program
+/// of the types the load built and the interner its names live in, the evaluator a node in flight
+/// is handed to and the walk a miss settles through, the sinks it writes to, the builtin `Result`
+/// and `Error` unions, and how its last run ended. `Copy` and without drop glue, so it rests in program
 /// storage beside the table it names; it is the door the graph settles a miss through.
 #[derive(Clone, Copy)]
 pub struct Program<'graph> {
@@ -259,7 +260,7 @@ pub struct Program<'graph> {
     builtins: &'graph KBuiltins<'graph, 'graph>,
     tiers: TypeTiers<'graph>,
     symbols: &'graph SymbolInterner,
-    evaluator: NativeStep<'graph, KBundle>,
+    evaluator: Evaluator<'graph>,
     settle: Settle<'graph>,
     compose: Compose<'graph>,
     activate: Activate<'graph>,
@@ -281,7 +282,7 @@ impl<'graph> Program<'graph> {
         (result, error, variants): (KType, KType, &'graph [KType]),
         symbols: &'graph SymbolInterner,
         (evaluator, settle, compose, activate): (
-            NativeStep<'graph, KBundle>,
+            Evaluator<'graph>,
             Settle<'graph>,
             Compose<'graph>,
             Activate<'graph>,
@@ -304,6 +305,11 @@ impl<'graph> Program<'graph> {
             variants,
             ending,
         }
+    }
+
+    /// The function every node in flight is evaluated by.
+    pub fn evaluator(&self) -> Evaluator<'graph> {
+        self.evaluator
     }
 
     /// The walk a frame's binding event decides through.
@@ -381,24 +387,22 @@ impl<'graph> Program<'graph> {
         self.ending
     }
 
-    /// The one door every evaluation is asked through: `node`, read through `view`, as a child the
-    /// drain can create — or as the successor a frame's tail hands `contract`. The caller picks its
-    /// placement and its `Use`; what the node means is the evaluator's, so nothing in `program`
-    /// names an expression shape. `within` is [`KBirth::Evaluate`]'s.
+    /// The door a top-level statement's evaluation is asked through: `node`, read through `view`,
+    /// as a child the drain can create, run by the evaluation stack. The caller
+    /// picks its placement and its `Use`; what the node means is the evaluator's, so nothing in
+    /// `program` names an expression shape. `within` is [`KBirth::Evaluate`]'s.
     pub fn evaluate<'here>(
         &'graph self,
         node: Evaluated,
         view: KActivationView<'graph, 'here>,
-        owed: Option<Owed<'here>>,
         within: Within<'graph, 'here>,
     ) -> Work<'graph, 'here, KBundle> {
         Work {
-            step: self.evaluator,
+            step: super::body::run,
             state: KBirth::Evaluate {
                 program: self,
                 node,
                 view,
-                owed,
                 within,
             },
         }

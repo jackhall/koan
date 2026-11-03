@@ -7,6 +7,7 @@ mod branches;
 mod bundle;
 mod continuation;
 mod delivery;
+mod doors;
 mod drain;
 mod faults;
 mod gather;

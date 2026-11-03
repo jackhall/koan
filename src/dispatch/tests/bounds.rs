@@ -1,6 +1,6 @@
 //! The build arena's bounds: what no frame holds stays within the budget however a loop binds, and
 //! what frames hold grows with the distinct arena nodes they run under, never with how deeply they
-//! nest.
+//! nest. And the run root's: a top-level statement's temporaries die with its cell.
 
 use std::num::NonZeroUsize;
 
@@ -121,4 +121,31 @@ fn what_frames_hold_is_linear_in_distinct_arena_nodes_not_nesting_depth() {
         });
         assert_eq!(held, [live, live], "{count} bindings");
     }
+}
+
+/// The bytes the run root's region holds once `source` has run.
+fn root_bytes(source: &str) -> usize {
+    let mut substrate =
+        CellSubstrate::load::<Koan>(source, "<test>", 4, BuildBudget::default(), output())
+            .unwrap_or_else(|error| panic!("the program loads: {error}"));
+    substrate
+        .with(|running| running.ran())
+        .expect("the program runs");
+    substrate
+        .with(|running| {
+            let root = running.root();
+            running.scheduler().graph().region_used(root)
+        })
+        .expect("the root is live")
+}
+
+#[test]
+fn a_top_level_statements_temporaries_die_with_it() {
+    let one = root_bytes("LET x = 1");
+    let record = "{a = 1, b = [1 2 3 4 5 6 7 8]}";
+    assert!(
+        root_bytes(&format!("LET x = {record}")) > one,
+        "the root holds what it binds"
+    );
+    assert_eq!(root_bytes(&format!("LET x = (ATTR {record} a)")), one);
 }

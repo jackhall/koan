@@ -47,15 +47,11 @@ enum Shape {
     TreeFresh,
     /// To a `Fresh` child, which lays a list of it and hops `Fresh` with that, homed in itself.
     TreeFreshCopied,
-    /// To a `Fresh` child, which lays a list of it and hands that off to a successor born under it.
-    TreeHandOff,
-    /// To a tenant, which lays a list of it in its host and hands that off.
-    TenantHandOff,
     /// To a `Fresh` child asked to keep its result, which hands the list back up.
     KeptResult,
-    /// To a `Fresh` child, which lays a list of it and hands that off; the successor lays a list of
-    /// that in its own region and hops to the next such child of this level. After the last, it
-    /// reports its own branch's reach steps rather than a branch length.
+    /// To a `Fresh` child, which lays a list of it and hops with that; the successor lays a list of
+    /// that in its own region and hops to the next such frame. After the last, it reports its own
+    /// branch's reach steps rather than a branch length.
     Cycle,
 }
 
@@ -249,8 +245,6 @@ fn hand_down<'graph>(
         Shape::TenantFresh => (shares(hop_fresh, Use::Reads, list), wake),
         Shape::TreeFresh => (fresh(hop_fresh, Use::Reads, list), wake),
         Shape::TreeFreshCopied => (fresh(wrap_and_hop_fresh, Use::Reads, list), wake),
-        Shape::TreeHandOff => (fresh(wrap_and_hand_off, Use::Reads, list), wake),
-        Shape::TenantHandOff => (shares(wrap_and_hand_off, Use::Reads, list), wake),
         // The deepest level is never the root work, so its own wake is `relay`'s.
         Shape::KeptResult => (
             fresh(hand_back, Use::Keeps, list),
@@ -271,17 +265,9 @@ fn hop_fresh<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'
     })
 }
 
-/// How a cell hands a list it laid on: by a hop beside it, or by a hand-off under it.
-#[derive(Clone, Copy)]
-enum Tail {
-    Hop,
-    HandOff,
-}
-
-/// Lay a list of the state and hand it on as `tail` says, to `next`.
-fn wrap_and_tail<'graph>(
+/// Lay a list of the state and hop with it to `next`.
+fn wrap_and_hop<'graph>(
     step: Step<'_, 'graph, '_, '_, '_, '_, Native>,
-    tail: Tail,
     next: TestStep<'graph>,
 ) -> Action<'graph, Native> {
     let (step, state) = step.state();
@@ -291,41 +277,29 @@ fn wrap_and_tail<'graph>(
         step: next,
         state: KValue::List(list),
     };
-    match tail {
-        Tail::Hop => step.tail(work),
-        Tail::HandOff => step.hand_off(work),
-    }
+    step.tail(work)
 }
 
 /// Lay a list of the state and hop with it to [`measures`].
 fn wrap_and_hop_fresh<'graph>(
     step: Step<'_, 'graph, '_, '_, '_, '_, Native>,
 ) -> Action<'graph, Native> {
-    wrap_and_tail(step, Tail::Hop, measures)
+    wrap_and_hop(step, measures)
 }
 
-/// Lay a list of the state and hand it off to [`measures`].
-fn wrap_and_hand_off<'graph>(
-    step: Step<'_, 'graph, '_, '_, '_, '_, Native>,
-) -> Action<'graph, Native> {
-    wrap_and_tail(step, Tail::HandOff, measures)
-}
-
-/// A cycle's frame: lay a list of the state and hand it off to a successor under this frame,
-/// whose birth links this frame's branch.
+/// A cycle's frame: lay a list of the state and hop with it to a successor beside this frame.
 fn cycle_frame<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
     FRAMES.with(|frames| frames.set(frames.get() + 1));
-    wrap_and_tail(step, Tail::HandOff, cycle_successor)
+    wrap_and_hop(step, cycle_successor)
 }
 
-/// A cycle's hand-off: lay a list of the state in its own region and hop to the next frame, beside
-/// the frame it was handed off from; after the last frame, report its own reach steps before the
-/// result crosses back.
+/// A cycle's successor: lay a list of the state in its own region and hop to the next frame;
+/// after the last frame, report its own reach steps before the result crosses back.
 fn cycle_successor<'graph>(
     step: Step<'_, 'graph, '_, '_, '_, '_, Native>,
 ) -> Action<'graph, Native> {
     if FRAMES.with(Cell::get) < CYCLE_FRAMES {
-        return wrap_and_tail(step, Tail::Hop, cycle_frame);
+        return wrap_and_hop(step, cycle_frame);
     }
     record(reach_steps(&step).to_string());
     step.finish_fresh(|_, _, _| Active::new(KValue::Null))
@@ -370,8 +344,6 @@ fn each_way_a_deep_cell_hands_a_value_on_costs_the_same_however_deep() {
         Shape::TenantFresh,
         Shape::TreeFresh,
         Shape::TreeFreshCopied,
-        Shape::TreeHandOff,
-        Shape::TenantHandOff,
         Shape::KeptResult,
     ] {
         let near = handed_under(shallow, shape);
@@ -384,14 +356,13 @@ fn each_way_a_deep_cell_hands_a_value_on_costs_the_same_however_deep() {
     }
 }
 
-/// Each frame's hand-off links the frame's branch, and each hop copies a list homed in the
-/// hand-off, a sibling's descendant, into the next frame: the last hand-off checks as many steps
-/// at any depth of the level the cycle runs under.
+/// Each hop copies a list homed in its predecessor, a sibling, into the next cell: the last
+/// successor checks as many steps at any depth of the level the cycle runs under.
 #[test]
 fn a_tail_cycle_checks_as_many_steps_however_deep_its_host() {
     let (shallow, deep) = if cfg!(miri) { (2, 3) } else { (4, 16) };
     let near = handed_under(shallow, Shape::Cycle);
-    assert_eq!(near.len(), 1, "the last hand-off reported once");
+    assert_eq!(near.len(), 1, "the last successor reported once");
     assert_eq!(
         handed_under(deep, Shape::Cycle),
         near,

@@ -7,9 +7,11 @@
 //! through the elaborator's door and bound in the same step; a module binder's body runs
 //! inline, its activation laid down in the running region and the enclosing body's place kept in a
 //! resident [`Outer`]; a component the knot ties is tied, and a refusal naming eager parts becomes
-//! one evaluation per part, all asked for at one park; a lone `LET` and a statement that binds
-//! nothing are one evaluation each. The only children the runner asks for are evaluations, through
-//! the program record's `evaluate`. See [README.md § The body runner](README.md#the-body-runner).
+//! one evaluation per part; a lone `LET` and a statement that binds nothing are one evaluation
+//! each. The runner answers each unit with what it needs ([`turn`]): at the top level each
+//! evaluation is a `Fresh` child of the root, every eager part asked for at one park; in a frame
+//! and in a block it is pushed onto the cell's [evaluation stack](super::stack) and run in the
+//! same step. See [README.md § The body runner](README.md#the-body-runner).
 //!
 //! **Faults.** A unit that receives a fault, or that the program refuses — a tie or a declaration
 //! refused, a callee that is no function, arguments that do not fit it — ends the body with a
@@ -47,19 +49,19 @@
 //!
 //! **Frames end under a contract.** A called frame owes its caller a value satisfying its declared
 //! return, with its own type-parameter solution substituted, retyped to it; a miss is an error
-//! value. When the frame's last unit is a statement that binds nothing, the runner **tails** into
-//! the evaluator with that [`Contract`], and the evaluation owes it instead. A frame a tail hop
-//! reached is checked against its own return and retyped to the one the hop owed, so a chain of
-//! hops returns at the outermost contract. An `EVAL`'s frame owes the `EVAL`'s declared return as a
-//! called frame owes its own. A block tails only as a tail `MATCH` arm, which the `MATCH`'s
-//! evaluation hands off owing its contract; every other block runs as a child and never tails.
+//! value. When the frame's last unit is a statement that binds nothing, the runner asks for it in
+//! **tail position**, owing that [`Contract`]: a call there whose return keeps it hops, and any
+//! other value comes back to the runner, which holds it to the contract where the frame ends. A
+//! frame a tail hop reached is checked against its own return and retyped to the one the hop owed,
+//! so a chain of hops returns at the outermost contract. An `EVAL`'s frame owes the `EVAL`'s
+//! declared return as a called frame owes its own. A block is in tail position only as a tail
+//! `MATCH` arm, which owes its frame's contract.
 //!
 //! **A caching body interns in scratch.** Each step picks one chain ([`run`]). A caching body
 //! keeps its blocks' and its last statement's values rather than forwarding them, so a value
-//! leaves it only through an [`Exit`]: the frame's end, and — in a frame holding its
-//! scratch — the hand-off of its last statement, which adopts the slots the statement reads and
-//! the frame's contract. An invariant site's types rest in the agent tier already, rested by the
-//! settlement the frame runs under: a step lays nothing there.
+//! leaves it only through an [`Exit`]: the frame's end, or a call out of it. An invariant site's
+//! types rest in the agent tier already, rested by the settlement the frame runs under: a step lays
+//! nothing there.
 
 use std::cell::Cell;
 
@@ -98,10 +100,13 @@ use crate::values::{
 };
 
 use super::activation_store::bound_of;
-use super::bundle::{Entered, FrameKept, Handed, KBirth, KBundle, KState, Keeps, Passing, Within};
+use super::bundle::{
+    Entered, FrameKept, Handed, KBirth, KBundle, KScratch, KState, Keeps, Passing, Within,
+};
 use super::exit::Exit;
 use super::record::{CallKind, Contract, Ending, Evaluated, Owed, Program, rendered};
 use super::settle::called_function;
+use super::stack::BlockEntry;
 
 /// The body runner's state between units: which body it is performing, how far it got, and where
 /// it parked.
@@ -111,8 +116,9 @@ pub struct Runner<'graph, 'cell> {
     /// Invariant: it binds. It rides the parked state family, which never crosses.
     activation: &'cell KActivation<'graph, 'cell>,
     unit: u32,
-    /// A frame's value so far: set when the unit holding its last statement completes.
-    result: Option<KValue<'graph, 'cell>>,
+    /// A frame's value so far, held beside where it rests: set when the unit holding its last
+    /// statement completes.
+    result: Option<Held<'graph, 'cell>>,
     /// The enclosing bodies of a module body being run inline, innermost first.
     outer: Option<&'cell Outer<'graph, 'cell>>,
     level: Level,
@@ -180,7 +186,7 @@ enum Stage {
 struct Outer<'graph, 'cell> {
     activation: &'cell KActivation<'graph, 'cell>,
     unit: u32,
-    result: Option<KValue<'graph, 'cell>>,
+    result: Option<Held<'graph, 'cell>>,
     /// The module binder's slot in `activation`, bound when the body ends.
     binder: Slot,
     /// The runner's `seen` in `activation`, where its statement seams resume.
@@ -190,7 +196,7 @@ struct Outer<'graph, 'cell> {
 
 /// Why a unit could not go on: a fault reached it or it raised one — what lies inside — or an
 /// invariant broke.
-enum Stopped<'graph, 'a> {
+pub(super) enum Stopped<'graph, 'a> {
     Raised(KInner<'graph, 'a>),
     Broken(StepError),
 }
@@ -201,11 +207,33 @@ impl From<StepError> for Stopped<'_, '_> {
     }
 }
 
+/// What a runner is handed back where it asked for something: the value of the evaluation it
+/// asked for, or the fault it ended with, or the values of the eager parts a tie named, by site.
+pub(super) enum Woken<'x, 'graph, 'here> {
+    Value(Held<'graph, 'here>),
+    Fault(KInner<'graph, 'here>),
+    Supplied(&'x [(Site, KValue<'graph, 'here>)]),
+}
+
+/// What a runner needs next: one evaluation of `node`, asked with `use_` and owing `owed` where
+/// it is the body's tail; one evaluation per eager part a refused tie named, at `sites`, laid in
+/// scratch; or nothing more, the body ended — or stopped.
+pub(super) enum Turn<'graph, 'here, 'scratch> {
+    Ask {
+        node: Evaluated,
+        use_: Use,
+        owed: Option<Owed<'here>>,
+    },
+    Supply(&'scratch [Site]),
+    Ended,
+    Stopped(Stopped<'graph, 'here>),
+}
+
 #[cfg(test)]
 thread_local! {
-    /// How many times a runner has woken with the parts a tie named: what a test reads to see one
-    /// wake however many parts.
-    pub(super) static SUPPLIED_WAKES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// How many times a runner has tied again with the parts a tie named supplied: what a test
+    /// reads to see one retry however many parts.
+    pub(super) static SUPPLIED_TIES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
 /// A step that took both its states.
@@ -221,6 +249,9 @@ type Taking<'a, 'graph, 'step, 'here, 'scratch, 'lent> =
 pub fn run<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'graph, KBundle> {
     let (step, state) = step.state();
     let (mut step, scratch) = step.scratch();
+    if let KState::Born(KBirth::Evaluate { .. }) | KState::Evaluating = state {
+        return super::stack::evaluating(step, state, scratch);
+    }
     // A call whose settlement binds a module of composed code whose composition the miss found
     // gone rebuilds it from the module's root and seeks again.
     if let Some(wanted) = step.wanting()
@@ -306,17 +337,15 @@ pub fn run<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'g
         KState::Born(KBirth::Eval { code: value, .. }) => (value.as_code())
             .and_then(|member| member.code())
             .map(|node| node.shape(&code)),
-        KState::Born(KBirth::Block { segment, .. }) => Some(code.shape(*segment)),
         KState::Runner(runner) => Some(code.shape(runner.activation.segment())),
-        KState::Born(_) | KState::Evaluating { .. } | KState::Catching { .. } => None,
+        KState::Born(_) | KState::Evaluating => None,
     };
     let caches = shape.is_some_and(|shape| facts.caches(shape));
     let routes = match &state {
         // A frame is a tree cell, and holds its scratch whatever it borrows.
         KState::Born(KBirth::Call { .. }) => caches && step.hold_scratch(),
-        KState::Born(KBirth::Block { within, .. }) => within.routes,
         KState::Runner(runner) => runner.within.routes,
-        KState::Born(_) | KState::Evaluating { .. } | KState::Catching { .. } => false,
+        KState::Born(_) | KState::Evaluating => false,
     };
     #[cfg(test)]
     if caches {
@@ -459,7 +488,7 @@ fn born_under(callee: KValue<'_, '_>) -> ArenaRef {
 fn ran<'graph, 'here, 'scratch>(
     mut step: Taking<'_, 'graph, '_, 'here, 'scratch, '_>,
     state: KState<'graph, 'here>,
-    scratch: Option<&'scratch [Site]>,
+    scratch: Option<KScratch<'graph, 'here, 'scratch>>,
     routes: bool,
     types: &Chain<'_, 'here, '_, '_>,
 ) -> Action<'graph, KBundle> {
@@ -640,57 +669,6 @@ fn ran<'graph, 'here, 'scratch>(
                 }
             }
         }
-        KState::Born(KBirth::Block {
-            program,
-            segment,
-            enclosing,
-            entered,
-            owed,
-            within,
-        }) => {
-            let writer = step.writer();
-            let (code, facts) = step.door();
-            let shape = code.shape(segment);
-            let enclosing = resident(writer, enclosing);
-            let activation = resident(
-                writer,
-                KActivation::of_block(writer, shape, &facts, enclosing),
-            );
-            match entered {
-                Entered::Plain => {}
-                // A `USING` body's parameters are the module's surfaced names, which its shape and
-                // the module cannot disagree on: a refusal is an invariant break.
-                Entered::Surfaced(module, site) => {
-                    let bump = Bump::new();
-                    let picks = facts.picks(code.shape(enclosing.segment()), site);
-                    if surface(writer, module, picks, activation, shape, types, &bump).is_err() {
-                        return step.failed(StepError::Refused);
-                    }
-                }
-                // An arm's one parameter is its `it`.
-                Entered::Arm(it) => {
-                    let it_slot = shape.slot(BinderSymbol::Value(IMPLICIT.it.symbol()));
-                    let bound = it_slot.map(|(slot, _)| activation.bind(slot, it));
-                    if !matches!(bound, Some(Ok(()))) {
-                        return step.failed(StepError::Refused);
-                    }
-                }
-            }
-            let mut memo = Memo::at(within.memo, within.inherit);
-            let activation =
-                match decided_at_entry(&mut step, types, program, activation, &mut memo) {
-                    Ok(activation) => activation,
-                    Err(error) => {
-                        let inner = laid_refusal(&step, error);
-                        return faulted(step, types, owed.map(|owed| owed.line()), inner);
-                    }
-                };
-            Runner {
-                within,
-                memo,
-                ..Runner::at(program, activation, Level::Block, owed)
-            }
-        }
         KState::Born(KBirth::Composed { code, source, .. }) => {
             let scratch = Bump::new();
             let (door, facts) = step.door();
@@ -711,15 +689,73 @@ fn ran<'graph, 'here, 'scratch>(
             };
             return step.finish(finished);
         }
-        KState::Runner(mut runner) => match woken(&mut step, &mut runner, scratch, types) {
-            Ok(()) => runner,
-            Err(stopped) => return stop(step, runner, stopped, types),
-        },
-        KState::Born(_) | KState::Evaluating { .. } | KState::Catching { .. } => {
-            return step.failed(StepError::Refused);
+        KState::Runner(runner) if runner.level == Level::Top => {
+            return top_level_woken(step, runner, scratch, types);
         }
+        KState::Runner(runner) => return super::stack::woken(step, runner, scratch, types),
+        KState::Born(_) | KState::Evaluating => return step.failed(StepError::Refused),
     };
-    perform(step, runner, types)
+    match runner.level {
+        Level::Top => top_level(step, runner, None, types),
+        Level::Frame | Level::Block => super::stack::running(step, runner, types),
+    }
+}
+
+/// A block's runner, entered as `entry` says beside the view it sits in, in the asker's own cell:
+/// a `USING … SCOPE` body on its module, a `MATCH` arm on its `it`, a synthesized block part bound
+/// to nothing. Its activation is laid down and decided at its entry; a refusal the walk reaches is
+/// the fault the block stops with.
+pub(super) fn entered_body<'graph, 'here>(
+    step: &mut Taking<'_, 'graph, '_, 'here, '_, '_>,
+    types: &Chain<'_, 'here, '_, '_>,
+    program: &'graph Program<'graph>,
+    entry: BlockEntry<'graph, 'here>,
+) -> Result<Runner<'graph, 'here>, Stopped<'graph, 'here>> {
+    let BlockEntry {
+        segment,
+        enclosing,
+        entered,
+        owed,
+        within,
+        ..
+    } = entry;
+    let writer = step.writer();
+    let (code, facts) = step.door();
+    let shape = code.shape(segment);
+    debug_assert_eq!(shape.kind(), ShapeKind::Block);
+    let enclosing = resident(writer, enclosing);
+    let activation = resident(
+        writer,
+        KActivation::of_block(writer, shape, &facts, enclosing),
+    );
+    match entered {
+        Entered::Plain => {}
+        // A `USING` body's parameters are the module's surfaced names, which its shape and the
+        // module cannot disagree on: a refusal is an invariant break.
+        Entered::Surfaced(module, site) => {
+            let bump = Bump::new();
+            let picks = facts.picks(code.shape(enclosing.segment()), site);
+            if surface(writer, module, picks, activation, shape, types, &bump).is_err() {
+                return Err(Stopped::Broken(StepError::Refused));
+            }
+        }
+        // An arm's one parameter is its `it`.
+        Entered::Arm(it) => {
+            let it_slot = shape.slot(BinderSymbol::Value(IMPLICIT.it.symbol()));
+            let bound = it_slot.map(|(slot, _)| activation.bind(slot, it));
+            if !matches!(bound, Some(Ok(()))) {
+                return Err(Stopped::Broken(StepError::Refused));
+            }
+        }
+    }
+    let mut memo = Memo::at(within.memo, within.inherit);
+    let activation = decided_at_entry(step, types, program, activation, &mut memo)
+        .map_err(|error| Stopped::Raised(laid_refusal(step, error)))?;
+    Ok(Runner {
+        within,
+        memo,
+        ..Runner::at(program, activation, Level::Block, owed)
+    })
 }
 
 /// The trace line a call's frame owes where it faults before its contract is known: its callee
@@ -969,57 +1005,6 @@ pub fn call<'graph, 'here>(
     }
 }
 
-/// What an evaluator asks for to run the block `shape`, a synthesized block part's, beside
-/// `enclosing`, the view it sits in: a tenant of the asker, since the view borrows its region.
-/// `within` is [`KBirth::Block`]'s.
-pub fn block<'graph, 'here>(
-    program: &'graph Program<'graph>,
-    shape: &BodyShape<'_>,
-    enclosing: KActivationView<'graph, 'here>,
-    use_: Use,
-    within: Within<'graph, 'here>,
-) -> Request<'graph, 'here, KBundle> {
-    entered_block(
-        program,
-        shape,
-        enclosing,
-        Entered::Plain,
-        None,
-        use_,
-        within,
-    )
-}
-
-/// What an evaluator asks for to run `shape`, a `USING … SCOPE` body or a `MATCH` arm, inside
-/// `enclosing`, its parameters bound as `entered` says: [`block`]'s request, the block entered on
-/// the module or on its `it`, owing `owed` where a tail arm is handed off.
-pub fn entered_block<'graph, 'here>(
-    program: &'graph Program<'graph>,
-    shape: &BodyShape<'_>,
-    enclosing: KActivationView<'graph, 'here>,
-    entered: Entered<'graph, 'here>,
-    owed: Option<Owed<'here>>,
-    use_: Use,
-    within: Within<'graph, 'here>,
-) -> Request<'graph, 'here, KBundle> {
-    debug_assert_eq!(shape.kind(), ShapeKind::Block);
-    Request {
-        placement: Placement::Shares,
-        use_,
-        work: crate::scheduler::Work {
-            step: run,
-            state: KBirth::Block {
-                program,
-                segment: shape.segment(),
-                enclosing,
-                entered,
-                owed,
-                within,
-            },
-        },
-    }
-}
-
 /// What an evaluator asks for to fill the holes of `code`, code composed at run time, from
 /// `source` under `USING`, or with no source to build it under `BUILD`: a one-step frame under
 /// the code's composition, where its shape lies, which shares its operands' storage.
@@ -1175,7 +1160,7 @@ impl<'graph, 'cell> Runner<'graph, 'cell> {
     /// What the runner hands an evaluation it asks for: what it runs within, and the memo a
     /// frame the evaluation calls seeds its own from — the runner's where it has read it, else
     /// the one the runner's would have been seeded from.
-    fn handing(&self) -> Within<'graph, 'cell> {
+    pub(super) fn handing(&self) -> Within<'graph, 'cell> {
         let inherit = match self.memo.read {
             Some(_) => self.memo.home,
             None => self.memo.inherit,
@@ -1184,6 +1169,27 @@ impl<'graph, 'cell> Runner<'graph, 'cell> {
             inherit,
             ..self.within
         }
+    }
+
+    /// Whether the runner owes a contract: a frame's, or a tail arm's.
+    pub(super) fn owes(&self) -> bool {
+        self.owed.is_some()
+    }
+
+    /// The body's value so far, held beside where it rests.
+    pub(super) fn result(&self) -> Option<Held<'graph, 'cell>> {
+        self.result
+    }
+
+    /// The program the runner performs a body of.
+    pub(super) fn program(&self) -> &'graph Program<'graph> {
+        self.program
+    }
+
+    /// The view of the runner's activation, which every evaluation it asks for reads names
+    /// through.
+    pub(super) fn view(&self) -> KActivationView<'graph, 'cell> {
+        self.activation.view()
     }
 
     /// The runner's activation, read through `step`'s door.
@@ -1224,23 +1230,13 @@ impl<'graph, 'cell> Runner<'graph, 'cell> {
         self.level == Level::Frame || self.level == Level::Block && self.owed.is_some()
     }
 
-    /// Where an evaluation this runner asks for lives: a `Fresh` tree child of the root at the top
-    /// level, so what it allocates beside its value dies with it; a tenant of the frame in a called
-    /// body or a block, so what it builds is at the frame's `'here`.
-    fn placement(&self) -> Placement {
-        match self.level {
-            Level::Top => Placement::Fresh,
-            Level::Frame | Level::Block => Placement::Shares,
-        }
-    }
-
     /// Bind `slot` and, when `unit` yields the body's value, keep it.
     fn bind(&mut self, unit: Unit, slot: Slot, value: KValue<'graph, 'cell>) {
         self.activation
             .bind(slot, value)
             .expect("a unit binds its slots once, in the shape's order");
         if self.yields(unit) && self.result.is_none() {
-            self.result = Some(value);
+            self.result = Some(Held::bare(value));
         }
     }
 
@@ -1933,71 +1929,46 @@ fn registrations_at<'graph, 'here>(
     Value::List(List::of_candidates(writer, found.iter().copied(), types))
 }
 
-/// A parked runner woken: the evaluation it asked for bound or kept, or the parts a tie named
-/// supplied and the tie made. A fault received stops it. In a caching body every value received
+/// A runner handed back what it asked for: the evaluation's value bound or kept, or the parts a
+/// tie named supplied and the tie made. A fault handed back stops it. In a caching body every value
 /// carries its types in the body's chain `types`.
-fn woken<'graph, 'here, 'scratch, 'lent>(
-    step: &mut Taking<'_, 'graph, '_, 'here, 'scratch, 'lent>,
+fn woke<'graph, 'here>(
+    step: &Taking<'_, 'graph, '_, 'here, '_, '_>,
     runner: &mut Runner<'graph, 'here>,
-    scratch: Option<&'scratch [Site]>,
+    woken: Woken<'_, 'graph, 'here>,
     types: &Chain<'_, 'here, '_, '_>,
 ) -> Result<(), Stopped<'graph, 'here>> {
     let at = runner.reading(step);
     let shape = at.shape();
     let unit = runner.current(shape);
-    match runner.stage {
-        Stage::Next => unreachable!("a runner parks only with an evaluation in flight"),
-        Stage::Evaluation => {
-            let received = step.results_with(types).next();
-            let received = received.ok_or(StepError::Unredeemable)??;
-            if let Received::Fault(inner) = received {
-                return Err(Stopped::Raised(inner));
-            }
-            match unit.work {
-                UnitWork::Component(component) => {
-                    let Received::Here(received) = received else {
-                        unreachable!(
-                            "a binding is asked for with `Keeps`, which never delivers to scratch"
-                        )
-                    };
-                    let slot = shape.components()[component.index()].members[0];
-                    let value = held(step, types, runner, slot, received.value)?;
-                    runner.bind(unit, slot, value);
-                    runner.keep(slot, received.becoming(value));
-                }
-                UnitWork::Statement(_) => {
-                    if runner.yields(unit)
-                        && let Received::Here(held) = received
-                    {
-                        runner.result = Some(held.value);
-                    }
+    match (runner.stage, woken) {
+        (_, Woken::Fault(inner)) => return Err(Stopped::Raised(inner)),
+        (Stage::Evaluation, Woken::Value(received)) => match unit.work {
+            UnitWork::Component(component) => {
+                let slot = shape.components()[component.index()].members[0];
+                let value = held(step, types, runner, slot, received.value)?;
+                runner.bind(unit, slot, value);
+                runner.keep(slot, received.becoming(value));
+                if runner.yields(unit) {
+                    runner.result = Some(received.becoming(value));
                 }
             }
-        }
-        Stage::Supplying => {
+            UnitWork::Statement(_) => {
+                if runner.yields(unit) {
+                    runner.result = Some(received);
+                }
+            }
+        },
+        (Stage::Supplying, Woken::Supplied(supplied)) => {
             #[cfg(test)]
-            SUPPLIED_WAKES.with(|wakes| wakes.set(wakes.get() + 1));
-            let Some(sites) = scratch else {
-                unreachable!("a supplying runner parks the sites it asked for")
-            };
+            SUPPLIED_TIES.with(|ties| ties.set(ties.get() + 1));
             let UnitWork::Component(component) = unit.work else {
                 unreachable!("only a component's tie names eager parts")
             };
-            let local = Bump::new();
-            let mut supplied: BumpVec<'_, (Site, KValue<'graph, 'here>)> =
-                BumpVec::with_capacity_in(sites.len(), &local);
-            for (site, received) in sites.iter().zip(step.results_with(types)) {
-                let held = match received? {
-                    Received::Here(held) => held,
-                    Received::Fault(inner) => return Err(Stopped::Raised(inner)),
-                    Received::Scratch(_) => unreachable!("an eager part is asked for with `Keeps`"),
-                };
-                supplied.push((*site, held.value));
-            }
-            supplied.sort_unstable_by_key(|(site, _)| *site);
             let component = &shape.components()[component.index()];
-            tied(step, types, runner, unit, component, &supplied)?;
+            tied(step, types, runner, unit, component, supplied)?;
         }
+        _ => return Err(Stopped::Broken(StepError::Unredeemable)),
     }
     runner.unit += 1;
     runner.stage = Stage::Next;
@@ -2121,25 +2092,32 @@ fn held_at<'graph, 'here>(
         .map_err(|fault| Stopped::Raised(laid(step, fault)))
 }
 
-/// Perform units until one parks or the body ends.
-fn perform<'graph, 'here>(
-    mut step: Taking<'_, 'graph, '_, 'here, '_, '_>,
-    mut runner: Runner<'graph, 'here>,
+/// Perform units, `woken` first handed back to the unit that asked for it, until one asks for
+/// something or the body ends.
+pub(super) fn turn<'graph, 'here, 'scratch>(
+    step: &mut Taking<'_, 'graph, '_, 'here, 'scratch, '_>,
+    runner: &mut Runner<'graph, 'here>,
+    woken: Option<Woken<'_, 'graph, 'here>>,
     types: &Chain<'_, 'here, '_, '_>,
-) -> Action<'graph, KBundle> {
+) -> Turn<'graph, 'here, 'scratch> {
+    if let Some(woken) = woken
+        && let Err(stopped) = woke(step, runner, woken, types)
+    {
+        return Turn::Stopped(stopped);
+    }
     loop {
-        if let Err(stopped) = decided_at_seams(&mut step, types, &mut runner) {
-            return stop(step, runner, stopped, types);
+        if let Err(stopped) = decided_at_seams(step, types, runner) {
+            return Turn::Stopped(stopped);
         }
-        let at = runner.reading(&step);
+        let at = runner.reading(step);
         let shape = at.shape();
         if runner.unit as usize == shape.units().len() {
             match runner.outer {
-                Some(outer) => match left(&step, types, runner, outer) {
-                    Ok(resumed) => runner = resumed,
-                    Err(stopped) => return stop(step, runner, stopped, types),
+                Some(outer) => match left(step, types, *runner, outer) {
+                    Ok(resumed) => *runner = resumed,
+                    Err(stopped) => return Turn::Stopped(stopped),
                 },
-                None => return ended(step, runner, types),
+                None => return Turn::Ended,
             }
             continue;
         }
@@ -2147,43 +2125,16 @@ fn perform<'graph, 'here>(
         let component = match unit.work {
             UnitWork::Statement(statement) => {
                 let node = Evaluated::Statement(statement);
-                if runner.tails(unit, shape) {
-                    // The frame's scratch departs after the successor's first step, while the
-                    // statement still reads the frame's bindings: adopt what it reads first.
-                    if runner.within.routes {
-                        let view = runner.activation.view();
-                        let scratch = Bump::new();
-                        let exit = Exit::new(step.types(), types, &scratch);
-                        for slot in shape.last_reads() {
-                            if let Some(value) = view.bound(*slot) {
-                                exit.value(&value);
-                            }
-                        }
-                        if let Some(owed) = &runner.owed {
-                            exit.contract(&owed.contract);
-                        }
-                        if let Some(decided) = view.decided() {
-                            decided.each_type(&mut |kt| exit.declared(kt));
-                        }
-                    }
-                    let program = runner.program;
-                    let work = program.evaluate(
-                        node,
-                        runner.activation.view(),
-                        runner.owed,
-                        runner.handing().handed_off(),
-                    );
-                    return step.hand_off(work);
-                }
-                // A caching body keeps its value, so it leaves only where the frame adopts it.
+                // A caching body keeps its value, so it leaves only where the frame adopts it; a
+                // tail owes the body's contract.
                 let use_ = match runner.yields(unit) {
                     true if at.facts().caches(shape) => Use::Keeps,
                     true => Use::Forwards,
                     false => Use::Reads,
                 };
-                let asked = ask(&mut step, &runner, node, use_);
+                let owed = runner.owed.filter(|_| runner.tails(unit, shape));
                 runner.stage = Stage::Evaluation;
-                return step.park(asked, run, KState::Runner(runner), None);
+                return Turn::Ask { node, use_, owed };
             }
             UnitWork::Component(component) => &shape.components()[component.index()],
         };
@@ -2192,8 +2143,8 @@ fn perform<'graph, 'here>(
             .iter()
             .any(|slot| matches!(shape.slot_name(*slot), BinderSymbol::Type(_)));
         if types_only {
-            if let Err(stopped) = declared(&step, types, &mut runner, unit, component) {
-                return stop(step, runner, stopped, types);
+            if let Err(stopped) = declared(step, types, runner, unit, component) {
+                return Turn::Stopped(stopped);
             }
             runner.unit += 1;
             continue;
@@ -2203,7 +2154,7 @@ fn perform<'graph, 'here>(
                 .births(*slot)
                 .is_some_and(|body| body.kind() == ShapeKind::Module)
         {
-            runner = entered(&step, runner, *slot);
+            *runner = entered(step, *runner, *slot);
             continue;
         }
         let births = component
@@ -2211,37 +2162,108 @@ fn perform<'graph, 'here>(
             .iter()
             .all(|slot| shape.births(*slot).is_some());
         if component.cyclic || births {
-            match first_tie(&mut step, types, &mut runner, unit, component) {
+            match first_tie(step, types, runner, unit, component) {
                 Ok(None) => {
                     runner.unit += 1;
                     continue;
                 }
-                Ok(Some((asked, sites))) => {
+                Ok(Some(sites)) => {
                     runner.stage = Stage::Supplying;
-                    return step.park(asked, run, KState::Runner(runner), Some(sites));
+                    return Turn::Supply(sites);
                 }
-                Err(stopped) => return stop(step, runner, stopped, types),
+                Err(stopped) => return Turn::Stopped(stopped),
             }
         }
         let [slot] = component.members else {
-            return step.failed(StepError::Refused);
+            return Turn::Stopped(Stopped::Broken(StepError::Refused));
         };
         let Some(rhs) = shape.rhs(*slot) else {
-            return step.failed(StepError::Refused);
+            return Turn::Stopped(Stopped::Broken(StepError::Refused));
         };
         // A binder the frame's tail call hands on is built where it outlives the hop.
         let threads = runner.tail_body()
             && runner.outer.is_none()
             && shape.threaded().binary_search(slot).is_ok();
-        let asked = ask(
-            &mut step,
-            &runner,
-            Evaluated::Part(shape.site(rhs)),
-            if threads { Use::Threads } else { Use::Keeps },
-        );
         runner.stage = Stage::Evaluation;
-        return step.park(asked, run, KState::Runner(runner), None);
+        return Turn::Ask {
+            node: Evaluated::Part(shape.site(rhs)),
+            use_: if threads { Use::Threads } else { Use::Keeps },
+            owed: None,
+        };
     }
+}
+
+/// The top level's runner: each evaluation it asks for a `Fresh` tree child of the root, so
+/// everything it allocates beside its value dies with it, and each eager part a tie names one
+/// such child, all at one park.
+fn top_level<'graph, 'here>(
+    mut step: Taking<'_, 'graph, '_, 'here, '_, '_>,
+    mut runner: Runner<'graph, 'here>,
+    woken: Option<Woken<'_, 'graph, 'here>>,
+    types: &Chain<'_, 'here, '_, '_>,
+) -> Action<'graph, KBundle> {
+    match turn(&mut step, &mut runner, woken, types) {
+        Turn::Ask { node, use_, .. } => {
+            let asked = ask(&mut step, &runner, node, use_);
+            step.park(asked, run, KState::Runner(runner), None)
+        }
+        Turn::Supply(sites) => {
+            let mut asked = None;
+            for site in sites {
+                asked = Some(ask(&mut step, &runner, Evaluated::Part(*site), Use::Keeps));
+            }
+            let asked = asked.expect("a tie refused on an eager part named one");
+            let sites = Some(KScratch::Supplying(sites));
+            step.park(asked, run, KState::Runner(runner), sites)
+        }
+        Turn::Ended => ended(step, runner, types),
+        Turn::Stopped(stopped) => stop(step, runner, stopped, types),
+    }
+}
+
+/// The top level woken: what its children delivered, as its runner is handed it back — the one
+/// evaluation it asked for, or every eager part at `sites`, by site.
+fn top_level_woken<'graph, 'here, 'scratch>(
+    mut step: Taking<'_, 'graph, '_, 'here, 'scratch, '_>,
+    runner: Runner<'graph, 'here>,
+    scratch: Option<KScratch<'graph, 'here, 'scratch>>,
+    types: &Chain<'_, 'here, '_, '_>,
+) -> Action<'graph, KBundle> {
+    let local = Bump::new();
+    let mut supplied: BumpVec<'_, (Site, KValue<'graph, 'here>)> = BumpVec::new_in(&local);
+    let first = match runner.stage {
+        Stage::Evaluation => step.results_with(types).next(),
+        _ => None,
+    };
+    let woken = match (runner.stage, scratch) {
+        (Stage::Supplying, Some(KScratch::Supplying(sites))) => {
+            let mut received: BumpVec<'_, _> = BumpVec::with_capacity_in(sites.len(), &local);
+            received.extend(step.results_with(types));
+            let mut fault = None;
+            for (site, received) in sites.iter().zip(received) {
+                match received {
+                    Ok(Received::Here(held)) => supplied.push((*site, held.value)),
+                    Ok(Received::Fault(inner)) => fault = Some(inner),
+                    Ok(Received::Scratch(_)) => {
+                        unreachable!("an eager part is asked for with `Keeps`")
+                    }
+                    Err(error) => return step.failed(error),
+                }
+            }
+            supplied.sort_unstable_by_key(|(site, _)| *site);
+            match fault {
+                Some(inner) => Woken::Fault(inner),
+                None => Woken::Supplied(&supplied),
+            }
+        }
+        (Stage::Evaluation, _) => match first {
+            Some(Ok(Received::Here(held))) => Woken::Value(held),
+            Some(Ok(Received::Fault(inner))) => Woken::Fault(inner),
+            _ => return step.failed(StepError::Unredeemable),
+        },
+        _ => return step.failed(StepError::Unredeemable),
+    };
+    top_level(step, runner, Some(woken), types)
 }
 
 /// The statement seams of the body the runner performs, a block's and an inline module body's
@@ -2303,7 +2325,8 @@ fn decided_at_seams<'graph, 'here>(
     Ok(())
 }
 
-/// Ask for one evaluation of `node` through the program's `evaluate`, at the runner's placement.
+/// Ask the top level's evaluation of `node` through the program's `evaluate`: a `Fresh` tree child
+/// of the root.
 fn ask<'graph, 'here>(
     step: &mut Taking<'_, 'graph, '_, 'here, '_, '_>,
     runner: &Runner<'graph, 'here>,
@@ -2312,23 +2335,22 @@ fn ask<'graph, 'here>(
 ) -> Asked {
     let work = runner
         .program
-        .evaluate(node, runner.activation.view(), None, runner.handing());
+        .evaluate(node, runner.activation.view(), runner.handing());
     step.spawn(Request {
-        placement: runner.placement(),
+        placement: Placement::Fresh,
         use_,
         work,
     })
 }
 
-/// A component's first tie: bound, or one evaluation asked for per eager part it named, beside the
-/// sites laid down in scratch for the wake.
+/// A component's first tie: bound, or the sites of the eager parts it named, laid in scratch.
 fn first_tie<'graph, 'here, 'scratch, 'lent>(
     step: &mut Taking<'_, 'graph, '_, 'here, 'scratch, 'lent>,
     types: &Chain<'_, 'here, '_, '_>,
     runner: &mut Runner<'graph, 'here>,
     unit: Unit,
     component: &Component<'_>,
-) -> Result<Option<(Asked, &'scratch [Site])>, Stopped<'graph, 'here>> {
+) -> Result<Option<&'scratch [Site]>, Stopped<'graph, 'here>> {
     let scratch = Bump::new();
     let mut missed: BumpVec<'_, Site> = BumpVec::new_in(&scratch);
     let reading = runner.reading(step);
@@ -2351,15 +2373,9 @@ fn first_tie<'graph, 'here, 'scratch, 'lent>(
             bound_members(step, types, runner, unit, component, &tied)?;
             Ok(None)
         }
-        Err(Untieable::Eager { .. }) if !missed.is_empty() => {
-            let sites = step.scratch_writer().fill(missed.len(), |at| missed[at]);
-            let mut asked = None;
-            for site in missed.iter() {
-                asked = Some(ask(step, runner, Evaluated::Part(*site), Use::Keeps));
-            }
-            let asked = asked.expect("a tie refused on an eager part named one");
-            Ok(Some((asked, sites)))
-        }
+        Err(Untieable::Eager { .. }) if !missed.is_empty() => Ok(Some(
+            step.scratch_writer().fill(missed.len(), |at| missed[at]),
+        )),
         Err(error) => Err(untied(step, &error)),
     }
 }
@@ -2474,15 +2490,15 @@ fn left<'graph, 'here>(
     Ok(resumed)
 }
 
-/// The body's end: the top level leaves its activation's view at rest for a later root work, a
-/// called frame or an `EVAL`'s finishes with its value held to its contract, and a block with its
-/// value.
-fn ended<'graph, 'here>(
+/// The body's end: the top level leaves its activation's view at rest for a later root work, and a
+/// called frame or an `EVAL`'s finishes with its value held to its contract, crossed out through
+/// its barrier where it was called through one, and handed on from where it rests otherwise.
+pub(super) fn ended<'graph, 'here>(
     step: Taking<'_, 'graph, '_, 'here, '_, '_>,
     runner: Runner<'graph, 'here>,
     types: &Chain<'_, 'here, '_, '_>,
 ) -> Action<'graph, KBundle> {
-    let value = runner.result.unwrap_or(Value::Null);
+    let held = runner.result.unwrap_or(Held::bare(Value::Null));
     let at = runner.reading(&step);
     let caches = at.facts().caches(at.shape());
     match (runner.level, runner.owed) {
@@ -2490,36 +2506,35 @@ fn ended<'graph, 'here>(
             program: runner.program,
             view: runner.activation.view(),
         }),
-        // A block's value stays in the body it runs in, whose chain reads its types.
-        (Level::Frame | Level::Block, None) if caches => step.finish_with(value, types),
-        (Level::Frame | Level::Block, None) => step.finish(value),
+        (Level::Frame | Level::Block, None) if caches => step.finish_with(held, types),
+        (Level::Frame | Level::Block, None) => step.finish(held),
         (Level::Frame | Level::Block, Some(owed)) => {
             let scratch = Bump::new();
             let fulfilled = (runner.program)
-                .fulfilled(step.writer(), types, value, owed.contract)
+                .fulfilled(step.writer(), types, held.value, owed.contract)
                 .and_then(|value| match runner.barrier {
                     Some(barrier) => {
                         let crossed = crossed_out(step.writer(), types, barrier.outermost, value)?;
-                        Ok(match barrier.returns {
+                        Ok(Held::bare(match barrier.returns {
                             Some(returns) => {
                                 crossed.retyped(step.writer(), returns, types, &scratch)
                             }
                             None => crossed,
-                        })
+                        }))
                     }
-                    None => Ok(value),
+                    None => Ok(held.becoming(value)),
                 });
-            let value = match fulfilled {
-                Ok(value) => value,
+            let held = match fulfilled {
+                Ok(held) => held,
                 Err(fault) => {
                     let inner = laid(&step, fault);
                     return faulted(step, types, Some(owed.line()), inner);
                 }
             };
             if caches {
-                Exit::new(step.types(), types, &scratch).value(&value);
+                Exit::new(step.types(), types, &scratch).value(&held.value);
             }
-            step.finish(value)
+            step.finish(held)
         }
     }
 }
@@ -2529,7 +2544,7 @@ fn ended<'graph, 'here>(
 /// is recorded for the run to render once the drain ends; one the top level raised itself is
 /// rendered here, through `types`, to the error sink. Either way the run is marked uncaught and the
 /// top level leaves its view at rest.
-fn stop<'graph, 'here>(
+pub(super) fn stop<'graph, 'here>(
     step: Taking<'_, 'graph, '_, 'here, '_, '_>,
     runner: Runner<'graph, 'here>,
     stopped: Stopped<'graph, 'here>,
