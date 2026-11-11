@@ -13,28 +13,28 @@
 //! first. They lie in the region the closure does, and a copy of the closure into another region
 //! lays them again there, its types made to resolve by the crossing beforehand.
 //!
-//! Beside its arena node a closure holds the [stamp](super::stamp) of the chain of settlements that
+//! Beside its depot slot a closure holds the [stamp](super::stamp) of the chain of settlements that
 //! node is the last of, by value, which a call replays where that node has been evicted. A copy
 //! lays the stamp's levels again too.
 
 use crate::memory::{BumpAllocator, BumpVec, Edge, Writer, collect, resident};
-use crate::values::{ArenaRef, Knotted, KnottedFamily, Link, Value, Weight};
+use crate::values::{DepotRef, Knotted, KnottedFamily, Link, Value, Weight};
 
 use super::activation::Reading;
-use super::settlement_facts::Activated;
+use super::build_layer::BuildLayer;
 use super::shape::{BodyShape, CaptureSlot, CaptureSource};
 use super::stamp::Stamp;
 
-/// A callable's closure bindings, in capture-slot order, beside the arena node the callable was
+/// A callable's closure bindings, in capture-slot order, beside the depot slot the callable was
 /// born under, where a call of it looks up its settlement, the stamp of the chain of settlements
 /// that node closes, and what the activation it was born in had decided. None of those is content,
 /// so the closure's digest and equality read the slots alone.
 #[derive(Clone, Copy)]
 pub struct ClosureBindings<'cell, X = crate::values::Nothing> {
     slots: &'cell [Link<'cell, X>],
-    build: ArenaRef,
+    build: DepotRef,
     stamp: Option<Stamp<'cell, X>>,
-    decided: Option<&'cell Activated<'cell>>,
+    decided: Option<&'cell BuildLayer<'cell>>,
 }
 
 impl<'graph, 'cell, X: Knotted> ClosureBindings<'cell, X> {
@@ -42,7 +42,7 @@ impl<'graph, 'cell, X: Knotted> ClosureBindings<'cell, X> {
     pub fn empty() -> &'cell ClosureBindings<'cell, X> {
         &ClosureBindings {
             slots: &[],
-            build: ArenaRef::ROOT,
+            build: DepotRef::ROOT,
             stamp: None,
             decided: None,
         }
@@ -76,13 +76,13 @@ impl<'graph, 'cell, X: Knotted> ClosureBindings<'cell, X> {
         read
     }
 
-    /// A finished read laid down in `writer`'s region, born under the arena node `build`, closing
+    /// A finished read laid down in `writer`'s region, born under the depot slot `build`, closing
     /// the chain `stamp` records, in an activation that had `decided` what it had.
     pub fn of(
         writer: Writer<'cell, '_>,
         captures: &[Link<'cell, X>],
-        (build, stamp): (ArenaRef, Option<Stamp<'cell, X>>),
-        decided: Option<&'cell Activated<'cell>>,
+        (build, stamp): (DepotRef, Option<Stamp<'cell, X>>),
+        decided: Option<&'cell BuildLayer<'cell>>,
     ) -> &'cell ClosureBindings<'cell, X> {
         let slots = collect(writer, captures.iter().copied());
         resident(
@@ -96,8 +96,8 @@ impl<'graph, 'cell, X: Knotted> ClosureBindings<'cell, X> {
         )
     }
 
-    /// The arena node the callable was born under.
-    pub fn build(&self) -> ArenaRef {
+    /// The depot slot the callable was born under.
+    pub fn build(&self) -> DepotRef {
         self.build
     }
 
@@ -108,7 +108,7 @@ impl<'graph, 'cell, X: Knotted> ClosureBindings<'cell, X> {
     }
 
     /// What the activation the callable was born in had decided.
-    pub fn decided(&self) -> Option<&'cell Activated<'cell>> {
+    pub fn decided(&self) -> Option<&'cell BuildLayer<'cell>> {
         self.decided
     }
 

@@ -14,7 +14,11 @@ takes parametric types and schemes, and solves: a scheme fits
 another when some instantiation of its group puts the instance under the other,
 and a module's signature fits a declared one when its members do. It holds the
 **rigid rule**: a variable lies under its bound and everything above it, and
-above only itself, `Never` and its lower end. An opaque carrier is no
+above only itself, `Never` and its lower end. A
+[projection](vocabulary.md#the-node-vocabulary) is such a variable, between the
+piece of its base's lower end and the piece of its base's bound, so
+`(FIELD f OF Elt)` with `Elt` bounded by `:{f :Number}` lies under `Number` and
+over only itself and `Never`. An opaque carrier is no
 variable but an atom: it reveals no bound outside its view, so above it lie
 only itself, a union holding it, and `Any`, and below it only itself and
 `Never`. *Fits* contains the order and is
@@ -43,7 +47,8 @@ ordered argument by argument, covariantly, and an application lies strictly
 under the bare family it applies, which stands for every application of it.
 Covariance is sound because a family's representation is covariant in its
 parameters: the elaborator refuses one placing a parameter at a contravariant
-position, which [`quantifies_contravariantly`](chain.rs) finds.
+position or inside a [pin](#signature-types), which
+[`quantifies_noncovariantly`](chain.rs) finds.
 
 [`join`](lattice.rs) **is not a walk.** It is the larger operand when the two are
 ordered and their canonical union otherwise, which is what makes it associative —
@@ -94,7 +99,10 @@ pinning nothing — the empty signature, `Module`, is the empty set — a
 one application lies under another of the same signature when its pins include
 the other's, each at an equal type, so `Stack WITH {Elt = Number}` lies under
 `Stack`, and two different pins of one parameter are unordered, even `Number`
-and `Number | Str`. A set lies under another when each application of the upper
+and `Number | Str`. A pin is compared by identity, so a pin holding a variable
+is read through its bounds by a rule of its own
+([read through intervals](solving.md#substitute-then-ask)), never at the
+application's variance. A set lies under another when each application of the upper
 lies above some application of the lower, so the empty set is the top. The meet
 of two sets is their union less each application lying above another, which
 makes it exact: `(Stack WITH {Elt = Number}) & (Stack WITH {Elt = Str})` holds
@@ -107,7 +115,7 @@ the order.
 side fits each asked application on its own, its members pooled across the
 offered applications: each manifest member equal, each value slot under the
 declared type, each keyworded member satisfied by some offered overload at its
-key, and each operator record covered at an equal mode. An asked application's
+key, and each operator group covered at an equal mode. An asked application's
 unpinned head parameters are solved first, as a call solves its group — one
 collector, to which each asked member contributes what the offer gives it, and
 the [least instance](solving.md#the-unifier-collects-it-does-not-bind) taken — and then
@@ -202,8 +210,8 @@ they number the group off the body alone ([numbering.rs](numbering.rs)), so
 two schemes that differ only in their variables' names or declaration order
 are one handle. A variable is numbered at its first occurrence in a walk that
 reads only what is ordered: a shape's slots in element order, a function's
-parameters in **symbol-sorted key order** — a record's identity is
-order-blind, so the numbering must be too — then the return, a record's
+parameters in **symbol-sorted key order** — a parameter record's identity is
+order-blind, so the numbering must be too — then the return, a record type's
 fields and an application's arguments and pins by name. A union or a meet is a
 set whose canonical order depends on the indices of the variables inside it,
 so the walk defers each one; a deferred set's members are then ordered by a

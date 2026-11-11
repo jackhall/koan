@@ -28,10 +28,11 @@ mod memos;
 mod tails;
 
 use memos::Memos;
+pub use tails::CallSite;
 use tails::Tails;
 
 /// What a step reads shapes through, at the step's own lifetime `'step`: the shape table of the base
-/// its cell's chain rests on. Built per step from the cell's arena reference; what crosses a park
+/// its cell's chain rests on. Built per step from the cell's depot reference; what crosses a park
 /// holds a segment or a site instead, so keeping one past the step does not compile:
 ///
 /// ```compile_fail
@@ -105,9 +106,6 @@ struct Levels<'graph> {
     /// The level of each of [`BodyShape::spelled`]'s paths, parallel to it: `None` for one that
     /// names no identity.
     paths: &'graph [Option<usize>],
-    /// At a chain root: the level past every name level of the chain, and how many spelled
-    /// identities its paths take from there.
-    root: Option<(usize, usize)>,
     /// A callable's or a `MODULE` body's closure layout past its builder captures: each run-bound
     /// type name of the bodies around it on its chain that is bound when its birth runs, by level,
     /// beside where the birth reads it in the activation around it.
@@ -184,7 +182,6 @@ impl<'graph> Shapes<'graph> {
                 homes: &[],
                 levels_by_home: &[],
                 paths: &[],
-                root: None,
                 layout: &[],
             },
         );
@@ -412,22 +409,6 @@ impl Shapes<'_> {
             }
         }
     }
-
-    /// The level past every name and spelled path level of the chain `root` roots: where the paths
-    /// no type spells take theirs.
-    pub fn path_base(&self, root: Segment) -> usize {
-        let (base, spelled) = self.levels[root.index() as usize]
-            .root
-            .expect("a chain root numbers its paths");
-        base + spelled
-    }
-
-    /// The first path level of the chain `root` roots, past every name level of it.
-    pub fn spelled_base(&self, root: Segment) -> usize {
-        (self.levels[root.index() as usize].root)
-            .expect("a chain root numbers its paths")
-            .0
-    }
 }
 
 /// Number the chain `root` roots: each shape's names after its encloser's, siblings alike, then
@@ -453,7 +434,6 @@ fn number_chain<'graph>(
         }
         levels[shape.segment().index() as usize].paths = collect(writer, paths.iter().copied());
     }
-    levels[root.segment().index() as usize].root = Some((top, identities.len()));
 }
 
 /// Number the names `shape` declares from `base`, then each shape nested in it on its chain from
@@ -676,6 +656,16 @@ impl Shapes<'_> {
     pub fn invariant(&self, segment: Segment) -> &[Slot] {
         self.tails[segment.index() as usize].invariant
     }
+
+    /// Every site in the text that calls the callable `segment` or offers it to code, sorted.
+    pub fn calls_into(&self, segment: Segment) -> &[CallSite] {
+        self.tails[segment.index() as usize].calls
+    }
+
+    /// Whether `segment` is a quote's code or nested in one.
+    pub fn in_code(&self, segment: Segment) -> bool {
+        self.tails[segment.index() as usize].in_code
+    }
 }
 
 impl<'graph> Shapes<'graph> {
@@ -715,6 +705,25 @@ impl<'graph> Shapes<'graph> {
         head: &ExpressionPart<'_>,
     ) -> bool {
         self.hops(shape, tails::head_callable(self, shape, head))
+    }
+
+    /// The site of the name the head `head` of a call by name in `shape` reads as, through any
+    /// one-part wrappers: where the text lists the call.
+    pub fn head_site(&self, shape: &BodyShape<'graph>, head: &ExpressionPart<'_>) -> Option<Site> {
+        Some(shape.site(tails::name_of(shape, head)?))
+    }
+
+    /// The parameter of the callable owning `shape` that `part`, read in `shape`, names bare:
+    /// `None` for any other part, and where `shape`'s owner is no callable.
+    pub fn passed_parameter(
+        &self,
+        shape: &BodyShape<'graph>,
+        part: &'graph ExpressionPart<'graph>,
+    ) -> Option<Slot> {
+        let owner = self.shape_at(self.owner(shape.segment()));
+        (owner.kind() == ShapeKind::Callable)
+            .then(|| tails::bare_parameter(shape, owner, part))
+            .flatten()
     }
 
     /// [`hops`](Self::hops) for a keyworded use's candidate at `coordinate` in `shape`.

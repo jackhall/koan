@@ -1,7 +1,7 @@
-//! Seeking a settlement: the drain finds a frame's settlement in the build arena before the frame
+//! Seeking a settlement: the drain finds a frame's settlement in the build depot before the frame
 //! is born, or builds it first, and the frame runs under it, whatever its placement. A missed
 //! settlement's binding image is relayed into the agent tier, so a frame finds its nodes after the
-//! asker is gone. Every run cell borrows the arena node it runs under from its birth to its
+//! asker is gone. Every run cell borrows the depot slot it runs under from its birth to its
 //! release, so a miss past the budget evicts only settlements no cell holds.
 
 use std::cell::RefCell;
@@ -20,12 +20,12 @@ use crate::scheduler::{
 };
 use crate::type_lattice::{KType, TypeNode};
 use crate::values::digest::{DigestHasher, Tag};
-use crate::values::{ArenaRef, BindingImage, BuildBudget, KeyedTypes, SettlementKey};
+use crate::values::{BindingImage, BuildBudget, DepotRef, KeyedTypes, LayerKey};
 
 thread_local! {
-    /// The arena node each observing step ran under, in the order they ran.
-    static BUILDS: RefCell<Vec<ArenaRef>> = const { RefCell::new(Vec::new()) };
-    /// The keys a [`sequence`] seeks, in order: each under the sequence's own arena node where
+    /// The depot slot each observing step ran under, in the order they ran.
+    static BUILDS: RefCell<Vec<DepotRef>> = const { RefCell::new(Vec::new()) };
+    /// The keys a [`sequence`] seeks, in order: each under the sequence's own depot slot where
     /// the flag is set, else under the root.
     static SEQUENCE: RefCell<Vec<(usize, bool)>> = const { RefCell::new(Vec::new()) };
     /// What [`settled`] read as a [`sequence`] woke from each of its seeks.
@@ -36,14 +36,14 @@ thread_local! {
     static EVICTED_THEN: RefCell<Vec<usize>> = const { RefCell::new(Vec::new()) };
     /// The key of the request each [`handed`] frame's first step was handed back, in the order
     /// they ran, then what a second take read.
-    static HANDED: RefCell<Vec<(Option<SettlementKey>, bool)>> = const { RefCell::new(Vec::new()) };
+    static HANDED: RefCell<Vec<(Option<LayerKey>, bool)>> = const { RefCell::new(Vec::new()) };
 }
 
-fn builds() -> Vec<ArenaRef> {
+fn builds() -> Vec<DepotRef> {
     BUILDS.with(|builds| builds.borrow().clone())
 }
 
-fn push_build(at: ArenaRef) {
+fn push_build(at: DepotRef) {
     BUILDS.with(|builds| builds.borrow_mut().push(at));
 }
 
@@ -77,8 +77,8 @@ fn fresh_tally() {
 }
 
 /// The key a test names by `at`.
-fn key(at: usize) -> SettlementKey {
-    SettlementKey(DigestHasher::new(Tag::Number).count(at).finished())
+fn key(at: usize) -> LayerKey {
+    LayerKey(DigestHasher::new(Tag::Number).count(at).finished())
 }
 
 /// What a test's miss settles: nothing, since the graph runs no program.
@@ -100,7 +100,7 @@ fn sought(at: usize, keyed: smallvec::SmallVec<[KeyedTypes; 1]>) -> Sought {
 
 /// A seek for the settlement keyed `at` under `parent`, its binding carrying no type, handing its
 /// request back to the frame where `hands_back` is set.
-fn seek_handing<'graph>(at: usize, parent: ArenaRef, hands_back: bool) -> Seek<'graph> {
+fn seek_handing<'graph>(at: usize, parent: DepotRef, hands_back: bool) -> Seek<'graph> {
     Seek {
         parent,
         settlement: Some((
@@ -112,7 +112,7 @@ fn seek_handing<'graph>(at: usize, parent: ArenaRef, hands_back: bool) -> Seek<'
 }
 
 /// A seek for the settlement keyed `at` under `parent`, its binding carrying no type.
-fn seek<'graph>(at: usize, parent: ArenaRef) -> Seek<'graph> {
+fn seek<'graph>(at: usize, parent: DepotRef) -> Seek<'graph> {
     seek_handing(at, parent, false)
 }
 
@@ -152,9 +152,9 @@ fn torn_down(mut graph: TestGraph<'_>, run: SlabHandle) {
     assert!(graph.is_empty(), "the run leaves no cell behind");
 }
 
-/// Record the arena node this frame runs under, and finish.
+/// Record the depot slot this frame runs under, and finish.
 fn observe<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
-    push_build(step.arena_ref(ArenaRef::ROOT));
+    push_build(step.depot_ref(DepotRef::ROOT));
     step.finish_fresh(|_, _, _| Active::new(KValue::Null))
 }
 
@@ -176,15 +176,15 @@ fn seek_two<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'g
     };
     step.spawn_seeking(
         fresh(observe, Use::Reads, KValue::Null),
-        seek(1, ArenaRef::ROOT),
+        seek(1, DepotRef::ROOT),
     );
-    let second = seek(second as usize, ArenaRef::ROOT);
+    let second = seek(second as usize, DepotRef::ROOT);
     let asked = step.spawn_seeking(fresh(observe, Use::Reads, KValue::Null), second);
     step.park(asked, finished, KValue::Null, None)
 }
 
 /// Run `start` over a graph loaded under `budget`, then tear it down; hand back the bytes of the
-/// first arena node it recorded.
+/// first depot slot it recorded.
 fn run_loaded(start: AnyStep, budget: BuildBudget) -> Option<usize> {
     reset();
     fresh_tally();
@@ -202,7 +202,7 @@ fn run_loaded(start: AnyStep, budget: BuildBudget) -> Option<usize> {
 fn settlement_bytes() -> usize {
     fn start<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
         let request = fresh(observe, Use::Reads, KValue::Null);
-        let asked = step.spawn_seeking(request, seek(1, ArenaRef::ROOT));
+        let asked = step.spawn_seeking(request, seek(1, DepotRef::ROOT));
         step.park(asked, finished, KValue::Null, None)
     }
     run_loaded(start, BuildBudget::default()).expect("the frame ran under its settlement")
@@ -221,7 +221,7 @@ fn a_missed_settlement_is_built_once_and_found_warm_by_the_next_birth() {
     let [first, second] = builds()[..] else {
         panic!("two frames ran: {:?}", builds())
     };
-    assert_ne!(first, ArenaRef::ROOT, "the frame runs under its settlement");
+    assert_ne!(first, DepotRef::ROOT, "the frame runs under its settlement");
     assert_eq!(
         first, second,
         "the second birth finds the first's settlement"
@@ -253,7 +253,7 @@ fn a_seek_handing_its_request_back_gives_the_frame_s_first_step_its_request() {
     fn start<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
         for hands_back in [true, true, false] {
             let request = fresh(handed, Use::Reads, KValue::Null);
-            step.spawn_seeking(request, seek_handing(1, ArenaRef::ROOT, hands_back));
+            step.spawn_seeking(request, seek_handing(1, DepotRef::ROOT, hands_back));
         }
         let asked = step.spawn(fresh(handed, Use::Reads, KValue::Null));
         step.park(asked, finished, KValue::Null, None)
@@ -279,7 +279,7 @@ fn a_seek_handing_its_request_back_gives_the_frame_s_first_step_its_request() {
 fn a_replay_hands_the_frame_back_only_its_own_level_s_request() {
     fn replaying<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
         let levels = [1, 2].map(|at| crate::scheduler::Replayed {
-            seek: seek_handing(at, ArenaRef::ROOT, true),
+            seek: seek_handing(at, DepotRef::ROOT, true),
             pins: smallvec::SmallVec::new(),
         });
         let work = Work {
@@ -317,13 +317,13 @@ fn two_bindings_give_two_settlements_under_one_parent() {
 }
 
 #[test]
-fn a_call_keying_no_settlement_runs_under_its_callees_arena_node() {
+fn a_call_keying_no_settlement_runs_under_its_callees_depot_slot() {
     /// Under a frame keyed 1: a call keying nothing whose callee was born under the root, one
     /// whose callee was born under this frame's settlement, and a plain child.
     fn frame<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
         let (mut step, _) = step.state();
-        let mine = step.arena_ref(ArenaRef::ROOT);
-        for parent in [ArenaRef::ROOT, mine] {
+        let mine = step.depot_ref(DepotRef::ROOT);
+        for parent in [DepotRef::ROOT, mine] {
             let unkeyed = Seek {
                 parent,
                 settlement: None,
@@ -336,15 +336,15 @@ fn a_call_keying_no_settlement_runs_under_its_callees_arena_node() {
     }
     fn start<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
         let request = fresh(frame, Use::Reads, KValue::Null);
-        let asked = step.spawn_seeking(request, seek(1, ArenaRef::ROOT));
+        let asked = step.spawn_seeking(request, seek(1, DepotRef::ROOT));
         step.park(asked, finished, KValue::Null, None)
     }
     run_loaded(start, BuildBudget::default());
     let [under_root, under_mine, plain] = builds()[..] else {
         panic!("three frames ran: {:?}", builds())
     };
-    assert_eq!(under_root, ArenaRef::ROOT);
-    assert_ne!(under_mine, ArenaRef::ROOT);
+    assert_eq!(under_root, DepotRef::ROOT);
+    assert_ne!(under_mine, DepotRef::ROOT);
     assert_eq!(
         plain, under_mine,
         "a plain child runs under its asker's settlement"
@@ -365,7 +365,7 @@ fn seek_bound<'graph>(
     }];
     let image = BindingImage::of(keyed.clone(), step.tiers(), &step.types());
     Seek {
-        parent: ArenaRef::ROOT,
+        parent: DepotRef::ROOT,
         settlement: Some((image, sought(at, keyed))),
         hands_back: false,
     }
@@ -490,14 +490,14 @@ fn a_binding_of_root_types_relays_nothing() {
     assert_eq!((settled(), relayed()), (1, 0));
 }
 
-/// Record this frame's arena node, then seek the [`SEQUENCE`] one key at a time: ask for one
+/// Record this frame's depot slot, then seek the [`SEQUENCE`] one key at a time: ask for one
 /// observing frame, park on it, and ask for the next when woken. Deliver once the last is in.
 fn sequence<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
     let (mut step, state) = step.state();
     let KValue::Number(at) = state else {
         return step.failed(StepError::Refused);
     };
-    let (at, mine) = (at as usize, step.arena_ref(ArenaRef::ROOT));
+    let (at, mine) = (at as usize, step.depot_ref(DepotRef::ROOT));
     if at == 0 {
         push_build(mine);
     } else {
@@ -509,7 +509,7 @@ fn sequence<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'g
     else {
         return step.finish_fresh(|_, _, _| Active::new(KValue::Null));
     };
-    let parent = if under_mine { mine } else { ArenaRef::ROOT };
+    let parent = if under_mine { mine } else { DepotRef::ROOT };
     let asked = step.spawn_seeking(fresh(observe, Use::Reads, KValue::Null), seek(key, parent));
     step.park(asked, sequence, KValue::Number((at + 1) as f64), None)
 }
@@ -529,7 +529,7 @@ fn run_sequence(
         mut step: Step<'_, 'graph, '_, '_, '_, '_, Native>,
     ) -> Action<'graph, Native> {
         let request = fresh(sequence, Use::Reads, KValue::Number(0.0));
-        let asked = step.spawn_seeking(request, seek(1, ArenaRef::ROOT));
+        let asked = step.spawn_seeking(request, seek(1, DepotRef::ROOT));
         step.park(asked, finished, KValue::Null, None)
     }
     reset();
@@ -541,7 +541,7 @@ fn run_sequence(
 }
 
 /// Whether `at` names a live settlement.
-fn live(scheduler: &Scheduler<'_, '_, Native>, at: ArenaRef) -> bool {
+fn live(scheduler: &Scheduler<'_, '_, Native>, at: DepotRef) -> bool {
     scheduler.graph().is_settled(at)
 }
 
@@ -590,7 +590,7 @@ fn a_parent_goes_after_its_child_and_a_seek_under_it_then_runs_cold() {
     let [outer, inner] = builds()[..] else {
         panic!("two frames ran: {:?}", builds())
     };
-    assert_ne!(outer, ArenaRef::ROOT);
+    assert_ne!(outer, DepotRef::ROOT);
     assert_ne!(
         inner, outer,
         "a binding under a settlement keys a child of it"
@@ -619,7 +619,7 @@ fn a_parent_goes_after_its_child_and_a_seek_under_it_then_runs_cold() {
     scheduler
         .run(work(under_outer, KValue::Null), run, Placement::Fresh)
         .expect("the root work ends");
-    assert_eq!(builds()[1], ArenaRef::ROOT);
+    assert_eq!(builds()[1], DepotRef::ROOT);
     assert_eq!(evicted_and_cold(), (2, 1));
     drop(scheduler);
     torn_down(graph, run);
@@ -632,12 +632,12 @@ fn hop<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph,
         KValue::Number(_) => {
             let asked = step.spawn_seeking(
                 fresh(hop, Use::Reads, KValue::Null),
-                seek(1, ArenaRef::ROOT),
+                seek(1, DepotRef::ROOT),
             );
             step.park(asked, finished, KValue::Null, None)
         }
         _ => {
-            let mine = step.arena_ref(ArenaRef::ROOT);
+            let mine = step.depot_ref(DepotRef::ROOT);
             push_build(mine);
             let work = Work {
                 step: observe,
@@ -661,7 +661,7 @@ fn a_hop_of_the_same_callee_runs_under_its_frames_settlement_and_cold_once_it_is
     let [frame, successor] = builds()[..] else {
         panic!("two frames ran: {:?}", builds())
     };
-    assert_ne!(frame, ArenaRef::ROOT);
+    assert_ne!(frame, DepotRef::ROOT);
     assert_eq!(
         successor, frame,
         "the successor runs under its predecessor's settlement"
@@ -691,7 +691,7 @@ fn a_hop_of_the_same_callee_runs_under_its_frames_settlement_and_cold_once_it_is
     scheduler
         .run(work(ask_hop, KValue::Null), run, Placement::Fresh)
         .expect("a hop after its settlement's eviction still runs");
-    assert_eq!(builds()[1], ArenaRef::ROOT);
+    assert_eq!(builds()[1], DepotRef::ROOT);
     assert_eq!(evicted_and_cold(), (1, 1));
     drop(scheduler);
     torn_down(graph, run);
@@ -704,7 +704,7 @@ fn hopper<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'gra
     let KValue::Number(stage) = state else {
         return step.failed(StepError::Refused);
     };
-    let mine = step.arena_ref(ArenaRef::ROOT);
+    let mine = step.depot_ref(DepotRef::ROOT);
     let next = KValue::Number(stage + 1.0);
     match stage as usize {
         0 | 2 => {
@@ -720,7 +720,7 @@ fn hopper<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'gra
         1 | 3 => {
             let key = if stage == 1.0 { 2 } else { 3 };
             let request = fresh(observe, Use::Reads, KValue::Null);
-            let asked = step.spawn_seeking(request, seek(key, ArenaRef::ROOT));
+            let asked = step.spawn_seeking(request, seek(key, DepotRef::ROOT));
             step.park(asked, hopper, next, None)
         }
         _ => {
@@ -734,7 +734,7 @@ fn hopper<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'gra
 fn a_loop_of_hops_holds_its_settlement_through_every_miss() {
     fn start<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
         let request = fresh(hopper, Use::Reads, KValue::Number(0.0));
-        let asked = step.spawn_seeking(request, seek(1, ArenaRef::ROOT));
+        let asked = step.spawn_seeking(request, seek(1, DepotRef::ROOT));
         step.park(asked, finished, KValue::Null, None)
     }
     reset();
@@ -757,13 +757,13 @@ fn a_loop_of_hops_holds_its_settlement_through_every_miss() {
     torn_down(graph, run);
 }
 
-/// Record the arena node this frame runs under, then ask for an evaluation (`Fresh`) and a block
+/// Record the depot slot this frame runs under, then ask for an evaluation (`Fresh`) and a block
 /// (`Shares`) asked for plainly, and deliver once they are in.
 fn observe_and_ask<'graph>(
     step: Step<'_, 'graph, '_, '_, '_, '_, Native>,
 ) -> Action<'graph, Native> {
     let (mut step, _) = step.state();
-    push_build(step.arena_ref(ArenaRef::ROOT));
+    push_build(step.depot_ref(DepotRef::ROOT));
     step.spawn(fresh(observe, Use::Reads, KValue::Null));
     let asked = step.spawn(shares(observe, Use::Reads, KValue::Null));
     step.park(asked, deliver, KValue::Null, None)
@@ -773,9 +773,9 @@ fn observe_and_ask<'graph>(
 fn every_run_cell_born_under_a_settlement_carries_its_reference() {
     fn start<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
         let request = fresh(observe_and_ask, Use::Reads, KValue::Null);
-        step.spawn_seeking(request, seek(1, ArenaRef::ROOT));
+        step.spawn_seeking(request, seek(1, DepotRef::ROOT));
         let request = shares(observe_and_ask, Use::Reads, KValue::Null);
-        let asked = step.spawn_seeking(request, seek(1, ArenaRef::ROOT));
+        let asked = step.spawn_seeking(request, seek(1, DepotRef::ROOT));
         step.park(asked, finished, KValue::Null, None)
     }
     run_loaded(start, BuildBudget::default());
@@ -785,7 +785,7 @@ fn every_run_cell_born_under_a_settlement_carries_its_reference() {
         6,
         "two frames and their four children ran: {seen:?}"
     );
-    assert_ne!(seen[0], ArenaRef::ROOT, "a frame runs under its settlement");
+    assert_ne!(seen[0], DepotRef::ROOT, "a frame runs under its settlement");
     assert!(
         seen.iter().all(|at| *at == seen[0]),
         "both placements find one settlement, and an evaluation and a block run under it"
@@ -798,7 +798,7 @@ fn a_tenants_hop_of_the_same_callee_keeps_its_settlement() {
     /// A tenant frame that hops to a frame of the same callee under its own settlement.
     fn frame<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
         let (step, state) = step.state();
-        let mine = step.arena_ref(ArenaRef::ROOT);
+        let mine = step.depot_ref(DepotRef::ROOT);
         push_build(mine);
         let work = Work {
             step: observe,
@@ -808,14 +808,14 @@ fn a_tenants_hop_of_the_same_callee_keeps_its_settlement() {
     }
     fn start<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
         let request = shares(frame, Use::Reads, KValue::Null);
-        let asked = step.spawn_seeking(request, seek(1, ArenaRef::ROOT));
+        let asked = step.spawn_seeking(request, seek(1, DepotRef::ROOT));
         step.park(asked, finished, KValue::Null, None)
     }
     run_loaded(start, BuildBudget::default());
     let [frame, successor] = builds()[..] else {
         panic!("two frames ran: {:?}", builds())
     };
-    assert_ne!(frame, ArenaRef::ROOT);
+    assert_ne!(frame, DepotRef::ROOT);
     assert_eq!(
         successor, frame,
         "the successor runs under its predecessor's settlement"
@@ -829,15 +829,15 @@ fn miss_then_note<'graph>(
     mut step: Step<'_, 'graph, '_, '_, '_, '_, Native>,
 ) -> Action<'graph, Native> {
     let request = fresh(observe, Use::Reads, KValue::Null);
-    let asked = step.spawn_seeking(request, seek(2, ArenaRef::ROOT));
+    let asked = step.spawn_seeking(request, seek(2, DepotRef::ROOT));
     step.park(asked, noted, KValue::Null, None)
 }
 
-/// [`miss_then_note`]'s second step: note the evictions so far, and record this cell's arena node.
+/// [`miss_then_note`]'s second step: note the evictions so far, and record this cell's depot slot.
 fn noted<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
     let evicted = TIERS.with(|tiers| tiers.get().evicted);
     EVICTED_THEN.with(|then| then.borrow_mut().push(evicted));
-    push_build(step.arena_ref(ArenaRef::ROOT));
+    push_build(step.depot_ref(DepotRef::ROOT));
     step.finish_fresh(|_, _, _| Active::new(KValue::Null))
 }
 
@@ -845,7 +845,7 @@ fn noted<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'grap
 fn a_tenants_count_runs_from_its_creation_to_its_release() {
     fn start<'graph>(mut step: Step<'_, 'graph, '_, '_, '_, '_, Native>) -> Action<'graph, Native> {
         let request = shares(miss_then_note, Use::Reads, KValue::Null);
-        let asked = step.spawn_seeking(request, seek(1, ArenaRef::ROOT));
+        let asked = step.spawn_seeking(request, seek(1, DepotRef::ROOT));
         step.park(asked, finished, KValue::Null, None)
     }
     reset();
@@ -859,7 +859,7 @@ fn a_tenants_count_runs_from_its_creation_to_its_release() {
     let [_two, tenant] = builds()[..] else {
         panic!("two frames ran: {:?}", builds())
     };
-    assert_ne!(tenant, ArenaRef::ROOT);
+    assert_ne!(tenant, DepotRef::ROOT);
     assert_eq!(
         EVICTED_THEN.with(|then| then.borrow().clone()),
         [0],

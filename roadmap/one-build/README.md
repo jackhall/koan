@@ -1,41 +1,58 @@
 # One build
 
 A program decided as far as its text allows, once, in one store the image
-writes out. The load fixes what the declarations decide; a binding the load
-could have traced — a functor applied to a `LET`-bound module, a `FOR ALL`
-group solved at a call the load selected — is settled at run instead, in the
-build arena, under a key, a parent link, a pin, a borrower count and a stamp
-every closure carries to replay it. The items here move that decision left
+writes out. The load fixes what the declarations decide, and lays a layer
+per binding [the trace](../../src/build/README.md#the-trace) names, each
+carrying the request of every call site of its body that it fixes
+([where facts are decided](../../src/build/README.md#where-facts-are-decided));
+a binding the trace cannot follow — a capture, a view built over a
+parameter, a callee that is a call's result, a body the trace leaves open
+— is settled at run instead, in the build depot, under a key computed from the
+values, a parent link, a pin, a borrower count and a stamp every closure
+carries to replay it. The items here move that decision left
 into the load one layer at a time, each step leaving the runtime whole, until
-the arena holds compositions alone, then write what the load decided out as
+the depot holds compositions alone, then write what the load decided out as
 an image a run resumes from without parsing, shaping or walking. What it buys
-the language: a text decided once per text rather than once per process; one
-form for a body's facts under a binding wherever they rest; and a loaded
-program that exists outside any process, which an editor queries and a run
+the language: a text decided once per text rather than once per process, and
+a loaded program that exists outside any process, which an editor queries and a run
 starts from.
 
-The sequence: [one layer](one-layer.md) gives a laid layer one form wherever
-it rests; [the trace](the-trace.md) finds, per call site, the binding the
-load can name; [traced layers at load](traced-layers-at-load.md) lays those
-layers in program storage while untraced sites still seek;
+The sequence: [an exhaustive check](exhaustive-check.md) walks the bindings
+past the trace's cap under an opt-in flag, keeping only refusals;
+[captures and views traced](captures-and-views-traced.md) follows a slot
+through captures, `LET` aliases, member reads, views, retypes and the records
+and unions a member holds, so fewer sites compute a key;
+[a module read out of a nominal parameter traced](nominal-parameters-traced.md)
+follows one past a record or union parameter;
+[callees built by a call traced](built-module-members.md) traces a callee
+that is a call's result — a returned `FN`, a functor's member — and has the
+load lay its layer;
 [settlements retired](settlements-retired.md) decides the rest in the frame's
-activation and leaves the arena compositions alone;
+activation and leaves the depot compositions alone;
 [what the agent tier keeps](agent-tier-keeps.md) rules on the tier above the
 frozen load; [the build image](build-image.md) writes the frozen load and
-program storage out; and [partial evaluation](partial-evaluation.md) steps
-what the text alone decides of the run. [A birth solved once](birth-solved-once.md),
-[a refused program stays loaded](refused-programs-stay-loaded.md) and
-[a program owns its source](a-program-owns-its-source.md) clean the birth
-path and the program's ownership the sequence runs through.
+program storage, the load's layers in it, out; and
+[partial evaluation](partial-evaluation.md) steps what the text alone
+decides of the run.
+[A refused program stays loaded](refused-programs-stay-loaded.md) and
+[a program owns its source](a-program-owns-its-source.md) clean the program's
+ownership the sequence runs through.
 [Warm composed types](warm-composed-types.md) keeps what a loop under a
 composition derives, once the Compositions choice below says where a
-composition's facts rest, and [invariance around a tail cycle](cycle-invariance.md)
-widens what the trace's fold calls unchanged.
+composition's facts rest, [invariance around a tail cycle](cycle-invariance.md)
+widens what the trace's fold calls unchanged, and
+[digested keyed parameters](digested-keyed-parameters.md) keeps a keyed
+argument's digest beside its slot where a call still computes its key.
+Two [types](../types/README.md) items widen what the load decides too:
+[projection types](../types/projection-types.md) leave a read out of a
+variable's value in a named unit, and
+[the overlap check over a parametric registration](../types/parametric-overlap.md)
+stops a callee over its encloser's type name walking at every hop.
 
 [The build module](../../src/build/README.md) owns the walk, its stores and
 the folds; [build storage](../../design/build-storage.md) says what each tier
-holds and [the scheduler](../../src/scheduler/README.md#the-build-arena) the
-arena.
+holds and [the scheduler](../../src/scheduler/README.md#the-build-depot) the
+depot.
 
 ## Next items
 
@@ -44,10 +61,12 @@ to start. Regenerated by `python3 tools/doclinks.py sync-next`; do not edit by
 hand.
 
 - [A program owns its source](a-program-owns-its-source.md)
-- [A birth solved once](birth-solved-once.md)
-- [One layer, wherever laid](one-layer.md)
+- [Callees built by a call traced](built-module-members.md)
+- [Captures and views traced](captures-and-views-traced.md)
+- [An exhaustive check](exhaustive-check.md)
+- [An opaque view nested in a module, laid at load](opaque-views-nested-at-load.md)
 - [A refused program stays loaded](refused-programs-stay-loaded.md)
-- [The trace](the-trace.md)
+- [Settlements retired](settlements-retired.md)
 - [Warm composed types](warm-composed-types.md)
 
 ## Open choices
@@ -74,8 +93,10 @@ here that decides them.
   activation, with the loop criterion weakened to "bounded by the decision
   memo"; an insert-only layer in the agent tier keyed by body and binding — a
   settlement minus parent link, pin, count, eviction and stamp, so the key
-  stays and the arena's apparatus alone is retired; or the value, with a home
-  found for a call by name.
+  stays and the depot's apparatus goes; or the value, with a home found for
+  a call by name. A decision is reusable across the bindings that keep its
+  questions ([resumption](../../src/build/README.md#resumption)), wherever it
+  lives, which does not decide this.
 - **The cold/warm line.** [The build image](build-image.md) calls cold what
   the text decides and warm what one program run observed;
   [what the agent tier keeps](agent-tier-keeps.md) puts whatever the tier
@@ -91,47 +112,32 @@ here that decides them.
   cold with no special case, and answers which agent's tier the warm layer
   holds ([agents](../../design/build-storage.md#agents) give each its own)
   as a union by key.
-- **What finds a layer.** [One layer](one-layer.md) finds a layer one way
-  wherever it rests, by base, body and binding, and its second criterion
-  presupposes a tree of layers its index direction leaves open;
-  [the trace](the-trace.md) lays the binding on the call site's record in
-  the base by a fold; [traced layers at load](traced-layers-at-load.md)
-  indexes per call site. A site inside a keyed body passes its caller's
-  parameter on, so per base site its binding is a set, one member per caller
-  layer, and per layer a singleton; the direction on a site traced to a set
-  exists only under the base fold. The choices: the trace is a fold over the
-  base whose record the program run reads, sets and a cap included; or each
-  layer's walk lays its own sites' bindings and the base fold reports a
-  count alone, read off what the load lays. Under either a traced site is
-  found from its parent layer's table by site and an untraced one by body
-  and binding wherever the first choice puts it, so one layer's "one way" is
-  two. Recommended: a tree of layers whose table is keyed by site and binding
-  digests, the arena's shape today.
-- **A refusal the build reaches.**
-  [Traced layers at load](traced-layers-at-load.md) leaves open whether the
-  load refuses or the layer keeps the refusal and the call faults;
-  [partial evaluation](partial-evaluation.md) writes the image and surfaces
-  the fault before the program runs;
+- **A refusal the build reaches.** A traced layer's refusal refuses the
+  load ([refusal](../../src/build/README.md#refusal)), and the refused
+  program then holds its layers too;
   [a refused program stays loaded](refused-programs-stay-loaded.md) covers a
-  load refused at its shape alone.
-  [Refusal](../../src/build/README.md#refusal) is eager wherever the input
-  arrives before the program runs, and the load refuses code no program run
-  reaches, which decides the first: a traced layer's refusal refuses the
-  load, and the refused program then holds its layers too. Open for partial
-  evaluation: whether a fault the build reaches is a refusal — no image, the
-  program held loaded — or rests in the image and faults the program run's
-  first step; and a fault a build-stepped `TRY` catches is no fault at all.
-- **Compositions.** [The trace](the-trace.md) decides a composition traces
-  nothing, yet a composition is a base as the program is, walked and folded
+  load refused at its shape alone;
+  [partial evaluation](partial-evaluation.md) writes the image and surfaces
+  a fault before the program runs. The choices, for partial evaluation: a
+  fault the build reaches is a refusal — no image, the program held loaded —
+  or it rests in the image and faults the program run's first step; and a
+  fault a build-stepped `TRY` catches is no fault at all.
+- **Compositions.** [The trace](../../src/build/README.md#the-trace)
+  traces only the load's base, yet a composition is a base as the program
+  is, walked and folded
   when composed, and its sites passing root content to keyed written bodies
   settle under it today, shared by every `EVAL` of the code; after the first
   choice they decide per `EVAL` frame, or as that choice says. The choices:
   the trace and the traced layers run over a composition's shape as over the
   program's, a composition being its whole layer tree, evicted and rebuilt
-  whole by syntax digest, so the arena still holds compositions alone and
+  whole by syntax digest, so a composition's layers take no depot slots of
+  their own and
   [warm composed types](warm-composed-types.md) asks about
   the composition's own layers; or a composition traces nothing and its keyed
-  calls take the first choice's answer. A composition binding a module of
+  calls take the first choice's answer. Under the first, the calls composed
+  code makes into a written callable offered to it would be traced when the
+  composition is built, as written code's are at load; the load itself
+  leaves an offered callable open, since its callers arrive at run. A composition binding a module of
   other composed code holds that composition today through a settlement's
   pin: under the first it is the layer tree's hold, under the second the
   frame's second borrow or its copy of the closed tree.
@@ -139,14 +145,7 @@ here that decides them.
   [a refused program stays loaded](refused-programs-stay-loaded.md) for
   program storage held apart from a graph, which that item's direction leaves
   open: decide it there, or drop the edge.
-  [A birth solved once](birth-solved-once.md) recommends the binding image
-  carry the solution, which [settlements retired](settlements-retired.md)
-  deletes: move its solve-once criterion there, or add the edge.
-  [One layer](one-layer.md) counts how many settled bindings name load
-  content, which every one does; the count wanted is activation decisions by
-  site. [The trace](the-trace.md) lists a call through a header or a barrier
-  among its stops, though such a call seeks no settlement and is outside its
-  input. [The build image](build-image.md) says a build that runs nothing
+  [The build image](build-image.md) says a build that runs nothing
   writes the cold layer, false once partial evaluation lands.
 
 ## Unplanned work
@@ -160,6 +159,42 @@ as surprises, not scheduled.
   barrier's crossing (`coerce::inward`) is a value operation the asker cannot
   run before the frame is born. Keying it needs that solution computed from
   types alone.
+- **Code passed through a parameter, traced at load.** A callable that
+  `EVAL`s a code parameter, or whose body is one, is offered the names the
+  code needs, and [the trace](../../src/build/README.md#the-trace) leaves each offered callable
+  open, since its callers arrive at run. Where every call site binds the
+  parameter to a written quote holding no splice, the load knows the code
+  and could build and trace it as it does
+  [traced code](../../src/scope/README.md#building-code), following code
+  through parameters as the trace follows modules. Code would become a
+  third kind of load content beside types and modules, and a body would
+  take one code shape per traced code binding, as a functor's instantiation
+  does.
+- **Laying the bindings a run seeks most.** Past
+  [the trace](../../src/build/README.md#the-trace)'s cap the load cannot tell which bindings a run
+  seeks most, so it names none, and they settle at run, where the depot
+  keeps the recently used. A run could count its seeks per site and binding,
+  and a later load lay the most sought past the cap, as profile-guided
+  specialization does. The counts would rest with the program, in
+  [the build image](build-image.md)'s warm layer, not in run-wide state.
+- **A capture-only site's request laid per inner binding.** Under
+  [captures and views traced](captures-and-views-traced.md) a slot map's
+  owner is the innermost body that keys, so a site in a nested body that
+  passes only its enclosers' slots has its request laid once per binding of
+  that body beneath each encloser layer — the same request several times,
+  bounded by the trace's cap. Measure what the duplication costs in layers
+  laid and bytes once the item ships; where it costs, let the outermost
+  source body own and the read walk the chain's parents, or lay the request
+  once and share it across the sibling layers.
+- **A settled callee under a decided encloser.** A callee under a settlement of
+  its own whose closure carries its encloser's decided layers walks closed at
+  its entry, waking every name the settlement and the layers leave open, so
+  it decides afresh under every encloser binding
+  ([activations](../../src/build/README.md#activations)). A load
+  layer's callee is one: a `FOR ALL` callee born in a loop body and called
+  with load content. Sharing its decisions needs a walk that witnesses the
+  encloser's names while checking the settlement's keys, which no layer store
+  does.
 - **A construction checked twice.** Every construction solves the construction
   rule (`values::construction`) twice: once as its step's early refusal check
   (`dispatch/evaluate.rs` `apply`), and again in the home build, where

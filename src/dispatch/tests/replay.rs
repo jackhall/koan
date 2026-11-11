@@ -1,5 +1,5 @@
 //! The stamp and replay: a callable keeps the requests that built the chain of settlements it was
-//! born under, and a call of it whose arena node was evicted replays them, so its frame is born
+//! born under, and a call of it whose depot slot was evicted replays them, so its frame is born
 //! warm. A frame's level is laid once, and only where its callee's body can birth a callable: by
 //! the frame in its own region, never in its asker's.
 
@@ -15,7 +15,8 @@ use super::caching::{PRELUDE, SMALLEST};
 use super::{WRITTEN, output};
 
 /// Two modules a `Holder` reads, and `MAKE`, keyed on one, whose frame births a function keyed
-/// on another.
+/// on another. Each test hands a module on composed and evaluated at run, which the trace does not
+/// follow, so the load lays no layer for the call and it settles at run.
 const MAKE: &str = "MODULE one = (LET held = 1)\n\
                     MODULE two = (LET held = 2)\n\
                     EXPR #(MAKE m :Holder) -> Any = #((LET w = (m :| Holder)) \
@@ -36,7 +37,7 @@ fn replayed(source: &str, budget: BuildBudget) -> (String, Tiers) {
 
 #[test]
 fn a_call_through_a_stale_handle_rebuilds_its_chain_and_is_born_warm() {
-    let calls = "LET g = (MAKE one)\nPRINT (g {k = one})\nLET h = (MAKE two)\nPRINT (g {k = one})";
+    let calls = "LET g = (MAKE (EVAL #($one) -> Holder))\nPRINT (g {k = one})\nLET h = (MAKE (EVAL #($two) -> Holder))\nPRINT (g {k = one})";
     let (printed, tiers) = replayed(&format!("{PRELUDE}{MAKE}{calls}"), SMALLEST);
     let (roomy, _) = replayed(&format!("{PRELUDE}{MAKE}{calls}"), BuildBudget::default());
     assert_eq!(printed, "7\n7");
@@ -53,8 +54,8 @@ fn a_replay_borrows_every_level_it_reaches_until_the_frame_is_born() {
                   (FN :{b :Holder} -> Any = #((LET x = (b :| Holder)) \
                   (FN :{c :Holder} -> Any = #((LET y = (c :| Holder)) \
                   (FN :{n :Number} -> Number = #(n + 1)))))))\n\
-                  LET second = (ONE one)\nLET third = (second {b = one})\n\
-                  LET fourth = (third {c = one})\nLET other = (MAKE two)\n\
+                  LET second = (ONE (EVAL #($one) -> Holder))\nLET third = (second {b = one})\n\
+                  LET fourth = (third {c = one})\nLET other = (MAKE (EVAL #($two) -> Holder))\n\
                   PRINT (fourth {n = 1})";
     let (printed, tiers) = replayed(&format!("{PRELUDE}{MAKE}{nested}"), SMALLEST);
     assert_eq!(printed, "2");
@@ -89,8 +90,8 @@ PRINT (g {n = 1})",
 #[test]
 fn a_non_keying_callable_borrows_the_settlement_its_handle_names() {
     let source = "EXPR #(KEEP m :Holder) -> Any = #((LET w = (m :| Holder)) \
-                  (FN :{n :Number} -> Any = #((LET inner = (MAKE two)) (n))))\n\
-                  LET g = (KEEP one)\nPRINT (g {n = 1})\nPRINT (g {n = 2})";
+                  (FN :{n :Number} -> Any = #((LET inner = (MAKE (EVAL #($two) -> Holder))) (n))))\n\
+                  LET g = (KEEP (EVAL #($one) -> Holder))\nPRINT (g {n = 1})\nPRINT (g {n = 2})";
     let (printed, tiers) = replayed(&format!("{PRELUDE}{MAKE}{source}"), SMALLEST);
     assert_eq!(printed, "1\n2");
     // `g`'s frame borrows `KEEP one`'s settlement, so the miss inside it does not evict it: the
@@ -101,7 +102,9 @@ fn a_non_keying_callable_borrows_the_settlement_its_handle_names() {
 #[test]
 fn the_stamp_is_no_part_of_a_closures_content() {
     let (printed, _) = replayed(
-        &format!("{PRELUDE}{MAKE}LET g = (MAKE one)\nLET h = (MAKE two)\nPRINT (g == h)"),
+        &format!(
+            "{PRELUDE}{MAKE}LET g = (MAKE (EVAL #($one) -> Holder))\nLET h = (MAKE (EVAL #($two) -> Holder))\nPRINT (g == h)"
+        ),
         BuildBudget::default(),
     );
     // Born under two settlements, so two stamps, over one code and no capture.
@@ -111,7 +114,7 @@ fn the_stamp_is_no_part_of_a_closures_content() {
 #[test]
 fn a_closure_returned_from_its_frame_replays_after_the_frames_region_is_gone() {
     let source = "EXPR #(WRAP m :Holder) -> Any = #((LET made = (MAKE m)) (made))\n\
-                  LET g = (WRAP one)\nLET h = (MAKE two)\nPRINT (g {k = one})";
+                  LET g = (WRAP (EVAL #($one) -> Holder))\nLET h = (MAKE (EVAL #($two) -> Holder))\nPRINT (g {k = one})";
     let (printed, tiers) = replayed(&format!("{PRELUDE}{MAKE}{source}"), SMALLEST);
     assert_eq!(printed, "7");
     assert_eq!(tiers.cold_births, 0);
@@ -135,7 +138,7 @@ fn touching(keyed: bool, births: bool) -> String {
          EXPR #(PASS m :Counter link :Link) -> Str = \
          #((LET v = (m :| Counter)) (LET t = (TOUCH m)) (PASS m (ATTR link next)))\n\
          EXPR #(PASS m :Counter end :Null) -> Str = #(\"done\")\n\
-         PRINT (PASS ints chain)"
+         PRINT (PASS (EVAL #($ints) -> Counter) chain)"
     )
 }
 
@@ -177,7 +180,7 @@ fn a_frame_lays_its_level_once_and_only_where_its_body_can_birth_a_callable() {
                  EXPR #(COUNT m :Holder) -> Number = #((LET w = (m :| Holder)) \
                  (LET f = (FN :{n :Number} -> Number = #(n))) (f {n = 3}))\n\
                  EXPR #(PEEK m :Holder) -> Number = #((LET w = (m :| Holder)) (1))\n\
-                 LET a = (TWICE one)\nLET b = (TWICE one)\nLET c = (COUNT one)\nLET d = (PEEK one)\n\
+                 LET a = (TWICE (EVAL #($one) -> Holder))\nLET b = (TWICE (EVAL #($one) -> Holder))\nLET c = (COUNT (EVAL #($one) -> Holder))\nLET d = (PEEK (EVAL #($one) -> Holder))\n\
                  PRINT (b {n = 1})\nPRINT c\nPRINT d";
     LEVELS.with(|levels| levels.set(0));
     let (printed, _) = replayed(&format!("{PRELUDE}{MAKE}{calls}"), BuildBudget::default());
@@ -191,7 +194,7 @@ fn a_frame_lays_its_level_once_and_only_where_its_body_can_birth_a_callable() {
 fn a_callable_born_in_a_block_replays_its_frames_level() {
     let source = "EXPR #(BLOCKY m :Holder) -> Any = #((LET w = (m :| Holder)) \
                   (USING empty SCOPE (FN :{k :Holder} -> Number = #((LET v = (k :| Holder)) (7)))))\n\
-                  LET g = (BLOCKY one)\nPRINT (g {k = one})\nLET h = (MAKE two)\nPRINT (g {k = one})";
+                  LET g = (BLOCKY (EVAL #($one) -> Holder))\nPRINT (g {k = one})\nLET h = (MAKE (EVAL #($two) -> Holder))\nPRINT (g {k = one})";
     let (printed, tiers) = replayed(&format!("{PRELUDE}{MAKE}{source}"), SMALLEST);
     assert_eq!(printed, "7\n7");
     // As through a stale handle born in the frame's own statements: `g`, born in a block, records
@@ -205,8 +208,8 @@ fn a_replay_reaches_a_fresh_frames_level() {
     let source = "EXPR #(OUTER m :Holder) -> Number = #((LET w = (m :| Holder)) \
                   (LET g = (FN :{k :Holder} -> Any = #((LET v = (k :| Holder)) \
                   (FN :{n :Number} -> Number = #(n + 1))))) \
-                  (LET h = (g {k = one})) (LET other = (MAKE two)) (h {n = 1}))\n\
-                  PRINT (OUTER one)";
+                  (LET h = (g {k = one})) (LET other = (MAKE (EVAL #($two) -> Holder))) (h {n = 1}))\n\
+                  PRINT (OUTER (EVAL #($one) -> Holder))";
     let (printed, tiers) = replayed(&format!("{PRELUDE}{MAKE}{source}"), SMALLEST);
     assert_eq!(printed, "2");
     // `OUTER`, `g` and `MAKE two` seek once each. `MAKE two`'s miss evicts `g`'s settlement, which

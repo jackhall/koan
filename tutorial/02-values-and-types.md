@@ -68,10 +68,10 @@ used as a key is resolved as a name lookup, the same as anywhere else, so
 when you want a literal key. Dictionaries are unordered: don't rely on the
 order keys come back in when you print one.
 
-Braces are also used for *records* — `{field = value}` with an `=` instead of a
-`:`. Records are how you construct [record types](07-records.md) and
-[call functions by name](04-functions.md); they're a distinct form from
-dictionaries, covered in those chapters.
+Braces are also used for *record values* — `{field = value}` with an `=`
+instead of a `:`. Record values are how you construct
+[record types](07-records.md) and [call functions by name](04-functions.md);
+they're a distinct form from dictionaries, covered in those chapters.
 
 ### Empty collections fit anywhere
 
@@ -82,7 +82,7 @@ parameter is typed `:(LIST OF Number)`, because a list of nothing is a list of
 numbers as far as the type is concerned. Once you've met
 [functions](04-functions.md) and [type ascription](#ascribing-a-type-with-) below,
 you can still pin an empty collection to a specific type:
-`[] :! (LIST OF Number)` is an empty list of numbers. (Braces are different: a bare `{}` is the empty *record*, not an empty
+`[] :! (LIST OF Number)` is an empty list of numbers. (Braces are different: a bare `{}` is the empty *record value*, not an empty
 dictionary.)
 
 ## Reading lists, dictionaries and strings
@@ -127,10 +127,10 @@ PRINT (ages "grace")
 
 ### Slices
 
-Applied to a record naming `from`, `to` or both, a list or a string gives back
-a **slice** of itself. A slice is half-open — it runs from `from` up to, but not
-including, `to` — and a missing `from` starts at the beginning, a missing `to`
-runs to the end. When `to` is below `from`, or is `-1`, the slice runs
+Applied to a record value naming `from`, `to` or both, a list or a string
+gives back a **slice** of itself. A slice is half-open — it runs from `from` up
+to, but not including, `to` — and a missing `from` starts at the beginning, a
+missing `to` runs to the end. When `to` is below `from`, or is `-1`, the slice runs
 backward: it starts at `from` and stops just past `to`, so `-1` reaches the
 first element. Reversing a list or a string is a backward slice from its last
 element:
@@ -222,7 +222,7 @@ lines.
 
 A program writing text for another language — SQL, HTML, a shell command —
 must treat the values it splices in apart from the text it trusts. A `%{…}`
-brace **keeps** its value apart: a template holding one is a record of
+brace **keeps** its value apart: a template holding one is a record value of
 `strings`, the pieces of text around the kept values, and `values`, the kept
 values in order. A `{…}` brace still renders into the text beside it:
 
@@ -239,7 +239,7 @@ PRINT query.values
 ```
 
 There is always one more string than value, so a function taking such a record
-can quote or escape each value for its language and interleave the two.
+value can quote or escape each value for its language and interleave the two.
 
 `JOIN` writes a list's elements one after another, each rendered as `PRINT`
 renders it, and `JOIN … BY` puts a separator string between them:
@@ -294,8 +294,8 @@ A few rules are worth knowing early:
   chaining: `a == b == c` is an error, not a three-way test.
 - **Numbers follow IEEE.** In particular a not-a-number result is not equal to
   anything, including itself.
-- **Records ignore field order.** `{x = 1, y = 2}` equals `{y = 2, x = 1}` (see
-  [Records](07-records.md)).
+- **Record values ignore field order.** `{x = 1, y = 2}` equals
+  `{y = 2, x = 1}` (see [Records](07-records.md)).
 - **Newtypes compare by identity.** A [newtype](08-newtypes.md) value is never
   equal to its bare representation, and two different newtypes with the same
   representation are unequal.
@@ -358,8 +358,8 @@ sigil or as a bare token, but a parameterized `:(...)` type always needs it.
 Container types are always parameterized down to their elements. A list's
 element type is the union of its elements' types: `[1, 2, 3]` is
 `:(LIST OF Number)`, and `[1, "x"]` is `:(LIST OF (Number | Str))`. A list of
-records keeps every field each record was written with
-([records in a container](07-records.md#records-in-a-container)).
+record values keeps every field each one was written with
+([record values in a container](07-records.md#record-values-in-a-container)).
 
 ### Types are values
 

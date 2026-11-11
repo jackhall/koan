@@ -4,8 +4,8 @@
 use crate::memory::{BumpVec, resident};
 use crate::scope::tests::with_shapes;
 use crate::scope::{
-    Address, Binding, Frontier, Keyed, Slot, Store, Typed, UnitFacts, UnitId, UnitIndex, Unknown,
-    each_part,
+    Address, Binding, Frontier, Keyed, Noted, Slot, Store, Typed, UnitFacts, UnitId, UnitIndex,
+    Unknown, each_part,
 };
 
 use super::super::LoadStore;
@@ -22,7 +22,7 @@ fn a_write_reads_back_and_the_laid_facts_find_every_site_it_keys() {
             segment: root.segment(),
             at: Address::Slot(Slot(0)),
         };
-        let frontier = Frontier::from_sorted(writer.fill(1, |_| unknown));
+        let frontier = Frontier::from_sorted(writer.fill(1, |_| Noted::named(unknown)));
         let mut written = Vec::new();
         for (index, statement) in root.body().iter().enumerate() {
             let unit = UnitId {

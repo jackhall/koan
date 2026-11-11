@@ -1758,9 +1758,19 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                         declares_type = draft.is_type_slot(binder);
                     }
                     // A type `LET`'s right-hand side is its declaration's definition, typed with
-                    // the binder rather than as a type expression of its own.
+                    // the binder rather than as a type expression of its own, and read deferred as
+                    // a `NEWTYPE`'s definition is: an alias may name a later type binder, and a
+                    // cycle through one is the declaration door's to cut.
                     if declares_type {
-                        self.typed(|builder| builder.walk_part(level, statement, part, state))?
+                        self.typed(|builder| {
+                            builder.walk_definition(
+                                level,
+                                statement,
+                                part,
+                                DefinitionKind::Plain,
+                                state.constructor(),
+                            )
+                        })?
                     } else {
                         self.walk_part(level, statement, part, state)?
                     }
@@ -2160,6 +2170,13 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
                 return Err(ShapeError::MarkOutsideQuote {
                     at: self.part_source(level, statement, self.site(level, part)),
                 });
+            }
+            // A module path, `m.Inner`, is read as any type reads one: spelled by its tokens, its
+            // root an eager value read, as outside a definition.
+            ExpressionPart::Expression(run) | ExpressionPart::SigiledTypeExpr(run)
+                if path_spelling(run, self.scratch).is_some() =>
+            {
+                return self.walk_part(level, statement, part, State::Eager);
             }
             // A type expression written inside a definition, and a quoted head, are nodes with
             // builtin shapes of their own: read their parts by their roles rather than descending

@@ -55,12 +55,12 @@ impl<'run, H: Habitat<'run>> std::fmt::Display for NameIn<'_, 'run, H> {
 
 /// A writer into `f` that drops the type sigil a surface opens a parenthesis with, `:(`, and keeps
 /// every other surface — a record's `:{`, a leaf name — as it is.
-struct Unsigiled<'a, 'b> {
-    f: &'a mut std::fmt::Formatter<'b>,
+struct Unsigiled<'a> {
+    f: &'a mut String,
     first: bool,
 }
 
-impl std::fmt::Write for Unsigiled<'_, '_> {
+impl std::fmt::Write for Unsigiled<'_> {
     fn write_str(&mut self, text: &str) -> std::fmt::Result {
         let first = std::mem::replace(&mut self.first, false);
         match text.strip_prefix(':') {
@@ -171,21 +171,29 @@ fn write_name_in<'run>(
         TypeNode::DeferredReturn(surface) => surface.write_surface(f, symbols),
         // `:(A | B)` — members separated by ` | ` and wrapped in the type sigil. A compound member
         // is written in bare parentheses inside it, as a union is spelled: `:((LIST OF Any) | Null)`.
+        // Members print sorted by their text, not in the node's stored order, which is whichever
+        // order the run first built the union in: the text is a function of the type alone.
         TypeNode::Union { members } => {
-            f.write_str(":(")?;
-            for (index, member) in members.iter().enumerate() {
-                if index > 0 {
-                    f.write_str(" | ")?;
-                }
+            let mut texts = Vec::with_capacity(members.len());
+            for member in members.iter() {
                 let member = NameIn {
                     kt: member,
                     types,
                     symbols,
                     binder,
                 };
-                write!(Unsigiled { f, first: true }, "{member}")?;
+                let mut text = String::new();
+                write!(
+                    Unsigiled {
+                        f: &mut text,
+                        first: true
+                    },
+                    "{member}"
+                )?;
+                texts.push(text);
             }
-            f.write_str(")")
+            texts.sort_unstable();
+            write!(f, ":({})", texts.join(" | "))
         }
         TypeNode::ConstructorApply {
             constructor,
@@ -205,7 +213,8 @@ fn write_name_in<'run>(
         }
         TypeNode::Parameter { name, .. }
         | TypeNode::Carrier { name, .. }
-        | TypeNode::Lexical { name, .. } => {
+        | TypeNode::Lexical { name, .. }
+        | TypeNode::Path { name, .. } => {
             write!(f, "{}", display_symbol(name.symbol(), symbols))
         }
         // A sealed nominal member renders by its own member name — a bare newtype (`:Wrapper`) or a

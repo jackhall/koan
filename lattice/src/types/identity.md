@@ -34,7 +34,7 @@ Three things follow, and each is load-bearing:
   byte, its own scalar payload, and its children's digests — which are already
   known, because each child is interned first. Nothing in the recipe walks a type: it is
   one layer deep. The only buffer it needs is the symbol sort an order-blind
-  record or union digests under.
+  field list or union digests under.
 - **Identity is interner-independent.** The digest is a pure function of
   content, so two independently built types with the same content are equal with
   no shared registry.
@@ -64,8 +64,8 @@ takes a **typed handle** over it, which adds nothing at run time and says what
 the type may hold:
 
 - a [`KType`](handle.rs) is **concrete**: outside a sealed `Signature` or
-  `SetMember` node it holds no free `Quantified`, no lexical variable, no head
-  `Parameter` and no scheme. An opaque carrier is concrete, since a
+  `SetMember` node it holds no free `Quantified`, no lexical or path variable,
+  no head `Parameter` and no scheme. An opaque carrier is concrete, since a
   value carries it and dispatch reads it. Every value but a quantified callable
   carries one;
 - a `Parametric` may hold a variable, but no scheme;
@@ -105,7 +105,7 @@ The registry is a root and its branches ([tiers.rs](tiers.rs)), in three
 kinds of tier. The **frozen load**, the root, holds every type the load
 builds, for the life of the program. While the load runs, a `RootBuilder`
 grows it in a bump its owner keeps for it; the load's end freezes it into a
-`Frozen`, laid in that bump, which has no intern door and no record door, so
+`Frozen`, laid in that bump, which interns nothing and records no verdict, so
 the run reads it and never writes it. It holds no cell, so it is `Sync` and
 every agent may read one load from its own thread. The root is a stack: the
 frozen load, and its builder while the load runs, rest on **images**, frozen
@@ -229,7 +229,7 @@ a reference to that child's node, so a walk or a relation steps from node to
 node and never consults a table. A shape's element keeps its slot's priority
 class, a `u16`, beside the slot's reference. A field no hot path reads sits
 behind one reference laid on an intern miss: a carrier's key and name, a
-lexical variable's name, a signature's schema, a deferred return's surface, and
+lexical variable's name, a path variable's class and name, a signature's schema, a deferred return's surface, and
 a sealed member's component.
 [`TypeChain::node`](chain.rs) reads a stored node back as a `TypeNode`,
 every field by value and each child as a handle, so no reader outside the
@@ -305,7 +305,11 @@ whether anything parametric, whether an opaque carrier is reachable, and
 whether the type is porous or exposing
 ([porosity](../../../design/type-tiers.md#porosity)) — and
 every other variant's are a constant of its kind, so each probe is one read of
-the node. The probes are the lattice's own;
+the node. Two more see inside a signature: whether a sibling, and whether an
+opaque carrier, is reachable from the node through any handle a signature or
+an application holds too. A signature and a variable store these two beside
+their kind's constant, since a variable's bound may hold a sibling or a
+signature naming a carrier. The probes are the lattice's own;
 the rest of koan reads quantified-ness off a `DeclaredType`'s arm and
 concreteness through `concrete` or `concrete_declared`.
 
@@ -361,7 +365,7 @@ its digest off the caller's own slices first, so content is laid in the half
 only on a miss. Interning a type or running a relation touches the global
 heap nowhere — a bracket the suite asserts directly ([tests/heap.rs](tests/heap.rs)).
 
-## Records and schemas
+## Field lists and schemas
 
 A [`Record`](record.rs) is an ordered, symbol-keyed field list — the shape behind
 a struct schema's fields, a function type's parameters, and a constructor
@@ -369,13 +373,14 @@ application's arguments. Keys are `BinderSymbol`s, never text: a field name is a
 fixed-width content digest carried alongside the binding class its own parse
 established, so a lookup is a `u128` compare and no field name is ever copied or
 re-classified. Identity is the key's `Symbol` bits alone, so a schema's class
-rides past the intern boundary without widening what makes two records the same.
+rides past the intern boundary without widening what makes two field lists the
+same.
 
-A record is one `Copy` fat pointer into the run region, with no index table: at
-record sizes a linear symbol compare beats hashing. Two invariants define it —
-**declaration order is preserved** for rendering and positional construction but
-**equality ignores it** (the digest agrees by feeding the fields symbol-sorted),
-and **names are unique** within a record.
+A field list is one `Copy` fat pointer into the run region, with no index table:
+at field-list sizes a linear symbol compare beats hashing. Two invariants define
+it — **declaration order is preserved** for rendering and positional
+construction but **equality ignores it** (the digest agrees by feeding the
+fields symbol-sorted), and **names are unique** within a field list.
 
 A [`SigSchema`](schema.rs) is the normalized carrier of a signature's shape.
 Its **origin** says whether a `SIG` declared it or a module carries it — a
@@ -396,8 +401,8 @@ the elaborator; the lattice takes a finished draft.
 
 ## Recursive groups: identity is the SCC, not the declaration
 
-A [`RecursiveGroupWindow`](window.rs) is the declarator-local pre-seal record a
-group of co-declared nominal types elaborates against. It is a **held record, not
+A [`RecursiveGroupWindow`](window.rs) is the declarator-local pre-seal state a
+group of co-declared nominal types elaborates against. It is **held state, not
 registry state** — several can be open at once, which a registry-hosted stack
 could not express — and it lives in the frame region of the node that declares
 the group, never the run region and never the heap. Nothing on a window is
@@ -438,6 +443,24 @@ while it still holds `Sibling` handles, and that is exact: the order relates a
 `Sibling` as an atom with the same profile as the sealed member it stands for, and
 distinct indices name distinct members, so a union canonical in relative form
 is canonical absolute.
+
+A relative schema may also hold a **signature over siblings** — a `SIG` a
+member names and that names a member back, which the elaborator reads relative
+because a signature mints no identity. Every relation still treats a
+signature as a leaf. The seal's two sibling walks — the one that collects
+a schema's reference edges and the one that rewrites its siblings — enter
+one, as a carrier's read-back does, and skip a node no sibling is reachable
+from. Each enters through the one door that does (`TypeChain::signature_mapped`): it maps
+each handle a signature holds — its parameters, manifest members, value slots
+and keyworded members — or an application's applied signature and pins, and
+re-interns the result through the signature's canonicalizing door, which
+re-sorts its keyworded channel by the renamed handles. So a sibling inside a
+signature is an edge of the component, is digested at its canonical position,
+and is absolute after the seal, like one anywhere else. The sealed group
+answers a relative type's absolute twin (`SealedGroup::absolute`), read
+through the same rewrite: what a signature a member names is bound to once
+the group seals, and the handle a declaration of the same members written
+after the group reaches.
 
 A member's schema names types over the member — its own cyclic edges, its
 siblings' — while the member must reach its schema: the region's one cycle.

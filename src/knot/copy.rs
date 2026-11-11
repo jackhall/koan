@@ -15,12 +15,12 @@
 //! so each arm below sits beside its rebuild's twin. The crossing copies those values over its own
 //! worklist and keys every knot it has rebuilt, so two members of one foreign knot a module holds
 //! arrive as members of one copy of that knot. A barrier's underlying function goes the same way,
-//! as the value word it would be if a member held it.
+//! as the value word it would be if a member held it, and so does an opaque view's underlying.
 
 use std::cell::Cell;
 
 use crate::memory::{KnotPlan, Writer, resident};
-use crate::type_lattice::{DeclaredType, Parametric};
+use crate::type_lattice::{DeclaredType, KType, Parametric};
 use crate::values::{self, DeepCopy, Value};
 
 use super::{Knotted, KnottedFamily, Node};
@@ -46,6 +46,9 @@ impl<'graph> values::KnottedFamily<'graph> for KnottedFamily {
                     module.members().iter().for_each(|value| out(*value));
                     if let Some(closure) = module.captures() {
                         closure.held(out);
+                    }
+                    if let Some(underlying) = module.underlying() {
+                        out(Value::Knotted(underlying));
                     }
                 }
                 Node::Coerced(coerced) => out(Value::Knotted(coerced.underlying())),
@@ -84,12 +87,21 @@ impl<'graph> values::KnottedFamily<'graph> for KnottedFamily {
                 }
                 Node::Builtin(builtin) => out(builtin.ktype().into()),
                 Node::Data { circular, .. } => out(circular.ktype().into()),
-                Node::Module(module) => out(module.ktype().into()),
+                Node::Module(module) => {
+                    out(module.ktype().into());
+                    if let Some(record) = module.view_record() {
+                        out(record.application.into());
+                        out(record.from.into());
+                        out(record.to.into());
+                        hidden_types(record.hidden, out);
+                    }
+                }
                 Node::Coerced(coerced) => {
                     out(coerced.ktype().into());
                     out(coerced.declared());
                     out(coerced.from().into());
                     out(coerced.to().into());
+                    hidden_types(coerced.hidden().carriers, out);
                 }
                 Node::Code(code) => out(code.ktype().into()),
             }
@@ -125,17 +137,31 @@ impl<'graph> values::KnottedFamily<'graph> for KnottedFamily {
                     let members = writer.fill(source.len(), |at| copy(&source[at]));
                     let closure =
                         (module.captures()).map(|closure| closure.copied(writer, &mut *copy));
-                    Node::Module(module.rebuilt(writer, members, closure))
+                    let underlying = module.underlying().map(|underlying| {
+                        match copy(&Value::Knotted(underlying)) {
+                            Value::Knotted(member) => member,
+                            _ => unreachable!("the copy of a knot member is a knot member"),
+                        }
+                    });
+                    Node::Module(module.rebuilt(writer, members, closure, underlying))
                 }
                 Node::Coerced(coerced) => {
                     let underlying = match copy(&Value::Knotted(coerced.underlying())) {
                         Value::Knotted(member) => member,
                         _ => unreachable!("the copy of a knot member is a knot member"),
                     };
-                    Node::Coerced(resident(writer, coerced.rebuilt(underlying)))
+                    Node::Coerced(resident(writer, coerced.rebuilt(writer, underlying)))
                 }
                 Node::Code(code) => Node::Code(resident(writer, code.rebuilt(writer, &mut *copy))),
             });
         Knotted(knot.member(member.member().index()))
+    }
+}
+
+/// Each carrier `hidden` holds and the type it hides.
+fn hidden_types(hidden: &[(KType, KType)], out: &mut dyn FnMut(DeclaredType<Parametric>)) {
+    for (carrier, hides) in hidden {
+        out((*carrier).into());
+        out((*hides).into());
     }
 }

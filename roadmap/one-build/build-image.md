@@ -25,14 +25,14 @@ into an image, and nothing resumes from one.
 - A build of a program writes an **image** in two layers. The **cold layer**
   is what the text decides: program storage — the shape, the folds, the
   closed-tree index and every layer the load laid
-  ([traced layers at load](traced-layers-at-load.md)) — and the type root
-  above [the builtin image](../../src/builtin_image.rs). The **warm layer** is
+  ([where facts are decided](../../src/build/README.md#where-facts-are-decided)) —
+  and the type root above [the builtin image](../../src/builtin_image.rs). The **warm layer** is
   what one run observed and may be left out: what
   [the agent tier keeps](agent-tier-keeps.md) and the compositions live in
-  the arena; a decision resting in a run cell is never in it. Each bump is
+  the depot; a decision resting in a run cell is never in it. Each bump is
   laid out as one contiguous range, every reference serialized as a pair —
   the ordinal of its storage in the image, the offset into that range — and
-  every arena handle as its node's ordinal. The image carries the source
+  every depot handle as its slot's ordinal. The image carries the source
   text's digest.
 - A run started from an image lays each region back as one chunk, relocates
   every serialized reference and handle, and steps the top-level run cell
@@ -43,10 +43,10 @@ into an image, and nothing resumes from one.
   use; a test observes that a composition in it is not rebuilt and what the
   agent tier keeps is not relaid.
 - The image closes over itself: every serialized reference names storage in
-  the image, so the build's rule that no arena node holds a handle to a run
+  the image, so the build's rule that no depot slot holds a handle to a run
   cell is what makes the image complete.
 - Relocation is a property of the types laid, enforced where drop-freeness is
-  today: a value laid in program storage or in an arena node's bump
+  today: a value laid in program storage or in a depot slot's bump
   implements the relocation walk the `Writer` requires, as its lay verbs
   require `!needs_drop` ([`Writer`](../../cellgraph/src/region.rs)) — and a
   Rust function pointer, such as a
@@ -59,7 +59,7 @@ into an image, and nothing resumes from one.
 **Directions.**
 
 - *The serialized reference — decided.* A reference is `(cell ordinal,
-  offset)` and a handle is an arena node's ordinal, computed when the image is
+  offset)` and a handle is a depot slot's ordinal, computed when the image is
   written by walking each bump's chunks and assigning them consecutive
   ranges. Live references stay native `&'cell T`: an offset-based pointer at
   run time would trade the brand-and-lifetime discipline every region read
@@ -93,14 +93,14 @@ into an image, and nothing resumes from one.
 
 ## Dependencies
 
-The [build arena](../../src/scheduler/README.md#the-build-arena) it serializes
+The [build depot](../../src/scheduler/README.md#the-build-depot) it serializes
 holds compositions alone once settlements are retired, program storage holds
 every layer the load laid, and the [builtin image](../../src/builtin_image.rs),
 the lower layer of the root, is what it stubs a reference into by handle.
 
 **Requires:**
 
-- [Settlements retired](settlements-retired.md) — the arena it writes holds
+- [Settlements retired](settlements-retired.md) — the depot it writes holds
   compositions alone, and program storage every layer the load laid.
 - [What the agent tier keeps](agent-tier-keeps.md) — which of the tier's
   content is the cold layer's and which the warm's.

@@ -12,6 +12,7 @@
 
 use std::cell::Cell;
 
+use super::judge;
 use super::reads::{Reads, TypeAt};
 use crate::memory::{BumpAllocator, BumpVec};
 use crate::parse::{BuiltinShapeId, KEYWORDS};
@@ -65,7 +66,7 @@ pub fn type_expression<'graph, R: Reads<'graph> + ?Sized>(
         reader,
         types,
         scratch,
-        fellows: &[],
+        fellows: Fellows::NONE,
         locals: &[],
         binder: Cell::new(false),
     }
@@ -127,10 +128,36 @@ impl Groups<'_> {
 
 /// A member of the component being declared, named by its relative handle until the group seals,
 /// with the parameter names it takes when it is a family — symbol-sorted, empty otherwise.
+#[derive(Clone, Copy)]
 pub(super) struct Fellow<'f> {
     pub(super) slot: Slot,
     pub(super) handle: KType,
     pub(super) params: &'f [TypeSymbol],
+}
+
+/// A component's signature or alias fellow not yet read, by its slot: `Some` with its relative
+/// type, read on first mention, or the refusal of a cycle through signatures and aliases alone;
+/// `None` for a slot that names no such fellow.
+pub(super) type Unread<'e> = &'e dyn Fn(Slot) -> Option<Result<KType, Elaboration>>;
+
+/// The fellow members of the component being declared, as a type expression in it reads them.
+#[derive(Clone, Copy)]
+pub(super) struct Fellows<'e> {
+    /// Each fellow at the relative handle it is named by until the group seals: a nominal member's
+    /// own sibling, a `UNION` binder's union of its variants' siblings, and a signature's or
+    /// alias's relative type once it is read.
+    pub(super) read: &'e [Fellow<'e>],
+    /// The signature and alias fellows not yet read. `None` once every fellow is read, and outside
+    /// a component.
+    pub(super) unread: Option<Unread<'e>>,
+}
+
+impl Fellows<'_> {
+    /// No fellow: an ordinary type expression, or a member declared alone.
+    pub(super) const NONE: Fellows<'static> = Fellows {
+        read: &[],
+        unread: None,
+    };
 }
 
 /// What elaborating one expression reads through.
@@ -138,10 +165,9 @@ pub(super) struct Elaborator<'e, 'run, 'p, 'x, 'reg, R: ?Sized> {
     pub(super) reader: &'e R,
     pub(super) types: &'e Chain<'run, 'p, 'reg, 'e>,
     pub(super) scratch: BumpAllocator<'x>,
-    /// Fellow members of the component being declared, each at the relative handle it is named by
-    /// until the group seals: a member's own sibling, or a `UNION` binder's union of its variants'
-    /// siblings. Empty for an ordinary type expression.
-    pub(super) fellows: &'e [Fellow<'e>],
+    /// Fellow members of the component being declared, each named by its relative handle until the
+    /// group seals. [`Fellows::NONE`] for an ordinary type expression.
+    pub(super) fellows: Fellows<'e>,
     /// Names declared inside the definition being elaborated and holding no slot of the enclosing
     /// shape — a `SIG`'s head parameters and manifest members, and a higher-kinded declarator's
     /// parameters. Empty outside a definition.
@@ -232,15 +258,20 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, '_, 'x, '_, R> {
             return Err(Elaboration::Unsupported { site });
         };
         // A fellow member of the component being declared is not bound yet: it is named by the
-        // relative handle its still-open window minted. A definition part opens no nested shape,
-        // so every fellow mention is local to the declaring shape.
+        // relative handle its still-open window minted, or, for a signature or alias not read yet,
+        // by its relative type, read now. A definition part opens no nested shape, so every fellow
+        // mention is local to the declaring shape.
         if let Coordinate::Activation {
             hops: 0,
             target: Target::Local(slot),
         } = mention.coordinate
-            && let Some(fellow) = self.fellows.iter().find(|fellow| fellow.slot == slot)
         {
-            return Ok(fellow.handle.into());
+            if let Some(fellow) = self.fellows.read.iter().find(|fellow| fellow.slot == slot) {
+                return Ok(fellow.handle.into());
+            }
+            if let Some(answer) = self.fellows.unread.and_then(|unread| unread(slot)) {
+                return answer.map(Into::into);
+            }
         }
         match self.reader.type_at(mention.coordinate) {
             TypeAt::Type(handle) => Ok(handle.into()),
@@ -307,8 +338,7 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, '_, 'x, '_, R> {
         operands: impl FnOnce() -> Result<Parametric, Elaboration>,
     ) -> Result<KType, Elaboration> {
         let operand = self.closed_operands(site, operands)?;
-        self.types
-            .concrete(operand)
+        judge::closed(self.reader.marks(), self.types, operand)
             .ok_or(Elaboration::Unsupported { site })
     }
 
@@ -387,8 +417,7 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, '_, 'x, '_, R> {
                         _ => return Err(unsupported),
                     };
                     // An owner naming a variable declares no member.
-                    self.types
-                        .concrete(owner)
+                    judge::closed(self.reader.marks(), self.types, owner)
                         .and_then(|owner| {
                             declared_variant(self.types, self.scratch, owner, name)
                                 .or_else(|| declared_field(self.types, self.scratch, owner, name))
@@ -520,9 +549,7 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, '_, 'x, '_, R> {
     fn meet(&self, site: Site, operands: &[Parametric]) -> Result<Parametric, Elaboration> {
         let mut met = KType::ANY;
         for operand in operands {
-            let operand = self
-                .types
-                .concrete(*operand)
+            let operand = judge::closed(self.reader.marks(), self.types, *operand)
                 .ok_or(Elaboration::MeetOverVariable { site })?;
             met = meet(self.types, self.scratch, met, operand);
         }
@@ -575,7 +602,7 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, '_, 'x, '_, R> {
         let bound =
             self.closed_operands(self.reader.shape().site(part), || self.part(part, groups))?;
         // An opaque carrier is concrete, but a variable's bound holds none.
-        match self.types.concrete(bound) {
+        match judge::closed(self.reader.marks(), self.types, bound) {
             Some(bound) if bound != KType::NEVER && !self.types.holds_carrier(bound) => Ok(bound),
             _ => Err(refused),
         }
@@ -587,12 +614,13 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, '_, 'x, '_, R> {
     fn param_names(&self, constructor: KType) -> Option<&[TypeSymbol]> {
         if let Some(fellow) = self
             .fellows
+            .read
             .iter()
             .find(|fellow| fellow.handle == constructor && !fellow.params.is_empty())
         {
             return Some(fellow.params);
         }
-        if let TypeNode::Union { members } = self.types.node(constructor) {
+        if let TypeNode::Union { members } = judge::closed_type_node(self.types, constructor) {
             let mut members = members.iter();
             let names = constructor_param_names(members.next()?, self.types)?;
             return members
@@ -647,7 +675,8 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, '_, 'x, '_, R> {
         groups: &Groups<'_>,
     ) -> Result<Parametric, Elaboration> {
         let unsupported = Elaboration::Unsupported { site };
-        let TypeNode::Signature { schema, .. } = self.types.node(signature) else {
+        let TypeNode::Signature { schema, .. } = judge::closed_type_node(self.types, signature)
+        else {
             return Err(unsupported);
         };
         if schema.origin != SigOrigin::Declared {
@@ -900,10 +929,15 @@ pub fn declared_field(
     owner: KType,
     name: Symbol,
 ) -> Option<KType> {
-    through_layers(types, scratch, owner, |layer| match types.node(layer) {
-        TypeNode::Record { fields } => Some(fields.get(name)),
-        _ => None,
-    })
+    through_layers(
+        types,
+        scratch,
+        owner,
+        |layer| match judge::closed_type_node(types, layer) {
+            TypeNode::Record { fields } => Some(fields.get(name)),
+            _ => None,
+        },
+    )
     .flatten()
 }
 
@@ -939,12 +973,16 @@ pub fn applied_union(
     union: KType,
     arguments: &[(BinderSymbol, Parametric)],
 ) -> Parametric {
-    let TypeNode::Union { members } = types.node(union) else {
+    let TypeNode::Union { members } = judge::closed_type_node(types, union) else {
         unreachable!("`applied_union` applies a union")
     };
     debug_assert!(
-        (members.iter())
-            .all(|member| !matches!(types.node(member), TypeNode::ConstructorApply { .. })),
+        (members.iter()).all(|member| {
+            !matches!(
+                judge::closed_type_node(types, member),
+                TypeNode::ConstructorApply { .. }
+            )
+        }),
         "`applied_union` applies an unapplied union"
     );
     let mut applied = BumpVec::with_capacity_in(members.len(), scratch);

@@ -120,7 +120,10 @@ pub fn may_hold_record(
     stack.push(ktype);
     while let Some(at) = stack.pop() {
         match types.node(at) {
-            TypeNode::Record { .. } | TypeNode::Quantified { .. } | TypeNode::Lexical { .. } => {
+            TypeNode::Record { .. }
+            | TypeNode::Quantified { .. }
+            | TypeNode::Lexical { .. }
+            | TypeNode::Path { .. } => {
                 return true;
             }
             TypeNode::List { element } => stack.push(element),

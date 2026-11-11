@@ -282,7 +282,8 @@ fn a_tree_is_a_recursive_family() {
 fn a_family_declaration_is_refused() {
     // Each case names the binder whose slot the refusal must leave empty.
     for (source, left) in [
-        // An application is covariant in its arguments.
+        // An application is covariant in its arguments, so a parameter is refused at a
+        // contravariant position or inside a pin.
         (
             "UNION (Elem -> Sink) = #{Take: :(FN :{x :Elem} -> Null), None: Null}",
             "Sink",
@@ -290,6 +291,11 @@ fn a_family_declaration_is_refused() {
         (
             "UNION (Elem Elem -> Twice) = #{One: Elem, None: Null}",
             "Twice",
+        ),
+        (
+            "SIG Stack FOR ALL #[Elt] = #[(VAL top :Elt)]\n\
+             UNION (Elem -> Holder) = #{Has: :(Stack WITH {Elt = Elem}), Not: Null}",
+            "Holder",
         ),
         // A family's parameters take no bound.
         (

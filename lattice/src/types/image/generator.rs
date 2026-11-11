@@ -200,6 +200,7 @@ pub fn check(tier: &Frozen<'_>) -> Vec<String> {
             Content::Signature {
                 schema,
                 schema_digest,
+                ..
             } if schema_content_digest(*schema) != schema_digest => {
                 found.push(format!("{name}: its schema digest is not its schema's"));
             }
@@ -417,8 +418,13 @@ impl<'g> Emitter<'_, 'g> {
                     self.node(ret)
                 )
             }
-            Content::Quantified { index, bound } => format!(
-                "Content::Quantified {{ index: {index}, bound: {} }}",
+            Content::Quantified {
+                flags: bits,
+                index,
+                bound,
+            } => format!(
+                "Content::Quantified {{ flags: {}, index: {index}, bound: {} }}",
+                flags(bits),
                 self.node(bound)
             ),
             Content::Union {
@@ -437,6 +443,7 @@ impl<'g> Emitter<'_, 'g> {
                 )
             }
             Content::Signature {
+                flags: bits,
                 schema,
                 schema_digest,
             } => {
@@ -446,7 +453,8 @@ impl<'g> Emitter<'_, 'g> {
                      to write one"
                 );
                 format!(
-                    "Content::Signature {{ schema: &SigSchema::EMPTY, schema_digest: TypeDigest::imaged({}) }}",
+                    "Content::Signature {{ flags: {}, schema: &SigSchema::EMPTY, schema_digest: TypeDigest::imaged({}) }}",
+                    flags(bits),
                     hex128(schema_digest.0)
                 )
             }
@@ -470,6 +478,7 @@ impl<'g> Emitter<'_, 'g> {
             Content::KFunction { .. } => unwritten("KFunction"),
             Content::Scheme { .. } => unwritten("Scheme"),
             Content::Lexical { .. } => unwritten("Lexical"),
+            Content::Path { .. } => unwritten("Path"),
             Content::ConstructorApply { .. } => unwritten("ConstructorApply"),
             Content::SignatureApply { .. } => unwritten("SignatureApply"),
             Content::SignatureMeet { .. } => unwritten("SignatureMeet"),

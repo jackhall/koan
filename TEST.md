@@ -146,8 +146,8 @@ again under the test-only `unnarrowed` switch in [`walk.rs`](src/dispatch/walk.r
 leaves every keyworded use whole and refuses none: a program the load accepts runs as it does
 unnarrowed, and a use the load refuses faults when run unnarrowed.
 The spelling laws ([`spellings.rs`](src/dispatch/tests/spellings.rs)) call one registration over
-one class by keyword, by name, and by name with its record's fields reversed: each spelling loads,
-faults or prints alike.
+one class by keyword, by name, and by name with its argument record's fields reversed: each
+spelling loads, faults or prints alike.
 The lexical-variable law runs a site naming a quantified variable by a type with and without the
 contexts drawn around it, the bare program its oracle.
 The retype law ([`retypes.rs`](src/dispatch/tests/retypes.rs)) retypes a value drawn under a drawn

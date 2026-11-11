@@ -61,7 +61,7 @@ Lowering is where koan's vocabulary enters, and eight rules cover it
   and is an error. `#` also glues to
   a `[…]` or `{…}` literal and quotes each element: a paren-group element is
   quoted as that group, any other element as a one-part quote, and a `_` key or
-  a record's field name stays bare, so `#{Some: (x), _: (y)}` is
+  a record literal's field name stays bare, so `#{Some: (x), _: (y)}` is
   `{#(Some): #(x), _: #(y)}`. The result is the bare literal — a container of
   quotes, not a quote.
 - A **sigil-led line** is a whole layout line whose first atom starts with `#`;
@@ -96,10 +96,11 @@ post-parse chain detector recognize a user-declared operator without the lexer
 knowing it exists.
 
 Brace literals get their own sub-state-machine ([brace.rs](brace.rs)) because
-one `{…}` frame serves two containers: a **dict** (`{k: v}`) and a **record**
-(`{x = 1}`). The first pairing operator selects the mode, mixing the two is an
-error, and an empty `{}` is the empty record. No keyword enters a literal but `_`
-as a dict's key, which names the dict's default.
+one `{…}` frame serves two literals: a **dict literal** (`{k: v}`) and a
+**record literal** (`{x = 1}`). The first pairing operator selects the mode,
+mixing the two is an error, and an empty `{}` is the empty record literal. No
+keyword enters a literal but `_` as a dict's key, which names the dict's
+default.
 
 ### Templates
 
@@ -124,9 +125,9 @@ unclosed-group error at its `{`.
 The part is `Template`, a `KTemplate` of `pieces`, the text between the braces
 with each doubled brace read as one, and `slots`, one `TemplateSlot` per brace,
 `Rendered` or `Kept`, each holding the brace's group. There is one more piece
-than slot. A template with a kept brace evaluates to a record, so lowering
-records its field names, `strings` and `values`, as it records any spelling a
-program renders. Braces are read only here: no builtin reads a run-time string
+than slot. A template with a kept brace evaluates to a record value, so
+lowering records its field names, `strings` and `values`, as it records any
+spelling a program renders. Braces are read only here: no builtin reads a run-time string
 as a template, so a brace holds any expression without a string ever becoming
 code.
 
@@ -327,7 +328,7 @@ slot is typed by is a pinned constant of the same kind: the code containers
 `List(Name)`, `List(Declaration)`, `Dict(TypeCode | Literal, Block)`,
 `Dict(Name, Block)` and `Dict(Name, TypeCode)`, the union `TypeCode`, a `FOR ALL` group's union
 `List(Name) | Dict(Name, TypeCode)` (`KType::QUANTIFIER_CODE`), and the empty
-record. Each is a node of the lattice's seed, the image every root rests on;
+record type. Each is a node of the lattice's seed, the image every root rests on;
 a test asks a fresh registry for every slot type and return, so a table type
 the seed lacks fails there.
 

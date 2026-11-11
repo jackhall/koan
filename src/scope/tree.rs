@@ -3,12 +3,13 @@
 //!
 //! A tree's nodes are content — the parts the run digests — and its leaves are what the load cannot
 //! see. A **body** is a `MODULE` or `GROUP` body over the trees of what it composes, a **knot** is
-//! closures tied into one knot, a **view** is an ascription's operator and application over its
-//! operand's tree, a **retype** is a knot member under a header over its bare member's tree, and a
-//! **digest** is a value the load computes outright. A **leaf** is keyed on
-//! the binder that names it and a value-member chain read through it, and on what says which run
-//! of the binder's body holds it: a `MODULE` or `GROUP` body's captures, or the substitution of a
-//! call the load unfolds. A leaf no binder names is unlike every tree, itself included.
+//! closures tied into one knot, a **view** is an ascription's application over its operand's tree
+//! and its underlying's, a **retype** is a knot member under a header over its bare member's
+//! tree, and a **digest** is a value the load computes outright — for a module a frame binds,
+//! beside the module as a view over it reads it ([`Bare`]). A **leaf** is keyed on the binder that
+//! names it and a value-member chain read through it, and on what says which run of the binder's
+//! body holds it: a `MODULE` or `GROUP` body's captures, or the substitution of a call the load
+//! unfolds. A leaf no binder names is unlike every tree, itself included.
 //!
 //! A tree with no leaf is **closed**, and its [digest](Tree::digest) is the one the run computes
 //! for the value the expression evaluates to, through the run's own recipes in
@@ -26,8 +27,8 @@
 
 use std::fmt;
 
-use crate::memory::{BumpAllocator, BumpBackedSet, BumpVec, Lays, bump_set};
-use crate::symbols::ValueSymbol;
+use crate::memory::{BumpAllocator, BumpBackedSet, BumpVec, Lays, bump_set, collect};
+use crate::symbols::{KeySymbol, ValueSymbol};
 use crate::type_lattice::KType;
 use crate::values::ContentDigest;
 use crate::values::digest::{
@@ -42,8 +43,10 @@ use super::shape::{BodyShape, Segment, Site, Slot};
 /// below, which compute each node's [`Identity`].
 #[derive(Clone, Copy)]
 pub enum Tree<'graph> {
-    /// A value the load computes, by its digest: a scalar literal, a closed type value.
-    Digest(ContentDigest),
+    /// A value the load computes, by its digest: a scalar literal, a closed type value, or a module
+    /// a frame binds, beside the module as a view over it reads it. The [`Bare`] is a function of
+    /// the digest, so it takes no part in the identity.
+    Digest(ContentDigest, Option<&'graph Bare<'graph>>),
     /// A `MODULE` or `GROUP` body over each capture its content composes, beside its closure slot.
     Body {
         body: Segment,
@@ -56,12 +59,14 @@ pub enum Tree<'graph> {
         index: u32,
         identity: Identity,
     },
-    /// An opaque view: its operator and the application it is built at, over its operand, digested
-    /// over the operand's bare member and what its fit solves.
+    /// An opaque view: the application it is built at over its operand, `source`, which admits it,
+    /// and its **underlying**'s tree, which its members are read from and its identity is digested
+    /// over, beside `from*`, what its fit solves over the underlying. The underlying is a `MODULE`
+    /// body, or a module a frame binds, never a view.
     View {
-        operator: Operator,
         application: KType,
         source: &'graph Tree<'graph>,
+        underlying: &'graph Tree<'graph>,
         identity: Identity,
     },
     /// A value retyped to `carried` over its bare member's tree: a knot member under a header.
@@ -78,7 +83,7 @@ pub enum Tree<'graph> {
 /// A tree's identity: the digest the run computes where the tree is closed; the run's recipes
 /// over each leaf's key where it is open, so two open trees share an identity exactly where they are
 /// alike, leaf for leaf; and nothing where a leaf no binder names sits in it.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
 pub enum Identity {
     Closed(ContentDigest),
     Open(ContentDigest),
@@ -141,6 +146,72 @@ pub struct Unfolded<'graph> {
     pub solution: &'graph [(Slot, KType)],
 }
 
+/// What a view node keeps of how it was built, so a view of it can be keyed and checked: the
+/// application it was built at and its two substitutions, as signature handles — `from` is
+/// `from*`, what *fits* solved over the view's underlying, `to` the view's own side — and
+/// `hidden`, each carrier `to` shows beside the type it hides over the underlying, so a type over
+/// the view's carriers reads back onto the underlying. `hidden` is a function of `to`, since a
+/// carrier is keyed on the content of the view that made it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct ViewRecord<'a> {
+    pub application: KType,
+    pub from: KType,
+    pub to: KType,
+    pub hidden: &'a [(KType, KType)],
+}
+
+impl ViewRecord<'_> {
+    /// This record, its carriers laid again through `lay`.
+    pub fn laid<'to>(self, lay: impl Lays<'to>) -> ViewRecord<'to> {
+        ViewRecord {
+            hidden: collect(lay, self.hidden.iter().copied()),
+            ..self
+        }
+    }
+}
+
+/// What `carrier` hides among `hidden`, a view's carriers each beside what it hides over the
+/// view's underlying: `None` for a carrier the view does not read back.
+pub fn hides(hidden: &[(KType, KType)], carrier: KType) -> Option<KType> {
+    (hidden.iter()).find_map(|(held, hides)| (*held == carrier).then_some(*hides))
+}
+
+/// A module as a view over it reads it. Every module is a view: a body-born module or an inward
+/// re-view is a transparent view of itself, sealing nothing and its own underlying.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Bare<'a> {
+    /// Its own signature, where known.
+    pub signature: Option<KType>,
+    /// What it seals: `None` for a transparent view of itself.
+    pub sealing: Option<Sealing<'a>>,
+}
+
+/// What an opaque view seals, and the module it is built over.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Sealing<'a> {
+    pub record: ViewRecord<'a>,
+    pub underlying_signature: KType,
+    pub underlying: ContentDigest,
+}
+
+/// The member a view of a view would show that its source hides: a value slot, or a keyworded
+/// member by its key.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Revealed {
+    Slot(ValueSymbol),
+    Keyworded(KeySymbol),
+}
+
+impl Revealed {
+    /// The symbol a diagnostic renders the member by: its name, or its key's spelling.
+    pub fn symbol(self) -> crate::symbols::Symbol {
+        match self {
+            Revealed::Slot(name) => name.symbol(),
+            Revealed::Keyworded(key) => key.symbol(),
+        }
+    }
+}
+
 impl<'graph> Tree<'graph> {
     /// A `MODULE` or `GROUP` body's tree over the captures its content composes.
     pub fn body(shape: &BodyShape<'_>, captures: &'graph [(u32, Tree<'graph>)]) -> Self {
@@ -198,26 +269,32 @@ impl<'graph> Tree<'graph> {
         }
     }
 
-    /// The view `operator` builds at `application` over `source`, whose fit solves `from` where
-    /// the load knows it: digested over the source's bare member, and open where `from` is unknown.
+    /// The opaque view at `application` over `source`, built over `underlying`, whose fit solves
+    /// `from*` where the load knows it: digested over the underlying, and open where `from*` is
+    /// unknown.
     pub fn view(
-        operator: Operator,
         application: KType,
         source: &'graph Tree<'graph>,
+        underlying: &'graph Tree<'graph>,
         from: Option<KType>,
     ) -> Self {
-        let identity = Identity::over(std::iter::once(source.bare().identity()), |digests| {
-            let source = digests.next().expect("the source's identity");
-            lone_member(view_content(operator, application, source, from))
+        let identity = Identity::over(std::iter::once(underlying.identity()), |digests| {
+            let underlying = digests.next().expect("the underlying's identity");
+            lone_member(view_content(
+                Operator::Opaque,
+                application,
+                underlying,
+                from,
+            ))
         });
         let identity = match (identity, from) {
             (Identity::Closed(digest), None) => Identity::Open(digest),
             (identity, _) => identity,
         };
         Tree::View {
-            operator,
             application,
             source,
+            underlying,
             identity,
         }
     }
@@ -301,7 +378,7 @@ impl<'graph> Tree<'graph> {
     /// The tree's identity.
     pub fn identity(&self) -> Identity {
         match *self {
-            Tree::Digest(digest) => Identity::Closed(digest),
+            Tree::Digest(digest, _) => Identity::Closed(digest),
             Tree::Body { identity, .. }
             | Tree::Knot { identity, .. }
             | Tree::View { identity, .. }
@@ -346,7 +423,7 @@ impl<'graph> Tree<'graph> {
     /// Each tree this one is built over, a leaf's key included.
     fn subtrees(&self, each: &mut impl FnMut(&'graph Tree<'graph>)) {
         match *self {
-            Tree::Digest(_) | Tree::Leaf(Leaf::Unnamed(_)) => {}
+            Tree::Digest(..) | Tree::Leaf(Leaf::Unnamed(_)) => {}
             Tree::Body { captures, .. } => captures.iter().for_each(|(_, tree)| each(tree)),
             Tree::Knot { members, .. } => {
                 for member in members {
@@ -357,7 +434,13 @@ impl<'graph> Tree<'graph> {
                     }
                 }
             }
-            Tree::View { source, .. } | Tree::Retyped { source, .. } => each(source),
+            Tree::View {
+                source, underlying, ..
+            } => {
+                each(source);
+                each(underlying);
+            }
+            Tree::Retyped { source, .. } => each(source),
             Tree::Leaf(Leaf::Bound { within, .. }) => match within {
                 None => {}
                 Some(Within::Body(captures)) => captures.iter().for_each(|(_, tree)| each(tree)),
@@ -430,7 +513,7 @@ impl Identity {
 impl fmt::Debug for Tree<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         match self {
-            Tree::Digest(digest) => f.debug_tuple("Digest").field(digest).finish(),
+            Tree::Digest(digest, _) => f.debug_tuple("Digest").field(digest).finish(),
             Tree::Body { body, captures, .. } => f
                 .debug_struct("Body")
                 .field("body", body)
@@ -442,15 +525,15 @@ impl fmt::Debug for Tree<'_> {
                 .field("index", index)
                 .finish(),
             Tree::View {
-                operator,
                 application,
                 source,
+                underlying,
                 ..
             } => f
                 .debug_struct("View")
-                .field("operator", operator)
                 .field("application", application)
                 .field("source", source)
+                .field("underlying", underlying)
                 .finish(),
             Tree::Retyped {
                 carried, source, ..

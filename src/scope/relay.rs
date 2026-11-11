@@ -1,6 +1,6 @@
 //! The **records copier**: a unit's record or a closing laid again through another layer, so it
 //! outlives the memory it was read from. A frame's activation walks at its step's borrow, over
-//! facts an arena node holds; what it decides is relaid into the frame's region, which no arena
+//! facts a depot slot holds; what it decides is relaid into the frame's region, which no depot
 //! node outlives the type system's view of; a closure holding those records lays them again into
 //! the region a copy of it lands in. Every slice and tree a record reaches is laid again, so
 //! nothing it holds points where it was read from; a frontier is laid flat, its unknowns past the
@@ -12,11 +12,12 @@
 
 use crate::memory::{BumpAllocator, BumpBackedMap, BumpVec, Lays, bump_table, collect, resident};
 
-use super::facts::{Binding, Bound, Frontier, Unknown};
+use super::facts::{Binding, Bound, Flattened, Frontier, Mark, Noted, OpenMark};
 use super::keyed::Keyed;
-use super::records::{Born, Closing, Deps, Retypes, SiteDeps, Typed, UnitFacts};
+use super::question::Answered;
+use super::records::{Born, Closing, Deps, Retypes, SiteDeps, Traced, Typed, UnitFacts};
 use super::shape::{Repeated, Scalar, ShapeError};
-use super::tree::{KnotNode, Leaf, NodeCapture, Tree, Unfolded, Within};
+use super::tree::{Bare, KnotNode, Leaf, NodeCapture, Sealing, Tree, Unfolded, Within};
 use super::typed::{
     Arms, Callable, Elimination, FunctionGroupMap, InstanceRead, Kept, Narrowing, ParameterBinding,
     PathEntry, Pick, Points, Registered, Resolution, Route, ShapeGroupMap, Static, StaticInstance,
@@ -35,61 +36,59 @@ pub(crate) fn relaid_error<'to>(
     resident(lay, relay.error(error))
 }
 
-/// A copier laying records through `lay`, flattening frontiers under `binding` with a memo of
-/// each frontier's unknowns, by identity, in `scratch`.
-pub(crate) struct Relay<'to, 'x, 'bind, L> {
+/// A copier laying records read at `'from` through `lay`, flattening frontiers under `binding`
+/// through `flat`, a memo of each frontier's unknowns by identity in `scratch`.
+pub(crate) struct Relay<'to, 'x, 'bind, 'from, L> {
     lay: L,
     scratch: BumpAllocator<'x>,
     binding: Binding<'bind>,
-    flat: BumpBackedMap<'x, (usize, usize), &'x [Unknown]>,
-    _to: std::marker::PhantomData<&'to ()>,
+    flat: Flattened<'x, 'from>,
+    /// Each answered question laid again, by where it was read: laid once per relay.
+    answered: BumpBackedMap<'x, usize, &'to Answered<'to>>,
 }
 
-impl<'to, 'x, 'bind, L: Lays<'to>> Relay<'to, 'x, 'bind, L> {
+impl<'to, 'x, 'bind, 'from, L: Lays<'to>> Relay<'to, 'x, 'bind, 'from, L> {
     /// A copier laying through `lay`, whose frontiers drop what `binding` binds.
     pub(crate) fn new(lay: L, scratch: BumpAllocator<'x>, binding: Binding<'bind>) -> Self {
+        Relay::flattening(lay, scratch, binding, Flattened::new(scratch))
+    }
+
+    /// A copier as [`new`](Self::new)'s, adopting `flat`: a frontier a walk's caller already
+    /// flattened is not walked again.
+    pub(crate) fn flattening(
+        lay: L,
+        scratch: BumpAllocator<'x>,
+        binding: Binding<'bind>,
+        flat: Flattened<'x, 'from>,
+    ) -> Self {
         Relay {
             lay,
             scratch,
             binding,
-            flat: bump_table(scratch),
-            _to: std::marker::PhantomData,
+            flat,
+            answered: bump_table(scratch),
         }
     }
 
-    /// `frontier` laid flat: each unknown it holds, past each read's cut, that the binding leaves
-    /// unbound, sorted.
-    pub(crate) fn frontier(&mut self, frontier: Frontier<'_>) -> Frontier<'to> {
+    /// This copier dropping what `binding` binds from the frontiers it lays from here on. What it
+    /// flattened and laid is kept: neither depends on the binding.
+    pub(crate) fn rebind(&mut self, binding: Binding<'bind>) {
+        self.binding = binding;
+    }
+
+    /// `frontier` laid flat: each unknown it holds and its marks, past each read's cut, that the
+    /// binding leaves unbound, sorted.
+    pub(crate) fn frontier(&mut self, frontier: Frontier<'from>) -> Frontier<'to> {
         if frontier.is_empty() {
             return Frontier::EMPTY;
         }
-        let mut stack = BumpVec::new_in(self.scratch);
-        stack.push((frontier, false));
-        while let Some((at, expanded)) = stack.pop() {
-            if self.flat.contains_key(&at.identity()) {
-                continue;
-            }
-            if !expanded {
-                stack.push((at, true));
-                stack.extend((at.reads().iter()).map(|cut| (cut.frontier, false)));
-                continue;
-            }
-            let mut unknowns = BumpVec::new_in(self.scratch);
-            unknowns.extend_from_slice(at.own());
-            for cut in at.reads() {
-                let read = self.flat[&cut.frontier.identity()];
-                unknowns.extend(read.iter().filter(|unknown| unknown.segment >= cut.from));
-            }
-            unknowns.sort_unstable();
-            unknowns.dedup();
-            let laid = collect(self.scratch, unknowns.iter().copied());
-            self.flat.insert(at.identity(), laid);
-        }
+        let flat = self.flat.of(frontier);
         let mut unbound = BumpVec::new_in(self.scratch);
-        unbound.extend(
-            (self.flat[&frontier.identity()].iter())
-                .filter(|unknown| self.binding.bound(**unknown).is_none()),
-        );
+        for each in flat {
+            if self.binding.bound(each.unknown).is_none() {
+                unbound.push(noted(self.lay, &mut self.answered, *each));
+            }
+        }
         let laid = collect(self.lay, unbound.iter().copied());
         match laid.is_empty() {
             true => Frontier::EMPTY,
@@ -97,15 +96,27 @@ impl<'to, 'x, 'bind, L: Lays<'to>> Relay<'to, 'x, 'bind, L> {
         }
     }
 
+    /// `answered` laid again, once per relay.
+    pub(crate) fn answered(&mut self, answered: &Answered<'_>) -> &'to Answered<'to> {
+        relaid_answered(self.lay, &mut self.answered, answered)
+    }
+
     /// `facts`, laid again.
-    pub(crate) fn unit(&self, facts: &UnitFacts<'_>) -> UnitFacts<'to> {
+    pub(crate) fn unit(&mut self, facts: &UnitFacts<'from>) -> UnitFacts<'to> {
         let UnitFacts {
             typed,
             born,
             paths,
             sites,
             named_variables,
+            seeds,
         } = facts;
+        let seeds = seeds.entries();
+        let mut flat = BumpVec::with_capacity_in(seeds.len(), self.scratch);
+        for (slot, seed) in seeds {
+            flat.push((*slot, self.frontier(*seed)));
+        }
+        let seeds = Keyed::from_sorted(collect(self.lay, flat.iter().copied()));
         UnitFacts {
             typed: self.keyed(*typed, |typed| self.typed(typed)),
             born: self.keyed(*born, |born| self.born(born)),
@@ -114,6 +125,7 @@ impl<'to, 'x, 'bind, L: Lays<'to>> Relay<'to, 'x, 'bind, L> {
             }),
             sites: self.lay.fill(sites.len(), |at| self.site(&sites[at])),
             named_variables: self.copied(named_variables),
+            seeds,
         }
     }
 
@@ -153,10 +165,24 @@ impl<'to, 'x, 'bind, L: Lays<'to>> Relay<'to, 'x, 'bind, L> {
         }
     }
 
+    /// `bare`, its record's hidden carriers laid again.
+    fn bare(&self, bare: &Bare<'_>) -> Bare<'to> {
+        Bare {
+            signature: bare.signature,
+            sealing: bare.sealing.map(|sealing| Sealing {
+                record: sealing.record.laid(self.lay),
+                ..sealing
+            }),
+        }
+    }
+
     /// `tree`, every node laid again.
     pub(crate) fn tree(&self, tree: &Tree<'_>) -> Tree<'to> {
         match tree {
-            Tree::Digest(digest) => Tree::Digest(*digest),
+            Tree::Digest(digest, bare) => Tree::Digest(
+                *digest,
+                bare.map(|bare| resident(self.lay, self.bare(bare))),
+            ),
             Tree::Body {
                 body,
                 captures,
@@ -194,14 +220,14 @@ impl<'to, 'x, 'bind, L: Lays<'to>> Relay<'to, 'x, 'bind, L> {
                 identity: *identity,
             },
             Tree::View {
-                operator,
                 application,
                 source,
+                underlying,
                 identity,
             } => Tree::View {
-                operator: *operator,
                 application: *application,
                 source: resident(self.lay, self.tree(source)),
+                underlying: resident(self.lay, self.tree(underlying)),
                 identity: *identity,
             },
             Tree::Retyped {
@@ -288,6 +314,7 @@ impl<'to, 'x, 'bind, L: Lays<'to>> Relay<'to, 'x, 'bind, L> {
             instances,
             uses,
             selections,
+            traced,
             by_name,
             routes,
             arms,
@@ -295,6 +322,7 @@ impl<'to, 'x, 'bind, L: Lays<'to>> Relay<'to, 'x, 'bind, L> {
             trees,
             picks,
             contents,
+            holding,
             minting,
             signature,
             exits,
@@ -321,6 +349,12 @@ impl<'to, 'x, 'bind, L: Lays<'to>> Relay<'to, 'x, 'bind, L> {
             }),
             uses: self.keyed(*uses, |statics| self.uses(statics)),
             selections: self.keyed(*selections, |points| self.points(points)),
+            traced: self.keyed(*traced, |traced| Traced {
+                callee: traced.callee,
+                call: traced.call,
+                by_name: traced.by_name,
+                fixed: self.copied(traced.fixed),
+            }),
             by_name: self.keyed(*by_name, |contributed| {
                 self.lay
                     .fill(contributed.len(), |at| self.static_type(&contributed[at]))
@@ -345,6 +379,7 @@ impl<'to, 'x, 'bind, L: Lays<'to>> Relay<'to, 'x, 'bind, L> {
                 })
             }),
             contents: self.keyed(*contents, |tree| self.tree(tree)),
+            holding: self.keyed(*holding, |held| self.copied(held)),
             minting: self.keyed_copied(*minting),
             signature: *signature,
             exits: *exits,
@@ -377,14 +412,14 @@ impl<'to, 'x, 'bind, L: Lays<'to>> Relay<'to, 'x, 'bind, L> {
             root,
             chain,
             label,
-            level,
+            name,
             through,
         } = entry;
         PathEntry {
             root: *root,
             chain: self.copied(chain),
             label: *label,
-            level: *level,
+            name: *name,
             through: *through,
         }
     }
@@ -421,7 +456,7 @@ impl<'to, 'x, 'bind, L: Lays<'to>> Relay<'to, 'x, 'bind, L> {
                 Deps::On(slots) => Deps::On(self.copied(slots)),
                 Deps::Varying => Deps::Varying,
             },
-            pending: self.copied(pending),
+            pending: (self.lay).fill(pending.len(), |at| self.tree(&pending[at])),
         }
     }
 
@@ -683,6 +718,15 @@ impl<'to, 'x, 'bind, L: Lays<'to>> Relay<'to, 'x, 'bind, L> {
                 ascribed,
                 at,
             },
+            ShapeError::ViewReveals {
+                member,
+                ascribed,
+                at,
+            } => ShapeError::ViewReveals {
+                member,
+                ascribed,
+                at,
+            },
             ShapeError::AnnotationNeverSatisfied {
                 value,
                 annotated,
@@ -757,6 +801,10 @@ impl<'to, 'x, 'bind, L: Lays<'to>> Relay<'to, 'x, 'bind, L> {
                 ShapeError::EvalNeverSatisfied { code, returns, at }
             }
             ShapeError::Type { error, at } => ShapeError::Type { error, at },
+            ShapeError::UnderCall { call, refusal } => ShapeError::UnderCall {
+                call,
+                refusal: resident(self.lay, self.error(refusal)),
+            },
             ShapeError::RepeatedGuard { guard, first, at } => ShapeError::RepeatedGuard {
                 guard: match guard {
                     Repeated::Type(handle) => Repeated::Type(handle),
@@ -775,4 +823,42 @@ impl<'to, 'x, 'bind, L: Lays<'to>> Relay<'to, 'x, 'bind, L> {
             },
         }
     }
+}
+
+/// `noted`, its answered question laid again through `lay` once per `laid`.
+fn noted<'to>(
+    lay: impl Lays<'to>,
+    laid: &mut BumpBackedMap<'_, usize, &'to Answered<'to>>,
+    noted: Noted<'_>,
+) -> Noted<'to> {
+    let mark = match noted.mark {
+        Mark::Named => Mark::Named,
+        Mark::Open(open) => Mark::Open(OpenMark {
+            kind: open.kind,
+            slot: open.slot,
+            judged: open.judged,
+            answered: open
+                .answered
+                .map(|answered| relaid_answered(lay, laid, answered)),
+        }),
+    };
+    Noted {
+        unknown: noted.unknown,
+        mark,
+    }
+}
+
+/// `answered` laid again through `lay`, once per `laid`, by where it was read.
+fn relaid_answered<'to>(
+    lay: impl Lays<'to>,
+    laid: &mut BumpBackedMap<'_, usize, &'to Answered<'to>>,
+    answered: &Answered<'_>,
+) -> &'to Answered<'to> {
+    let at = std::ptr::from_ref(answered).addr();
+    if let Some(held) = laid.get(&at) {
+        return held;
+    }
+    let held = resident(lay, answered.laid(lay));
+    laid.insert(at, held);
+    held
 }

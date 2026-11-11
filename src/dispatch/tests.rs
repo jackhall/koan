@@ -22,6 +22,7 @@ mod generic;
 mod instances;
 mod kept;
 mod keys;
+mod laid;
 mod lexical;
 mod literal_splices;
 mod loops;
@@ -30,7 +31,10 @@ mod memo;
 mod modules;
 mod named_code;
 mod narrowing;
+#[path = "../../audit/parametric_layers.rs"]
+mod parametric_layers;
 mod paths;
+mod program_size;
 mod programs;
 mod quotes;
 mod rankings;
@@ -40,6 +44,8 @@ mod replay;
 mod resumption;
 mod retypes;
 mod rules;
+#[path = "../../audit/seek_cost.rs"]
+mod seek_cost;
 mod selection;
 mod signatures;
 mod spellings;
@@ -49,9 +55,11 @@ mod statics;
 mod surface;
 mod tail;
 mod templates;
+mod trace;
 mod trees;
 mod types;
 mod views;
+mod witness;
 
 use std::cell::RefCell;
 

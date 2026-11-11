@@ -5,7 +5,9 @@ use proptest::prelude::*;
 
 use crate::memory::{Bump, BumpVec};
 use crate::scope::tests::with_shapes;
-use crate::scope::{Address, Cut, Frontier, Segment, ShapeKind, Shapes, Slot, UnitIndex, Unknown};
+use crate::scope::{
+    Address, Cut, Frontier, Noted, Segment, ShapeKind, Shapes, Slot, UnitIndex, Unknown,
+};
 
 use super::super::folds::keyed_names;
 
@@ -94,7 +96,7 @@ proptest! {
             let mut laid: Vec<(Segment, UnitIndex, Frontier<'_>)> = Vec::new();
             for (own, reads, body, unit) in &nodes {
                 let mut staged = BumpVec::new_in(&scratch);
-                staged.extend(own.iter().map(|at| unknowns[pick(*at, unknowns.len())]));
+                staged.extend(own.iter().map(|at| Noted::named(unknowns[pick(*at, unknowns.len())])));
                 let mut cuts = BumpVec::new_in(&scratch);
                 if !laid.is_empty() {
                     cuts.extend(reads.iter().map(|(read, from)| Cut {

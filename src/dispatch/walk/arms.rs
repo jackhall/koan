@@ -27,15 +27,16 @@
 //!
 //! See [README.md § Static types](../README.md#static-types).
 
+use crate::elaborate::judge::{self, Marks};
 use crate::elaborate::{arm_shapes, variant_label, variant_named, variants};
 use crate::memory::{BumpVec, collect};
 use crate::parse::KExpression;
 use crate::scope::{Arms, BodyShape, Elimination, Guard, Scalar, ShapeError, Store, Table};
-use crate::type_lattice::{Interval, KType, Parametric, Verdict, bound_above, fits, meet};
-use crate::values::{Retype, representation, retyped_to, under, unknown};
+use crate::type_lattice::{Interval, KType, Parametric, Verdict, meet};
+use crate::values::{Retype, representation, under, unknown};
 
 use super::super::select::{first_ranked, guard_outranks};
-use super::{Entering, Pass, never_satisfies};
+use super::{Entering, Pass};
 
 /// One arm as the walk reads it: what admits a value to it, and the interval its `it` lies in.
 #[derive(Clone, Copy)]
@@ -64,7 +65,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             false => None,
         };
         let union = clause
-            .and_then(|clause| types.concrete(clause))
+            .and_then(|clause| judge::closed(self, types, clause))
             .filter(|union| variants(types, *union).is_some());
         self.armed(level, node, scrutinee, clause, union, under_union)
     }
@@ -110,7 +111,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             typed.push(last.unwrap_or_else(unknown));
         }
         // A scrutinee that never arrives takes no arm.
-        if scrutinee.upper == KType::NEVER.into() {
+        if judge::is(self, types, scrutinee.upper, KType::NEVER) {
             return Ok(Interval::point(KType::NEVER.into()));
         }
         let verdicts = self.verdicts(scrutinee, clause, &reads);
@@ -118,10 +119,11 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             matches!(read.guard, Guard::Default)
                 || read
                     .admits
-                    .and_then(|admits| types.concrete(admits))
+                    .and_then(|admits| judge::closed(self, types, admits))
                     .is_some()
         });
-        let outranks = |a: usize, b: usize| outranks(types, scratch, &reads[a], &reads[b]);
+        let marks: &dyn Marks = &*self;
+        let outranks = |a: usize, b: usize| outranks(marks, types, scratch, &reads[a], &reads[b]);
         let mut kept = BumpVec::with_capacity_in(reads.len(), scratch);
         for (at, verdict) in verdicts.iter().enumerate() {
             let dropped = match verdict {
@@ -138,10 +140,11 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 kept.push((at as u16, *verdict));
             }
         }
-        let scrutinee_named = bound_above(types, scratch, scrutinee.upper);
+        // Named only in a refusal, an end read only there.
+        let scrutinee_named = || judge::bound_above(marks, types, scratch, scrutinee.upper);
         if kept.is_empty() {
             return Err(ShapeError::NoAdmittingArm {
-                scrutinee: scrutinee_named,
+                scrutinee: scrutinee_named(),
                 union,
                 at: node.source,
             });
@@ -171,7 +174,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                     Some(Err(count)) => {
                         return Err(ShapeError::AmbiguousArms {
                             count,
-                            scrutinee: scrutinee_named,
+                            scrutinee: scrutinee_named(),
                             at: node.source,
                         });
                     }
@@ -196,7 +199,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             None => {
                 let mut kept_types = BumpVec::with_capacity_in(kept.len(), scratch);
                 kept_types.extend(kept.iter().map(|(at, _)| typed[*at as usize]));
-                spanned(types, scratch, &kept_types)
+                spanned(self, types, scratch, &kept_types)
             }
         })
     }
@@ -216,9 +219,8 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         let (types, scratch) = (self.types, self.scratch);
         let retyped = |declared: Option<Parametric>| match declared {
             Some(declared) => (
-                retyped_to(types, scratch, declared),
-                types
-                    .concrete(declared)
+                judge::retyped(self, types, scratch, declared),
+                judge::closed(self, types, declared)
                     .map(|closed| Retype::of(types, scratch, closed)),
             ),
             None => (unknown(), None),
@@ -289,9 +291,9 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     ) -> BumpVec<'p, Verdict> {
         let (types, scratch) = (self.types, self.scratch);
         let judge = |admits: Parametric, may_always: bool| {
-            if never_satisfies(types, scratch, scrutinee, admits).is_some() {
+            if judge::never_satisfies(self, types, scratch, scrutinee, admits).is_some() {
                 Verdict::Never
-            } else if may_always && fits(types, scratch, scrutinee.upper, admits) {
+            } else if may_always && judge::fits(self, types, scratch, scrutinee.upper, admits) {
                 Verdict::Always
             } else {
                 Verdict::Maybe
@@ -331,12 +333,16 @@ fn scalar_type(scalar: Scalar<'_>) -> KType {
 
 /// Whether the arm read `a` strictly outranks `b` ([`guard_outranks`]).
 fn outranks(
+    marks: &dyn Marks,
     types: &crate::values::Chain<'_, '_, '_, '_>,
     scratch: crate::memory::BumpAllocator<'_>,
     a: &Read<'_>,
     b: &Read<'_>,
 ) -> bool {
-    let closed = |read: &Read<'_>| read.admits.and_then(|admits| types.concrete(admits));
+    let closed = |read: &Read<'_>| {
+        read.admits
+            .and_then(|admits| judge::closed(marks, types, admits))
+    };
     guard_outranks(types, scratch, (a.guard, closed(a)), (b.guard, closed(b)))
 }
 
@@ -344,6 +350,7 @@ fn outranks(
 /// arms': the plain union of their upper ends, over the lattice meet of their lower ends where every
 /// one is closed and `Never` otherwise.
 pub(super) fn spanned(
+    marks: &dyn Marks,
     types: &crate::values::Chain<'_, '_, '_, '_>,
     scratch: crate::memory::BumpAllocator<'_>,
     typed: &[Interval],
@@ -354,7 +361,7 @@ pub(super) fn spanned(
     let mut lower = Some(KType::ANY);
     for each in typed {
         lower = lower
-            .zip(types.concrete(each.lower))
+            .zip(judge::closed(marks, types, each.lower))
             .map(|(met, lower)| meet(types, scratch, met, lower));
     }
     Interval {

@@ -299,6 +299,9 @@ fn pairing<'n, 'run>(
                 assembly: Assembly::Shape(xe, xc),
             }
         }
+        // Two applications of one constructor pair by their arguments. A constructor is nominal,
+        // as an application lies under its family by identity alone, so two of different
+        // constructors are leaves.
         (
             TypeNode::ConstructorApply {
                 constructor: xc,
@@ -308,7 +311,7 @@ fn pairing<'n, 'run>(
                 constructor: yc,
                 arguments: ya,
             },
-        ) => {
+        ) if xc == yc => {
             let mut paired = by_name(scratch, xa, ya, v, Width::Exact, 1, Assembly::Apply);
             if let Pairing::Structural { pairs, .. } = &mut paired {
                 pairs.insert(0, (xc, yc, v));

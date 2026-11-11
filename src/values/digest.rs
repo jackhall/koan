@@ -141,6 +141,19 @@ pub enum Tag {
     Composition = 0x35,
     /// A string template: its pieces, then each brace's kind and part.
     Template = 0x36,
+    /// A path class: its label, application and tree identity, or its one path's chain and name.
+    PathClass = 0x37,
+    /// A path no type spells: its root, member chain, label and application.
+    PathEntry = 0x38,
+    /// A witnessed layer: its event's site, the names it witnessed, the module binders it binds
+    /// and the questions its admission keeps.
+    Witnessed = 0x39,
+    /// A layer walked closed: every name it was walked under.
+    Binding = 0x3A,
+    /// The spine beneath a cell's first event: each of its layers' digests, innermost first.
+    Spine = 0x3B,
+    /// An answered question: the question, its types and the answer.
+    Answered = 0x3C,
 }
 
 /// The one hasher every digest is computed through: a tag first, then payload, then each part's

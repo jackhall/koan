@@ -18,14 +18,15 @@
 //!
 //! See [README.md § The builtin table](README.md#the-builtin-table).
 
+use crate::elaborate::judge::{self, Marks};
 use crate::elaborate::{SignatureMember, signature_member};
 use crate::memory::{BumpAllocator, BumpVec};
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::{
-    DeclaredType, Interval, KType, Parametric, SchemaDraft, SigOrigin, TypeNode, bound_above,
-    lower_end_outside, shape_return, shape_slots,
+    DeclaredType, Interval, KType, Parametric, SchemaDraft, SigOrigin, TypeNode, shape_return,
+    shape_slots,
 };
-use crate::values::{Chain, record_type, retyped_to, under, unknown};
+use crate::values::{Chain, record_type, under, unknown};
 
 use super::builtins::Native;
 
@@ -60,32 +61,29 @@ pub(super) struct Typed {
 /// The first argument a need of `native`'s call drops and the call's return, its overload declared
 /// as the shape `declared`, over `given`: the load's entry point.
 pub(super) fn typed(
+    marks: &dyn Marks,
     native: Native,
     declared: KType,
     given: &[Given<'_>],
     types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
 ) -> Typed {
-    let needs = needs(native, declared, given, types, scratch);
+    let needs = needs(marks, native, declared, given, types, scratch);
     let dropped = (given.iter().zip(needs.iter()))
         .position(|(given, need)| {
-            lower_end_outside(
-                types,
-                scratch,
-                given.typed,
-                bound_above(types, scratch, (*need).into()),
-            )
+            judge::lower_end_outside(marks, types, scratch, given.typed, *need)
         })
-        .map(|slot| (slot, lacks(native, given, slot, types)));
+        .map(|slot| (slot, lacks(marks, native, given, slot, types)));
     let returns = match dropped {
         Some(_) => Interval::point(KType::NEVER.into()),
-        None => returns(native, declared, given, types, scratch),
+        None => returns(marks, native, declared, given, types, scratch),
     };
     Typed { dropped, returns }
 }
 
 /// The return of `native`'s call over `given`, with no need checked.
 fn returns(
+    marks: &dyn Marks,
     native: Native,
     declared: KType,
     given: &[Given<'_>],
@@ -98,29 +96,31 @@ fn returns(
             let record = given[1].typed;
             let names = distinct(names, scratch);
             Interval {
-                lower: projection(types, scratch, &names, |name| {
-                    lower_field(types, record.lower, name)
+                lower: projection(marks, types, scratch, &names, |name| {
+                    lower_field(marks, types, record.lower, name)
                 }),
-                upper: projection(types, scratch, &names, |name| {
-                    upper_field(types, scratch, record.upper, name)
+                upper: projection(marks, types, scratch, &names, |name| {
+                    upper_field(marks, types, scratch, record.upper, name)
                 }),
             }
         }
         // An operand that never arrives reads nothing.
-        (Native::ModuleMember, Some(_)) if given[0].typed.upper == KType::NEVER.into() => {
+        (Native::ModuleMember, Some(_))
+            if judge::is(marks, types, given[0].typed.upper, KType::NEVER) =>
+        {
             Interval::point(KType::NEVER.into())
         }
         (Native::ModuleMember, Some([name])) => {
-            match signature_member(types, scratch, given[0].typed.upper, *name) {
+            match signature_member(marks, types, scratch, given[0].typed.upper, *name) {
                 Some(SignatureMember {
                     declared: DeclaredType::Type(declared),
                     unpinned: None,
                 }) => match name {
-                    BinderSymbol::Type(_) => match types.concrete(declared) {
+                    BinderSymbol::Type(_) => match judge::closed(marks, types, declared) {
                         Some(held) => Interval::point(KType::of_kind(held.kind_of(types)).into()),
                         None => under(KType::ANY_TYPE.into()),
                     },
-                    _ => member_read(types, scratch, given[0].typed, declared),
+                    _ => member_read(marks, types, scratch, given[0].typed, declared),
                 },
                 _ => match name {
                     BinderSymbol::Type(_) => under(KType::ANY_TYPE.into()),
@@ -130,10 +130,15 @@ fn returns(
         }
         (Native::Field, Some([name])) => {
             let value = given[0].typed;
-            let upper = upper_field(types, scratch, value.upper, *name);
+            let upper = upper_field(marks, types, scratch, value.upper, *name);
             // A union field's value keeps its variant, so both ends must name the field alike.
-            if lower_field(types, value.lower, *name) == upper {
-                retyped_to(types, scratch, upper)
+            if judge::same(
+                marks,
+                types,
+                lower_field(marks, types, value.lower, *name),
+                upper,
+            ) {
+                judge::retyped(marks, types, scratch, upper)
             } else {
                 under(upper)
             }
@@ -149,20 +154,21 @@ fn returns(
 /// its node itself, never a variable's bound, since the run reads the member through that very
 /// schema and retypes it to `declared` — and at most `declared` otherwise.
 pub(super) fn member_read(
+    marks: &dyn Marks,
     types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
     operand: Interval,
     declared: Parametric,
 ) -> Interval {
-    let exact = operand.is_exact()
+    let exact = judge::exact(marks, types, operand)
         && matches!(
-            types.node(operand.upper),
+            judge::type_node(marks, types, operand.upper),
             TypeNode::Signature { .. }
                 | TypeNode::SignatureApply { .. }
                 | TypeNode::SignatureMeet { .. }
         );
     if exact {
-        retyped_to(types, scratch, declared)
+        judge::retyped(marks, types, scratch, declared)
     } else {
         under(declared)
     }
@@ -172,13 +178,18 @@ pub(super) fn member_read(
 /// names the call reads dropped it: the first name, in the order written, a record lower end lacks,
 /// or the one member a module read names. `None` where the rule narrowed nothing there.
 fn lacks(
+    marks: &dyn Marks,
     native: Native,
     given: &[Given<'_>],
     slot: usize,
     types: &Chain<'_, '_, '_, '_>,
 ) -> Option<Lacks> {
     let names = named(given, native)?;
-    match (native, slot, types.node(given[slot].typed.lower)) {
+    match (
+        native,
+        slot,
+        judge::type_node(marks, types, given[slot].typed.lower),
+    ) {
         (Native::Project, 1, TypeNode::Record { fields })
         | (Native::Field, 0, TypeNode::Record { fields }) => (names.iter())
             .find(|name| fields.get(name.symbol()).is_none())
@@ -205,6 +216,7 @@ fn lacks(
 /// than select what full selection would not. Narrowing one at a shadowable key — `==`, `PRINT` —
 /// would break that agreement.
 fn needs<'x>(
+    marks: &dyn Marks,
     native: Native,
     declared: KType,
     given: &[Given<'_>],
@@ -223,7 +235,7 @@ fn needs<'x>(
         // it needs, which no module is.
         (Native::Field, Some(names @ [_]))
             if matches!(
-                types.node(given[0].typed.lower),
+                judge::type_node(marks, types, given[0].typed.lower),
                 TypeNode::Record { .. }
                     | TypeNode::Signature { .. }
                     | TypeNode::SignatureApply { .. }
@@ -235,7 +247,7 @@ fn needs<'x>(
         // Over a lower end that is a signature, a module naming the label is what a read needs.
         (Native::ModuleMember, Some([name]))
             if matches!(
-                types.node(given[0].typed.lower),
+                judge::type_node(marks, types, given[0].typed.lower),
                 TypeNode::Signature { .. }
                     | TypeNode::SignatureApply { .. }
                     | TypeNode::SignatureMeet { .. }
@@ -284,6 +296,7 @@ pub(super) fn distinct<'x>(
 /// The record of each of `names` at the type `field` reads for it; `Never` where one reads `Never`,
 /// since no record holds a field at `Never`.
 fn projection(
+    marks: &dyn Marks,
     types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
     names: &[BinderSymbol],
@@ -293,7 +306,7 @@ fn projection(
     let mut fields = BumpVec::with_capacity_in(names.len(), scratch);
     for name in names {
         match field(*name) {
-            typed if typed == never => return never,
+            typed if judge::is(marks, types, typed, KType::NEVER) => return never,
             typed => fields.push((*name, typed)),
         }
     }
@@ -304,14 +317,15 @@ fn projection(
 /// union's members, read through a rigid variable's bound; `Any` where a value under `ktype` may
 /// hold no such field.
 fn upper_field(
+    marks: &dyn Marks,
     types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
     ktype: Parametric,
     name: BinderSymbol,
 ) -> Parametric {
-    let node = types.node(ktype);
+    let node = judge::type_node(marks, types, ktype);
     if let Some(bound) = node.rigid_bound() {
-        return upper_field(types, scratch, bound.into(), name);
+        return upper_field(marks, types, scratch, bound.into(), name);
     }
     match node {
         TypeNode::Never => KType::NEVER.into(),
@@ -323,7 +337,7 @@ fn upper_field(
             fields.extend(
                 members
                     .iter()
-                    .map(|member| upper_field(types, scratch, member, name)),
+                    .map(|member| upper_field(marks, types, scratch, member, name)),
             );
             types.union_of(scratch, &fields)
         }
@@ -333,8 +347,13 @@ fn upper_field(
 
 /// A type under the field `name` of every value above the lower end `ktype`: a record's field type,
 /// or `Never` where it names no such field.
-fn lower_field(types: &Chain<'_, '_, '_, '_>, ktype: Parametric, name: BinderSymbol) -> Parametric {
-    match types.node(ktype) {
+fn lower_field(
+    marks: &dyn Marks,
+    types: &Chain<'_, '_, '_, '_>,
+    ktype: Parametric,
+    name: BinderSymbol,
+) -> Parametric {
+    match judge::type_node(marks, types, ktype) {
         TypeNode::Record { fields } => fields
             .get(name.symbol())
             .unwrap_or_else(|| KType::NEVER.into()),

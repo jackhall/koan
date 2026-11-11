@@ -34,7 +34,7 @@ use super::handle::{KType, Naming};
 use super::kind::KKind;
 #[cfg(any(test, feature = "generator"))]
 use super::node::TypeNode;
-use super::node::{ContentKey, NodeSchema};
+use super::node::{ContentKey, NodeSchema, PathClass};
 use super::schema::{SigOrigin, SigSchema};
 use super::shape::{DeferredReturnSurface, DispatchTokenElement};
 
@@ -137,6 +137,7 @@ const TAG_CARRIER: u8 = 0x30;
 const TAG_SCHEME: u8 = 0x31;
 const TAG_MEMO_GROUP: u8 = 0x32;
 const TAG_CODE_UNBUILT: u8 = 0x33;
+const TAG_PATH: u8 = 0x34;
 
 /// The one place the hash function is touched. Feeds a domain-tagged, length-prefixed,
 /// little-endian byte stream into a BLAKE3 hasher and truncates the result to a `u128`.
@@ -278,6 +279,7 @@ pub(super) fn node_digest<'run, C: Naming<'run>>(
             lower,
             bound,
         } => lexical_digest(*level, *name, lower.digest(), bound.digest()),
+        TypeNode::Path { class, name, bound } => path_digest(*class, *name, bound.digest()),
         TypeNode::Union { members } => union_digest(scratch, members.raw()),
         TypeNode::ConstructorApply {
             constructor,
@@ -483,8 +485,18 @@ pub(super) fn lexical_digest(
         .finish()
 }
 
+/// A path class's variable: its class's digest, its label and its bound.
+pub(super) fn path_digest(class: PathClass, name: TypeSymbol, bound: TypeDigest) -> TypeDigest {
+    DigestHasher::new(TAG_PATH)
+        .count(class.0[0] as usize)
+        .count(class.0[1] as usize)
+        .symbol(name.symbol())
+        .digest(bound)
+        .finish()
+}
+
 /// A union — order-blind, matching its set-based identity: the member digests feed sorted, staged
-/// in `scratch`. The node keeps its members in the order first written, for rendering.
+/// in `scratch`. The node keeps its members in the order first written; rendering sorts them by text.
 pub(super) fn union_digest<'run, H: Naming<'run>>(
     scratch: BumpAllocator<'_>,
     members: &[H],

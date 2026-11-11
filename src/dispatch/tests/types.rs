@@ -8,8 +8,8 @@
 use crate::memory::Bump;
 use crate::program::{CellSubstrate, Program};
 use crate::scope::{
-    Address, BodyShape, CaptureSlot, Coordinate, FunctionGroupMap, LoadFacts, PathEntry, ShapeKind,
-    Slot, Source, Static, StaticType, Target, TypeExpression, UnitId, Unknown, Variable,
+    Address, BodyShape, CaptureSlot, Coordinate, FunctionGroupMap, LoadFacts, PathEntry, PathName,
+    ShapeKind, Slot, Static, StaticType, Target, TypeExpression, UnitId, Unknown, Variable,
 };
 use crate::symbols::{BinderSymbol, TypeSymbol, ValueSymbol};
 use crate::type_lattice::{DeclaredType, KType, Parametric, TypeNode, display_name};
@@ -93,13 +93,18 @@ fn registered<'graph>(program: &Program<'graph>) -> &'graph BodyShape<'graph> {
         .expect("the registration births its body")
 }
 
+/// The level of `variable`, a type name's.
+fn level_of(variable: &Variable) -> usize {
+    match variable {
+        Variable::Type { level, .. } => *level,
+        Variable::Path { .. } => panic!("a name's variable, not {variable:?}"),
+    }
+}
+
 /// The rigid value `typed` holds, beside its variables' levels.
 fn rigid(typed: StaticType<'_>) -> (Parametric, Vec<usize>) {
     match typed {
-        Static::Rigid { value, variables } => (
-            value,
-            variables.iter().map(|variable| variable.level).collect(),
-        ),
+        Static::Rigid { value, variables } => (value, variables.iter().map(level_of).collect()),
         _ => panic!("a rigid type, not {typed:?}"),
     }
 }
@@ -122,6 +127,22 @@ fn type_name(program: &Program<'_>, name: &str) -> TypeSymbol {
 /// The lexical variable `name` at `level`, bounded by `Any`.
 fn lexical(program: &Program<'_>, level: usize, name: &str) -> Parametric {
     super::statics::lexical(program, level, name, KType::ANY)
+}
+
+/// The variable of the class the path `entry` resolved to, named `name`.
+fn path_variable(program: &Program<'_>, entry: &PathEntry<'_>, name: &str) -> Parametric {
+    let root = program
+        .shapes()
+        .shape_at(program.shapes().chain_root(program.shape().segment()));
+    let (_, resolution) = (program
+        .facts()
+        .path(&program.tiers().resting(), root, entry.name))
+    .expect("the entry is resolved");
+    let crate::scope::Resolved::Class(class) = resolution.resolved else {
+        panic!("an open path")
+    };
+    let name = TypeSymbol::declared(name, program.symbols()).expect("a Type token");
+    reading(program.tiers(), &Bump::new()).path_variable(class, name, KType::ANY)
 }
 
 /// The slot of the type binder `name` in `shape`.
@@ -201,9 +222,9 @@ fn a_for_all_name_is_its_lexical_variable() {
         let slot = type_slot(program, body, "Held");
         assert_eq!(
             variables,
-            [Variable {
+            [Variable::Type {
                 level: 0,
-                source: Source::Type(local(slot))
+                at: local(slot)
             }]
         );
     });
@@ -300,12 +321,9 @@ fn a_nested_quantified_callable_is_rigid_over_its_enclosing_names() {
         let facts = program.facts();
         let inner = nested(registered(program), ShapeKind::Callable);
         let (value, levels) = match facts.callable_type(&program.tiers().resting(), inner) {
-            Static::Rigid { value, variables } => (
-                value,
-                (variables.iter())
-                    .map(|variable| variable.level)
-                    .collect::<Vec<_>>(),
-            ),
+            Static::Rigid { value, variables } => {
+                (value, variables.iter().map(level_of).collect::<Vec<_>>())
+            }
             typed => panic!("a rigid callable, not {typed:?}"),
         };
         assert_eq!(levels, [0]);
@@ -364,12 +382,12 @@ fn a_dollar_name_crossing_into_code_is_a_name_of_the_code_s_own() {
             .expect("the code captures `$Elt`");
         assert_eq!(
             variables,
-            [Variable {
+            [Variable::Type {
                 level: 0,
-                source: Source::Type(Coordinate::Activation {
+                at: Coordinate::Activation {
                     hops: 0,
                     target: Target::Capture(CaptureSlot(capture as u32)),
-                }),
+                },
             }]
         );
     });
@@ -613,17 +631,11 @@ fn an_enclosing_for_all_name_keeps_its_level_along_the_chain() {
 /// entry.
 fn path_entry<'graph>(program: &Program<'graph>, variables: &[Variable]) -> PathEntry<'graph> {
     let facts = program.facts();
-    let [
-        Variable {
-            source: Source::Path { root, level, .. },
-            ..
-        },
-    ] = variables
-    else {
+    let [Variable::Path { root, entry, .. }] = variables else {
         panic!("one path variable, not {variables:?}")
     };
     let root = facts.shapes().shape_at(*root);
-    (facts.path(&program.tiers().resting(), root, *level))
+    (facts.path(&program.tiers().resting(), root, *entry))
         .map(|(entry, _)| entry)
         .expect("a path variable reads a minted entry")
 }
@@ -677,7 +689,7 @@ fn a_path_through_a_module_name_is_one_variable_past_every_name_level() {
             program,
             facts.typed_expression(&program.tiers().resting(), shape, expression.site),
         );
-        assert_eq!(value, lexical(program, 2, "Other"));
+        assert_eq!(value, path_variable(program, &entry, "Other"));
         assert!(entry.through.is_none(), "a binder with no declared type");
     });
 }
@@ -727,7 +739,7 @@ fn a_path_through_an_annotated_binder_reads_after_the_binders() {
             panic!("one path read")
         };
         let root = facts.shapes().shape_at(root);
-        let entry = (facts.path(&program.tiers().resting(), root, level))
+        let entry = (facts.path(&program.tiers().resting(), root, PathName::Spelled(level)))
             .map(|(entry, _)| entry)
             .expect("a minted entry");
         assert!(

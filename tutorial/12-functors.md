@@ -211,6 +211,38 @@ LET kept :(view.Carrier) = 5
 error: <input>:4:1: this value is Number, which can never satisfy its annotation Carrier
 ```
 
+A view is the module it hides and what it shows of it, however many steps it
+took to write. Viewing `view` again at `Ordered` shows the same of `ints`, so
+it is `view` itself, with the same `Carrier`. A view of a view must hide again
+everything its source hides: `Shown` shows `compare` at `Any`, which `view`
+hides, so viewing `view` at `Shown` is refused, though viewing `ints` at
+`Shown` is not:
+
+```koan
+SIG Ordered FOR ALL #[Carrier] = #[(VAL compare :Carrier)]
+MODULE ints = (LET compare = 5)
+LET view = (ints :| Ordered)
+LET again = (view :| Ordered)
+LET kept :(view.Carrier) = again.compare
+PRINT kept
+```
+
+```text
+Carrier(5)
+```
+
+```koan
+SIG Ordered FOR ALL #[Carrier] = #[(VAL compare :Carrier)]
+SIG Shown = #[(VAL compare :Any)]
+MODULE ints = (LET compare = 5)
+LET view = (ints :| Ordered)
+LET shown = (view :| Shown)
+```
+
+```text
+error: <input>:5:13: this view shows `compare` where its source hides it: a view of a view must hide again everything its source hides
+```
+
 A member can be read through any expression that gives a module, a functor's
 call included. Put the call in parentheses and write the `.` straight after
 them, with no space: `(MAKESET up).empty` reads a value member, and
@@ -479,8 +511,8 @@ parameter the payload says nothing about is `Never`. `Option.Some 1` has type
 narrower arguments, so that `None` fits `:(Number -> Option)` and
 `:(Str -> Option)` alike, and every one of these values fits the bare `Option`.
 A payload that can't be read as the variant's type — a `Tree.Node` whose record
-has no `left` field, or whose `value` is a number while its `left` holds strings
-— is an error naming the variant and the payload's type.
+value has no `left` field, or whose `value` is a number while its `left` holds
+strings — is an error naming the variant and the payload's type.
 
 Two things a parameterized union can't do: bound a parameter with `UNDER`, and
 use a parameter inside a function type's parameter list — a variant

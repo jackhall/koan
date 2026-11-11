@@ -5,17 +5,9 @@ An opaque view's coercion rebuilding every value its view's types admit.
 **Problem.** A `:|` view rebuilds each member declared at an unpinned head
 parameter at the view's type, arm by arm along the declared type
 ([members are born coerced](../../src/knot/module/README.md#members-are-born-coerced)),
-and refuses a value no arm rebuilds. Three values its types admit reach no arm
+and refuses a value no arm rebuilds. Two values its types admit reach no arm
 that rebuilds them:
 
-- **A nested slot pinned to a type over the enclosing parameter.** Under
-  `SIG Deep FOR ALL #[Depth] = #[(VAL v :Depth)]` and
-  `SIG Outer FOR ALL #[Carrier] = #[(VAL zero :Carrier) (VAL deep :(Deep WITH {Depth = (LIST OF Carrier)}))]`,
-  `ints :| Outer` over `MODULE ints = ((LET zero = 0) (LET deep = d))` with
-  `MODULE d = ((LET v = [1]))` loads, then the run faults with "member deep
-  cannot take its view's type: its module does not fit its view"
-  (`CoercionRefused::Nested` in [coerce.rs](../../src/knot/module/coerce.rs)).
-  A pin `(Carrier | Str)` faults alike; a bare `Carrier` and a `:!` run.
 - **A cyclic data value.** A container that is a knot's data node is a knot
   member rather than a container word, so the container arm has nothing to
   rebuild and refuses it `Unsupported`, as the test
@@ -27,9 +19,6 @@ that rebuilds them:
 
 **Acceptance criteria.**
 
-- `ints :| Outer` over the program above runs, and its `deep.v` holds `1`
-  sealed under the view's carrier; so does the same program with the pin
-  `(Carrier | Str)`.
 - `m :| Bag` over the `m` of `a_cyclic_data_member_refuses_the_barrier` builds
   a view whose `ring` holds each of its elements sealed under the view's
   carrier.

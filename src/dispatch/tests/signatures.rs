@@ -121,7 +121,8 @@ fn a_header_keeps_the_brand_its_signature_hides() {
 
 /// A view through a header is the view of its member: `m :| Counter` over `ints` passed through
 /// `m :Counter` shares `ints :| Counter`'s carrier, so a value one seals passes the other's
-/// `succ`, while a header pinning the parameter otherwise fits otherwise, and mints its own.
+/// `succ`, and so does a view through a header pinning the parameter otherwise, which admits the
+/// view and is forgotten: *fits* solves over the member.
 #[test]
 fn a_view_through_a_header_is_the_view_of_its_member() {
     let source = format!(
@@ -137,7 +138,7 @@ fn a_view_through_a_header_is_the_view_of_its_member() {
                    LET plain = (ints :| Zeroed)\n\
                    LET wide = ((ints :! (Zeroed WITH {Carrier = (Number | Str)})) :| Zeroed)\n\
                    PRINT (wide.Carrier == plain.Carrier)";
-    assert_eq!(run(widened), "false");
+    assert_eq!(run(widened), "true");
 }
 
 /// A function member of an opaque view returns a value retyped to the return its caller sees, so a

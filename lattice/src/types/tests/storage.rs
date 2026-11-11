@@ -3,13 +3,17 @@
 //! component's members before the types over them.
 
 use crate::bump::Bump;
-use crate::symbols::{BinderSymbol, KeywordSymbol, SymbolInterner, TypeSymbol};
+use crate::symbols::{BinderSymbol, KeywordSymbol, SymbolInterner, TypeSymbol, ValueSymbol};
 
 use crate::types::handle::{KType, Parametric, TypeHandle};
 use crate::types::kind::KKind;
-use crate::types::node::NodeSchema;
+use crate::types::node::{ContentKey, NodeSchema};
+use crate::types::schema::{SchemaDraft, SigOrigin};
 use crate::types::shape::DispatchTokenElement;
-use crate::types::typed::{fits, is_subtype_of, join, substitute_quantified};
+use crate::types::substitute::rewrite_siblings;
+use crate::types::typed::{fits, is_subtype_of, join, substitute_carriers, substitute_quantified};
+
+use super::raw::substitute::collect_siblings;
 use crate::types::window::{RecursiveGroupWindow, RelativeSchema};
 
 /// A root of 16k mixed types — lists, dicts, records, functions, unions and shapes over a
@@ -117,6 +121,57 @@ fn walks_and_relations_look_up_only_their_operands() {
     let solved = substitute_quantified(&types, &scratch, deep_variable, &[KType::NUMBER]);
     assert_eq!(types.lookups() - before, 2, "the root and its one binding");
     assert_eq!(solved, Parametric::from(deep(KType::NUMBER)));
+}
+
+/// A walk seeking siblings or carriers reads a signature's stored flags and leaves one holding
+/// neither unentered, however many slots it declares: it looks up none of the signature's handles.
+#[test]
+fn a_walk_leaves_a_signature_holding_nothing_it_seeks_unentered() {
+    let symbols = SymbolInterner::new();
+    let [a, b] =
+        ["a", "b"].map(|name| BinderSymbol::declared(name, &symbols).expect("a bindable token"));
+    let (region, scratch) = (Bump::new(), Bump::new());
+    let types = crate::types::tests::building(&region);
+    let mut draft = SchemaDraft::new(&scratch);
+    draft.origin = SigOrigin::Declared;
+    for at in 0..64 {
+        let slot = ValueSymbol::declared(&format!("slot{at}"), &symbols).expect("a value token");
+        draft.insert_value_slot(slot, KType::NUMBER);
+    }
+    let signature = types.signature(&scratch, draft);
+    let beside = |head: KType| types.record(&scratch, &[(a, head), (b, signature)]);
+    let number = types.enter(KType::NUMBER.raw());
+
+    // The seal's two sibling walks, over a sibling beside the signature.
+    let relative = beside(types.sibling(0));
+    let before = types.lookups();
+    let rewritten = rewrite_siblings(&types, &scratch, types.enter(relative.raw()), &|_| number);
+    assert_eq!(
+        types.lookups() - before,
+        1,
+        "the rewrite looks up its root alone"
+    );
+    assert_eq!(rewritten.handle(), beside(KType::NUMBER).raw());
+    let before = types.lookups();
+    assert_eq!(collect_siblings(&types, &scratch, relative.raw()), [0]);
+    assert_eq!(
+        types.lookups() - before,
+        1,
+        "the collection looks up its root alone"
+    );
+
+    // A carrier's read-back, over a carrier beside the signature.
+    let name = TypeSymbol::declared("Carrier", &symbols).expect("a Type token");
+    let carrier = types.carrier(name, KType::ANY, ContentKey(1));
+    let held = beside(carrier);
+    let before = types.lookups();
+    let read = substitute_carriers(&types, &scratch, held, &mut |_| Some(KType::NUMBER));
+    assert_eq!(
+        types.lookups() - before,
+        2,
+        "the read-back looks up its root and its one answer"
+    );
+    assert_eq!(read, beside(KType::NUMBER));
 }
 
 /// Two roots interning one content hold two nodes that compare equal: a node's identity is

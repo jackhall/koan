@@ -56,10 +56,10 @@ silence the stale-anchor check; delete a redundant test instead.
   resident and cell runs, each module's member run and each barrier's resident are written into
   the same region, over the finished copies of the values the knot holds. No `unsafe` of its own; the backing `unsafe` is
   `cellgraph`'s `thin_run`, `fill` and reattach seam.
-- `src/scheduler/arena.rs` — the build arena's settlements and compositions are `self_cell`s
+- `src/scheduler/depot.rs` — the build depot's settlements and compositions are `self_cell`s
   whose dependents read their parents' and pinned compositions' bumps through the `Rc`s their
   owners hold. No `unsafe` of its own; the backing `unsafe` is `self_cell`'s, and these tests pin
-  the release orders the arena's eviction makes.
+  the release orders the depot's eviction makes.
 - `src/scheduler/drain.rs` — the drain performs every birth and every death: it creates a tail
   successor, wakes its state out of its predecessor, and only then releases that predecessor, whose
   region goes back to the pool for the hop after. No `unsafe` of its own; the backing `unsafe` is
@@ -128,8 +128,8 @@ the absolute table its seal rewrote, and read through a lifetime-erased atomic p
   two components sealed in one group, each re-sealed alone onto its existing nodes, and every
   member's absolute schema read back through its component's table, the cyclic edge included.
 - `a_frozen_load_reads_alike_from_two_threads`
-  a load holding a record, a union, a function type and a sealed two-member group, frozen, then
-  read from two scoped threads at once: every member table read through its atomic pointer.
+  a load holding a record type, a union, a function type and a sealed two-member group, frozen,
+  then read from two scoped threads at once: every member table read through its atomic pointer.
 
 **Program-region AST** ([src/parse/ast/program.rs](../src/parse/ast/program.rs)) — every name
 and every parts run the parser produces is written into program storage through the doors here, and
@@ -166,13 +166,13 @@ in a later step.
   the run it read released, and redeemed in the destination's next step: every element reads back.
 - `a_copied_type_value_names_a_type_its_destination_resolves`
   a type value whose record type its home's branch minted crosses under a copy verdict, its home
-  is released, and the destination reads the record's node: the copy re-laid it in the
+  is released, and the destination reads the record type's node: the copy re-laid it in the
   destination's branch rather than entering the home's by reference.
 - `a_settled_bit_written_through_a_pinned_header_reads_in_a_later_step`
   pins interior mutation through a shared borrow of a header laid in another cell's region: a
-  record laid in a home cell's region is pinned into a holder and its home sealed; the holder's
-  step marks it settled through its `Cell<Weight>`, and its next step reads the bit and every
-  byte of the record before both cells are released.
+  record value laid in a home cell's region is pinned into a holder and its home sealed; the
+  holder's step marks it settled through its `Cell<Weight>`, and its next step reads the bit and
+  every byte of the record value before both cells are released.
 
 **Knots in a cell's region** ([src/knot/copy.rs](../src/knot/copy.rs)) — a knot
 member copied across a crossing, a function, a quote or a data node, re-ties its whole knot through the
@@ -185,7 +185,7 @@ destination's writer, and is read through its edges after the region it came fro
   the copy, each typing record — the quantifier map and the registered shape — is re-homed through
   the destination's writer, and every captured byte reads back.
 - `a_copied_ring_outlives_its_home`
-  a self-referencing tagged value whose record holds a string cell and an anonymous list node
+  a self-referencing tagged value whose record value holds a string cell and an anonymous list node
   naming the ring crosses under a copy verdict, is kept, its home released, and redeemed: every
   edge names a node of the copy and the string reads back.
 - `a_copied_list_view_outlives_its_home`
@@ -262,13 +262,13 @@ cell's region; what this pins is the ordering between two.
 **Self-contained substrate** ([src/program/substrate.rs](../src/program/substrate.rs)) — program
 storage, the types' load and agent-tier bumps and the interner in `self_cell`'s owner, and in its
 dependent at `'graph` the graph, and the builtin table and the program record laid down in program
-storage, the record borrowing the type tiers.
+storage, the program record borrowing the type tiers.
 
 - `two_programs_run_and_are_read_back_in_a_separate_call`
   two substrates returned from a helper, moved through a `Vec` into a `Box`, each running its
   program in one call and read back in another through a root work resumed from the view the top
-  level left at rest in the root, then dropped: the owner's box, the table and record in program
-  storage, and the graph and its root beside them all released.
+  level left at rest in the root, then dropped: the owner's box, the table and program record in
+  program storage, and the graph and its root beside them all released.
 
 **The top level on the scheduler** ([src/program/body.rs](../src/program/body.rs)) — the body
 runner performing a whole program under the drain: top-level bindings written in the root's region
@@ -339,9 +339,9 @@ in the frame's own step and crossed into the callee's birth.
   a barrier reached by its key, over a value member the block reads, its result crossing the
   block's frame and the barrier both, every captured byte read back.
 - `a_caught_value_outlives_its_released_frames`
-  a `TRY` reads the kept cell of a frame that compared two records holding a module, entered
-  beside it: the records are deep-copied into the `TRY`'s region as the `Error`'s fields before
-  the drain releases the cell, and read back after through the arm's value.
+  a `TRY` reads the kept cell of a frame that compared two record values holding a module, entered
+  beside it: the record values are deep-copied into the `TRY`'s region as the `Error`'s fields
+  before the drain releases the cell, and read back after through the arm's value.
 - `a_caught_fault_releases_its_frames`
   a fault three frames deep caught by a `TRY` and by a `CATCH`, each walking the kept cells
   outermost first, one step beside each, its frame lines laid in its own region across the steps:
@@ -359,19 +359,19 @@ interns into it, its branch written through `Cell`s and read by a later chain ov
   a scratch branch laid by an unkeyed call's caching chain, then read at the same park by a keyed
   loop's caching chain of its own.
 
-**Build arena** ([src/scheduler/arena.rs](../src/scheduler/arena.rs)) — each settlement's facts
+**Build depot** ([src/scheduler/depot.rs](../src/scheduler/depot.rs)) — each settlement's facts
 are `self_cell`'s dependent, laid in its owner's bump and reading its parent's facts and the
 compositions it rests on or pins through the `Rc`s that owner holds, so a settlement, a
-composition and their pinners may be released in any order the arena's policy allows.
+composition and their pinners may be released in any order the depot's policy allows.
 
 - `a_child_settlement_keeps_its_parent_and_releases_it_last`
-  the arena's handle on a parent dropped first, the child's facts read through to the parent's
+  the depot's handle on a parent dropped first, the child's facts read through to the parent's
   after, and the parent released last, by the child's own `Rc`.
 - `a_replay_borrows_every_level_it_reaches_until_the_frame_is_born`
   a chain of three settlements, each over its parent's facts, evicted leaf first under a small
   budget and settled again by a replay.
 - `a_pinned_composition_outlives_its_last_pinner`
-  a settlement whose facts read a wording out of a composition it pins, the arena's handle on the
+  a settlement whose facts read a wording out of a composition it pins, the depot's handle on the
   composition dropped first, and the composition released last, by the pinner's own `Rc`.
 
 **Composed syntax** ([src/knot/code.rs](../src/knot/code.rs),
@@ -383,7 +383,7 @@ holds its own copy laid by the crossing.
   a quote born inside composed code, its syntax inside the root's region-laid syntax, handed back
   across its `EVAL`'s frame, run again after its composition is evicted and printed.
 - `a_composition_evicted_and_rebuilt_gives_its_functions_the_same_identity`
-  functions born of composed code, each keeping its root's syntax beside its body's record, crossed
+  functions born of composed code, each keeping its root's syntax beside its body record, crossed
   out of their frames and called after their composition is evicted, which the call rebuilds from
   the copied root.
 
@@ -392,9 +392,9 @@ holds its own copy laid by the crossing.
 Prepended by `python3 tools/miri.py --log` on a clean run, trimmed to five.
 
 <!-- slate-durations:start -->
+- 2026-11-07: 1847s — 54 tests, 0 leaks, 0 UB
 - 2026-11-03: 2114s — 54 tests, 0 leaks, 0 UB
 - 2026-11-01: 1453s — 53 tests, 0 leaks, 0 UB
 - 2026-11-01: 4181s — 53 tests, 0 leaks, 0 UB
 - 2026-10-31: 1680s — 49 tests, 0 leaks, 0 UB
-- 2026-10-31: 1478s — 46 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->

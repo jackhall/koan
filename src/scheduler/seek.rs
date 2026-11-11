@@ -1,14 +1,14 @@
-//! How a run cell finds the arena node it runs under: what its asker hands the drain, and what the
+//! How a run cell finds the depot slot it runs under: what its asker hands the drain, and what the
 //! drain does with it before the cell is born.
 //!
-//! An asker that calls a body hands a [`Seek`]: the arena node the callee was born under, and, for
+//! An asker that calls a body hands a [`Seek`]: the depot slot the callee was born under, and, for
 //! a body keyed on its bindings whose content the asker read and the load could have declared, the
 //! image of the types its binding carries beside its request ([`Sought`]): the key, the [`Ask`] a
 //! miss settles, and those types. Where the frame lays its own level from that request — a frame
 //! with a region of its own, whose callee's body can birth a callable — the drain hands the
 //! request back to the frame's first step once the frame is born under the settlement
 //! ([`Step::sought`](super::Step::sought)). The drain looks the key up in the
-//! [arena](super::arena) under that parent: a live hit is stamped, and a miss
+//! [depot](super::depot) under that parent: a live hit is stamped, and a miss
 //! settles the body through the program's [`Settles`] door — the image's nodes relayed into the
 //! agent tier under the root, into the walk's own chain under a composition — and evicts to the
 //! budget once the frame borrows it. A miss under a composition binding a module of other composed
@@ -29,15 +29,15 @@
 
 use crate::memory::Bump;
 pub use crate::scope::{Ask, Asked, Sought};
-use crate::scope::{ComposedSyntax, Composition, Facts, Settlement};
-use crate::values::{ArenaRef, BindingImage, Chain, ContentDigest};
+use crate::scope::{BuildLayer, ComposedSyntax, Composition, Facts};
+use crate::values::{BindingImage, Chain, ContentDigest, DepotRef};
 use smallvec::SmallVec;
 
-/// What an asker hands the drain to find a frame's arena node: the one the callee was born under,
+/// What an asker hands the drain to find a frame's depot slot: the one the callee was born under,
 /// the settlement under it the frame seeks, if any, and whether the frame's first step is handed
 /// that request back to lay its own level.
 pub struct Seek<'graph> {
-    pub parent: ArenaRef,
+    pub parent: DepotRef,
     /// A keyed body's binding image under `parent`, beside its request — its key, what a miss
     /// settles and the types its binding carries: `None` for a body that keys no settlement or a
     /// call whose content at a keyed name the asker could not read or the load does not hold, whose
@@ -73,7 +73,7 @@ pub trait Settles<'graph> {
         ask: &Ask,
         rest: &mut dyn FnMut(Option<&Chain<'_, '_, '_, '_>>),
         witness: &'a &'graph (),
-    ) -> Option<Settlement<'a>>;
+    ) -> Option<BuildLayer<'a>>;
 
     /// The composition of `syntax`, code composed at run time copied into storage of its own: its
     /// shapes built alone over the copy and walked with nothing bound, laid in that storage, its
@@ -99,9 +99,9 @@ impl<'graph> Settles<'graph> for Unsettled {
         _: &Ask,
         rest: &mut dyn FnMut(Option<&Chain<'_, '_, '_, '_>>),
         _: &'a &'graph (),
-    ) -> Option<Settlement<'a>> {
+    ) -> Option<BuildLayer<'a>> {
         rest(None);
-        Some(Settlement::empty(parent.top()))
+        Some(BuildLayer::empty(parent.top()))
     }
 
     fn compose<'a>(
@@ -119,11 +119,11 @@ pub(super) enum Lending<'graph> {
     /// What its asker runs under, as a top-level statement's evaluation or a written quote's
     /// `EVAL` does.
     Parent,
-    /// A call's frame: the arena node its [`Seek`] finds or builds.
+    /// A call's frame: the depot slot its [`Seek`] finds or builds.
     Call(Seek<'graph>),
-    /// The settlement an `ArenaRef` names, as a tail hop of the same callee runs under its
+    /// The settlement a `DepotRef` names, as a tail hop of the same callee runs under its
     /// frame's, stamped; the root, cold, where that one is no longer live.
-    Under(ArenaRef),
+    Under(DepotRef),
     /// The composition of code composed at run time, found by its syntax digest and stamped, or
     /// built over the syntax a bounce copied.
     Compose(Compose),
@@ -131,7 +131,7 @@ pub(super) enum Lending<'graph> {
     /// was born of is found or built over the syntax its first step copied.
     Pinning(Seek<'graph>, ComposedSyntax),
     /// A call's frame born warm: each level of its callee's stamp found or settled under the one
-    /// before, from the asker's arena node, the last its own seek.
+    /// before, from the asker's depot slot, the last its own seek.
     Replay(Vec<Replayed<'graph>>),
 }
 

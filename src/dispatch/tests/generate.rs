@@ -1032,10 +1032,12 @@ pub(super) struct Bound {
     pub(super) pair: Option<Desc>,
     pub(super) module: Option<(Desc, String)>,
     pub(super) local: Option<(Desc, String)>,
+    /// What a [`Statement::Cell`]'s own type name binds: its entry's binding, not `SUBJECT`'s.
+    pub(super) cel: Option<Desc>,
 }
 
 /// The unknowns a [`Bound`] may bind, by the names the program spells them with.
-pub(super) const UNKNOWNS: [&str; 6] = ["Elt", "Key", "Item", "Pair", "m", "n"];
+pub(super) const UNKNOWNS: [&str; 7] = ["Elt", "Key", "Item", "Pair", "m", "n", "Cel"];
 
 impl Bound {
     /// Each unknown it binds, by name, beside the closed type it binds — a module's `Carrier`.
@@ -1047,6 +1049,7 @@ impl Bound {
             self.pair.as_ref(),
             self.module.as_ref().map(|(carrier, _)| carrier),
             self.local.as_ref().map(|(carrier, _)| carrier),
+            self.cel.as_ref(),
         ];
         (UNKNOWNS.iter().zip(all))
             .filter_map(|(name, bound)| Some((*name, bound?)))
@@ -1063,6 +1066,7 @@ impl Bound {
             pair: self.pair.clone().filter(|_| kept("Pair")),
             module: self.module.clone().filter(|_| kept("m")),
             local: self.local.clone().filter(|_| kept("n")),
+            cel: self.cel.clone().filter(|_| kept("Cel")),
         }
     }
 
@@ -1123,7 +1127,25 @@ pub(super) enum Statement {
     Component,
     /// A quantified callable a local `MODULE` holds, read where it is wanted at a type over `Elt`.
     RigidInstance,
+    /// A local `MODULE` holding `FN FOR ALL #[Tee] :{t :Tee, u :Elt, v :Key} -> Tee`: a scheme
+    /// over both of `SUBJECT`'s names, read with one bound and the other kept.
+    SchemeOverBoth,
+    /// `LET s = px` and `LET t :(pw.Carrier) = pw.zero`: a top-level binder typed by a path of a
+    /// class through one view, read beside a path of the class through another, both views of a
+    /// module the load does not see, declared ahead of `SUBJECT` ([`PREFIX_CLASS`]).
+    PrefixClass,
+    /// `EXPR FOR ALL #[Cel] #(CELL t :Cel) -> Any`, whose body asks `OP` of `t` and `BOTH2` of `t`
+    /// and `SUBJECT`'s `x`: a cell under `SUBJECT`, its entry over `SUBJECT`'s. It reads `Elt`
+    /// through `x`, not its signature, whose registration a binding of `Elt` would leave rigid and
+    /// so holding. Only [`cellular`] draws one; a restart binding `Cel` drops its group.
+    Cell,
 }
+
+/// What a [`Statement::PrefixClass`] reads, declared at the top level ahead of `SUBJECT`.
+const PREFIX_CLASS: &str = "MODULE pints = ((LET zero = 0) \
+     (LET succ = (FN :{x :Number} -> Number = #(x))))\n\
+     LET pm = (EVAL #($pints) -> Counter)\n\
+     LET pv = (pm :| Counter)\nLET pw = (pm :| Counter)\nLET px :(pv.Carrier) = pv.zero\n";
 
 /// The quote's code a [`Statement::Quote`] writes.
 #[derive(Clone, Copy, Debug)]
@@ -1188,7 +1210,7 @@ fn carrier() -> BoxedStrategy<(Desc, String)> {
 }
 
 /// `desc` with `Elt`, its variable 0, read as `elt`.
-fn substituted(desc: &Desc, elt: &Desc) -> Desc {
+pub(super) fn substituted(desc: &Desc, elt: &Desc) -> Desc {
     match desc {
         Desc::Variable(0) => elt.clone(),
         Desc::List(each) => Desc::List(Box::new(substituted(each, elt))),
@@ -1259,6 +1281,7 @@ pub(super) fn resumable() -> impl Strategy<Value = Resumable> {
                     pair: bound_pair,
                     module: bound_module.filter(|_| module),
                     local: bound_local.filter(|_| local),
+                    cel: None,
                 },
             };
             // A statement reads only what the program binds.
@@ -1281,6 +1304,92 @@ pub(super) fn resumable() -> impl Strategy<Value = Resumable> {
             case
         },
     )
+}
+
+/// The type names a [`Witnessable`] draws alternates for, in order.
+pub(super) const ALTERNATED: [&str; 4] = ["Elt", "Key", "Item", "Cel"];
+
+/// A [`Resumable`] beside three alternate closed types for each of [`ALTERNATED`]: what a binding
+/// reading over the layer its binding witnessed may give each instead (the witnessed laws).
+#[derive(Clone, Debug)]
+pub(super) struct Witnessable {
+    pub(super) case: Resumable,
+    pub(super) alternates: [Vec<Desc>; 4],
+}
+
+impl Witnessable {
+    /// The program: `case`'s, each alternate declared at the top level as
+    /// [`alternate`](Self::alternate), and `Pair` over each `Elt` alternate.
+    pub(super) fn render(&self) -> String {
+        let mut out = self.case.render();
+        for (name, alternates) in ALTERNATED.iter().zip(&self.alternates) {
+            for (index, desc) in alternates.iter().enumerate() {
+                let declared = Self::alternate(name, index);
+                out += &format!("LET {declared} = {}\n", ascribed(desc, &[]));
+            }
+        }
+        if let Some(pair) = &self.case.pair {
+            for (index, elt) in self.alternates[0].iter().enumerate() {
+                let declared = Self::alternate("Pair", index);
+                out += &format!(
+                    "LET {declared} = {}\n",
+                    ascribed(&substituted(pair, elt), &[])
+                );
+            }
+        }
+        out
+    }
+
+    /// The name the alternate `index` of the type name `name` is declared under.
+    pub(super) fn alternate(name: &str, index: usize) -> String {
+        format!("Alt{name}{index}")
+    }
+
+    /// `case`'s binding with each name `chosen` names given its alternate there, `Pair` following
+    /// `Elt` where the binding gives it a type.
+    pub(super) fn bound(&self, chosen: &[(&str, usize)]) -> Bound {
+        let mut bound = self.case.bound.clone();
+        for (name, index) in chosen {
+            let at = ALTERNATED.iter().position(|each| each == name);
+            let desc = Some(self.alternates[at.expect("an alternated name")][*index].clone());
+            match *name {
+                "Elt" => bound.elt = desc,
+                "Key" => bound.key = desc,
+                "Cel" => bound.cel = desc,
+                _ => bound.item = desc,
+            }
+        }
+        if let (Some(pair), Some(elt), true) = (&self.case.pair, &bound.elt, bound.pair.is_some()) {
+            bound.pair = Some(substituted(pair, elt));
+        }
+        bound
+    }
+}
+
+/// A [`Witnessable`]: a [`Resumable`] and three [`closed`] alternates for each name.
+pub(super) fn witnessable() -> impl Strategy<Value = Witnessable> {
+    let three = || prop::collection::vec(closed(), 3);
+    (resumable(), three(), three(), three(), three()).prop_map(|(case, elt, key, item, cel)| {
+        Witnessable {
+            case,
+            alternates: [elt, key, item, cel],
+        }
+    })
+}
+
+/// A [`Witnessable`] whose body ends in one [`Statement::Cell`], beside what its entry's binding
+/// gives `Cel`: what the commutation law over an encloser and a cell draws. `Cel` binds `Number`
+/// or `Str`, which `OP` and `BOTH2` tell apart, and so do two of its alternates; under `Str`,
+/// `BOTH2` reads `x` at `Any`, so an alternate of `Elt` keeps its question.
+pub(super) fn cellular() -> impl Strategy<Value = Witnessable> {
+    let told = || prop_oneof![Just(Desc::Number), Just(Desc::Str)];
+    (witnessable(), told(), told(), told(), closed()).prop_map(|(mut case, cel, a, b, c)| {
+        case.case.statements.truncate(4);
+        case.case.statements.push(Statement::Cell);
+        case.case.bound.cel = Some(cel);
+        case.alternates[3] = vec![a, b, c];
+        case
+    })
 }
 
 fn statement() -> impl Strategy<Value = Statement> {
@@ -1326,6 +1435,8 @@ fn statement() -> impl Strategy<Value = Statement> {
         1 => Just(Statement::ModuleBody),
         1 => Just(Statement::Component),
         1 => Just(Statement::RigidInstance),
+        1 => Just(Statement::SchemeOverBoth),
+        1 => Just(Statement::PrefixClass),
     ]
 }
 
@@ -1335,7 +1446,10 @@ const RESUMABLE_PRELUDE: &str = "SIG Counter FOR ALL #[Carrier] = \
      SIG Picks FOR ALL #[Carrier] = #[(VAL zero :Carrier) (EXPR #(PICK x :Carrier) -> Str)]\n\
      EXPR #(OP x :Number) -> Str = #(\"n\")\n\
      EXPR #(OP x :Str) -> Number = #(1)\n\
-     EXPR FOR ALL #[Elt] #(OP x :(LIST OF Elt)) -> Elt = #(x)\n";
+     EXPR FOR ALL #[Elt] #(OP x :(LIST OF Elt)) -> :(LIST OF Elt) = #(x)\n\
+     EXPR #(BOTH2 x :Number AND y :Number) -> Str = #(\"nn\")\n\
+     EXPR #(BOTH2 x :Number AND y :Str) -> Str = #(\"ns\")\n\
+     EXPR #(BOTH2 x :Str AND y :Any) -> Number = #(1)\n";
 
 impl Resumable {
     /// The program, `SUBJECT` written over every unknown — and, beside it, each type the binding
@@ -1375,7 +1489,7 @@ impl Resumable {
             };
         }
         for (name, desc) in restart.entries() {
-            if matches!(name, "Elt" | "Key" | "Item") {
+            if matches!(name, "Elt" | "Key" | "Item" | "Cel") {
                 out += &format!("LET {name} = {}\n", ascribed(desc, &[]));
             }
         }
@@ -1406,6 +1520,9 @@ impl Resumable {
         if self.picks {
             parameters.push("p :Picks".to_string());
         }
+        if (self.statements.iter()).any(|statement| matches!(statement, Statement::PrefixClass)) {
+            out += PREFIX_CLASS;
+        }
         out += &format!(
             "EXPR {quantifier}#(SUBJECT {}) -> Any = #(\n",
             parameters.join(" AND ")
@@ -1430,7 +1547,7 @@ impl Resumable {
             out += "  LET Both = :{a :Elt b :(m.Carrier)}\n";
         }
         for (index, statement) in self.statements.iter().enumerate() {
-            out += &format!("  {}\n", statement.render(index));
+            out += &format!("  {}\n", statement.render(index, restart));
         }
         out += "  x\n)\n";
         out
@@ -1438,8 +1555,9 @@ impl Resumable {
 }
 
 impl Statement {
-    /// The statement as `SUBJECT`'s body writes it, its binders named by `index`.
-    fn render(&self, index: usize) -> String {
+    /// The statement as `SUBJECT`'s body writes it, its binders named by `index`, in the restart
+    /// under `restart`.
+    fn render(&self, index: usize, restart: &Bound) -> String {
         let typed = |typed: &Typed| match typed {
             Typed::Elt => "Elt",
             Typed::Item => "Item",
@@ -1510,15 +1628,32 @@ impl Statement {
                 "LET ev{index} = (FN :{{y :Elt}} -> Any = #(od{index} {{y = y}}))\n  \
                  LET od{index} = (FN :{{y :Elt}} -> Any = #(ev{index} {{y = y}}))"
             ),
+            Statement::SchemeOverBoth => format!(
+                "MODULE sb{index} OVER #[Elt Key] = \
+                 (LET h = (FN FOR ALL #[Tee] :{{t :Tee, u :Elt, v :Key}} -> Tee = #(t)))"
+            ),
             Statement::RigidInstance => format!(
                 "MODULE ids{index} = (LET id = (FN FOR ALL #[Tee] :{{y :Tee}} -> Tee = #(y)))\n  \
                  LET w{index} :(FN :{{y :Elt}} -> Elt) = ids{index}.id"
             ),
+            Statement::PrefixClass => {
+                format!("LET s{index} = px\n  LET t{index} :(pw.Carrier) = pw.zero")
+            }
+            Statement::Cell => {
+                let group = match restart.cel {
+                    Some(_) => "",
+                    None => "FOR ALL #[Cel] ",
+                };
+                format!(
+                    "EXPR {group}#(CELL t :Cel) -> Any = #(\n    \
+                     LET p = (OP t)\n    LET u = (BOTH2 t AND x)\n    u\n  )"
+                )
+            }
         }
     }
 }
 
-/// One top-level declaration of an [`Independent`] program: it reads only the prelude's `OP`, or a
+/// One declaration of an [`Independent`] program: it reads only what the prelude declares, or a
 /// registration another declares.
 #[derive(Clone, Copy, Debug)]
 pub(super) enum Declaration {
@@ -1539,6 +1674,11 @@ pub(super) enum Declaration {
     /// `LET c = (FN :{} -> Number = #(REG 1))`: a callable whose body calls the registration the
     /// declaration at this index makes, which the load unfolds wherever either is written.
     Caller(usize),
+    /// `LET y :(w.Carrier) = w.zero`: a path through the prelude's view `w`.
+    PathRead,
+    /// `LET r = (FN :{k :Any} -> Any = #((LET q = w) (LET z = x0) (z)))`: a callable capturing the
+    /// view `w` and reading `x0`, typed by a path of `w`'s class through the view `v`.
+    Reader,
 }
 
 /// A program of [`Declaration`]s, beside two of them to swap whose units read nothing of each
@@ -1549,8 +1689,17 @@ pub(super) struct Independent {
     pub(super) swap: (usize, usize),
 }
 
-/// The prelude every [`Independent`] program declares ahead of its declarations.
-const INDEPENDENT_PRELUDE: &str = "EXPR #(OP x :Number) -> Str = #(\"n\")\n";
+/// The prelude every [`Independent`] program declares ahead of its declarations: `OP`, a
+/// signature and a module fitting it.
+const INDEPENDENT_PRELUDE: &str = "EXPR #(OP x :Number) -> Str = #(\"n\")\n\
+     SIG Counter FOR ALL #[Carrier] = \
+     #[(VAL zero :Carrier) (VAL succ :(FN :{x :Carrier} -> Carrier))]\n\
+     MODULE ints = ((LET zero = 0) (LET succ = (FN :{x :Number} -> Number = #(x + 1))))\n";
+
+/// Two views of the module `m`, which the load does not see, and a binder typed by a path through
+/// the first: what an [`Independent`] program's declarations read, ahead of them.
+const INDEPENDENT_VIEWS: &str =
+    "LET v = (m :| Counter)\nLET w = (m :| Counter)\nLET x0 :(v.Carrier) = v.zero\n";
 
 /// An [`Independent`] program and a pair of its declarations to swap.
 pub(super) fn independent() -> impl Strategy<Value = Independent> {
@@ -1568,6 +1717,8 @@ pub(super) fn independent() -> impl Strategy<Value = Independent> {
         prop::collection::vec(any::<u8>(), 6),
     );
     drawn.prop_flat_map(|(mut declarations, callers)| {
+        // A path read through `w` and a reader capturing `w`, each read through one class.
+        declarations.extend([Declaration::PathRead, Declaration::Reader]);
         // A caller of some registration the drawing makes, in place of a value.
         let registrations: Vec<usize> = (declarations.iter().enumerate())
             .filter(|(_, declaration)| matches!(declaration, Declaration::Registration))
@@ -1602,16 +1753,17 @@ pub(super) fn independent() -> impl Strategy<Value = Independent> {
 }
 
 impl Independent {
-    /// The program, its two drawn declarations swapped where `swapped`. Each declaration's names
-    /// are its own, whatever its place.
-    pub(super) fn render(&self, swapped: bool) -> String {
+    /// The program, its two drawn declarations swapped where `swapped`: at the top level over a
+    /// module the load does not see, or, where `nested`, as statements of a callable's body over
+    /// its module parameter. Each declaration's names are its own, whatever its place.
+    pub(super) fn render(&self, swapped: bool, nested: bool) -> String {
         let mut order: Vec<usize> = (0..self.declarations.len()).collect();
         if swapped {
             order.swap(self.swap.0, self.swap.1);
         }
-        let mut out = String::from(INDEPENDENT_PRELUDE);
+        let mut out = String::from(INDEPENDENT_VIEWS);
         for index in order {
-            let letter = ["A", "B", "C", "D", "E", "F"][index];
+            let letter = ["A", "B", "C", "D", "E", "F", "G", "H"][index];
             out += &match self.declarations[index] {
                 Declaration::Value => format!("LET v{index} = [1, 2]"),
                 Declaration::Call => format!("LET u{index} = (OP 1)"),
@@ -1629,13 +1781,25 @@ impl Independent {
                     format!("MODULE m{index} = ((LET Carrier = Number) (LET zero = 0))")
                 }
                 Declaration::Caller(target) => {
-                    let callee = ["A", "B", "C", "D", "E", "F"][target];
+                    let callee = ["A", "B", "C", "D", "E", "F", "G", "H"][target];
                     format!("LET c{index} = (FN :{{}} -> Number = #(REG{callee} 1))")
                 }
+                Declaration::PathRead => format!("LET y{index} :(w.Carrier) = w.zero"),
+                Declaration::Reader => format!(
+                    "LET r{index} = (FN :{{k :Any}} -> Any = #((LET q = w) (LET z = x0) (z)))"
+                ),
             };
             out += "\n";
         }
-        out
+        match nested {
+            false => format!("{INDEPENDENT_PRELUDE}LET m = (EVAL #($ints) -> Counter)\n{out}"),
+            true => {
+                let body: String = out.lines().map(|line| format!("  {line}\n")).collect();
+                format!(
+                    "{INDEPENDENT_PRELUDE}LET outer = (FN :{{m :Counter}} -> Any = #(\n{body}  \"done\"\n))\n"
+                )
+            }
+        }
     }
 }
 

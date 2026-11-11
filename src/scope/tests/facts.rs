@@ -4,10 +4,10 @@
 use crate::memory::{Bump, BumpVec, Lays, program_storage};
 use crate::type_lattice::KType;
 
-use super::super::{Address, Binding, Bound, Cut, Frontier, Segment, Slot, Unknown};
+use super::super::{Address, Binding, Bound, Cut, Frontier, Noted, Segment, Slot, Unknown};
 
 // `scope` holds no heap outside its tests, so the flattening every test reads lives here.
-impl Frontier<'_> {
+impl<'a> Frontier<'a> {
     /// Its unknowns, flattened: its own and each read's past its cut, sorted and deduplicated.
     pub fn unknowns(self) -> Vec<Unknown> {
         // A chain of k reads is k deep, so the walk keeps its own stack. Each frontier is walked
@@ -19,12 +19,74 @@ impl Frontier<'_> {
                 Some(walked) if *walked <= from => continue,
                 _ => _ = widest.insert(frontier.identity(), from),
             }
-            unknowns.extend((frontier.own().iter()).filter(|unknown| unknown.segment >= from));
+            unknowns.extend(
+                frontier
+                    .own_unknowns()
+                    .filter(|unknown| unknown.segment >= from),
+            );
             stack.extend((frontier.reads().iter()).map(|cut| (cut.frontier, cut.from.max(from))));
         }
         unknowns.sort_unstable();
         unknowns.dedup();
         unknowns
+    }
+
+    /// Its marks, flattened as [`unknowns`](Self::unknowns) flattens its unknowns.
+    pub fn marks(self) -> Vec<Noted<'a>> {
+        let mut widest = std::collections::HashMap::<(usize, usize), Segment>::new();
+        let (mut stack, mut marks) = (vec![(self, Segment(0))], Vec::new());
+        while let Some((frontier, from)) = stack.pop() {
+            match widest.get(&frontier.identity()) {
+                Some(walked) if *walked <= from => continue,
+                _ => _ = widest.insert(frontier.identity(), from),
+            }
+            marks.extend((frontier.own().iter()).filter(|noted| noted.unknown.segment >= from));
+            stack.extend((frontier.reads().iter()).map(|cut| (cut.frontier, cut.from.max(from))));
+        }
+        marks.dedup();
+        marks
+    }
+
+    /// Whether `binding` binds some unknown here open: whether it re-runs the unit.
+    pub fn meets_open(self, binding: Binding<'_>) -> bool {
+        (self.marks().iter()).any(|noted| noted.is_open() && binding.bound(noted.unknown).is_some())
+    }
+
+    /// How the record stands, its marks flattened: it re-runs where a mark on a `checked` name
+    /// is undecided or unkept, or one on a `witness` name is and none there is undecided of a
+    /// holding kind; else it is read closed where it names what `chain` binds.
+    pub fn wakes_flat(
+        self,
+        checked: Binding<'_>,
+        witness: Binding<'_>,
+        chain: Binding<'_>,
+        keeps: &dyn Fn(&crate::scope::Answered<'_>) -> bool,
+    ) -> crate::scope::Wake {
+        let marks = self.marks();
+        let open = |names: Binding<'_>| {
+            (marks.iter()).any(|noted| match noted.mark {
+                crate::scope::Mark::Open(open) => {
+                    names.bound(noted.unknown).is_some()
+                        && open.answered.is_none_or(|answered| !keeps(answered))
+                }
+                crate::scope::Mark::Named => false,
+            })
+        };
+        let holds = (marks.iter()).any(|noted| match noted.mark {
+            crate::scope::Mark::Open(open) => {
+                witness.bound(noted.unknown).is_some()
+                    && open.answered.is_none()
+                    && open.kind.holds()
+            }
+            crate::scope::Mark::Named => false,
+        });
+        if open(checked) || (open(witness) && !holds) {
+            crate::scope::Wake::Open
+        } else if self.meets_binding(chain) {
+            crate::scope::Wake::Named
+        } else {
+            crate::scope::Wake::Untouched
+        }
     }
 
     /// Whether `binding` binds some unknown here: whether it wakes the unit's record.
@@ -49,7 +111,7 @@ fn frontier<'a>(
     reads: &[(Frontier<'a>, u32)],
 ) -> Frontier<'a> {
     let mut staged = BumpVec::new_in(scratch);
-    staged.extend_from_slice(own);
+    staged.extend(own.iter().copied().map(Noted::named));
     let mut cuts = BumpVec::new_in(scratch);
     cuts.extend((reads.iter()).map(|(frontier, from)| Cut {
         frontier: *frontier,
@@ -71,7 +133,10 @@ fn a_frontier_lays_its_own_unknowns_sorted_and_each_read_once_at_its_widest_cut(
         &[unknown(2, 0), unknown(1, 3), unknown(2, 0), unknown(1, 1)],
         &[(read, 3), (Frontier::EMPTY, 0), (other, 0), (read, 1)],
     );
-    assert_eq!(laid.own(), &[unknown(1, 1), unknown(1, 3), unknown(2, 0)]);
+    assert_eq!(
+        laid.own_unknowns().collect::<Vec<_>>(),
+        [unknown(1, 1), unknown(1, 3), unknown(2, 0)]
+    );
     // In the order first read, whatever the address each read frontier is laid at.
     let reads: Vec<_> = (laid.reads().iter())
         .map(|cut| (cut.frontier.identity(), cut.from))

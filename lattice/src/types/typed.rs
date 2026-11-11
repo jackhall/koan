@@ -15,7 +15,7 @@ use crate::symbols::{BinderSymbol, TypeSymbol};
 use super::chain::TypeChain;
 use super::handle::{DeclaredType, Handle, KType, Naming, Parametric, Scheme, TypeHandle};
 use super::lattice;
-use super::node::Variable;
+use super::node::{PathClass, Variable};
 use super::order;
 use super::ranking::{self, Judged};
 use super::schema::Members;
@@ -400,6 +400,18 @@ mod sealed {
         }
     }
 
+    // A concrete type holds no variable a substitution binds, and a carrier's answer is
+    // concrete, so a rebuild of one is concrete.
+    impl Substitutable for super::KType {
+        fn through<'run>(
+            self,
+            types: &TypeChain<'run, impl Habitat<'run>>,
+            rebuild: impl FnOnce(Linked<'run>) -> Linked<'run>,
+        ) -> Self {
+            wrap(rebuild(types.enter(self.raw())).handle())
+        }
+    }
+
     impl Substitutable for Scheme {
         fn through<'run>(
             self,
@@ -427,20 +439,55 @@ mod sealed {
 }
 
 impl Substitutable for Parametric {}
+impl Substitutable for KType {}
 impl Substitutable for Scheme {}
 impl Substitutable for DeclaredType<Parametric> {}
 
-/// `kt` with every lexical variable whose level `bindings` covers replaced by its binding, under
-/// any scheme — what a run reads a load-time type through.
+/// `kt` with every lexical variable whose level `bindings` binds replaced by its binding, under
+/// any scheme — what a run reads a load-time type through. A level left `None` keeps its variable.
 pub fn substitute_levels<'ty, S: Substitutable>(
     types: &TypeChain<'ty, impl Habitat<'ty>>,
     scratch: BumpAllocator<'_>,
     kt: S,
-    bindings: &[KType],
+    bindings: &[Option<KType>],
 ) -> S {
-    let bindings = enter_all(types, scratch, bindings.iter().map(|binding| binding.raw()));
+    let mut entered = BumpVec::with_capacity_in(bindings.len(), scratch);
+    entered
+        .extend((bindings.iter()).map(|binding| binding.map(|binding| types.enter(binding.raw()))));
+    let bindings = entered;
     sealed::Substitutable::through(kt, types, |node| {
         substitute::substitute_levels(types, scratch, node, &bindings)
+    })
+}
+
+/// `kt` with each path variable `binding` answers for replaced by its answer: a type a walk fixed,
+/// read through its paths' resolutions.
+pub fn substitute_paths<'ty, S: Substitutable>(
+    types: &TypeChain<'ty, impl Habitat<'ty>>,
+    scratch: BumpAllocator<'_>,
+    kt: S,
+    binding: &mut impl FnMut(PathClass, TypeSymbol) -> Option<Parametric>,
+) -> S {
+    sealed::Substitutable::through(kt, types, |node| {
+        substitute::substitute_paths(types, scratch, node, &mut |class, name| {
+            binding(class, name).map(|answer| answer.linked(types))
+        })
+    })
+}
+
+/// `kt` with each opaque view's carrier `binding` answers for replaced by its answer: a view's
+/// carriers read as what they hide over the module it is built over. `binding` is handed each
+/// carrier `kt` holds, inside a signature or an application too.
+pub fn substitute_carriers<'ty, S: Substitutable>(
+    types: &TypeChain<'ty, impl Habitat<'ty>>,
+    scratch: BumpAllocator<'_>,
+    kt: S,
+    binding: &mut impl FnMut(KType) -> Option<KType>,
+) -> S {
+    sealed::Substitutable::through(kt, types, |node| {
+        substitute::substitute_carriers(types, scratch, node, &mut |carrier| {
+            binding(KType::read(carrier)).map(|answer| answer.linked(types))
+        })
     })
 }
 

@@ -17,7 +17,7 @@ use crate::scope::{
     Activation, ClosureBindings, Component, Coordinate, ShapeKind, Slot, Target, Written,
 };
 use crate::symbols::BinderSymbol;
-use crate::values::{ArenaRef, Chain};
+use crate::values::{Chain, DepotRef};
 
 use super::{Born, Module};
 
@@ -40,7 +40,7 @@ pub fn body_activation<'graph, 'cell>(
     });
     // A module is never called, so its closure seeks no settlement. The module keeps it, to
     // compute its content from where a demand first reaches it.
-    let closure = ClosureBindings::of(writer, &captures, (ArenaRef::ROOT, None), None);
+    let closure = ClosureBindings::of(writer, &captures, (DepotRef::ROOT, None), None);
     Activation::of_module(
         writer,
         body,

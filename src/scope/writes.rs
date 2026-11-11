@@ -5,9 +5,10 @@
 //! few units its binding wakes, so its [`KeyedWrites`] are a table keyed by unit, sized by what it
 //! wrote. Each store keeps one, and lays it into a [`LoadFacts`] once its walk returns.
 
+use super::closed::ClosedTypes;
 use std::cell::Cell;
 
-use crate::memory::{BumpAllocator, BumpBackedMap, BumpVec, Lays, bump_table};
+use crate::memory::{BumpAllocator, BumpBackedMap, BumpVec, Lays, bump_table, resident};
 
 use super::facts::{Binding, Frontier, UnitId};
 use super::records::{Closing, LoadFacts, UnitFacts};
@@ -151,6 +152,8 @@ pub struct KeyedWrites<'o, 'p> {
     scratch: BumpAllocator<'p>,
     units: Cell<BumpBackedMap<'p, UnitId, Unit<'o>>>,
     closings: Cell<BumpBackedMap<'p, Segment, Close<'o>>>,
+    /// The table of closed types the walk laid for what it absorbed.
+    closed: Cell<ClosedTypes<'o>>,
 }
 
 impl<'o, 'p> KeyedWrites<'o, 'p> {
@@ -160,7 +163,18 @@ impl<'o, 'p> KeyedWrites<'o, 'p> {
             scratch,
             units: Cell::new(bump_table(scratch)),
             closings: Cell::new(bump_table(scratch)),
+            closed: Cell::new(ClosedTypes::EMPTY),
         }
+    }
+
+    /// The table of closed types the walk laid for what it absorbed.
+    pub fn closed(&self) -> ClosedTypes<'o> {
+        self.closed.get()
+    }
+
+    /// Keep `closed`, the table the walk laid for what it absorbed.
+    pub fn write_closed(&self, closed: ClosedTypes<'o>) {
+        self.closed.set(closed);
     }
 
     /// `read` of the unit table, which it holds meanwhile.
@@ -177,6 +191,11 @@ impl<'o, 'p> KeyedWrites<'o, 'p> {
         let read = read(&mut closings);
         self.closings.set(closings);
         read
+    }
+
+    /// Whether the walk wrote any unit.
+    pub fn wrote_units(&self) -> bool {
+        self.units(|units| !units.is_empty())
     }
 
     /// The record this walk wrote for `unit`, where it wrote one.
@@ -221,6 +240,13 @@ impl<'o, 'p> KeyedWrites<'o, 'p> {
         binding: Binding<'o>,
     ) -> LoadFacts<'o> {
         let (units, closings) = self.sorted(scratch);
-        LoadFacts::of_records(lay, scratch, shapes, base, binding, &units, &closings)
+        let facts = LoadFacts::of_records(lay, scratch, shapes, base, binding, &units, &closings);
+        match self.closed().is_empty() {
+            true => facts,
+            false => facts.rebased(resident(
+                lay,
+                (*facts.base_layer()).with_closed(self.closed().copied(lay)),
+            )),
+        }
     }
 }

@@ -32,7 +32,7 @@ use crate::parse::ExpressionPart;
 use crate::scope::{BodyShape, Component, Located, ShapeKind, Stamp, Untieable, Written};
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::{DeclaredType, KType, satisfied_by};
-use crate::values::{ArenaRef, Chain, Retype, Weight, retype_target_as};
+use crate::values::{Chain, DepotRef, Retype, Weight, retype_target_as};
 
 use super::data::{self, Stager};
 use super::{Eager, Function, KReading, Knotted, Node, Supplied, code, function, module};
@@ -52,7 +52,7 @@ pub struct Tied<'graph, 'cell, 'x> {
 /// several learns them all at once. A refusal writes nothing.
 ///
 /// Member `i` of `component` is the knot's node `i`; the caller binds each member's slot to the
-/// member at that node. A function member is born under the arena node `build`, and every member
+/// member at that node. A function member is born under the depot slot `build`, and every member
 /// keeps what it holds of its written code as `written` holds it.
 #[allow(clippy::too_many_arguments)]
 pub fn tie<'graph, 'cell, 'x>(
@@ -60,7 +60,7 @@ pub fn tie<'graph, 'cell, 'x>(
     activation: &KReading<'_, 'graph, 'cell>,
     written: Written<'graph, 'cell, '_>,
     component: &Component<'_>,
-    born: (ArenaRef, Option<Stamp<'cell, Knotted<'graph, 'cell>>>),
+    born: (DepotRef, Option<Stamp<'cell, Knotted<'graph, 'cell>>>),
     types: &Chain<'_, 'cell, '_, '_>,
     scratch: BumpAllocator<'x>,
     eager: &mut Eager<'_, 'graph, 'cell>,

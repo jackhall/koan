@@ -13,7 +13,7 @@
 //! code kind and an application's signature are always a [`KType`]. Inside the lattice `H` is a
 //! reference to the child's node ([`Linked`]), and so is every one of those concrete fields. A
 //! tier's table stores a node in its own layout ([`stored`](super::stored)), whose `view_as`
-//! is the one conversion. [`Variable`] views the three variable variants as one, and owns the rule
+//! is the one conversion. [`Variable`] views the four variable variants as one, and owns the rule
 //! for their two ends.
 //!
 //! Interning and node reads live on [`TypeChain`](super::chain::TypeChain); the digest
@@ -132,9 +132,9 @@ pub enum TypeNode<'run, H: Naming<'run> = Handle> {
     /// [`KType::ANY`] unless declared.
     ///
     /// Named where [`Self::Quantified`] is positional: a parameter is substituted by name within
-    /// its own signature, and `WITH` pins it by name. The three rigid variables — this,
-    /// [`Self::Quantified`] and [`Self::Lexical`] — share the rigid rule in the order and the role
-    /// of the rigid side in a specificity check.
+    /// its own signature, and `WITH` pins it by name. The four rigid variables — this,
+    /// [`Self::Quantified`], [`Self::Lexical`] and [`Self::Path`] — share the rigid rule in the
+    /// order and the role of the rigid side in a specificity check.
     ///
     /// Every field is identity.
     Parameter {
@@ -234,6 +234,20 @@ pub enum TypeNode<'run, H: Naming<'run> = Handle> {
         level: usize,
         name: TypeSymbol,
         lower: H::Bound,
+        bound: H::Bound,
+    },
+    /// A **path class's variable**: the one type every path of a class is at every run — a type
+    /// member `name` read through modules of one content tree, through one application
+    /// ([design/modules.md § Comparing two paths](../../../design/modules.md#comparing-two-paths)).
+    /// Named by `class`, a digest of that content, so every walk names one class alike whatever
+    /// order it resolves its paths in; bounded by `bound`, its lower end `Never`. Rigid as a
+    /// [`Self::Lexical`] is: no binder captures it and no solve binds it, and a reader that knows
+    /// the class's type reads it through.
+    ///
+    /// Every field is identity.
+    Path {
+        class: PathClass,
+        name: TypeSymbol,
         bound: H::Bound,
     },
     /// Untagged structural disjunction — the type `:(A | B)`. Members are canonical:
@@ -346,6 +360,7 @@ impl<'run, H: Naming<'run>> TypeNode<'run, H> {
             | TypeNode::ExpressionShape { .. }
             | TypeNode::Quantified { .. }
             | TypeNode::Lexical { .. }
+            | TypeNode::Path { .. }
             | TypeNode::DeferredReturn(_)
             | TypeNode::Union { .. }
             | TypeNode::ConstructorApply { .. }
@@ -411,9 +426,21 @@ pub enum Variable<B = KType> {
         lower: B,
         bound: B,
     },
+    /// A path class's variable.
+    Path {
+        class: PathClass,
+        name: TypeSymbol,
+        bound: B,
+    },
     /// A signature's head parameter.
     Parameter { name: TypeSymbol, bound: B },
 }
+
+/// A path class's name: a digest of the label its paths read, the application they are read
+/// through and the identity of the content tree they read it off. The digest is computed outside
+/// the lattice, which holds it as identity alone: two words, so a key holding one aligns as a word.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct PathClass(pub [u64; 2]);
 
 impl<B: Copy> Variable<B> {
     /// The variable `node` is, or `None` for any other node.
@@ -431,6 +458,7 @@ impl<B: Copy> Variable<B> {
                 lower,
                 bound,
             },
+            TypeNode::Path { class, name, bound } => Variable::Path { class, name, bound },
             TypeNode::Parameter { name, bound } => Variable::Parameter { name, bound },
             _ => return None,
         })
@@ -441,6 +469,7 @@ impl<B: Copy> Variable<B> {
         match self {
             Variable::Quantified { bound, .. }
             | Variable::Lexical { bound, .. }
+            | Variable::Path { bound, .. }
             | Variable::Parameter { bound, .. } => bound,
         }
     }
@@ -451,7 +480,9 @@ impl Variable {
     pub fn lower(self) -> KType {
         match self {
             Variable::Lexical { lower, .. } => lower,
-            Variable::Quantified { .. } | Variable::Parameter { .. } => KType::NEVER,
+            Variable::Quantified { .. } | Variable::Path { .. } | Variable::Parameter { .. } => {
+                KType::NEVER
+            }
         }
     }
 
@@ -483,6 +514,11 @@ impl<'run> Variable<Linked<'run>> {
                 lower: KType::read(lower),
                 bound: KType::read(bound),
             },
+            Variable::Path { class, name, bound } => Variable::Path {
+                class,
+                name,
+                bound: KType::read(bound),
+            },
             Variable::Parameter { name, bound } => Variable::Parameter {
                 name,
                 bound: KType::read(bound),
@@ -494,7 +530,9 @@ impl<'run> Variable<Linked<'run>> {
     pub(super) fn lower_in(self, types: &TypeChain<'run, impl Habitat<'run>>) -> Linked<'run> {
         match self {
             Variable::Lexical { lower, .. } => lower,
-            Variable::Quantified { .. } | Variable::Parameter { .. } => types.never(),
+            Variable::Quantified { .. } | Variable::Path { .. } | Variable::Parameter { .. } => {
+                types.never()
+            }
         }
     }
 

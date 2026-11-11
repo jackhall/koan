@@ -23,7 +23,7 @@ use crate::scheduler::{
     Action, Held, Received, Seek, Slot as Asked, Step, StepError, Taken, Use, Work,
 };
 use crate::scope::{Link, Segment, Site};
-use crate::values::{ArenaRef, Chain, KeptCell, Value};
+use crate::values::{Chain, DepotRef, KeptCell, Value};
 
 use super::body::{Runner, Stopped, Turn, Woken, ended, entered_body, run, stop, turn};
 use super::bundle::{Catching, Entered, KBirth, KBundle, KScratch, KState, Within};
@@ -108,7 +108,7 @@ pub enum Next<'graph, 'here> {
 )]
 pub enum Tailed<'graph, 'here> {
     Seeking(Work<'graph, 'here, KBundle>, Seek<'graph>),
-    Under(Work<'graph, 'here, KBundle>, ArenaRef),
+    Under(Work<'graph, 'here, KBundle>, DepotRef),
 }
 
 /// A block a node runs: its segment, the view it sits in, how its parameters are bound, what it
@@ -315,14 +315,10 @@ pub(super) fn evaluating<'graph, 'here, 'scratch>(
         }
         _ => return step.failed(StepError::Refused),
     };
-    let (code, facts) = step.door();
-    let Some(segment) = stack.top.map(|top| segment_of(&top)) else {
+    let Some(within) = stack.top.map(|top| within_of(&top)) else {
         return step.failed(StepError::Refused);
     };
-    let within = stack.top.map(|top| within_of(&top));
-    let caches = facts.caches(code.shape(segment));
-    let routes = within.is_some_and(|within| within.routes);
-    if routes || caches {
+    if within.routes || within.caches {
         let types = step.caching_types();
         statement(step, stack, woken, &types)
     } else {
@@ -346,15 +342,6 @@ fn statement<'graph, 'here, 'scratch>(
         false => None,
     };
     ran(step, stack, outcome, types)
-}
-
-/// The segment of the body an entry runs in.
-fn segment_of(task: &Task<'_, '_, '_>) -> Segment {
-    match task {
-        Task::Node(node) => node.view.segment(),
-        Task::Body { runner, .. } => runner.view().segment(),
-        Task::Supply(supply) => supply.view.segment(),
-    }
 }
 
 /// What an entry runs within.
@@ -391,14 +378,10 @@ fn ran<'graph, 'here, 'scratch>(
     mut outcome: Option<Outcome<'graph, 'here, 'scratch>>,
     types: &Chain<'_, 'here, '_, '_>,
 ) -> Action<'graph, KBundle> {
-    let caches = {
-        let (code, facts) = step.door();
-        let segment = match (stack.bottom, stack.top) {
-            (Bottom::Runner(runner), _) => runner.view().segment(),
-            (Bottom::Statement, Some(top)) => segment_of(&top),
-            (Bottom::Statement, None) => return step.failed(StepError::Refused),
-        };
-        facts.caches(code.shape(segment))
+    let caches = match (stack.bottom, stack.top) {
+        (Bottom::Runner(runner), _) => runner.handing().caches,
+        (Bottom::Statement, Some(top)) => within_of(&top).caches,
+        (Bottom::Statement, None) => return step.failed(StepError::Refused),
     };
     loop {
         match stack.top {
@@ -428,7 +411,7 @@ fn ran<'graph, 'here, 'scratch>(
                             let (code, facts) = step.door();
                             debug_assert_eq!(
                                 facts.caches(code.shape(entry.segment)),
-                                caches,
+                                entry.within.caches,
                                 "a block is classed with the body that owns it"
                             );
                         }

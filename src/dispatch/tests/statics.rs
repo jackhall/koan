@@ -7,7 +7,7 @@ use crate::program::{CellSubstrate, Program};
 use crate::scope::{BodyShape, Narrowing, ShapeKind, Slot, Static};
 use crate::symbols::TypeSymbol;
 use crate::type_lattice::{
-    DeclaredType, Interval, KType, Parametric, Verdict, display_name, outranks,
+    DeclaredType, Interval, KType, Parametric, TypeNode, Verdict, display_name, outranks,
 };
 
 use super::{Koan, output, run};
@@ -131,7 +131,12 @@ pub(super) fn let_narrowing(program: &Program<'_>, shape: &BodyShape<'_>, name: 
     };
     rendered(
         (program.facts())
-            .use_statics(&program.tiers().resting(), shape, shape.site_of_node(node))
+            .use_statics(
+                &program.tiers().resting(),
+                &crate::memory::Bump::new(),
+                shape,
+                shape.site_of_node(node),
+            )
             .narrowing,
     )
 }
@@ -235,6 +240,54 @@ fn a_parameter_is_read_at_its_declared_type() {
     );
 }
 
+/// A value the run retypes by its fit at a binder — a parameter, an annotated `LET`, a `LET`
+/// binding a `:!` whole — is exactly its signature pinned at the paths through that binder, so a
+/// member read through it, a call solving a pin over its own variable and a path written through
+/// the binder all read one path.
+#[test]
+fn a_value_retyped_by_its_fit_is_pinned_at_its_paths() {
+    let source = "SIG Counter FOR ALL #[Carrier] = #[(VAL zero :Carrier)]\n\
+                  EXPR FOR ALL #[Cr] #(ECHO elem :(Counter WITH {Carrier = Cr})) -> Cr = \
+                  #(elem.zero)\n\
+                  MODULE ints = ((LET zero = 0))\n\
+                  LET outer = (FN :{h :Counter, g :Any} -> Any = #(\n  \
+                  LET z = h.zero\n  LET k = (ECHO h)\n  \
+                  LET a :Counter = g\n  LET az = a.zero\n  LET ak = (ECHO a)\n  \
+                  LET m = (g :! Counter)\n  LET mz = m.zero\n  LET mk = (ECHO m)\n  \
+                  LET mw :(m.Carrier) = mz\n  \
+                  z\n))\n\
+                  PRINT (outer {h = ints, g = ints})";
+    assert_eq!(run(source), "0");
+    loaded(source, |program| {
+        let outer = body(program, program.shape(), "outer");
+        let bump = Bump::new();
+        let types = reading(program.tiers(), &bump);
+        for name in ["h", "a", "m"] {
+            let typed = interval(program, outer, name);
+            assert_eq!(typed.lower, typed.upper, "`{name}` is exact");
+            let TypeNode::SignatureApply { pins, .. } = types.node(typed.upper) else {
+                panic!("`{name}` is an application");
+            };
+            assert!(
+                (pins.iter()).all(|(_, pin)| matches!(types.node(pin), TypeNode::Path { .. })),
+                "`{name}` pins its carrier to its path"
+            );
+        }
+        // A member read at a path variable is at most it: the run's carried type decides.
+        let z = interval(program, outer, "z");
+        assert_ne!(z.lower, z.upper, "`h.zero` is at most its path");
+        for names in [&["z", "k"][..], &["az", "ak"], &["mz", "mk", "mw"]] {
+            let uppers: Vec<_> = (names.iter())
+                .map(|name| upper(program, outer, name))
+                .collect();
+            assert!(
+                uppers.iter().all(|at| *at == uppers[0]),
+                "{names:?} read one path"
+            );
+        }
+    });
+}
+
 #[test]
 fn a_capture_keeps_its_type_along_the_chain() {
     loaded(
@@ -309,10 +362,10 @@ fn a_use_with_one_admitting_candidate_selects_it() {
 fn a_use_several_candidates_may_admit_joins_their_returns() {
     let source = format!("{AREAS}LET a = (AREA (EITHER))");
     assert_eq!(narrowing(&source, "a"), "kept maybe maybe");
-    assert_eq!(top(&source, "a"), ":(Str | Number)");
+    assert_eq!(top(&source, "a"), ":(Number | Str)");
     let source = format!("{AREAS}LET r = ({{v = 1}} :! :{{v :Any}})\nLET a = (AREA r.v)");
     assert_eq!(narrowing(&source, "a"), "kept maybe maybe");
-    assert_eq!(top(&source, "a"), ":(Str | Number)");
+    assert_eq!(top(&source, "a"), ":(Number | Str)");
 }
 
 #[test]
@@ -778,8 +831,22 @@ proptest::proptest! {
     /// unfolds into its callee wherever either is written.
     #[test]
     fn reordering_independent_declarations_changes_no_fact(case in super::generate::independent()) {
-        let (written, swapped) = (case.render(false), case.render(true));
+        let (written, swapped) = (case.render(false, false), case.render(true, false));
         let facts = |source: &str| loaded(source, by_names);
+        proptest::prop_assert_eq!(facts(&written), facts(&swapped), "in\n{}\nswapped as\n{}", written, swapped);
+    }
+
+    /// 10b. Reordering independent statements of a callable's body changes no fact but where each
+    /// statement sits: so a class's variable reaches a callable whatever order its paths are
+    /// resolved in.
+    #[test]
+    fn reordering_independent_statements_of_a_body_changes_no_fact(case in super::generate::independent()) {
+        let (written, swapped) = (case.render(false, true), case.render(true, true));
+        let facts = |source: &str| {
+            let mut facts = loaded(source, by_names);
+            facts.retain(|fact| !fact.starts_with("/outer #"));
+            facts
+        };
         proptest::prop_assert_eq!(facts(&written), facts(&swapped), "in\n{}\nswapped as\n{}", written, swapped);
     }
 }
@@ -796,15 +863,15 @@ fn a_container_literal_is_typed_by_its_cells_filled_types() {
     for (source, typed) in [
         (
             "LET l = [{x = 1, y = 2}, {x = 3}]",
-            ":(LIST OF :(:{x :Number y :Number} | :{x :Number y :Null}))",
+            ":(LIST OF :(:{x :Number y :Null} | :{x :Number y :Number}))",
         ),
         (
             "LET l = [{p = {x = 1, y = 2}}, {p = {x = 3}}]",
-            ":(LIST OF :(:{p :{x :Number y :Number}} | :{p :{x :Number y :Null}}))",
+            ":(LIST OF :(:{p :{x :Number y :Null}} | :{p :{x :Number y :Number}}))",
         ),
         (
             "LET l = {\"a\": {x = 1, y = 2}, \"b\": {x = 3}}",
-            ":(MAP Str -> :(:{x :Number y :Number} | :{x :Number y :Null}))",
+            ":(MAP Str -> :(:{x :Number y :Null} | :{x :Number y :Number}))",
         ),
     ] {
         loaded(source, |program| {

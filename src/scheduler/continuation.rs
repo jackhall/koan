@@ -21,7 +21,7 @@ use crate::memory::{
 use crate::scheduler::action::{Action, Step, Use};
 use crate::scheduler::kept::{Kept, KeptPart};
 use crate::scheduler::seek::Requested;
-use crate::values::{ArenaRef, ContentDigest, TypeTiers};
+use crate::values::{ContentDigest, DepotRef, TypeTiers};
 
 /// What a scheduler runs: the layer above it, as one bundle — the family a cell is born holding,
 /// the family it holds at a step and parks with, the family of what a parked cell keeps in its
@@ -178,7 +178,7 @@ pub(super) struct ContinuationFamily<B>(PhantomData<B>);
 reattachable!(ContinuationFamily<B: StepBundle<'graph>> => Continuation<'graph, 'cell, B>);
 
 /// What a cell will do when it next runs: one shape, no arm to add — the step, the cell's
-/// provenance and arena node, and the bundle's state.
+/// provenance and depot slot, and the bundle's state.
 ///
 /// A *birth* continuation is this at `'cell = 'graph`, because every birth door takes one there:
 /// its state is a root work's, at `'graph`, or at rest as a carrier. The successor [`Step::park`]
@@ -190,8 +190,8 @@ where
 {
     pub step: NativeStep<'graph, B>,
     pub provenance: Provenance,
-    /// The arena node the cell runs under, which the drain borrowed for it at its birth.
-    pub arena: ArenaRef,
+    /// The depot slot the cell runs under, which the drain borrowed for it at its birth.
+    pub depot: DepotRef,
     /// What the drain tells the cell's first step about how it placed it.
     pub arrival: Arrival,
     /// The request a frame's asker handed the drain to give its first step: the frame lays its

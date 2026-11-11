@@ -1,8 +1,8 @@
 # A nested projection
 
-`FROM` projecting a record's subrecords by a schema.
+`FROM` projecting a record value's subrecords by a schema.
 
-**Problem.** `FROM`'s field list names a record's top-level fields alone
+**Problem.** `FROM`'s field list names a record value's top-level fields alone
 (`Native::Project` in [`builtins`](../../src/dispatch/builtins.rs)), so
 narrowing a subrecord takes a `FROM` per level and a record literal rebuilding
 the result: projecting `y` of `r = {x = 1, y = {z = 2, w = 3}}` onto `z` is
@@ -12,10 +12,10 @@ the result: projecting `y` of `r = {x = 1, y = {z = 2, w = 3}}` onto `z` is
 
 - A schema maps each field name to `null`, which keeps the field whole, or to a
   schema, which projects the subrecord under it. `FROM` over a schema is its
-  record retyped to the projection of its carried type the schema describes,
-  and a list of names is the schema mapping each to `null`.
-- The load types the call from both ends of the record's static type, nested
-  fields included.
+  record value retyped to the projection of its carried type the schema
+  describes, and a list of names is the schema mapping each to `null`.
+- The load types the call from both ends of the record value's static type,
+  nested fields included.
 - A schema is a data structure of symbols, and `FROM` parses no code to read
   one.
 

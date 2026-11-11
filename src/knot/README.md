@@ -66,9 +66,9 @@ activation. This module closes it:
   and a call reads it to bind each type parameter to what the group solved to.
   It is keyed by the **name** because a frame walks its callee's slots in the
   type channel's symbol order, so nothing positional survives the trip. The
-  record is homed out of line for the reason a barrier's fields are, below: the
-  node holds one nullable pointer, eight bytes, where a second type handle inline
-  would widen every node from 64 to 80 bytes. An unquantified `FN` — which is
+  typing record is homed out of line for the reason a barrier's fields are,
+  below: the node holds one nullable pointer, eight bytes, where a second type
+  handle inline would widen every node from 64 to 80 bytes. An unquantified `FN` — which is
   almost every function — has none of them, stores `None` and allocates nothing. A `Data`
   node holds a [`Circular`](../values/circular.rs) — a list, dict, record or
   tagged resident whose cells are links — and the same knot weight. A `Module`
@@ -89,8 +89,8 @@ activation. This module closes it:
   [scope](../scope/README.md#splicing) and name and sorted so, empty for a view;
   a root reads a pinned mark's binding at its scope's number, so only a quote
   born inside composed code keys its pinned marks apart —
-  and the same knot weight. A `Builtin` node points at a builtin overload's record in
-  program storage. `values::Knotted::resolve` says which arm a node is, and
+  and the same knot weight. A `Builtin` node points at a builtin overload's
+  [`BuiltinFunction`](builtin.rs) in program storage. `values::Knotted::resolve` says which arm a node is, and
   `Knotted::function`, `::builtin`, `::code`, `::module` and `::coerced` each
   answer only for their own arm.
 - `KValue`, `KValueFamily`, `KValueCarrier` and `KActivation` spell the value,
@@ -306,11 +306,11 @@ statement after every unit it reads — so a `FN` that captures a name declared
 after it is born once that name is bound. The door shares the tie's staging and
 lay-down for a function node, so a door-born function weighs exactly what the
 tie gives the same function in a one-node knot. The tie and the door are each
-handed the arena node the birth runs under and the stamp of its chain, which
+handed the depot slot the birth runs under and the stamp of its chain, which
 every function they lay records on its closure bindings beside the layers its
 encloser's activation decided, and an instance keeps its function's: a call
-of it seeks its [settlement](../build/README.md#references-between-frames-and-the-arena)
-beneath that arena node, and replays the stamp where it is gone. No capture it reads is an edge:
+of it seeks its [settlement](../build/README.md#references-between-frames-and-the-depot)
+beneath that depot slot, and replays the stamp where it is gone. No capture it reads is an edge:
 a callable that captures a fellow member is a node of its binder's knot, which
 the tie never asks the evaluator for. Its type is read as the tie's is, and a
 signature the load left unknown that does not elaborate refuses `Type` and
@@ -321,8 +321,8 @@ to a written quote ([building code](../scope/README.md#building-code)) is born
 over the value its body part evaluates to: the evaluator gathers the part
 before it calls the door, and the tie asks `eager` for it beside its data
 members' parts. A value that is no code refuses `NotCode`. The function's
-closure is that code, laid flat, then the record of the names and keys its
-declaring scope offers it, as an `EVAL` of a code parameter is offered them;
+closure is that code, laid flat, then the record value of the names and keys
+its declaring scope offers it, as an `EVAL` of a code parameter is offered them;
 its typing record holds the digest of the code's syntax and the callable's
 parameter names, which its call finds the code's composition by. Its body
 shape holds no statements and captures nothing, so it is never a node of a
@@ -335,7 +335,7 @@ A quantified function the load instantiated at an
 other, typed by the concrete instance of its scheme, with the solution in group
 order in its typing record. Where the load's solution names a lexical
 variable, each door reads the type the run binds it to where the site runs and
-substitutes it, so the record holds the solution so bound. A frame calling it
+substitutes it, so the typing record holds the solution so bound. A frame calling it
 binds its `FOR ALL` names from that solution and solves nothing. Two doors make
 one:
 
@@ -360,13 +360,14 @@ name past a header does.
 A builtin overload is a function value like any other, so a keyworded use's
 candidates are one kind of thing whichever table or scope they come from.
 [`builtin`](builtin.rs) lays one down as a one-node knot in program storage,
-beside the builtin table that holds it: a `Builtin` node pointing at a record of
-the expression shape the overload is registered at, which is the type it
-carries, and an `id` naming its native in the embedder's table. The knot layer
-never runs one — only [dispatch](../dispatch/README.md#the-builtin-table) knows
-what an `id` means. It has no captures, it equals only itself by the record's
-address, and a copy carries the node as it is, since the record outlives every
-cell.
+beside the builtin table that holds it: a `Builtin` node pointing at a
+[`BuiltinFunction`](builtin.rs) that holds the expression shape the overload is
+registered at, which is the type it carries, and an `id` naming its native in
+the embedder's table. The knot layer never runs one — only
+[dispatch](../dispatch/README.md#the-builtin-table) knows what an `id` means.
+It has no captures, it equals only itself by its `BuiltinFunction`'s address,
+and a copy carries the node as it is, since the `BuiltinFunction` outlives
+every cell.
 
 ## A quote
 
@@ -388,9 +389,9 @@ non-code element and syntax past the depth limit with an error the evaluator
 raises.
 
 [`using`](code.rs) is `code USING src`: a new one-node knot whose holes a field
-of `src` names — a record's field its type shows, read through
+of `src` names — a record value's field its type shows, read through
 [the door](../values/README.md#the-type-memo-and-satisfies) at the type the
-record's type names it at, or a module's member — are filled, and whose
+record value's type names it at, or a module's member — are filled, and whose
 other holes stay holes. It reads the code's shape — the load's for written
 code, its composition's for composed code, a view laid flat first — to find
 where each filled hole is read, and lays flat composed syntax with a filled
@@ -487,7 +488,7 @@ and sets them there; every other node's stay clear. Every birth door — the
 tie, the lambda and instance doors, a module's or a barrier's tie and a
 quote's — stamps them through the chain it was born through, from the types
 the knot carries and the values it holds, and a builtin's member answers both
-bits, its record being the root's.
+bits, its root's `BuiltinFunction` holding no weight to keep them in.
 
 **Every knot member copies.** The copy is two walks over the knot, in
 [copy.rs](copy.rs). `held` lists every value the knot holds — each node in
@@ -499,8 +500,8 @@ that finished copy: every node rebuilt in index order — a function's closure
 run through `ClosureBindings::copied` and its typing record re-homed beside it
 through the destination's writer, a code node's bound run and its composed
 syntax laid again, a view materialized there and keeping its type, a data
-node through `Circular::copied`, a module's member run and a barrier's
-underlying function — each edge carried verbatim, since an edge names a node by
+node through `Circular::copied`, a module's member run, an opaque view's
+underlying and a barrier's underlying function — each edge carried verbatim, since an edge names a node by
 index and so means the same node in the copy, anonymous nodes included, and
 the types, body and code shapes, quote bodies and knot weight's bytes carried
 over, and the crossing stamps the copy's memo bits where it lands. The
@@ -512,7 +513,8 @@ member. A module's member that is itself a knot member brings its whole knot wit
 and one placement copies each knot once, so two members of one foreign knot
 arrive as members of one copy of it and still capture each other. A barrier's
 underlying function goes the same way, as the value word a member holding it
-would be.
+would be, and so does an opaque view's underlying; a view's record and a
+barrier's `hidden` carriers are laid again in the destination's region.
 
 ## Equality and rendering
 
@@ -571,8 +573,8 @@ call per knot. A node's content is what it is:
   does not name — every one but a read of the program's top level, and every
   type capture its contract composes;
 - a **module**: the content it keeps ([birth](module/README.md#birth)) — a
-  view's operator and application over its source's bare member and what
-  *fits* solved, computed where the view is built, and a body-born module's
+  view's application over its underlying's content and `from*`, what *fits*
+  solved over the underlying, computed where the view is built, and a body-born module's
   code over each capture the code digest does not name, computed where a
   demand first reaches it, its captures listed as a function's are until then;
 - a **barrier**: the digest of the function it stands before, the type a caller
@@ -655,7 +657,8 @@ carries the scalar types alone.
 - [`tests/code.rs`](tests/code.rs) — the quote door binding `$` names where the
   quote is written and printing its marks, code compared by its text and the
   values its names bind, a quote reading its own binder as a one-node knot, and
-  `USING` over a record and a module, extra fields and refused code included.
+  `USING` over a record value and a module, extra fields and refused code
+  included.
 - [`tests/view.rs`](tests/view.rs) — code views: a read's part and slice,
   either way; a fragment equal to the quote written of its parts, a hole again
   and its `$` bindings kept; a mark a read moves into a quote value pinned; a
@@ -682,7 +685,7 @@ Six tests join the koan [Miri slate](../../observe/miri_slate.md), the paths
 only `knot` drives: `a_copied_knot_outlives_its_home` — a knot's node run
 filled while closure runs are written into the same region, read through its
 edges after the region it was copied from is released —
-`a_copied_ring_outlives_its_home`, the same for a tagged ring whose record
+`a_copied_ring_outlives_its_home`, the same for a tagged ring whose record node
 holds a string cell and an anonymous list node,
 `a_copied_list_view_outlives_its_home`, the same for a list node that spreads a
 fellow list node and a list from outside its knot, laid flat by the copy,

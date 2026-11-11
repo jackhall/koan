@@ -353,7 +353,7 @@ fn evaluate<'graph, 'here, 'scratch>(
                 program.written(),
                 site,
                 None,
-                (crate::values::ArenaRef::ROOT, None),
+                (crate::values::DepotRef::ROOT, None),
                 types,
                 &scratch,
             ) else {
@@ -507,7 +507,7 @@ fn evaluate<'graph, 'here, 'scratch>(
             {
                 let request = request(Some(owed.hopped(step.writer())));
                 let seek = Seek {
-                    parent: crate::values::ArenaRef::ROOT,
+                    parent: crate::values::DepotRef::ROOT,
                     settlement: None,
                     hands_back: false,
                 };

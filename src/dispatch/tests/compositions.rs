@@ -66,7 +66,7 @@ struct Looped {
     /// How many compositions the run built and evicted.
     composed: usize,
     evicted: usize,
-    /// The unheld bytes of the arena at the run's end.
+    /// The unheld bytes of the depot at the run's end.
     unheld: usize,
     /// The nodes adoption laid and the bytes program storage grew by, over the run.
     laid: usize,

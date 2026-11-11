@@ -13,13 +13,18 @@
 //! parameters by name, or a keyworded use's every candidate a binder births, its slots paired with
 //! the registration's written slot names. Each reads the text alone, so the load's folds and every
 //! later walk read one answer.
+//!
+//! The same pass lists every **call site** of each callable a binder births: a keyworded use's
+//! candidate, by the use's node site; a call by name, by its head's site; and an `EVAL`'s offer of
+//! it to the code it runs, which may call it with anything. It marks each body that is a quote's
+//! code or nested in one. The [trace](../../build/README.md#the-trace) reads both.
 
 use crate::memory::{BumpAllocator, BumpVec, Writer, collect};
 use crate::parse::{BuiltinShapeId, ExpressionPart, KExpression, Role};
 use crate::symbols::BinderSymbol;
 
 use super::super::shape::{
-    BodyShape, Candidate, Coordinate, Lands, Position, Segment, ShapeKind, Slot, Which,
+    BodyShape, Candidate, Coordinate, Lands, Offer, Position, Segment, ShapeKind, Site, Slot, Which,
 };
 use super::super::signature::declare_parameters;
 use super::Shapes;
@@ -35,6 +40,20 @@ pub(super) struct Tails<'graph> {
     /// The parameters every tail edge into the body passes on bare, sorted: empty for a body that
     /// escapes.
     pub(super) invariant: &'graph [Slot],
+    /// A callable's: every site in the text that calls it or offers it to code, sorted.
+    pub(super) calls: &'graph [CallSite],
+    /// Whether the body is a quote's code or nested in one.
+    pub(super) in_code: bool,
+}
+
+/// A site in the text that calls a callable a binder births, in the shape at `at`: a keyworded use
+/// listing it, by the use's node site; a call by name of it, by its head's site; or, `offered`, an
+/// `EVAL` offering it to the code it runs, by its operand's site.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Debug)]
+pub struct CallSite {
+    pub at: Segment,
+    pub site: Site,
+    pub offered: bool,
 }
 
 /// One tail call: the caller, the callee, and per parameter of the callee the caller's own
@@ -140,13 +159,87 @@ pub(super) fn tails<'graph, 'x>(
     rebinds.sort_unstable();
     rebinds.dedup();
 
+    // Every call site, by callee.
+    let mut calls: BumpVec<'_, (Segment, CallSite)> = BumpVec::new_in(scratch);
+    for shape in bodies {
+        let at = shape.segment();
+        let mut call = |callee: Option<&BodyShape<'_>>, site, offered| {
+            if let Some(callee) = callee {
+                calls.push((callee.segment(), CallSite { at, site, offered }));
+            }
+        };
+        for (site, list) in shape.candidate_lists().iter() {
+            for candidate in list.candidates {
+                if let Candidate::One(coordinate) = candidate {
+                    call(candidate_callable(shapes, shape, *coordinate), *site, false);
+                }
+            }
+        }
+        for mention in shape.mentions().iter().filter(|mention| mention.head) {
+            call(births_callable(shapes, mention.lands), mention.site, false);
+        }
+        for (site, offered) in shape.offer_table().iter() {
+            for (_, offer) in offered.iter() {
+                match offer {
+                    Offer::Name(coordinate) => call(
+                        (shapes.follow(at, *coordinate))
+                            .and_then(|lands| births_callable(shapes, lands)),
+                        *site,
+                        true,
+                    ),
+                    Offer::Key(list) => {
+                        for candidate in list.candidates {
+                            if let Candidate::One(coordinate) = candidate {
+                                call(candidate_callable(shapes, shape, *coordinate), *site, true);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    calls.sort_unstable();
+    calls.dedup();
+    // Whether each body is a quote's code or nested in one: an encloser's answer is its own.
+    let mut in_code: BumpVec<'_, Option<bool>> = BumpVec::with_capacity_in(count, scratch);
+    in_code.resize(count, None);
+    let mut climbing = BumpVec::new_in(scratch);
+    for shape in bodies {
+        let mut at = shape.segment();
+        let known = loop {
+            if let Some(known) = in_code[at.index() as usize] {
+                break known;
+            }
+            if shapes.shape_at(at).kind() == ShapeKind::Code {
+                break true;
+            }
+            climbing.push(at);
+            match shapes.parent(at) {
+                Some((up, _)) => at = up,
+                None => break false,
+            }
+        };
+        for each in climbing.drain(..) {
+            in_code[each.index() as usize] = Some(known);
+        }
+        if shapes.shape_at(at).kind() == ShapeKind::Code {
+            in_code[at.index() as usize] = Some(true);
+        }
+    }
+
     let mut laid = BumpVec::with_capacity_in(count, scratch);
     for shape in bodies {
         let segment = shape.segment();
+        let in_code = in_code[segment.index() as usize] == Some(true);
         if shape.kind() != ShapeKind::Callable {
-            laid.push(Tails::default());
+            laid.push(Tails {
+                in_code,
+                ..Tails::default()
+            });
             continue;
         }
+        let from = calls.partition_point(|(each, _)| *each < segment);
+        let to = calls.partition_point(|(each, _)| *each <= segment);
         let start = rebinds.partition_point(|(each, _)| *each < segment);
         let end = rebinds.partition_point(|(each, _)| *each <= segment);
         let escapes = !invariant_body(segment);
@@ -158,6 +251,8 @@ pub(super) fn tails<'graph, 'x>(
             escapes,
             rebound: collect(writer, rebinds[start..end].iter().map(|(_, slot)| *slot)),
             invariant: collect(writer, invariant.iter().copied()),
+            calls: collect(writer, calls[from..to].iter().map(|(_, call)| *call)),
+            in_code,
         });
     }
     laid
@@ -313,7 +408,7 @@ pub(super) fn name_of<'p>(
 
 /// The parameter of `caller` that `value` names bare, read in `shape`, `caller` itself or a tail
 /// arm's block in it.
-fn bare_parameter<'graph>(
+pub(super) fn bare_parameter<'graph>(
     shape: &BodyShape<'graph>,
     caller: &BodyShape<'graph>,
     value: &'graph ExpressionPart<'graph>,

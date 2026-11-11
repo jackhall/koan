@@ -244,7 +244,9 @@ self_cell!(
 pub struct CellSubstrate(Joined);
 
 /// The load's one walk over `shapes`: every record the language's walk computes, laid in program
-/// storage through `writer`, beside the folds the load lays over them.
+/// storage through `writer`, beside the folds the load lays over them, the trace among them, and
+/// the layers the trace names, each with its call sites' requests. A refusal one of those layers
+/// reached refuses the load, naming the first call in text order that passed its binding.
 pub(crate) fn walked<'graph, L: Language>(
     shapes: &'graph crate::scope::Shapes<'graph>,
     builtins: &'graph KBuiltins<'graph, 'graph>,
@@ -262,8 +264,10 @@ pub(crate) fn walked<'graph, L: Language>(
         shapes.root().segment(),
     )?;
     let unfolded = resident(writer, store.facts(scratch));
-    let folds = crate::build::fold(unfolded, writer, scratch);
-    Ok(resident(writer, unfolded.folded(writer, folds)))
+    let folds = crate::build::trace::traced(unfolded, writer, scratch);
+    let folded = resident(writer, unfolded.folded(writer, folds));
+    // The layers the trace names rest beside the base, their types in the load's chain.
+    super::settle::traced::<L>((shapes, builtins), types, writer, scratch, folded)
 }
 
 impl CellSubstrate {

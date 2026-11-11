@@ -3,7 +3,7 @@
 //! The **run root** is the slab cell every root work is born under. The load runs here, outside
 //! the graph and before any root work, and returns the type tiers and the facts every later step
 //! reads; what it writes rests in program storage. The settlements frames run under are the graph's
-//! [build arena](super::arena), not cells. See
+//! [build depot](super::depot), not cells. See
 //! [build/README.md § Steps and the drain](../build/README.md#steps-and-the-drain).
 
 use crate::memory::SlabHandle;

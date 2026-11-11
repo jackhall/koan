@@ -1,5 +1,6 @@
 //! Settlement keys over frontiers: which names a callable's key lists, folded from the
-//! frontiers of the units beneath it, and what a call of it seeks at run.
+//! frontiers of the units beneath it and widened to each slot it passes on, and what a call of it
+//! seeks at run, a hop rebinding a key included.
 
 use crate::parse::ExpressionPart;
 use crate::program::Program;
@@ -257,31 +258,81 @@ const WRAPS: [&str; 2] = [
     "EXPR FOR ALL #[Elt] #(WRAP x :Elt) -> Number = #((LET p = (PICK x)) (1))\n",
 ];
 
+/// `VIA`, unkeyed, handing its argument on to `WRAP` at `Any`: a `WRAP` call whose solution the
+/// load cannot fix, so it settles at run rather than in a layer the load laid.
+const VIA: &str = "EXPR #(VIA y :Any) -> Any = #(WRAP y)\n";
+
 #[test]
 fn two_calls_differing_at_a_frontier_name_build_two_settlements_and_agreeing_ones_share() {
     for (wrap, printed) in WRAPS.into_iter().zip([["n\nn", "n\n1"], ["1\n1", "1\n1"]]) {
-        let agree = format!("{PICK}{wrap}PRINT (WRAP 1)\nPRINT (WRAP 2)\n");
+        let agree = format!("{PICK}{wrap}{VIA}PRINT (VIA 1)\nPRINT (VIA 2)\n");
         assert_eq!(sought(&agree), (2, 1, printed[0].to_string()), "{wrap}");
-        let differ = format!("{PICK}{wrap}PRINT (WRAP 1)\nPRINT (WRAP \"s\")\n");
+        let differ = format!("{PICK}{wrap}{VIA}PRINT (VIA 1)\nPRINT (VIA \"s\")\n");
         assert_eq!(sought(&differ), (2, 2, printed[1].to_string()), "{wrap}");
     }
 }
 
+/// `CARRIER`, keyed on the module it views, and `PASS`, keyed on its own module, handing it on
+/// to `CARRIER` bare at `CARRIER`'s declared type.
+const PASSING: &str = "EXPR #(CARRIER m :Counter) -> Number = #((LET v = (m :| Counter)) (7))\n\
+                       EXPR #(PASS m :Counter) -> Number = #((LET w = (m :| Counter)) (CARRIER m))\n";
+
+#[test]
+fn a_module_passed_on_keys_the_layer_its_origin_keys() {
+    // The frame binds `ints` at `Counter` whether it comes bare or through `PASS`'s `m`, so both
+    // `CARRIER` calls key the one layer.
+    let source = format!("{PASSING}PRINT (CARRIER ints)\nPRINT (PASS ints)\n");
+    let ran = ran(&source);
+    assert_eq!(ran.printed, "7\n7");
+    assert_eq!(
+        (ran.tiers.sought, ran.tiers.laid, ran.tiers.settled),
+        (3, 3, 0)
+    );
+    loaded(&program(2, &source), |program| {
+        assert_eq!(
+            program.facts().layers().len(),
+            2,
+            "one `PASS` layer, one `CARRIER` layer"
+        );
+    });
+}
+
+#[test]
+fn a_narrowed_signature_keys_apart() {
+    // `TAKE` declares `Module`, so its frame binds the type each call carries.
+    let source = "EXPR #(TAKE m :Module) -> Number = #((LET v = (m :| Counter)) (7))\n\
+                  PRINT (TAKE ints)\nPRINT (TAKE (ints :! Counter))\n";
+    let ran = ran(source);
+    assert_eq!(ran.printed, "7\n7");
+    assert_eq!(
+        (ran.tiers.sought, ran.tiers.laid, ran.tiers.settled),
+        (2, 2, 0)
+    );
+    loaded(&program(2, source), |program| {
+        assert_eq!(
+            program.facts().layers().len(),
+            2,
+            "one layer per carried type"
+        );
+    });
+}
+
 #[test]
 fn two_calls_differing_at_a_module_parameter_build_two_settlements() {
-    // `SAME`, called once a `step`, keys its own `Elt` on the carrier `m` passes it.
+    // `SAME`, called once a `step`, keys its own `Elt` on the carrier `m` passes it. Each `step`
+    // call passes load content, so it finds a layer the load laid; `SAME` settles beneath it.
     let step = "LET step = (FN :{m :Counter} -> Any = \
                 #((LET s = (SAME m.zero AND (m.succ {x = m.zero}))) (s)))\n";
     let agree = format!("{SAME}{step}PRINT (step {{m = ints}})\nPRINT (step {{m = ints}})\n");
-    assert_eq!(sought(&agree), (4, 2, "0\n0".to_string()));
+    assert_eq!(sought(&agree), (4, 1, "0\n0".to_string()));
     let differ = format!("{SAME}{step}PRINT (step {{m = ints}})\nPRINT (step {{m = words}})\n");
-    assert_eq!(sought(&differ), (4, 4, "0\n".to_string()));
+    assert_eq!(sought(&differ), (4, 2, "0\n".to_string()));
 }
 
 #[test]
 fn an_evicted_settlement_costs_a_recomputation_and_never_a_different_answer() {
     let source = format!(
-        "{PICK}{}PRINT (WRAP 1)\nPRINT (WRAP \"s\")\nPRINT (WRAP 1)\n",
+        "{PICK}{}{VIA}PRINT (VIA 1)\nPRINT (VIA \"s\")\nPRINT (VIA 1)\n",
         WRAPS[0]
     );
     let tight = ran_under(2, &source, SMALLEST);
@@ -352,6 +403,44 @@ fn past_a_header_or_a_barrier_a_body_keyed_on_a_for_all_name_is_born_cold() {
 }
 
 #[test]
+fn past_a_header_or_a_barrier_a_body_keyed_on_a_module_is_born_cold() {
+    // `first` views `x`, so it keys on it.
+    let inner = "SIG Inner FOR ALL #[Elem Extra] = #[(VAL one :Elem) (VAL two :Extra)]\n\
+                 MODULE parts = ((LET one = 1) (LET two = \"s\"))\n";
+    let first = "(FN :{x :(Inner WITH {Elem = Number})} -> Any = #((x :| Inner).one))";
+    // A barrier: `Outer` hides `Carrier`, so `mine` crosses in re-viewed at `Elem = Number`.
+    let barrier = format!(
+        "SIG Outer FOR ALL #[Carrier] = #[(VAL zero :Carrier) \
+         (VAL first :(FN :{{x :(Inner WITH {{Elem = Carrier}})}} -> Any))]\n\
+         MODULE m = ((LET zero = 0) (LET first = {first}))\nLET v = (m :| Outer)\n\
+         MODULE mine = ((LET one = v.zero) (LET two = 5))\nPRINT (v.first {{x = mine}})\n"
+    );
+    // A header showing `first` taking `Extra` at `Any`, which its frame retypes `parts` to first:
+    // a retyped closure's, which the load traces, and a signature member's.
+    let wide = "(FN :{x :(Inner WITH {Elem = Number, Extra = Any})} -> Any)";
+    let retyped =
+        format!("LET first = {first}\nLET g = (first :! {wide})\nPRINT (g {{x = parts}})\n");
+    let member = format!(
+        "SIG Wide = #[(VAL first :{wide})]\nMODULE m = (LET first = {first})\n\
+         LET w = (m :! Wide)\nPRINT (w.first {{x = parts}})\n"
+    );
+    let direct = format!("LET first = {first}\nPRINT (first {{x = parts}})\n");
+    let (keyed, _, printed) = sought(&format!("{inner}{direct}"));
+    assert_eq!((keyed, printed.as_str()), (1, "Elem(1)"), "{direct}");
+    for (past, printed) in [
+        (barrier, "Elem(0)"),
+        (retyped, "Elem(1)"),
+        (member, "Elem(1)"),
+    ] {
+        assert_eq!(
+            sought(&format!("{inner}{past}")),
+            (0, 0, printed.into()),
+            "{past}"
+        );
+    }
+}
+
+#[test]
 fn an_escaping_body_s_hop_seeks_with_its_own_content() {
     // `hop`'s name escapes into `CHOOSE`, so it reaches its second and third frames through
     // `next`, a value the load cannot follow, passing `words` where the first frame bound `ints`:
@@ -372,10 +461,11 @@ fn an_escaping_body_s_hop_seeks_with_its_own_content() {
     let hop = (shapes.iter()).find(|(names, _)| names.contains(&"next".to_string()));
     assert_eq!(hop.map(|(_, keys)| keys.clone()), Some(some(&["m"])));
     // Three `hop` frames at `ints`, `words` and `words`, and `SAME`'s calls in each, one at
-    // `Number` and two at `Str`.
+    // `Number` and two at `Str`. The first `hop` call passes load content, so it finds the layer
+    // the load laid; the rest settle at run.
     let ran = ran(&source);
     assert_eq!(ran.printed, "7");
-    assert_eq!((ran.tiers.sought, ran.tiers.settled), (6, 4));
+    assert_eq!((ran.tiers.sought, ran.tiers.settled), (6, 3));
 }
 
 /// A unit that reads an entry-bound name beside a later-bound one seams at the later one, so its
@@ -391,10 +481,11 @@ fn a_unit_mixing_seams_keys_nothing_at_the_entry() {
     assert_eq!(keyed(&source, &["n", "x", "s", "Elt"]), None);
 }
 
-/// A unit that reads a parameter waits on every name its entry's frontier holds, so its callable
-/// keys on each keyable one: `p` reads `x` alone, and `SUBJECT` keys `Key` beside `Elt`.
+/// A unit that reads a parameter waits on the names that parameter's seed holds alone, so its
+/// callable keys on each keyable one: `p` reads `x` alone, and `SUBJECT` keys `Elt`, not `Key`,
+/// which only `k`'s seed holds.
 #[test]
-fn a_callable_keys_on_each_keyable_name_its_entry_holds_that_a_unit_reads_through() {
+fn a_callable_keys_on_each_keyable_name_the_seeds_its_units_read_hold() {
     let source = format!(
         "{PICK}EXPR FOR ALL #[Elt Key] #(SUBJECT x :Elt AND k :Key) -> Any = #(\n  \
          LET p = (PICK x)\n  p\n)\n"
@@ -403,7 +494,7 @@ fn a_callable_keys_on_each_keyable_name_its_entry_holds_that_a_unit_reads_throug
     let (_, listed) = (found.iter())
         .find(|(names, _)| names.iter().any(|name| name == "k"))
         .expect("`SUBJECT` is a callable");
-    assert_eq!(*listed, some(&["Elt", "Key"]));
+    assert_eq!(*listed, some(&["Elt"]));
 }
 
 /// A module parameter is an unknown wherever a fact reads its content, so a callable reading a
@@ -446,9 +537,10 @@ fn wraps_pick(source: &str) -> (Segment, Site, bool) {
             panic!("`p` is bound to a call");
         };
         let site = wrap.site_of_node(node);
+        let closing = crate::memory::Bump::new();
         let narrowing = program
             .facts()
-            .use_statics(&program.tiers().resting(), wrap, site)
+            .use_statics(&program.tiers().resting(), &closing, wrap, site)
             .narrowing;
         (
             wrap.segment(),
@@ -462,7 +554,7 @@ fn wraps_pick(source: &str) -> (Segment, Site, bool) {
 fn a_frame_under_a_settlement_reads_its_settled_facts() {
     // `PICK x` waits on `Elt` at the load, which leaves both overloads; a frame under the
     // settlement at `Elt := Number` finds the one at `Number` selected.
-    let source = format!("{PICK}{}PRINT (WRAP 1)\n", WRAPS[0]);
+    let source = format!("{PICK}{}{VIA}PRINT (VIA 1)\n", WRAPS[0]);
     let (segment, site, selected) = wraps_pick(&source);
     assert!(!selected, "the load selects nothing at `PICK x`");
     CHOSEN.with(|chosen| chosen.borrow_mut().clear());
@@ -494,37 +586,38 @@ fn a_fact_is_settled_once_per_settlement() {
     // Two frames under one key: the second finds the settlement the first's miss built, so the
     // units of `WRAP` its binding wakes are walked once past the load's walk.
     let visits = |calls: &str| {
-        let source = format!("{PICK}{}{calls}", WRAPS[0]);
+        let source = format!("{PICK}{}{VIA}{calls}", WRAPS[0]);
         let (wrap, _, _) = wraps_pick(&source);
         VISITS.with(|visits| visits.set((Some(wrap), 0)));
         let ran = crate::dispatch::walk::visiting(visit, || ran(&source));
         (ran.tiers.settled, VISITS.with(|visits| visits.get().1))
     };
-    let (settled, walked) = visits("PRINT (WRAP 1)\n");
+    let (settled, walked) = visits("PRINT (VIA 1)\n");
     let (_, loaded) = visits("LET unused = 1\n");
     assert_eq!(settled, 1);
     assert!(
         walked > loaded,
         "the miss walks `WRAP`'s body past the load"
     );
-    assert_eq!(visits("PRINT (WRAP 1)\nPRINT (WRAP 2)\n"), (1, walked));
+    assert_eq!(visits("PRINT (VIA 1)\nPRINT (VIA 2)\n"), (1, walked));
 }
 
 /// Two overloads of `PICK` at `Number`, which a call at `Number` cannot rank, and one at `Str`.
-const TWINS: &str = "EXPR #(PICK x :Number) -> Str = #(\"a\")\n\
+pub(super) const TWINS: &str = "EXPR #(PICK x :Number) -> Str = #(\"a\")\n\
                      EXPR #(PICK x :Number) -> Str = #(\"b\")\n\
                      EXPR #(PICK x :Str) -> Number = #(1)\n";
 
 /// `WRAP` over [`TWINS`]: at the load `PICK x` waits on `Elt`.
-const TWIN_WRAP: &str = "EXPR FOR ALL #[Elt] #(WRAP x :Elt) -> Any = #((LET p = (PICK x)) (p))\n";
+pub(super) const TWIN_WRAP: &str =
+    "EXPR FOR ALL #[Elt] #(WRAP x :Elt) -> Any = #((LET p = (PICK x)) (p))\n";
 
 /// A refusal's message, its location dropped.
-fn unlocated(message: &str) -> &str {
+pub(super) fn unlocated(message: &str) -> &str {
     message.split_once(": ").map_or(message, |(_, rest)| rest)
 }
 
 /// The refusal the load words for [`TWINS`] with `WRAP`'s `x` declared at `Number`.
-fn declared_refusal() -> String {
+pub(super) fn declared_refusal() -> String {
     let declared = format!(
         "{TWINS}EXPR #(WRAP x :Number) -> Any = #((LET p = (PICK x)) (p))\nPRINT (WRAP 1)\n"
     );
@@ -536,7 +629,7 @@ fn declared_refusal() -> String {
 }
 
 /// The fault a run printed, its location dropped.
-fn fault(printed: &str) -> &str {
+pub(super) fn fault(printed: &str) -> &str {
     unlocated(printed.strip_prefix("error: ").expect("the run faults"))
 }
 
@@ -547,7 +640,7 @@ fn a_refusal_a_settlement_reaches_faults_the_asker_worded_as_the_load_words_it()
     // so a second run's ask finds the refused settlement under the key and is born under it too.
     let ran = ran_times(
         2,
-        &format!("{TWINS}{TWIN_WRAP}PRINT (WRAP 1)\n"),
+        &format!("{TWINS}{TWIN_WRAP}{VIA}PRINT (VIA 1)\n"),
         BuildBudget::default(),
         2,
     );
@@ -566,7 +659,7 @@ fn a_settlements_facts_and_refusals_are_the_same_after_its_eviction() {
     // Each run asks at `Str` and then at `Number`, which refuses and ends it: past the smallest
     // budget, each miss evicts the other's settlement, so the second run settles the refused one
     // again, refusing alike.
-    let source = format!("{TWINS}{TWIN_WRAP}PRINT (WRAP \"s\")\nPRINT (WRAP 1)\n");
+    let source = format!("{TWINS}{TWIN_WRAP}{VIA}PRINT (VIA \"s\")\nPRINT (VIA 1)\n");
     let tight = ran_times(2, &source, SMALLEST, 2);
     let roomy = ran_times(2, &source, BuildBudget::default(), 2);
     assert_eq!(tight.printed, roomy.printed);
@@ -579,4 +672,50 @@ fn a_settlements_facts_and_refusals_are_the_same_after_its_eviction() {
         .for_each(|printed| assert_eq!(fault(printed), declared_refusal()));
     assert_eq!((tight.tiers.settled, tight.tiers.evicted), (4, 3));
     assert_eq!((roomy.tiers.settled, roomy.tiers.evicted), (2, 0));
+}
+
+#[test]
+fn a_pass_through_body_keys_its_traced_slots() {
+    // `PASS` reads nothing of `m`, so no frontier keys it; it keys on `m` because it passes it on
+    // to `CARRIER`'s key.
+    let source = format!(
+        "{PRELUDE}EXPR #(CARRIER m :Counter) -> Number = #((LET v = (m :| Counter)) (7))\n\
+         EXPR #(PASS m :Counter) -> Number = #(CARRIER m)\n"
+    );
+    assert_eq!(keyed(&source, &["m"]), some(&["m"]));
+}
+
+/// `KIND`, whose overloads tell a number from a string; `DESCRIBE`, keyed on `m`, whose static
+/// selection of `KIND` depends on the module it is handed; and `FLIP`, which hands `m` to
+/// `DESCRIBE` and hops with its two modules swapped.
+const FLIPPING: &str = "EXPR #(KIND x :Number) -> Str = #(\"a number\")\n\
+                        EXPR #(KIND x :Str) -> Str = #(\"a string\")\n\
+                        EXPR #(DESCRIBE m :Counter) -> Str = #(PRINT (KIND m.zero))\n\
+                        EXPR #(FLIP m :Counter k :Counter link :Link) -> Number = \
+                        #((LET d = (DESCRIBE m)) (FLIP k m (ATTR link next)))\n\
+                        EXPR #(FLIP m :Counter k :Counter end :Null) -> Number = #(7)\n";
+
+#[test]
+fn a_hop_rebinding_a_traced_slot_seeks() {
+    use crate::dispatch::evaluate::HOPPED;
+    // `FLIP`'s hop rebinds `m`, which it passes on to `DESCRIBE`: each hop seeks its own layer, so
+    // `DESCRIBE` reads the module that hop binds.
+    let source = format!("{PRELUDE}{FLIPPING}");
+    assert_eq!(
+        keyed(&source, &["d", "link", "m", "k"]),
+        some(&["m"]),
+        "`FLIP` keys on `m`, which its tail rebinds and it passes on"
+    );
+    HOPPED.with(|hopped| hopped.set(0));
+    let ran = ran_under(
+        4,
+        &format!("{FLIPPING}PRINT (FLIP ints words chain)\n"),
+        BuildBudget::default(),
+    );
+    assert_eq!(ran.printed, "a number\na string\na number\na string\n7");
+    assert_eq!(
+        HOPPED.with(std::cell::Cell::get),
+        0,
+        "no hop of `FLIP` borrows its frame's layer"
+    );
 }

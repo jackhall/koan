@@ -17,8 +17,8 @@ use crate::parse::SourceRef;
 use crate::parse::{KExpression, ParseError};
 use crate::scheduler::{Ask, Settles, Work};
 use crate::scope::{
-    BodyShape, ComposedRoot, ComposedSyntax, Composition, Facts, Fault, FaultKind, Hop, Line,
-    LoadFacts, Segment, Settlement, ShapeError, Shapes, Site, Slot, Store, Written,
+    BodyShape, BuildLayer, ComposedRoot, ComposedSyntax, Composition, Facts, Fault, FaultKind, Hop,
+    Line, LoadFacts, Segment, ShapeError, Shapes, Site, Slot, Store, Written,
 };
 use crate::symbols::{BinderSymbol, SymbolInterner};
 use crate::type_lattice::{DeclaredType, KType, TypeNode, satisfied_by, substitute_quantified};
@@ -208,7 +208,7 @@ pub(super) type Settle<'graph> = for<'a> fn(
     &Ask,
     &mut dyn FnMut(Option<&Chain<'_, '_, '_, '_>>),
     &'a &'graph (),
-) -> Option<Settlement<'a>>;
+) -> Option<BuildLayer<'a>>;
 
 /// The miss a composition is built through, the language's monomorphized in:
 /// [`composed`](super::settle::composed).
@@ -229,7 +229,7 @@ impl<'graph> Settles<'graph> for Program<'graph> {
         ask: &Ask,
         rest: &mut dyn FnMut(Option<&Chain<'_, '_, '_, '_>>),
         witness: &'a &'graph (),
-    ) -> Option<Settlement<'a>> {
+    ) -> Option<BuildLayer<'a>> {
         (self.settle)(self, bump, parent, pinned, ask, rest, witness)
     }
 
@@ -330,6 +330,40 @@ impl<'graph> Program<'graph> {
     /// What the load decided about every body. A step reads facts through its door instead.
     pub fn facts(&self) -> &'graph LoadFacts<'graph> {
         self.facts
+    }
+
+    /// The trace's enumeration over the load's records, at most `limit` bindings a body: handed to
+    /// `each` per body with traced slots, in segment order, how many bindings it names or why they
+    /// are open. Returns how many times it read a site to push a binding.
+    #[cfg(test)]
+    pub(crate) fn enumerated(
+        &self,
+        limit: usize,
+        mut each: impl FnMut(Result<usize, crate::scope::Open>),
+    ) -> usize {
+        use crate::build::trace::{Bindings, bindings, edge_reads};
+        let scratch = Bump::new();
+        let folds = crate::build::fold(self.facts, &scratch, &scratch);
+        let before = edge_reads();
+        let bodies = bindings(self.facts, folds, limit, &scratch);
+        let reads = edge_reads() - before;
+        for body in bodies.iter().filter(|body| !body.slots.is_empty()) {
+            each(match body.bindings {
+                Bindings::Named(named) => Ok(named.len()),
+                Bindings::Open(reason) => Err(reason),
+            });
+        }
+        reads
+    }
+
+    /// Hand `each` every body's fact keys, in segment order: the keys fold's keys, recomputed
+    /// from the load's records, before the trace widens them to its traced slots.
+    #[cfg(test)]
+    pub(crate) fn fact_keys(&self, mut each: impl FnMut(Option<&[crate::scope::Slot]>)) {
+        let scratch = Bump::new();
+        for folds in crate::build::fold(self.facts, &scratch, &scratch) {
+            each(folds.keys);
+        }
     }
 
     /// The program's written code: what a value born of it keeps.

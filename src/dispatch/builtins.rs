@@ -513,6 +513,7 @@ pub(super) fn run<'graph, 'here>(
             // is at a call's head.
             match facts.instance_at(
                 &at.types,
+                scratch,
                 at.view.shape(),
                 at.view.shape().site_of_node(node),
             ) {

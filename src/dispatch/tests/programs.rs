@@ -157,7 +157,7 @@ fn attr_reads_a_field_by_a_label_written_bare_or_quoted() {
     );
     assert_eq!(
         run("UNION Maybe = #{Some: Number, None: Null}\nPRINT Maybe.Many"),
-        "load: <test>:2:7: :(Some | None) has no member Many",
+        "load: <test>:2:7: :(None | Some) has no member Many",
         "a closed projection naming no member refuses the load"
     );
     assert_eq!(run("MODULE m = (LET x = 1)\nPRINT m.x"), "1");

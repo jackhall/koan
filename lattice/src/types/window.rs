@@ -52,7 +52,11 @@
 //! profile as the sealed member it stands for, and distinct indices name distinct members, so a
 //! union canonical in relative form is canonical absolute. The rewrite re-interns each union
 //! through the same door, and the rename `Sibling(i) ↦ member_i` preserves every subsumption
-//! verdict, so the union is the one the relative schema held.
+//! verdict, so the union is the one the relative schema held. A signature over siblings — one a
+//! member names and that names a member back — is entered the same way, through
+//! [`TypeChain::signature_mapped`](super::chain::TypeChain::signature_mapped), and re-interned
+//! through its own canonicalizing door, which re-sorts its keyworded channel by the renamed
+//! handles. [`SealedGroup::absolute`] reads such a relative type through the same rewrite.
 //!
 //! See [README.md](README.md) § Recursive groups: identity is the SCC, not the declaration.
 
@@ -166,11 +170,11 @@ impl<'w> RelativeSchema<'w> {
     ) {
         match self {
             RelativeSchema::NewType(repr) => {
-                collect_siblings(scratch, types.enter(repr.raw()), out)
+                collect_siblings(types, scratch, types.enter(repr.raw()), out)
             }
             RelativeSchema::TypeConstructor { representation, .. } => {
                 if let Some(representation) = representation {
-                    collect_siblings(scratch, types.enter(representation.raw()), out);
+                    collect_siblings(types, scratch, types.enter(representation.raw()), out);
                 }
             }
         }
@@ -252,6 +256,24 @@ impl<'w> SealedGroup<'w> {
             .iter()
             .find(|(binder, _)| *binder == name)
             .map(|(_, kt)| *kt)
+    }
+
+    /// `relative`, elaborated against this group's open window, with each sibling read as the
+    /// member it names: the type a declaration of the same content reads once the group is
+    /// sealed. How a signature or alias the group's members name takes its absolute type.
+    pub fn absolute<'ty>(
+        &self,
+        types: &TypeChain<'ty, impl Habitat<'ty>>,
+        scratch: BumpAllocator<'_>,
+        relative: KType,
+    ) -> KType {
+        let resolve = |index: usize| types.enter(self.members[index].kt.raw());
+        KType::read(rewrite_siblings(
+            types,
+            scratch,
+            types.enter(relative.raw()),
+            &resolve,
+        ))
     }
 
     /// Every `(name, handle)` this seal installs: the standalone members, then the binders.

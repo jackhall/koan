@@ -280,6 +280,27 @@ fn a_union_may_name_itself_and_types_take_slots_after_values() {
 }
 
 #[test]
+fn a_type_lets_right_side_is_a_deferred_mention() {
+    // An alias reads its right side as a `NEWTYPE` reads its definition, so it may name a type
+    // binder declared after it.
+    for source in [
+        "LET Fwd = Later\nNEWTYPE Later = Number",
+        "LET Fwd = :{a :(Later | Null)}\nNEWTYPE Later = Number",
+        "LET Fwd = (LIST OF Later)\nNEWTYPE Later = Number",
+    ] {
+        shaped(source, |fixture, _, shape| {
+            let shape = shape.expect("the program shapes");
+            let later = BinderSymbol::Type(type_name("Later", fixture.symbols));
+            assert_eq!(
+                mention_of(shape, later).class,
+                MentionClass::Deferred,
+                "{source}"
+            );
+        });
+    }
+}
+
+#[test]
 fn each_error_names_what_a_user_needs() {
     let cases: &[(&str, &str)] = &[
         (

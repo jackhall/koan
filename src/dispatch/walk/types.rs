@@ -7,19 +7,19 @@
 //! where it is typed ([`overlap`](super::super::check::overlap)), outside a quote's code, whose
 //! closing record keeps its first overlap for the `EVAL` running it to report.
 
+use crate::elaborate::judge;
 use crate::elaborate::{self, Signatures, Tools, TypeContext};
 use crate::memory::{BumpVec, collect};
 use crate::scope::{
-    Binder, BodyShape, Born, Component, Located, Registration, Resolved, Segment, ShapeError,
-    ShapeKind, Shapes, Site, Slot, StaticCallable, StaticRegistered, StaticType, Store,
-    TypeExpression, Unknown,
+    Binder, BodyShape, Born, Component, Located, PathName, Position, Registration, Resolved,
+    Segment, ShapeError, ShapeKind, Shapes, Site, Slot, StaticCallable, StaticRegistered,
+    StaticType, Store, TypeExpression, Unknown,
 };
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::{KType, Parametric, is_subtype_of};
 
 use super::super::check::overlap;
-use super::reads::Part;
-use super::{Pass, Tag, never_satisfies};
+use super::{Pass, Tag};
 
 impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>> TypeContext<'graph, 'o>
     for Pass<'p, 'o, '_, 'graph, 'tier, '_, '_, S>
@@ -58,6 +58,14 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>> TypeContext<'graph, '
 
     fn note(&self, unknowns: &[Unknown]) {
         Pass::note(self, unknowns);
+    }
+
+    fn note_open(&self, unknown: Unknown, mark: crate::scope::OpenMark<'static>) {
+        Pass::note_open(self, unknown, mark);
+    }
+
+    fn marks(&self) -> &dyn crate::elaborate::judge::Marks {
+        self
     }
 }
 
@@ -113,9 +121,14 @@ impl<'p, 'o: 'p, 'x, 'graph: 'o + 'p, 'tier: 'o, 'pair, 'reg, S: Store<'o>>
         for expression in written.iter() {
             self.type_expression(level, expression)?;
         }
-        elaborate::guards(shape, &written, self.scratch, |expression| {
-            self.type_cell(shape, expression.site)
-        })?;
+        elaborate::guards(
+            self,
+            self.types,
+            shape,
+            &written,
+            self.scratch,
+            |expression| self.type_cell(shape, expression.site),
+        )?;
         elaborate::arms_under(self.types, self.scratch, shape, &written, |expression| {
             self.type_cell(shape, expression.site)
         })
@@ -154,6 +167,11 @@ impl<'p, 'o: 'p, 'x, 'graph: 'o + 'p, 'tier: 'o, 'pair, 'reg, S: Store<'o>>
         self.set_registered(level, registration.slot, typed);
         let root = self.shape_at(self.chain_root_segment(level));
         if root.kind() != ShapeKind::Code {
+            // A rigid entry is checked where its binding closes it: a binding may make it overlap.
+            if let crate::scope::Static::Rigid { value, .. } = typed {
+                use crate::elaborate::judge::Marks;
+                self.open(crate::scope::OpenKind::Overlap, None, value.shape);
+            }
             overlap(
                 shape,
                 registration,
@@ -184,19 +202,9 @@ impl<'p, 'o: 'p, 'x, 'graph: 'o + 'p, 'tier: 'o, 'pair, 'reg, S: Store<'o>>
             callable: typed,
             levels,
             instance: None,
-            digestible: &[],
+            digestible: self.digestible(body, typed, levels),
         };
         self.set_born(body.segment(), born);
-        let mut digestible = BumpVec::new_in(self.scratch);
-        for slot in (0..body.slots() as u32).map(Slot) {
-            if body.position_of(slot) == crate::scope::Position::PARAMETER
-                && self.digests(body, slot)
-            {
-                digestible.push(slot);
-            }
-        }
-        let digestible = collect(self.lay, digestible.iter().copied());
-        self.set_born(body.segment(), Born { digestible, ..born });
         Ok(())
     }
 
@@ -217,7 +225,7 @@ impl<'p, 'o: 'p, 'x, 'graph: 'o + 'p, 'tier: 'o, 'pair, 'reg, S: Store<'o>>
         };
         let typed = self.part(level, part)?;
         let (types, scratch) = (self.types, self.scratch);
-        match never_satisfies(types, scratch, typed, KType::ANY_CODE.into()) {
+        match judge::never_satisfies(self, types, scratch, typed, KType::ANY_CODE.into()) {
             Some((value, _)) => Err(ShapeError::BodyNotCode {
                 value,
                 at: self.source(level, site),
@@ -226,27 +234,48 @@ impl<'p, 'o: 'p, 'x, 'graph: 'o + 'p, 'tier: 'o, 'pair, 'reg, S: Store<'o>>
         }
     }
 
-    /// Whether `frame`'s parameter at `slot` digests at a constant cost: a type binder, or one
-    /// declared closed under `Module` or as a type value. A list's or a record's digest costs its
-    /// size, so any other parameter keys nothing.
-    fn digests(&self, frame: &BodyShape<'graph>, slot: Slot) -> bool {
-        let name = frame.slot_name(slot);
-        if let BinderSymbol::Type(_) = name {
-            return true;
-        }
+    /// The parameters of `frame`, typed `typed` with its own group at `levels`, whose arguments
+    /// digest at a constant cost, sorted: a type binder, or one declared closed under `Module` or
+    /// as a type value. A list's or a record's digest costs its size, so any other parameter keys
+    /// nothing.
+    fn digestible(
+        &self,
+        frame: &BodyShape<'graph>,
+        typed: StaticCallable<'o>,
+        levels: &[Parametric],
+    ) -> &'o [Slot] {
         let (types, scratch) = (self.types, self.scratch);
-        let declared = (self.body_type(frame, Part::Parameter(name.symbol())))
-            .and_then(|declared| types.concrete(declared));
-        declared.is_some_and(|declared| {
-            is_subtype_of(types, scratch, declared, KType::EMPTY_SIGNATURE)
-                || is_subtype_of(types, scratch, declared, KType::ANY_TYPE)
-        })
+        // The function type as the body reads it, instantiated once for every parameter. Each
+        // `FOR ALL` name the binding binds is already closed in `levels`.
+        let params = self
+            .function_in_body(typed, levels)
+            .map(|(params, _)| params);
+        let digests = |slot: Slot| {
+            let name = frame.slot_name(slot);
+            if let BinderSymbol::Type(_) = name {
+                return true;
+            }
+            let declared = params
+                .and_then(|params| params.get(name.symbol()))
+                .and_then(|declared| judge::closed(self, types, declared));
+            declared.is_some_and(|declared| {
+                is_subtype_of(types, scratch, declared, KType::EMPTY_SIGNATURE)
+                    || is_subtype_of(types, scratch, declared, KType::ANY_TYPE)
+            })
+        };
+        let mut digestible = BumpVec::new_in(scratch);
+        for slot in (0..frame.slots() as u32).map(Slot) {
+            if frame.position_of(slot) == Position::PARAMETER && digests(slot) {
+                digestible.push(slot);
+            }
+        }
+        collect(self.lay, digestible.iter().copied())
     }
 
     /// What the path at `level` of the chain `root` roots resolves to, where the walk resolved it,
     /// the resolving unit's frontier gathered.
     pub(super) fn resolution_at(&self, root: Segment, level: usize) -> Option<Resolved> {
-        let (resolution, tag): (_, Tag) = self.resolved_at(root, level)?;
+        let (resolution, tag): (_, Tag) = self.resolved_at(root, PathName::Spelled(level))?;
         self.gather(tag);
         Some(resolution.resolved)
     }

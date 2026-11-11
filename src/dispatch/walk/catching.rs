@@ -57,7 +57,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             Some(error),
             true,
         )?;
-        Ok(spanned(types, scratch, &[body, arms]))
+        Ok(spanned(self, types, scratch, &[body, arms]))
     }
 
     /// `CATCH <body>`: `Result` applied at the body's upper end and `Error`, over `Never`.

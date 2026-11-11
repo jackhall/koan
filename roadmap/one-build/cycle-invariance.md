@@ -40,9 +40,6 @@ The site classes it refines live in [the folds](../../src/build/folds.rs),
 and their tail edges and the invariance fixpoint in
 [the shape's tail facts](../../src/scope/shapes/tails.rs).
 
-**Requires:**
-
-- [The trace](the-trace.md) — the tails fold it refines is the one the trace
-  extends.
+**Requires:** none.
 
 **Unblocks:** none.

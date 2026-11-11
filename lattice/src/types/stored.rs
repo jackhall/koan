@@ -4,8 +4,10 @@
 //!
 //! The table stores a node apart from the [`TypeNode`] a reader sees, so storage can pack what a
 //! view spells out. Each variant whose probe answers its children decide carries a [`Flags`] byte:
-//! the six answers — four about variables and carriers, and porous and exposing — folded at intern
-//! so each probe is one read of the node. Every other variant's answers are a constant of its
+//! the eight answers — four about variables and carriers, porous and exposing, and two that see
+//! inside a signature, a sibling and a carrier reachable there — folded at intern so each probe is
+//! one read of the node. A signature's and a variable's byte holds only the two that see inside a
+//! signature, beside a constant of its kind. Every other variant's answers are a constant of its
 //! kind, which [`Content::flags`] answers.
 //!
 //! A few fields a hot path never reads sit behind one `&'run` reference, laid in the half on an
@@ -39,16 +41,17 @@ use super::component::Component;
 use super::digest::TypeDigest;
 use super::handle::{DeclaredType, Handle, Naming, Parametric, wrap};
 use super::kind::KKind;
-use super::node::{ContentKey, Group, TypeNode};
+use super::node::{ContentKey, Group, PathClass, TypeNode};
 use super::record::Record;
 use super::run::{Elements, Run};
 use super::schema::SigSchema;
 use super::shape::{DeferredReturnSurface, StoredElement};
 use super::tiers::lay_one;
 
-/// The six probe answers, folded from a node's children when it is interned: a free
-/// `Quantified`, any rigid variable, anything parametric, an opaque carrier, and the two
-/// porosity answers ([type tiers](../../../design/type-tiers.md#porosity)).
+/// The eight probe answers, folded from a node's children when it is interned: a free
+/// `Quantified`, any rigid variable, anything parametric, an opaque carrier, the two porosity
+/// answers ([type tiers](../../../design/type-tiers.md#porosity)), and the two [`DEEP`](Self::DEEP)
+/// answers, which alone fold through the handles a signature or an application holds too.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct Flags(u8);
 
@@ -68,10 +71,10 @@ impl Flags {
     pub(super) const NONE: Self = Flags(0);
     /// A `Quantified` position is reachable without crossing a scheme.
     pub(super) const QUANTIFIED: Self = Flags(1);
-    /// A rigid variable — `Quantified`, `Lexical` or `Parameter` — is reachable.
+    /// A rigid variable — `Quantified`, `Lexical`, `Path` or `Parameter` — is reachable.
     pub(super) const RIGID: Self = Flags(2);
-    /// A free `Quantified`, a `Lexical`, a head `Parameter` or a scheme is reachable outside
-    /// sealed content: the type is parametric rather than concrete.
+    /// A free `Quantified`, a `Lexical`, a `Path`, a head `Parameter` or a scheme is reachable
+    /// outside sealed content: the type is parametric rather than concrete.
     pub(super) const PARAMETRIC: Self = Flags(4);
     /// An opaque carrier is reachable outside sealed content.
     pub(super) const CARRIER: Self = Flags(8);
@@ -81,10 +84,23 @@ impl Flags {
     pub(super) const EXPOSING: Self = Flags(32);
     /// Both porosity answers.
     pub(super) const POROSITY: Self = Flags(16 | 32);
+    /// A sibling is reachable, inside a signature or an application too: what the seal's two
+    /// sibling walks stop early by.
+    pub(super) const SIBLING: Self = Flags(64);
+    /// An opaque carrier is reachable, inside a signature or an application too: what a carrier's
+    /// read-back stops early by. Every node with [`CARRIER`](Self::CARRIER) has it.
+    pub(super) const DEEP_CARRIER: Self = Flags(128);
+    /// The answers that fold through the handles a signature or an application holds.
+    pub(super) const DEEP: Self = Flags(64 | 128);
 
     /// These flags less `other`'s.
     pub(super) fn without(self, other: Self) -> Self {
         Flags(self.0 & !other.0)
+    }
+
+    /// The flags set both here and in `other`.
+    pub(super) fn within(self, other: Self) -> Self {
+        Flags(self.0 & other.0)
     }
 
     /// Whether every flag of `other` is set here.
@@ -135,6 +151,9 @@ pub enum Content<'run> {
     Never,
     OfKind(KKind),
     Parameter {
+        /// Only [`Flags::DEEP`] answers, folded from its bound: every other is a variable's
+        /// constant.
+        flags: Flags,
         name: TypeSymbol,
         bound: Linked<'run>,
     },
@@ -172,13 +191,27 @@ pub enum Content<'run> {
         body: Linked<'run>,
     },
     Quantified {
+        /// Only [`Flags::DEEP`] answers, folded from its bound: every other is a variable's
+        /// constant.
+        flags: Flags,
         index: usize,
         bound: Linked<'run>,
     },
     Lexical {
+        /// Only [`Flags::DEEP`] answers, folded from its two ends: every other is a variable's
+        /// constant.
+        flags: Flags,
         level: u32,
         name: &'run TypeSymbol,
         lower: Linked<'run>,
+        bound: Linked<'run>,
+    },
+    Path {
+        /// Only [`Flags::DEEP`] answers, folded from its bound: every other is a variable's
+        /// constant.
+        flags: Flags,
+        class: &'run PathClass,
+        name: &'run TypeSymbol,
         bound: Linked<'run>,
     },
     Union {
@@ -191,6 +224,8 @@ pub enum Content<'run> {
         arguments: Record<'run, Linked<'run>>,
     },
     Signature {
+        /// Only [`Flags::DEEP`] answers: every other is a signature's constant.
+        flags: Flags,
         schema: &'run SigSchema<'run>,
         schema_digest: TypeDigest,
     },
@@ -322,7 +357,7 @@ impl<'run> StoredNode<'run> {
             },
             Content::Never => TypeNode::Never,
             Content::OfKind(kind) => TypeNode::OfKind(kind),
-            Content::Parameter { name, bound } => TypeNode::Parameter {
+            Content::Parameter { name, bound, .. } => TypeNode::Parameter {
                 name,
                 bound: C::read_bound(bound),
             },
@@ -354,7 +389,7 @@ impl<'run> StoredNode<'run> {
                 group,
                 body: C::read(body),
             },
-            Content::Quantified { index, bound } => TypeNode::Quantified {
+            Content::Quantified { index, bound, .. } => TypeNode::Quantified {
                 index,
                 bound: C::read_bound(bound),
             },
@@ -363,10 +398,18 @@ impl<'run> StoredNode<'run> {
                 name,
                 lower,
                 bound,
+                ..
             } => TypeNode::Lexical {
                 level: level as usize,
                 name: *name,
                 lower: C::read_bound(lower),
+                bound: C::read_bound(bound),
+            },
+            Content::Path {
+                class, name, bound, ..
+            } => TypeNode::Path {
+                class: *class,
+                name: *name,
                 bound: C::read_bound(bound),
             },
             Content::Union { members, .. } => TypeNode::Union {
@@ -383,6 +426,7 @@ impl<'run> StoredNode<'run> {
             Content::Signature {
                 schema,
                 schema_digest,
+                ..
             } => TypeNode::Signature {
                 schema: *schema,
                 schema_digest,
@@ -461,6 +505,19 @@ impl<'run> StoredNode<'run> {
     /// flag interning stored in the node.
     pub(super) fn contains_carrier(&self) -> bool {
         self.flags().holds(Flags::CARRIER)
+    }
+
+    /// Whether a sibling is reachable from the node, inside a signature or an application too.
+    /// Read off the flag interning stored in the node.
+    pub(super) fn contains_sibling(&self) -> bool {
+        self.flags().holds(Flags::SIBLING)
+    }
+
+    /// Whether an opaque carrier is reachable from the node, inside a signature or an application
+    /// too, where [`contains_carrier`](Self::contains_carrier) stops at one. Read off the flag
+    /// interning stored in the node.
+    pub(super) fn contains_deep_carrier(&self) -> bool {
+        self.flags().holds(Flags::DEEP_CARRIER)
     }
 
     /// Whether a type minted at run, or one built over it, can lie under or fit the node. Read off
@@ -557,7 +614,11 @@ impl<'run> Content<'run> {
             TypeNode::CodeUnbuilt { kind } => Content::CodeUnbuilt { kind },
             TypeNode::Never => Content::Never,
             TypeNode::OfKind(kind) => Content::OfKind(kind),
-            TypeNode::Parameter { name, bound } => Content::Parameter { name, bound },
+            TypeNode::Parameter { name, bound } => Content::Parameter {
+                flags: flags.within(Flags::DEEP),
+                name,
+                bound,
+            },
             TypeNode::Carrier { name, key, met } => Content::Carrier {
                 key: lay_one(lay, (key, name)),
                 met,
@@ -582,16 +643,27 @@ impl<'run> Content<'run> {
                 }
             }
             TypeNode::Scheme { group, body } => Content::Scheme { flags, group, body },
-            TypeNode::Quantified { index, bound } => Content::Quantified { index, bound },
+            TypeNode::Quantified { index, bound } => Content::Quantified {
+                flags: flags.within(Flags::DEEP),
+                index,
+                bound,
+            },
             TypeNode::Lexical {
                 level,
                 name,
                 lower,
                 bound,
             } => Content::Lexical {
+                flags: flags.within(Flags::DEEP),
                 level: u32::try_from(level).expect("a lexical level fits u32"),
                 name: lay_one(lay, name),
                 lower,
+                bound,
+            },
+            TypeNode::Path { class, name, bound } => Content::Path {
+                flags: flags.within(Flags::DEEP),
+                class: lay_one(lay, class),
+                name: lay_one(lay, name),
                 bound,
             },
             TypeNode::Union { members } => Content::Union { flags, members },
@@ -607,6 +679,7 @@ impl<'run> Content<'run> {
                 schema,
                 schema_digest,
             } => Content::Signature {
+                flags: flags.within(Flags::DEEP),
                 schema: lay_one(lay, schema),
                 schema_digest,
             },
@@ -672,7 +745,8 @@ impl<'run> Content<'run> {
             Content::CodeUnbuilt { kind } => Content::CodeUnbuilt { kind: map(kind) },
             Content::Never => Content::Never,
             Content::OfKind(kind) => Content::OfKind(kind),
-            Content::Parameter { name, bound } => Content::Parameter {
+            Content::Parameter { flags, name, bound } => Content::Parameter {
+                flags,
                 name,
                 bound: map(bound),
             },
@@ -724,19 +798,37 @@ impl<'run> Content<'run> {
                 ),
                 body: map(body),
             },
-            Content::Quantified { index, bound } => Content::Quantified {
+            Content::Quantified {
+                flags,
+                index,
+                bound,
+            } => Content::Quantified {
+                flags,
                 index,
                 bound: map(bound),
             },
             Content::Lexical {
+                flags,
                 level,
                 name,
                 lower,
                 bound,
             } => Content::Lexical {
+                flags,
                 level,
                 name: lay_one(lay, *name),
                 lower: map(lower),
+                bound: map(bound),
+            },
+            Content::Path {
+                flags,
+                class,
+                name,
+                bound,
+            } => Content::Path {
+                flags,
+                class: lay_one(lay, *class),
+                name: lay_one(lay, *name),
                 bound: map(bound),
             },
             Content::Union { flags, members } => Content::Union {
@@ -753,9 +845,11 @@ impl<'run> Content<'run> {
                 arguments: Record::over(mapped_fields(lay, arguments.raw(), map)),
             },
             Content::Signature {
+                flags,
                 schema,
                 schema_digest,
             } => Content::Signature {
+                flags,
                 schema: lay_one(lay, schema.copied_into(lay)),
                 schema_digest,
             },
@@ -797,8 +891,10 @@ impl<'run> Content<'run> {
     }
 
     /// The node's probe answers — the one door every probe reads. A variant with a [`Flags`] field
-    /// answers it; every other variant answers a constant of its kind. A variable's are constant
-    /// because its bound and lower end are concrete and carrier-free.
+    /// answers it; every other variant answers a constant of its kind. A variable's are a constant
+    /// beside the [`DEEP`](Flags::DEEP) answers its byte folds from its ends, since its bound and
+    /// lower end are concrete and carrier-free outside a signature, but may hold a sibling or a
+    /// signature naming a carrier.
     pub(super) fn flags(&self) -> Flags {
         match *self {
             Content::List { flags, .. }
@@ -811,28 +907,31 @@ impl<'run> Content<'run> {
             | Content::ConstructorApply { flags, .. }
             | Content::SignatureApply { flags, .. }
             | Content::SignatureMeet { flags, .. } => flags,
-            Content::Quantified { .. } => {
-                Flags::QUANTIFIED | Flags::RIGID | Flags::PARAMETRIC | Flags::POROSITY
+            // Its byte holds what it reaches through its handles; the rest are its kind's.
+            Content::Signature { flags, .. } => Flags::POROSITY | flags,
+            Content::Quantified { flags, .. } => {
+                Flags::QUANTIFIED | Flags::RIGID | Flags::PARAMETRIC | Flags::POROSITY | flags
             }
-            Content::Lexical { .. } | Content::Parameter { .. } => {
-                Flags::RIGID | Flags::PARAMETRIC | Flags::POROSITY
+            Content::Lexical { flags, .. }
+            | Content::Path { flags, .. }
+            | Content::Parameter { flags, .. } => {
+                Flags::RIGID | Flags::PARAMETRIC | Flags::POROSITY | flags
             }
             // An opaque carrier: a value carries it and dispatches on it, so it is concrete. Its
             // payload is read at its own type, so it exposes; nothing but itself lies under it.
-            Content::Carrier { .. } => Flags::CARRIER | Flags::EXPOSING,
+            Content::Carrier { .. } => Flags::CARRIER | Flags::DEEP_CARRIER | Flags::EXPOSING,
             // Every type built over a minted one lies under these, and a part under them keeps its
             // own memo. A signature is the top of the signature types a view's lies under.
             // An application lies under the bare family it applies, and a pre-seal sibling has the
             // profile of the member it becomes.
             Content::Any
             | Content::AnyValue
-            | Content::Signature { .. }
             | Content::DeferredReturn(_)
             | Content::SetMember {
                 kind: KKind::TypeConstructor,
                 ..
-            }
-            | Content::Sibling(_) => Flags::POROSITY,
+            } => Flags::POROSITY,
+            Content::Sibling(_) => Flags::SIBLING | Flags::POROSITY,
             // A type value's payload is the type it names; a nominal's is read at its
             // representation.
             Content::OfKind(_) | Content::SetMember { .. } => Flags::EXPOSING,

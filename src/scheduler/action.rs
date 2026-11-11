@@ -12,8 +12,8 @@
 //! a carrier door: a step holds values at its own brands and nothing else, and says what it needs —
 //! a child, a wait, a successor, a result — beside the hints that place it. What it keeps of a
 //! value at the value's true home is an opaque, brand-free [`Kept`](super::Kept), which only the
-//! veneer redeems: a finish hands such a value on from there ([`Step::finish`]). An arena node
-//! reaches a step only as an opaque [`ArenaRef`], which the scheduler alone opens; the region a decision
+//! veneer redeems: a finish hands such a value on from there ([`Step::finish`]). A depot slot
+//! reaches a step only as an opaque [`DepotRef`], which the scheduler alone opens; the region a decision
 //! memo rests in, as an opaque [`MemoHome`] minted from a cell's own provenance, which names an
 //! ancestor of every cell it is handed to.
 //!
@@ -30,21 +30,21 @@ use crate::memory::{
     Active, CellHandle, CrossedOperand, DeliverError, Delivered, Dormant, Erased, Header, Operand,
     Ready, ReattachableOverBoth, Receipt, Stale, StepContext, Writer, resident,
 };
-use crate::scheduler::arena::BuildArena;
 use crate::scheduler::beside::{Beside, ReadsBeside};
 use crate::scheduler::continuation::{
     Arrival, BirthAt, Born, Continuation, ContinuationFamily, NativeStep, Provenance, Report,
     Rested, StateAt, StepBundle, Work,
 };
 use crate::scheduler::delivery::{Fill, FillFamily, KDelivery};
+use crate::scheduler::depot::BuildDepot;
 use crate::scheduler::kept::{Held, Kept, KeptPart};
 use crate::scheduler::seek::{Compose, Lending, Replayed, Requested, Seek};
 use crate::scope::{
     Code, ComposedRoot, ComposedSyntax, Entry, EntryFamily, Facts, HalfHeader, Inner, Line, Link,
-    MemoFamily, MemoKey,
+    MemoFamily, MemoKey, RoomFamily,
 };
 use crate::type_lattice::Halves;
-use crate::values::{ArenaRef, Chain, ContentDigest, Half, KeptCell, TypeTiers, Types};
+use crate::values::{Chain, ContentDigest, DepotRef, Half, KeptCell, TypeTiers, Types};
 
 /// The raw context a step runs in: every door `cellgraph` hands one, over the bundle's families.
 /// Only a [`Step`] and the drain hold one.
@@ -106,7 +106,7 @@ pub(super) enum Kind<'graph, B: StepBundle<'graph>> {
     Beside(KeptCell),
     /// The step ended with a fault, delivered to its consumer. The drain drops what the consumer
     /// asked for and has not yet run, and pushes the consumer; it keeps a tree cell, `kept`, and
-    /// its borrow of its arena node, and releases a tenant as a finish does.
+    /// its borrow of its depot slot, and releases a tenant as a finish does.
     Faulted { kept: bool },
     /// A root work's end that leaves a birth at rest in its home, for the graph's owner to resume a
     /// later root work from. The drain releases the cell and hands the carrier back out of `run`.
@@ -242,8 +242,8 @@ pub struct Step<
     /// What the cell's door reads: the settlement it runs under, if any, over the load.
     facts: Facts<'a>,
     provenance: &'a Provenance,
-    /// The arena node the cell runs under, which a park hands its successor.
-    arena: ArenaRef,
+    /// The depot slot the cell runs under, which a park hands its successor.
+    depot: DepotRef,
     /// The syntax digest of the composed code the cell's chain rests on, if not the load.
     composed: Option<ContentDigest>,
     /// What the drain told the cell's first step about how it placed it.
@@ -251,8 +251,8 @@ pub struct Step<
     /// The request a call's asker handed the drain, which the frame's first step lays a level
     /// from.
     sought: Option<Box<Requested<'graph>>>,
-    /// The books the cell's arena node is kept in, which the step reads liveness from.
-    books: &'a BuildArena<'graph>,
+    /// The books the cell's depot slot is kept in, which the step reads liveness from.
+    books: &'a BuildDepot<'graph>,
     spawns: &'a mut Spawns<'graph, B>,
     /// The kept cell's header, where the drain entered this step beside one.
     beside: Option<&'a dyn ReadsBeside<'graph>>,
@@ -291,7 +291,7 @@ where
     'lent: 'scratch,
 {
     /// The step the drain hands a cell's continuation, over its graph's type tiers, the provenance
-    /// and arena node it read off that same continuation, the buffer it cleared for this step, the
+    /// and depot slot it read off that same continuation, the buffer it cleared for this step, the
     /// carrier of a birth it woke pinned, and both slots the cell parked in.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn new(
@@ -302,14 +302,14 @@ where
         tiers: TypeTiers<'graph>,
         facts: Facts<'a>,
         provenance: &'a Provenance,
-        (arena, composed, arrival, sought): (
-            ArenaRef,
+        (depot, composed, arrival, sought): (
+            DepotRef,
             Option<ContentDigest>,
             Arrival,
             Option<Box<Requested<'graph>>>,
         ),
         (books, spawns, beside): (
-            &'a BuildArena<'graph>,
+            &'a BuildDepot<'graph>,
             &'a mut Spawns<'graph, B>,
             Option<&'a dyn ReadsBeside<'graph>>,
         ),
@@ -322,7 +322,7 @@ where
             tiers,
             facts,
             provenance,
-            arena,
+            depot,
             composed,
             arrival,
             sought,
@@ -358,7 +358,7 @@ where
             tiers,
             facts,
             provenance,
-            arena,
+            depot,
             composed,
             arrival,
             sought,
@@ -374,7 +374,7 @@ where
             tiers,
             facts,
             provenance,
-            arena,
+            depot,
             composed,
             arrival,
             sought,
@@ -411,7 +411,7 @@ where
             tiers,
             facts,
             provenance,
-            arena,
+            depot,
             composed,
             arrival,
             sought,
@@ -427,7 +427,7 @@ where
             tiers,
             facts,
             provenance,
-            arena,
+            depot,
             composed,
             arrival,
             sought,
@@ -547,9 +547,9 @@ where
         self.arrival == Arrival::Replayed
     }
 
-    /// Whether `at` names a live arena node: what a call reads before it replays a stamp. The
+    /// Whether `at` names a live depot slot: what a call reads before it replays a stamp. The
     /// root always does.
-    pub fn arena_live(&self, at: ArenaRef) -> bool {
+    pub fn depot_live(&self, at: DepotRef) -> bool {
         self.books.is_live(at)
     }
 
@@ -559,10 +559,15 @@ where
         self.sought.take()
     }
 
-    /// Whether this cell runs under a settlement: a call's frame the drain found or built one
-    /// for, or a cell its asker's runs under.
+    /// Whether this cell runs under a settlement or a layer the load laid: a call's frame the drain
+    /// found, built or laid one for, or a cell its asker's runs under.
     pub fn under_settlement(&self) -> bool {
-        self.arena != ArenaRef::ROOT
+        self.depot != DepotRef::ROOT
+    }
+
+    /// Whether this cell runs under a layer the load laid, which is never evicted.
+    pub fn under_load_layer(&self) -> bool {
+        self.depot.load_ordinal().is_some()
     }
 
     /// Ask for one child, and take back the slot of this step's run it will report to. The drain
@@ -574,7 +579,7 @@ where
         self.spawn_lending(request, Lending::Parent)
     }
 
-    /// [`spawn`](Self::spawn) a call's frame, born under the arena node `seek` finds: the drain
+    /// [`spawn`](Self::spawn) a call's frame, born under the depot slot `seek` finds: the drain
     /// looks its settlement up, or builds it, before the child is born, so it never runs under
     /// this cell's settlement unless the seek names it.
     pub fn spawn_seeking(
@@ -625,7 +630,7 @@ where
         &mut self,
         home: MemoHome,
         inherit: Option<MemoHome>,
-        key: MemoKey<'_>,
+        key: MemoKey,
     ) -> Option<&'here Entry<'here>> {
         let tiers = self.tiers;
         let memo = self.memo_read(home.0)?;
@@ -718,6 +723,19 @@ where
         )
     }
 
+    /// Whether the decision memo resting in `home` may keep another entry: its budget unspent,
+    /// or no memo laid there yet. `false` where the home has died.
+    pub fn memo_room(&mut self, home: MemoHome) -> bool {
+        let Ok(room) =
+            (self.context).alloc_into::<RoomFamily, RoomFamily>(home.0, &[], |_, header, _| {
+                Active::new(header.get().is_none_or(HalfHeader::memo_room))
+            })
+        else {
+            return false;
+        };
+        self.context.read(&room).value()
+    }
+
     /// The memo resting in `home`, as a carrier homed there.
     fn memo_read(&mut self, home: CellHandle) -> Option<Ready<'graph, 'step, MemoFamily>> {
         (self.context)
@@ -727,11 +745,11 @@ where
             .ok()
     }
 
-    /// The arena node this cell runs under, where it is a settlement, and `fallback` under the
+    /// The depot slot this cell runs under, where it is a settlement, and `fallback` under the
     /// root.
-    pub fn arena_ref(&self, fallback: ArenaRef) -> ArenaRef {
+    pub fn depot_ref(&self, fallback: DepotRef) -> DepotRef {
         if self.under_settlement() {
-            self.arena
+            self.depot
         } else {
             fallback
         }
@@ -828,7 +846,7 @@ where
         self.context.store_successor(Continuation {
             step,
             provenance: *self.provenance,
-            arena: self.arena,
+            depot: self.depot,
             arrival: Arrival::Placed,
             sought: None,
             state: Rested::Awake(state),
@@ -856,7 +874,7 @@ where
         self.context.store_successor(Continuation {
             step,
             provenance: *self.provenance,
-            arena: self.arena,
+            depot: self.depot,
             arrival: Arrival::Placed,
             sought: None,
             state: Rested::Awake(state),
@@ -880,7 +898,7 @@ where
         )
     }
 
-    /// [`tail`](Self::tail) into a call's frame, born under the arena node `seek` finds, as
+    /// [`tail`](Self::tail) into a call's frame, born under the depot slot `seek` finds, as
     /// [`spawn_seeking`](Self::spawn_seeking) asks for a child.
     pub fn tail_seeking(
         self,
@@ -900,7 +918,7 @@ where
     /// born under that same settlement with no lookup — sound only for a callee whose name does
     /// not escape, so that every hop into it is a tail edge the load read; or cold, where that
     /// settlement is no longer live.
-    pub fn tail_under(self, work: Work<'graph, 'here, B>, build: ArenaRef) -> Action<'graph, B> {
+    pub fn tail_under(self, work: Work<'graph, 'here, B>, build: DepotRef) -> Action<'graph, B> {
         let threads = B::threads(&work.state);
         self.tail_lending(
             Placement::Fresh,
@@ -925,7 +943,7 @@ where
         self.tail_lending(placement, work, Lending::Compose(compose), Tailing::Rebirth)
     }
 
-    /// Hand this cell's work, untouched, to a successor born under the arena node `seek` finds,
+    /// Hand this cell's work, untouched, to a successor born under the depot slot `seek` finds,
     /// once the composition of `root`'s code is built over a copy of its syntax: the first step of
     /// a call whose settlement binds a module of that code, which the miss found gone
     /// ([`wanting`](Self::wanting)). The successor takes this cell's placement.
@@ -951,8 +969,8 @@ where
     }
 
     /// Hand this cell's work, untouched, to a successor born warm: the first step of a call whose
-    /// callee's arena node is gone, which replays its stamp. Each of `levels`, outermost first, is
-    /// found under the one before, or settled there, from this cell's own arena node — the root,
+    /// callee's depot slot is gone, which replays its stamp. Each of `levels`, outermost first, is
+    /// found under the one before, or settled there, from this cell's own depot slot — the root,
     /// or the composition the callee was born of — and the last is the frame's own seek, under
     /// the last level. The successor takes this cell's placement.
     pub fn replay(
@@ -1441,7 +1459,7 @@ where
             CellHandle::Tree(handle) => {
                 let link = resident(writer, Link { line, inner });
                 (self.header().get_or_lay(|| KRegionHeader::lay(writer))).set_link(link);
-                let kept = KeptCell::of(handle, self.arena);
+                let kept = KeptCell::of(handle, self.depot);
                 let placed = self.context.alloc_into::<FillFamily, FillFamily>(
                     self.provenance.parent,
                     &[],

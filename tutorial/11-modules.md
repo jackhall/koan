@@ -157,6 +157,30 @@ The result of an ascription is itself a module, so it binds under a lowercase
 name (`named` above) like every other module. A *signature* name, by contrast, is
 capitalized (`HasLabel`) — a signature is a type.
 
+## A recursive structure of modules
+
+A signature may name a union that names the signature back, as
+[mutually recursive types](08-newtypes.md#mutually-recursive-types) do. Here
+each `Node` module holds a count and a link to the next node, and `TOTAL` sums
+the counts along the list:
+
+```koan
+SIG Node = #[(VAL count :Number) (VAL next :Link)]
+UNION Link = #{More: Node, End: Null}
+EXPR #(TOTAL n :Node) -> Number = #(n.count + (MATCH n.next UNDER Link WITH #{More: (TOTAL it), End: (0)}))
+MODULE last = ((LET count = 4) (LET next = (Link.End null)))
+MODULE first = ((LET count = 3) (LET next = (Link.More last)))
+PRINT (TOTAL first)
+```
+
+```text
+7
+```
+
+The union is what lets the ring close: a signature declares no new type of its
+own, so a signature that names itself, `SIG Chain = #[(VAL next :Chain)]`, is
+refused.
+
 ## Opening a module with `USING`
 
 `USING <module> SCOPE (<body>)` runs the body with the module's members brought

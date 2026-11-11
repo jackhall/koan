@@ -23,7 +23,7 @@ use super::raw::shape::{keys_equal, shape_classes, shape_of};
 use super::raw::sig_relations::{admits_shape, shape_specificity, sig_fits};
 use super::raw::signatures::{applications, applications_under, is_signature_type};
 use super::raw::substitute::{
-    Side, bound_above, read_through, substitute_parameters, substitute_quantified,
+    Side, bound_above, collect_siblings, read_through, substitute_parameters, substitute_quantified,
 };
 use super::raw::unify::{admits, most_determined_first, ties};
 use super::raw::walk::{visit, visit_free_quantified};
@@ -33,13 +33,15 @@ use crate::symbols::{BinderSymbol, TypeSymbol};
 use crate::types::chain::TypeChain;
 use crate::types::handle::{DeclaredType, Handle, KType, Parametric, TypeHandle, wrap};
 use crate::types::kind::KKind;
-use crate::types::node::{TypeNode, Variable};
-use crate::types::schema::{Members, canonical_overloads};
+use crate::types::node::{NodeSchema, TypeNode, Variable};
+use crate::types::ranking::STAND_IN_LEVEL;
+use crate::types::schema::{Members, canonical_overloads, member};
 use crate::types::shape::{DispatchTokenElement, Specificity, shape_slots};
 use crate::types::sig_relations::InstanceFailure;
 use crate::types::tiers::{Agent, BumpHalf, Habitat};
 use crate::types::typed::{
-    fits, instance_under, instantiate_quantified, is_subtype_of, join, meet, satisfied_by,
+    fits, fits_application, instance_under, instantiate_quantified, is_subtype_of, join, meet,
+    satisfied_by,
 };
 use crate::types::unify::{Collector, Interval, UnifyFailure, intervals};
 use crate::types::walk::Variance;
@@ -47,11 +49,12 @@ use crate::types::walk::unary::Visit;
 use crate::types::window::{RecursiveGroupWindow, RelativeSchema};
 
 use super::generators::{
-    Groups, Vocabulary, World, arb_admitted_pair, arb_any, arb_any_with, arb_argument_pair,
-    arb_arguments, arb_bounded_head_chain, arb_chain, arb_concrete, arb_fits_chain,
-    arb_function_type, arb_instance_chain, arb_lexical, arb_opaque, arb_ordered_pair,
-    arb_over_head_parameter, arb_own_instance, arb_shape_below, arb_shape_pair, arb_shape_type,
-    arb_signature, arb_signature_type, arb_wanted_instance, under_with, with_scratch,
+    Groups, Placement, Vocabulary, World, arb_admitted_pair, arb_any, arb_any_with,
+    arb_argument_pair, arb_arguments, arb_bounded_head_chain, arb_chain, arb_concrete,
+    arb_fits_chain, arb_function_type, arb_instance_chain, arb_lexical, arb_opaque,
+    arb_ordered_pair, arb_over_head_parameter, arb_own_instance, arb_pinnable, arb_placement,
+    arb_sealed_member, arb_shape_below, arb_shape_pair, arb_shape_type, arb_signature,
+    arb_signature_type, arb_wanted_instance, placed, under_with, with_scratch,
 };
 
 thread_local! {
@@ -525,7 +528,8 @@ proptest! {
 
     /// The probe flags interning stores beside a node answer what a walk over the type would: a free
     /// quantifier reachable without crossing a shape's binder, any rigid variable reachable at all,
-    /// anything parametric, an opaque carrier, and the two porosity answers, each its definition.
+    /// anything parametric, an opaque carrier, the two porosity answers, and an opaque carrier
+    /// reachable inside a signature too, each its definition.
     #[test]
     fn the_probe_flags_are_their_walks(declared in one()) {
         let types = registry();
@@ -541,6 +545,7 @@ proptest! {
         let rigid = visit(&types, scratch, a, &mut |_, node, _| match node {
             TypeNode::Quantified { .. }
             | TypeNode::Lexical { .. }
+            | TypeNode::Path { .. }
             | TypeNode::Parameter { .. } => Visit::Stop,
             _ => Visit::Descend,
         });
@@ -550,6 +555,7 @@ proptest! {
             _ if node.binds_quantifiers() => Visit::Stop,
             TypeNode::Quantified { .. }
             | TypeNode::Lexical { .. }
+            | TypeNode::Path { .. }
             | TypeNode::Parameter { .. } => Visit::Stop,
             _ => Visit::Descend,
         });
@@ -562,6 +568,14 @@ proptest! {
         prop_assert_eq!(types.contains_rigid(a), rigid);
         prop_assert_eq!(types.is_concrete(a), !parametric);
         prop_assert_eq!(types.contains_carrier(a), carrier);
+        let deep_carrier =
+            deep_walk(&types, scratch, a, &|node| matches!(node, TypeNode::Carrier { .. }));
+        prop_assert_eq!(types.enter(a).contains_deep_carrier(), deep_carrier);
+        prop_assert!(!carrier || deep_carrier, "a carrier outside a signature is reachable");
+        prop_assert_eq!(
+            types.enter(a).contains_sibling(),
+            deep_walk(&types, scratch, a, &|node| matches!(node, TypeNode::Sibling(_))),
+        );
         prop_assert_eq!(types.is_porous(a), porous_walk(&types, a));
         prop_assert_eq!(types.is_exposing(a), exposing_walk(&types, a));
         // The checked conversion agrees: a scheme is never concrete, and a type is where no
@@ -604,6 +618,39 @@ proptest! {
             crate::types::display_name(wrap::<Parametric>(a), &world.types, &world.symbols),
             crate::types::display_name(wrap::<Parametric>(b), &world.types, &world.symbols),
         );
+    }
+
+    /// Reading every carrier back as `Number` leaves none reachable, inside a signature or out.
+    #[test]
+    fn reading_every_carrier_back_leaves_none(declared in one()) {
+        let types = registry();
+        let bump = Bump::new();
+        let scratch = &bump;
+        let number = types.enter(KType::NUMBER.raw());
+        let read = crate::types::substitute::substitute_carriers(
+            &types,
+            scratch,
+            types.enter(declared.raw()),
+            &mut |_| Some(number),
+        );
+        prop_assert!(!read.contains_deep_carrier());
+    }
+
+    /// The same at each placement a sibling takes, a scheme's group bound among them, and the
+    /// read-back is the type written at the answer: one type, one handle.
+    #[test]
+    fn a_carrier_reads_back_at_every_placement(placement in arb_placement()) {
+        // A bound holds no carrier outside a signature.
+        prop_assume!(placement != Placement::InBound);
+        let (types, world) = (registry(), world());
+        let bump = Bump::new();
+        let scratch = &bump;
+        let carrier = types.carrier(world.type_names[1], KType::ANY, crate::types::ContentKey(7));
+        let held = placed(&*types, scratch, &world, carrier, placement);
+        prop_assert!(types.enter(held.raw()).contains_deep_carrier(), "a placed carrier is reachable");
+        let mut answer = |at: KType| (at == carrier).then_some(KType::NUMBER);
+        let read = crate::types::typed::substitute_carriers(&*types, scratch, held, &mut answer);
+        prop_assert_eq!(read, placed(&*types, scratch, &world, KType::NUMBER, placement));
     }
 }
 
@@ -703,6 +750,27 @@ fn widened_with_a_carrier() -> BoxedStrategy<(Handle, Handle)> {
         .boxed()
 }
 
+/// Whether `seek` holds at a node reachable from `root`, inside a signature or an application too:
+/// the walk the two deep probe flags answer, entering a signature through the handles it holds.
+fn deep_walk<'run>(
+    types: &TypeChain<'run, impl Habitat<'run>>,
+    scratch: BumpAllocator<'_>,
+    root: Handle,
+    seek: &impl Fn(&TypeNode<'run, Handle>) -> bool,
+) -> bool {
+    visit(types, scratch, root, &mut |at, node, _| match node {
+        _ if seek(node) => Visit::Stop,
+        TypeNode::Signature { .. } | TypeNode::SignatureApply { .. } => {
+            let mut found = false;
+            types.signature_handles(types.enter(at), &mut |held| {
+                found = found || deep_walk(types, scratch, held.handle(), seek);
+            });
+            if found { Visit::Stop } else { Visit::Skip }
+        }
+        _ => Visit::Descend,
+    })
+}
+
 /// [`TypeChain::porous`] by its definition, as a descent: whether a type minted at run, or one
 /// built over it, can lie under or fit `kt`.
 fn porous_walk<'ty>(types: &TypeChain<'ty, impl Habitat<'ty>>, kt: Handle) -> bool {
@@ -716,6 +784,7 @@ fn porous_walk<'ty>(types: &TypeChain<'ty, impl Habitat<'ty>>, kt: Handle) -> bo
         | TypeNode::SignatureMeet { .. }
         | TypeNode::Quantified { .. }
         | TypeNode::Lexical { .. }
+        | TypeNode::Path { .. }
         | TypeNode::Parameter { .. }
         | TypeNode::DeferredReturn(_)
         | TypeNode::Sibling(_) => true,
@@ -757,6 +826,7 @@ fn exposing_walk<'ty>(types: &TypeChain<'ty, impl Habitat<'ty>>, kt: Handle) -> 
         | TypeNode::SignatureMeet { .. }
         | TypeNode::Quantified { .. }
         | TypeNode::Lexical { .. }
+        | TypeNode::Path { .. }
         | TypeNode::Parameter { .. }
         | TypeNode::Carrier { .. }
         | TypeNode::DeferredReturn(_)
@@ -814,20 +884,33 @@ proptest! {
         prop_assert_eq!(substitute_parameters(&types, scratch, a, none), a);
     }
 
-    // A type holding a binder is not drawn: relating two of them runs the unifier, whose
-    // completeness is not this law's subject.
+    /// A type read through its variables' intervals from above lies over every instance of it, and
+    /// read from below under every instance: what a load-time verdict over a variable rests on. An
+    /// instance binds each lexical and path variable within its ends, as a run does, and any other
+    /// at `Never`. A pin over a variable is read by its own rule, since the order compares pins by
+    /// handle. A type holding a binder is not drawn: relating two of them runs the unifier, whose
+    /// completeness is not this law's subject.
     #[test]
-    fn bounding_above_lies_over_every_instance(a in arb_any_with(world(), 3, Vocabulary::CLOSED)) {
+    fn reading_through_bounds_brackets_every_instance(
+        a in arb_any_with(world(), 3, Vocabulary::CLOSED),
+        draw in draw(),
+    ) {
         let a = a.raw();
         let types = registry();
         let bump = Bump::new();
         let scratch = &bump;
         let above = bound_above(&types, scratch, a);
+        let below = read_through(&types, scratch, a, Side::Below, &mut |_, node| {
+            Some(Variable::of(node)?.interval().raw())
+        });
         prop_assert!(!types.contains_rigid(above));
+        prop_assert!(!types.contains_rigid(below));
         prop_assert!(order::is_subtype_of(&types, scratch, a, above));
         let lowest = [KType::NEVER; 8];
-        let instance = substitute_quantified(&types, scratch, a, &lowest);
+        let bound = instance(&types, scratch, a, &draw);
+        let instance = substitute_quantified(&types, scratch, bound, &lowest);
         prop_assert!(order::is_subtype_of(&types, scratch, instance, above));
+        prop_assert!(order::is_subtype_of(&types, scratch, below, instance));
     }
 
     /// A type read at the lower ends of its variables fits itself read at their upper ends, a
@@ -845,6 +928,59 @@ proptest! {
         });
         let above = bound_above(&types, scratch, a);
         prop_assert!(order::fits(&types, scratch, below, above));
+    }
+
+    /// A pin over a call's own variable solves it at the one point the carried module fixes: its
+    /// own pin where it applies the signature pinning the parameter, else what its fit to the
+    /// signature solves the parameter to, which it then fits at. A fit whose solution names one of
+    /// the module's own unpinned parameters fixes nothing, and no fit admits nothing.
+    #[test]
+    fn a_pin_over_a_variable_solves_it_at_the_fit(
+        (signature, name, offered) in arb_pinnable(world()),
+    ) {
+        let types = registry();
+        let bump = Bump::new();
+        let scratch = &bump;
+        let parameter = BinderSymbol::Type(name);
+        let variable = types.quantified(0, KType::ANY);
+        let declared =
+            types.signature_apply::<Parametric>(scratch, signature, &[(parameter, variable)]);
+        let mut collector = Collector::<Handle>::new(&types, scratch, &[KType::ANY]);
+        let admitted =
+            admits(&types, scratch, declared.raw(), offered.raw(), Variance::Co, &mut collector);
+        let solved = match admitted {
+            Ok(()) => collector.solve(&types).ok().map(|solution| solution[0]),
+            Err(_) => None,
+        };
+        let pins: Vec<Handle> = applications(&types, scratch, offered.raw())
+            .expect("a signature type")
+            .iter()
+            .filter(|application| application.signature.handle() == signature.raw())
+            .filter_map(|application| application.pin(name.symbol()))
+            .map(|pin| pin.handle())
+            .collect();
+        let expected = match pins.first() {
+            Some(first) => {
+                prop_assume!(pins.iter().all(|pin| pin == first));
+                Some(*first)
+            }
+            None => match fits_application(&types, scratch, offered, signature, &[]) {
+                // A stand-in for one of the module's own parameters is a lexical variable at a
+                // level far past every one the world draws.
+                Ok(solution) => member(solution, name).map(|solved| solved.raw()).filter(|solved| {
+                    !visit(&types, scratch, *solved, &mut |_, node, _| match *node {
+                        TypeNode::Lexical { level, .. } if level >= STAND_IN_LEVEL / 2 => Visit::Stop,
+                        _ => Visit::Descend,
+                    })
+                }),
+                Err(_) => None,
+            },
+        };
+        prop_assert_eq!(solved, expected);
+        if let Some(solved) = solved {
+            let at = types.signature_apply::<Handle>(scratch, signature, &[(parameter, solved)]);
+            prop_assert!(order::fits(&types, scratch, offered.raw(), at));
+        }
     }
 }
 
@@ -1389,7 +1525,7 @@ fn draw_from(source: impl Strategy<Value = u8>) -> impl Strategy<Value = Draw> {
 
 /// `kt` as the run carries it: each lexical variable replaced by the type the run binds its level
 /// to — its bound, its lower end, or the bound met with a pool type and joined with the lower end,
-/// as `draw` says.
+/// as `draw` says — and each path variable alike, by its class.
 fn instance<'ty>(
     types: &TypeChain<'ty, impl Habitat<'ty>>,
     scratch: BumpAllocator<'_>,
@@ -1416,6 +1552,26 @@ fn instance<'ty>(
                         scratch,
                         lower,
                         meet(types, scratch, bound, draw.pool[level % draw.pool.len()]),
+                    ),
+                }
+                .raw(),
+            )),
+            // A path class's variable is bound as the lexical variable at its class's index is,
+            // its lower end `Never`.
+            Variable::Path { class, bound, .. } => Some(Interval::point(
+                match draw
+                    .instances
+                    .get(class.0[0] as usize)
+                    .copied()
+                    .unwrap_or(0)
+                {
+                    0 => bound,
+                    1 => KType::NEVER,
+                    _ => meet(
+                        types,
+                        scratch,
+                        bound,
+                        draw.pool[class.0[0] as usize % draw.pool.len()],
                     ),
                 }
                 .raw(),
@@ -1797,7 +1953,7 @@ proptest! {
 
     #[test]
     fn sealing_is_order_insensitive_and_idempotent(
-        reprs in prop::collection::vec(small_concrete(), 1..4),
+        reprs in prop::collection::vec((small_concrete(), arb_placement()), 1..4),
     ) {
         let types = registry();
         let bump = Bump::new();
@@ -1805,25 +1961,104 @@ proptest! {
         let world = world();
         let names: Vec<_> = world.type_names[..reprs.len().min(3)].to_vec();
         let reprs = &reprs[..names.len()];
-        let forwards = seal(&types, scratch, &names, reprs, false);
-        let backwards = seal(&types, scratch, &names, reprs, true);
+        let forwards = seal(&types, scratch, &world, &names, reprs, false);
+        let backwards = seal(&types, scratch, &world, &names, reprs, true);
         // The same group presented in either member order seals to the same handles.
         let mut mirrored = backwards.clone();
         mirrored.reverse();
         prop_assert_eq!(forwards.clone(), mirrored);
         // Re-presenting the same group yields the same handles.
-        prop_assert_eq!(forwards, seal(&types, scratch, &names, reprs, false));
+        prop_assert_eq!(forwards, seal(&types, scratch, &world, &names, reprs, false));
+    }
+
+    /// A sealed member's absolute schema names its fellows by their member handles: no sibling is
+    /// left in it, inside a signature or out.
+    #[test]
+    fn a_sealed_schema_holds_no_sibling(member in arb_sealed_member(world(), 3)) {
+        let types = registry();
+        let bump = Bump::new();
+        let scratch = &bump;
+        let Some(NodeSchema::NewType(repr)) = types.member_schema(member) else {
+            unreachable!("a drawn member is a sealed newtype");
+        };
+        prop_assert!(collect_siblings(&types, scratch, repr.raw()).is_empty());
+    }
+
+    /// A relative type's sibling flag is its walk, at every placement, and rewriting every sibling
+    /// as `Number` leaves none reachable.
+    #[test]
+    fn rewriting_every_sibling_leaves_none(repr in small_concrete(), placement in arb_placement()) {
+        let types = registry();
+        let bump = Bump::new();
+        let scratch = &bump;
+        let world = world();
+        let window = RecursiveGroupWindow::new(scratch, &[(world.type_names[0], KKind::NewType)]);
+        let sibling = window.sibling(world.type_names[0], KKind::NewType, &*types);
+        let relative = placed(&*types, scratch, &world, sibling, placement);
+        let relative = types.record(scratch, &[(world.binders[0], relative), (world.binders[1], repr)]);
+        prop_assert!(types.enter(relative.raw()).contains_sibling(), "a placed sibling is reachable");
+        prop_assert!(deep_walk(&types, scratch, relative.raw(), &|node| matches!(node, TypeNode::Sibling(_))));
+        let number = types.enter(KType::NUMBER.raw());
+        let rewritten = crate::types::substitute::rewrite_siblings(
+            &types,
+            scratch,
+            types.enter(relative.raw()),
+            &|_| number,
+        );
+        prop_assert!(!rewritten.contains_sibling());
+    }
+
+    /// The absolute twin of a relative signature over a sibling is the signature written over
+    /// the member that sibling names, and the handle the sealed schemas that held it hold.
+    #[test]
+    fn the_absolute_of_a_relative_signature_is_its_standalone_twin(
+        reprs in prop::collection::vec(small_concrete(), 1..4),
+        placement in arb_placement(),
+    ) {
+        let types = registry();
+        let bump = Bump::new();
+        let scratch = &bump;
+        let world = world();
+        let names: Vec<_> = world.type_names[..reprs.len().min(3)].to_vec();
+        let reprs = &reprs[..names.len()];
+        let announced: Vec<(TypeSymbol, KKind)> =
+            names.iter().map(|name| (*name, KKind::NewType)).collect();
+        let window = RecursiveGroupWindow::new(scratch, &announced);
+        let mut held = Vec::new();
+        for (index, repr) in reprs.iter().enumerate() {
+            let successor = window.sibling(names[(index + 1) % names.len()], KKind::NewType, &*types);
+            let relative = placed(&*types, scratch, &world, successor, placement);
+            held.push(relative);
+            // The relative type alone, so the sealed schema holds its absolute twin whole.
+            let body = types.record(scratch, &[(world.binders[0], relative), (world.binders[1], *repr)]);
+            window.fill_member(index, RelativeSchema::NewType(body), &*types, scratch);
+        }
+        let sealed = window.sealed().expect("the window seals on its last fill");
+        for (index, relative) in held.into_iter().enumerate() {
+            let successor = sealed.member((index + 1) % names.len()).expect("sealed");
+            let twin = placed(&*types, scratch, &world, successor, placement);
+            prop_assert_eq!(sealed.absolute(&*types, scratch, relative), twin);
+            let member = sealed.member(index).expect("sealed");
+            let Some(NodeSchema::NewType(repr)) = types.member_schema(member) else {
+                unreachable!("a sealed newtype");
+            };
+            let TypeNode::Record { fields } = types.node(repr) else {
+                unreachable!("a record representation stays one");
+            };
+            prop_assert_eq!(fields.get(world.binders[0].symbol()), Some(twin));
+        }
     }
 }
 
-/// Seal a group of newtypes over `reprs`, each also referencing its successor as a sibling, in
-/// announcement order or reversed, over a window hosted in `scratch`. Returns the member handles in
-/// announcement order.
+/// Seal a group of newtypes over `reprs`, each also referencing its successor as a sibling at its
+/// placement, in announcement order or reversed, over a window hosted in `scratch`. Returns the
+/// member handles in announcement order.
 fn seal<'ty>(
     types: &TypeChain<'ty, impl Habitat<'ty>>,
     scratch: BumpAllocator<'_>,
+    world: &World,
     names: &[TypeSymbol],
-    reprs: &[KType],
+    reprs: &[(KType, Placement)],
     reversed: bool,
 ) -> Vec<KType> {
     let order: Vec<usize> = if reversed {
@@ -1837,8 +2072,10 @@ fn seal<'ty>(
         .collect();
     let window = RecursiveGroupWindow::new(scratch, &announced);
     for (position, index) in order.iter().enumerate() {
+        let (repr, placement) = reprs[*index];
         let successor = window.sibling(names[(index + 1) % names.len()], KKind::NewType, types);
-        let body = types.union_of(scratch, &[reprs[*index], successor]);
+        let successor = placed(types, scratch, world, successor, placement);
+        let body = types.union_of(scratch, &[repr, successor]);
         window.fill_member(position, RelativeSchema::NewType(body), types, scratch);
     }
     let sealed = window.sealed().expect("the window seals on its last fill");

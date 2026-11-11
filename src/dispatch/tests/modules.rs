@@ -100,6 +100,32 @@ fn a_type_member_is_read_through_a_module_name() {
     );
 }
 
+/// A path inside a declaration's definition reads the module member, as one in an annotation does.
+#[test]
+fn a_definition_reads_a_type_member_through_a_module_name() {
+    let module = "MODULE m = (LET Inner = Number)\n";
+    for (program, printed) in [
+        (
+            "NEWTYPE Wrapped = :(m.Inner)\nPRINT (Wrapped 3)",
+            "Wrapped(3)",
+        ),
+        (
+            "NEWTYPE Held = :{a :(m.Inner | Null)}\nPRINT (Held {a = 3})",
+            "Held({a = 3})",
+        ),
+        (
+            "SIG Slot = #[(VAL x :(m.Inner))]\nPRINT Slot",
+            "SIG (x: Number)",
+        ),
+        (
+            "LET Alias = :(LIST OF m.Inner)\nPRINT Alias",
+            ":(LIST OF Number)",
+        ),
+    ] {
+        assert_eq!(run(&format!("{module}{program}")), printed, "{program}");
+    }
+}
+
 /// A type path through a view reads each member at the type the view's signature declares it: a
 /// nested module declared at an application reads its pinned head parameter, as `v.inner` then
 /// `.Elem` does. The load sees the view exactly, so a value that can never be that type refuses it.
@@ -452,22 +478,20 @@ fn a_sealed_member_is_opaque_outside_its_view_whatever_its_bound() {
              EXPR #(PASS p :Counter) -> Any = #(TAKE p)\n{program}"
         )
     };
-    // `USE c` settles at `c`'s closed tree, which refuses as a load would.
-    let refused_plus = "error: <test>:4:34: no overload of `_ + _` admits these \
-                        arguments:\n  Carrier, which can never satisfy Number\n  in :(FN :{m :SIG \
-                        FOR ALL #{Carrier: Number} (zero: Carrier, succ: :(FN :{x :Carrier} -> \
-                        Carrier))} -> Any) (USE c) at <test>:10:7";
+    // The load lays `USE c`'s layer at `c`'s closed tree, which refuses the load, naming the call.
+    let refused_plus = "load: <test>:4:34: no overload of `_ + _` admits these \
+                        arguments:\n  Carrier, which can never satisfy Number\n  in (USE c) at \
+                        <test>:10:7";
     let refused_take = "no overload of `TAKE _` admits this argument:\n  SIG (Carrier: Carrier, \
                         zero: Carrier, succ: :(FN :{x :Carrier} -> Carrier)), which can never \
                         satisfy SIG (zero: Number)";
     let loaded_take = format!("load: <test>:10:7: {refused_take}");
-    // Through `p :Counter`, the view is seen at `Counter` pinned at its own carrier; `PASS c`'s
-    // settlement refuses as a load would.
-    let ran_take = "error: <test>:9:35: no overload of `TAKE _` admits this argument:\n  SIG FOR \
+    // Through `p :Counter`, the view is seen at `Counter` pinned at its own carrier; the layer the
+    // load lays for `PASS c` refuses the load, naming the call.
+    let passed_take = "load: <test>:9:35: no overload of `TAKE _` admits this argument:\n  SIG FOR \
                     ALL #{Carrier: Number} (zero: Carrier, succ: :(FN :{x :Carrier} -> Carrier)) \
-                    WITH {Carrier = Carrier}, which can never satisfy SIG (zero: Number)\n  in :(FN \
-                    :{p :SIG FOR ALL #{Carrier: Number} (zero: Carrier, succ: :(FN :{x :Carrier} \
-                    -> Carrier))} -> Any) (PASS c) at <test>:10:7";
+                    WITH {Carrier = Carrier}, which can never satisfy SIG (zero: Number)\n  in \
+                    (PASS c) at <test>:10:7";
     for (program, printed) in [
         (
             "PRINT (c.zero + 1)",
@@ -492,23 +516,25 @@ fn a_sealed_member_is_opaque_outside_its_view_whatever_its_bound() {
         // A bounded parameter offers no `Number`, so neither the view nor a `Counter` fits `Plain`.
         ("PRINT (TAKE ints)", "5"),
         ("PRINT (TAKE c)", &loaded_take),
-        ("PRINT (PASS c)", ran_take),
+        ("PRINT (PASS c)", passed_take),
     ] {
         assert_eq!(run(&source(program)), printed, "{program}");
     }
 }
 
-/// An opaque view of an opaque view reseals each member under its own carrier, and a call through
-/// it crosses both barriers each way; a value sealed under the inner view is no value of the outer.
+/// An opaque view of an opaque view is built over its underlying: each member sealed once under its
+/// own carrier, behind one barrier over the underlying's function, so a call crosses one barrier
+/// each way; a value sealed under the inner view is no value of the outer.
 #[test]
-fn an_opaque_view_of_an_opaque_view_reseals_and_stacks_its_barriers() {
+fn an_opaque_view_of_an_opaque_view_is_built_over_its_underlying() {
     let source = |program: &str| {
         format!(
             "SIG Counter FOR ALL #[Carrier] = \
-             #[(VAL zero :Carrier) (VAL succ :(FN :{{x :Carrier}} -> Carrier))]\n\
+             #[(VAL zero :Carrier) (VAL one :Carrier) (VAL succ :(FN :{{x :Carrier}} -> Carrier))]\n\
              SIG Again FOR ALL #[Carrier] = \
              #[(VAL zero :Carrier) (VAL succ :(FN :{{x :Carrier}} -> Carrier))]\n\
-             MODULE ints = ((LET zero = 4) (LET succ = (FN :{{x :Number}} -> Number = #(x + 1))))\n\
+             MODULE ints = ((LET zero = 4) (LET one = 1) \
+             (LET succ = (FN :{{x :Number}} -> Number = #(x + 1))))\n\
              LET c = (ints :| Counter)\nLET d = (c :| Again)\n{program}"
         )
     };
@@ -526,8 +552,8 @@ fn an_opaque_view_of_an_opaque_view_reseals_and_stacks_its_barriers() {
             "LET call = (FN :{e :Any, z :Any} -> Any = #(e.succ {x = z}))\n\
              PRINT (call {e = d, z = c.zero})"
         )),
-        "error: :(FN :{x :Carrier} -> Carrier) cannot be called with :{x :Carrier}: its value \
-         does not satisfy Carrier\n  in :(FN :{x :Carrier} -> Carrier) (e.succ {x = z}) at <test>:6:44\n  in :(FN :{e :Any z :Any} -> Any) (call {e = d, z = c.zero}) at <test>:7:7"
+        "error: :(FN :{x :Carrier} -> Carrier) cannot be called with :{x :Carrier}: it is not \
+         sealed under Carrier\n  in :(FN :{x :Carrier} -> Carrier) (e.succ {x = z}) at <test>:6:44\n  in :(FN :{e :Any z :Any} -> Any) (call {e = d, z = c.zero}) at <test>:7:7"
     );
 }
 
@@ -868,5 +894,571 @@ fn a_path_reads_through_every_pin_of_its_declared_application() {
                   #((LET p :(Mapper WITH {Elt = Elt}) = m) ((FN :{} -> Any = #(:(p.Carrier))) {}))\n\
                   PRINT (READER Number two)\n\
                   PRINT (READER Str two)";
-    assert_eq!(run(source), ":(Number | Bool)\nNumber");
+    assert_eq!(run(source), ":(Bool | Number)\nNumber");
+}
+
+/// A pin over a callable's own variable is solved where the argument fits the application: off a
+/// module exact at its own type, a view's carrier, and an argument typed only at run.
+#[test]
+fn a_pin_over_a_callables_variable_solves_it() {
+    let mapper = "SIG Mapper FOR ALL #[Carrier Elt] = \
+                  #[(VAL make :(FN :{n :Number} -> Carrier)) \
+                  (EXPR #(STEP _ :Carrier _ :Elt) -> Carrier)]\n\
+                  MODULE two = ((LET make = (FN :{n :Number} -> Number = #(n))) \
+                  (EXPR #(STEP x :Number y :Str) -> Number = #(x)) \
+                  (EXPR #(STEP x :(Number | Bool) y :Number) -> (Number | Bool) = #(x)))\n\
+                  EXPR FOR ALL #[Elt] #(USE x :Elt p :(Mapper WITH {Elt = Elt})) -> Any = #(Elt)\n\
+                  PRINT (USE 1 two)";
+    assert_eq!(run(mapper), "Number");
+    let source = format!(
+        "{ECHO}LET c = (ints :| Counter)\n\
+         EXPR #(VIA m :Any) -> Any = #(ECHO m)\n\
+         PRINT (ECHO ints)\nPRINT (ECHO c)\nPRINT (VIA ints)"
+    );
+    assert_eq!(run(&source), "0\nCarrier(0)\n0");
+}
+
+/// `Counter` over one member, `ECHO`, whose argument pins `Counter`'s carrier to its own variable,
+/// and `ints`.
+const ECHO: &str = "SIG Counter FOR ALL #[Carrier] = #[(VAL zero :Carrier)]\n\
+                    EXPR FOR ALL #[Cr] #(ECHO elem :(Counter WITH {Carrier = Cr})) -> Cr = \
+                    #(elem.zero)\n\
+                    MODULE ints = ((LET zero = 0))\n";
+
+/// A value the run retypes by its fit at a binder is exactly the application pinned at the paths
+/// through it, so `ECHO` solves its carrier at load: a parameter, an annotated `LET`, a `LET`
+/// binding a `:!`, a call or an `EVAL` whole, a member read through a name chain and an arm's
+/// `it`.
+#[test]
+fn a_value_retyped_by_its_fit_at_a_binder_solves_a_pin_over_a_variable() {
+    let source = format!(
+        "{ECHO}SIG Outer = #[(VAL inner :Counter)]\n\
+         MODULE outer = ((LET inner = ints))\n\
+         EXPR #(HAS h :Counter) -> Any = #(ECHO h)\n\
+         EXPR #(NOTED g :Any) -> Any = #((LET a :Counter = g) (ECHO a))\n\
+         EXPR #(HELD g :Any) -> Any = #((LET m = (g :! Counter)) (ECHO m))\n\
+         EXPR #(INNER o :Outer) -> Any = #(ECHO o.inner)\n\
+         EXPR #(ARM g :Any) -> Any = #(MATCH g WITH #{{Counter: (ECHO it), _: (7)}})\n\
+         EXPR #(MAKE g :Any) -> Counter = #(g)\n\
+         EXPR #(CALLED g :Any) -> Any = #((LET n = (MAKE g)) (ECHO n))\n\
+         EXPR #(EVALED g :Any) -> Any = #((LET e = (EVAL #($g) -> Counter)) (ECHO e))\n\
+         PRINT (HAS ints)\nPRINT (NOTED ints)\nPRINT (HELD ints)\nPRINT (INNER outer)\n\
+         PRINT (ARM ints)\nPRINT (ARM 1)\nPRINT (CALLED ints)\nPRINT (EVALED ints)"
+    );
+    assert_eq!(run(&source), "0\n0\n0\n0\n0\n7\n0\n0");
+}
+
+/// A binder pinned in its own unit is read from a callable born after it, at every call of the
+/// body: each walk reaches its path's class alike.
+#[test]
+fn a_binder_pinned_in_its_own_unit_is_read_by_a_later_callable() {
+    let source = format!(
+        "{ECHO}EXPR #(HELD g :Any) -> Any = \
+         #((LET m = (g :! Counter)) (LET f = (FN :{{}} -> Any = #(ECHO m))) (f {{}}))\n\
+         EXPR #(TWICE g :Any) -> Any = #((PRINT (HELD g)) (HELD g))\n\
+         PRINT (TWICE ints)"
+    );
+    assert_eq!(run(&source), "0\n0");
+}
+
+/// The run reads a path through module members alone, so a read through a record's field stays
+/// at most its signature: refused at load, through a record parameter or a record holding a value
+/// retyped in place.
+#[test]
+fn a_field_read_stays_at_most_its_signature() {
+    for go in [
+        "EXPR #(GO rr :{c :Counter}) -> Any = #(ECHO rr.c)\nPRINT (GO {c = ints})",
+        "EXPR #(GO g :Any) -> Any = #((LET r = {c = (g :! Counter)}) (ECHO r.c))\nPRINT (GO ints)",
+    ] {
+        let refused = run(&format!("{ECHO}{go}"));
+        assert!(refused.contains("no overload of `ECHO _`"), "{refused}");
+    }
+}
+
+/// A value retyped in place has no binder to read its paths through: it stays at most its
+/// signature, which can never fit a pin over a variable.
+#[test]
+fn a_value_retyped_in_place_stays_at_most_its_signature() {
+    let source = format!("{ECHO}EXPR #(INLINE g :Any) -> Any = #(ECHO (g :! Counter))");
+    let refused = run(&source);
+    assert!(refused.contains("no overload of `ECHO _`"), "{refused}");
+}
+
+/// A pin over a variable solves it once across the call: two arguments that pin it to unrelated
+/// types refuse the call, and one that agrees solves it.
+#[test]
+fn a_pin_and_a_slot_solve_one_variable_jointly() {
+    let both = |argument: &str| {
+        format!(
+            "{ECHO}EXPR #(BOTH 1 WITH 1)\n\
+             EXPR FOR ALL #[Cr] #(BOTH elem :(Counter WITH {{Carrier = Cr}}) WITH x :Cr) -> Any \
+             = #(Cr)\n\
+             PRINT (BOTH ints WITH {argument})"
+        )
+    };
+    assert_eq!(run(&both("1")), "Number");
+    let refused = run(&both("\"s\""));
+    assert!(
+        refused.contains("no overload of `BOTH _ WITH _`"),
+        "{refused}"
+    );
+}
+
+/// A family parameter inside a pin is refused, as one at a contravariant position is: a pin is
+/// invariant.
+#[test]
+fn a_family_parameter_inside_a_pin_refuses_the_load() {
+    let refused = run("SIG Stack FOR ALL #[Elt] = #[(VAL top :Elt)]\n\
+                       UNION (Elem -> Holder) = #{Has: :(Stack WITH {Elt = Elem}), Not: Null}");
+    assert!(refused.contains("<test>:2:"), "{refused}");
+}
+
+/// `Counter`, two signatures each naming one of its members, `Shown` showing `zero` at `Any`, and
+/// `c`, a view of `ints` at `Counter`: the views of a view the tests below take.
+const VIEWED: &str = "SIG Counter FOR ALL #[Carrier] = \
+                      #[(VAL zero :Carrier) (VAL succ :(FN :{x :Carrier} -> Carrier))]\n\
+                      SIG Counter0 FOR ALL #[Carrier] = #[(VAL zero :Carrier)]\n\
+                      SIG Stepper FOR ALL #[Carrier] = #[(VAL succ :(FN :{x :Carrier} -> Carrier))]\n\
+                      SIG Shown = #[(VAL zero :Any)]\n\
+                      MODULE ints = ((LET zero = 4) (LET succ = (FN :{x :Number} -> Number = #(x + 1))))\n\
+                      LET c = (ints :| Counter)\n";
+
+/// A view of a view at its own application is that view: its carrier is the source's.
+#[test]
+fn a_view_of_a_view_at_its_own_exposure_is_the_view() {
+    let source = format!("{VIEWED}LET k :(c.Carrier) = (c :| Counter).zero\nPRINT k");
+    assert_eq!(run(&source), "Carrier(4)");
+}
+
+/// A view of a view is built over its underlying: `(c :| Counter0)` and `(ints :| Counter0)` are
+/// one module, so a value either seals passes a slot typed at the other's carrier.
+#[test]
+fn a_view_of_a_view_is_the_view_of_its_underlying() {
+    let source = format!(
+        "{VIEWED}LET a = (c :| Counter0)\nLET b = (ints :| Counter0)\n\
+         LET f = (FN :{{x :(b.Carrier)}} -> Any = #(x))\n\
+         LET g = (FN :{{x :(a.Carrier)}} -> Any = #(x))\n\
+         PRINT (f {{x = a.zero}})\nPRINT (g {{x = b.zero}})"
+    );
+    assert_eq!(run(&source), "Carrier(4)\nCarrier(4)");
+}
+
+/// *Fits* admits a view of a view over its source as written: `Plain` fits `ints` but not `c`,
+/// whose `zero` is sealed.
+#[test]
+fn a_view_of_a_view_is_admitted_over_its_source() {
+    let plain = "SIG Plain = #[(VAL zero :Number)]\n";
+    assert_eq!(
+        run(&format!("{VIEWED}{plain}PRINT (ints :| Plain).zero")),
+        "4"
+    );
+    assert_eq!(
+        run(&format!("{VIEWED}{plain}LET p = (c :| Plain)")),
+        "load: <test>:8:9: this value is SIG (Carrier: Carrier, zero: Carrier, succ: :(FN :{x \
+         :Carrier} -> Carrier)), which can never satisfy its ascription SIG (zero: Number)"
+    );
+}
+
+/// A header a view's source is seen through only admits the view: a widening is forgotten once
+/// the view hides the parameter again, over a module or over a view of it.
+#[test]
+fn a_header_under_a_view_is_forgotten() {
+    let ord =
+        "SIG Ord FOR ALL #[Carrier] = #[(VAL zero :Carrier)]\nMODULE nums = ((LET zero = 4))\n";
+    let over_module = format!(
+        "{ord}LET plain = (nums :| Ord)\n\
+         LET wide = ((nums :! (Ord WITH {{Carrier = Any}})) :| Ord)\n\
+         LET take = (FN :{{x :(plain.Carrier)}} -> Any = #(x))\n\
+         PRINT (take {{x = wide.zero}})"
+    );
+    assert_eq!(run(&over_module), "Carrier(4)");
+    let over_view = format!(
+        "{ord}LET c0 = (nums :| Ord)\n\
+         LET again = ((c0 :! (Ord WITH {{Carrier = Any}})) :| Ord)\n\
+         LET take = (FN :{{x :(c0.Carrier)}} -> Any = #(x))\n\
+         PRINT (take {{x = again.zero}})\nPRINT (again.Carrier == c0.Carrier)"
+    );
+    assert_eq!(run(&over_view), "Carrier(4)\ntrue");
+}
+
+/// What one view shows at `Any` and the next hides again is forgotten: `((nums :| Wide) :| Took)`
+/// is `(nums :| Took)`.
+#[test]
+fn a_widening_through_a_view_is_forgotten_once_hidden_again() {
+    let source = "SIG Wide FOR ALL #[Carrier] = #[(VAL zero :Carrier) (VAL x :Any)]\n\
+                  SIG Took FOR ALL #[Elem] = #[(VAL x :Elem)]\n\
+                  MODULE nums = ((LET zero = 4) (LET x = 7))\n\
+                  LET a = ((nums :| Wide) :| Took)\nLET b = (nums :| Took)\n\
+                  LET take = (FN :{x :(b.Elem)} -> Any = #(x))\n\
+                  PRINT (a.Elem == b.Elem)\nPRINT (take {x = a.x})";
+    assert_eq!(run(source), "true\nElem(7)");
+}
+
+/// What *fits* solves over the underlying names no carrier of the source: a parameter hiding a
+/// whole list the source sealed cell by cell holds the underlying's bare list.
+#[test]
+fn a_view_of_a_view_solves_over_the_underlying() {
+    let source = "SIG Listed FOR ALL #[Carrier] = \
+                  #[(VAL zero :Carrier) (VAL pair :(LIST OF Carrier))]\n\
+                  SIG Paired FOR ALL #[Elem] = #[(VAL pair :Elem)]\n\
+                  MODULE nums = ((LET zero = 4) (LET pair = [1 2]))\n\
+                  LET v = (nums :| Listed)\n\
+                  PRINT (v :| Paired).pair\n\
+                  PRINT ((v :| Paired).Elem == (nums :| Paired).Elem)";
+    assert_eq!(run(source), "Elem([1, 2])\ntrue");
+}
+
+/// A signature naming the source's carrier, ascribed or held by a pin, is read back onto the
+/// underlying, inside the signature too: what is written over a module at a type is written over
+/// its view at the carrier hiding that type.
+#[test]
+fn a_view_of_a_view_reads_back_a_carrier_inside_a_signature() {
+    let ascribed = "SIG Counter FOR ALL #[Carrier] = #[(VAL zero :Carrier)]\n\
+                    MODULE ints = ((LET zero = 0))\n\
+                    LET c = (ints :| Counter)\n\
+                    LET Hid = c.Carrier\n\
+                    SIG Named = #[(VAL zero :Hid)]\n\
+                    LET d = (c :| Named)\n\
+                    PRINT d.zero";
+    assert_eq!(run(ascribed), "Carrier(0)");
+    let pinned = "SIG Counter FOR ALL #[Carrier] = #[(VAL zero :Carrier)]\n\
+                  SIG Outer FOR ALL #[Carrier] = \
+                  #[(VAL zero :Carrier) (VAL m :(Counter WITH {Carrier = Carrier}))]\n\
+                  MODULE ints = ((LET zero = 0) (MODULE m = ((LET zero = 0))))\n\
+                  LET c = (ints :| Outer)\n\
+                  LET Hid = c.Carrier\n\
+                  SIG Named = #[(VAL zero :Hid)]\n\
+                  SIG Wrap FOR ALL #[Elem] = #[(VAL m :Elem)]\n\
+                  LET d = (c :| (Wrap WITH {Elem = Named}))\n\
+                  PRINT d.m.zero";
+    assert_eq!(run(pinned), "Carrier(0)");
+    // Inward too: a module handed to a function member at such a signature is re-viewed at it
+    // read back, its member unsealed for the underlying function.
+    let inward = "SIG Zeroed = #[(VAL zero :Number)]\n\
+                  SIG Inner FOR ALL #[Elem] = #[(VAL zero :Elem)]\n\
+                  SIG Counter FOR ALL #[Carrier] = #[(VAL zero :Carrier) \
+                  (VAL take :(FN :{m :(Inner WITH {Elem = Carrier})} -> Number))]\n\
+                  MODULE ints = ((LET zero = 0) \
+                  (LET take = (FN :{m :Zeroed} -> Number = #(m.zero + 1))))\n\
+                  LET c = (ints :| Counter)\n\
+                  LET Hid = c.Carrier\n\
+                  SIG Named = #[(VAL zero :Hid)]\n\
+                  SIG Taker = #[(VAL take :(FN :{m :Named} -> Number))]\n\
+                  LET d = (c :| Taker)\n\
+                  PRINT (d.take {m = c})";
+    assert_eq!(run(inward), "1");
+}
+
+/// A `FOR ALL` bound may be a signature naming a view's carrier, or name a recursive group's
+/// fellow inside a signature: either is a type variable's bound like any other, and the seal
+/// reads the fellow in the bound as the member it names.
+#[test]
+fn a_bound_may_hold_a_carrier_or_a_fellow_inside_a_signature() {
+    let carrier = "SIG Counter FOR ALL #[Carrier] = #[(VAL zero :Carrier)]\n\
+                   MODULE ints = ((LET zero = 0))\n\
+                   LET c = (ints :| Counter)\n\
+                   LET Hid = c.Carrier\n\
+                   SIG Named = #[(VAL zero :Hid)]\n\
+                   EXPR FOR ALL #{Mod: Named} #(PICK m :Mod) -> Number = #(1)\n\
+                   PRINT (PICK c)";
+    assert_eq!(run(carrier), "1");
+    let fellow = "SIG Shelf = #[(VAL pick :(FN FOR ALL #{Elem: Leaf} :{x :Elem} -> Number)) \
+                  (VAL kid :Leaf)]\n\
+                  NEWTYPE Leaf = :{shelf :Shelf}\n\
+                  PRINT Shelf";
+    // The sealed signature names the fellow in the bound, as in the slot: no sibling is left.
+    assert_eq!(
+        run(fellow),
+        "SIG (pick: :(FN FOR ALL #{Elem: Leaf} :{x :Elem} -> Number), kid: Leaf)"
+    );
+}
+
+/// A view of a view that shows a part its source hides is refused, at load where the load sees
+/// the source and at run otherwise, naming the member; over the module itself it is a view.
+#[test]
+fn a_view_of_a_view_showing_what_its_source_hides_is_refused() {
+    assert_eq!(
+        run(&format!("{VIEWED}LET s = (c :| Shown)")),
+        "load: <test>:7:9: this view shows `zero` where its source hides it: a view of a view \
+         must hide again everything its source hides"
+    );
+    assert_eq!(
+        run(&format!(
+            "{VIEWED}LET f = (FN :{{x :Any}} -> Any = #(x :| Shown))\nPRINT (f {{x = c}}).zero"
+        )),
+        "error: this view shows `zero` where its source hides it: a view of a view must hide \
+         again everything its source hides\n  in :(FN :{x :Any} -> Any) (f {x = c}) at <test>:8:7"
+    );
+    assert_eq!(run(&format!("{VIEWED}PRINT (ints :| Shown).zero")), "4");
+    let swapped = "SIG Shows FOR ALL #[Carrier] = #[(VAL a :Any) (VAL b :Carrier)]\n\
+                   SIG Hides FOR ALL #[Carrier] = #[(VAL a :Carrier) (VAL b :Any)]\n\
+                   MODULE m = ((LET a = 1) (LET b = 2))\n\
+                   LET s0 = (m :| Shows)\nLET h = (s0 :| Hides)";
+    assert_eq!(
+        run(swapped),
+        "load: <test>:5:9: this view shows `b` where its source hides it: a view of a view must \
+         hide again everything its source hides"
+    );
+}
+
+/// A sealed part inside a union is hidden again by the union member reading as its type, whatever
+/// order the members are written in.
+#[test]
+fn a_union_member_hides_again_whatever_its_order() {
+    let source = "SIG Either FOR ALL #[Carrier] = \
+                  #[(VAL zero :(Carrier | Str)) (VAL one :Number)]\n\
+                  SIG Either2 FOR ALL #[Carrier] = #[(VAL zero :(Str | Carrier))]\n\
+                  MODULE nums = ((LET zero = 4) (LET one = 1))\n\
+                  LET e = (nums :| Either)\n\
+                  PRINT ((e :| Either).Carrier == e.Carrier)\n\
+                  LET e2 = (e :| Either2)\nLET n2 = (nums :| Either2)\n\
+                  LET take = (FN :{x :(n2.Carrier | Str)} -> Any = #(x))\n\
+                  PRINT (take {x = e2.zero})\nPRINT (e2.Carrier == n2.Carrier)";
+    assert_eq!(run(source), "true\nCarrier(4)\ntrue");
+}
+
+/// `Inner` with two parameters, an `Outer` declaring it nested over its own, and `v`, a view of a
+/// module holding `parts` at it.
+const NESTED: &str = "SIG Inner FOR ALL #[Elem Extra] = #[(VAL one :Elem) (VAL two :Extra)]\n\
+                      SIG Outer FOR ALL #[Carrier] = #[(VAL zero :Carrier) \
+                      (VAL inner :(Inner WITH {Elem = Carrier})) \
+                      (VAL first :(FN :{x :(Inner WITH {Elem = Carrier})} -> Carrier))]\n\
+                      MODULE parts = ((LET one = 1) (LET two = \"s\"))\n\
+                      MODULE m = ((LET zero = 0) (LET inner = parts) \
+                      (LET first = (FN :{x :(Inner WITH {Elem = Number})} -> Number = #(x.one))))\n\
+                      LET v = (m :| Outer)\n";
+
+/// A view's nested module member is an opaque view of the underlying's member: it hides the
+/// nested signature's parameter its slot leaves unpinned, a view of it at its own application is
+/// it, and a view of the outer view views it over the underlying's member again.
+#[test]
+fn a_nested_module_member_is_an_opaque_view() {
+    assert_eq!(run(&format!("{NESTED}PRINT v.inner.two")), "Extra(s)");
+    let again = format!(
+        "{NESTED}LET i = v.inner\nLET w = (i :| (Inner WITH {{Elem = v.Carrier}}))\n\
+         LET take = (FN :{{x :(i.Extra)}} -> Any = #(x))\n\
+         PRINT (w.Extra == i.Extra)\nPRINT (take {{x = w.two}})"
+    );
+    assert_eq!(run(&again), "true\nExtra(s)");
+    let both = format!(
+        "{NESTED}SIG OuterInner FOR ALL #[Carrier] = #[(VAL inner :(Inner WITH {{Elem = Carrier}}))]\n\
+         LET a = (v :| OuterInner).inner\nLET b = (m :| OuterInner).inner\n\
+         PRINT (a.Elem == b.Elem)\nPRINT (a.Extra == b.Extra)"
+    );
+    assert_eq!(run(&both), "true\ntrue");
+    let whole = format!(
+        "{NESTED}SIG Whole FOR ALL #[Part] = #[(VAL inner :Part)]\n\
+         PRINT ((v :| Whole).Part == (m :| Whole).Part)\n\
+         PRINT (v :| Whole).inner\nPRINT (m :| Whole).inner"
+    );
+    assert_eq!(
+        run(&whole),
+        "true\nPart(SIG (two: Str, one: Number))\nPart(SIG (two: Str, one: Number))"
+    );
+    let shown = format!(
+        "{NESTED}SIG OuterShow FOR ALL #[Carrier] = \
+         #[(VAL inner :(Inner WITH {{Elem = Carrier, Extra = Any}}))]\nLET r = (v :| OuterShow)"
+    );
+    assert_eq!(
+        run(&shown),
+        "load: <test>:7:9: this view shows `inner` where its source hides it: a view of a view \
+         must hide again everything its source hides"
+    );
+    assert_eq!(
+        run(&format!("{NESTED}PRINT (v.first {{x = v.inner}})")),
+        "Carrier(1)"
+    );
+}
+
+/// A nested module a call through a barrier passes inward is re-viewed transparently, and a view of
+/// it inside the function is built over it: its own underlying.
+#[test]
+fn an_inward_re_view_is_its_own_underlying() {
+    let source = "SIG Inner FOR ALL #[Elem Extra] = #[(VAL one :Elem) (VAL two :Extra)]\n\
+                  SIG Outer FOR ALL #[Carrier] = #[(VAL zero :Carrier) \
+                  (VAL inner :(Inner WITH {Elem = Carrier})) \
+                  (VAL first :(FN :{x :(Inner WITH {Elem = Carrier})} -> Any)) \
+                  (VAL pinned :(FN :{x :(Inner WITH {Elem = Carrier})} -> Any))]\n\
+                  MODULE parts = ((LET one = 1) (LET two = \"s\"))\n\
+                  MODULE m = ((LET zero = 0) (LET inner = parts) \
+                  (LET first = (FN :{x :(Inner WITH {Elem = Number})} -> Any = \
+                  #((x :| Inner).one))) \
+                  (LET pinned = (FN :{x :(Inner WITH {Elem = Number})} -> Any = \
+                  #((x :| (Inner WITH {Elem = Number})).one))))\n\
+                  LET v = (m :| Outer)\n";
+    assert_eq!(
+        run(&format!(
+            "{source}PRINT (v.first {{x = v.inner}})\nPRINT (v.pinned {{x = v.inner}})"
+        )),
+        "Elem(1)\n1"
+    );
+    // A module built from a value the view sealed crosses in unsealed.
+    assert_eq!(
+        run(&format!(
+            "{source}MODULE mine = ((LET one = v.zero) (LET two = 5))\nPRINT (v.first {{x = mine}})"
+        )),
+        "Elem(0)"
+    );
+}
+
+/// A module a function member returns through its view's barrier is an opaque view at the return
+/// type read on the view's side, hiding the parameters it leaves unpinned.
+#[test]
+fn a_module_a_barrier_returns_is_an_opaque_view() {
+    let source = "SIG Inner FOR ALL #[Elem Extra] = #[(VAL one :Elem) (VAL two :Extra)]\n\
+                  SIG Maker FOR ALL #[Carrier] = #[(VAL zero :Carrier) \
+                  (VAL make :(FN :{x :Carrier} -> (Inner WITH {Elem = Carrier})))]\n\
+                  MODULE ints = ((LET zero = 4) (LET make = (FN :{x :Number} -> \
+                  (Inner WITH {Elem = Number, Extra = Str}) = \
+                  #(MODULE made OVER #[x] = ((LET one = x) (LET two = \"a\"))))))\n\
+                  LET v = (ints :| Maker)\nLET r = (v.make {x = v.zero})\n\
+                  PRINT r.one\nPRINT r.two";
+    assert_eq!(run(source), "Carrier(4)\nExtra(a)");
+}
+
+/// `Listed` sealing a list cell by cell, `Paired` naming its list, and `v`, a view of `nums` at
+/// `Listed`: the pins over `v`'s carrier below.
+const LISTED: &str = "SIG Listed FOR ALL #[Carrier] = \
+                      #[(VAL zero :Carrier) (VAL pair :(LIST OF Carrier))]\n\
+                      SIG Paired FOR ALL #[Elem] = #[(VAL pair :Elem)]\n\
+                      SIG Zeroed FOR ALL #[Elem] = #[(VAL zero :Elem)]\n\
+                      MODULE nums = ((LET zero = 4) (LET pair = [1 2]))\n\
+                      LET v = (nums :| Listed)\n";
+
+/// A pin over the source's carrier reads back onto the underlying, however deep in the pin the
+/// carrier sits: what is written over `nums` with `Number` is written over `v` with `v.Carrier`.
+/// The view seals each cell under `v`'s carrier, a view of it at its own application is it, one
+/// hiding the list whole is `nums`'s, and one showing it at `Any` is refused.
+#[test]
+fn a_pin_over_a_sources_carrier_reads_back_onto_the_underlying() {
+    let w = "LET w = (v :| (Paired WITH {Elem = (LIST OF v.Carrier)}))\n";
+    assert_eq!(
+        run(&format!(
+            "{LISTED}{w}LET w2 = (w :| (Paired WITH {{Elem = (LIST OF v.Carrier)}}))\n\
+             LET take = (FN :{{x :(LIST OF v.Carrier)}} -> Any = #(x))\n\
+             PRINT (take {{x = w2.pair}})\nPRINT (take {{x = v.pair}})"
+        )),
+        "[Carrier(1), Carrier(2)]\n[Carrier(1), Carrier(2)]"
+    );
+    assert_eq!(
+        run(&format!(
+            "{LISTED}{w}LET h = (w :| Paired)\nLET g = (nums :| Paired)\n\
+             PRINT (h.Elem == g.Elem)\nPRINT h.pair"
+        )),
+        "true\nElem([1, 2])"
+    );
+    assert_eq!(
+        run(&format!(
+            "{LISTED}LET f = (FN :{{x :Any}} -> Any = \
+             #((x :| (Paired WITH {{Elem = (LIST OF v.Carrier)}})).pair))\nPRINT (f {{x = v}})"
+        )),
+        "[Carrier(1), Carrier(2)]"
+    );
+    assert_eq!(
+        run(&format!(
+            "{LISTED}{w}LET h = (w :| (Paired WITH {{Elem = Any}}))"
+        )),
+        "load: <test>:7:9: this view shows `pair` where its source hides it: a view of a view \
+         must hide again everything its source hides"
+    );
+}
+
+/// A pin at a union holding the source's carrier hides the sealed part at the member it reads as,
+/// and a view hiding it again is the underlying's.
+#[test]
+fn a_union_pin_over_a_sources_carrier_hides_it_at_its_member() {
+    let source = format!(
+        "{LISTED}LET w = (v :| (Zeroed WITH {{Elem = (v.Carrier | Str)}}))\nPRINT w.zero\n\
+         LET z = (w :| Zeroed)\nLET n = (nums :| Zeroed)\nPRINT (z.Elem == n.Elem)"
+    );
+    assert_eq!(run(&source), "Carrier(4)\ntrue");
+}
+
+/// A function-typed pin over the source's carrier is a barrier over the underlying's function: a
+/// call crosses it inward through the carrier and back.
+#[test]
+fn a_function_pin_over_a_sources_carrier_crosses_one_barrier() {
+    let source = "SIG Stepper FOR ALL #[Carrier] = \
+                  #[(VAL zero :Carrier) (VAL succ :(FN :{x :Carrier} -> Carrier))]\n\
+                  SIG Fun FOR ALL #[Elem] = #[(VAL succ :Elem)]\n\
+                  MODULE ints = ((LET zero = 4) (LET succ = (FN :{x :Number} -> Number = #(x + 1))))\n\
+                  LET c = (ints :| Stepper)\n\
+                  LET w = (c :| (Fun WITH {Elem = (FN :{x :(c.Carrier)} -> (c.Carrier))}))\n\
+                  PRINT (w.succ {x = c.zero})";
+    assert_eq!(run(source), "Carrier(5)");
+}
+
+/// A nested slot pinned at a structure over the enclosing carrier views the nested module over it,
+/// and a view of it at its own application is it.
+#[test]
+fn a_nested_pin_over_the_enclosing_carrier_reads_back() {
+    let source = "SIG Inner FOR ALL #[Elem Extra] = #[(VAL one :Elem) (VAL two :Extra)]\n\
+                  SIG Outer FOR ALL #[Carrier] = #[(VAL zero :Carrier) \
+                  (VAL inner :(Inner WITH {Elem = (LIST OF Carrier)}))]\n\
+                  MODULE parts = ((LET one = [1 2]) (LET two = \"s\"))\n\
+                  MODULE m = ((LET zero = 0) (LET inner = parts))\n\
+                  LET v = (m :| Outer)\nPRINT v.inner.one\nLET i = v.inner\n\
+                  LET j = (i :| (Inner WITH {Elem = (LIST OF v.Carrier)}))\n\
+                  PRINT (j.Extra == i.Extra)";
+    assert_eq!(run(source), "[Carrier(1), Carrier(2)]\ntrue");
+}
+
+/// A nested slot pinned at a union holding the enclosing carrier views the nested module's member
+/// at the union's member over the carrier.
+#[test]
+fn a_nested_union_pin_over_the_enclosing_carrier_seals_at_its_member() {
+    let source = "SIG Inner FOR ALL #[Elem] = #[(VAL one :Elem)]\n\
+                  SIG Outer FOR ALL #[Carrier] = #[(VAL zero :Carrier) \
+                  (VAL inner :(Inner WITH {Elem = (Carrier | Str)}))]\n\
+                  MODULE parts = ((LET one = 1))\n\
+                  MODULE m = ((LET zero = 0) (LET inner = parts))\n\
+                  LET v = (m :| Outer)\n\
+                  LET take = (FN :{x :(v.Carrier | Str)} -> Any = #(x))\n\
+                  PRINT (take {x = v.inner.one})";
+    assert_eq!(run(source), "Carrier(1)");
+}
+
+/// `SIG Node`, a counter module and a link to the next node, and `UNION Link` over it: a list of
+/// modules a signature and a union declare together, and `WALK`, which sums the counters' carriers
+/// along it.
+const NODES: &str = "SIG Node = #[(VAL count :Counter) (VAL next :Link)]\n\
+                     UNION Link = #{More: Node, End: Null}\n\
+                     EXPR #(CARRIER m :Counter) -> Number = #((LET v = (m :| Counter)) (7))\n\
+                     EXPR #(WALK n :Node) -> Number = \
+                     #((CARRIER n.count) + (MATCH n.next UNDER Link WITH \
+                     #{More: (WALK it), End: (0)}))\n\
+                     MODULE last = ((LET count = ints) (LET next = (Link.End null)))\n\
+                     MODULE first = ((LET count = ints) (LET next = (Link.More last)))\n";
+
+/// A signature a nominal member names, and that names it back, declares a recursive structure of
+/// modules: a module admits at it, and *fits* over it stops at the nominal.
+#[test]
+fn a_signature_in_a_recursive_group_types_a_list_of_modules() {
+    assert_eq!(run(&format!("{COUNTER}{NODES}PRINT (WALK first)")), "14");
+    assert_eq!(
+        run(&format!(
+            "{COUNTER}{NODES}LET n :Node = first\nPRINT (WALK n)"
+        )),
+        "14"
+    );
+    assert_eq!(
+        run("SIG Holder = #[(VAL n :Nat)]\nNEWTYPE Nat = :{s :Holder}\nPRINT 1"),
+        "1"
+    );
+    // A ring through signatures alone has no nominal to mint its identity.
+    assert_eq!(
+        run("SIG Chain = #[(VAL next :Chain)]\nPRINT 1"),
+        "load: <test>:1:1: `Chain` names itself through signatures and aliases alone, so its type \
+         is infinite; a recursive type passes through a NEWTYPE or a UNION"
+    );
+    // A payload that misses the signature is refused, as any payload that misses is.
+    assert_eq!(
+        run(&format!(
+            "{COUNTER}{NODES}MODULE bad = ((LET count = ints) (LET next = 5))\n\
+             LET wrong = (Link.More bad)\nPRINT \"built\""
+        )),
+        "error: More cannot wrap SIG (count: SIG (zero: Number, succ: :(FN :{x :Number} -> \
+         Number)), next: Number): its representation is SIG (count: SIG FOR ALL #{Carrier: Any} \
+         (zero: Carrier, succ: :(FN :{x :Carrier} -> Carrier)), next: :(End | More))"
+    );
 }

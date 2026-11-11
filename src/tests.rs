@@ -18,6 +18,11 @@ pub(crate) fn allocation_count() -> u64 {
     counting_alloc::thread_allocations()
 }
 
+/// The bytes this thread has asked for since it started.
+pub(crate) fn allocation_bytes() -> u64 {
+    counting_alloc::thread_bytes()
+}
+
 #[global_allocator]
 static COUNTING_ALLOCATOR: counting_alloc::Counting<std::alloc::System> =
     counting_alloc::Counting(std::alloc::System);

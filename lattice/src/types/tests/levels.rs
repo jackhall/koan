@@ -3,15 +3,19 @@
 //! and that its identity is every field.
 
 use crate::bump::{Bump, BumpAllocator};
-use crate::symbols::{BinderSymbol, SymbolInterner, TypeSymbol};
+use crate::symbols::{BinderSymbol, SymbolInterner, TypeSymbol, ValueSymbol};
 
 use super::raw::RawRegistry;
 use super::raw::order::is_subtype_of;
-use super::raw::substitute::{bound_above, substitute_levels, substitute_quantified};
+use super::raw::substitute::{
+    bound_above, substitute_levels, substitute_paths, substitute_quantified,
+};
 use super::raw::unify::admits;
 use crate::types::chain::TypeChain;
 use crate::types::handle::{Handle, KType, TypeHandle};
+use crate::types::node::{ContentKey, PathClass};
 use crate::types::render::display_handle;
+use crate::types::schema::{SchemaDraft, SigOrigin};
 use crate::types::unify::Collector;
 use crate::types::walk::Variance;
 
@@ -74,7 +78,7 @@ fn no_binder_captures_a_lexical_variable() {
     let elt = world.lexical(0, "Elt", KType::ANY);
     let f = world.function(&["Tee"], "t", tee, elt);
     assert_eq!(
-        substitute_levels(&world.types, world.region, f, &[KType::NUMBER.raw()]),
+        substitute_levels(&world.types, world.region, f, &[Some(KType::NUMBER.raw())]),
         world.function(&["Tee"], "t", tee, KType::NUMBER.raw()),
         "a level substitutes under a quantified function",
     );
@@ -85,9 +89,25 @@ fn no_binder_captures_a_lexical_variable() {
     );
     let past = world.lexical(1, "Item", KType::ANY);
     assert_eq!(
-        substitute_levels(&world.types, world.region, past, &[KType::NUMBER.raw()]),
+        substitute_levels(
+            &world.types,
+            world.region,
+            past,
+            &[Some(KType::NUMBER.raw())]
+        ),
         past,
         "a level past the bindings is kept",
+    );
+    let g = world.function(&["Tee"], "t", elt, past);
+    assert_eq!(
+        substitute_levels(
+            &world.types,
+            world.region,
+            g,
+            &[None, Some(KType::NUMBER.raw())]
+        ),
+        world.function(&["Tee"], "t", elt, KType::NUMBER.raw()),
+        "a level left unbound keeps its variable beside one bound",
     );
 }
 
@@ -276,5 +296,126 @@ fn every_field_of_a_lexical_variable_is_identity() {
     assert_eq!(
         display_handle(elt, &world.types, &world.symbols).to_string(),
         "Elt"
+    );
+}
+
+#[test]
+fn every_field_of_a_path_variable_is_identity() {
+    let bump = Bump::new();
+    let world = World::new(&bump);
+    let path = |class, text: &str, bound| {
+        (world.types)
+            .path_variable(PathClass([class, 0]), world.name(text), bound)
+            .raw()
+    };
+    let carrier = path(0, "Carrier", KType::ANY);
+    assert_eq!(carrier, path(0, "Carrier", KType::ANY));
+    for other in [
+        path(1, "Carrier", KType::ANY),
+        path(0, "Elt", KType::ANY),
+        path(0, "Carrier", KType::NUMBER),
+        world.lexical(0, "Carrier", KType::ANY),
+    ] {
+        assert_ne!(carrier.digest(), other.digest());
+    }
+    assert_eq!(
+        display_handle(carrier, &world.types, &world.symbols).to_string(),
+        "Carrier"
+    );
+}
+
+#[test]
+fn substituting_paths_replaces_each_class_it_answers_for_and_no_other_variable() {
+    let bump = Bump::new();
+    let world = World::new(&bump);
+    let carrier = |class| {
+        (world.types)
+            .path_variable(PathClass([class, 0]), world.name("Carrier"), KType::ANY)
+            .raw()
+    };
+    let (answered, kept) = (carrier(0), carrier(1));
+    let elt = world.lexical(0, "Elt", KType::ANY);
+    let number = KType::NUMBER.raw();
+    let mut answer = |class| (class == PathClass([0, 0])).then_some(number);
+    let mut substituted = |kt| substitute_paths(&world.types, world.region, kt, &mut answer);
+    assert_eq!(substituted(answered), number);
+    assert_eq!(
+        substituted(world.types.list(answered)),
+        world.types.list(number)
+    );
+    assert_eq!(
+        substituted(kept),
+        kept,
+        "a class it does not answer for is kept"
+    );
+    assert_eq!(substituted(elt), elt, "a lexical variable is no path's");
+    // No scheme captures a path variable: one in a quantified function's return is replaced.
+    let tee = world.types.quantified(0, KType::ANY).raw();
+    assert_eq!(
+        substituted(world.function(&["Tee"], "t", tee, answered)),
+        world.function(&["Tee"], "t", tee, number),
+    );
+}
+
+#[test]
+fn substituting_carriers_replaces_each_carrier_it_answers_for_at_its_position() {
+    let bump = Bump::new();
+    let world = World::new(&bump);
+    let (types, region) = (&world.types, world.region);
+    let carrier = |key| types.carrier(world.name("Carrier"), KType::ANY, ContentKey(key));
+    let (answered, kept) = (carrier(1), carrier(2));
+    let mut answer = |held: KType| (held == answered).then_some(KType::NUMBER);
+    let mut substituted =
+        |kt: KType| crate::types::substitute_carriers(types, region, kt, &mut answer);
+    assert_eq!(substituted(answered), KType::NUMBER);
+    assert_eq!(substituted(types.list(answered)), types.list(KType::NUMBER));
+    assert_eq!(
+        substituted(kept),
+        kept,
+        "a carrier it does not answer for is kept"
+    );
+    // A union re-interns through its canonical door: the answer is absorbed where it lies below
+    // another member.
+    let either = types.union_of(region, &[answered, KType::STR]);
+    assert_eq!(
+        substituted(either),
+        types.union_of(region, &[KType::NUMBER, KType::STR])
+    );
+    let both = types.union_of(region, &[answered, KType::NUMBER]);
+    assert_eq!(substituted(both), KType::NUMBER);
+}
+
+/// A carrier a signature holds is read back inside it — in a value slot, and in an application's
+/// signature — and the signature re-interned through its canonical door: one type, one handle.
+#[test]
+fn substituting_carriers_reads_a_carrier_inside_a_signature() {
+    let bump = Bump::new();
+    let world = World::new(&bump);
+    let (types, region) = (&world.types, world.region);
+    let carrier = types.carrier(world.name("Carrier"), KType::ANY, ContentKey(1));
+    let zero = ValueSymbol::declared("zero", &world.symbols).expect("a value token");
+    let elem = world.name("Elem");
+    let declared = |slot: KType| {
+        let mut draft = SchemaDraft::new(region);
+        draft.origin = SigOrigin::Declared;
+        draft.insert_parameter(elem, types.head_parameter(elem, KType::ANY));
+        draft.insert_value_slot(zero, slot);
+        types.signature(region, draft)
+    };
+    let applied = |slot: KType| {
+        types.signature_apply(
+            region,
+            declared(slot),
+            &[(BinderSymbol::Type(elem), KType::STR)],
+        )
+    };
+    let mut answer = |held: KType| (held == carrier).then_some(KType::NUMBER);
+    let mut substituted =
+        |kt: KType| crate::types::substitute_carriers(types, region, kt, &mut answer);
+    assert_eq!(substituted(declared(carrier)), declared(KType::NUMBER));
+    assert_eq!(substituted(applied(carrier)), applied(KType::NUMBER));
+    assert_eq!(
+        substituted(types.list(applied(carrier))),
+        types.list(applied(KType::NUMBER))
     );
 }

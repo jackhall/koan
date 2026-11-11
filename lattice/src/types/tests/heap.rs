@@ -170,7 +170,7 @@ fn interning_and_relations_touch_no_heap() {
     let _ = meet(&types, scratch, record, narrow);
     assert!(is_subtype_of(&types, scratch, applied, group_family));
     let sink = types.function_type(scratch, &[(x, variable)], KType::NUMBER.into());
-    assert!(types.quantifies_contravariantly(scratch, sink, 1));
+    assert!(types.quantifies_noncovariantly(scratch, sink, 1));
     let _ = meet(&types, scratch, union, record);
     // Two signature types meet at the set of both, which is never `Never`.
     assert_ne!(meet(&types, scratch, interface, module), KType::NEVER);

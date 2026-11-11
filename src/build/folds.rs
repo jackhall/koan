@@ -6,7 +6,7 @@
 //!   its content depends on: closed, invariant where it reads only parameters every tail edge into
 //!   its frame passes on bare and that digest at a constant cost, else varying. The invariance and
 //!   escape are the text's ([`Shapes::invariant`], [`Shapes::escapes`]); a site's pending paths are
-//!   read through the records' resolutions. Each body's record says whether its frame caches,
+//!   read through their classes' content trees. Each body's record says whether its frame caches,
 //!   beside its classed sites and, on a callable's own, the parameters that may key it.
 //! - **Keys.** A callable keys on each of its own keyable names that lies in the frontier of some
 //!   unit beneath it, its entry aside, whose seam — the latest bind site among its frontier's
@@ -19,12 +19,15 @@
 //! - **Contract.** Each lexical variable a contribution or a solution names is composed by every
 //!   callable or `MODULE` body between the body reading it and its home. The walk refuses a
 //!   `MODULE` body composing a type its `OVER` list does not name.
+//!
+//! These are the frontier keys. The [trace](trace.rs) then widens each callable's keys to its
+//! traced slots and fills each body's call-site traces over them.
 
 use crate::memory::{BumpAllocator, BumpBackedMap, BumpVec, Lays, bump_table, collect, resident};
 use crate::scope::{
     Address, BindSite, BodyClass, Caching, Cut, Deps, DepsGathering, Folds, Frontier, Keyed,
-    LoadFacts, Mint, Position, Resolution, Resolved, Root, Segment, ShapeKind, Shapes, SiteDeps,
-    Slot, UnitIndex, tree_deps,
+    LoadFacts, Mint, Position, Resolved, Root, Segment, ShapeKind, Shapes, SiteDeps, Slot,
+    UnitIndex, tree_deps,
 };
 
 /// The folds of every body `load` holds records for, by segment, laid through `lay`.
@@ -33,12 +36,21 @@ pub fn fold<'o>(
     lay: impl Lays<'o>,
     scratch: BumpAllocator<'_>,
 ) -> &'o [Folds<'o>] {
+    collect(lay, staged(load, lay, scratch).iter().copied())
+}
+
+/// [`fold`], each body's folds laid through `lay` but their run staged in `scratch`, for the trace
+/// to lay once with its traces.
+pub(super) fn staged<'o, 'x>(
+    load: &LoadFacts<'o>,
+    lay: impl Lays<'o>,
+    scratch: BumpAllocator<'x>,
+) -> BumpVec<'x, Folds<'o>> {
     let shapes = load.shapes();
     let count = shapes.bodies().len();
     // What the walk recorded, gathered from every unit's record.
     let mut sites: BumpVec<'_, SiteDeps<'o>> = BumpVec::new_in(scratch);
     let mut digestible: BumpVec<'_, (Segment, &'o [Slot])> = BumpVec::new_in(scratch);
-    let mut resolutions: BumpVec<'_, ((Segment, usize), Resolution<'o>)> = BumpVec::new_in(scratch);
     let mut rooting: BumpVec<'_, (Segment, Slot)> = BumpVec::new_in(scratch);
     let mut frontiers: BumpVec<'_, (Segment, UnitIndex, Frontier<'o>)> = BumpVec::new_in(scratch);
     let mut contract = BumpVec::with_capacity_in(count, scratch);
@@ -50,7 +62,6 @@ pub fn fold<'o>(
     for (unit, (facts, frontier)) in load.own_units() {
         sites.extend(facts.sites.iter().copied());
         digestible.extend((facts.born.iter()).map(|(body, born)| (*body, born.digestible)));
-        resolutions.extend((facts.paths.iter()).map(|(at, (_, resolution))| (*at, *resolution)));
         rooting.extend((facts.paths.iter()).filter_map(|(_, (entry, resolution))| {
             match (entry.root, resolution.resolved) {
                 (Root::Binder(binder), Resolved::Class(_)) => Some((binder.body, binder.slot)),
@@ -63,7 +74,6 @@ pub fn fold<'o>(
         }
     }
     digestible.sort_unstable_by_key(|(body, _)| *body);
-    resolutions.sort_unstable_by_key(|(at, _)| *at);
     rooting.sort_unstable();
     rooting.dedup();
     let digestible = |body: Segment, slot: Slot| {
@@ -82,17 +92,8 @@ pub fn fold<'o>(
     let class_of = |site: &SiteDeps<'o>| -> (Mint, &'o [Slot]) {
         let mut deps = DepsGathering::new(scratch);
         deps.add(site.deps);
-        for (root, level) in site.pending {
-            match resolutions.binary_search_by_key(&(*root, *level), |(at, _)| *at) {
-                Ok(at) => tree_deps(
-                    shapes,
-                    (site.holder, site.frame),
-                    &resolutions[at].1.tree,
-                    &mut deps,
-                    scratch,
-                ),
-                Err(_) => deps.add(Deps::Varying),
-            }
+        for tree in site.pending {
+            tree_deps(shapes, (site.holder, site.frame), tree, &mut deps, scratch);
         }
         match deps.laid(lay) {
             Deps::Closed => (Mint::Closed, &[]),
@@ -157,6 +158,8 @@ pub fn fold<'o>(
                 seams: &[],
                 rooting: &[],
                 contract,
+                traces: Keyed::EMPTY,
+                slot_maps: &[],
             });
             continue;
         };
@@ -224,9 +227,11 @@ pub fn fold<'o>(
                 collect(lay, slots.iter().copied())
             },
             contract,
+            traces: Keyed::EMPTY,
+            slot_maps: &[],
         });
     }
-    collect(lay, folds.iter().copied())
+    folds
 }
 
 /// Each `(body, address)` a body of a kind in `entered` keys on through its frontiers: a `keyable`
@@ -301,7 +306,7 @@ fn seam_names<'x>(
                 continue;
             }
             let mut seams = BumpVec::new_in(scratch);
-            seams.extend((at.own().iter()).filter_map(|unknown| match unknown.at {
+            seams.extend(at.own_unknowns().filter_map(|unknown| match unknown.at {
                 Address::Slot(slot)
                     if shapes.shape_at(unknown.segment).position_of(slot)
                         != Position::PARAMETER =>
@@ -366,8 +371,10 @@ fn summarize<'x>(
         }
         let read = |cut: &Cut<'_>| summaries[&cut.frontier.identity()];
         let mut sites = BumpVec::new_in(scratch);
-        sites
-            .extend((at.own().iter()).map(|unknown| (unknown.segment, shapes.bind_site(*unknown))));
+        sites.extend(
+            at.own_unknowns()
+                .map(|unknown| (unknown.segment, shapes.bind_site(unknown))),
+        );
         for cut in at.reads() {
             let held = read(cut).sites;
             let past = held.partition_point(|(segment, _)| *segment < cut.from);
@@ -389,7 +396,7 @@ fn summarize<'x>(
             }
         }
         let mut keys = BumpVec::new_in(scratch);
-        keys.extend((at.own().iter()).filter_map(|unknown| {
+        keys.extend(at.own_unknowns().filter_map(|unknown| {
             let named = entered.contains(&shapes.shape_at(unknown.segment).kind())
                 && keyable(unknown.segment, unknown.at);
             named.then_some((unknown.segment, unknown.at))

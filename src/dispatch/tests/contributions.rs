@@ -388,9 +388,9 @@ fn a_later_slot_reads_an_earlier_lexical_solution_at_its_ends() {
     );
     assert_eq!(
         run(&source),
-        "paired\nerror: <test>:2:50: no overload of `PAIR _ WITH _` admits these \
+        "load: <test>:2:50: no overload of `PAIR _ WITH _` admits these \
          arguments:\n  (Number, Str), which can never satisfy :(EXPR FOR ALL #[Elt] #(PAIR _ :Elt \
-         WITH _ :Elt) -> Str)\n  in :(FN FOR ALL #[Outer] :{m :Outer} -> Str) (WRAP 1) at <test>:6:7"
+         WITH _ :Elt) -> Str)\n  in (WRAP 1) at <test>:6:7"
     );
 }
 

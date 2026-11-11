@@ -30,10 +30,10 @@ use std::ops::Deref;
 use crate::memory::{Covariant, SlotArray, SlotConflict, SlotView, Writer};
 use crate::values::{ContentDigest, Knotted, KnottedFamily, Link, NoKnot, Value, ValueFamily};
 
+use super::build_layer::BuildLayer;
 use super::builtins::Builtins;
 use super::closure::ClosureBindings;
 use super::records::Facts;
-use super::settlement_facts::Activated;
 use super::shape::{BodyShape, CaptureSlot, Coordinate, Segment, ShapeKind, Slot, Target};
 use super::shapes::Code;
 
@@ -86,7 +86,7 @@ pub struct ActivationView<
     digests: &'cell [Cell<Option<ContentDigest>>],
     /// What its frame decided in its own activation so far, innermost event first: a block's and a
     /// module body's are its frame's as they stood when it was laid down.
-    decided: Option<&'cell Activated<'cell>>,
+    decided: Option<&'cell BuildLayer<'cell>>,
 }
 
 impl<'graph, XF: KnottedFamily<'graph>, X: Copy> Clone for ActivationView<'graph, '_, XF, X> {
@@ -220,7 +220,7 @@ where
         facts: &Facts<'_>,
         closure: &'cell ClosureBindings<'cell, XF::Closed<'cell>>,
         builtins: &'cell Builtins<'cell, XF::Closed<'cell>>,
-        decided: Option<&'cell Activated<'cell>>,
+        decided: Option<&'cell BuildLayer<'cell>>,
     ) -> Self {
         debug_assert_eq!(shape.kind(), ShapeKind::Module);
         debug_assert_eq!(
@@ -303,7 +303,7 @@ where
     }
 
     /// This activation reading `decided`, what its frame decided so far, over its own slots.
-    pub fn deciding(self, decided: &'cell Activated<'cell>) -> Self {
+    pub fn deciding(self, decided: &'cell BuildLayer<'cell>) -> Self {
         Activation {
             view: ActivationView {
                 decided: Some(decided),
@@ -353,7 +353,7 @@ impl<'graph, 'cell, XF: KnottedFamily<'graph>> ActivationView<'graph, 'cell, XF>
     }
 
     /// What its frame decided in its own activation so far, innermost event first.
-    pub fn decided(&self) -> Option<&'cell Activated<'cell>> {
+    pub fn decided(&self) -> Option<&'cell BuildLayer<'cell>> {
         self.decided
     }
 

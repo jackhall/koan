@@ -43,7 +43,7 @@ fn a_birth_continuation_comes_back_at_the_step_brand_and_a_successor_survives_to
             Some(Continuation {
                 step: inert,
                 provenance: place(root),
-                arena: crate::values::ArenaRef::ROOT,
+                depot: crate::values::DepotRef::ROOT,
                 arrival: crate::scheduler::continuation::Arrival::Placed,
                 sought: None,
                 state: Rested::Awake(KValue::Number(1.0)),
@@ -64,7 +64,7 @@ fn a_birth_continuation_comes_back_at_the_step_brand_and_a_successor_survives_to
             context.store_successor(Continuation {
                 step: inert,
                 provenance: place(root),
-                arena: crate::values::ArenaRef::ROOT,
+                depot: crate::values::DepotRef::ROOT,
                 arrival: crate::scheduler::continuation::Arrival::Placed,
                 sought: None,
                 state: Rested::Awake(here),

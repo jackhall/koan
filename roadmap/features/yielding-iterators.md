@@ -66,8 +66,8 @@ elements a consumer takes lazily.
   each element through one cell per nesting level; a flattened stack of bound
   calls makes a demand one step and one child, and copies the O(depth) stack
   across each consumer hop.
-- *A bound call's shape — open.* A tagged record over a function value, or a
-  node of the callable parameter [`knot`](../../src/knot/README.md) closes,
+- *A bound call's shape — open.* A tagged record value over a function value, or
+  a node of the callable parameter [`knot`](../../src/knot/README.md) closes,
   beside the function node.
 - *Buffered channels — deferred.* A policy layer for buffering and
   multi-producer merge, designed once streams ship.

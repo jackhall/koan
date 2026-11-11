@@ -1,7 +1,7 @@
 # Newtypes
 
 `NEWTYPE` mints a fresh type identity. You've already seen its record form for
-[records](07-records.md); this chapter covers its other form, where a newtype
+[record types](07-records.md); this chapter covers its other form, where a newtype
 wraps an existing type to make a distinct one:
 
 ```koan
@@ -36,10 +36,10 @@ a plain number
 a distance
 ```
 
-This is what records can't give you ergonomically: pairs of types that share a
-representation but mean different things — `Distance` and `Duration`, `UserId`
-and `PostId` — without wrapping each in a single-field record. Constructing one
-from the wrong representation is an error:
+This is what record types can't give you ergonomically: pairs of types that
+share a representation but mean different things — `Distance` and `Duration`,
+`UserId` and `PostId` — without wrapping each in a single-field record type.
+Constructing one from the wrong representation is an error:
 
 ```koan
 NEWTYPE Distance = Number
@@ -53,7 +53,7 @@ error: Distance cannot wrap Str: its representation is Number
 ## Wrapping other types
 
 A newtype's representation can be any type, including a record type or another
-newtype. When it wraps a record, field access *falls through* the wrapper:
+newtype. When it wraps a record type, field access *falls through* the wrapper:
 
 ```koan
 NEWTYPE Point = :{x :Number, y :Number}
@@ -68,7 +68,7 @@ PRINT b.x
 ```
 
 The fall-through reads each layer at its representation, so the wrapper shows
-the fields `Point` names and nothing more, even when the record underneath
+the fields `Point` names and nothing more, even when the record value underneath
 carries others. It is transparent, except that a missing-field error names the
 wrapper you accessed, not the type underneath:
 
@@ -108,8 +108,8 @@ alias of the type name. Like field access on a value, it falls through a wrappin
 newtype: with `NEWTYPE Boxed = Point`, `:(Boxed.x)` is `Point`'s `x`.
 
 The sigil is optional, though: reading a field off a type, as off any other
-value, gives the type its record declares the field with. So `v :Point.y` is the
-same slot, and the read runs anywhere a value does:
+value, gives the type its record type declares the field with. So `v :Point.y`
+is the same slot, and the read runs anywhere a value does:
 
 ```koan
 NEWTYPE Point = :{x :Number, y :Str}
@@ -145,5 +145,23 @@ Rest({next = Cell({head = 1, tail = Rest({next = null})})})
 
 Here `Cell` names `Rest` before `Rest` is declared, and `Rest` names `Cell` — each
 definition mentions the other.
+
+A type alias may take part in a recursive type too. It is the type it is
+defined as, so below `Children` is a list of `Node`s, and a `Node` holds one:
+
+```koan
+LET Children = :(LIST OF Node)
+NEWTYPE Node = :{value :Number, kids :Children}
+LET leaf = (Node {value = 2, kids = []})
+PRINT (Node {value = 1, kids = [leaf, leaf]})
+```
+
+```text
+Node({kids = [Node({kids = [], value = 2}), Node({kids = [], value = 2})], value = 1})
+```
+
+Every such cycle needs a `NEWTYPE` or a `UNION` in it, since only those declare
+a new type for the cycle to pass through. `LET Left = Right` beside `LET Right = Left`
+names no type at all, and is refused.
 
 Next: [Errors](09-errors.md).

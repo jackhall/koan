@@ -6,12 +6,14 @@
 //! Each record is destructured whole and each match lists every variant and field, so a
 //! type-bearing field a record gains does not compile until it is visited.
 
+use crate::memory::{Lays, resident};
 use crate::type_lattice::{DeclaredType, Interval, KType, Parametric};
 use crate::values::Retype;
 
-use super::records::{AtRun, Born, Closing, Retypes, Typed, UnitFacts};
+use super::keyed::Keyed;
+use super::records::{AtRun, Born, Closing, Restamp, Retypes, Typed, UnitFacts};
 use super::shape::{Repeated, ShapeError};
-use super::tree::{KnotNode, Leaf, NodeCapture, Tree, Unfolded, Within};
+use super::tree::{KnotNode, Leaf, NodeCapture, Tree, Unfolded, ViewRecord, Within};
 use super::typed::{
     Callable, Elaboration, InstanceRead, Kept, Narrowing, PathEntry, Point, Points, Registered,
     Resolution, Resolved, Static, StaticInstance, StaticType, UseStatics,
@@ -29,7 +31,11 @@ impl UnitFacts<'_> {
             paths,
             sites: _,
             named_variables: _,
+            seeds,
         } = self;
+        for (_, seed) in seeds.iter() {
+            seed.each_type(each);
+        }
         for (_, typed) in typed.iter() {
             typed_types(typed, each);
         }
@@ -41,7 +47,7 @@ impl UnitFacts<'_> {
                 root: _,
                 chain: _,
                 label: _,
-                level: _,
+                name: _,
                 through,
             } = entry;
             if let Some(through) = through {
@@ -172,6 +178,7 @@ fn typed_types(typed: &Typed<'_>, each: &mut Each<'_>) {
         instances,
         uses,
         selections,
+        traced,
         by_name,
         routes: _,
         arms: _,
@@ -179,6 +186,7 @@ fn typed_types(typed: &Typed<'_>, each: &mut Each<'_>) {
         trees,
         picks: _,
         contents,
+        holding: _,
         minting: _,
         signature,
         exits: _,
@@ -225,6 +233,11 @@ fn typed_types(typed: &Typed<'_>, each: &mut Each<'_>) {
     for (_, points) in selections.iter() {
         points_types(points, each);
     }
+    for (_, traced) in traced.iter() {
+        for (_, fixed) in traced.fixed.iter() {
+            fixed.each_type(&mut |kt| each(kt.into()));
+        }
+    }
     for (_, contributions) in by_name.iter() {
         contributions
             .iter()
@@ -268,7 +281,27 @@ fn born_types(born: &Born<'_>, each: &mut Each<'_>) {
 /// Every type `tree` names, its subtrees' included.
 pub(super) fn tree_types(tree: &Tree<'_>, each: &mut Each<'_>) {
     match tree {
-        Tree::Digest(_) | Tree::Leaf(Leaf::Unnamed(_)) => {}
+        Tree::Digest(_, None) | Tree::Leaf(Leaf::Unnamed(_)) => {}
+        Tree::Digest(_, Some(bare)) => {
+            bare.signature
+                .iter()
+                .for_each(|ktype| each((*ktype).into()));
+            if let Some(sealing) = bare.sealing {
+                let ViewRecord {
+                    application,
+                    from,
+                    to,
+                    hidden,
+                } = sealing.record;
+                for ktype in [application, from, to, sealing.underlying_signature] {
+                    each(ktype.into());
+                }
+                for (carrier, hides) in hidden {
+                    each((*carrier).into());
+                    each((*hides).into());
+                }
+            }
+        }
         Tree::Body {
             body: _,
             captures,
@@ -295,13 +328,14 @@ pub(super) fn tree_types(tree: &Tree<'_>, each: &mut Each<'_>) {
             }
         }
         Tree::View {
-            operator: _,
             application,
             source,
+            underlying,
             identity: _,
         } => {
             each((*application).into());
             tree_types(source, each);
+            tree_types(underlying, each);
         }
         Tree::Retyped {
             carried,
@@ -444,6 +478,11 @@ fn error_types(error: &ShapeError<'_>, each: &mut Each<'_>) {
         ShapeError::NotASignature {
             ascribed: value,
             at: _,
+        }
+        | ShapeError::ViewReveals {
+            member: _,
+            ascribed: value,
+            at: _,
         } => ktype(value),
         ShapeError::NoAdmittingArm {
             scrutinee,
@@ -477,6 +516,7 @@ fn error_types(error: &ShapeError<'_>, each: &mut Each<'_>) {
             }
         }
         ShapeError::Type { error, at: _ } => elaboration_types(&error, each),
+        ShapeError::UnderCall { call: _, refusal } => error_types(refusal, each),
         ShapeError::Rebind {
             name: _,
             first: _,
@@ -565,6 +605,7 @@ fn elaboration_types(error: &Elaboration, each: &mut Each<'_>) {
         | Elaboration::Bound { site: _ }
         | Elaboration::Quantified { site: _ }
         | Elaboration::MeetOverVariable { site: _ }
+        | Elaboration::CycleWithoutNominal { name: _, site: _ }
         | Elaboration::Unknown { site: _ }
         | Elaboration::Unbound { name: _, site: _ } => {}
     }
@@ -632,6 +673,12 @@ impl Named for UseStatics<'_> {
     }
 }
 
+impl Named for Restamp {
+    fn each_named(&self, each: &mut Each<'_>) {
+        each(self.at.into());
+    }
+}
+
 impl Named for Retypes<'_> {
     fn each_named(&self, each: &mut Each<'_>) {
         let Retypes {
@@ -651,7 +698,7 @@ impl Named for PathEntry<'_> {
             root: _,
             chain: _,
             label: _,
-            level: _,
+            name: _,
             through,
         } = self;
         through.each_named(each);
@@ -793,6 +840,575 @@ fn points_types(points: &Points<'_>, each: &mut dyn FnMut(DeclaredType<Parametri
             Point::Closed(point) => each((*point).into()),
             Point::Rigid(point) => each((*point).into()),
             Point::Carried(_) => {}
+        }
+    }
+}
+
+/// What a [`Closer`] makes of one type: the closed type a binding gives it, the type with only
+/// some of its variables closed, or the type unchanged.
+#[derive(Clone, Copy, Debug)]
+pub enum Closed {
+    Type(DeclaredType<KType>),
+    Partial(DeclaredType<Parametric>),
+    Same,
+}
+
+/// Closes the types a shared record's fact names under one binding: the walk's by substitution as
+/// it absorbs, the run's by a probe of its chain's tables of closed types
+/// ([`records`](super::records)).
+pub trait Closer {
+    fn close(&mut self, ty: DeclaredType<Parametric>) -> Closed;
+}
+
+/// A [`Closer`] that lays the slices it copies through [`lay`](Self::lay).
+pub trait Laying<'l>: Closer {
+    type Lay: Lays<'l>;
+
+    fn lay(&self) -> Self::Lay;
+}
+
+/// A fact whose types a [`Closer`] maps without laying, beside the visitor's [`Named`]: the lists
+/// are kept in step, so a type-bearing field the one reaches the other closes.
+pub trait Close: Sized {
+    fn closed(self, closer: &mut impl Closer) -> Self;
+}
+
+/// A fact holding a slice of types, which closing copies where some element changes.
+pub trait CloseLaying<'l>: Sized {
+    fn closed_laying(self, closer: &mut impl Laying<'l>) -> Self;
+}
+
+/// A fact whose rigid arm closes into its closed arm where every type it names closes: what a
+/// [`Static`]'l rigid value and closed value are.
+pub trait CloseInto: Sized {
+    type Into;
+
+    /// The closed value where every type closes, else the value with what closes closed.
+    fn close_into(self, closer: &mut impl Closer) -> Result<Self::Into, Self>;
+}
+
+/// `ty` under `closer`: the closed type, or the type with what closes closed.
+fn close_parametric(closer: &mut impl Closer, ty: Parametric) -> Result<KType, Parametric> {
+    match closer.close(DeclaredType::Type(ty)) {
+        Closed::Type(DeclaredType::Type(closed)) => Ok(closed),
+        Closed::Partial(DeclaredType::Type(partial)) => Err(partial),
+        Closed::Same => Err(ty),
+        Closed::Type(DeclaredType::Scheme(_)) | Closed::Partial(DeclaredType::Scheme(_)) => {
+            unreachable!("a type closes to a type")
+        }
+    }
+}
+
+/// `ty` under `closer`, read as a parametric type either way.
+fn close_declared(
+    closer: &mut impl Closer,
+    ty: DeclaredType<Parametric>,
+) -> DeclaredType<Parametric> {
+    match closer.close(ty) {
+        Closed::Type(closed) => declared(closed),
+        Closed::Partial(partial) => partial,
+        Closed::Same => ty,
+    }
+}
+
+/// `ty` closed into a declared type over concrete handles where it closes whole.
+fn declared_into(
+    closer: &mut impl Closer,
+    ty: DeclaredType<Parametric>,
+) -> Result<DeclaredType<KType>, DeclaredType<Parametric>> {
+    match closer.close(ty) {
+        Closed::Type(closed) => Ok(closed),
+        Closed::Partial(partial) => Err(partial),
+        Closed::Same => Err(ty),
+    }
+}
+
+/// `items` with each closed by `close`, laid again through the closer only where one changes: the
+/// items before the first that changes are copied, and each is closed once.
+fn close_slice<'l, T: Copy, C: Laying<'l>>(
+    closer: &mut C,
+    items: &'l [T],
+    mut close: impl FnMut(T, &mut Counting<'_, C>) -> T,
+) -> &'l [T] {
+    let mut counting = Counting {
+        closer,
+        changed: false,
+    };
+    let mut first = None;
+    for (at, item) in items.iter().enumerate() {
+        let closed = close(*item, &mut counting);
+        if counting.changed {
+            first = Some((at, closed));
+            break;
+        }
+    }
+    let Some((first, closed)) = first else {
+        return items;
+    };
+    let lay = counting.lay();
+    let mut closed = Some(closed);
+    lay.fill(items.len(), |at| match at.cmp(&first) {
+        std::cmp::Ordering::Less => items[at],
+        std::cmp::Ordering::Equal => closed.take().expect("the first change is laid once"),
+        std::cmp::Ordering::Greater => close(items[at], &mut counting),
+    })
+}
+
+/// `table` with each value closed by `close`, laid again only where one changes: the keys stay,
+/// so it stays sorted.
+fn close_keyed<'l, K: Ord + Copy, V: Copy, C: Laying<'l>>(
+    closer: &mut C,
+    table: Keyed<'l, (K, V)>,
+    mut close: impl FnMut(V, &mut Counting<'_, C>) -> V,
+) -> Keyed<'l, (K, V)> {
+    let entries = close_slice(closer, table.entries(), |(key, value), closer| {
+        (key, close(value, closer))
+    });
+    match std::ptr::eq(entries, table.entries()) {
+        true => table,
+        false => Keyed::from_sorted(entries),
+    }
+}
+
+/// A closer noting whether it changed any type.
+struct Counting<'c, C> {
+    closer: &'c mut C,
+    changed: bool,
+}
+
+impl<C: Closer> Closer for Counting<'_, C> {
+    fn close(&mut self, ty: DeclaredType<Parametric>) -> Closed {
+        let closed = self.closer.close(ty);
+        self.changed |= !matches!(closed, Closed::Same);
+        closed
+    }
+}
+
+impl<'l, C: Laying<'l>> Laying<'l> for Counting<'_, C> {
+    type Lay = C::Lay;
+
+    fn lay(&self) -> C::Lay {
+        self.closer.lay()
+    }
+}
+
+impl Close for Parametric {
+    fn closed(self, closer: &mut impl Closer) -> Self {
+        close_parametric(closer, self).map_or_else(|partial| partial, Into::into)
+    }
+}
+
+impl Close for Restamp {
+    fn closed(self, closer: &mut impl Closer) -> Self {
+        Restamp {
+            at: self.at.closed(closer),
+            ..self
+        }
+    }
+}
+
+impl<'l> CloseLaying<'l> for Retypes<'l> {
+    fn closed_laying(self, closer: &mut impl Laying<'l>) -> Self {
+        Retypes {
+            parameters: close_slice(closer, self.parameters, |(name, restamp), closer| {
+                (name, restamp.closed(closer))
+            }),
+            returns: self.returns.closed(closer),
+        }
+    }
+}
+
+impl Close for Interval {
+    fn closed(self, closer: &mut impl Closer) -> Self {
+        Interval {
+            lower: self.lower.closed(closer),
+            upper: self.upper.closed(closer),
+        }
+    }
+}
+
+impl Close for DeclaredType<Parametric> {
+    fn closed(self, closer: &mut impl Closer) -> Self {
+        close_declared(closer, self)
+    }
+}
+
+impl Close for DeclaredType<Interval> {
+    fn closed(self, closer: &mut impl Closer) -> Self {
+        match self {
+            DeclaredType::Type(typed) => DeclaredType::Type(typed.closed(closer)),
+            DeclaredType::Scheme(scheme) => {
+                match close_declared(closer, DeclaredType::Scheme(scheme)) {
+                    DeclaredType::Scheme(scheme) => DeclaredType::Scheme(scheme),
+                    DeclaredType::Type(_) => unreachable!("a scheme closes to a scheme"),
+                }
+            }
+        }
+    }
+}
+
+impl CloseInto for Parametric {
+    type Into = KType;
+
+    fn close_into(self, closer: &mut impl Closer) -> Result<KType, Self> {
+        close_parametric(closer, self)
+    }
+}
+
+impl<'l> CloseInto for Registered<'l, Parametric> {
+    type Into = Registered<'l, KType>;
+
+    fn close_into(self, closer: &mut impl Closer) -> Result<Self::Into, Self> {
+        let Registered {
+            shape,
+            quantifier_map,
+            parameters,
+        } = self;
+        match declared_into(closer, shape) {
+            Ok(shape) => Ok(Registered {
+                shape,
+                quantifier_map,
+                parameters,
+            }),
+            Err(shape) => Err(Registered {
+                shape,
+                quantifier_map,
+                parameters,
+            }),
+        }
+    }
+}
+
+impl<'l> CloseInto for Callable<'l, Parametric> {
+    type Into = Callable<'l, KType>;
+
+    fn close_into(self, closer: &mut impl Closer) -> Result<Self::Into, Self> {
+        let Callable {
+            ktype,
+            quantifier_map,
+            registered,
+        } = self;
+        let ktype = declared_into(closer, ktype);
+        let registered = registered.map(|registered| registered.close_into(closer));
+        match (ktype, registered) {
+            (Ok(ktype), None) => Ok(Callable {
+                ktype,
+                quantifier_map,
+                registered: None,
+            }),
+            (Ok(ktype), Some(Ok(registered))) => Ok(Callable {
+                ktype,
+                quantifier_map,
+                registered: Some(registered),
+            }),
+            (ktype, registered) => Err(Callable {
+                ktype: ktype.map_or_else(|partial| partial, declared),
+                quantifier_map,
+                registered: registered.map(|registered| match registered {
+                    Ok(Registered {
+                        shape,
+                        quantifier_map,
+                        parameters,
+                    }) => Registered {
+                        shape: declared(shape),
+                        quantifier_map,
+                        parameters,
+                    },
+                    Err(partial) => partial,
+                }),
+            }),
+        }
+    }
+}
+
+/// A rigid value closes into its closed arm where every type it names closes; its variables stay
+/// as written where only some do, since the run refuses a rigid fact whatever it lists. A closed
+/// value is closed already.
+impl<C, R: CloseInto<Into = C>> Close for Static<'_, C, R> {
+    fn closed(self, closer: &mut impl Closer) -> Self {
+        match self {
+            Static::Rigid { value, variables } => match value.close_into(closer) {
+                Ok(closed) => Static::Closed(closed),
+                Err(value) => Static::Rigid { value, variables },
+            },
+            Static::Unknown | Static::Closed(_) => self,
+        }
+    }
+}
+
+impl Close for Point {
+    fn closed(self, closer: &mut impl Closer) -> Self {
+        match self {
+            Point::Rigid(point) => match close_parametric(closer, point) {
+                Ok(closed) => Point::Closed(closed),
+                Err(partial) => Point::Rigid(partial),
+            },
+            Point::Closed(_) | Point::Carried(_) => self,
+        }
+    }
+}
+
+impl Close for PathEntry<'_> {
+    fn closed(self, closer: &mut impl Closer) -> Self {
+        PathEntry {
+            through: self.through.map(|through| through.closed(closer)),
+            ..self
+        }
+    }
+}
+
+impl<T: Close> Close for Option<T> {
+    fn closed(self, closer: &mut impl Closer) -> Self {
+        self.map(|value| value.closed(closer))
+    }
+}
+
+impl<A: Close, B: Close> Close for (A, B) {
+    fn closed(self, closer: &mut impl Closer) -> Self {
+        (self.0.closed(closer), self.1.closed(closer))
+    }
+}
+
+/// What names only closed types: a resolution, a content tree, a retype table. A refusal that
+/// names a variable is marked open where the walk keeps it, so it is never read closed.
+macro_rules! closes_as_is {
+    ($($fact:ty),* $(,)?) => {
+        $(impl Close for $fact {
+            fn closed(self, _: &mut impl Closer) -> Self {
+                self
+            }
+        })*
+    };
+}
+
+closes_as_is!(
+    KType,
+    Retype,
+    Resolution<'_>,
+    Tree<'_>,
+    &Tree<'_>,
+    &ShapeError<'_>,
+    Elaboration,
+);
+
+impl<'l> CloseLaying<'l> for Points<'l> {
+    fn closed_laying(self, closer: &mut impl Laying<'l>) -> Self {
+        Points {
+            points: close_slice(closer, self.points, |point, closer| point.closed(closer)),
+            variables: self.variables,
+        }
+    }
+}
+
+impl<'l> CloseLaying<'l> for StaticInstance<'l> {
+    fn closed_laying(self, closer: &mut impl Laying<'l>) -> Self {
+        let StaticInstance::Rigid {
+            solution,
+            ktype,
+            variables,
+        } = self
+        else {
+            return self;
+        };
+        let closes = (solution.iter()).all(|each| close_parametric(closer, *each).is_ok());
+        match close_parametric(closer, ktype) {
+            Ok(ktype) if closes => StaticInstance::Closed {
+                solution: closer.lay().fill(solution.len(), |at| {
+                    close_parametric(closer, solution[at]).expect("every point closes")
+                }),
+                ktype,
+            },
+            ktype => StaticInstance::Rigid {
+                solution: close_slice(closer, solution, |each, closer| each.closed(closer)),
+                ktype: ktype.map_or_else(|partial| partial, Into::into),
+                variables,
+            },
+        }
+    }
+}
+
+impl<'l> CloseLaying<'l> for InstanceRead<'l> {
+    fn closed_laying(self, closer: &mut impl Laying<'l>) -> Self {
+        match self {
+            InstanceRead::Solved(solved) => InstanceRead::Solved(solved.closed_laying(closer)),
+            InstanceRead::AsIs => InstanceRead::AsIs,
+        }
+    }
+}
+
+impl<'l> CloseLaying<'l> for UseStatics<'l> {
+    fn closed_laying(self, closer: &mut impl Laying<'l>) -> Self {
+        let UseStatics {
+            narrowing,
+            contributions,
+        } = self;
+        let narrowing = match narrowing {
+            Narrowing::Full | Narrowing::Selected(_) => narrowing,
+            Narrowing::Kept(kept) => {
+                let points = close_slice(closer, kept.points, |points, closer| {
+                    points.closed_laying(closer)
+                });
+                match std::ptr::addr_eq(points, kept.points) {
+                    true => narrowing,
+                    false => Narrowing::Kept(crate::memory::resident(
+                        closer.lay(),
+                        Kept { points, ..*kept },
+                    )),
+                }
+            }
+        };
+        UseStatics {
+            narrowing,
+            contributions: close_slice(closer, contributions, |each, closer| each.closed(closer)),
+        }
+    }
+}
+
+/// A born callable's own group levels are how its body names its group: they stay as laid.
+impl<'l> CloseLaying<'l> for Born<'l> {
+    fn closed_laying(self, closer: &mut impl Laying<'l>) -> Self {
+        let Born {
+            callable,
+            levels,
+            instance,
+            digestible,
+        } = self;
+        Born {
+            callable: callable.closed(closer),
+            levels,
+            instance: instance.map(|instance| instance.closed_laying(closer)),
+            digestible,
+        }
+    }
+}
+
+impl<'l> CloseLaying<'l> for &'l [StaticType<'l>] {
+    fn closed_laying(self, closer: &mut impl Laying<'l>) -> Self {
+        close_slice(closer, self, |each, closer| each.closed(closer))
+    }
+}
+
+impl<'l, T: CloseLaying<'l>> CloseLaying<'l> for Option<T> {
+    fn closed_laying(self, closer: &mut impl Laying<'l>) -> Self {
+        self.map(|value| value.closed_laying(closer))
+    }
+}
+
+/// A body's facts closed table by table, each laid again only where one of its values changes. A
+/// route, an arm set's verdicts and a pick name no type: a verdict a binding could change was
+/// marked open where it was judged, so its record re-runs instead.
+impl<'l> CloseLaying<'l> for Typed<'l> {
+    fn closed_laying(self, closer: &mut impl Laying<'l>) -> Self {
+        let Typed {
+            declared,
+            registered,
+            expressions,
+            parts,
+            statements,
+            binders,
+            settled,
+            instances,
+            uses,
+            selections,
+            traced,
+            by_name,
+            routes,
+            arms,
+            retypes,
+            trees,
+            picks,
+            contents,
+            holding,
+            minting,
+            signature,
+            exits,
+            closed,
+            folded,
+        } = self;
+        Typed {
+            declared: close_keyed(closer, declared, |typed, closer| typed.closed(closer)),
+            registered: close_keyed(closer, registered, |typed, closer| typed.closed(closer)),
+            expressions: close_keyed(closer, expressions, |typed, closer| typed.closed(closer)),
+            parts: close_keyed(closer, parts, |typed, closer| typed.closed(closer)),
+            statements: close_keyed(closer, statements, |typed, closer| typed.closed(closer)),
+            binders: close_keyed(closer, binders, |typed, closer| typed.closed(closer)),
+            settled,
+            instances: close_keyed(closer, instances, |read, closer| read.closed_laying(closer)),
+            uses: close_keyed(closer, uses, |statics, closer| {
+                statics.closed_laying(closer)
+            }),
+            selections: close_keyed(closer, selections, |points, closer| {
+                points.closed_laying(closer)
+            }),
+            // A traced call's content is closed: the trace keys it.
+            traced,
+            by_name: close_keyed(closer, by_name, |typed, closer| typed.closed_laying(closer)),
+            routes,
+            arms,
+            retypes,
+            trees,
+            picks,
+            contents,
+            holding,
+            minting,
+            signature,
+            exits,
+            closed,
+            folded,
+        }
+    }
+}
+
+/// A unit's record closed, laid again only where some fact changes.
+impl<'l> CloseLaying<'l> for &'l UnitFacts<'l> {
+    fn closed_laying(self, closer: &mut impl Laying<'l>) -> Self {
+        let UnitFacts {
+            typed,
+            born,
+            paths,
+            sites,
+            named_variables,
+            seeds,
+        } = *self;
+        let closed = UnitFacts {
+            typed: close_keyed(closer, typed, |typed, closer| typed.closed_laying(closer)),
+            born: close_keyed(closer, born, |born, closer| born.closed_laying(closer)),
+            paths: close_keyed(closer, paths, |path, closer| path.closed(closer)),
+            sites,
+            named_variables,
+            seeds,
+        };
+        let same = std::ptr::eq(closed.typed.entries(), typed.entries())
+            && std::ptr::eq(closed.born.entries(), born.entries())
+            && std::ptr::eq(closed.paths.entries(), paths.entries());
+        match same {
+            true => self,
+            false => resident(closer.lay(), closed),
+        }
+    }
+}
+
+/// A closing record closed: only a quote's code's unfilled type names a type a binding closes;
+/// a summary is a content tree, and a refusal naming a variable is marked open where it is kept.
+impl<'l> CloseLaying<'l> for &'l Closing<'l> {
+    fn closed_laying(self, closer: &mut impl Laying<'l>) -> Self {
+        let Some(ran) = self.ran else {
+            return self;
+        };
+        let mut counting = Counting {
+            closer,
+            changed: false,
+        };
+        let closed = ran.closed(&mut counting);
+        match counting.changed {
+            false => self,
+            true => resident(
+                counting.lay(),
+                Closing {
+                    ran: Some(closed),
+                    ..*self
+                },
+            ),
         }
     }
 }

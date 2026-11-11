@@ -37,6 +37,7 @@
 //! over one, or the solve fails at a verdict over one. A closed solve always is.
 
 use crate::bump::{BumpAllocator, BumpVec};
+use crate::symbols::BinderSymbol;
 
 use std::marker::PhantomData;
 
@@ -45,13 +46,16 @@ use super::handle::{Handle, KType, Naming, Parametric, TypeHandle, wrap};
 use super::lattice::{join_iter, meet_through_variables};
 use super::node::TypeNode;
 use super::order::fits;
+use super::schema::member;
+use super::sig_relations::fits_at_open;
+use super::signatures::{Application, applications, is_signature_type};
 use super::stored::Linked;
 use super::substitute::{Side, bound_above, read_through};
 use super::tiers::Habitat;
 use super::verdicts::Relation;
 use super::walk::Variance;
 use super::walk::binary::{Arm, Lockstep, lockstep};
-use super::walk::unary::{Visit, visit_in};
+use super::walk::unary::{Context, Visit, rebuild, visit_in};
 
 /// Why a carried type does not fill a declared position.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -726,7 +730,8 @@ pub(super) fn member_at_least<'run>(
 /// is at least as specific as the other ([`member_at_least`]), or neither is and some type lies
 /// under both read from above. An argument both admit then has no member to prefer, so the solve
 /// would turn on which member is stored first. A contravariant position takes its union whole, and
-/// a nested scheme's group is its own.
+/// a nested scheme's group is its own. A pin is solved from both sides, so a union inside one ties
+/// at any position.
 pub(super) fn tied_members<'run>(
     types: &TypeChain<'run, impl Habitat<'run>>,
     scratch: BumpAllocator<'_>,
@@ -734,29 +739,50 @@ pub(super) fn tied_members<'run>(
 ) -> Option<(Linked<'run>, Linked<'run>)> {
     let mut tied = None;
     visit_in(scratch, declared, Variance::Co, &mut |_, node, context| {
-        if node.binds_quantifiers() {
-            return Visit::Skip;
-        }
-        let TypeNode::Union { members } = *node else {
-            return Visit::Descend;
-        };
-        if context.variance() == Variance::Contra {
-            return Visit::Descend;
-        }
-        let mut binding = BumpVec::new_in(scratch);
-        binding.extend((members.iter().copied()).filter(|member| member.contains_quantified()));
-        for (at, a) in binding.iter().enumerate() {
-            if let Some(b) = binding[at + 1..]
-                .iter()
-                .find(|b| ties(types, scratch, a, b))
-            {
-                tied = Some((*a, *b));
-                return Visit::Stop;
-            }
-        }
-        Visit::Descend
+        tie_at(types, scratch, node, context, &mut tied)
     });
     tied
+}
+
+/// [`tied_members`]'s rule at one node, recording the first tie in `tied`.
+fn tie_at<'run>(
+    types: &TypeChain<'run, impl Habitat<'run>>,
+    scratch: BumpAllocator<'_>,
+    node: &TypeNode<'run, Linked<'run>>,
+    context: &Context,
+    tied: &mut Option<(Linked<'run>, Linked<'run>)>,
+) -> Visit {
+    if node.binds_quantifiers() {
+        return Visit::Skip;
+    }
+    match *node {
+        TypeNode::SignatureApply { pins, .. } => {
+            for pin in pins.values() {
+                let mut at_pin = |_, node: &TypeNode<'run, Linked<'run>>, context: &Context| {
+                    tie_at(types, scratch, node, context, tied)
+                };
+                if visit_in(scratch, pin, Variance::Co, &mut at_pin) {
+                    return Visit::Stop;
+                }
+            }
+            Visit::Skip
+        }
+        TypeNode::Union { members } if context.variance() == Variance::Co => {
+            let mut binding = BumpVec::new_in(scratch);
+            binding.extend((members.iter().copied()).filter(|member| member.contains_quantified()));
+            for (at, a) in binding.iter().enumerate() {
+                if let Some(b) = binding[at + 1..]
+                    .iter()
+                    .find(|b| ties(types, scratch, a, b))
+                {
+                    *tied = Some((*a, *b));
+                    return Visit::Stop;
+                }
+            }
+            Visit::Descend
+        }
+        _ => Visit::Descend,
+    }
 }
 
 /// Whether two members of one declared union tie: see [`tied_members`].
@@ -860,6 +886,175 @@ impl<'run, T> Admits<'_, '_, 'run, T> {
     }
 }
 
+impl<'run, T> Admits<'_, '_, 'run, T> {
+    /// Whether the signature type `carried` fills the declared signature type `declared`, which
+    /// pins a parameter to a type over a free variable. A variable an earlier class pinned is read
+    /// at its pin first. Each open pin is then solved at the one point the carried side fixes for
+    /// it: its own pin where an application of the same signature pins it, else what `carried`'s
+    /// fit to the signature solves the parameter to. A pin's position is invariant, so the point
+    /// reaches the variable from both sides ([`invariant`](Self::invariant)).
+    fn signature(
+        &mut self,
+        types: &TypeChain<'run, impl Habitat<'run>>,
+        scratch: BumpAllocator<'_>,
+        declared: Linked<'run>,
+        carried: Linked<'run>,
+        v: Variance,
+    ) -> Admission<'run> {
+        let collector = &*self.collector;
+        let read = rebuild(
+            types,
+            scratch,
+            declared,
+            &mut |_, node, context| match *node {
+                TypeNode::Quantified { index, .. } if context.binder_depth() == 0 => {
+                    collector.pinned(index)
+                }
+                _ => None,
+            },
+        );
+        if read != declared {
+            return lockstep(types, scratch, read, carried, v, self);
+        }
+        let asked = applications(scratch, declared).expect("a signature type");
+        let held = applications(scratch, carried).expect("a signature type");
+        match v {
+            Variance::Co => {
+                for application in asked.iter() {
+                    self.fills(types, scratch, *application, &held, carried)?;
+                }
+                Ok(())
+            }
+            Variance::Contra => {
+                for upper in held.iter() {
+                    self.lies_under(types, scratch, &asked, *upper, declared)?;
+                }
+                Ok(())
+            }
+        }
+    }
+
+    /// Covariant: `carried`, holding `held`, fits the one declared application `asked`.
+    fn fills(
+        &mut self,
+        types: &TypeChain<'run, impl Habitat<'run>>,
+        scratch: BumpAllocator<'_>,
+        asked: Application<'_, 'run>,
+        held: &[Application<'_, 'run>],
+        carried: Linked<'run>,
+    ) -> Admission<'run> {
+        let (open, fixed) = split_pins(scratch, asked.pins);
+        let unpinned = types.signature_apply(scratch, asked.signature, &fixed);
+        let fits_fixed = |collector: &mut Collector<'_, 'run, T>| {
+            if fits(types, scratch, carried, unpinned) {
+                return Ok(());
+            }
+            collector.bound_read |= carried.contains_rigid() || unpinned.contains_rigid();
+            Err(UnifyFailure::Mismatch)
+        };
+        if open.is_empty() {
+            return fits_fixed(self.collector);
+        }
+        let pinning = |application: &&Application<'_, 'run>| {
+            application.signature == asked.signature
+                && open
+                    .iter()
+                    .all(|(name, _)| application.pin(name.symbol()).is_some())
+        };
+        if held.iter().any(|application| pinning(&application)) {
+            for application in held.iter().filter(pinning) {
+                for (name, pin) in open.iter() {
+                    let solved = application
+                        .pin(name.symbol())
+                        .expect("it pins every open name");
+                    self.invariant(types, scratch, pin, solved)?;
+                }
+            }
+            return fits_fixed(self.collector);
+        }
+        self.collector.bound_read |= carried.contains_rigid();
+        let Some(solution) = fits_at_open(types, scratch, carried, asked.signature, &fixed) else {
+            return Err(UnifyFailure::Mismatch);
+        };
+        for (name, pin) in open.iter() {
+            let BinderSymbol::Type(name) = name else {
+                unreachable!("an application pins type parameters")
+            };
+            let solved = member(solution, *name).expect("a fit solves every parameter");
+            self.invariant(types, scratch, pin, solved)?;
+        }
+        Ok(())
+    }
+
+    /// Contravariant: the declared applications `asked` lie under the one carried application
+    /// `upper`. Every one of the same signature must pin each of `upper`'s pins, an open one
+    /// solved at it, so the solve reads no storage order; with none, `declared` must lie under
+    /// `upper` with its variables rigid.
+    fn lies_under(
+        &mut self,
+        types: &TypeChain<'run, impl Habitat<'run>>,
+        scratch: BumpAllocator<'_>,
+        asked: &[Application<'_, 'run>],
+        upper: Application<'_, 'run>,
+        declared: Linked<'run>,
+    ) -> Admission<'run> {
+        let mut lowers = (asked.iter())
+            .filter(|application| application.signature == upper.signature)
+            .peekable();
+        if lowers.peek().is_none() {
+            if fits(types, scratch, declared, upper.node(types, scratch)) {
+                return Ok(());
+            }
+            self.collector.bound_read = true;
+            return Err(UnifyFailure::Mismatch);
+        }
+        for lower in lowers {
+            for (name, pinned) in upper.pins.iter() {
+                let Some(pin) = lower.pin(name.symbol()) else {
+                    return Err(UnifyFailure::Mismatch);
+                };
+                if pin.contains_quantified() {
+                    self.invariant(types, scratch, pin, pinned)?;
+                } else if pin != *pinned {
+                    return Err(UnifyFailure::Mismatch);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// `pin` at exactly `solved`: an invariant position, admitted from both sides, so a bare
+    /// variable takes `solved` as a lower and an upper contribution.
+    fn invariant(
+        &mut self,
+        types: &TypeChain<'run, impl Habitat<'run>>,
+        scratch: BumpAllocator<'_>,
+        pin: Linked<'run>,
+        solved: Linked<'run>,
+    ) -> Admission<'run> {
+        lockstep(types, scratch, pin, solved, Variance::Co, self)?;
+        lockstep(types, scratch, pin, solved, Variance::Contra, self)
+    }
+}
+
+/// Some of an application's pins, by parameter.
+type Pins<'s, 'run> = BumpVec<'s, (BinderSymbol, Linked<'run>)>;
+
+/// An application's pins split into those over a free variable and the rest.
+fn split_pins<'s, 'run>(
+    scratch: BumpAllocator<'s>,
+    pins: &[(BinderSymbol, Linked<'run>)],
+) -> (Pins<'s, 'run>, Pins<'s, 'run>) {
+    let (mut open, mut fixed) = (BumpVec::new_in(scratch), BumpVec::new_in(scratch));
+    for pin in pins {
+        match pin.1.contains_quantified() {
+            true => open.push(*pin),
+            false => fixed.push(*pin),
+        }
+    }
+    (open, fixed)
+}
+
 impl<'run, T> Lockstep<'run> for Admits<'_, '_, 'run, T> {
     type Out = Admission<'run>;
 
@@ -923,6 +1118,15 @@ impl<'run, T> Lockstep<'run> for Admits<'_, '_, 'run, T> {
                     Visit::Descend
                 });
                 Some(Ok(()))
+            }
+            // A declared signature type holding a variable in a pin, against a carried one: the
+            // pair is a leaf to the walk, so the pins are solved here ([solving]).
+            //
+            // [solving]: ../../src/types/solving.md#the-unifier-collects
+            TypeNode::SignatureApply { .. } | TypeNode::SignatureMeet { .. }
+                if is_signature_type(carried) =>
+            {
+                Some(self.signature(types, scratch, declared, carried, v))
             }
             _ => None,
         }

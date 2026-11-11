@@ -5,7 +5,7 @@
 //! ([`Function::content`]). A function of written code points at the load's record of its body;
 //! one born of code composed at run time keeps a copy of its composition's record in its typing
 //! record, the root of that code on it, which finds or rebuilds the composition — so the knot node
-//! stays 64 bytes and nothing it holds points into an arena node.
+//! stays 64 bytes and nothing it holds points into a depot slot.
 //!
 //! A function whose body is untraced code — named code the load could not follow to its quote —
 //! is born over the code its body part evaluated to: its closure is that code, laid flat, and the
@@ -28,7 +28,7 @@
 use std::cell::Cell;
 
 use crate::memory::{Bump, BumpAllocator, BumpVec, Edge, KnotPlan, Writer, resident};
-use crate::scope::{Activated, AtRun, Elaboration, StaticInstance};
+use crate::scope::{AtRun, BuildLayer, Elaboration, StaticInstance};
 use crate::scope::{
     BodyAt, BodyRef, BodyShape, Candidate, ClosureBindings, ComposedRoot, Offer, Position,
     Registration, ShapeKind, Site, Slot, Stamp, Written,
@@ -38,7 +38,7 @@ use crate::symbols::{BinderSymbol, TypeSymbol};
 use crate::type_lattice::{DeclaredType, KType, Scheme, instantiate_quantified};
 use crate::values::digest::{composition_digest, function_content};
 use crate::values::{
-    ArenaRef, Chain, ContentDigest, Knotted as _, Link, List, Record, Retyped, Seen, Value, Weight,
+    Chain, ContentDigest, DepotRef, Knotted as _, Link, List, Record, Retyped, Seen, Value, Weight,
 };
 
 use super::{Coerced, KReading, KValue, Knotted, Node, composed, flattened};
@@ -391,7 +391,7 @@ pub(super) struct Staged<'graph, 'cell, 'x> {
     pub declared: Option<DeclaredType<KType>>,
     pub captures: BumpVec<'x, Link<'cell, Knotted<'graph, 'cell>>>,
     /// What the activation the function is born in had decided, which its closure keeps.
-    pub decided: Option<&'cell Activated<'cell>>,
+    pub decided: Option<&'cell BuildLayer<'cell>>,
     /// An untraced body's code, beside its body part's site in the shape it is born in and the
     /// parameters its composition binds.
     pub untraced: Option<(Knotted<'graph, 'cell>, Site, &'x [BinderSymbol])>,
@@ -407,14 +407,14 @@ impl<'graph, 'cell> Staged<'graph, 'cell, '_> {
         }
     }
 
-    /// This node's closure run, born under the arena node `build`, and typing record laid down in
+    /// This node's closure run, born under the depot slot `build`, and typing record laid down in
     /// `writer`'s region, beside what the two add to the knot's weight. A plain unquantified `FN` has
     /// no typing record and writes none. An untraced body's closure is its code, laid flat, then
     /// the record of what `activation`, the activation it is born in, offers it.
     pub(super) fn laid_down(
         &self,
         writer: Writer<'cell, '_>,
-        born: (ArenaRef, Option<Stamp<'cell, Knotted<'graph, 'cell>>>),
+        born: (DepotRef, Option<Stamp<'cell, Knotted<'graph, 'cell>>>),
         activation: &KReading<'_, 'graph, 'cell>,
         types: &Chain<'_, 'cell, '_, '_>,
     ) -> (
@@ -525,7 +525,7 @@ where
         loaded(body, registration, activation, types, scratch).map_err(Untieable::Type)?;
     // A body whose group the load solved where it is wanted is born as that instance.
     let facts = activation.facts();
-    let (ktype, instance) = match (facts.born_instance(types, body), callable.ktype) {
+    let (ktype, instance) = match (facts.born_instance(types, scratch, body), callable.ktype) {
         (Some(instance), DeclaredType::Scheme(scheme)) => {
             debug_assert!(registration.is_none(), "a registration binds its scheme");
             let (solution, instance) = solved(instance, scratch);
@@ -673,7 +673,7 @@ where
 /// load left unknown that does not elaborate refuses `Type`, and writes nothing.
 ///
 /// A callable that captures a fellow member is born inside its binder's knot by the tie, which
-/// never asks for it, so no capture here is an edge. It is born under the arena node `build`, and
+/// never asks for it, so no capture here is an edge. It is born under the depot slot `build`, and
 /// keeps its body's record as `written` holds it. An untraced body is born over `code`, what the
 /// caller evaluated its body part to.
 #[allow(clippy::too_many_arguments)]
@@ -683,7 +683,7 @@ pub fn lambda<'graph, 'cell, 'x>(
     written: Written<'graph, 'cell, '_>,
     site: Site,
     code: Option<KValue<'graph, 'cell>>,
-    born: (ArenaRef, Option<Stamp<'cell, Knotted<'graph, 'cell>>>),
+    born: (DepotRef, Option<Stamp<'cell, Knotted<'graph, 'cell>>>),
     types: &Chain<'_, 'cell, '_, '_>,
     scratch: BumpAllocator<'x>,
 ) -> Result<Knotted<'graph, 'cell>, Untieable<'x>>
@@ -753,6 +753,7 @@ pub fn barrier_instance<'graph, 'cell>(
         declared,
         barrier.from(),
         barrier.to(),
+        barrier.hidden(),
         types,
     );
     Knotted::of(knot, 0)
@@ -804,7 +805,7 @@ pub fn instance<'graph, 'cell>(
         Link::Edge(edge) => Link::Value(Value::Knotted(member.sibling(*edge))),
         Link::Value(value) => Link::Value(*value),
     }));
-    // The same body over the same captures, so the same arena node.
+    // The same body over the same captures, so the same depot slot.
     let closure = ClosureBindings::of(
         writer,
         &links,

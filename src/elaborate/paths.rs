@@ -13,6 +13,7 @@ use crate::symbols::{BinderSymbol, TypeSymbol, ValueSymbol};
 use crate::type_lattice::{DeclaredType, KType, Parametric, TypeNode, fits_application, member};
 use crate::values::Chain;
 
+use super::judge::{self, Marks, NoMarks};
 use super::members::{SignatureMember, schema_of, signature_member};
 
 /// The application a path is read through: `declared`, a root's declared type, walked through the
@@ -20,6 +21,7 @@ use super::members::{SignatureMember, schema_of, signature_member};
 /// `label` a head parameter. `None` where it ends anywhere else, and the path reads the module's
 /// own type member.
 pub fn declared_through(
+    marks: &dyn Marks,
     types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
     declared: Parametric,
@@ -28,7 +30,7 @@ pub fn declared_through(
 ) -> Option<Parametric> {
     let mut held = declared;
     for step in chain {
-        match signature_member(types, scratch, held, BinderSymbol::Value(*step))? {
+        match signature_member(marks, types, scratch, held, BinderSymbol::Value(*step))? {
             SignatureMember {
                 declared: DeclaredType::Type(inner),
                 unpinned: None,
@@ -36,8 +38,8 @@ pub fn declared_through(
             _ => return None,
         }
     }
-    let signature = match types.node(held) {
-        TypeNode::Signature { .. } => types.concrete(held)?,
+    let signature = match judge::type_node(marks, types, held) {
+        TypeNode::Signature { .. } => judge::closed(marks, types, held)?,
         TypeNode::SignatureApply { signature, .. } => signature,
         _ => return None,
     };
@@ -62,7 +64,7 @@ pub fn path_binding(
         return member_type(types, scratch, inner, BinderSymbol::Type(label));
     };
     let mut pins = BumpVec::new_in(scratch);
-    let signature = match types.node(through) {
+    let signature = match judge::closed_type_node(types, through) {
         TypeNode::SignatureApply {
             signature,
             pins: pinned,
@@ -73,7 +75,7 @@ pub fn path_binding(
         _ => through,
     };
     let solution = fits_application(types, scratch, inner, signature, &pins).ok()?;
-    types.concrete(member(solution, label)?)
+    judge::static_of(types, member(solution, label)?)
 }
 
 /// The signature of the module a module of signature `signature` holds through the value members
@@ -99,11 +101,12 @@ pub(super) fn member_type(
     of: KType,
     name: BinderSymbol,
 ) -> Option<KType> {
-    match signature_member(types, scratch, of.into(), name) {
+    // A closed signature's member names no run-bound name.
+    match signature_member(&NoMarks, types, scratch, of.into(), name) {
         Some(SignatureMember {
             declared: DeclaredType::Type(declared),
             unpinned: None,
-        }) => types.concrete(declared),
+        }) => judge::static_of(types, declared),
         _ => None,
     }
 }

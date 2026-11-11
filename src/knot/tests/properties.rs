@@ -306,7 +306,7 @@ fn run<'graph, 'cell>(
             &fixture.reading_of(activation),
             fixture.written(),
             component,
-            (crate::values::ArenaRef::ROOT, None),
+            (crate::values::DepotRef::ROOT, None),
             types,
             fixture.scratch(),
             &mut |_, _| Some(Supplied::Value(Value::Null)),

@@ -320,14 +320,29 @@ pub(super) mod substitute {
         types: &TypeChain<'ty, impl Habitat<'ty>>,
         scratch: BumpAllocator<'_>,
         kt: Handle,
-        bindings: &[B],
+        bindings: &[Option<B>],
     ) -> Handle {
         let bindings: Vec<_> = bindings
             .iter()
-            .map(|binding| types.enter(binding.raw()))
+            .map(|binding| binding.as_ref().map(|binding| types.enter(binding.raw())))
             .collect();
         crate::types::substitute::substitute_levels(types, scratch, types.enter(kt), &bindings)
             .handle()
+    }
+
+    pub(in crate::types::tests) fn substitute_paths<'ty>(
+        types: &TypeChain<'ty, impl Habitat<'ty>>,
+        scratch: BumpAllocator<'_>,
+        kt: Handle,
+        binding: &mut impl FnMut(crate::types::node::PathClass) -> Option<Handle>,
+    ) -> Handle {
+        crate::types::substitute::substitute_paths(
+            types,
+            scratch,
+            types.enter(kt),
+            &mut |class, _| binding(class).map(|answer| types.enter(answer)),
+        )
+        .handle()
     }
 
     pub(in crate::types::tests) fn bound_above<'ty>(
@@ -352,6 +367,17 @@ pub(super) mod substitute {
         );
         crate::types::substitute::substitute_parameters(types, scratch, types.enter(kt), bindings)
             .handle()
+    }
+
+    /// Every sibling index `kt` references, inside a signature too.
+    pub(in crate::types::tests) fn collect_siblings<'ty>(
+        types: &TypeChain<'ty, impl Habitat<'ty>>,
+        scratch: BumpAllocator<'_>,
+        kt: Handle,
+    ) -> Vec<usize> {
+        let mut out = crate::bump::BumpVec::new_in(scratch);
+        crate::types::substitute::collect_siblings(types, scratch, types.enter(kt), &mut out);
+        out.to_vec()
     }
 
     /// `interval` is handed each variable's handle and its node read through a handle.

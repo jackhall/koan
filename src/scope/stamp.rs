@@ -1,8 +1,10 @@
 //! A callable's **stamp**: the requests that built the chain of settlements it was born under, so a
-//! call of it whose arena node was evicted can rebuild that chain and be born warm
+//! call of it whose depot slot was evicted can rebuild that chain and be born warm
 //! ([build/README.md § Resumption](../build/README.md#resumption)).
 //!
-//! An [`Ask`] is what a miss settles: a body and what each name its key lists binds. A [`Level`]
+//! An [`Ask`] is what a miss settles: a body and what each name its key lists binds. A
+//! [`SiteRequest`] is one call site's ask and key laid with a layer, which a call at that site hands
+//! the drain in place of computing them from its values. A [`Level`]
 //! is one settlement's whole request — its key, its ask, the types its binding carries, and each
 //! module of other composed code it pins, whose root rebuilds that code's composition. A level is
 //! laid once per frame, in the frame's own region, and only for a frame that seeks a settlement
@@ -11,17 +13,19 @@
 //! the frame's first step to lay once the frame is born under that settlement. The stamp of a callable born in the frame is that
 //! level over the stamp of the frame's callee ([`Stamp`]), two words a closure holds by value, so a
 //! birth lays nothing for it. Neither is content: a closure's digest and equality skip its stamp,
-//! as they skip its arena node.
+//! as they skip its depot slot.
 
 use smallvec::SmallVec;
 
-use crate::memory::{Writer, collect, resident};
+use crate::memory::{Lays, Writer, collect, resident};
 use crate::type_lattice::{DeclaredType, KType, Parametric};
-use crate::values::{ContentDigest, KeyedTypes, Knotted, SettlementKey, Value, Weight};
+use crate::values::digest::{retyped_content, type_digest};
+use crate::values::{Chain, ContentDigest, DepotRef, KeyedTypes, Knotted, LayerKey, Value, Weight};
 
 use super::shape::{Segment, Slot};
 
 /// What a miss settles: the callee's body, and what each name its key lists binds there.
+#[derive(PartialEq, Eq, Debug)]
 pub struct Ask {
     pub body: Segment,
     pub bound: SmallVec<[Asked; 1]>,
@@ -32,7 +36,7 @@ pub struct Ask {
 /// module born of code composed at run time names its composition by syntax digest, where a miss
 /// under a composition finds its tree if no layer below does, and pins it. The slot rides in each
 /// arm, in the padding the digests leave, so an ask stays small enough to hand on by value.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Asked {
     Type {
         slot: Slot,
@@ -55,6 +59,45 @@ impl Asked {
         }
     }
 
+    /// What the key digests at this name: what the callee's frame binds there — a type as its type
+    /// value, a module as its member, beside the type the frame binds it at where that is not the
+    /// member's own.
+    pub fn digest(&self, types: &Chain<'_, '_, '_, '_>) -> ContentDigest {
+        match *self {
+            Asked::Type { named, .. } => type_digest(named, KType::of_kind(named.kind_of(types))),
+            Asked::Module {
+                carried,
+                content,
+                retyped,
+                ..
+            } => match retyped {
+                true => retyped_content(carried.into(), content),
+                false => content,
+            },
+        }
+    }
+
+    /// This binding at the keyed name at `slot`: what a site passing it on binds its callee's
+    /// name to.
+    pub fn at(self, slot: Slot) -> Asked {
+        match self {
+            Asked::Type { named, .. } => Asked::Type { slot, named },
+            Asked::Module {
+                carried,
+                content,
+                retyped,
+                composition,
+                ..
+            } => Asked::Module {
+                slot,
+                carried,
+                content,
+                retyped,
+                composition,
+            },
+        }
+    }
+
     /// The type this binds the name at.
     fn ktype(&self) -> KType {
         match *self {
@@ -66,18 +109,77 @@ impl Asked {
 
 /// One settlement's request by value, before it is laid as a [`Level`]: its key, what a miss
 /// settles, and the types its binding carries, in the order its key digests them.
+#[derive(PartialEq, Eq, Debug)]
 pub struct Sought {
-    pub key: SettlementKey,
+    pub key: LayerKey,
     pub ask: Ask,
     pub keyed: SmallVec<[KeyedTypes; 1]>,
 }
 
+/// One call site's request, laid with a layer: the key and the ask of the binding the site passes
+/// under the layer's binding, and the types that binding carries.
+#[derive(Clone, Copy, Debug)]
+pub struct SiteRequest<'a> {
+    pub key: LayerKey,
+    pub body: Segment,
+    pub bound: &'a [Asked],
+    pub keyed: &'a [KeyedTypes],
+}
+
+impl<'a> SiteRequest<'a> {
+    /// `sought` laid through `lay`.
+    pub fn laid(lay: impl Lays<'a>, sought: &Sought) -> Self {
+        SiteRequest {
+            key: sought.key,
+            body: sought.ask.body,
+            bound: collect(lay, sought.ask.bound.iter().copied()),
+            keyed: collect(lay, sought.keyed.iter().copied()),
+        }
+    }
+
+    /// This request by value: what a call hands the drain.
+    pub fn sought(&self) -> Sought {
+        Sought {
+            key: self.key,
+            ask: Ask {
+                body: self.body,
+                bound: self.bound.iter().copied().collect(),
+            },
+            keyed: self.keyed.iter().copied().collect(),
+        }
+    }
+
+    /// Every type it names.
+    pub fn each_type(&self, out: &mut dyn FnMut(DeclaredType<Parametric>)) {
+        each_type_of(self.bound, self.keyed, out);
+    }
+}
+
+/// Every type a binding names: the type each keyed name binds at, and each keyed argument's types.
+fn each_type_of(
+    bound: &[Asked],
+    keyed: &[KeyedTypes],
+    out: &mut dyn FnMut(DeclaredType<Parametric>),
+) {
+    for asked in bound {
+        out(asked.ktype().into());
+    }
+    for keyed in keyed {
+        out(keyed.carried.into());
+        if let Some(named) = keyed.named {
+            out(named.into());
+        }
+    }
+}
+
 /// One settlement's request, laid in a region: its key, the body it settles and what each keyed
-/// name binds, the types the binding carries, and each module of other composed code whose
-/// composition it pins.
+/// name binds, the types the binding carries, each module of other composed code whose composition
+/// it pins, and what its chain rests on: the root, or a layer the load laid, which is never
+/// evicted and so is no level, where a replay of the chain starts.
 #[derive(Clone, Copy)]
 pub struct Level<'cell, X> {
-    pub key: SettlementKey,
+    pub base: DepotRef,
+    pub key: LayerKey,
     pub body: Segment,
     pub bound: &'cell [Asked],
     pub keyed: &'cell [KeyedTypes],
@@ -85,15 +187,18 @@ pub struct Level<'cell, X> {
 }
 
 impl<'cell, X: Knotted> Level<'cell, X> {
-    /// `sought`'s level, pinning the compositions of `modules`, laid in `writer`'s region.
+    /// `sought`'s level, pinning the compositions of `modules`, its chain resting on `base`, laid
+    /// in `writer`'s region.
     pub fn laid(
         writer: Writer<'cell, '_>,
         sought: &Sought,
         modules: &[Value<'cell, X>],
+        base: DepotRef,
     ) -> &'cell Self {
         resident(
             writer,
             Level {
+                base,
                 key: sought.key,
                 body: sought.ask.body,
                 bound: collect(writer, sought.ask.bound.iter().copied()),
@@ -134,6 +239,16 @@ impl<'cell, X: Knotted> Stamp<'cell, X> {
         levels
     }
 
+    /// What the chain rests on, where a replay of it starts: its outermost level's base, which
+    /// every level inner to it copies.
+    pub fn base(&self) -> DepotRef {
+        let mut outermost = self;
+        while let Some(below) = outermost.below {
+            outermost = below;
+        }
+        outermost.level.base
+    }
+
     /// Every module value a level holds, innermost level first, in the order
     /// [`copied`](Self::copied) asks for them.
     pub fn held(&self, out: &mut dyn FnMut(Value<'cell, X>)) {
@@ -145,15 +260,7 @@ impl<'cell, X: Knotted> Stamp<'cell, X> {
     /// Every type a level names, which a call that replays it reads.
     pub fn each_type(&self, out: &mut dyn FnMut(DeclaredType<Parametric>)) {
         for stamp in std::iter::successors(Some(self), |stamp| stamp.below) {
-            for asked in stamp.level.bound {
-                out(asked.ktype().into());
-            }
-            for keyed in stamp.level.keyed {
-                out(keyed.carried.into());
-                if let Some(named) = keyed.named {
-                    out(named.into());
-                }
-            }
+            each_type_of(stamp.level.bound, stamp.level.keyed, out);
         }
     }
 
@@ -168,6 +275,7 @@ impl<'cell, X: Knotted> Stamp<'cell, X> {
         let level = resident(
             writer,
             Level {
+                base: level.base,
                 key: level.key,
                 body: level.body,
                 bound: collect(writer, level.bound.iter().copied()),

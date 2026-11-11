@@ -319,8 +319,8 @@ A family that implements **`Projects`** lays its own empty header and names one
 part of it, as a reattachable family of its own; `Header::project` narrows a
 door to a **`Projected`** one over that part. The projected door keeps the same
 slot at the same brands and is invariant in the half's brand like its source,
-but names no header family, so a layer that cannot name the record reads and
-lays the header through that part alone. Projecting lays nothing: the record is
+but names no header family, so a layer that cannot name the whole header reads
+and lays it through that part alone. Projecting lays nothing: the header is
 laid by the first `get_or_lay` through either door, so a half that never needs
 its header stays [untouched](#recycled-regions). Each read goes through a
 `Header` door over the same slot, so the projection adds no `unsafe`.

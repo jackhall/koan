@@ -7,7 +7,7 @@
 use crate::memory::{BumpAllocator, Lays};
 use crate::scope::{
     Binding, Bound, Closing, Frontier, LoadFacts, Segment, Shapes, Store, UnitFacts, UnitId,
-    Unknown, Writes,
+    Unknown, Wake, Writes,
 };
 
 /// The load's store over `shapes`, laying through `L`.
@@ -58,7 +58,11 @@ impl<'o, L: Lays<'o>> Store<'o> for LoadStore<'o, '_, L> {
     }
 
     /// The load keeps no record from before its walk, so every unit runs.
-    fn wakes(&self, _: Frontier<'_>) -> bool {
+    fn wakes(&self, _: Frontier<'_>, _: &crate::values::Chain<'_, '_, '_, '_>) -> Wake {
+        Wake::Open
+    }
+
+    fn traces(&self) -> bool {
         true
     }
 

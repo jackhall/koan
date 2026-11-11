@@ -1128,6 +1128,12 @@ impl<'graph> BodyShape<'graph> {
         self.offers.get(site).map_or(&[], |(_, offered)| *offered)
     }
 
+    /// Every `EVAL` of a code parameter needing names, by its operand's site, beside what it offers
+    /// for each ([`offers`](Self::offers)).
+    pub fn offer_table(&self) -> Keyed<'graph, (Site, &'graph [(BinderSymbol, Offer<'graph>)])> {
+        self.offers
+    }
+
     /// Every registration this body declares, by slot.
     pub fn registrations(&self) -> &'graph [Registration<'graph>] {
         self.registrations
@@ -1430,6 +1436,13 @@ pub enum ShapeError<'graph> {
         ascribed: KType,
         at: SourceRef,
     },
+    /// A view of a view at `ascribed` that shows `member`, a value slot or a keyworded member's
+    /// key, where its source hides it.
+    ViewReveals {
+        member: Symbol,
+        ascribed: KType,
+        at: SourceRef,
+    },
     /// An annotated binder whose value's static type can never satisfy its annotation.
     AnnotationNeverSatisfied {
         value: Shown,
@@ -1513,6 +1526,12 @@ pub enum ShapeError<'graph> {
         guard: Repeated<'graph>,
         first: SourceRef,
         at: SourceRef,
+    },
+    /// A refusal the walk reached in a layer the load laid, under the binding the call at `call`
+    /// passes: the first such call in text order.
+    UnderCall {
+        call: SourceRef,
+        refusal: &'graph ShapeError<'graph>,
     },
 }
 
@@ -1611,6 +1630,7 @@ impl ShapeError<'_> {
             | ShapeError::Ambiguous { at, .. }
             | ShapeError::ReturnNeverSatisfied { at, .. }
             | ShapeError::AscriptionNeverSatisfied { at, .. }
+            | ShapeError::ViewReveals { at, .. }
             | ShapeError::AnnotationNeverSatisfied { at, .. }
             | ShapeError::CallNeverSatisfied { at, .. }
             | ShapeError::ReadNeverSatisfied { at, .. }
@@ -1623,6 +1643,7 @@ impl ShapeError<'_> {
             | ShapeError::EvalNeverSatisfied { at, .. }
             | ShapeError::Type { at, .. }
             | ShapeError::RepeatedGuard { at, .. } => *at,
+            ShapeError::UnderCall { refusal, .. } => refusal.at(),
         }
     }
 
@@ -1651,10 +1672,22 @@ pub struct ShapeErrorDisplay<'x, 'run, 'p, 'reg> {
 
 impl fmt::Display for ShapeErrorDisplay<'_, '_, '_, '_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        write!(f, "{}: ", self.error.at())?;
+        self.message(f)
+    }
+}
+
+impl ShapeErrorDisplay<'_, '_, '_, '_> {
+    /// The error's message, after where it was found.
+    fn message(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let name = |name: &BinderSymbol| self.symbols.display(name.symbol());
         let operator = |symbol: &KeywordSymbol| self.symbols.display(symbol.symbol());
-        write!(f, "{}: ", self.error.at())?;
         match self.error {
+            ShapeError::UnderCall { call, refusal } => {
+                refusal.display(self.symbols, self.types).message(f)?;
+                let text = call.text();
+                write!(f, "\n  in ({}) at {call}", super::fault::ungrouped(&text))
+            }
             ShapeError::Rebind {
                 name: bound, first, ..
             } => write!(f, "`{}` is bound twice; first at {first}", name(bound)),
@@ -1966,6 +1999,12 @@ impl fmt::Display for ShapeErrorDisplay<'_, '_, '_, '_> {
                 "this value is {}, which can never satisfy its ascription {}",
                 value.display(self.types, self.symbols),
                 display_name(*ascribed, self.types, self.symbols)
+            ),
+            ShapeError::ViewReveals { member, .. } => write!(
+                f,
+                "this view shows `{}` where its source hides it: a view of a view must hide \
+                 again everything its source hides",
+                self.symbols.display(*member)
             ),
             ShapeError::AnnotationNeverSatisfied {
                 value, annotated, ..

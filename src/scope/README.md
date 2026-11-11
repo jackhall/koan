@@ -43,10 +43,10 @@ A scope is built in three tiers, each at the moment its contents become known.
   is born in, never as a copied value. A callable's birth reads every capture into
   scratch first and lays the run down only once every read is finished, so a
   closure binding is never a placeholder. Beside the run the bindings carry
-  the arena node the callable was born under, an
-  [`ArenaRef`](../build/README.md#references-between-frames-and-the-arena) a
+  the depot slot the callable was born under, an
+  [`DepotRef`](../build/README.md#references-between-frames-and-the-depot) a
   call seeks its settlement beneath, the [stamp](stamp.rs) a call replays
-  where that arena node is gone, and the layers its encloser's activation
+  where that depot slot is gone, and the layers its encloser's activation
   decided before its birth ([`closure`](closure.rs)); none is content, so the
   closure's digest and equality read the run alone.
 - **Per-call bindings** — one activation per call, laid down in the call's
@@ -334,7 +334,11 @@ since none of it runs until the callable is called. Any other mention is
 shape's slot, an operator's operand, a dict key, a type expression outside a
 definition, a `MODULE` body and a `MATCH` or `TRY` arm are all eager contexts, and
 so are a callable's parameter and return types and each `FOR ALL` name's bound,
-which are mentions of the enclosing shape read where the callable is born. A
+which are mentions of the enclosing shape read where the callable is born —
+save a mention, in an `EXPR` or `FN` head's types, of one of that head's own
+parameters, which resolves to the parameter and introduces a hidden `FOR ALL`
+slot no name resolves to
+([a head reading its parameters](../elaborate/README.md#a-head-reading-its-parameters)). A
 parenthesized group of one
 part is transparent: it is the part. So in
 
@@ -394,7 +398,7 @@ The shape hands the layer above each body's components — each with whether it
 is `deferred_only` and whether it is `cyclic`, holding more than one member or
 a member that reads itself — and the class of every mention, and
 `BodyShape::form`, the builtin shape node a callable body sits in, where its
-signature is read. What the layer above reads off a binder is **one record per
+signature is read. What the layer above reads off a binder is **one entry per
 slot**, indexed by the slot, which the builder fills as its walk finds each fact
 and the seal freezes:
 
@@ -413,7 +417,7 @@ and the seal freezes:
   node's own builtin shape;
 - `BodyShape::registration`, the registration bound at the slot;
 - the load-time facts of a type binder and a registration, which the load's
-  records keep ([below](#load-time-types)).
+  unit records keep ([below](#load-time-types)).
 
 The position a binder writes at is a read by slot too
 (`BodyShape::position_of`). Every other table a shape holds by site — mentions,
@@ -423,14 +427,21 @@ over its key, so it is held sorted by site and searched in one place
 when it is cyclic or every member births a callable or a module; a non-cyclic
 data binder is an ordinary value, and a component of type binders goes through
 [the elaborator's door](../elaborate/README.md#declarations). A component never
-mixes the two channels: a definition names types only, so no mention leaves a
-type binder for a value binder. Tying is
+mixes the two channels: the only value binder a definition names is a module
+path's root, an eager mention, so a cycle through one is an eager cycle,
+refused above. Tying is
 [`knot`](../knot/README.md#the-tie)'s, which writes a deferred mention
 below a nested constructor into the knot as an anonymous node, and a `FN`
 there that captures a fellow member as a function node.
 
 A declaration's definition part is walked under the constructor state, so every
-type name it reads is a deferred mention — but a definition's own statements are
+type name it reads is a deferred mention. A type `LET`'s right side is its
+definition and is walked the same way, so an alias may name a type binder
+declared after it, and a cycle through one is
+[the declaration door's](../elaborate/README.md#one-window-per-component) to
+cut. A module path inside a definition, `m.Inner`, is read as one outside it
+is: its spelling is recorded and its root is an eager mention, so the module
+is declared before the definition reading it. A definition's own statements are
 declarators with builtin shapes of their own, and a type expression written
 inside one is a node with a shape of its own too: each is walked by *their*
 roles rather than by structure. A `SIG`'s own `FOR ALL` group declares its head
@@ -604,9 +615,9 @@ tied.
 A shape holds no fact a type decides: it is a function of the text, the
 builtin table and the operator claims alone, and holds
 no cell, so `BodyShape` is covariant in its lifetime and `Sync`. What
-[the load's walk](../build/README.md#the-one-walk) decides rests in records
-off the shape, and the facts of the text that span bodies rest in the
-**shape table**.
+[the load's walk](../build/README.md#the-one-walk) decides rests in unit and
+closing records off the shape, and the facts of the text that span bodies rest
+in the **shape table**.
 
 **The shape table.** [`Shapes`](shapes.rs) holds every shape one load builds,
 by segment, beside the statement of its encloser it sits in, laid once where
@@ -619,7 +630,7 @@ body:
   segments: a body's nested bodies take the segments before its own, so a
   body's segment exceeds every body's it encloses, the order a frontier's
   [cut](../build/README.md#frontiers-and-seams) reads;
-- which unit's record holds a fact the shape places: a slot's (`slot_unit`), a
+- which unit record holds a fact the shape places: a slot's (`slot_unit`), a
   statement's (`running`) and a callable's or a quote's code's birth
   (`birth_unit`), an inline body's facts resting in the unit running the
   statement of its encloser that holds it;
@@ -643,24 +654,35 @@ body:
   label, in first-spelling order (`BodyShape::spelled`, `path_level`), each
   part holding a path a type spells decided by its tokens
   ([`path_spelling`](spelling.rs)); a path no type spells, which a member read
-  pins, takes its level past these (`path_base`) as a fact of the unit
-  pinning it;
+  pins or a class's variable is rooted at, takes no level but a name: a
+  digest of its root, member chain, label and application (`PathName`,
+  `PathEntry::minted`), a fact of the unit minting it;
 - a callable's or a `MODULE` body's **layout**: each run-bound type name of
   the bodies around it on its chain that is bound when its birth runs, by
   level, beside where the birth reads it in the activation around it, held in
   the closure past its builder's captures (`layout`, `coordinate_of`);
 - the tail-call facts ([`tails`](shapes/tails.rs)): which callables
   **escape**, the parameters a body's own tail rebinds, and the parameters
-  every tail edge into a body passes on bare, a greatest fixpoint;
+  every tail edge into a body passes on bare, a greatest fixpoint; beside
+  them each callable's **call sites**, every keyworded use listing it, every
+  head mention of its binder and every offer of it to code an `EVAL` runs,
+  and which bodies lie in a quote's code,
+  which [the trace](../build/README.md#the-trace) reads;
 - the **digest memos** ([`memos`](shapes/memos.rs)): the slots that keep one,
   each `:|` over a module binder read bare that reads them (`view_slots`), and
   which digested slot each call passes bare (`handoffs`).
 
-**Records.** The walk keeps one record per unit ([`records`](records.rs)): a
-`UnitFacts`, which holds one `Typed` per body the unit typed — the unit's own
-body and each inline body it ran — what it births, the path entries it
-resolved first on its chain, and what the folds read; one `Closing` per owning
-body; and, once the walk ends, the `Folds` per body. A `Typed` holds, each
+**Unit and closing records.** The walk keeps one unit record per unit
+([`records`](records.rs)): a `UnitFacts`, which holds one `Typed` per body the
+unit typed — the unit's own body and each inline body it ran — what it births,
+the path entries it resolved first on its chain, and what the folds read; one
+closing record per owning body, a `Closing`; and, once the walk ends, the
+`Folds` per body, among them the
+[trace](../build/README.md#the-trace) at each call site of a keyed body in
+it and, on the body owning them, the **slot map** of each call site outside a
+quote's code whose trace covers every key of its callee: where the
+call is written and what it passes at each key, from which a layer of the body
+lays the site's request. A `Typed` holds, each
 table sorted by its key:
 
 - the type channel's facts: each type binder's declaration and each
@@ -699,7 +721,18 @@ table sorted by its key:
   callee in symbol order; the **content tree** of the view each `:|`
   ascription at a closed signature builds, by its site, beside the overloads
   each keyworded member's covering picks where the module's content is closed,
-  and each module binder's content tree, by slot; and each minting site;
+  and each module binder's content tree, by slot; each **traced call**, a
+  call the load resolves to one callable body — a keyworded use with one
+  candidate selected, by its node's site, or a call by name whose head is a
+  knot member, by its head's site: the callee's segment, whether the call is
+  by name, where the call is written, and, per slot, what the site passes
+  there. That is load content — a `FOR ALL` name's closed point or a closed
+  type value, or, where a module argument's static type is exact and its
+  content tree closed, its knot member's digest (a retype's bare module, a
+  view itself), beside the type it carries in, the member's type and its parameter's closed declared
+  type, from which the load computes the type a frame binds it at — or a slot
+  of the site's own body passed on bare;
+  and each minting site;
 - what an inline body folds into its owner's closing: its exits, its minting
   sites and a `MODULE` or `GROUP` body's exact signature.
 
@@ -707,25 +740,37 @@ A unit's birth record holds each callable's type, its own group's levels, the
 solution a `FN FOR ALL` the load instantiated is born at, and which of its
 parameters digest at a constant cost. A path entry is a plain `PathEntry` —
 its root, a binder or a part written in place, its value-member chain, its
-label, its level and the declared application it is read through, if any —
-beside its `Resolution`: the path's content tree and what
+label, its name — the level the shape spells it at, or its minted digest —
+and the declared application it is read through, if any — beside its
+`Resolution`: the path's content tree and what
 [dispatch](../dispatch/README.md#paths) resolved it to, closed at a type or
-the variable of its class. A closing holds an owning body's class, exits,
-summary and recursion flag, each closed parameter's and the return's retype,
+its class (`PathClass`), a digest of the class's label, application and tree
+identity. A layer indexes each unit record's paths by chain root and name, and
+the first unit resolving a path to each class by chain root and class
+(`Held::Path`, `Held::Class`), which is where a rooted walk reads a standing
+body's path, and what a class reads where the walk resolved none of its paths.
+A body's typed facts list, for each module binder, the identity of each module
+it holds: its own, and every one a member of a module body it holds holds in
+turn (`Typed.holding`), and a layer indexes each binder by the body and each of
+those identities (`Held::Holder`): where a rooted walk finds a standing body's
+binders a class is read through. A closing holds an owning body's class, exits,
+summary and recursion flag, each parameter's and the return's restamp — how
+its retype re-stamps, beside the declared type a binding's table closes —
 and for a quote's code the type a traced `EVAL` runs it at, the code's typing
 refusal and its overlap, which an `EVAL` reports beside the builder's own
 (`BodyShape::refusal`).
 
 A load-time type is `Unknown`, a closed value, or a rigid value beside the
-`Variable`s that the run substitutes: each a variable's level and its source —
-a name's coordinate (`Source::Type`), or a path, by its chain root's segment and
-its level there, beside the coordinate of its root (`Source::Path`), which the
-layer binding the root resolves closed before the run reads it. A born
+`Variable`s that the run substitutes: a name's level beside its coordinate
+(`Variable::Type`), or a path class's variable, by its class, beside the path
+it is read through — its chain root's segment and its name there — and the
+coordinate of its root (`Variable::Path`), which the layer binding the root
+resolves closed before the run reads it. A born
 instance is a `StaticInstance`, closed or rigid, its type recorded beside its
 solution, or nothing: it has no unknown arm. The vocabulary lives here, beside
-the shape its records key on: `Static`, `StaticInstance`, `Variable`, `Point`,
-`Kept` and `Table`, `Route`, `Arms`, and the callable-typing records the
-elaborator fills, `Callable`, `Registered`, `ParameterBinding`, and
+the shape the unit records key on: `Static`, `StaticInstance`, `Variable`,
+`Point`, `Kept` and `Table`, `Route`, `Arms`, and the callable-typing records
+the elaborator fills, `Callable`, `Registered`, `ParameterBinding`, and
 `Elaboration`, so a shape error can carry an elaboration's refusal.
 
 **The read door.** Every reader — the evaluator, the body runner, a callable's
@@ -734,31 +779,47 @@ birth and the suites — reads facts through one set of readers
 (`typed_expression`, `value_type`, `use_statics`, `settled`, `instance_at`,
 `named_contributions`, `view_tree`, `route`, `arms`, `retype`, `class`, `caching` and
 the rest), so no reader names where a fact is kept. `LoadFacts` reads one
-load's records; `Facts`, what a step's door hands it, reads a cell's layers —
-its activation's decisions, the settlements it runs under, and the
-[composition](composition.rs) or load they rest on — innermost first. A step
+load's unit and closing records; `Facts`, what a step's door hands it, reads a
+chain of one laid layer type, `BuildLayer` — its activation's decided layers,
+the settlements it runs under, and the base layer of the
+[composition](composition.rs) or load they rest on — innermost first
+([one laid layer](../build/README.md#the-store)). Each layer binds its own
+names alone, and a chain's binding is the union, read down its parents. A
+depot layer of a written body also carries, by shape and site, the
+**request** of each call site of the body that passes a slot of it on, and
+the load's base layer that of every site passing load content alone: the key
+and the ask of the binding the site passes. `request` reads the depot layer
+a cell runs under, then the base, so a call there seeks its layer by name. A step
 holds a `Facts` at its own borrow alone, so what it parks names a segment, a
 site or a digest. Every reader whose fact names a type takes the reading
-frame's chain before the shape and hands the fact back with each type it names
-resolving there: over a composition, a type the chain lacks is minted from its
+frame's chain before the shape and hands the fact back with each rigid type it
+names closed by a probe of the closed types the chain's layers hold
+([resumption](../build/README.md#resumption)), then each type resolving there.
+A probe reads a type's digest alone, so a closed type is minted as any other
+is, and a reader whose fact holds a slice of types takes the caller's scratch,
+which a slice is copied into only where a type in it closes. Over a
+composition, a type the chain lacks is minted from its
 term, found by digest in the composition's table and then each settlement's.
 The mint is private to the readers, so no run-side read can skip it; over the
 load and the settlements under the root it returns at once, since every type
 their facts name lies in the root or the agent tier. A walk that rests a layer
 on a step's facts takes their raw layers through `Facts::whole`, which first
 mints every term they hold into the walk's chain; only `LoadFacts`, whose types
-all lie in those two tiers, is itself a raw source of records. A reader whose
-fact names no type (`route`, `picks`, `view_slots`, `handoffs`, `caching`) takes no chain.
+all lie in those two tiers, is itself a raw source of unit and closing records.
+A reader whose fact names no type (`route`, `picks`, `view_slots`, `handoffs`,
+`caching`) takes no chain.
 `at_run` reads a fact where the cell runs — closed, refused at every run, or
 left open to the run's own door — and never yields a rigid one, since every
-variable the load left open is bound in a layer the cell reads. A slot's, a statement's or a birth's fact
-lies in the record of the unit the shape table names for it, so it reads that
-record directly; it indexes only each site, through and path fact, whose unit
-the shape cannot name, to the record holding it, and forwards the text facts to
-the shape table. A path's entry and its resolution read in one lookup (`path`).
-A `LoadFacts` may sit over a base: every read tries its own records, then its
-base's, and a unit it re-ran replaces the base's record of it whole. The
-load's is laid in program storage before the program is, and indexes every
+variable the load left open is bound in a layer the cell reads, which decides the fact closed or
+holds its closed type ([resumption](../build/README.md#resumption)). A slot's, a statement's or a birth's fact
+lies in the unit record of the unit the shape table names for it, so it reads
+that unit record directly; it indexes only each site, through and path fact,
+whose unit the shape cannot name, to the unit record holding it, and forwards
+the text facts to the shape table. A path's entry and its resolution read in
+one lookup (`path`). A `LoadFacts` may sit over a base: every read tries its
+own unit and closing records, then its base's, and a unit it re-ran replaces
+the base's unit record of it whole.
+The load's is laid in program storage before the program is, and indexes every
 closed content tree its units computed by its **identity**, the digest the run
 computes for that content (`tree_of`), as a settlement's and a composition's
 facts index theirs. A body the walk has not typed — a quote's
@@ -777,13 +838,15 @@ it; a `Bound`, what a binding gives an unknown — a type, or a module's closed
 content tree beside the exact type it carries; a `Binding`, unknowns sorted
 beside their bounds; and the `Store` trait the walk runs over.
 [`writes`](writes.rs) is the table a store keeps its writes in, one per unit,
-before it lays them into a `LoadFacts`.
+before it lays them as a layer.
 
 **Content trees.** The value channel's trees are [`tree`](tree.rs)'s
 vocabulary: what the load knows of a module-valued expression's content
 ([the module design](../../design/modules.md#the-load-and-the-run)). A
-`Tree` is a digest the load computes, a `MODULE` or `GROUP` body over the trees
-of what it composes, a knot of closures, an opaque view over its operand's tree,
+`Tree` is a digest the load computes — for a module a frame binds, beside the
+module as a view, what a view over it reads — a `MODULE` or `GROUP` body over
+the trees of what it composes, a knot of closures, an opaque view over its
+operand's tree and its underlying's,
 a retype — a knot member under a header — over its bare member's tree, or a
 **leaf** for what the load cannot see: a binder and a value-member chain read
 through it (`Leaf::Bound`), keyed too on which run of the binder's body holds
@@ -794,13 +857,13 @@ own [recipes](../values/README.md#content-digests). `Tree::same_as` is the one
 equality: closed trees by digest, any other structurally. Trees are `Copy`, and
 a tree names a body, and a binder its body, by segment.
 
-**Covariant facts.** Every record — static types, trees, path entries,
+**Covariant facts.** Every fact — static types, trees, path entries,
 resolutions, `UnitFacts`, `Closing`, `Folds` — names a body by its segment and
 a path by its chain root's segment and level, never by a reference into
 program storage, and holds no cell, so each is `Copy` and covariant in its one
-lifetime: a record laid in program storage reads as one laid in any
-shorter-lived region. The walk lays every value a record keeps where the
-record rests, through its store's `lay`, so nothing is copied out after it.
+lifetime: a fact laid in program storage reads as one laid in any
+shorter-lived region. The walk lays every value a fact keeps where the
+fact rests, through its store's `lay`, so nothing is copied out after it.
 
 ## Names that arrive at run time
 
@@ -908,21 +971,22 @@ Inside a quote, a name or a keyworded use is in one of three states:
   `GREET` and the one the build offers are candidates, and the quote still needs
   `GREET _`. A mark keeps its `\` through every composition until something
   binds it.
-- **`code USING src`** binds the holes `src` surfaces — a record's fields, a
-  module's members, and a keyworded hole to the module's registrations at its
-  key — and returns code with the others still holes, as
+- **`code USING src`** binds the holes `src` surfaces — a record value's
+  fields, a module's members, and a keyworded hole to the module's
+  registrations at its key — and returns code with the others still holes, as
   [`USING … SCOPE`](#names-that-arrive-at-run-time) makes the names its operand
   surfaces its body's parameters. It applies as often as a program likes, so a
   template's holes can be filled in stages. A field naming no hole is ignored,
-  as record width subtyping ignores a field a slot does not name, so templates
-  can share one context record; a hole an earlier `USING` filled is no hole, and
-  is never rebound. What it returns is composed code in which each filled hole
-  is a **filled mark** in a scope of its own ([splicing](#splicing)): resolved
-  through its fill as a `$` name is through its binding, so the fill survives
-  any splice or slice of the code and no binder composed beside it rebinds it,
-  and printed bare, as it was written. A filled keyworded use in an operator run
-  lists the keys it fills, so the run's other keys stay holes. Its result is
-  built, with the type of the code it filled.
+  as a record type's width subtyping ignores a field a slot does not name, so
+  templates can share one context record; a hole an earlier `USING` filled is
+  no hole, and is never rebound. What it returns is composed code in which each
+  filled hole is a **filled mark** in a scope of its own
+  ([splicing](#splicing)): resolved through its fill as a `$` name is through
+  its binding, so the fill survives any splice or slice of the code and no
+  binder composed beside it rebinds it, and printed bare, as it was written. A
+  filled keyworded use in an operator run lists the keys it fills, so the run's
+  other keys stay holes. Its result is built, with the type of the code it
+  filled.
 
 Both marks work on value and type names alike, a type name's in a type
 expression too: `:(LIST OF $Alias)`, or `:($Alias)` alone, since the `:` sigil
@@ -1234,7 +1298,7 @@ An **operator group** is a set of operator symbols under one `ReductionMode` —
 fold-left, fold-right, unary, or pairwise with a combiner symbol and the
 direction its pair results fold in. Its identity is its content: two
 declarations of an equal member set under an equal mode are one group, so a
-functor's `GROUP` is one group however often it is instantiated. The record is
+functor's `GROUP` is one group however often it is instantiated. A group is
 the lattice's [`DeclaredGroup`](../../lattice/src/types/schema.rs), so a signature's
 operator channel and a body's held group are the same type and compare with
 `==`. [groups.rs](groups.rs) holds the model; [shape/build/rewrite.rs](shape/build/rewrite.rs)
@@ -1259,7 +1323,7 @@ declarations sit, in this order:
 3. nothing: the symbol chains fold-left, alone.
 
 A second `GROUP` over a claimed symbol is admitted only when its group is
-*equal*, and is then the same record; a `GROUP` written out equal to a builtin
+*equal*, and is then the same group; a `GROUP` written out equal to a builtin
 group says what the language already says and claims nothing. Any other overlap
 — with a builtin group, with another statement's group, with a unary mark, in
 either order — is `RedeclaresGroup`. The scan enters exactly the quotes the
@@ -1275,7 +1339,7 @@ no position is ever compared:
 - a **`GROUP`'s own body** holds the group it declares;
 - a **`USING … SCOPE` body** holds the groups its operand surfaces, read off the
   same declaration [its names are](#names-that-arrive-at-run-time) — a `GROUP`
-  binder's claimed record, or the bodyless `GROUP` heads of the `SIG` an
+  binder's claimed group, or the bodyless `GROUP` heads of the `SIG` an
   ascription names.
 
 Frames nest outward from the body holding the run. A surfaced group equal to one
@@ -1514,12 +1578,12 @@ carrying its `ShapeError`. Each kind holds structured fields — types, names,
 symbols, code, extents, values, and the refusal enums the layers below report,
 `CoercionRefused`, `ComposeRefused`, `UsingRefused` and `CodeRefused` among
 them, which live here so a kind can carry them — and no rendered text. A field
-naming what a value at the raise carries holds that value — the record a
-missing field is read off, the operands `==` cannot compare, the arguments no
-overload admits — laid in the region the fault is raised in, or pinned there,
-so the fault keeps it where it lies. This module names no knot, so `Fault` is
-generic over the knotted type its values hold, as a stamp is, and so are
-`Link` and `Inner`; [`KFault`](../knot.rs) names it over koan's.
+naming what a value at the raise carries holds that value — the record value
+a missing field is read off, the operands `==` cannot compare, the arguments
+no overload admits — laid in the region the fault is raised in, or pinned
+there, so the fault keeps it where it lies. This module names no knot, so
+`Fault` is generic over the knotted type its values hold, as a stamp is, and
+so are `Link` and `Inner`; [`KFault`](../knot.rs) names it over koan's.
 `Fault::display` words every kind, through the interner and a chain, as
 `ShapeError::display` does: what the [dispatch](../dispatch/README.md#errors)
 table lists, and a `Refused` fault as its `ShapeError` renders, every line.
@@ -1563,32 +1627,32 @@ table and callable it shares — so no other combination can be built.
 A shape and everything it holds — declared-name runs, mentions, captures,
 components, nested shapes — rest in program storage and are `Copy`. A shape
 holds no cell, so it is covariant in `'graph` and `Sync`; the
-[load-time facts](#load-time-types) rest in records beside it. A written
-quote's code shape is built into program storage once, where the program
-loads; composed code's, in its [composition](composition.rs)'s own storage,
-over a copy of the code's syntax. A body's **sites** number each part and
-expression node its statements hold, at any depth, in program order
+[load-time facts](#load-time-types) rest in unit and closing records beside
+it. A written quote's code shape is built into program storage once, where the
+program loads; composed code's, in its [composition](composition.rs)'s own
+storage, over a copy of the code's syntax. A body's **sites** number each part
+and expression node its statements hold, at any depth, in program order
 ([`sites`](shape/sites.rs)): an index per shape, plain data a parked state
 holds and resolves back to its part through the shape, and never compared
 across shapes.
 
-What a koan graph keeps per habitat half is `scope`'s record, the
-[region header](header.rs) (`RegionHeader`, whose record is a `HalfHeader`):
+What a koan graph keeps per habitat half is `scope`'s
+[region header](header.rs) (`RegionHeader`, laid as a `HalfHeader`):
 the half's type branch, the [decision memo](memo.rs) of the cells whose
 results are built in the half beside how many entries it has laid, and, in a
 kept cell's region, the outermost [link](#faults) of the fault it ended with.
 `values` reads the branch alone, through the projection `RegionHeader`
-defines, and the record is laid by the first door that interns into the half
+defines, and the header is laid by the first door that interns into the half
 or lays a memo, so a half that needs neither stays untouched. What a step
 reads of shapes and facts it reads through its door, never through a header
-([the build module](../build/README.md#references-between-frames-and-the-arena)).
+([the build module](../build/README.md#references-between-frames-and-the-depot)).
 
 ## The import rule
 
 `scope` names `crate::values`, `crate::type_lattice`, `crate::symbols`,
 `crate::memory`, `crate::parse` and `crate::source`, and no scheduler type. From `type_lattice` it names the
 operator-group vocabulary — `DeclaredGroup` and its `ReductionMode` — so a
-signature's operator channel and a body's held group are one record rather than
+signature's operator channel and a body's held group are one type rather than
 two that must be kept in step. The scheduler reaches scopes through its
 embedder, save the region header it names, and scopes never reach the
 scheduler. The compiler

@@ -1,8 +1,8 @@
 # Records
 
-A record is a value with named, typed fields — the product type to the tagged
-union's sum type. You declare a named record type with `NEWTYPE`, giving it a
-record representation:
+A record value holds named, typed fields; its record type is the product type
+to the tagged union's sum type. You declare a named record type with
+`NEWTYPE`, giving it a record representation:
 
 ```koan
 NEWTYPE Point = :{x :Number, y :Number}
@@ -29,13 +29,14 @@ PRINT (Point {y = 4, x = 3})
 Point({x = 3, y = 4})
 ```
 
-Notice the printed order: a record's fields are stored and rendered **sorted by
-field name**, whatever order you wrote them in. Nothing in the language reads
-field position, so this only ever shows up in output — two records with the same
-fields print the same way, and comparing them ignores order either way.
+Notice the printed order: a record value's fields are stored and rendered
+**sorted by field name**, whatever order you wrote them in. Nothing in the
+language reads field position, so this only ever shows up in output — two record
+values with the same fields print the same way, and comparing them ignores order
+either way.
 
 Bare identifiers on the value side resolve through scope like anywhere else, so
-you can build a record from existing names:
+you can build a record value from existing names:
 
 ```koan
 NEWTYPE Point = :{x :Number, y :Number}
@@ -67,7 +68,7 @@ PRINT seg.finish.x
 
 `.` must read off a name or a sub-expression result, not directly off a literal
 — write `LET n = 5` then `n.x` rather than `(5).x`, which is a parse error.
-Reading a field a record doesn't have is an error that names the type:
+Reading a field a record value doesn't have is an error that names the type:
 
 ```koan
 NEWTYPE Point = :{x :Number, y :Number}
@@ -149,10 +150,10 @@ Point {x = "oops", y = 4}
 error: Point cannot wrap :{x :Str y :Number}: its representation is :{x :Number y :Number}
 ```
 
-The required fields are a *minimum*, though — a record with **more** fields
-than the representation names still constructs a `Point`. This is *width
-subtyping*: a wider record (more fields) stands in wherever a narrower one is
-expected. The `Point` shows only the fields its representation names, so the
+The required fields are a *minimum*, though — a record value with **more**
+fields than the representation names still constructs a `Point`. This is *width
+subtyping*: a wider record value (more fields) stands in wherever a narrower one
+is expected. The `Point` shows only the fields its representation names, so the
 extra one is out of reach, both when printed and when read:
 
 ```koan
@@ -167,11 +168,11 @@ Point({x = 3, y = 4})
 error: Point has no field z
 ```
 
-## Records in a container
+## Record values in a container
 
-A list or dict can hold records of different widths. Each keeps every field it
-was written with, and a record that lacks a field another record there has
-reads that field as `null`:
+A list or dict can hold record values of different widths. Each keeps every
+field it was written with, and a record value that lacks a field another one
+there has reads that field as `null`:
 
 ```koan
 PRINT [{x = 1, y = 2}, {x = 3}]
@@ -188,11 +189,11 @@ The list's element type keeps both shapes,
 `:(LIST OF :{x :Number})` still takes the list, and reads each element at
 `:{x :Number}`.
 
-## Records and dispatch
+## Record types and dispatch
 
 A function parameter can be typed with a record schema `:{...}` directly, and it
-matches any record that has at least those fields. A record literal also stands
-on its own as an anonymous record value, which prints with its fields:
+matches any record value that has at least those fields. A record literal also
+stands on its own as an anonymous record value, which prints with its fields:
 
 ```koan
 LET person = {name = "ada", age = 36}
@@ -217,8 +218,8 @@ ada
 36
 ```
 
-Naming a field the record's type doesn't carry refuses the program when it
-loads, naming the field and the record's type:
+Naming a field the record value's type doesn't carry refuses the program when
+it loads, naming the field and that type:
 
 ```koan
 LET person = {name = "ada", age = 36}
@@ -229,8 +230,8 @@ PRINT person.email
 error: <input>:2:7: :{name :Str age :Number} has no field email
 ```
 
-Width subtyping has a cost in dispatch: a wide record can satisfy two different
-field-subset schemas at once, with neither more specific, so a call is
+Width subtyping has a cost in dispatch: a wide record value can satisfy two
+different field-subset schemas at once, with neither more specific, so a call is
 ambiguous. Here the ambiguity is certain from the types alone, so the program
 refuses to load, naming where the call is written:
 
@@ -245,9 +246,9 @@ PICK both
 error: <input>:4:1: ambiguous call of `PICK _`: 2 overloads admit (:{x :Number y :Str z :Str}) and none ranks first
 ```
 
-`#[<fields>] FROM <record>` resolves this by *projecting* a record to exactly the
-named fields — a list of quoted names, so `#[x y]` — narrowing the type the
-dispatcher sees so just one overload matches:
+`#[<fields>] FROM <record>` resolves this by *projecting* a record value to
+exactly the named fields — a list of quoted names, so `#[x y]` — narrowing the
+type the dispatcher sees so just one overload matches:
 
 ```koan
 EXPR #(PICK r :{x :Number, y :Str}) -> Str = #("got xy")

@@ -130,8 +130,8 @@ type that is one type re-stamps the value at itself — a list, dict or record
 type, a nominal or a family's application, a function type or an expression
 shape, a code kind, a kind, a signature type — so a member read through a
 module and a call through a function see exactly the declared type, as a field
-read through a record does. A retype to a record type keeps at `Null` each
-field the record's own type lacks or has at exactly `Null`:
+read through a record value does. A retype to a record type keeps at `Null`
+each field the record value's own type lacks or has at exactly `Null`:
 `{x = 1, y = null} :! :{x :Number, y :(Number | Null)}` carries
 `{x :Number, y :Null}`. A signature type re-stamps a module at each of its
 applications the module fits, pinned at what *fits* solves for each head
@@ -140,7 +140,7 @@ exact only where it computes the pins itself. A union keeps each variant's own
 type, and `Any` re-stamps nothing, nor do `Module` and `Code`, which every
 module and every quote satisfies. A knot member — a function, a module, a
 quote's code, a data node — takes the type as a header beside it, as a record
-carries its own
+value carries its own
 ([the type memo](../src/values/README.md#the-type-memo-and-satisfies)), and a
 member a cyclic component ties under an annotation is born at it, so a fellow
 reaching it through the knot sees the declared type too. A callee seen at a
@@ -161,8 +161,11 @@ argument's static type does ([where a call runs](#where-a-call-runs)).
   upper end claims a value is exactly what it is at most.
 - A lexical variable stands for whatever a run binds, so a relation over one
   must hold for every binding. The load compares a rigid type only along the
-  lexical chain it was typed in, and reads it from outside through
-  [`bound_above`](../lattice/src/types/solving.md#substitute-then-ask).
+  lexical chain it was typed in, and from outside reads it through its
+  declared bound —
+  [`bound_above`](../lattice/src/types/solving.md#substitute-then-ask) by
+  variance, or the bound itself at a covariant position, as a field read
+  does.
 - Where a relation holds at some bindings and not others, the answer is
   *maybe* or *unknown*, and the call decides.
 - A static solve naming a lexical variable is the call's own only where a run,
@@ -229,8 +232,10 @@ changes what a reader sees and which overload runs.
 
 - [Types](../roadmap/types/README.md) — the project's open
   items.
-- [Dependent signatures](../roadmap/types/dependent-signatures.md)
 - [A nested projection](../roadmap/types/nested-projection.md)
-- [A pin over a variable](../roadmap/types/pins-over-variables.md)
+- [A value retyped in place, pinned at its paths](../roadmap/types/pinned-in-place.md)
 - [What a barrier rebuilds](../roadmap/types/barrier-coercion.md)
 - [A carried union at a contravariant position](../roadmap/types/contravariant-union-solve.md)
+- [Projection types](../roadmap/types/projection-types.md) — a type naming
+  a piece of what a variable or a parameter is bound to, read at load and
+  written in a signature.

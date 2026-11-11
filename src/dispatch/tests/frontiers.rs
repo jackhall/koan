@@ -367,29 +367,30 @@ fn a_callable_in_a_using_block_waits_on_the_name_it_surfaces() {
 }
 
 /// A block's units keep records of their own: a fact over a name the block surfaces lies in the
-/// record of the block's unit fixing it, and the unit holding the block reads that frontier cut
-/// at itself, so it keeps none of the block's facts and waits on none of its names.
+/// record of the block's unit fixing it — `t` reads `Carrier` as a value, so it waits on
+/// `Carrier`'s seed — and the unit holding the block reads that frontier cut at itself, so it
+/// keeps none of the block's facts and waits on none of its names.
 #[test]
 fn a_blocks_units_keep_their_own_records() {
     let source = format!(
         "{COUNTER}{PICK}LET step = (FN :{{m :Counter}} -> Any = #(\n  \
          LET s = (USING (m :! Counter) SCOPE (\n    \
-         LET a = zero\n    LET b = (PICK a)\n    b\n  ))\n  s\n))"
+         LET a = zero\n    LET b = (PICK a)\n    LET t = Carrier\n    b\n  ))\n  s\n))"
     );
     loaded(&source, |program| {
         let step = body(program, program.shape(), "step");
         let block = nested_of(step, ShapeKind::Block);
         let carrier = unknown(program, block, "Carrier");
-        let b = unit_of(program, block, "b");
-        assert_eq!(b.segment, block.segment());
-        assert!(waits(program, block, "b").contains(&carrier));
+        let t = unit_of(program, block, "t");
+        assert_eq!(t.segment, block.segment());
+        assert!(waits(program, block, "t").contains(&carrier));
         let (facts, _) = program
             .facts()
-            .unit(b)
+            .unit(t)
             .expect("the load ran the block's unit");
         let (_, typed) =
             (facts.typed.get(block.segment())).expect("the unit keeps the block's facts");
-        assert!(typed.binders.get(slot(program, block, "b")).is_some());
+        assert!(typed.binders.get(slot(program, block, "t")).is_some());
         let s = unit_of(program, step, "s");
         let (facts, _) = program.facts().unit(s).expect("the load ran the unit");
         assert!(facts.typed.get(block.segment()).is_none());

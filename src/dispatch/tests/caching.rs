@@ -13,7 +13,7 @@ use super::super::Koan;
 use super::classes::tutorial_snippets;
 use super::statics::loaded;
 use super::{WRITTEN, output};
-use crate::values::{ArenaRef, BuildBudget};
+use crate::values::{BuildBudget, DepotRef};
 
 /// `SIG Counter`, whose head parameter an opaque view hides, `MODULE ints` and `MODULE words`,
 /// which fit it at different carriers, `Link`, a chain a loop walks to the `null` at its end, and
@@ -162,6 +162,23 @@ fn wrapped_peeks() -> String {
          EXPR #(WRAP m :Counter end :Null) -> Str = #(\"done\")\n\
          PRINT (WRAP ints chain)"
     )
+}
+
+/// `source` with each call handing `ints` or `words` straight to `COUNTDOWN`, `WRAP`, `OUTER` or
+/// `TOUCH` handing it the module composed and evaluated at run instead: the trace follows nothing
+/// an `EVAL` returns, so the load lays no layer, and the call seeks its settlement at run, as a
+/// test of the run's settlements wants.
+fn untraced(source: &str) -> String {
+    let mut source = source.to_string();
+    for callee in ["COUNTDOWN", "WRAP", "OUTER", "TOUCH"] {
+        for module in ["ints", "words"] {
+            source = source.replace(
+                &format!("({callee} {module}"),
+                &format!("({callee} (EVAL #(${module}) -> Counter)"),
+            );
+        }
+    }
+    source
 }
 
 /// [`INVARIANT`] over `ints`.
@@ -420,10 +437,11 @@ fn a_hops_adoptions_hold_flat_in_depth() {
             deltas["asked"]
         );
         // Every hop is a frame in a region of its own, so what an exit adopts there it adopts
-        // afresh each hop: a constant per hop, which `assert_flat` holds above.
+        // afresh each hop: a constant per hop, which `assert_flat` holds above. A view over a
+        // module a hop binds is settled in its activation, which lays the view's types.
         if settled == 0 {
             assert!(
-                deltas["laid"] <= 2 * hops,
+                deltas["laid"] <= 4 * hops,
                 "{name}: a hop borrowing nothing new lays a constant: {} nodes over {hops} hops",
                 deltas["laid"]
             );
@@ -663,7 +681,7 @@ fn a_call_with_new_content_each_call_holds_its_hosts_region_flat() {
 
 #[test]
 fn a_loop_handing_a_keyed_helper_a_module_over_its_link_holds_adoptions_flat() {
-    let source = wrapped_peeks();
+    let source = untraced(&wrapped_peeks());
     assert_eq!(caching(&source), 2, "`WRAP` and `PEEK` cache");
     let ran_adopting = |depth: u32| {
         crate::values::ADOPTED.with(|adopted| adopted.set(0));
@@ -718,7 +736,7 @@ fn a_member_reached_through_a_call_is_not_entered() {
 
 #[test]
 fn a_fresh_loop_over_an_invariant_module_holds_its_agent_tier_flat() {
-    let source = invariant_loop();
+    let source = untraced(&invariant_loop());
     assert_eq!(caching(&source), 1);
     let [few, many] = at_ends(&source);
     assert_eq!(few.printed, "7");
@@ -1018,6 +1036,564 @@ fn laid_through_caching_chains() {
     }
 }
 
+/// What answered one keyed seek, read off the drain's tallies around it: a layer the load laid,
+/// the depot, a walk at run, or none, its parent gone, so the frame was born cold.
+#[derive(Clone, Copy)]
+enum Answer {
+    Load,
+    Depot,
+    Walk,
+    Cold,
+}
+
+/// One call site's row: its text, how many seeks it made, read off a request and computed from
+/// the values, the key of each, whether the load laid every one, how many of its seeks each
+/// [`Answer`] answered, in that enum's order, what the trace names at it, and whether each of its
+/// seeks matched one of the bindings the trace names there.
+struct CallRow {
+    text: String,
+    seeks: usize,
+    requested: usize,
+    keyed: usize,
+    keys: usize,
+    laid: bool,
+    answers: [usize; 4],
+    trace: Option<SiteTrace>,
+    matched: bool,
+}
+
+/// What the trace names at one call site, owned past the load's borrow: the bindings, or why
+/// none.
+#[derive(Clone, Debug)]
+enum SiteTrace {
+    Named(Vec<Vec<crate::scope::Content>>),
+    Untraced(crate::scope::Untraced),
+}
+
+impl SiteTrace {
+    /// The row's word for it: `named`, `untraced` with its reason, or `unnamed` where the trace
+    /// laid nothing at the site.
+    fn word(trace: Option<&SiteTrace>) -> String {
+        match trace {
+            Some(SiteTrace::Named(_)) => "named".to_string(),
+            Some(SiteTrace::Untraced(reason)) => format!("untraced {reason:?}"),
+            None => "unnamed".to_string(),
+        }
+    }
+}
+
+/// Whether the request `asked` binds each key to what `binding` names there: a type the same
+/// type, a module's knot member the same content.
+fn matches(asked: &[crate::scope::Asked], binding: &[crate::scope::Content]) -> bool {
+    use crate::scope::{Asked, Content};
+    asked.len() == binding.len()
+        && (asked.iter().zip(binding)).all(|(asked, content)| match (asked, content) {
+            (Asked::Type { named, .. }, Content::Type(at)) => named == at,
+            (Asked::Module { content, .. }, Content::Module { content: at, .. }) => content == at,
+            _ => false,
+        })
+}
+
+/// What one run of `code` sought and decided: one row per call site, one per binding event site
+/// (its walks and its memo's answers), the drain's tallies, how many seeks replayed a stamp's
+/// level rather than a call's own, and each key the load laid that no seek sought.
+struct Traced {
+    calls: Vec<CallRow>,
+    /// The most bindings the trace names at any one site.
+    widest: usize,
+    events: Vec<(String, usize, usize)>,
+    tiers: Tiers,
+    replayed: usize,
+    unsought: usize,
+    /// Each body laid more layers than its fact keys have distinct bindings among them: its slot
+    /// names, the layers the load and the run's walks laid for it, and those bindings.
+    rewalks: Vec<(String, usize, usize)>,
+    /// Each call into a keyed callee that sought no settlement: its text, and the walks and memo
+    /// answers of the binding events at its callee's entry.
+    activations: Vec<(String, usize, usize)>,
+}
+
+thread_local! {
+    /// Each keyed seek of a [`traced`] run: the extent of its call, the key it sought, the body
+    /// and what it bound each key to, whether it read a request, and what answered it once the
+    /// drain has.
+    #[allow(clippy::type_complexity)]
+    static SEEKS: std::cell::RefCell<
+        Vec<(
+            crate::source::SourceRef,
+            crate::values::LayerKey,
+            (crate::scope::Segment, Vec<crate::scope::Asked>),
+            bool,
+            Option<Answer>,
+        )>,
+    > = const { std::cell::RefCell::new(Vec::new()) };
+    /// Each call of a [`traced`] run into a keyed callee that sought no settlement: its extent and
+    /// its callee's body.
+    static UNSOUGHT_CALLS: std::cell::RefCell<Vec<(crate::source::SourceRef, crate::scope::Segment)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+    /// How many seeks the drain answered that no call made: a replayed stamp's levels.
+    static REPLAYED: Cell<usize> = const { Cell::new(0) };
+    /// Each binding event of a [`traced`] run, by its site, and whether it walked.
+    static EVENTS: std::cell::RefCell<Vec<(crate::scope::EventSite, bool)>> =
+        const { std::cell::RefCell::new(Vec::new()) };
+}
+
+/// Note a keyed seek of `birth`, a call, requesting `sought`, read off a request where
+/// `requested` and computed from the values where not.
+fn noted(birth: &crate::program::KBirth<'_, '_>, sought: &crate::scope::Sought, requested: bool) {
+    if let crate::program::KBirth::Call { call, .. } = birth {
+        let asked = (sought.ask.body, sought.ask.bound.to_vec());
+        SEEKS.with(|seeks| {
+            (seeks.borrow_mut()).push((*call, sought.key, asked, requested, None));
+        });
+    }
+}
+
+/// Note a call `birth` into a keyed callee that sought no settlement.
+fn unsought(birth: &crate::program::KBirth<'_, '_>) {
+    if let crate::program::KBirth::Call { call, callee, .. } = birth {
+        let function = crate::program::called_function(*callee).expect("a keyed callee");
+        let body = function.body().segment;
+        UNSOUGHT_CALLS.with(|calls| calls.borrow_mut().push((*call, body)));
+    }
+}
+
+/// Note a seek of `birth` computed from the values.
+fn computed(birth: &crate::program::KBirth<'_, '_>, sought: &crate::scope::Sought) {
+    noted(birth, sought, false);
+}
+
+/// Note a seek of `birth` read off a request.
+fn requested(birth: &crate::program::KBirth<'_, '_>, sought: &crate::scope::Sought) {
+    noted(birth, sought, true);
+}
+
+/// Note what answered the seek of `key`, from the drain's tallies `before` and `after` it: the
+/// earliest call's seek of `key` not yet answered, since the drain answers a call's seek before
+/// the next is made, or a replayed level where none waits.
+fn answered(key: crate::values::LayerKey, before: Tiers, after: Tiers) {
+    let answer = if after.laid > before.laid {
+        Answer::Load
+    } else if after.settled > before.settled {
+        Answer::Walk
+    } else if after.cold_births > before.cold_births {
+        Answer::Cold
+    } else {
+        Answer::Depot
+    };
+    SEEKS.with(|seeks| {
+        let mut seeks = seeks.borrow_mut();
+        let waiting =
+            (seeks.iter_mut()).find(|(_, each, _, _, answer)| *each == key && answer.is_none());
+        match waiting {
+            Some((.., slot)) => *slot = Some(answer),
+            None => REPLAYED.with(|replayed| replayed.set(replayed.get() + 1)),
+        }
+    });
+}
+
+/// Note a binding event at `site`, walked or answered by the memo.
+fn decided(site: crate::scope::EventSite, walked: bool) {
+    EVENTS.with(|events| events.borrow_mut().push((site, walked)));
+}
+
+/// [`Traced`] for one run of `code`: `None` where `code` refuses at load.
+fn traced(code: &str) -> Option<Traced> {
+    use crate::program::{DECIDING, REQUESTING, SEEKING, UNSOUGHT};
+    use crate::scheduler::ANSWERED;
+    use crate::scope::{Asked, Segment, Slot};
+    use std::collections::{BTreeSet, HashMap};
+    let mut substrate =
+        CellSubstrate::load::<Koan>(code, "<measured>", 2, BuildBudget::default(), output())
+            .ok()?;
+    let laid: BTreeSet<_> = substrate.with(|running| {
+        (running.program().facts().layers().iter())
+            .map(|laid| laid.key.0)
+            .collect()
+    });
+    // Each body's slot names and fact keys, recomputed from the load's records, beside the body
+    // and binding of each layer the load laid, read off the request naming it.
+    #[allow(clippy::type_complexity)]
+    let (bodies, load_layers): (Vec<(String, Option<Vec<Slot>>)>, Vec<(Segment, Vec<Asked>)>) =
+        substrate.with(|running| {
+            let program = running.program();
+            let (shapes, load) = (program.shapes(), program.facts());
+            let mut fact_keys = Vec::new();
+            program.fact_keys(|keys| fact_keys.push(keys.map(<[Slot]>::to_vec)));
+            let bodies = (shapes.bodies().iter().zip(fact_keys))
+                .map(|(shape, keys)| {
+                    let names: Vec<String> = (0..shape.slots())
+                        .map(|at| {
+                            let symbol = shape.slot_name(Slot(at as u32)).symbol();
+                            program.symbols().display(symbol).to_string()
+                        })
+                        .collect();
+                    (format!("[{}]", names.join(", ")), keys)
+                })
+                .collect();
+            let mut requests: Vec<&crate::scope::SiteRequest<'_>> = Vec::new();
+            for shape in shapes.bodies() {
+                for (site, _) in load.traces(shape).iter() {
+                    requests.extend(load.request(shape, *site));
+                    requests.extend(
+                        (load.layers().iter())
+                            .filter_map(|laid| laid.layer.request(shape.segment(), *site)),
+                    );
+                }
+            }
+            let load_layers = (load.layers().iter())
+                .map(|laid| {
+                    let request = (requests.iter())
+                        .find(|request| request.key == laid.key)
+                        .expect("a request names each layer the load laid");
+                    (request.body, request.bound.to_vec())
+                })
+                .collect();
+            (bodies, load_layers)
+        });
+    // What the trace names at each call site, by the call's extent.
+    let traces: Vec<(crate::source::SourceRef, SiteTrace)> = substrate.with(|running| {
+        let program = running.program();
+        let mut traces = Vec::new();
+        for shape in program.shapes().bodies() {
+            for (site, trace) in program.facts().traces(shape).iter() {
+                let Some(call) = super::trace::call_of(shape, *site) else {
+                    continue;
+                };
+                traces.push((
+                    call,
+                    match trace {
+                        crate::scope::CallTrace::Named { bindings, .. } => SiteTrace::Named(
+                            bindings.iter().map(|binding| binding.to_vec()).collect(),
+                        ),
+                        crate::scope::CallTrace::Untraced(reason) => SiteTrace::Untraced(*reason),
+                    },
+                ));
+            }
+        }
+        traces
+    });
+    let widest = (traces.iter())
+        .map(|(_, trace)| match trace {
+            SiteTrace::Named(bindings) => bindings.len(),
+            SiteTrace::Untraced(_) => 0,
+        })
+        .max()
+        .unwrap_or(0);
+    SEEKS.with(|seeks| seeks.borrow_mut().clear());
+    REPLAYED.with(|replayed| replayed.set(0));
+    EVENTS.with(|events| events.borrow_mut().clear());
+    UNSOUGHT_CALLS.with(|calls| calls.borrow_mut().clear());
+    TIERS.with(|tiers| tiers.set(Tiers::default()));
+    SEEKING.with(|hook| hook.set(Some(computed)));
+    REQUESTING.with(|hook| hook.set(Some(requested)));
+    ANSWERED.with(|hook| hook.set(Some(answered)));
+    DECIDING.with(|hook| hook.set(Some(decided)));
+    UNSOUGHT.with(|hook| hook.set(Some(unsought)));
+    let _ = substrate.with(|running| running.ran());
+    UNSOUGHT.with(|hook| hook.set(None));
+    SEEKING.with(|hook| hook.set(None));
+    REQUESTING.with(|hook| hook.set(None));
+    ANSWERED.with(|hook| hook.set(None));
+    DECIDING.with(|hook| hook.set(None));
+    let seeks = SEEKS.with(|seeks| seeks.take());
+    let mut calls: Vec<(crate::source::SourceRef, CallRow, BTreeSet<_>)> = Vec::new();
+    for (call, key, asked, requested, answer) in &seeks {
+        let answer = answer.unwrap_or_else(|| panic!("the drain answered `{}`", call.text()));
+        let at = match calls.iter().position(|(each, ..)| each == call) {
+            Some(at) => at,
+            None => {
+                let trace = (traces.iter()).find(|(each, _)| each == call);
+                let row = CallRow {
+                    text: call.text(),
+                    seeks: 0,
+                    requested: 0,
+                    keyed: 0,
+                    keys: 0,
+                    laid: true,
+                    answers: [0; 4],
+                    trace: trace.map(|(_, trace)| trace.clone()),
+                    matched: true,
+                };
+                calls.push((*call, row, BTreeSet::new()));
+                calls.len() - 1
+            }
+        };
+        let (_, row, keys) = &mut calls[at];
+        row.seeks += 1;
+        if *requested {
+            row.requested += 1;
+        } else {
+            row.keyed += 1;
+        }
+        row.laid &= laid.contains(&key.0);
+        row.answers[answer as usize] += 1;
+        if let Some(SiteTrace::Named(bindings)) = &row.trace {
+            row.matched &= bindings.iter().any(|binding| matches(&asked.1, binding));
+        }
+        keys.insert(key.0);
+        row.keys = keys.len();
+    }
+    let mut events: Vec<(String, usize, usize)> = Vec::new();
+    let mut at: HashMap<String, usize> = HashMap::new();
+    for (site, walked) in EVENTS.with(|events| events.take()) {
+        let site = format!("{site:?}");
+        let index = *at.entry(site.clone()).or_insert_with(|| {
+            events.push((site, 0, 0));
+            events.len() - 1
+        });
+        if walked {
+            events[index].1 += 1;
+        } else {
+            events[index].2 += 1;
+        }
+    }
+    let sought: BTreeSet<_> = seeks.iter().map(|(_, key, ..)| key.0).collect();
+    // Every layer laid for each body, by the load and by the run's walks, beside the distinct
+    // bindings of its fact keys among them.
+    let walked = (seeks.iter())
+        .filter(|(.., answer)| matches!(answer, Some(Answer::Walk)))
+        .map(|(_, _, asked, ..)| asked.clone());
+    let mut per_body: BTreeMap<Segment, Vec<Vec<Asked>>> = BTreeMap::new();
+    for (body, asked) in load_layers.into_iter().chain(walked) {
+        per_body.entry(body).or_default().push(asked);
+    }
+    let mut rewalks = Vec::new();
+    for (body, layers) in &per_body {
+        let (name, facts) = &bodies[body.index() as usize];
+        let facts = facts.as_deref().unwrap_or(&[]);
+        let bindings: BTreeSet<Vec<String>> = (layers.iter())
+            .map(|asked| {
+                (asked.iter())
+                    .filter(|each| facts.contains(&each.slot()))
+                    .map(|each| format!("{each:?}"))
+                    .collect()
+            })
+            .collect();
+        if layers.len() > bindings.len() {
+            rewalks.push((name.clone(), layers.len(), bindings.len()));
+        }
+    }
+    let mut activations: Vec<(String, usize, usize)> = Vec::new();
+    for (call, body) in UNSOUGHT_CALLS.with(|calls| calls.take()) {
+        if activations.iter().any(|(text, ..)| *text == call.text()) {
+            continue;
+        }
+        let entry = format!("{:?}", crate::scope::EventSite::entry(body));
+        let (walks, memo) = (events.iter())
+            .find(|(site, ..)| *site == entry)
+            .map_or((0, 0), |(_, walks, memo)| (*walks, *memo));
+        activations.push((call.text(), walks, memo));
+    }
+    Some(Traced {
+        calls: calls.into_iter().map(|(_, row, _)| row).collect(),
+        widest,
+        events,
+        tiers: TIERS.with(Cell::get),
+        replayed: REPLAYED.with(Cell::get),
+        unsought: laid.difference(&sought).count(),
+        rewalks,
+        activations,
+    })
+}
+
+/// The trace's count over some call rows: the seeks read off a request and those computed from
+/// the values, the seeks the load did not lay, how many of them sit at a site the trace names, how
+/// many sit at each other kind of site, by its word, and the most bindings the trace names at one
+/// site.
+#[derive(Default)]
+struct Tally {
+    requested: usize,
+    keyed: usize,
+    unlaid: usize,
+    named: usize,
+    unnamed: BTreeMap<String, usize>,
+    widest: usize,
+}
+
+impl Tally {
+    /// Count `row`'s seeks the load did not lay.
+    fn add(&mut self, row: &CallRow) {
+        self.requested += row.requested;
+        self.keyed += row.keyed;
+        let unlaid = row.seeks - row.answers[Answer::Load as usize];
+        self.unlaid += unlaid;
+        match row.trace {
+            Some(SiteTrace::Named(_)) => self.named += unlaid,
+            _ if unlaid > 0 => {
+                *(self.unnamed)
+                    .entry(SiteTrace::word(row.trace.as_ref()))
+                    .or_default() += unlaid;
+            }
+            _ => {}
+        }
+    }
+
+    /// Add `other`'s counts to these.
+    fn merge(&mut self, other: &Tally) {
+        self.requested += other.requested;
+        self.keyed += other.keyed;
+        self.unlaid += other.unlaid;
+        self.named += other.named;
+        for (word, count) in &other.unnamed {
+            *self.unnamed.entry(word.clone()).or_default() += count;
+        }
+        self.widest = self.widest.max(other.widest);
+    }
+
+    /// Print the counts under `label`.
+    fn print(&self, label: &str) {
+        let others: String = (self.unnamed.iter())
+            .map(|(word, count)| format!(" | {word} {count}"))
+            .collect();
+        println!(
+            "{label}: requested {} | keyed {} | unlaid {} | named {}{others} | widest site {}\n",
+            self.requested, self.keyed, self.unlaid, self.named, self.widest
+        );
+    }
+}
+
+/// Over the tutorial's runnable programs, how many of each call site's seeks the load's layers,
+/// the depot and a walk at run answered, what each binding event decided, and what the drain
+/// tallied. The load lays a layer for some call, and a program whose every seek's key the load
+/// laid settles nothing at run.
+///
+/// And the trace's count: of the seeks the load did not lay, how many the trace names, and why it
+/// names none at each other site, beside the most bindings it names at one site. Every seek at a
+/// named site matches one of the site's bindings, reads its request and computes no key.
+///
+/// And the two costs one layer keyed on every traced slot accepts, printed: each body laid more
+/// layers than its fact keys have distinct bindings among them, which re-walked its facts once per
+/// passed-on content, and each call into a keyed callee that sought no settlement, beside what its
+/// callee's entry decided in its activation. Run with
+/// `cargo test traced_seeks_over_the_tutorial -- --nocapture` for the rows.
+#[test]
+fn traced_seeks_over_the_tutorial() {
+    let mut totals = Tiers::default();
+    let mut unsought = 0;
+    let (mut rewalks, mut activations) = (0, 0);
+    let mut tally = Tally::default();
+    for (name, code) in tutorial_snippets() {
+        let Some(traced) = traced(&code) else {
+            continue;
+        };
+        let tiers = traced.tiers;
+        if traced.calls.is_empty() && traced.events.is_empty() && tiers.laid == 0 {
+            continue;
+        }
+        println!("## {name}");
+        let mut own = Tally {
+            widest: traced.widest,
+            ..Tally::default()
+        };
+        for row in &traced.calls {
+            let [load, depot, walk, cold] = row.answers;
+            println!(
+                "call | {} | seeks {} | requested {} | keyed {} | keys {} | load {load} | \
+                 depot {depot} | walk {walk} | cold {cold} | trace {}",
+                row.text,
+                row.seeks,
+                row.requested,
+                row.keyed,
+                row.keys,
+                SiteTrace::word(row.trace.as_ref())
+            );
+            if let Some(SiteTrace::Named(_)) = row.trace {
+                assert!(
+                    row.matched,
+                    "{name}: a seek at `{}` matches none of its bindings",
+                    row.text
+                );
+                // A call at a named site reads its request and computes no key.
+                assert_eq!(row.keyed, 0, "{name}: `{}` computed a key", row.text);
+                assert_eq!(row.seeks, row.requested, "{name}: `{}`", row.text);
+            }
+            own.add(row);
+        }
+        own.print("trace");
+        tally.merge(&own);
+        for (site, walks, reuses) in &traced.events {
+            println!("event | {site} | walks {walks} | memo {reuses}");
+        }
+        // The two costs one layer keyed on every traced slot accepts.
+        for (body, layers, bindings) in &traced.rewalks {
+            println!("rewalk | {body} | layers {layers} | fact bindings {bindings}");
+        }
+        for (call, walks, memo) in &traced.activations {
+            println!("unsought | {call} | walks {walks} | memo {memo}");
+        }
+        rewalks += traced.rewalks.len();
+        activations += traced.activations.len();
+        let hits = tiers.sought - tiers.laid - tiers.settled - tiers.cold_births;
+        println!(
+            "sought {} | laid {} | settled {} | cold {} | depot hits {hits} | replayed {} | \
+             laid unsought {}\n",
+            tiers.sought,
+            tiers.laid,
+            tiers.settled,
+            tiers.cold_births,
+            traced.replayed,
+            traced.unsought
+        );
+        // Every seek is a call's or a replayed level's, and each row's answers sum to its seeks.
+        let answered: usize = (traced.calls.iter())
+            .map(|row| row.answers.iter().sum::<usize>())
+            .sum();
+        assert_eq!(answered + traced.replayed, tiers.sought, "{name}");
+        if traced.calls.iter().all(|row| row.laid) {
+            assert_eq!(
+                tiers.settled, 0,
+                "{name}: every key was laid, yet the run settled"
+            );
+        }
+        totals.sought += tiers.sought;
+        totals.laid += tiers.laid;
+        totals.settled += tiers.settled;
+        totals.cold_births += tiers.cold_births;
+        unsought += traced.unsought;
+    }
+    println!(
+        "tutorial: sought {} | laid {} | settled {} | cold {} | laid unsought {unsought}",
+        totals.sought, totals.laid, totals.settled, totals.cold_births
+    );
+    tally.print("tutorial trace");
+    println!("tutorial costs: rewalking bodies {rewalks} | unsought calls {activations}");
+    assert!(
+        totals.laid >= 1,
+        "the load lays no layer the tutorial seeks"
+    );
+}
+
+/// A request names the key and ask its values give: every seek read off a request also computes
+/// its key, under [`CROSS_CHECK`](crate::program::CROSS_CHECK), over every tutorial snippet and the
+/// load's layer fixtures. It passes where no assertion fires.
+#[test]
+fn a_request_names_the_key_its_values_give() {
+    use crate::program::{CROSS_CHECK, REQUESTING};
+    thread_local! {
+        static CHECKED: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    }
+    fn checked(_: &crate::program::KBirth<'_, '_>, _: &crate::scope::Sought) {
+        CHECKED.with(|checked| checked.set(checked.get() + 1));
+    }
+    let programs = (tutorial_snippets().into_iter()).chain(super::laid::fixtures());
+    CROSS_CHECK.with(|check| check.set(true));
+    REQUESTING.with(|hook| hook.set(Some(checked)));
+    for (_, code) in programs {
+        let Ok(mut substrate) =
+            CellSubstrate::load::<Koan>(&code, "<measured>", 2, BuildBudget::default(), output())
+        else {
+            continue;
+        };
+        let _ = substrate.with(|running| running.ran());
+    }
+    CROSS_CHECK.with(|check| check.set(false));
+    REQUESTING.with(|hook| hook.set(None));
+    let checked = CHECKED.with(std::cell::Cell::get);
+    println!("cross-checked requests: {checked}");
+    assert!(checked > 0, "no seek read a request");
+}
+
 /// A tail edge into a registration the load types `Unknown` pairs by its written slots (D1.9):
 /// `SPIN`'s parameter `e` reads a meet over `Elt`, so its registration is untyped, and its tail
 /// call passes `Item` on bare, so the nominal it declares over it is invariant.
@@ -1224,7 +1800,8 @@ fn no_run_cell_interns_into_the_agent_tier() {
         mixed_chain(),
         varying_loop(),
         boxed,
-    ];
+    ]
+    .map(|source| untraced(&source));
     let mut settled = 0;
     for source in &sources {
         let [(tiers, ..)] = runs(source, 1, |_| {})[..] else {
@@ -1289,7 +1866,7 @@ pub(super) fn runs(
                 .with(|running| running.ran())
                 .expect("the program runs");
             let table = substrate.with(|running| {
-                let table = running.scheduler().graph().children_of(ArenaRef::ROOT);
+                let table = running.scheduler().graph().children_of(DepotRef::ROOT);
                 between(running);
                 table
             });
@@ -1301,7 +1878,7 @@ pub(super) fn runs(
 
 #[test]
 fn a_loop_seeks_its_settlement_once_and_a_second_caller_finds_it_warm() {
-    let once = format!("{INVARIANT}PRINT (COUNTDOWN ints chain)\n");
+    let once = untraced(&format!("{INVARIANT}PRINT (COUNTDOWN ints chain)\n"));
     let [(alone, ..)] = runs(&once, 1, |_| {})[..] else {
         unreachable!()
     };
@@ -1310,7 +1887,7 @@ fn a_loop_seeks_its_settlement_once_and_a_second_caller_finds_it_warm() {
         (1, 1),
         "one seek for the whole loop"
     );
-    let twice = format!("{once}PRINT (COUNTDOWN ints chain)");
+    let twice = untraced(&format!("{once}PRINT (COUNTDOWN ints chain)"));
     let [(both, table, ref printed)] = runs(&twice, 1, |_| {})[..] else {
         unreachable!()
     };
@@ -1331,8 +1908,8 @@ fn a_loop_seeks_its_settlement_once_and_a_second_caller_finds_it_warm() {
         both.agent, alone.agent,
         "the second caller finds every warm type laid"
     );
-    let [(apart, table, _)] = runs(&format!("{once}PRINT (COUNTDOWN words chain)"), 1, |_| {})[..]
-    else {
+    let apart = untraced(&format!("{once}PRINT (COUNTDOWN words chain)"));
+    let [(apart, table, _)] = runs(&apart, 1, |_| {})[..] else {
         unreachable!()
     };
     assert_eq!(apart.settled, 2, "two bindings, two settlements");
@@ -1344,10 +1921,10 @@ fn a_callable_born_under_a_settlement_keys_its_own_beneath_it() {
     let inner =
         "(LET g = (FN :{x :Number} -> Number = #((LET v = (m :| Counter)) (x)))) (g {x = 1})";
     for body in [inner.to_string(), format!("(USING empty SCOPE ({inner}))")] {
-        let source = format!(
+        let source = untraced(&format!(
             "EXPR #(OUTER m :Counter) -> Number = #((LET w = (m :| Counter)) {body})\n\
              PRINT (OUTER ints)"
-        );
+        ));
         let [(tiers, table, ref printed)] = runs(&source, 1, |_| {})[..] else {
             unreachable!()
         };
@@ -1362,10 +1939,10 @@ fn a_callable_born_under_a_settlement_keys_its_own_beneath_it() {
 
 #[test]
 fn an_evicted_settlement_is_rebuilt_on_the_next_miss_with_the_same_answer() {
-    let source = format!(
+    let source = untraced(&format!(
         "{INVARIANT}PRINT (COUNTDOWN ints chain)\nPRINT (COUNTDOWN words chain)\n\
          PRINT (COUNTDOWN ints chain)"
-    );
+    ));
     let tight = ran_under(DEPTHS[0], &source, SMALLEST);
     assert_eq!(tight.printed, "7\n7\n7");
     assert_eq!(
@@ -1386,9 +1963,9 @@ pub(super) const SMALLEST: BuildBudget = BuildBudget {
 #[test]
 fn a_helper_keyed_on_a_module_built_each_hop_seeks_nothing_and_its_loop_settles_once() {
     // `PEEK` keys on a module built over each hop's link: content the run produced, which no load
-    // could declare, so it seeks nothing and runs under its callee's arena node, the root. `WRAP`
+    // could declare, so it seeks nothing and runs under its callee's depot slot, the root. `WRAP`
     // keys on `ints`, load content, and settles once across the loop.
-    let source = wrapped_peeks();
+    let source = untraced(&wrapped_peeks());
     let [few, many] = ENDS.map(|depth| ran_under(depth, &source, SMALLEST));
     for ran in [&few, &many] {
         assert_eq!(ran.printed, "done");
@@ -1459,6 +2036,7 @@ fn a_settlement_its_frame_holds_outlives_every_miss_the_frame_waits_on() {
                   (LET g = (FN :{x :Number} -> Number = #((LET v = (m :| Counter)) (x)))) \
                   (LET swept = (SWEEP chain)) (g {x = 1}))\n\
                   PRINT (OUTER ints)";
+    let source = &untraced(source);
     let tight = ran_under(2, source, SMALLEST);
     assert_eq!(tight.printed, "1");
     assert!(tight.tiers.evicted > 0, "the misses evict");
@@ -1526,7 +2104,7 @@ fn a_callees_callable_keys_under_its_own_chain_not_its_callers() {
                   (g {x = 1}))\n\
                   EXPR #(OUTER m :Counter) -> Number = #((LET w = (m :| Counter)) (SHARE m) (2))\n\
                   PRINT (OUTER ints)";
-    let [(tiers, table, ref printed)] = runs(source, 1, |_| {})[..] else {
+    let [(tiers, table, ref printed)] = runs(&untraced(source), 1, |_| {})[..] else {
         unreachable!()
     };
     assert_eq!(printed, "2");
@@ -1540,7 +2118,7 @@ const STR_INVARIANT: &str = "EXPR #(COUNTDOWN m :Counter link :Link) -> Str = \
 
 #[test]
 fn a_str_loop_seeks_its_settlement_once_and_a_second_park_finds_it_warm() {
-    let once = format!("{STR_INVARIANT}PRINT (COUNTDOWN ints chain)\n");
+    let once = untraced(&format!("{STR_INVARIANT}PRINT (COUNTDOWN ints chain)\n"));
     let [(alone, ..)] = runs(&once, 1, |_| {})[..] else {
         unreachable!()
     };
@@ -1549,7 +2127,7 @@ fn a_str_loop_seeks_its_settlement_once_and_a_second_park_finds_it_warm() {
         (1, 1),
         "one seek for the whole loop"
     );
-    let twice = format!("{once}PRINT (COUNTDOWN ints chain)");
+    let twice = untraced(&format!("{once}PRINT (COUNTDOWN ints chain)"));
     let [(both, table, ref printed)] = runs(&twice, 1, |_| {})[..] else {
         unreachable!()
     };
@@ -1585,10 +2163,10 @@ fn a_callable_born_in_a_keyed_frame_keys_its_own_beneath_it() {
     let inner =
         "(LET g = (FN :{x :Number} -> Number = #((LET v = (m :| Counter)) (x)))) (g {x = 1})";
     for body in [inner.to_string(), format!("(USING empty SCOPE ({inner}))")] {
-        let source = format!(
+        let source = untraced(&format!(
             "EXPR #(OUTER m :Counter) -> Any = #((LET w = (m :| Counter)) {body})\n\
              PRINT (OUTER ints)"
-        );
+        ));
         let [(tiers, table, ref printed)] = runs(&source, 1, |_| {})[..] else {
             unreachable!()
         };
@@ -1604,17 +2182,18 @@ fn a_callable_born_in_a_keyed_frame_keys_its_own_beneath_it() {
 #[test]
 fn an_unkeyed_callee_in_a_keyed_frame_keys_its_callables_under_its_own_birth() {
     // `OUTER` is keyed; `SHARE`, whose `m :Any` keys nothing, runs under the root it was born
-    // under, so the callable it births keys there, not under `OUTER`'s settlement.
+    // under, so the callable it births keys there, not under `OUTER`'s settlement: `g` keys on
+    // nothing, so its call finds the layer the load laid beneath the root.
     let source = "EXPR #(SHARE m :Any) -> Any = \
                   #((LET g = (FN :{x :Number} -> Number = #((LET v = (m :| Counter)) (x)))) \
                   (g {x = 1}))\n\
                   EXPR #(OUTER m :Counter) -> Any = #((LET w = (m :| Counter)) (SHARE m) (2))\n\
                   PRINT (OUTER ints)";
-    let [(tiers, table, ref printed)] = runs(source, 1, |_| {})[..] else {
+    let [(tiers, table, ref printed)] = runs(&untraced(source), 1, |_| {})[..] else {
         unreachable!()
     };
     assert_eq!(printed, "2");
-    assert_eq!((tiers.settled, table), (2, 2));
+    assert_eq!((tiers.laid, tiers.settled, table), (1, 1, 1));
 }
 
 #[test]
@@ -1664,10 +2243,11 @@ fn a_type_composed_at_run_keys_no_settlement_and_its_asker_settles_once() {
     // not the root's, so the call it is handed to, by a child or by a tail hop, seeks nothing. What
     // the asker's settlement's records name rests in the agent tier once.
     for asker in ["ASK", "HOPPING"] {
-        let once = ran(DEPTHS[0], &format!("{BOXED}PRINT ({asker} Number)\n"));
+        let number = "(EVAL #(Number) -> Type)";
+        let once = ran(DEPTHS[0], &format!("{BOXED}PRINT ({asker} {number})\n"));
         let twice = ran(
             DEPTHS[0],
-            &format!("{BOXED}LET first = ({asker} Number)\nPRINT ({asker} Number)\n"),
+            &format!("{BOXED}LET first = ({asker} {number})\nPRINT ({asker} {number})\n"),
         );
         assert_eq!((once.printed.as_str(), twice.printed.as_str()), ("1", "1"));
         assert_eq!(
@@ -1682,11 +2262,33 @@ fn a_type_composed_at_run_keys_no_settlement_and_its_asker_settles_once() {
             "`{asker}`'s second call hits, and a hit rests nothing"
         );
     }
+    // The load lays `COUNTDOWN ints chain`'s layer, its retype's application interned in the root.
+    let invariant = ran(DEPTHS[0], &invariant_loop()).tiers;
     assert_eq!(
-        ran(DEPTHS[0], &invariant_loop()).tiers.relayed,
-        1,
-        "a written module's types are the root's: only the application its parameter's retype \
-         stamps, which the frame binds it at, is relayed"
+        (invariant.laid > 0, invariant.relayed),
+        (true, 0),
+        "a written module's types are the root's, and a layer the load laid relays nothing"
+    );
+}
+
+/// An invariant site's types under a traced binding rest in the frozen load, where a settlement
+/// under an untraced one rests them at run.
+#[test]
+fn an_invariant_site_under_a_traced_binding_rests_in_the_frozen_load() {
+    let traced = ran(DEPTHS[0], &invariant_loop());
+    let untraced = ran(DEPTHS[0], &untraced(&invariant_loop()));
+    assert_eq!(traced.printed, untraced.printed);
+    let tiers = traced.tiers;
+    assert!(tiers.laid >= 1, "the load lays the loop's layer");
+    assert_eq!(
+        (tiers.settled, tiers.rested, tiers.relayed),
+        (0, 0, 0),
+        "the load's layer rests every type the loop names"
+    );
+    assert_eq!(untraced.tiers.settled, 1);
+    assert!(
+        untraced.tiers.rested > 0,
+        "the settlement rests the loop's view"
     );
 }
 
@@ -1720,4 +2322,28 @@ fn a_shares_loop_catching_a_fault_over_new_content_each_hop_holds_its_hosts_regi
     let [few, many] = at_ends(source);
     assert_eq!((few.printed.as_str(), few.root), ("done", 0));
     assert_eq!(few, many);
+}
+
+/// A callable offered to code keys on what that code passes it: `LOOP`'s written tail hops pass
+/// `elem` on bare, so it is invariant over them, but the code `RUN` evaluates calls it with
+/// another module. That call lies in the code's shape and is no tail edge, so its frame seeks a
+/// settlement under its own `elem` and describes strings, not the numbers its first frame saw.
+#[test]
+fn a_callable_offered_to_code_keys_on_what_the_code_passes_it() {
+    let source = "SIG Has FOR ALL #[Elt] = #[(VAL v :Elt)]\n\
+                  MODULE nums = (LET v = 1)\n\
+                  MODULE strs = (LET v = \"s\")\n\
+                  EXPR #(DESCRIBE xs :(LIST OF Number)) -> Str = #(\"numbers\")\n\
+                  EXPR #(DESCRIBE xs :(LIST OF Str)) -> Str = #(\"strings\")\n\
+                  EXPR #(RUN code :(Expression NEEDING #[(LOOP _ AT _)])) -> Any = \
+                  #(EVAL code -> Any)\n\
+                  EXPR #(LOOP elem :Has AT n :Number) -> Any = #(\n  \
+                  (PRINT (DESCRIBE [elem.v]))\n  \
+                  (MATCH n WITH #{0: (PRINT \"done\"), 1: (LOOP elem AT 0), \
+                  _: (RUN #(\\(LOOP $strs AT 1)))})\n)\n\
+                  LOOP nums AT 2\n";
+    assert_eq!(
+        ran(DEPTHS[0], source).printed,
+        "numbers\nstrings\nstrings\ndone"
+    );
 }

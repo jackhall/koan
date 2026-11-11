@@ -40,7 +40,7 @@ use crate::types::SEED;
 use crate::types::chain::TypeChain;
 use crate::types::handle::{DeclaredType, Handle, KType, Parametric, Scheme, TypeHandle, wrap};
 use crate::types::kind::KKind;
-use crate::types::node::{ContentKey, TypeNode};
+use crate::types::node::{ContentKey, PathClass, TypeNode};
 use crate::types::operators::{FoldDirection, ReductionMode};
 use crate::types::schema::{SchemaDraft, SigOrigin};
 use crate::types::shape::shape_slots;
@@ -475,6 +475,7 @@ fn arb_type_in(
         Vocabulary::CONCRETE,
     );
     let family = arb_family(family_world, depth);
+    let pin = arb_pin(world.clone(), bound.clone(), members.clone(), vocabulary);
     prop_oneof![
         6 => leaf,
         2 => inner().prop_map(move |element| list_world.types.list(element)),
@@ -498,7 +499,7 @@ fn arb_type_in(
             }
         ),
         3 => arb_shape(shape_world, depth, shape_members, vocabulary),
-        2 => arb_signature_type(sig_world, depth).prop_map(KType::raw),
+        2 => arb_signature_type_in(sig_world, depth, pin),
         1 => arb_sealed_member(group_world, depth).prop_map(KType::raw),
         1 => family.clone().prop_map(KType::raw),
         1 => (family, inner()).prop_map(move |(family, argument)| {
@@ -559,7 +560,10 @@ fn arb_leaf(
             .boxed()
     };
     let opaque = arb_opaque(world.clone()).prop_map(KType::raw);
-    let lexical = arb_lexical(world.clone()).prop_map(|variable| variable.raw());
+    let lexical = prop_oneof![
+        3 => arb_lexical(world.clone()).prop_map(|variable| variable.raw()),
+        1 => arb_path_variable(world.clone()).prop_map(|variable| variable.raw()),
+    ];
     // A code kind needing names: a kind from three levels of the code tree, needing one to three
     // names of the binder alphabet.
     let needing_world = world.clone();
@@ -655,6 +659,20 @@ pub fn arb_lexical(world: World) -> BoxedStrategy<Parametric> {
         .prop_map(move |(level, name, bound, lower)| {
             let (name, bound) = (world.type_names[name], world.grounds()[bound]);
             with_scratch(|scratch| lexical_over(&world, scratch, level, name, bound, lower))
+        })
+        .boxed()
+}
+
+/// A path class's variable: one of two classes, named from the type alphabet, over a ground
+/// bound.
+pub fn arb_path_variable(world: World) -> BoxedStrategy<Parametric> {
+    let grounds = world.grounds().len();
+    (0..2u64, 0..world.type_names.len(), 0..grounds)
+        .prop_map(move |(class, name, bound)| {
+            let (name, bound) = (world.type_names[name], world.grounds()[bound]);
+            world
+                .types
+                .path_variable(PathClass([class, 0]), name, bound)
         })
         .boxed()
 }
@@ -865,7 +883,7 @@ fn arb_plantings(
     (
         prop::sample::subsequence((0..positions).collect::<Vec<usize>>(), 2 * variables)
             .prop_shuffle(),
-        prop::collection::vec((0..3u8, prop::option::of(0..3u8)), variables),
+        prop::collection::vec((0..4u8, prop::option::of(0..4u8)), variables),
     )
         .prop_map(|(picked, forms)| {
             picked
@@ -944,15 +962,75 @@ fn arb_function(
         .boxed()
 }
 
-/// A planted variable in one of four forms: itself (`form` 0), a list's element (1), a function's
-/// parameter (2), which reaches the variable from above, or a record's field (3).
+/// A planted variable in one of five forms: itself (`form` 0), a list's element (1), a function's
+/// parameter (2), which reaches the variable from above, an application's pin (3), which reaches it
+/// from both sides, or a record's field (4).
 fn planted(world: &World, variable: Handle, form: u8) -> Handle {
     match form {
         0 => variable,
         1 => world.types.list(variable),
         2 => function_of(world, variable),
+        3 => pinned_at(world, variable),
         _ => with_scratch(|scratch| world.types.record(scratch, &[(world.binders[0], variable)])),
     }
+}
+
+/// A declared signature over one head parameter, its one value slot holding the parameter bare, as
+/// a list's element or as a function's parameter; the parameter's name; and a signature type
+/// offered against it: the signature pinning the parameter at a ground, a module whose slot holds a
+/// ground where the parameter was — which fits where the ground lies under the parameter's bound —
+/// or an unrelated draw.
+pub fn arb_pinnable(world: World) -> BoxedStrategy<(KType, TypeSymbol, KType)> {
+    let grounds = world.grounds().len();
+    let drawn = arb_signature_type(world.clone(), 2);
+    (0..grounds, 0..3u8, 0..grounds, 0..3u8, drawn)
+        .prop_map(move |(bound, form, ground, offer, drawn)| {
+            let (types, name) = (&world.types, world.type_names[0]);
+            let (bound, ground) = (world.grounds()[bound], world.grounds()[ground]);
+            let parameter = types.head_parameter(name, bound);
+            with_scratch(|scratch| {
+                let mut draft = SchemaDraft::new(scratch);
+                draft.origin = SigOrigin::Declared;
+                draft.insert_parameter(name, parameter);
+                let slot = planted(&world, parameter.raw(), form);
+                draft.insert_value_slot(world.values[0], world.declared(slot));
+                let signature = types.signature(scratch, draft);
+                let offered = match offer {
+                    0 => types.signature_apply(
+                        scratch,
+                        signature,
+                        &[(BinderSymbol::Type(name), ground)],
+                    ),
+                    1 => {
+                        let mut draft = SchemaDraft::new(scratch);
+                        let slot = planted(&world, ground.raw(), form);
+                        draft.insert_value_slot(world.values[0], world.declared(slot));
+                        types.signature(scratch, draft)
+                    }
+                    _ => drawn,
+                };
+                (signature, name, offered)
+            })
+        })
+        .boxed()
+}
+
+/// `SIG FOR ALL #{Name: Any} (v :Name) WITH {Name = pin}`, over the first names of the alphabets.
+fn pinned_at(world: &World, pin: Handle) -> Handle {
+    with_scratch(|scratch| {
+        let name = world.type_names[0];
+        let parameter = world.types.head_parameter(name, KType::ANY);
+        let mut draft = SchemaDraft::new(scratch);
+        draft.origin = SigOrigin::Declared;
+        draft.insert_parameter(name, parameter);
+        draft.insert_value_slot(world.values[0], parameter);
+        let signature = world.types.signature(scratch, draft);
+        world.types.signature_apply::<Handle>(
+            scratch,
+            signature,
+            &[(BinderSymbol::Type(name), pin)],
+        )
+    })
 }
 
 /// `FN :{x :parameter} -> Null`.
@@ -967,36 +1045,85 @@ fn function_of(world: &World, parameter: Handle) -> Handle {
 /// A signature type: a signature, an application of one pinning some of its head parameters at
 /// ground types, or the meet of two applications.
 pub fn arb_signature_type(world: World, depth: u32) -> BoxedStrategy<KType> {
+    let pin = arb_pin(
+        world.clone(),
+        Rc::new(Vec::new()),
+        Rc::new(Vec::new()),
+        Vocabulary::CONCRETE,
+    );
+    arb_signature_type_in(world.clone(), depth, pin)
+        .prop_map(move |raw| world.concrete(raw))
+        .boxed()
+}
+
+/// [`arb_signature_type`], each pin drawn by `pin`.
+fn arb_signature_type_in(
+    world: World,
+    depth: u32,
+    pin: BoxedStrategy<Handle>,
+) -> BoxedStrategy<Handle> {
     let meet_world = world.clone();
+    let application = arb_application(world.clone(), depth, pin);
     prop_oneof![
-        2 => arb_signature(world.clone(), depth),
-        2 => arb_application(world.clone(), depth),
-        1 => (arb_application(world.clone(), depth), arb_application(world, depth)).prop_map(
+        2 => arb_signature(world, depth).prop_map(KType::raw),
+        2 => application.clone(),
+        1 => (application.clone(), application).prop_map(
             move |(a, b)| with_scratch(|scratch| meet_world.types.signature_meet(scratch, &[a, b]))
         ),
     ]
     .boxed()
 }
 
-/// A drawn signature with each of its head parameters pinned at a ground type or left open — the
-/// signature itself where it pins none.
-fn arb_application(world: World, depth: u32) -> BoxedStrategy<KType> {
+/// What an application pins a head parameter at: a ground type, or under `vocabulary` with
+/// variables also a variable — a lexical one, a path's, or one in scope — or a list of one, which
+/// the order compares by handle as it does any pin.
+fn arb_pin(
+    world: World,
+    bound: Rc<Vec<Handle>>,
+    members: Rc<Vec<Handle>>,
+    vocabulary: Vocabulary,
+) -> BoxedStrategy<Handle> {
     let grounds = world.grounds();
-    let picks = prop::collection::vec(prop::option::of(0..grounds.len()), 2);
+    let ground = (0..grounds.len()).prop_map(move |pick| grounds[pick].raw());
+    if !vocabulary.variables {
+        return ground.boxed();
+    }
+    let mut rigid: Vec<Handle> = bound.as_ref().clone();
+    rigid.extend(members.iter().copied());
+    let lexical = arb_lexical(world.clone()).prop_map(|variable| variable.raw());
+    let path = arb_path_variable(world.clone()).prop_map(|variable| variable.raw());
+    let variable = if rigid.is_empty() {
+        prop_oneof![2 => lexical, 1 => path].boxed()
+    } else {
+        let in_scope = (0..rigid.len()).prop_map(move |index| rigid[index]);
+        prop_oneof![2 => lexical, 1 => path, 2 => in_scope].boxed()
+    };
+    let listed = variable
+        .clone()
+        .prop_map(move |variable| world.types.list(variable));
+    prop_oneof![2 => ground, 2 => variable, 1 => listed].boxed()
+}
+
+/// A drawn signature with each of its head parameters pinned at what `pin` draws or left open —
+/// the signature itself where it pins none.
+fn arb_application(world: World, depth: u32, pin: BoxedStrategy<Handle>) -> BoxedStrategy<Handle> {
+    let picks = prop::collection::vec(prop::option::of(pin), 2);
     (arb_signature(world.clone(), depth), picks)
         .prop_map(move |(signature, picks)| {
             let TypeNode::Signature { schema, .. } = world.types.node(signature) else {
                 unreachable!("a drawn signature is one");
             };
-            let pins: Vec<(BinderSymbol, KType)> = schema
+            let pins: Vec<(BinderSymbol, Handle)> = schema
                 .parameters
                 .iter()
                 .zip(picks)
-                .filter_map(|((name, _), pick)| {
-                    pick.map(|pick| (BinderSymbol::Type(*name), grounds[pick]))
-                })
+                .filter_map(|((name, _), pick)| pick.map(|pick| (BinderSymbol::Type(*name), pick)))
                 .collect();
-            with_scratch(|scratch| world.types.signature_apply(scratch, signature, &pins))
+            with_scratch(|scratch| {
+                world
+                    .types
+                    .signature_apply::<Handle>(scratch, signature, &pins)
+            })
         })
         .boxed()
 }
@@ -1106,14 +1233,101 @@ pub fn arb_signature(world: World, depth: u32) -> BoxedStrategy<KType> {
         .boxed()
 }
 
+/// Where a recursive member's reference to its successor sits in its relative representation.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Placement {
+    /// The sibling itself.
+    Bare,
+    /// The value slot of a declared signature: `#[(VAL a :<sibling>)]`.
+    InSignature,
+    /// The same slot of a declared signature over one head parameter `Elt`, which a second slot
+    /// reads, applied with `Elt` pinned at `Number`.
+    InApplication,
+    /// The bound of a declared signature's head parameter `Elt`, which its slot reads:
+    /// `SIG FOR ALL #{Elt: <sibling>} = #[(VAL a :Elt)]`. A walk reaches the sibling through the
+    /// variable's bound.
+    InBound,
+    /// A declared signature's slot at a function scheme whose one `FOR ALL` name is bounded by a
+    /// signature holding the sibling in its slot:
+    /// `#[(VAL a :(FN FOR ALL #{Elt: #[(VAL a :<sibling>)]} :{x :Elt} -> Number))]`. A rebuild
+    /// reaches the sibling through the scheme's group bound.
+    InSchemeBound,
+}
+
+/// Any [`Placement`].
+pub fn arb_placement() -> impl Strategy<Value = Placement> {
+    prop_oneof![
+        Just(Placement::Bare),
+        Just(Placement::InSignature),
+        Just(Placement::InApplication),
+        Just(Placement::InBound),
+        Just(Placement::InSchemeBound),
+    ]
+}
+
+/// `sibling` held at `placement` — the relative type a member names its successor by. A signature
+/// over a sibling is what a `SIG` a member names and that names the group back elaborates to.
+pub fn placed<'ty>(
+    types: &TypeChain<'ty, impl Habitat<'ty>>,
+    scratch: BumpAllocator<'_>,
+    world: &World,
+    sibling: KType,
+    placement: Placement,
+) -> KType {
+    let declared = |slot: Parametric, parameter: Option<(TypeSymbol, Parametric)>| {
+        let mut draft = SchemaDraft::new(scratch);
+        draft.origin = SigOrigin::Declared;
+        draft.insert_value_slot(world.values[0], slot);
+        if let Some((name, parameter)) = parameter {
+            draft.insert_parameter(name, parameter);
+            draft.insert_value_slot(world.values[1], parameter);
+        }
+        types.signature(scratch, draft)
+    };
+    match placement {
+        Placement::Bare => sibling,
+        Placement::InSignature => declared(sibling.into(), None),
+        Placement::InApplication => {
+            let name = world.type_names[0];
+            let parameter = types.head_parameter(name, KType::NUMBER);
+            let signature = declared(sibling.into(), Some((name, parameter)));
+            types.signature_apply(
+                scratch,
+                signature,
+                &[(BinderSymbol::Type(name), KType::NUMBER)],
+            )
+        }
+        Placement::InBound => {
+            let name = world.type_names[0];
+            let parameter = types.head_parameter(name, sibling);
+            declared(parameter, Some((name, parameter)))
+        }
+        Placement::InSchemeBound => {
+            let bound = declared(sibling.into(), None);
+            let elt = types.quantified(0, bound);
+            let scheme = types.function_scheme(
+                scratch,
+                &[world.type_names[0]],
+                &[bound],
+                &[(world.binders[0], elt)],
+                KType::NUMBER.into(),
+            );
+            let mut draft = SchemaDraft::new(scratch);
+            draft.origin = SigOrigin::Declared;
+            draft.insert_value_slot(world.values[0], scheme.handle);
+            types.signature(scratch, draft)
+        }
+    }
+}
+
 /// One member of a freshly sealed recursive group, whose relative schemas may hold unions over
-/// sibling references — the shape the seal's canonicalization claim is about. The window is hosted
-/// in the value's own scratch region, which it does not outlive.
-fn arb_sealed_member(world: World, depth: u32) -> BoxedStrategy<KType> {
+/// sibling references, bare or inside a signature — the shapes the seal's canonicalization claim is
+/// about. The window is hosted in the value's own scratch region, which it does not outlive.
+pub fn arb_sealed_member(world: World, depth: u32) -> BoxedStrategy<KType> {
     let repr = arb_concrete(world.clone(), depth.saturating_sub(1));
     (
         1..4usize,
-        prop::collection::vec((repr, any::<bool>()), 1..4),
+        prop::collection::vec((repr, prop::option::of(arb_placement())), 1..4),
     )
         .prop_map(move |(count, reprs)| {
             let count = count.min(reprs.len()).max(1);
@@ -1123,16 +1337,18 @@ fn arb_sealed_member(world: World, depth: u32) -> BoxedStrategy<KType> {
             with_scratch(|scratch| {
                 let window = RecursiveGroupWindow::new(scratch, &announced);
                 for index in 0..names.len() {
-                    let (repr, recursive) = reprs[index];
-                    let body = if recursive {
-                        let sibling = window.sibling(
-                            names[(index + 1) % names.len()],
-                            KKind::NewType,
-                            &world.types,
-                        );
-                        world.types.union_of(scratch, &[repr, sibling])
-                    } else {
-                        repr
+                    let (repr, placement) = reprs[index];
+                    let body = match placement {
+                        Some(placement) => {
+                            let sibling = window.sibling(
+                                names[(index + 1) % names.len()],
+                                KKind::NewType,
+                                &world.types,
+                            );
+                            let held = placed(&world.types, scratch, &world, sibling, placement);
+                            world.types.union_of(scratch, &[repr, held])
+                        }
+                        None => repr,
                     };
                     window.fill_member(index, RelativeSchema::NewType(body), &world.types, scratch);
                 }
@@ -1948,7 +2164,8 @@ pub fn arb_fits_chain(
 /// nothing, so a bounded parameter fits no ground.
 pub fn arb_bounded_head_chain(world: World) -> BoxedStrategy<(KType, KType, KType)> {
     let grounds = world.grounds().len();
-    (0..grounds, 0..grounds, 0..3u8, 0..4u8)
+    let forms = prop::sample::select(&[0u8, 1, 2, 4][..]);
+    (0..grounds, 0..grounds, 0..3u8, forms)
         .prop_map(move |(bound, target, last, form)| {
             let types = &world.types;
             let (name, slot) = (world.type_names[0], world.values[0]);

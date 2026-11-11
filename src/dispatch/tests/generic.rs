@@ -43,6 +43,7 @@ fn statement(program: &Program<'_>, shape: &BodyShape<'_>, index: usize) -> Stri
         (program.facts())
             .use_statics(
                 &program.tiers().resting(),
+                &crate::memory::Bump::new(),
                 shape,
                 shape.site_of_node(&shape.body()[index]),
             )
@@ -273,7 +274,12 @@ fn a_candidate_over_a_variable_outside_code_is_unknown_in_it() {
                 rendered(
                     program
                         .facts()
-                        .use_statics(&program.tiers().resting(), code, code.site_of_node(greet))
+                        .use_statics(
+                            &program.tiers().resting(),
+                            &crate::memory::Bump::new(),
+                            code,
+                            code.site_of_node(greet)
+                        )
                         .narrowing
                 ),
                 "full",
@@ -396,7 +402,8 @@ fn a_kept_list_s_points_are_types_its_records_name() {
     loaded(source, |program| {
         let (facts, types) = (program.facts(), program.tiers().resting());
         let body = expressed(program, program.shape(), "USE");
-        let statics = facts.use_statics(&types, body, body.site_of_node(&body.body()[0]));
+        let closing = crate::memory::Bump::new();
+        let statics = facts.use_statics(&types, &closing, body, body.site_of_node(&body.body()[0]));
         let Narrowing::Kept(kept) = statics.narrowing else {
             panic!(
                 "the use keeps its candidates, not {}",
@@ -440,8 +447,8 @@ fn several_always_candidates_one_rigid_are_ranked_at_the_call() {
     assert_eq!(last_in(source, "OUTER"), "kept always always");
     assert_eq!(
         run(&format!("{source}\nPRINT (OUTER 1)")),
-        "error: <test>:4:3: ambiguous call of `INNER _`: 2 overloads admit (Number) and none \
-         ranks first\n  in :(FN FOR ALL #{Elt: Number} :{x :Elt} -> :(Elt | Str)) (OUTER 1) at <test>:6:7"
+        "load: <test>:4:3: ambiguous call of `INNER _`: 2 overloads admit (Number) and none \
+         ranks first\n  in (OUTER 1) at <test>:6:7"
     );
 }
 
@@ -510,11 +517,11 @@ fn two_arguments_at_one_parameter_bind_the_join_of_their_types() {
                 )\n";
     assert_eq!(
         run(&format!("{flat}PRINT (FLAT [[\"a\"], [1]])")),
-        ":(Str | Number)\n[]"
+        ":(Number | Str)\n[]"
     );
     assert_eq!(
         top(&format!("{flat}LET r = (FLAT [[\"a\"], [1]])"), "r"),
-        ":(LIST OF :(Str | Number))"
+        ":(LIST OF :(Number | Str))"
     );
 }
 
@@ -574,6 +581,11 @@ fn a_union_whose_members_tie_refuses_its_declaration() {
     let function =
         run("MODULE m = (LET f = (FN FOR ALL #[Elt Key] :{u :(Elt | Key)} -> Any = #(u)))");
     assert!(function.contains("tie in one union"), "{function}");
+    // A pin is solved from both sides, so a union inside one ties under a parameter list too.
+    let pinned = run("SIG Sig FOR ALL #[Pv] = #[(VAL v :Pv)]\n\
+         EXPR FOR ALL #[Elt Key] #(FF f :(FN :{x :(Sig WITH {Pv = (Elt | Key)})} -> Null)) -> Any \
+         = #(Elt)");
+    assert!(pinned.contains("tie in one union"), "{pinned}");
 }
 
 #[test]

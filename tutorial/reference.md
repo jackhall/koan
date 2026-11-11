@@ -25,7 +25,7 @@ the link in each section to the relevant chapter.
 | `EXPR #(<head>) -> <Type> = #(<body>)`     | Define an expression shape — a keyword/slot run with an enforced return type, reached by dispatch. |
 | `EXPR FOR ALL #[<names>] #(<head>) -> <Type> = #(<body>)` | The same, quantified: each name is solved per call from the types the arguments carry. |
 | `LET <name> = FN EXPR #(<head>) -> <Type> = #(<body>)` | Both channels from one statement: the value name and the shape's bucket. |
-| `FN :{<fields>} -> <Type> = #(<body>)`     | A lambda: keyword-less, reached by name, called with a record of named arguments. |
+| `FN :{<fields>} -> <Type> = #(<body>)`     | A lambda: keyword-less, reached by name, called with a record value of named arguments. |
 | `FN FOR ALL #[<names>] :{<fields>} -> <Type> = #(<body>)` | The same, quantified: each name is solved per call from the types the arguments carry, and the body reads it as a type. Bound by a plain `LET` only in a module; anywhere but the head of a call it is used at the one type it is wanted at there (a `LET`'s stated type, a `:!`, a slot, a declared return), which must settle every name. |
 | `<keyword> <args>`                         | Call a function by writing its shape (e.g. `ECHO 21`). |
 | `<fn> {name = value, ...}`                 | Call a captured function by named arguments. |
@@ -44,7 +44,7 @@ the link in each section to the relevant chapter.
 | `NEWTYPE <Name> = :{<field> :<Type>, ...}` | Declare a record type (named fields).    |
 | `(<Type> {field = value, ...})`            | Construct a record value.                |
 | `<record>.<field>`                         | Read a field off any record value.       |
-| `#[<fields>] FROM <record>`                | Project a record's type to the named fields. |
+| `#[<fields>] FROM <record>`                | Project a record value's type to the named fields. |
 
 ## Control and errors — see [6](06-pattern-matching.md), [9](09-errors.md)
 
@@ -52,7 +52,7 @@ the link in each section to the relevant chapter.
 |---------------------------------------------------|-----------------------------------|
 | `MATCH <value> UNDER <Union> WITH #{<Tag>: (<body>), ...}` | Branch on a union's variants; every variant needs an arm unless a `_` arm defaults the rest, and `it` is the payload. |
 | `MATCH <value> WITH #{<Type or literal>: (<body>), ...}` | Branch on the value; each guard is a type or a scalar literal, the most specific admitting one runs, and `it` is the value at the guard's type. |
-| `TRY (<body>) WITH #{<Kind>: (<arm>), ...}`        | Run a block; an error of a kind an arm names (or `_`) runs that arm, `it` the error's record. A kind no arm takes passes on. |
+| `TRY (<body>) WITH #{<Kind>: (<arm>), ...}`        | Run a block; an error of a kind an arm names (or `_`) runs that arm, `it` the error's record value. A kind no arm takes passes on. |
 | `CATCH (<body>)`                                   | Run a block, producing `Result.Ok` of its value or `Result.Error` of its error. |
 | `Result.Ok <value>`, `Result.Error <value>`       | Built-in result union's variants, reached by projection. |
 
@@ -66,7 +66,7 @@ the link in each section to the relevant chapter.
 | `x` inside a quote | A hole: binds only to a builtin, a binder in the quote's own code, or a name `USING` supplies. |
 | `$x`, `$(<keyworded use>)` inside a quote | Resolve the name, or the one keyworded use, where the quote is written. |
 | `\x`, `\(<keyworded use>)` inside a quote | Resolve where the code is run, from what the code parameter's type offers. |
-| `<code> USING <record>` | Fill the holes the record's fields (or a module's members) name; the rest stay holes. A filled hole keeps its fill wherever the code goes. |
+| `<code> USING <record>` | Fill the holes the record value's fields (or a module's members) name; the rest stay holes. A filled hole keeps its fill wherever the code goes. |
 | `$..<name>` inside a quote | Splice the code elements of the list `<name>`, read where the quote is written: among statements each adds its statements, beside other parts each is one part. |
 | `..$<name>` in a list literal inside a quote | Spread the list's value when the code runs. |
 | `<code> <index>`, `<code> {from = <i>, to = <j>}` | Read a part of code, or the code of a run of its parts, as a list is read: `Result.Ok` of unbuilt code. |

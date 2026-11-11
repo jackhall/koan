@@ -200,7 +200,7 @@ supplies them in the order the head spells them, and the parameter names are for
 the body's use only.
 
 `FN` writes a **lambda**: no keywords, so nothing to dispatch on. It is reached by
-name, and its arguments are a record of named fields (`inc {x = 41}`).
+name, and its arguments are a record value of named fields (`inc {x = 41}`).
 
 Every `EXPR` head carries at least one keyword and no `FN` does, so the two never
 compete — a call either spells a shape or names a value.
@@ -257,7 +257,7 @@ error: <input>:3:1: this argument is :{a :Str}, which can never satisfy the para
 
 A function whose signature is just a record schema — `FN :{<fields>} -> Type`
 — has no keyword, so it registers no shape. The value `FN` returns is the only
-way to call it, always by named record:
+way to call it, always with a record value of named arguments:
 
 ```koan
 LET label = (FN :{text :Str} -> Str = #(text))

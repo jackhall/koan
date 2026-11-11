@@ -51,7 +51,7 @@ never the parse — as one of:
   otherwise built from its braces' values: its text with each rendered brace's
   value spliced in as `PRINT` renders it, a string [view](../values/README.md#views)
   over its pieces and those texts, or, where a brace keeps its value, the record
-  of the n + 1 strings around the kept values and those values;
+  value of the n + 1 strings around the kept values and those values;
 - a **block** a pairwise operator run hoisted an operand into, run on the
   cell's [evaluation stack](../program/README.md#the-evaluation-stack), whose
   value is its last statement's — which is how the
@@ -91,7 +91,8 @@ never the parse — as one of:
   ([matching](#matching)); its value is the arm's;
 - a **`TRY <body> WITH <arms>`**: the body run as a block; its value is the
   body's, or, where the body faults with a kind an arm takes, that arm's, run
-  as a block entered on the fault's `Error` record ([catching](#catching));
+  as a block entered on the fault's `Error` record value
+  ([catching](#catching));
 - a **`CATCH <body>`**: the body run as a block; its value is `Result.Ok` of
   the body's, or `Result.Error` of the `Error` its fault makes;
 - a **bucket declaration**, whose value is `null`;
@@ -178,17 +179,18 @@ the constants it names, so laying the table interns no type.
   `JOIN … BY` over a list and a `Str`, the separator spliced between them.
 - The overloads of the [builtin expression shapes](../parse/README.md#the-builtin-shape-table-one-typed-entry-every-fact)
   whose slots dispatch evaluates, typed as their entries type them: `ATTR` over a
-  record or a tagged value over one, reading through every tagged layer at the
-  representation its identity names to the field, which it hands back at the
-  type the record's type names it at; over a type, giving the type its record declares the field with, so
+  record value or a tagged value over one, reading through every tagged layer at
+  the representation its identity names to the field, which it hands back at the
+  type the record value's type names it at; over a type, giving the type its
+  record type declares the field with, so
   `Point.y` is `Str` and `v :Point.y` is a slot; over a union type labelled by a
   type name, giving the variant; and over a module, the member at its
   [layout](../knot/module/README.md#layout-order) index, a quantified member
   made into the instance the load solved at the read — a member the module
   lacks is a fault, and so is a quantified one read where the load recorded no
-  type to instantiate it at. `FROM` restamps a record
+  type to instantiate it at. `FROM` restamps a record value
   at the projection of its carried type onto the fields it names, each once,
-  sharing the record's runs; a name that type does not name is a fault,
+  sharing the record value's runs; a name that type does not name is a fault,
   as it is to `ATTR`. `USING` fills a code's holes through the
   [`USING` door](../knot/README.md#a-quote), and answers composed code whose
   filled holes are filled marks.
@@ -203,9 +205,9 @@ so what `ATTR` and `FROM` return already carries the type their rules give over
 the carried types, and the evaluator checks the carried type against the static
 one in debug builds. A native
 with no rule of its own takes its declared slots and a return at most its
-declared one. `FROM`'s rule is the [projection](#static-types) of its record's
-static type, and `ATTR`'s over a record the named field's type there. A
-property law pins every rule: over argument intervals within others, its return
+declared one. `FROM`'s rule is the [projection](#static-types) of its record
+value's static type, and `ATTR`'s over a record value the named field's type
+there. A property law pins every rule: over argument intervals within others, its return
 lies within theirs; handed no names, its return lies around its return over
 any; and over its declared slots, its
 return lies under its declared return. A return whose upper end is `Never` lies
@@ -213,7 +215,7 @@ within every interval, and a rule over an argument whose lower end lies outside
 its need returns `Never`. "Outside" is the judge's own lower-end test, the
 lattice's `lower_end_outside`, and the rule names what the argument lacks from
 the names it narrowed the need by: the first field, in the order written, a
-record lacks, or the member a module read names.
+record type lacks, or the member a module read names.
 
 **A shadowable builtin is derived, not listed.** A builtin whose operands are
 all `Any` — `==` and `PRINT` — admits every argument, so any user overload
@@ -282,14 +284,15 @@ slot to the parameter the registration names for it — or packs every slot into
 solved, by name, as a type value, which the frame binds rather than solving
 again. A builtin's native runs in the evaluation's own step. A call by name
 binds each parameter to the field of its argument record the parameter names,
-by name — `null` for a field a fill gave the record, which it does not store —
-whatever fields the record's type hides, and hands its record over as written, beside the contributions the load recorded
+by name — `null` for a field a fill gave the argument record, which it does
+not store — whatever fields the argument record's type hides, and hands its
+argument record over as written, beside the contributions the load recorded
 for it — one per parameter in symbol order, as a keyworded use records one per
 slot — and the [frame](../program/README.md#the-body-runner) admits each
 argument — at its contribution where it has one — against its parameter's
 declared type and solves the callee's group against them jointly, so naming the
 callee may admit what a keyworded call of the same function refuses. The call says which it is (`CallKind`), so only a keyworded call's
-record is trusted to carry type parameters. A function a view carries behind a
+argument record is trusted to carry type parameters. A function a view carries behind a
 [barrier](../knot/module/README.md#members-are-born-coerced) registers at the
 shape the barrier shows its caller and binds its slots under the names the
 function behind it registers; the [frame](../program/README.md#the-body-runner)
@@ -320,24 +323,23 @@ fixed:
   fill is not monotone in its members, so otherwise neither end maps through it:
   the upper end holds the plain union of its elements' upper ends, which the
   fill only narrows, and the lower end the plain union of their lower ends, each
-  one that may hold a record read as `Never`; a dict's keys are the union of its
-  keys' ends either way. A [template](../parse/README.md#templates) with no
-  kept brace is exactly `Str`, whatever its rendered braces are, and one with a
-  kept brace the record `{strings :(LIST OF Str), values :(LIST OF …)}`, its
+  one that may hold a record type read as `Never`; a dict's keys are the union
+  of its keys' ends either way. A [template](../parse/README.md#templates) with
+  no kept brace is exactly `Str`, whatever its rendered braces are, and one with
+  a kept brace the record type `{strings :(LIST OF Str), values :(LIST OF …)}`, its
   `values` list typed from the kept braces as a list literal's from its
   elements;
 - a name has its binder's static type: a parameter is exactly its declared type
   where the retype makes it so — a list or dict type, a record type with no
   field `Null` lies strictly under (one with such a field is at least itself
-  with that field at `Null`, since a record keeps its own `Null`s), a family or its
-  application, a newtype or a union's variant, a function type or an expression
-  shape, a code kind below `Code`, a kind, or a signature type pinning every head
-  parameter — since its frame
+  with that field at `Null`, since a record value keeps its own `Null`s), a
+  family or its application, a newtype or a union's variant, a function type
+  or an expression shape, a code kind below `Code`, a kind, or a signature
+  type pinning every head parameter — since its frame
   [retypes](../program/README.md#the-body-runner) the argument to it, and at
   most its declared type otherwise, a union keeping each variant's own type. A
-  signature type leaving a head parameter unpinned is at most itself: each run
-  pins the parameter at what its module fits, and two pins of one parameter are
-  unordered. A
+  signature type leaving a head parameter unpinned is exactly itself pinned at
+  the paths through the value, as below. A
   local has its right-hand side's, an annotated local, `LET n :T = v`, what
   the ascription `v :! T` would have — a member of a cyclic component included,
   since the tie births it at its annotation — a
@@ -364,7 +366,7 @@ fixed:
   [surfaced head](../scope/README.md#names-that-arrive-at-run-time) is a
   registration whose return is at most the head's whatever the solve, since the
   module's own definition answers the call — save a lone closed head of the
-  signature a header carries: every function the header offers there is
+  signature a header or a view carries: every function it offers there is
   retyped to it, and the call's frame retypes its value to the head's return
   under the selection's own solution, so the call is exactly that return where
   the retype makes it so and every interval is a point, and its verdict may be
@@ -372,9 +374,9 @@ fixed:
   `SIG Boxes = #[(EXPR FOR ALL #[Elt] #(BOX _ :Elt) -> :(LIST OF Elt))]`, in
   `USING (m :! Boxes) SCOPE (…)`, `BOX 1` is exactly `LIST OF Number` and
   `BOX "s"` exactly `LIST OF Str`, each use solving the head's `Elt` afresh.
-  Through a `:|` view the call is at most the head's return, though the run
-  retypes it there too
-  ([unplanned work](../../roadmap/types/README.md#unplanned-work)).
+  Where the header or view leaves a head parameter unpinned, the call is at
+  most the head's return, though the run retypes it there too
+  ([a surfaced head reads only the parameters its shape names](../../roadmap/types/surfaced-head-parameters.md)).
   A surfaced key is a spread over every function the module offers there, so
   its verdict is at most *maybe*, and *never* only where one body definition or
   one closed signature head is the whole of the key;
@@ -389,9 +391,17 @@ fixed:
   argument that may be either, `E` a `Number`; a lookup reads the value type,
   `E` the key type where the key's upper end lies under it and their union
   otherwise. It refuses the load where the argument's lower end lies outside
-  `Number | {}`, is a record naming neither bound or a bound outside `Number`,
-  or, for a dict, lies outside its key type or every scalar. A list, a dict or
-  a string satisfies no function type;
+  `Number | {}`, is a record type naming neither bound or a bound outside
+  `Number`, or, for a dict, lies outside its key type or every scalar. A list,
+  a dict or a string satisfies no function type. A head typed by a lexical
+  variable is read as the container its bound is, its element, key and value
+  the variable's [projections](../../lattice/src/types/vocabulary.md#the-node-vocabulary):
+  `(xs 0)` over `xs :Ll`, `Ll` bounded by `LIST OF Number`, is at most
+  `Result {Ok = (ELEMENT OF Ll), Error = Number}`, and an argument that
+  container refuses refuses the load, worded as over `LIST OF Number`. A head
+  typed by a signature's head parameter or a path is not read through its
+  bound, since its run-time type may be a carrier, which lies under `Any`
+  alone;
 - an application is the identity its construction builds when its head is a
   type the load knows, and its callee's return when the head is a function —
   exact by the same rule where the callee's static type is exact, a parameter
@@ -407,14 +417,21 @@ fixed:
   The load reads the union off the type the projection's owner part records;
   a construction through a name bound to the variant itself spells no union and
   is exactly what it builds;
-- `ATTR` over a record is the named field's type in the record's static type,
-  read at each end: exactly that type where both ends name the field at one type
+- `ATTR` over a record value is the named field's type in the record value's
+  static type, read at each end: exactly that type where both ends name the field at one type
   the retype makes exact, since the run reads the field's value at it, and at
-  most the upper end's otherwise — `Any` where the upper end names no such field.
+  most the upper end's otherwise — `Any` where the upper end names no such
+  field. A lexical variable's field is its projection there, at either end:
+  `x.f` over `x :Elt`, `Elt` bounded by `:{f :Number}`, is at most
+  `(FIELD f OF Elt)`, and exact under a binding whose retype makes the piece
+  exact. The rule asks no judgement over the variable, so where the bound rules
+  out a module member and a variant, the read's unit names `Elt` and a binding
+  reads it with the binding written in. Any other variable's field is read
+  through its declared bound.
   A field's value keeps its own variant of a union, so an `ATTR` over an exact
-  record is exact only where its field's type is. A lower end lacking the field
-  makes the candidate *never*, since every record the run can carry lacks it
-  too;
+  record value is exact only where its field's type is. A lower end lacking the
+  field makes the candidate *never*, since every record type the run can carry
+  lacks it too;
 - a `MODULE` or `GROUP` binder is exactly the signature the run ties where the
   load knows every member exactly — each value binder at a closed point or a
   closed scheme, each type binder and registration closed — and at most
@@ -423,7 +440,8 @@ fixed:
   load only where every run's view door faults: an operand that can never be a
   module (`ShapeError::NotAModule`, `Number is no module to ascribe` for
   `1 :| Any`), a closed type that is no one application of a signature
-  (`ShapeError::NotASignature`, for `m :| Any` or `m :| (A & B)`), and an exact
+  (`ShapeError::NotASignature`, for `m :| Any` or `m :| (A & B)`), a view of a
+  view showing a part its source hides (`ShapeError::ViewReveals`), and an exact
   operand whose signature can never fit the ascribed one, which the meet test
   cannot say, since signatures meet to a set and never to `Never`. It is
   exactly the view's signature over an operand whose [content tree](#paths) is
@@ -454,14 +472,14 @@ fixed:
 - a call in tail position is typed as any other call: its node never finishes,
   since the frame it tails into returns at the enclosing contract, so no
   carried type is read against it;
-- `FROM` over a written field list is the projection of its record's static
-  type, read at each end: the record of the listed fields at the upper end's
-  types, `Any` where it names none, above, and the same over the lower end's
-  below, so a call over an exact record is exactly its projection. A lower end
-  lacking a listed field makes the candidate *never*, so
+- `FROM` over a written field list is the projection of its record value's
+  static type, read at each end: the record type of the listed fields at the
+  upper end's types, `Any` where it names none, above, and the same over the
+  lower end's below, so a call over an exact record value is exactly its
+  projection. A lower end lacking a listed field makes the candidate *never*, so
   `EXPR #(GET r :{a :Number}) -> Any = #(#[b] FROM r)` refuses the load. Over a
   list the load cannot read, `FROM` is at most `:{}`, and the run restamps its
-  record at the projection of the record's carried type;
+  record value at the projection of the record value's carried type;
 - an `EVAL <code> -> <Type>` is its declared return as a registration's call
   is: exactly `<Type>` where the retype makes it so, since the run retypes its
   value to it, and at most `<Type>` otherwise. An operand whose static type is
@@ -475,8 +493,29 @@ fixed:
   `\` keys, so an unmarked keyworded use's hole holds nothing as the traced code
   runs, and the load types the code a second time that way: after
   `LET q = #(1 + 2)`, the code `EVAL q -> Number` runs is `Number`, while the
-  code's own record, which a `USING` may fill, keeps the hole as a candidate the
-  load cannot read and types `1 + 2` at most `Any`.
+  code's own unit records keep the hole, which a `USING` may fill, as a
+  candidate the load cannot read and type `1 + 2` at most `Any`.
+
+**Pinned at its paths.** Wherever the run
+retypes a value by its fit to a signature type leaving a head parameter
+unpinned, and a binder roots the value — a parameter, an annotated local, a
+local a `LET` binds whole to a `:!`, a call, an ascription or an `EVAL`, a
+module member read through a chain of module members, an arm's `it` under a
+type or label guard — the value is exactly that type with each such parameter
+pinned at the [path](#paths) through the binder, since the run pins the parameter at what the
+module fits, which is what the path binds. So over `h :Counter`, `h` is exactly
+`Counter WITH {Carrier = h.Carrier}`, `h.zero` is at most `h.Carrier` (exactly,
+where its own retype makes it so), and `ECHO h` under
+`EXPR FOR ALL #[Cr] #(ECHO elem :(Counter WITH {Carrier = Cr})) -> Cr` is
+`h.Carrier` too; over `LET m = (g :! Counter)`, `m.zero`, `ECHO m` and a
+written `:(m.Carrier)` are one type. A binder the binding binds is exactly the
+module it carries, so its paths pin nothing. A value retyped in place has no
+binder through which every walk reaches its path's class, so it stays at most
+the signature type, and `ECHO (g :! Counter)` over `g :Any` is refused at load.
+A read through a record's field stays at most its type too, since the run
+reads a path through module members alone, and so does a value whose path's
+class is out of reach, as `o.inner` over `LET o = (g :! Outer)`, whose class is
+a retyped module's member. A meet of applications stays at most itself.
 
 "At most" leaves the lower end at `Never`. A static type whose upper end is
 `Number`, `Str`, `Bool` or `Null` is exact, since no value carries a type
@@ -556,10 +595,11 @@ record. A solution may name a lexical
 variable: in the body of
 `EXPR FOR ALL #[Outer] #(WRAP a :Outer) -> :(FN :{x :Outer} -> Outer)`, `pick`
 as the last statement solves `Elt` to `Outer`, its static type exactly the
-instance over `Outer`. The record then keeps where the site reads each variable
-it names, as a contribution's does (below), and the run substitutes the type it
-binds there where the name is read or the literal is born, so `WRAP 1` returns
-a `FN :{x :Number} -> Number` and nothing is solved at run time. Each refusal
+instance over `Outer`. The unit or birth record then keeps where the site
+reads each variable it names, as a contribution's does (below), and the run
+substitutes the type it binds there where the name is read or the literal is
+born, so `WRAP 1` returns a `FN :{x :Number} -> Number` and nothing is solved
+at run time. Each refusal
 names the group's variables in group order:
 
 ```text
@@ -589,10 +629,10 @@ variable where a run
 [reproduces the solve](../../lattice/src/types/solving.md#the-unifier-collects-it-does-not-bind):
 in the body of `EXPR FOR ALL #[Outer] #(WRAP xs :(LIST OF Outer)) -> Any`,
 `APPLY pick TO xs` instantiates `pick` at `Elt = LIST OF Outer`, a solution
-naming a lexical variable as above, while under
-`#{Outer: :(LIST OF Number)}` with `xs :Outer` and `y :(LIST OF Elt)` the solve
-reads `Outer` through its bound, which a run binding it lower does not
-reproduce. A solving argument there that is itself an instance site, whose
+naming a lexical variable as above, and so does one under
+`#{Outer: :(LIST OF Number)}` with `xs :Outer` and `y :(LIST OF Elt)`, at
+`Elt = (ELEMENT OF Outer)`, the projection a run binding `Outer` reduces to
+that binding's element. A solving argument there that is itself an instance site, whose
 contribution is unknown, or whose solve a run may not reproduce, fixes nothing.
 Any other variable the slot shares with the other arguments must come out one
 point the call reproduces — a closed one, or one of a reproducible solve — and
@@ -669,7 +709,7 @@ reads it. The walk computes a
 contribution only at a position some candidate's slot solves, whether or not
 the load keeps that candidate, since a call runs what selection over the full
 list would and a candidate the load judged *never* from a contribution must stay
-*never* there. The record
+*never* there. The unit record
 keeps each use's contributions, which the call resolves and hands selection
 beside the carried types.
 
@@ -751,11 +791,11 @@ ambiguous call of `PICK _`: 2 overloads admit (Number) and none ranks first
 ```
 
 An instance argument is listed at its scheme, since no instance of it is made.
-The unit's record keeps the candidate selected with its points, or each
+The unit record keeps the candidate selected with its points, or each
 candidate kept beside its verdict and points with the list's elimination
 table, in one entry per use beside the use's contributions (above), which the
 call reads by its expression node's site (`Facts::use_statics`); a use the load narrowed
-nothing at and recorded no contributions for has no record, and the call
+nothing at and recorded no contributions for has no entry, and the call
 selects over its whole list from the carried types. An instance site's type is
 recorded too, closed or rigid over the run's variables, and the run reads it
 rather than instantiating.
@@ -801,8 +841,9 @@ this value is Str, which can never satisfy its ascription Number
 
 One whose operand's upper end [fits](../../lattice/src/types/relations.md#the-relations)
 its type is **settled**: every value the run carries there satisfies it, so the
-run retypes without checking. *Fits* is rigid-aware, so an operand typed by a lexical variable settles an
-ascription to that variable. The record keeps each settled ascription by site.
+run retypes without checking. *Fits* is rigid-aware, so an operand typed by a
+lexical variable settles an ascription to that variable. The unit record keeps
+each settled ascription by site.
 
 **Retypes.** Where the load closes a retype's declared type — at a `:!`, an
 annotated binder, a knot annotation, a member read over an exact module, each
@@ -810,8 +851,8 @@ closed parameter and the return of a callable — it records what the retype
 re-stamps a value at (`values::Retype`): the declared type itself, the value's
 own type, or, for a union's members or a module's fit, the declared type the
 re-stamp computes against, since that target turns on the type the value
-carries. The run re-stamps by the record; debug builds check it against the
-computed target.
+carries. The run re-stamps by what the load recorded; debug builds check it
+against the computed target.
 
 An annotated binder, `LET <name> <type> = <value>`, is held to its type the same
 way, refused `ShapeError::AnnotationNeverSatisfied` at its statement and settled
@@ -828,10 +869,10 @@ callee's parameters, one slot each in symbol order, every slot in one class,
 returning the callee's return, judged through the lattice's `judge_by_class`
 over the argument's static type laid onto the slots. The lay-out reads the
 argument at both ends: each slot takes the field of its name from the lower
-end, or `Never` where that end is no record, and from the upper end, or `Any`.
-Records are width-superset, so a lower end that is a record lacking a parameter,
-or an upper end that is a record naming a field no parameter declares, can never
-name the parameters exactly, and refuses the load
+end, or `Never` where that end is no record type, and from the upper end, or
+`Any`. Record types are width-superset, so a lower end that is a record type
+lacking a parameter, or an upper end that is a record type naming a field no
+parameter declares, can never name the parameters exactly, and refuses the load
 (`ShapeError::CallNeverSatisfied`), as does a judgement of *never*:
 
 ```text
@@ -845,8 +886,8 @@ names only the callee: `… which can never satisfy the parameters of
 So under `LET which = FN EXPR #(WHICH x :(LIST OF Number)) -> Str`, `which {x = x}`
 over a parameter `x :(LIST OF Any)` refuses the load as `WHICH x` does, while
 under `LET f = FN :{x :Number, y :Str} -> Str`, `f (g {})` over a parameter
-`g :(FN :{} -> :{y :Str})` loads: a record under `g`'s return may name `x`. A
-field whose static type is `Never` never arrives, so the call is `Never`. A
+`g :(FN :{} -> :{y :Str})` loads: a record value under `g`'s return may name
+`x`. A field whose static type is `Never` never arrives, so the call is `Never`. A
 callee the load knows only at most, such as a parameter of function type, may
 bind a function admitting more or naming other parameters: its call is the
 call's to admit, at most its return.
@@ -854,7 +895,7 @@ call's to admit, at most its return.
 A quantified callee's group is solved as a keyworded use's is, each field
 contributing as an argument does, so `pair {x = a, y = b}` under
 `FN FOR ALL #[Elt] :{x :Elt, y :Elt} -> :(LIST OF Elt)` is exactly
-`LIST OF (Number | Str)` over the parameters above. The record keeps the
+`LIST OF (Number | Str)` over the parameters above. The unit record keeps the
 contributions by the argument's site for the frame, one per parameter in symbol
 order, whatever the static solve finds: a field whose static type the load
 cannot admit still contributes, and the frame solves from it as a keyworded
@@ -871,7 +912,7 @@ is. The call is exact at its return where its callee is unquantified, or where
 the solve is reproducible over exact contributions, as a keyworded one is. A
 call by name and
 its keyworded twin over one class therefore load, fault or return alike, and a
-call by name is blind to the order its record's fields are written in.
+call by name is blind to the order its argument record's fields are written in.
 
 **A component.** The members of a component of value binders are typed against
 one another's seeds, so no member's static type depends on the order they are
@@ -890,14 +931,39 @@ through its façade ([`reads`](walk/reads.rs)), which gathers what each unit
 reads ([the store](../build/README.md#the-store)): a lexical variable's home,
 a type binder the type half left unknown, and a module binder whose content
 tree a fact reads — through a view, a path rooted at it or an unfold over it —
-each beside a read of the frontier of every record the unit read, cut to its
-chain. A name a
+each beside a read of the frontier of every unit or closing record the unit
+read, cut to its chain. Every rule that reads a variable through its ends — a verdict, a
+*fits*, a solve, an end read, a piece read through a bound, two parametric
+types compared, a retype of the bare name — reads it through one of the
+walk's judgement doors, which marks the unknowns of what it judged open,
+beside the judgement's kind, the slot and the judged type, unless its answer
+holds at every binding within their ends — or, in a walk that witnesses a
+binding, notes the binding's answer where it is discrete
+([resumption](../build/README.md#resumption)); the elaborator marks through its
+type context. [`tests::boundary`](tests/boundary.rs) holds the walk and the
+elaborator to reaching no lattice judgement but through a door
+([`judge`](../elaborate/judge.rs)). A unit record, a closing record and a
+seed note **named** each variable the types they fix hold. A callable's entry
+seeds each binder in a gathering of its own, its **seed**, which a read of the
+binder gathers alone, so a reader of one parameter waits on that parameter's
+type only; the entry unit's frontier reads every seed. A run-bound type name's
+seed is open on its kind (`Kind`), a question a witness answers, since a
+binding seeds the name as a type value of its type's kind; any other
+run-bound binder's seed, and a code capture's read, are open by `TypeValue`,
+which holds, since a binding makes the name's value exact. A name a
 `USING … SCOPE` surfaces waits on what its module's static type waits on. A
 resumption runs the same rules under a binding: a bound type name seeds as a
 closed type binder does, a bound `FOR ALL` name closes the body's type, and a
 bound module binder is exactly the type it carries, its tree the bound one.
-A unit its binding does not wake is absorbed as its base holds it, what its
-facts gave the body's class included, and every other re-runs once, refusing where a load with the binding declared would. A
+A unit its binding does not wake, open over none of its names, is absorbed as
+its base holds it, what its facts gave the body's class included, its unit
+record read closed where it names a bound name, and every other re-runs once,
+refusing where a load with the binding declared would. The walk closes what
+it absorbs by substitution and lays each type it closed whole in its layer's
+closed types at its end.
+A body standing around a rooted walk's root is neither: the façade reads each
+of its facts off the unit record holding it, which it tags at its first read
+([resumption](../build/README.md#resumption)). A
 rule holds no writer and never asks which store it runs over:
 [`tests::boundary`](tests/boundary.rs) holds every file of the walk but the
 façade to reaching no store door.
@@ -931,11 +997,27 @@ its root names, walked through its member chain:
   application pins the label, or where the member is a type a body binds
   closed. The path is that type — under a pin, the pin, which *fits* solves the
   label to at every run;
-- otherwise a **class**: the variable of the first path resolved over a tree
-  [`same_as`](../scope/README.md#load-time-types) its own, at the same label,
-  through the same declared application. Paths of one class are one type, so a
-  call solving one variable from two of them is *always*; paths of two classes
-  are *maybe*; carriers over two different closed trees are *never*.
+- the **pin** of the root's static type, where that type is exactly an
+  application pinning the label (through the member chain) at a closed type or
+  a path variable: that type, or that variable's class, since every run binds
+  the root to that very application. So a path written over `LET m = (g :! Counter)` is the class `m`
+  is [pinned at](#static-types), one type with `m.zero`;
+- otherwise a **class**: the paths read at the same label, through the same
+  declared application, off trees
+  [`same_as`](../scope/README.md#load-time-types) its own. A class's variable
+  is a lattice variable of its own kind, named by a digest of that content, so
+  every walk names a class alike whatever it resolved before; a path whose tree
+  holds a leaf no binder names is alone in its class. Paths of one class are
+  one type, so a call solving one variable from two of them is *always*; paths
+  of two classes are *maybe*; carriers over two different closed trees are
+  *never*.
+
+A path entry is named along its chain by its spelling or its content: a path
+a type spells by the level the shape numbers it at, and one the walk mints —
+to pin a module's type, or to root a class's variable — by a digest of its
+root, member chain, label and application. So a chain's path table opens
+empty, and a rooted walk reads a path of a standing body off the unit record
+holding it.
 
 Every fact the type half fixes reads a path through its resolution, a type
 binder over a path among them: closed where the resolution is closed. A path in
@@ -976,41 +1058,61 @@ member — a `:!`, an annotated binder, an unfolded call's parameter or return, 
 member read — the tree is a **retype** of the member's tree at the type the
 run stamps, digested as the run digests a header; where the load cannot say
 what the run stamps, the retype keys the source at the declared type. Each `:|`
-site at a closed signature records its view's tree in its unit's record, keyed
-on its source's bare member and what the fit solves, which
-`LoadFacts::view_tree` reads back.
+site at a closed signature records its view's tree in its unit record, keyed
+on its underlying's tree and `from*`, what the fit solves over the
+underlying, which `LoadFacts::view_tree` reads back; a view of a view the
+load sees whose source it shows a part of is refused at load.
 
 **Where the run reads a path.** No value carries a path variable, and the run
 resolves none: every path a frame reads is decided closed in some layer of its
 facts — the load, a settlement or the frame's
 [activation](../build/README.md#activations) — once its root's binding is
 known, through the same `elaborate::path_binding` the load reads, and the run
-reads the closed type off the record, as it reads every type a type expression
-denotes. A law holds the run's read door never to yield a rigid fact. The walk
-adds no capture for a path: a use
-records a path variable at a path of its class whose root the reading shape
-reaches through its blocks and builder captures, and a static type read across a
-callable or module boundary reads each path variable no reachable path stands
-for through its bounds, its upper end from above and its lower end from below.
+reads the closed type off the unit record, as it reads every type a type
+expression denotes. A law holds the run's read door never to yield a rigid
+fact: every fact a frame reads is closed in a layer the cell reads, decided
+there by its walk or, for a rigid unit record the layer absorbs, read through
+the layer's closed types ([resumption](../build/README.md#resumption)). The walk
+adds no capture for a path. A class is **reachable** from a shape by its
+content alone, whatever order the walk resolved its paths in: where a binder
+the shape reaches through its blocks and builder captures holds a module of
+the class's tree — the leaf binder the tree reads through, a module binder
+whose content tree it is, or a member of a module body one holds, however
+deep the bodies nest, as the body's unit records hold its members' trees. The
+binders read are the shape's own text's, out to the first callable or module
+around it, then what that one captures, so what a callable reaches is fixed by
+its text. Each is found by the class's identity, never by a scan of a body's
+slots: a module binder's unit record lists the identity of each module it
+holds, its own and its members', and a running level's binders are indexed by them
+in the walk, a standing level's in the layers (`Held::Holder`), read at or
+before the unit birthing the next level, and the search stops at the first
+holder that witnesses the class. The walk keeps each shape's answer for a
+class until it fixes another module binder's content tree, even one that holds
+no module.
+A use records a path variable at a path through such a binder, minted where
+the walk holds none, and a static type read across a callable or module
+boundary reads each path variable whose class is not reachable through its
+bounds, its upper end from above and its lower end from below.
 
-**Pins are read, not stored.** A member read through a name chain pins the
-operand's unpinned head parameters to their paths only while it reads the
-member (`elaborate::applied_member`). No static type holds an application
-pinning a parameter to a path: the lattice reads a pin through its bounds
-covariantly where the order compares pins invariantly, so such a type read
-through its bounds would be no upper end
-([a pin over a variable](../../roadmap/types/pins-over-variables.md)).
+**Pins are stored.** A value the run retypes by its fit is typed at its
+application [pinned at its paths](#static-types), and a member read over an
+operand still at most an unpinned application, a name chain or one written in
+place, pins it the same way while it reads the member (`elaborate::applied_member`), so the
+two read one class. The lattice reads a pin over a variable through its bounds
+by [a rule of its own](../../lattice/src/types/solving.md#substitute-then-ask),
+so such a type read through its bounds is still an upper end.
 
 **Closed views at load.** At a `:|` site over a closed tree the walk calls the
 view door's type half,
-[`opaque_view_types`](../knot/module/README.md#the-view-door), into the root's
-registry: each carrier and the view's signature and, where the load knows what
-the operand carries, what *fits* solves, each member's declared type under
-either side and the types of each nested module's re-view, at any depth
-([`views`](walk/views.rs)). What a module carries is read off its tree: a
-`MODULE` body's exact signature, which the walk keeps by body; a closed
+[`exposure`](../knot/module/README.md#the-view-door), into the root's
+registry: each carrier and the view's signature, `from*` over the underlying,
+each member's declared type under either side and the types of each nested
+module's view, at any depth ([`views`](walk/views.rs)). A view's members are
+its underlying's, so what a module carries is read off the underlying's tree:
+a `MODULE` body's exact signature, which the walk keeps by body; a closed
 retype's, the type the load computed for it, each member read through it at the
-type it declares; and a member an opaque view rebuilt, as the coercion
+type it declares; a module a frame binds, by the signature its frame recorded
+beside its digest; and a member an opaque view rebuilt, as the coercion
 walk rebuilds it, a list's or dict's cells of several signatures one by one.
 The walk keeps what each read yields — a view over a closed tree by its print, a
 value a view rebuilt by what it was rebuilt from — and a view over an open tree
@@ -1020,23 +1122,22 @@ fits its source once: the walk keeps what each fit solves by the view's
 application and its source's print, beside the type the source carries, and
 builds each view's tree over its own source, so two sources of one content
 share a fit but not a tree. The one fit that keys the tree also gives what a
-closed view binds. Over an opaque view whose
-source the load does not type exactly, a member is read at the type the view declares for it. Where no tree
-shows a member — one written in a container literal, bound to a parameter or
-returned by a call the load does not unfold — its exact type stands for it, and
-a view of that type is read as its signature declares its members
+closed view binds. Where no tree shows a member — one written in a container
+literal, bound to a parameter or returned by a call the load does not unfold —
+its exact type stands for it
 ([the content tree's horizon](../../design/modules.md#the-load-and-the-run)).
 A member declared at an application fixing each parameter of its signature is
 read as if it carried that application, its own members at their declared
-types under the pins, so its re-view is laid at any depth. Two re-views stay
-the run's: one from an application that leaves a parameter open, and one from
-an application pinning a parameter above what the member's values realize,
-through a slot that leaves that parameter open, where *fits* solves the run's
-re-view off the values. An exact `:!` of a module lays each declared type a
-member read through it reads (`lay_carried`). The run's view door then interns
-none of them, and asserts in debug builds that the closed tree's digest is the
-view's; the walk asserts that what the tree shows the operand carries is its
-exact static type, where it has both.
+types under the pins. A type says neither whether a module is a view nor what
+its content is, but a nested slot whose application pins every parameter views
+any module alike: there the walk lays the nested view of a module it knows by
+its type alone (`pinned_view`). At a slot leaving a parameter unpinned, such a
+module is viewed at run, since its carrier is keyed on content the load does
+not see. An exact `:!` of a module lays each declared
+type a member read through it reads (`lay_carried`). The run's view door then
+interns none of the types of a view the load laid, and asserts in debug builds
+that the closed tree's digest is the view's; the walk asserts that what the
+tree shows the operand carries is its exact static type, where it has both.
 
 ### Body classes
 
@@ -1059,13 +1160,13 @@ A `:|` over a closed content tree mints nothing at run, since the load laid its
 types in the root.
 
 Each body gets a caching record, which [the folds](../build/README.md#the-folds)
-lay over the walk's records once it ends. It classes every minting site
-**closed**, **invariant** or **varying** by the leaves of its content tree — a
-nominal declared per call by the type binders its declaration reads — and
-the sites whose fact closes under the frame's binding are settled by its
-settlement's walk, which rests their types in the agent tier. A caching frame
-body's own record also lists the parameters its invariant sites read, its
-blocks' and module bodies' included, which key its
+lay over the walk's unit and closing records once it ends. It classes every
+minting site **closed**, **invariant** or **varying** by the leaves of its
+content tree — a nominal declared per call by the type binders its declaration
+reads — and the sites whose fact closes under the frame's binding are settled
+by its settlement's walk, which rests their types in the agent tier. A caching
+frame body's own caching record also lists the parameters its invariant sites
+read, its blocks' and module bodies' included, which key its
 [settlement](../build/README.md#keys-which-bindings-make-a-settlement)
 beside the names the units beneath it seamed at an entry wait on, a
 parameter's own type aside:
@@ -1141,8 +1242,8 @@ admits, the one they rank first is recorded as the arm the run takes; a lone
 closed, the ranking is laid as an elimination table, which holds up to
 `Table::MOST` arms; past it, the load and the run rank the guards themselves
 ([`first_ranked`](select.rs)). A guard over a `FOR ALL` name ranks at the run,
-since its relation to another guard need not hold under every binding. The record, [`Arms`](../scope/typed.rs), is keyed by the
-`MATCH`'s site.
+since its relation to another guard need not hold under every binding. The unit
+record's entry, [`Arms`](../scope/typed.rs), is keyed by the `MATCH`'s site.
 
 **A `MATCH`'s static type** spans its kept arms': the chosen arm's where the
 load chose one, and otherwise the plain union of their upper ends over the
@@ -1296,10 +1397,10 @@ past its catcher. A body that yields a value yields it: a `TRY` finishes with
 the value, and a `CATCH` with `Result.Ok` of it.
 
 **The value is the builtin union `Error`**, one variant per fault kind, each
-named as its [`FaultKind`](../scope/README.md#faults) is, over a record of the
-kind's fields beside two every variant has: `message`, the `Str` an uncaught
-fault prints after `error: `, and `frames`, the lines its trace prints —
-merged as they print, innermost first — each a record
+named as its [`FaultKind`](../scope/README.md#faults) is, over a record type of
+the kind's fields beside two every variant has: `message`, the `Str` an
+uncaught fault prints after `error: `, and `frames`, the lines its trace prints
+— merged as they print, innermost first — each a record value at
 `{callee :Str, call :Str, at :Str, count :Number}`: the callee as the line
 names it, `` `EVAL` `` for an `EVAL` frame, the call as written, its
 `path:line:col`, and the frames the line counts. A kind's own fields map one
@@ -1331,6 +1432,8 @@ refusal, such as a rejected key, is `Any`. Beside `message` and `frames`:
 | `Incomparable` | `left :Any`, `right :Any` |
 | `NotAModule` | `value :Any` |
 | `NotASignature` | `ascribed :Type` |
+| `ViewReveals` | `ascribed :Type`, `member :Str` |
+| `ViewUnread` | `ascribed :Type` |
 | `Coercion` | `name :Str` |
 | `QuantifiedMember` | `name :Str` |
 | `BarrierInstance` | `name :Str` |
@@ -1372,16 +1475,16 @@ the kept cell's chain, and at the innermost the fault's fields, a value by the
 deep copy a crossing makes and a type adopted from the cell's branch — and the
 drain releases the kept cell once the step ends, so once the `Error` is built
 every frame the fault kept is released. A `TRY` then runs its arm as a
-`MATCH` arm runs, `it` the variant's record, built in the `TRY`'s home and
+`MATCH` arm runs, `it` the variant's record value, built in the `TRY`'s home and
 kept nowhere else, the arm in tail position, owing the frame's contract, where
 the `TRY` is. A `CATCH` finishes with `Result.Error` of the
 `Error`.
 
 **At load** a `TRY`'s arms are typed as a `MATCH … UNDER Error`'s over a
 scrutinee anywhere under `Error` ([`walk/arms.rs`](walk/arms.rs)): a label's
-arm is *maybe* and `_`'s *always*, `it` under a label the variant's record and
-under `_` the union of the records no label names. A label naming no kind
-refuses the load, `NoVariant`, and no coverage is asked. A `TRY` declares no
+arm is *maybe* and `_`'s *always*, `it` under a label the variant's record type
+and under `_` the union of the record types no label names. A label naming no
+kind refuses the load, `NoVariant`, and no coverage is asked. A `TRY` declares no
 result: its static type spans its body's and its kept arms', as a `MATCH`'s
 spans its arms', and a reader who wants one checked ascribes it. A `CATCH` is
 `Result` applied at its body's static upper end and `Error`, over `Never`
@@ -1443,8 +1546,8 @@ list unequal to one holding it, a recursive list spreading lists from outside
 its group and fellow members, a spread cycle and a spread of no list refusing
 the group, and a recursive list's view crossing out of its frame;
 [templates](tests/templates.rs) — rendered and kept braces, a consumer selecting
-on the kept values' types, the load typing a template as `Str` or its record,
-a brace's names read where the template is, a quoted template filled by
+on the kept values' types, the load typing a template as `Str` or its record
+type, a brace's names read where the template is, a quoted template filled by
 `USING`, a template read and keyed as its string, and `JOIN` with and without
 `BY`; [selection](tests/selection.rs) — every ranking example, ambiguity within and
 across scopes at load and at run, the no-overload miss at load and at run, fall-through, builtin
@@ -1459,8 +1562,8 @@ own arguments, a `USING … SCOPE` block's surfaced heads typed through the
 ascription's pins, a wider signature *always* at a narrower one's slot and
 outranking it, a component's members typed alike whatever their order —
 an annotated fellow read at its annotation, a fellow's callable body reading
-the fellow's own type — and the law that reordering independent declarations
-changes no fact; [constructions](tests/constructions.rs) — a
+the fellow's own type — and the laws that reordering independent declarations,
+or independent statements of a callable's body, changes no fact; [constructions](tests/constructions.rs) — a
 construction's static type: a newtype's, a family's applied at its payload, and
 a union variant's between what it builds and the union its head's path reaches,
 a tag projection through a variant's payload, an annotation at the union
@@ -1501,16 +1604,16 @@ container or nominal parameter's exact type, a union's kept at most, a settled
 ascription, a refused one, a generic use over an exact parameter selected, a
 candidate *never* over an argument's lower end, a call exact at its callee's
 return — by keyword, by name, in tail position — and one the load cannot solve
-exactly, and `FROM`'s projection over an exact record;
+exactly, and `FROM`'s projection over an exact record value;
 [annotation](tests/annotation.rs) — an annotated binder retyped to its type,
 refused, settled at load and missed at run, a function recursing through its
 annotated name, and a `USING` over an annotated binder;
 [instances](tests/instances.rs) — each instance site and its refusals: a
 quantified binding outside a module, an annotation, an ascription, a declared
 return, a container's element type, a keyworded slot solved from the other
-arguments first, candidates disagreeing, a call by name's record, an instance
-argument or field sharing its class with a contribution made at it, a call by
-name whose other fields never fit refused, a closed
+arguments first, candidates disagreeing, a call by name's argument record, an
+instance argument or field sharing its class with a contribution made at it, a
+call by name whose other fields never fit refused, a closed
 solution, a solution over a type each run binds — at each kind of site, through
 nested callables and a block, and its equality under one binding and two — a
 keyworded slot's variables an earlier class solves, ranked, in written order
@@ -1528,10 +1631,10 @@ slot refused at load, a contribution over a lexical variable read in its body,
 through nested callables and through a block, a closure capturing a type only
 where a call in it contributes it, which is on the
 [Miri slate](../../observe/miri_slate.md), and a call by name solved from its
-record's static type, exact at its return, refused at load, reading a rigid
-contribution, solving from a rigid field the load cannot admit, refused over
-its argument's lower end as its keyworded twin is, its argument read at both
-ends, `Never` where a field never arrives, and judged by a
+argument record's static type, exact at its return, refused at load, reading a
+rigid contribution, solving from a rigid field the load cannot admit, refused
+over its argument's lower end as its keyworded twin is, its argument read at
+both ends, `Never` where a field never arrives, and judged by a
 reproducible solve over a lexical variable — refused, exact at its return — as
 a keyworded call over one is: refused where it fails, selected where it admits,
 and a later slot reading an earlier lexical solution at its ends;
@@ -1543,7 +1646,7 @@ transparent: a drawn program the load accepts runs as it does loaded under the
 test-only `unnarrowed` switch, which leaves every use whole and refuses none,
 and a use the load refuses faults there; [spellings](tests/spellings.rs) — the
 laws that a call by name of a one-class registration runs as its keyworded call
-and is blind to its record's field order; [lexical](tests/lexical.rs) — the law that a
+and is blind to its argument record's field order; [lexical](tests/lexical.rs) — the law that a
 lexical variable reads the same through any context, a site naming one by a
 type run inside drawn functions, closures, hoisting blocks, modules and a
 quote's code and without them; [retypes](tests/retypes.rs) — the law that a
@@ -1606,17 +1709,23 @@ local registrations, calls by name, `MODULE` bodies, components and rigid
 instances — and a binding of any closed types and modules: a resumption is the
 restart with the binding declared, resumptions are confluent, quiescence is
 exact, a resumption is monotone and re-runs only the units it wakes, the rigid
-rule commutes with binding, a body sealed at the load is sealed in every
-restart, the three stores give equal facts, and no record changes a level the
-shape numbers. A fact typed `Never` never arrives, so the monotone and
+rule commutes with binding, over a body and over an encloser and a cell under
+it, a body sealed at the load is sealed in every restart, the three stores
+give equal facts, and no unit record changes a level
+the shape numbers. A fact typed `Never` never arrives, so the monotone and
 confluence laws read it as the bottom: it lies within every fact, a use or
 settled check in a statement typed `Never` is vacuous, and a refusal on the
 way to a binding agrees with the binding where it types `Never` the statement
 holding the refused site;
+[program size](tests/program_size.rs) — a miss and an activation rooted at
+one body over programs of size n and 4n, grown by plain binders, callables,
+type paths and an enclosing callable's paths before or after the callee,
+and a block at the top level reading a class through a view beside type paths
+before or after it, reading as many standing unit records;
 [surface](tests/surface.rs) — printing, `==`, `ATTR`, `FROM` and a field read
 through a newtype or a family seeing only what the carried type names, one node
-seen at two types, every container filling its records at each position, a
-hidden field never showing again, and `FROM` sharing its record's
+seen at two types, every container filling its record values at each position,
+a hidden field never showing again, and `FROM` sharing its record value's
 runs; [modules](tests/modules.rs) — each ascription operator, a retype at a
 signature and at a meet of two, a member read
 by name, through a chain and by a quoted label, a type member read through a
@@ -1649,16 +1758,20 @@ the run computes, a type through an inline call over a leaf refused, after an
 unknown too, a path through a name a quote leaves open left for its
 `EVAL`, each open
 path's tree read back, a quantified member read through a call instanced or
-refused, a functor body written on one line unfolding, and the law that a load
+refused, a functor body written on one line unfolding, a class reaching a
+callable through a binder it captures in any order and through a member
+chain of a module it captures, one or two bodies down, and the law that a load
 verdict on two paths through drawn modules, views and functor calls holds at
 every run;
 [views](tests/views.rs) — a view of a body over literals laying no type at run,
-and views laying every nested module's re-view at load: in a slot, a record
-field, a list (empty, or of modules of two signatures) or a dict, two deep,
-under a header or an opaque view or a chain of them, at a slot leaving a
-nested parameter unset, over a list or dict of modules of two signatures viewed
-twice, and inside a record literal past the tree's horizon; a lone `:!` laying
-its types; a view inside a record literal over a slot leaving a parameter open,
+and views laying every nested module's view at load: in a slot, an empty list,
+two deep, under a header or an opaque view or a chain of them, and at a slot
+leaving a nested parameter unset, and, where the slot pins every parameter, of
+a nested module the load knows by its type alone — in a record field, a list
+of modules of two signatures, a container under a header, a list or dict of
+modules of two signatures viewed twice, and inside a record literal past the
+tree's horizon; a lone `:!`
+laying its types; a view inside a record literal over a slot leaving a parameter open,
 running; a chain of views over a module the load types at most, re-viewing
 at run no more than its first view does; and the load reading each of a chain
 of open views once, and fitting a `:|` over a closed tree once;
@@ -1685,7 +1798,18 @@ time, a member of a received value reached through a call's result not entered
 whatever its length, and a loop handing a callee a module built over its link
 each hop, caching and flat, a `Number`-returning callee viewing it at an invariant site
 included, and a `Fresh` loop and a `Shares` loop each catching a fault over new content each hop,
-the region flat;
+the region flat, and what each tutorial program's call sites seek and binding
+events decide beside the layers the load laid;
+[laid](tests/laid.rs) — the load's layers: a keyworded call fixing a `FOR ALL`
+name, a functor over a written module, a view, a retype, a call by name and an
+open callee each finding the layer the load laid, and a callee born beneath a
+load layer finding the one laid beneath it; a call at a traced site reading
+its request and computing no key, beside an untraced site, a callee that is a
+call's result and run content at a traced slot computing from the values; a
+miss laying its own layer and a child at its first call; an evicted parent's
+replay seeking with its handed-back request; a load layer outliving every
+eviction, a replay of a chain on one starting there, and a traced layer's
+refusal refusing the load, naming the first call in text order;
 [tail](tests/tail.rs), a keyworded tail
 recursion holding its cells constant, which is on the
 [Miri slate](../../observe/miri_slate.md), a tail call reading its route, and
@@ -1698,10 +1822,10 @@ closes — the load, or a settlement over a `FOR ALL` name — and the arm a run
 takes, a value guard and a rigid guard among them, and arms past a table's
 bound ranked at load and at run;
 [kept](tests/kept.rs) — a frame handing back its parameter, a field of it and a
-binder bound bare to it unchanged, and a record a call returns built once in
-its caller's home; [loops](tests/loops.rs) — a tail loop's memory at 16, 64
+binder bound bare to it unchanged, and a record value a call returns built once
+in its caller's home; [loops](tests/loops.rs) — a tail loop's memory at 16, 64
 and 256 hops, each loop hopping under its frame's settlement and seeking one
-each hop: a chain walk and a record rebuilt whole each hop holding every
+each hop: a chain walk and a record value rebuilt whole each hop holding every
 region flat, a walk copying no part of its chain, a hop handing on its
 received arguments uncopied, no hop pledged, a cons loop copying a constant
 per hop, amortized, holding a constant times what it threads and delivering
@@ -1721,9 +1845,12 @@ the agent tier growing by nothing for run content, a loop calling a keyed
 callee on load content holding one settlement, and no type expression
 elaborated at the run; [memo](tests/memo.rs) — a decision memo hit by a fresh
 loop, an alternating statement, mutual tail and nested recursion, another
-settlement and captures, the heap flat, and the law that a memoized activation
-equals one decided from scratch; [compositions](tests/compositions.rs) — an
-`EVAL` of composed code running as its written quote does, a second hitting
+settlement and captures, a block and a callee under a deepening encloser
+deciding once per answer, a seam binding a module, keys whose hashes collide,
+the heap flat, and the law that a memoized activation equals one decided from
+scratch over an encloser whose binding deepens;
+[compositions](tests/compositions.rs) — an `EVAL` of composed code running as
+its written quote does, a second hitting
 its composition, a loop composing code each hop holding O(1) compositions, an
 evicted composition rebuilt with its functions' identity kept, and by a
 `BUILD`, a derived type
@@ -1735,7 +1862,7 @@ and the composition its chain pins, born warm, a non-keying callable borrowing
 the settlement its handle names, and the stamp no part of a closure's content,
 one of them on the [Miri slate](../../observe/miri_slate.md);
 [bounds](tests/bounds.rs) — build memory no frame holds within the budget, and
-what frames hold linear in distinct arena nodes, not nesting depth; and
+what frames hold linear in distinct depot slots, not nesting depth; and
 [faults](tests/faults.rs) — a value of `Error` raising nothing, a part or a
 tie's eager part that faults stopping the parts after it, an uncaught fault's
 frames kept until its outcome drops (on the Miri slate), the values a fault
@@ -1759,12 +1886,15 @@ tutorial snippet is checked against its shown output by
 
 - [Invariance around a tail cycle](../../roadmap/one-build/cycle-invariance.md)
   — an argument built over invariant leaves classed invariant.
+- [Projection types](../../roadmap/types/projection-types.md) — a read out of
+  a lexical variable's value typed by its projection, and a head reading its
+  own parameters' types.
 - [The features project's unplanned work](../../roadmap/features/README.md#unplanned-work) — a
   warning for an overload never selected.
-- [A pin over a variable](../../roadmap/types/pins-over-variables.md)
-  — a static type pinning a parameter to a path, so a member read through a
-  signature leaving a head parameter unpinned is exact, and a quantified
-  callable's parameter at an application over its own group.
-- [The types project's unplanned work](../../roadmap/types/README.md#unplanned-work)
-  — the overlap check skipping a quantified registration, and a keyworded
-  member through a view at most its return at load.
+- [A value retyped in place, pinned at its paths](../../roadmap/types/pinned-in-place.md)
+  — a value retyped in place, a field read and a retyped binder's member,
+  each solving a pin over a callable's own variable at load.
+- [The overlap check over a parametric registration](../../roadmap/types/parametric-overlap.md)
+  — a quantified or rigid registration checked at load.
+- [A surfaced head reads only the parameters its shape names](../../roadmap/types/surfaced-head-parameters.md)
+  — a head over an unpinned parameter it never names, exact at load.

@@ -1,13 +1,13 @@
-//! What the build arena's books are keyed and bounded by, and how code above the scheduler names
-//! an arena node.
+//! What the build depot's books are keyed and bounded by, and how code above the scheduler names
+//! a depot slot.
 //!
-//! A [`SettlementKey`] finds a settlement under its parent. A [`BindingImage`] is the types a
+//! A [`LayerKey`] finds a settlement under its parent. A [`BindingImage`] is the types a
 //! seek's keyed arguments carry that the frozen load and the agent tier lack, with a copy of their
 //! nodes laid in the image's own bump from the asker's chain: what the drain relays into the agent tier
 //! when it builds a settlement, so a frame under it finds them after the asker is gone. A
-//! [`BuildBudget`] bounds the bytes of the arena nodes no run cell holds. An [`ArenaRef`] is how
-//! code above the scheduler holds an arena node without naming a slot: only `values` and
-//! `scheduler` open one. See [build/README.md](../build/README.md#references-between-frames-and-the-arena).
+//! [`BuildBudget`] bounds the bytes of the depot slots no run cell holds. A [`DepotRef`] is how
+//! code above the scheduler holds what a frame runs under without naming a slot: only `values` and
+//! `scheduler` open one. See [build/README.md](../build/README.md#references-between-frames-and-the-depot).
 
 use std::cell::Cell;
 use std::num::NonZeroUsize;
@@ -22,12 +22,12 @@ use super::{ContentDigest, Knotted, TypeTiers, Value};
 
 /// What a parent finds a settlement by: the callee's segment and the content digests at the
 /// names its key lists, hashed into one digest.
-#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct SettlementKey(pub ContentDigest);
+#[derive(Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Debug)]
+pub struct LayerKey(pub ContentDigest);
 
 /// The types a settlement's binding carries that the frozen load and the agent tier lacked when
 /// the asker read them, one entry per keyed name in the order its key digests them, beside a copy
-/// of their nodes ([build/README.md](../build/README.md#references-between-frames-and-the-arena)). A handle
+/// of their nodes ([build/README.md](../build/README.md#references-between-frames-and-the-depot)). A handle
 /// is a content digest, so the image outlives the values it was read from. A binding whose every
 /// type already rests is imaged by nothing, so a seek that hits allocates nothing.
 #[derive(Default)]
@@ -166,7 +166,7 @@ impl KeyedTypes {
     }
 }
 
-/// How many bytes the build arena's unheld arena nodes may hold: past it, a miss evicts the least
+/// How many bytes the build depot's unheld depot slots may hold: past it, a miss evicts the least
 /// recently used unheld leaves.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct BuildBudget {
@@ -181,45 +181,79 @@ impl Default for BuildBudget {
     }
 }
 
-/// The arena node a function was born under: a settlement, by its slot and the slot's generation
-/// then, or the root, the frozen load. Opaque above the scheduler, which alone opens one, so a step
-/// can hand the drain only an arena node the scheduler named to it. A handle whose slot has since
-/// been evicted names nothing.
+/// What a function was born under and a frame runs under: the root, the frozen load; a layer the
+/// load laid, by its ordinal in the load's table, never evicted and so generation-free; or a depot
+/// slot, by the slot and the slot's generation then. Opaque above the scheduler, which alone opens
+/// one, so a step can hand the drain only what the scheduler named to it. A handle whose slot has
+/// since been evicted names nothing.
 #[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
-pub struct ArenaRef(Option<(u32, u32)>);
+pub struct DepotRef(Placed);
 
-impl ArenaRef {
+/// What a [`DepotRef`] names: see its documentation.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+enum Placed {
+    Root,
+    Load(u32),
+    Slot { slot: u32, generation: u32 },
+}
+
+impl DepotRef {
     /// The root: the frozen load.
-    pub const ROOT: ArenaRef = ArenaRef(None);
+    pub const ROOT: DepotRef = DepotRef(Placed::Root);
 
-    /// The settlement at `slot` while the slot is at `generation`.
+    /// The settlement or composition at `slot` while the slot is at `generation`.
     pub(crate) fn of(slot: u32, generation: u32) -> Self {
-        ArenaRef(Some((slot, generation)))
+        DepotRef(Placed::Slot { slot, generation })
     }
 
-    /// The slot and generation this names, or `None` for the root.
+    /// The layer the load laid at `ordinal` in its table.
+    pub(crate) fn load(ordinal: u32) -> Self {
+        DepotRef(Placed::Load(ordinal))
+    }
+
+    /// The slot and generation this names, or `None` for the root and a load layer.
     pub(crate) fn opened(self) -> Option<(u32, u32)> {
-        self.0
+        match self.0 {
+            Placed::Slot { slot, generation } => Some((slot, generation)),
+            Placed::Root | Placed::Load(_) => None,
+        }
+    }
+
+    /// The ordinal of the load layer this names, if it names one.
+    pub(crate) fn load_ordinal(self) -> Option<u32> {
+        match self.0 {
+            Placed::Load(ordinal) => Some(ordinal),
+            Placed::Root | Placed::Slot { .. } => None,
+        }
+    }
+
+    /// What a chain of settlements under this rests on, where a replay of it starts: this where it
+    /// names a layer the load laid, else the root.
+    pub fn chain_base(self) -> DepotRef {
+        match self.0 {
+            Placed::Load(_) => self,
+            Placed::Root | Placed::Slot { .. } => DepotRef::ROOT,
+        }
     }
 }
 
-/// A tree cell a fault keeps, beside the arena node it borrows: opaque and brand-free, so a fault's
+/// A tree cell a fault keeps, beside the depot slot it borrows: opaque and brand-free, so a fault's
 /// link may name it from any region. Only the scheduler makes or opens one, as it does an
-/// [`ArenaRef`] ([scheduler/README.md](../scheduler/README.md#faults)).
+/// [`DepotRef`] ([scheduler/README.md](../scheduler/README.md#faults)).
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct KeptCell {
     cell: TreeHandle,
-    arena: ArenaRef,
+    depot: DepotRef,
 }
 
 impl KeptCell {
-    /// The kept tree cell `cell`, which borrows `arena`.
-    pub(crate) fn of(cell: TreeHandle, arena: ArenaRef) -> Self {
-        KeptCell { cell, arena }
+    /// The kept tree cell `cell`, which borrows `depot`.
+    pub(crate) fn of(cell: TreeHandle, depot: DepotRef) -> Self {
+        KeptCell { cell, depot }
     }
 
-    /// The kept tree cell and the arena node it borrows.
-    pub(crate) fn opened(self) -> (TreeHandle, ArenaRef) {
-        (self.cell, self.arena)
+    /// The kept tree cell and the depot slot it borrows.
+    pub(crate) fn opened(self) -> (TreeHandle, DepotRef) {
+        (self.cell, self.depot)
     }
 }

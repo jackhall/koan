@@ -4,9 +4,14 @@
 //! them has a type other than the one it has in the source. The member is therefore not carried
 //! but rebuilt at the view's types: data is re-tagged through the admission barrier, a container
 //! is rebuilt part by part from what its type shows — a record from the fields its slot declares,
-//! and no other — and laid at its slot's type, a nested module is re-viewed, and a function is
-//! wrapped in a [barrier node](super::Coerced) a call will later go through. Each type the walk
-//! reads is one the load lays at a view it sees all of ([`ViewTypes`](super::view::ViewTypes)).
+//! and no other — and laid at its slot's type, a nested module is viewed — outward an opaque view
+//! of its own, inward a transparent re-view — and a function is wrapped in a
+//! [barrier node](super::Coerced) a call will later go through. Each type the walk reads is one
+//! the load lays at a view it sees all of ([`Exposure`](super::view::Exposure)). A view is built
+//! over its underlying, so the source side is the underlying's own binding, and a carrier of the
+//! view's source, held by a pin or written in a signature, is read on that side through what it
+//! hides ([`Hidden`]): a parameter so pinned is rebuilt along its pin, and a member at such a
+//! carrier is sealed under it.
 //!
 //! **The walk recurses on the declared type**, never on the two substituted types in lockstep. A
 //! union interns its members in a canonical order, so the source's substitution and the view's do
@@ -25,11 +30,11 @@ use crate::symbols::{BinderSymbol, TypeSymbol};
 use crate::scope::{CoercionRefused, IMPLICIT, ParameterBinding};
 use crate::type_lattice::{
     DeclaredType, DispatchTokenElement, KType, Members, Parametric, Record as TypeRecord,
-    SchemaDraft, TypeNode, satisfied_by, substitute_parameters,
+    SchemaDraft, TypeNode, satisfied_by, substitute_carriers, substitute_parameters,
 };
 use crate::values::{Chain, Dict, List, Record, SealRefused, Tagged, Value, satisfies};
 
-use super::{Coerced, ModuleContent, Operator, view};
+use super::{Coerced, view};
 
 /// One side of a coercion: what a signature's head parameters are bound to, interned as a
 /// signature declaring each binding a manifest member — the handle a barrier holds — beside
@@ -65,6 +70,44 @@ impl<'run> Substitution<'run> {
     }
 }
 
+/// The carriers a view's types show, each beside the type it hides over the module the view is
+/// built over, and whether that module's side is a coercion's `from` side — outward — or its `to`
+/// side, crossing a barrier inward. A type read on that side reads each carrier as what it hides.
+#[derive(Clone, Copy)]
+pub struct Hidden<'a> {
+    pub carriers: &'a [(KType, KType)],
+    pub on_from: bool,
+}
+
+impl<'a> Hidden<'a> {
+    /// No carrier read back.
+    pub const NONE: Hidden<'static> = Hidden {
+        carriers: &[],
+        on_from: true,
+    };
+
+    /// These carriers read on the other side: a crossing the other way.
+    pub fn flipped(self) -> Self {
+        Hidden {
+            on_from: !self.on_from,
+            ..self
+        }
+    }
+
+    /// The type `carrier` hides, where it is one of these.
+    pub fn of(&self, carrier: KType) -> Option<KType> {
+        crate::scope::hides(self.carriers, carrier)
+    }
+
+    /// These carriers laid in `writer`'s region.
+    pub(super) fn laid<'to>(self, writer: Writer<'to, '_>) -> Hidden<'to> {
+        Hidden {
+            carriers: crate::memory::collect(writer, self.carriers.iter().copied()),
+            on_from: self.on_from,
+        }
+    }
+}
+
 /// What a coercion reads: the region it writes into, the lattice, and the two substitutions a
 /// declared type is read under — the source module's bindings and the view's.
 pub struct Coercion<'a, 'tier, 'cell, 'x, 'reg> {
@@ -75,6 +118,11 @@ pub struct Coercion<'a, 'tier, 'cell, 'x, 'reg> {
     pub from: Substitution<'tier>,
     /// What the view binds them to: the carriers under `:|`, the source's own under `:!`.
     pub to: Substitution<'tier>,
+    /// Whether the walk crosses a barrier inward, where a nested module is re-viewed
+    /// transparently; outward it is viewed opaquely.
+    pub inward: bool,
+    /// The view's carriers, read back on the underlying's side.
+    pub hidden: Hidden<'a>,
 }
 
 /// Why a member type read under a module's or a view's bindings is concrete: it reads only its
@@ -82,30 +130,30 @@ pub struct Coercion<'a, 'tier, 'cell, 'x, 'reg> {
 const BOUND: &str = "a member type reads only head parameters, each bound";
 
 impl<'cell, 'x> Coercion<'_, '_, 'cell, 'x, '_> {
-    /// `declared` read under `bindings`.
-    fn read(
-        &self,
-        declared: DeclaredType<Parametric>,
-        bindings: Members<'_, TypeSymbol>,
-    ) -> DeclaredType<KType> {
-        self.types
-            .concrete_declared(substitute_parameters(
-                self.types,
-                self.scratch,
-                declared,
-                bindings,
-            ))
-            .expect(BOUND)
+    /// `declared` read under the `from` bindings where `from`, else the `to` ones: on the
+    /// underlying's side, each of the view's carriers as what it hides.
+    fn side(&self, declared: DeclaredType<Parametric>, from: bool) -> DeclaredType<Parametric> {
+        let (types, scratch) = (self.types, self.scratch);
+        let bindings = if from {
+            self.from.bindings
+        } else {
+            self.to.bindings
+        };
+        let read = substitute_parameters(types, scratch, declared, bindings);
+        if self.hidden.on_from != from || self.hidden.carriers.is_empty() {
+            return read;
+        }
+        substitute_carriers(types, scratch, read, &mut |carrier| self.hidden.of(carrier))
     }
 
     /// `declared` read under the source module's bindings.
     pub(super) fn source_side(&self, declared: DeclaredType<Parametric>) -> DeclaredType<KType> {
-        self.read(declared, self.from.bindings)
+        (self.types.concrete_declared(self.side(declared, true))).expect(BOUND)
     }
 
     /// `declared` read under the view's bindings.
     pub(super) fn view_side(&self, declared: DeclaredType<Parametric>) -> DeclaredType<KType> {
-        self.read(declared, self.to.bindings)
+        (self.types.concrete_declared(self.side(declared, false))).expect(BOUND)
     }
 }
 
@@ -117,11 +165,8 @@ pub fn coerce<'graph, 'cell>(
     value: KValue<'graph, 'cell>,
     declared: DeclaredType<Parametric>,
 ) -> Result<KValue<'graph, 'cell>, CoercionRefused> {
-    let (types, scratch) = (cx.types, cx.scratch);
-    let (src, dst) = (
-        substitute_parameters(types, scratch, declared, cx.from.bindings),
-        substitute_parameters(types, scratch, declared, cx.to.bindings),
-    );
+    let types = cx.types;
+    let (src, dst) = (cx.side(declared, true), cx.side(declared, false));
     // The two sides agree, so the member already has the type the view declares: the whole of
     // `:!`, and every slot of `:|` that names no unpinned parameter.
     if src == dst {
@@ -138,11 +183,14 @@ pub fn coerce<'graph, 'cell>(
     // Only a function slot is a scheme, so every other arm's two sides are types.
     let (src_type, dst_type) = (src.as_type(), dst.as_type());
     match node {
-        // A reference to a head parameter. Where the view side is a carrier the value takes it as
-        // its one tagged layer, the barrier checking it is one and the value fits the source side —
-        // a view, a view of a view, or a crossing inwards to a barrier stacked behind; where only
-        // the source side is, a value sealed under it gives up its payload at the view's type.
-        TypeNode::Parameter { .. } => {
+        // A reference to a head parameter. Where the view side is a carrier the value is sealed
+        // under it, the barrier checking it is one and the value fits the source side: the
+        // underlying's binding, which may itself be a value another view sealed, as
+        // `MODULE n = ((LET zero = c.zero))` binds one of `c`'s. Where only the source side is — a
+        // value crossing a barrier inward — a value sealed under it gives up its payload at the
+        // view's type.
+        // A carrier is declared inside a pin the walk descends into, or by a signature naming one.
+        TypeNode::Parameter { .. } | TypeNode::Carrier { .. } => {
             let (Some(src), Some(dst)) = (src_type, dst_type) else {
                 return Err(unsupported);
             };
@@ -150,6 +198,12 @@ pub fn coerce<'graph, 'cell>(
                 return Tagged::seal(cx.writer, value, dst, src, cx.types, cx.scratch)
                     .map(Value::Tagged)
                     .map_err(CoercionRefused::Seal);
+            }
+            // A parameter pinned at a type holding the view's carriers: rebuilt along the pin,
+            // read as written on the view's side and through its carriers on the underlying's.
+            if !cx.types.is_carrier(src) {
+                let pin = if cx.hidden.on_from { dst } else { src };
+                return coerce(cx, value, DeclaredType::Type(pin.into()));
             }
             let not_sealed = CoercionRefused::Seal(SealRefused::NotSealed { carrier: src });
             let Value::Tagged(sealed) = value else {
@@ -253,16 +307,20 @@ pub fn coerce<'graph, 'cell>(
                 declared,
                 cx.from.handle,
                 cx.to.handle,
+                cx.hidden,
                 cx.types,
             );
             Ok(Value::Knotted(Knotted::of(knot, 0)))
         }
-        // A nested module is re-viewed, and nothing is minted at the boundary: the application's
-        // pins name the enclosing signature's parameters, which the enclosing substitutions read.
-        // The nested signature's own unpinned parameters keep what *fits* solves them to either
-        // side. An application naming none of the enclosing parameters never reaches here — its
-        // two sides agree and the comparison above carried the module already.
-        TypeNode::SignatureApply { .. } => {
+        // A nested module. Outward it is an opaque view of the underlying's member at the slot's
+        // application read on the view's side, admitted at it read on the underlying's: the
+        // enclosing carriers arrive through the pins, and each parameter the application leaves
+        // unpinned gets a carrier of the nested view's. Inward it is re-viewed transparently, the
+        // re-view its own underlying. An application naming none of the enclosing parameters
+        // never reaches here: its two sides agree, and the comparison above carried the module. A
+        // bare signature is the application of it that pins nothing, and reaches here where it
+        // names an enclosing carrier.
+        TypeNode::Signature { .. } | TypeNode::SignatureApply { .. } => {
             let Some(member) = value
                 .knot_member()
                 .filter(|member| member.module().is_some())
@@ -272,34 +330,38 @@ pub fn coerce<'graph, 'cell>(
             let (Some(src), Some(dst)) = (src_type, dst_type) else {
                 return Err(unsupported);
             };
-            // A header's carried application is what the module offers the nested slot, and the
-            // re-view is keyed on the bare member behind it.
+            // A header's carried application is what the module offers the nested slot.
             let held = value
                 .ktype()
                 .as_type()
                 .expect("a module's type is a signature type");
-            let bare = Value::Knotted(member).digest(cx.types, cx.scratch);
-            let nested = view::nested_types(held, src, dst, cx.types, cx.scratch)
-                .map_err(|_| CoercionRefused::Nested)?;
-            let from = nested
-                .from
-                .expect("a nested module's signature binds the source's side");
-            // A nested view is the enclosing opaque one's, at the application its slot reads.
-            let content = ModuleContent::view(Operator::Reviewed, dst, bare, from.handle);
-            view::build(
-                cx.writer,
-                value,
-                nested.sig,
-                nested.view,
-                from,
-                nested.to,
-                content,
-                None,
-                cx.types,
-                cx.scratch,
-            )
-            .map(Value::Knotted)
-            .map_err(|_| CoercionRefused::Nested)
+            let exposure = if cx.inward {
+                let bare = Value::Knotted(member).digest(cx.types, cx.scratch);
+                view::nested_types(held, src, dst, bare, cx.types, cx.scratch)
+            } else {
+                let operand = view::operand_of(Some(held), member, cx.types, cx.scratch);
+                let context = cx.hidden.carriers;
+                view::exposure(operand, dst, src, context, cx.types, cx.scratch)
+            }
+            .map_err(|_| CoercionRefused::Nested)?;
+            let built = match cx.inward {
+                true => {
+                    let (Some(from), Some(built)) = (exposure.from, exposure.built) else {
+                        unreachable!("a re-view's fit binds both sides")
+                    };
+                    let (sig, writer) = (exposure.sig, cx.writer);
+                    view::build(
+                        writer, value, sig, from, built, None, None, true, cx.hidden, cx.types,
+                        cx.scratch,
+                    )
+                }
+                false => view::built_over(
+                    cx.writer, member, &exposure, None, false, cx.types, cx.scratch,
+                ),
+            };
+            built
+                .map(Value::Knotted)
+                .map_err(|_| CoercionRefused::Nested)
         }
         _ => Err(unsupported),
     }
@@ -309,7 +371,7 @@ pub fn coerce<'graph, 'cell>(
 /// view's, read off the signature handles it holds — swapped for a value crossing it inwards.
 fn across<'a, 'tier, 'cell, 'x, 'reg>(
     writer: Writer<'cell, 'a>,
-    barrier: &Coerced<'_, '_>,
+    barrier: &'a Coerced<'_, 'a>,
     inwards: bool,
     types: &'a Chain<'tier, 'cell, 'reg, '_>,
     scratch: BumpAllocator<'x>,
@@ -319,12 +381,15 @@ fn across<'a, 'tier, 'cell, 'x, 'reg>(
         Substitution::of(barrier.to(), types),
     );
     let (from, to) = if inwards { (to, from) } else { (from, to) };
+    let hidden = barrier.hidden();
     Coercion {
         writer,
         types,
         scratch,
         from,
         to,
+        inward: inwards,
+        hidden: if inwards { hidden.flipped() } else { hidden },
     }
 }
 

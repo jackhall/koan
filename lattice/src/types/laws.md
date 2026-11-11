@@ -14,7 +14,7 @@ with the law removed, not this one.
 
 **The law.** A type is **concrete** or **parametric**. A parametric type holds
 an unsolved variable: a `FOR ALL` name, a signature's head parameter, a lexical
-variable, or a quantified callable's whole type. Every value but a quantified
+variable or a projection of one, a path class's variable, or a quantified callable's whole type. Every value but a quantified
 callable carries a concrete type, and the order, `join`, `meet` and a union's
 canonical shape relate concrete types alone. An unsolved variable is a pair of
 ends, `[lower, bound]`, or a solved type. It is never read as its bound.
@@ -33,12 +33,12 @@ handle only because no variable reaches it.
 - *A parametric type among concrete ones.* The concrete lattice promises more
   than *fits* does: antisymmetry by handle, and an exact `join` and `meet`.
   A scheme or a variable let into one concrete type does not stay there. The
-  list that holds it, the union that names it and the record with a field of
-  it are each built by the order, so each now holds two handles that fit each
+  list that holds it, the union that names it and the record type with a field
+  of it are each built by the order, so each now holds two handles that fit each
   other, or a join that is not least, and every reader of those inherits the
   weaker guarantee. This is why a program may name a quantified type only as a
-  signature member's whole type: a signature is sealed content, a leaf no walk
-  enters, so the scheme inside it never reaches the order
+  signature member's whole type: a signature is sealed content, a leaf every
+  relation treats as one, so the scheme inside it never reaches the order
   ([quantified types](../../../design/quantified-types.md)).
 - *A variable in a built type.* A list's type is the `join` of its cells'
   types. `join` reads the order, which has no rule for a variable, so a cell
@@ -110,9 +110,9 @@ second walk can drift from it.
 **The law.** A type's handle is its content digest under two flags that are
 not identity, and equal types have equal handles: comparing two types is
 comparing two integers, with no structural fallback. So every canonical shape is part of identity — a union is flat,
-deduplicated and holds no member under another; a record's digest ignores field
-order; a quantifier group is numbered by position, so two alpha-variants are
-one node; a union of the three family tops is `Any`.
+deduplicated and holds no member under another; a record type's digest ignores
+field order; a quantifier group is numbered by position, so two alpha-variants
+are one node; a union of the three family tops is `Any`.
 
 **What rests on it.** Handle equality stands for type equality everywhere: the
 verdict table's key, a repeated-guard check, a manifest member, a pinned
@@ -134,8 +134,8 @@ for a type that already has one.
 
 **What enforces it.** Every composite is built through the chain's doors,
 which canonicalize before they digest. `equal_content_interns_once`,
-`union_of_is_canonical`, `a_union_holding_the_three_family_tops_is_any` and the
-two fixed-point laws over shapes and function types state it;
+`union_of_is_canonical`, `a_union_holding_the_three_family_tops_is_any`,
+`a_projection_is_canonical` and the two fixed-point laws over shapes and function types state it;
 `a_handles_flags_are_not_its_identity` states that a handle's two flags never
 reach its equality, hash or order, and `a_handles_flags_are_true` that each
 names what its node is; [tests/golden.rs](tests/golden.rs) pins the builtin
@@ -151,8 +151,8 @@ the other, and `a ≤ b` exactly when `join(a, b)` is `b` and `meet(a, b)` is
 **What rests on it.** `join` is the canonical union every container's type is
 built from: a list's type is the union of its cells' types once
 [`values`](../../../src/values/README.md#the-type-memo-and-satisfies) fills
-their records against each other, and nothing later descends into a value to
-type it again.
+their record values against each other, and nothing later descends into a
+value to type it again.
 A variable's least instance is the join of its lower contributions. `meet` is
 the solve's upper end, the `&` a program writes, a retype's target, and the
 test behind every *never* verdict and every refused return or ascription.
@@ -244,15 +244,15 @@ upper ones with its bound — and the solve fails only where that pair denotes
 no type. A call takes the pair's **least instance**; a relation asks only that
 the pair denote some type.
 
-**What rests on it.** A call by name, whose record has no order; *fits*'
-instantiation clause; a static solve, whose intervals must hold every binding
-a call can reach.
+**What rests on it.** A call by name, whose argument record has no order;
+*fits*' instantiation clause; a static solve, whose intervals must hold every
+binding a call can reach.
 
 **What breaks.** Bind a variable to the first argument that reaches it, and
 `FOR ALL #[Elt] :{x :Elt, y :Elt} -> Elt` over `{x = 1, y = "s"}` binds `Elt`
 to `Number` and refuses `y`, or binds it to `Str` and refuses `x`, by which
-field is read first. A record is read in symbol order, so renaming a parameter
-changes which call is admitted. Collected, the call binds `Elt` to
+field is read first. An argument record is read in symbol order, so renaming a
+parameter changes which call is admitted. Collected, the call binds `Elt` to
 `Number | Str` and both are admitted. Where a program wants one slot to fix a
 variable for the next, it says so with a
 [priority class](solving.md#priority-classes).
@@ -263,6 +263,9 @@ members neither of which is more specific, that one argument may both admit, is
 refused where it is declared
 ([ties](solving.md#the-unifier-collects-it-does-not-bind)): tried by storage
 order, `(Elt | Key)` over `1` binds `Elt` or `Key` by which handle sorts first.
+A pin is solved from both sides, so a union inside one is tied wherever the
+pin sits: under a function's parameter list, `S WITH {P = (Elt | Key)}` would
+otherwise bind by storage order unrefused.
 
 A static solve over lexical variables is taken as the call's own only where the
 collector reports it
@@ -275,16 +278,18 @@ fails exactly where it fails.
 `a_solve_puts_every_type_under_any_and_over_never`,
 `a_carried_variable_is_admitted_where_its_bound_is`,
 `a_solution_reads_only_its_solving_slots`,
-`a_reproducible_solve_commutes_with_binding` and
+`a_reproducible_solve_commutes_with_binding`,
+`a_solve_over_a_carried_lexical_variable_contributes_its_projection`,
+`a_pin_over_a_variable_solves_it_at_the_fit` and
 `an_untied_union_admits_through_one_member_in_any_order`.
 
 ## A load-time verdict holds at every run
 
 **The law.** A static type is an **interval** holding every type a run can
-carry there, and may hold lexical variables, each standing for whatever a run
-binds. Every rule over static types maps both ends. *Always* means every call
-within the arguments' intervals is admitted, at every binding of every lexical
-variable; *never* means none is. Anything else is *maybe*, and the call
+carry there, and may hold lexical and path variables, each standing for
+whatever a run binds. Every rule over static types maps both ends. *Always*
+means every call within the arguments' intervals is admitted, at every binding
+of every lexical and path variable; *never* means none is. Anything else is *maybe*, and the call
 decides.
 
 **What rests on it.** A candidate judged *never* is dropped, and a use left
@@ -311,11 +316,18 @@ ascription retypes without checking. Each is sound only if the verdict was.
   over a rigid `Elt` and `Number` where a run binds `Elt` to `Number`. A meet
   taken at load would refuse a program that runs, so
   [the load leaves it unknown](../../../src/elaborate/README.md#the-type-channel-at-load).
+- *Reading a pin at its application's variance.* The order compares pins by
+  identity, so `S WITH {Elt = Elt}` read from above as `S WITH {Elt = Any}`
+  lies above no instance but the one at `Any`, and a judge reading it so calls
+  *never* a call that runs. A pin's two reads must agree for it to stay; read
+  from above, a pin they disagree on drops, and read from below, the
+  application is `Never`.
 
 **What enforces it.** `a_carried_solution_lies_in_its_static_interval`,
 `a_verdict_holds_of_every_call_within_its_static_types`,
-`a_reproducible_solve_commutes_with_binding` and
-`bounding_above_lies_over_every_instance`, which draw carried types within the
+`a_reproducible_solve_commutes_with_binding`,
+`a_projection_over_a_binding_is_its_piece` and
+`reading_through_bounds_brackets_every_instance`, which draw carried types within the
 static ones and bind each lexical variable as a run does; and
 `a_type_read_below_its_variables_fits_itself_read_above`, which reads one type,
 a nested binder included, at both ends of its variables as the judge does. Debug builds check
@@ -364,20 +376,20 @@ read.
 A law draws a case that meets its precondition by construction rather than by
 filtering, since a case that passes without reaching the law is invisible: an
 ordered pair or chain is built by widening — a step up the order, read down it
-at a contravariant child, so a function's parameter narrows and a record drops a
-field — two shapes share one key, an argument shape is mostly its candidate's
-own instance, and a scheme comes with its own instance, widened half the time so
-the solve has an interval to choose from. A binder's group has as many variables
-as its positions hold two of, each planted at two — bare, in a list or as a
-function's parameter — so a solve relates positions, caps a join from above, and
-solves variables side by side. An instance's bindings are pool types — grounds,
-composites and `Never` — or lexical variables over them, slot by slot, so a
-solve lands on a rigid variable as often as on a type, and on both at once.
-A *fits* chain sets a lexical variable at its bottom, bounded by the order
-chain's, or in its middle, between that chain's bottom and middle, so a step
-through a bound composes with one through a lower end. What still misses is a
-counted rejection, capped per law, so a generator that drifts off a precondition
-fails the suite.
+at a contravariant child, so a function's parameter narrows and a record type
+drops a field — two shapes share one key, an argument shape is mostly its
+candidate's own instance, and a scheme comes with its own instance, widened half
+the time so the solve has an interval to choose from. A binder's group has as
+many variables as its positions hold two of, each planted at two — bare, in a
+list or as a function's parameter — so a solve relates positions, caps a join
+from above, and solves variables side by side. An instance's bindings are pool
+types — grounds, composites and `Never` — or lexical variables over them, slot
+by slot, so a solve lands on a rigid variable as often as on a type, and on both
+at once. A *fits* chain sets a lexical variable at its bottom, bounded by the
+order chain's, or in its middle, between that chain's bottom and middle, so a
+step through a bound composes with one through a lower end. What still misses is
+a counted rejection, capped per law, so a generator that drifts off a
+precondition fails the suite.
 
 Hand-written tests remain only where a law cannot express the shape
 ([tests/residue.rs](tests/residue.rs); a family's in

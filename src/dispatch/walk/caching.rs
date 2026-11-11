@@ -9,22 +9,23 @@
 //! closing class (the build's fold): the walk records no tail edge and no escape, since both
 //! are the text's.
 
+use crate::elaborate::judge;
 use crate::memory::{BumpVec, collect};
 use crate::parse::{ExpressionPart, ListItem, TemplateSlot};
 use crate::scope::{
     Binder, Coordinate, Deps, DepsGathering, Segment, ShapeKind, Site, SiteDeps, Slot, Store, Tree,
     tree_deps,
 };
-use crate::type_lattice::{Interval, KType, Side, Variable, read_through};
+use crate::type_lattice::{Interval, KType, Side, Variable};
 
 use super::{Form, Pass, of_part, porous_site};
 
-/// What a site reads as the walk types it: what it depends on already, beside the paths it reads,
-/// each by its chain root and level, which the fold resolves.
+/// What a site reads as the walk types it: what it depends on already, beside the content tree of
+/// each path class it reads, which the fold reads the dependencies of.
 #[derive(Clone, Copy)]
 pub(super) struct Reads<'o> {
     deps: Deps<'o>,
-    pending: &'o [(Segment, usize)],
+    pending: &'o [Tree<'o>],
 }
 
 impl<'o> Reads<'o> {
@@ -183,7 +184,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         }
         let scratch = self.scratch;
         let mut deps = DepsGathering::new(scratch);
-        let mut pending: BumpVec<'_, &'o [(Segment, usize)]> = BumpVec::new_in(scratch);
+        let mut pending: BumpVec<'_, &'o [Tree<'o>]> = BumpVec::new_in(scratch);
         for (part, typed) in parts {
             let each = self.part_reads(level, part, typed);
             deps.add(each.deps);
@@ -232,27 +233,27 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         if !porous_site(types, typed) {
             return Reads::CLOSED;
         }
-        let mut levels = BumpVec::new_in(scratch);
+        let (mut levels, mut classes) = (0, BumpVec::new_in(scratch));
         let mut number = |variable: Variable| {
-            if let Variable::Lexical { level, .. } = variable {
-                levels.push(level);
+            match variable {
+                Variable::Path { class, .. } => classes.push(class),
+                Variable::Lexical { .. } => levels += 1,
+                _ => {}
             }
             Some(Interval::point(KType::NUMBER.into()))
         };
         let mapped = Interval {
-            lower: read_through(types, scratch, typed.lower, Side::Below, &mut number),
-            upper: read_through(types, scratch, typed.upper, Side::Above, &mut number),
+            lower: judge::read_points(types, scratch, typed.lower, Side::Below, &mut number),
+            upper: judge::read_points(types, scratch, typed.upper, Side::Above, &mut number),
         };
-        if levels.is_empty() || porous_site(types, mapped) {
+        // A name's variable is the run's alone to bind, and no class here is one a path reaches.
+        if levels > 0 || classes.is_empty() || porous_site(types, mapped) {
             return Reads::known(Deps::Varying);
         }
-        let mut pending = BumpVec::with_capacity_in(levels.len(), scratch);
-        for variable in levels {
-            let entry = (self.is_path(level, variable))
-                .then(|| self.reachable(level, variable))
-                .flatten();
-            match entry {
-                Some((entry, _)) => pending.push((self.chain_root_segment(level), entry.level)),
+        let mut pending = BumpVec::with_capacity_in(classes.len(), scratch);
+        for class in classes {
+            match self.reachable(level, class) {
+                Some(witness) => pending.push(witness.tree()),
                 None => return Reads::known(Deps::Varying),
             }
         }

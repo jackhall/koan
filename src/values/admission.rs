@@ -392,9 +392,9 @@ fn admits_part_at(
 ) -> bool {
     match types.node(slot) {
         TypeNode::Any => true,
-        TypeNode::Quantified { bound, .. } | TypeNode::Lexical { bound, .. } => {
-            admits_part_at(bound.into(), part, types, at)
-        }
+        TypeNode::Quantified { bound, .. }
+        | TypeNode::Lexical { bound, .. }
+        | TypeNode::Path { bound, .. } => admits_part_at(bound.into(), part, types, at),
         TypeNode::Never => false,
         TypeNode::AnyValue => matches!(
             part,

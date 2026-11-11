@@ -720,7 +720,7 @@ fn activate<'g, 'c>(
                 let bindings = ClosureBindings::of(
                     writer,
                     &captures,
-                    (crate::values::ArenaRef::ROOT, None),
+                    (crate::values::DepotRef::ROOT, None),
                     None,
                 );
                 // A captured value is the enclosing binding's word — the sibling a capture of the
@@ -1064,9 +1064,6 @@ fn agree(a: &Shapes<'_>, b: &Shapes<'_>) {
             assert_eq!(left.spelled_at(left.site(mine.part)), Some(index));
             assert_eq!(identity(mine.id), identity(theirs.id));
             assert_eq!(a.path_level(segment, index), b.path_level(segment, index));
-        }
-        if matches!(left.kind(), ShapeKind::Program | ShapeKind::Code) {
-            assert_eq!(a.path_base(segment), b.path_base(segment));
         }
         let (mine, theirs) = (written_parts(left), written_parts(right));
         assert_eq!(mine.len(), theirs.len());

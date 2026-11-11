@@ -24,7 +24,7 @@
 //! - **Names are unique** within a record. The parser rejects duplicate fields upstream, in
 //!   `STRUCT` / `SIG` declarations and in record literals alike, and the constructor asserts it.
 //!
-//! See [README.md](README.md) § Records and schemas.
+//! See [identity.md](identity.md) § Field lists and schemas.
 
 use std::marker::PhantomData;
 

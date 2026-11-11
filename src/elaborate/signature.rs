@@ -22,7 +22,7 @@ use crate::type_lattice::{
     DeclaredType, DispatchTokenElement, GroupIntern, KType, Parametric, TypeNode,
 };
 
-use super::expression::{Elaborator, Groups, HeadElement, QuantifierGroup, walk_head};
+use super::expression::{Elaborator, Fellows, Groups, HeadElement, QuantifierGroup, walk_head};
 use super::reads::Reads;
 use crate::values::Chain;
 
@@ -48,7 +48,7 @@ pub fn callable_type<'graph, 'x, R: Reads<'graph> + ?Sized>(
         reader,
         types,
         scratch,
-        fellows: &[],
+        fellows: Fellows::NONE,
         locals: &[],
         binder: Cell::new(false),
     };

@@ -20,10 +20,11 @@
 use crate::memory::{BumpAllocator, BumpVec};
 use crate::symbols::{BinderSymbol, TypeSymbol};
 use crate::type_lattice::{
-    DeclaredType, KType, Members, Parametric, SigSchema, TypeNode, bound_above, meet,
-    substitute_parameters,
+    DeclaredType, KType, Members, Parametric, SigSchema, TypeNode, meet, substitute_parameters,
 };
 use crate::values::Chain;
+
+use super::judge::{self, Marks};
 
 /// How many members of a module of signature `schema` are values — the index the type channel
 /// starts at.
@@ -83,7 +84,7 @@ fn rank<N: Ord + Copy, T>(table: &[(N, T)], name: N) -> Option<usize> {
 
 /// The schema of the signature `handle` is, if it is one.
 pub fn schema_of<'run>(handle: KType, types: &Chain<'run, '_, '_, '_>) -> Option<SigSchema<'run>> {
-    match types.node(handle) {
+    match judge::closed_type_node(types, handle) {
         TypeNode::Signature { schema, .. } => Some(schema),
         _ => None,
     }
@@ -100,26 +101,31 @@ pub struct SignatureMember {
     pub unpinned: Option<TypeSymbol>,
 }
 
-/// The member `name` of every module under `upper`, a signature or an application of one read
-/// through a rigid variable's bound — a union's value member joined over its members, a meet's the
+/// The member `name` of every module under `upper`, a signature or an application of one, a
+/// variable read through its bound — a union's value member joined over its members, a meet's the
 /// meet of what each application declaring it declares: `None` where `upper` is no such type, or
 /// declares no such member, or is a meet leaving a parameter the member names unpinned or
-/// declaring a type member or a scheme two ways.
+/// declaring a type member or a scheme two ways. An application's pins are read as they are, a
+/// variable in one kept: a pin is invariant, so its variable has no bound to read it through.
+/// Reading a variable through its bound is a judgement, which marks through `marks`.
 pub fn signature_member(
+    marks: &dyn Marks,
     types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
     upper: Parametric,
     name: BinderSymbol,
 ) -> Option<SignatureMember> {
-    let upper = bound_above(types, scratch, upper);
-    let (declared, pinned) = match types.node(upper) {
-        TypeNode::Signature { .. } => (upper, None),
+    if let Some(above) = judge::variable_above(marks, types, scratch, upper) {
+        return signature_member(marks, types, scratch, above.into(), name);
+    }
+    let (declared, pinned) = match judge::type_node(marks, types, upper) {
+        TypeNode::Signature { .. } => (judge::closed(marks, types, upper)?, None),
         TypeNode::SignatureApply { signature, pins } => (signature, Some(pins)),
         // A union's value member is the join of its members', where each declares it at a type.
         TypeNode::Union { members } if matches!(name, BinderSymbol::Value(_)) => {
             let mut joined = BumpVec::with_capacity_in(members.len(), scratch);
             for each in members.iter() {
-                match signature_member(types, scratch, each.into(), name)? {
+                match signature_member(marks, types, scratch, each, name)? {
                     SignatureMember {
                         declared: DeclaredType::Type(declared),
                         unpinned: None,
@@ -136,7 +142,7 @@ pub fn signature_member(
         TypeNode::SignatureMeet { members } => {
             let mut met = None;
             for each in members.iter() {
-                let Some(read) = signature_member(types, scratch, each.into(), name) else {
+                let Some(read) = signature_member(marks, types, scratch, each, name) else {
                     continue;
                 };
                 if read.unpinned.is_some() {
@@ -144,11 +150,14 @@ pub fn signature_member(
                 }
                 met = Some(match met {
                     None => read.declared,
-                    Some(held) if held == read.declared => held,
+                    Some(held) if judge::same(marks, types, held, read.declared) => held,
                     // Two applications declaring a type member, or a scheme, otherwise disagree.
                     Some(held) => match (name, held.as_type(), read.declared.as_type()) {
                         (BinderSymbol::Value(_), Some(held), Some(read)) => {
-                            let (held, read) = (types.concrete(held)?, types.concrete(read)?);
+                            let (held, read) = (
+                                judge::closed(marks, types, held)?,
+                                judge::closed(marks, types, read)?,
+                            );
                             DeclaredType::Type(meet(types, scratch, held, read).into())
                         }
                         _ => return None,
@@ -163,11 +172,7 @@ pub fn signature_member(
         _ => return None,
     };
     let mut pins = BumpVec::new_in(scratch);
-    pins.extend(
-        (pinned.iter())
-            .flat_map(|pins| pins.iter())
-            .map(|(name, pin)| (name, Parametric::from(pin))),
-    );
+    pins.extend((pinned.iter()).flat_map(|pins| pins.iter()));
     applied_member(types, scratch, declared, &pins, name)
 }
 

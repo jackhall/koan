@@ -23,7 +23,7 @@ pub fn variants<'tier>(
     types: &Chain<'tier, '_, '_, '_>,
     union: KType,
 ) -> Option<impl Iterator<Item = KType> + 'tier> {
-    match types.node(union) {
+    match super::judge::closed_type_node(types, union) {
         TypeNode::Union { members } => Some(members.iter()),
         _ => None,
     }
@@ -37,11 +37,11 @@ pub fn variant_named(types: &Chain<'_, '_, '_, '_>, union: KType, label: Symbol)
 /// The name a label gives `variant`: a declared variant's own, an applied one's constructor's, and
 /// `None` for a structural member.
 pub fn variant_label(types: &Chain<'_, '_, '_, '_>, variant: KType) -> Option<Symbol> {
-    let declared = match types.node(variant) {
+    let declared = match super::judge::closed_type_node(types, variant) {
         TypeNode::ConstructorApply { constructor, .. } => constructor,
         _ => variant,
     };
-    match types.node(declared) {
+    match super::judge::closed_type_node(types, declared) {
         TypeNode::SetMember { name, .. } => Some(name.symbol()),
         _ => None,
     }

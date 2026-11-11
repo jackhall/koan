@@ -4,7 +4,7 @@ Cellgraph's surface now that no build cell is a cell.
 
 **Problem.** Cellgraph grew doors for one embedder's build tree, which koan
 now keeps outside the graph in
-[its build arena](../../src/scheduler/README.md#the-build-arena):
+[its build depot](../../src/scheduler/README.md#the-build-depot):
 `is_childless` has no koan caller, and the named
 and copied lends of [`lend.rs`](../src/lend.rs), counted tenant lends with
 their `held`/`unheld` books, [`lend_cycle`](../src/graph/lend_cycle.rs),

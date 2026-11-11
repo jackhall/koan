@@ -187,3 +187,136 @@ fn the_walk_s_rules_never_ask_which_half_they_run_over() {
         offenders.join("\n")
     );
 }
+
+/// The lattice's judgements and the composites built from them: outside the doors
+/// ([`judge`](crate::elaborate::judge)) a rule calls none, so every judgement over a type that may
+/// hold a run-bound name marks.
+const JUDGEMENTS: &[&str] = &[
+    "judge_by_class(",
+    "fits(",
+    "admits_with(",
+    "lower_end_outside(",
+    "bound_above(",
+    "scheme_bound_above(",
+    "instance_under(",
+    "select_by_class(",
+    "intervals(",
+    "retyped_to(",
+    "never_satisfies(",
+    "read_through(",
+];
+
+/// The methods that judge: on a collector, an interval, or a type's handle.
+const JUDGING_METHODS: &[&str] = &[
+    ".solve(",
+    ".reproducible(",
+    ".concrete(",
+    ".concrete_declared(",
+    ".is_exact(",
+    "types.node(",
+];
+
+/// Each judgement `code` makes past the doors: a free judgement not called as `judge::…`, or a
+/// judging method.
+fn judgements_past_the_doors(code: &str) -> Vec<String> {
+    let mut found = Vec::new();
+    for name in JUDGEMENTS {
+        for (at, _) in code.match_indices(name) {
+            let before = &code[..at];
+            let joined = before
+                .chars()
+                .next_back()
+                .is_some_and(|ch| ch.is_alphanumeric() || ch == '_' || ch == '.');
+            if !joined && !before.ends_with("judge::") && !before.ends_with("fn ") {
+                found.push(name.to_string());
+            }
+        }
+    }
+    for method in JUDGING_METHODS {
+        found.extend(
+            code.match_indices(method)
+                .map(|(_, method)| method.to_string()),
+        );
+    }
+    found
+}
+
+/// The walk's and the elaborator's files: every rule a load's typing runs, the doors' own file
+/// and the tests aside.
+fn judging_sources() -> Vec<std::path::PathBuf> {
+    let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let mut sources = vec![
+        manifest.join("src/dispatch/walk.rs"),
+        manifest.join("src/dispatch/rules.rs"),
+    ];
+    crate::tests::boundary::collect_sources(&manifest.join("src/dispatch/walk"), &mut sources);
+    crate::tests::boundary::collect_sources(&manifest.join("src/elaborate"), &mut sources);
+    sources.retain(|source| {
+        let path = source.to_string_lossy();
+        !path.ends_with("judge.rs") && !path.ends_with("tests.rs") && !path.contains("/tests/")
+    });
+    sources
+}
+
+#[test]
+fn the_walk_judges_through_its_doors() {
+    use crate::tests::boundary::strip_comments_and_strings;
+    // The scan bites on a bare judgement, a judging method and a path around the doors, and lets
+    // a door pass.
+    let planted = "fits(types, scratch, a, b)
+types.concrete(ty)
+crate::type_lattice::bound_above(types, scratch, ty)
+judge::fits(self, types, scratch, a, b)
+sig_fits(types, scratch, a, b)";
+    assert_eq!(judgements_past_the_doors(planted).len(), 3);
+    let mut offenders = Vec::new();
+    for source in judging_sources() {
+        let code = strip_comments_and_strings(&std::fs::read_to_string(&source).unwrap());
+        for found in judgements_past_the_doors(&code) {
+            offenders.push(format!("{}: {found}", source.display()));
+        }
+    }
+    assert!(
+        offenders.is_empty(),
+        "judged past the doors:\n{}",
+        offenders.join("\n")
+    );
+}
+
+/// Each call of a store's [`answer`](crate::scope::Store::answer) in `code`: the witness's door.
+fn witness_asks(code: &str) -> usize {
+    code.matches(".answer(").count()
+}
+
+/// The witness is reached only through the marks: of the judging sources, the stores and `scope`,
+/// only the walk's marks (`walk/reads.rs`) ask a store for its answer, once, so no rule reads a witness's
+/// answer except through a door, and none reads its types at all.
+#[test]
+fn the_witness_is_asked_only_through_the_marks() {
+    use crate::tests::boundary::strip_comments_and_strings;
+    // The scan bites on a call and lets a definition pass.
+    let planted = "self.store.answer(question, &unknown_of, types, scratch)\nfn answer(";
+    assert_eq!(witness_asks(planted), 1);
+    let manifest = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    let mut sources = judging_sources();
+    sources.push(manifest.join("src/elaborate/judge.rs"));
+    crate::tests::boundary::collect_sources(&manifest.join("src/program"), &mut sources);
+    crate::tests::boundary::collect_sources(&manifest.join("src/build"), &mut sources);
+    crate::tests::boundary::collect_sources(&manifest.join("src/scope"), &mut sources);
+    sources.retain(|source| {
+        let path = source.to_string_lossy();
+        !path.ends_with("tests.rs") && !path.contains("/tests/")
+    });
+    let mut asks = Vec::new();
+    for source in sources {
+        let code = strip_comments_and_strings(&std::fs::read_to_string(&source).unwrap());
+        let found = witness_asks(&code);
+        if found > 0 {
+            asks.push((source.to_string_lossy().into_owned(), found));
+        }
+    }
+    assert!(
+        asks.len() == 1 && asks[0].0.ends_with("src/dispatch/walk/reads.rs") && asks[0].1 == 1,
+        "the witness is asked past the marks: {asks:?}"
+    );
+}

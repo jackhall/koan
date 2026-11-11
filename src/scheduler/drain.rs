@@ -1,10 +1,10 @@
 //! The drain: the loop that runs one root work to its end over a ready stack, and the graph it runs
 //! over.
 //!
-//! The graph holds the run cells and, beside them, the [build arena](super::arena) of the
+//! The graph holds the run cells and, beside them, the [build depot](super::depot) of the
 //! settlements frames run under; no settlement is a cell. Before a cell is born the drain resolves
-//! the arena node it runs under: for a call's frame, what its asker's [`Seek`] finds or builds,
-//! and for any other cell, what its asker runs under. The drain borrows that arena node for the
+//! the depot slot it runs under: for a call's frame, what its asker's [`Seek`] finds or builds,
+//! and for any other cell, what its asker runs under. The drain borrows that depot slot for the
 //! cell's life, from its birth to its release, so a held settlement is never evicted, and a tail
 //! hop's successor borrows its frame's before the frame is released. Between steps it opens no
 //! cell but to run a step: a `Fresh` cell borrows its parent's scratch and a `Shares` one is its
@@ -43,20 +43,20 @@ use crate::memory::{
 use crate::scheduler::action::{
     Action, Asked, Context, Kind, Placement, Spawns, Step, StepError, Tailing,
 };
-use crate::scheduler::arena::{BuildArena, Composed, Settled};
 use crate::scheduler::beside::{KeptHeader, ReadsBeside};
 use crate::scheduler::continuation::{
     Arrival, BirthAt, Born, Continuation, ContinuationFamily, NativeStep, Provenance, Report,
     Rested, StateAt, StepBundle, Work,
 };
 use crate::scheduler::delivery::KDelivery;
+use crate::scheduler::depot::{BuildDepot, Composed, Settled};
 use crate::scheduler::kept::Kept;
 use crate::scheduler::seek::{Compose, Lending, Replayed, Requested, Seek, Settles, Unsettled};
 use crate::scope::{Facts, HalfHeader, LoadFacts, Named};
 #[cfg(test)]
 use crate::type_lattice::Branch;
 use crate::type_lattice::Halves;
-use crate::values::{ArenaRef, BuildBudget, Chain, ContentDigest, Half, KeptCell, TypeTiers};
+use crate::values::{BuildBudget, Chain, ContentDigest, DepotRef, Half, KeptCell, TypeTiers};
 
 /// What a loop cell may hold past twice its live bytes before a hop compacts it: a region's first
 /// chunk, within which growth is noise.
@@ -71,12 +71,12 @@ const COMPACTION_FLOOR: usize = FIRST_CHUNK;
 ///
 /// It holds the type tiers every step's chain reads first, so a step and a crossing take it
 /// from the graph they run over rather than from a program or a static, the load's facts every
-/// step's door reads beneath its cell's layers, and the build arena its frames run under.
+/// step's door reads beneath its cell's layers, and the build depot its frames run under.
 pub struct Graph<'graph, B: StepBundle<'graph>> {
     cells: CellGraph<'graph, ContinuationFamily<B>, B::Scratch, KDelivery, KRegionHeader>,
     tiers: TypeTiers<'graph>,
     facts: &'graph LoadFacts<'graph>,
-    arena: BuildArena<'graph>,
+    depot: BuildDepot<'graph>,
     /// The door a miss settles through.
     settles: &'graph dyn Settles<'graph>,
 }
@@ -100,7 +100,7 @@ impl<'graph, B: StepBundle<'graph>> Graph<'graph, B> {
             cells: CellGraph::new(cap, crate::values::verdict),
             tiers,
             facts,
-            arena: BuildArena::new(budget),
+            depot: BuildDepot::new(budget),
             settles,
         }
     }
@@ -140,12 +140,12 @@ impl<'graph, B: StepBundle<'graph>> Graph<'graph, B> {
         peeked.ok().flatten().flatten()
     }
 
-    /// Release a kept cell and its borrow of the arena node it ran under. Kept cells release in
+    /// Release a kept cell and its borrow of the depot slot it ran under. Kept cells release in
     /// any order: an ancestor's release outlives the call until the kept cells under it dispose.
     pub fn release_kept(&mut self, kept: KeptCell) -> Result<(), ReleaseTreeError> {
-        let (cell, arena) = kept.opened();
+        let (cell, depot) = kept.opened();
         self.cells.release_tree(cell)?;
-        self.arena.release(arena);
+        self.depot.release(depot);
         Ok(())
     }
 
@@ -162,51 +162,51 @@ impl<'graph, B: StepBundle<'graph>> Graph<'graph, B> {
     /// How many settlements are live.
     #[cfg(test)]
     pub(crate) fn live_settlements(&self) -> usize {
-        self.arena.len()
+        self.depot.len()
     }
 
     /// How many compositions are live.
     #[cfg(test)]
     pub(crate) fn live_compositions(&self) -> usize {
-        self.arena.compositions()
+        self.depot.compositions()
     }
 
     /// How many live settlements lie directly under a composition, and how many live compositions
     /// some settlement pins.
     #[cfg(test)]
     pub(crate) fn under_compositions(&self) -> (usize, usize) {
-        self.arena.under_compositions()
+        self.depot.under_compositions()
     }
 
     /// How many live settlements lie directly under `parent`.
     #[cfg(test)]
-    pub(crate) fn children_of(&self, parent: ArenaRef) -> usize {
-        self.arena.children_of(parent)
+    pub(crate) fn children_of(&self, parent: DepotRef) -> usize {
+        self.depot.children_of(parent)
     }
 
     /// Whether `at` names a live settlement.
     #[cfg(test)]
-    pub(crate) fn is_settled(&self, at: ArenaRef) -> bool {
-        at != ArenaRef::ROOT && self.arena.is_live(at)
+    pub(crate) fn is_settled(&self, at: DepotRef) -> bool {
+        at != DepotRef::ROOT && self.depot.is_live(at)
     }
 
     /// What the live settlement `at` weighs against the budget: what a test that forces eviction
     /// sizes its budget by.
     #[cfg(test)]
-    pub(crate) fn settlement_bytes(&self, at: ArenaRef) -> Option<usize> {
-        self.arena.bytes_of(at)
+    pub(crate) fn settlement_bytes(&self, at: DepotRef) -> Option<usize> {
+        self.depot.bytes_of(at)
     }
 
     /// How many run cells borrow the live settlement `at`.
     #[cfg(test)]
-    pub(crate) fn borrowers(&self, at: ArenaRef) -> Option<usize> {
-        self.arena.borrowers(at)
+    pub(crate) fn borrowers(&self, at: DepotRef) -> Option<usize> {
+        self.depot.borrowers(at)
     }
 
     /// The bytes of live settlements no run cell holds.
     #[cfg(test)]
     pub(crate) fn unheld_bytes(&self) -> usize {
-        self.arena.unheld_bytes()
+        self.depot.unheld_bytes()
     }
 
     /// The bytes a live slab or tree cell's region has handed out.
@@ -242,11 +242,13 @@ pub(crate) struct Tiers {
     pub scratch_bytes: usize,
     /// How many frames sought a settlement: a count, not a high-water mark.
     pub sought: usize,
+    /// How many seeks a layer the load laid answered: a count.
+    pub laid: usize,
     /// How many of those built one on a miss: a count.
     pub settled: usize,
     /// How many settlements a miss evicted: a count.
     pub evicted: usize,
-    /// How many frames were born cold because the arena node their seek or hop named is dead: a
+    /// How many frames were born cold because the depot slot their seek or hop named is dead: a
     /// count.
     pub cold_births: usize,
     /// Nodes the drain laid into the agent tier from new settlements' askers' branches: a count.
@@ -278,6 +280,18 @@ fn tally(count: impl FnOnce(&mut Tiers)) {
     });
 }
 
+/// What a test hands each keyed seek's key, beside [`TIERS`] before and after the drain answered
+/// it.
+#[cfg(test)]
+pub(crate) type Answered = fn(crate::values::LayerKey, Tiers, Tiers);
+
+#[cfg(test)]
+thread_local! {
+    /// What each keyed seek's key and tallies are handed to, while a test sets it.
+    pub(crate) static ANSWERED: std::cell::Cell<Option<Answered>> =
+        const { std::cell::Cell::new(None) };
+}
+
 #[cfg(test)]
 thread_local! {
     /// Bytes run steps have written to their write homes' regions: a count. Tests reset it.
@@ -295,6 +309,7 @@ thread_local! {
             agent_verdicts: 0,
             scratch_bytes: 0,
             sought: 0,
+            laid: 0,
             settled: 0,
             evicted: 0,
             cold_births: 0,
@@ -381,11 +396,11 @@ pub struct Scheduler<'a, 'graph, B: StepBundle<'graph>> {
     census: Census,
 }
 
-/// Where the drain places a frame it seeks for: the arena node it runs under, whether placing it
+/// Where the drain places a frame it seeks for: the depot slot it runs under, whether placing it
 /// missed, the composition its first step must rebuild, and the request its first step lays a
 /// level from.
 type Placing<'graph> = (
-    ArenaRef,
+    DepotRef,
     bool,
     Option<ContentDigest>,
     Option<Box<Requested<'graph>>>,
@@ -404,14 +419,14 @@ enum Entry<'graph, B: StepBundle<'graph>> {
     /// has run ([`Step::read_beside`](crate::scheduler::Step::read_beside)).
     Beside { cell: CellHandle, kept: KeptCell },
     /// A request not yet born: the provenance the drain filled for it, the request at rest, the
-    /// arena node its asker runs under, the cell it is born under and how its birth crosses.
-    /// `release_after` is a tail's predecessor, released with its borrow of that arena node once
+    /// depot slot its asker runs under, the cell it is born under and how its birth crosses.
+    /// `release_after` is a tail's predecessor, released with its borrow of that depot slot once
     /// this cell's first step has returned — the successor wakes its state out of the
     /// predecessor's region, and borrows first.
     Unborn {
         provenance: Provenance,
         asked: Asked<'graph, B>,
-        asker: ArenaRef,
+        asker: DepotRef,
         under: CellHandle,
         born: Born,
         release_after: Option<CellHandle>,
@@ -501,7 +516,7 @@ where
                     threads: false,
                     loop_base: 0,
                 },
-                arena: ArenaRef::ROOT,
+                depot: DepotRef::ROOT,
                 arrival: Arrival::Placed,
                 sought: None,
                 state,
@@ -530,7 +545,7 @@ where
                     (cell, release_after, release_loop)
                 }
             };
-            let (action, provenance, arena) = self.step(cell, beside)?;
+            let (action, provenance, depot) = self.step(cell, beside)?;
             // What the step read of the kept cell it ran beside it has copied by value.
             if let Some(kept) = beside {
                 (self.graph)
@@ -539,17 +554,17 @@ where
                 #[cfg(test)]
                 self.census.retired();
             }
-            // A hop's successor has woken what its predecessor kept, and borrows its arena node,
+            // A hop's successor has woken what its predecessor kept, and borrows its depot slot,
             // so the predecessor can go — and the loop cell it compacted away from after it.
-            if let Some((predecessor, arena)) = release_after {
-                self.retire(predecessor, arena)?;
+            if let Some((predecessor, depot)) = release_after {
+                self.retire(predecessor, depot)?;
             }
             if let Some(old) = release_loop {
                 self.release_loop(old)?;
             }
             match action.kind() {
                 Kind::Finished { completed } => {
-                    self.retire(cell, arena)?;
+                    self.retire(cell, depot)?;
                     // The loop's last cell has delivered: its loop cell's bytes reached the home
                     // already, by a pledge or a copy.
                     if let Some(loop_cell) = provenance.loop_cell {
@@ -566,10 +581,10 @@ where
                     }
                 }
                 Kind::Faulted { kept } => {
-                    // A kept cell keeps its arena borrow; a loop cell above it outlives the call
+                    // A kept cell keeps its depot borrow; a loop cell above it outlives the call
                     // under it until it is released.
                     if !kept {
-                        self.retire(cell, arena)?;
+                        self.retire(cell, depot)?;
                     }
                     if let Some(loop_cell) = provenance.loop_cell {
                         self.release_loop(loop_cell)?;
@@ -590,7 +605,7 @@ where
                 Kind::Park => {
                     #[cfg(test)]
                     PARKS.with(|parks| parks.set(parks.get() + 1));
-                    self.asked_by(cell, provenance, arena)
+                    self.asked_by(cell, provenance, depot)
                 }
                 Kind::Beside(kept) => self.ready.push(Entry::Beside { cell, kept }),
                 Kind::Tail(asked, tailing) => {
@@ -606,7 +621,7 @@ where
                     self.ready.push(Entry::Unborn {
                         provenance,
                         asked,
-                        asker: arena,
+                        asker: depot,
                         under: provenance.loop_cell.unwrap_or(provenance.parent),
                         born: Born::Hop,
                         release_after: Some(cell),
@@ -615,7 +630,7 @@ where
                 }
                 // Only a root work leaves: `leave` refuses a cell that reports to somebody.
                 Kind::Left(dormant) => {
-                    self.retire(cell, arena)?;
+                    self.retire(cell, depot)?;
                     debug_assert!(self.ready.is_empty(), "the root work ended last");
                     return Ok(Some(Resting(dormant)));
                 }
@@ -664,7 +679,7 @@ where
         Ok(fresh)
     }
 
-    /// Release a loop cell: it borrows no arena node, and runs nothing.
+    /// Release a loop cell: it borrows no depot slot, and runs nothing.
     fn release_loop(&mut self, loop_cell: CellHandle) -> Result<(), DrainStalled> {
         let CellHandle::Tree(handle) = loop_cell else {
             return Err(DrainStalled::Unreleasable);
@@ -681,8 +696,8 @@ where
     ///
     /// A child is born under the cell that asked for it and reports to the slot it was pushed at,
     /// so no step can name a destination that is not its spawner's; its home is the spawner, or
-    /// under `Forwards` the spawner's own home. `arena` is what the spawner runs under.
-    fn asked_by(&mut self, cell: CellHandle, provenance: Provenance, arena: ArenaRef) {
+    /// under `Forwards` the spawner's own home. `depot` is what the spawner runs under.
+    fn asked_by(&mut self, cell: CellHandle, provenance: Provenance, depot: DepotRef) {
         let Scheduler { ready, spawns, .. } = self;
         for (slot, asked) in spawns.take().rev() {
             let (home, threads) = provenance.target(asked.use_, cell);
@@ -699,7 +714,7 @@ where
                     loop_base: 0,
                 },
                 asked,
-                asker: arena,
+                asker: depot,
                 under: cell,
                 born: Born::Child,
                 release_after: None,
@@ -709,14 +724,14 @@ where
     }
 
     /// Give a request its cell, under `parent`, its birth crossing as `born` says, running under
-    /// the arena node its lending resolves to, which it borrows. `asker` is the arena node the cell
+    /// the depot slot its lending resolves to, which it borrows. `asker` is the depot slot the cell
     /// that asked runs under. A miss evicts to the budget once the new cell borrows its settlement.
     fn create(
         &mut self,
         provenance: Provenance,
         asked: Asked<'graph, B>,
         (parent, born): (CellHandle, Born),
-        asker: ArenaRef,
+        asker: DepotRef,
     ) -> Result<CellHandle, DrainStalled> {
         #[cfg(test)]
         {
@@ -728,8 +743,8 @@ where
                 FRAMES.with(|frames| frames.set(frames.get() + 1));
             }
         }
-        let arena = &mut self.graph.arena;
-        let mut replayed = SmallVec::<[ArenaRef; 4]>::new();
+        let depot = &mut self.graph.depot;
+        let mut replayed = SmallVec::<[DepotRef; 4]>::new();
         let replaying = matches!(asked.lending, Lending::Replay(_));
         let (under, missed, wanting, sought) = match asked.lending {
             Lending::Parent => (asker, false, None, None),
@@ -740,30 +755,30 @@ where
                 let (under, missed, wanting, sought) = self.seek(seek);
                 (under, missed || built, wanting, sought)
             }
-            Lending::Under(under) if arena.is_live(under) => {
-                arena.stamp(under);
+            Lending::Under(under) if depot.is_live(under) => {
+                depot.stamp(under);
                 (under, false, None, None)
             }
             Lending::Under(_) => {
                 #[cfg(test)]
                 tally(|tiers| tiers.cold_births += 1);
-                (ArenaRef::ROOT, false, None, None)
+                (DepotRef::ROOT, false, None, None)
             }
             Lending::Compose(compose) => {
                 let (under, missed) = self.composed(compose);
                 (under, missed, None, None)
             }
         };
-        self.graph.arena.borrow(under);
+        self.graph.depot.borrow(under);
         // A replay's levels are held until the frame borrows the last: its chain holds them since.
         for level in replayed.iter().rev() {
-            self.graph.arena.release(*level);
+            self.graph.depot.release(*level);
         }
         if missed {
-            let _evicted = self.graph.arena.evict_to_budget();
+            let _evicted = self.graph.depot.evict_to_budget();
             #[cfg(test)]
             {
-                let unheld = self.graph.arena.unheld_bytes();
+                let unheld = self.graph.depot.unheld_bytes();
                 tally(|tiers| {
                     tiers.evicted += _evicted;
                     tiers.unheld = tiers.unheld.max(unheld);
@@ -772,7 +787,7 @@ where
         }
         #[cfg(test)]
         {
-            let live = self.graph.arena.len();
+            let live = self.graph.depot.len();
             tally(|tiers| tiers.live = tiers.live.max(live));
         }
         let arrival = match wanting {
@@ -786,7 +801,7 @@ where
             Continuation {
                 step: asked.step,
                 provenance,
-                arena: under,
+                depot: under,
                 arrival,
                 sought,
                 state: Rested::Dormant(asked.state, born),
@@ -794,7 +809,7 @@ where
         )
     }
 
-    /// The arena node a frame born by a replay runs under, whether any level missed, the
+    /// The depot slot a frame born by a replay runs under, whether any level missed, the
     /// composition its first step must rebuild, and the request its first step lays a level from:
     /// each of `levels` found under the one before, or settled there, from `base`, the asker's —
     /// its pins found or built first — and borrowed into `held` until the frame borrows its own;
@@ -803,8 +818,8 @@ where
     fn replay(
         &mut self,
         levels: Vec<Replayed<'graph>>,
-        base: ArenaRef,
-        held: &mut SmallVec<[ArenaRef; 4]>,
+        base: DepotRef,
+        held: &mut SmallVec<[DepotRef; 4]>,
     ) -> Placing<'graph> {
         // The frame was counted cold where its own seek found its parent gone; it is born warm.
         #[cfg(test)]
@@ -814,6 +829,11 @@ where
         {
             tally(|tiers| tiers.cold_births = tiers.cold_births.saturating_sub(1));
         }
+        // A chain resting on a layer the load laid starts there; any other, at the asker's.
+        let rests = (levels.first()).map(|first| first.seek.parent);
+        let base = rests
+            .filter(|at| at.load_ordinal().is_some())
+            .unwrap_or(base);
         let (mut parent, mut missed) = (base, false);
         let count = levels.len();
         for (at, Replayed { seek, pins }) in levels.into_iter().enumerate() {
@@ -828,23 +848,40 @@ where
             if wanting.is_some() || under == parent {
                 return (under, missed, wanting, None);
             }
-            self.graph.arena.borrow(under);
+            self.graph.depot.borrow(under);
             held.push(under);
             parent = under;
         }
         (parent, missed, None, None)
     }
 
-    /// The arena node a frame `seek` asks for runs under, whether it was a miss, the composition
+    /// The depot slot a frame `seek` asks for runs under, whether it was a miss, the composition
     /// its first step must rebuild, and — where the seek hands it back and the frame runs under the
     /// settlement it sought — the request its first step lays a level from: the parent itself for a
-    /// seek with no key; else the settlement under the parent the key names, stamped, or built —
-    /// its binding's image relayed into the agent tier under the root, nothing relayed under a
-    /// composition. The root, cold, for a parent that is no longer live. A miss under a composition
+    /// seek with no key; under the root or a load layer, the layer the load laid beneath it for the
+    /// key, which lays no level; else the settlement under the parent the key names, stamped, or
+    /// built — its binding's image relayed into the agent tier under the root, nothing relayed
+    /// under a composition. The root, cold, for a parent that is no longer live, handed the
+    /// request whatever the seek says, which the frame's replay seeks its own layer with. A miss under a composition
     /// binding a module of another composed code pins that code's composition, where no layer below
     /// holds the module's tree; where that composition is gone, the frame is born under the parent
     /// wanting it rebuilt.
     fn seek(&mut self, seek: Seek<'graph>) -> Placing<'graph> {
+        #[cfg(test)]
+        let (key, before) = (
+            (seek.settlement.as_ref()).map(|(_, sought)| sought.key),
+            TIERS.with(std::cell::Cell::get),
+        );
+        let placing = self.placed(seek);
+        #[cfg(test)]
+        if let (Some(key), Some(answered)) = (key, ANSWERED.with(std::cell::Cell::get)) {
+            answered(key, before, TIERS.with(std::cell::Cell::get));
+        }
+        placing
+    }
+
+    /// [`seek`](Self::seek)'s answer.
+    fn placed(&mut self, seek: Seek<'graph>) -> Placing<'graph> {
         let Seek {
             parent,
             settlement,
@@ -853,30 +890,50 @@ where
         let Some((image, sought)) = settlement else {
             // A callee of composed code whose composition is gone is born under the root, and
             // bounces with its syntax.
-            return match self.graph.arena.is_live(parent) {
+            return match self.graph.depot.is_live(parent) {
                 true => (parent, false, None, None),
-                false => (ArenaRef::ROOT, false, None, None),
+                false => (DepotRef::ROOT, false, None, None),
             };
         };
         let key = sought.key;
         #[cfg(test)]
         tally(|tiers| tiers.sought += 1);
-        let arena = &mut self.graph.arena;
-        if !arena.is_live(parent) {
+        let depot = &mut self.graph.depot;
+        // A callee whose depot slot is gone is born cold under the root, and handed its request,
+        // which its first step's replay seeks its own layer with.
+        if !depot.is_live(parent) {
             #[cfg(test)]
             tally(|tiers| tiers.cold_births += 1);
-            return (ArenaRef::ROOT, false, None, None);
+            return (
+                DepotRef::ROOT,
+                false,
+                None,
+                Some(Box::new(Requested { sought, image })),
+            );
         }
         let handed = |image, sought| hands_back.then(|| Box::new(Requested { sought, image }));
-        let door = arena.door(parent);
+        // Under the root or a load layer, a layer the load laid answers first: never evicted, it
+        // borrows nothing, and a frame under it lays no level.
+        let beneath = match parent.opened() {
+            None => Some(parent.load_ordinal()),
+            Some(_) => None,
+        };
+        if let Some(beneath) = beneath
+            && let Some((ordinal, _)) = self.graph.facts.layer(beneath, key)
+        {
+            #[cfg(test)]
+            tally(|tiers| tiers.laid += 1);
+            return (DepotRef::load(ordinal), false, None, None);
+        }
+        let door = depot.door(parent, self.graph.facts);
         let base = door.composition.map(|(digest, _)| digest);
-        if let Some(found) = arena.find(parent, key) {
+        if let Some(found) = depot.find(parent, key) {
             #[cfg(debug_assertions)]
             assert!(
                 base.is_some() || self.holds_binding(&image),
                 "a hit's binding rests: its key digests the content its types are read from"
             );
-            self.graph.arena.stamp(found);
+            self.graph.depot.stamp(found);
             return (found, false, None, handed(image, sought));
         }
         // Under a composition, each module of other composed code no layer below holds the tree
@@ -902,7 +959,7 @@ where
                 {
                     continue;
                 }
-                match arena.composition(composed) {
+                match depot.composition(composed) {
                     Some(at) => {
                         if !pins.contains(&at) {
                             pins.push(at);
@@ -912,7 +969,7 @@ where
                 }
             }
         }
-        let pinned = arena.pinned(&pins);
+        let pinned = depot.pinned(&pins);
         // The binding's types rest once it resolves, before its walk reads them: in the agent tier
         // under the root, and in the walk's own chain under a composition.
         let resting: crate::values::Chain<'graph, '_, 'graph, '_> = self.graph.tiers.resting();
@@ -928,7 +985,7 @@ where
         };
         let settles = self.graph.settles;
         let built = Settled::build(
-            arena.under(parent),
+            depot.under(parent, self.graph.facts),
             pinned,
             self.graph.facts,
             |bump, below, pinned, witness| {
@@ -939,7 +996,7 @@ where
             debug_assert_eq!(relayed, before, "nothing rests for a settlement not built");
             return (parent, false, None, None);
         };
-        let settled = self.graph.arena.insert(parent, key, facts, pins);
+        let settled = self.graph.depot.insert(parent, key, facts, pins);
         #[cfg(test)]
         tally(|tiers| {
             tiers.settled += 1;
@@ -952,7 +1009,7 @@ where
     /// The composition `compose` asks for, and whether it was a miss: found by its syntax digest
     /// and stamped; built through the program's door over the syntax a bounce copied; or, with no
     /// syntax in hand, the root, where the cell's first step bounces.
-    fn composed(&mut self, compose: Compose) -> (ArenaRef, bool) {
+    fn composed(&mut self, compose: Compose) -> (DepotRef, bool) {
         let digest = match &compose {
             Compose::Find(digest) => *digest,
             Compose::Owned(syntax) => {
@@ -961,12 +1018,12 @@ where
                 syntax.digest()
             }
         };
-        if let Some(found) = self.graph.arena.composition(digest) {
-            self.graph.arena.stamp(found);
+        if let Some(found) = self.graph.depot.composition(digest) {
+            self.graph.depot.stamp(found);
             return (found, false);
         }
         let Compose::Owned(syntax) = compose else {
-            return (ArenaRef::ROOT, false);
+            return (DepotRef::ROOT, false);
         };
         let settles = self.graph.settles;
         let facts = Composed::build(syntax, |syntax, bump, witness| {
@@ -974,7 +1031,7 @@ where
         });
         #[cfg(test)]
         tally(|tiers| tiers.composed += 1);
-        (self.graph.arena.compose(digest, facts), true)
+        (self.graph.depot.compose(digest, facts), true)
     }
 
     /// Whether the frozen load or the agent tier holds the node of every handle `image` carries,
@@ -986,18 +1043,18 @@ where
     }
 
     /// Enter one cell, wake its state, and run the step its continuation names — beside `kept`'s
-    /// region header where it names a kept cell. Hands back the provenance and arena node it read
+    /// region header where it names a kept cell. Hands back the provenance and depot slot it read
     /// off the continuation.
     fn step(
         &mut self,
         cell: CellHandle,
         kept: Option<KeptCell>,
-    ) -> Result<(Action<'graph, B>, Provenance, ArenaRef), DrainStalled> {
+    ) -> Result<(Action<'graph, B>, Provenance, DepotRef), DrainStalled> {
         self.spawns.clear();
         // `enter` borrows the graph exclusively and the step borrows the buffer, so the two are
         // taken as separate fields rather than through `self`.
         let Scheduler { graph, spawns, .. } = self;
-        let (tiers, facts, books) = (graph.tiers, graph.facts, &graph.arena);
+        let (tiers, facts, books) = (graph.tiers, graph.facts, &graph.depot);
         let Some(kept) = kept else {
             return (graph.cells)
                 .enter(cell, |context| {
@@ -1048,10 +1105,10 @@ where
         Ok(born)
     }
 
-    /// Release a finished cell by its kind, and its borrow of `arena`, the arena node it ran
+    /// Release a finished cell by its kind, and its borrow of `depot`, the depot slot it ran
     /// under. Its step has already filled its consumer's receipt, so nothing is in flight at the
     /// death. The drain runs no slab cell — a slab cell is a root — so one here is refused.
-    fn retire(&mut self, cell: CellHandle, arena: ArenaRef) -> Result<(), DrainStalled> {
+    fn retire(&mut self, cell: CellHandle, depot: DepotRef) -> Result<(), DrainStalled> {
         let released = match cell {
             CellHandle::Slab(_) => false,
             CellHandle::Tree(handle) => self.graph.cells.release_tree(handle).is_ok(),
@@ -1060,7 +1117,7 @@ where
         if !released {
             return Err(DrainStalled::Unreleasable);
         }
-        self.graph.arena.release(arena);
+        self.graph.depot.release(depot);
         #[cfg(test)]
         self.census.retired();
         Ok(())
@@ -1114,10 +1171,10 @@ fn run_step<'graph, 'step, 'here, 'scratch, 'lent, B: StepBundle<'graph>>(
         CellHandle,
     ),
     tiers: TypeTiers<'graph>,
-    (load, books): (&'graph LoadFacts<'graph>, &BuildArena<'graph>),
+    (load, books): (&'graph LoadFacts<'graph>, &BuildDepot<'graph>),
     spawns: &mut Spawns<'graph, B>,
     beside: Option<&dyn ReadsBeside<'graph>>,
-) -> (Action<'graph, B>, Provenance, ArenaRef)
+) -> (Action<'graph, B>, Provenance, DepotRef)
 where
     'graph: 'step + 'here + 'lent,
     'here: 'scratch,
@@ -1127,7 +1184,7 @@ where
     let Continuation {
         step,
         provenance,
-        arena,
+        depot,
         arrival,
         sought,
         state,
@@ -1147,7 +1204,7 @@ where
             match wake::<B>(context, tiers, dormant, (born, provenance.loop_cell)) {
                 Ok(woken) => woken,
                 Err(_) => {
-                    return (Action::refused(StepError::Unredeemable), provenance, arena);
+                    return (Action::refused(StepError::Unredeemable), provenance, depot);
                 }
             }
         }
@@ -1161,8 +1218,8 @@ where
         context.writer().in_use(),
     );
     // The door reads the settlement the cell runs under, over the composition its chain rests on
-    // or the load, borrowed from the arena for the step.
-    let door = books.door(arena);
+    // or the load, borrowed from the depot for the step.
+    let door = books.door(depot, load);
     let (facts, composed) = match door.composition {
         Some((digest, composition)) => (Facts::composed(composition, door.top), Some(digest)),
         None => (Facts::under(load, door.top), None),
@@ -1172,7 +1229,7 @@ where
         tiers,
         facts,
         &provenance,
-        (arena, composed, arrival, sought),
+        (depot, composed, arrival, sought),
         (books, spawns, beside),
         state,
         scratch,
@@ -1212,7 +1269,7 @@ where
             });
         });
     }
-    (step, provenance, arena)
+    (step, provenance, depot)
 }
 
 /// Wake a birth a spawn, a hop or a root work's `leave` put to rest: redeem it into this step and

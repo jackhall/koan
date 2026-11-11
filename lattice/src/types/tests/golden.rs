@@ -11,7 +11,7 @@ use crate::types::component::Component;
 use crate::types::digest::{ComponentMember, node_digest};
 use crate::types::handle::{DeclaredType, Handle, KType, Parametric, TypeHandle, builtin_types};
 use crate::types::kind::KKind;
-use crate::types::node::{ContentKey, Group, NodeSchema, TypeNode};
+use crate::types::node::{ContentKey, Group, NodeSchema, PathClass, TypeNode};
 use crate::types::record::Record;
 use crate::types::render::display_name;
 use crate::types::run::{Elements, Run};
@@ -296,6 +296,11 @@ fn every_node_kind_has_its_own_tag() {
             lower: types.never(),
             bound: types.any(),
         },
+        TypeNode::Path {
+            class: PathClass([0, 0]),
+            name,
+            bound: types.any(),
+        },
         TypeNode::Union {
             members: Run::over(members),
         },
@@ -512,6 +517,13 @@ fn every_compound_variant_digests_as_pinned() {
             0x3aafb1d8a61c89a70c6463338076a428,
         ),
         (
+            "Path",
+            types
+                .path_variable(PathClass([3, 0]), elt, KType::ANY)
+                .raw(),
+            0x0fc2ed31c2082cce1f9edf9d40dd80b9,
+        ),
+        (
             "Union",
             number_or_str.raw(),
             0x3a7468915d9624ce6495d3589cba8424,
@@ -604,6 +616,7 @@ fn every_compound_variant_digests_as_pinned() {
         "Scheme",
         "Quantified",
         "Lexical",
+        "Path",
         "Union",
         "ConstructorApply",
         "Signature",
@@ -660,6 +673,7 @@ fn variant_name<'run, H: crate::types::handle::Naming<'run>>(
         TypeNode::Scheme { .. } => "Scheme",
         TypeNode::Quantified { .. } => "Quantified",
         TypeNode::Lexical { .. } => "Lexical",
+        TypeNode::Path { .. } => "Path",
         TypeNode::Union { .. } => "Union",
         TypeNode::ConstructorApply { .. } => "ConstructorApply",
         TypeNode::Signature { .. } => "Signature",
@@ -693,6 +707,25 @@ fn the_family_tops_are_spelled_value_type_and_code() {
         );
         assert_eq!(display_name(top, &types, &symbols).to_string(), spelling);
     }
+}
+
+/// A union prints the same however its run first built it: each chain stores the members in the
+/// order it was handed them, and the text sorts them.
+#[test]
+fn a_unions_text_is_independent_of_the_order_it_was_built_in() {
+    let symbols = SymbolInterner::new();
+    let printed = |reversed: bool| {
+        let bump = Bump::new();
+        let types = crate::types::tests::tiered(&bump);
+        let mut members = [KType::STR, types.list(KType::ANY), KType::NUMBER];
+        if reversed {
+            members.reverse();
+        }
+        let union = types.union_of(&bump, &members);
+        display_name(union, &types, &symbols).to_string()
+    };
+    assert_eq!(printed(false), ":((LIST OF Any) | Number | Str)");
+    assert_eq!(printed(true), printed(false));
 }
 
 /// Every builtin type name lowers to the handle it names, and every one but the bare containers —

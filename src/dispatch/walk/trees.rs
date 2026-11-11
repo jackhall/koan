@@ -22,27 +22,35 @@
 //! callee whose strongly connected component has closed and is trivial
 //! ([recursion](../../build/README.md#recursion)).
 //!
+//! At each call the load's walk resolves to one callable body — a keyworded use it selected, or
+//! a call by name whose head's tree is a closure — it records what the call passes at each of the
+//! callee's slots ([`Traced`]): load content, or a `FOR ALL` name or parameter of the callable
+//! owning the call passed on bare, a parameter only at its callee's own closed declared type.
+//! The [trace](../../build/README.md#the-trace) folds those records.
+//!
 //! Trees on the chain are memoized per shape and site, and each binder's tree once on the chain and
 //! once through each body's tree, except where a cycle cut on an outer binder, a fallback the
 //! walk's progress could still sharpen, or a leaf keyed on the read site shaped it. A binder
 //! already being read reads as a leaf, so no tree is built through itself.
 
+use crate::elaborate::judge;
 use crate::elaborate::signature_member;
 use crate::memory::{BumpBackedMap, BumpVec, bump_table, collect, resident};
 use crate::parse::{ExpressionPart, KExpression};
 use crate::scope::{
-    Binder, BodyShape, CaptureSlot, CaptureSource, Coordinate, Identity, KnotNode, Leaf, Narrowing,
-    NodeCapture, ParameterBinding, Position, Segment, ShapeError, ShapeKind, Shapes, Site, Slot,
-    Static, StaticCallable, StaticInstance, Store, Target, Tree, Unfolded, Within,
+    Bare, Binder, BodyShape, CaptureSlot, CaptureSource, Content, Coordinate, Fixed, Identity,
+    KnotNode, Leaf, Narrowing, NodeCapture, ParameterBinding, Point, Position, Revealed, Segment,
+    ShapeError, ShapeGroupMap, ShapeKind, Shapes, Site, Slot, Static, StaticCallable,
+    StaticInstance, Store, Target, Traced, Tree, Unfolded, Within,
 };
 use crate::symbols::{BinderSymbol, ValueSymbol};
-use crate::type_lattice::{KType, TypeNode};
-use crate::values::digest::{Operator, literal_digest, type_digest};
+use crate::type_lattice::{DeclaredType, Interval, KKind, KType, Parametric, TypeNode};
+use crate::values::digest::{literal_digest, type_digest};
 use crate::values::{retype_target, retypes_by_header};
 
 use super::super::evaluate::{Form, Wanted, of_node, of_part, slots};
 use super::{Landing, Pass, address};
-use crate::knot::module::view::{self, Ascription};
+use crate::knot::module::view::{self, Ascription, Unascribable};
 
 type Read<'o, T> = Result<T, ShapeError<'o>>;
 
@@ -74,9 +82,9 @@ impl Shaped {
     };
 }
 
-/// What a `:|`'s fit solved, where the load knows it, beside the type its source carries and the
-/// unit that read them.
-pub(super) type Fitted = (Option<KType>, Option<KType>, super::Tag);
+/// What a `:|`'s fit solved over its underlying, where the load knows it, beside the type its
+/// source carries, the member it shows that its source hides, and the unit that read them.
+pub(super) type Fitted = (Option<KType>, Option<KType>, Option<Revealed>, super::Tag);
 
 /// A binder's tree as [`binder_tree`](Pass::binder_tree) builds it: settled, or a fallback the
 /// walk's progress could still sharpen, which each return names.
@@ -144,7 +152,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
 
     /// The callable cell of the body `body`, read through its own chain's path resolutions.
     pub(super) fn callable_of(&self, body: &'graph BodyShape<'graph>) -> StaticCallable<'o> {
-        self.resolved_callable(self.body_level(body), self.callable_cell(body))
+        self.resolved_callable(self.callable_cell(body))
     }
 
     /// The tree of `part`, read in the shape at chain level `level`.
@@ -256,7 +264,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                     unreachable!("an ascription has an operand, its keyword and a type")
                 };
                 let typed = self.type_cell(shape, shape.site(&ascribed.value));
-                match self.resolved_type(self.scope_level(scope), typed) {
+                match self.resolved_type(typed) {
                     Static::Closed(application) => {
                         let source = self.tree_in(scope, &operand.value, None)?;
                         Settled(match mode {
@@ -271,10 +279,10 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 }
             }
             Form::Leaf(ExpressionPart::Literal(literal)) => {
-                Settled(Tree::Digest(literal_digest(literal)))
+                Settled(Tree::Digest(literal_digest(literal), None))
             }
             Form::Leaf(ExpressionPart::SigiledTypeExpr(_) | ExpressionPart::RecordType(_)) => {
-                match self.resolved_type(self.scope_level(scope), self.type_cell(shape, site)) {
+                match self.resolved_type(self.type_cell(shape, site)) {
                     Static::Closed(handle) => Settled(named_type(self.types, handle)),
                     _ => Provisional(self.fallback(scope, named, site)?),
                 }
@@ -355,6 +363,13 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             Scope::Body { captures, .. } => Some(captures.as_ptr().addr()),
         };
         if let Some((tree, tag)) = self.binders.get(&(key.0, slot, under)).copied() {
+            self.gather(tag);
+            return Ok(tree);
+        }
+        // A standing binder's content tree is read off the record of the unit binding it.
+        if let Scope::Chain(level) = scope
+            && let Some((tree, tag)) = self.stood_content(level, slot)
+        {
             self.gather(tag);
             return Ok(tree);
         }
@@ -624,9 +639,14 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 carried, source, ..
             } => {
                 let (types, scratch) = (self.types, self.scratch);
-                let declared =
-                    signature_member(types, scratch, carried.into(), BinderSymbol::Value(label))
-                        .and_then(|read| read.declared.as_type());
+                let declared = signature_member(
+                    self,
+                    types,
+                    scratch,
+                    carried.into(),
+                    BinderSymbol::Value(label),
+                )
+                .and_then(|read| read.declared.as_type());
                 match (
                     self.read_step(*source, label, rest, joined, site)?,
                     declared,
@@ -637,7 +657,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                     _ => None,
                 }
             }
-            Tree::Digest(_) | Tree::Knot { .. } | Tree::View { .. } => None,
+            Tree::Digest(..) | Tree::Knot { .. } | Tree::View { .. } => None,
         })
     }
 
@@ -673,12 +693,12 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         if let Tree::Leaf(Leaf::Unnamed(_)) = tree {
             return Ok(tree);
         }
-        if let Tree::Digest(_) = tree {
+        if let Tree::Digest(..) = tree {
             // A type value retyped to a kind may take it, and its digest names its kind.
-            let kind = matches!(types.node(declared), TypeNode::OfKind(_));
+            let kind = matches!(judge::type_node(self, types, declared), TypeNode::OfKind(_));
             return Ok(if kind { unnamed } else { tree });
         }
-        let Some(declared) = types.concrete(declared) else {
+        let Some(declared) = judge::closed(self, types, declared) else {
             return Ok(if tree.closed() { unnamed } else { tree });
         };
         if !retypes_by_header(types, declared) {
@@ -722,8 +742,9 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         })
     }
 
-    /// The opaque view at `application` over `source`, read at the part at `site`: keyed on what
-    /// its fit solves where the load knows the source's signature, and open otherwise.
+    /// The opaque view at `application` over `source`, read at the part at `site`: built over
+    /// the source's underlying and keyed on what its fit solves over it, where the load knows
+    /// both, and open otherwise — a view of a view that shows a part its source hides among them.
     pub(super) fn view_tree(
         &mut self,
         application: KType,
@@ -733,20 +754,21 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         Ok(self.view_tree_held(application, source, site)?.0)
     }
 
-    /// [`view_tree`](Self::view_tree) beside the type `source` carries, where the load knows it:
-    /// its fit is memoized by `application` and the source's identity, and a closed view's
-    /// [`view_of`](Self::view_of) seeded from the same fit.
+    /// [`view_tree`](Self::view_tree) beside the type `source` carries, where the load knows it,
+    /// and the member the view shows that its source hides, where it does: its fit is memoized by
+    /// `application` and the source's identity, and a closed view's [`view_of`](Self::view_of)
+    /// seeded from the same fit.
     pub(super) fn view_tree_held(
         &mut self,
         application: KType,
         source: Tree<'o>,
         site: Site,
-    ) -> Read<'o, (Tree<'o>, Option<KType>)> {
+    ) -> Read<'o, (Tree<'o>, Option<KType>, Option<Revealed>)> {
         let key = (application, source.identity());
-        let (from, held, seed) = match self.view_trees.get(&key).copied() {
-            Some((from, held, tag)) => {
+        let (from, held, revealed, seed) = match self.view_trees.get(&key).copied() {
+            Some((from, held, revealed, tag)) => {
                 self.gather(tag);
-                (from, held, None)
+                (from, held, revealed, None)
             }
             None => {
                 #[cfg(test)]
@@ -755,33 +777,69 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                     counts.fits += 1;
                 });
                 let (types, scratch) = (self.types, self.scratch);
-                let held = self.carried_type(super::views::Carried::Tree(source), site)?;
-                let fit =
-                    view::opaque_view(held, application, source.bare().digest(), types, scratch);
-                let (from, viewed) = (
-                    fit.map(|(from, _)| from),
-                    fit.and_then(|(_, viewed)| viewed),
-                );
+                let operand = self.operand_of(source, site)?;
+                let (exposure, revealed) =
+                    match view::exposure(operand, application, application, &[], types, scratch) {
+                        Ok(exposure) => (Some(exposure), None),
+                        Err(Unascribable::Reveals { member }) => (None, Some(member)),
+                        Err(_) => (None, None),
+                    };
+                let from = exposure
+                    .and_then(|exposure| exposure.from)
+                    .map(|from| from.handle);
                 let tag = self.innermost();
                 // A leaf no binder names is keyed on its site, which the identity does not tell apart.
                 if key.1 != Identity::Unnamed {
-                    self.view_trees.insert(key, (from, held, tag));
+                    self.view_trees
+                        .insert(key, (from, operand.held, revealed, tag));
                 }
-                (from, held, viewed.map(|viewed| (viewed, tag)))
+                (
+                    from,
+                    operand.held,
+                    revealed,
+                    exposure.map(|exposure| (exposure, tag)),
+                )
             }
         };
         // Built over this source itself, which another of its identity may not be.
+        let underlying = self.underlying_tree(source);
         let tree = Tree::view(
-            Operator::Opaque,
             application,
             resident(self.lay, source),
+            resident(self.lay, underlying),
             from,
         );
-        // A closed view's source is closed, so its fit read what the view binds too.
+        // A closed view's underlying is closed, so its fit read what the view binds too.
         if let (identity @ Identity::Closed(_), Some((viewed, tag))) = (tree.identity(), seed) {
             self.views.entry(identity).or_insert((Some(viewed), tag));
         }
-        Ok((tree, held))
+        Ok((tree, held, revealed))
+    }
+
+    /// The tree of the module a view over `source` is built over: an opaque view's underlying, a
+    /// module a frame binds that is one by its underlying's digest, and any other module itself,
+    /// behind any header.
+    pub(super) fn underlying_tree(&self, source: Tree<'o>) -> Tree<'o> {
+        match source.bare() {
+            Tree::View { underlying, .. } => *underlying,
+            Tree::Digest(
+                _,
+                Some(Bare {
+                    sealing: Some(sealing),
+                    ..
+                }),
+            ) => Tree::Digest(
+                sealing.underlying,
+                Some(resident(
+                    self.lay,
+                    Bare {
+                        signature: Some(sealing.underlying_signature),
+                        sealing: None,
+                    },
+                )),
+            ),
+            bare => bare,
+        }
     }
 
     /// The trees of what `body`, born in `scope` at the part at `site`, composes: each capture its
@@ -912,41 +970,10 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         let Narrowing::Selected(coordinate) = self.use_at(level, index).narrowing else {
             return Ok(None);
         };
-        let followed = self.follow(level, coordinate);
-        let Landing::Slot { level: home, slot } = followed.landing else {
+        let site = shape.site_of_node(node);
+        let Some((callee, names, solution)) = self.selected_callee(level, coordinate, site) else {
             return Ok(None);
         };
-        let declaring = self.chain[home].shape;
-        let (Some(callee), Some(_)) = (declaring.births(slot), declaring.registration(slot)) else {
-            return Ok(None);
-        };
-        if followed.crossed || callee.kind() != ShapeKind::Callable {
-            return Ok(None);
-        }
-        let Static::Closed(registered) =
-            self.resolved_registered(home, self.registered_cell(declaring, slot))
-        else {
-            return Ok(None);
-        };
-        let ParameterBinding::Named(names) = registered.parameters else {
-            return Ok(None);
-        };
-        // Each `FOR ALL` variable at the closed point the pass solved it to at this use.
-        let mut solution = BumpVec::new_in(self.scratch);
-        if !registered.quantifier_map.is_empty() {
-            let site = shape.site_of_node(node);
-            let Some(points) = self.selection_at(level, site) else {
-                return Ok(None);
-            };
-            for (name, at) in registered.quantifier_map.iter() {
-                let (Some(point), Some((variable, _))) =
-                    (points.closed(at), callee.slot(BinderSymbol::Type(name)))
-                else {
-                    return Ok(None);
-                };
-                solution.push((variable, point));
-            }
-        }
         let wanted = slots(node, self.scratch);
         let mut arguments = BumpVec::with_capacity_in(wanted.len(), self.scratch);
         for (position, wanted) in wanted.iter().enumerate() {
@@ -959,6 +986,330 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             arguments.push((parameter, self.tree(level, part)?));
         }
         self.unfold(callee, &arguments, &solution, shape.site_of_node(node))
+    }
+
+    /// What the use at `site` of the shape at `level`, which selected `coordinate`, calls: a
+    /// registration's callable body, beside its parameter names in slot order and each `FOR ALL`
+    /// variable's slot at the closed point the walk solved it to there. `None` where it calls none
+    /// ([`selected_body`](Self::selected_body)) or a variable has no closed point.
+    #[allow(clippy::type_complexity)]
+    fn selected_callee(
+        &mut self,
+        level: usize,
+        coordinate: Coordinate,
+        site: Site,
+    ) -> Option<(
+        &'graph BodyShape<'graph>,
+        &'o [BinderSymbol],
+        BumpVec<'p, (Slot, KType)>,
+    )> {
+        let (callee, names, quantifier_map) = self.selected_body(level, coordinate)?;
+        // Each `FOR ALL` variable at the closed point the pass solved it to at this use.
+        let mut solution = BumpVec::new_in(self.scratch);
+        if !quantifier_map.is_empty() {
+            let points = self.selection_at(level, site)?;
+            for (name, at) in quantifier_map.iter() {
+                let (point, (variable, _)) =
+                    (points.closed(at)?, callee.slot(BinderSymbol::Type(name))?);
+                solution.push((variable, point));
+            }
+        }
+        Some((callee, names, solution))
+    }
+
+    /// The callable body a use in the shape at `level` that selected `coordinate` calls: a
+    /// registration's the chain declares, uncrossed, beside its parameter names in slot order and
+    /// its `FOR ALL` names. `None` where it calls none, or its registered type is not closed and
+    /// named.
+    fn selected_body(
+        &mut self,
+        level: usize,
+        coordinate: Coordinate,
+    ) -> Option<(
+        &'graph BodyShape<'graph>,
+        &'o [BinderSymbol],
+        ShapeGroupMap<'o>,
+    )> {
+        let followed = self.follow(level, coordinate);
+        let Landing::Slot { level: home, slot } = followed.landing else {
+            return None;
+        };
+        let declaring = self.chain[home].shape;
+        let (Some(callee), Some(_)) = (declaring.births(slot), declaring.registration(slot)) else {
+            return None;
+        };
+        if followed.crossed || callee.kind() != ShapeKind::Callable {
+            return None;
+        }
+        let Static::Closed(registered) =
+            self.resolved_registered(self.registered_cell(declaring, slot))
+        else {
+            return None;
+        };
+        let ParameterBinding::Named(names) = registered.parameters else {
+            return None;
+        };
+        Some((callee, names, registered.quantifier_map))
+    }
+
+    /// Record what the keyworded use `node` of the shape at `level`, which selected `coordinate`
+    /// at `site`, passes at its callee's slots, where it calls a callable body: each `FOR ALL`
+    /// name's point ([`fixed_point`](Self::fixed_point)) and each parameter's argument
+    /// ([`fixed_argument`](Self::fixed_argument)). A slot it passes nothing the trace follows at
+    /// is left out.
+    pub(super) fn trace(
+        &mut self,
+        level: usize,
+        node: &'graph KExpression<'graph>,
+        coordinate: Coordinate,
+        site: Site,
+    ) {
+        let Some((callee, names, quantifier_map)) = self.selected_body(level, coordinate) else {
+            return;
+        };
+        let scratch = self.scratch;
+        let mut fixed = BumpVec::new_in(scratch);
+        if !quantifier_map.is_empty()
+            && let Some(points) = self.selection_at(level, site)
+        {
+            for (name, at) in quantifier_map.iter() {
+                let (Some((slot, _)), Some(point)) =
+                    (callee.slot(BinderSymbol::Type(name)), points.points.get(at))
+                else {
+                    continue;
+                };
+                let point = match *point {
+                    Point::Closed(point) => Some(point.into()),
+                    Point::Rigid(point) => Some(point),
+                    Point::Carried(_) => None,
+                };
+                if let Some(at) = point.and_then(|point| self.fixed_point(level, point)) {
+                    fixed.push((slot, at));
+                }
+            }
+        }
+        let params = self.parameter_types(callee);
+        let wanted = slots(node, scratch);
+        for (position, wanted) in wanted.iter().enumerate() {
+            let (Wanted::Evaluated(part), Some(name)) = (wanted, names.get(position)) else {
+                continue;
+            };
+            let Some((slot, _)) = callee.slot(*name) else {
+                continue;
+            };
+            let declared = (params.and_then(|params| params.get(name.symbol())))
+                .and_then(|declared| judge::closed(self, self.types, declared));
+            if let Some(at) = self.fixed_argument(level, part, declared, site) {
+                fixed.push((slot, at));
+            }
+        }
+        fixed.sort_by_key(|(slot, _)| *slot);
+        let traced = Traced {
+            callee: callee.segment(),
+            call: node.source,
+            by_name: false,
+            fixed: collect(self.lay, fixed.iter().copied()),
+        };
+        self.record_traced(level, site, traced);
+    }
+
+    /// Record what the call by name `node` of the shape at `level` passes at its callee's slots,
+    /// where its head's tree is a member of a knot of a callable body of a closed type: each field
+    /// of a record literal argument's
+    /// ([`fixed_argument`](Self::fixed_argument)), and each `FOR ALL` name at the member's
+    /// instance, else at the point `intervals`, the call's solve of its group, gives it. A head
+    /// behind a header passes a `FOR ALL` name only at an instance, and no module, since its frame
+    /// solves and binds only once retyped. Kept at the head's site, where the text lists the call.
+    pub(super) fn trace_by_name(
+        &mut self,
+        level: usize,
+        node: &'graph KExpression<'graph>,
+        intervals: Option<&[Interval]>,
+    ) {
+        let [head, argument] = node.parts else {
+            return;
+        };
+        // An argument that is no record literal passes nothing the trace follows at any parameter.
+        let fields = match &argument.value {
+            ExpressionPart::RecordLiteral(fields) => *fields,
+            _ => &[],
+        };
+        let shape = self.chain[level].shape;
+        let Some(site) = self.shapes.head_site(shape, &head.value) else {
+            return;
+        };
+        let (headed, tree) = match self.tree(level, &head.value) {
+            Ok(Tree::Retyped { source, .. }) => (true, *source),
+            Ok(tree) => (false, tree),
+            Err(_) => return,
+        };
+        let Tree::Knot { members, index, .. } = tree else {
+            return;
+        };
+        let member = members[index as usize];
+        let callee = self.shape_at(member.body);
+        if callee.kind() != ShapeKind::Callable {
+            return;
+        }
+        let Static::Closed(callable) = self.callable_of(callee) else {
+            return;
+        };
+        let scratch = self.scratch;
+        let mut fixed = BumpVec::new_in(scratch);
+        if let DeclaredType::Scheme(_) = callable.ktype {
+            for (name, index) in callable.quantifier_map.iter() {
+                let Some((slot, _)) = callee.slot(BinderSymbol::Type(name)) else {
+                    continue;
+                };
+                let point = match member.instance.get(index) {
+                    Some(point) => Some(Parametric::from(*point)),
+                    None if headed => None,
+                    None => (intervals.and_then(|intervals| intervals.get(index)))
+                        .filter(|interval| judge::exact(self, self.types, **interval))
+                        .map(|interval| interval.upper),
+                };
+                if let Some(at) = point.and_then(|point| self.fixed_point(level, point)) {
+                    fixed.push((slot, at));
+                }
+            }
+        }
+        let params = self.parameter_types(callee);
+        for (name, value) in fields.iter() {
+            let Some((slot, position)) = callee.slot(*name) else {
+                continue;
+            };
+            if position != Position::PARAMETER {
+                continue;
+            }
+            let declared = (params.and_then(|params| params.get(name.symbol())))
+                .and_then(|declared| judge::closed(self, self.types, declared));
+            // Past a header the frame binds a module once retyped to the type the header shows,
+            // so only a type passes.
+            let passes = |at: &Fixed| match at {
+                Fixed::Content(Content::Type(_)) => true,
+                Fixed::Content(Content::Module { .. }) => !headed,
+                Fixed::Passed(_) => !headed || matches!(name, BinderSymbol::Type(_)),
+            };
+            if let Some(at) = self
+                .fixed_argument(level, value, declared, site)
+                .filter(passes)
+            {
+                fixed.push((slot, at));
+            }
+        }
+        fixed.sort_by_key(|(slot, _)| *slot);
+        let traced = Traced {
+            callee: callee.segment(),
+            call: node.source,
+            by_name: true,
+            fixed: collect(self.lay, fixed.iter().copied()),
+        };
+        self.record_traced(level, site, traced);
+    }
+
+    /// The parameter types of the callable body `callee`'s closed type, which its frame retypes its
+    /// arguments to.
+    fn parameter_types(
+        &self,
+        callee: &'graph BodyShape<'graph>,
+    ) -> Option<crate::type_lattice::Record<'o, Parametric>> {
+        match self.callable_of(callee) {
+            Static::Closed(callable) => match callable.ktype.view(self.types).body {
+                TypeNode::KFunction { params, .. } => Some(params),
+                _ => None,
+            },
+            _ => None,
+        }
+    }
+
+    /// What a `FOR ALL` name solved to `point`, in a use in the shape at `level`, passes: its
+    /// closed point, or the `FOR ALL` name of the callable owning the shape that `point` is
+    /// exactly, passed on. `None` for any other point.
+    fn fixed_point(&self, level: usize, point: Parametric) -> Option<Fixed> {
+        if let Some(closed) = judge::closed(self, self.types, point) {
+            return Some(Fixed::Content(Content::Type(closed)));
+        }
+        let TypeNode::Lexical {
+            level: variable, ..
+        } = judge::type_node(self, self.types, point)
+        else {
+            return None;
+        };
+        let owner = self.shape_at(self.shapes.owner(self.chain[level].shape.segment()));
+        if owner.kind() != ShapeKind::Callable {
+            return None;
+        }
+        let Some(Target::Local(slot)) = self.shapes.home(owner.segment(), variable) else {
+            return None;
+        };
+        let typed = matches!(owner.slot_name(slot), BinderSymbol::Type(_));
+        (typed && owner.position_of(slot) == Position::PARAMETER).then_some(Fixed::Passed(slot))
+    }
+
+    /// What the argument `part`, in a use in the shape at `level` at `site`, passes at a parameter
+    /// of the closed declared type `declared`: a module whose static type is an exact signature and
+    /// whose tree is closed; a closed type value; or a parameter of the callable owning the shape,
+    /// named bare, at that same closed declared type, passed on. `None` for anything else, and
+    /// where `declared` is not closed.
+    fn fixed_argument(
+        &mut self,
+        level: usize,
+        part: &'graph ExpressionPart<'graph>,
+        declared: Option<KType>,
+        site: Site,
+    ) -> Option<Fixed> {
+        let (types, shape) = (self.types, self.chain[level].shape);
+        let declared = declared?;
+        if let Some(slot) = self.shapes.passed_parameter(shape, part) {
+            let owner = self.shape_at(self.shapes.owner(shape.segment()));
+            let own = (self.parameter_types(owner))
+                .and_then(|params| params.get(owner.slot_name(slot).symbol()))
+                .and_then(|own| judge::closed(self, types, own));
+            return (own == Some(declared)).then_some(Fixed::Passed(slot));
+        }
+        if let Some(named) = self.type_value(level, part) {
+            return Some(Fixed::Content(Content::Type(named)));
+        }
+        let at = (self.part_type(level, shape.site(part)))
+            .and_then(|typed| judge::exactly(self, types, typed))
+            .filter(|exact| exact.kind_of(types) == KKind::Signature)?;
+        let tree = self.tree(level, part).ok()?;
+        // Only a closed tree.
+        tree.digest()?;
+        // The run's knot member: a retype's bare member, a view or a body itself.
+        let mut member = tree;
+        while let Tree::Retyped { source, .. } = member {
+            member = *source;
+        }
+        let own = self
+            .carried_type(super::views::Carried::Tree(member), site)
+            .ok()??;
+        debug_assert!(
+            !matches!(tree, Tree::Body { .. }) || at == own,
+            "a bare module is typed its own type: a differing annotation retypes it"
+        );
+        Some(Fixed::Content(Content::Module {
+            content: member.digest()?,
+            at,
+            own,
+            declared,
+        }))
+    }
+
+    /// The closed type the type value `part`, read in the shape at `level`, names: `None` for any
+    /// other part.
+    fn type_value(&self, level: usize, part: &'graph ExpressionPart<'graph>) -> Option<KType> {
+        let shape = self.chain[level].shape;
+        match part {
+            ExpressionPart::Type(_) => self.head_handle(level, part),
+            ExpressionPart::SigiledTypeExpr(_) | ExpressionPart::RecordType(_) => {
+                match self.resolved_type(self.type_cell(shape, shape.site(part))) {
+                    Static::Closed(handle) => Some(handle),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
     }
 
     /// The tree of the call by name `node` of the shape at `level`, unfolded where its head's tree
@@ -1098,7 +1449,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             return Ok(*substituted);
         }
         let substituted = match tree {
-            Tree::Digest(_) | Tree::Leaf(Leaf::Unnamed(_)) => tree,
+            Tree::Digest(..) | Tree::Leaf(Leaf::Unnamed(_)) => tree,
             Tree::Body { body, captures, .. } => Tree::body(
                 self.shape_at(body),
                 self.substituted_captures(captures, call, site, done)?,
@@ -1236,7 +1587,10 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
 
 /// The tree of a type value naming `named` at its own kind, as the run births it.
 fn named_type<'o>(types: &crate::values::Chain<'_, '_, '_, '_>, named: KType) -> Tree<'o> {
-    Tree::Digest(type_digest(named, KType::of_kind(named.kind_of(types))))
+    Tree::Digest(
+        type_digest(named, KType::of_kind(named.kind_of(types))),
+        None,
+    )
 }
 
 /// Whether `body` is `callee` or a body nested in it, at any depth: a binder bound once per call

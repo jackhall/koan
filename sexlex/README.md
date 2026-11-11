@@ -137,9 +137,9 @@ indented deeper nests inside it. Three things suspend it, and each exists for a
 concrete shape the language above wants.
 
 **Inside `[` or `{`, lines join flat.** `flat` goes above zero and every `Line`
-token is swallowed. A list or a record laid out over several lines is one run of
-items, which is what a reader of a collection wants — the line breaks were
-formatting.
+token is swallowed. A list or a record literal laid out over several lines is
+one run of items, which is what a reader of a collection wants — the line
+breaks were formatting.
 
 **A line ending in `,` joins the next line flat**, whatever its indentation. This
 is the continuation escape hatch outside brackets: an argument run that grew too

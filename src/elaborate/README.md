@@ -29,7 +29,8 @@ gives.
 
 A parameter and return type of a callable are eager mentions of the enclosing
 shape, so a signature is read through the enclosing shape's reader: at load, the
-shape the callable is written in.
+shape the callable is written in. A mention of one of the head's own
+parameters is the one exception ([below](#a-head-reading-its-parameters)).
 
 A type expression elaborates to a
 [parametric type](../../lattice/src/types/identity.md#typed-handles): a `FOR ALL` name
@@ -77,10 +78,10 @@ registry's own doors:
   kind, or an element that is no one-name quote, is unsupported;
 - `Union.Tag` is the member of the union whose tag it names, read through
   every newtype layer above the union as a field is read through those above a
-  record: under `UNION Shape = #{Sized: Maybe, Flat: Null}`, `Shape.Sized.Some`
-  is `Maybe`'s `Some`;
-- `Record.field` is the type the record under `Record` declares `field` with,
-  read through every newtype layer above the record — a `NEWTYPE`'s
+  record type: under `UNION Shape = #{Sized: Maybe, Flat: Null}`,
+  `Shape.Sized.Some` is `Maybe`'s `Some`;
+- `Record.field` is the type the record type under `Record` declares `field`
+  with, read through every newtype layer above the record type — a `NEWTYPE`'s
   representation, a union variant's payload — so a field's type is reached the
   way its value is. The read chains where a field is itself record-shaped:
   `Outer.inner.x`, `Shape.Circle.r`;
@@ -101,6 +102,16 @@ registry's own doors:
   by what the root holds. At load a path is a
   [path variable](#the-type-channel-at-load). A path that reads no type is
   `NoSuchMember`;
+- `TYPE OF x` is the type the value `x` carries, its operand a value name or
+  a chain of member reads rooted at one, never a call. Over a parameter of the
+  head it is written in it is that head's hidden variable or declared type
+  ([below](#a-head-reading-its-parameters)); over any other operand it is the
+  operand's static type where the load knows it exactly — closed, or rigid
+  where it names a type a run binds — so under `MODULE int_order = …`,
+  `m :(TYPE OF int_order)` admits what fits `int_order`'s signature. A module
+  binder the load does not know exactly leaves it unknown, to the layer that
+  binds the module; any other operand the load does not know exactly refuses
+  as `InexactOperand`, `TYPE OF x` over a body's parameter `x :Elt` among them;
 - `Pair {Key = Number}` is a declared type constructor applied to its arguments
   by the parameter names the family declares — every parameter named once and no
   name it does not declare — and `Number -> Wrap` is the same application spelled
@@ -171,7 +182,8 @@ A function type numbers its group by
 [first occurrence](../../lattice/src/types/relations.md#quantified-binders), which may
 differ from the order the group was written in, so `callable_type` hands back a
 **quantifier map** beside the handle: each `FOR ALL` name the declaration wrote,
-paired with its index in the group. The group keeps every name, so the map is a
+and each [hidden variable](#a-head-reading-its-parameters) its head's
+parameter reads introduce, paired with its index in the group. The group keeps every name, so the map is a
 permutation and a call solves each name. The knot stores the map and the
 registered shape with the function, and a call reads each type parameter's
 solution through the map.
@@ -184,8 +196,8 @@ because alpha-variants intern to one node and it carries whichever spelling
 interned first.
 
 The load's walk types every callable where the program loads and rests the
-result in the record of the unit that births it, and each registration's
-expression shape in the record of the unit that binds it
+result in the unit record of the unit that births it, and each registration's
+expression shape in that of the unit that binds it
 ([below](#the-type-channel-at-load)). A birth reads that type rather
 than elaborating its signature: as it is when it is closed, with its variables
 substituted when it is rigid, and as the layer that settled it under the
@@ -194,6 +206,40 @@ reads the registrations' shapes.
 
 A module body has no callable type here, and neither has a `USING` body: its
 type is its signature, below.
+
+### A head reading its parameters
+
+In the head of an `EXPR` definition or a `FN`, and in a `:(EXPR …)` or
+`:(FN …)` type, a slot's or the return's type may read any parameter of that
+head; an operator's head reads none. Each read is a
+**hidden variable** of the head's own `FOR ALL` group, which a call solves like
+any other, the priority classes saying which slot solves it:
+
+- `elem.Carrier`, where `elem`'s declared type leaves the head parameter
+  `Carrier` unpinned, is a hidden variable bounded by `Any`, and `elem`'s
+  declared type becomes that type pinning `Carrier` to it. So
+  `EXPR #(ECHO elem :Counter) -> elem.Carrier` is
+  `EXPR FOR ALL #[Carrier] #(ECHO elem :(Counter WITH {Carrier = Carrier})) -> Carrier`,
+  each call solving the variable to what the module passed fits `Counter` at.
+  The bound is `Any` whatever `Counter` bounds `Carrier` by, since a view's
+  carrier lies under `Any` alone. Where the declared type pins the label, the
+  read is the pin; where it declares the label a manifest member, that
+  member's type; otherwise it is `NoSuchMember`. A longer chain,
+  `elem.inner.Carrier`, refuses as `ParameterChain`.
+- `TYPE OF elem`, where `elem`'s declared type is closed, is a hidden variable
+  bounded by it, and `elem`'s declared type becomes that variable, so
+  `-> :(TYPE OF elem)` returns a value of the argument's own type. Where the
+  declared type is not closed — it names a `FOR ALL` name, holds one, or reads
+  another parameter — `TYPE OF elem` is that declared type.
+
+A parameter whose type reads itself, directly or through other parameters,
+refuses as `ParameterCycle`. A hidden variable is never found by name — a
+`Carrier` written in the body names whatever it names outside — and its name is
+render-only: the label, or the parameter's name capitalized (`Elem`), with the
+smallest free integer suffix where the group already holds that name
+(`Carrier2`). A head with a hidden variable is quantified, so a `FN` reading its
+parameters is a quantified function, and a function type reading its own
+parameters inside another type is refused as `Quantified`.
 
 ## A module's self-signature
 
@@ -235,9 +281,11 @@ here because `elaborate` sits below `knot` and the reader needs it. Its order:
 `schema_member` gives a named member's index beside its declared type, so the
 signature alone places a member, and nothing assumes a body's or a `USING`
 block's slot order matches. `signature_member` reads a member of every module
-under a type — a signature or an application of one, read through a rigid
-variable's bound, each pin substituted, and naming the first head parameter the
-application leaves unpinned; a union's value member is the join of its members'.
+under a type — a signature or an application of one, a variable read through
+its bound, each pin substituted as it is (a variable in one kept, since a pin is
+invariant and its variable has no bound to read it through), and naming the
+first head parameter the application leaves unpinned; a union's value member is
+the join of its members'.
 A signature names a keyworded member by its shape, never by a slot, so the
 registrations are the tail past every named member. The sort is by interned
 symbol, not by the text of a name.
@@ -292,11 +340,29 @@ different programs are one handle. A projection off a fellow is
 no field.
 
 **Only a nominal member can close a cycle.** A transparent alias and a signature
-name no fresh identity, so a cycle through one has no finite type: a cyclic
-component holding a `LET` or a `SIG` member is refused at that member. A
-non-nominal member is therefore only ever reached alone, and answers outside any
-window. This is the type channel's restatement of the nominal cut
-[the tie](../knot/README.md#the-tie) already makes for values.
+name no fresh identity, so a cycle through such members alone has no finite
+type, and is refused as `CycleWithoutNominal` at the member it re-enters:
+`SIG Chain = #[(VAL next :Chain)]` refuses at `Chain`. A cycle that passes through a nominal member is finite,
+since the nominal mints the identity:
+
+```koan
+SIG Holder = #[(VAL n :Nat)]
+NEWTYPE Nat = :{s :Holder}
+```
+
+A signature or alias is no window member. It elaborates **relative** where a
+fellow names it — a mention of a nominal fellow reads that fellow's relative
+handle, and a mention of another signature or alias reads that one's relative
+type, elaborated first — so a nominal member's schema holds it with each
+fellow still a `Sibling`. After the seal, its binder holds the type the sealed
+group reads the relative one as
+([`SealedGroup::absolute`](../../lattice/src/types/identity.md#recursive-groups-identity-is-the-scc-not-the-declaration)):
+one handle with a declaration of the same members written after the group,
+and the handle the nominal's sealed schema holds. A component of signatures
+and aliases alone opens no window: cyclic, it is refused at the member written
+first, and otherwise it is one member, answered alone. This is the type channel's
+restatement of the nominal cut [the tie](../knot/README.md#the-tie) already
+makes for values.
 
 ### Families
 
@@ -313,8 +379,9 @@ with the parameters as the innermost quantifier group, bounded by `Any`, so a
 nested `EXPR` type's group shadows them like any other outer group.
 Parameters take no bound. An application is covariant in its arguments
 ([the order](../../lattice/src/types/relations.md#the-relations)), so a payload placing a
-parameter at a contravariant position — inside a function type's parameter
-list — is refused rather than given an unsound order.
+parameter anywhere else — inside a function type's parameter list, or as the pin
+of a signature application (`Stack WITH {Elt = Elem}`), which the order compares
+by identity — is refused rather than given an unsound order.
 
 A fellow carries the parameter names of the family it names, so a family
 applies itself or a fellow family inside its own component while the window is
@@ -331,7 +398,7 @@ image's handles and runs neither.
 builtin and a declared `Result` are one handle.
 [`builtin_error`](builtin.rs) seals the builtin `Error` alike, through the
 window a `UNION Error = #{…}` listing one variant per fault kind, each over its
-record ([catching](../dispatch/README.md#catching)), seals through, so the
+record type ([catching](../dispatch/README.md#catching)), seals through, so the
 builtin and that declared twin are one handle.
 
 What a construction through a family carries is the construction rule's
@@ -423,7 +490,7 @@ and its own group — run unit by unit, where the program loads and before
 anything runs, **a quote's code included**. Each entry point types one fact
 through the one load-time reader, `Reader`, over a `TypeContext` the walk
 implements, and leaves every unknown it read in the context's gathering. The
-fact rests in the unit's record. A load-time type is one of three:
+fact rests in the unit record. A load-time type is one of three:
 
 - **closed** — it names only builtins and closed type binders, so it is the same
   at every run, and the run reads it as it is;
@@ -477,18 +544,20 @@ only the return reads included: under
 rigid, and each call binds it.
 
 **Paths.** A [path](#what-a-type-expression-is) is typed as a **path
-variable**: a lexical variable at a level past every name level of its chain.
-Its identity is a text fact — its root, the binder the owner's name lands at
-or the owner's own site where it is written in place, its member chain and its
-label — so two spellings of one path share it, and the shape numbers each
-spelled identity in first-spelling order
+variable**: the variable of its class, a lattice variable of its own kind named
+by the class's content — its label, its application and the identity of the
+content tree its paths read — never by a level. A path's own identity is a
+text fact — its root, the binder the owner's name lands at or the owner's own
+site where it is written in place, its member chain and its label — so two
+spellings of one path share it, and the shape numbers each spelled identity at
+a level past every name level of its chain, in first-spelling order
 ([path spellings](../scope/README.md#load-time-types)). Where the root's
 declared type names the label a head parameter, the entry records that
 application, read off a parameter's type or an annotated binder's. Dispatch's
 [walk](../dispatch/README.md#paths) resolves every path a unit spells, before
 the unit's declarations, to a closed type or a class off the module's content
 tree, and the reader reads each through that resolution: closed as it is, and
-in `Typing` mode a class as its representative's path variable. The run binds
+in `Typing` mode a class as its class's variable. The run binds
 no path variable: a fact reading one is decided closed in the layer that knows
 the root's module, and the run reads it there. A **type binder over a
 path** reads through the path's resolution in `Declaring` mode: closed where
@@ -519,7 +588,7 @@ leaves [its check](#a-unions-variants) to the binding that closes it. A type bin
 never rigid: its readers across a callable boundary could not reach the
 coordinates its variables are read at, and a sealed nominal is a leaf
 substitution never enters, so a `NEWTYPE` over a `FOR ALL` name is a different
-type each call ([unplanned work](../../roadmap/types/README.md#unplanned-work)).
+type each call ([a nominal over a run-bound type, typed at load](../../roadmap/types/run-bound-nominals.md)).
 The declaration door therefore reads through the load-time reader in a mode that
 answers every run-bound name *unknown*.
 
@@ -608,27 +677,37 @@ never a guess:
 - `NotAType` — a type name bound to something other than a type value;
 - `NoSuchMember` — a projection naming a union tag or record field its owner
   does not declare, or off an owner with neither — `Number.z`, or a ring of
-  newtypes with no record under it;
+  newtypes with no record type under it;
 - `Bound` — a bound that names a type variable or is `Never`;
 - `Quantified` — a quantified function type or expression shape written
   anywhere but as the whole type of a signature's `VAL` member or a signature's
   keyworded head;
 - `MeetOverVariable` — a meet one of whose operands names a `FOR ALL` variable
   or a signature's head parameter;
+- `CycleWithoutNominal` — a type declaration that names itself through
+  signatures and aliases alone ([above](#one-window-per-component)), at the
+  member the door refuses. It names that member;
 - `TiedUnion` — a `FN`, an `EXPR` head, an expression shape or a parameterized
   union's variant whose parameter, slot or representation holds, at a covariant
   position, a union two of whose members naming its own group
   [tie](../../lattice/src/types/solving.md#the-unifier-collects-it-does-not-bind): an
   argument both admit would solve the group by whichever member the union stores
   first. It names the two members;
-- `Unsupported` — any other spelling: a `_` field, an outer quantifier read
+- `ParameterChain` — a head's type reading a type member of its parameter
+  through another member, `elem.inner.Carrier`;
+- `ParameterCycle` — a parameter whose type reads itself through its head's
+  parameters, `a :(TYPE OF b)` beside `b :(TYPE OF a)`. It names the parameter;
+- `InexactOperand` — a `TYPE OF` over a value that is no parameter of its head
+  and whose static type the load knows neither exactly nor as a module
+  binder's. It names the operand;
+- `Unsupported` — any other spelling: a `_` field, a `TYPE OF` operand that is
+  no name or member chain rooted at one, an outer quantifier read
   under a nested group, an application whose arguments are not exactly the
   parameters its constructor declares, a `WITH` over anything but a declared
   signature or pinning a name it does not declare as a parameter, a bound on a
   `NEWTYPE` family or a parameterized union, and every declaration the
-  door refuses — a cyclic component through a non-nominal member, a repeated
-  head parameter, union tag or family parameter, a union
-  with no variant, a family parameter at a contravariant position, and a
+  door refuses but a cycle — a repeated head parameter, union tag or family parameter, a union
+  with no variant, a family parameter at a contravariant position or inside a pin, and a
   forward reference inside a `SIG` body. An operator
   declaration or head naming `!=`, and an `==` whose result is not `Bool`, are
   `Unsupported` for the same reason a group head that would chain a symbol twice
@@ -664,15 +743,19 @@ shaped and activated on the load's chain, in program storage, with every slot
 bound or left empty as the test asks; [`tests/projections.rs`](tests/projections.rs) reads a record
 field's declared type and a union's variant through an alias, a newtype layer
 and a chain, and each refusal. [`tests/declarations.rs`](tests/declarations.rs) runs the declaration
-door over the same harness: each form it elaborates, each group it seals — a
-ring, a union and a newtype in one component, a ring written in either order
-interning equal — the chaining record a bodyless `GROUP` head declares and the
+door over the same harness: each declaration it elaborates, each group it
+seals — a ring, a union and a newtype in one component, a ring written in either
+order interning equal, a signature, an applied signature and an alias a nominal
+member names back, each bound to its standalone twin, an alias tree whose
+composite right side lists its nominal, and a group of signatures, an alias and a
+union sealing to the same handles in every written order — the chaining record a bodyless `GROUP` head declares and the
 two handles two directions make of one signature, each bodyless head spelling
 the shape its definition registers, a signature's head parameters, its members
 reading them under a group of their own, a `WITH` application and the meet of
 two, a quantified type spelled only as a signature member's, and each refusal,
-asserting the refused
-component left its binders' slots empty. [`tests/module.rs`](tests/module.rs) runs the self-signature
+a cycle through signatures and aliases alone refused at the member it
+re-enters among them, asserting the refused component left its binders' slots
+empty. [`tests/module.rs`](tests/module.rs) runs the self-signature
 over a module body activated in a cell with its slots bound by hand: a slot per
 value binder and a manifest member per type binder, the empty body as the empty
 signature, two bodies binding the same members in either order interning equal,
@@ -716,8 +799,7 @@ every fact through its `TypeContext`.
 - [Families as parameters](../../roadmap/features/families-as-parameters.md) —
   higher-kinded head parameters, and a constructor application leaving a
   parameter unpinned.
-- [A pin over a variable](../../roadmap/types/pins-over-variables.md)
-  — a pin's variable read through its bounds as the order compares pins.
+- [A nominal over a run-bound type, typed at load](../../roadmap/types/run-bound-nominals.md)
+  — one load-time handle for a `NEWTYPE` over a `FOR ALL` name.
 - [Unplanned work](../../roadmap/types/README.md#unplanned-work) — a
-  family's variance, which no declaration states, and a nominal over a
-  run-bound type declared per call.
+  family's variance, which no declaration states.

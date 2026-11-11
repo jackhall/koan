@@ -714,8 +714,16 @@ fn a_copied_barrier_outlives_its_home() {
                 // is the module layer's work. What is pinned here is that the node and the function
                 // behind it both rebuild at the destination.
                 let plain = f.ktype().as_type().expect("`f` is unquantified");
-                let knot =
-                    Coerced::tie(writer, f, f.ktype(), f.ktype().into(), plain, plain, types);
+                let knot = Coerced::tie(
+                    writer,
+                    f,
+                    f.ktype(),
+                    f.ktype().into(),
+                    plain,
+                    plain,
+                    crate::knot::module::coerce::Hidden::NONE,
+                    types,
+                );
                 let barrier = Knotted::of(knot, 0);
                 let source = context.lift::<KValueFamily>(Value::Knotted(barrier));
                 let crossed = fixture.tiers.cross(context, dest, &source).unwrap();

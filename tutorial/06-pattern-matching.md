@@ -148,7 +148,7 @@ MATCH m UNDER Maybe WITH #{Some: (PRINT "got")}
 ```
 
 ```text
-error: <input>:3:1: this `MATCH … UNDER :(Some | None)` has no arm for None; add a `_` arm to default it
+error: <input>:3:1: this `MATCH … UNDER :(None | Some)` has no arm for None; add a `_` arm to default it
 ```
 
 Cover every variant the union declares — or add a `_` key, which stands in for

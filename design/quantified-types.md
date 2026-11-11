@@ -20,6 +20,15 @@ signature's head (`SIG Stack FOR ALL #{Elt: Any}`), and a signature's member.
 Everything else is refused, and each refusal reads syntax alone, so none needs
 a type.
 
+A callable's head also quantifies where its types read its own parameters:
+`EXPR #(ECHO elem :Counter) -> elem.Carrier` and
+`EXPR #(ECHO elem :Counter) -> :(TYPE OF elem)` each carry a **hidden
+variable** in their group, which every call solves from the argument
+([a head reading its parameters](../src/elaborate/README.md#a-head-reading-its-parameters)).
+Such a head is quantified under every rule below, so a `FN` reading its
+parameters is a quantified function, and a function type reading its own
+parameters inside another type is refused as `Quantified`.
+
 | Refusal | What it refuses | Owner |
 |---|---|---|
 | `QuantifiedRead` | a name a keyworded form binds, or a quantified member `USING … SCOPE` surfaces, read anywhere but the head of a call; a module's quantified member read through `$` in a quote or as an `EVAL` offer | [scope](../src/scope/README.md#resolution) |
@@ -225,7 +234,7 @@ Each rule above is a known one, and the source says what it buys and costs.
 | `KType` and `Scheme`; a `FOR ALL` on a declaration, solved at each use | types and type schemes; let-polymorphism | Damas and Milner, *Principal type-schemes for functional programs* (1982) |
 | A call solving its group, and an instance site | a scheme is instantiated at each use and is no first-class value | the same |
 | An instance site's type read from the type it is wanted at | checking mode: type arguments propagated from the expected type | Pierce and Turner, *Local type inference* (2000) |
-| A rank-2 slot spelled as a signature with a quantified member | higher-rank polymorphism packaged in a module or a record with a polymorphic field | Russo, *First-class structures for Standard ML* (2000); Rossberg, *1ML* (2015) |
+| A rank-2 slot spelled as a signature with a quantified member | higher-rank polymorphism packaged in a module or a record value with a polymorphic field | Russo, *First-class structures for Standard ML* (2000); Rossberg, *1ML* (2015) |
 | *Fits*' table: the offered side solved afresh, the asked side rigid | subsumption between polymorphic types: instantiate the offered type, skolemize the asked one | Mitchell, *Polymorphic type inference and containment* (1988); Peyton Jones, Vytiniotis, Weirich and Shields, *Practical type inference for arbitrary-rank types* (2007) |
 | A sealed signature; a variable that never leaves its binder | the skolem escape check | the same |
 | *Fits* answered by a terminating, incomplete solve | containment by instantiation is undecidable | Tiuryn and Urzyczyn, *The subtyping problem for second-order types is undecidable* (1996) |

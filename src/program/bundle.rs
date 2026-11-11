@@ -22,7 +22,7 @@ use crate::scope::{Hop, Named};
 use crate::symbols::{BinderSymbol, Symbol};
 use crate::type_lattice::{DeclaredType, Halves, KType};
 use crate::values::{
-    ArenaRef, ContentDigest, Half, PathSegment, Record, TypeTiers, Value, Weight, copy_severed,
+    ContentDigest, DepotRef, Half, PathSegment, Record, TypeTiers, Value, Weight, copy_severed,
 };
 
 use super::body::Runner;
@@ -116,11 +116,12 @@ pub enum Entered<'graph, 'cell> {
 }
 
 /// What a body runs within, handed to every node and block on its stack: whether it runs in
-/// the own body of a routing caching frame, whose caching chain it then interns through; the arena
-/// node its frame runs under, which a callable born in it is born under; where its frame's decision memo
-/// rests, which a block decides in; the memo a frame it calls seeds its own from; and the root of
+/// the own body of a routing caching frame, whose caching chain it then interns through; whether
+/// its frame's body caches, read once at the frame's first step, since its blocks and inline
+/// module bodies are classed with it; the depot slot its frame runs under, which a callable born
+/// in it is born under; where its frame's decision memo rests, which a block decides in; the memo a frame it calls seeds its own from; and the root of
 /// the composed code its frame runs, which a value born in it keeps — the books hold only its
-/// digest; the stamp of the chain of settlements its frame's arena node closes, which a
+/// digest; the stamp of the chain of settlements its frame's depot slot closes, which a
 /// callable born in it keeps beside that node — `None` for a frame under its own settlement whose
 /// body births no callable; and what its frame keeps of its arguments, callee and binders, which
 /// a name read of the frame's body reads beside the value — `None` outside a called frame, and for
@@ -128,7 +129,8 @@ pub enum Entered<'graph, 'cell> {
 #[derive(Clone, Copy)]
 pub struct Within<'graph, 'cell> {
     pub routes: bool,
-    pub build: ArenaRef,
+    pub caches: bool,
+    pub build: DepotRef,
     pub stamp: Option<Stamp<'cell, Knotted<'graph, 'cell>>>,
     pub memo: Option<MemoHome>,
     pub inherit: Option<MemoHome>,
@@ -222,10 +224,12 @@ impl<'graph, 'cell> ArmKept<'graph, 'cell> {
 }
 
 impl<'graph, 'cell> Within<'graph, 'cell> {
-    /// The top level's before its runner names its memo: no caching frame, and the root.
+    /// The top level's before its runner names its memo: no caching frame, and the root. The program
+    /// never caches.
     pub const TOP: Self = Within {
         routes: false,
-        build: ArenaRef::ROOT,
+        caches: false,
+        build: DepotRef::ROOT,
         stamp: None,
         memo: None,
         inherit: None,
@@ -234,8 +238,8 @@ impl<'graph, 'cell> Within<'graph, 'cell> {
         arms: None,
     };
 
-    /// Where a callable born in the body is born: the arena node, and the stamp of its chain.
-    pub fn born(&self) -> (ArenaRef, Option<Stamp<'cell, Knotted<'graph, 'cell>>>) {
+    /// Where a callable born in the body is born: the depot slot, and the stamp of its chain.
+    pub fn born(&self) -> (DepotRef, Option<Stamp<'cell, Knotted<'graph, 'cell>>>) {
         (self.build, self.stamp)
     }
 }

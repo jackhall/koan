@@ -92,9 +92,10 @@ where the quote is written. Glued to a parenthesized group, `$(…)` marks one
 keyworded use, such as `$(GREET "bob")`, so that `GREET` resolves where the
 quote is written rather than being a hole.
 
-`code USING <record>` fills a quote's holes by name, from the record's fields
-or a module's members, and leaves any hole the record does not name a hole. A
-field that names no hole is ignored, so one record can serve several quotes:
+`code USING <record>` fills a quote's holes by name, from the record value's
+fields or a module's members, and leaves any hole the record value does not
+name a hole. A field that names no hole is ignored, so one record value can
+serve several quotes:
 
 ```koan
 LET greet = #(PRINT name)

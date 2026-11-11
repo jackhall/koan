@@ -7,8 +7,8 @@ a slot the load marks as digested
 ([content digests](../../src/values/README.md#content-digests)); every other
 demand walks what the value reaches through a memo that lives one demand. A
 loop that builds a module each hop over a value that grows with the loop —
-`MODULE m OVER #[link]` over a chain of `{next :Any}` records — and views or
-keys it walks the rest of the chain each hop, since each hop's module is new
+`MODULE m OVER #[link]` over a chain of `{next :Any}` record values — and views
+or keys it walks the rest of the chain each hop, since each hop's module is new
 and the chain's own parts keep nothing: quadratic in the loop's length. The
 caching suite's per-hop digest test
 ([caching.rs](../../src/dispatch/tests/caching.rs),

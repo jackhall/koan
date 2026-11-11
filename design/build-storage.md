@@ -1,7 +1,7 @@
 # Build storage
 
 Where the work of deciding a program lives: the frozen load every agent
-shares, the tier an agent keeps for what its build rests, and the arena its
+shares, the tier an agent keeps for what its build rests, and the depot its
 settlements and compositions are evicted from. The story across
 [the type lattice](../lattice/src/types/identity.md#storage-a-root-and-its-branches),
 which keeps each tier's table, [the build](../src/build/README.md), which
@@ -14,7 +14,7 @@ decides, [the scheduler](../src/scheduler/README.md), which runs, and
 |---|---|---|---|---|
 | builtin image | `'static`, one per binary, `Sync` | by no one: generated Rust source, compiled in | the lattice's fixed handles, every builtin overload's shape type, `Result` and `Error`, and the texts of the names they hold; no verdicts | never |
 | frozen load | `'load`, one per program, `Sync` | by the load alone, frozen at its end | load content: every type the load builds, its verdicts, the shape, builtins, symbols, sources, the facts it decides | at the program's end |
-| agent tier | `'agent`, one per agent | insert-only, by a settlement under the root at its rest | what the agent's settlements under the root rest: their types and verdicts; verdicts over load pairs the load's table lacks; the agent's symbol overlay | at the agent's death, whole |
+| agent tier | `'agent`, one per agent | insert-only, by a settlement a miss builds under the root at its rest | what the agent's settlements under the root rest: their types and verdicts; verdicts over load pairs the load's table lacks; the agent's symbol overlay | at the agent's death, whole |
 | region, scratch | `'here`, `'scratch` | as [type tiers](type-tiers.md) says | runtime types: what a frame builds, mints in a loop, a deepening list | with the region; at the habitat's reset |
 
 The brands are ordered, `'load: 'agent: 'here: 'scratch`, and a chain reads
@@ -40,14 +40,14 @@ The frozen load and the agent tier are freed by none of the three. The load is
 released at the program's end, the agent tier at its agent's death, and every
 cell of the agent dies first. So a region node references a rested type as it
 references a load type, and a rested type is never relaid, never counted and
-never read through a sealed claim. An arena node is freed by eviction, so no
+never read through a sealed claim. A depot slot is freed by eviction, so no
 byte laid in a region, a scratch, a parked state or a value references one:
-a step reads its arena node's shape and facts at its own lifetime and copies
+a step reads its depot slot's shape and facts at its own lifetime and copies
 out indexes, digests and type handles alone, which is what lets the borrower
 count drop at release. A settlement's pin on the composition whose shape its
-binding's tree names is a count between arena nodes: a pinned composition is
+binding's tree names is a count between depot slots: a pinned composition is
 no eviction candidate while a pinner lives, and is held while one is held,
-and a borrowed arena node is never evicted. The run's own halves keep the rules
+and a borrowed depot slot is never evicted. The run's own halves keep the rules
 [type tiers](type-tiers.md#a-node-lives-in-a-tier-its-children-outlive) gives
 them.
 
@@ -88,8 +88,12 @@ the load's types, schemes, signatures, shapes, builtins and symbols; a
 decision at every site whose types are all concrete, no binder reachable; the
 closed verdict table; for each generic body, which binders each site's types
 mention, so a settlement evaluates only its dependent sites; and dispatch
-candidates per site, narrowed by the load-known argument types. What it
-cannot hold is a node that mentions a binding's carried type, a verdict over
+candidates per site, narrowed by the load-known argument types. In program
+storage beside its base layer, the load lays the facts of each binding
+[the trace](../src/build/README.md#the-trace) names, a layer found by its
+parent and key and read by every agent as the base is, its types and those
+its call sites' requests name in the root. What the frozen load cannot
+hold is a node that mentions a binding's carried type, a verdict over
 one, a decision at a dependent site, and anything `EVAL` builds.
 
 **Covariance.** An agent's graph borrows storage at its own `'graph`, with
@@ -102,7 +106,7 @@ covariant in their lifetime.
 An insert-only tier of nodes and verdicts laid in a bump the agent owns. A
 node is handed out as `&'agent StoredNode<'agent>` and never moves, nothing in
 the tier is released before the tier is released whole, and the tier goes
-with its agent. Two things intern into it: a settlement under the root at its rest, laying
+with its agent. Two things intern into it: a settlement a miss builds under the root at its rest, laying
 the types its facts name, the binding's nodes it relaid from its image, and
 the verdicts it reached; and a run's verdict over load or agent types, which
 no run may write into the load's table. A run cell reads the agent tier,
@@ -114,12 +118,21 @@ symbol is its text's digest.
 
 ## Settlements and compositions
 
-The **build arena** holds two kinds of node under one root. A **settlement**
+The **build depot** holds two kinds of slot under one root. A **settlement**
 is the open facts of one frontier class settled under one binding, keyed on
 every name its seam binds, each of those names bound to content the frozen
 load names: a type whose in-root bit is set, a type value naming such a type,
 or a module whose content tree is closed, computed by the load under the root
-and by the load or a composition under one. A binding
+and by the load or a composition under one. Where the trace names the
+binding, the load lays the layer itself, in program storage, its walk
+interning through the load's chain before the root freezes; a seek under the
+root or another layer the load laid finds it there, by parent and key,
+before probing the depot, and nothing evicts it. Every layer, the load's and
+a settlement alike, carries the request of each call site of its body whose
+slot map its binding fixes, so a call there finds its layer with no key
+computed
+([the build module](../src/build/README.md#references-between-frames-and-the-depot)).
+A binding
 to anything else births no settlement; the site it reaches is decided in the
 frame's own activation, over the carried types, in the frame's own tiers
 ([the build module](../src/build/README.md#activations)). A
@@ -132,17 +145,17 @@ carries.
 
 | the key names | decided in | lives |
 |---|---|---|
-| load content | a settlement, its types rested in the agent tier under the root | the agent's life, shared by every frame under the binding |
+| load content | a layer the load laid in program storage, its types in the root, where the trace names the binding; otherwise a settlement a miss builds, its types rested in the agent tier under the root | the program's life for the load's; for a settlement, the agent's life, shared by every frame under the binding |
 | run content | the frame's activation | the frame |
 | composed syntax | a composition | until its eviction, shared by every `EVAL` of the code |
 
-An arena node holds its facts, its residual and its children's table, and a
-composition its shape; no arena node holds a type. The arena is the agent's
+A depot slot holds its facts, its residual and its children's table, and a
+composition its shape; no depot slot holds a type. The depot is the agent's
 own, outside the cell graph, with parent links, a borrower count that drops
-at the borrower's release, and one budget over the bytes of the arena nodes
+at the borrower's release, and one budget over the bytes of the depot slots
 no frame holds through its borrow, a parent link or a pin, evicted least
 recently used, leaf first, since evicting a held one frees nothing
-([the scheduler](../src/scheduler/README.md#the-build-arena)). A
+([the scheduler](../src/scheduler/README.md#the-build-depot)). A
 settlement binds a module by the closed tree its layer computed, the load's
 under the root and the load's or a composition's under one, pinning the
 computing composition; each layer indexes the closed trees it
@@ -165,11 +178,11 @@ The cell graph holds run cells alone, and the drain keeps the build's books.
 
 ## Agents
 
-An agent is a thread with its own cell graph, drain, build arena, agent tier
+An agent is a thread with its own cell graph, drain, build depot, agent tier
 and symbol overlay. Agents share the frozen load and nothing else: no build
 data crosses between them after the load, so there is no mirror, no shared
-books and no cross-agent pending map, and what an agent recomputes is exactly
-what the load left undecided. A value crossing between agents adopts its
+books and no cross-agent pending map, and what an agent recomputes is what
+the frozen load leaves undecided. A value crossing between agents adopts its
 carried type into the receiver's chain, free when the type is a load type,
 since its handle says so. The program's memory is the frozen load plus, per
 agent, its budget and its stack
@@ -178,10 +191,8 @@ agent, its budget and its stack
 ## Open work
 
 - [Agents](../roadmap/features/agents.md) — threads sharing the frozen load.
-- [One layer, wherever laid](../roadmap/one-build/one-layer.md) — one form
-  for a laid layer wherever it rests.
 - [Settlements retired](../roadmap/one-build/settlements-retired.md) — the
-  arena holding compositions alone.
+  depot holding compositions alone.
 - [What the agent tier keeps](../roadmap/one-build/agent-tier-keeps.md) — the
   tier's content once nothing settles into it.
 - [The build image](../roadmap/one-build/build-image.md) — the frozen load

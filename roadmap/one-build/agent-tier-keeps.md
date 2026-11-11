@@ -11,10 +11,11 @@ every frame under the binding reads them
 [the agent tier as the warm tier](../../design/type-tiers.md#the-agent-tier-as-the-warm-tier)).
 It also takes what no settlement lays: a run's verdict over two load types
 the load never asked, which no run may write into the frozen table, and the
-symbol overlay of the names an agent's `EVAL`s parse. Once
-[traced layers at load](traced-layers-at-load.md) rests a traced binding's
-types in the frozen load and [settlements retired](settlements-retired.md)
-decides the rest in activations, nothing settles into the tier, and what it
+symbol overlay of the names an agent's `EVAL`s parse. The load rests a
+traced binding's types in the frozen load
+([where facts are decided](../../src/build/README.md#where-facts-are-decided)),
+so once [settlements retired](settlements-retired.md) decides the rest in
+activations, nothing settles into the tier, and what it
 still holds — the overflow verdicts, the overlay, and whatever an untraced
 binding's decision rests that a frame's branch would otherwise relay per hop
 — is unmeasured.

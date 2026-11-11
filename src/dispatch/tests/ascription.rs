@@ -91,13 +91,13 @@ fn a_module_ascribed_no_signature_is_held_to_it_as_a_value() {
         run("MODULE m = (LET x = 1)\nPRINT (m :| Any)"),
         "load: <test>:2:7: Any is no signature"
     );
-    // A type the load cannot read faults at run, as `VIEW`'s settlement at `Elt := Number` words
-    // it.
+    // A type the load reads only under a binding refuses the load where a call fixes it, as the
+    // layer it lays for `VIEW` at `Elt := Number` words it, naming the call.
     assert_eq!(
         run("MODULE m = (LET x = 1)\n\
              EXPR FOR ALL #[Elt] #(VIEW x :Elt) -> Any = #(m :| Elt)\n\
              PRINT (VIEW 1)"),
-        "error: <test>:2:46: Number is no signature\n  in :(FN FOR ALL #[Elt] :{x :Elt} -> Any) (VIEW 1) at <test>:3:7"
+        "load: <test>:2:46: Number is no signature\n  in (VIEW 1) at <test>:3:7"
     );
 }
 
@@ -435,7 +435,7 @@ fn a_container_or_nominal_parameter_is_exact() {
             );
             assert_eq!(
                 ends(program, f, "m"),
-                (never, ":(Some | None)".to_string()),
+                (never, ":(None | Some)".to_string()),
                 "a union keeps a variant's own type"
             );
         },
@@ -461,7 +461,7 @@ fn a_nominal_ascription_is_exact() {
         assert_eq!(ends(program, top, "boxed"), (boxed.clone(), boxed));
         assert_eq!(
             ends(program, top, "maybe"),
-            ("Never".to_string(), ":(Some | None)".to_string()),
+            ("Never".to_string(), ":(None | Some)".to_string()),
             "a union keeps a variant's own type"
         );
         assert_eq!(
@@ -569,7 +569,7 @@ fn a_record_retype_to_a_nullable_field_is_read_between_its_nulls_and_itself() {
                 ends(program, program.shape(), "r"),
                 (
                     ":{x :Number y :Null}".to_string(),
-                    ":{x :Number y :(Number | Null)}".to_string()
+                    ":{x :Number y :(Null | Number)}".to_string()
                 )
             );
         },

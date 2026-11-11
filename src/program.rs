@@ -26,6 +26,7 @@ mod body;
 mod bundle;
 mod exit;
 mod record;
+pub(crate) mod resume;
 mod settle;
 mod stack;
 mod substrate;
@@ -33,6 +34,8 @@ mod substrate;
 #[cfg(test)]
 pub(crate) mod tests;
 
+#[cfg(test)]
+pub(crate) use body::DECIDING;
 pub use body::{Runner, call, eval, run, under_composition};
 pub use bundle::{
     ArmKept, Catching, Entered, FrameKept, FrameLink, Handed, KBirth, KBirthFamily, KBundle,
@@ -41,11 +44,14 @@ pub use bundle::{
 pub use exit::Exit;
 pub use record::{CallKind, Contract, Evaluated, Language, LoadError, Output, Owed, Program, kept};
 #[cfg(test)]
-pub(crate) use settle::LEVELS;
+pub(crate) use settle::{CROSS_CHECK, LEVELS, REQUESTING, SEEKING, UNSOUGHT};
 pub use settle::{called_function, seek};
 pub use stack::{BlockEntry, Delivered, Evaluator, Next, Node, Tailed};
 #[cfg(test)]
 pub(crate) use substrate::Ran;
+/// The cap on a body's bindings the load's trace names.
+#[cfg(test)]
+pub(crate) const TRACE_CAP: usize = crate::build::trace::CAP;
 #[cfg(test)]
 pub(crate) use substrate::walked;
 pub use substrate::{CellSubstrate, Outcome, Running, STACK_BYTES, Uncaught};

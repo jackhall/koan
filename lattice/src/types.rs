@@ -94,7 +94,7 @@ pub use handle::{
 };
 pub use image::seed::IMAGE as SEED;
 pub use kind::KKind;
-pub use node::{ContentKey, Group, NodeSchema, TypeNode, Variable};
+pub use node::{ContentKey, Group, NodeSchema, PathClass, TypeNode, Variable};
 pub use operators::{FoldDirection, ReductionMode};
 pub use ranking::{Judged, Verdict};
 pub use record::Record;
@@ -120,8 +120,9 @@ pub use typed::{
     Substitutable, admit_by_class, bound_above, erase_rigid, fits, fits_application,
     instance_under, instantiate_quantified, is_subtype_of, join, join_iter, judge_by_class,
     lower_end_outside, meet, outranks, read_through, satisfied_by, scheme_bound_above,
-    select_by_class, shape_specificity, sig_fits, solving_slots, substitute_levels,
-    substitute_parameters, substitute_quantified, tied_members,
+    select_by_class, shape_specificity, sig_fits, solving_slots, substitute_carriers,
+    substitute_levels, substitute_parameters, substitute_paths, substitute_quantified,
+    tied_members,
 };
 pub use unify::{Collector, Interval, UnifyFailure, admits_with, intervals};
 pub use verdicts::MemoKind;

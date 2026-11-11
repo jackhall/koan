@@ -1,0 +1,52 @@
+# An opaque view nested in a module, laid at load
+
+**Problem.** A view over a module whose slot holds an opaque view interns
+types at run, though the load sees the nested view's content tree. In
+
+```
+SIG Inner FOR ALL #[Elem] = #[(VAL item :Elem)]
+SIG Outer FOR ALL #[Carrier] = #[(VAL zero :Carrier) (VAL inner :(Inner WITH {Elem = Carrier}))]
+MODULE a = ((LET Elem = Number) (LET item = 5))
+LET o = (a :| Inner)
+MODULE ints = ((LET zero = o.item) (LET inner = o))
+LET m = (ints :| Outer)
+```
+
+every tree is closed: `o` is a view of a body-born module, and `ints`
+captures only `o`. Yet the run interns 11 types into its branch building `m`.
+The same program with `o` held in a list (`(LET inners = [o])` under
+`(VAL inners :(LIST OF (Inner WITH {Elem = Carrier})))`) interns 14. A body
+held in either place interns none
+([`dispatch/tests/views.rs`](../../src/dispatch/tests/views.rs)). Per
+[where each body interns](../../design/type-tiers.md#where-each-body-interns),
+the load computes every type the door computes from types alone over a closed
+tree, so the run should mint nothing here.
+
+The nested slot's pin names `Outer`'s carrier, which hides `o`'s own carrier
+over `ints`. The run's [exposure](../../src/knot/module/README.md#the-view-door)
+reads that pin back through `o`'s sealing and builds over `a`. The load lays
+the nested view either through the tree's exposure or, where every parameter
+is pinned, through `view::pinned_view`, which takes `from*` from the pins as
+written ([`walk/views.rs`](../../src/dispatch/walk/views.rs) `nested_view`).
+Which of the 11 types the load misses, and why, is not yet known.
+
+**Acceptance criteria.**
+
+- The program above interns no type at run, and neither does its list form.
+  Tests in `dispatch/tests/views.rs` pin both counts at 0.
+- The nested view's `from*` and `hidden` that the load lays are those the run's
+  exposure builds over `o`'s underlying.
+
+**Directions.**
+
+- *Where the load's nested lay diverges from the run's — open.* First
+  attribute the 11 types: the outer view, the nested view's substitutions, or
+  the coerced members. Then either read the pins back through the nested
+  tree's sealing before `pinned_view` takes them, or have the tree's exposure
+  answer for an opaque cell.
+
+## Dependencies
+
+**Requires:** none.
+
+**Unblocks:** none — a leaf.

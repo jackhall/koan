@@ -599,6 +599,7 @@ pub(super) fn leaf_name<'run, H: Naming<'run>>(
         | TypeNode::Scheme { .. }
         | TypeNode::Quantified { .. }
         | TypeNode::Lexical { .. }
+        | TypeNode::Path { .. }
         | TypeNode::DeferredReturn(_)
         | TypeNode::Union { .. }
         | TypeNode::ConstructorApply { .. }

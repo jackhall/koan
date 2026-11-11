@@ -31,6 +31,7 @@ use super::substitute::{instantiate_quantified, substitute_parameters};
 use super::tiers::Habitat;
 use super::unify::{Collector, UnifyFailure, admits};
 use super::walk::Variance;
+use super::walk::unary::{Visit, visit};
 
 // --- Specificity ---
 
@@ -324,6 +325,29 @@ pub(super) fn fits_application<'run, 's>(
 ) -> Result<Members<'s, TypeSymbol, Linked<'run>>, FitsFailure<'run, 's>> {
     let pins = scratch.alloc_slice_copy(pins);
     fits_one(types, scratch, offered, Application { signature, pins })
+}
+
+/// [`fits_application`]'s solution where it fixes each parameter: `None` where `offered` does not
+/// fit, or where the solution names a stand-in for one of the offered side's own unpinned
+/// parameters. A stand-in names a type no reader may learn, so a solution holding one fixes
+/// nothing. What a pin over a call's own variable solves it to ([`Admits`](super::unify)).
+pub(super) fn fits_at_open<'run, 's>(
+    types: &TypeChain<'run, impl Habitat<'run>>,
+    scratch: BumpAllocator<'s>,
+    offered: Linked<'run>,
+    signature: Linked<'run>,
+    fixed: &[(BinderSymbol, Linked<'run>)],
+) -> Option<Members<'s, TypeSymbol, Linked<'run>>> {
+    let solution = fits_application(types, scratch, offered, signature, fixed).ok()?;
+    let held = applications(scratch, offered).map_or(0, |set| set.len());
+    let stand_in = |level: usize| (OFFERED_LEVEL + 1 - held..=OFFERED_LEVEL).contains(&level);
+    let hidden = solution.iter().any(|(_, solved)| {
+        visit(scratch, solved, &mut |_, node, _| match *node {
+            TypeNode::Lexical { level, .. } if stand_in(level) => Visit::Stop,
+            _ => Visit::Descend,
+        })
+    });
+    (!hidden).then_some(solution)
 }
 
 /// The class walks' stand-in level less one: the offered side's own unpinned parameters read as

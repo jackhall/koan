@@ -60,7 +60,13 @@ pub fn member<'graph, 'cell>(
     scratch: BumpAllocator<'_>,
 ) -> Option<KValue<'graph, 'cell>> {
     let node = module.knot_member()?.module()?;
-    let read = signature_member(types, scratch, module.ktype().as_type()?.into(), name)?;
+    let read = signature_member(
+        &crate::elaborate::judge::NoMarks,
+        types,
+        scratch,
+        module.ktype().as_type()?.into(),
+        name,
+    )?;
     if let BinderSymbol::Type(_) = name {
         let declared = types.concrete(read.declared.as_type()?)?;
         return Some(Value::Type(TypeValue::new(writer, declared, types)));

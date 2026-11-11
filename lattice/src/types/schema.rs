@@ -208,7 +208,8 @@ impl SigSchema<'_> {
 /// A named insert replaces an earlier binding for the same name, so each name lands once. A member
 /// type may read the head parameters, and a value slot or a keyworded member may be a quantified
 /// callable's scheme — the schema's own doors for those — while the signature the draft interns is
-/// concrete: no walk enters a signature.
+/// concrete: no walk enters a signature but the seal's sibling walks and a carrier's read-back,
+/// and neither replaces a variable.
 pub struct SchemaDraft<'s> {
     /// See [`SigSchema::origin`].
     pub origin: SigOrigin,

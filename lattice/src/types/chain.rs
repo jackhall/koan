@@ -62,10 +62,10 @@ use super::digest::{self, ComponentMember, TypeDigest, schema_content_digest};
 use super::handle::{DeclaredType, Handle, KType, Naming, Parametric, TypeHandle, wrap};
 #[cfg(test)]
 use super::kind::KKind;
-use super::node::{ContentKey, Group, NodeSchema, TypeNode};
+use super::node::{ContentKey, Group, NodeSchema, PathClass, TypeNode};
 use super::numbering;
 use super::order::{Dropped, is_subtype_of, unsubsumed};
-use super::record::Record;
+use super::record::{Record, map_fields};
 use super::run::{Elements, Run};
 use super::schema::{
     Members, SchemaDraft, SigOrigin, SigSchema, canonical_groups, canonical_overloads, member,
@@ -79,7 +79,7 @@ use super::substitute::{rewrite_siblings, substitute_quantified};
 use super::tiers::{Agent, AgentTier, ChainPosition, Frozen, Habitat, Halves, Own, lay_one};
 use super::verdicts::{Answer, MemoKind, Relation, VerdictKey};
 use super::walk::Variance;
-use super::walk::unary::{Visit, children, visit, visit_free_quantified};
+use super::walk::unary::{Visit, children, visit, visit_free_quantified, visit_in};
 
 /// The porous and exposing flags of a flagged `node`, from its children's
 /// ([type tiers](../../../design/type-tiers.md#porosity)). A child at a flipped position — a
@@ -443,12 +443,22 @@ impl<'t, H: Habitat<'t>> TypeChain<'t, H> {
     }
 
     /// `node`'s flags folded from its children's own: each child is a node, interned first. A
-    /// variable's or a carrier's own flags are [`Content::flags`]'s constants.
+    /// variable's or a carrier's own flags are [`Content::flags`]'s constants. A signature or an
+    /// application also folds the [`DEEP`](Flags::DEEP) answers of each handle it holds, and no
+    /// other: what it holds is closed to every other walk.
     pub(super) fn flags_over(&self, node: &TypeNode<'t, Linked<'t>>) -> Flags {
         let mut folded = Flags::NONE;
         children(node, &mut |child, _| {
             folded = folded | child.flags().without(Flags::POROSITY);
         });
+        if matches!(
+            node,
+            TypeNode::Signature { .. } | TypeNode::SignatureApply { .. }
+        ) {
+            self.held_handles(node, &mut |held| {
+                folded = folded | held.flags().within(Flags::DEEP);
+            });
+        }
         let folded = folded | porosity_over(node);
         // A scheme binds its own variables, so nothing under one is free here, and the scheme
         // itself is a quantified callable's type.
@@ -891,6 +901,24 @@ impl<'t, H: Habitat<'t>> TypeChain<'t, H> {
         Parametric::read(self.lexical_node(&scratch, level, name, self.never, bound))
     }
 
+    /// The variable of the path class `class`, its paths reading the type member `name`, bounded
+    /// by `bound` and above `Never`.
+    pub fn path_variable(&self, class: PathClass, name: TypeSymbol, bound: KType) -> Parametric {
+        Parametric::read(self.path_node(class, name, bound.linked(self)))
+    }
+
+    /// [`path_variable`](Self::path_variable) as a node.
+    pub(super) fn path_node(
+        &self,
+        class: PathClass,
+        name: TypeSymbol,
+        bound: Linked<'t>,
+    ) -> Linked<'t> {
+        self.assert_bound(bound);
+        let digest = digest::path_digest(class, name, bound.digest());
+        self.intern_digested(digest, || TypeNode::Path { class, name, bound })
+    }
+
     /// A lexical variable between `lower` and `bound`. A `lower` other than `Never` lies strictly
     /// under `bound` — a converged pair is its point, never a variable.
     pub fn lexical_between(
@@ -1110,6 +1138,104 @@ impl<'t, H: Habitat<'t>> TypeChain<'t, H> {
             signature,
             pins: Record::over(self.rehome_fields(pins)),
         }))
+    }
+
+    /// `node` — a `Signature` or a `SignatureApply` — with each handle it holds replaced by
+    /// `each`'s answer, re-interned through the doors that canonicalize it. A signature's handles
+    /// are its parameters, manifest members, value slots and keyworded members, in
+    /// [`signature_handles`](Self::signature_handles)' order; an application's are its applied
+    /// signature and its pins. Answers `node` itself when `each` changes nothing. The one door a
+    /// walk enters a signature through: the seal's two sibling walks and a carrier's read-back
+    /// take it, each stopping at a node whose [`DEEP`](Flags::DEEP) answer says nothing it seeks
+    /// is inside.
+    ///
+    /// A changed signature re-interns through [`signature`](Self::signature), never
+    /// [`intern_schema`](Self::intern_schema): its keyworded channel is sorted by handle, and a
+    /// rename changes handles.
+    pub(super) fn signature_mapped(
+        &self,
+        scratch: BumpAllocator<'_>,
+        node: Linked<'t>,
+        each: &mut impl FnMut(Linked<'t>) -> Linked<'t>,
+    ) -> Linked<'t> {
+        // Every handle mapped first, in `signature_handles`' order, so an unchanged signature
+        // stages no draft.
+        let mut mapped = BumpVec::new_in(scratch);
+        let mut changed = false;
+        self.signature_handles(node, &mut |held| {
+            let answer = each(held);
+            changed |= answer != held;
+            mapped.push(answer);
+        });
+        if !changed {
+            return node;
+        }
+        let mut mapped = mapped.into_iter();
+        let mut next = || mapped.next().expect("one answer per handle");
+        match node.view() {
+            TypeNode::Signature { schema, .. } => {
+                let mut draft = SchemaDraft::new(scratch);
+                draft.origin = schema.origin;
+                for (name, _) in schema.parameters {
+                    draft.insert_parameter(*name, Parametric::read(next()));
+                }
+                for (name, _) in schema.manifest_members {
+                    draft.insert_manifest(*name, Parametric::read(next()));
+                }
+                // A scheme stays a scheme: a rename binds no variable and drops none.
+                let mut declared = |kt: DeclaredType<Parametric>| match kt {
+                    DeclaredType::Type(_) => DeclaredType::Type(Parametric::read(next())),
+                    DeclaredType::Scheme(_) => DeclaredType::Scheme(wrap(next().handle())),
+                };
+                for (name, kt) in schema.value_slots {
+                    draft.insert_value_slot(*name, declared(*kt));
+                }
+                for kt in schema.keyworded {
+                    draft.push_keyworded(declared(*kt));
+                }
+                for group in schema.operators {
+                    draft.push_operator_group(group.members, group.mode);
+                }
+                self.enter(self.signature(scratch, draft).raw())
+            }
+            TypeNode::SignatureApply { pins, .. } => {
+                let signature = next();
+                let pins = map_fields(scratch, pins.raw(), |_: Linked<'t>| next());
+                self.signature_apply::<Linked<'t>>(scratch, signature, &pins)
+            }
+            _ => unreachable!("only a signature or an application is mapped"),
+        }
+    }
+
+    /// Each handle `node` — a `Signature` or a `SignatureApply` — holds, handed to `each` in
+    /// [`signature_mapped`](Self::signature_mapped)'s order: the read-only twin a walk collecting
+    /// what a signature names takes.
+    pub(super) fn signature_handles(&self, node: Linked<'t>, each: &mut impl FnMut(Linked<'t>)) {
+        self.held_handles(&node.view(), each);
+    }
+
+    /// [`signature_handles`](Self::signature_handles) over a view, so interning can fold the
+    /// flags of what a node not yet laid holds.
+    fn held_handles(&self, node: &TypeNode<'t, Linked<'t>>, each: &mut impl FnMut(Linked<'t>)) {
+        match *node {
+            TypeNode::Signature { schema, .. } => {
+                let named = (schema.parameters.iter()).chain(schema.manifest_members.iter());
+                for (_, kt) in named {
+                    each(self.enter(kt.raw()));
+                }
+                for (_, kt) in schema.value_slots {
+                    each(self.enter(kt.raw()));
+                }
+                for kt in schema.keyworded {
+                    each(self.enter(kt.raw()));
+                }
+            }
+            TypeNode::SignatureApply { signature, pins } => {
+                each(signature);
+                pins.values().for_each(each);
+            }
+            _ => unreachable!("only a signature or an application is read"),
+        }
     }
 
     /// The meet of the signature types `members` — the set of every application they hold, less
@@ -1512,22 +1638,41 @@ impl<'t, H: Habitat<'t>> TypeChain<'t, H> {
             })
     }
 
-    /// Whether any of quantifiers `0..arity` occurs free in `kt` at a contravariant position — what
-    /// a family's representation may not do, since an application is covariant in its arguments.
-    pub fn quantifies_contravariantly<N: TypeHandle>(
+    /// Whether any of quantifiers `0..arity` occurs free in `kt` at a contravariant position or
+    /// inside an application's pin — what a family's representation may not do, since an
+    /// application is covariant in its arguments while a pin is invariant.
+    pub fn quantifies_noncovariantly<N: TypeHandle>(
         &self,
         scratch: BumpAllocator<'_>,
         kt: N,
         arity: usize,
     ) -> bool {
         let kt = self.enter(kt.raw());
+        let mut ours = |index: usize, _: &_| match index < arity {
+            true => Visit::Stop,
+            false => Visit::Skip,
+        };
         // A nested scheme's own group shadows these, so the walk skips it.
         kt.contains_quantified()
-            && visit_free_quantified(scratch, kt, Variance::Co, &mut |index, context| {
-                if index < arity && context.variance() == Variance::Contra {
-                    Visit::Stop
-                } else {
-                    Visit::Skip
+            && visit_in(scratch, kt, Variance::Co, &mut |_, node, context| {
+                if node.binds_quantifiers() {
+                    return Visit::Skip;
+                }
+                match *node {
+                    TypeNode::Quantified { index, .. } => match context.variance() {
+                        Variance::Contra => ours(index, context),
+                        Variance::Co => Visit::Skip,
+                    },
+                    TypeNode::SignatureApply { pins, .. } => {
+                        match pins
+                            .values()
+                            .any(|pin| visit_free_quantified(scratch, pin, Variance::Co, &mut ours))
+                        {
+                            true => Visit::Stop,
+                            false => Visit::Skip,
+                        }
+                    }
+                    _ => Visit::Descend,
                 }
             })
     }

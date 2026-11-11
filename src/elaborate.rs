@@ -43,6 +43,7 @@
 mod builtin;
 mod declaration;
 mod expression;
+pub mod judge;
 mod members;
 mod module;
 mod paths;

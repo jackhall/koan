@@ -38,10 +38,10 @@ breaks without it.
    point, the least instance, only where a call needs one.
 6. **A load-time verdict holds at every run.** A static type is an interval,
    every rule maps both of its ends, and *always* and *never* survive whatever
-   a run binds a lexical variable to.
+   a run binds a lexical or path variable to.
 7. **One type, one handle.** Identity is the content digest, so every canonical
-   shape — a union's, a record's field order, a quantifier group's numbering —
-   is part of identity.
+   shape — a union's, a record type's field order, a quantifier group's
+   numbering — is part of identity.
 8. **The laws are the tests.** A new node or relation extends the generators
    and the laws. A failing law is fixed in the lattice, never by narrowing a
    generator or restating the law up to equivalence.
@@ -51,7 +51,7 @@ breaks without it.
 | Doc | Holds |
 |---|---|
 | [The laws](laws.md) | each law, what rests on it, what breaks without it, and what enforces it |
-| [Identity and storage](identity.md) | the content digest, typed handles, the frozen load, the agent tier and the branches, the verdict tables and downstream memos, records and schemas, recursive groups |
+| [Identity and storage](identity.md) | the content digest, typed handles, the frozen load, the agent tier and the branches, the verdict tables and downstream memos, field lists and schemas, recursive groups |
 | [The node vocabulary](vocabulary.md) | every node variant, the kind order, the three families, the code family |
 | [The relations](relations.md) | the order, *fits*, `join` and `meet`, signature types, quantified binders |
 | [Solving](solving.md) | substitution, the unifier, and priority classes: admission, ranking and judging |
@@ -79,8 +79,8 @@ content digest the table states a type with no registry in hand. Every
 composite the table spells — the code containers `List(Name)`,
 `List(Declaration)`, `Dict(TypeCode, Block)`, `Dict(Name, Block)` and
 `Dict(Name, TypeCode)`, the unions `TypeCode` and `List(Name) | Dict(Name,
-TypeCode)` (`QUANTIFIER_CODE`, a `FOR ALL` group), and the empty record — is
-pinned the same way. Each fixed handle names a node of the lattice's seed, the
+TypeCode)` (`QUANTIFIER_CODE`, a `FOR ALL` group), and the empty record type —
+is pinned the same way. Each fixed handle names a node of the lattice's seed, the
 image every root rests on ([storage](identity.md#storage-a-root-and-its-branches)),
 so the table's static data names no type a chain must first intern.
 `KType::same_as` is the equality that comparison uses, handle against handle in
@@ -116,7 +116,14 @@ handle.
   composite re-interns through the chain's ordinary doors, a union through
   the canonicalizing one. A signature and a sealed member are leaves to
   both unary drivers: one is closed content, the other content-addressed by its
-  component. Substitution and sibling rewriting are this.
+  component. Substitution and sibling rewriting are this. Three rules enter a
+  signature or an application by handing it to `signature_mapped` or its
+  read-only twin `signature_handles`: the seal's two sibling walks and the
+  carrier substitution. Each stops at a node whose stored flag says nothing it
+  seeks lies inside: `SIBLING` for a sibling, `DEEP_CARRIER` for an opaque
+  carrier. Both are folded at interning from a node's children and from every
+  handle a signature or an application holds, and `DEEP_CARRIER` holds wherever
+  `CARRIER`, which stops at a signature, does.
 - **Unary visit** — supply a pre-order rule returning descend / skip / stop.
   Occurrence censuses and reference folds are this. A probe over the free
   `Quantified` positions alone takes `visit_free_quantified`, which skips nested
@@ -135,7 +142,9 @@ The context a unary rule is handed answers the two questions the arm table
 alone cannot: how many schemes lie between the root and here — `binder_depth`
 — and the variance of the current position. A scheme's one child is its body,
 at the scheme's own variance, and the body's node flips its own parameters and
-slots.
+slots. Its group bounds are no children, since the body's variables carry
+them, but a rebuild rebuilds them too, outside the group and by the same rule,
+and binds the body at what the rule made of them.
 
 [Rendering](render.rs) is exempt, and for a stated reason: it spells syntax
 *between* children and inherits the enclosing scheme's group from above, which
@@ -154,10 +163,13 @@ never a bundle — the lattice knows about types and symbols and nothing else.
 - [Recursion over run-time types](../../../roadmap/performance/recursion-over-run-time-types.md)
   — every structural walk, relation and rendering over types as deep as a
   run-time value's carried type.
-- [A pin over a variable](../../../roadmap/types/pins-over-variables.md)
-  — a pin's variable read through its bounds as the order compares pins.
+- [Projection types](../../../roadmap/types/projection-types.md) — the
+  projection node and the unifier's descent into it.
 - [A carried union at a contravariant position](../../../roadmap/types/contravariant-union-solve.md)
   — a solve over an argument's union blind to its member order.
+- [Narrower questions](../../../roadmap/one-build/narrower-questions.md) — a
+  door answering the interval of bindings under which a relation over a
+  lexical variable holds, where a judgement needs one.
 - [The types project's unplanned work](../../../roadmap/types/README.md#unplanned-work)
   — anonymous structural recursion in types, and a singleton static type for
   a type value.

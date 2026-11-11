@@ -9,8 +9,15 @@
 //! [`visit_free_quantified`] is [`visit`] narrowed to the free `Quantified` positions, the probe
 //! every scheme check shares.
 //!
-//! A signature's members and a sealed member's schema are closed content: neither walk reaches
-//! inside one.
+//! A scheme's group bounds are no children: its body's variables carry them, so [`visit`] reaches
+//! each through the body. [`rebuild`] rebuilds them too, by the same rule, so the rebuilt scheme
+//! binds its body at what the rule made of them.
+//!
+//! A signature's members and a sealed member's schema are closed content: neither driver reaches
+//! inside one. The seal's two sibling walks and a carrier's read-back alone enter a signature, by a
+//! rule that hands it to
+//! [`TypeChain::signature_mapped`](crate::types::chain::TypeChain::signature_mapped) or its
+//! read-only twin.
 //!
 //! Both entry points take the scratch allocator the walk's transient buffers — each node's child
 //! list and the rebuilt children — are built in.
@@ -19,6 +26,7 @@ use crate::bump::{BumpAllocator, BumpVec};
 
 use super::Variance;
 use crate::types::chain::TypeChain;
+use crate::types::handle::{KType, Naming, TypeHandle};
 use crate::types::node::TypeNode;
 use crate::types::record::map_fields;
 use crate::types::shape::{DispatchTokenElement, map_slots};
@@ -191,6 +199,16 @@ fn rebuild_at<'run>(
     if binder {
         context.binder_depth -= 1;
     }
+    // A scheme's group bounds are handles beside its body, which binds each again at its
+    // variables: each is rebuilt by the same rule, outside the group, after the body.
+    if let TypeNode::Scheme { group, .. } = node {
+        for bound in group.bounds {
+            let held = types.enter(bound.raw());
+            let new = rebuild_at(types, scratch, held, context, rule);
+            changed |= new != held;
+            rebuilt.push(new);
+        }
+    }
     if !changed {
         return kt;
     }
@@ -284,7 +302,9 @@ pub fn children<'run>(
             out(lower, false);
             out(bound, false);
         }
-        TypeNode::Quantified { bound, .. } | TypeNode::Parameter { bound, .. } => out(bound, false),
+        TypeNode::Quantified { bound, .. }
+        | TypeNode::Path { bound, .. }
+        | TypeNode::Parameter { bound, .. } => out(bound, false),
         // An application's pins; its signature is closed.
         TypeNode::SignatureApply { pins, .. } => pins.values().for_each(|kt| out(kt, false)),
         TypeNode::SignatureMeet { members } => members.iter().for_each(|m| out(m, false)),
@@ -292,7 +312,8 @@ pub fn children<'run>(
 }
 
 /// **The other half of the arm table.** One node plus replacement children, in [`children`]'s
-/// order, re-interned through the chain's own doors. `None` for a node with no children.
+/// order — a scheme's rebuilt group bounds after its body — re-interned through the chain's own
+/// doors. `None` for a node with no children.
 fn reassemble<'run>(
     types: &TypeChain<'run, impl Habitat<'run>>,
     scratch: BumpAllocator<'_>,
@@ -329,10 +350,11 @@ fn reassemble<'run>(
         }
         // The rebuilt body still reads the group in its old order, which the door renumbers: a
         // rebuild that drops a variable's first occurrence moves it.
+        // The rebuilt group bounds follow the body, so the group binds the body at them.
         TypeNode::Scheme { group, .. } => {
-            types
-                .bind_group(scratch, group.names, group.bounds, new[0])
-                .0
+            let mut bounds = BumpVec::with_capacity_in(group.bounds.len(), scratch);
+            bounds.extend(new[1..].iter().map(|bound| KType::read(bound)));
+            types.bind_group(scratch, group.names, &bounds, new[0]).0
         }
         TypeNode::Union { .. } => types.union_of(scratch, new),
         TypeNode::ConstructorApply { arguments, .. } => {
@@ -346,6 +368,7 @@ fn reassemble<'run>(
         TypeNode::Lexical { level, name, .. } => {
             types.lexical_node(scratch, level, name, new[0], new[1])
         }
+        TypeNode::Path { class, name, .. } => types.path_node(class, name, new[0]),
         TypeNode::Parameter { name, .. } => types.parameter(name, new[0]),
         TypeNode::SignatureApply { signature, pins } => {
             let mut values = new.iter();

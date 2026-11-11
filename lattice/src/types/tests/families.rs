@@ -3,11 +3,12 @@
 //! builds its own chain over a region of its own, which doubles as its scratch.
 
 use crate::bump::{Bump, BumpAllocator};
-use crate::symbols::{BinderSymbol, SymbolInterner, TypeSymbol};
+use crate::symbols::{BinderSymbol, SymbolInterner, TypeSymbol, ValueSymbol};
 
 use crate::types::chain::TypeChain;
 use crate::types::handle::{KType, Parametric};
 use crate::types::kind::KKind;
+use crate::types::schema::{SchemaDraft, SigOrigin};
 use crate::types::tiers::Habitat;
 use crate::types::typed::is_subtype_of;
 use crate::types::unify::{Collector, admits_with};
@@ -118,13 +119,39 @@ fn a_contravariant_occurrence_is_found() {
         types.function_type(region, params, ret)
     };
     let sink = function(&[(x, variable)], KType::NULL.into());
-    assert!(types.quantifies_contravariantly(region, sink, 1));
+    assert!(types.quantifies_noncovariantly(region, sink, 1));
     let give = function(&[], variable);
-    assert!(!types.quantifies_contravariantly(region, give, 1));
+    assert!(!types.quantifies_noncovariantly(region, give, 1));
     let flipped_twice = function(&[(f, sink)], KType::NULL.into());
-    assert!(!types.quantifies_contravariantly(region, flipped_twice, 1));
+    assert!(!types.quantifies_noncovariantly(region, flipped_twice, 1));
     let boxed = family(&types, region, name, parameter);
     let applied =
         types.constructor_apply(region, boxed, &[(BinderSymbol::Type(parameter), variable)]);
-    assert!(!types.quantifies_contravariantly(region, applied, 1));
+    assert!(!types.quantifies_noncovariantly(region, applied, 1));
+}
+
+/// A pin is invariant, so a family parameter inside one is found at any position, a list's element
+/// too; a variable past the family's own group is not its parameter.
+#[test]
+fn a_pinned_occurrence_is_found() {
+    let symbols = SymbolInterner::new();
+    let top = ValueSymbol::declared("top", &symbols).expect("a value token");
+    let elt = TypeSymbol::declared("Elt", &symbols).expect("a Type token");
+    let bump = Bump::new();
+    let region = &bump;
+    let types = crate::types::tests::tiered(region);
+    let member = types.head_parameter(elt, KType::ANY);
+    let mut draft = SchemaDraft::new(region);
+    draft.origin = SigOrigin::Declared;
+    draft.insert_parameter(elt, member);
+    draft.insert_value_slot(top, member);
+    let stack = types.signature(region, draft);
+    let pinned = |variable: Parametric| {
+        types.signature_apply::<Parametric>(region, stack, &[(BinderSymbol::Type(elt), variable)])
+    };
+    let ours = pinned(types.quantified(0, KType::ANY));
+    assert!(types.quantifies_noncovariantly(region, ours, 1));
+    assert!(types.quantifies_noncovariantly(region, types.list(ours), 1));
+    let other = pinned(types.quantified(1, KType::ANY));
+    assert!(!types.quantifies_noncovariantly(region, other, 1));
 }

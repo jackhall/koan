@@ -2,16 +2,16 @@
 
 What a type can say, and what type a value has. Generic code is typed as far
 as its static types reach and checked by the call for the rest, so the items
-here widen what the declarations can decide — a signature reading its own
-parameters, a static type pinning a parameter to a variable, a literal's
-element type keeping every field a program wrote, a projection by schema —
-settle what a value carries where today's rule loses something, as at a view's
-barrier, and keep a solve blind to the order a union's members are written
-in. What it buys the language: a program that states its types
-is refused early where they decide it, and a program that leaves them out
-still runs, each call checking what the load could not. Where the load's pass
-runs, and where what it settles lives, is
-[one build](../one-build/README.md)'s.
+here widen what the declarations can decide — a type naming a piece of a
+variable or a parameter, a static type pinning a parameter to a variable, a
+nominal over a run-bound type typed at load, an overload a builtin always beats
+refused whatever its signature, a projection by schema — settle what a value
+carries where today's rule loses something, as at a view's barrier or a tail
+call, and keep a solve blind to the order a union's members are written in.
+What it buys the language: a program that states its types is refused early
+where they decide it, and a program that leaves them out still runs, each call
+checking what the load could not. Where the load's pass runs, and where what
+it settles lives, is [one build](../one-build/README.md)'s.
 
 [The design](../../design/gradual-typing.md) follows a type from its
 declaration to a call. The pieces sit in the [type lattice](../../lattice/src/types/README.md), the
@@ -26,10 +26,14 @@ hand.
 
 - [What a barrier rebuilds](barrier-coercion.md)
 - [A carried union at a contravariant position](contravariant-union-solve.md)
-- [Dependent signatures](dependent-signatures.md)
 - [A nested projection](nested-projection.md)
-- [A pin over a variable](pins-over-variables.md)
-- [Return contracts](return-contracts.md)
+- [The overlap check over a parametric registration](parametric-overlap.md)
+- [A value retyped in place, pinned at its paths](pinned-in-place.md)
+- [Projection types](projection-types.md)
+- [A nominal over a run-bound type, typed at load](run-bound-nominals.md)
+- [A surfaced head reads only the parameters its shape names](surfaced-head-parameters.md)
+- [A tail call keeps every retype](tail-retypes.md)
+- [Types held in record values](types-in-records.md)
 - [A parameterized union's variant takes only the parameters its payload names](variant-parameters.md)
 
 ## Unplanned work
@@ -48,25 +52,14 @@ as surprises, not scheduled.
   type for a type value — the type whose one value is the type value `Number` —
   would carry the denoted type through ordinary static typing. It is a
   [type lattice](../../lattice/src/types/README.md) change.
-- **The overlap check skips quantified registrations.** The load-time
-  [overlap check](../../src/dispatch/README.md#the-overlap-check) types only a
-  registration that binds no `FOR ALL` group, so
-  `EXPR FOR ALL #[Elt] #(x :Elt + y :Elt) -> Str` loads beside the builtin `+`,
-  which wins every call the two share.
 - **A family cannot state its variance.** Every type-constructor family is
   covariant in its parameters, so a
   [parameterized union](../../src/elaborate/README.md#families) placing a
-  parameter inside a function type's parameter list is refused. Admitting one needs either a
-  variance annotation on the declarator or inference over its variants, and
-  an order whose application arm reads each parameter's variance.
-- **A nominal over a run-bound type is declared per call.** A `NEWTYPE` or
-  `UNION` whose definition names a type a run binds — `NEWTYPE Box = :{v :Elt}`
-  in a `FOR ALL #[Elt]` body — has no load-time handle
-  ([the type channel at load](../../src/elaborate/README.md#the-type-channel-at-load)):
-  a sealed group is a leaf substitution never enters, and a nominal's identity
-  is its name and schema, so each call's `Box` is a different type. It is declared through the activation
-  each time its unit runs. A lattice door that substitutes into a sealed group
-  and re-seals it would give the same handle from one load-time declaration.
+  parameter inside a function type's parameter list, or as a signature
+  application's pin (`UNION (Elem -> Holder) = #{Has: :(Stack WITH {Elt = Elem}), Not: Null}`),
+  is refused. Admitting one needs either a variance annotation on the
+  declarator — contravariant, or invariant for a pin — or inference over its
+  variants, and an order whose application arm reads each parameter's variance.
 - **Whether `Module` and `Code` should re-stamp.** Every type that is one type
   re-stamps a value at itself, `Type` included, but `Module` and `Code`, the
   types every module and every quote satisfies, re-stamp nothing
@@ -76,21 +69,10 @@ as surprises, not scheduled.
   name only the return reads is solved to its bound, `Module`, so `-> Out`
   would hide them too. Each such functor would declare its result's signature
   or return `Any`. Undecided.
-- **A keyworded member through a view returns at most its declared return at
-  load.** Through a header, a lone closed head of the carried signature is
-  exactly its return under the call's solve
-  ([static types](../../src/dispatch/README.md#static-types)); through a `:|`
-  view the load reads the call at most the head's return, quantified or not,
-  though the run retypes the barrier's value to it. So over the `Viewed` and `m`
-  of the dispatch test
-  `a_quantified_keyworded_member_returns_what_its_declared_shape_returns`, whose
-  `GET` returns a field `Viewed`'s head hides, with `v = (m :| Viewed)`,
-  `USING v SCOPE (ATTR (GET 1) y)` loads and faults `has no field y` at the run
-  where the same read through a header refuses the load.
 - **Anonymous structural recursion in types.** A data cycle ties only through
   a callable or a tagged nominal value
   ([the tie](../../src/knot/README.md#the-tie)), so `LET a = [1 a]` or a ring of
-  plain records needs a nominal declaration. Structural `μ`-types in the
+  plain record values needs a nominal declaration. Structural `μ`-types in the
   [type lattice](../../lattice/src/types/README.md) would admit them without
   breaking a program the nominal cut admits.
 - **The unfilled typing is a flag every write consults.** A quote's code is

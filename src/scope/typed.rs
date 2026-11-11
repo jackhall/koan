@@ -6,7 +6,8 @@
 //! in its group — and its refusal ([`Elaboration`]) live here, beside the shape whose facts the
 //! load's records hold. A fact is a [`Static`]: unknown, closed — a concrete value, the same at
 //! every run — or rigid over [`Variable`]s — a parametric value over the lexical variables the run
-//! supplies, by level — which [`solutions`] reads through an activation for one substitution.
+//! supplies, a name's by level and a path class's by class — which [`solutions`] reads through an
+//! activation for one substitution.
 //!
 //! The value channel's records live here too: the [`UseStatics`] the load's walk fixes for each
 //! keyworded use: its candidates' [`Narrowing`] and its
@@ -15,18 +16,18 @@
 //! See [README.md § Load-time types](README.md#load-time-types).
 
 use std::fmt;
-use std::hash::{Hash, Hasher};
 
 use crate::memory::{BumpAllocator, BumpVec, Lays, collect};
 use crate::symbols::{BinderSymbol, Symbol, SymbolInterner, TypeSymbol, ValueSymbol};
 use crate::type_lattice::{
-    DeclaredType, KType, Parametric, TypeNode, Verdict, display_name, outranks,
+    DeclaredType, KType, Parametric, PathClass, TypeNode, Verdict, display_name, outranks,
 };
 use crate::values::Chain;
+use crate::values::digest::{DigestHasher, Tag};
 
 use super::keyed::Keyed;
 use super::shape::{Candidate, Coordinate, Segment, Site, Slot};
-use super::tree::{Binder, Tree};
+use super::tree::{Binder, Identity, Tree};
 
 /// A callable's type, and how its `FOR ALL` group's declaration order maps onto that type's
 /// group — what a call needs to bind each type parameter to its solution. `T` is what the type is
@@ -136,6 +137,9 @@ pub enum Elaboration {
         members: (Parametric, Parametric),
         site: Site,
     },
+    /// The type declaration of `name`, at `site`, names itself through signatures and aliases
+    /// alone: neither mints an identity, so the cycle has no finite type.
+    CycleWithoutNominal { name: TypeSymbol, site: Site },
     /// The load-time reader cannot know the type at `site` before the program runs: the load
     /// pass's cue to leave it for the run, never reported.
     Unknown { site: Site },
@@ -155,6 +159,7 @@ impl Elaboration {
             | Elaboration::Quantified { site }
             | Elaboration::MeetOverVariable { site }
             | Elaboration::TiedUnion { site, .. }
+            | Elaboration::CycleWithoutNominal { site, .. }
             | Elaboration::Unknown { site }
             | Elaboration::Unbound { site, .. } => *site,
         }
@@ -211,6 +216,12 @@ impl fmt::Display for ElaborationDisplay<'_, '_, '_, '_> {
                 display_name(*a, self.types, self.symbols),
                 display_name(*b, self.types, self.symbols)
             ),
+            Elaboration::CycleWithoutNominal { name, .. } => write!(
+                f,
+                "`{}` names itself through signatures and aliases alone, so its type is \
+                 infinite; a recursive type passes through a NEWTYPE or a UNION",
+                self.symbols.display(name.symbol())
+            ),
             Elaboration::Unknown { .. } => f.write_str("this type is known only where it runs"),
             Elaboration::Unbound { name, .. } => write!(
                 f,
@@ -223,69 +234,79 @@ impl fmt::Display for ElaborationDisplay<'_, '_, '_, '_> {
 
 /// A rigid variable of a load-time type, and where the run reads its value.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub struct Variable {
-    /// The variable's level: the lexical variable the rigid value names it by.
-    pub level: usize,
-    pub source: Source,
-}
-
-/// Where the run reads a rigid variable's value.
-#[derive(Clone, Copy, PartialEq, Eq, Debug)]
-pub enum Source {
-    /// A type name: the coordinate, in the shape the value was typed in, that holds its type.
-    Type(Coordinate),
-    /// A path variable: the coordinate, in the shape the value was typed in, of the module its
-    /// root names — `None` for a root written in place — and the path it stands for, by the
-    /// segment of the body rooting its chain and its level there.
+pub enum Variable {
+    /// A type name's lexical variable at `level`: `at` is the coordinate, in the shape the value
+    /// was typed in, that holds its type.
+    Type { level: usize, at: Coordinate },
+    /// A path class's variable, read through the path `entry` of the chain the body `root` roots:
+    /// `at` is the coordinate, in the shape the value was typed in, of the module the path's root
+    /// names — `None` for a root written in place.
     Path {
+        class: PathClass,
         at: Option<Coordinate>,
         root: Segment,
-        level: usize,
+        entry: PathName,
     },
 }
 
-/// One path of a chain — a type member `label` read through a module-valued expression — typed as
-/// a lexical variable of its own, its **path variable**, at a level past every name level of the
-/// chain ([design/modules.md § Carriers and paths](../../design/modules.md#carriers-and-paths)).
+impl Variable {
+    /// Whether this is `other`'s variable, wherever each is read.
+    pub fn names_alike(&self, other: &Variable) -> bool {
+        match (self, other) {
+            (Variable::Type { level, .. }, Variable::Type { level: theirs, .. }) => level == theirs,
+            (Variable::Path { class, .. }, Variable::Path { class: theirs, .. }) => class == theirs,
+            _ => false,
+        }
+    }
+}
+
+/// A path entry's name along its chain: a path the chain's types spell, at the level the shape
+/// numbers it at, or one the walk mints, by a digest of its root, member chain, label and
+/// application ([`PathEntry::minted`]). Every walk of a chain names a path alike.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub enum PathName {
+    Spelled(usize),
+    Minted([u64; 2]),
+}
+
+/// One path of a chain — a type member `label` read through a module-valued expression — by its
+/// [`PathName`] ([design/modules.md § Carriers and paths](../../design/modules.md#carriers-and-paths)).
 /// The shape numbers one per distinct root, member chain and label its type expressions spell,
-/// and the load's walk one more per path it pins a module's type through, past them. The walk
-/// resolves each one in the unit that reads it first ([`LoadFacts::resolution`](super::LoadFacts::resolution)).
+/// and the walk mints one per path it pins a module's type through or roots a class's variable
+/// at, named by its content. The walk resolves each one in the unit that reads it first
+/// ([`LoadFacts::resolution`](super::LoadFacts::resolution)).
 #[derive(Clone, Copy, PartialEq, Eq)]
 pub struct PathEntry<'graph> {
     pub root: Root,
     /// The value members read from the root, in order, before `label`.
     pub chain: &'graph [ValueSymbol],
     pub label: TypeSymbol,
-    /// The path variable's level.
-    pub level: usize,
+    pub name: PathName,
     /// The application the path is read through: the module `chain` reaches is fitted to it, and
     /// the path is what it fits `label` at. Over the chain's lexical variables, which a layer
     /// binding them closes. `None` where the path reads the module's own type member.
     pub through: Option<Parametric>,
 }
 
-impl<'graph> PathEntry<'graph> {
-    /// The hash the walk finds the entries for `root`, `chain` and `label` by.
-    pub fn hash_of(root: Root, chain: &[ValueSymbol], label: TypeSymbol) -> u64 {
-        let mut hasher = std::hash::DefaultHasher::new();
-        match root {
-            Root::Binder(binder) => (0u8, binder).hash(&mut hasher),
-            Root::Inline { site, .. } => (1u8, site).hash(&mut hasher),
-        }
-        (chain, label).hash(&mut hasher);
-        hasher.finish()
-    }
-
-    /// Whether this entry is the one for `root`, `chain` and `label`.
-    pub fn is(&self, root: Root, chain: &[ValueSymbol], label: TypeSymbol) -> bool {
-        self.root == root && self.chain == chain && self.label == label
+impl PathEntry<'_> {
+    /// The name the walk mints a path no type spells by: a digest of its root, member chain, label
+    /// and application.
+    pub fn minted(
+        root: Root,
+        chain: &[ValueSymbol],
+        label: TypeSymbol,
+        through: Option<Parametric>,
+    ) -> PathName {
+        let mut hasher = DigestHasher::new(Tag::PathEntry);
+        hasher.feed((root, chain, label, through.map(|through| through.digest())));
+        PathName::Minted(words(hasher.finished().bits()))
     }
 }
 
 impl fmt::Debug for PathEntry<'_> {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_struct("PathEntry")
-            .field("level", &self.level)
+            .field("name", &self.name)
             .field("chain", &self.chain)
             .field("label", &self.label)
             .finish()
@@ -318,10 +339,38 @@ impl Resolution<'_> {
 pub enum Resolved {
     /// The same type at every run.
     Closed(KType),
-    /// The path variable at this level: the first path the pass resolved over a tree like this
-    /// one's, read at the same label through the same application. Every path of one class is one
-    /// type at every run.
-    Class(usize),
+    /// The variable of this class: the paths read at one label, through one application, off
+    /// trees of one identity. Every path of one class is one type at every run.
+    Class(PathClass),
+}
+
+impl Resolved {
+    /// The class of the paths read at `label` through `through` off a tree of `identity`: `None`
+    /// where the tree holds a leaf no binder names, whose path is like no other.
+    pub fn class_of(
+        label: TypeSymbol,
+        through: Option<Parametric>,
+        identity: Identity,
+    ) -> Option<PathClass> {
+        if identity == Identity::Unnamed {
+            return None;
+        }
+        let mut hasher = DigestHasher::new(Tag::PathClass);
+        hasher.feed((label, through.map(|through| through.digest()), identity));
+        Some(PathClass(words(hasher.finished().bits())))
+    }
+
+    /// The class of the one path `entry` of the chain the body `root` roots, alone in its class.
+    pub fn own_class(root: Segment, entry: PathName) -> PathClass {
+        let mut hasher = DigestHasher::new(Tag::PathClass);
+        hasher.feed((root, entry));
+        PathClass(words(hasher.finished().bits()))
+    }
+}
+
+/// A digest's bits as two words, low first.
+fn words(bits: u128) -> [u64; 2] {
+    [bits as u64, (bits >> 64) as u64]
 }
 
 /// A path's root: the binder a name lands at, or an expression written in place, by its site and
@@ -728,7 +777,7 @@ impl<C, R> Static<'_, C, R> {
         match self {
             Static::Rigid { variables, .. } => variables
                 .iter()
-                .any(|variable| matches!(variable.source, Source::Path { .. })),
+                .any(|variable| matches!(variable, Variable::Path { .. })),
             _ => false,
         }
     }

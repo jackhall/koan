@@ -85,12 +85,12 @@ pub use list::{LinkedPiece, List, Piece};
 pub use record::Record;
 pub use retyped::Retyped;
 pub(crate) use settled::stamp_knot;
-pub use settlement::{ArenaRef, BindingImage, BuildBudget, KeptCell, KeyedTypes, SettlementKey};
+pub use settlement::{BindingImage, BuildBudget, DepotRef, KeptCell, KeyedTypes, LayerKey};
 #[cfg(test)]
 pub(crate) use surface::TARGETS;
 pub use surface::{
-    PartPath, PathSegment, Retype, Seen, Surface, applications, fit_solution, pinned_at_fit,
-    retype_target, retype_target_as, retyped_to, retypes_by_header, under, unknown,
+    PartPath, PathSegment, Restamping, Retype, Seen, Surface, applications, fit_solution,
+    pinned_at_fit, retype_target, retype_target_as, retyped_to, retypes_by_header, under, unknown,
 };
 pub use tagged::Tagged;
 #[cfg(test)]

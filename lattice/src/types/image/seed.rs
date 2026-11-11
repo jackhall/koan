@@ -39,7 +39,7 @@ pub static ANY_CODE: StoredNode<'static> = StoredNode::imaged(
 
 pub static EMPTY_SIGNATURE: StoredNode<'static> = StoredNode::imaged(
     0xd06902e2_9cd758a6_57ad60d2_6aa0df34,
-    Content::Signature { schema: &SigSchema::EMPTY, schema_digest: TypeDigest::imaged(0x2c934a0c_96bbbc0f_474649ea_8a4e99da) },
+    Content::Signature { flags: Flags::imaged(0x00), schema: &SigSchema::EMPTY, schema_digest: TypeDigest::imaged(0x2c934a0c_96bbbc0f_474649ea_8a4e99da) },
 );
 
 pub static TYPE_CODE: StoredNode<'static> = StoredNode::imaged(

@@ -19,6 +19,12 @@ name alike — so on how the program is spelled: with two `NEWTYPE`s `Apple` and
 `Apple`, and the same union written `(LIST OF Pear) | (LIST OF Apple)` to
 `Pear`.
 
+A pin is solved from both sides, so a declared union inside one ties wherever
+the pin sits, and a binder holding such a tie is refused as `TiedUnion` even
+under a function's parameter list, where a union outside a pin is taken whole:
+`EXPR FOR ALL #[Elt Key] #(F f :(FN :{x :(S WITH {P = (Elt | Key)})} -> Null)) -> Any`
+over `SIG S FOR ALL #[P] = #[(VAL v :P)]` does not declare.
+
 **Acceptance criteria.**
 
 - `KAA` over a function on `(LIST OF Apple) | (LIST OF Pear)` solves `Elt` to
@@ -26,6 +32,8 @@ name alike — so on how the program is spelled: with two `NEWTYPE`s `Apple` and
 - A law in the [property suite](../../lattice/src/types/tests/properties.rs)
   states that a solve's answer does not depend on the order a carried union's
   members were interned in.
+- `F` above declares, and a call solves `Elt` and `Key` to one answer
+  whichever order the pin's union is written in.
 
 **Directions.**
 

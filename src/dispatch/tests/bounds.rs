@@ -1,5 +1,5 @@
-//! The build arena's bounds: what no frame holds stays within the budget however a loop binds, and
-//! what frames hold grows with the distinct arena nodes they run under, never with how deeply they
+//! The build depot's bounds: what no frame holds stays within the budget however a loop binds, and
+//! what frames hold grows with the distinct depot slots they run under, never with how deeply they
 //! nest. And the run root's: a top-level statement's temporaries die with its cell.
 
 use std::num::NonZeroUsize;
@@ -57,7 +57,7 @@ fn ran(source: &str, budget: BuildBudget) -> (String, Tiers, usize) {
 }
 
 /// A loop down `h` that calls `KEEP` on each hop's module — a fresh load-content binding wherever
-/// the module differs — and, where `composes`, composes and runs the hop's quote, so the arena holds
+/// the module differs — and, where `composes`, composes and runs the hop's quote, so the depot holds
 /// settlements and compositions both.
 fn looping(composes: bool) -> String {
     let compose = match composes {
@@ -83,9 +83,10 @@ proptest! {
         settlements in 1usize..4,
         composes in any::<bool>(),
     ) {
-        // One settlement's weight sizes the budget, so a loop over more bindings must evict.
+        // One settlement's weight sizes the budget, so a loop over more bindings must evict. The
+        // module is read off the hop at `Any`, as the loop reads it, so the call settles at run.
         let (_, _, one) = ran(
-            &program(1, 1, |_| 0, "LET x = (KEEP m0)\n"),
+            &program(1, 1, |_| 0, "LET x = (KEEP (ATTR h m))\n"),
             BuildBudget::default(),
         );
         let budget = BuildBudget {
@@ -100,14 +101,15 @@ proptest! {
 }
 
 /// `DOWN`, keyed on the module it views, which recurses down `h` and binds its value only once the
-/// frame below returns, so every frame of the recursion is live at its bottom.
+/// frame below returns, so every frame of the recursion is live at its bottom. Each call reads its
+/// module off a hop at `Any`, so the load lays no layer for it and every frame settles at run.
 const DOWN: &str = "EXPR #(DOWN m :Holder h :Hop) -> Number = \
                     #((LET w = (m :| Holder)) (LET r = (DOWN (ATTR h m) (ATTR h next))) (r))\n\
                     EXPR #(DOWN m :Holder end :Null) -> Number = #(7)\n\
-                    PRINT (DOWN m0 h)";
+                    PRINT (DOWN (ATTR h m) h)";
 
 #[test]
-fn what_frames_hold_is_linear_in_distinct_arena_nodes_not_nesting_depth() {
+fn what_frames_hold_is_linear_in_distinct_depot_slots_not_nesting_depth() {
     // Every frame of a recursion under one binding runs under its one settlement, and two bindings
     // alternating hold two, however deep.
     for (count, live) in [(1, 1), (2, 2)] {

@@ -16,11 +16,27 @@ content, so no substitution enters one; a head parameter a pin names is reached
 through the application's pins.
 
 A load-time type is read where it runs by replacing each lexical variable with
-the binding at its level ([`substitute_levels`](substitute.rs)). No binder
-captures a lexical variable, so the substitution asks no binder depth.
+the binding at its level ([`substitute_levels`](substitute.rs)), a level the
+binding leaves unbound keeping its variable under a scheme as anywhere; and a type the
+load fixed over paths is read through what their classes resolved to by
+replacing each path variable by class ([`substitute_paths`](substitute.rs)). No
+binder captures a lexical or a path variable, so neither substitution asks a
+binder depth.
+
+A type over an opaque view's carriers is read onto the module the view is
+built over by replacing each carrier a caller answers for with the type it
+hides ([`substitute_carriers`](substitute.rs)). A carrier is an atom, so its
+answer lands at its position alone, and each composite on the way out
+re-interns through its canonical door, so a union absorbs an answer lying
+below another member. Unlike every other substitution here, it enters a
+signature and an application through `signature_mapped`, so a carrier a slot
+or a pin holds is read back too: a carrier is an atom no signature binds, so
+nothing is captured.
 
 A substitution keeps its operand's kind: a `Parametric` comes back a
-`Parametric`, and a `Scheme` a `Scheme`, its own group still bound. A caller
+`Parametric`, a `Scheme` a `Scheme`, its own group still bound, and a `KType`
+a `KType`, since a concrete type holds no variable a substitution binds and a
+carrier's answer is concrete. A caller
 whose bindings answer every variable narrows the result through `concrete`,
 naming the invariant that makes it concrete. `bound_above` and `erase_rigid`
 answer every free variable of a `Parametric` by its ends, so they yield a
@@ -28,14 +44,23 @@ answer every free variable of a `Parametric` by its ends, so they yield a
 
 A type is **read through intervals** ([`read_through`](substitute.rs)). Each
 variable stands for some type between a lower and an upper end, which
-[`Variable`](node.rs) — the view of the three variable nodes — reads off it: a
-lexical variable's own, `[Never, bound]` for the others. Read from
+[`Variable`](node.rs) — the view of the five variable nodes — reads off it: a
+lexical variable's and a projection's own, `[Never, bound]` for the others. A
+projection is read through its base: the base takes the end its position asks
+for, and the projection rebuilds over that end to its piece, the same end of
+the projection, since every step is covariant. Read from
 above, a variable takes its upper end at a covariant position and its lower end
 at a contravariant one, which gives the type above every instance; read from
 below, the reverse, which gives the type below every instance. A signature is
-left opaque. `bound_above` is the read from above with every free variable — a
-`Quantified` under none of the type's own binders, every `Parameter` and
-every lexical variable — at `[Never, bound]`, a lexical variable at its own
+left opaque. The order compares a pin by identity, so a pin holding a variable
+is read from both sides: where the two reads are one type the pin stays, so read;
+otherwise a read from above drops it — `S WITH {Elt = Elt}` reads as `S`, which
+lies above every application of `S` — and a read from below makes the whole
+application `Never`. The side is the application's own, swapped at a
+contravariant position, and a meet of applications reads `Never` where any
+member does. A variable a binder inside the pin binds is kept, as anywhere. `bound_above` is the read from above with every free variable — a
+`Quantified` under none of the type's own binders, every `Parameter`, every
+path variable and every lexical variable — at `[Never, bound]`, a lexical variable at its own
 two ends, which is what a load-time type is
 compared through where a run may bind its variables to anything under their
 bounds. `erase_rigid`, which reads a variable as its bound everywhere, can put a
@@ -84,19 +109,45 @@ never tried: no binding of it admits. Two binding members **tie**
 neither is and their reads from above meet above `Never`: an argument both admit
 would then bind the group by whichever member the union stores first. The
 elaborator refuses a binder holding a tie at a covariant position of a
-parameter, slot or representation
+parameter, slot or representation, or inside a pin at any position, since a
+pin is solved from both sides
 ([`TiedUnion`](../../../src/elaborate/README.md#refusals)), so the member admitted never
 turns on storage order. A contravariant position takes its union whole.
 
-A **carried** rigid variable fills, at a covariant position, whatever its bound
-fills: a `Held` bounded by `LIST OF Number` fills `LIST OF Elt`, solving `Elt` to
+A **declared signature application** pinning a head parameter to a type that
+names the call's variable, as `elem :(Counter WITH {Carrier = Cr})` does, is
+solved by the module the argument carries, since the order compares a pin by
+identity. At a covariant position, each variable an earlier
+[priority class](#priority-classes) solved is substituted first; what is still
+open is solved by the carried side's own pins, where it applies the signature
+and pins each open parameter — every such application contributing, so none is
+picked by storage order — and otherwise by what *fits* solves the parameter to
+([`fits_application`](sig_relations.rs)). Each open pin takes that solution as
+both a lower and an upper contribution: a module fits at one type, the one the
+run re-stamps it at and its path reads, so `ints` fixes `Cr` at `Number`, and
+where one class holds both `elem` and an `x :Cr`, an `x` of `"s"` is refused
+rather than widening `Cr` to `Number | Str`. A solution naming a parameter the
+carried type leaves open fixes nothing, and the slot does not admit. At a
+contravariant position, each pin a carried application holds must be pinned by
+the declared one, an open pin solved alike.
+
+A **carried** lexical variable or [projection](vocabulary.md#the-node-vocabulary),
+at a covariant position, against a declared list, dict or record holding a
+variable, fills each child the declared type names with its projection there,
+wherever every binding has that piece: an `Ll` bounded by `LIST OF Number` fills
+`LIST OF Elt`, solving `Elt` to `(ELEMENT OF Ll)`, and an `Rr` bounded by
+`:{f :Number, g :Str}` fills `:{f :Elt}` with `(FIELD f OF Rr)`. A binding of
+the carried variable lies under its bound, so pairing the declared type with it
+gives each child exactly the projection's reduction there. Any other carried rigid
+variable fills, at a covariant position, whatever its bound fills: a `Held`
+bounded by `LIST OF Number` at a declared function type's return fills it with
 `Number`, just as the monomorphic instance between the two would. Below a rigid
 variable is only itself, so at a contravariant position it fills nothing more.
 
 Whatever its variables solve to, a declared type lies above `Never` and under
 `Any`, so the walk admits a carried `Never` at a covariant position and a
 carried `Any` at a contravariant one outright, as the order does, rather than
-pairing either structurally against `LIST OF Elt` or a record. Each variable
+pairing either structurally against `LIST OF Elt` or a record type. Each variable
 the declared type names takes what a part-by-part pairing would give it, since
 an extreme is `Never` in every covariant part and `Any` in every contravariant
 one: a variable at a covariant position binds `Never`, as a bare one does, so
@@ -132,9 +183,10 @@ every member, a union splits across them, a member under a sibling is
 absorbed — or a verdict over one that fails), a variable answered by a meet over a
 contribution holding one, and a solve failing at a verdict over one. So
 `LIST OF Elt` over `LIST OF Outer` solves `Elt` to `LIST OF Outer`
-reproducibly, while `LIST OF Elt` over an `Outer` bounded by `LIST OF Number`
-solves it to `Number`, which a run binding `Outer` below its bound does not
-reproduce. The report is one flag for the whole collector, exact where it says
+reproducibly, and so does `LIST OF Elt` over an `Outer` bounded by
+`LIST OF Number`, to `(ELEMENT OF Outer)`; a carried variable filling a position
+through its bound instead solves to the bound's piece, `Number`, which a run
+binding `Outer` below its bound does not reproduce. The report is one flag for the whole collector, exact where it says
 reproducible and conservative elsewhere; a closed solve always is.
 
 **A binding does not grow with its arguments; an interval does.** Beside the
@@ -181,7 +233,8 @@ them, and each later class admits its arguments against the least instance of
 that pair. So
 `FOR ALL #[Elt] #(PAIR x :(LIST OF Elt) WITH y :(LIST OF Elt))` fixes `Elt`
 from `x` and refuses a `y` that does not lie under it, while one class over both
-slots — or a call by name, whose record has no order — solves them jointly.
+slots — or a call by name, whose argument record has no order — solves them
+jointly.
 A later class holds the solution as a **pin** in its collector, and a pin
 refuses a contribution on its wrong side where it arrives — above it at a
 covariant position, below it at a contravariant one — rather than when the

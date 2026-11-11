@@ -139,7 +139,7 @@ proptest! {
 #[test]
 fn every_retype_site_renders_as_source_that_runs() {
     let desc = Desc::Wrapped(Box::new(Desc::Dict(Box::new(Desc::Maybe))));
-    let printed = "[:(Wrap {Type = :(MAP Str -> :(Some | None))})({\"a\": Some(1)})]";
+    let printed = "[:(Wrap {Type = :(MAP Str -> :(None | Some))})({\"a\": Some(1)})]";
     for source in sites(&desc, "(Wrap ({\"a\": (Maybe.Some 1)}))") {
         assert_eq!(run(&source), printed, "{source}");
     }

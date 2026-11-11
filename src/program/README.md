@@ -3,7 +3,7 @@
 A loaded program as one owning value, and the body runner that performs it.
 [`CellSubstrate`](substrate.rs) holds program storage, the symbol interner, the
 frozen load of the types the load builds and the agent tier above it, the
-program's record and the
+program record and the
 [cell graph](../scheduler/README.md) that runs it, and it can be returned from a
 function, moved, kept in a struct and dropped like any other value. An embedder
 that keeps a program across calls — a language server, a REPL — keeps one of
@@ -37,10 +37,10 @@ than a generic `cellgraph` type.
   - the **program record**, [below](#the-program-record), in program storage,
     which holds the **type tiers** (`TypeTiers`): the frozen load and the
     agent tier, each laid down in an owner's bump rather than held by value,
-    so the record and the graph can both borrow them at `'graph`. The graph
-    hands them to every step and crossing; the record keeps them for a reader
-    outside a step. They take bumps of their own rather than program
-    storage's `Writer` because each grows as a
+    so the program record and the graph can both borrow them at `'graph`.
+    The graph hands them to every step and crossing; the program record keeps
+    them for a reader outside a step. They take bumps of their own rather than
+    program storage's `Writer` because each grows as a
     [collections arena](../../lattice/README.md#the-bump-tier) client. Resting
     there is sound because neither owns anything on the global heap — their
     node indexes and
@@ -77,17 +77,23 @@ image's, so the load builds none of them — has `L` lay the builtin table down,
 builds the program's shapes over that table,
 has `L` run [its walk](../build/README.md#the-one-walk) over them into the
 load's store — the [type half](../elaborate/README.md#the-type-channel-at-load)
-and the value half unit by unit — and folds the records, lays the
-`LoadFacts` the program and every activation read them through, freezes the types' load so no step
+and the value half unit by unit — and folds the unit and closing records, lays
+the `LoadFacts` the program and every activation read them through over the
+load's base layer, lays on that base the request of each call site passing
+load content alone and beside it a layer per binding
+[the trace](../build/README.md#the-trace) names, each with its call sites'
+requests, refusing the load where one refuses ([`traced`](settle.rs)), their
+types interned through the load's chain, freezes the types' load so no step
 can intern into it and the interner's load table so a later name lands in its
-overlay, lays the agent tier in its own bump, and lays the record down beside the
-[output sinks](#faults-and-output) the embedder hands `load`. All of that runs
-before the graph stands: the scheduler's
+overlay, lays the agent tier in its own bump, and lays the program record down
+beside the [output sinks](#faults-and-output) the embedder hands `load`. All of
+that runs before the graph stands: the scheduler's
 [load door](../scheduler/README.md#the-drain) runs the load, then stands the
-graph up over one slab root, the run root, handing it the load's facts and
-the door its misses [settle](#settlements-and-activations) through. `load`
-takes the build arena's budget beside the slab cap
-([the scheduler](../scheduler/README.md#the-build-arena)); the interpreter
+graph up over one slab root, the run root, handing it the load's facts, the
+load's layers among them, and the door its misses
+[settle](#settlements-and-activations) through. `load`
+takes the build depot's budget beside the slab cap
+([the scheduler](../scheduler/README.md#the-build-depot)); the interpreter
 passes its default. It returns a `Result`, and
 `LoadError` carries the parse error, or the rendering of the `ShapeError` that
 stopped it. A shape error borrows program storage and names symbols and types
@@ -127,13 +133,13 @@ born holding `KBirth::Evaluate`, whose step is the body runner's.
 which lays the table down through program storage's writer, `evaluator`, the
 function the evaluation stack calls on a node, and `facts`, the language's
 [walk](../build/README.md#the-one-walk) over the program's shapes into any
-store it is handed — the load's, or a test's over the load's records — which
-may refuse the program, as dispatch's
+store it is handed — the load's, or a test's over the load's unit and closing
+records — which may refuse the program, as dispatch's
 [overlap check](../dispatch/README.md#the-overlap-check) does, and records
 what it decides in the store, as dispatch's
 [static types](../dispatch/README.md#static-types) are. Its default walks
 nothing, so a language without one loads with no facts and its run reads
-every type where it runs. A record of function pointers ranked over `'graph`
+every type where it runs. A struct of function pointers ranked over `'graph`
 cannot name the bundle's projections (rustc #100013); a method generic over
 `'graph` is handed the one the program loads at. Dispatch implements it; the
 tests implement a [miniature](tests/evaluator.rs).
@@ -144,13 +150,13 @@ tests implement a [miniature](tests/evaluator.rs).
 a program's steps run over, with its three families:
 
 - **`KBirth`**, what a cell is born holding, which crosses and is covariant:
-  `Program`, the top level's root work; `Call`, a callee, a record of its
-  arguments by name, how the call reached it — by keyword or by name — and,
+  `Program`, the top level's root work; `Call`, a callee, a record value of
+  its arguments by name, how the call reached it — by keyword or by name — and,
   for a call by name the load recorded contributions for, the type each
   parameter is solved from, one per parameter in symbol order, none where it
   reads its argument's carried type;
-  `Eval`, a quote's code, a record of the names its `EVAL` offers and the
-  contract its declared return makes; `Evaluate`, a top-level statement's
+  `Eval`, a quote's code, a record value of the names its `EVAL` offers and
+  the contract its declared return makes; `Evaluate`, a top-level statement's
   node and the view it is read through; `Composed`, a `USING` or
   a `BUILD` over code composed at run time, which under the code's
   composition fills its holes from a source or, with none, carries it at the
@@ -162,8 +168,8 @@ a program's steps run over, with its three families:
   of its callee and arguments (`Keeps`) — beside, in a `Call` or an `Eval`,
   where its asker's decision memo rests. An `Evaluate` carries what its
   frame runs **within**, as each node and block on a cell's evaluation stack
-  does: whether it [routes](#caching-bodies), the
-  arena node it runs under and the stamp of its chain, the homes of its
+  does: whether it caches and whether it [routes](#caching-bodies), the
+  depot slot it runs under and the stamp of its chain, the homes of its
   decision memo, under a composition the code's root, and the table of what
   its frame keeps ([frames](#frames-contracts-and-tails)). The family's
   `covariant!` witness is what checks that an activation's view is covariant
@@ -254,23 +260,24 @@ asked for.
 
 **How a frame binds depends on how the call reached it.** A keyworded call's
 arguments were admitted by the [selection](../dispatch/README.md#selection) that
-chose the callee, which also put each type parameter's solution in the record
-by name, so the frame trusts both. A call by name's arguments were written by
-the caller, so the frame **admits** every argument against its parameter's
-declared type under one collector — `:(FN :{x :Number} -> Str) cannot be called
-with :{x :Str}` when one does not fit — and, for a **quantified** callee, solves
-the group from that collector itself. The load records a call by name's
+chose the callee, which also put each type parameter's solution in the
+argument record by name, so the frame trusts both. A call by name's arguments
+were written by the caller, so the frame **admits** every argument against its
+parameter's declared type under one collector —
+`:(FN :{x :Number} -> Str) cannot be called with :{x :Str}` when one does not
+fit — and, for a **quantified** callee, solves the group from that collector
+itself. The load records a call by name's
 [contributions](../dispatch/README.md#static-types) one per parameter
 in symbol order, so the frame finds a parameter's entry by how many parameters
 sort before it. The load records them only where its argument names no field
 but the parameters of the callee it saw, so a call whose contributions or
-record are not exactly as long as the running callee's parameters is no call
-the load admitted: it misnames before any entry is read. A parameter with a
-contribution is admitted at that type,
+argument record are not exactly as long as the running callee's parameters is
+no call the load admitted: it misnames before any entry is read. A parameter
+with a contribution is admitted at that type,
 resolved where the call runs, and every other at its argument's carried type,
 so the solve follows the declarations as a keyworded call's does; a type
-parameter the caller writes into the record names no parameter, and misnames
-the call. An
+parameter the caller writes into the argument record names no parameter, and
+misnames the call. An
 [instance](../knot/README.md#an-instance) carries the solution the load made it
 at, so its frame takes that solution and solves nothing. A **`:Type` parameter** —
 a type-channel parameter that is no `FOR ALL` name — is an argument like any
@@ -520,8 +527,8 @@ a helper that returns a part of its argument hands back a value homed where
 its caller's argument rests, not in the calling frame. A hop's successor
 crosses each value on its own, rebuilds the argument record in its own region
 over them, each restamped at the type the skeleton held it at, and keeps a
-carrier of each; the skeleton and the predecessor's record die with the hop
-([tail hops](../scheduler/README.md#tail-hops)).
+carrier of each; the skeleton and the predecessor's argument record die with
+the hop ([tail hops](../scheduler/README.md#tail-hops)).
 
 **What a loop keeps.** A binder of the frame body's — or a tail arm's block's —
 [threaded set](../scope/README.md#the-threaded-set), and each argument part of its
@@ -550,8 +557,10 @@ with the frame body that owns them, so they cache where it does:
   scratch, and writes the scratch;
 - the region chain in every other body.
 
-The `routes` bit of the `Within` on each node and block of the frame's stack
-carries the frame's routing down. A frame under a settlement under the root
+The frame reads its body's caching bit from the folds once, at its first step.
+The `caches` and `routes` bits of the `Within` on each node and block of the
+frame's stack carry that bit and the frame's routing down, so nothing on the
+stack reads the folds again. A frame under a settlement under the root
 reads an invariant site's types where the settlement rested them, in the agent
 tier, and adopts nothing there; a frame under none, or under a composition,
 mints them into its scratch, its warm tier and its cold tier at once.
@@ -571,12 +580,20 @@ the frame received or passes on is walked once
 ### Settlements and activations
 
 A call, whatever its placement, hands the drain a `Seek`
-([`seek`](settle.rs)): the arena node the callee was born under, read off its
-closure bindings, and, where the callee's body record lists keys and the
-asker can read load content at each, the key — the callee's base and segment
-and the content digest at each keyed name
-([the build module](../build/README.md#keys-which-bindings-make-a-settlement))
-— the image of the types that content carries, and what a miss settles.
+([`seek`](settle.rs)): the depot slot the callee was born under, read off its
+closure bindings, and, where the callee's body record lists keys, the
+**request** of the binding it passes — the key, the callee's base and segment
+and what its frame binds at each keyed name
+([the build module](../build/README.md#keys-which-bindings-make-a-settlement)),
+beside what a miss settles. At a call site whose slot map its frame's layer
+of its own body covers, the call reads the request that layer laid, and at a
+site passing load content alone the request the base laid, from any frame
+([references](../build/README.md#references-between-frames-and-the-depot)): it
+reads no argument, digests nothing and solves no group, and hands no image,
+since every type the request names already rests. Any other call computes the
+request from the values where the asker reads load content at each keyed name
+([`settlement`](settle.rs)), beside the image of the types that content
+carries; a call passing anything else seeks no settlement.
 
 Where the callee's body can birth a callable — a bit its shape seals and its
 body record carries, set by a nested callable directly or through a nested
@@ -586,7 +603,7 @@ frame's own region, by the one function [`level`](settle.rs). The frame's
 region does not exist while its asker runs, so the `Seek` carries the request
 by value, beside its binding's image, and the drain hands both back to the
 frame's first step once the frame is born under that settlement
-([the scheduler](../scheduler/README.md#the-build-arena)). The frame relays the
+([the scheduler](../scheduler/README.md#the-build-depot)). The frame relays the
 image into its region and lays the level there at entry, so the level's types
 resolve for a callable born under it whatever its asker was — under a
 composition, a tail call's asker is the dead predecessor frame, no ancestor
@@ -594,40 +611,50 @@ of the frame. A hop under its frame's own settlement hands the frame's level on 
 birth. Nothing is laid in the asker, so a loop making a keyed call each hop
 leaves nothing per hop in its asker's region.
 
-A miss runs [`settled`](settle.rs): the
+A seek whose parent and key name a layer the load laid finds it in the load's
+table and walks nothing. A miss runs [`settled`](settle.rs): the
 language's walk rooted at the callee's body over a layer on its parent's
-facts, its types adopted into the agent tier under the root and kept as terms
-under a composition, so every frame of that body under that binding finds its
+facts — over a witnessed layer the load laid for the body beneath its
+parent, where the binding keeps its questions
+([resumption](../build/README.md#resumption)) — then the request of each of the body's call sites its slot maps cover,
+under the binding, by the step the load runs for each layer it lays; its
+types — the unit and closing records' and the requests' — adopted into the
+agent tier under the root and kept as terms under a composition, whose layers
+carry no request, so every frame of that body under that binding finds its
 invariant types warm. A frame born under a settlement routes: it holds its
 scratch. Dispatch picks the door where it calls: a hop of the frame's own
-callee, keyed, from a frame under a settlement its route marks a hop,
-`tail_under` the frame's arena node; any other call `spawn_seeking` or
+callee, keyed but on no slot its own tail rebinds, from a frame under a
+settlement its route marks a hop, `tail_under` the frame's depot slot; any
+other call, a hop that rebinds a key included, `spawn_seeking` or
 `tail_seeking`; an `EVAL`, a `USING` or a `BUILD` of composed code `spawn_composing`;
 and a written quote's `EVAL` `spawn`. A part or a block is pushed onto the
 stack, and a top-level statement's evaluation is spawned by the top level.
 
-A frame's runner takes the arena node it runs under at its first step and
+A frame's runner takes the depot slot it runs under at its first step and
 hands it, with its stamp — the frame's level over its callee's — in its
 `Within`, to every node and block on its stack, so a callable a tie or a
 lambda births in the frame, its blocks included, is born under it, seeks
 beneath it and replays its chain where it is gone. A frame under its own
 settlement whose body births no callable holds no level, and its `Within`
-carries no stamp; a frame under the arena node its callee was born under
+carries no stamp; a frame under the depot slot its callee was born under
 carries its callee's. A call whose callee's
-arena node is no longer live replays the callee's stamp before the frame
-runs. The top level and a module's closure run under the root, and an `EVAL`
+depot slot is no longer live replays the callee's stamp before the frame
+runs, its own layer sought last with the request the drain handed back at
+its cold birth, so a call that read its request computes no key there
+either. The top level and a module's closure run under the root, and an `EVAL`
 of composed code, or a call of a function whose body is untraced code, under
 its composition.
 
-At each binding event whose names its arena node's facts leave unbound —
+At each binding event whose names its depot slot's facts leave unbound —
 its entry, a statement seam, a block's entry, an `EVAL`'s captures — the
 runner decides in the frame's **activation**
 ([`activation_store`](activation_store.rs)): it reads the binding off its
-slots, walks the body over what it read below, relays the records into the
-frame's region and layers them on what every node and block on its stack
-reads. It first looks the event up in its decision memo, and walks only where
-the memo holds no decision for those bindings
-([the build module](../build/README.md#activations)). A refusal the walk
+slots, walks the body over what it read below, relays the unit and closing
+records into the frame's region and layers them on what every node and block
+on its stack reads. It first looks the event up in its decision memo by
+the bindings' identity, then asks the memo's witnessed decisions at the event
+whether the binding keeps their questions, and walks only what neither
+decides ([the build module](../build/README.md#activations)). A refusal the walk
 reaches, or one the frame's settlement kept, faults the frame worded as the
 load words it.
 
@@ -643,8 +670,9 @@ a value, which lies in a frame the fault keeps — and no rendered text. A
 refusal the build's walk reaches while the program runs — an `EVAL`'s written
 quote's, composed code's, a settlement's or an activation's — is one kind,
 `Refused`, carrying the `ShapeError` itself: a settlement or a composition
-keeps the refusal as it keeps its records, its types rested or termed beside
-them ([settlements](#settlements-and-activations)), and an activation lays it
+keeps the refusal as it keeps its unit and closing records, its types rested
+or termed beside them
+([settlements](#settlements-and-activations)), and an activation lays it
 in its frame. Every unit that receives a fault — an evaluation's outcome, an
 eager part a tie named — stops the body with it, and so does every refusal the
 program is to blame for: a tie or a declaration refused, a callee that is no
@@ -730,9 +758,9 @@ drain finds by the code's syntax digest or builds over the copy the frame's
 first step hands it. A written quote's refusals are found before anything is
 spawned; composed code's, by its frame under the composition. The
 evaluator hands it the names the `EVAL` offers, read at the coordinates the
-shape recorded for its operand (`BodyShape::offers`), as a record. Code whose
-shape kept an error faults with `Refused`, carrying that `ShapeError`; other
-code it refuses faults with a `CodeRefused`: `Unbound` for the first name
+shape recorded for its operand (`BodyShape::offers`), as a record value. Code
+whose shape kept an error faults with `Refused`, carrying that `ShapeError`;
+other code it refuses faults with a `CodeRefused`: `Unbound` for the first name
 hole, `\` name the `EVAL` does not offer, or keyworded hole some use in the
 code selects from alone, and
 `QuantifiedRead` for a `$` name at composed code's entry bound to a
@@ -751,7 +779,7 @@ runs composed code, binding the callee's parameters: its frame is born under
 the composition the function's typing record finds — by the digest of the
 code's syntax and the parameter names, so a callable with no parameters shares
 `BUILD`'s — and activates its root, binding each parameter as any call's frame
-does, and its captures from the code's bindings and from the record the
+does, and its captures from the code's bindings and from the record value the
 declaring scope offered where the function was born. Before it runs, the frame
 faults with the composition's kept refusal or with `unbound`'s, as an `EVAL`
 frame refuses. It seeks no settlement keyed on its parameters and carries no
@@ -802,12 +830,12 @@ moves them into a `Vec`, runs each, and reads a binding back in a separate call
 through a resumed root work; it also checks both load errors, an inspection
 before the program ran, and a stalled substrate.
 [`tests/stores.rs`](tests/stores.rs) holds the test door the dispatch suite
-resumes a load through — a resumption over a **layer** of the load's records,
-a **reload** under a binding from the start, and a **frame** whose binding is
-read off the values its slots hold — beside the test stores themselves: a
-layer reads its base where it wrote nothing, wakes exactly where a frontier
-meets a newly bound unknown, and a frame binds a type value as a type and a
-module value by its digest tree. The two-program test,
+resumes a load through — a resumption over a **layer** of the load's unit and
+closing records, a **reload** under a binding from the start, and a **frame**
+whose binding is read off the values its slots hold — beside the test stores
+themselves: a layer reads its base where it wrote nothing, wakes exactly where
+a frontier meets a newly bound unknown, and a frame binds a type value as a
+type and a module value by its digest tree. The two-program test,
 `a_whole_program`, `an_eager_part_is_supplied_by_site_in_one_wake`,
 `a_call_binds_each_type_parameter_to_its_solution`,
 `a_lambda_returned_from_a_frame_keeps_its_captures` and

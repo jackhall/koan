@@ -1,9 +1,14 @@
 //! The view door: what `:|` builds over a module, and what refuses one; and what a retype at a
 //! signature reads.
 
+use std::ptr;
+
 use crate::knot::tests::{TestGraph, declared, pin, with_fixture};
+use crate::scope::Revealed;
 use crate::symbols::BinderSymbol;
-use crate::type_lattice::{DeclaredType, FitsFailure, KType, Parametric, TypeNode, sig_fits};
+use crate::type_lattice::{
+    DeclaredType, FitsFailure, KType, Parametric, SchemaDraft, SigOrigin, TypeNode, sig_fits,
+};
 use crate::values::{Value, satisfies};
 
 use super::super::layout;
@@ -119,8 +124,8 @@ fn an_opaque_view_keys_its_carrier_on_content() {
     });
 }
 
-/// A view is keyed on its source's bare member and what its fit solves: through a header that
-/// fits alike, one view; through one pinning its parameter otherwise, another.
+/// A view is keyed on its underlying and what its fit solves over it: through any header the
+/// source is under, one view, since the header only admits the view.
 #[test]
 fn an_opaque_views_carrier_is_keyed_on_its_own_content() {
     with_fixture(|fixture| {
@@ -154,10 +159,10 @@ fn an_opaque_views_carrier_is_keyed_on_its_own_content() {
             let through = view(Value::Knotted(m).retyped(writer, ord, types, scratch));
             assert_eq!(content(bare), content(through), "a header that fits alike");
             let widened = view(Value::Knotted(m).retyped(writer, wide, types, scratch));
-            assert_ne!(
+            assert_eq!(
                 content(bare),
                 content(widened),
-                "a header whose fit solves otherwise"
+                "a header pinning the parameter otherwise"
             );
         })
     });
@@ -431,6 +436,183 @@ fn an_opaque_view_wraps_an_overload_over_a_carrier_in_a_barrier() {
             );
             let node = view.module().expect("a view is a module");
             assert!(sig_fits(types, scratch, node.ktype(), stack).is_ok());
+        })
+    });
+}
+
+/// `Counter`, `Stepper` naming its function member alone, `Shown` showing `zero` at `Any`, and a
+/// module fitting all three: the views of a view below take them over `ints :| Counter`.
+const COUNTER: &str = "\
+SIG Counter FOR ALL #[Carrier] = #[(VAL zero :Carrier) (VAL succ :(FN :{x :Carrier} -> Carrier))]
+SIG Stepper FOR ALL #[Carrier] = #[(VAL succ :(FN :{x :Carrier} -> Carrier))]
+SIG Shown = #[(VAL zero :Any)]
+MODULE ints = ((LET zero = 4) (LET succ = (FN :{x :Number} -> Number = #(x))))";
+
+#[test]
+fn a_view_of_a_view_at_its_exposure_is_its_source() {
+    with_fixture(|fixture| {
+        let lines = fixture.parse(COUNTER);
+        let scratch = fixture.scratch();
+        fixture.in_cell(pin, |context| {
+            let types = &fixture.tiers.of(context);
+            let writer = context.writer();
+            let activation = fixture.run(writer, types, &lines, &[]);
+            let ints = module(fixture, activation, "ints");
+            let counter = declared(fixture, activation, "Counter");
+            let view = |source| {
+                ascribe(writer, source, counter, None, types, scratch)
+                    .unwrap_or_else(|error| panic!("the source satisfies `Counter`: {error:?}"))
+            };
+            let c = view(Value::Knotted(ints));
+            assert!(ptr::eq(view(Value::Knotted(c)).node(), c.node()));
+            // Through a header widening the parameter, which only admits the view.
+            let carrier: BinderSymbol = fixture.name("Carrier");
+            let wide = types.signature_apply(scratch, counter, &[(carrier, KType::ANY)]);
+            let headed = Value::Knotted(c).retyped(writer, wide, types, scratch);
+            assert!(ptr::eq(view(headed).node(), c.node()));
+        })
+    });
+}
+
+#[test]
+fn a_view_of_a_view_is_built_over_its_underlying_behind_one_barrier() {
+    with_fixture(|fixture| {
+        let lines = fixture.parse(COUNTER);
+        let scratch = fixture.scratch();
+        fixture.in_cell(pin, |context| {
+            let types = &fixture.tiers.of(context);
+            let writer = context.writer();
+            let activation = fixture.run(writer, types, &lines, &[]);
+            let ints = module(fixture, activation, "ints");
+            let (counter, stepper) = (
+                declared(fixture, activation, "Counter"),
+                declared(fixture, activation, "Stepper"),
+            );
+            let c = ascribe(writer, Value::Knotted(ints), counter, None, types, scratch)
+                .unwrap_or_else(|error| panic!("`ints` satisfies `Counter`: {error:?}"));
+            let s = ascribe(writer, Value::Knotted(c), stepper, None, types, scratch)
+                .unwrap_or_else(|error| panic!("`c` satisfies `Stepper`: {error:?}"));
+            let node = s.module().expect("a view is a module");
+            assert!(
+                node.underlying()
+                    .is_some_and(|underlying| ptr::eq(underlying.node(), ints.node())),
+                "the view keeps the module under every view"
+            );
+            let Value::Knotted(succ) = member(fixture, s, "succ", types, scratch) else {
+                panic!("`succ` is a function member");
+            };
+            let Value::Knotted(own) = member(fixture, ints, "succ", types, scratch) else {
+                panic!("`succ` is a function member");
+            };
+            assert_eq!(succ.barriers().count(), 1, "one barrier");
+            assert!(ptr::eq(succ.behind_barriers().node(), own.node()));
+        })
+    });
+}
+
+#[test]
+fn a_view_of_a_view_that_shows_what_its_source_hides_is_refused() {
+    with_fixture(|fixture| {
+        let lines = fixture.parse(COUNTER);
+        let scratch = fixture.scratch();
+        fixture.in_cell(pin, |context| {
+            let types = &fixture.tiers.of(context);
+            let writer = context.writer();
+            let activation = fixture.run(writer, types, &lines, &[]);
+            let ints = module(fixture, activation, "ints");
+            let (counter, shown) = (
+                declared(fixture, activation, "Counter"),
+                declared(fixture, activation, "Shown"),
+            );
+            let c = ascribe(writer, Value::Knotted(ints), counter, None, types, scratch)
+                .unwrap_or_else(|error| panic!("`ints` satisfies `Counter`: {error:?}"));
+            let BinderSymbol::Value(zero) = fixture.name("zero") else {
+                panic!("`zero` is a value name");
+            };
+            assert!(matches!(
+                ascribe(writer, Value::Knotted(c), shown, None, types, scratch),
+                Err(Unascribable::Reveals { member: Revealed::Slot(member) }) if member == zero
+            ));
+            assert!(ascribe(writer, Value::Knotted(ints), shown, None, types, scratch).is_ok());
+        })
+    });
+}
+
+#[test]
+fn a_view_of_a_view_naming_a_sources_carrier_inside_a_signature_is_read_back() {
+    // A signature declaring a slot at the source's own carrier is read back onto the module the
+    // view is built over, inside the signature too: the view is built, its member at that carrier.
+    with_fixture(|fixture| {
+        let lines = fixture.parse(COUNTER);
+        let scratch = fixture.scratch();
+        fixture.in_cell(pin, |context| {
+            let types = &fixture.tiers.of(context);
+            let writer = context.writer();
+            let activation = fixture.run(writer, types, &lines, &[]);
+            let ints = module(fixture, activation, "ints");
+            let counter = declared(fixture, activation, "Counter");
+            let c = ascribe(writer, Value::Knotted(ints), counter, None, types, scratch)
+                .unwrap_or_else(|error| panic!("`ints` satisfies `Counter`: {error:?}"));
+            let Value::Type(carrier) = member(fixture, c, "Carrier", types, scratch) else {
+                panic!("`Carrier` is a type member");
+            };
+            let BinderSymbol::Value(zero) = fixture.name("zero") else {
+                panic!("`zero` is a value name");
+            };
+            let mut draft = SchemaDraft::new(scratch);
+            draft.origin = SigOrigin::Declared;
+            draft.insert_value_slot(zero, carrier.handle());
+            let named = types.signature(scratch, draft);
+            let d = ascribe(writer, Value::Knotted(c), named, None, types, scratch)
+                .unwrap_or_else(|error| panic!("`c` satisfies its carrier's signature: {error:?}"));
+            let zero = member(fixture, d, "zero", types, scratch);
+            assert_eq!(zero.concrete_ktype(), carrier.handle());
+        })
+    });
+}
+
+const NESTED_COUNTER: &str = "\
+SIG Counter FOR ALL #[Carrier] = #[(VAL zero :Carrier)]
+SIG Outer FOR ALL #[Carrier] = #[(VAL zero :Carrier) (VAL m :(Counter WITH {Carrier = Carrier}))]
+SIG Wrap FOR ALL #[Elem] = #[(VAL m :Elem)]
+MODULE ints = ((LET zero = 0) (MODULE m = ((LET zero = 0))))";
+
+#[test]
+fn a_view_of_a_view_pinning_a_signature_at_a_sources_carrier_is_read_back() {
+    // A pin holding a signature that names the source's carrier hides the nested member again
+    // behind that carrier, and is read back onto the module the view is built over.
+    with_fixture(|fixture| {
+        let lines = fixture.parse(NESTED_COUNTER);
+        let scratch = fixture.scratch();
+        fixture.in_cell(pin, |context| {
+            let types = &fixture.tiers.of(context);
+            let writer = context.writer();
+            let activation = fixture.run(writer, types, &lines, &[]);
+            let ints = module(fixture, activation, "ints");
+            let (outer, wrap) = (
+                declared(fixture, activation, "Outer"),
+                declared(fixture, activation, "Wrap"),
+            );
+            let c = ascribe(writer, Value::Knotted(ints), outer, None, types, scratch)
+                .unwrap_or_else(|error| panic!("`ints` satisfies `Outer`: {error:?}"));
+            let Value::Type(carrier) = member(fixture, c, "Carrier", types, scratch) else {
+                panic!("`Carrier` is a type member");
+            };
+            let BinderSymbol::Value(zero) = fixture.name("zero") else {
+                panic!("`zero` is a value name");
+            };
+            let mut draft = SchemaDraft::new(scratch);
+            draft.origin = SigOrigin::Declared;
+            draft.insert_value_slot(zero, carrier.handle());
+            let named = types.signature(scratch, draft);
+            let wrapped = types.signature_apply(scratch, wrap, &[(fixture.name("Elem"), named)]);
+            let d = ascribe(writer, Value::Knotted(c), wrapped, None, types, scratch)
+                .unwrap_or_else(|error| panic!("`c` satisfies the wrapped signature: {error:?}"));
+            let Value::Knotted(m) = member(fixture, d, "m", types, scratch) else {
+                panic!("`m` is a module member");
+            };
+            let zero = member(fixture, m, "zero", types, scratch);
+            assert_eq!(zero.concrete_ktype(), carrier.handle());
         })
     });
 }

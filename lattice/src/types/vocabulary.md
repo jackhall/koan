@@ -37,12 +37,12 @@ subtree.
   by dispatch: the interleaved keyword/argument element sequence a call must
   spell, each slot's [priority class](solving.md#priority-classes), and the
   return. It is *representationally* distinct from `KFunction`: a lambda takes a
-  record of named arguments and is reached by name; a shape is reached by its
-  keyword sequence and its argument *positions* are load-bearing, which a
-  canonically ordered record erases. So no shape is ever equal to, satisfies, or
-  is satisfied by a lambda type. Neither binds a variable: a `Quantified` inside a function type or a
-  shape reads the enclosing scheme's group, and one holding no variable is
-  concrete.
+  record value of named arguments and is reached by name; a shape is reached by
+  its keyword sequence and its argument *positions* are load-bearing, which a
+  canonically ordered parameter record erases. So no shape is ever equal to,
+  satisfies, or is satisfied by a lambda type. Neither binds a variable: a
+  `Quantified` inside a function type or a shape reads the enclosing scheme's
+  group, and one holding no variable is concrete.
 - **`Scheme`** — a quantified callable's type, and the one **binder**: a
   quantifier group over a body, a `KFunction` or an `ExpressionShape` whose
   free `Quantified` positions read that group. The group is one reference into
@@ -53,7 +53,7 @@ subtree.
   group: for an empty one they answer the plain body. Every walk asks
   [`binds_quantifiers`](node.rs), true of a scheme alone, rather than naming
   the arm.
-- **Three rigid variables**, and the split is deliberate. `Quantified` is
+- **Four rigid variables**, and the split is deliberate. `Quantified` is
   positional and bound by the enclosing scheme, so two schemes alpha-equivalent
   under a renaming intern to one node, and a free one in a declared slot is what
   a call solves. `Parameter` is *named*: a signature's head parameter, which its
@@ -61,8 +61,13 @@ subtree.
   (`Lexical`) is a name only a run binds, read where the program loads
   ([the type channel at load](../../../src/elaborate/README.md#the-type-channel-at-load)):
   it is positional by its level along the lexical chain that declares it, and
-  carries its name, which renders it. No scheme captures it and no solve binds
-  it. The three share the rigid rule in
+  carries its name, which renders it. A **path variable** (`Path`) is a path
+  class's: the one type every path of a class is at every run
+  ([module design](../../../design/modules.md#comparing-two-paths)). It is
+  named by a `PathClass`, a digest of the class's content computed outside the
+  lattice and held as identity alone, and carries the member's name, which
+  renders it. No scheme captures a lexical or a path variable and no solve
+  binds one. The four share the rigid rule in
   *fits*, the substitution mechanism, and the role of the rigid side in a
   specificity check. Each is **bounded by** a closed type — a `KType` that holds
   no opaque carrier and is not `Never` — and lies under its bound and
@@ -81,10 +86,30 @@ subtree.
   ([*fits* over signatures](relations.md#signature-types)).
   A lexical variable has a **lower end** too, a closed type under its bound:
   below it lie itself and whatever lies under that end, where below
-  `Quantified` and `Parameter` lie only themselves and `Never`. A name a
+  `Quantified`, `Path` and `Parameter` lie only themselves and `Never`. A name a
   `FOR ALL` declares has the lower end `Never`; a later priority class reads an
   earlier one's variable as a lexical variable between two ends
   ([priority classes](solving.md#priority-classes)).
+- **`Projection`** — one piece of whatever a lexical variable is bound to, at
+  a [`Step`](node.rs): a record's field, a list's element, a dict's key or
+  value, each a covariant child of its container. Its one child is its
+  **base**, a `Lexical` or another projection, so `(FIELD g OF (FIELD f OF Elt))`
+  is a chain. It is a rigid variable of its own: it carries two ends, the
+  piece of its base's lower end and the piece of its base's bound, and shares
+  the rigid rule through them, so its identity is its base and step alone.
+  [`TypeChain::projection`](chain.rs) is its one door, and builds one only
+  where every binding has the piece — where the base's bound lies under the
+  step's family, `:{f :Any}`, `LIST OF Any` or the dict top — answering `None`
+  elsewhere. Its canonical shapes are part of identity: over a concrete base
+  it answers the piece, over a union the union of the members' pieces, where
+  its two ends meet that type, and where its bound's piece is `Never`, `Never`.
+  So substituting its base rebuilds it through the door into the binding's
+  piece, which exists since a binding lies under the bound. A type member is
+  no step: a module's own type need not name one, which its fit against a
+  declared signature supplies, so a member read is a
+  [path](../../../src/dispatch/README.md#paths). It renders as
+  `(FIELD f OF Elt)`, `(ELEMENT OF Ll)`, `(KEY OF Dd)` and `(VALUE OF Dd)`,
+  words no parser reads.
 - **Signature types** — three nodes, each read as a set of
   [applications](relations.md#signature-types). A `Signature` is owned interface content: a
   `SIG`-declared interface, a module's self-sig, a view's signature and the

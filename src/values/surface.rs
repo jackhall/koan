@@ -782,18 +782,43 @@ pub enum Retype {
 impl Retype {
     /// The retype to `declared`, read off its node: the classes [`retyped_to`] reads.
     pub fn of(types: &Chain<'_, '_, '_, '_>, scratch: BumpAllocator<'_>, declared: KType) -> Self {
+        Restamping::of(types, scratch, declared).at(declared)
+    }
+}
+
+/// How a [`Retype`] re-stamps, apart from the declared type each arm but [`Retype::Keeps`] holds:
+/// discrete, so a record may lay it over a declared type a binding closes.
+#[derive(Clone, Copy, PartialEq, Eq, Hash, Debug)]
+pub enum Restamping {
+    Point,
+    Keeps,
+    Computed,
+    Fit,
+}
+
+impl Restamping {
+    /// How the retype to `declared` re-stamps, read off its node: the classes [`retyped_to`] reads.
+    pub fn of(types: &Chain<'_, '_, '_, '_>, scratch: BumpAllocator<'_>, declared: KType) -> Self {
         if let TypeNode::Union { .. } = types.node(declared) {
-            return Retype::Computed(declared);
+            return Restamping::Computed;
         }
         match retyped_kind(types, declared.into()) {
-            None => Retype::Keeps,
-            Some(Kind::Module) if !pins_every_parameter(types, declared.into()) => {
-                Retype::Fit(declared)
-            }
+            None => Restamping::Keeps,
+            Some(Kind::Module) if !pins_every_parameter(types, declared.into()) => Restamping::Fit,
             Some(Kind::Record) if !record_is_point(types, scratch, declared.into()) => {
-                Retype::Computed(declared)
+                Restamping::Computed
             }
-            Some(_) => Retype::Point(declared),
+            Some(_) => Restamping::Point,
+        }
+    }
+
+    /// The retype to `declared` that re-stamps so.
+    pub fn at(self, declared: KType) -> Retype {
+        match self {
+            Restamping::Point => Retype::Point(declared),
+            Restamping::Keeps => Retype::Keeps,
+            Restamping::Computed => Retype::Computed(declared),
+            Restamping::Fit => Retype::Fit(declared),
         }
     }
 }

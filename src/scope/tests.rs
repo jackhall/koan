@@ -12,6 +12,7 @@ mod groups;
 mod header;
 pub(crate) mod plan;
 mod properties;
+mod question;
 mod quoted_uses;
 mod quotes;
 mod rewrite;
@@ -455,6 +456,13 @@ pub(super) fn unlocated(error: ShapeError) -> ShapeError {
         E::ParameterOutsideBody { name, .. } => E::ParameterOutsideBody { name, at },
         E::NotAModule { value, .. } => E::NotAModule { value, at },
         E::NotASignature { ascribed, .. } => E::NotASignature { ascribed, at },
+        E::ViewReveals {
+            member, ascribed, ..
+        } => E::ViewReveals {
+            member,
+            ascribed,
+            at,
+        },
         E::SpreadNeverAList { value, .. } => E::SpreadNeverAList { value, at },
         E::SpliceNeverCode { value, .. } => E::SpliceNeverCode { value, at },
         E::SpliceInKnot { .. } => E::SpliceInKnot { at },
@@ -474,6 +482,7 @@ pub(super) fn unlocated(error: ShapeError) -> ShapeError {
             first: at,
             at,
         },
+        E::UnderCall { refusal, .. } => E::UnderCall { call: at, refusal },
     }
 }
 

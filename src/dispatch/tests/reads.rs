@@ -161,7 +161,7 @@ fn the_load_types_a_read_from_both_ends_of_its_head() {
         )
     };
     let result = |ok: &str, error: &str| {
-        format!("(Ok {{Error = {error}, Ok = {ok}}}) | (Error {{Error = {error}, Ok = {ok}}})")
+        format!("(Error {{Error = {error}, Ok = {ok}}}) | (Ok {{Error = {error}, Ok = {ok}}})")
     };
     let element = ":(Number | Str)";
     assert_eq!(
@@ -256,7 +256,7 @@ fn code_is_read_by_its_parts_as_unbuilt_code() {
 #[test]
 fn the_load_types_a_read_of_code_as_code() {
     use super::statics::top;
-    let result = "(Ok {Error = Number, Ok = Code}) | (Error {Error = Number, Ok = Code})";
+    let result = "(Error {Error = Number, Ok = Code}) | (Ok {Error = Number, Ok = Code})";
     for read in ["(q 0)", "(q {from = 1})"] {
         assert_eq!(
             top(

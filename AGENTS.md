@@ -27,7 +27,7 @@
 - `PRINT` returns the string it printed.
 - A dispatch placeholder or park keys on the full bucket key (every keyword), never the lead keyword alone, and is uniform across binders that produce functions.
 - No global or run-rooted mutable state, such as a run-wide registry: it hurts understandability and precludes concurrency. Home shared lookup data on the value or type it describes.
-- A record that reaches another scope stores the *name* and resolves it at the use site (through `USING`), never a resolved reference. A new lifetime on a stored type is the tell.
+- A stored declaration that reaches another scope, such as an operator group, stores the *name* and resolves it at the use site (through `USING`), never a resolved reference. A new lifetime on a stored type is the tell.
 
 # Rust Conventions
 - When refactoring types/lifetimes, verify with `cargo build` after each step rather than batching multiple type changes.
@@ -56,7 +56,7 @@
 
 ## Documentation
 - Keep documentation updated and as concise as possible. Do not sacrifice grammar for brevity.
-- Say "expression shape", never "form"; "operator run", never a bare "run"; and qualify "node" (type node, arena node, composition, settlement).
+- Say "expression shape", never "form"; "operator run", never a bare "run"; and qualify "node" (type node) and "record" (unit record, closing record, record type, record value) in docs and in messages alike, and call a depot slot by what it holds (a settlement, a composition).
 - Design docs (`design/`, module READMEs) pin the intended end state. Rewrite them at plan time, with the user's permission, never during implementation; if implementation shows one is wrong, stop and ask. The shepherd may edit them at ship.
 - For work touching `README.md`, `tutorial/`, a module's `README.md` design doc, `design/*.md`, or `roadmap/*.md` (including the `roadmap/README.md` index), invoke the **documentation skill** — it owns the doc-tree partition rules, deletion-vs-edit semantics for shipped roadmap items, and the `doclinks check` gating workflow.
 - Source-file comments stay here because they're maintained during implementation, not at the doc-update phase:

@@ -82,6 +82,12 @@ pub enum Fault<'cell, V = Value<'cell>> {
     NotASignature {
         ascribed: KType,
     },
+    /// A view of a view at `ascribed` that shows `member`, a value slot or a keyworded member's
+    /// key, where its source hides it.
+    ViewReveals {
+        ascribed: KType,
+        member: Symbol,
+    },
     /// A member an ascription's view could not take at the type the view declares for it.
     Coercion {
         name: Symbol,
@@ -195,7 +201,7 @@ macro_rules! kinds {
 
         impl FaultKind {
             /// Every kind, in [`Fault`]'s order.
-            pub const ALL: [FaultKind; 32] = [$(FaultKind::$kind,)*];
+            pub const ALL: [FaultKind; 33] = [$(FaultKind::$kind,)*];
 
             /// The kind's name: its `Error` variant's label.
             pub const fn name(self) -> &'static str {
@@ -233,6 +239,7 @@ kinds! {
     Incomparable: ["left": Any, "right": Any];
     NotAModule: ["value": Any];
     NotASignature: ["ascribed": Type];
+    ViewReveals: ["ascribed": Type, "member": Str];
     Coercion: ["name": Str];
     QuantifiedMember: ["name": Str];
     BarrierInstance: ["name": Str];
@@ -316,6 +323,7 @@ impl<'cell, V: Copy> Fault<'cell, V> {
             Fault::Incomparable { left, right } => Fault::Incomparable { left, right },
             Fault::NotAModule { value } => Fault::NotAModule { value },
             Fault::NotASignature { ascribed } => Fault::NotASignature { ascribed },
+            Fault::ViewReveals { ascribed, member } => Fault::ViewReveals { ascribed, member },
             Fault::Coercion { name, refused } => Fault::Coercion { name, refused },
             Fault::QuantifiedMember { name } => Fault::QuantifiedMember { name },
             Fault::BarrierInstance { name } => Fault::BarrierInstance { name },
@@ -423,6 +431,7 @@ impl<'cell, V: Copy> Fault<'cell, V> {
                 each(second);
             }
             Fault::NotASignature { .. }
+            | Fault::ViewReveals { .. }
             | Fault::Coercion { .. }
             | Fault::QuantifiedMember { .. }
             | Fault::BarrierInstance { .. }
@@ -502,6 +511,10 @@ impl<'cell, V: Copy> Fault<'cell, V> {
                 each("value", Value(value))
             }
             Fault::NotASignature { ascribed } => each("ascribed", Type(Some(ascribed))),
+            Fault::ViewReveals { ascribed, member } => {
+                each("ascribed", Type(Some(ascribed)));
+                each("member", Text(&symbols.display(member)));
+            }
             Fault::Coercion { name, .. }
             | Fault::QuantifiedMember { name }
             | Fault::BarrierInstance { name } => each("name", Text(&symbols.display(name))),
@@ -640,6 +653,12 @@ impl<X: Knotted> fmt::Display for FaultDisplay<'_, '_, '_, '_, '_, Value<'_, X>>
             Fault::NotASignature { ascribed } => {
                 view_refused(f, ViewRefused::NotASignature(ascribed), symbols, types)
             }
+            Fault::ViewReveals { member, .. } => write!(
+                f,
+                "this view shows `{}` where its source hides it: a view of a view must hide again \
+                 everything its source hides",
+                symbols.display(member)
+            ),
             Fault::Coercion { name, refused } => write!(
                 f,
                 "member {} cannot take its view's type: {}",
@@ -794,6 +813,7 @@ impl<X: Knotted> Named for Fault<'_, Value<'_, X>> {
             }
             Fault::NoArm { union, .. } => union.into_iter().for_each(ktype),
             Fault::NotASignature { ascribed: of }
+            | Fault::ViewReveals { ascribed: of, .. }
             | Fault::Unascribable { ascribed: of, .. }
             | Fault::Uncomposed(ComposeRefused::NotAList { value: of })
             | Fault::Uncomposed(ComposeRefused::NotCode { element: of })

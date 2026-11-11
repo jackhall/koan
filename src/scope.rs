@@ -27,8 +27,11 @@
 //! See [scope/README.md](scope/README.md).
 
 mod activation;
+mod admission;
+mod build_layer;
 mod builtins;
 mod channels;
+mod closed;
 mod closure;
 mod composition;
 mod facts;
@@ -38,10 +41,10 @@ mod groups;
 mod header;
 mod keyed;
 mod memo;
+mod question;
 mod record_types;
 mod records;
 mod relay;
-mod settlement_facts;
 mod shape;
 mod shapes;
 mod signature;
@@ -57,16 +60,25 @@ pub(crate) mod tests;
 pub(crate) use records::RecordSource;
 #[cfg(test)]
 pub(crate) use records::{RIGID_AT_RUN, TERM_PROBES, rigid_at_run};
-pub(crate) use relay::relaid_error;
+pub(crate) use relay::{Relay, relaid_error};
 pub(crate) use shape::IMPLICIT;
 pub(crate) use signature::{pair_label, traced_quote};
 pub(crate) use spelling::{PathSpelling, SpelledRoot, path_spelling, tag_projection};
 
 pub use activation::{Activation, ActivationView, Reading};
+pub use admission::{Admission, Condition, Keeping};
+pub use build_layer::{BuildLayer, Witnessing};
 pub use builtins::Builtins;
+#[cfg(test)]
+pub(crate) use closed::CLOSED_LAID;
+pub use closed::{ClosedTypes, closed_under};
 pub use closure::ClosureBindings;
 pub use composition::{ComposedSyntax, Composition, quote_paths};
-pub use facts::{Address, Binding, Bound, Cut, Frontier, Store, UnitId, Unknown};
+pub(crate) use facts::Flattened;
+pub use facts::{
+    Address, Binding, Bound, Cut, Frontier, Mark, Noted, OpenKind, OpenMark, Store, UnitId,
+    Unknown, Wake, settle_marks,
+};
 pub use fault::{
     Bottom, CodeRefused, CodeRefusedDisplay, CoercionRefused, ComposeRefused, ErrorField, Fault,
     FaultDisplay, FaultKind, Field, Hop, Inner, Line, Link, RefusedConstruction, Trace, Untieable,
@@ -76,14 +88,22 @@ pub use filled::{FilledSites, filled_sites};
 pub use groups::{BuiltinGroup, GroupFrame, is_equal, is_equality, is_unequal};
 pub use header::{HalfHeader, RegionHeader};
 pub use keyed::{Keyed, KeyedEntry};
-pub use memo::{DecisionMemo, Entry, EntryFamily, EventSite, MemoFamily, MemoKey, extended};
-pub use record_types::Named;
-pub use records::{
-    AtRun, BodyAt, BodyRef, Born, Closing, CodeSyntax, ComposedRoot, Deps, DepsGathering, Facts,
-    FactsOver, Folds, Layers, LoadFacts, LoadRecords, NamedVariable, Retypes, SiteDeps, Typed,
-    UnitFacts, Written, tree_deps,
+pub use memo::{
+    Decided, Decision, DecisionMemo, Entry, EntryFamily, EventSite, FANOUT, MemoFamily, MemoKey,
+    RoomFamily, extended, spine_digest, witnessed_digest,
 };
-pub use settlement_facts::{Activated, Settlement};
+#[cfg(test)]
+pub(crate) use memo::{HASH_MASK, PROBED};
+pub use question::{
+    Answer, Answered, Levels, Question, answer, free_variables, keeps, rebound, unsatisfiable,
+};
+pub use record_types::{CloseLaying, Closed, Closer, Laying, Named};
+pub use records::{
+    AtRun, BodyAt, BodyRef, Born, CallTrace, Closing, CodeSyntax, ComposedRoot, Content, Deps,
+    DepsGathering, Facts, FactsOver, Fixed, Folds, Held, Layers, LoadFacts, LoadLayer, LoadRecords,
+    NamedVariable, Open, Restamp, Retypes, SiteDeps, SlotMap, Traced, Typed, UnitFacts, Untraced,
+    Written, tree_deps,
+};
 pub use shape::{
     Arm, BodyShape, BuiltinIndex, Candidate, CandidateList, CaptureChain, CaptureSlot,
     CaptureSource, CaptureSpec, Component, ComponentIndex, Coordinate, Guard, Lands, Listed,
@@ -93,14 +113,17 @@ pub use shape::{
     UnitWork, ViewRefused, Which, arm_refused, each_part, follow, in_body_of, part_of,
     selection_refused, source_of, spelled, view_refused,
 };
-pub use shapes::{BindSite, Code, Origin, Shapes};
-pub use stamp::{Ask, Asked, Level, Sought, Stamp};
-pub use tree::{Binder, Identity, KnotNode, Leaf, NodeCapture, Tree, Unfolded, Within};
+pub use shapes::{BindSite, CallSite, Code, Origin, Shapes};
+pub use stamp::{Ask, Asked, Level, SiteRequest, Sought, Stamp};
+pub use tree::{
+    Bare, Binder, Identity, KnotNode, Leaf, NodeCapture, Revealed, Sealing, Tree, Unfolded,
+    ViewRecord, Within, hides,
+};
 pub use typed::{
     Arms, BodyClass, Caching, Callable, CandidateRoute, Elaboration, ElaborationDisplay,
     Elimination, FunctionGroupMap, HandedTo, Handoff, InstanceRead, Kept, Mint, Narrowing,
-    ParameterBinding, PathEntry, Pick, Point, Points, Registered, Resolution, Resolved, Root,
-    Route, ShapeGroupMap, Source, Static, StaticCallable, StaticInstance, StaticRegistered,
+    ParameterBinding, PathEntry, PathName, Pick, Point, Points, Registered, Resolution, Resolved,
+    Root, Route, ShapeGroupMap, Static, StaticCallable, StaticInstance, StaticRegistered,
     StaticType, Table, UseStatics, Variable, ViewSlots,
 };
 pub use writes::{KeyedWrites, Writes};

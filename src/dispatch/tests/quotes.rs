@@ -256,8 +256,9 @@ fn a_quote_reads_its_dollar_names_at_their_static_types() {
         // The code may be offered registrations at `_ + _`, so the builtin is kept beside them,
         // and admitted *always* where `$n`'s static type is `Number`.
         let always = (code.candidate_lists().iter()).any(|(site, _)| {
+            let closing = crate::memory::Bump::new();
             let Narrowing::Kept(kept) = facts
-                .use_statics(&program.tiers().resting(), code, *site)
+                .use_statics(&program.tiers().resting(), &closing, code, *site)
                 .narrowing
             else {
                 return false;

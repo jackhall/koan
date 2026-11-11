@@ -20,7 +20,7 @@
 //! and leaves its view at rest as it always does. [`StepError::Refused`] is left for invariant
 //! breaks alone.
 //!
-//! **A cell decides in its activation.** Where its arena node's facts and its enclosers' decisions
+//! **A cell decides in its activation.** Where its depot slot's facts and its enclosers' decisions
 //! leave a name unbound that a unit of its body waits on — content the run produced — a frame, a
 //! block or an inline module body binds it to what its slot or capture holds at the binding event,
 //! its entry or the statement binding it, and decides those units in its own activation
@@ -57,9 +57,11 @@
 //! declared return as a called frame owes its own. A block is in tail position only as a tail
 //! `MATCH` arm, which owes its frame's contract.
 //!
-//! **A caching body interns in scratch.** Each step picks one chain ([`run`]). A caching body
-//! keeps its blocks' and its last statement's values rather than forwarding them, so a value
-//! leaves it only through an [`Exit`]: the frame's end, or a call out of it. An invariant site's
+//! **A caching body interns in scratch.** Each step picks one chain ([`run`]) by its frame's
+//! caching bit, read from the folds at the frame's first step and carried on its `Within` to its
+//! blocks and the nodes on its stack. A caching body keeps its blocks' and its last statement's
+//! values rather than forwarding them, so a value leaves it only through an [`Exit`]: the frame's
+//! end, or a call out of it. An invariant site's
 //! types rest in the agent tier already, rested by the settlement the frame runs under: a step lays
 //! nothing there.
 
@@ -81,9 +83,12 @@ use crate::scheduler::{
     Action, Held, MemoHome, Placement, Received, Replayed, Request, Requested, Seek, Slot as Asked,
     Step, StepError, Taken, Use,
 };
-use crate::scope::{Activated, CodeRefused, Entry, EventSite, MemoKey, extended};
 use crate::scope::{Address, AtRun, Bound, Tree, Unknown};
+use crate::scope::{Admission, Binding, Keeping, Levels};
 use crate::scope::{BodyShape, Component, Position, ShapeKind, Site, Slot, Unit, UnitWork};
+use crate::scope::{
+    BuildLayer, CodeRefused, Decided, Decision, Entry, EventSite, MemoKey, extended,
+};
 use crate::scope::{CaptureSource, ClosureBindings, Code, CodeSyntax, ComposedRoot, Facts};
 use crate::scope::{CoercionRefused, Fault, Inner, Line, Trace, Untieable};
 use crate::scope::{ComposedSyntax, Stamp};
@@ -95,11 +100,11 @@ use crate::type_lattice::{
     Variance, admits_with, substitute_quantified,
 };
 use crate::values::{
-    ArenaRef, BindingImage, CALL_ONLY, Chain, ContentDigest, Link, List, Record, TypeValue, Value,
+    BindingImage, CALL_ONLY, Chain, ContentDigest, DepotRef, Link, List, Record, TypeValue, Value,
     binding_at,
 };
 
-use super::activation_store::bound_of;
+use super::activation_store::{Activating, bound_of};
 use super::bundle::{
     Entered, FrameKept, Handed, KBirth, KBundle, KScratch, KState, Keeps, Passing, Within,
 };
@@ -130,7 +135,7 @@ pub struct Runner<'graph, 'cell> {
     /// How many of its units' statement seams the runner has decided in its activation.
     seen: u32,
     /// What the body runs within: what it hands each evaluation and block it asks for
-    /// ([`KBirth::Evaluate`]), and the arena node a callable born in it is born under.
+    /// ([`KBirth::Evaluate`]), and the depot slot a callable born in it is born under.
     within: Within<'graph, 'cell>,
     /// Where its binding events read and extend the decision memo.
     memo: Memo<'cell>,
@@ -138,14 +143,14 @@ pub struct Runner<'graph, 'cell> {
 
 /// Where a runner's binding events read the decision memo: the home it rests in, `None` where the
 /// runner decides without one, and the home that seeds it where it holds none; then, once the
-/// first event has looked, the key it looked under and the entry that key found, and how many of
-/// that entry's decisions the events since have matched.
+/// first event has looked, the key it looked under and the entry that key found, and the
+/// last decision of that entry the events since have walked down to.
 #[derive(Clone, Copy)]
 struct Memo<'cell> {
     home: Option<MemoHome>,
     inherit: Option<MemoHome>,
-    read: Option<(MemoKey<'cell>, Option<&'cell Entry<'cell>>)>,
-    matched: u32,
+    read: Option<(MemoKey, Option<&'cell Entry<'cell>>)>,
+    at: Option<&'cell Decision<'cell>>,
 }
 
 impl Memo<'_> {
@@ -155,7 +160,7 @@ impl Memo<'_> {
             home,
             inherit,
             read: None,
-            matched: 0,
+            at: None,
         }
     }
 }
@@ -263,7 +268,8 @@ pub fn run<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'g
         };
         let types = step.types();
         let keys = super::settle::callee_keys(&birth);
-        let seek = super::settle::seek(&mut birth, keys, &types, &types);
+        // Composed code carries no request.
+        let seek = super::settle::seek(&mut birth, keys, None, &types, &types);
         let work = crate::scheduler::Work {
             step: run,
             state: birth,
@@ -285,7 +291,7 @@ pub fn run<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'g
         };
         return step.bounce(work, root);
     }
-    // A call whose callee's arena node is gone replays the chain of settlements its stamp
+    // A call whose callee's depot slot is gone replays the chain of settlements its stamp
     // records, so its frame is born warm where it would have been.
     if let KState::Born(KBirth::Call {
         program, callee, ..
@@ -293,14 +299,15 @@ pub fn run<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'g
         && !step.replayed()
         && let Some(function) = called_function(*callee)
         && let Some(stamp) = function.closure().stamp()
-        && !step.arena_live(function.closure().build())
+        && !step.depot_live(function.closure().build())
     {
         let types = step.types();
         let tiers = program.tiers();
+        let base = stamp.base();
         let levels: SmallVec<[Replayed<'graph>; 4]> = (stamp.levels().iter())
             .map(|level| Replayed {
                 seek: Seek {
-                    parent: ArenaRef::ROOT,
+                    parent: base,
                     settlement: Some({
                         let sought = level.sought();
                         let image = BindingImage::of(sought.keyed.clone(), tiers, &types);
@@ -317,8 +324,18 @@ pub fn run<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'g
         let KState::Born(mut birth) = state else {
             unreachable!("matched above")
         };
-        let keys = super::settle::callee_keys(&birth);
-        let own = super::settle::seek(&mut birth, keys, &types, &types);
+        // A cold birth's request was handed back, so the frame's own seek computes no key.
+        let own = match step.sought() {
+            Some(requested) => Seek {
+                parent: DepotRef::ROOT,
+                hands_back: super::settle::handed_back(&birth),
+                settlement: Some((requested.image, requested.sought)),
+            },
+            None => {
+                let keys = super::settle::callee_keys(&birth);
+                super::settle::seek(&mut birth, keys, None, &types, &types)
+            }
+        };
         let own = Replayed {
             seek: own,
             pins: SmallVec::new(),
@@ -330,6 +347,7 @@ pub fn run<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'g
         return step.replay(work, levels.into_iter().chain([own]));
     }
     let (code, facts) = step.door();
+    // A frame reads its body's caching bit at its first step; its runner carries it after.
     let shape = match &state {
         KState::Born(KBirth::Call { callee, .. }) => {
             called_function(*callee).map(|function| function.frame_shape(&code))
@@ -337,10 +355,12 @@ pub fn run<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'g
         KState::Born(KBirth::Eval { code: value, .. }) => (value.as_code())
             .and_then(|member| member.code())
             .map(|node| node.shape(&code)),
-        KState::Runner(runner) => Some(code.shape(runner.activation.segment())),
-        KState::Born(_) | KState::Evaluating => None,
+        KState::Born(_) | KState::Runner(_) | KState::Evaluating => None,
     };
-    let caches = shape.is_some_and(|shape| facts.caches(shape));
+    let caches = match &state {
+        KState::Runner(runner) => runner.within.caches,
+        _ => shape.is_some_and(|shape| facts.caches(shape)),
+    };
     let routes = match &state {
         // A frame is a tree cell, and holds its scratch whatever it borrows.
         KState::Born(KBirth::Call { .. }) => caches && step.hold_scratch(),
@@ -349,15 +369,19 @@ pub fn run<'graph>(step: Step<'_, 'graph, '_, '_, '_, '_, KBundle>) -> Action<'g
     };
     #[cfg(test)]
     if caches {
+        let shape = match &state {
+            KState::Runner(runner) => Some(code.shape(runner.activation.segment())),
+            _ => shape,
+        };
         let address = shape.map(|shape| std::ptr::from_ref(shape).addr());
         crate::scheduler::CACHING.set(address);
     }
     if routes || caches {
         let types = step.caching_types();
-        ran(step, state, scratch, routes, &types)
+        ran(step, state, scratch, routes, caches, &types)
     } else {
         let types = step.types();
-        ran(step, state, scratch, false, &types)
+        ran(step, state, scratch, false, false, &types)
     }
 }
 
@@ -401,7 +425,7 @@ fn wanted_root<'here>(
 /// else one laid here, in the frame's region, from `sought`, the request the drain handed the
 /// frame's first step back, its binding's types relayed into that region first. A frame under its
 /// own settlement whose body births no callable has neither, and no stamp. Where the frame runs
-/// under the arena node its callee was born under, it is the callee's own stamp.
+/// under the depot slot its callee was born under, it is the callee's own stamp.
 fn stamped<'graph, 'here>(
     step: &Taking<'_, 'graph, '_, 'here, '_, '_>,
     birth: &KBirth<'graph, 'here>,
@@ -412,15 +436,18 @@ fn stamped<'graph, 'here>(
     };
     let function = called_function(callee);
     let below = function.and_then(|function| function.closure().stamp());
-    let under_own = step.under_settlement() && step.arena_ref(ArenaRef::ROOT) != born_under(callee);
-    if !under_own {
+    let under_own = step.under_settlement() && step.depot_ref(DepotRef::ROOT) != born_under(callee);
+    // A layer the load laid is never evicted, so a frame under one lays no level.
+    if !under_own || step.under_load_layer() {
         return below.copied();
     }
+    // The chain rests on what the outermost level's parent rests on: the root or a load layer.
+    let base = below.map_or_else(|| born_under(callee).chain_base(), |below| below.base());
     let level = level.or_else(|| {
         sought.map(|requested| {
             let region = step.types();
             requested.image.relay(&region);
-            super::settle::level(step.writer(), birth, &requested.sought, &region)
+            super::settle::level(step.writer(), birth, &requested.sought, &region, base)
         })
     });
     debug_assert!(
@@ -478,18 +505,20 @@ fn frame_kept<'graph, 'here>(
     )
 }
 
-/// The arena node `callee`'s function was born under, behind every barrier: where a frame of it
+/// The depot slot `callee`'s function was born under, behind every barrier: where a frame of it
 /// runs that the drain found no settlement of its own for.
-fn born_under(callee: KValue<'_, '_>) -> ArenaRef {
-    called_function(callee).map_or(ArenaRef::ROOT, |function| function.closure().build())
+fn born_under(callee: KValue<'_, '_>) -> DepotRef {
+    called_function(callee).map_or(DepotRef::ROOT, |function| function.closure().build())
 }
 
-/// [`run`] on the chain `types` it picked; `routes` is a call's, taken at its frame's first step.
+/// [`run`] on the chain `types` it picked; `routes` and `caches` are a call's or an `EVAL`'s, read
+/// at its frame's first step.
 fn ran<'graph, 'here, 'scratch>(
     mut step: Taking<'_, 'graph, '_, 'here, 'scratch, '_>,
     state: KState<'graph, 'here>,
     scratch: Option<KScratch<'graph, 'here, 'scratch>>,
     routes: bool,
+    caches: bool,
     types: &Chain<'_, 'here, '_, '_>,
 ) -> Action<'graph, KBundle> {
     let (code, facts) = step.door();
@@ -542,9 +571,9 @@ fn ran<'graph, 'here, 'scratch>(
             let untraced =
                 called_function(callee).is_some_and(|function| function.composing().is_some());
             let (build, stamp) = match untraced {
-                true => (step.arena_ref(ArenaRef::ROOT), None),
+                true => (step.depot_ref(DepotRef::ROOT), None),
                 false => (
-                    step.arena_ref(born_under(callee)),
+                    step.depot_ref(born_under(callee)),
                     stamped(&step, &birth, sought.as_deref()),
                 ),
             };
@@ -568,6 +597,7 @@ fn ran<'graph, 'here, 'scratch>(
                     barrier,
                     within: Within {
                         routes,
+                        caches,
                         build,
                         stamp,
                         memo: home,
@@ -635,10 +665,10 @@ fn ran<'graph, 'here, 'scratch>(
                 return step.failed(StepError::Refused);
             };
             // A callable born of composed code is born under its composition; a written quote's
-            // lexical chain of arena nodes is not placed, so its callables seek from the root.
+            // lexical chain of depot slots is not placed, so its callables seek from the root.
             let build = match facts.composition() {
-                Some(_) => step.arena_ref(ArenaRef::ROOT),
-                None => ArenaRef::ROOT,
+                Some(_) => step.depot_ref(DepotRef::ROOT),
+                None => DepotRef::ROOT,
             };
             let home = Some(step.memo_home());
             let mut memo = Memo::at(home, inherit);
@@ -654,6 +684,7 @@ fn ran<'graph, 'here, 'scratch>(
                     }
                     Runner {
                         within: Within {
+                            caches,
                             build,
                             memo: home,
                             root,
@@ -804,7 +835,7 @@ fn faulted<'graph, 'here>(
 }
 
 /// A frame's or a block's entry event: each parameter, or a quote's code's capture, a unit beneath
-/// its body waits on with the entry as its seam, which its arena node's facts and what its
+/// its body waits on with the entry as its seam, which its depot slot's facts and what its
 /// encloser decided leave unbound, bound to what its slot holds and decided in its activation over
 /// what its encloser decided ([`activated`](super::activation_store)). `activation` itself where
 /// it binds none; the refusal the cell faults with where the walk refuses.
@@ -880,9 +911,24 @@ fn local(slot: Slot) -> Coordinate {
     }
 }
 
+/// What a test hands each binding event's site to, and whether it walked.
+#[cfg(test)]
+pub(crate) type Deciding = fn(EventSite, bool);
+
+#[cfg(test)]
+thread_local! {
+    /// What each binding event [`decide`] answers is handed to, by its site, while a test sets
+    /// it: `true` where it walked, `false` where the memo's decision answered it.
+    pub(crate) static DECIDING: std::cell::Cell<Option<Deciding>> =
+        const { std::cell::Cell::new(None) };
+}
+
 /// What the binding event at `site`, binding `own` over `facts`, which read `below`, decides
-/// ([`activated`](super::activation_store)): the decision `memo` holds for it, laid over `below`,
-/// or the walk's, which the memo then keeps. A refusal is not kept.
+/// ([`activated`](super::activation_store)): the binding layer `memo` holds for it by identity,
+/// laid over `below`; else a walk over a witnessed decision whose questions the binding keeps
+/// every one of, or some where the event has no room for another decision, whose decision it
+/// joins, keeping nothing where it walked nothing; else a walk of its own, which witnesses where
+/// it may, kept as a new decision. A refusal is not kept.
 #[allow(clippy::too_many_arguments)]
 fn decide<'graph, 'here>(
     step: &mut Taking<'_, 'graph, '_, 'here, '_, '_>,
@@ -890,60 +936,126 @@ fn decide<'graph, 'here>(
     program: &'graph Program<'graph>,
     memo: &mut Memo<'here>,
     facts: Facts<'_>,
-    below: Option<&'here Activated<'here>>,
+    below: Option<&'here BuildLayer<'here>>,
     own: &[(Unknown, Bound<'_>)],
     rewakes: bool,
     site: EventSite,
-) -> Result<&'here Activated<'here>, &'here ShapeError<'here>> {
+) -> Result<&'here BuildLayer<'here>, &'here ShapeError<'here>> {
     let segment = site.segment();
-    let walk = |step: &Taking<'_, 'graph, '_, 'here, '_, '_>| {
+    let walk = |step: &Taking<'_, 'graph, '_, 'here, '_, '_>, activating: Activating<'here>| {
+        #[cfg(test)]
+        if let Some(deciding) = DECIDING.with(std::cell::Cell::get) {
+            deciding(site, activating.walks());
+        }
+        let activate = program.activate();
         let writer = step.writer();
-        let decided =
-            (program.activate())(program, writer, facts, types, below, own, rewakes, segment)?;
-        Ok(resident(writer, decided))
+        activate(
+            program,
+            writer,
+            facts,
+            types,
+            below,
+            own,
+            (activating, rewakes),
+            segment,
+        )
+    };
+    let closed = |step: &Taking<'_, 'graph, '_, 'here, '_, '_>| {
+        let activated = walk(step, Activating::Closed)?;
+        Ok(resident(step.writer(), activated.layer))
     };
     #[cfg(test)]
     if super::activation_store::UNMEMOIZED.with(std::cell::Cell::get) {
-        return walk(step);
+        return closed(step);
     }
     let Some(home) = memo.home else {
-        return walk(step);
+        return closed(step);
     };
     let (key, entry) = match memo.read {
         Some(read) => read,
         None => {
-            let key = MemoKey {
-                segment,
-                arena: step.arena_ref(ArenaRef::ROOT),
-                below,
-            };
+            let key = MemoKey::new(segment, step.depot_ref(DepotRef::ROOT), below);
             let read = (key, step.memo_entry(home, memo.inherit, key));
             memo.read = Some(read);
             read
         }
     };
-    let held = entry.and_then(|entry| entry.decision(memo.matched));
-    if let Some(decision) = held.filter(|decision| decision.matches(site, own)) {
-        memo.matched += 1;
-        return Ok(resident(step.writer(), decision.over(below)));
+    if let Some((decision, binding)) =
+        entry.and_then(|entry| entry.decision(memo.at, site, own, below))
+    {
+        memo.at = Some(decision);
+        #[cfg(test)]
+        if let Some(deciding) = DECIDING.with(std::cell::Cell::get) {
+            deciding(site, false);
+        }
+        let writer = step.writer();
+        return Ok(resident(writer, decision.over(writer, binding, below)));
     }
-    let decided = walk(step)?;
-    let matched = memo.matched;
-    let laid = step.memo_lay(home, |writer, half, into| {
+    let scratch = Bump::new();
+    let earlier = BuildLayer::witnessed_names(&scratch, below);
+    // An event witnesses its type names and those the witnessed layers beneath it witnessed, its
+    // cell's earlier events' and its enclosers', where its memo has room to keep what it lays:
+    // past the budget its witnessed layer would serve none.
+    let witnesses = !rewakes
+        && super::resume::witnesses()
+        && (!earlier.is_empty() || (own.iter()).any(|(_, bound)| matches!(bound, Bound::Type(_))))
+        && step.memo_room(home);
+    let chosen = match (rewakes, entry) {
+        (false, Some(entry)) => {
+            let candidates = entry.witnessed(memo.at, site, own, &earlier);
+            let chosen = read_over(types, facts, own, candidates);
+            // Keeping only some questions, a binding witnesses afresh while the event has room
+            // for another decision: a join walks closed and answers nothing, so a later binding
+            // taking its answers would keep all of no layer, nor would a cell beneath it.
+            let partial = |kept: &Keeping| *kept != Keeping::All;
+            match chosen {
+                Some((_, kept)) if partial(&kept) && witnesses && entry.room_under(memo.at) => None,
+                chosen => chosen,
+            }
+        }
+        _ => None,
+    };
+    let activating = match chosen {
+        Some((decision, kept)) => Activating::Over(
+            (decision.witnessed()).expect("a witnessed decision holds its layer"),
+            kept,
+        ),
+        None if witnesses => Activating::Witnessing { site },
+        None => Activating::Closed,
+    };
+    let activated = walk(step, activating)?;
+    let writer = step.writer();
+    let layer = admitting_chain(writer, activated.layer);
+    let decided = resident(writer, layer);
+    // A join that walked nothing keeps nothing: its layer admits by identity of the whole chain,
+    // which a deepening encloser never repeats, and a later binding keeping every question reads
+    // over the decision as cheaply. The cell walks on down from the decision it joined.
+    if let Some((into, Keeping::All)) = chosen
+        && (into
+            .witnessed()
+            .and_then(|witnessed| witnessed.witnessing()))
+        .is_some_and(|witnessing| !witnessing.holds)
+    {
+        memo.at = Some(into);
+        return Ok(decided);
+    }
+    let into = match chosen {
+        Some((into, _)) => Decided::Joins {
+            into,
+            binding: decided,
+        },
+        None => Decided::New {
+            witnessed: activated.witnessed,
+            binding: decided,
+        },
+    };
+    let at = memo.at;
+    let laid = step.memo_lay(home, |writer, half, into_home| {
         if !half.memo_room() {
             return None;
         }
-        let adopt = &mut |kt| into.adopt_from(types, kt);
-        let (laid, entry) = extended(
-            writer,
-            half.memo(),
-            key,
-            entry,
-            matched,
-            site,
-            decided,
-            adopt,
-        );
+        let adopt = &mut |kt| into_home.adopt_from(types, kt);
+        let (laid, entry) = extended(writer, half.memo(), key, entry, at, site, into, adopt);
         half.set_memo(laid, true);
         Some(entry)
     });
@@ -952,12 +1064,58 @@ fn decide<'graph, 'here>(
             #[cfg(test)]
             super::activation_store::KEPT.with(|kept| kept.set(kept.get() + 1));
             memo.read = Some((key, Some(laid)));
-            memo.matched += 1;
+            memo.at = laid.laid();
         }
         // A memo that kept nothing holds no decision a later event of this cell could match.
         None => memo.home = None,
     }
     Ok(decided)
+}
+
+/// The witnessed decision among `candidates` an event binding `own` over `facts` reads over,
+/// beside how many of its questions the binding keeps ([`chosen`](super::resume::chosen)): each
+/// question asked closed under the whole chain's binding, through the frame's chain `types`.
+fn read_over<'here>(
+    types: &Chain<'_, '_, '_, '_>,
+    facts: Facts<'_>,
+    own: &[(Unknown, Bound<'_>)],
+    candidates: impl Iterator<Item = &'here Decision<'here>>,
+) -> Option<(&'here Decision<'here>, Keeping)> {
+    let mut candidates = candidates.peekable();
+    candidates.peek()?;
+    let scratch = Bump::new();
+    let mut staged = BumpVec::new_in(&scratch);
+    facts.each_bound(&mut |unknown, bound| staged.push((unknown, bound)));
+    staged.extend(own.iter().copied());
+    let binding = Binding::laid(&scratch, &mut staged);
+    let mut mine = BumpVec::new_in(&scratch);
+    mine.extend(own.iter().copied());
+    let own = Binding::laid(&scratch, &mut mine);
+    let levels = Levels::of(&scratch, facts.shapes(), binding);
+    let keeps = super::resume::kept_by(types, &scratch, &levels);
+    let candidates = candidates.filter_map(|decision| Some((decision, decision.witnessed()?)));
+    super::resume::chosen(candidates, &keeps, own)
+}
+
+/// `layer`, the binding layer of an event, admitting by identity of every name its chain binds:
+/// its own, the module binders of the witnessed layer it lies over, and every name of the layers
+/// beneath — its cell's earlier events' and its enclosers'. The memo key does not pin the
+/// enclosers' bindings, and the layer's table closes types naming them.
+fn admitting_chain<'here>(
+    writer: Writer<'here, '_>,
+    layer: BuildLayer<'here>,
+) -> BuildLayer<'here> {
+    let scratch = Bump::new();
+    let mut staged = BumpVec::new_in(&scratch);
+    for beneath in std::iter::successors(layer.parent(), |layer| layer.parent()) {
+        staged.extend(beneath.binding().entries().iter().copied());
+    }
+    if staged.is_empty() {
+        return layer;
+    }
+    staged.extend(layer.binding().entries().iter().copied());
+    let binding = Binding::laid(writer, &mut staged);
+    layer.admitting(Admission::binding(writer, binding))
 }
 
 /// What an evaluator asks for to call `callee` over `arguments`, a record of its parameters by name
@@ -1466,7 +1624,7 @@ fn frame<'graph, 'here>(
     // quantified callee's are solved per call, and an untraced body's composition closed none.
     let retypes = match quantified || function.composing().is_some() {
         true => Retypes::NONE,
-        false => facts.retypes(types, shape),
+        false => facts.retypes(types, scratch, shape),
     };
     let mut parameters = 0;
     for slot in (0..shape.slots()).map(|slot| Slot(slot as u32)) {
@@ -1493,7 +1651,7 @@ fn frame<'graph, 'here>(
                     argument.satisfies(declared, types, scratch),
                     "a frame binds an argument its parameter admits"
                 );
-                let retype = retypes.parameter(name.symbol());
+                let retype = retypes.parameter(types, name.symbol());
                 let value = argument
                     .seen_as(declared, retype, types, scratch)
                     .restamped(writer, types);
@@ -1567,7 +1725,7 @@ fn frame<'graph, 'here>(
     // value is retyped to: a barrier's shown return is no record's.
     let restamp = match (outermost, shown_return) {
         (None, Some(_)) => owed.and_then(|outer| outer.restamp),
-        _ => owed.map_or(retypes.returns, |outer| outer.restamp),
+        _ => owed.map_or(retypes.returned(types), |outer| outer.restamp),
     };
     let contract = Contract {
         callee: Some(declared),
@@ -1827,7 +1985,7 @@ fn untraced_closure<'graph, 'here>(
     Ok(ClosureBindings::of(
         writer,
         &links,
-        (ArenaRef::ROOT, None),
+        (DepotRef::ROOT, None),
         None,
     ))
 }
@@ -1847,8 +2005,8 @@ fn code_frame<'graph, 'here>(
     let bump = Bump::new();
     let writer = step.writer();
     let links = code_closure(writer, types, member, shape, offered, &bump)?;
-    // A quote's lexical chain of arena nodes is not placed, so its frame seeks from the root.
-    let closure = ClosureBindings::of(writer, &links, (ArenaRef::ROOT, None), None);
+    // A quote's lexical chain of depot slots is not placed, so its frame seeks from the root.
+    let closure = ClosureBindings::of(writer, &links, (DepotRef::ROOT, None), None);
     Some(resident(
         writer,
         KActivation::of_code(writer, shape, &facts, closure, program.builtins()),
@@ -2128,7 +2286,7 @@ pub(super) fn turn<'graph, 'here, 'scratch>(
                 // A caching body keeps its value, so it leaves only where the frame adopts it; a
                 // tail owes the body's contract.
                 let use_ = match runner.yields(unit) {
-                    true if at.facts().caches(shape) => Use::Keeps,
+                    true if runner.within.caches => Use::Keeps,
                     true => Use::Forwards,
                     false => Use::Reads,
                 };
@@ -2499,8 +2657,7 @@ pub(super) fn ended<'graph, 'here>(
     types: &Chain<'_, 'here, '_, '_>,
 ) -> Action<'graph, KBundle> {
     let held = runner.result.unwrap_or(Held::bare(Value::Null));
-    let at = runner.reading(&step);
-    let caches = at.facts().caches(at.shape());
+    let caches = runner.within.caches;
     match (runner.level, runner.owed) {
         (Level::Top, _) => step.leave(KBirth::Inspect {
             program: runner.program,

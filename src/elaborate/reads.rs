@@ -38,6 +38,11 @@ pub trait Reads<'graph> {
         0
     }
 
+    /// Where a judgement over what this reader read marks: nowhere outside a walk.
+    fn marks(&self) -> &dyn super::judge::Marks {
+        &super::judge::NoMarks
+    }
+
     /// The type member `name` of the module the binding at `at` holds, reached through the value
     /// members `chain` names in turn — the path spelled at `site` — beside that module's
     /// signature: `None` where the binding holds no module, and [`TypeAt::NotAType`] where the

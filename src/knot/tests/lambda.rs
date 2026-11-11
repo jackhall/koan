@@ -63,7 +63,7 @@ fn born<'graph, 'cell>(
         fixture.written(),
         site,
         None,
-        (crate::values::ArenaRef::ROOT, None),
+        (crate::values::DepotRef::ROOT, None),
         types,
         fixture.scratch(),
     )

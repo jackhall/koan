@@ -22,8 +22,8 @@ const PREFIXES: &[&str] = &[
 ];
 
 /// The owning types outside the tests: the buffer a step pushes its requests into, the drain's
-/// ready stack, the build arena's slots and free list, and the shared hold each settlement's facts
-/// keep on their parent's and on the compositions they rest on or pin, and the arena keeps on a
+/// ready stack, the build depot's slots and free list, and the shared hold each settlement's facts
+/// keep on their parent's and on the compositions they rest on or pin, and the depot keeps on a
 /// composition's; the levels of a replay a frame's first step hands the drain; and the request a
 /// frame's asker hands the drain, which it keeps in the frame's continuation until the
 /// frame's first step takes it. Each is the scheduler's runtime state, held beside the graph or in
@@ -34,16 +34,16 @@ const OWNING_ALLOWED: &[(&str, &str)] = &[
     ("src/scheduler/action.rs", "Vec::new()"),
     ("src/scheduler/drain.rs", "ready: Vec<Entry<'graph, B>>"),
     ("src/scheduler/drain.rs", "Vec::new()"),
-    ("src/scheduler/arena.rs", "slots: Vec<Slot<'graph>>"),
-    ("src/scheduler/arena.rs", "use std::rc::Rc;"),
-    ("src/scheduler/arena.rs", "Rc<Settled<'graph>>"),
-    ("src/scheduler/arena.rs", "Rc<Composed<'graph>>"),
-    ("src/scheduler/arena.rs", "Rc::new(facts)"),
-    ("src/scheduler/arena.rs", "Rc::clone(facts)"),
-    ("src/scheduler/arena.rs", "free: Vec<u32>"),
+    ("src/scheduler/depot.rs", "slots: Vec<Slot<'graph>>"),
+    ("src/scheduler/depot.rs", "use std::rc::Rc;"),
+    ("src/scheduler/depot.rs", "Rc<Settled<'graph>>"),
+    ("src/scheduler/depot.rs", "Rc<Composed<'graph>>"),
+    ("src/scheduler/depot.rs", "Rc::new(facts)"),
+    ("src/scheduler/depot.rs", "Rc::clone(facts)"),
+    ("src/scheduler/depot.rs", "free: Vec<u32>"),
     ("src/scheduler/seek.rs", "Replay(Vec<Replayed<'graph>>)"),
     ("src/scheduler/drain.rs", "levels: Vec<Replayed<'graph>>"),
-    ("src/scheduler/arena.rs", "Vec::new()"),
+    ("src/scheduler/depot.rs", "Vec::new()"),
     (
         "src/scheduler/continuation.rs",
         "Option<Box<Requested<'graph>>>",
@@ -82,11 +82,11 @@ fn scheduler_names_only_the_layers_below_it_holds_no_heap_and_spells_the_stack_l
     crate::tests::boundary::holds("scheduler", PREFIXES, OWNING_ALLOWED);
 }
 
-/// Only the scheduler and `values` open an `ArenaRef` or a `KeptCell`, or make one: every other
-/// module holds and passes the token, so a step can hand the drain only an arena node the
+/// Only the scheduler and `values` open a `DepotRef` or a `KeptCell`, or make one: every other
+/// module holds and passes the token, so a step can hand the drain only a depot slot the
 /// scheduler named to it, and a reader reaches a kept cell only through the graph's read door.
 #[test]
-fn only_the_scheduler_and_values_open_an_arena_ref() {
+fn only_the_scheduler_and_values_open_a_depot_ref() {
     let source = std::path::PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/src"));
     let mut files = Vec::new();
     crate::tests::boundary::collect_sources(&source, &mut files);
@@ -100,7 +100,9 @@ fn only_the_scheduler_and_values_open_an_arena_ref() {
         .filter(|file| {
             let text = std::fs::read_to_string(file).expect("a source file reads");
             let code = crate::tests::boundary::strip_comments_and_strings(&text);
-            code.contains("ArenaRef::of")
+            code.contains("DepotRef::of")
+                || code.contains("DepotRef::load")
+                || code.contains(".load_ordinal()")
                 || code.contains("KeptCell::of")
                 || code.contains(".opened()")
         })
@@ -108,7 +110,7 @@ fn only_the_scheduler_and_values_open_an_arena_ref() {
     assert!(files.len() > 100, "the walk found the crate's sources");
     assert!(
         offenders.is_empty(),
-        "a module outside the scheduler opens an `ArenaRef` or a `KeptCell`: {offenders:?}"
+        "a module outside the scheduler opens a `DepotRef` or a `KeptCell`: {offenders:?}"
     );
 }
 

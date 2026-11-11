@@ -37,6 +37,16 @@ fn facts_over_no_layers_answer_as_the_load_does() {
                     )
                 };
             }
+            // A reader whose fact holds a slice of types closes it into a scratch: `laid!`.
+            macro_rules! laid {
+                ($reader:ident ( $($argument:expr),* )) => {
+                    same(
+                        stringify!($reader),
+                        format!("{:?}", load.$reader(&types, &crate::memory::Bump::new(), shape, $($argument),*)),
+                        format!("{:?}", facts.$reader(&types, &crate::memory::Bump::new(), shape, $($argument),*)),
+                    )
+                };
+            }
             macro_rules! typed {
                 ($reader:ident ( $($argument:expr),* )) => {
                     same(
@@ -48,7 +58,7 @@ fn facts_over_no_layers_answer_as_the_load_does() {
             }
             typed!(callable_type());
             typed!(group_levels());
-            typed!(born_instance());
+            laid!(born_instance());
             alike!(homes());
             alike!(type_captures());
             alike!(capture_count());
@@ -68,11 +78,11 @@ fn facts_over_no_layers_answer_as_the_load_does() {
             for site in shape.sites().all() {
                 typed!(typed_expression(site));
                 typed!(value_type(site));
-                typed!(use_statics(site));
+                laid!(use_statics(site));
                 alike!(settled(site));
-                typed!(instance_at(site));
-                typed!(selection(site));
-                typed!(named_contributions(site));
+                laid!(instance_at(site));
+                laid!(selection(site));
+                laid!(named_contributions(site));
                 alike!(mint_at(site));
                 alike!(mints_at(site));
                 typed!(view_tree(site));

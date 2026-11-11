@@ -23,7 +23,7 @@ where each rests it.
 |---|---|---|---|
 | builtin image | the binary | — | the lattice's fixed handles and the builtin types, below the frozen load and probed after it; no verdicts |
 | frozen load | the load | the program's end | every type the load builds, shared by every agent |
-| agent tier | the agent's birth | its death | every type the agent's settlements under the root rest: a binding's type nodes and the types the settlement's facts name, among them what the invariant sites of a caching frame keyed on that binding mint |
+| agent tier | the agent's birth | its death | every type the settlements a miss builds under the root rest: a binding's type nodes and the types the settlement's facts name, among them what the invariant sites of a caching frame keyed on that binding mint |
 | region branch | the region's birth | its death | a porous body's run-built types, what a caching body's exits carry, and what a catcher copies in |
 | scratch branch | the habitat's reset | its next reset | a step's scratch types, and every other type a caching body builds |
 
@@ -42,7 +42,7 @@ its spawner's, caching the hit. A verdict over two load types is read from
 the load's table, one over load and agent types from the agent's, and any
 other from the branches' tables, shortest-lived first. The frozen load is
 closed after the load and the agent tier's types are laid only by a
-settlement under the root at its rest, so every type the run builds lives in
+settlement a miss builds under the root at its rest, so every type the run builds lives in
 a branch, a composite over load types alone included; a run records only
 verdicts there ([below](#verdicts)).
 
@@ -79,10 +79,10 @@ folded once per type at the load, beside the lattice's others.
 A type is **porous** where minted content can lie under it or fit it. A
 carrier is an atom of [the order](../lattice/src/types/laws.md#the-order-is-a-partial-order),
 under itself, a union holding it and `Any` alone, but a type built over one
-reaches further: a list or record over it lies under `Value`, a record with an
-extra field at it lies under every record type by width, and a view's
-signature lies under `Module`, the top of the signature types, and fits every
-signature its members satisfy. At a contravariant position every type but
+reaches further: a list or record type over it lies under `Value`, a record
+type with an extra field at it lies under every record type by width, and a
+view's signature lies under `Module`, the top of the signature types, and fits
+every signature its members satisfy. At a contravariant position every type but
 `Any` admits `P | C`, so `FN :{x :(Number | C)} -> Null` lies under
 `FN :{x :Number} -> Null`. So `Any`, `Value`, every record type, every
 signature type and every variable are porous; a function or shape type is
@@ -98,16 +98,16 @@ exposing; a type value's payload is the type it names, whatever
 its kind; a nominal's payload is read at its representation. So `Any`,
 `Value`, every kind, every signature type, every variable, a carrier and a
 nominal are exposing; a union is exposing where it is porous or a child is
-exposing; and a list, dict, record or family application is exposing where a
-child is exposing or is a porous function type. A function type exposes
-nothing: what a function reaches it reaches through its captures, which the
-exit walk closes ([below](#the-scratch-branch-as-a-cache)).
+exposing; and a list, dict, record type or family application is exposing
+where a child is exposing or is a porous function type. A function type
+exposes nothing: what a function reaches it reaches through its captures,
+which the exit walk closes ([below](#the-scratch-branch-as-a-cache)).
 
 A value is **porous** where its static type's upper end is porous or
 exposing, and, where that type is exact and closed, where it is exposing: an
 exact closed site carries that very type, and the surface door hides what the
-type does not name, so a retyped record shows no extra field to any reader
-but a knot's copy, which the exit walk closes too. An open capture, typed
+type does not name, so a retyped record value shows no extra field to any
+reader but a knot's copy, which the exit walk closes too. An open capture, typed
 `[Never, Any]`, is porous by definition.
 
 Porosity promises only that a value at a non-porous site reaches no minted
@@ -135,9 +135,9 @@ view, open or closed, no closure, no module body holding a minting site in
 itself or in a block or module body it runs, and no leaf but a value the body
 received. The tree reads a local binder through to what it binds, so a module
 built over an alias of a parameter, a literal or another such module holds
-nothing minted. A record bound by `LET` is read by its static type alone. A
-builtin's native runs in the caller's step and enters no frame. A body mints
-at a `:|` ascription, which hides each unpinned
+nothing minted. A record value bound by `LET` is read by its static type
+alone. A builtin's native runs in the caller's step and enters no frame. A
+body mints at a `:|` ascription, which hides each unpinned
 head parameter behind a carrier, and at a nominal declaration the load leaves
 unknown, declared each time its unit runs; `:!` mints nothing, since it
 carries each head parameter at what *fits* solved.
@@ -190,8 +190,10 @@ declared per call is classed alike by the type binders its declaration reads:
   bound to content the load names
   ([build storage](build-storage.md#settlements-and-compositions)). Its type
   is a fact the settlement settles under the binding, so it lies in the
-  **warm tier**: the agent tier, where a settlement under the root rests it
-  ([below](#the-agent-tier-as-the-warm-tier)), laid by the build and read by
+  **warm tier**: the agent tier, where a settlement a miss builds under the
+  root rests it ([below](#the-agent-tier-as-the-warm-tier)), or the frozen
+  load beneath it, where the walk of a layer the load laid interned it,
+  laid by the build and read by
   every frame under the binding, whatever its placement; a frame whose
   binding names run content, or whose settlement lies under a composition,
   mints it into its scratch.
@@ -220,8 +222,9 @@ for a called frame, its host's for a tenant. A scratch chain holds the region
 tier it reads between the agent tier and its own by value, so building one
 per step lays nothing; no branch holds that tier, since a habitat's door
 lives one step and a branch lives as long as its half. A type the body builds
-stays in its scratch; an invariant site's type is rested in the agent tier by
-the settlement before any frame is born under the binding, so every frame
+stays in its scratch; an invariant site's type lies in the frozen load or is
+rested in the agent tier by the settlement before any frame is born under the
+binding, so every frame
 reads it there and lays nothing into it, and the verdicts the build reaches
 over those types are recorded there and stay warm across hops and callers. A
 body whose binding names run content runs on the same chain and mints into
@@ -257,16 +260,18 @@ parameters its invariant sites read, or a fact seamed at an entry in its
 subtree, other than a parameter's own type, waits on one of its names, and
 each name is bound to content the load names
 ([build storage](build-storage.md#settlements-and-compositions)) — is born
-under a settlement of its body under the content at those names: one the
-drain finds in, or builds into, the arena before the frame is born. A
-settlement under the root lays the binding's type nodes and the types its facts
-name in the agent tier, so a frame finds them whatever became of the asker,
+under a settlement of its body under the content at those names: a layer
+the load laid, or one the drain finds in, or builds into, the depot before
+the frame is born. A settlement a miss builds under the root lays the
+binding's type nodes and the types its facts name in the agent tier, and a
+layer the load laid interned them in the frozen load, so a frame finds them
+whatever became of the asker,
 and every frame of that body under that binding, whatever park asked for it
 and whatever its placement, reads the same type nodes and verdicts; a hop of a
-tail loop of one callee whose name does not escape reads under the
-settlement its frame ran under, with no lookup. A settlement's facts are
-evicted under the arena's budget, least recently used and leaf first among
-the arena nodes no frame holds through its borrow, a parent link or a pin, while
+tail loop of one callee whose name does not escape, rebinding none of its
+keys, reads under the settlement its frame ran under, with no lookup. A settlement's facts are
+evicted under the depot's budget, least recently used and leaf first among
+the depot slots no frame holds through its borrow, a parent link or a pin, while
 the types one under the root rested stay for the agent's life, so no frame
 under one loses the warm tier. A frame whose binding names run content is
 born under no settlement and settles its facts in its own activation,
@@ -372,5 +377,7 @@ released with that branch.
 
 - [Invariance around a tail cycle](../roadmap/one-build/cycle-invariance.md)
   — an argument built over invariant leaves classed invariant.
+- [An opaque view nested in a module, laid at load](../roadmap/one-build/opaque-views-nested-at-load.md)
+  — a closed tree whose slot holds an opaque view, which the run views today.
 - [Presizing a branch](../roadmap/performance/branch-presizing.md) — a branch
   laid at a predicted size.

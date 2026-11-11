@@ -8,7 +8,7 @@ use crate::type_lattice::{ContentKey, KType, Members, TypeNode};
 use crate::values::tests::parts;
 use crate::values::{Knotted as _, Record, Resolved, Value};
 
-use super::super::coerce::{Coercion, Substitution, coerce};
+use super::super::coerce::{Coercion, Hidden, Substitution, coerce};
 use super::super::view::{Unascribable, ascribe};
 use super::{member, module};
 use crate::scope::CoercionRefused;
@@ -237,15 +237,16 @@ MODULE m = ((LET Carrier = Number) (LET one = 1) \
 }
 
 #[test]
-fn a_nested_module_is_re_viewed_at_the_outer_carrier() {
+fn a_nested_module_is_viewed_at_the_outer_carrier_and_re_viewed_crossing_inward() {
     // A nested signature reaches an enclosing parameter only through an application — `VAL inner
     // :(Inner WITH {Elem = Carrier})`. The declared type is built here as that elaboration builds
-    // it, and the coercion door is driven directly: what is pinned is that the nested view's
-    // `Elem` *is* the outer carrier, arriving through the declaration rather than made again at
-    // the boundary.
+    // it, and the coercion door is driven directly. Outward the nested module is an opaque view of
+    // its own: its `Elem` *is* the outer carrier, arriving through the pin, and `Extra`, which the
+    // application leaves unpinned, is behind a carrier keyed on the nested view's content. Inward
+    // it is re-viewed transparently, unsealing `Elem` and keeping `Extra`, a view of itself.
     let source = "\
-SIG Inner FOR ALL #[Elem] = #[(VAL v :Elem)]
-MODULE m = ((MODULE inner = ((LET Elem = Number) (LET v = 5))))";
+SIG Inner FOR ALL #[Elem Extra] = #[(VAL v :Elem) (VAL w :Extra)]
+MODULE m = ((MODULE inner = ((LET Elem = Number) (LET Extra = Str) (LET v = 5) (LET w = \"s\"))))";
     with_fixture(|fixture| {
         let lines = fixture.parse(source);
         let scratch = fixture.scratch();
@@ -265,49 +266,88 @@ MODULE m = ((MODULE inner = ((LET Elem = Number) (LET v = 5))))";
             let slot = types.signature_apply(scratch, inner, &[(fixture.name("Elem"), reference)]);
 
             let hidden = types.carrier(carrier, KType::ANY, ContentKey(7));
-            let cx = Coercion {
-                writer,
-                types,
-                scratch,
-                from: Substitution::interned(
+            let (number, hiding) = (
+                Substitution::interned(
                     Members::from_pairs(scratch, [(carrier, KType::NUMBER)]),
                     types,
                     scratch,
                 ),
-                to: Substitution::interned(
+                Substitution::interned(
                     Members::from_pairs(scratch, [(carrier, hidden)]),
                     types,
                     scratch,
                 ),
+            );
+            let outward = Coercion {
+                writer,
+                types,
+                scratch,
+                from: number,
+                to: hiding,
+                inward: false,
+                hidden: Hidden::NONE,
             };
 
             let held = member(fixture, m, "inner", types, scratch);
             let Value::Knotted(view) =
-                coerce(&cx, held, slot.into()).expect("the nested module re-views")
+                coerce(&outward, held, slot.into()).expect("the nested module is viewed")
             else {
                 panic!("a signature slot stays a module");
             };
             let Value::Knotted(before) = held else {
                 panic!("`m.inner` is a module member");
             };
+            let node = view.module().expect("a module");
             assert!(
-                !ptr::eq(view.node(), before.node()),
-                "a nested module naming the carrier is re-viewed, not carried"
+                node.underlying()
+                    .is_some_and(|underlying| ptr::eq(underlying.node(), before.node())),
+                "a nested module naming the carrier is viewed over the module, not carried"
             );
-
-            let Value::Type(nested_elem) = member(fixture, view, "Elem", types, scratch) else {
-                panic!("`Elem` is a type member");
+            let type_member = |of, name| match member(fixture, of, name, types, scratch) {
+                Value::Type(member) => member.handle(),
+                _ => panic!("`{name}` is a type member"),
             };
             assert_eq!(
-                nested_elem.handle(),
+                type_member(view, "Elem"),
                 hidden,
-                "no carrier is made at a nested boundary"
+                "the pin brings the outer carrier"
             );
             assert_eq!(
                 member(fixture, view, "v", types, scratch).concrete_ktype(),
                 hidden,
                 "and the nested member is sealed at it"
             );
+            let key = node.content().expect("a view's content").carrier_key();
+            assert!(
+                matches!(
+                    types.node(type_member(view, "Extra")),
+                    TypeNode::Carrier { key: at, .. } if at == key
+                ),
+                "an unpinned parameter is behind the nested view's own carrier"
+            );
+
+            // Crossing back inward, the re-view unseals what the pin sealed and keeps the rest.
+            let inward = Coercion {
+                writer,
+                types,
+                scratch,
+                from: hiding,
+                to: number,
+                inward: true,
+                hidden: Hidden::NONE,
+            };
+            let Value::Knotted(re_viewed) =
+                coerce(&inward, Value::Knotted(view), slot.into()).expect("the module re-views")
+            else {
+                panic!("a signature slot stays a module");
+            };
+            let node = re_viewed.module().expect("a module");
+            assert!(
+                node.view_record().is_none() && node.underlying().is_none(),
+                "an inward re-view is a transparent view of itself"
+            );
+            assert_eq!(type_member(re_viewed, "Elem"), KType::NUMBER);
+            assert_eq!(type_member(re_viewed, "Extra"), type_member(view, "Extra"));
         })
     });
 }
@@ -345,6 +385,8 @@ LET f = (FN :{} -> Number = #(1))";
                     types,
                     scratch,
                 ),
+                inward: false,
+                hidden: Hidden::NONE,
             };
             let f = crate::knot::tests::callable(fixture, activation, "f");
             for value in [Value::Knotted(f), Value::Null] {

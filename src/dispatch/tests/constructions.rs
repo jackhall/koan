@@ -19,19 +19,19 @@ fn constructed(source: &str) -> String {
 #[test]
 fn a_construction_through_a_union_lies_between_its_variant_and_the_union() {
     for (body, expected) in [
-        ("LET v = (Maybe.Some 3)", "[Some, :(Some | None)]"),
-        ("LET v = (:(Maybe.Some) 3)", "[Some, :(Some | None)]"),
+        ("LET v = (Maybe.Some 3)", "[Some, :(None | Some)]"),
+        ("LET v = (:(Maybe.Some) 3)", "[Some, :(None | Some)]"),
         (
             "LET Alias = Maybe\nLET v = (Alias.Some 7)",
-            "[Some, :(Some | None)]",
+            "[Some, :(None | Some)]",
         ),
-        ("LET v = (Maybe.Some \"s\")", "[Never, :(Some | None)]"),
+        ("LET v = (Maybe.Some \"s\")", "[Never, :(None | Some)]"),
     ] {
         assert_eq!(constructed(&format!("{MAYBE}\n{body}")), expected, "{body}");
     }
     assert_eq!(
         constructed("MODULE m = (UNION Mb = #{Some: Number, None: Null})\nLET v = (m.Mb.Some 3)"),
-        "[Some, :(Some | None)]",
+        "[Some, :(None | Some)]",
         "a module path reaches its union"
     );
 }
@@ -53,7 +53,7 @@ fn a_construction_through_no_union_is_its_variant() {
 fn a_family_construction_is_at_most_its_union_applied_at_the_payload() {
     assert_eq!(
         constructed(&format!("{OPTION}\nLET v = (Option.Some 3)")),
-        "[:(Some {Elem = Number}), :((Some {Elem = Number}) | (None {Elem = Number}))]"
+        "[:(Some {Elem = Number}), :((None {Elem = Number}) | (Some {Elem = Number}))]"
     );
     assert_eq!(
         constructed(&format!("{TREE}\nLET v = (Tree.Leaf null)")),
@@ -66,13 +66,13 @@ fn a_family_construction_is_at_most_its_union_applied_at_the_payload() {
 fn a_tag_projection_reads_through_a_variant_s_payload() {
     assert_eq!(
         constructed(&format!("{MAYBE}\n{SHAPE}\nLET v = (Shape.Sized.Some 3)")),
-        "[Some, :(Some | None)]"
+        "[Some, :(None | Some)]"
     );
     assert_eq!(
         constructed(&format!(
             "{MAYBE}\n{SHAPE}\nLET v = (Shape.Sized (Maybe.Some 3))"
         )),
-        "[Sized, :(Sized | Flat)]"
+        "[Sized, :(Flat | Sized)]"
     );
     assert_eq!(
         run(&format!("{MAYBE}\n{SHAPE}\nPRINT (Shape.Sized.Some 3)")),
@@ -108,10 +108,10 @@ fn an_annotation_at_the_union_is_settled_at_load() {
 fn a_generic_call_binds_its_name_to_the_union_reached() {
     let what = "EXPR FOR ALL #[Un] #(WHAT x :Un) -> Any = #(PRINT Un)";
     for (call, expected) in [
-        ("WHAT (Maybe.Some 3)", ":(Some | None)"),
+        ("WHAT (Maybe.Some 3)", ":(None | Some)"),
         (
             "WHAT (Option.Some 3)",
-            ":((Some {Elem = Number}) | (None {Elem = Number}))",
+            ":((None {Elem = Number}) | (Some {Elem = Number}))",
         ),
         (
             "WHAT (Tree.Leaf null)",

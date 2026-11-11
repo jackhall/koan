@@ -15,13 +15,12 @@
 //! either variant.
 
 use crate::elaborate::applied_union;
+use crate::elaborate::judge::{self, Marks};
 use crate::memory::BumpVec;
 use crate::parse::{ExpressionPart, KExpression};
 use crate::scope::{ShapeError, Store};
 use crate::symbols::{BinderSymbol, TypeSymbol};
-use crate::type_lattice::{
-    Interval, KType, Parametric, TypeNode, bound_above, is_subtype_of, lower_end_outside,
-};
+use crate::type_lattice::{Interval, KType, Parametric, TypeNode, is_subtype_of};
 
 use super::super::builtins::result_type;
 use super::super::lookup::bound;
@@ -47,15 +46,15 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     /// What `end` is as a read's head, read off its node: `None` for anything but a list, a dict or
     /// `Str`.
     fn container(&self, end: Parametric) -> Option<Container> {
-        if end == KType::STR.into() {
+        if judge::is(self, self.types, end, KType::STR) {
             return Some(Container::Str);
         }
-        let code = (self.types.concrete(end))
+        let code = (judge::closed(self, self.types, end))
             .is_some_and(|end| is_subtype_of(self.types, self.scratch, end, KType::ANY_CODE));
-        if code && end != KType::NEVER.into() {
+        if code && !judge::is(self, self.types, end, KType::NEVER) {
             return Some(Container::Code);
         }
-        match self.types.node(end) {
+        match judge::type_node(self, self.types, end) {
             TypeNode::List { element } => Some(Container::List { element }),
             TypeNode::Dict { key, value } => Some(Container::Dict { key, value }),
             _ => None,
@@ -91,10 +90,12 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         };
         let payload = self.part(level, argument)?;
         let (types, scratch) = (self.types, self.scratch);
-        let outside = |slot: Parametric| lower_end_outside(types, scratch, payload, slot);
+        let marks: &dyn Marks = &*self;
+        let outside =
+            |slot: Parametric| judge::lower_end_outside(marks, types, scratch, payload, slot);
         let number: Parametric = KType::NUMBER.into();
         let union = |members: &[Parametric]| types.union_of(scratch, members);
-        let bounds = |end: Parametric| match types.node(end) {
+        let bounds = |end: Parametric| match judge::type_node(marks, types, end) {
             TypeNode::Record { fields } => {
                 let named = |name| fields.get(bound(name));
                 Some([named("from"), named("to")])
@@ -111,23 +112,23 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                     || bounds(payload.lower).is_some_and(|named| {
                         named.iter().all(Option::is_none)
                             || named.iter().flatten().any(|bound| {
-                                lower_end_outside(types, scratch, Interval::point(*bound), number)
+                                let bound = Interval::point(*bound);
+                                judge::lower_end_outside(marks, types, scratch, bound, number)
                             })
                     })
             }
         };
         if refused {
             return Err(ShapeError::ReadNeverSatisfied {
-                container: bound_above(types, scratch, typed.upper),
-                argument: bound_above(types, scratch, payload.upper),
+                container: judge::bound_above(marks, types, scratch, typed.upper),
+                argument: judge::bound_above(marks, types, scratch, payload.upper),
                 at: node.source,
             });
         }
         let (ok, error) = match shape {
             Container::Dict { key, value } => {
-                let under = types.concrete(payload.upper).is_some_and(|upper| {
-                    types
-                        .concrete(key)
+                let under = judge::closed(marks, types, payload.upper).is_some_and(|upper| {
+                    judge::closed(marks, types, key)
                         .is_some_and(|key| is_subtype_of(types, scratch, upper, key))
                 });
                 (
@@ -150,7 +151,9 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                     (_, Some(_)) => typed.upper,
                     (_, None) => KType::ANY.into(),
                 };
-                let ok = if payload.upper == number || payload.upper == KType::NEVER.into() {
+                let ok = if judge::is(marks, types, payload.upper, KType::NUMBER)
+                    || judge::is(marks, types, payload.upper, KType::NEVER)
+                {
                     element
                 } else if bounds(payload.upper)
                     .is_some_and(|named| named.iter().any(Option::is_some))

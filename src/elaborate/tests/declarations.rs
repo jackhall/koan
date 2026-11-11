@@ -10,7 +10,7 @@ use crate::type_lattice::{
 use crate::values::Chain;
 
 use super::{Held, Program, brought, declared, with_program};
-use crate::scope::Elaboration;
+use crate::scope::{Elaboration, Site};
 
 /// The representation a newtype member wraps.
 fn representation(program: &Program<'_, '_, '_>, handle: KType) -> KType {
@@ -130,6 +130,222 @@ fn a_union_and_a_newtype_seal_in_one_group() {
             assert_eq!(fields.get(n.symbol()), Some(nat));
         },
     );
+}
+
+/// The type a signature's value slot `name` is declared at.
+fn slot(
+    program: &Program<'_, '_, '_>,
+    signature: KType,
+    name: &str,
+) -> Option<DeclaredType<Parametric>> {
+    let TypeNode::Signature { schema, .. } = program.types.node(signature) else {
+        panic!("the handle is a signature");
+    };
+    member(
+        schema.value_slots,
+        ValueSymbol::declared(name, program.symbols).unwrap(),
+    )
+}
+
+/// The type a record representation's field `name` holds.
+fn field(program: &Program<'_, '_, '_>, member: KType, name: &str) -> Option<KType> {
+    let TypeNode::Record { fields } = program.types.node(representation(program, member)) else {
+        panic!("the representation is a record");
+    };
+    fields.get(BinderSymbol::classify(name).unwrap().symbol())
+}
+
+#[test]
+fn a_signature_a_nominal_names_back_seals_in_its_group() {
+    // The nominal mints the identity, so the cycle through the signature is finite; the signature
+    // is bound to the handle a declaration of the same members written after the group reaches.
+    let holder = |source| {
+        brought(source, |program| {
+            let (holder, nat) = (program.bound("Holder"), program.bound("Nat"));
+            assert_eq!(
+                slot(&program, holder, "n"),
+                Some(nat.into()),
+                "the slot names the member"
+            );
+            assert_eq!(
+                field(&program, nat, "s"),
+                Some(holder),
+                "the field names the signature"
+            );
+            assert_eq!(
+                program.bound("Again"),
+                holder,
+                "one handle with its standalone twin"
+            );
+            holder
+        })
+    };
+    assert_eq!(
+        holder(
+            "SIG Holder = #[(VAL n :Nat)]\nNEWTYPE Nat = :{s :Holder}\nSIG Again = #[(VAL n :Nat)]"
+        ),
+        holder(
+            "NEWTYPE Nat = :{s :Holder}\nSIG Holder = #[(VAL n :Nat)]\nSIG Again = #[(VAL n :Nat)]"
+        ),
+        "one handle, whichever order the ring is written in"
+    );
+}
+
+#[test]
+fn a_union_variant_over_a_signature_seals() {
+    brought(
+        "SIG Node = #[(VAL next :Link)]\nUNION Link = #{More: Node, End: Null}",
+        |program| {
+            let (node, link) = (program.bound("Node"), program.bound("Link"));
+            let more = program
+                .types
+                .union_member_named(link, program.type_name("More").symbol())
+                .expect("the union declares `More`");
+            assert_eq!(representation(&program, more), node);
+            assert_eq!(slot(&program, node, "next"), Some(link.into()));
+        },
+    );
+}
+
+#[test]
+fn an_applied_signature_seals_in_its_group() {
+    brought(
+        "SIG Stack FOR ALL #[Elt] = #[(VAL top :Elt) (VAL rest :Pile)]\n\
+         UNION Pile = #{More: :(Stack WITH {Elt = Number}), Empty: Null}",
+        |program| {
+            let (stack, pile) = (program.bound("Stack"), program.bound("Pile"));
+            let more = program
+                .types
+                .union_member_named(pile, program.type_name("More").symbol())
+                .expect("the union declares `More`");
+            let TypeNode::SignatureApply { signature, pins } =
+                program.types.node(representation(&program, more))
+            else {
+                panic!("the payload is an application");
+            };
+            assert_eq!(
+                signature, stack,
+                "the application is over the bound signature"
+            );
+            let elt = BinderSymbol::Type(program.type_name("Elt"));
+            assert_eq!(pins.get(elt.symbol()), Some(KType::NUMBER));
+            assert_eq!(slot(&program, stack, "rest"), Some(pile.into()));
+        },
+    );
+}
+
+/// Where the door refuses a declaration of `name`: its declaration's leading keyword.
+fn declaration_site(program: &Program<'_, '_, '_>, name: &str) -> Site {
+    let shape = program.reading.shape();
+    let (slot, _) = shape
+        .slot(BinderSymbol::Type(program.type_name(name)))
+        .expect("a declared binder");
+    let node = shape
+        .declarations(slot)
+        .expect("a type binder's declaration");
+    shape.site(&node.parts[0].value)
+}
+
+#[test]
+fn a_group_of_signatures_aliases_and_unions_seals_alike_in_every_written_order() {
+    // Signatures and an alias reading each other — `Cc` reads `Aa`, which reads `Bb` — and a union
+    // that reads them back, under union compositions on both sides: the order they are read in
+    // moves no handle.
+    let lines = [
+        "SIG Aa = #[(VAL b :(Bb | Null))]",
+        "SIG Bb = #[(VAL n :(Nat | Str))]",
+        "LET Cc = :(Aa | Number)",
+        "UNION Nat = #{Zero: Null, Succ: Cc, Both: :(Aa | Bb | Cc)}",
+    ];
+    let sealed = |order: &[usize]| {
+        let source: Vec<&str> = order.iter().map(|index| lines[*index]).collect();
+        brought(&source.join("\n"), |program| {
+            ["Aa", "Bb", "Cc", "Nat"].map(|name| program.bound(name))
+        })
+    };
+    let first = sealed(&[0, 1, 2, 3]);
+    for a in 0..4 {
+        for b in (0..4).filter(|b| *b != a) {
+            for c in (0..4).filter(|c| *c != a && *c != b) {
+                let d = 6 - a - b - c;
+                assert_eq!(sealed(&[a, b, c, d]), first, "written as {a}{b}{c}{d}");
+            }
+        }
+    }
+    // The signatures and alias are their standalone twins over the sealed union.
+    brought(
+        &format!("{}\nSIG Again = #[(VAL n :(Nat | Str))]", lines.join("\n")),
+        |program| assert_eq!(program.bound("Again"), program.bound("Bb")),
+    );
+}
+
+#[test]
+fn an_alias_a_nominal_names_back_seals_in_its_group() {
+    let ring = |source| {
+        brought(source, |program| {
+            let ring = program.bound("Ring");
+            assert_eq!(
+                program.bound("Next"),
+                ring,
+                "the alias is the member it names"
+            );
+            ring
+        })
+    };
+    assert_eq!(
+        ring("LET Next = Ring\nNEWTYPE Ring = :{next :(Next | Null)}"),
+        ring("NEWTYPE Ring = :{next :(Next | Null)}\nLET Next = Ring"),
+        "one handle, whichever order the ring is written in"
+    );
+    brought("LET Fwd = Later\nNEWTYPE Later = Number", |program| {
+        assert_eq!(program.bound("Fwd"), program.bound("Later"));
+    });
+    // A composite right side is read deferred too: a tree whose children an alias lists.
+    let tree = |source| {
+        brought(source, |program| {
+            let node = program.bound("Node");
+            assert_eq!(program.bound("Children"), program.types.list(node));
+            assert_eq!(
+                field(&program, node, "kids"),
+                Some(program.types.list(node))
+            );
+            node
+        })
+    };
+    assert_eq!(
+        tree("LET Children = :(LIST OF Node)\nNEWTYPE Node = :{kids :Children}"),
+        tree("NEWTYPE Node = :{kids :Children}\nLET Children = :(LIST OF Node)"),
+    );
+}
+
+#[test]
+fn a_cycle_through_signatures_and_aliases_alone_refuses_at_the_member_it_reenters() {
+    // Each case names the member the refusal points at, which it leaves empty.
+    for (source, at) in [
+        ("SIG Chain = #[(VAL next :Chain)]", "Chain"),
+        // A cycle through two signatures, beside one a nominal member closes.
+        (
+            "SIG Left = #[(VAL right :Right)]\nSIG Right = #[(VAL left :Left) (VAL n :Nat)]\n\
+             NEWTYPE Nat = :{left :Left}",
+            "Left",
+        ),
+        ("LET Left = Right\nLET Right = Left", "Left"),
+        (
+            "LET Left = :(Right | Null)\nLET Right = :(LIST OF Left)",
+            "Left",
+        ),
+    ] {
+        declared(source, |program, brought| {
+            let site = declaration_site(&program, at);
+            let name = program.type_name(at);
+            assert_eq!(
+                brought,
+                Err(Elaboration::CycleWithoutNominal { name, site }),
+                "`{source}` refuses at `{at}`"
+            );
+            assert!(program.unbound(at), "`{source}` leaves `{at}` empty");
+        });
+    }
 }
 
 #[test]
@@ -278,13 +494,6 @@ fn a_declared_family_is_applied_by_member_name() {
 fn a_declaration_the_door_cannot_elaborate_refuses_and_binds_nothing() {
     // Each case names the binder whose slot the refusal must leave empty.
     for (source, left) in [
-        // A cycle through a signature names no fresh identity, so it has no finite type. A
-        // cycle through a transparent alias does not reach the door at all: a `LET`'s right-hand
-        // side is eager, so the shape refuses it as an eager cycle first.
-        (
-            "SIG Holder = #[(VAL n :Nat)]\nNEWTYPE Nat = :{s :Holder}",
-            "Nat",
-        ),
         // `{+}` alone is not the builtin additive group, so it would chain `+` a second way.
         (
             "SIG Chained FOR ALL #[Carrier] = #[(GROUP FOLD LEFT = #[(OP #(+) OVER Carrier)])]",

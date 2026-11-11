@@ -94,13 +94,35 @@ listing one the body already reads changes nothing.
 
 An opaque ascription, `m :| Counter`, hides each head parameter the application
 leaves unpinned behind a **carrier**. A carrier is keyed on content — the
-opaque view's own, which is its operator and signature application over the
-digest of the module it views and what *fits* solves each parameter to, under
-the parameter's name — and never on when or how often the ascription is
-evaluated. The module it views is the one behind any retype: a view reads only
-its signature's members, at its own types, so `ints :| Counter` and
-`m :| Counter`, `m` being `ints` passed through a parameter `m :Counter`, are
-one view with one carrier. A carrier lives in the
+opaque view's own, which is its signature application over the content of its
+**underlying** module and
+[`from*`](../src/knot/module/README.md#the-view-door), what *fits* solves
+each parameter to over the underlying's signature, under the parameter's name
+— and never on when, how often or in how many steps the ascription is written.
+Every module is a view. A body-born module, and a module a barrier re-views
+inward, is a transparent view of itself at the signature it is born at: it
+hides nothing and is its own underlying. A retype's underlying is its
+operand's, and an opaque view's is the underlying of the module it is built
+over. A view keeps a reference to its
+underlying and is built over the underlying's members, so a view is the module
+it hides and what it shows of it, and nothing else. The source as written,
+header included, decides only whether the view is admitted.
+
+`ints :| Counter` and `m :| Counter`, `m` being `ints` passed through a
+parameter `m :Counter`, are one view with one carrier, and so is
+`(ints :! (Counter WITH {Carrier = Any})) :| Counter`.
+`(ints :| Counter) :| Counter` is that view: the door returns its source.
+`(ints :| Counter) :| Small`, where *fits* admits `Small` over the view and
+`Small` hides again everything `Counter` hides, is `ints :| Small`, its members
+built over `ints` under one seal. A view of a view that shows a part its
+source hides is refused: with `SIG Shown = #[(VAL zero :Any)]`,
+`(ints :| Counter) :| Shown` is refused, since built over `ints` it would
+unseal `zero`. So every view sits directly over a body-born module or a
+re-view, and a chain of views over one module never grows. A view's nested
+module member is a view of the underlying's nested member in turn, with a
+carrier for each parameter of the nested signature its application leaves
+unpinned, and so is a module a function member returns through the view's
+barrier. A carrier lives in the
 [branch](../lattice/src/types/identity.md#storage-a-root-and-its-branches) of
 the region its view is tied in, so a view minted at each hop of a loop is
 released with the hop. A transparent
@@ -168,11 +190,13 @@ what the load cannot see:
 |---|---|
 | `MODULE n OVER #[x Elt] = (…)` | a **body**: its resolved code over the trees of what it captures |
 | a closure, or closures tied into one knot | a **knot**: each closure's code and instance solution over the trees of what it captures, a closure reaching a fellow by its index |
-| `e :\| Counter` | a **view**: the operator, the signature application and what *fits* solves, over the tree of `e` behind any retype |
+| `e :\| Counter` | a **view**: the signature application and `from*`, what *fits* solves over `e`'s underlying, over the tree of that underlying — behind any retype and any view |
 | `e :! Counter`, and wherever the run retypes a module — an annotated binder, an unfolded call's parameter or return, a member read | a **retype**: the signature application pinned at what *fits* solves, over the tree of `e` |
 | a value the load can compute, such as a literal | its digest |
 | a name bound by `LET m = e` or `MODULE m = …` | the tree of what it is bound to |
-| a member chain, `e.inner` | through a body, the tree of the member's binding |
+| a record `{inner = e}`, or a construction `(Next.More e)` | a **building** node: the record or variant over the trees of its parts |
+| a member chain, `e.inner` | through a body, the tree of the member's binding; through a building node, the tree of the field's part |
+| `it` in an arm of `MATCH s …` | an **arm** node over the tree of `s`: the payload of the arm's variant under `UNDER`, `s` at the arm's guard under `WITH` |
 | a call, `(MAKESET ints)` | the tree the function builds, [unfolded](#a-call-unfolds) |
 | a parameter `p`, or a member chain through one, `p.inner` | a **leaf**, keyed on the binder and the chain |
 | anything else | a leaf, keyed on the binder of the `LET` that names it |
@@ -181,15 +205,24 @@ A leaf no binder names — a `MATCH` written inline, a module read out of a list
 is unlike every tree, its own text written elsewhere included. A knot holding
 anything but closures — a data node, a quote — is a leaf.
 
-A container literal is no node either, so a tree's **horizon** stops at a
-container, a parameter and a call the load does not unfold. A module past it —
-`inner` in `{inner = (a :| Inner)}` — is known only by the exact type the load
+A building node is closed where its parts are, and digests as the run digests
+the record or variant at the type it is built at. An arm node is never closed,
+since the run picks the arm from the scrutinee's value; its identity is keyed
+on the arm and the scrutinee's tree, as a leaf's is on its binder.
+[The trace](../src/build/README.md#the-trace) evaluates one over closed
+content, and only where the run would take that arm: under `UNDER`, it is the
+payload of the building node's variant; under `WITH`, the scrutinee retyped to
+the guard.
+
+A list or dictionary literal is no node, so a tree's **horizon** stops at a
+list or a dictionary, a parameter and a call the load does not unfold. A module
+past it — one read out of a list — is known only by the exact type the load
 gives it, and where that type is a view's, the view's own members only as its
 signature declares them. A member declared at an application that fixes each
 parameter of its signature is read as a module of that application, at any
 depth; one whose application leaves a parameter open the load cannot read
-further. The load does not look into a container: what lies past the horizon,
-the run reads off the values.
+further. The load does not look into a list or a dictionary: what lies past
+the horizon, the run reads off the values.
 
 The load computes a node's digest through the run's own recipe for it, read
 over the digests of the node's parts, so the load and the run cannot key one
@@ -206,7 +239,7 @@ module by its content.
 
 A call that does not unfold is a leaf: one of a function a parameter holds or
 that dispatch picks only at the run, one of a recursive function, or one whose
-result is chosen by a `MATCH` or read out of a container. Bound by a `LET`, it
+result is chosen by a `MATCH` or read out of a list or a dictionary. Bound by a `LET`, it
 is keyed on that binder, so after `LET s = (BUILD p)`, `s.zero` and `s.succ`
 share a type; written inline, it is unlike every tree.
 
@@ -240,9 +273,15 @@ rule reads the two trees:
 
 A tree with no leaf is a **closed** tree: the load computes the digest the run
 keys the carrier on, so the load's type is the run's carrier. A tree with a leaf
-gives a rigid type, a lexical variable of the load's own that the run binds by
-reading the member off the module the path's root names. It is read from
-outside through its bound, `Any`, and no value carries it. So two paths over
+gives a rigid type, a variable of the load's own that the run binds by reading
+the member off the module the path's root names. The variable is the path's
+**class**'s, named by the class's content — the member, the application it is
+read through and the tree's identity — so two paths read alike off identical
+trees share it, whatever order the load reads them in. It is read from outside
+through its bound, `Any`, and no value carries it. Where the root lies outside
+a callable, the callable keeps the variable only where a binder it reaches —
+one of its own text's, or one it captures — holds a module of the class's
+tree, itself or as a member ([paths](../src/dispatch/README.md#paths)). So two paths over
 trees with leaves are *maybe* wherever their trees differ, even in content.
 Every equality the load draws holds at the run, and a *maybe* the run settles
 either way contradicts nothing the load said.

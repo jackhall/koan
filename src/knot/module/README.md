@@ -35,9 +35,25 @@ and a view both go through, so the two have one representation and one copy.
 A module's node also holds its **content**, the digest its knot's
 [digest](../../values/README.md#content-digests) covers it by. A body-born
 module's is its body's code digest over the digest of each capture the code
-digest does not name, a view's its operator and signature application over the
-digest of its source's bare member — the module behind any header — and what
-*fits* solved each head parameter to. `ModuleContent` ([module.rs](../module.rs)) owns that recipe
+digest does not name, a view's its signature application over the content of
+its **underlying** — the module behind any header and any opaque view — and
+`from*`, what *fits* solved each head parameter to over the underlying's
+signature ([the view door](#the-view-door),
+[carriers and paths](../../../design/modules.md#carriers-and-paths)). A view's
+node also keeps a reference to its underlying and a **view record** — the
+application it was built at and its two substitutions, as handles, and
+`hidden`, each carrier its types show — one its `to` binds, or one its
+application names in a pin or in its signature — beside the type it hides over
+the underlying — so a view of it is built and keyed over the same underlying.
+`hidden` is a function of the application and `to`, since a carrier is keyed on
+the content of the view that made it. The copy and the exit walk
+carry the reference as they carry a barrier's function, and a view's knot
+weighs its underlying in, since a crossing copies it. Every module is a view:
+a body-born module, and a module a barrier re-views inward
+([below](#members-are-born-coerced)), is a transparent view of itself at the
+signature it is born at, hiding nothing and its own underlying, so it keeps no
+record and no reference.
+`ModuleContent` ([module.rs](../module.rs)) owns that recipe
 — one constructor per kind, and `Module::tie` takes nothing else — so a
 module's content is computed one way wherever one is tied. It is computed at
 the first view or key that reaches the module and kept on the module behind a
@@ -70,7 +86,7 @@ offers at a key. A body-born module holds each registration its body declares,
 in the shape's registration order — the function born for a bare `EXPR` or `OP`
 statement, or for a combined one's bucket beside its named value slot. A view
 holds, for each keyworded member of its signature in the signature's order,
-each overload the source offers there that the member admits. No signature
+each overload its underlying offers there that the member admits. No signature
 table indexes the tail: the module's signature carries each registered shape in
 its keyworded channel, and a reader finds a key's functions by their registered
 shapes, never by position (`layout::functions_at`).
@@ -112,11 +128,12 @@ offered, and ambiguous where a call meets them.
 [retype](#layout-order), which re-stamps the module under a header and never
 comes here. A view is a module of its own — the same node, through the same
 constructor a body-born one goes through — holding only the members its
-signature names, at the types that signature declares. So a view and a
+signature names, at the types that signature declares, built over its
+underlying's members. So a view and a
 body-born module have one representation and one copy, and nothing downstream
 asks which it holds. A keyworded member is carried as the pick a header makes
-([above](#layout-order)) among the source's overloads at its key, read under the
-source's bindings — each behind a barrier where the view reads the member
+([above](#layout-order)) among the underlying's overloads at its key, read under
+`from*` — each behind a barrier where the view reads the member
 otherwise, and retyped to the member's shape the view shows.
 
 Only `:|` is a view. The run and
@@ -134,9 +151,20 @@ application, which solves each head parameter the application leaves unpinned
 from what the source's members offer, and then fixes two substitutions over the
 signature's head parameters:
 
-- `from` — what *fits* solved each one to, or its pin: under
-  `SIG Counter FOR ALL #[Carrier] = #[(VAL zero :Carrier)]`, a source binding
-  `zero` to `0` gives `Carrier` the type `Number`;
+- `from*` — what *fits* solves each one to over the **underlying's**
+  signature, or its pin: under
+  `SIG Counter FOR ALL #[Carrier] = #[(VAL zero :Carrier)]`, an underlying
+  binding `zero` to `0` gives `Carrier` the type `Number`, whether the source
+  is that module, a view of it or a retype of either. Where the source is a
+  view, the ascribed application is read back onto the underlying before the
+  fit: each of the source's carriers it holds, anywhere in a pin or in the
+  signature, under a signature node too, replaced by what the source's
+  `hidden` says it hides (the lattice's `substitute_carriers`). So
+  `(v :| (Paired WITH {Elem = (LIST OF v.Carrier)}))`, `v` a view of `nums`
+  hiding `Number` behind `v.Carrier`, solves `Elem` to `LIST OF Number` over
+  `nums`, and `(v :| Named)`, `Named` declaring `zero` at `v.Carrier`, fits
+  over `nums` as `Named` at `Number` does. *Fits* is transitive, so a fit the
+  source admitted holds over the underlying;
 - `to` — a **carrier per unpinned parameter**, keyed on the view's own content.
   A carrier records the declaration's bound as the bound it met, which only the
   signature's fit reads, so the view fits what its source did; anywhere else it
@@ -146,41 +174,72 @@ signature's head parameters:
 Everything after that is one fit, `fitted`, and one body, [`build`](view.rs),
 which the nested case below goes through too.
 
+**A view of a view** is built over its source's underlying, or refused. The
+door checks, from types alone (`hides_again`), that every part the source
+seals sits, in the new view, at a part whose view-side type is a carrier: a
+head parameter the new view leaves unpinned, or a carrier a pin holds,
+anywhere in the pin. The check walks each member's declared type beside the
+source's, by the coercion walk's arms, a bare signature pairing as the
+application of it that pins nothing, reading the source's underlying side
+through its `hidden` and a source parameter through what the source binds it
+to; a union pairs its members by type handle, never by position, and a part
+the source sealed whole sits at the new union's member that reads as it; a
+keyworded member is checked against the source members covering it. Where the
+check holds, the view is built over the underlying exactly as a view of it
+would be: one seal and one barrier, nothing of the source's carried. Where it
+fails, the view is refused (`Reveals`), since built over the underlying it
+would unseal what the source hides, and built over the source a chain of
+views alternating two signatures would never repeat. Where the computed
+content equals the source's own, the door returns the source.
+
 The carrier is a [`Carrier` node](../../../lattice/src/types/vocabulary.md)
-keyed on the view's content — its operator and application over its source's
-bare member's digest and `from`, the one `ModuleContent` the view is tied
-with — and the parameter's name keeps two parameters of one view apart. A view
-reads only its signature's members, at its own types, so the module behind a
-header is what it views: `ints :| Counter` and `m :| Counter`, `m` being `ints`
-passed through a parameter `m :Counter`, are one view with one carrier, while
-over a header that pins a parameter otherwise the fit solves otherwise, and
-keys a carrier of its own. Two ascriptions of one signature over modules of
-equal content therefore produce views with one carrier, and over modules that
-differ views whose carriers do not unify.
+keyed on the view's content — its application over its underlying's content
+and `from*`, the one `ModuleContent` the view is tied with — and the
+parameter's name keeps two parameters of one view apart. The source as
+written, header included, decides only whether the view is admitted, and the
+members are built over the underlying, so a view is what it shows of the
+module it hides. `ints :| Counter` and `m :| Counter`, `m` being `ints` passed
+through a parameter `m :Counter`, are one view with one carrier, and so is
+`(ints :! (Counter WITH {Carrier = Any})) :| Counter`.
+`(ints :| Counter) :| Counter` is that view, returned. `(ints :| Counter) :|
+Small`, where *fits* admits `Small` over the view and `Small` hides again what
+`Counter` hides, is `ints :| Small`. Two ascriptions of one signature over modules of equal content therefore
+produce views with one carrier, and over modules that differ views whose
+carriers do not unify.
 
 The view carries a signature of its own — each head parameter a manifest member
 at what `to` gives it, every manifest member, value slot and keyworded member at
 its declared type read under `to` — so a view's signature is a module's, with no
 parameters, and it fits the signature it was ascribed to.
 
-**The type half.** Everything the door computes from types alone — the schema,
-both substitutions and the view's signature — is
-[`opaque_view_types`](view.rs), over a source known by its bare member's
-digest; without the source's signature it computes the view's own side only,
-and only where the application pins every parameter, whose fit solves its pins.
-[`opaque_view`](view.rs) computes it beside what *fits* solves, which keys the
-view's content tree at load, from one fit.
-[`nested_types`](view.rs) is the same half of a nested re-view (below). The load
+**The type half.** Everything the door computes from types alone — the
+schema, the admission fit, the check, both substitutions, the content, the view
+record and the view's signature — is [`exposure`](view.rs), over an operand
+known by its carried type, its bare member's content, and that member as a
+view: its own signature and, for an opaque view, its record and its
+underlying's signature and digest. A transparent source hides nothing, so the
+check holds over it and it is its own underlying: the door has one path.
+Where the load does not know the bare member as a view, or does not know the
+carried type, the view is open; a fully pinned application over a source known
+to hide nothing still solves its pins. A frame binding a module records it as a
+view beside its digest
+([activations](../../build/README.md#activations)), so a view over a module
+parameter is settled for each binding. [`nested_types`](view.rs) is the same half of an
+inward re-view (below). A nested view at a slot whose application pins every
+parameter needs no operand: *fits* solves a fully pinned application to its
+pins over any module, so [`pinned_view`](view.rs) computes its `from*`, `to`,
+signature and `hidden` from the slot's two sides alone. The load
 calls these at a `:|` site over a content tree it sees all of, and interns what
 the walk would — each member's declared type under either side and each nested
-module's re-view — so the run's view finds every one of those types already in
+module's view — so the run's view finds every one of those types already in
 the root ([closed views at load](../../dispatch/README.md#paths)).
 
 An `Unascribable` names which door refused: the operand is no module, the
 ascribed handle names no one application of a signature, the module does not fit it
-(carrying the lattice's own failure), or a member could not take the view's type
-for it. A refusal binds nothing and writes nothing but what a partial coercion
-walk had already laid down, which no name reaches.
+(carrying the lattice's own failure), a view of a view shows a part its source
+hides (naming the member), or a member could not take the view's type for it.
+A refusal binds nothing and writes nothing but what a partial
+coercion walk had already laid down, which no name reaches.
 
 ## Members are born coerced
 
@@ -193,7 +252,8 @@ the source, so it is not carried but rebuilt — [`coerce`](coerce.rs).
 in lockstep. A union interns its members in a canonical order, so the source's
 substitution and the view's do not correspond position for position; only the
 declaration lines them up. At each step the declared type read under `from` and
-under `to` says what the member is coming from and going to, and **where the two
+under `to` — on the underlying's side, each of the view's carriers read as what
+it hides — says what the member is coming from and going to, and **where the two
 agree there is nothing to do** — every slot that names no unpinned parameter. Where they differ and a side still names
 a variable — a slot over the member's own `FOR ALL` group — there is no type to
 rebuild the value at, and it is refused. A barrier's
@@ -207,14 +267,21 @@ Where they differ, the arm is the declared type's:
   [`sealing`](../../values/README.md#what-a-value-is), the second checked
   constructor beside `construction`: a parameter records no representation to
   check a construction against, so what is checked is that the identity is a
-  carrier and that the value satisfies the source side — the source's own
-  binding, or, for a view of an opaque view, the inner view's carrier, so the
-  value is resealed and the two views' barriers stack. Where only the source
-  side is a carrier, a value sealed under it gives up its payload at the view's
-  type;
-- a list, dict or record — rebuilt part by part from what its type shows, a
-  record from the fields its slot declares and no other, and laid straight at
-  the slot's type read under `to` (`List::typed`, `Dict::typed`,
+  carrier and that the value satisfies the source side, the underlying's own
+  binding. A view is built over its underlying, so the source side is never a
+  carrier of the view's source. It is a carrier only where the underlying
+  binds a value another view sealed, as `MODULE n = ((LET zero = c.zero))`
+  binds one of `c`'s, and the value is then sealed again under the view's
+  carrier. Where only the
+  source side is a carrier — a value crossing a barrier inward — a value
+  sealed under it gives up its payload at the view's type. Where neither side
+  is — a parameter pinned at a type holding the view's carriers — the value is
+  rebuilt along the pin, read as written on the view's side and through
+  `hidden` on the underlying's, the walk meeting each carrier the pin holds as
+  a parameter's arm;
+- a list, dict or record value — rebuilt part by part from what its type shows,
+  a record value from the fields its slot declares and no other, and laid
+  straight at the slot's type read under `to` (`List::typed`, `Dict::typed`,
   `Record::typed`), which each rebuilt part satisfies, so the walk interns no
   type of its own for the container; a dict's keys are
   untouched, so a key read back through the view carries the source's scalar
@@ -226,18 +293,30 @@ Where they differ, the arm is the declared type's:
   Then that member's arm;
 - a function type or an expression shape — a **barrier node**
   ([`Coerced`](../README.md#what-a-knot-member-is)) holding the
-  function it stands before, the type a caller sees, the declared slot type and
-  the two substitutions as signature handles, which `view_types` interns once
-  per view and a call through the barrier reads as the handles' manifest members;
-- an application whose pins name the enclosing signature's parameters — the
-  member is **re-viewed** through the same `fitted` and `build`, its types those
-  [`nested_types`](view.rs) computes from the nested module's signature and the
-  slot's type under either side. No carrier is made at a
-  nested boundary: the enclosing substitutions read the pins, so the nested
-  view's identities are the outer carriers, arriving through the declared type
-  rather than being made again, and the nested signature's own unpinned
-  parameters keep what *fits* solves them to. A signature-typed slot whose type
-  names no enclosing parameter reads alike either side, and is carried.
+  function it stands before, the type a caller sees, the declared slot type,
+  the two substitutions as signature handles, which `exposure` interns once
+  per view and a call through the barrier reads as the handles' manifest
+  members, and the view's `hidden`, which a crossing reads on the underlying's
+  side, inward with the sides swapped;
+- an application whose pins name the enclosing signature's parameters, or a
+  signature naming an enclosing carrier, the application of it that pins
+  nothing — outward, the underlying's nested member is **viewed** through the same
+  `exposure` and `build` as `:|`, at the slot's type read under `to`, its
+  admission already decided by the enclosing fit and its `from*` solved at the
+  slot's type read under `from*`: the enclosing carriers arrive through the
+  pins, and each parameter of the nested signature the application leaves
+  unpinned gets a carrier keyed on the nested view's content. A module a
+  barrier's function returns crosses outward the same way, its admission
+  checked here, since no enclosing fit decided it. Inward, a nested
+  module is **re-viewed** transparently through `fitted` and `build`, its
+  types those [`nested_types`](view.rs) computes: its members built over the
+  slot's type read on the barrier's outer side, and its own type laid from it
+  read on the function's, so a bare signature's re-view takes the signature
+  read back through the carriers it names. Its content is tagged apart
+  (`Operator::Reviewed`); the re-view is a transparent view of itself, its
+  own underlying, so a view of it inside the function is built over it. A
+  signature-typed slot whose type names no enclosing parameter or carrier
+  reads alike either side, and is carried.
 
 Anything else, and any value whose shape does not match the arm its declaration
 took, is a `CoercionRefused` naming what it was.
@@ -245,14 +324,12 @@ took, is a `CoercionRefused` naming what it was.
 **A call through a barrier** crosses it both ways. Its arguments cross
 [`inward`](coerce.rs): the same walk with the two substitutions swapped, where a
 parameter's arm unseals a value sealed under the carrier and refuses one that
-is not (`NotSealed`), or, at a barrier stacked before another view's, reseals
-it under that view's carrier. A function member's parameters are crossed by name, and a
+is not (`NotSealed`). A function member's parameters are crossed by name, and a
 keyworded member's slots under the names the function behind the barrier
 registers. The function behind it is then called by name, so its own frame
 admits the arguments and solves its group. Its result crosses back
-[`outward`](coerce.rs) at the declared return. A barrier stacked behind another
-is crossed in turn, and a call through one never tails, since its value crosses
-where its frame ends.
+[`outward`](coerce.rs) at the declared return. A call through a barrier never
+tails, since its value crosses where its frame ends.
 
 A quantified member behind a barrier, read where the load solved its group — an
 [instance site](../../dispatch/README.md#static-types) — is a barrier of its own
@@ -307,13 +384,15 @@ ties the binder with the finished activation.
 - [`tests/view.rs`](tests/view.rs) — a retype at a signature reads what the
   signature names at what *fits* solves under a header over the module's own
   node, an opaque view keys its carrier on content under the parameter's name —
-  one through a header that fits alike, another through one that fits
-  otherwise — records its bound and reveals it nowhere, and keeps a pin, a view
+  one content whatever header its source is under — records its bound and
+  reveals it nowhere, and keeps a pin, a view of a view built over its
+  underlying or refused, a view
   carries the overload each keyworded member picks and wraps one over a carrier
   in a barrier, each refusal, and a view copying across a cell like any module.
 - [`tests/coerce.rs`](tests/coerce.rs) — one program per arm: every slot that
   names the carrier born at it, a function member behind a barrier, a nested
-  module re-viewed at the outer carrier, a signature-typed slot naming no member
+  module viewed with a carrier for each parameter its slot leaves unpinned and
+  re-viewed transparently crossing inward, a signature-typed slot naming no member
   carried verbatim, a union member naming
   a hidden parameter taking the value whatever the union's order, and the
   refusals.
@@ -331,5 +410,4 @@ open a module and call through a barrier are
 ## Open work
 
 - [What a barrier rebuilds](../../../roadmap/types/barrier-coercion.md)
-  — a nested slot pinned to a type over the enclosing parameter, a cyclic data
-  member and a dict's keys, each coerced through a barrier.
+  — a cyclic data member and a dict's keys, each coerced through a barrier.

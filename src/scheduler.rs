@@ -10,7 +10,7 @@
 //! A step cannot create or release a cell, and names no handle and no carrier door: it hands the
 //! drain an [`Action`] naming nothing but `'graph`, and the drain performs every birth and every
 //! death. A request has no cell until the drain pops it, so the only thing a live cell ever waits
-//! on is its receipt run. A frame keyed on its bindings is born under its settlement, an arena
+//! on is its receipt run. A frame keyed on its bindings is born under its settlement, a depot
 //! node the drain finds or builds before the birth ([`Seek`]), so it never waits on one.
 //!
 //! **Imports.** Outside doc comments and `#[cfg(test)]` this module names `crate::knot`,
@@ -22,10 +22,10 @@
 //! See [scheduler/README.md](scheduler/README.md).
 
 mod action;
-mod arena;
 mod beside;
 mod continuation;
 mod delivery;
+mod depot;
 mod drain;
 mod kept;
 mod load;
@@ -44,7 +44,8 @@ pub use beside::Beside;
 pub use continuation::{BirthAt, Born, NativeStep, StateAt, StepBundle, Work};
 #[cfg(test)]
 pub(crate) use drain::{
-    BORN, CACHING, FRAMES, HOPS, HopSample, LAID, PARKS, REGION_WRITTEN, SKELETONS, TIERS, Tiers,
+    ANSWERED, BORN, CACHING, FRAMES, HOPS, HopSample, LAID, PARKS, REGION_WRITTEN, SKELETONS,
+    TIERS, Tiers,
 };
 pub use drain::{DrainStalled, Graph, Resting, Scheduler};
 pub use kept::{Held, Kept, KeptPart};

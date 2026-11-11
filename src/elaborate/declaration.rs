@@ -7,6 +7,11 @@
 //! writer: minting each member's [`TypeValue`](crate::values::TypeValue) and naming the region it
 //! lives in stay the caller's.
 //!
+//! Only a nominal member opens a window index. A signature or alias in a component that also holds
+//! a nominal member is read relative, over its fellows' relative handles, and handed back as the
+//! sealed group's absolute twin of that type ([README.md § One window per
+//! component](README.md#one-window-per-component)).
+//!
 //! See [README.md § Declarations](README.md#declarations).
 
 use std::cell::Cell;
@@ -18,14 +23,16 @@ use crate::parse::{ExpressionPart, KExpression};
 use crate::parse::{
     bounded, declarator_parameters, family_head, quoted_body, quoted_part, symbol_from_quote_body,
 };
-use crate::scope::{BodyShape, BuiltinGroup, Component, Elaboration, Site, Which, is_equality};
+use crate::scope::{
+    BodyShape, BuiltinGroup, Component, Elaboration, Site, Slot, Which, is_equality,
+};
 use crate::symbols::{KeywordSymbol, TypeSymbol};
 use crate::type_lattice::{
     DeclaredGroup, DeclaredType, FoldDirection, KKind, KType, Parametric, RecursiveGroupWindow,
     ReductionMode, RelativeSchema, SchemaDraft, SigOrigin,
 };
 
-use super::expression::{Elaborator, Fellow, Groups};
+use super::expression::{Elaborator, Fellow, Fellows, Groups};
 use super::reads::Reads;
 use super::signature::operator_shape;
 use crate::values::Chain;
@@ -50,7 +57,11 @@ pub fn declares_nominal(node: &KExpression<'_>) -> bool {
 /// any — a `SIG`'s signature, and a `LET` of a type name's type expression.
 ///
 /// Every member is read and every schema elaborated before the group seals, so a member of a
-/// sealed group reads its fellows as siblings and a ring of declarations needs no placeholder. A
+/// sealed group reads its fellows as siblings and a ring of declarations needs no placeholder. Only
+/// the nominal members open the window: a signature or alias fellow is read relative where a member
+/// names it ([`Relatives`]) and handed back as the sealed group's absolute twin of that relative
+/// type. A cycle through signatures and aliases alone has no finite type and is refused at the
+/// member it re-enters, or at the first-written member of a component with no nominal one. A
 /// declaration the door cannot elaborate refuses with the same [`Elaboration`] a type expression
 /// does, naming the site, and writes nothing: the window, its member list and every staged run
 /// live in `scratch`, and the only durable write is the registry intern, which is content-
@@ -71,22 +82,30 @@ pub fn type_declarations<'graph, 'x, R: Reads<'graph> + ?Sized>(
     }
 
     // Only a nominal member can close a cycle: a transparent alias and a signature name no fresh
-    // identity, so a cycle through one has no finite type. The rewrite's restatement of the
-    // nominal cut the value channel's tie already makes.
-    if let Some(member) = read.iter().find(|member| !member.is_nominal())
-        && (component.cyclic || read.len() > 1)
-    {
-        return Err(Elaboration::Unsupported { site: member.site });
-    }
-    if let [member] = &*read
-        && !member.is_nominal()
-    {
-        let handle = member.standalone(reader, types, scratch)?;
-        return Ok(scratch.alloc_slice_copy(&[handle]));
+    // identity, so a cycle through such members alone has no finite type. The type channel's
+    // restatement of the nominal cut the value channel's tie already makes.
+    if !read.iter().any(Declaration::is_nominal) {
+        if let Some(first) = read.iter().min_by_key(|member| member.site)
+            && component.cyclic
+        {
+            return Err(first.cycle());
+        }
+        let elaborator = Elaborator {
+            reader,
+            types,
+            scratch,
+            fellows: Fellows::NONE,
+            locals: &[],
+            binder: Cell::new(false),
+        };
+        let [member] = &*read else {
+            unreachable!("an acyclic component is one member")
+        };
+        return Ok(scratch.alloc_slice_copy(&[member.elaborate(&elaborator)?]));
     }
 
     // The whole member and binder list is fixed before any schema elaborates, because a schema's
-    // fellow mention must already have an index to name.
+    // fellow mention must already have an index to name. A signature or alias takes no index.
     let mut members = BumpVec::new_in(scratch);
     let mut binders = BumpVec::new_in(scratch);
     let mut fellows = BumpVec::with_capacity_in(component.members.len(), scratch);
@@ -128,12 +147,43 @@ pub fn type_declarations<'graph, 'x, R: Reads<'graph> + ?Sized>(
                     params,
                 });
             }
-            Declared::Signature { .. } | Declared::Alias(_) => {
-                unreachable!("a non-nominal member is answered alone above")
-            }
+            Declared::Signature { .. } | Declared::Alias(_) => {}
         }
     }
     let window = RecursiveGroupWindow::for_component(scratch, &members, &binders);
+
+    // Each signature and alias, relative: over its nominal fellows' handles, and over each other
+    // signature or alias it names, read first. They are read in written order — a component's
+    // members are in slot order — so a cycle among them refuses at the first one written.
+    let mut relatives = BumpVec::with_capacity_in(read.len(), scratch);
+    relatives.resize(read.len(), None);
+    {
+        let state = scratch.alloc_slice_fill_with(read.len(), |_| Cell::new(Reading::Unread));
+        let reading = Relatives {
+            read: &read,
+            slots: component.members,
+            nominal: &fellows,
+            state,
+            reader,
+            types,
+            scratch,
+        };
+        let mut written: BumpVec<'_, usize> = BumpVec::with_capacity_in(read.len(), scratch);
+        written.extend((0..read.len()).filter(|index| !read[*index].is_nominal()));
+        written.sort_unstable_by_key(|index| read[*index].site);
+        for index in written {
+            relatives[index] = Some(reading.relative(index)?);
+        }
+    }
+    for (relative, slot) in relatives.iter().zip(component.members) {
+        if let Some(handle) = relative {
+            fellows.push(Fellow {
+                slot: *slot,
+                handle: *handle,
+                params: &[],
+            });
+        }
+    }
 
     let mut sealed = None;
     let mut index = 0;
@@ -142,7 +192,10 @@ pub fn type_declarations<'graph, 'x, R: Reads<'graph> + ?Sized>(
             reader,
             types,
             scratch,
-            fellows: &fellows,
+            fellows: Fellows {
+                read: &fellows,
+                unread: None,
+            },
             locals: &[],
             binder: Cell::new(false),
         };
@@ -173,7 +226,7 @@ pub fn type_declarations<'graph, 'x, R: Reads<'graph> + ?Sized>(
             }
             // Each variant is a family over all of the union's parameters, its payload read with
             // them as the innermost group. An application is covariant in its arguments, so a
-            // parameter at a contravariant position is refused.
+            // parameter at a contravariant position or inside a pin, which is invariant, is refused.
             Declared::Union { variants, params } => {
                 let family = Groups {
                     names: params,
@@ -182,7 +235,7 @@ pub fn type_declarations<'graph, 'x, R: Reads<'graph> + ?Sized>(
                 };
                 for (_, payload) in variants {
                     let representation = elaborator.part(payload, &family)?;
-                    if types.quantifies_contravariantly(scratch, representation, params.len()) {
+                    if types.quantifies_noncovariantly(scratch, representation, params.len()) {
                         return Err(Elaboration::Unsupported {
                             site: elaborator.reader.shape().site(payload),
                         });
@@ -198,14 +251,14 @@ pub fn type_declarations<'graph, 'x, R: Reads<'graph> + ?Sized>(
                     index += 1;
                 }
             }
-            Declared::Signature { .. } | Declared::Alias(_) => unreachable!("answered alone above"),
+            Declared::Signature { .. } | Declared::Alias(_) => {}
         }
     }
     let sealed = sealed.expect("the last fill seals a window whose every member was filled");
 
     let mut handles = BumpVec::with_capacity_in(read.len(), scratch);
     let mut index = 0;
-    for member in read.iter() {
+    for (member, relative) in read.iter().zip(&relatives) {
         let handle = match member.kind {
             Declared::NewType { .. } | Declared::Family { .. } => {
                 let handle = sealed.member(index).expect("a filled member seals");
@@ -218,13 +271,72 @@ pub fn type_declarations<'graph, 'x, R: Reads<'graph> + ?Sized>(
                     .binder_type(member.name)
                     .expect("a declaring binder seals its union")
             }
-            Declared::Signature { .. } | Declared::Alias(_) => unreachable!("answered alone above"),
+            Declared::Signature { .. } | Declared::Alias(_) => sealed.absolute(
+                types,
+                scratch,
+                relative.expect("a signature or alias is read relative"),
+            ),
         };
         handles.push(handle);
     }
     Ok(scratch.alloc_slice_copy(&handles))
 }
 
+/// How far a component's signature or alias member has been read.
+#[derive(Clone, Copy)]
+enum Reading {
+    Unread,
+    /// Being read: a mention reaching it again closes a cycle through signatures and aliases alone.
+    Open,
+    Read(KType),
+}
+
+/// A component's signature and alias members, each read relative on first mention: over its
+/// nominal fellows' relative handles, and over each other signature or alias it names, read first.
+/// A mention that re-enters a member still being read is refused at that member.
+struct Relatives<'a, 'graph, 'x, 'tier, 'pair, 'reg, 'door, R: ?Sized> {
+    read: &'a [Declaration<'graph, 'x>],
+    /// Each member's slot, parallel to `read`.
+    slots: &'graph [Slot],
+    /// The nominal fellows, as announced.
+    nominal: &'a [Fellow<'a>],
+    /// Each member's reading, parallel to `read`; a nominal member's stays `Unread`.
+    state: &'a [Cell<Reading>],
+    reader: &'a R,
+    types: &'a Chain<'tier, 'pair, 'reg, 'door>,
+    scratch: BumpAllocator<'x>,
+}
+
+impl<'graph, R: Reads<'graph> + ?Sized> Relatives<'_, 'graph, '_, '_, '_, '_, '_, R> {
+    /// Member `index`'s relative type, read on first call. A call that re-enters a member still
+    /// being read is a cycle through signatures and aliases alone, refused at that member.
+    fn relative(&self, index: usize) -> Result<KType, Elaboration> {
+        match self.state[index].get() {
+            Reading::Read(handle) => return Ok(handle),
+            Reading::Open => return Err(self.read[index].cycle()),
+            Reading::Unread => {}
+        }
+        self.state[index].set(Reading::Open);
+        let unread = |slot: Slot| {
+            let at = self.slots.iter().position(|member| *member == slot)?;
+            (!self.read[at].is_nominal()).then(|| self.relative(at))
+        };
+        let elaborator = Elaborator {
+            reader: self.reader,
+            types: self.types,
+            scratch: self.scratch,
+            fellows: Fellows {
+                read: self.nominal,
+                unread: Some(&unread),
+            },
+            locals: &[],
+            binder: Cell::new(false),
+        };
+        let handle = self.read[index].elaborate(&elaborator)?;
+        self.state[index].set(Reading::Read(handle));
+        Ok(handle)
+    }
+}
 /// The group-free top of the quantifier stack: a declaration's own part encloses no `FOR ALL`.
 const TOP: Groups<'static> = Groups {
     names: &[],
@@ -238,7 +350,7 @@ const DECLARED: &str = "a declared type reads no variable";
 
 /// A declared type, read under [`TOP`] with no head parameter in reach: concrete.
 fn closed(types: &Chain<'_, '_, '_, '_>, declared: Parametric) -> KType {
-    types.concrete(declared).expect(DECLARED)
+    super::judge::static_of(types, declared).expect(DECLARED)
 }
 
 /// One member of a component, read off its declaration node before anything is elaborated.
@@ -268,8 +380,9 @@ enum Declared<'graph, 'x> {
     /// parameter names, symbol-sorted — the identity wrapper over its argument, which a
     /// construction builds only when there is one parameter.
     Family { params: &'x [TypeSymbol] },
-    /// `SIG <Name> [FOR ALL <names>] = <body>`: a signature over its head group, if it writes one,
-    /// which no `Sibling` can stand for and so takes part in no cycle.
+    /// `SIG <Name> [FOR ALL <names>] = <body>`: a signature over its head group, if it writes one.
+    /// No window member: it mints no identity, so no `Sibling` stands for it, and inside a
+    /// component it is read relative.
     Signature {
         group: Option<&'graph ExpressionPart<'graph>>,
         body: &'graph ExpressionPart<'graph>,
@@ -348,6 +461,14 @@ impl<'graph, 'x> Declaration<'graph, 'x> {
         })
     }
 
+    /// The refusal of a cycle through signatures and aliases alone, at this member.
+    fn cycle(&self) -> Elaboration {
+        Elaboration::CycleWithoutNominal {
+            name: self.name,
+            site: self.site,
+        }
+    }
+
     /// Whether this member can be a window member, and so can close a cycle.
     fn is_nominal(&self) -> bool {
         matches!(
@@ -356,26 +477,17 @@ impl<'graph, 'x> Declaration<'graph, 'x> {
         )
     }
 
-    /// The handle of a member declared alone, outside any window.
-    fn standalone<R: Reads<'graph> + ?Sized>(
+    /// The type of a signature or alias member, its names read through `elaborator`: alone, or
+    /// relative inside a component.
+    fn elaborate<R: Reads<'graph> + ?Sized>(
         &self,
-        reader: &R,
-        types: &Chain<'_, '_, '_, '_>,
-        scratch: BumpAllocator<'_>,
+        elaborator: &Elaborator<'_, '_, '_, '_, '_, R>,
     ) -> Result<KType, Elaboration> {
-        let elaborator = Elaborator {
-            reader,
-            types,
-            scratch,
-            fellows: &[],
-            locals: &[],
-            binder: Cell::new(false),
-        };
         match self.kind {
-            Declared::Alias(rhs) => Ok(closed(types, elaborator.part(rhs, &TOP)?)),
+            Declared::Alias(rhs) => Ok(closed(elaborator.types, elaborator.part(rhs, &TOP)?)),
             Declared::Signature { group, body } => {
-                let mut heads = BumpVec::new_in(scratch);
-                signature_type(&elaborator, group, body, self.site, &mut heads)
+                let mut heads = BumpVec::new_in(elaborator.scratch);
+                signature_type(elaborator, group, body, self.site, &mut heads)
             }
             _ => unreachable!("a nominal member seals in a window"),
         }
@@ -405,7 +517,7 @@ pub(super) fn signature_heads<'graph, 'x, R: Reads<'graph> + ?Sized>(
         reader,
         types,
         scratch,
-        fellows: &[],
+        fellows: Fellows::NONE,
         locals: &[],
         binder: Cell::new(false),
     };

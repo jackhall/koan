@@ -240,7 +240,15 @@ fn law(
         let given: Vec<Given<'_>> = (drawn.iter().enumerate())
             .map(|(index, slot)| slot.given(pick(index, slot), named))
             .collect();
-        typed(native, declared, &given, world.types, &scratch).returns
+        typed(
+            &crate::elaborate::judge::NoMarks,
+            native,
+            declared,
+            &given,
+            world.types,
+            &scratch,
+        )
+        .returns
     };
 
     for named in [true, false] {

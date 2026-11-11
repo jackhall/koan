@@ -1,34 +1,35 @@
-//! The build arena: the settlements a graph's frames run under, kept as books beside the cell
+//! The build depot: the settlements a graph's frames run under, kept as books beside the cell
 //! graph rather than as cells in it.
 //!
-//! An arena node is a settlement or a composition. A settlement is one body's facts settled under
-//! one binding, found by its parent and its [`SettlementKey`]. Its parent is the arena node its
-//! callee was born under, or the root, the frozen load, which is no slot ([`ArenaRef::ROOT`]). Its
+//! A depot slot is a settlement or a composition. A settlement is one body's facts settled under
+//! one binding, found by its parent and its [`LayerKey`]. Its parent is the depot slot its
+//! callee was born under, or the root, the frozen load, which is no slot ([`DepotRef::ROOT`]). Its
 //! facts are a [`Settled`]: a bump holding them beside a shared hold on its parent's, which they
-//! read below them, so a step reads the chain through the newest alone, borrowed from the arena for
+//! read below them, so a step reads the chain through the newest alone, borrowed from the depot for
 //! the step. A composition is the facts of code composed at run time, a child of the root found
 //! by its syntax digest: a [`Composed`], a copy of its syntax and the shapes and records built over
 //! it in program storage of its own, which a step under it reads as its chain's base in place of
 //! the load. The books hold the digest alone: the syntax a miss copies comes from the code value
-//! or callee that asked, through the cell that bounces it ([`ComposedSyntax`]). A run cell born under an arena node
-//! borrows it for its life, through the drain, so a borrowed arena node is never evicted. Each
-//! slot carries a generation, bumped when its arena node is evicted, so an [`ArenaRef`] held past
+//! or callee that asked, through the cell that bounces it ([`ComposedSyntax`]). A run cell born under a depot slot
+//! borrows it for its life, through the drain, so a borrowed depot slot is never evicted. Each
+//! slot carries a generation, bumped when its depot slot is evicted, so a [`DepotRef`] held past
 //! an eviction names nothing rather than the slot's next tenant.
 //!
-//! A settlement's parent is a settlement or a composition; one under a composition reads the
-//! composition as its chain's base. A settlement under a composition that binds a module by a
+//! A settlement's parent is a settlement, a composition, or a layer the load laid in program
+//! storage, which is no slot ([`DepotRef::load`]): never evicted, it holds and counts nothing. One
+//! under a composition reads the composition as its chain's base. A settlement under a composition that binds a module by a
 //! tree another composition computed **pins** that composition: it keeps a shared hold on its
 //! facts, and the composition counts it as a pinner.
 //!
-//! **Held.** An arena node is held while a run cell borrows it, while a held arena node lies below
+//! **Held.** A depot slot is held while a run cell borrows it, while a held depot slot lies below
 //! it, or while a held settlement pins it. The held total moves only where a count turns from zero
 //! or to zero, and each turn propagates to the parent and the pinned compositions, so a borrow
 //! costs the depth of its chain.
 //!
 //! **Eviction** runs after a miss: while the unheld bytes exceed the [`BuildBudget`], the unheld
-//! arena node with no children, no pinner and the oldest use goes. A parent is no candidate while
+//! depot slot with no children, no pinner and the oldest use goes. A parent is no candidate while
 //! it has a child, nor a composition while a settlement pins it, so eviction takes leaves first.
-//! Each victim is found by a linear scan of the live arena nodes, held ones included. See
+//! Each victim is found by a linear scan of the live depot slots, held ones included. See
 //! [build/README.md § The store](../build/README.md#the-store).
 
 use std::collections::HashMap;
@@ -39,37 +40,37 @@ use self_cell::self_cell;
 use smallvec::SmallVec;
 
 use crate::memory::Bump;
-use crate::scope::{ComposedSyntax, Composition, Facts, LoadFacts, Settlement};
-use crate::values::{ArenaRef, BuildBudget, ContentDigest, SettlementKey};
+use crate::scope::{BuildLayer, ComposedSyntax, Composition, Facts, LoadFacts};
+use crate::values::{BuildBudget, ContentDigest, DepotRef, LayerKey};
 
-/// A graph's arena nodes, their books, and the budget their unheld bytes stay within.
-pub(super) struct BuildArena<'graph> {
+/// A graph's depot slots, their books, and the budget their unheld bytes stay within.
+pub(super) struct BuildDepot<'graph> {
     slots: Vec<Slot<'graph>>,
-    /// Slots holding no arena node, reused before the slab grows.
+    /// Slots holding no depot slot, reused before the slab grows.
     free: Vec<u32>,
     /// Every live settlement, by its parent and key.
-    children: HashMap<(ArenaRef, SettlementKey), ArenaRef>,
+    children: HashMap<(DepotRef, LayerKey), DepotRef>,
     /// Every live composition, by its syntax digest.
-    compositions: HashMap<ContentDigest, ArenaRef>,
+    compositions: HashMap<ContentDigest, DepotRef>,
     budget: BuildBudget,
-    /// Bytes of every live arena node.
+    /// Bytes of every live depot slot.
     total: usize,
-    /// Bytes of every held arena node.
+    /// Bytes of every held depot slot.
     held: usize,
     /// The use counter each stamp takes the next value of.
     clock: u64,
 }
 
-/// One slot of the arena: its generation, and the arena node it holds, if any.
+/// One slot of the depot: its generation, and the depot slot it holds, if any.
 struct Slot<'graph> {
     generation: u32,
-    node: Option<ArenaNode<'graph>>,
+    deposit: Option<Deposit<'graph>>,
 }
 
-/// An arena node's books: where it sits, who holds it, when it was last used, and what it weighs,
+/// A depot slot's books: where it sits, who holds it, when it was last used, and what it weighs,
 /// beside its facts.
-struct ArenaNode<'graph> {
-    parent: ArenaRef,
+struct Deposit<'graph> {
+    parent: DepotRef,
     kind: Kind<'graph>,
     /// Run cells borrowing it.
     borrowers: usize,
@@ -85,13 +86,13 @@ struct ArenaNode<'graph> {
     bytes: usize,
 }
 
-/// Which arena node it is, by what finds it, beside its facts.
+/// Which depot slot it is, by what finds it, beside its facts.
 enum Kind<'graph> {
     Settlement {
-        key: SettlementKey,
+        key: LayerKey,
         facts: Rc<Settled<'graph>>,
         /// The compositions it pins.
-        pins: SmallVec<[ArenaRef; 1]>,
+        pins: SmallVec<[DepotRef; 1]>,
     },
     Composition {
         digest: ContentDigest,
@@ -99,11 +100,11 @@ enum Kind<'graph> {
     },
 }
 
-/// What a step under an arena node reads facts through: the composition its chain rests on, by
+/// What a step under a depot slot reads facts through: the composition its chain rests on, by
 /// its syntax digest, if not the load, and the settlement it runs under, if any.
 pub(super) struct Door<'a> {
     pub composition: Option<(ContentDigest, &'a Composition<'a>)>,
-    pub top: Option<&'a Settlement<'a>>,
+    pub top: Option<&'a BuildLayer<'a>>,
 }
 
 /// What a composition's facts are laid in: its syntax's own program storage, which its shapes and
@@ -118,7 +119,7 @@ pub(super) struct ComposedOwner<'graph> {
 
 self_cell!(
     /// A composition's facts, laid in the storage its owner keeps. A step reads them only borrowed
-    /// from the arena, as it reads a settlement's.
+    /// from the depot, as it reads a settlement's.
     pub(super) struct Composed<'graph> {
         owner: ComposedOwner<'graph>,
         #[covariant]
@@ -153,33 +154,42 @@ impl<'graph> Composed<'graph> {
     }
 }
 
-/// What a settlement's facts are laid in: their own bump, beside the parent settlement they read
-/// below them, the composition their chain rests on, if not the load, by syntax digest, and the
+/// What a settlement's facts are laid in: their own bump, beside the parent layer they read below
+/// them, the composition their chain rests on, if not the load, by syntax digest, and the
 /// compositions whose trees they bind a module by, each of which they keep alive; and the load
 /// beneath all.
 pub(super) struct SettledOwner<'graph> {
     bump: Bump,
-    parent: Option<Rc<Settled<'graph>>>,
+    parent: Option<Parent<'graph>>,
     base: Option<(ContentDigest, Rc<Composed<'graph>>)>,
     pins: SmallVec<[Rc<Composed<'graph>>; 1]>,
     load: &'graph LoadFacts<'graph>,
 }
 
-/// What a new settlement is laid over: the settlement or the composition it is a child of, or the
-/// root.
+/// What a new settlement is laid over: the settlement or the composition it is a child of, a
+/// layer the load laid, or the root.
 pub(super) enum Under<'graph> {
     Root,
+    Load(&'graph BuildLayer<'graph>),
     Settlement(Rc<Settled<'graph>>),
     Composition(ContentDigest, Rc<Composed<'graph>>),
 }
 
+/// The layer a settlement's facts read below them: a settlement's, held by a share of its depot
+/// slot's facts, or a layer the load laid, which lives in program storage and so outlives the
+/// graph, holding nothing.
+enum Parent<'graph> {
+    Slot(Rc<Settled<'graph>>),
+    Load(&'graph BuildLayer<'graph>),
+}
+
 self_cell!(
     /// A settlement's facts, laid in the bump its owner keeps. A step reads them only borrowed
-    /// from the arena, at a borrow inside its own, so nothing of them can be laid in a region.
+    /// from the depot, at a borrow inside its own, so nothing of them can be laid in a region.
     pub(super) struct Settled<'graph> {
         owner: SettledOwner<'graph>,
         #[covariant]
-        dependent: Settlement,
+        dependent: BuildLayer,
     }
 );
 
@@ -197,13 +207,14 @@ impl<'graph> Settled<'graph> {
             Facts<'a>,
             &[&'a Composition<'a>],
             &'a &'graph (),
-        ) -> Option<Settlement<'a>>,
+        ) -> Option<BuildLayer<'a>>,
     ) -> Option<Self> {
         let (parent, base) = match under {
             Under::Root => (None, None),
+            Under::Load(layer) => (Some(Parent::Load(layer)), None),
             Under::Settlement(parent) => {
                 let base = parent.borrow_owner().base.clone();
-                (Some(parent), base)
+                (Some(Parent::Slot(parent)), base)
             }
             Under::Composition(digest, composition) => (None, Some((digest, composition))),
         };
@@ -215,7 +226,10 @@ impl<'graph> Settled<'graph> {
             load,
         };
         Settled::try_new(owner, |owner| {
-            let top = owner.parent.as_deref().map(Settled::borrow_dependent);
+            let top = owner.parent.as_ref().map(|parent| match parent {
+                Parent::Slot(parent) => parent.borrow_dependent(),
+                Parent::Load(layer) => *layer,
+            });
             let facts = match &owner.base {
                 Some((_, composition)) => Facts::composed(composition.facts(), top),
                 None => Facts::under(owner.load, top),
@@ -234,7 +248,7 @@ impl<'graph> Settled<'graph> {
     }
 
     /// The facts themselves.
-    pub(super) fn facts(&self) -> &Settlement<'_> {
+    pub(super) fn facts(&self) -> &BuildLayer<'_> {
         self.borrow_dependent()
     }
 
@@ -244,13 +258,13 @@ impl<'graph> Settled<'graph> {
     }
 }
 
-impl ArenaNode<'_> {
+impl Deposit<'_> {
     fn is_held(&self) -> bool {
         self.borrowers > 0 || self.held_children > 0 || self.held_pinners > 0
     }
 
     /// The compositions it pins: none for a composition.
-    fn pins(&self) -> &[ArenaRef] {
+    fn pins(&self) -> &[DepotRef] {
         match &self.kind {
             Kind::Settlement { pins, .. } => pins,
             Kind::Composition { .. } => &[],
@@ -258,10 +272,10 @@ impl ArenaNode<'_> {
     }
 }
 
-impl<'graph> BuildArena<'graph> {
-    /// An empty arena whose unheld bytes stay within `budget`.
+impl<'graph> BuildDepot<'graph> {
+    /// An empty depot whose unheld bytes stay within `budget`.
     pub(super) fn new(budget: BuildBudget) -> Self {
-        BuildArena {
+        BuildDepot {
             slots: Vec::new(),
             free: Vec::new(),
             children: HashMap::new(),
@@ -273,32 +287,35 @@ impl<'graph> BuildArena<'graph> {
         }
     }
 
-    fn node(&self, at: ArenaRef) -> Option<&ArenaNode<'graph>> {
+    fn deposit(&self, at: DepotRef) -> Option<&Deposit<'graph>> {
         let (slot, generation) = at.opened()?;
         let slot = self.slots.get(slot as usize)?;
-        (slot.generation == generation).then_some(slot.node.as_ref())?
+        (slot.generation == generation).then_some(slot.deposit.as_ref())?
     }
 
-    fn node_mut(&mut self, at: ArenaRef) -> Option<&mut ArenaNode<'graph>> {
+    fn deposit_mut(&mut self, at: DepotRef) -> Option<&mut Deposit<'graph>> {
         let (slot, generation) = at.opened()?;
         let slot = self.slots.get_mut(slot as usize)?;
-        (slot.generation == generation).then_some(slot.node.as_mut())?
+        (slot.generation == generation).then_some(slot.deposit.as_mut())?
     }
 
-    /// Whether `at` names a live arena node. The root always does.
-    pub(super) fn is_live(&self, at: ArenaRef) -> bool {
-        at == ArenaRef::ROOT || self.node(at).is_some()
+    /// Whether `at` names a live depot slot. The root and a load layer always do.
+    pub(super) fn is_live(&self, at: DepotRef) -> bool {
+        at.opened().is_none() || self.deposit(at).is_some()
     }
 
     /// The live settlement keyed `key` under `parent`, if any. Stamps nothing.
-    pub(super) fn find(&self, parent: ArenaRef, key: SettlementKey) -> Option<ArenaRef> {
+    pub(super) fn find(&self, parent: DepotRef, key: LayerKey) -> Option<DepotRef> {
         self.children.get(&(parent, key)).copied()
     }
 
-    /// What a settlement built under the live `at` is laid over: the root for the root or a
-    /// handle gone stale.
-    pub(super) fn under(&self, at: ArenaRef) -> Under<'graph> {
-        match self.node(at).map(|node| &node.kind) {
+    /// What a settlement built under the live `at` is laid over, a load layer read from `load`:
+    /// the root for the root or a handle gone stale.
+    pub(super) fn under(&self, at: DepotRef, load: &'graph LoadFacts<'graph>) -> Under<'graph> {
+        if let Some(ordinal) = at.load_ordinal() {
+            return Under::Load(load.load_layer(ordinal));
+        }
+        match self.deposit(at).map(|deposit| &deposit.kind) {
             None => Under::Root,
             Some(Kind::Settlement { facts, .. }) => Under::Settlement(Rc::clone(facts)),
             Some(Kind::Composition { digest, facts }) => {
@@ -308,18 +325,25 @@ impl<'graph> BuildArena<'graph> {
     }
 
     /// A shared hold on the facts of each live composition in `pins`.
-    pub(super) fn pinned(&self, pins: &[ArenaRef]) -> SmallVec<[Rc<Composed<'graph>>; 1]> {
+    pub(super) fn pinned(&self, pins: &[DepotRef]) -> SmallVec<[Rc<Composed<'graph>>; 1]> {
         (pins.iter())
-            .map(|at| match self.node(*at).map(|node| &node.kind) {
+            .map(|at| match self.deposit(*at).map(|deposit| &deposit.kind) {
                 Some(Kind::Composition { facts, .. }) => Rc::clone(facts),
                 _ => unreachable!("a pin is a live composition"),
             })
             .collect()
     }
 
-    /// What a step under the live `at` reads: nothing past the load for the root.
-    pub(super) fn door(&self, at: ArenaRef) -> Door<'_> {
-        match self.node(at).map(|node| &node.kind) {
+    /// What a step under the live `at` reads, a load layer read from `load`: nothing past the load
+    /// for the root.
+    pub(super) fn door<'a>(&'a self, at: DepotRef, load: &'a LoadFacts<'a>) -> Door<'a> {
+        if let Some(ordinal) = at.load_ordinal() {
+            return Door {
+                composition: None,
+                top: Some(load.load_layer(ordinal)),
+            };
+        }
+        match self.deposit(at).map(|deposit| &deposit.kind) {
             None => Door {
                 composition: None,
                 top: None,
@@ -336,7 +360,7 @@ impl<'graph> BuildArena<'graph> {
     }
 
     /// The live composition of the code whose syntax digest is `digest`, if any. Stamps nothing.
-    pub(super) fn composition(&self, digest: ContentDigest) -> Option<ArenaRef> {
+    pub(super) fn composition(&self, digest: ContentDigest) -> Option<DepotRef> {
         self.compositions.get(&digest).copied()
     }
 
@@ -345,11 +369,11 @@ impl<'graph> BuildArena<'graph> {
     /// [`evict_to_budget`](Self::evict_to_budget) once a frame borrows it.
     pub(super) fn insert(
         &mut self,
-        parent: ArenaRef,
-        key: SettlementKey,
+        parent: DepotRef,
+        key: LayerKey,
         facts: Settled<'graph>,
-        pins: SmallVec<[ArenaRef; 1]>,
-    ) -> ArenaRef {
+        pins: SmallVec<[DepotRef; 1]>,
+    ) -> DepotRef {
         debug_assert!(
             self.is_live(parent),
             "a settlement is built under a live parent"
@@ -359,10 +383,10 @@ impl<'graph> BuildArena<'graph> {
             "a key settles once per parent"
         );
         for pin in &pins {
-            let node = self
-                .node_mut(*pin)
+            let deposit = self
+                .deposit_mut(*pin)
                 .expect("a settlement pins a live composition");
-            node.pinners += 1;
+            deposit.pinners += 1;
         }
         let bytes = facts.bytes();
         let facts = Rc::new(facts);
@@ -373,20 +397,20 @@ impl<'graph> BuildArena<'graph> {
 
     /// A new composition of the code whose syntax digest is `digest`, a child of the root holding
     /// `facts`, unheld and stamped. Evicts nothing, as [`insert`](Self::insert) does not.
-    pub(super) fn compose(&mut self, digest: ContentDigest, facts: Composed<'graph>) -> ArenaRef {
+    pub(super) fn compose(&mut self, digest: ContentDigest, facts: Composed<'graph>) -> DepotRef {
         debug_assert!(self.composition(digest).is_none(), "a syntax composes once");
         let bytes = facts.bytes();
         let facts = Rc::new(facts);
-        let at = self.laid(ArenaRef::ROOT, bytes, Kind::Composition { digest, facts });
+        let at = self.laid(DepotRef::ROOT, bytes, Kind::Composition { digest, facts });
         self.compositions.insert(digest, at);
         at
     }
 
-    /// A slot for a new arena node of `kind` weighing `bytes` past its books, under `parent`.
-    fn laid(&mut self, parent: ArenaRef, bytes: usize, kind: Kind<'graph>) -> ArenaRef {
-        let bytes = size_of::<ArenaNode<'_>>() + bytes;
+    /// A slot for a new depot slot of `kind` weighing `bytes` past its books, under `parent`.
+    fn laid(&mut self, parent: DepotRef, bytes: usize, kind: Kind<'graph>) -> DepotRef {
+        let bytes = size_of::<Deposit<'_>>() + bytes;
         self.clock += 1;
-        let node = ArenaNode {
+        let deposit = Deposit {
             parent,
             kind,
             borrowers: 0,
@@ -400,66 +424,70 @@ impl<'graph> BuildArena<'graph> {
         let at = match self.free.pop() {
             Some(slot) => {
                 let entry = &mut self.slots[slot as usize];
-                entry.node = Some(node);
-                ArenaRef::of(slot, entry.generation)
+                entry.deposit = Some(deposit);
+                DepotRef::of(slot, entry.generation)
             }
             None => {
-                let slot = u32::try_from(self.slots.len()).expect("the arena fits u32 slots");
+                let slot = u32::try_from(self.slots.len()).expect("the depot fits u32 slots");
                 self.slots.push(Slot {
                     generation: 0,
-                    node: Some(node),
+                    deposit: Some(deposit),
                 });
-                ArenaRef::of(slot, 0)
+                DepotRef::of(slot, 0)
             }
         };
         self.total += bytes;
-        if let Some(parent) = self.node_mut(parent) {
+        if let Some(parent) = self.deposit_mut(parent) {
             parent.children += 1;
         }
         at
     }
 
     /// Mark `at` used now: a hit, or a hop under it. The root takes no stamp.
-    pub(super) fn stamp(&mut self, at: ArenaRef) {
+    pub(super) fn stamp(&mut self, at: DepotRef) {
         self.clock += 1;
         let clock = self.clock;
-        if let Some(node) = self.node_mut(at) {
-            node.used = clock;
+        if let Some(deposit) = self.deposit_mut(at) {
+            deposit.used = clock;
         }
     }
 
-    /// Count one more run cell borrowing the live `at`. The root is never counted.
-    pub(super) fn borrow(&mut self, at: ArenaRef) {
-        let Some(node) = self.node_mut(at) else {
-            debug_assert_eq!(at, ArenaRef::ROOT, "a run cell borrows a live arena node");
+    /// Count one more run cell borrowing the live `at`. The root and a load layer are never
+    /// counted.
+    pub(super) fn borrow(&mut self, at: DepotRef) {
+        let Some(deposit) = self.deposit_mut(at) else {
+            debug_assert!(
+                at.opened().is_none(),
+                "a run cell borrows a live depot slot"
+            );
             return;
         };
-        let was = node.is_held();
-        node.borrowers += 1;
+        let was = deposit.is_held();
+        deposit.borrowers += 1;
         if !was {
             self.turned(at, true);
         }
     }
 
     /// Count one fewer run cell borrowing `at`, which it borrowed.
-    pub(super) fn release(&mut self, at: ArenaRef) {
-        let Some(node) = self.node_mut(at) else {
-            debug_assert_eq!(at, ArenaRef::ROOT, "a borrowed arena node stays live");
+    pub(super) fn release(&mut self, at: DepotRef) {
+        let Some(deposit) = self.deposit_mut(at) else {
+            debug_assert!(at.opened().is_none(), "a borrowed depot slot stays live");
             return;
         };
-        node.borrowers -= 1;
-        if !node.is_held() {
+        deposit.borrowers -= 1;
+        if !deposit.is_held() {
             self.turned(at, false);
         }
     }
 
     /// Move `at`'s bytes into or out of the held total, as it turned held or unheld, and carry
     /// the turn up through every parent it turns in turn, and to every composition each pins.
-    fn turned(&mut self, mut at: ArenaRef, held: bool) {
+    fn turned(&mut self, mut at: DepotRef, held: bool) {
         loop {
-            let node = self.node(at).expect("a turning arena node is live");
-            let (bytes, parent) = (node.bytes, node.parent);
-            let pins: SmallVec<[ArenaRef; 1]> = node.pins().into();
+            let deposit = self.deposit(at).expect("a turning depot slot is live");
+            let (bytes, parent) = (deposit.bytes, deposit.parent);
+            let pins: SmallVec<[DepotRef; 1]> = deposit.pins().into();
             if held {
                 self.held += bytes;
             } else {
@@ -467,7 +495,9 @@ impl<'graph> BuildArena<'graph> {
             }
             // A pinned composition is a child of the root, so its own turn goes no further.
             for pin in pins {
-                let pinned = self.node_mut(pin).expect("a pinned composition stays live");
+                let pinned = self
+                    .deposit_mut(pin)
+                    .expect("a pinned composition stays live");
                 let was = pinned.is_held();
                 if held {
                     pinned.held_pinners += 1;
@@ -483,7 +513,7 @@ impl<'graph> BuildArena<'graph> {
                     }
                 }
             }
-            let Some(parent_node) = self.node_mut(parent) else {
+            let Some(parent_node) = self.deposit_mut(parent) else {
                 return;
             };
             let was = parent_node.is_held();
@@ -500,17 +530,19 @@ impl<'graph> BuildArena<'graph> {
     }
 
     /// Evict unheld leaves, least recently used first, until the unheld bytes are within the
-    /// budget, and return how many went. Each victim is found by a scan of every live arena node,
-    /// held ones included: a miss usually evicts one or none, and the live nodes are what the
+    /// budget, and return how many went. Each victim is found by a scan of every live depot slot,
+    /// held ones included: a miss usually evicts one or none, and the live slots are what the
     /// budget keeps beside what live frames hold.
     pub(super) fn evict_to_budget(&mut self) -> usize {
         let mut evicted = 0;
         while self.total - self.held > self.budget.bytes.get() {
             let victim = (self.slots.iter().enumerate())
-                .filter_map(|(slot, entry)| Some((slot, entry.generation, entry.node.as_ref()?)))
-                .filter(|(_, _, node)| !node.is_held() && node.children == 0 && node.pinners == 0)
-                .min_by_key(|(_, _, node)| node.used)
-                .map(|(slot, generation, _)| ArenaRef::of(slot as u32, generation));
+                .filter_map(|(slot, entry)| Some((slot, entry.generation, entry.deposit.as_ref()?)))
+                .filter(|(_, _, deposit)| {
+                    !deposit.is_held() && deposit.children == 0 && deposit.pinners == 0
+                })
+                .min_by_key(|(_, _, deposit)| deposit.used)
+                .map(|(slot, generation, _)| DepotRef::of(slot as u32, generation));
             let Some(victim) = victim else {
                 break;
             };
@@ -522,28 +554,28 @@ impl<'graph> BuildArena<'graph> {
 
     /// Remove the unheld, childless `at`: its slot's generation moves on, so every handle to it
     /// goes stale.
-    fn evict(&mut self, at: ArenaRef) {
+    fn evict(&mut self, at: DepotRef) {
         let (slot, _) = at.opened().expect("the root is never evicted");
         let entry = &mut self.slots[slot as usize];
-        let node = entry.node.take().expect("an evicted arena node is live");
+        let deposit = entry.deposit.take().expect("an evicted depot slot is live");
         debug_assert!(
-            !node.is_held() && node.children == 0 && node.pinners == 0,
+            !deposit.is_held() && deposit.children == 0 && deposit.pinners == 0,
             "eviction takes unheld, unpinned leaves"
         );
         entry.generation += 1;
         self.free.push(slot);
-        self.total -= node.bytes;
-        match &node.kind {
-            Kind::Settlement { key, .. } => self.children.remove(&(node.parent, *key)),
+        self.total -= deposit.bytes;
+        match &deposit.kind {
+            Kind::Settlement { key, .. } => self.children.remove(&(deposit.parent, *key)),
             Kind::Composition { digest, .. } => self.compositions.remove(digest),
         };
-        for pin in node.pins() {
+        for pin in deposit.pins() {
             let pinned = self
-                .node_mut(*pin)
+                .deposit_mut(*pin)
                 .expect("a pinned composition outlives its pinners");
             pinned.pinners -= 1;
         }
-        if let Some(parent) = self.node_mut(node.parent) {
+        if let Some(parent) = self.deposit_mut(deposit.parent) {
             parent.children -= 1;
         }
     }
@@ -564,16 +596,16 @@ impl<'graph> BuildArena<'graph> {
     /// some settlement pins.
     #[cfg(test)]
     pub(super) fn under_compositions(&self) -> (usize, usize) {
-        let compositions = || (self.compositions.values()).filter_map(|at| self.node(*at));
+        let compositions = || (self.compositions.values()).filter_map(|at| self.deposit(*at));
         (
-            compositions().map(|node| node.children).sum(),
-            compositions().filter(|node| node.pinners > 0).count(),
+            compositions().map(|deposit| deposit.children).sum(),
+            compositions().filter(|deposit| deposit.pinners > 0).count(),
         )
     }
 
     /// How many live settlements lie directly under `parent`.
     #[cfg(test)]
-    pub(super) fn children_of(&self, parent: ArenaRef) -> usize {
+    pub(super) fn children_of(&self, parent: DepotRef) -> usize {
         (self.children.keys())
             .filter(|(under, _)| *under == parent)
             .count()
@@ -581,19 +613,19 @@ impl<'graph> BuildArena<'graph> {
 
     /// What the live `at` weighs.
     #[cfg(test)]
-    pub(super) fn bytes_of(&self, at: ArenaRef) -> Option<usize> {
-        Some(self.node(at)?.bytes)
+    pub(super) fn bytes_of(&self, at: DepotRef) -> Option<usize> {
+        Some(self.deposit(at)?.bytes)
     }
 
-    /// The bytes of live arena nodes no run cell holds.
+    /// The bytes of live depot slots no run cell holds.
     #[cfg(test)]
     pub(super) fn unheld_bytes(&self) -> usize {
         self.total - self.held
     }
 
-    /// How many run cells borrow `at`: `None` for an arena node that is not live, or the root.
+    /// How many run cells borrow `at`: `None` for a depot slot that is not live, or the root.
     #[cfg(test)]
-    pub(super) fn borrowers(&self, at: ArenaRef) -> Option<usize> {
-        Some(self.node(at)?.borrowers)
+    pub(super) fn borrowers(&self, at: DepotRef) -> Option<usize> {
+        Some(self.deposit(at)?.borrowers)
     }
 }

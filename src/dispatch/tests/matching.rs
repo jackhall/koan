@@ -40,7 +40,7 @@ fn an_arms_it_is_retyped_to_its_guard() {
     };
     assert_eq!(
         in_f(&f("Number: (it), _: (null)"), "m"),
-        "[Never, :(Number | Null)]"
+        "[Never, :(Null | Number)]"
     );
     assert_eq!(
         in_f(&f(":(LIST OF Any): (it), _: (null)"), "m"),
@@ -49,7 +49,7 @@ fn an_arms_it_is_retyped_to_its_guard() {
     );
     assert_eq!(
         in_f(&f("\"a\": (it), _: (null)"), "m"),
-        "[Never, :(Str | Null)]"
+        "[Never, :(Null | Str)]"
     );
     assert_eq!(top("LET m = (MATCH 1 WITH #{_: (it)})", "m"), "Number");
     assert_eq!(
@@ -156,13 +156,13 @@ fn a_match_under_a_union_is_checked_against_it_where_the_load_closes_it() {
         run(&format!(
             "{MAYBE}\nMATCH (Maybe.Some 1) UNDER Maybe WITH #{{Some: (1), Bogus: (2), None: (3)}}"
         )),
-        "load: <test>:2:28: Bogus names no variant of :(Some | None)"
+        "load: <test>:2:28: Bogus names no variant of :(None | Some)"
     );
     assert_eq!(
         run(&format!(
             "{MAYBE}\nMATCH (Maybe.Some 1) UNDER Maybe WITH #{{Some: (1)}}"
         )),
-        "load: <test>:2:1: this `MATCH … UNDER :(Some | None)` has no arm for None; add a `_` arm \
+        "load: <test>:2:1: this `MATCH … UNDER :(None | Some)` has no arm for None; add a `_` arm \
          to default it"
     );
     assert_eq!(

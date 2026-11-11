@@ -7,18 +7,27 @@
 //!
 //! Every walk here is over nodes, and so is every binding it substitutes; [`typed`](super::typed)
 //! types each one the rest of koan calls.
+//!
+//! A signature is opaque to every walk here but three: the seal's two sibling walks
+//! ([`rewrite_siblings`], [`collect_siblings`]), so a sibling a signature holds is an edge and is
+//! rewritten, and a carrier's read-back ([`substitute_carriers`]), so a type over a view's carrier
+//! reads back whole. Each enters one through [`TypeChain::signature_mapped`] or its read-only twin,
+//! and stops at a node whose stored flag
+//! ([`contains_sibling`](super::stored::StoredNode::contains_sibling),
+//! [`contains_deep_carrier`](super::stored::StoredNode::contains_deep_carrier)) says nothing it
+//! seeks is inside, a signature too.
 
 use crate::bump::{BumpAllocator, BumpVec};
 use crate::symbols::TypeSymbol;
 
 use super::chain::TypeChain;
-use super::node::{TypeNode, Variable};
+use super::node::{PathClass, TypeNode, Variable};
 use super::schema::{Members, member};
 use super::stored::Linked;
 use super::tiers::Habitat;
 use super::unify::Interval;
 use super::walk::Variance;
-use super::walk::unary::{Visit, rebuild, visit};
+use super::walk::unary::{Context, Visit, rebuild, visit};
 
 /// Rewrite every **free** `Quantified(i)` inside `kt` to `bindings[i]` — the per-call substitution
 /// a solved call applies to a shape's return.
@@ -42,20 +51,38 @@ pub(super) fn substitute_quantified<'run>(
     })
 }
 
-/// `kt` with every lexical variable whose level `bindings` covers replaced by its binding, under
+/// `kt` with every lexical variable whose level `bindings` binds replaced by its binding, under
 /// any scheme — no scheme captures one. What a run reads a load-time type through, each level bound
-/// to the type its coordinate holds. A level past `bindings` is kept, and a signature is opaque.
+/// to the type its coordinate holds. A level `bindings` leaves `None`, or past them, is kept, and a
+/// signature is opaque.
 pub(super) fn substitute_levels<'run>(
     types: &TypeChain<'run, impl Habitat<'run>>,
     scratch: BumpAllocator<'_>,
     kt: Linked<'run>,
-    bindings: &[Linked<'run>],
+    bindings: &[Option<Linked<'run>>],
 ) -> Linked<'run> {
     if bindings.is_empty() || !kt.contains_rigid() {
         return kt;
     }
     rebuild(types, scratch, kt, &mut |_, node, _| match *node {
-        TypeNode::Lexical { level, .. } => bindings.get(level).copied(),
+        TypeNode::Lexical { level, .. } => bindings.get(level).copied().flatten(),
+        _ => None,
+    })
+}
+
+/// `kt` with every path variable `binding` answers for replaced by its answer, under any scheme —
+/// no scheme captures one. What a walk reads a load-time type through its paths' resolutions by.
+pub(super) fn substitute_paths<'run>(
+    types: &TypeChain<'run, impl Habitat<'run>>,
+    scratch: BumpAllocator<'_>,
+    kt: Linked<'run>,
+    binding: &mut impl FnMut(PathClass, TypeSymbol) -> Option<Linked<'run>>,
+) -> Linked<'run> {
+    if !kt.contains_rigid() {
+        return kt;
+    }
+    rebuild(types, scratch, kt, &mut |_, node, _| match *node {
+        TypeNode::Path { class, name, .. } => binding(class, name),
         _ => None,
     })
 }
@@ -126,6 +153,11 @@ pub enum Side {
 /// replaced by the end `side` takes at its position; one it answers `None` for is kept. A signature
 /// is opaque.
 ///
+/// An application's pin is compared by handle, so it is read by its own rule
+/// ([`read_application`]): kept where it reads alike from both sides, else the application is
+/// dropped to its other pins from above and is `Never` from below
+/// ([solving](../../src/types/solving.md#substitute-then-ask)).
+///
 /// `interval` is handed the node and its view, so a reader can answer with the node itself as an
 /// end. A carrier is concrete, and only a signature's fit reads one so, as an interval up to the
 /// bound its view's source met ([`Collector::heads`](super::unify::Collector::heads)); every other
@@ -140,15 +172,37 @@ pub(super) fn read_through<'run>(
         &TypeNode<'run, Linked<'run>>,
     ) -> Option<Interval<Linked<'run>>>,
 ) -> Linked<'run> {
+    read_through_dyn(types, scratch, kt, side, interval)
+}
+
+/// What an interval reader is, behind a `dyn`: [`read_application`] wraps one per pin, which a
+/// generic recursion would instantiate without end.
+type IntervalOf<'a, 'run> =
+    dyn FnMut(Linked<'run>, &TypeNode<'run, Linked<'run>>) -> Option<Interval<Linked<'run>>> + 'a;
+
+/// [`read_through`]'s body, over a `dyn` reader.
+fn read_through_dyn<'run>(
+    types: &TypeChain<'run, impl Habitat<'run>>,
+    scratch: BumpAllocator<'_>,
+    kt: Linked<'run>,
+    side: Side,
+    interval: &mut IntervalOf<'_, 'run>,
+) -> Linked<'run> {
     if !kt.contains_rigid() && !kt.contains_carrier() {
         return kt;
     }
     rebuild(types, scratch, kt, &mut |at, node, context| {
         let free = match *node {
-            TypeNode::Quantified { .. } => context.binder_depth() == 0,
-            TypeNode::Lexical { .. } | TypeNode::Parameter { .. } | TypeNode::Carrier { .. } => {
-                true
+            TypeNode::SignatureApply { .. } | TypeNode::SignatureMeet { .. } => {
+                return Some(read_application(
+                    types, scratch, at, side, context, interval,
+                ));
             }
+            TypeNode::Quantified { .. } => context.binder_depth() == 0,
+            TypeNode::Lexical { .. }
+            | TypeNode::Path { .. }
+            | TypeNode::Parameter { .. }
+            | TypeNode::Carrier { .. } => true,
             _ => false,
         };
         if !free {
@@ -160,6 +214,63 @@ pub(super) fn read_through<'run>(
             _ => ends.lower,
         })
     })
+}
+
+/// A signature type `at` read through intervals at `context`. The order compares two pins of one
+/// parameter by handle, so each pin is read from both sides: where the two reads agree the pin
+/// stays, read; otherwise a read above every instance drops the pin, and a read below every
+/// instance is `Never`. A meet so reads each member, and is `Never` where one is.
+///
+/// Each pin is read by a walk of its own, rooted at the pin, so a `Quantified` an enclosing scheme
+/// of `kt` binds is kept rather than read as free.
+fn read_application<'run>(
+    types: &TypeChain<'run, impl Habitat<'run>>,
+    scratch: BumpAllocator<'_>,
+    at: Linked<'run>,
+    side: Side,
+    context: &Context,
+    interval: &mut IntervalOf<'_, 'run>,
+) -> Linked<'run> {
+    if !at.contains_rigid() && !at.contains_carrier() {
+        return at;
+    }
+    let above = matches!(
+        (side, context.variance()),
+        (Side::Above, Variance::Co) | (Side::Below, Variance::Contra)
+    );
+    match at.view() {
+        TypeNode::SignatureApply { signature, pins } => {
+            let bound = context.binder_depth() > 0;
+            let mut read = |pin, side| {
+                read_through_dyn(types, scratch, pin, side, &mut |at, node| match *node {
+                    TypeNode::Quantified { .. } if bound => None,
+                    _ => interval(at, node),
+                })
+            };
+            let mut kept = BumpVec::with_capacity_in(pins.len(), scratch);
+            for &(name, pin) in pins.raw() {
+                let upper = read(pin, Side::Above);
+                if upper == read(pin, Side::Below) {
+                    kept.push((name, upper));
+                } else if !above {
+                    return types.never();
+                }
+            }
+            types.signature_apply(scratch, signature, &kept)
+        }
+        TypeNode::SignatureMeet { members } => {
+            let mut read = BumpVec::with_capacity_in(members.len(), scratch);
+            for member in members.iter() {
+                let member = read_application(types, scratch, member, side, context, interval);
+                if member == types.never() {
+                    return member;
+                }
+                read.push(member);
+            }
+            types.signature_meet(scratch, &read)
+        }
+        _ => at,
+    }
 }
 
 /// `kt` with each head parameter `bindings` names replaced by its binding — how a signature's
@@ -183,31 +294,80 @@ pub(super) fn substitute_parameters<'run>(
     })
 }
 
+/// `kt` with each opaque view's carrier `binding` answers for replaced by its answer — how a view
+/// of a view reads a type over its source's carriers on the module both are built over. A carrier
+/// is an atom, so the answer lands at the carrier's position alone. `binding` is handed each
+/// carrier `kt` holds, so a reader may answer `None` for all of them to list them.
+///
+/// A signature or an application is entered through
+/// [`signature_mapped`](TypeChain::signature_mapped), so a carrier in a slot is read back too. A
+/// carrier is a concrete atom no signature binds, so substituting one inside a signature captures
+/// nothing.
+pub(super) fn substitute_carriers<'run>(
+    types: &TypeChain<'run, impl Habitat<'run>>,
+    scratch: BumpAllocator<'_>,
+    kt: Linked<'run>,
+    binding: &mut impl FnMut(Linked<'run>) -> Option<Linked<'run>>,
+) -> Linked<'run> {
+    if !kt.contains_deep_carrier() {
+        return kt;
+    }
+    rebuild(types, scratch, kt, &mut |at, node, _| match *node {
+        _ if !at.contains_deep_carrier() => Some(at),
+        TypeNode::Carrier { .. } => binding(at),
+        TypeNode::Signature { .. } | TypeNode::SignatureApply { .. } => {
+            Some(types.signature_mapped(scratch, at, &mut |slot| {
+                substitute_carriers(types, scratch, slot, binding)
+            }))
+        }
+        _ => None,
+    })
+}
+
 /// Deep-rewrite every [`TypeNode::Sibling`] in `kt` through `resolve`, re-interning each composite
 /// on the way out. A sealed member is a leaf, so a cyclic edge into already-sealed content
 /// terminates rather than descending forever. Every member `resolve` names is interned before the
 /// rewrite, so a union re-interns through the canonical door, reading member nodes that exist.
+///
+/// A signature or an application is entered through
+/// [`signature_mapped`](TypeChain::signature_mapped), which re-interns it canonical: a relative
+/// schema may hold a signature over siblings. A node holding no sibling is kept whole, unentered.
 pub(super) fn rewrite_siblings<'run>(
     types: &TypeChain<'run, impl Habitat<'run>>,
     scratch: BumpAllocator<'_>,
     kt: Linked<'run>,
     resolve: &impl Fn(usize) -> Linked<'run>,
 ) -> Linked<'run> {
-    rebuild(types, scratch, kt, &mut |_, node, _| match *node {
+    rebuild(types, scratch, kt, &mut |at, node, _| match *node {
+        _ if !at.contains_sibling() => Some(at),
         TypeNode::Sibling(index) => Some(resolve(index)),
+        TypeNode::Signature { .. } | TypeNode::SignatureApply { .. } => {
+            Some(types.signature_mapped(scratch, at, &mut |slot| {
+                rewrite_siblings(types, scratch, slot, resolve)
+            }))
+        }
         _ => None,
     })
 }
 
-/// Collect every sibling index `kt` references, at any depth, in walk order.
-pub(super) fn collect_siblings(
+/// Collect every sibling index `kt` references, at any depth, in walk order — inside a signature
+/// or an application too, entered through
+/// [`signature_handles`](TypeChain::signature_handles), as [`rewrite_siblings`] enters one. A node
+/// holding no sibling is skipped, unentered.
+pub(super) fn collect_siblings<'run>(
+    types: &TypeChain<'run, impl Habitat<'run>>,
     scratch: BumpAllocator<'_>,
-    kt: Linked<'_>,
+    kt: Linked<'run>,
     out: &mut BumpVec<'_, usize>,
 ) {
-    visit(scratch, kt, &mut |_, node, _| match *node {
+    visit(scratch, kt, &mut |at, node, _| match *node {
+        _ if !at.contains_sibling() => Visit::Skip,
         TypeNode::Sibling(index) => {
             out.push(index);
+            Visit::Skip
+        }
+        TypeNode::Signature { .. } | TypeNode::SignatureApply { .. } => {
+            types.signature_handles(at, &mut |slot| collect_siblings(types, scratch, slot, out));
             Visit::Skip
         }
         _ => Visit::Descend,

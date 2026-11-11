@@ -27,9 +27,10 @@ times from one place — a function looping through calls to itself — prints o
 line with a count, such as `×1000`, rather than a line per call.
 
 Some mistakes need no run to be found. A call that no overload can ever accept,
-a field read the record's type rules out, or a function body that can never
-produce its declared return type, is refused when the program loads, located at
-its line and column, before anything runs — so `before` is never printed:
+a field read the record value's type rules out, or a function body that can
+never produce its declared return type, is refused when the program loads,
+located at its line and column, before anything runs — so `before` is never
+printed:
 
 ```koan
 PRINT "before"
@@ -50,7 +51,7 @@ for the body's. The arms are a dict of quotes, as a `MATCH`'s are, and each
 head is:
 
 - an **error-kind name**, such as `NoField` — the arm for that kind; `it` is a
-  record describing the error.
+  record value describing the error.
 - `_` — the arm for every kind no other head names.
 
 ```koan
@@ -68,10 +69,10 @@ A head that names no error kind is refused when the program loads.
 
 ### What `it` holds
 
-A caught error's `it` is an ordinary record. Every kind's record has
+A caught error's `it` is an ordinary record value. Whatever the kind, it has
 `message`, the text an uncaught error prints after `error: `, and `frames`, the
-lines its trace prints, innermost first, each a record of the callee's type,
-the call as written, where it is, and how many calls the line counts. Beside
+lines its trace prints, innermost first, each a record value of the callee's
+type, the call as written, where it is, and how many calls the line counts. Beside
 those, each kind has fields of its own: a `NoField` holds `of`, the value that
 lacked the field, and `field`, the field's name.
 
@@ -84,7 +85,7 @@ TRY (GRAB {x = 1}) WITH #{NoField: (PRINT it)}
 {field = z, frames = [{at = <input>:2:5, call = GRAB {x = 1}, callee = :(FN :{p :Any} -> Any), count = 1}], message = :{x :Number} has no field z, of = {x = 1}}
 ```
 
-Read one field off it as off any record:
+Read one field off it as off any record value:
 
 ```koan
 EXPR #(GRAB p :Any) -> Any = #(p.z)
@@ -97,7 +98,7 @@ TRY (GRAB {x = 1}) WITH #{NoField: ((PRINT it.message) (PRINT it.of))}
 ```
 
 The values an error names are the values the failing code held, so `it.of`
-above is the record itself, not its type. `frames` lists every call between
+above is the record value itself, not its type. `frames` lists every call between
 the error and the `TRY`:
 
 ```koan
@@ -174,7 +175,7 @@ hold it to one type, ascribe it: `(TRY … WITH …) :! :Str`.
 
 | Kind           | Raised when                                        | Fields beside `message` and `frames` |
 |----------------|----------------------------------------------------|--------------------------------------|
-| `NoField`      | a record has no field of the name read             | `of`, `field`                        |
+| `NoField`      | a record value has no field of the name read       | `of`, `field`                        |
 | `NoOverload`   | no overload admits a call's arguments              | `key`, `arguments`                   |
 | `NoArm`        | no arm of a `MATCH` admits its value               | `scrutinee`, `union`                 |
 | `Incomparable` | two values cannot be compared                      | `left`, `right`                      |
@@ -204,7 +205,7 @@ Every kind is a variant of the built-in union `Error`, named as the kind is.
 and decide later. `CATCH <body>` runs its body and produces a
 [`Result`](#result): `Result.Ok` of the value when the body succeeds, and
 `Result.Error` of the error when it fails, the error being its `Error` variant
-over the same record a `TRY`'s `it` holds:
+over the same record value a `TRY`'s `it` holds:
 
 ```koan
 EXPR #(GRAB p :Any) -> Any = #(p.z)

@@ -18,7 +18,7 @@
 # sweep of the lattice laws.
 #
 # Every cargo step builds the default feature set, and every one but the release check builds the
-# debug profile. The routine tier runs the tutorial's snippets through the interpreter binary.
+# debug profile. Both tiers run the tutorial's snippets through the interpreter binary.
 #
 # One line per step, then one summary line. A step that passes is worth a count, a score, or a
 # delta — not its runner chatter — so the whole green slate reads without scrolling, and the
@@ -308,6 +308,7 @@ run doctests 'doctests FAILED' cargo test --workspace --doc --quiet
 ok doctests "ok ($(passed) passed, compile_fail guards included)" 'doctests ok'
 
 release_step
+snippets_step
 cellgraph_surface
 # `cellgraph/perf` is the one feature in the workspace, and it gates the measurement binary the
 # perf step below runs. A default build hides that source from clippy, so the total tier's lint

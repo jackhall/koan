@@ -1,4 +1,4 @@
-//! The test stores a resumption runs the walk through, beside the production [`Layer`]: a
+//! The test stores a resumption runs the walk through, beside the production [`LayerStore`]: a
 //! [`Frame`], a layer whose binding is read off the values a frame's slots hold, and
 //! [`Everything`], which re-runs every unit a store holds. They live in `program` because it is the
 //! one module that names both the build's store vocabulary and the values a frame binds
@@ -11,17 +11,20 @@
 //! bump it is handed. It folds what it wrote, so a test reads a resumption's facts through the same
 //! accessors the run uses.
 
-use crate::build::{Layer, LoadStore};
+use crate::build::{LayerStore, LoadStore};
+use crate::knot::KValue;
 use crate::memory::{Bump, BumpAllocator, BumpVec, Lays, Writer, resident};
+use crate::program::resume::{Resumed, Resuming, resumed};
 use crate::program::{CellSubstrate, KBirth, KBundle, KState, Language, Running};
 use crate::scheduler::{Action, Ask, Step, StepError};
 use crate::scope::tests::with_shapes;
 use crate::scope::{
-    Address, Binding, Bound, Closing, Facts, Frontier, Keyed, LoadFacts, Segment, ShapeError,
-    Shapes, Site, Slot, Store, Typed, UnitFacts, UnitId, Unknown, each_part,
+    Address, Binding, Bound, BuildLayer, ClosedTypes, Closing, EventSite, Facts, Frontier, Keyed,
+    Levels, LoadFacts, Mark, Noted, OpenKind, OpenMark, Segment, ShapeError, Shapes, Site, Slot,
+    Store, Typed, UnitFacts, UnitId, Unknown, Wake, each_part, keeps,
 };
-use crate::type_lattice::{KType, display_name};
-use crate::values::{Chain, Knotted, Nothing, TypeValue, Value};
+use crate::type_lattice::{DeclaredType, KType, display_name};
+use crate::values::{Chain, TypeValue, Value};
 
 use super::{WANTED, wanted};
 
@@ -48,8 +51,12 @@ impl<'o, S: Store<'o>> Store<'o> for Everything<'_, S> {
         self.0.close(body)
     }
 
-    fn wakes(&self, _: Frontier<'_>) -> bool {
-        true
+    fn wakes(&self, _: Frontier<'_>, _: &Chain<'_, '_, '_, '_>) -> Wake {
+        Wake::Open
+    }
+
+    fn traces(&self) -> bool {
+        self.0.traces()
     }
 
     fn write(&self, unit: UnitId, facts: &'o UnitFacts<'o>, frontier: Frontier<'o>) {
@@ -59,11 +66,14 @@ impl<'o, S: Store<'o>> Store<'o> for Everything<'_, S> {
     fn write_close(&self, body: Segment, closing: &'o Closing<'o>, frontier: Frontier<'o>) {
         self.0.write_close(body, closing, frontier);
     }
+    fn write_closed(&self, closed: ClosedTypes<'o>) {
+        self.0.write_closed(closed);
+    }
 }
 
 /// `layer`'s writes laid over `base` as a resumption's facts, not yet folded.
 fn layered<'o, L: Lays<'o>>(
-    layer: &Layer<'o, '_, L, LoadFacts<'o>>,
+    layer: &LayerStore<'o, '_, L, LoadFacts<'o>>,
     lay: impl Lays<'o>,
     scratch: &Bump,
     base: &'o LoadFacts<'o>,
@@ -71,16 +81,16 @@ fn layered<'o, L: Lays<'o>>(
     (layer.writes()).laid(lay, scratch, base.shapes(), Some(base), layer.bound())
 }
 
-/// A resumption's store inside a frame: a [`Layer`] over the load's facts whose binding is what
+/// A resumption's store inside a frame: a [`LayerStore`] over the load's facts whose binding is what
 /// the frame's slots hold — a type value binds its type, and a module value its carried type over
 /// its content, by digest.
-pub struct Frame<'o, 'p, L>(Layer<'o, 'p, L, LoadFacts<'o>>);
+pub struct Frame<'o, 'p, L>(LayerStore<'o, 'p, L, LoadFacts<'o>>);
 
 /// What a frame's slot holding `value` binds its unknown to, which a test's frame binds a type
 /// or a module to.
-fn bound_of<'o, X: Knotted>(
+fn bound_of<'o>(
     lay: impl Lays<'o>,
-    value: Value<'_, X>,
+    value: KValue<'_, '_>,
     types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
 ) -> Bound<'o> {
@@ -90,11 +100,11 @@ fn bound_of<'o, X: Knotted>(
 
 impl<'o, 'p, L: Lays<'o>> Frame<'o, 'p, L> {
     /// A frame over `load`, the load's own facts, whose slots hold `slots`.
-    pub fn new<X: Knotted>(
+    pub fn new(
         lay: L,
         scratch: BumpAllocator<'p>,
         load: &'o LoadFacts<'o>,
-        slots: &[(Unknown, Value<'_, X>)],
+        slots: &[(Unknown, KValue<'_, '_>)],
         types: &Chain<'_, '_, '_, '_>,
     ) -> Self {
         let mut bound = BumpVec::new_in(scratch);
@@ -103,7 +113,7 @@ impl<'o, 'p, L: Lays<'o>> Frame<'o, 'p, L> {
                 .map(|(unknown, value)| (*unknown, bound_of(lay, *value, types, scratch))),
         );
         let binding = Binding::laid(lay, &mut bound);
-        Frame(Layer::new(lay, scratch, *load, binding))
+        Frame(LayerStore::new(lay, scratch, *load, binding))
     }
 
     /// What the frame's slots bind.
@@ -131,8 +141,8 @@ impl<'o, L: Lays<'o>> Store<'o> for Frame<'o, '_, L> {
         self.0.close(body)
     }
 
-    fn wakes(&self, frontier: Frontier<'_>) -> bool {
-        self.0.wakes(frontier)
+    fn wakes(&self, frontier: Frontier<'_>, types: &Chain<'_, '_, '_, '_>) -> Wake {
+        self.0.wakes(frontier, types)
     }
 
     fn write(&self, unit: UnitId, facts: &'o UnitFacts<'o>, frontier: Frontier<'o>) {
@@ -141,6 +151,9 @@ impl<'o, L: Lays<'o>> Store<'o> for Frame<'o, '_, L> {
 
     fn write_close(&self, body: Segment, closing: &'o Closing<'o>, frontier: Frontier<'o>) {
         self.0.write_close(body, closing, frontier);
+    }
+    fn write_closed(&self, closed: ClosedTypes<'o>) {
+        self.0.write_closed(closed);
     }
 }
 
@@ -161,7 +174,7 @@ impl<'graph> Running<'graph> {
         let root = self.program().shapes().root().segment();
         let scratch = Bump::new();
         let base = base.unwrap_or(self.program().facts());
-        let layer = Layer::new(bump, &scratch, *base, binding);
+        let layer = LayerStore::new(bump, &scratch, *base, binding);
         match everything {
             true => self.walked::<L, _>(&Everything(&layer), types, &scratch, root)?,
             false => self.walked::<L, _>(&layer, types, &scratch, root)?,
@@ -171,6 +184,80 @@ impl<'graph> Running<'graph> {
             bump,
             &scratch,
         ))
+    }
+
+    /// Witness the load under `own`: the first walk of a witnessing resumption over the load's
+    /// facts, binding `own`'s module binders and leaving its type names rigid, each door's
+    /// question answered under them.
+    pub fn witness<'l, L: Language>(
+        &self,
+        types: &Chain<'l, '_, '_, '_>,
+        own: Binding<'l>,
+        bump: &'l Bump,
+    ) -> Result<&'l LoadFacts<'l>, ShapeError<'l>>
+    where
+        'graph: 'l,
+    {
+        let root = self.program().shapes().root().segment();
+        let scratch = Bump::new();
+        let base: &'l LoadFacts<'l> = self.program().facts();
+        let mut witness = BumpVec::new_in(&scratch);
+        witness.extend((own.entries().iter()).filter(|(_, bound)| matches!(bound, Bound::Type(_))));
+        let witness = Binding::laid(bump, &mut witness);
+        let layer = LayerStore::witnessing(bump, &scratch, *base, own, witness);
+        self.walked::<L, _>(&layer, types, &scratch, root)?;
+        Ok(folded(
+            layered(&layer, bump, &scratch, base),
+            bump,
+            &scratch,
+        ))
+    }
+
+    /// The resumption of the load under `own`: walked closed where `closed`, else over `over`, a
+    /// witnessed layer, keeping what `own` keeps of it, else witnessed afresh.
+    pub(crate) fn resumption<'l, L: Language>(
+        &self,
+        types: &Chain<'l, '_, '_, '_>,
+        own: Binding<'l>,
+        (over, closed): (Option<&'l BuildLayer<'l>>, bool),
+        bump: &'l Bump,
+    ) -> Result<Resumed<'l>, ShapeError<'l>>
+    where
+        'graph: 'l,
+    {
+        let scratch = Bump::new();
+        let load: &'l LoadFacts<'l> = self.program().facts();
+        let facts = Facts::of(load);
+        let shapes = self.program().shapes();
+        let resuming = match (closed, over) {
+            (true, _) => Resuming::Closed,
+            (false, Some(witnessed)) => {
+                let levels = Levels::of(&scratch, shapes, own);
+                let kept = (witnessed.admission())
+                    .kept(&mut |answered| keeps(types, &scratch, answered, &levels));
+                Resuming::Over(witnessed, kept)
+            }
+            (false, None) => {
+                let mut witness = BumpVec::new_in(&scratch);
+                witness.extend(
+                    (own.entries().iter()).filter(|(_, bound)| matches!(bound, Bound::Type(_))),
+                );
+                Resuming::Witnessing {
+                    spine: facts,
+                    witness: Binding::laid(bump, &mut witness),
+                    site: EventSite::entry(self.program().shapes().root().segment()),
+                }
+            }
+        };
+        resumed::<L>(
+            (shapes, self.program().builtins()),
+            (bump, &scratch, &mut crate::scope::Flattened::new(&scratch)),
+            facts,
+            (own, own),
+            (resuming, false),
+            types,
+            shapes.root().segment(),
+        )
     }
 
     /// Resume the load under `binding` from the body at `at` down: a walk rooted at it.
@@ -186,7 +273,7 @@ impl<'graph> Running<'graph> {
     {
         let scratch = Bump::new();
         let base: &'l LoadFacts<'l> = self.program().facts();
-        let layer = Layer::new(bump, &scratch, *base, binding);
+        let layer = LayerStore::new(bump, &scratch, *base, binding);
         self.walked::<L, _>(&layer, types, &scratch, at)?;
         Ok(folded(
             layered(&layer, bump, &scratch, base),
@@ -213,10 +300,10 @@ impl<'graph> Running<'graph> {
     }
 
     /// Resume the load in a [`Frame`] whose slots hold `slots`.
-    pub fn in_frame<'l, L: Language, X: Knotted>(
+    pub fn in_frame<'l, L: Language>(
         &self,
         types: &Chain<'l, '_, '_, '_>,
-        slots: &[(Unknown, Value<'_, X>)],
+        slots: &[(Unknown, KValue<'_, '_>)],
         bump: &'l Bump,
     ) -> Result<&'l LoadFacts<'l>, ShapeError<'l>>
     where
@@ -240,11 +327,26 @@ impl<'graph> Running<'graph> {
     where
         'graph: 'l,
     {
+        self.settle_under::<L>(None, ask, bump)
+    }
+
+    /// [`Running::settle`] beneath the load's layer at `parent` in its table, or the root where
+    /// `None`.
+    pub fn settle_under<'l, L: Language>(
+        &self,
+        parent: Option<u32>,
+        ask: &Ask,
+        bump: &'l Bump,
+    ) -> Option<Facts<'l>>
+    where
+        'graph: 'l,
+    {
         let load: &'l LoadFacts<'l> = self.program().facts();
+        let parent = parent.map(|at| load.layers()[at as usize].layer);
         let settled = super::super::settle::settled::<L>(
             self.program(),
             bump,
-            Facts::of(load),
+            Facts::under(load, parent),
             &[],
             ask,
             &mut |_: Option<&crate::values::Chain<'_, '_, '_, '_>>| {},
@@ -274,10 +376,39 @@ impl<'graph> Running<'graph> {
             types,
             None,
             own.entries(),
-            false,
+            (super::super::activation_store::Activating::Closed, false),
             at,
         )?;
-        Ok(Facts::of(load).activated(Some(resident(bump, decided))))
+        Ok(Facts::of(load).activated(Some(resident(bump, decided.layer))))
+    }
+
+    /// What the binding event binding `own` at the body `at` decides over `below`, layers an
+    /// activation laid in `bump`, as `activating` says: the walk a call over its closure's decided
+    /// layers runs, laid in `bump`.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn activate_over<'l, L: Language>(
+        &self,
+        types: &Chain<'l, '_, '_, '_>,
+        below: Option<&'l BuildLayer<'l>>,
+        own: Binding<'l>,
+        activating: super::super::activation_store::Activating<'l>,
+        at: Segment,
+        bump: &'l Bump,
+    ) -> Result<super::super::activation_store::Activated<'l>, &'l crate::scope::ShapeError<'l>>
+    where
+        'graph: 'l,
+    {
+        let load: &'l LoadFacts<'l> = self.program().facts();
+        super::super::activation_store::activated::<L>(
+            self.program(),
+            bump,
+            Facts::of(load).activated(below),
+            types,
+            below,
+            own.entries(),
+            (activating, false),
+            at,
+        )
     }
 
     /// Run `L`'s walk over the program from the body at `at` down into `store`, interning through
@@ -505,7 +636,7 @@ fn a_layer_reads_its_base_where_it_did_not_write() {
             load.write(*unit, record(writer, shapes, index, true), Frontier::EMPTY);
         }
         let base = resident(writer, load.facts(scratch));
-        let layer = Layer::new(writer, scratch, *base, Binding::EMPTY);
+        let layer = LayerStore::new(writer, scratch, *base, Binding::EMPTY);
         let rerun = record(writer, shapes, 1, false);
         layer.write(units[1], rerun, Frontier::EMPTY);
         let read = |unit| layer.fact(unit).expect("a record").0;
@@ -525,7 +656,7 @@ fn a_layer_reads_its_base_where_it_did_not_write() {
 
 #[test]
 fn a_layer_wakes_exactly_where_a_frontier_meets_an_unknown_its_base_left_unbound() {
-    with_shapes(SOURCE, |shapes, writer, scratch, _| {
+    with_shapes(SOURCE, |shapes, writer, scratch, types| {
         let [a, b, c] = [0, 1, 2].map(|slot| unknown(shapes, slot));
         let binding = |bound: &[(Unknown, KType)]| {
             let mut staged = BumpVec::new_in(scratch);
@@ -540,25 +671,39 @@ fn a_layer_wakes_exactly_where_a_frontier_meets_an_unknown_its_base_left_unbound
         let base = resident(writer, load.facts(scratch));
         let both = binding(&[(a, KType::NUMBER), (b, KType::STR)]);
         let frontier = |unknowns: &[Unknown]| {
-            Frontier::from_sorted(writer.fill(unknowns.len(), |at| unknowns[at]))
+            Frontier::from_sorted(writer.fill(unknowns.len(), |at| opened(unknowns[at])))
         };
-        let cases: [(&[Unknown], bool); 6] = [
-            (&[], false),
-            (&[a], false),
-            (&[b], true),
-            (&[c], false),
-            (&[a, c], false),
-            (&[a, b], true),
+        // A mark on a name the base binds is read closed; one on a name the layer binds re-runs.
+        let cases: [(&[Unknown], Wake); 6] = [
+            (&[], Wake::Untouched),
+            (&[a], Wake::Named),
+            (&[b], Wake::Open),
+            (&[c], Wake::Untouched),
+            (&[a, c], Wake::Named),
+            (&[a, b], Wake::Open),
         ];
-        let layer = Layer::new(writer, scratch, *base, both);
-        let everything = Layer::new(writer, scratch, *base, both);
+        let layer = LayerStore::new(writer, scratch, *base, both);
+        let everything = LayerStore::new(writer, scratch, *base, both);
         let everything = Everything(&everything);
         for (unknowns, wakes) in cases {
-            assert_eq!(layer.wakes(frontier(unknowns)), wakes, "{unknowns:?}");
-            assert!(everything.wakes(frontier(unknowns)), "{unknowns:?}");
+            assert_eq!(
+                layer.wakes(frontier(unknowns), types),
+                wakes,
+                "{unknowns:?}"
+            );
+            assert_eq!(everything.wakes(frontier(unknowns), types), Wake::Open);
         }
         assert!(layer.binding(b).is_some() && layer.binding(c).is_none());
     });
+}
+
+/// `unknown`, marked open: a verdict over it left *maybe*.
+fn opened(unknown: Unknown) -> Noted<'static> {
+    let judged = DeclaredType::Type(KType::NUMBER.into());
+    Noted {
+        unknown,
+        mark: Mark::Open(OpenMark::undecided(OpenKind::Verdict, None, judged)),
+    }
 }
 
 #[test]
@@ -568,13 +713,14 @@ fn a_frame_binds_what_its_slots_hold_and_wakes_where_that_meets_a_frontier() {
         let load = LoadStore::new(writer, scratch, shapes, Binding::EMPTY);
         let base = resident(writer, load.facts(scratch));
         let named = TypeValue::new(writer, KType::NUMBER, types);
-        let slots: [(Unknown, Value<'_, Nothing>); 1] = [(a, Value::Type(named))];
+        let slots: [(Unknown, KValue<'_, '_>); 1] = [(a, Value::Type(named))];
         let frame = Frame::new(writer, scratch, base, &slots, types);
         assert!(
             matches!(frame.binding().bound(a), Some(Bound::Type(bound)) if bound == KType::NUMBER)
         );
         assert!(frame.binding().bound(b).is_none());
-        let frontier = |unknown| Frontier::from_sorted(writer.fill(1, |_| unknown));
-        assert!(frame.wakes(frontier(a)) && !frame.wakes(frontier(b)));
+        let frontier = |unknown| Frontier::from_sorted(writer.fill(1, |_| opened(unknown)));
+        assert_eq!(frame.wakes(frontier(a), types), Wake::Open);
+        assert_eq!(frame.wakes(frontier(b), types), Wake::Untouched);
     });
 }

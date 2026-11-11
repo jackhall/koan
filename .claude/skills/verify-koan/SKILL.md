@@ -62,7 +62,7 @@ never mistaken for a full one:
 Verify (routine): slate ok, tests ok, release ok, snippets ok, surface ok under --release, surface profile-free, clippy clean, doclinks ok.
 Verify (docs only): doclinks ok.
 Verify (cellgraph only): tests ok, surface ok under --release, surface profile-free, clippy clean, doclinks ok, koan compiles.
-Verify (total): slate ok, tests ok, doctests ok, release ok, surface ok under --release, surface profile-free, clippy clean, doclinks ok, miri ok, coverage 87.18% (Δ -0.00 vs 87.18%), modgraph tests ok, modgraph score 1809.79 (Δ +0.00 vs 1809.79).
+Verify (total): slate ok, tests ok, doctests ok, release ok, snippets ok, surface ok under --release, surface profile-free, clippy clean, doclinks ok, miri ok, coverage 87.18% (Δ -0.00 vs 87.18%), modgraph tests ok, modgraph score 1809.79 (Δ +0.00 vs 1809.79).
 ```
 
 Two things the line does not carry, which are worth adding in your own words

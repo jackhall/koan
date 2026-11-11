@@ -305,9 +305,14 @@ fn each_open_path_reads_back_its_tree() {
     );
     loaded(&source, |program| {
         let (root, facts) = (program.shape(), program.facts());
-        let levels = 0..program.shapes().path_base(root.segment()) + 64;
-        let mut trees = levels.filter_map(|level| {
-            let (entry, resolution) = facts.path(&program.tiers().resting(), root, level)?;
+        let mut names: Vec<_> = (facts.own_units().iter())
+            .flat_map(|(_, (record, _))| record.paths.iter())
+            .filter(|((at, _), _)| *at == root.segment())
+            .map(|((_, name), _)| *name)
+            .collect();
+        names.sort();
+        let mut trees = names.into_iter().filter_map(|name| {
+            let (entry, resolution) = facts.path(&program.tiers().resting(), root, name)?;
             match resolution.resolved {
                 Resolved::Class(_) => Some((entry.label, resolution.tree)),
                 Resolved::Closed(_) => None,
@@ -523,4 +528,71 @@ proptest! {
         let _ = run(&source);
         prop_assert_eq!(crate::scope::RIGID_AT_RUN.with(std::cell::Cell::get), 0, "in\n{}", source);
     }
+}
+
+/// A class's variable reaches a callable through any binder it captures that holds a module of
+/// the class's tree, whatever the order the walk resolved the class's paths in: `inner` reads
+/// `Carrier` through `w`, which it captures, whether a path through `w` is resolved before it,
+/// after it or nowhere.
+#[test]
+fn a_class_is_reachable_through_a_captured_holder_in_any_order() {
+    let program = |before: &str, after: &str| {
+        format!(
+            "{COUNTER}LET outer = (FN :{{m :Counter}} -> Str = #(\n  \
+             (LET v = (m :| Counter))\n  (LET w = (m :| Counter))\n  \
+             (LET x0 :(v.Carrier) = v.zero)\n  {before}\n  \
+             (LET inner = (FN :{{k :Any}} -> Any = #((LET q = w) (LET z = x0) (z))))\n  \
+             {after}\n  \"done\"))"
+        )
+    };
+    let y = "(LET y :(w.Carrier) = w.zero)";
+    for (before, after) in [(y, ""), ("", y), ("", "")] {
+        let source = program(before, after);
+        let z = loaded(&source, |program| {
+            let outer = body(program, program.shape(), "outer");
+            let inner = body(program, outer, "inner");
+            super::statics::ends(program, interval(program, inner, "z"))
+        });
+        assert_eq!(
+            z, "[Never, Carrier]",
+            "with `{before}` before `inner`, `{after}` after"
+        );
+    }
+}
+
+/// A class's variable reaches a callable through a member of a module it captures, as the
+/// module's body recorded that member's content tree: `inner` reads `Carrier` through `box.v`.
+#[test]
+fn a_class_is_reachable_through_a_member_of_a_captured_module() {
+    let source = format!(
+        "{COUNTER}LET outer = (FN :{{m :Counter}} -> Str = #(\n  \
+         (MODULE box OVER #[m] = (LET v = (m :| Counter)))\n  \
+         (LET x0 :(box.v.Carrier) = box.v.zero)\n  \
+         (LET inner = (FN :{{k :Any}} -> Any = #((LET q = box) (LET z = x0) (z))))\n  \"done\"))"
+    );
+    let z = loaded(&source, |program| {
+        let outer = body(program, program.shape(), "outer");
+        let inner = body(program, outer, "inner");
+        super::statics::ends(program, interval(program, inner, "z"))
+    });
+    assert_eq!(z, "[Never, Carrier]");
+}
+
+/// A class's variable reaches through a member chain however deep: `inner` reads `Carrier`
+/// through `outerbox.box.v`, two module bodies down.
+#[test]
+fn a_class_is_reachable_through_a_nested_member_chain() {
+    let source = format!(
+        "{COUNTER}LET outer = (FN :{{m :Counter}} -> Str = #(\n  \
+         (MODULE outerbox OVER #[m] = (MODULE box OVER #[m] = (LET v = (m :| Counter))))\n  \
+         (LET x0 :(outerbox.box.v.Carrier) = outerbox.box.v.zero)\n  \
+         (LET inner = (FN :{{k :Any}} -> Any = #((LET q = outerbox) (LET z = x0) (z))))\n  \
+         \"done\"))"
+    );
+    let z = loaded(&source, |program| {
+        let outer = body(program, program.shape(), "outer");
+        let inner = body(program, outer, "inner");
+        super::statics::ends(program, interval(program, inner, "z"))
+    });
+    assert_eq!(z, "[Never, Carrier]");
 }

@@ -204,7 +204,8 @@ impl<'graph, 'cell> Knotted<'graph, 'cell> {
         }
     }
 
-    /// The barriers stacked at this member, outermost first: one per view of a view.
+    /// The barriers stacked at this member, outermost first: one per view the member was taken
+    /// through, a function a body-born module bound from a view among them.
     pub fn barriers(self) -> impl Iterator<Item = &'cell Coerced<'graph, 'cell>> {
         std::iter::successors(self.coerced(), |barrier| barrier.underlying().coerced())
     }

@@ -73,7 +73,9 @@ fn a_view_over_a_nested_module_lays_its_nested_view_at_load() {
     );
 }
 
-/// A nested module in a record field is re-viewed too, and the record rebuilt at its slot's type.
+/// A nested module in a record field is viewed too, and the record rebuilt at its slot's type. The
+/// load knows a module a container holds by its type alone, but a slot pinning every parameter
+/// views it alike whatever it is, so the load lays the nested view from types alone.
 #[test]
 fn a_view_over_a_record_holding_a_module_lays_its_nested_view_at_load() {
     let source = "SIG Inner FOR ALL #[Elem] = #[(VAL item :Elem)]\n\
@@ -201,7 +203,7 @@ fn a_slot_leaving_a_nested_parameter_unset_lays_its_nested_view_at_load() {
 }
 
 /// A view inside a record literal has no tree, so its own nested modules are read as its
-/// signature declares them: at applications fixing every parameter, which the load re-views alike.
+/// signature declares them: at applications fixing every parameter, which the load lays alike.
 #[test]
 fn a_view_inside_a_record_literal_lays_its_nested_views_at_load() {
     let source = format!(
@@ -239,7 +241,7 @@ fn a_retype_lays_its_types_at_load() {
 }
 
 /// A list or a map of modules of two signatures under an opaque view, viewed again: each cell is
-/// re-viewed at its own signature, as the run re-views it.
+/// viewed at its own signature for the first view, and the second is the first.
 #[test]
 fn a_view_of_an_opaque_view_over_modules_of_two_signatures_lays_each_at_load() {
     let inner = "SIG Inner FOR ALL #[Elem] = #[(VAL item :Elem)]\n\

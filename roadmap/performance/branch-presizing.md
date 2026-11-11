@@ -32,7 +32,7 @@ body's doors and its past activations both say something about it.
   doors, functor runs, run-built code shapes and per-call nominals, and the
   nodes one pass through the body builds, and lays the branch at that size. A
   loop over varying content exceeds it, so growth remains.
-- *A shape-record memo — open.* A record beside a body shape remembers the
+- *A body-shape memo — open.* A memo beside a body shape remembers the
   size its last activation's branch reached, and the next activation lays that
   size. The memo is a hint: a wrong one costs one stranded run, as today.
 - *A recycled-region memo — open.* A reset region remembers its previous

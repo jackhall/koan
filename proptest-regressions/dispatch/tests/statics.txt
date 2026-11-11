@@ -1,0 +1,7 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc c49c104fd4e96e15ad9743e53796f94992bc28cc27f35693f1bb829f1f1997c0 # shrinks to case = Independent { declarations: [Value, Value, PathRead, Reader], swap: (0, 1) }

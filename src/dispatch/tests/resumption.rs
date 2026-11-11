@@ -22,32 +22,32 @@ const PICK: &str = "EXPR #(PICK x :Number) -> Str = #(\"n\")\n\
                     EXPR #(PICK x :Str) -> Number = #(1)\n";
 
 /// `SIG Counter`, a module signature over a `Carrier` head parameter.
-const COUNTER: &str = "SIG Counter FOR ALL #[Carrier] = \
+pub(super) const COUNTER: &str = "SIG Counter FOR ALL #[Carrier] = \
                        #[(VAL zero :Carrier) (VAL succ :(FN :{x :Carrier} -> Carrier))]\n";
 
 /// What a test reads a resumption through: the running program, a chain over its frozen root that
 /// every resumption interns through, and the bump they lay their records in.
-struct Door<'d, 'graph> {
+pub(super) struct Door<'d, 'graph> {
     running: &'d Running<'graph>,
-    types: &'d Chain<'d, 'd, 'd, 'd>,
-    bump: &'d Bump,
+    pub(super) types: &'d Chain<'d, 'd, 'd, 'd>,
+    pub(super) bump: &'d Bump,
 }
 
 impl<'d, 'graph: 'd> Door<'d, 'graph> {
-    fn symbols(&self) -> &'graph SymbolInterner {
+    pub(super) fn symbols(&self) -> &'graph SymbolInterner {
         self.running.symbols()
     }
 
-    fn root(&self) -> &'graph BodyShape<'graph> {
+    pub(super) fn root(&self) -> &'graph BodyShape<'graph> {
         self.running.program().shapes().root()
     }
 
-    fn load(&self) -> &'graph LoadFacts<'graph> {
+    pub(super) fn load(&self) -> &'graph LoadFacts<'graph> {
         self.running.program().facts()
     }
 
     /// `staged` laid down as a binding of types.
-    fn binding(&self, staged: &[(Unknown, KType)]) -> Binding<'d> {
+    pub(super) fn binding(&self, staged: &[(Unknown, KType)]) -> Binding<'d> {
         let bound: Vec<_> = (staged.iter())
             .map(|(unknown, typed)| (*unknown, Bound::Type(*typed)))
             .collect();
@@ -83,6 +83,26 @@ impl<'d, 'graph: 'd> Door<'d, 'graph> {
         }
     }
 
+    /// The resumption of the load under `own`: closed where `closed`, else over `over`, a witnessed
+    /// layer, else witnessed afresh.
+    pub(super) fn resumption(
+        &self,
+        own: Binding<'d>,
+        over: Option<&'d crate::scope::BuildLayer<'d>>,
+        closed: bool,
+    ) -> Result<crate::program::resume::Resumed<'d>, String> {
+        (self.running)
+            .resumption::<Koan>(self.types, own, (over, closed), self.bump)
+            .map_err(|error| error.display(self.symbols(), self.types).to_string())
+    }
+
+    /// Witness the load under `own`: the first walk of a witnessing resumption alone.
+    pub(super) fn witness(&self, own: Binding<'d>) -> Result<&'d LoadFacts<'d>, String> {
+        (self.running)
+            .witness::<Koan>(self.types, own, self.bump)
+            .map_err(|error| error.display(self.symbols(), self.types).to_string())
+    }
+
     /// Resume the load under `binding` over `base`, the load's own facts where `None`.
     fn resume(
         &self,
@@ -109,7 +129,10 @@ impl<'d, 'graph: 'd> Door<'d, 'graph> {
 }
 
 /// Load `source` and hand `check` the door its resumptions go through.
-fn resumed<R>(source: &str, check: impl for<'d, 'graph> FnOnce(&Door<'d, 'graph>) -> R) -> R {
+pub(super) fn resumed<R>(
+    source: &str,
+    check: impl for<'d, 'graph> FnOnce(&Door<'d, 'graph>) -> R,
+) -> R {
     let mut substrate =
         CellSubstrate::load::<Koan>(source, "<test>", 8, BuildBudget::default(), output())
             .unwrap_or_else(|error| panic!("the program loads: {error}"));
@@ -137,7 +160,7 @@ fn slot(symbols: &SymbolInterner, shape: &BodyShape<'_>, name: &str) -> Slot {
 }
 
 /// The unknown the slot `name` of `shape` is.
-fn unknown(symbols: &SymbolInterner, shape: &BodyShape<'_>, name: &str) -> Unknown {
+pub(super) fn unknown(symbols: &SymbolInterner, shape: &BodyShape<'_>, name: &str) -> Unknown {
     Unknown {
         segment: shape.segment(),
         at: Address::Slot(slot(symbols, shape, name)),
@@ -145,7 +168,7 @@ fn unknown(symbols: &SymbolInterner, shape: &BodyShape<'_>, name: &str) -> Unkno
 }
 
 /// The one quantified callable body the top level registers.
-fn quantified<'graph>(door: &Door<'_, 'graph>) -> &'graph BodyShape<'graph> {
+pub(super) fn quantified<'graph>(door: &Door<'_, 'graph>) -> &'graph BodyShape<'graph> {
     let mut found = (door.root().nested_shapes().iter()).filter(|(_, nested)| {
         nested.kind() == ShapeKind::Callable
             && !door.load().group_levels(door.types, nested).is_empty()
@@ -178,7 +201,12 @@ fn narrowing(
     };
     rendered(
         facts
-            .use_statics(door.types, shape, shape.site_of_node(node))
+            .use_statics(
+                door.types,
+                &crate::memory::Bump::new(),
+                shape,
+                shape.site_of_node(node),
+            )
             .narrowing,
     )
 }
@@ -237,7 +265,10 @@ fn elimination(
         panic!("`{name}` is bound to a node");
     };
     let site = shape.site_of_node(node);
-    match facts.use_statics(door.types, shape, site).narrowing {
+    match facts
+        .use_statics(door.types, &crate::memory::Bump::new(), shape, site)
+        .narrowing
+    {
         crate::scope::Narrowing::Kept(kept) => match kept.elimination {
             crate::scope::Elimination::Open => "open",
             crate::scope::Elimination::Table(_) => "table",
@@ -342,15 +373,16 @@ fn binding_a_name_a_type_reads_before_a_path_finds_its_entry() {
     assert_eq!(resumed, Ok(()));
 }
 
-/// A binding re-runs exactly the units whose frontier holds a name it binds: `WRAP`'s, each of
-/// which reads `x` and so waits on every name its entry holds, `Key` among them, and none of the
-/// program's own.
+/// A binding re-runs exactly the units whose frontier reaches an open mark on a name it binds. The
+/// entry unit's does: a binding makes `Key`'s value exact, so its seed is open. `WRAP`'s other
+/// units read `x`'s seed alone, which no fact over `Key` reaches, so none re-runs. None of the
+/// program's own units names `Key` at all.
 #[test]
-fn binding_a_name_no_fact_reads_re_runs_only_its_own() {
+fn binding_a_name_no_fact_reads_re_runs_only_the_entry() {
     let source = format!(
         "{PICK}EXPR FOR ALL #[Elt Key] #(WRAP x :Elt) -> Any = #(\n  LET p = (PICK x)\n  p\n)"
     );
-    let (reran, waiting, outside) = resumed(&source, |door| {
+    let (reran, waiting) = resumed(&source, |door| {
         let f = quantified(door);
         let key = unknown(door.symbols(), f, "Key");
         let binding = door.binding(&[(key, KType::NUMBER)]);
@@ -358,15 +390,19 @@ fn binding_a_name_no_fact_reads_re_runs_only_its_own() {
         let reran: Vec<_> = (resumed.own_units().iter())
             .map(|(unit, _)| *unit)
             .collect();
-        let waiting: Vec<_> = (door.load().own_units().iter())
+        let named: Vec<_> = (door.load().own_units().iter())
             .filter(|(_, (_, frontier))| frontier.unknowns().contains(&key))
             .map(|(unit, _)| *unit)
             .collect();
-        let outside = reran.iter().any(|unit| unit.segment != f.segment());
-        (reran, waiting, outside)
+        let entry = crate::scope::UnitId {
+            segment: f.segment(),
+            unit: crate::scope::UnitIndex::ENTRY,
+        };
+        (reran, (named, entry))
     });
-    assert_eq!(reran, waiting, "exactly the units waiting on `Key` re-run");
-    assert!(!outside, "no unit outside `WRAP`'s body waits on `Key`");
+    let (named, entry) = waiting;
+    assert_eq!(reran, vec![entry], "only the entry seeds `Key`");
+    assert_eq!(named, vec![entry], "no unit but the entry reaches `Key`");
 }
 
 /// A unit a resumption absorbs keeps what its facts gave the body's class: a porous exit a unit
@@ -739,7 +775,7 @@ fn an_eval_frame_settles_facts_waiting_on_its_dollar_names_in_its_activation() {
 }
 
 /// `SUBJECT`'s body: the last callable the top level births.
-fn subject<'graph>(root: &'graph BodyShape<'graph>) -> &'graph BodyShape<'graph> {
+pub(super) fn subject<'graph>(root: &'graph BodyShape<'graph>) -> &'graph BodyShape<'graph> {
     (root.nested_shapes().iter().rev())
         .find(|(_, nested)| nested.kind() == ShapeKind::Callable)
         .map(|(_, nested)| *nested)
@@ -807,9 +843,208 @@ fn a_surfaced_head_waits_on_its_ascription() {
     assert_eq!(under, "Str", "the head's return");
 }
 
+/// The unit binding `name` in `shape`.
+pub(super) fn unit_of(
+    door: &Door<'_, '_>,
+    shape: &BodyShape<'_>,
+    name: &str,
+) -> crate::scope::UnitId {
+    crate::scope::UnitId {
+        segment: shape.segment(),
+        unit: shape.unit_of_slot(slot(door.symbols(), shape, name)),
+    }
+}
+
+/// How the load's record of `unit` waits on `unknown`: `None` where it does not, else whether any
+/// mark on it is open, beside the kinds of those marks.
+fn waits_on(
+    door: &Door<'_, '_>,
+    unit: crate::scope::UnitId,
+    unknown: Unknown,
+) -> Option<Vec<Option<crate::scope::OpenKind>>> {
+    let (_, frontier) = door.load().unit(unit).expect("the load ran the unit");
+    let marks: Vec<_> = (frontier.marks().into_iter())
+        .filter(|noted| noted.unknown == unknown)
+        .map(|noted| match noted.mark {
+            crate::scope::Mark::Named => None,
+            crate::scope::Mark::Open(open) => Some(open.kind),
+        })
+        .collect();
+    (!marks.is_empty()).then_some(marks)
+}
+
+/// Whether `resumed` re-ran `unit`.
+fn reran(resumed: &LoadFacts<'_>, unit: crate::scope::UnitId) -> bool {
+    (resumed.own_units().iter()).any(|(held, _)| *held == unit)
+}
+
+/// A unit over a list of a bound name only names it: a binding absorbs its record, reads it with
+/// the type written in, and lays the list it closes to in the layer's table of closed types.
+#[test]
+fn a_unit_over_a_list_of_its_name_is_read_closed_through_its_layers_table() {
+    let source = "EXPR FOR ALL #[Elt] #(WRAP xs :(LIST OF Elt)) -> Any = #(\n  \
+                  LET ys = xs\n  ys\n)";
+    let (named, absorbed, typed, tabled) = resumed(source, |door| {
+        let f = quantified(door);
+        let elt = unknown(door.symbols(), f, "Elt");
+        let ys = unit_of(door, f, "ys");
+        let named = waits_on(door, ys, elt);
+        let binding = door.binding(&[(elt, KType::NUMBER)]);
+        let resumed = (door.resume(None, binding, false)).expect("the resumption refuses nothing");
+        let tabled: Vec<String> = (resumed.base_layer().closed().entries())
+            .map(|(_, value)| display_name(value, door.types, door.symbols()).to_string())
+            .collect();
+        (
+            named,
+            !reran(resumed, ys),
+            upper(door, resumed, f, "ys"),
+            tabled,
+        )
+    });
+    assert_eq!(
+        named,
+        Some(vec![None]),
+        "`ys` names `Elt` and judges nothing over it"
+    );
+    assert!(absorbed, "a binding of `Elt` absorbs `ys`'s record");
+    assert_eq!(
+        typed, ":(LIST OF Number)",
+        "and reads it with the type written in"
+    );
+    assert!(
+        tabled.contains(&":(LIST OF Number)".to_string()),
+        "{tabled:?}"
+    );
+}
+
+/// A reader of a bare-variable parameter re-runs: a binding makes the parameter exactly its type,
+/// which no substitution of its load-time `[Never, Elt]` gives, so its seed is open by `Retype`.
+#[test]
+fn a_bare_parameters_reader_re_runs_by_retype() {
+    let source = "EXPR FOR ALL #[Elt] #(WRAP x :Elt) -> Any = #(\n  LET y = x\n  y\n)";
+    let (marks, rerun) = resumed(source, |door| {
+        let f = quantified(door);
+        let elt = unknown(door.symbols(), f, "Elt");
+        let y = unit_of(door, f, "y");
+        let marks = waits_on(door, y, elt).unwrap_or_default();
+        let binding = door.binding(&[(elt, KType::NUMBER)]);
+        let resumed = (door.resume(None, binding, false)).expect("the resumption refuses nothing");
+        (marks, reran(resumed, y))
+    });
+    assert!(
+        marks.contains(&Some(crate::scope::OpenKind::Retype)),
+        "{marks:?}"
+    );
+    assert!(rerun, "a binding of `Elt` re-runs `y`");
+}
+
+/// A binder's reader reaches its seed alone: a reader of `xs` names `Elt` and waits on nothing of
+/// `Key`, and a value read of `Key` is open over it. A type naming `Key` reads no seed: `zs`'s
+/// annotation is open only by the check its rigid type skips.
+#[test]
+fn a_binders_reader_reaches_its_seed_alone() {
+    let source = "EXPR FOR ALL #[Elt Key] #(WRAP xs :(LIST OF Elt) AND k :Key) -> Any = #(\n  \
+                  LET ys = xs\n  LET t = Key\n  LET zs :(LIST OF Key) = []\n  ys\n)";
+    let (ys, t, zs, rerun) = resumed(source, |door| {
+        let f = quantified(door);
+        let (elt, key) = (
+            unknown(door.symbols(), f, "Elt"),
+            unknown(door.symbols(), f, "Key"),
+        );
+        let (ys, t, zs) = (
+            unit_of(door, f, "ys"),
+            unit_of(door, f, "t"),
+            unit_of(door, f, "zs"),
+        );
+        let waits = (
+            (waits_on(door, ys, elt), waits_on(door, ys, key)),
+            waits_on(door, t, key),
+            waits_on(door, zs, key),
+        );
+        let binding = door.binding(&[(key, KType::NUMBER)]);
+        let resumed = (door.resume(None, binding, false)).expect("the resumption refuses nothing");
+        (
+            waits.0,
+            waits.1,
+            waits.2,
+            (reran(resumed, ys), reran(resumed, t), reran(resumed, zs)),
+        )
+    });
+    assert_eq!(ys, (Some(vec![None]), None), "`ys` names `Elt` alone");
+    assert!(
+        t.is_some_and(|marks| marks.contains(&Some(crate::scope::OpenKind::Kind))),
+        "`t` reads `Key`'s value, open on its kind"
+    );
+    assert_eq!(
+        zs,
+        Some(vec![Some(crate::scope::OpenKind::Unclosed)]),
+        "`zs` reaches no seed of `Key`: its marks are its own"
+    );
+    assert_eq!(
+        rerun,
+        (false, true, true),
+        "a binding of `Key` re-runs `t` and `zs`, not `ys`"
+    );
+}
+
+/// An absorbed unit's call sites carry the requests a walked layer lays: a layer's requests come
+/// from the load's slot maps and the ask, not from re-run records (F7).
+#[test]
+fn an_absorbed_units_requests_are_a_walked_layers() {
+    let source = format!(
+        "{COUNTER}MODULE ints = ((LET zero = 0) (LET succ = (FN :{{x :Number}} -> Number = #(x + 1))))\n\
+         EXPR #(CARRIER m :Counter) -> Number = #((LET v = (m :| Counter)) (7))\n\
+         EXPR FOR ALL #[Elt] #(WRAP xs :(LIST OF Elt) AND m :Counter) -> Any = #(\n  \
+         LET ys = xs\n  LET n = (CARRIER m)\n  ys\n)\n"
+    );
+    resumed(&source, |door| {
+        let f = quantified(door);
+        let binding = door.bound(&[
+            (
+                unknown(door.symbols(), f, "Elt"),
+                Bound::Type(KType::NUMBER),
+            ),
+            (unknown(door.symbols(), f, "m"), door.module("ints")),
+        ]);
+        let skipping = (door.resume(None, binding, false)).expect("the resumption refuses nothing");
+        let walked = (door.resume(None, binding, true)).expect("the resumption refuses nothing");
+        assert!(!reran(skipping, unit_of(door, f, "ys")), "`ys` is absorbed");
+        let sites: Vec<_> = door
+            .load()
+            .traces(f)
+            .iter()
+            .map(|(site, _)| *site)
+            .collect();
+        assert!(!sites.is_empty(), "`WRAP` traces `(CARRIER m)`");
+        for site in sites {
+            let request = |facts: &LoadFacts<'_>| {
+                (facts.base_layer().request(f.segment(), site)).map(|each| each.key)
+            };
+            assert_eq!(request(skipping), request(walked), "at {site:?}");
+        }
+    });
+}
+
+/// A scheme over two names two layers bind: `h`'s type names `Elt`, which `f`'s frame binds, and
+/// `Key`, which `g`'s frame binds beneath it. Each layer writes in the level its binding binds and
+/// keeps the other, so no rigid fact reaches the run.
+#[test]
+fn a_scheme_over_two_layers_names_reaches_the_run_closed() {
+    let source = "MODULE lib = (LET f = (FN FOR ALL #[Elt] :{x :Elt} -> Any = #(\n  \
+                  MODULE mid OVER #[Elt x] = (LET g = (FN FOR ALL #[Key] :{k :Key} -> Any = #(\n    \
+                  MODULE inner OVER #[Elt Key] = \
+                  (LET h = (FN FOR ALL #[Tee] :{t :Tee, u :Elt, v :Key} -> Tee = #(t)))\n    \
+                  (inner.h {t = 1, u = x, v = k})\n  )))\n  \
+                  (mid.g {k = \"s\"})\n)))\n\
+                  PRINT (lib.f {x = 2})\nPRINT (lib.f {x = \"w\"})\n";
+    crate::scope::RIGID_AT_RUN.with(|count| count.set(0));
+    assert_eq!(super::run(source), "1\n1");
+    assert_eq!(crate::scope::RIGID_AT_RUN.with(std::cell::Cell::get), 0);
+}
+
 /// The laws over drawn [`Resumable`] programs, each fact rendered by names — never by an index or
 /// a source position — so a resumption and a restart render alike where they agree.
-mod laws {
+pub(super) mod laws {
     use proptest::prelude::*;
 
     use crate::memory::Bump;
@@ -829,7 +1064,9 @@ mod laws {
     use crate::values::tests::reading;
     use crate::values::{BuildBudget, Chain};
 
-    use super::super::generate::{Bound, Resumable, resumable};
+    use super::super::generate::{
+        ALTERNATED, Bound, Resumable, Witnessable, cellular, resumable, witnessable,
+    };
     use super::super::{Koan, output};
     use super::{Door, resumed, subject};
 
@@ -848,8 +1085,9 @@ mod laws {
         bind(door, bound, false)
     }
 
-    /// [`binding`], each module bound to its content tree's digest alone, as a frame binds the
-    /// module its slot holds where `by_digest`.
+    /// [`binding`], each module bound to its content tree's digest beside the module as a view
+    /// over it reads it, as a frame binds the module its slot holds where `by_digest`: a `MODULE`
+    /// body is a transparent view of itself at the signature it carries.
     fn bind<'d>(door: &Door<'d, '_>, bound: &Bound, by_digest: bool) -> crate::scope::Binding<'d> {
         let body = subject(door.root());
         let mut staged = Vec::new();
@@ -864,13 +1102,24 @@ mod laws {
                 name,
                 matches!(name, "m" | "n").then(|| door.module(&declared)),
             ) {
-                (_, Some(Bind::Module { carried, tree })) if by_digest => Bind::Module {
-                    carried,
-                    tree: crate::memory::resident(
-                        door.bump,
-                        Tree::Digest(tree.digest().expect("a closed tree")),
-                    ),
-                },
+                (_, Some(Bind::Module { carried, tree })) if by_digest => {
+                    let bare = matches!(tree, Tree::Body { .. }).then(|| {
+                        crate::memory::resident(
+                            door.bump,
+                            crate::scope::Bare {
+                                signature: Some(carried),
+                                sealing: None,
+                            },
+                        )
+                    });
+                    Bind::Module {
+                        carried,
+                        tree: crate::memory::resident(
+                            door.bump,
+                            Tree::Digest(tree.digest().expect("a closed tree"), bare),
+                        ),
+                    }
+                }
                 (_, Some(module)) => module,
                 (_, None) => Bind::Type(door.declared(&declared)),
             };
@@ -936,11 +1185,152 @@ mod laws {
         /// The names a binding binds: a restart drops them from the shape or binds them anew, so
         /// what the load fixed for each binder itself is no fact a restart has.
         bound: &'read [&'read str],
+        /// Law 14's reading: only the lines a unit not open holds, each type with the binding's
+        /// levels written in. `None` renders every line as the facts hold it.
+        substituting: Option<&'read Substituting>,
+        /// Whether every type the rigid fact being rendered names closed under substitution.
+        closes: std::cell::Cell<bool>,
+    }
+
+    /// Where a rendered line rests: the unit whose record holds its fact.
+    #[derive(Clone, Copy)]
+    enum Line {
+        Slot(crate::scope::Segment, Slot),
+        Site(crate::scope::Segment, Site),
+        Statement(crate::scope::Segment, usize),
+        Callable(crate::scope::Segment),
+    }
+
+    /// Law 14's reading of a load's facts: the levels a binding binds, the unit holding each site
+    /// and each born body, and the units whose frontier meets an open mark on a bound name.
+    struct Substituting {
+        levels: Vec<(usize, KType)>,
+        sites: std::collections::HashMap<(crate::scope::Segment, Site), crate::scope::UnitId>,
+        born: std::collections::HashMap<crate::scope::Segment, crate::scope::UnitId>,
+        open: Vec<crate::scope::UnitId>,
     }
 
     impl<'f, S: RecordSource<'f>> Reader<'_, '_, '_, '_, '_, S> {
         fn named(&self, typed: impl Into<DeclaredType<Parametric>>) -> String {
+            let typed = self.read(typed.into());
             display_name(typed, self.types, self.symbols).to_string()
+        }
+
+        /// `typed` as this render reads it: with the binding's levels written in under law 14.
+        fn read(&self, typed: DeclaredType<Parametric>) -> DeclaredType<Parametric> {
+            let Some(substituting) = self.substituting else {
+                return typed;
+            };
+            let scratch = Bump::new();
+            let bound = |level| {
+                (substituting.levels.iter())
+                    .find(|(held, _)| *held == level)
+                    .map(|(_, typed)| *typed)
+            };
+            let read = match typed {
+                DeclaredType::Type(typed) => DeclaredType::Type(read_through(
+                    self.types,
+                    &scratch,
+                    typed,
+                    Side::Above,
+                    &mut |variable| match variable {
+                        Variable::Lexical { level, .. } => {
+                            bound(level).map(|typed| Interval::point(typed.into()))
+                        }
+                        _ => None,
+                    },
+                )),
+                DeclaredType::Scheme(scheme) => {
+                    let free = crate::elaborate::judge::free_variables(self.types, &scratch, typed);
+                    let top = (free.iter())
+                        .filter_map(|variable| match variable {
+                            Variable::Lexical { level, .. } => Some(*level),
+                            _ => None,
+                        })
+                        .max();
+                    match top {
+                        None => typed,
+                        // A level the binding leaves unbound keeps its variable.
+                        Some(top) => {
+                            let dense: Vec<_> = (0..=top).map(bound).collect();
+                            DeclaredType::Scheme(crate::type_lattice::substitute_levels(
+                                self.types, &scratch, scheme, &dense,
+                            ))
+                        }
+                    }
+                }
+            };
+            let rigid = match read {
+                DeclaredType::Type(typed) => self.types.concrete(typed).is_none(),
+                DeclaredType::Scheme(_) => {
+                    !crate::elaborate::judge::free_variables(self.types, &scratch, read).is_empty()
+                }
+            };
+            if rigid {
+                self.closes.set(false);
+            }
+            read
+        }
+
+        /// `typed`'s ends, rendered as this render reads them.
+        fn interval(&self, typed: Interval) -> String {
+            let read = |end: Parametric| match self.read(end.into()) {
+                DeclaredType::Type(end) => end,
+                DeclaredType::Scheme(_) => unreachable!("an end is a type"),
+            };
+            interval(
+                Interval {
+                    lower: read(typed.lower),
+                    upper: read(typed.upper),
+                },
+                self.types,
+                self.symbols,
+            )
+        }
+
+        /// A load-time type, by its names: a rigid one law 14 closes whole reads as closed, as the
+        /// restart fixes it.
+        fn statically<C, R>(
+            &self,
+            typed: Static<'_, C, R>,
+            closed: impl Fn(C) -> String,
+            rigid: impl Fn(R) -> String,
+        ) -> String {
+            match typed {
+                Static::Rigid { value, .. } if self.substituting.is_some() => {
+                    self.closes.set(true);
+                    let named = rigid(value);
+                    match self.closes.get() {
+                        true => format!("closed {named}"),
+                        false => format!("rigid {named}"),
+                    }
+                }
+                typed => statically(typed, closed, rigid),
+            }
+        }
+
+        /// Whether `line` is rendered: always, or under law 14 where a unit not open holds it.
+        fn keeps(&self, line: Line) -> bool {
+            let Some(substituting) = self.substituting else {
+                return true;
+            };
+            let holder = match line {
+                Line::Slot(segment, slot) => Some(crate::scope::UnitId {
+                    segment,
+                    unit: self.facts.shapes().shape_at(segment).unit_of_slot(slot),
+                }),
+                Line::Statement(segment, index) => Some(crate::scope::UnitId {
+                    segment,
+                    unit: self
+                        .facts
+                        .shapes()
+                        .shape_at(segment)
+                        .unit_of_statement(index),
+                }),
+                Line::Site(segment, site) => substituting.sites.get(&(segment, site)).copied(),
+                Line::Callable(segment) => substituting.born.get(&segment).copied(),
+            };
+            holder.is_some_and(|unit| !substituting.open.contains(&unit))
         }
 
         fn solution(&self, solution: StaticInstance<'_>) -> String {
@@ -951,9 +1341,32 @@ mod laws {
                     format!("closed {points:?}")
                 }
                 StaticInstance::Rigid { solution, .. } => {
+                    self.closes.set(true);
                     let points: Vec<String> =
                         solution.iter().map(|point| self.named(*point)).collect();
-                    format!("rigid {points:?}")
+                    match self.substituting.is_some() && self.closes.get() {
+                        true => format!("closed {points:?}"),
+                        false => format!("rigid {points:?}"),
+                    }
+                }
+            }
+        }
+
+        /// A selection's point, by name: a closed one, else `open`. Law 14 reads a rigid one with
+        /// the binding written in, and names it where that closes it.
+        fn point(&self, point: crate::scope::Point) -> String {
+            match point {
+                crate::scope::Point::Closed(point) => self.named(point),
+                crate::scope::Point::Rigid(point) if self.substituting.is_some() => {
+                    self.closes.set(true);
+                    let named = self.named(point);
+                    match self.closes.get() {
+                        true => named,
+                        false => "open".to_string(),
+                    }
+                }
+                crate::scope::Point::Rigid(_) | crate::scope::Point::Carried(_) => {
+                    "open".to_string()
                 }
             }
         }
@@ -961,50 +1374,57 @@ mod laws {
         /// Every fact of `shape` and the shapes nested in it, rendered by names under `path`.
         fn render(&self, shape: &BodyShape<'_>, path: &str, out: &mut Vec<String>) {
             let (facts, symbols) = (self.facts, self.symbols);
+            let segment = shape.segment();
             // Binders by name: a restart numbers its slots apart.
             let mut binders = Vec::new();
             for at in (0..shape.slots()).map(|at| Slot(at as u32)) {
                 let named = shape.slot_name(at);
                 let spelled = symbols.display(named.symbol()).to_string();
-                if path.is_empty() && self.bound.contains(&spelled.as_str()) {
+                // A bound name's slot is left out: `SUBJECT`'s at the top path, and a cell's `Cel`
+                // in the cell, whose restart has no such slot.
+                if (path.is_empty() || spelled == "Cel") && self.bound.contains(&spelled.as_str()) {
                     continue;
                 }
                 let name = format!("{path} {spelled}");
                 match named {
                     BinderSymbol::Value(_) => {
                         let typed = match facts.binder_type(self.types, shape, at) {
-                            Some(DeclaredType::Type(typed)) => interval(typed, self.types, symbols),
+                            Some(DeclaredType::Type(typed)) => self.interval(typed),
                             Some(DeclaredType::Scheme(scheme)) => self.named(scheme),
                             None => "untyped".to_string(),
                         };
-                        binders.push(format!("{name} = {typed}"));
+                        if self.keeps(Line::Slot(segment, at)) {
+                            binders.push(format!("{name} = {typed}"));
+                        }
                     }
                     BinderSymbol::Type(_) => {
                         let typed = facts.declared_type(self.types, shape, at);
-                        binders.push(format!(
-                            "{name} declares {}",
-                            statically(
-                                typed,
-                                |closed| self.named(closed),
-                                |rigid| self.named(rigid)
-                            )
-                        ));
+                        let typed = self.statically(
+                            typed,
+                            |closed| self.named(closed),
+                            |rigid| self.named(rigid),
+                        );
+                        if self.keeps(Line::Slot(segment, at)) {
+                            binders.push(format!("{name} declares {typed}"));
+                        }
                     }
                     // A code shape's hole or mark is a capture, and holds no fact of its own.
                     BinderSymbol::Key(_) => {}
                     BinderSymbol::Registration(_) => {
                         let typed = facts.registered_type(self.types, shape, at);
-                        binders.push(format!(
-                            "{name} registers {}",
-                            statically(
-                                typed,
-                                |closed| self.named(closed.shape),
-                                |rigid| self.named(rigid.shape)
-                            )
-                        ));
+                        let typed = self.statically(
+                            typed,
+                            |closed| self.named(closed.shape),
+                            |rigid| self.named(rigid.shape),
+                        );
+                        if self.keeps(Line::Slot(segment, at)) {
+                            binders.push(format!("{name} registers {typed}"));
+                        }
                     }
                 }
-                if let Some(tree) = facts.content(self.types, shape, at) {
+                if let Some(tree) = facts.content(self.types, shape, at)
+                    && self.keeps(Line::Slot(segment, at))
+                {
                     binders.push(format!("{name} holds a tree closed {}", tree.closed()));
                 }
             }
@@ -1013,27 +1433,27 @@ mod laws {
             // `SUBJECT`'s own type is a fact of the unit birthing it.
             if shape.kind() == ShapeKind::Callable && !path.is_empty() {
                 let typed = facts.callable_type(self.types, shape);
-                out.push(format!(
-                    "{path} callable {}",
-                    statically(
-                        typed,
-                        |closed| self.named(closed.ktype),
-                        |rigid| self.named(rigid.ktype)
-                    )
-                ));
+                let typed = self.statically(
+                    typed,
+                    |closed| self.named(closed.ktype),
+                    |rigid| self.named(rigid.ktype),
+                );
+                if self.keeps(Line::Callable(segment)) {
+                    out.push(format!("{path} callable {typed}"));
+                }
             }
             let mut expressions: Vec<_> = shape.type_expressions().iter().collect();
             expressions.sort_by_key(|expression| expression.site);
             for (index, expression) in expressions.into_iter().enumerate() {
                 let typed = facts.typed_expression(self.types, shape, expression.site);
-                out.push(format!(
-                    "{path} type {index} = {}",
-                    statically(
-                        typed,
-                        |closed| self.named(closed),
-                        |rigid| self.named(rigid)
-                    )
-                ));
+                let typed = self.statically(
+                    typed,
+                    |closed| self.named(closed),
+                    |rigid| self.named(rigid),
+                );
+                if self.keeps(Line::Site(segment, expression.site)) {
+                    out.push(format!("{path} type {index} = {typed}"));
+                }
             }
             // A statement binding a bound name is the restart's own, or rebinds it there.
             let skipped: Vec<usize> = (0..shape.slots())
@@ -1053,10 +1473,10 @@ mod laws {
                 (shape.body().iter().enumerate()).filter(|(index, _)| !skipped.contains(index));
             for (written, (index, statement)) in statements.enumerate() {
                 let typed = facts.statement_type(self.types, shape, index);
-                let typed = typed.map_or("untyped".to_string(), |typed| {
-                    interval(typed, self.types, symbols)
-                });
-                out.push(format!("{path} #{written} = {typed}"));
+                let typed = typed.map_or("untyped".to_string(), |typed| self.interval(typed));
+                if self.keeps(Line::Statement(segment, index)) {
+                    out.push(format!("{path} #{written} = {typed}"));
+                }
                 let mut sites = Vec::new();
                 each_part(statement, |part| sites.push(shape.site(part)));
                 let mut at = 0;
@@ -1066,28 +1486,42 @@ mod laws {
                     };
                     let part = format!("{path} #{written}.{at}");
                     at += 1;
-                    out.push(format!("{part} = {}", interval(typed, self.types, symbols)));
-                    match facts.instance_at(self.types, shape, *site) {
-                        Some(InstanceRead::Solved(solution)) => {
-                            out.push(format!("{part} instance {}", self.solution(solution)));
-                        }
-                        Some(InstanceRead::AsIs) => out.push(format!("{part} instance as is")),
-                        None => {}
+                    let line = Line::Site(segment, *site);
+                    let typed = self.interval(typed);
+                    if self.keeps(line) {
+                        out.push(format!("{part} = {typed}"));
                     }
-                    let named = facts.named_contributions(self.types, shape, *site);
+                    match facts.instance_at(self.types, &crate::memory::Bump::new(), shape, *site) {
+                        Some(InstanceRead::Solved(solution)) => {
+                            let solution = self.solution(solution);
+                            if self.keeps(line) {
+                                out.push(format!("{part} instance {solution}"));
+                            }
+                        }
+                        Some(InstanceRead::AsIs) if self.keeps(line) => {
+                            out.push(format!("{part} instance as is"));
+                        }
+                        _ => {}
+                    }
+                    let closing = crate::memory::Bump::new();
+                    let named = facts.named_contributions(self.types, &closing, shape, *site);
                     if !named.is_empty() {
                         let named: Vec<String> = (named.iter())
                             .map(|typed| {
-                                statically(
+                                self.statically(
                                     *typed,
                                     |closed| self.named(closed),
                                     |rigid| self.named(rigid),
                                 )
                             })
                             .collect();
-                        out.push(format!("{part} by name {named:?}"));
+                        if self.keeps(line) {
+                            out.push(format!("{part} by name {named:?}"));
+                        }
                     }
-                    if let Some(tree) = facts.view_tree(self.types, shape, *site) {
+                    if let Some(tree) = facts.view_tree(self.types, shape, *site)
+                        && self.keeps(line)
+                    {
                         out.push(format!("{part} views a tree closed {}", tree.closed()));
                     }
                 }
@@ -1101,40 +1535,87 @@ mod laws {
                     let Some((_, list)) = shape.candidate_lists().get(site) else {
                         continue;
                     };
-                    let fixed = facts.use_statics(self.types, shape, site);
+                    let closing = crate::memory::Bump::new();
+                    let fixed = facts.use_statics(self.types, &closing, shape, site);
                     let contributions: Vec<String> = (fixed.contributions.iter())
                         .map(|typed| {
-                            statically(
+                            self.statically(
                                 *typed,
                                 |closed| self.named(closed),
                                 |rigid| self.named(rigid),
                             )
                         })
                         .collect();
-                    out.push(format!(
-                        "{path} #{written} use {at}: {} from {contributions:?}",
-                        narrowed(fixed.narrowing, list)
-                    ));
-                    if let Some(points) = facts.selection(self.types, shape, site) {
-                        let points: Vec<String> = (0..points.points.len())
-                            .map(|at| {
-                                points
-                                    .closed(at)
-                                    .map_or("open".to_string(), |point| self.named(point))
-                            })
+                    if self.keeps(Line::Site(segment, site)) {
+                        out.push(format!(
+                            "{path} #{written} use {at}: {} from {contributions:?}",
+                            narrowed(fixed.narrowing, list)
+                        ));
+                    }
+                    if let Some(points) =
+                        facts.selection(self.types, &crate::memory::Bump::new(), shape, site)
+                    {
+                        let points: Vec<String> = (points.points.iter())
+                            .map(|point| self.point(*point))
                             .collect();
-                        out.push(format!("{path} #{written} use {at} solves {points:?}"));
+                        if self.keeps(Line::Site(segment, site)) {
+                            out.push(format!("{path} #{written} use {at} solves {points:?}"));
+                        }
                     }
                 }
                 let settled = (sites.iter())
                     .filter(|site| facts.settled(shape, **site))
                     .count();
-                out.push(format!("{path} #{written} settled {settled}"));
+                let held = (sites.iter()).all(|site| self.keeps(Line::Site(segment, *site)));
+                if held && self.keeps(Line::Statement(segment, index)) {
+                    out.push(format!("{path} #{written} settled {settled}"));
+                }
             }
             for (index, (_, nested)) in shape.nested_shapes().iter().enumerate() {
                 self.render(nested, &format!("{path}/{index}"), out);
             }
         }
+    }
+
+    /// The lines of `SUBJECT`'s render of the load that units not open over `bound` hold, each type
+    /// read with `bound`'s levels written in: law 14's side of the comparison.
+    fn commuted(door: &Door<'_, '_>, bound: &Bound) -> Vec<String> {
+        let binding = binding(door, bound);
+        let load = door.load();
+        let mut substituting = Substituting {
+            levels: levels(door, bound),
+            sites: std::collections::HashMap::new(),
+            born: std::collections::HashMap::new(),
+            open: Vec::new(),
+        };
+        for (unit, (facts, frontier)) in load.own_units() {
+            if frontier.meets_open(binding) {
+                substituting.open.push(*unit);
+            }
+            for (segment, typed) in facts.typed.iter() {
+                typed.held(*segment, &mut |held| {
+                    if let crate::scope::Held::Site(segment, site) = held {
+                        substituting.sites.insert((segment, site), *unit);
+                    }
+                });
+            }
+            for (segment, _) in facts.born.iter() {
+                substituting.born.insert(*segment, *unit);
+            }
+        }
+        let names = left_out(bound);
+        let names: Vec<&str> = names.iter().map(String::as_str).collect();
+        let reader = Reader {
+            facts: load,
+            types: door.types,
+            symbols: door.symbols(),
+            bound: &names,
+            substituting: Some(&substituting),
+            closes: std::cell::Cell::new(true),
+        };
+        let mut out = Vec::new();
+        reader.render(subject(load.shapes().root()), "", &mut out);
+        out
     }
 
     /// Every fact of `SUBJECT`'s body as `facts` holds them, but of the binders `bound` names.
@@ -1160,7 +1641,7 @@ mod laws {
     }
 
     /// [`render_facts`] over any source of records.
-    fn render_over<'f, S: RecordSource<'f>>(
+    pub(in super::super) fn render_over<'f, S: RecordSource<'f>>(
         facts: &FactsOver<S>,
         types: &Chain<'_, '_, '_, '_>,
         symbols: &SymbolInterner,
@@ -1172,6 +1653,8 @@ mod laws {
             types,
             symbols,
             bound: &names,
+            substituting: None,
+            closes: std::cell::Cell::new(true),
         };
         let mut out = Vec::new();
         reader.render(subject(facts.shapes().root()), "", &mut out);
@@ -1263,6 +1746,97 @@ mod laws {
                 )),
             }
         })
+    }
+
+    /// A layer the load laid equals the settlement a miss lays
+    /// for the same request beneath the same parent. Over each of the load's layer fixtures (a
+    /// view, a retype, a call by name, `g` under `OUTER`, `CARRIER` under `PASS`, and more), every
+    /// layer in the load's table renders its callee's body as [`Running::settle_under`] of the
+    /// request naming it does, and carries the same requests, entry for entry.
+    ///
+    /// [`Running::settle_under`]: crate::program::Running::settle_under
+    #[test]
+    fn a_layer_the_load_laid_equals_the_settlement_a_miss_lays() {
+        use crate::scope::{CallTrace, Facts};
+        let mut checked = Vec::new();
+        for (name, source) in super::super::laid::fixtures() {
+            let mut each = resumed(&source, |door| {
+                let program = door.running.program();
+                let (shapes, load) = (program.shapes(), door.load());
+                // Every named site, beside its call's text.
+                let mut sites = Vec::new();
+                for shape in shapes.bodies() {
+                    for (site, trace) in load.traces(shape).iter() {
+                        if let CallTrace::Named { .. } = trace {
+                            let call = super::super::trace::call_of(shape, *site);
+                            sites.push((*shape, *site, call.map(|call| call.text())));
+                        }
+                    }
+                }
+                let mut checked = Vec::new();
+                for laid in load.layers() {
+                    // The base's requests, then each laid layer's.
+                    let requests = (sites.iter()).flat_map(|(shape, site, call)| {
+                        let laid = (load.layers().iter())
+                            .filter_map(|each| each.layer.request(shape.segment(), *site));
+                        (load.request(shape, *site).into_iter().chain(laid))
+                            .map(|request| (request, call.clone()))
+                    });
+                    let (request, call) = (requests.into_iter())
+                        .find(|(request, _)| request.key == laid.key)
+                        .unwrap_or_else(|| panic!("{name}: a request names each laid layer"));
+                    let sought = request.sought();
+                    let settled = (door.running)
+                        .settle_under::<Koan>(laid.parent, &sought.ask, door.bump)
+                        .expect("every module a request binds has a tree in the load");
+                    let body = shapes.shape_at(request.body);
+                    let render = |facts: &Facts<'_>| {
+                        let reader = Reader {
+                            facts,
+                            types: door.types,
+                            symbols: door.symbols(),
+                            bound: &[],
+                            substituting: None,
+                            closes: std::cell::Cell::new(true),
+                        };
+                        let mut out = Vec::new();
+                        reader.render(body, "", &mut out);
+                        out
+                    };
+                    let at_load = Facts::under(load, Some(laid.layer));
+                    assert!(settled.refusal(door.types).is_none(), "{name}: {call:?}");
+                    assert_eq!(render(&at_load), render(&settled), "{name}: {call:?}");
+                    let top = settled.top().expect("a settlement is its facts' top layer");
+                    for (shape, site, at) in &sites {
+                        let requested = |layer: &crate::scope::BuildLayer<'_>| {
+                            layer
+                                .request(shape.segment(), *site)
+                                .map(|each| each.sought())
+                        };
+                        assert_eq!(
+                            requested(laid.layer),
+                            requested(top),
+                            "{name}: {call:?}'s layer, the request at {at:?}"
+                        );
+                    }
+                    checked.push(call.unwrap_or_default());
+                }
+                checked
+            });
+            checked.append(&mut each);
+        }
+        for call in [
+            "(CARRIER (ints :| Counter))",
+            "(CARRIER (ints :! Counter))",
+            "(peek {k = one})",
+            "(g {k = one})",
+            "(CARRIER m)",
+        ] {
+            assert!(
+                checked.iter().any(|each| each == call),
+                "{call}: {checked:?}"
+            );
+        }
     }
 
     /// What `SUBJECT`'s frame decides in its activation under the binding, a module bound by its
@@ -1400,8 +1974,8 @@ mod laws {
             prop_assert!(broken.is_empty(), "{:?} in\n{}", broken, case.render());
         }
 
-        /// 5. A resumption re-runs exactly the units whose frontier at the load meets its binding,
-        /// each once: so it terminates.
+        /// 5. A resumption re-runs exactly the units whose frontier at the load reaches an open
+        /// mark on a name its binding binds, each once: so it terminates.
         #[test]
         fn a_resumption_reruns_only_the_units_it_wakes(case in resumable()) {
             let compared = resumed(&case.render(), |door| {
@@ -1409,7 +1983,7 @@ mod laws {
                 let resumed = (door.running).resume::<Koan>(door.types, None, binding, false, door.bump).ok()?;
                 let reran: Vec<_> = resumed.own_units().iter().map(|(unit, _)| *unit).collect();
                 let woken: Vec<_> = (door.load().own_units().iter())
-                    .filter(|(_, (_, frontier))| frontier.meets_binding(binding))
+                    .filter(|(_, (_, frontier))| frontier.meets_open(binding))
                     .map(|(unit, _)| *unit)
                     .collect();
                 Some((reran, woken))
@@ -1430,6 +2004,26 @@ mod laws {
             if let Ok(restarted) = loaded_rendered(&restart, &case.bound) {
                 for line in substituted {
                     prop_assert!(restarted.contains(&line), "{} not in the restart\n{}\nrestarted as\n{}", line, case.render(), restart);
+                }
+            }
+        }
+
+        /// 14. A unit record not open commutes with binding: each line of `SUBJECT`'s render that a
+        /// unit holds whose frontier reaches no open mark on a name the binding binds, read with
+        /// the binding's levels written in by the test's own substitution, is the restart's. A
+        /// restart that refuses, refusing in a unit that re-runs, is refused by the resumption
+        /// alike.
+        #[test]
+        fn a_unit_record_not_open_commutes_with_binding(case in resumable()) {
+            let lines = resumed(&case.render(), |door| commuted(door, &case.bound));
+            let restart = case.restart(&case.bound);
+            match loaded_rendered(&restart, &case.bound) {
+                Ok(restarted) => for line in lines {
+                    prop_assert!(restarted.contains(&line), "{} not in the restart\n{}\nrestarted as\n{}", line, case.render(), restart);
+                },
+                Err(refusal) => {
+                    let resumed = resume_rendered(&case, std::slice::from_ref(&case.bound), false);
+                    prop_assert_eq!(resumed.err(), Some(refusal), "in\n{}\nrestarted as\n{}", case.render(), restart);
                 }
             }
         }
@@ -1567,8 +2161,9 @@ mod laws {
                             continue;
                         };
                         for (at, facts) in facts.iter().enumerate() {
-                            if let Some(entry) = facts.path(door.types, root, level).map(|(entry, _)| entry)
-                                && (entry.root != id.root || entry.chain != id.chain || entry.label != id.label || entry.level != level)
+                            let name = crate::scope::PathName::Spelled(level);
+                            if let Some(entry) = facts.path(door.types, root, name).map(|(entry, _)| entry)
+                                && (entry.root != id.root || entry.chain != id.chain || entry.label != id.label || entry.name != name)
                             {
                                 broken.push(format!("records {at} hold {entry:?} at the level the shape gives {id:?}"));
                             }
@@ -1661,8 +2256,14 @@ mod laws {
         let scratch = Bump::new();
         let mut open = false;
         let read = read_through(door.types, &scratch, value, Side::Above, &mut |variable| {
-            let Variable::Lexical { level, .. } = variable else {
-                return None;
+            let level = match variable {
+                Variable::Lexical { level, .. } => level,
+                // A path's variable is no level a binding binds.
+                Variable::Path { .. } => {
+                    open = true;
+                    return None;
+                }
+                _ => return None,
             };
             match levels.iter().find(|(held, _)| *held == level) {
                 Some((_, typed)) => Some(Interval::point((*typed).into())),
@@ -1840,8 +2441,11 @@ mod laws {
                     }
                     if shape.candidate_lists().get(site).is_some()
                         && let Some(why) = widened(
-                            load.use_statics(door.types, shape, site).narrowing,
-                            resumed.use_statics(door.types, shape, site).narrowing,
+                            load.use_statics(door.types, &crate::memory::Bump::new(), shape, site)
+                                .narrowing,
+                            resumed
+                                .use_statics(door.types, &crate::memory::Bump::new(), shape, site)
+                                .narrowing,
                         )
                     {
                         broken.push(format!("use {site:?}: {why}"));
@@ -1897,5 +2501,655 @@ mod laws {
                 None
             }
         }
+    }
+
+    /// What the witnessed laws read of a [`Witnessable`]: the layer its load witnessed under the
+    /// case's binding `a`, and `b`, the binding they compare under — each type name an alternate
+    /// keeping every bare question on it, else `a`'s, `Pair` following `Elt` and each module `a`'s
+    /// — beside its description, whether `b` keeps every question, and whether it differs from `a`
+    /// on a name some question reads.
+    struct Witnessed<'d> {
+        witnessed: &'d crate::scope::BuildLayer<'d>,
+        first: crate::scope::BuildLayer<'d>,
+        a: crate::scope::Binding<'d>,
+        b: crate::scope::Binding<'d>,
+        b_bound: Bound,
+        kept: bool,
+        differs: bool,
+    }
+
+    /// The level the type name `name` of `SUBJECT` is homed at, where it has one.
+    fn level_of(door: &Door<'_, '_>, name: &str) -> Option<usize> {
+        let body = subject(door.root());
+        let at = slot(door.symbols(), body, name)?;
+        (door.load().homes(body).iter())
+            .find(|(_, target)| *target == Target::Local(at))
+            .map(|(level, _)| *level)
+    }
+
+    /// Whether `answered` is a bare question on the name homed at `level`: it reads no other
+    /// name, and reads that one as a whole type.
+    fn bare_on(door: &Door<'_, '_>, answered: &crate::scope::Answered<'_>, level: usize) -> bool {
+        let scratch = Bump::new();
+        let (mut whole, mut alone) = (false, true);
+        answered.question.each_type(&mut |ty| {
+            if let DeclaredType::Type(typed) = ty
+                && matches!(door.types.node(typed),
+                    crate::type_lattice::TypeNode::Lexical { level: held, .. } if held == level)
+            {
+                whole = true;
+            }
+            for variable in crate::scope::free_variables(door.types, &scratch, ty) {
+                alone &= matches!(variable, Variable::Lexical { level: held, .. } if held == level);
+            }
+        });
+        whole && alone
+    }
+
+    /// The levels `binding` binds `SUBJECT`'s type names at, beside their types.
+    fn levels_of(door: &Door<'_, '_>, binding: crate::scope::Binding<'_>) -> Vec<(usize, KType)> {
+        let body = subject(door.root());
+        let mut levels = Vec::new();
+        for (level, target) in door.load().homes(body) {
+            let Target::Local(slot) = target else {
+                continue;
+            };
+            let unknown = Unknown {
+                segment: body.segment(),
+                at: Address::Slot(*slot),
+            };
+            if let (Some(Bind::Type(typed)), BinderSymbol::Type(_)) =
+                (binding.bound(unknown), body.slot_name(*slot))
+            {
+                levels.push((*level, typed));
+            }
+        }
+        levels
+    }
+
+    /// Whether a binding whose levels are `levels` keeps `answered`.
+    fn keeps_under(
+        door: &Door<'_, '_>,
+        answered: &crate::scope::Answered<'_>,
+        levels: &[(usize, KType)],
+    ) -> bool {
+        let scratch = Bump::new();
+        let levels = crate::scope::Levels::from_bound(&scratch, levels);
+        crate::scope::keeps(door.types, &scratch, answered, &levels)
+    }
+
+    /// `case`'s load witnessed under its binding, and the binding the witnessed laws compare under:
+    /// `None` where the witnessing walk refused or witnessed nothing.
+    fn witnessed<'d>(door: &Door<'d, '_>, case: &Witnessable) -> Option<Witnessed<'d>> {
+        let a = binding(door, &case.case.bound);
+        let first = door.resumption(a, None, false).ok()?;
+        let witnessed = first.witnessed?;
+        let mut questions = Vec::new();
+        witnessed
+            .admission()
+            .each_kept(&mut |answered| questions.push(answered));
+        let body = subject(door.root());
+        let (mut chosen, mut rebound, mut differs) = (Vec::new(), Vec::new(), false);
+        for name in ALTERNATED {
+            let (Some(level), Some((_, _))) = (
+                level_of(door, name),
+                case.case
+                    .bound
+                    .entries()
+                    .into_iter()
+                    .find(|(bound, _)| *bound == name),
+            ) else {
+                continue;
+            };
+            let unknown = Unknown {
+                segment: body.segment(),
+                at: Address::Slot(slot(door.symbols(), body, name).expect("a type name's slot")),
+            };
+            let Some(Bind::Type(was)) = a.bound(unknown) else {
+                continue;
+            };
+            let bare: Vec<_> = (questions.iter())
+                .filter(|answered| bare_on(door, answered, level))
+                .collect();
+            let read = (questions.iter()).any(|answered| {
+                let scratch = Bump::new();
+                let mut reads = false;
+                answered.question.each_type(&mut |ty| {
+                    reads |= (crate::scope::free_variables(door.types, &scratch, ty).iter())
+                        .any(|variable| matches!(variable, Variable::Lexical { level: held, .. } if *held == level));
+                });
+                reads
+            });
+            let found = (0..3).find(|index| {
+                let alternate = door.declared(&Witnessable::alternate(name, *index));
+                (bare.iter()).all(|answered| keeps_under(door, answered, &[(level, alternate)]))
+            });
+            if let Some(index) = found {
+                let alternate = door.declared(&Witnessable::alternate(name, index));
+                differs |= read && alternate != was;
+                chosen.push((name, index));
+                rebound.push((unknown, alternate));
+                if name == "Elt"
+                    && case.case.bound.pair.is_some()
+                    && let Some(at) = slot(door.symbols(), body, "Pair")
+                {
+                    let pair = Unknown {
+                        segment: body.segment(),
+                        at: Address::Slot(at),
+                    };
+                    let declared = door.declared(&Witnessable::alternate("Pair", index));
+                    rebound.push((pair, declared));
+                }
+            }
+        }
+        let mut staged: Vec<_> = (a.entries().iter())
+            .map(
+                |(unknown, bound)| match rebound.iter().find(|(held, _)| held == unknown) {
+                    Some((_, typed)) => (*unknown, Bind::Type(*typed)),
+                    None => (*unknown, *bound),
+                },
+            )
+            .collect();
+        staged.sort_by_key(|(unknown, _)| *unknown);
+        let b = door.bound(&staged);
+        let levels = levels_of(door, b);
+        let kept = (questions.iter()).all(|answered| keeps_under(door, answered, &levels));
+        Some(Witnessed {
+            witnessed,
+            first: first.layer,
+            a,
+            b,
+            b_bound: case.bound(&chosen),
+            kept,
+            differs,
+        })
+    }
+
+    /// The witnessed names of `witnessed`, as `binding` binds them: what a closing walk over it
+    /// checks.
+    fn checked_of<'d>(
+        door: &Door<'d, '_>,
+        witnessed: &crate::scope::BuildLayer<'d>,
+        binding: crate::scope::Binding<'d>,
+    ) -> crate::scope::Binding<'d> {
+        let names = witnessed.witnessing().expect("a witnessed layer").names;
+        let staged: Vec<_> = (names.iter())
+            .filter_map(|unknown| Some((*unknown, binding.bound(*unknown)?)))
+            .collect();
+        door.bound(&staged)
+    }
+
+    /// The frontier of `unit` as a walk over `top`, a chain of layers laid over the load, reads
+    /// it: the innermost layer's that ran it, else the load's.
+    fn frontier_over<'d>(
+        door: &Door<'d, '_>,
+        top: &crate::scope::BuildLayer<'d>,
+        unit: crate::scope::UnitId,
+    ) -> Option<crate::scope::Frontier<'d>> {
+        (std::iter::successors(Some(top), |layer| layer.parent()))
+            .find_map(|layer| layer.unit(unit))
+            .or_else(|| door.load().unit(unit))
+            .map(|(_, frontier)| frontier)
+    }
+
+    /// The units a closing walk under `binding` over `witnessed` re-runs, by the flattened oracle:
+    /// each whose frontier over it reaches a question on a checked name the binding does not keep.
+    fn woken_over<'d>(
+        door: &Door<'d, '_>,
+        witnessed: &crate::scope::BuildLayer<'d>,
+        binding: crate::scope::Binding<'d>,
+    ) -> Vec<crate::scope::UnitId> {
+        woken_through(
+            door,
+            witnessed,
+            witnessed,
+            binding,
+            &levels_of(door, binding),
+        )
+    }
+
+    /// [`woken_over`] over `top`, a chain holding `witnessed`, the binding's levels `levels`.
+    fn woken_through<'d>(
+        door: &Door<'d, '_>,
+        witnessed: &crate::scope::BuildLayer<'d>,
+        top: &crate::scope::BuildLayer<'d>,
+        binding: crate::scope::Binding<'d>,
+        levels: &[(usize, KType)],
+    ) -> Vec<crate::scope::UnitId> {
+        let checked = checked_of(door, witnessed, binding);
+        let keeps = |answered: &crate::scope::Answered<'_>| keeps_under(door, answered, levels);
+        (door.load().own_units().iter())
+            .map(|(unit, _)| *unit)
+            .filter(|unit| {
+                frontier_over(door, top, *unit).is_some_and(|frontier| {
+                    frontier.wakes_flat(checked, crate::scope::Binding::EMPTY, binding, &keeps)
+                        == crate::scope::Wake::Open
+                })
+            })
+            .collect()
+    }
+
+    /// The lines of `SUBJECT`'s render over `witnessed` that units a closing walk under `b` does
+    /// not re-run hold, each type read with `b`'s levels written in: law 14's side, widened.
+    fn commuted_over<'d>(door: &Door<'d, '_>, witnessed: &Witnessed<'d>) -> Vec<String> {
+        let facts = crate::scope::Facts::under(door.load(), Some(witnessed.witnessed));
+        let levels = levels_of(door, witnessed.b);
+        let open = woken_over(door, witnessed.witnessed, witnessed.b);
+        commuted_in(door, &facts, levels, open, &witnessed.b_bound)
+    }
+
+    /// The lines of `SUBJECT`'s render of `facts` that units not in `open` hold, each type read
+    /// with `levels` written in, but of the binders `bound` names.
+    fn commuted_in<'f, S: RecordSource<'f>>(
+        door: &Door<'_, '_>,
+        facts: &FactsOver<S>,
+        levels: Vec<(usize, KType)>,
+        open: Vec<crate::scope::UnitId>,
+        bound: &Bound,
+    ) -> Vec<String> {
+        let load = door.load();
+        let mut substituting = Substituting {
+            levels,
+            sites: std::collections::HashMap::new(),
+            born: std::collections::HashMap::new(),
+            open,
+        };
+        for (unit, (facts, _)) in load.own_units() {
+            for (segment, typed) in facts.typed.iter() {
+                typed.held(*segment, &mut |held| {
+                    if let crate::scope::Held::Site(segment, site) = held {
+                        substituting.sites.insert((segment, site), *unit);
+                    }
+                });
+            }
+            for (segment, _) in facts.born.iter() {
+                substituting.born.insert(*segment, *unit);
+            }
+        }
+        let names = left_out(bound);
+        let names: Vec<&str> = names.iter().map(String::as_str).collect();
+        let reader = Reader {
+            facts,
+            types: door.types,
+            symbols: door.symbols(),
+            bound: &names,
+            substituting: Some(&substituting),
+            closes: std::cell::Cell::new(true),
+        };
+        let mut out = Vec::new();
+        reader.render(subject(load.shapes().root()), "", &mut out);
+        out
+    }
+
+    /// The closing walk under `b` over the witnessed layer: its render, or its refusal.
+    fn over_rendered<'d>(
+        door: &Door<'d, '_>,
+        witnessed: &Witnessed<'d>,
+    ) -> Result<Vec<String>, String> {
+        let resumed = door.resumption(witnessed.b, Some(witnessed.witnessed), false);
+        let layer = resumed.map_err(|refusal| unlocated(&refusal))?.layer;
+        let facts = crate::scope::Facts::under(
+            door.load(),
+            Some(crate::memory::resident(door.bump, layer)),
+        );
+        Ok(render_over(
+            &facts,
+            door.types,
+            door.symbols(),
+            &left_out(&witnessed.b_bound),
+        ))
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig {
+            cases: crate::tests::case_share(1, 4),
+            ..ProptestConfig::default()
+        })]
+
+        /// 14, widened. A unit record whose frontier over a witnessed layer reaches no question
+        /// a binding does not keep commutes with that binding: each line of `SUBJECT`'s render
+        /// over the layer such a unit holds, read with the binding's levels written in, is the
+        /// restart's. A restart that refuses is refused alike by the closing walk over the layer.
+        #[test]
+        fn a_unit_record_whose_questions_a_binding_keeps_commutes_with_it(case in witnessable()) {
+            let read = resumed(&case.render(), |door| {
+                let witnessed = witnessed(door, &case)?;
+                Some((
+                    witnessed.kept,
+                    witnessed.b_bound.clone(),
+                    commuted_over(door, &witnessed),
+                    over_rendered(door, &witnessed).err(),
+                ))
+            });
+            let Some((kept, b, lines, refused)) = read else {
+                return Ok(());
+            };
+            prop_assume!(kept);
+            let restart = case.case.restart(&b);
+            match loaded_rendered(&restart, &b) {
+                Ok(restarted) => for line in lines {
+                    prop_assert!(restarted.contains(&line), "{} not in the restart\n{}\nrestarted as\n{}", line, case.render(), restart);
+                },
+                Err(refusal) => prop_assert_eq!(refused, Some(refusal), "in\n{}\nrestarted as\n{}", case.render(), restart),
+            }
+        }
+
+        /// 8, witnessed. A binding read over the layer another binding witnessed renders as the
+        /// restart under it, refusals included.
+        #[test]
+        fn a_resumption_over_a_witnessed_layer_is_a_restart(case in witnessable()) {
+            let read = resumed(&case.render(), |door| {
+                let witnessed = witnessed(door, &case)?;
+                Some((witnessed.b_bound.clone(), over_rendered(door, &witnessed)))
+            });
+            let Some((b, over)) = read else {
+                return Ok(());
+            };
+            let restart = case.case.restart(&b);
+            prop_assert_eq!(over, loaded_rendered(&restart, &b), "in\n{}\nrestarted as\n{}", case.render(), restart);
+        }
+
+        /// 5, witnessed. A witnessing walk re-runs exactly the units whose frontier at the load
+        /// reaches an undecided question on a witnessed name and no undecided one of a holding
+        /// kind, or one on a module binder it binds; a closing walk over its layer, exactly those
+        /// whose frontier over the layer reaches a question on a checked name its binding does not
+        /// keep — under the witness, and under another binding.
+        #[test]
+        fn a_witnessed_resumption_reruns_only_the_units_it_wakes(case in witnessable()) {
+            let compared = resumed(&case.render(), |door| {
+                let witnessed = witnessed(door, &case)?;
+                let mut names: Vec<_> = (witnessed.a.entries().iter())
+                    .filter(|(_, bound)| matches!(bound, Bind::Type(_)))
+                    .copied()
+                    .collect();
+                names.sort_by_key(|(unknown, _)| *unknown);
+                let witness = door.bound(&names);
+                let mut modules: Vec<_> = (witnessed.a.entries().iter())
+                    .filter(|(_, bound)| matches!(bound, Bind::Module { .. }))
+                    .copied()
+                    .collect();
+                modules.sort_by_key(|(unknown, _)| *unknown);
+                let modules = door.bound(&modules);
+                let first: Vec<_> = witnessed.witnessed.own_units().collect();
+                let woken_first: Vec<_> = (door.load().own_units().iter())
+                    .filter(|(_, (_, frontier))| {
+                        frontier.wakes_flat(modules, witness, modules, &|_| false) == crate::scope::Wake::Open
+                    })
+                    .map(|(unit, _)| *unit)
+                    .collect();
+                let closing: Vec<_> = witnessed.first.own_units().collect();
+                let woken_closing = woken_over(door, witnessed.witnessed, witnessed.a);
+                let over = door.resumption(witnessed.b, Some(witnessed.witnessed), false).ok();
+                let over: Option<Vec<_>> = over.map(|resumed| resumed.layer.own_units().collect());
+                let woken_over = woken_over(door, witnessed.witnessed, witnessed.b);
+                Some(((first, woken_first), (closing, woken_closing), (over, woken_over)))
+            });
+            if let Some(((first, woken_first), (closing, woken_closing), (over, woken))) = compared {
+                prop_assert_eq!(first, woken_first, "the witnessing walk in\n{}", case.render());
+                prop_assert_eq!(closing, woken_closing, "the closing walk in\n{}", case.render());
+                // A closing walk that refuses re-runs nothing to compare: law 8 holds its refusal.
+                if let Some(over) = over {
+                    prop_assert_eq!(over, woken, "the closing walk under another binding in\n{}", case.render());
+                }
+            }
+        }
+    }
+
+    /// The witnessed laws compare some binding that differs from the witness on a name a question
+    /// reads: on a fixed seed, one of 64 cases does.
+    #[test]
+    fn the_witnessed_laws_draw_a_binding_other_than_the_witness() {
+        use proptest::strategy::ValueTree;
+        use proptest::test_runner::{RngAlgorithm, TestRng, TestRunner};
+        let mut runner = TestRunner::new_with_rng(
+            ProptestConfig::default(),
+            TestRng::deterministic_rng(RngAlgorithm::ChaCha),
+        );
+        let strategy = witnessable();
+        let differs = (0..64).any(|_| {
+            let case = strategy.new_tree(&mut runner).expect("a case").current();
+            resumed(&case.render(), |door| {
+                witnessed(door, &case).is_some_and(|witnessed| witnessed.differs && witnessed.kept)
+            })
+        });
+        assert!(differs, "no case binds an alternate a question reads");
+    }
+
+    /// The `CELL` registration `SUBJECT`'s body holds, where a [`Statement::Cell`] wrote one.
+    fn cell<'graph>(door: &Door<'_, 'graph>) -> Option<(usize, &'graph BodyShape<'graph>)> {
+        (subject(door.root()).nested_shapes().iter().enumerate())
+            .map(|(index, (_, nested))| (index, *nested))
+            .find(|(_, nested)| {
+                nested.kind() == ShapeKind::Callable
+                    && slot(door.symbols(), nested, "Cel").is_some()
+            })
+    }
+
+    /// What the commutation law over an encloser and a cell reads of a [`cellular`] case: the
+    /// binding `b` it compares under, which keeps every question of both witnessed layers;
+    /// whether `b` binds a name some question reads to another type than the witness; the lines
+    /// of `CELL`'s render over its witnessed layer that commute; and the closing walk's refusal
+    /// under `b`. `None` where an event refused or witnessed nothing.
+    struct CellRead {
+        b: Bound,
+        differs: bool,
+        lines: Vec<String>,
+        refused: Option<String>,
+    }
+
+    /// [`CellRead`]: `SUBJECT`'s entry activated under the case's binding, witnessing; `CELL`'s
+    /// entry over its binding layer binding `Cel`, witnessing; `b` the first of the alternates for
+    /// `Elt` (where the case binds it) and `Cel` under which both witnessed layers keep every
+    /// question, one that differs where any does; `SUBJECT`'s entry under `b` over its witnessed
+    /// layer; and `CELL`'s render over its witnessed layer laid over that.
+    fn cell_read(door: &Door<'_, '_>, case: &Witnessable) -> Option<CellRead> {
+        use crate::program::activation_store::Activating;
+        use crate::scope::{EventSite, Keeping};
+        let body = subject(door.root());
+        let (index, cell) = cell(door)?;
+        let (running, types) = (door.running, door.types);
+        let names = ["Elt", "Key", "Item", "Pair", "m", "n"];
+        let a = bind(door, &case.case.bound.only(&names), true);
+        let entry = |segment| Activating::Witnessing {
+            site: EventSite::entry(segment),
+        };
+        let at = (body.segment(), cell.segment());
+        let first =
+            (running.activate_over::<Koan>(types, None, a, entry(at.0), at.0, door.bump)).ok()?;
+        let encloser = first.witnessed?;
+        let binding = crate::memory::resident(door.bump, first.layer);
+        let cel_slot = slot(door.symbols(), cell, "Cel")?;
+        let cel = Unknown {
+            segment: cell.segment(),
+            at: Address::Slot(cel_slot),
+        };
+        let witness = door.declared(&Resumable::declared("Cel"));
+        let own = door.bound(&[(cel, Bind::Type(witness))]);
+        let below = Some(binding);
+        let witnessed =
+            (running.activate_over::<Koan>(types, below, own, entry(at.1), at.1, door.bump))
+                .ok()?
+                .witnessed?;
+        let cel_level = (door.load().homes(cell).iter())
+            .find(|(_, target)| *target == Target::Local(cel_slot))
+            .map(|(level, _)| *level)?;
+        // Each witnessed layer's questions: the encloser's, judged under `SUBJECT`'s levels, and
+        // the cell's, under `Cel`'s too.
+        let (mut theirs, mut ours) = (Vec::new(), Vec::new());
+        (encloser.admission()).each_kept(&mut |answered| theirs.push(answered));
+        (witnessed.admission()).each_kept(&mut |answered| ours.push(answered));
+        let questions: Vec<_> = theirs.iter().chain(&ours).copied().collect();
+        let reads = |level: usize| {
+            (questions.iter()).any(|answered| {
+                let scratch = Bump::new();
+                let mut reads = false;
+                answered.question.each_type(&mut |ty| {
+                    reads |= (crate::scope::free_variables(door.types, &scratch, ty).iter())
+                        .any(|variable| matches!(variable, Variable::Lexical { level: held, .. } if *held == level));
+                });
+                reads
+            })
+        };
+        let unknown = |name| {
+            Some(Unknown {
+                segment: body.segment(),
+                at: Address::Slot(slot(door.symbols(), body, name)?),
+            })
+        };
+        // Only a name the case's binding binds is alternated, as the witnessed laws draw.
+        let elt =
+            (level_of(door, "Elt").zip(unknown("Elt"))).filter(|_| case.case.bound.elt.is_some());
+        let pair = unknown("Pair").filter(|_| case.case.bound.pair.is_some());
+        // `SUBJECT`'s binding and `Cel`'s type under the alternates `chosen`, whether they bind a
+        // name a question reads to another type than the witness, and the levels each binds.
+        let under = |chosen: &[(&str, usize)]| {
+            let mut staged: Vec<_> = a.entries().to_vec();
+            let (mut cel_bound, mut differs) = (witness, false);
+            for (name, found) in chosen {
+                let alternate = door.declared(&Witnessable::alternate(name, *found));
+                match (*name, elt) {
+                    ("Elt", Some((level, elt))) => {
+                        let was = (staged.iter()).find(|(unknown, _)| *unknown == elt);
+                        differs |= reads(level)
+                            && !matches!(was, Some((_, Bind::Type(was))) if *was == alternate);
+                        staged.retain(|(unknown, _)| *unknown != elt);
+                        staged.push((elt, Bind::Type(alternate)));
+                        if let Some(pair) = pair {
+                            let declared = door.declared(&Witnessable::alternate("Pair", *found));
+                            staged.retain(|(unknown, _)| *unknown != pair);
+                            staged.push((pair, Bind::Type(declared)));
+                        }
+                    }
+                    _ => {
+                        differs |= reads(cel_level) && alternate != witness;
+                        cel_bound = alternate;
+                    }
+                }
+            }
+            staged.sort_by_key(|(unknown, _)| *unknown);
+            let subject_levels = levels_of(door, door.bound(&staged));
+            let mut levels = subject_levels.clone();
+            levels.push((cel_level, cel_bound));
+            (staged, cel_bound, differs, (subject_levels, levels))
+        };
+        let keeps_all = |(subject, cell): &(Vec<_>, Vec<_>)| {
+            (theirs.iter()).all(|answered| keeps_under(door, answered, subject))
+                && (ours.iter()).all(|answered| keeps_under(door, answered, cell))
+        };
+        let elts: &[Option<usize>] = match elt {
+            Some(_) => &[None, Some(0), Some(1), Some(2)],
+            None => &[None],
+        };
+        let mut drawn: Vec<Vec<(&str, usize)>> = Vec::new();
+        for elt in elts {
+            for cel in [None, Some(0), Some(1), Some(2)] {
+                let chosen = [
+                    elt.map(|found| ("Elt", found)),
+                    cel.map(|found| ("Cel", found)),
+                ];
+                drawn.push(chosen.into_iter().flatten().collect());
+            }
+        }
+        // The first combination both layers keep that differs, else the witness's own.
+        let chosen = (drawn.into_iter())
+            .find(|chosen| {
+                let (_, _, differs, levels) = under(chosen);
+                differs && keeps_all(&levels)
+            })
+            .unwrap_or_default();
+        let (staged, cel_bound, differs, (_, levels)) = under(&chosen);
+        let b_subject = door.bound(&staged);
+        let b_cel = door.bound(&[(cel, Bind::Type(cel_bound))]);
+        let mut every = staged.clone();
+        every.push((cel, Bind::Type(cel_bound)));
+        every.sort_by_key(|(unknown, _)| *unknown);
+        let b_every = door.bound(&every);
+        let b = case.bound(&chosen);
+        let display = |refusal: &crate::scope::ShapeError<'_>| {
+            unlocated(&refusal.display(door.symbols(), door.types).to_string())
+        };
+        let over = Activating::Over(encloser, Keeping::All);
+        let resumed =
+            match running.activate_over::<Koan>(types, None, b_subject, over, at.0, door.bump) {
+                Ok(resumed) => crate::memory::resident(door.bump, resumed.layer),
+                Err(refusal) => {
+                    let refused = Some(display(refusal));
+                    return Some(CellRead {
+                        b,
+                        differs,
+                        lines: Vec::new(),
+                        refused,
+                    });
+                }
+            };
+        let closing = Activating::Over(witnessed, Keeping::All);
+        let refused =
+            (running.activate_over::<Koan>(types, Some(resumed), b_cel, closing, at.1, door.bump))
+                .err()
+                .map(display);
+        let top = crate::memory::resident(door.bump, witnessed.over(Some(resumed)));
+        let open = woken_through(door, witnessed, top, b_every, &levels);
+        let facts = crate::scope::Facts::of(door.load()).activated(Some(top));
+        // `CELL`'s own lines; its callable type is `SUBJECT`'s fact, which a restart binding
+        // `Cel` writes without its group.
+        let path = format!("/{index}");
+        let lines: Vec<String> = (commuted_in(door, &facts, levels, open, &b).into_iter())
+            .filter(|line| {
+                line.starts_with(&format!("{path} ")) || line.starts_with(&format!("{path}/"))
+            })
+            .filter(|line| !line.starts_with(&format!("{path} callable ")))
+            .collect();
+        Some(CellRead {
+            b,
+            differs,
+            lines,
+            refused,
+        })
+    }
+
+    proptest! {
+        #![proptest_config(ProptestConfig {
+            cases: crate::tests::case_share(1, 4),
+            ..ProptestConfig::default()
+        })]
+
+        /// 14, over an encloser and a cell. A cell's unit record whose frontier over the cell's
+        /// witnessed layer, laid over its encloser's binding layer under another binding, reaches
+        /// no question that binding does not keep commutes with it: each line of `CELL`'s render
+        /// such a unit holds, read with the binding's levels written in, is the restart's. A
+        /// restart that refuses is refused alike by the closing walk.
+        #[test]
+        fn a_cells_unit_record_whose_questions_a_binding_keeps_commutes_with_it(case in cellular()) {
+            let Some(read) = resumed(&case.render(), |door| cell_read(door, &case)) else {
+                return Ok(());
+            };
+            let restart = case.case.restart(&read.b);
+            match loaded_rendered(&restart, &read.b) {
+                Ok(restarted) => for line in &read.lines {
+                    prop_assert!(restarted.contains(line), "{} not in the restart\n{}\nrestarted as\n{}", line, case.render(), restart);
+                },
+                Err(refusal) => prop_assert_eq!(read.refused, Some(refusal), "in\n{}\nrestarted as\n{}", case.render(), restart),
+            }
+        }
+    }
+
+    /// The cell law compares some binding that differs from the witness on a name a question
+    /// reads, and renders some line: on a fixed seed, one of 64 cases does.
+    #[test]
+    fn the_cell_law_draws_a_binding_other_than_the_witness() {
+        use proptest::strategy::ValueTree;
+        use proptest::test_runner::{RngAlgorithm, TestRng, TestRunner};
+        let mut runner = TestRunner::new_with_rng(
+            ProptestConfig::default(),
+            TestRng::deterministic_rng(RngAlgorithm::ChaCha),
+        );
+        let strategy = cellular();
+        let differs = (0..64).any(|_| {
+            let case = strategy.new_tree(&mut runner).expect("a case").current();
+            resumed(&case.render(), |door| {
+                cell_read(door, &case).is_some_and(|read| read.differs && !read.lines.is_empty())
+            })
+        });
+        assert!(differs, "no case binds an alternate a question reads");
     }
 }

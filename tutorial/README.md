@@ -28,8 +28,8 @@ a new shape (`FN`, its counterpart, writes an anonymous function that registers
 nothing). Built-in forms and your own functions work the same way, so the
 language grows from the inside. Types come in two flavors you'll declare
 yourself: **tagged unions** (a value that is one of several alternatives) and
-**newtypes** (a fresh identity over a representation, including records with
-named fields).
+**newtypes** (a fresh identity over a representation, including record types
+with named fields).
 
 ## Chapters
 
@@ -74,7 +74,7 @@ Koan is young, and some things you might reach for aren't here:
   Computation is expressed through functions and dispatch.
 - **No loops.** Recursion is the iteration model (see
   [Pattern matching](06-pattern-matching.md)).
-- **No user-declared traits or interfaces** beyond what unions, records, and the
-  module system provide.
+- **No user-declared traits or interfaces** beyond what unions, record types,
+  and the module system provide.
 
 When a snippet doesn't behave the way you expect, one of these is a likely cause.
