@@ -9,8 +9,10 @@ refused whatever its signature, a projection by schema — settle what a value
 carries where today's rule loses something, as at a view's barrier or a tail
 call, and keep a solve blind to the order a union's members are written in.
 What it buys the language: a program that states its types is refused early
-where they decide it, and a program that leaves them out still runs, each call
-checking what the load could not. Where the load's pass runs, and where what
+where they decide it, each call checking only what the load could not decide,
+and a program asking for decisions the build cannot bound is refused with the
+declaration that would bound them
+([the binding graph](../../design/binding-graph.md#refusal)). Where the load's pass runs, and where what
 it settles lives, is [one build](../one-build/README.md)'s.
 
 [The design](../../design/gradual-typing.md) follows a type from its
@@ -52,6 +54,13 @@ as surprises, not scheduled.
   type for a type value — the type whose one value is the type value `Number` —
   would carry the denoted type through ordinary static typing. It is a
   [type lattice](../../lattice/src/types/README.md) change.
+- **Whether a declared parameter may be `Any`.** `Any` marks what the run
+  decides ([the binding graph](../../design/binding-graph.md#what-a-bind-site-binds)),
+  so a parameter declared `Any` leaves every question waiting on it to the
+  call. Refusing `Any` on a declaration's parameters, where a `FOR ALL` name
+  says the same and lets the build answer, would keep it for returns,
+  containers and function values; but a function value that ignores its
+  parameter would then have no type to declare it at. Undecided.
 - **A family cannot state its variance.** Every type-constructor family is
   covariant in its parameters, so a
   [parameterized union](../../src/elaborate/README.md#families) placing a
@@ -74,7 +83,10 @@ as surprises, not scheduled.
   ([the tie](../../src/knot/README.md#the-tie)), so `LET a = [1 a]` or a ring of
   plain record values needs a nominal declaration. Structural `μ`-types in the
   [type lattice](../../lattice/src/types/README.md) would admit them without
-  breaking a program the nominal cut admits.
+  breaking a program the nominal cut admits. They would also let the build
+  infer the recursive union a
+  [recursion that grows its type](growing-recursion-refused.md) is refused
+  for want of, in the declaration's place.
 - **The unfilled typing is a flag every write consults.** A quote's code is
   typed a second time with its unmarked holes empty, and the walk
   ([`walk.rs`](../../src/dispatch/walk.rs)) checks `unfilled` wherever that

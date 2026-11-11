@@ -100,6 +100,8 @@ the lower layer of the root, is what it stubs a reference into by handle.
 
 **Requires:**
 
+- [The build over the binding graph](build-over-the-binding-graph.md) — the
+  image writes the graph, not tables a later build would reshape.
 - [Settlements retired](settlements-retired.md) — the depot it writes holds
   compositions alone, and program storage every layer the load laid.
 - [What the agent tier keeps](agent-tier-keeps.md) — which of the tier's

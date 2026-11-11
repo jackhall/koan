@@ -37,6 +37,7 @@ subdirectory's README carries its own slice.
 - [Families as parameters](features/families-as-parameters.md)
 - [Yielding iterators](features/yielding-iterators.md)
 - [A program owns its source](one-build/a-program-owns-its-source.md)
+- [The binding graph crate](one-build/binding-graph-crate.md)
 - [Callees built by a call traced](one-build/built-module-members.md)
 - [Captures and views traced](one-build/captures-and-views-traced.md)
 - [An exhaustive check](one-build/exhaustive-check.md)

@@ -445,8 +445,10 @@ through the load, to a call, [quantified types](design/quantified-types.md)
 says where a `FOR ALL` may be written and what stands in for a higher-ranked
 type, [modules](design/modules.md) says what a module's types are and when
 two are one, [type tiers](design/type-tiers.md) says where a type the run
-builds lives and when it is released, and [build storage](design/build-storage.md)
-says what the load and the build decide and where each rests it.
+builds lives and when it is released, [build storage](design/build-storage.md)
+says what the load and the build decide and where each rests it, and
+[the binding graph](design/binding-graph.md) says which bind site owns each
+decision and how one is reached through a call.
 
 Future work lives in [roadmap/](roadmap/) — one file per work item, with `Requires:` /
 `Unblocks:` cross-links. Its [README](roadmap/README.md) groups work into project
