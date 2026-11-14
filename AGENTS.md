@@ -48,6 +48,7 @@
 - Syntax and semantics forks are the user's to decide: enumerate the options with their consequences and ask, even mid-implementation.
 - Before surfacing recorded forks, test each premise against the end-state docs, downstream acceptance criteria and the code; only genuine rulings go to the user. Before deferring a direction to a later item, write the smallest program the current item allows that hits it.
 - Record a decision at the scope the user stated it; surface its consequences as questions.
+- Close a direction in the session where you can; record one as open only where the user leaves it open.
 - When the user asserts a language invariant, tests that contradict it are bugs to fix.
 - An old tutorial's output is not a spec: list each rule a snippet implies as a question, and reason from the language's invariants, not its representation.
 - Push back when a request's justification no longer holds under a revised plan.
