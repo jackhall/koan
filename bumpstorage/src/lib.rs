@@ -1,6 +1,7 @@
-//! The **bump tier**: storage outside any cell graph, for the type lattice's root and for the
-//! scratch a caller passes. A bump here has no reach and no cell; it is released whole when its
-//! owner drops.
+//! The **bump tier**: storage outside any cell graph, for the type lattice's root, the binding
+//! graph's instances and the scratch a caller passes. A bump here has no reach and no cell; it is
+//! released whole when its owner drops. The lattice, `bindgraph` and koan rest on it, and it
+//! depends on none of them.
 //!
 //! The tier is a collections arena — growable vectors, a hash map, a bare hash table and a hash set
 //! over `&Bump` as an [`Allocator`](allocator_api2::alloc::Allocator) — which a cell's `Writer`
@@ -15,17 +16,24 @@
 //! a cell's region can host it. [`FrozenTable`] is its read-only twin, laid once in a bump, which
 //! holds no cell.
 //!
-//! This is the crate's only import of `bumpalo`, `allocator_api2` and `hashbrown`.
+//! This is the workspace's only import of `bumpalo`, `allocator_api2` and `hashbrown`.
 //!
 //! **Nothing with drop glue goes in.** Bumpalo runs no destructor, so a value owning heap memory
 //! would leak it. [`bump_table`] asserts that for a table's entries at compile time; a slice or a
 //! single value is the caller's to keep `Copy`.
+//!
+//! See [README.md](../README.md).
+
+#![forbid(unsafe_code)]
 
 use std::hash::BuildHasher;
 
 mod components;
 mod digest_table;
 mod frozen_table;
+/// Crate-wide test scaffolding: the property-case share.
+#[cfg(test)]
+mod tests;
 
 pub use components::strongly_connected_components;
 pub use digest_table::{DigestTable, Keyed, LaysRuns, Slot};

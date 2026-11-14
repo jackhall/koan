@@ -15,7 +15,7 @@ read, the lifetime-erased member table of a sealed component, whose group below 
 other `unsafe` these tests reach lives in
 `cellgraph` — `Writer::fill`, the reattach seam, the region release — pinned
 library-side by [cellgraph/observe/miri_slate.md](../cellgraph/observe/miri_slate.md),
-or in `bumpalo`'s allocator under `lattice`'s bump tier. `Writer::thin_run`, under
+or in `bumpalo`'s allocator under the bump tier, `bumpstorage`. `Writer::thin_run`, under
 `memory`'s knot, is pinned library-side: the knot is safe indexing over the
 `ThinRun` handle, with no layout or retype of its own. What this slate pins is
 the *safe* koan code that drives them: a bump-hosted table, write-once slots laid

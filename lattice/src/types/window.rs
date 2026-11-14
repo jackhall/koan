@@ -62,8 +62,8 @@
 
 use std::cell::{Cell, RefCell};
 
-use crate::bump::{BumpAllocator, BumpVec, strongly_connected_components};
 use crate::symbols::{Symbol, TypeSymbol};
+use bumpstorage::{BumpAllocator, BumpVec, strongly_connected_components};
 
 use super::chain::TypeChain;
 use super::digest::{ComponentMember, component_digest};

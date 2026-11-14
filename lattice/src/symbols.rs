@@ -22,7 +22,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::hash::{BuildHasherDefault, Hasher};
 
-use crate::bump::{FrozenTable, Keyed};
+use bumpstorage::{FrozenTable, Keyed};
 
 /// A symbol's content identity: the low 128 bits of a BLAKE3 hash of its UTF-8 bytes.
 ///

@@ -27,7 +27,7 @@ use std::cell::{Cell, RefCell};
 use std::hint::black_box;
 use std::time::{Duration, Instant};
 
-use lattice::bump::{Bump, BumpHashTable, DigestTable, Keyed, LaysRuns, bump_hash_table};
+use bumpstorage::{Bump, BumpHashTable, DigestTable, Keyed, LaysRuns, bump_hash_table};
 
 /// Best of this many timings, unless `NODE_TABLE_RUNS` says otherwise.
 const RUNS: usize = 5;

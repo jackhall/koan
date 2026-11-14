@@ -23,12 +23,19 @@ again each hop, as a run-content binding does.
   on the binding event, which a hop's hand-off carries; or a tier the
   settlement under the composition owns, evicted with it, which revisits the
   rule that no depot slot holds a type; or the composition's facts naming the
-  derived term once, so a frame mints it from the term in O(1). Whether a
-  composition has layers of its own to hold one is the project's
-  [Compositions](README.md#open-choices) choice.
+  derived term once, so a frame mints it from the term in O(1). A
+  composition has a graph of its own
+  ([the binding graph](../../design/binding-graph.md#instances)).
 
 ## Dependencies
 
-**Requires:** none.
+Written against a settlement under a composition. Planning restates it over
+a composition's own binding graph, as where a type with a frame's content
+written in rests.
+
+**Requires:**
+
+- [The build over the binding graph](build-over-the-binding-graph.md) — a
+  composition is a base with a graph of its own.
 
 **Unblocks:** none.

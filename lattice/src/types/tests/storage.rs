@@ -2,8 +2,8 @@
 //! nodes through references, that a node's identity is its digest, and that a seal lays each
 //! component's members before the types over them.
 
-use crate::bump::Bump;
 use crate::symbols::{BinderSymbol, KeywordSymbol, SymbolInterner, TypeSymbol, ValueSymbol};
+use bumpstorage::Bump;
 
 use crate::types::handle::{KType, Parametric, TypeHandle};
 use crate::types::kind::KKind;

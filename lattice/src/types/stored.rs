@@ -34,8 +34,8 @@
 use std::fmt;
 use std::hash::{Hash, Hasher};
 
-use crate::bump::LaysRuns;
 use crate::symbols::{BinderSymbol, TypeSymbol};
+use bumpstorage::LaysRuns;
 
 use super::component::Component;
 use super::digest::TypeDigest;

@@ -7,7 +7,7 @@
 //! [`RawRegistry`] gives the chain back the readers that moved onto a node: a scheme's split,
 //! a declared type and the six probes.
 
-use crate::bump::BumpAllocator;
+use bumpstorage::BumpAllocator;
 
 use crate::types::chain::TypeChain;
 use crate::types::handle::{DeclaredType, Handle, Parametric, TypeHandle};
@@ -142,8 +142,8 @@ pub(super) mod lattice {
 
 pub(super) mod ranking {
     use super::*;
-    use crate::bump::BumpVec;
     use crate::types::unify::Interval;
+    use bumpstorage::BumpVec;
 
     pub(in crate::types::tests) use crate::types::ranking::{Judged, Verdict};
 
@@ -273,8 +273,8 @@ pub(super) mod sig_relations {
 
 pub(super) mod signatures {
     use super::*;
-    use crate::bump::BumpVec;
     use crate::types::signatures::Application;
+    use bumpstorage::BumpVec;
 
     pub(in crate::types::tests) use crate::types::signatures::applications_under;
 
@@ -375,7 +375,7 @@ pub(super) mod substitute {
         scratch: BumpAllocator<'_>,
         kt: Handle,
     ) -> Vec<usize> {
-        let mut out = crate::bump::BumpVec::new_in(scratch);
+        let mut out = bumpstorage::BumpVec::new_in(scratch);
         crate::types::substitute::collect_siblings(types, scratch, types.enter(kt), &mut out);
         out.to_vec()
     }
@@ -407,9 +407,9 @@ pub(super) mod substitute {
 
 pub(super) mod unify {
     use super::*;
-    use crate::bump::BumpVec;
     use crate::types::unify::{Collector, UnifyFailure};
     use crate::types::walk::Variance;
+    use bumpstorage::BumpVec;
 
     pub(in crate::types::tests) fn admits<'run, T>(
         types: &TypeChain<'run, impl Habitat<'run>>,

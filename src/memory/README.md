@@ -13,13 +13,14 @@ index-edged group of values that refer to each other, and
 [`program`](program.rs) the program-text owner beside the graph.
 
 The bump tier — the arena outside any graph, the strongly-connected-component
-walk staged in it — is [`lattice`](../../lattice/README.md#the-bump-tier)'s,
-since the type lattice's registry is built over it. `memory` re-exports it, so
-koan names every storage shape as `memory`'s.
+walk staged in it — is its own crate,
+[`bumpstorage`](../../bumpstorage/README.md#the-bump-tier), which the type
+lattice's registry and the binding graph are built over too. `memory`
+re-exports it, so koan names every storage shape as `memory`'s.
 
 ## Two tiers, and why the boundary falls where it does
 
-- **The bump tier** ([lattice's](../../lattice/README.md#the-bump-tier)) —
+- **The bump tier** ([bumpstorage's](../../bumpstorage/README.md#the-bump-tier)) —
   storage outside the graph, with no reach and no cell, released whole when its
   owner drops. It holds the [type lattice](../../lattice/src/types/README.md)'s
   registry and the scratch a caller passes, and since it is a *collections*
@@ -201,7 +202,7 @@ instantiation, so **a payload bringing drop glue with it fails the build at
 the instantiation site**, not at runtime and not in review. The knot's
 message names the knot, so the failure points at the shape rather than the
 cellgraph verb under it. The bump tier holds its tables to the same rule
-([lattice](../../lattice/README.md#the-bump-tier)).
+([bumpstorage](../../bumpstorage/README.md#the-bump-tier)).
 
 The same discipline is why a cell's death is O(1): its region releases its
 chunks rather than walking a graph.
@@ -209,9 +210,9 @@ chunks rather than walking a graph.
 ## The import rule
 
 **`memory` names no item from the rest of koan outside doc comments and
-`#[cfg(test)]`**, and depends on `cellgraph` and on `lattice`'s bump tier. No
-koan file outside `memory` names `cellgraph`, and no koan file outside
-`memory` and the crate root names `lattice`: the crate root re-exports
+`#[cfg(test)]`**, and depends on `cellgraph` and on `bumpstorage`, the bump
+tier. No koan file outside `memory` names `cellgraph` or `bumpstorage`, and
+no koan file outside the crate root names `lattice`: the crate root re-exports
 `symbols` and the type lattice, and `memory` the bump tier. It is a leaf under
 the rest of the tree, and anything not on the list above is a new edge rather
 than a detail.

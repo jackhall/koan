@@ -11,7 +11,7 @@
 
 use std::cell::RefCell;
 
-use crate::bump::{BumpAllocator, BumpVec, LaysRuns};
+use bumpstorage::{BumpAllocator, BumpVec, LaysRuns};
 
 use super::chain::TypeChain;
 use super::component::Component;

@@ -30,25 +30,26 @@ impl<'r, N> FrozenTable<'r, N> {
 
     /// The run of slots, in order, for the emitter that writes them.
     #[cfg(any(test, feature = "generator"))]
-    pub(crate) fn slots(&self) -> &'r [Slot<'r, N>] {
+    #[doc(hidden)]
+    pub fn slots(&self) -> &'r [Slot<'r, N>] {
         self.run
     }
 }
 
-impl<'r, N: Keyed> FrozenTable<'r, N> {
-    /// A table over `bump` holding the `len` entries `entries` yields, whose keys are distinct:
-    /// one run laid at a load of at most one half, each entry placed as a digest table places it.
-    pub fn placed(
+impl<'r, N> FrozenTable<'r, N> {
+    /// A table over `bump` holding the `len` entries `entries` yields, each beside its word, none
+    /// of which another would be accepted for: one run laid at a load of at most one half, each
+    /// entry placed as a digest table places it.
+    pub fn placed_at(
         bump: BumpAllocator<'r>,
         len: usize,
-        entries: impl IntoIterator<Item = &'r N>,
+        entries: impl IntoIterator<Item = (u64, &'r N)>,
     ) -> Self {
         let run: &'r mut [Slot<'r, N>] =
             bump.alloc_slice_fill_with(slots_for(len), |_| Slot::EMPTY);
         let mut placed = 0;
-        for entry in entries {
-            let slot = Slot::of(entry.key(), entry);
-            run[home(run.len(), |index| run[index], slot.word())] = slot;
+        for (word, entry) in entries {
+            run[home(run.len(), |index| run[index], word)] = Slot::imaged(word, entry);
             placed += 1;
         }
         assert_eq!(
@@ -58,9 +59,9 @@ impl<'r, N: Keyed> FrozenTable<'r, N> {
         FrozenTable { run, len }
     }
 
-    /// The entry whose key is `key`, if the table holds one.
-    pub fn get(&self, key: N::Key) -> Option<&'r N> {
-        probe(self.run.len(), |index| self.run[index], key)
+    /// The entry homed at `word` that `is` accepts, if the table holds one.
+    pub fn find(&self, word: u64, is: impl Fn(&'r N) -> bool) -> Option<&'r N> {
+        probe(self.run.len(), |index| self.run[index], word, is)
     }
 
     /// How many entries the table holds.
@@ -80,5 +81,30 @@ impl<'r, N: Keyed> FrozenTable<'r, N> {
                 visit(entry);
             }
         }
+    }
+
+    /// Every entry beside its stored word, in slot order.
+    pub fn words(&self) -> impl Iterator<Item = (u64, &'r N)> {
+        let slots = self.run.iter();
+        slots.filter_map(|slot| Some((slot.word(), slot.entry()?)))
+    }
+}
+
+impl<'r, N: Keyed> FrozenTable<'r, N> {
+    /// A table over `bump` holding the `len` entries `entries` yields, whose keys are distinct.
+    pub fn placed(
+        bump: BumpAllocator<'r>,
+        len: usize,
+        entries: impl IntoIterator<Item = &'r N>,
+    ) -> Self {
+        let entries = entries
+            .into_iter()
+            .map(|entry| (N::word(entry.key()), entry));
+        Self::placed_at(bump, len, entries)
+    }
+
+    /// The entry whose key is `key`, if the table holds one.
+    pub fn get(&self, key: N::Key) -> Option<&'r N> {
+        self.find(N::word(key), |entry| entry.key() == key)
     }
 }

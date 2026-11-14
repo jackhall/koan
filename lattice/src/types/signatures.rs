@@ -10,8 +10,8 @@
 //! [`sig_relations`](super::sig_relations)) all read signature types through here and nothing else,
 //! so none of them solves: two applications compare by their pins alone.
 
-use crate::bump::{BumpAllocator, BumpVec};
 use crate::symbols::{BinderSymbol, Symbol};
+use bumpstorage::{BumpAllocator, BumpVec};
 
 use super::chain::TypeChain;
 use super::handle::Handle;

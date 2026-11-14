@@ -253,14 +253,14 @@ and hash by their digests, and a reference is an identity only within one
 table.
 
 The tiers keep different tables. A branch's is a
-[`DigestTable`](../bump/digest_table.rs) in its region: 16 B slots, each the
+[`DigestTable`](../../../bumpstorage/src/digest_table.rs) in its region: 16 B slots, each the
 digest's low word beside the node's reference, probed linearly at a load of at
 most one half. A region's writer lays fixed runs and has no allocator, so the
 table grows by laying a run of twice the length and re-placing each slot by
 its stored word, reading no node. The root builder's is a hashbrown table in
 the load's bump, where its grown build and its stranded bucket arrays are paid
 once. The freeze lays one run for its nodes and places each into it as a
-digest table would, a [`FrozenTable`](../bump/frozen_table.rs): the same slots,
+digest table would, a [`FrozenTable`](../../../bumpstorage/src/frozen_table.rs): the same slots,
 probed the same way, but a plain slice filled while it is exclusively held and
 never written after, so the frozen load holds no cell. An image's table is a
 `FrozenTable` over a static run, its slots placed the same way when it is
@@ -327,7 +327,7 @@ and any other from the own branch's, the region's, then the agent tier's. An
 image's type is a load type here, and an image carries no verdicts, so a
 verdict is read from the load's own table, never an image's.
 The root builder's and the agent tier's tables are
-[`DigestTable`](../bump/digest_table.rs)s of verdict entries laid in their
+[`DigestTable`](../../../bumpstorage/src/digest_table.rs)s of verdict entries laid in their
 bump at the first verdict, and a branch's laid in its half, each growing and
 dropping nothing. A key's two digests fold into its word and a slot compares
 the whole key, so a collision costs a probe and never a wrong answer. A
@@ -425,7 +425,7 @@ At the last fill the window seals, and **identity is not the declared group**: i
 is each member's strongly-connected component under the sibling-reference
 relation, presented canonically in name-symbol order. `seal_group` extracts the
 reference edges, runs the bump tier's
-[Tarjan walk](../../README.md#strongly-connected-components), and digests the condensation in topological order —
+[Tarjan walk](../../../bumpstorage/README.md#strongly-connected-components), and digests the condensation in topological order —
 every component after the components it references, so a cross-component
 reference folds the referent's already-finished handle as ordinary external
 content while an intra-component one stays relative.

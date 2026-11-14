@@ -5,7 +5,7 @@
 //! nodes stand for: the type lattice runs it over the members of a recursive group, and a scope runs
 //! it over a body's bindings.
 //!
-//! See [README.md § Strongly connected components](../../README.md#strongly-connected-components).
+//! See [README.md § Strongly connected components](../README.md#strongly-connected-components).
 
 use super::{BumpAllocator, BumpVec};
 

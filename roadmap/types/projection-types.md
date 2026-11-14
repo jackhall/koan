@@ -93,4 +93,7 @@ carries in type position: `TYPE OF` has no shape.
 
 **Requires:** none.
 
-**Unblocks:** none — a leaf.
+**Unblocks:**
+
+- [Every typing rule states its question](../one-build/typing-rules-state-their-questions.md)
+  — a read out of a variable's value named as a type.

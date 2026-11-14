@@ -1,0 +1,25 @@
+[package]
+name = "bumpstorage"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+# The tier's arena: storage outside any cell graph, for the type registry, the binding graph's
+# instances and the scratch a caller passes. `allocator-api2` turns on `impl Allocator for &Bump`,
+# the seam the tier's growable vector and hash table are built over. Same version cellgraph pins.
+bumpalo = { version = "3.20.3", features = ["allocator-api2"] }
+# The tier's hash table — the type registry's node table rides it.
+hashbrown = "0.17"
+# The `Allocator` trait `&Bump` implements, and the growable `Vec` the tier builds over it —
+# `std::vec::Vec` has no stable custom-allocator seam.
+allocator-api2 = "0.2.21"
+
+[features]
+# Opens the frozen table's slots to the lattice's image generator, which writes them across the
+# crate boundary. Off by default; the lattice's `generator` feature turns it on.
+generator = []
+
+[dev-dependencies]
+# Generated index graphs for the component walk's law.
+proptest = "1"

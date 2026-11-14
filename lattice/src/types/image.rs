@@ -34,10 +34,10 @@
 //! `--features bootstrap-image` on each command above. The feature compiles each image's
 //! hand-written stub ([`seed_stub`] here) in its generated file's place.
 
-pub use crate::bump::{FrozenTable, Slot};
 pub use crate::symbols::{
     BinderSymbol, KeywordSymbol, StaticText, StaticTexts, TypeSymbol, ValueSymbol,
 };
+pub use bumpstorage::{FrozenTable, Slot};
 
 pub use super::component::Component;
 pub use super::digest::{ComponentMember, TypeDigest};

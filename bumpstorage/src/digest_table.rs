@@ -8,16 +8,21 @@
 //! and reading an entry only when its word matches. The load stays at most one half, so every
 //! probe ends at an empty slot. The smallest run is four slots, one 64 B line.
 //!
+//! A [`Keyed`] entry is found by its key ([`get`](DigestTable::get)). An entry whose key a caller
+//! builds for one lookup, a slice no `Copy` key could carry, is found by its content word and a
+//! test instead ([`find`](DigestTable::find), [`insert_at`](DigestTable::insert_at)); the
+//! keyed doors rest on those two, so the probe is written once.
+//!
 //! The table grows by laying a run twice the length and re-placing every occupied slot by its
 //! stored word, so growth reads no entry; the old run is stranded. Laying is the one capability
 //! it needs, [`LaysRuns`], which an insert takes as an argument: a region's writer lays fixed runs
 //! and has no allocator, so a table that grows only by laying runs is one a cell's region can
-//! host. The bump tier implements [`LaysRuns`] for a bump (`bump.rs`).
+//! host. The bump tier implements [`LaysRuns`] for a bump (`lib.rs`).
 //!
 //! A [`FrozenTable`](super::FrozenTable) holds the same slots, placed the same way into a run laid
 //! once in a bump and never written after. The type lattice's root builder keeps a hashbrown
 //! table, which it freezes into a frozen table, and a branch keeps a digest table; see
-//! [identity.md § Storage](../types/identity.md#storage-a-root-and-its-branches).
+//! [identity.md § Storage](../../lattice/src/types/identity.md#storage-a-root-and-its-branches).
 
 use std::cell::Cell;
 
@@ -78,24 +83,15 @@ impl<'r, N> Slot<'r, N> {
         }
     }
 
-    /// The slot holding `entry`, whose key the caller has read as `key`.
-    pub(super) fn of(key: N::Key, entry: &'r N) -> Self
-    where
-        N: Keyed,
-    {
-        Slot {
-            word: N::word(key),
-            entry: Some(entry),
-        }
-    }
-
     /// The entry the slot holds, or `None` where it is empty.
-    pub(crate) fn entry(self) -> Option<&'r N> {
+    #[doc(hidden)]
+    pub fn entry(self) -> Option<&'r N> {
         self.entry
     }
 
     /// The key's low word the slot stores; its home.
-    pub(crate) fn word(self) -> u64 {
+    #[doc(hidden)]
+    pub fn word(self) -> u64 {
         self.word
     }
 }
@@ -119,7 +115,7 @@ pub struct DigestTable<'r, N> {
 const _: () = assert!(std::mem::size_of::<Cell<Slot<'static, u8>>>() == 16);
 const _: () = assert!(std::mem::size_of::<DigestTable<'static, u8>>() == 24);
 
-impl<'r, N: Keyed> DigestTable<'r, N> {
+impl<'r, N> DigestTable<'r, N> {
     /// An empty table on the smallest run.
     pub fn new(lay: impl LaysRuns<'r>) -> Self {
         Self::on_run(lay, SMALLEST)
@@ -137,21 +133,26 @@ impl<'r, N: Keyed> DigestTable<'r, N> {
         }
     }
 
-    /// The entry whose key is `key`, if the table holds one.
-    pub fn get(&self, key: N::Key) -> Option<&'r N> {
+    /// The entry homed at `word` that `is` accepts, if the table holds one: the door for an entry
+    /// whose key a caller builds for one lookup, as a slice no `Copy` key could carry.
+    pub fn find(&self, word: u64, is: impl Fn(&'r N) -> bool) -> Option<&'r N> {
         let run = self.run.get();
-        probe(run.len(), |index| run[index].get(), key)
+        probe(run.len(), |index| run[index].get(), word, is)
     }
 
-    /// Insert `entry`, whose key the caller guarantees is absent, growing through `lay` first if
-    /// one more entry would pass half the run.
-    pub fn insert_unique(&self, lay: impl LaysRuns<'r>, entry: &'r N) {
-        let key = entry.key();
-        debug_assert!(self.get(key).is_none(), "an inserted key is absent");
+    /// Insert `entry` under `word`, growing through `lay` first if one more entry would pass half
+    /// the run. The caller guarantees the table holds no entry it would accept under `word`.
+    pub fn insert_at(&self, lay: impl LaysRuns<'r>, word: u64, entry: &'r N) {
         if (self.len.get() + 1) * 2 > self.run.get().len() {
             self.grow(lay);
         }
-        place(self.run.get(), Slot::of(key, entry));
+        place(
+            self.run.get(),
+            Slot {
+                word,
+                entry: Some(entry),
+            },
+        );
         self.len.set(self.len.get() + 1);
     }
 
@@ -175,6 +176,12 @@ impl<'r, N: Keyed> DigestTable<'r, N> {
         self.run.get().iter().filter_map(|slot| slot.get().entry)
     }
 
+    /// Every entry beside its stored word, in slot order: what a frozen twin is placed from.
+    pub fn words(&self) -> impl Iterator<Item = (u64, &'r N)> {
+        let slots = self.run.get().iter().map(Cell::get);
+        slots.filter_map(|slot| Some((slot.word, slot.entry?)))
+    }
+
     /// Visit every entry, in slot order.
     pub fn each(&self, visit: impl FnMut(&'r N)) {
         self.entries().for_each(visit);
@@ -194,21 +201,37 @@ impl<'r, N: Keyed> DigestTable<'r, N> {
     }
 }
 
-/// The entry under `key` in a run of `len` slots, each read through `slot`, probing linearly from
-/// the key's home: the one probe a [`DigestTable`] and a [`FrozenTable`] share.
-pub(super) fn probe<'r, N: Keyed>(
+impl<'r, N: Keyed> DigestTable<'r, N> {
+    /// The entry whose key is `key`, if the table holds one.
+    pub fn get(&self, key: N::Key) -> Option<&'r N> {
+        self.find(N::word(key), |entry| entry.key() == key)
+    }
+
+    /// Insert `entry`, whose key the caller guarantees is absent, growing through `lay` first if
+    /// one more entry would pass half the run.
+    pub fn insert_unique(&self, lay: impl LaysRuns<'r>, entry: &'r N) {
+        let key = entry.key();
+        debug_assert!(self.get(key).is_none(), "an inserted key is absent");
+        self.insert_at(lay, N::word(key), entry);
+    }
+}
+
+/// The entry homed at `word` that `is` accepts, in a run of `len` slots each read through `slot`,
+/// probing linearly from the word's home and testing only an entry whose stored word matches: the
+/// one probe a [`DigestTable`] and a [`FrozenTable`](super::FrozenTable) share.
+pub(super) fn probe<'r, N>(
     len: usize,
     slot: impl Fn(usize) -> Slot<'r, N>,
-    key: N::Key,
+    word: u64,
+    is: impl Fn(&'r N) -> bool,
 ) -> Option<&'r N> {
     let mask = len - 1;
-    let word = N::word(key);
     let mut index = word as usize & mask;
     // Ends: the load is at most one half, so an empty slot always lies ahead.
     loop {
         let slot = slot(index);
         let entry = slot.entry?;
-        if slot.word == word && entry.key() == key {
+        if slot.word == word && is(entry) {
             return Some(entry);
         }
         index = (index + 1) & mask;

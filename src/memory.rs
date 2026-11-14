@@ -6,7 +6,7 @@
 //! [`program`](crate::memory::program) is program storage: one `cellgraph` store, written through a
 //! [`Writer`](crate::memory::Writer) like a region.
 //!
-//! The **bump tier** is `lattice`'s — storage outside the graph, [`Bump`](crate::memory::Bump), [`BumpAllocator`](crate::memory::BumpAllocator), [`BumpVec`](crate::memory::BumpVec) and
+//! The **bump tier** is `bumpstorage`'s — storage outside the graph, [`Bump`](crate::memory::Bump), [`BumpAllocator`](crate::memory::BumpAllocator), [`BumpVec`](crate::memory::BumpVec) and
 //! [`BumpBackedMap`](crate::memory::BumpBackedMap), for the type lattice's registry and for the
 //! scratch a caller passes, with the [`strongly_connected_components`](crate::memory::strongly_connected_components)
 //! walk staged in it. It is
@@ -25,12 +25,12 @@ pub mod substrate;
 #[cfg(test)]
 mod tests;
 
-pub use knot::{Edge, Knot, KnotPlan, Member};
-pub use lattice::bump::{
+pub use bumpstorage::{
     Bump, BumpAllocator, BumpBackedMap, BumpBackedSet, BumpVec, LaysRuns,
     strongly_connected_components,
 };
-pub(crate) use lattice::bump::{bump_set, bump_table};
+pub(crate) use bumpstorage::{bump_set, bump_table};
+pub use knot::{Edge, Knot, KnotPlan, Member};
 pub use program::{ProgramBrand, ProgramStorage, program_storage};
 pub use slots::{SlotArray, SlotConflict, SlotView};
 pub use substrate::*;

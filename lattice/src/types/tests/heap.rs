@@ -7,9 +7,9 @@
 //! branch are laid in one region, too — so any allocation inside the bracket is the lattice's own,
 //! and the test names it by failing.
 
-use crate::bump::{Bump, BumpAllocator, BumpVec};
 use crate::symbols::{BinderSymbol, KeywordSymbol, SymbolInterner, TypeSymbol, ValueSymbol};
 use crate::tests::allocation_count;
+use bumpstorage::{Bump, BumpAllocator, BumpVec};
 
 use super::raw::RawRegistry;
 use crate::types::handle::{KType, TypeHandle};

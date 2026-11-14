@@ -773,6 +773,6 @@ observes it records in `tests/native.rs` for the test around it to read back.
 - [Setting the build budget](../../roadmap/features/bound-settings.md)
   — the budget as a setting a user names.
 - [Agents](../../roadmap/features/agents.md) — a depot per agent.
-- [Settlements retired](../../roadmap/one-build/settlements-retired.md) — the
-  depot holding compositions alone, with no key computed from a value and no
-  pin.
+- [The build over the binding graph](../../roadmap/one-build/build-over-the-binding-graph.md)
+  — the depot holding compositions alone, with no key computed from a value
+  and no pin.

@@ -22,7 +22,7 @@
 //! Both entry points take the scratch allocator the walk's transient buffers — each node's child
 //! list and the rebuilt children — are built in.
 
-use crate::bump::{BumpAllocator, BumpVec};
+use bumpstorage::{BumpAllocator, BumpVec};
 
 use super::Variance;
 use crate::types::chain::TypeChain;

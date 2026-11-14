@@ -30,7 +30,7 @@ is the only tier that rebaselines the trend logs under `observe/`, and then only
 
 Property depth is the one variable `PROPTEST_CASES`, which `ProptestConfig::default()` reads: the
 routine tier sets 64, the total tier 2048, and every property module states its share of that
-default (`crate::tests::case_share`, one in koan's test scaffolding and one in `lattice`'s) rather
+default (`crate::tests::case_share`, one in koan's test scaffolding, one in `lattice`'s and one in `bindgraph`'s) rather
 than a literal, so the modules' relative depths hold at
 whatever the tier — or you — ask for. No module goes below 64 cases.
 
@@ -45,6 +45,7 @@ cargo test --workspace         # every module's unit tests, across the workspace
 cargo test parse::             # one module
 cargo test -p sexlex           # the layout crate alone
 cargo test -p lattice          # the symbols, the type lattice's laws and its heap contract
+cargo test -p bindgraph        # the binding graph's cases and laws, over a toy domain
 cargo test -- --nocapture      # show stdout
 ```
 
@@ -238,7 +239,7 @@ details and tuning lives in
 The audit slate is the load-bearing memory-safety check. It runs the safe
 koan code that drives every unsafe site the kept modules reach — `cellgraph`'s
 `Writer::fill`, `Writer::thin_run` and reattach seam, and `bumpalo`'s allocator
-under the bump tier — under Miri's tree-borrows mode, with zero process-exit
+under the bump tier, `bumpstorage` — under Miri's tree-borrows mode, with zero process-exit
 leaks and zero UB required for sign-off. `memory`'s knot adds no layout or
 retype over `thin_run` (cellgraph's slate runs it at every edge its arithmetic
 has, including a fill writing into the same region); what koan's slate pins is

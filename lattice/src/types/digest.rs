@@ -27,8 +27,8 @@
 //! so no two variants can share a digest, every text run is length-prefixed so concatenation is
 //! unambiguous, and every child digest / [`ContentKey`] / integer is fed little-endian.
 
-use crate::bump::{BumpAllocator, BumpVec};
 use crate::symbols::{BinderSymbol, Symbol, TypeSymbol};
+use bumpstorage::{BumpAllocator, BumpVec};
 
 use super::handle::{KType, Naming};
 use super::kind::KKind;

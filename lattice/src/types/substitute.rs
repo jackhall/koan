@@ -17,8 +17,8 @@
 //! [`contains_deep_carrier`](super::stored::StoredNode::contains_deep_carrier)) says nothing it
 //! seeks is inside, a signature too.
 
-use crate::bump::{BumpAllocator, BumpVec};
 use crate::symbols::TypeSymbol;
+use bumpstorage::{BumpAllocator, BumpVec};
 
 use super::chain::TypeChain;
 use super::node::{PathClass, TypeNode, Variable};

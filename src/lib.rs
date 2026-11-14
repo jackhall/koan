@@ -17,7 +17,7 @@ pub mod elaborate;
 /// parameter, born by the tie of its component and copied by re-tying its knot.
 pub mod knot;
 /// The shape of things in storage: the cell tier over `cellgraph` — its names under Koan's
-/// spelling, the slot array, the knot and program storage — with `lattice`'s bump tier
+/// spelling, the slot array, the knot and program storage — with `bumpstorage`'s bump tier
 /// re-exported beside it.
 pub mod memory;
 pub mod parse;

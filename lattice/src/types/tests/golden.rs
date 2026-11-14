@@ -4,8 +4,8 @@
 //! computes, and that no two node kinds share a domain tag. The first catches a recipe change that
 //! would silently re-identify a builtin leaf; the second catches a new variant added without one.
 
-use crate::bump::Bump;
 use crate::symbols::{BinderSymbol, KeywordSymbol, SymbolInterner, TypeSymbol, ValueSymbol};
+use bumpstorage::Bump;
 
 use crate::types::component::Component;
 use crate::types::digest::{ComponentMember, node_digest};

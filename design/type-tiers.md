@@ -29,7 +29,7 @@ where each rests it.
 
 A handle's identity is its content's digest, so it names one type in every
 tier, and a reset moves where a type resolves, never what it is. Every branch's table is a
-[`DigestTable`](../lattice/src/bump/digest_table.rs) differing only in what
+[`DigestTable`](../bumpstorage/src/digest_table.rs) differing only in what
 lays its runs; the frozen load's is a run of slots laid once at the freeze and
 never written, and the agent tier's grows in the agent's bump. An intern
 probes the tiers a step reads longest-lived first, the frozen load, then the

@@ -1,0 +1,20 @@
+[package]
+name = "bindgraph"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[dependencies]
+# The bump tier every kept table and entry is laid through: the lent bumps, the digest tables
+# found by a content word, and the frozen twins.
+bumpstorage = { path = "../bumpstorage" }
+
+[features]
+# Counts the domain's asks and the answer function's runs. Off by default, so no other build
+# compiles the counters.
+perf = []
+
+[dev-dependencies]
+# Generated texts and bindings for the crate's laws, each checked against the same graph answered
+# from scratch; the hand-written cases pin the design's examples.
+proptest = "1"

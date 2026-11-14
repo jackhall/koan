@@ -94,16 +94,17 @@ into an image, and nothing resumes from one.
 ## Dependencies
 
 The [build depot](../../src/scheduler/README.md#the-build-depot) it serializes
-holds compositions alone once settlements are retired, program storage holds
-every layer the load laid, and the [builtin image](../../src/builtin_image.rs),
+holds compositions alone once the build is over the binding graph, the cold
+layer then writes the graph and the instances the load made where it names
+the load's layers, and the [builtin image](../../src/builtin_image.rs),
 the lower layer of the root, is what it stubs a reference into by handle.
 
 **Requires:**
 
+- [The graph written out and read back](../../bindgraph/roadmap/graph-export.md)
+  — the export the image writes the graph through.
 - [The build over the binding graph](build-over-the-binding-graph.md) — the
   image writes the graph, not tables a later build would reshape.
-- [Settlements retired](settlements-retired.md) — the depot it writes holds
-  compositions alone, and program storage every layer the load laid.
 - [What the agent tier keeps](agent-tier-keeps.md) — which of the tier's
   content is the cold layer's and which the warm's.
 - [A refused program stays loaded](refused-programs-stay-loaded.md) — program

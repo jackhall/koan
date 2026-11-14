@@ -2,8 +2,8 @@
 //! that no binder captures one, that the order reads it as a rigid variable, that no solve binds it,
 //! and that its identity is every field.
 
-use crate::bump::{Bump, BumpAllocator};
 use crate::symbols::{BinderSymbol, SymbolInterner, TypeSymbol, ValueSymbol};
+use bumpstorage::{Bump, BumpAllocator};
 
 use super::raw::RawRegistry;
 use super::raw::order::is_subtype_of;

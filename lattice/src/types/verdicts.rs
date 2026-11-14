@@ -8,8 +8,8 @@
 //! Every table keeps every verdict it is given, as [`VerdictEntry`]s:
 //!
 //! - The **load's** is read-only and complete for what the load asked: its builder records into a
-//!   [`DigestTable`](crate::bump::DigestTable) laid at the first verdict, which evicts nothing, and
-//!   the freeze lays it into a [`FrozenTable`](crate::bump::FrozenTable). No run writes it.
+//!   [`DigestTable`](bumpstorage::DigestTable) laid at the first verdict, which evicts nothing, and
+//!   the freeze lays it into a [`FrozenTable`](bumpstorage::FrozenTable). No run writes it.
 //! - A **branch's** is insert-only: a digest table laid in its half at its first verdict and
 //!   released with it.
 //!
@@ -22,7 +22,7 @@
 //! read and record verdicts live in [`order`](super::order), [`ranking`](super::ranking) and
 //! [`unify`](super::unify).
 
-use crate::bump::Keyed;
+use bumpstorage::Keyed;
 
 use super::digest::TypeDigest;
 use super::handle::Handle;

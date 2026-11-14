@@ -6,8 +6,8 @@
 use std::collections::{BTreeMap, HashSet};
 use std::fmt::Write;
 
-use crate::bump::{Bump, FrozenTable};
 use crate::symbols::{BinderSymbol, StaticText, StaticTexts, Symbol, SymbolInterner};
+use bumpstorage::{Bump, FrozenTable};
 
 use super::super::component::Component;
 use super::super::digest::{

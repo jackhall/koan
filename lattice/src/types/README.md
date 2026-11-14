@@ -61,7 +61,7 @@ breaks without it.
 The lattice names exactly two things outside itself: the classified symbol
 types from [`symbols`](../symbols/README.md), and the
 bump-allocation seam and the component walk from
-[the bump tier](../../README.md#the-bump-tier). No value, cell, AST, scope,
+[the bump tier](../../../bumpstorage/README.md#the-bump-tier). No value, cell, AST, scope,
 working part or execute-side type reaches it — the
 [parser](../../../src/parse/README.md) included, which is what keeps the two
 from naming each other: both rest on `symbols`, a leaf.
@@ -167,9 +167,9 @@ never a bundle — the lattice knows about types and symbols and nothing else.
   projection node and the unifier's descent into it.
 - [A carried union at a contravariant position](../../../roadmap/types/contravariant-union-solve.md)
   — a solve over an argument's union blind to its member order.
-- [Narrower questions](../../../roadmap/one-build/narrower-questions.md) — a
-  door answering the interval of bindings under which a relation over a
-  lexical variable holds, where a judgement needs one.
+- [Every typing rule states its question](../../../roadmap/one-build/typing-rules-state-their-questions.md)
+  — each judgement about a lexical variable a question with finitely many
+  answers, where a rule is handed a type today.
 - [The types project's unplanned work](../../../roadmap/types/README.md#unplanned-work)
   — anonymous structural recursion in types, and a singleton static type for
   a type value.

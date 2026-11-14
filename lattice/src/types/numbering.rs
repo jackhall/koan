@@ -23,7 +23,7 @@
 //!
 //! A variable no position names comes last, by bound: two with one bound are interchangeable.
 
-use crate::bump::{BumpAllocator, BumpVec};
+use bumpstorage::{BumpAllocator, BumpVec};
 
 use super::chain::TypeChain;
 use super::handle::{Handle, KType, TypeHandle};

@@ -311,11 +311,11 @@ fn a_key_is_its_run() {
 /// declaring one records nothing; a name the tier lacks is recorded as before.
 #[test]
 fn a_static_tier_renders_names_it_never_records() {
-    let bump: &'static crate::bump::Bump = Box::leak(Box::new(crate::bump::Bump::new()));
+    let bump: &'static bumpstorage::Bump = Box::leak(Box::new(bumpstorage::Bump::new()));
     let texts = ["Error", "ok", "TRY"]
         .map(|text| &*bump.alloc(StaticText::imaged(Symbol::of(text).0, text)));
     let tier: &'static StaticTexts = Box::leak(Box::new(StaticTexts::imaged(
-        crate::bump::FrozenTable::placed(bump, texts.len(), texts),
+        bumpstorage::FrozenTable::placed(bump, texts.len(), texts),
     )));
     let symbols = SymbolInterner::resting_on(tier);
     for text in texts {

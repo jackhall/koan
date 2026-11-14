@@ -7,15 +7,8 @@ publish = false
 [dependencies]
 # Symbol identity and type identity are content digests.
 blake3 = "1.8.5"
-# The bump tier's arena: storage outside the graph for the type registry and the scratch a caller
-# passes. `allocator-api2` turns on `impl Allocator for &Bump`, the seam the tier's growable
-# vector and hash table are built over. Same version cellgraph pins.
-bumpalo = { version = "3.20.3", features = ["allocator-api2"] }
-# The bump tier's hash table — the type registry's node table rides it.
-hashbrown = "0.17"
-# The `Allocator` trait `&Bump` implements, and the growable `Vec` the bump tier builds over it —
-# `std::vec::Vec` has no stable custom-allocator seam.
-allocator-api2 = "0.2.21"
+# The bump tier the type registry, its tables and every scratch buffer are laid in.
+bumpstorage = { path = "../bumpstorage" }
 
 [features]
 # Counters koan's tests read across the crate boundary, where `cfg(test)` does not reach. Off by
@@ -25,12 +18,15 @@ counters = []
 # generated file does not compile: after a change to the stored layout it spells.
 bootstrap-image = []
 # The image generator — the emitter, the digest checks and the golden compare — which koan's tests
-# call across the crate boundary. Off by default, so the shipped interpreter carries none of it.
-generator = []
+# call across the crate boundary. Off by default, so the shipped interpreter carries none of it. It
+# opens the frozen table's slots in `bumpstorage`, which it writes.
+generator = ["bumpstorage/generator"]
 
 [dev-dependencies]
 # Generated type trees for the lattice's laws and generated spellings for the symbol classes.
 proptest = "1"
+# The frozen table's slots, which the image generator's tests read as the generator does.
+bumpstorage = { path = "../bumpstorage", features = ["generator"] }
 
 # The node-table benchmark: the digest table a type branch lays against the hashbrown table the
 # root keeps, over linked stand-in nodes. `cargo bench -p lattice --bench node_table [section…]`.

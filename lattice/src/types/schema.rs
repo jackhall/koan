@@ -23,8 +23,8 @@
 
 use std::ops::Deref;
 
-use crate::bump::{BumpAllocator, BumpVec, LaysRuns};
 use crate::symbols::{KeywordSymbol, TypeSymbol, ValueSymbol};
+use bumpstorage::{BumpAllocator, BumpVec, LaysRuns};
 
 use super::chain::TypeChain;
 use super::handle::{DeclaredType, KType, Parametric};

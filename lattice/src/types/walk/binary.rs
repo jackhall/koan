@@ -11,8 +11,8 @@
 //! Every pairing's buffers are built in the scratch allocator the walk is handed. The walk reads
 //! nodes by reference, from node to child.
 
-use crate::bump::{BumpAllocator, BumpVec};
 use crate::symbols::BinderSymbol;
+use bumpstorage::{BumpAllocator, BumpVec};
 
 use super::Variance;
 use crate::types::chain::TypeChain;

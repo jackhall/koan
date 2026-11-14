@@ -49,7 +49,9 @@ For a walk-through of the language surface with runnable snippets, see the [tuto
 ```sh
 cargo test                               # every module's unit tests
 cargo test parse::                       # tests under one module
-cargo test -p lattice                    # the symbols, the type lattice and the bump tier
+cargo test -p lattice                    # the symbols and the type lattice
+cargo test -p bumpstorage                # the bump tier: its digest tables and the component walk
+cargo test -p bindgraph                  # the binding graph and its laws
 ```
 
 Each module keeps its tests in a `#[cfg(test)] mod tests` block alongside the code. For the full testing and linting workflow — including the Miri audit slate that signs off the memory model under tree borrows — see [TEST.md](TEST.md).
@@ -115,8 +117,8 @@ program does not catch ends the run.
 ## Source layout
 
 The crate's top-level modules are [memory/](src/memory) (where a value lives
-and how long — the cell tier and program storage, with `lattice`'s bump tier
-re-exported), [parse](src/parse.rs) (text →
+and how long — the cell tier and program storage, with `bumpstorage`'s bump
+tier re-exported), [parse](src/parse.rs) (text →
 `KExpression`, plus the AST and builtin shape table that output is written in),
 [values/](src/values.rs) (the data values and the per-dispatch expression form,
 laid down in a cell's region — see [src/values/README.md](src/values/README.md)),
@@ -163,7 +165,7 @@ src/
 ├── lib.rs               library facade — declares every module and re-exports `lattice`'s symbols and types (the latter as type_lattice), so the binary and the tests reach the interpreter through one module graph
 ├── tests.rs             `#[cfg(test)]` crate-wide test scaffolding — installs audit/'s counting global allocator for the lib-test binary and exposes the tally an allocation bracket reads; tests/boundary.rs is the source scanner every module's boundary test hands its import lists to
 ├── source.rs            source-span and provenance carrier for errors
-├── memory.rs            pub mod memory — where a value lives and how long: the cell tier over cellgraph and program storage, with `lattice`'s bump tier re-exported
+├── memory.rs            pub mod memory — where a value lives and how long: the cell tier over cellgraph and program storage, with `bumpstorage`'s bump tier re-exported
 ├── memory/
 │   ├── substrate.rs        the crate's only import of cellgraph — a re-export block binding the liveness width once (WIDTH), with the width-bound Ready / Operand / CellGraph / StepContext aliases
 │   ├── slots.rs            SlotArray / SlotView — a fixed run of two-state write-once binding slots in a cell's region, safe code over cellgraph's once-written run: the invariant array binds, the covariant view reads
@@ -337,11 +339,6 @@ The [lattice](lattice/README.md) crate's tree:
 lattice/src/
 ├── lib.rs               the crate root — the import rule and `deny(unsafe_code)` outside the test build, which a sealed component's member-table read alone allows
 ├── tests.rs             `#[cfg(test)]` crate-wide test scaffolding — installs audit/'s counting global allocator for this crate's test binary, the tally the heap-contract tests bracket, and the property-case share
-├── bump.rs              pub mod bump — the bump tier: Bump, BumpAllocator (= &Bump), BumpVec, BumpBackedMap / BumpHashTable / BumpBackedSet and bump_table / bump_hash_table / bump_set; the crate's only import of bumpalo / hashbrown / allocator_api2
-├── bump/
-│   ├── digest_table.rs     DigestTable — the insert-only table of references to entries keyed by a uniformly distributed word, grown through LaysRuns with no allocator, so a cell's region can host it
-│   ├── frozen_table.rs     FrozenTable — a DigestTable's read-only copy, its slots laid once and never written, so it holds no cell
-│   └── components.rs       strongly_connected_components — Tarjan over an index graph, staged in a bump; the walk the type lattice's recursive groups and koan's scope bindings both condense by
 ├── symbols.rs           pub mod symbols — Symbol, a name's 128-bit content digest, plus SymbolInterner (the program's digest→text side table, read only when rendering: the load's table, frozen at its end, and an overlay for names recorded after, resting on an optional StaticTexts tier compiled into the binary), the four classified wrappers, BindKind, the token classifiers and the identity hasher every symbol-keyed table uses; a leaf, so koan's parse and the type lattice rest on it rather than on each other
 ├── symbols/
 │   └── tests.rs            interning laws, including how a static_name! records
@@ -380,6 +377,39 @@ lattice/src/
     ├── ranking.rs        priority classes — admit_by_class, the per-class verdict class_at_least the chain records, select_by_class, and judge_by_class's never/always/maybe over static types
     ├── window.rs         RecursiveGroupWindow and seal_group — the open/seal doors and the Tarjan component pass behind them
     └── render.rs         surface-syntax rendering — the one recursion written by hand, over the chain and the symbol interner
+```
+
+The [bumpstorage](bumpstorage/README.md) crate's tree:
+
+```
+bumpstorage/src/
+├── lib.rs               the bump tier: Bump, BumpAllocator (= &Bump), BumpVec, BumpBackedMap / BumpHashTable / BumpBackedSet and bump_table / bump_hash_table / bump_set, LaysRuns for a bump; the workspace's only import of bumpalo / hashbrown / allocator_api2, and `forbid(unsafe_code)`
+├── tests.rs             `#[cfg(test)]` the property-case share
+├── digest_table.rs      DigestTable — the insert-only table of references to entries homed by a uniformly distributed word, found by a Keyed entry's key or by a word and a test, grown through LaysRuns with no allocator, so a cell's region can host it
+├── frozen_table.rs      FrozenTable — a DigestTable's read-only twin, its slots laid once and never written, so it holds no cell
+└── components.rs        strongly_connected_components — Tarjan over an index graph, staged in a bump; the walk the type lattice's recursive groups and koan's scope bindings both condense by
+```
+
+The [bindgraph](bindgraph/README.md) crate is
+[the binding graph](design/binding-graph.md) as a library generic over a fact
+domain: bind sites laid from a description of the text, each question's
+owner, the calls between bodies, the answers that give names their content, and
+the instances that hold a site's answers under a binding. It names nothing of koan, and no koan module imports it.
+
+```
+bindgraph/src/
+├── lib.rs               the crate root — the three layers (text, graph, bound), `forbid(unsafe_code)`, and the doctest that a path into koan does not compile
+├── id.rs                the id newtypes and Site, a body's entry or one of its statements
+├── domain.rs            what the embedder supplies — Facts (what the graph keeps), Domain (the content one call reads), Answers, Binding and the Doors an answer asks through, checked against its question's declared asks — and the contracts it keeps
+├── text.rs              Text, the builder that describes bodies, site and answered names, questions and the asks each may make, calls on an arm or a site, and AnswersName edges; and Malformed
+├── graph.rs             Graph — BindingNode and its handle width, Ask, BindsAfter, PassesName, AnswersName, AnswerBranch, OpenCaller and the accessors over them; Field, one declared ask's place in a handle; bound_at, passed and the afresh oracle
+├── graph/lay.rs         Text::lay, step by step — the bases, the site order, each question's and call's owner, where each answered name binds, each node's handle fields, and every refusal
+├── graph/grows.rs       the refusal of a recursion that grows — one arc per mention, summary arcs through calls, strongly connected components by an iterative Kosaraju
+├── bound.rs             Bound, Handle (an instance's admission in words the caller holds) and Frozen: instance looks the view up and evaluates on a miss, answers reads or replays, freeze lays the frozen part
+├── bound/store.rs       where answers and views rest — the content words, the answer and view entries, Resting (a run's answers under a byte budget) and a node's ViewTable
+├── bound/evaluate.rs    an evaluation — one node under one view, within one instance call, its demands on an explicit stack, knots found by Tarjan's algorithm, a filed callee's names derived again
+├── tests.rs             the toy domain, the reference evaluation, hand-written cases and the laws as property tests
+└── tests/               the toy, the harness, the reference, the cases, the laws, the rebuilt cases and the perf counters' test
 ```
 
 ## Design and roadmap
@@ -422,9 +452,8 @@ from that module's top-of-file comment. The kept modules carry theirs:
 - [src/dispatch/README.md](src/dispatch/README.md) — the language koan's
   programs run under: what a node is, the builtin table, selection by priority
   class, tails under a contract, errors, and the overlap check.
-- [lattice/README.md](lattice/README.md) — the symbol vocabulary, the type
-  lattice and the bump tier as one crate below koan, its import rule, the
-  component walk; with
+- [lattice/README.md](lattice/README.md) — the symbol vocabulary and the type
+  lattice as one crate below koan, and its import rule; with
   [lattice/src/symbols/README.md](lattice/src/symbols/README.md) for why a
   symbol's identity is a content digest, why the interner is not a lookup
   authority, and what a symbol's binding class buys, and
@@ -432,12 +461,19 @@ from that module's top-of-file comment. The kept modules carry theirs:
   algebra: its invariants, and an index of its parts — identity, the node
   vocabulary, the relations, solving, and [the laws](lattice/src/types/laws.md)
   with what breaks without each.
+- [bumpstorage/README.md](bumpstorage/README.md) — the bump tier as a crate
+  below the lattice, the binding graph and koan: the arena, the digest table
+  and its frozen twin, the component walk, and its import rule.
 - [sexlex/README.md](sexlex/README.md) — the layout half of the parser: what it
   decides, the three things it refuses, and the three indentation regimes.
 - [cellgraph/README.md](cellgraph/README.md) — the cell substrate's contract and
   verbs, with [cellgraph/src/graph/README.md](cellgraph/src/graph/README.md) for
   matrix liveness, the sealed tier and pricing, and
   [cellgraph/src/tree/README.md](cellgraph/src/tree/README.md) for tree cells.
+- [bindgraph/README.md](bindgraph/README.md) — the binding graph as a
+  library: its three layers, the order of bind sites and who owns a
+  question, the refusal of a recursion that grows, the domain's contract,
+  how an instance is found and made, and the laws.
 
 A design no single module owns sits in [design/](design/gradual-typing.md):
 [gradual typing](design/gradual-typing.md) follows a type from its declaration,
@@ -468,9 +504,19 @@ roadmap tree — its README is the whole design statement, and the crate doc on
 [sexlex/src/lib.rs](sexlex/src/lib.rs) is the precise form of the five rules
 about whitespace, brackets, quotes, adjacency and indentation it rests on.
 
-[lattice/](lattice/README.md) is the third: the symbol vocabulary, the type
-lattice and the bump tier, so the lattice's closure — it names nothing of koan
-— holds by the crate edge. Koan re-exports its modules under `crate::symbols`,
-`crate::type_lattice` and `crate::memory`, so no koan file outside `lib.rs` and
-`memory.rs` names the crate. Like sexlex it carries no roadmap tree: its open
+[lattice/](lattice/README.md) is the third: the symbol vocabulary and the type
+lattice, so the lattice's closure — it names nothing of koan — holds by the
+crate edge. Koan re-exports its modules under `crate::symbols` and
+`crate::type_lattice`, so no koan file outside `lib.rs` names the crate. Like
+sexlex it carries no roadmap tree: its open
 work stays in koan's.
+
+[bindgraph/](bindgraph/README.md) is the fourth: the binding graph, generic
+over a fact domain and naming nothing of koan. Like cellgraph it carries its
+open work in [a roadmap tree of its own](bindgraph/roadmap/README.md).
+
+[bumpstorage/](bumpstorage/README.md) is the fifth: the bump tier the lattice,
+the binding graph and koan all rest on, so neither of the first two depends on
+the other for its storage. Koan re-exports it under `crate::memory`, so no
+koan file outside `memory.rs` names the crate. Like sexlex it carries no
+roadmap tree.

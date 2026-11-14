@@ -19,8 +19,9 @@ buys the language and listing its ready-to-start items. The projects are
 [performance/](performance/README.md), what a program pays at the size its data sets.
 
 The cell substrate Koan embeds carries its own roadmap,
-[cellgraph/roadmap/](../cellgraph/roadmap/README.md). Items cross-link across
-the two trees — a library item routinely unblocks a Koan one — and `doclinks`
+[cellgraph/roadmap/](../cellgraph/roadmap/README.md), and so does the binding
+graph, [bindgraph/roadmap/](../bindgraph/roadmap/README.md). Items cross-link across
+the trees — a library item routinely unblocks a Koan one — and `doclinks`
 gates the pair as one dependency graph, but each tree derives its own
 "Next items" list, so the one below covers this tree only.
 
@@ -37,14 +38,8 @@ subdirectory's README carries its own slice.
 - [Families as parameters](features/families-as-parameters.md)
 - [Yielding iterators](features/yielding-iterators.md)
 - [A program owns its source](one-build/a-program-owns-its-source.md)
-- [The binding graph crate](one-build/binding-graph-crate.md)
-- [Callees built by a call traced](one-build/built-module-members.md)
-- [Captures and views traced](one-build/captures-and-views-traced.md)
-- [An exhaustive check](one-build/exhaustive-check.md)
 - [An opaque view nested in a module, laid at load](one-build/opaque-views-nested-at-load.md)
 - [A refused program stays loaded](one-build/refused-programs-stay-loaded.md)
-- [Settlements retired](one-build/settlements-retired.md)
-- [Warm composed types](one-build/warm-composed-types.md)
 - [Recursion over run-time types](performance/recursion-over-run-time-types.md)
 - [Placing a verdict without probing](performance/verdict-placement.md)
 - [What a barrier rebuilds](types/barrier-coercion.md)

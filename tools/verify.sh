@@ -189,6 +189,14 @@ release_step() {
     ok release 'checks clean under --release' 'release ok'
 }
 
+# The binding graph's tests again under `perf`, which no default build compiles, so the counters'
+# assertions run with them.
+bindgraph_perf() {
+    run 'bindgraph perf' 'bindgraph perf tests FAILED' \
+        cargo test -p bindgraph --features perf --lib --quiet
+    ok 'bindgraph perf' "ok ($(passed) passed)" 'bindgraph perf ok'
+}
+
 # clippy, auto-fixing once before it gates. `$@` is the package/feature selection.
 clippy_step() {
     if OUT="$(cargo clippy "$@" -- -D warnings 2>&1)"; then
@@ -279,6 +287,7 @@ if [ "$TIER" = routine ]; then
     # run doctests; here nothing instruments the build, so there is nothing to split.
     run tests 'tests FAILED' cargo test --workspace --quiet
     ok tests "ok ($(passed) passed, unit + doctests)" 'tests ok'
+    bindgraph_perf
 
     release_step
     snippets_step
@@ -306,14 +315,15 @@ ok tests "ok ($(passed) passed → $LCOV)" 'tests ok'
 # `compile_fail` doctest that *starts* compiling is a test failure.
 run doctests 'doctests FAILED' cargo test --workspace --doc --quiet
 ok doctests "ok ($(passed) passed, compile_fail guards included)" 'doctests ok'
+bindgraph_perf
 
 release_step
 snippets_step
 cellgraph_surface
-# `cellgraph/perf` is the one feature in the workspace, and it gates the measurement binary the
-# perf step below runs. A default build hides that source from clippy, so the total tier's lint
-# turns it on — the same reason the cellgraph-only routine scope does.
-clippy_step --workspace --all-targets --features cellgraph/perf
+# `cellgraph/perf` gates the measurement binary the perf step below runs, and `bindgraph/perf` the
+# binding graph's counters. A default build hides that source from clippy, so the total tier's lint
+# turns both on — the same reason the cellgraph-only routine scope does.
+clippy_step --workspace --all-targets --features cellgraph/perf,bindgraph/perf
 doclinks_step
 
 # The leak/UB audit over the slate the `slate-audit` step just proved current. Minutes, and the

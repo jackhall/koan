@@ -5,8 +5,8 @@
 //! that pins the *edge* of a law rather than the law itself. Each builds its own chain over a
 //! region of its own, which doubles as its scratch.
 
-use crate::bump::Bump;
 use crate::symbols::{BinderSymbol, KeywordSymbol, SymbolInterner, TypeSymbol, ValueSymbol};
+use bumpstorage::Bump;
 
 use super::raw::RawRegistry;
 use super::raw::lattice::{join, meet_through_variables as meet};

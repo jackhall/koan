@@ -1,6 +1,6 @@
 [workspace]
-members = ["cellgraph", "lattice", "sexlex"]
-default-members = [".", "cellgraph", "lattice", "sexlex"]
+members = ["bindgraph", "bumpstorage", "cellgraph", "lattice", "sexlex"]
+default-members = [".", "bindgraph", "bumpstorage", "cellgraph", "lattice", "sexlex"]
 resolver = "2"
 
 [package]
@@ -31,8 +31,10 @@ bootstrap-image = []
 cellgraph = { path = "cellgraph" }
 # The layout half of the parser: whitespace-sensitive s-expressions with glue, no vocabulary.
 sexlex = { path = "sexlex" }
-# The symbol vocabulary, the type lattice over it, and the bump tier both rest on.
+# The symbol vocabulary and the type lattice over it.
 lattice = { path = "lattice" }
+# The bump tier: storage outside any cell graph, re-exported by `memory`.
+bumpstorage = { path = "bumpstorage" }
 # A value's content digest, hashed as the lattice hashes a type's, at the lattice's version.
 blake3 = "1.8.5"
 # The one self-referential value: `CellSubstrate` owns program storage beside the graph that

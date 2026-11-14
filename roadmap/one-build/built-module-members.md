@@ -47,6 +47,13 @@ off that chain.
 
 ## Dependencies
 
-**Requires:** none.
+Written against the trace and the load's layers. Planning restates it over
+the binding graph, as a `PassesName` edge to a callee that is a call's
+result.
+
+**Requires:**
+
+- [The build over the binding graph](build-over-the-binding-graph.md) — the
+  edge such a call lays.
 
 **Unblocks:** none.

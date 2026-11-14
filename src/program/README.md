@@ -41,7 +41,7 @@ than a generic `cellgraph` type.
     The graph hands them to every step and crossing; the program record keeps
     them for a reader outside a step. They take bumps of their own rather than
     program storage's `Writer` because each grows as a
-    [collections arena](../../lattice/README.md#the-bump-tier) client. Resting
+    [collections arena](../../bumpstorage/README.md#the-bump-tier) client. Resting
     there is sound because neither owns anything on the global heap — their
     node indexes and
     [verdict tables](../../lattice/src/types/identity.md#storage-a-root-and-its-branches)

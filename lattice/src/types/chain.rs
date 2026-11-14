@@ -54,8 +54,8 @@
 
 use std::cell::Cell;
 
-use crate::bump::{Bump, BumpAllocator, BumpVec};
 use crate::symbols::{BinderSymbol, Symbol, TypeSymbol};
+use bumpstorage::{Bump, BumpAllocator, BumpVec};
 
 use super::component::Component;
 use super::digest::{self, ComponentMember, TypeDigest, schema_content_digest};
@@ -678,7 +678,7 @@ impl<'t, H: Habitat<'t>> TypeChain<'t, H> {
     /// parametric element yields no `KType`:
     ///
     /// ```compile_fail,E0308
-    /// use lattice::bump::Bump;
+    /// use bumpstorage::Bump;
     /// use lattice::symbols::{SymbolInterner, TypeSymbol};
     /// use lattice::types::{KType, RootBuilder, SEED, TypeChain};
     ///

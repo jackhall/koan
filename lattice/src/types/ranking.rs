@@ -27,7 +27,7 @@
 //! naming a variable their own class first mentions. A later class only admits against that
 //! solution, so dispatch hands the solve an argument's static contribution at a solving slot alone.
 
-use crate::bump::{BumpAllocator, BumpVec};
+use bumpstorage::{BumpAllocator, BumpVec};
 
 use super::chain::TypeChain;
 use super::handle::{Handle, Parametric, TypeHandle};

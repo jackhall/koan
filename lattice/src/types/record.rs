@@ -28,8 +28,8 @@
 
 use std::marker::PhantomData;
 
-use crate::bump::{BumpAllocator, BumpVec};
 use crate::symbols::{BinderSymbol, Symbol};
+use bumpstorage::{BumpAllocator, BumpVec};
 
 use super::handle::{Handle, Naming};
 use super::stored::Linked;

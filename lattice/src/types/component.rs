@@ -23,7 +23,7 @@
 use std::marker::PhantomData;
 use std::sync::atomic::{AtomicPtr, Ordering};
 
-use crate::bump::LaysRuns;
+use bumpstorage::LaysRuns;
 
 use super::digest::{ComponentMember, TypeDigest};
 use super::tiers::lay_one;

@@ -9,8 +9,8 @@
 //! [`Linked`] nodes: each function here enters its operands once and reads its result back as a
 //! handle.
 
-use crate::bump::{BumpAllocator, BumpVec};
 use crate::symbols::{BinderSymbol, TypeSymbol};
+use bumpstorage::{BumpAllocator, BumpVec};
 
 use super::chain::TypeChain;
 use super::handle::{DeclaredType, Handle, KType, Naming, Parametric, Scheme, TypeHandle};

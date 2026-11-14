@@ -4,7 +4,7 @@
 use proptest::prelude::*;
 
 use super::strongly_connected_components;
-use crate::bump::Bump;
+use crate::Bump;
 
 /// A digraph of up to twelve nodes as adjacency lists.
 fn digraph() -> impl Strategy<Value = Vec<Vec<usize>>> {

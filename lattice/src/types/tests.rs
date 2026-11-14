@@ -18,10 +18,10 @@ mod storage;
 mod tiers;
 mod verdicts;
 
-use crate::bump::BumpAllocator;
 use crate::symbols::{BinderSymbol, TypeSymbol};
 use crate::types::SEED;
 use crate::types::tiers::{Agent, BumpHalf, RootBuilder};
+use bumpstorage::BumpAllocator;
 
 use super::chain::TypeChain;
 use super::handle::{Handle, KType, Parametric, wrap};

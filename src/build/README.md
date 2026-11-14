@@ -1023,17 +1023,17 @@ and the scheduler hands a step its door and no more.
   — the budget as a setting a user names.
 - [Warm composed types](../../roadmap/one-build/warm-composed-types.md)
   — the types a settlement under a composition derives, kept warm.
-- [An exhaustive check](../../roadmap/one-build/exhaustive-check.md) —
-  every traced binding walked under an opt-in flag, keeping only refusals.
+- [An exhaustive check](../../roadmap/one-build/exhaustive-check.md) — an
+  opt-in load that also starts from every entry, keeping only refusals.
 - [Captures and views traced](../../roadmap/one-build/captures-and-views-traced.md)
   — a slot followed through captures, `LET` aliases and retypes by a site's
   slot map.
 - [Callees built by a call traced](../../roadmap/one-build/built-module-members.md)
   — a callee that is a call's result traced, and its layer laid by the load.
-- [Settlements retired](../../roadmap/one-build/settlements-retired.md) — an
-  untraced binding decided in the activation, the depot holding compositions
+- [Every typing rule states its question](../../roadmap/one-build/typing-rules-state-their-questions.md)
+  — no unit held: each judgement about a bound name a question with finitely
+  many answers.
+- [The build over the binding graph](../../roadmap/one-build/build-over-the-binding-graph.md)
+  — the load laying [the binding graph](../../design/binding-graph.md), and
+  the build and every run cell executing it, the depot holding compositions
   alone.
-- [Narrower questions](../../roadmap/one-build/narrower-questions.md) — a
-  witnessed layer's questions compressed and narrowed, and fewer units held.
-- [A witnessed layer laid in the memo's home](../../roadmap/one-build/witnessed-layer-in-the-home.md)
-  — a witnessing frame's region holding its binding layer alone.

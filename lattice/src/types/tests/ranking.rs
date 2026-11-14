@@ -7,8 +7,8 @@
 //! rest pin the normalizer, the ranking's place in a shape's identity and rendering, the verdict
 //! table's reuse, and the two signature relations a ranking refuses in.
 
-use crate::bump::{Bump, BumpAllocator};
 use crate::symbols::{BinderSymbol, KeywordSymbol, SymbolInterner, TypeSymbol};
+use bumpstorage::{Bump, BumpAllocator};
 
 use super::raw::RawRegistry;
 use super::raw::order::fits;

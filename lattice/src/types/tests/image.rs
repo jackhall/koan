@@ -1,13 +1,13 @@
 //! The seed image, pinned: the checked-in file is what the seed's recipe generates, every digest
 //! in it is its static content's, and a root resting on it holds only what it adds.
 
-use crate::bump::Bump;
 use crate::symbols::SymbolInterner;
 use crate::types::SEED;
 use crate::types::chain::TypeChain;
 use crate::types::handle::KType;
 use crate::types::image::{check, compare_or_update, emit};
 use crate::types::tiers::RootBuilder;
+use bumpstorage::Bump;
 
 /// The command that regenerates the seed, which its header names.
 const REGENERATE: &str = "UPDATE_IMAGE=1 cargo test -p lattice the_seed_image_is_fresh";

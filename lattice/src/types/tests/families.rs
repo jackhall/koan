@@ -2,8 +2,8 @@
 //! solution a construction takes, and the contravariance probe a declaration is refused by. Each
 //! builds its own chain over a region of its own, which doubles as its scratch.
 
-use crate::bump::{Bump, BumpAllocator};
 use crate::symbols::{BinderSymbol, SymbolInterner, TypeSymbol, ValueSymbol};
+use bumpstorage::{Bump, BumpAllocator};
 
 use crate::types::chain::TypeChain;
 use crate::types::handle::{KType, Parametric};

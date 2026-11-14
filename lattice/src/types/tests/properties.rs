@@ -28,7 +28,6 @@ use super::raw::substitute::{
 use super::raw::unify::{admits, most_determined_first, ties};
 use super::raw::walk::{visit, visit_free_quantified};
 use super::raw::{lattice, order};
-use crate::bump::{Bump, BumpAllocator, BumpVec};
 use crate::symbols::{BinderSymbol, TypeSymbol};
 use crate::types::chain::TypeChain;
 use crate::types::handle::{DeclaredType, Handle, KType, Parametric, TypeHandle, wrap};
@@ -47,6 +46,7 @@ use crate::types::unify::{Collector, Interval, UnifyFailure, intervals};
 use crate::types::walk::Variance;
 use crate::types::walk::unary::Visit;
 use crate::types::window::{RecursiveGroupWindow, RelativeSchema};
+use bumpstorage::{Bump, BumpAllocator, BumpVec};
 
 use super::generators::{
     Groups, Placement, Vocabulary, World, arb_admitted_pair, arb_any, arb_any_with,

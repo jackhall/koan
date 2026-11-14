@@ -6,8 +6,8 @@
 //! recorded. A downstream memo rides the same tables: an answer for a member of a group reads back
 //! for that pair alone, from whichever tier holds its shortest-lived type.
 
-use crate::bump::Bump;
 use crate::symbols::{BinderSymbol, SymbolInterner};
+use bumpstorage::Bump;
 
 use crate::types::SEED;
 use crate::types::chain::TypeChain;

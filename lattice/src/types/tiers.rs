@@ -40,10 +40,10 @@ use std::cell::{Cell, RefCell};
 use std::hash::BuildHasher;
 use std::marker::PhantomData;
 
-use crate::bump::{
+use crate::symbols::IdentityBuildHasher;
+use bumpstorage::{
     BumpAllocator, BumpHashTable, DigestTable, FrozenTable, Keyed, LaysRuns, bump_hash_table,
 };
-use crate::symbols::IdentityBuildHasher;
 
 #[cfg(test)]
 use super::chain::TypeChain;

@@ -40,7 +40,7 @@ from pathlib import Path
 from miri import MIRIFLAGS, ROOT, _env, list_lib_tests
 
 FIRST_REGULAR_STRING_ID = 100_000_003
-WORKSPACE_CRATES = {"lattice", "cellgraph", "sexlex"}
+WORKSPACE_CRATES = {"lattice", "bumpstorage", "cellgraph", "sexlex"}
 # Load phases of `CellSubstrate::load`, then the operator run, by generic-free function path.
 PHASES = {
     "parse::parse_with_path": "parse",

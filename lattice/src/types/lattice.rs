@@ -11,7 +11,7 @@
 //! The four laws — commutativity, associativity, idempotence and absorption — hold over every
 //! concrete type, and that is what fixes both operations.
 
-use crate::bump::{BumpAllocator, BumpVec};
+use bumpstorage::{BumpAllocator, BumpVec};
 
 use super::chain::TypeChain;
 use super::handle::Handle;

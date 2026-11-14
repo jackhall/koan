@@ -11,8 +11,8 @@
 //! checks every member under that solution. A member's own `FOR ALL` variable is solved afresh on
 //! the offered side and held rigid on the asked one.
 
-use crate::bump::{BumpAllocator, BumpVec};
 use crate::symbols::{BinderSymbol, KeywordSymbol, TypeSymbol, ValueSymbol};
+use bumpstorage::{BumpAllocator, BumpVec};
 
 use super::chain::TypeChain;
 use super::handle::{DeclaredType, KType, Naming, Parametric, TypeHandle};

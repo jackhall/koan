@@ -3,8 +3,8 @@
 //! references it, that a link is read once per chain and never by an intern, which tier keeps a
 //! verdict, and how far a merge walks.
 
-use crate::bump::Bump;
 use crate::symbols::{BinderSymbol, SymbolInterner, TypeSymbol};
+use bumpstorage::Bump;
 
 use crate::types::SEED;
 use crate::types::chain::TypeChain;

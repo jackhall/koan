@@ -9,8 +9,8 @@
 //! [`keys_equal`]), [`map_slots`], the one way an element run is rebuilt, plus the specificity
 //! verdict [`shape_specificity`](super::sig_relations) produces.
 
-use crate::bump::{BumpAllocator, BumpVec};
 use crate::symbols::{KeywordSymbol, SymbolInterner, TypeSymbol};
+use bumpstorage::{BumpAllocator, BumpVec};
 
 use super::chain::TypeChain;
 use super::handle::{Handle, KType, Naming, Parametric, Scheme, TypeHandle};

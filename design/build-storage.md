@@ -191,8 +191,8 @@ agent, its budget and its stack
 ## Open work
 
 - [Agents](../roadmap/features/agents.md) — threads sharing the frozen load.
-- [Settlements retired](../roadmap/one-build/settlements-retired.md) — the
-  depot holding compositions alone.
+- [The build over the binding graph](../roadmap/one-build/build-over-the-binding-graph.md)
+  — the depot holding compositions alone.
 - [What the agent tier keeps](../roadmap/one-build/agent-tier-keeps.md) — the
   tier's content once nothing settles into it.
 - [The build image](../roadmap/one-build/build-image.md) — the frozen load

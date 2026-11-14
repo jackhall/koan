@@ -1,7 +1,7 @@
 use std::cell::{Cell, RefCell};
 
 use super::{DigestTable, Keyed, LaysRuns};
-use crate::bump::{Bump, FrozenTable};
+use crate::{Bump, FrozenTable};
 
 /// A test entry that counts its key reads.
 struct Entry<'c> {
@@ -207,4 +207,65 @@ fn a_frozen_table_finds_every_entry_and_misses_the_rest() {
     let mut seen = 0;
     frozen.each(|_| seen += 1);
     assert_eq!(seen, 1000);
+}
+
+/// An entry found by a word its caller computes and a test over a slice it holds, as a key built
+/// for one lookup is: no `Keyed` impl.
+struct Run<'b> {
+    words: &'b [u64],
+}
+
+/// A word every `Run` of one length shares, so only the test tells two apart.
+fn length_word(words: &[u64]) -> u64 {
+    words.len() as u64
+}
+
+#[test]
+fn find_tells_entries_sharing_a_word_apart_by_the_test() {
+    let bump = Bump::new();
+    let table = DigestTable::new(&bump);
+    let a = &*bump.alloc(Run {
+        words: bump.alloc_slice_copy(&[1, 2]),
+    });
+    let b = &*bump.alloc(Run {
+        words: bump.alloc_slice_copy(&[3, 4]),
+    });
+    table.insert_at(&bump, length_word(a.words), a);
+    table.insert_at(&bump, length_word(b.words), b);
+    for (key, entry) in [([1, 2], a), ([3, 4], b)] {
+        let found = table.find(length_word(&key), |run: &Run| run.words == key);
+        assert!(std::ptr::eq(found.expect("found"), entry));
+    }
+    assert!(table.find(2, |run| run.words == [5, 6]).is_none());
+}
+
+#[test]
+fn insert_at_grows_and_a_frozen_twin_finds_the_same() {
+    let bump = Bump::new();
+    let table = DigestTable::new(&bump);
+    let mut random = SplitMix(8);
+    let keys: Vec<[u64; 2]> = (0..300)
+        .map(|_| [random.next_u64(), random.next_u64()])
+        .collect();
+    let word = |key: &[u64]| key[0] ^ key[1].rotate_left(17);
+    for key in &keys {
+        let entry = &*bump.alloc(Run {
+            words: bump.alloc_slice_copy(key),
+        });
+        table.insert_at(&bump, word(key), entry);
+    }
+    assert_eq!(table.len(), 300);
+    assert_eq!(table.slots(), 1024);
+    let frozen = FrozenTable::placed_at(&bump, table.len(), table.words());
+    for key in &keys {
+        let growing = table.find(word(key), |run| run.words == key);
+        let twin = frozen.find(word(key), |run| run.words == key);
+        assert!(std::ptr::eq(growing.expect("found"), twin.expect("found")));
+    }
+    assert!(
+        frozen
+            .find(word(&[0, 0]), |run| run.words == [0, 0])
+            .is_none()
+    );
+    assert_eq!(frozen.words().count(), 300);
 }

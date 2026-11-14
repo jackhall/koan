@@ -14,18 +14,17 @@ the load never asked, which no run may write into the frozen table, and the
 symbol overlay of the names an agent's `EVAL`s parse. The load rests a
 traced binding's types in the frozen load
 ([where facts are decided](../../src/build/README.md#where-facts-are-decided)),
-so once [settlements retired](settlements-retired.md) decides the rest in
-activations, nothing settles into the tier, and what it
-still holds — the overflow verdicts, the overlay, and whatever an untraced
-binding's decision rests that a frame's branch would otherwise relay per hop
-— is unmeasured.
+so once [the build over the binding graph](build-over-the-binding-graph.md)
+removes settlements, nothing settles into the tier, and what it still holds
+— the overflow verdicts, the overlay, and whatever type a frame writes load
+content into that its branch would otherwise mint per hop — is unmeasured.
 
 **Acceptance criteria.**
 
-- A list of what the tier holds after the two items above, measured over the
-  example programs: types, verdicts and symbols, by what laid each.
+- A list of what the tier holds after that item, measured over the example
+  programs: types, verdicts and symbols, by what laid each.
 - A ruling, recorded in [build storage](../../design/build-storage.md), on
-  whether the tier stays — as the warm tier for untraced decisions, as a
+  whether the tier stays — as the warm tier for the types frames close, as a
   verdict overflow, or as the overlay alone — or folds into the frozen load
   and the region branch, with the tiers' order
   ([type tiers](../../design/type-tiers.md#the-tiers)) rewritten to it.
@@ -35,10 +34,10 @@ binding's decision rests that a frame's branch would otherwise relay per hop
 
 **Directions.**
 
-- *The warm tier for an untraced decision — open.* An untraced binding of
-  load content is still finite per text, so what its decision rests may live
-  in an insert-only tier as a settlement's does today; or it rests in the
-  frame's branch and a loop relays it per hop, bounded by the decision memo.
+- *The warm tier for a type a frame closes — open.* A type with load
+  content written in is still finite per text, so it may live in an
+  insert-only tier as a settlement's types do today; or it rests in the
+  frame's branch and a loop mints it per hop.
 - *The overlay — open.* The symbol overlay is per agent whatever the tier's
   fate; whether it stays beside a type tier or becomes a structure of the
   agent's own.
@@ -47,8 +46,8 @@ binding's decision rests that a frame's branch would otherwise relay per hop
 
 **Requires:**
 
-- [Settlements retired](settlements-retired.md) — nothing settles into the
-  tier before it is measured.
+- [The build over the binding graph](build-over-the-binding-graph.md) —
+  nothing settles into the tier before it is measured.
 
 **Unblocks:**
 

@@ -15,12 +15,14 @@ fact downstream of one waits for the run with it.
 
 **Acceptance criteria.**
 
-- A cycle of calls inside one recursive group
-  ([recursion](../../src/build/README.md#recursion)) whose `PassesName`
-  mappings, composed around the cycle, give a `FOR ALL` name a type built
-  over itself is refused at build; the message names a call on the cycle and
-  asks for a declared recursive type.
-- `DEEPEN` above is refused.
+- A closed walk of laid calls whose `PassesName` mappings, composed around
+  it, give a `FOR ALL` name a type built over itself is refused at build
+  ([refusal](../../design/binding-graph.md#refusal)). The walk counts every
+  candidate a call could select, and the message names a call on it and the
+  `FOR ALL` name and asks for a declared recursive type.
+- `DEEPEN` above is refused, and so is
+  [the design's `MIX`](../../design/binding-graph.md#refusal), whose calls
+  each repeat alone.
 - A cycle that passes each name on as itself, renames names, or passes fixed
   content somewhere around it builds as before; under
 
@@ -29,7 +31,7 @@ fact downstream of one waits for the run with it.
   EXPR FOR ALL #[Item] #(WRAP y :Item) -> :(LIST OF Item) = #(KEEP [y])
   ```
 
-  `WRAP` builds, since `KEEP` is outside its recursive group.
+  `WRAP` builds, since no walk leads back from `KEEP` to `WRAP`.
 - The same recursion written over a declared recursive type builds, and one
   `BoundInstance` serves every depth.
 - A cycle reached through a callable the text cannot follow — one read as a
@@ -37,10 +39,10 @@ fact downstream of one waits for the run with it.
 
 **Directions.**
 
-- *Which mappings count as growing — decided.* The composition around the
-  whole cycle, never one call alone: a name is built over itself only where
-  every call on the cycle hands it on, so a cycle that passes fixed content
-  at one call repeats and builds.
+- *Which mappings count as growing — decided.* The composition around a
+  whole closed walk, never one call alone. A name is built over itself only
+  where every call on the walk hands it on, so a walk that passes fixed
+  content at one call repeats and builds.
 - *Inferring the recursive type — deferred.* A union the build infers in the
   declaration's place waits on anonymous recursive types
   ([types](README.md#unplanned-work)).

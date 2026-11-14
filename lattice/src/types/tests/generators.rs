@@ -30,8 +30,8 @@ use std::rc::Rc;
 
 use proptest::prelude::*;
 
-use crate::bump::{Bump, BumpAllocator, LaysRuns};
 use crate::symbols::{BinderSymbol, KeywordSymbol, SymbolInterner, TypeSymbol, ValueSymbol};
+use bumpstorage::{Bump, BumpAllocator, LaysRuns};
 
 use super::raw::RawRegistry;
 use super::raw::walk::visit;

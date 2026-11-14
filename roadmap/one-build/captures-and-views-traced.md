@@ -134,10 +134,10 @@ retype's the closed type it pins over its operand's bare digest
 - *Residency on the load's index — decided.* The trees a load layer's
   requests name rest in the load's index. A settlement made at run keeps its
   own, so a callee born outside the owner's chain finds none there and
-  decides in its activation, as such a call does today;
-  [settlements retired](settlements-retired.md) decides every such binding
-  there. Carrying the trees into the callee's settlement is depot code that
-  item deletes.
+  decides in its activation, as such a call does today. Carrying the trees
+  into the callee's settlement is depot code
+  [the build over the binding graph](build-over-the-binding-graph.md)
+  deletes.
 - *Where the alias stops — decided.* A `LET` is followed where its right side
   is. One bound to a call's result — a functor's application, a returned `FN`
   — is not. One reading a `USING … SCOPE` surfaced name is not, since the load
@@ -157,7 +157,14 @@ retype's the closed type it pins over its operand's bare digest
 
 ## Dependencies
 
-**Requires:** none.
+Written against the trace and its slot maps. Planning restates it over the
+binding graph, as what a `PassesName` mapping may write: a capture, a `LET`
+alias, a member read, a view, a retype.
+
+**Requires:**
+
+- [The build over the binding graph](build-over-the-binding-graph.md) — the
+  edges whose mappings this widens.
 
 **Unblocks:**
 

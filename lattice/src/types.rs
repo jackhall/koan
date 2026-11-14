@@ -3,7 +3,7 @@
 //! The node vocabulary, the tiers types are interned in, the identity recipe, the structural
 //! relations between types, and the unifier that solves a quantified position. Nothing else. It
 //! imports the classified symbol types from [`symbols`](crate::symbols), with the bump tier from
-//! [`bump`](crate::bump). No value, cell, AST, scope, working part or execute-side type reaches it,
+//! `bumpstorage`. No value, cell, AST, scope, working part or execute-side type reaches it,
 //! since the crate depends on no koan code — the parser included, which is what keeps the two from
 //! naming each other. Everything that matches a type against something that is *not* a type — a
 //! value, a parser part, a declaration — lives with that thing and calls in here.

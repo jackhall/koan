@@ -2,8 +2,8 @@
 //! through intervals. The worked examples a law cannot name; the interval law itself is in
 //! [`properties`](super::properties).
 
-use crate::bump::{Bump, BumpAllocator};
 use crate::symbols::{BinderSymbol, SymbolInterner};
+use bumpstorage::{Bump, BumpAllocator};
 
 use super::raw::substitute::{Side, read_through};
 use super::raw::unify::admits;

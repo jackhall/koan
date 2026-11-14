@@ -1,6 +1,8 @@
 # lattice
 
-The symbol vocabulary, the type lattice over it, and the bump tier both rest on.
+The symbol vocabulary and the type lattice over it. Both rest on the bump
+tier, [`bumpstorage`](../bumpstorage/README.md): storage outside any cell
+graph, its digest tables and the component walk.
 
 Koan ([README.md](../README.md)) is the crate's user. The crate depends on no
 koan code, so nothing koan's evaluator knows — a value, a cell, an AST node, a
@@ -19,89 +21,16 @@ as a law over generated types, and the compiler, not a review, refuses one.
   interning registry of a frozen load, an agent tier and per-habitat branches, the identity recipe, the relations between types and the
   unifier ([src/types/README.md](src/types/README.md)). It names `symbols` and
   the bump tier, and nothing else.
-- [`bump`](src/bump.rs) — the bump tier, below. It names neither of the
-  others.
-
-## The bump tier
-
-Storage outside any cell graph, with no reach and no cell, released whole when
-its owner drops. It holds the type lattice's frozen load and agent tier, and the scratch a caller
-passes. It is a *collections* arena: `BumpAllocator` is `&Bump`, both
-bumpalo's verb receiver and the `Allocator` its growable `BumpVec` and its
-hashbrown `BumpBackedMap`, `BumpHashTable` and `BumpBackedSet` are built over. A cell's region
-has no verb that grows a buffer, so the tier does not pretend to be a region,
-and it carries no door of its own: callers use bumpalo's `alloc`,
-`alloc_slice_copy`, `alloc_slice_fill_iter` and `alloc_str`. The one
-exception is `LaysRuns`, below, which a bump implements so that the digest
-table can grow in one and a type tier can lay its nodes there.
-
-**Drop-freeness is a compile-time fact.** Bumpalo runs no destructor, so
-nothing with drop glue goes in. `bump_table`, `bump_hash_table` and `bump_set`
-assert that for their entries as a `const` assert at each instantiation, so **an entry type
-bringing drop glue with it fails the build where it is declared**, not at
-runtime and not in review. A slice or a single value is the caller's to keep
-`Copy`. The same discipline is why releasing a bump costs its chunks and
-nothing more: no graph of owned values is walked on the way out.
-
-## The digest table
-
-[`DigestTable`](src/bump/digest_table.rs) is an insert-only hash table of
-references to entries that each carry their own key (the `Keyed` trait) and
-name a uniformly distributed low word of it: a 128-bit digest's own, or a
-fold of a wider key, as a verdict entry folds its two digests and relation.
-The word is already a hash, so the table runs no hash function, and the entry
-holds its key, so the table stores no copy. A slot is 16 B: the key's word,
-whose masked low bits are the slot's home, beside the reference. A probe
-walks linearly to the first empty slot and reads an entry, comparing its whole
-key, only when its word matches; the load stays at most one half, and the
-smallest run is four slots, one cache line.
-
-The table grows without an allocator. It lays a run of twice the length
-through `LaysRuns` — a trait an insert takes as an argument, which lays a run
-of values or a string — and re-places every slot by its stored word, so growth
-reads no entry and strands the old run. A bump implements `LaysRuns` here;
-koan implements it for a habitat half — a cell region's or scratch habitat's
-`Writer` beside its header door — which lays fixed runs and has no allocator,
-so a habitat can host the table. A type branch's table is one
-([storage](src/types/identity.md#storage-a-root-and-its-branches)).
-
-[`FrozenTable`](src/bump/frozen_table.rs) is a digest table's read-only copy,
-laid once by `DigestTable::frozen`: the same slots in the same places, probed
-by the same function, but a plain slice that is never written, so it holds no
-cell and is `Sync` wherever its entries are. The type lattice's frozen load
-indexes its nodes and its verdicts with two.
-
-`cargo bench -p lattice --bench node_table` times the digest table against
-the hashbrown table the root builder and the agent tier keep.
-
-## Strongly connected components
-
-[`strongly_connected_components`](src/bump/components.rs) is Tarjan's walk
-over an index graph: `edges[i]` lists the nodes `i` references, and the
-components come back as runs of node indices, every buffer staged in a bump
-the caller passes. The emission order is reverse topological on the
-condensation — a component comes out only after every component it references
-— which is the order a caller that finishes each component against the ones
-below it relies on. The walk keeps its own stack of frames in the bump rather
-than recursing, since a program's chain of bindings is as long as its author
-writes it.
-
-It lives in the bump tier because it names nothing of what a node stands for
-and has two callers that must not depend on each other: the
-[type lattice](src/types/identity.md#recursive-groups-identity-is-the-scc-not-the-declaration)
-condenses a recursive group's members to digest them, and koan's
-[scope shape](../src/scope/README.md#visibility) condenses a body's bindings
-to find the components a knot can tie and the eager cycles it refuses.
 
 ## The import rule
 
 - **The crate depends on no koan code.** Its manifest names none, so the edge
   holds by the build: a path into koan does not compile.
-- **No koan file names `bumpalo`, `hashbrown` or `allocator_api2`.** They are
-  this crate's dependencies, not koan's. Inside the crate,
-  [`bump.rs`](src/bump.rs) is the only file naming them. `blake3` is the content
-  digest under symbol and type identity here, and koan depends on it in its own
-  right for a value's [content digest](../src/values/README.md#content-digests).
+- **No file here names `bumpalo`, `hashbrown` or `allocator_api2`.** They are
+  [`bumpstorage`](../bumpstorage/README.md#the-import-rule)'s, and the crate
+  reaches them only through it. `blake3` is the content digest under symbol and
+  type identity here, and koan depends on it in its own right for a value's
+  [content digest](../src/values/README.md#content-digests).
 - **One `unsafe` outside the test build.** The crate root carries
   `#![cfg_attr(not(test), deny(unsafe_code))]`, and the one site that allows
   it is the read behind a sealed component's member table
@@ -125,6 +54,9 @@ seed's generator runs when a layout change stops the generated file compiling
 default, compiles the image generator — the emitter, the digest checks and the
 golden compare — for koan's builtin-image test, which calls it across the crate
 boundary; koan's dev-dependency turns it on beside `counters`, so the shipped
-interpreter carries none of it.
+interpreter carries none of it. It turns on `bumpstorage`'s own `generator`
+feature, which opens the frozen table's slots the emitter writes.
+`cargo bench -p lattice --bench node_table` times the digest table against
+the hashbrown table the root builder and the agent tier keep.
 The crate carries no roadmap tree: its open work is in koan's
 ([the type lattice's open work](src/types/README.md#open-work)).

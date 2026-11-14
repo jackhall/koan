@@ -16,8 +16,8 @@
 //! and a dispatch that needs to choose between two unrelated slot types has an ambiguity, not a
 //! verdict.
 
-use crate::bump::{BumpAllocator, BumpVec};
 use crate::symbols::BinderSymbol;
+use bumpstorage::{BumpAllocator, BumpVec};
 
 use super::chain::TypeChain;
 use super::handle::Handle;

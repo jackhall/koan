@@ -36,8 +36,8 @@
 //! ends or chose a declared union's member that a binding may change, a variable's answer is a meet
 //! over one, or the solve fails at a verdict over one. A closed solve always is.
 
-use crate::bump::{BumpAllocator, BumpVec};
 use crate::symbols::BinderSymbol;
+use bumpstorage::{BumpAllocator, BumpVec};
 
 use std::marker::PhantomData;
 

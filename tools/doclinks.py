@@ -53,13 +53,13 @@ REPO = Path(__file__).resolve().parent.parent
 
 # Crates embedded in the repo that carry their own `design/` + `roadmap/` pair
 # and their own source tree, alongside koan's at the root.
-EMBEDDED_CRATES = ("cellgraph",)
+EMBEDDED_CRATES = ("cellgraph", "bindgraph")
 
 # Embedded crates with a source tree and a README but no doc trees of their own:
 # their design is the crate README and its module READMEs, and their open work,
 # if any, lives in koan's roadmap. They are scanned for links and orphan-gated on their module READMEs like any other
 # source tree, and contribute nothing to the roadmap or design gates.
-LEAF_CRATES = ("sexlex", "lattice")
+LEAF_CRATES = ("sexlex", "lattice", "bumpstorage")
 
 MD_GLOBS = (
     "*.md", "audit/**/*.md", "src/**/*.md", "design/**/*.md",
