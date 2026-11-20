@@ -392,9 +392,9 @@ holds its own copy laid by the crossing.
 Prepended by `python3 tools/miri.py --log` on a clean run, trimmed to five.
 
 <!-- slate-durations:start -->
+- 2026-11-20: 2102s — 54 tests, 0 leaks, 0 UB
 - 2026-11-07: 1847s — 54 tests, 0 leaks, 0 UB
 - 2026-11-03: 2114s — 54 tests, 0 leaks, 0 UB
 - 2026-11-01: 1453s — 53 tests, 0 leaks, 0 UB
 - 2026-11-01: 4181s — 53 tests, 0 leaks, 0 UB
-- 2026-10-31: 1680s — 49 tests, 0 leaks, 0 UB
 <!-- slate-durations:end -->
