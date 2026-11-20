@@ -13,8 +13,8 @@
 //! code kind and an application's signature are always a [`KType`]. Inside the lattice `H` is a
 //! reference to the child's node ([`Linked`]), and so is every one of those concrete fields. A
 //! tier's table stores a node in its own layout ([`stored`](super::stored)), whose `view_as`
-//! is the one conversion. [`Variable`] views the four variable variants as one, and owns the rule
-//! for their two ends.
+//! is the one conversion. [`Variable`] views the five variable variants as one, and owns the rule
+//! for their two ends. A [`Step`] names the piece a [`TypeNode::Projection`] reads.
 //!
 //! Interning and node reads live on [`TypeChain`](super::chain::TypeChain); the digest
 //! recipe per variant lives in [`digest`](super::digest).
@@ -132,9 +132,9 @@ pub enum TypeNode<'run, H: Naming<'run> = Handle> {
     /// [`KType::ANY`] unless declared.
     ///
     /// Named where [`Self::Quantified`] is positional: a parameter is substituted by name within
-    /// its own signature, and `WITH` pins it by name. The four rigid variables — this,
-    /// [`Self::Quantified`], [`Self::Lexical`] and [`Self::Path`] — share the rigid rule in the
-    /// order and the role of the rigid side in a specificity check.
+    /// its own signature, and `WITH` pins it by name. The five rigid variables — this,
+    /// [`Self::Quantified`], [`Self::Lexical`], [`Self::Path`] and [`Self::Projection`] — share the
+    /// rigid rule in the order and the role of the rigid side in a specificity check.
     ///
     /// Every field is identity.
     Parameter {
@@ -250,6 +250,36 @@ pub enum TypeNode<'run, H: Naming<'run> = Handle> {
         name: TypeSymbol,
         bound: H::Bound,
     },
+    /// A **derived name**: a type a typing rule over lexical variables hands back that no other
+    /// node spells — a piece the bound does not guarantee, a meet, a type a question's answer
+    /// decides — read where the program loads
+    /// ([build/README.md § Derived names](../../../src/build/README.md#derived-names)). Named by
+    /// `term`, a digest of the rule's term computed outside the lattice, so every walk names one
+    /// term alike; lying between `lower` and `bound`, and rendered by `name`. Rigid as a
+    /// [`Self::Lexical`] is, and every relation treats it as one: no binder captures it and no
+    /// solve binds it, and a reader that knows its term's type under a binding reads it through.
+    ///
+    /// Every field is identity.
+    Derived {
+        term: DerivedId,
+        name: TypeSymbol,
+        lower: H::Bound,
+        bound: H::Bound,
+    },
+    /// A **projection**: the `step` piece of whatever the lexical variable `base` reaches is bound
+    /// to — `(FIELD f OF Elt)`, `(ELEMENT OF Ll)` — read where the program loads. `base` is a
+    /// [`Self::Lexical`], a [`Self::Derived`] or another projection, and its bound guarantees the piece: every binding
+    /// has it. `lower` and `bound` are the pieces of the base's two ends, so a projection lies
+    /// between them as a lexical variable lies between its own; they are derived from `base` and
+    /// are not identity. Substituting the base reduces the projection to the binding's piece.
+    /// Build through [`TypeChain::projection`](super::chain::TypeChain::projection), which answers
+    /// the piece itself wherever it is known.
+    Projection {
+        base: H,
+        step: Step,
+        lower: H::Bound,
+        bound: H::Bound,
+    },
     /// Untagged structural disjunction — the type `:(A | B)`. Members are canonical:
     /// deduplicated, no nested `Union`, no member below the rest, always two or more, in the order
     /// first written. Identity is order-blind. Build through
@@ -361,6 +391,8 @@ impl<'run, H: Naming<'run>> TypeNode<'run, H> {
             | TypeNode::Quantified { .. }
             | TypeNode::Lexical { .. }
             | TypeNode::Path { .. }
+            | TypeNode::Derived { .. }
+            | TypeNode::Projection { .. }
             | TypeNode::DeferredReturn(_)
             | TypeNode::Union { .. }
             | TypeNode::ConstructorApply { .. }
@@ -376,16 +408,15 @@ impl<'run, H: Naming<'run>> TypeNode<'run, H> {
         self.group().is_some()
     }
 
-    /// A rigid variable's bound — a [`Self::Quantified`]'s, a [`Self::Lexical`]'s or a
-    /// [`Self::Parameter`]'s — or `None` for any other node.
+    /// A rigid variable's bound, or `None` for any other node.
     pub fn rigid_bound(&self) -> Option<H::Bound> {
         Variable::of(self).map(Variable::bound)
     }
 }
 
 impl<'run, H: TypeHandle> TypeNode<'run, H> {
-    /// A rigid variable's lower end: a [`Self::Lexical`]'s own, `Never` for the other two, `None`
-    /// for any other node.
+    /// A rigid variable's lower end: a [`Self::Lexical`]'s, a [`Self::Derived`]'s or a
+    /// [`Self::Projection`]'s own, `Never` for the others, `None` for any other node.
     pub fn rigid_lower(&self) -> Option<KType> {
         Variable::of(self).map(Variable::lower)
     }
@@ -432,8 +463,32 @@ pub enum Variable<B = KType> {
         name: TypeSymbol,
         bound: B,
     },
+    /// A derived name.
+    Derived {
+        term: DerivedId,
+        name: TypeSymbol,
+        lower: B,
+        bound: B,
+    },
     /// A signature's head parameter.
     Parameter { name: TypeSymbol, bound: B },
+    /// A projection of a lexical variable, between the pieces of its base's two ends. A read
+    /// through intervals never hands one to its reader: it reads the projection's base.
+    Projection { lower: B, bound: B },
+}
+
+/// The piece of a type a [`TypeNode::Projection`] names. Each is a covariant child of its
+/// container, so the piece of an end is the end of the piece.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum Step {
+    /// A record's field, by its label.
+    Field(BinderSymbol),
+    /// A list's element.
+    Element,
+    /// A dict's key.
+    Key,
+    /// A dict's value.
+    Value,
 }
 
 /// A path class's name: a digest of the label its paths read, the application they are read
@@ -441,6 +496,11 @@ pub enum Variable<B = KType> {
 /// the lattice, which holds it as identity alone: two words, so a key holding one aligns as a word.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct PathClass(pub [u64; 2]);
+
+/// A derived name's name: a digest of its term, the rule and the types it reads. The digest is
+/// computed outside the lattice, which holds it as identity alone, as it holds a [`PathClass`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct DerivedId(pub [u64; 2]);
 
 impl<B: Copy> Variable<B> {
     /// The variable `node` is, or `None` for any other node.
@@ -459,7 +519,19 @@ impl<B: Copy> Variable<B> {
                 bound,
             },
             TypeNode::Path { class, name, bound } => Variable::Path { class, name, bound },
+            TypeNode::Derived {
+                term,
+                name,
+                lower,
+                bound,
+            } => Variable::Derived {
+                term,
+                name,
+                lower,
+                bound,
+            },
             TypeNode::Parameter { name, bound } => Variable::Parameter { name, bound },
+            TypeNode::Projection { lower, bound, .. } => Variable::Projection { lower, bound },
             _ => return None,
         })
     }
@@ -470,16 +542,21 @@ impl<B: Copy> Variable<B> {
             Variable::Quantified { bound, .. }
             | Variable::Lexical { bound, .. }
             | Variable::Path { bound, .. }
-            | Variable::Parameter { bound, .. } => bound,
+            | Variable::Derived { bound, .. }
+            | Variable::Parameter { bound, .. }
+            | Variable::Projection { bound, .. } => bound,
         }
     }
 }
 
 impl Variable {
-    /// The variable's lower end: a lexical variable's own, `Never` for the other two.
+    /// The variable's lower end: a lexical variable's, a derived name's or a projection's own,
+    /// `Never` for the others.
     pub fn lower(self) -> KType {
         match self {
-            Variable::Lexical { lower, .. } => lower,
+            Variable::Lexical { lower, .. }
+            | Variable::Derived { lower, .. }
+            | Variable::Projection { lower, .. } => lower,
             Variable::Quantified { .. } | Variable::Path { .. } | Variable::Parameter { .. } => {
                 KType::NEVER
             }
@@ -519,8 +596,23 @@ impl<'run> Variable<Linked<'run>> {
                 name,
                 bound: KType::read(bound),
             },
+            Variable::Derived {
+                term,
+                name,
+                lower,
+                bound,
+            } => Variable::Derived {
+                term,
+                name,
+                lower: KType::read(lower),
+                bound: KType::read(bound),
+            },
             Variable::Parameter { name, bound } => Variable::Parameter {
                 name,
+                bound: KType::read(bound),
+            },
+            Variable::Projection { lower, bound } => Variable::Projection {
+                lower: KType::read(lower),
                 bound: KType::read(bound),
             },
         }
@@ -529,7 +621,9 @@ impl<'run> Variable<Linked<'run>> {
     /// [`lower`](Variable::lower) by reference: `Never` is the chain's own node.
     pub(super) fn lower_in(self, types: &TypeChain<'run, impl Habitat<'run>>) -> Linked<'run> {
         match self {
-            Variable::Lexical { lower, .. } => lower,
+            Variable::Lexical { lower, .. }
+            | Variable::Derived { lower, .. }
+            | Variable::Projection { lower, .. } => lower,
             Variable::Quantified { .. } | Variable::Path { .. } | Variable::Parameter { .. } => {
                 types.never()
             }

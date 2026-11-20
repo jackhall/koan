@@ -48,7 +48,9 @@ variable stands for some type between a lower and an upper end, which
 lexical variable's and a projection's own, `[Never, bound]` for the others. A
 projection is read through its base: the base takes the end its position asks
 for, and the projection rebuilds over that end to its piece, the same end of
-the projection, since every step is covariant. Read from
+the projection, since every step is covariant. Where a reader answers its base
+with a type lacking the piece, which no binding is, the projection reads as
+its own end at that side, which lies around every binding's piece. Read from
 above, a variable takes its upper end at a covariant position and its lower end
 at a contravariant one, which gives the type above every instance; read from
 below, the reverse, which gives the type below every instance. A signature is
@@ -189,6 +191,14 @@ through its bound instead solves to the bound's piece, `Number`, which a run
 binding `Outer` below its bound does not reproduce. The report is one flag for the whole collector, exact where it says
 reproducible and conservative elsewhere; a closed solve always is.
 
+Every door that runs a solve hands it back as one **solve record**: the
+solution, each variable's interval (below), which variables a contribution
+reached, and whether the solve is reproducible.
+[`judge_by_class`](ranking.rs) returns its verdict beside the solve record,
+[`instance_under`](sig_relations.rs) returns its instance's, and the door that
+admits one [priority class](#priority-classes) returns that class's. A verdict
+is one of three answers and names no type; the solve record holds the types.
+
 **A binding does not grow with its arguments; an interval does.** Beside the
 pair, the unifier reports an **interval** per variable
 ([`intervals`](unify.rs)), holding every least instance a call can bind over
@@ -246,6 +256,14 @@ variable whose first class is its own. In written order `PAIR`'s `x` solves and
 its `y` only admits, so dispatch hands the solve an argument's static type at
 `x` alone.
 
+One door admits **one class** of a shape: over the slots a caller knows, with
+each variable an earlier class solved pinned, it returns that class's solve
+record. It is the step `admit_by_class`, `admits_shape`, `class_at_least` and
+`judge_by_class` each take per class, open to a caller that knows only some of
+a call's arguments. Dispatch reads an
+[instance argument's slot](../../../src/dispatch/README.md#static-types)
+through the group its other arguments solve, class by class, through it.
+
 `admits_shape` runs the same loop with a candidate shape's slot types as the
 arguments. A slot type stands for every type a call carries under it, so an
 earlier class fixes no point but an **interval** of them — `[Never, L]` where a
@@ -257,7 +275,9 @@ in written order, `FOR ALL #[Elt] #(PAIR x :Elt WITH y :Elt)` does not fit
 `#(PAIR x :(Number | Str) WITH y :(Number | Str))`, which admits
 `PAIR 1 WITH "s"`, while `FOR ALL #[Elt] #(APPLY f :(FN :{x :Elt} -> Null) TO y :Elt)`
 fits `#(APPLY f :(FN :{x :Number} -> Null) TO y :Number)`, since a call
-binds `Elt` at or above `Number`.
+binds `Elt` at or above `Number`. A slot type `Never` stands for no call, so
+the walk leaves its slot out: it solves no variable, and the next class
+mentioning one solves it. `class_at_least` leaves it out alike.
 
 The classes order **ranking**. [`class_at_least`](ranking.rs) is the verdict
 "`a` is at least as specific as `b` at class `c`": `b`'s slots in class `c`
@@ -274,7 +294,8 @@ is the same comparison between two shapes.
 
 The classes order **judging**, too. [`judge_by_class`](ranking.rs) gives a
 candidate shape a verdict against arguments of known static types, each an
-interval, class by class, beside each variable's interval:
+interval, class by class, beside the solve record that holds each variable's
+interval:
 
 - *never* — some slot, each variable an earlier class solved read at its
   greatest instance and every lexical variable left read at its ends from

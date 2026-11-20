@@ -2,6 +2,7 @@
 //! `Result` every read answers, the load's typing and refusals, and `LENGTH`.
 
 use super::run;
+use super::statics::{binder, loaded};
 
 #[test]
 fn the_builtin_result_is_bound_and_its_variants_construct() {
@@ -292,4 +293,132 @@ fn a_part_of_code_equals_the_quote_written_of_it_alone() {
                   PRINT ((q 1) == (Result.Ok #($..xs)))\n\
                   LET ys = [#(PRINT y)]\nPRINT ((q 1) == (Result.Ok #($..ys)))";
     assert_eq!(run(source), "true\nfalse");
+}
+
+/// A read's static type over a variable's container, as its two variants: `Result` over a variable
+/// renders by its members.
+fn result(error: &str, ok: &str) -> String {
+    format!(":((Error {{Error = {error}, Ok = {ok}}}) | (Ok {{Error = {error}, Ok = {ok}}}))")
+}
+
+/// `body`, the body of `EXPR FOR ALL #{<bound>} #(AT xs :<variable>) -> Any`, each of its binders
+/// rendered by `inspect`.
+fn over_variable<R>(
+    bound: &str,
+    body: &str,
+    inspect: impl FnOnce(&dyn Fn(&str) -> String) -> R,
+) -> R {
+    let source = format!(
+        "EXPR FOR ALL #{{{bound}}} #(AT xs :{}) -> Any = #(\n  {body}\n  1\n)",
+        bound.split(':').next().expect("a variable")
+    );
+    loaded(&source, |program| {
+        let at = super::frontiers::quantified(program);
+        inspect(&|name| binder(program, at, name))
+    })
+}
+
+/// A head typed by a lexical variable whose bound is a list is read as that list, its element the
+/// variable's projection; an argument the bound refuses refuses the load, worded as over it.
+#[test]
+fn a_head_typed_by_a_list_bounded_variable_reads_its_element() {
+    over_variable("Ll: :(LIST OF Number)", "LET y = (xs 0)", |binder| {
+        assert_eq!(binder("y"), result("Number", "(ELEMENT OF Ll)"));
+    });
+    let refusal = |argument: &str| {
+        run(&format!(
+            "EXPR FOR ALL #{{Ll: :(LIST OF Number)}} #(AT xs :Ll) -> Any = #((xs {argument}))"
+        ))
+    };
+    assert_eq!(
+        refusal("\"a\""),
+        "load: <test>:1:63: :(LIST OF Number) can never be read by Str"
+    );
+    assert_eq!(
+        refusal("{x = 1}"),
+        "load: <test>:1:63: :(LIST OF Number) can never be read by :{x :Number}"
+    );
+    // Over a closed list the refusal reads alike.
+    assert_eq!(
+        run("LET ys = [1]\nPRINT (ys \"a\")"),
+        "load: <test>:2:7: :(LIST OF Number) can never be read by Str"
+    );
+    assert_eq!(
+        run(
+            "EXPR FOR ALL #{Ll: :(LIST OF Number)} #(AT xs :Ll) -> Any = #((xs 0))\n\
+             PRINT (AT [5, 6])"
+        ),
+        ok("Number", "5")
+    );
+}
+
+/// A head typed by a dict-bounded lexical variable is read as that dict: its key refusal reads the
+/// bound's key, which every binding's lies under, and the lookup's `Error` holds the variable's key
+/// beside the argument, which may lie outside it.
+#[test]
+fn a_head_typed_by_a_dict_bounded_variable_reads_its_value() {
+    over_variable("Dd: :(MAP Str -> Number)", "LET y = (xs \"k\")", |binder| {
+        assert_eq!(binder("y"), result(":((KEY OF Dd) | Str)", "(VALUE OF Dd)"));
+    });
+    assert_eq!(
+        run("EXPR FOR ALL #{Dd: :(MAP Str -> Number)} #(AT d :Dd) -> Any = #((d 1))"),
+        "load: <test>:1:65: :(MAP Str -> Number) can never be read by Number"
+    );
+    assert_eq!(
+        run(
+            "EXPR FOR ALL #{Dd: :(MAP Str -> Number)} #(AT d :Dd) -> Any = #((d \"k\"))\n\
+             PRINT (AT {\"k\": 3})"
+        ),
+        ok("Number", "3")
+    );
+}
+
+/// A read of a field of a variable is itself read through: the element of the field.
+#[test]
+fn a_head_typed_by_a_projection_reads_its_element() {
+    over_variable(
+        "Elt: :{f :(LIST OF Number)}",
+        "LET y = ((xs.f) 0)",
+        |binder| {
+            assert_eq!(
+                binder("y"),
+                result("Number", "(ELEMENT OF (FIELD f OF Elt))")
+            );
+        },
+    );
+}
+
+/// A head no bound makes a container still routes by name at run: a variable bounded by a record
+/// or a signature is no container, so the application is the derived name of what a binding reads
+/// or calls, and a signature's head parameter is read through no bound, since a view's carrier
+/// lies under `Any` alone.
+#[test]
+fn a_head_no_bound_makes_a_container_routes_by_name_at_run() {
+    over_variable("Rec: :{x :Number}", "LET y = (xs 0)", |binder| {
+        assert_eq!(binder("y"), "(UPPER Rec APPLIED TO Number)");
+    });
+    assert!(
+        run(
+            "EXPR FOR ALL #{Rec: :{x :Number}} #(RR r :Rec) -> Any = #((r 0))\n\
+             PRINT (RR {x = 1})"
+        )
+        .starts_with("error: :{x :Number} is not callable")
+    );
+    let counter = "SIG Counter FOR ALL #{Carrier: Number} = #[(VAL zero :Carrier)]\n\
+                   MODULE ints = ((LET zero = 0))\n";
+    assert!(
+        run(&format!(
+            "{counter}EXPR FOR ALL #{{Mod: Counter}} #(MM m :Mod) -> Any = #((m 0))\n\
+             PRINT (MM (ints :| Counter))"
+        ))
+        .starts_with("error: SIG (Carrier: Carrier, zero: Carrier) is not callable")
+    );
+    let lists = "SIG Lists FOR ALL #{Xs: :(LIST OF Number)} = #[(VAL xs :Xs)]\n";
+    loaded(
+        &format!("{lists}EXPR #(LL l :Lists) -> Any = #(\n  LET y = ((l.xs) \"a\")\n  y\n)"),
+        |program| {
+            let ll = super::generic::expressed(program, program.shape(), "LL");
+            assert_eq!(binder(program, ll, "y"), "Any");
+        },
+    );
 }

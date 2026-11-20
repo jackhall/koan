@@ -14,14 +14,15 @@
 use crate::build::{LayerStore, LoadStore};
 use crate::knot::KValue;
 use crate::memory::{Bump, BumpAllocator, BumpVec, Lays, Writer, resident};
-use crate::program::resume::{Resumed, Resuming, resumed};
+use crate::program::resume::{Resumed, Resuming, kept_by, resumed};
 use crate::program::{CellSubstrate, KBirth, KBundle, KState, Language, Running};
 use crate::scheduler::{Action, Ask, Step, StepError};
-use crate::scope::tests::with_shapes;
+use crate::scope::tests::{spellings, with_shapes};
 use crate::scope::{
-    Address, Binding, Bound, BuildLayer, ClosedTypes, Closing, EventSite, Facts, Frontier, Keyed,
-    Levels, LoadFacts, Mark, Noted, OpenKind, OpenMark, Segment, ShapeError, Shapes, Site, Slot,
-    Store, Typed, UnitFacts, UnitId, Unknown, Wake, each_part, keeps,
+    Address, Binding, Bound, BuildLayer, ClosedTypes, Closing, DerivedName, EventSite, Facts,
+    Frontier, Keyed, Levels, LoadFacts, Mark, Noted, OpenKind, OpenMark, Segment, ShapeError,
+    Shapes, Site, Slot, Spellings, Store, Typed, UnitFacts, UnitId, UnitRecord, Unknown, Wake,
+    each_part,
 };
 use crate::type_lattice::{DeclaredType, KType, display_name};
 use crate::values::{Chain, TypeValue, Value};
@@ -59,13 +60,41 @@ impl<'o, S: Store<'o>> Store<'o> for Everything<'_, S> {
         self.0.traces()
     }
 
-    fn write(&self, unit: UnitId, facts: &'o UnitFacts<'o>, frontier: Frontier<'o>) {
-        self.0.write(unit, facts, frontier);
+    fn derived(
+        &self,
+        types: &crate::values::Chain<'_, '_, '_, '_>,
+        term: crate::scope::DerivedTerm<'_>,
+    ) -> DerivedName<'_> {
+        self.0.derived(types, term)
+    }
+
+    fn derived_name(&self, id: crate::type_lattice::DerivedId) -> Option<DerivedName<'_>> {
+        self.0.derived_name(id)
+    }
+
+    fn write(&self, unit: UnitId, record: UnitRecord<'o>) {
+        self.0.write(unit, record);
     }
 
     fn write_close(&self, body: Segment, closing: &'o Closing<'o>, frontier: Frontier<'o>) {
         self.0.write_close(body, closing, frontier);
     }
+    fn holding(
+        &self,
+        held: crate::scope::Held,
+    ) -> Option<(UnitId, &'o crate::scope::UnitFacts<'o>)> {
+        self.0.holding(held)
+    }
+
+    fn holders(
+        &self,
+        segment: Segment,
+        identity: crate::scope::Identity,
+        each: &mut dyn FnMut(UnitId, crate::scope::Holder),
+    ) {
+        self.0.holders(segment, identity, each);
+    }
+
     fn write_closed(&self, closed: ClosedTypes<'o>) {
         self.0.write_closed(closed);
     }
@@ -101,8 +130,7 @@ fn bound_of<'o>(
 impl<'o, 'p, L: Lays<'o>> Frame<'o, 'p, L> {
     /// A frame over `load`, the load's own facts, whose slots hold `slots`.
     pub fn new(
-        lay: L,
-        scratch: BumpAllocator<'p>,
+        (lay, scratch, spellings): (L, BumpAllocator<'p>, Spellings<'p>),
         load: &'o LoadFacts<'o>,
         slots: &[(Unknown, KValue<'_, '_>)],
         types: &Chain<'_, '_, '_, '_>,
@@ -113,7 +141,7 @@ impl<'o, 'p, L: Lays<'o>> Frame<'o, 'p, L> {
                 .map(|(unknown, value)| (*unknown, bound_of(lay, *value, types, scratch))),
         );
         let binding = Binding::laid(lay, &mut bound);
-        Frame(LayerStore::new(lay, scratch, *load, binding))
+        Frame(LayerStore::new((lay, scratch, spellings), *load, binding))
     }
 
     /// What the frame's slots bind.
@@ -145,13 +173,41 @@ impl<'o, L: Lays<'o>> Store<'o> for Frame<'o, '_, L> {
         self.0.wakes(frontier, types)
     }
 
-    fn write(&self, unit: UnitId, facts: &'o UnitFacts<'o>, frontier: Frontier<'o>) {
-        self.0.write(unit, facts, frontier);
+    fn derived(
+        &self,
+        types: &crate::values::Chain<'_, '_, '_, '_>,
+        term: crate::scope::DerivedTerm<'_>,
+    ) -> DerivedName<'_> {
+        self.0.derived(types, term)
+    }
+
+    fn derived_name(&self, id: crate::type_lattice::DerivedId) -> Option<DerivedName<'_>> {
+        self.0.derived_name(id)
+    }
+
+    fn write(&self, unit: UnitId, record: UnitRecord<'o>) {
+        self.0.write(unit, record);
     }
 
     fn write_close(&self, body: Segment, closing: &'o Closing<'o>, frontier: Frontier<'o>) {
         self.0.write_close(body, closing, frontier);
     }
+    fn holding(
+        &self,
+        held: crate::scope::Held,
+    ) -> Option<(UnitId, &'o crate::scope::UnitFacts<'o>)> {
+        self.0.holding(held)
+    }
+
+    fn holders(
+        &self,
+        segment: Segment,
+        identity: crate::scope::Identity,
+        each: &mut dyn FnMut(UnitId, crate::scope::Holder),
+    ) {
+        self.0.holders(segment, identity, each);
+    }
+
     fn write_closed(&self, closed: ClosedTypes<'o>) {
         self.0.write_closed(closed);
     }
@@ -174,13 +230,15 @@ impl<'graph> Running<'graph> {
         let root = self.program().shapes().root().segment();
         let scratch = Bump::new();
         let base = base.unwrap_or(self.program().facts());
-        let layer = LayerStore::new(bump, &scratch, *base, binding);
+        let spellings = Spellings::new(self.program().symbols());
+        let layer = LayerStore::new((bump, &scratch, spellings), *base, binding);
         match everything {
             true => self.walked::<L, _>(&Everything(&layer), types, &scratch, root)?,
             false => self.walked::<L, _>(&layer, types, &scratch, root)?,
         }
         Ok(folded(
             layered(&layer, bump, &scratch, base),
+            types,
             bump,
             &scratch,
         ))
@@ -204,10 +262,12 @@ impl<'graph> Running<'graph> {
         let mut witness = BumpVec::new_in(&scratch);
         witness.extend((own.entries().iter()).filter(|(_, bound)| matches!(bound, Bound::Type(_))));
         let witness = Binding::laid(bump, &mut witness);
-        let layer = LayerStore::witnessing(bump, &scratch, *base, own, witness);
+        let spellings = Spellings::new(self.program().symbols());
+        let layer = LayerStore::witnessing((bump, &scratch, spellings), *base, own, witness);
         self.walked::<L, _>(&layer, types, &scratch, root)?;
         Ok(folded(
             layered(&layer, bump, &scratch, base),
+            types,
             bump,
             &scratch,
         ))
@@ -233,8 +293,9 @@ impl<'graph> Running<'graph> {
             (true, _) => Resuming::Closed,
             (false, Some(witnessed)) => {
                 let levels = Levels::of(&scratch, shapes, own);
-                let kept = (witnessed.admission())
-                    .kept(&mut |answered| keeps(types, &scratch, answered, &levels));
+                let spellings = Spellings::new(self.program().symbols());
+                let keeps = kept_by((types, &scratch, spellings), facts, &levels);
+                let kept = (witnessed.admission()).kept(&mut |answered| keeps(witnessed, answered));
                 Resuming::Over(witnessed, kept)
             }
             (false, None) => {
@@ -250,7 +311,11 @@ impl<'graph> Running<'graph> {
             }
         };
         resumed::<L>(
-            (shapes, self.program().builtins()),
+            (
+                shapes,
+                self.program().builtins(),
+                Spellings::new(self.program().symbols()),
+            ),
             (bump, &scratch, &mut crate::scope::Flattened::new(&scratch)),
             facts,
             (own, own),
@@ -273,10 +338,12 @@ impl<'graph> Running<'graph> {
     {
         let scratch = Bump::new();
         let base: &'l LoadFacts<'l> = self.program().facts();
-        let layer = LayerStore::new(bump, &scratch, *base, binding);
+        let spellings = Spellings::new(self.program().symbols());
+        let layer = LayerStore::new((bump, &scratch, spellings), *base, binding);
         self.walked::<L, _>(&layer, types, &scratch, at)?;
         Ok(folded(
             layered(&layer, bump, &scratch, base),
+            types,
             bump,
             &scratch,
         ))
@@ -294,9 +361,10 @@ impl<'graph> Running<'graph> {
     {
         let scratch = Bump::new();
         let shapes = self.program().shapes();
-        let store = LoadStore::new(bump, &scratch, shapes, binding);
+        let spellings = crate::scope::Spellings::new(self.program().symbols());
+        let store = LoadStore::new(bump, &scratch, (shapes, spellings), binding);
         self.walked::<L, _>(&store, types, &scratch, shapes.root().segment())?;
-        Ok(folded(store.facts(&scratch), bump, &scratch))
+        Ok(folded(store.facts(&scratch), types, bump, &scratch))
     }
 
     /// Resume the load in a [`Frame`] whose slots hold `slots`.
@@ -311,11 +379,13 @@ impl<'graph> Running<'graph> {
     {
         let scratch = Bump::new();
         let load: &'l LoadFacts<'l> = self.program().facts();
-        let frame = Frame::new(bump, &scratch, load, slots, types);
+        let spellings = Spellings::new(self.program().symbols());
+        let frame = Frame::new((bump, &scratch, spellings), load, slots, types);
         let root = self.program().shapes().root().segment();
         self.walked::<L, _>(&frame, types, &scratch, root)?;
         Ok(folded(
             layered(&frame.0, bump, &scratch, load),
+            types,
             bump,
             &scratch,
         ))
@@ -436,9 +506,14 @@ impl<'graph> Running<'graph> {
 }
 
 /// `unfolded` laid in `bump` beside its folds, as the load lays its own.
-fn folded<'l>(unfolded: LoadFacts<'l>, bump: &'l Bump, scratch: &Bump) -> &'l LoadFacts<'l> {
+fn folded<'l>(
+    unfolded: LoadFacts<'l>,
+    types: &crate::values::Chain<'_, '_, '_, '_>,
+    bump: &'l Bump,
+    scratch: &Bump,
+) -> &'l LoadFacts<'l> {
     let unfolded = resident(bump, unfolded);
-    let folds = crate::build::fold(unfolded, bump, scratch);
+    let folds = crate::build::fold((unfolded, types), bump, scratch);
     resident(bump, unfolded.folded(bump, folds))
 }
 
@@ -543,7 +618,8 @@ fn framing_facts<'graph, L: Language>(
         .map(|(unknown, name)| (*unknown, wanted(program, &view, name)))
         .collect();
     let load: &LoadFacts<'_> = program.facts();
-    let frame = Frame::new(&bump, &scratch, load, &values, types);
+    let spellings = Spellings::new(program.symbols());
+    let frame = Frame::new((&bump, &scratch, spellings), load, &values, types);
     let walked = L::facts(
         program.shapes(),
         program.builtins(),
@@ -552,7 +628,14 @@ fn framing_facts<'graph, L: Language>(
         &scratch,
         program.shapes().root().segment(),
     )
-    .map(|()| folded(layered(&frame.0, &bump, &scratch, load), &bump, &scratch));
+    .map(|()| {
+        folded(
+            layered(&frame.0, &bump, &scratch, load),
+            types,
+            &bump,
+            &scratch,
+        )
+    });
     let rendered = match walked {
         Ok(facts) => Ok(render(facts, types, program.symbols(), &leave)),
         Err(error) => Err(error.display(program.symbols(), types).to_string()),
@@ -631,14 +714,17 @@ fn unknown(shapes: &Shapes<'_>, slot: u32) -> Unknown {
 fn a_layer_reads_its_base_where_it_did_not_write() {
     with_shapes(SOURCE, |shapes, writer, scratch, _| {
         let units = units(shapes);
-        let load = LoadStore::new(writer, scratch, shapes, Binding::EMPTY);
+        let load = LoadStore::new(writer, scratch, (shapes, spellings()), Binding::EMPTY);
         for (index, unit) in units.iter().enumerate() {
-            load.write(*unit, record(writer, shapes, index, true), Frontier::EMPTY);
+            load.write(
+                *unit,
+                UnitRecord::Typed(record(writer, shapes, index, true), Frontier::EMPTY),
+            );
         }
         let base = resident(writer, load.facts(scratch));
-        let layer = LayerStore::new(writer, scratch, *base, Binding::EMPTY);
+        let layer = LayerStore::new((writer, scratch, spellings()), *base, Binding::EMPTY);
         let rerun = record(writer, shapes, 1, false);
-        layer.write(units[1], rerun, Frontier::EMPTY);
+        layer.write(units[1], UnitRecord::Typed(rerun, Frontier::EMPTY));
         let read = |unit| layer.fact(unit).expect("a record").0;
         assert!(std::ptr::eq(read(units[0]), base.unit(units[0]).unwrap().0));
         assert!(std::ptr::eq(read(units[1]), rerun));
@@ -667,7 +753,12 @@ fn a_layer_wakes_exactly_where_a_frontier_meets_an_unknown_its_base_left_unbound
             );
             Binding::laid(writer, &mut staged)
         };
-        let load = LoadStore::new(writer, scratch, shapes, binding(&[(a, KType::NUMBER)]));
+        let load = LoadStore::new(
+            writer,
+            scratch,
+            (shapes, spellings()),
+            binding(&[(a, KType::NUMBER)]),
+        );
         let base = resident(writer, load.facts(scratch));
         let both = binding(&[(a, KType::NUMBER), (b, KType::STR)]);
         let frontier = |unknowns: &[Unknown]| {
@@ -682,8 +773,8 @@ fn a_layer_wakes_exactly_where_a_frontier_meets_an_unknown_its_base_left_unbound
             (&[a, c], Wake::Named),
             (&[a, b], Wake::Open),
         ];
-        let layer = LayerStore::new(writer, scratch, *base, both);
-        let everything = LayerStore::new(writer, scratch, *base, both);
+        let layer = LayerStore::new((writer, scratch, spellings()), *base, both);
+        let everything = LayerStore::new((writer, scratch, spellings()), *base, both);
         let everything = Everything(&everything);
         for (unknowns, wakes) in cases {
             assert_eq!(
@@ -710,11 +801,11 @@ fn opened(unknown: Unknown) -> Noted<'static> {
 fn a_frame_binds_what_its_slots_hold_and_wakes_where_that_meets_a_frontier() {
     with_shapes(SOURCE, |shapes, writer, scratch, types| {
         let [a, b] = [0, 1].map(|slot| unknown(shapes, slot));
-        let load = LoadStore::new(writer, scratch, shapes, Binding::EMPTY);
+        let load = LoadStore::new(writer, scratch, (shapes, spellings()), Binding::EMPTY);
         let base = resident(writer, load.facts(scratch));
         let named = TypeValue::new(writer, KType::NUMBER, types);
         let slots: [(Unknown, KValue<'_, '_>); 1] = [(a, Value::Type(named))];
-        let frame = Frame::new(writer, scratch, base, &slots, types);
+        let frame = Frame::new((writer, scratch, spellings()), base, &slots, types);
         assert!(
             matches!(frame.binding().bound(a), Some(Bound::Type(bound)) if bound == KType::NUMBER)
         );

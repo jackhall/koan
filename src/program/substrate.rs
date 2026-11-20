@@ -247,14 +247,21 @@ pub struct CellSubstrate(Joined);
 /// storage through `writer`, beside the folds the load lays over them, the trace among them, and
 /// the layers the trace names, each with its call sites' requests. A refusal one of those layers
 /// reached refuses the load, naming the first call in text order that passed its binding.
-pub(crate) fn walked<'graph, L: Language>(
+pub(crate) fn walked<'graph, 'x, L: Language>(
     shapes: &'graph crate::scope::Shapes<'graph>,
     builtins: &'graph KBuiltins<'graph, 'graph>,
     types: &Chain<'graph, 'graph, 'graph, '_>,
     writer: crate::memory::Writer<'graph, 'graph>,
-    scratch: BumpAllocator<'_>,
+    scratch: BumpAllocator<'x>,
+    symbols: &'x crate::symbols::SymbolInterner,
 ) -> Result<&'graph crate::scope::LoadFacts<'graph>, crate::scope::ShapeError<'graph>> {
-    let store = crate::build::LoadStore::new(writer, scratch, shapes, crate::scope::Binding::EMPTY);
+    let spellings = crate::scope::Spellings::new(symbols);
+    let store = crate::build::LoadStore::new(
+        writer,
+        scratch,
+        (shapes, spellings),
+        crate::scope::Binding::EMPTY,
+    );
     L::facts(
         shapes,
         builtins,
@@ -264,10 +271,16 @@ pub(crate) fn walked<'graph, L: Language>(
         shapes.root().segment(),
     )?;
     let unfolded = resident(writer, store.facts(scratch));
-    let folds = crate::build::trace::traced(unfolded, writer, scratch);
+    let folds = crate::build::trace::traced((unfolded, types), writer, scratch);
     let folded = resident(writer, unfolded.folded(writer, folds));
     // The layers the trace names rest beside the base, their types in the load's chain.
-    super::settle::traced::<L>((shapes, builtins), types, writer, scratch, folded)
+    super::settle::traced::<L>(
+        (shapes, builtins, spellings),
+        types,
+        writer,
+        scratch,
+        folded,
+    )
 }
 
 impl CellSubstrate {
@@ -320,8 +333,15 @@ impl CellSubstrate {
                     &scratch,
                 )
                 .map_err(refused)?;
-                let walked = walked::<L>(shapes, builtins, types, brand.writer(), &scratch)
-                    .map_err(refused)?;
+                let walked = walked::<L>(
+                    shapes,
+                    builtins,
+                    types,
+                    brand.writer(),
+                    &scratch,
+                    &owner.symbols,
+                )
+                .map_err(refused)?;
                 let tiers = TypeTiers {
                     frozen: builder.freeze(),
                     agent: Agent::in_region(&owner.agent),

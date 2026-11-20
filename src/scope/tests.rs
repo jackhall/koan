@@ -243,6 +243,16 @@ pub(crate) fn with_shapes<R>(
     })
 }
 
+/// A symbols door over an interner of its own, for a suite's load store that derives no name it
+/// renders.
+pub(crate) fn spellings() -> super::Spellings<'static> {
+    thread_local! {
+        static SYMBOLS: &'static crate::symbols::SymbolInterner =
+            Box::leak(Box::new(crate::symbols::SymbolInterner::new()));
+    }
+    super::Spellings::new(SYMBOLS.with(|symbols| *symbols))
+}
+
 /// The value builtins every suite's table holds.
 pub(super) const BUILTIN_VALUES: &[&str] = &["origin"];
 
@@ -389,16 +399,14 @@ pub(super) fn unlocated(error: ShapeError) -> ShapeError {
         E::NoAdmittingCandidate {
             key,
             arguments,
-            lines,
-            shown,
-            against,
+            listed,
+            shapes,
             ..
         } => E::NoAdmittingCandidate {
             key,
             arguments,
-            lines,
-            shown,
-            against,
+            listed,
+            shapes,
             at,
         },
         E::NoField { of, field, .. } => E::NoField { of, field, at },
@@ -423,38 +431,24 @@ pub(super) fn unlocated(error: ShapeError) -> ShapeError {
             count,
             at,
         },
-        E::ReturnNeverSatisfied { body, returns, .. } => {
-            E::ReturnNeverSatisfied { body, returns, at }
-        }
-        E::AscriptionNeverSatisfied {
-            value, ascribed, ..
-        } => E::AscriptionNeverSatisfied {
-            value,
-            ascribed,
-            at,
-        },
-        E::AnnotationNeverSatisfied {
-            value, annotated, ..
-        } => E::AnnotationNeverSatisfied {
-            value,
-            annotated,
-            at,
-        },
+        E::ReturnNeverSatisfied { refused, .. } => E::ReturnNeverSatisfied { refused, at },
+        E::AscriptionNeverSatisfied { refused, .. } => E::AscriptionNeverSatisfied { refused, at },
+        E::AnnotationNeverSatisfied { refused, .. } => E::AnnotationNeverSatisfied { refused, at },
         E::CallNeverSatisfied {
             callee,
-            arguments,
+            payload,
             parameters,
             ..
         } => E::CallNeverSatisfied {
             callee,
-            arguments,
+            payload,
             parameters,
             at,
         },
-        E::NotCode { value, .. } => E::NotCode { value, at },
-        E::BodyNotCode { value, .. } => E::BodyNotCode { value, at },
+        E::NotCode { refused, .. } => E::NotCode { refused, at },
+        E::BodyNotCode { refused, .. } => E::BodyNotCode { refused, at },
         E::ParameterOutsideBody { name, .. } => E::ParameterOutsideBody { name, at },
-        E::NotAModule { value, .. } => E::NotAModule { value, at },
+        E::NotAModule { refused, .. } => E::NotAModule { refused, at },
         E::NotASignature { ascribed, .. } => E::NotASignature { ascribed, at },
         E::ViewReveals {
             member, ascribed, ..
@@ -475,7 +469,7 @@ pub(super) fn unlocated(error: ShapeError) -> ShapeError {
             argument,
             at,
         },
-        E::EvalNeverSatisfied { code, returns, .. } => E::EvalNeverSatisfied { code, returns, at },
+        E::EvalNeverSatisfied { refused, .. } => E::EvalNeverSatisfied { refused, at },
         E::Type { error, .. } => E::Type { error, at },
         E::RepeatedGuard { guard, .. } => E::RepeatedGuard {
             guard,

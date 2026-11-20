@@ -6,8 +6,8 @@ use crate::memory::{Bump, BumpVec, resident};
 use crate::parse::ExpressionPart;
 use crate::program::{CellSubstrate, Running};
 use crate::scope::{
-    Address, Binding, BodyClass, BodyShape, Bound, LoadFacts, Mint, ShapeKind, Site, Slot, Static,
-    Unknown,
+    Address, Binding, BodyClass, BodyShape, Bound, Identity, LoadFacts, Mint, ShapeKind, Site,
+    Slot, Static, Unknown,
 };
 use crate::symbols::{BinderSymbol, SymbolInterner};
 use crate::type_lattice::{DeclaredType, KType, display_name};
@@ -70,7 +70,7 @@ impl<'d, 'graph: 'd> Door<'d, 'graph> {
             panic!("`{name}` is typed");
         };
         let tree = load
-            .content(self.types, root, at)
+            .content(root, at)
             .expect("the load reads the module's tree");
         assert!(
             typed.is_exact() && tree.closed(),
@@ -104,7 +104,7 @@ impl<'d, 'graph: 'd> Door<'d, 'graph> {
     }
 
     /// Resume the load under `binding` over `base`, the load's own facts where `None`.
-    fn resume(
+    pub(super) fn resume(
         &self,
         base: Option<&'d LoadFacts<'d>>,
         binding: Binding<'d>,
@@ -116,7 +116,7 @@ impl<'d, 'graph: 'd> Door<'d, 'graph> {
     }
 
     /// The type `name` declares at the top level, closed.
-    fn declared(&self, name: &str) -> KType {
+    pub(super) fn declared(&self, name: &str) -> KType {
         let root = self.root();
         let Static::Closed(typed) =
             self.load()
@@ -298,6 +298,37 @@ fn a_rigid_pair_left_open_at_the_load_is_ranked_by_its_settlement() {
     assert_eq!((before, after), ("open", "table"));
 }
 
+/// A rigid pair's ranking is a question per pair: the use holds nothing over `Elt`, and a second
+/// binding ranking the pair alike keeps its answers and lays no unit for it.
+#[test]
+fn a_rigid_pair_s_ranking_is_asked_and_kept_under_a_second_binding() {
+    let source = "EXPR FOR ALL #[Elt] #(WRAP x :Elt z :Any) -> Any = #(\n  \
+                  EXPR #(PICK y :Elt) -> Str = #(\"e\")\n  \
+                  EXPR #(PICK y :Str) -> Number = #(1)\n  \
+                  LET p = (PICK z)\n  p\n)";
+    let (holding, laid) = resumed(source, |door| {
+        let f = quantified(door);
+        let elt = unknown(door.symbols(), f, "Elt");
+        let unit = unit_of(door, f, "p");
+        let holding = (waits_on(door, unit, elt).into_iter().flatten().flatten())
+            .filter(|kind| kind.holds())
+            .collect::<Vec<_>>();
+        let under = |at| door.binding(&[(elt, at)]);
+        let first = (door.resumption(under(KType::NUMBER), None, false)).expect("no refusal");
+        let witnessed = first.witnessed.expect("the first resumption witnesses");
+        let second = door.resumption(under(KType::BOOL), Some(witnessed), false);
+        (
+            holding,
+            second.expect("no refusal").layer.unit_of(unit).is_some(),
+        )
+    });
+    assert!(holding.is_empty(), "{holding:?}");
+    assert!(
+        !laid,
+        "a binding ranking the pair alike lays no unit for `p`"
+    );
+}
+
 #[test]
 fn binding_a_module_parameter_closes_its_paths() {
     let source = format!(
@@ -337,6 +368,473 @@ fn binding_a_module_binder_beside_a_name_keeps_its_paths() {
     assert_eq!(resumed, Ok(()));
 }
 
+/// A binding of a module parameter is written into the path variables of its classes: the
+/// parameter's seed, exact at its own paths, is absorbed and closed by module substitution to the
+/// type its retype stamps, and a read of its member is what a fresh load reads.
+#[test]
+fn binding_a_module_parameter_writes_it_into_its_paths() {
+    let source = format!(
+        "{COUNTER}MODULE ints = ((LET Carrier = Number) (LET zero = 0) \
+         (LET succ = (FN :{{x :Number}} -> Number = #(x))))\n\
+         LET stamped :Counter = ints\n\
+         LET step = (FN :{{m :Counter}} -> Any = #(\n  LET k = m.zero\n  k\n))\n"
+    );
+    let (held, seed, seed_reran, read) = resumed(&source, |door| {
+        let symbols = door.symbols();
+        let step = born(symbols, door.root(), "step");
+        let (entry, _) = (door.load().unit(unit_of(door, step, "m"))).expect("the entry ran");
+        let binding = door.bound(&[(unknown(symbols, step, "m"), door.module("stamped"))]);
+        let resumed = (door.resume(None, binding, false)).expect("the resumption refuses nothing");
+        (
+            entry.paths.len(),
+            upper(door, resumed, step, "m"),
+            reran(resumed, unit_of(door, step, "m")),
+            upper(door, resumed, step, "k"),
+        )
+    });
+    assert_eq!(held, 1, "the entry's record holds the seed's path");
+    assert!(seed.ends_with("WITH {Carrier = Number}"), "{seed}");
+    assert!(!seed_reran, "the seed names its paths alone");
+    assert_eq!(read, "Number");
+}
+
+/// A path read through a binder a `LET` retypes at a signature, over a module parameter, closes by
+/// module substitution: under a binding of the parameter, `n.Carrier` is the carrier the retyped
+/// module shows, as a fresh load reads it, and the unit reading it re-runs nothing.
+#[test]
+fn a_path_through_a_retyped_binder_closes_as_the_module_it_shows() {
+    let source = format!(
+        "{COUNTER}MODULE ints = ((LET Carrier = Number) (LET zero = 0) \
+         (LET succ = (FN :{{x :Number}} -> Number = #(x))))\n\
+         LET stamped :Counter = ints\n\
+         LET step = (FN :{{m :Counter}} -> Any = #(\n  LET n :Counter = m\n  \
+         LET Carriers = :(n.Carrier)\n  Carriers\n))\n"
+    );
+    let (load, under, carriers_reran) = resumed(&source, |door| {
+        let symbols = door.symbols();
+        let step = born(symbols, door.root(), "step");
+        let load = declares_closed(door, door.load(), step, "Carriers");
+        let binding = door.bound(&[(unknown(symbols, step, "m"), door.module("stamped"))]);
+        let resumed = (door.resume(None, binding, false)).expect("the resumption refuses nothing");
+        let at = slot(symbols, step, "Carriers");
+        let under = match resumed.declared_type(door.types, step, at) {
+            Static::Closed(closed) => Some(display_name(closed, door.types, symbols).to_string()),
+            _ => None,
+        };
+        (load, under, reran(resumed, unit_of(door, step, "Carriers")))
+    });
+    assert!(!load, "the load reads `n.Carrier` as its class");
+    assert_eq!(under.as_deref(), Some("Number"));
+    assert!(!carriers_reran, "the record names `m`, and is absorbed");
+}
+
+/// A module parameter held in place is pinned at the paths through its operand, so a read of it
+/// is over `m`'s own class at the load: under a binding of `m` it is what a fresh load reads, no
+/// question it asks holds, and a second binding keeping every answer lays no unit for it. A hold
+/// of a hold, a hold of a member chain, and a hold of a `:Module` parameter are pinned at the same
+/// paths, and a member read off the hold reads the type it arrives at.
+#[test]
+fn a_module_held_in_place_is_pinned_at_its_operand_s_paths() {
+    let prelude = format!(
+        "{COUNTER}MODULE ints = ((LET Carrier = Number) (LET zero = 0) \
+         (LET succ = (FN :{{x :Number}} -> Number = #(x))))\n\
+         LET stamped :Counter = ints\n\
+         SIG Outer = #[(VAL inner :Counter)]\n\
+         MODULE outer = ((LET inner = stamped))\n"
+    );
+    let using = "LET s0 = (USING (m :! Counter) SCOPE (succ zero))";
+    let inner_using = "LET s0 = (USING (m.inner :! Counter) SCOPE (succ zero))";
+    for (param, module, body) in [
+        ("m :Counter", "stamped", using),
+        ("m :Counter", "stamped", "LET s0 = (m :! Counter).zero"),
+        (
+            "m :Counter",
+            "stamped",
+            "LET s0 = ((m :! Counter) :! Counter).zero",
+        ),
+        ("m :Outer", "outer", "LET s0 = (m.inner :! Counter).zero"),
+        ("m :Outer", "outer", inner_using),
+        ("m :Module", "stamped", "LET s0 = (m :! Counter).zero"),
+    ] {
+        let program = |param: &str, prefix: &str| {
+            format!(
+                "{prelude}EXPR FOR ALL #[Elt] #(SUBJECT x :Elt AND {param}) -> Any = #(\n  \
+                 {prefix}{body}\n  s0\n)\n"
+            )
+        };
+        let (load, under, holding, laid) = resumed(&program(param, ""), |door| {
+            let symbols = door.symbols();
+            let f = subject(door.root());
+            let (elt, m) = (unknown(symbols, f, "Elt"), unknown(symbols, f, "m"));
+            let unit = unit_of(door, f, "s0");
+            let holding = (waits_on(door, unit, m).into_iter().flatten().flatten())
+                .filter(|kind| kind.holds())
+                .collect::<Vec<_>>();
+            let under =
+                |elt_at| door.bound(&[(elt, Bound::Type(elt_at)), (m, door.module(module))]);
+            let first = (door.resumption(under(KType::NUMBER), None, false)).expect("no refusal");
+            let witnessed = first.witnessed.expect("the first resumption witnesses");
+            let second = door.resumption(under(KType::BOOL), Some(witnessed), false);
+            let laid = second.expect("no refusal").layer.unit_of(unit).is_some();
+            let resumed = (door.resume(None, under(KType::NUMBER), false)).expect("no refusal");
+            let load = upper(door, door.load(), f, "s0");
+            (load, upper(door, resumed, f, "s0"), holding, laid)
+        });
+        let restart = program("n :Any", &format!("LET m = {module}\n  "));
+        let restarted = resumed(&restart, |door| {
+            upper(door, door.load(), subject(door.root()), "s0")
+        });
+        assert_ne!(
+            load, "Any",
+            "{body}: the load reads the hold over `m`'s class"
+        );
+        assert_eq!(under, restarted, "{body}");
+        assert_eq!(under, "Number", "{body}");
+        assert!(holding.is_empty(), "{body}: {holding:?}");
+        assert!(
+            !laid,
+            "{body}: a binding keeping every answer lays no unit for `s0`"
+        );
+    }
+}
+
+/// A value member read through a type a run binds is the member the binding's module declares,
+/// read whole over a union, and unknown where the module declares none: under each binding of
+/// `Elt`, the load's type closed by the binding is the resumption's, and a restart's, and no
+/// question the read asks holds.
+#[test]
+fn a_member_read_through_a_run_bound_name_is_what_a_fresh_load_reads() {
+    let prefix = "SIG Has = #[(VAL f :Number)]\nSIG Deep = #[(VAL f :Has2)]\n\
+                  SIG Has2 = #[(VAL g :Str)]\n";
+    let chained = "#(SUBJECT x :Elt) -> Any = #(\n  LET w = x.f\n  LET y = w.g\n  y\n)";
+    for (body, declared, expected) in [
+        (
+            "#(SUBJECT x :Elt) -> Any = #(\n  LET y = x.f\n  y\n)",
+            ":Module",
+            "[Never, Any]",
+        ),
+        (chained, ":Deep", "[Str, Str]"),
+        (
+            "#(SUBJECT x :(Elt | Has)) -> Any = #(\n  LET y = x.f\n  y\n)",
+            ":Never",
+            "[Number, Number]",
+        ),
+    ] {
+        let source = format!("{prefix}LET Bound = {declared}\nEXPR FOR ALL #[Elt] {body}");
+        let (closed, under, holding) = resumed(&source, |door| {
+            let f = subject(door.root());
+            let elt = unknown(door.symbols(), f, "Elt");
+            let at = slot(door.symbols(), f, "y");
+            let Some(DeclaredType::Type(load)) = door.load().binder_type(door.types, f, at) else {
+                panic!("`y` is typed, and no scheme");
+            };
+            let bound = door.declared("Bound");
+            let levels: Vec<(usize, KType)> = (door.load().homes(f).iter())
+                .filter_map(|(level, target)| match target {
+                    crate::scope::Target::Local(slot)
+                        if (Unknown {
+                            segment: f.segment(),
+                            at: Address::Slot(*slot),
+                        }) == elt =>
+                    {
+                        Some((*level, bound))
+                    }
+                    _ => None,
+                })
+                .collect();
+            let show = |ty| {
+                let closed = laws::substitute(door, &levels, ty).expect("the binding closes it");
+                display_name(closed, door.types, door.symbols()).to_string()
+            };
+            let closed = format!("[{}, {}]", show(load.lower), show(load.upper));
+            let holding = (waits_on(door, unit_of(door, f, "y"), elt)
+                .into_iter()
+                .flatten())
+            .flatten()
+            .filter(|kind| kind.holds())
+            .collect::<Vec<_>>();
+            let binding = door.binding(&[(elt, bound)]);
+            let resumed = (door.resume(None, binding, false)).expect("no refusal");
+            (closed, ends(door, resumed, f, "y"), holding)
+        });
+        assert_eq!(closed, under, "{body} under `Elt := {declared}`");
+        assert_eq!(under, expected, "{body} under `Elt := {declared}`");
+        assert!(holding.is_empty(), "{body}: {holding:?}");
+        // Declared `:Module`, `x` is a module binder of its own, which a restart types exactly.
+        if declared != ":Module" {
+            let restart = format!("{prefix}LET Elt = {declared}\nEXPR {body}");
+            let restarted = resumed(&restart, |door| {
+                ends(door, door.load(), subject(door.root()), "y")
+            });
+            assert_eq!(under, restarted, "{body} under `Elt := {declared}`");
+        }
+    }
+}
+
+/// A path through a module parameter whose declared application pins its label over a run-bound
+/// name is that pin: under a binding of the name it is what a fresh load with the name declared
+/// reads, no question it asks holds, and a second binding keeping every answer lays no unit for
+/// it.
+#[test]
+fn a_path_pinned_over_a_run_bound_name_is_its_pin() {
+    let prelude = "SIG Paired FOR ALL #[Left Right] = #[(VAL left :Left) (VAL right :Right)]\n";
+    let body = "#(WRAP x :Elt AND p :(Paired WITH {Left = Elt})) -> Any = #(\n  \
+                LET y :(p.Left) = p.left\n  LET Lefts = :(p.Left)\n  y\n)\n";
+    let source = format!("{prelude}EXPR FOR ALL #[Elt] {body}");
+    let (under, holding, laid) = resumed(&source, |door| {
+        let f = subject(door.root());
+        let elt = unknown(door.symbols(), f, "Elt");
+        let unit = unit_of(door, f, "y");
+        let holding = (waits_on(door, unit, elt).into_iter().flatten().flatten())
+            .filter(|kind| kind.holds())
+            .collect::<Vec<_>>();
+        let under = |at| door.binding(&[(elt, at)]);
+        let first = (door.resumption(under(KType::NUMBER), None, false)).expect("no refusal");
+        let witnessed = first.witnessed.expect("the first resumption witnesses");
+        let second = door.resumption(under(KType::STR), Some(witnessed), false);
+        let laid = second.expect("no refusal").layer.unit_of(unit).is_some();
+        let resumed = (door.resume(None, under(KType::NUMBER), false)).expect("no refusal");
+        (ends(door, resumed, f, "y"), holding, laid)
+    });
+    let restarted = resumed(&format!("{prelude}LET Elt = Number\nEXPR {body}"), |door| {
+        ends(door, door.load(), subject(door.root()), "y")
+    });
+    assert_eq!(under, restarted);
+    assert_eq!(under, "[Number, Number]");
+    assert!(holding.is_empty(), "{holding:?}");
+    assert!(!laid, "a binding keeping every answer lays no unit for `y`");
+}
+
+/// A head a `USING` surfaces through an ascription pinned over a run-bound name registers at its
+/// pins over the name: under a binding of the name the call is what a fresh load with the name
+/// declared selects, no question it asks holds, and a second binding keeping every answer lays no
+/// unit for it.
+#[test]
+fn a_head_surfaced_through_an_ascription_over_a_name_registers_over_it() {
+    let prelude = PICKS;
+    let body = "#(SUBJECT x :Elt AND p :Picks) -> Any = #(\n  \
+                LET s0 = (USING (p :! (Picks WITH {Carrier = Elt})) SCOPE (PICK zero))\n  s0\n)\n";
+    let source = format!("{prelude}EXPR FOR ALL #[Elt] {body}");
+    let (load, under, holding, laid) = resumed(&source, |door| {
+        let f = subject(door.root());
+        let elt = unknown(door.symbols(), f, "Elt");
+        let unit = unit_of(door, f, "s0");
+        let holding = (waits_on(door, unit, elt).into_iter().flatten().flatten())
+            .filter(|kind| kind.holds())
+            .collect::<Vec<_>>();
+        let under = |at| door.binding(&[(elt, at)]);
+        let first = (door.resumption(under(KType::NUMBER), None, false)).expect("no refusal");
+        let witnessed = first.witnessed.expect("the first resumption witnesses");
+        let second = door.resumption(under(KType::STR), Some(witnessed), false);
+        let laid = second.expect("no refusal").layer.unit_of(unit).is_some();
+        let resumed = (door.resume(None, under(KType::NUMBER), false)).expect("no refusal");
+        let load = upper(door, door.load(), f, "s0");
+        (load, ends(door, resumed, f, "s0"), holding, laid)
+    });
+    let restarted = resumed(&format!("{prelude}LET Elt = Number\nEXPR {body}"), |door| {
+        ends(door, door.load(), subject(door.root()), "s0")
+    });
+    assert!(
+        !load.contains("Any"),
+        "the load registers the head over `Elt`: {load}"
+    );
+    assert_eq!(under, restarted);
+    assert_eq!(under, "[Str, Str]");
+    assert!(holding.is_empty(), "{holding:?}");
+    assert!(
+        !laid,
+        "a binding keeping every answer lays no unit for `s0`"
+    );
+}
+
+/// A `MODULE` body whose members are written over a run-bound name is exactly the signature they
+/// declare, written over the name: under a binding of the name it is what a fresh load with the
+/// name declared types it, no question it asks holds, and a second binding keeping every answer
+/// lays no unit for it.
+#[test]
+fn a_module_over_a_run_bound_name_is_its_signature_over_the_name() {
+    let body = "#(SUBJECT x :Elt) -> Any = #(\n  \
+                MODULE md0 OVER #[Elt] = (LET f = (FN :{y :Elt} -> Elt = #(y)))\n  md0\n)\n";
+    let source = format!("EXPR FOR ALL #[Elt] {body}");
+    let (under, holding, laid) = resumed(&source, |door| {
+        let f = subject(door.root());
+        let elt = unknown(door.symbols(), f, "Elt");
+        let unit = unit_of(door, f, "md0");
+        let holding = (waits_on(door, unit, elt).into_iter().flatten().flatten())
+            .filter(|kind| kind.holds())
+            .collect::<Vec<_>>();
+        let under = |at| door.binding(&[(elt, at)]);
+        let first = (door.resumption(under(KType::NUMBER), None, false)).expect("no refusal");
+        let witnessed = first.witnessed.expect("the first resumption witnesses");
+        let second = door.resumption(under(KType::STR), Some(witnessed), false);
+        let laid = second.expect("no refusal").layer.unit_of(unit).is_some();
+        let resumed = (door.resume(None, under(KType::NUMBER), false)).expect("no refusal");
+        (ends(door, resumed, f, "md0"), holding, laid)
+    });
+    let restarted = resumed(&format!("LET Elt = Number\nEXPR {body}"), |door| {
+        ends(door, door.load(), subject(door.root()), "md0")
+    });
+    assert_eq!(under, restarted);
+    assert!(holding.is_empty(), "{holding:?}");
+    assert!(
+        !laid,
+        "a binding keeping every answer lays no unit for `md0`"
+    );
+}
+
+/// A `MODULE` body capturing a run-bound name, or a local alias written over one, holds a content
+/// tree a binding closes: under a closed walk, and under a binding over a witnessed layer that
+/// keeps every answer, it is closed, and over an alias it is the tree a fresh load with the name
+/// declared reads.
+#[test]
+fn a_module_capturing_a_run_bound_name_closes_its_tree_under_a_binding() {
+    let bodies = [
+        "#(SUBJECT x :Elt) -> Any = #(\n  MODULE md0 OVER #[Elt] = (LET f = 7)\n  md0\n)\n",
+        "#(SUBJECT x :Elt) -> Any = #(\n  LET Row = :(LIST OF Elt)\n  \
+         MODULE md0 OVER #[Row] = (LET f = (FN :{y :Row} -> Row = #(y)))\n  md0\n)\n",
+    ];
+    for body in bodies {
+        let (load, walked, second) = resumed(&format!("EXPR FOR ALL #[Elt] {body}"), |door| {
+            let f = subject(door.root());
+            let (elt, at) = (
+                unknown(door.symbols(), f, "Elt"),
+                slot(door.symbols(), f, "md0"),
+            );
+            let under = |ty| door.binding(&[(elt, ty)]);
+            let held = "`md0` holds a content tree";
+            let load = door.load().content(f, at).expect(held);
+            let closed = (door.resume(None, under(KType::NUMBER), false)).expect("no refusal");
+            let walked = closed.content(f, at).expect(held).identity();
+            let first = (door.resumption(under(KType::STR), None, false)).expect("no refusal");
+            let witnessed = first.witnessed.expect("the first resumption witnesses");
+            let second = door.resumption(under(KType::NUMBER), Some(witnessed), false);
+            let layer = resident(door.bump, second.expect("no refusal").layer);
+            let facts = crate::scope::Facts::under(door.load(), Some(layer));
+            let second = facts.content(f, at).expect(held).identity();
+            (load.closed(), walked, second)
+        });
+        assert!(!load, "the load's tree is open over `Elt`:\n{body}");
+        assert!(matches!(walked, Identity::Closed(_)), "{walked:?}\n{body}");
+        assert_eq!(walked, second, "{body}");
+        if body.contains("Row") {
+            let restarted = resumed(&format!("LET Elt = Number\nEXPR {body}"), |door| {
+                let f = subject(door.root());
+                let at = slot(door.symbols(), f, "md0");
+                door.load()
+                    .content(f, at)
+                    .expect("`md0` holds a content tree")
+                    .identity()
+            });
+            assert_eq!(walked, restarted, "{body}");
+        }
+    }
+}
+
+/// A module parameter held in place at its own declared type is the parameter's own type: one
+/// type, over one class.
+#[test]
+fn a_module_held_in_place_at_its_own_type_is_the_parameter_s_type() {
+    let source = format!(
+        "{COUNTER}LET step = (FN :{{m :Counter}} -> Any = #(\n  LET s0 = (m :! Counter)\n  \
+         LET s1 = m\n  s0\n))\n"
+    );
+    let (held, read) = resumed(&source, |door| {
+        let step = born(door.symbols(), door.root(), "step");
+        (
+            upper(door, door.load(), step, "s0"),
+            upper(door, door.load(), step, "s1"),
+        )
+    });
+    assert!(held.ends_with("WITH {Carrier = Carrier}"), "{held}");
+    assert_eq!(held, read);
+}
+
+/// A module parameter held in place at a type its binding may not fit is refused by the binding
+/// exactly where a fresh load, with the parameter declared at the bound module, refuses it.
+#[test]
+fn a_module_held_in_place_is_refused_by_a_binding_as_a_fresh_load_refuses_it() {
+    let prelude = format!(
+        "{COUNTER}MODULE ints = ((LET Carrier = Number) (LET zero = 0) \
+         (LET succ = (FN :{{x :Number}} -> Number = #(x))))\n\
+         LET stamped :Counter = ints\n\
+         MODULE strs = ((LET Carrier = Str) (LET zero = \"z\") \
+         (LET succ = (FN :{{x :Str}} -> Str = #(x))))\n\
+         LET sstamped :Counter = strs\n\
+         SIG Zeroed = #[(VAL zero :Number)]\n"
+    );
+    // Whether a binding of `m` to `stamped`, then to `sstamped`, admits the hold.
+    for (held, fits) in [
+        ("(Counter WITH {Carrier = Str})", [false, true]),
+        ("Zeroed", [true, false]),
+        ("(Counter & Zeroed)", [true, false]),
+    ] {
+        let body = format!("LET s0 = (m :! {held}).zero");
+        let source =
+            format!("{prelude}LET step = (FN :{{m :Counter}} -> Any = #(\n  {body}\n  s0\n))\n");
+        for (module, fits) in ["stamped", "sstamped"].into_iter().zip(fits) {
+            let resumed = resumed(&source, |door| {
+                let step = born(door.symbols(), door.root(), "step");
+                let m = unknown(door.symbols(), step, "m");
+                let binding = door.bound(&[(m, door.module(module))]);
+                door.resume(None, binding, false).is_ok()
+            });
+            let restart = format!(
+                "{prelude}LET step = (FN :{{n :Any}} -> Any = #(\n  LET m = {module}\n  \
+                 {body}\n  s0\n))\n"
+            );
+            let loaded = CellSubstrate::load::<Koan>(
+                &restart,
+                "<test>",
+                8,
+                BuildBudget::default(),
+                output(),
+            )
+            .is_ok();
+            assert_eq!(resumed, loaded, "{body} under `m := {module}`");
+            assert_eq!(resumed, fits, "{body} under `m := {module}`");
+        }
+    }
+}
+
+/// A record holding a content tree with a leaf on a module parameter names the parameter: a
+/// binding of it absorbs the record, and its tree reads as the bound module's, as a fresh load reads
+/// it, through the binding's layer.
+#[test]
+fn binding_a_module_parameter_substitutes_it_into_the_trees_its_records_hold() {
+    let source = format!(
+        "{COUNTER}MODULE ints = ((LET Carrier = Number) (LET zero = 0) \
+         (LET succ = (FN :{{x :Number}} -> Number = #(x))))\n\
+         LET stamped :Counter = ints\n\
+         LET step = (FN :{{m :Counter}} -> Any = #(\n  LET n = m\n  n\n))\n"
+    );
+    let (before, after, bound, n_reran) = resumed(&source, |door| {
+        let symbols = door.symbols();
+        let step = born(symbols, door.root(), "step");
+        let n = slot(symbols, step, "n");
+        let before = door.load().content(step, n).map(|tree| tree.closed());
+        let stamped = door.module("stamped");
+        let bound = match stamped {
+            Bound::Module { tree, .. } => tree.identity(),
+            Bound::Type(_) => unreachable!("`stamped` is a module"),
+        };
+        let binding = door.bound(&[(unknown(symbols, step, "m"), stamped)]);
+        let resumed = (door.resume(None, binding, false)).expect("the resumption refuses nothing");
+        (
+            before,
+            resumed.content(step, n).map(|tree| tree.identity()),
+            bound,
+            reran(resumed, unit_of(door, step, "n")),
+        )
+    });
+    assert_eq!(before, Some(false), "the load reads `n` as a leaf on `m`");
+    assert_eq!(
+        after,
+        Some(bound),
+        "a binding reads `n` as the module it binds"
+    );
+    assert!(!n_reran, "`n`'s record names `m`, and is absorbed");
+}
+
 /// A type binder that reads a `FOR ALL` name before a path over a module parameter the binding
 /// leaves unbound declares unknown at the load, and stays unknown under a binding of the name: its
 /// path is a class.
@@ -374,11 +872,10 @@ fn binding_a_name_a_type_reads_before_a_path_finds_its_entry() {
 }
 
 /// A binding re-runs exactly the units whose frontier reaches an open mark on a name it binds. The
-/// entry unit's does: a binding makes `Key`'s value exact, so its seed is open. `WRAP`'s other
-/// units read `x`'s seed alone, which no fact over `Key` reaches, so none re-runs. None of the
-/// program's own units names `Key` at all.
+/// entry unit seeds `Key` at the decided name of its kind's type value, which asks nothing, so it
+/// only names `Key`; `WRAP`'s other units read `x`'s seed alone. So binding `Key` re-runs nothing.
 #[test]
-fn binding_a_name_no_fact_reads_re_runs_only_the_entry() {
+fn binding_a_name_no_fact_reads_re_runs_nothing() {
     let source = format!(
         "{PICK}EXPR FOR ALL #[Elt Key] #(WRAP x :Elt) -> Any = #(\n  LET p = (PICK x)\n  p\n)"
     );
@@ -387,12 +884,10 @@ fn binding_a_name_no_fact_reads_re_runs_only_the_entry() {
         let key = unknown(door.symbols(), f, "Key");
         let binding = door.binding(&[(key, KType::NUMBER)]);
         let resumed = (door.resume(None, binding, false)).expect("the resumption refuses nothing");
-        let reran: Vec<_> = (resumed.own_units().iter())
-            .map(|(unit, _)| *unit)
-            .collect();
-        let named: Vec<_> = (door.load().own_units().iter())
+        let reran: Vec<_> = (resumed.own_units()).map(|(unit, _)| unit).collect();
+        let named: Vec<_> = (door.load().own_units())
             .filter(|(_, (_, frontier))| frontier.unknowns().contains(&key))
-            .map(|(unit, _)| *unit)
+            .map(|(unit, _)| unit)
             .collect();
         let entry = crate::scope::UnitId {
             segment: f.segment(),
@@ -401,8 +896,295 @@ fn binding_a_name_no_fact_reads_re_runs_only_the_entry() {
         (reran, (named, entry))
     });
     let (named, entry) = waiting;
-    assert_eq!(reran, vec![entry], "only the entry seeds `Key`");
+    assert_eq!(
+        reran,
+        vec![],
+        "`Key`'s seed asks nothing, so nothing re-runs"
+    );
     assert_eq!(named, vec![entry], "no unit but the entry reaches `Key`");
+}
+
+/// A binding under which a quote's code refuses leaves no record of the code's units: no `OP`
+/// takes a `Bool`, so the resumption marks the unit the load typed unreached, and a reader finds
+/// none, as in a fresh load with `Elt` bound.
+#[test]
+fn a_binding_refusing_a_quote_s_code_hides_the_load_s_records_of_it() {
+    let source = "EXPR #(OP x :Number) -> Str = #(\"n\")\nEXPR #(OP x :Str) -> Number = #(1)\n\
+        EXPR FOR ALL #[Elt] #(SUBJECT x :Elt) -> Any = #(\n  \
+        LET s0 = (EVAL #($(OP $x)) -> Any)\n  x\n)";
+    let (loaded, read, cut, refused) = resumed(source, |door| {
+        let f = quantified(door);
+        let (_, code) = *(f.nested_shapes().iter())
+            .find(|(_, nested)| nested.kind() == ShapeKind::Code)
+            .expect("SUBJECT quotes a code");
+        let unit = crate::scope::UnitId {
+            segment: code.segment(),
+            unit: crate::scope::UnitIndex::of_run(0),
+        };
+        let binding = door.binding(&[(unknown(door.symbols(), f, "Elt"), KType::BOOL)]);
+        let resumed = (door.resume(None, binding, false)).expect("only the code refuses");
+        let refused =
+            (resumed.closing(code.segment())).is_some_and(|(closing, _)| closing.refusal.is_some());
+        (
+            door.load().unit(unit).is_some(),
+            resumed.unit(unit).is_some(),
+            resumed.unreached_units().any(|at| at == unit),
+            refused,
+        )
+    });
+    assert!(loaded, "the load types the code's unit");
+    assert!(refused, "under `Bool` the code refuses");
+    assert!(cut, "the resumption marks the code's unit unreached");
+    assert!(!read, "a reader finds no record of it");
+}
+
+/// `WRAP`'s body: `y` holds `x :Elt` to `Number`, which is `Never` where `Elt` is, and `z` reads
+/// `y` alone.
+const ARRIVES: &str = "#(WRAP x :Elt) -> Any = #(\n  LET y :Number = x\n  LET z = y\n  z\n)";
+
+/// A value held to a type is `Never` where it never arrives: at the load, the decided name over
+/// whether `Elt` is `Never`, so a binding of `Elt` to `Never` gives `y` and `z`, which only reads
+/// `y`, the types a restart with `Elt` declared gives them, and one to `Number` gives `Number`.
+#[test]
+fn a_value_that_never_arrives_is_never_under_the_binding_that_makes_it_so() {
+    for (bound, declared) in [(KType::NEVER, ":Never"), (KType::NUMBER, ":Number")] {
+        let (load, under) = resumed(&format!("EXPR FOR ALL #[Elt] {ARRIVES}"), |door| {
+            let f = quantified(door);
+            let elt = unknown(door.symbols(), f, "Elt");
+            let binding = door.binding(&[(elt, bound)]);
+            let resumed =
+                (door.resume(None, binding, false)).expect("the resumption refuses nothing");
+            let read = |facts| ["y", "z"].map(|name| upper(door, facts, f, name));
+            (read(door.load()), read(resumed))
+        });
+        let restart = format!("LET Elt = {declared}\nEXPR {ARRIVES}");
+        let restarted = resumed(&restart, |door| {
+            let f = subject(door.root());
+            ["y", "z"].map(|name| upper(door, door.load(), f, name))
+        });
+        assert_eq!(
+            load, ["(ONE OF Number, Never)"; 2],
+            "`y` arrives where `Elt` is not `Never`"
+        );
+        assert_eq!(under, restarted, "under `Elt := {declared}`");
+    }
+}
+
+/// Two `FIRST` overloads: one over a record whose field `x` is `Elt`, one at `Number`.
+const FIRSTS: &str = "EXPR FOR ALL #[Elt] #(FIRST r :{x :Elt}) -> Elt = #(r.x)\n\
+                      EXPR #(FIRST n :Number) -> Number = #(n)\n";
+
+/// `SUBJECT`'s body: `s` calls `FIRST` over `y :Item`, and `t` reads `s` alone.
+const SELECTS: &str = "#(SUBJECT y :Item) -> Any = #(\n  LET s = (FIRST y)\n  LET t = s\n  t\n)";
+
+/// Both ends of the binder `name` of `shape`, as `facts` holds it, rendered.
+fn ends(door: &Door<'_, '_>, facts: &LoadFacts<'_>, shape: &BodyShape<'_>, name: &str) -> String {
+    let at = slot(door.symbols(), shape, name);
+    let Some(DeclaredType::Type(typed)) = facts.binder_type(door.types, shape, at) else {
+        panic!("`{name}` is typed, and no scheme");
+    };
+    let render = |ty| display_name(ty, door.types, door.symbols()).to_string();
+    format!("[{}, {}]", render(typed.lower), render(typed.upper))
+}
+
+/// A call keeping two candidates over `y :Item` is typed by which runs, one decided name per
+/// candidate: a binding of `Item` gives `s` and `t` what a fresh load with `Item` declared
+/// selects — the record overload under a record, the `Number` one under `Number`, and both at
+/// most under `Any`, where the call reads the carried type.
+#[test]
+fn a_call_s_type_under_a_binding_is_what_a_fresh_load_selects() {
+    for declared in [":{x :Str}", ":Number", ":Any"] {
+        let source = format!("LET Bound = {declared}\n{FIRSTS}EXPR FOR ALL #[Item] {SELECTS}");
+        let under = resumed(&source, |door| {
+            let f = subject(door.root());
+            let item = unknown(door.symbols(), f, "Item");
+            let binding = door.binding(&[(item, door.declared("Bound"))]);
+            let resumed =
+                (door.resume(None, binding, false)).expect("the resumption refuses nothing");
+            ["s", "t"].map(|name| ends(door, resumed, f, name))
+        });
+        let restart = format!("{FIRSTS}LET Item = {declared}\nEXPR {SELECTS}");
+        let restarted = resumed(&restart, |door| {
+            let f = subject(door.root());
+            ["s", "t"].map(|name| ends(door, door.load(), f, name))
+        });
+        assert_eq!(under, restarted, "under `Item := {declared}`");
+    }
+}
+
+/// `SUBJECT`'s body: `m` matches `y :Item` against a `Number` arm and `_`, and `t` reads `m` alone.
+const MATCHES: &str = "#(SUBJECT y :Item) -> Any = #(\n  \
+                       LET m = (MATCH y WITH #{:Number: (1), _: (\"s\")})\n  LET t = m\n  t\n)";
+
+/// A `MATCH` over `y :Item` is typed by which arms run, one decided name per arm: a binding of
+/// `Item` gives `m` and `t` what a fresh load with `Item` declared gives them — the `Number` arm's
+/// type alone under `Number`, `_`'s under `Str`, and both at most under `Any`.
+#[test]
+fn a_match_s_type_under_a_binding_is_what_a_fresh_load_takes() {
+    for declared in [":Number", ":Str", ":Any"] {
+        let source = format!("LET Bound = {declared}\nEXPR FOR ALL #[Item] {MATCHES}");
+        let (load, under) = resumed(&source, |door| {
+            let f = subject(door.root());
+            let item = unknown(door.symbols(), f, "Item");
+            let binding = door.binding(&[(item, door.declared("Bound"))]);
+            let resumed =
+                (door.resume(None, binding, false)).expect("the resumption refuses nothing");
+            let read = |facts| ["m", "t"].map(|name| ends(door, facts, f, name));
+            (read(door.load()), read(resumed))
+        });
+        let restart = format!("LET Item = {declared}\nEXPR {MATCHES}");
+        let restarted = resumed(&restart, |door| {
+            let f = subject(door.root());
+            ["m", "t"].map(|name| ends(door, door.load(), f, name))
+        });
+        assert_ne!(load, restarted, "the load leaves the arm to the binding");
+        assert_eq!(under, restarted, "under `Item := {declared}`");
+    }
+}
+
+/// `APPLY`, whose second slot solves `Elt` from a function's return, beside a module whose `pick`
+/// is quantified.
+const APPLIES: &str = "EXPR #(APPLY 2 TO 1)\n\
+     EXPR FOR ALL #[Elt] #(APPLY f :(FN :{x :Elt} -> Elt) TO y :(FN :{x :Number} -> Elt)) \
+     -> Elt = #(f {x = 1})\n\
+     MODULE lib = (LET pick = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(x)))\n";
+
+/// `SUBJECT`'s body: `s` applies `lib.pick` to `g :Outer`, and `t` reads `s` alone.
+const STORED: &str = "#(SUBJECT g :Outer) -> Any = #(\n  LET s = (APPLY lib.pick TO g)\n  \
+                      LET t = s\n  t\n)";
+
+/// `Outer` is read through its bound, which a binding lower solves otherwise, so the load stores
+/// `APPLY`'s solve whole and fixes `pick` at the derived name it types: a binding of `Outer` gives
+/// `s` and `t` what a fresh load with `Outer` declared gives them.
+#[test]
+fn a_stored_solve_fixes_an_instance_its_binding_solves() {
+    let declared = ":(FN :{x :Number} -> Number)";
+    let source = format!(
+        "LET Bound = {declared}\n{APPLIES}\
+         EXPR FOR ALL #{{Outer: :(FN :{{x :Number}} -> Number)}} {STORED}"
+    );
+    let (load, under) = resumed(&source, |door| {
+        let f = subject(door.root());
+        let outer = unknown(door.symbols(), f, "Outer");
+        let binding = door.binding(&[(outer, door.declared("Bound"))]);
+        let resumed = (door.resume(None, binding, false)).expect("the resumption refuses nothing");
+        let read = |facts| ["s", "t"].map(|name| ends(door, facts, f, name));
+        (read(door.load()), read(resumed))
+    });
+    let restart = format!("{APPLIES}LET Outer = {declared}\nEXPR {STORED}");
+    let restarted = resumed(&restart, |door| {
+        let f = subject(door.root());
+        ["s", "t"].map(|name| ends(door, door.load(), f, name))
+    });
+    assert_ne!(load, restarted, "the load leaves `s` to the binding");
+    assert_eq!(under, restarted);
+}
+
+/// Three `OP` overloads, one quantified over the element of a list.
+const OPS: &str = "EXPR #(OP x :Number) -> Str = #(\"n\")\n\
+                   EXPR #(OP x :Str) -> Number = #(1)\n\
+                   EXPR FOR ALL #[Elt] #(OP x :(LIST OF Elt)) -> :(LIST OF Elt) = #(x)\n";
+
+/// `SUBJECT`'s body: `s` calls `OP` over `y :Item`, and `t` reads `s` alone.
+const JUDGED: &str = "#(SUBJECT y :Item) -> Any = #(\n  LET s = (OP y)\n  LET t = s\n  t\n)";
+
+/// The list overload's group solved from `y :Item` is a solve a run may solve otherwise, so its
+/// verdict's intervals are derived names judged again under a binding: under `Item := (LIST OF
+/// Number)`, `s` and `t` are what a fresh load with `Item` declared gives them.
+#[test]
+fn a_verdict_s_unreproduced_intervals_are_derived_names() {
+    let declared = ":(LIST OF Number)";
+    let source = format!("LET Bound = {declared}\n{OPS}EXPR FOR ALL #[Item] {JUDGED}");
+    let (load, under) = resumed(&source, |door| {
+        let f = subject(door.root());
+        let item = unknown(door.symbols(), f, "Item");
+        let binding = door.binding(&[(item, door.declared("Bound"))]);
+        let resumed = (door.resume(None, binding, false)).expect("the resumption refuses nothing");
+        let read = |facts| ["s", "t"].map(|name| ends(door, facts, f, name));
+        (read(door.load()), read(resumed))
+    });
+    let restart = format!("{OPS}LET Item = {declared}\nEXPR {JUDGED}");
+    let restarted = resumed(&restart, |door| {
+        let f = subject(door.root());
+        ["s", "t"].map(|name| ends(door, door.load(), f, name))
+    });
+    assert!(
+        load[0].contains("JUDGED"),
+        "the load reads the judged names: {load:?}"
+    );
+    assert_eq!(under, restarted);
+}
+
+/// A family whose `Of` variant holds a function returning its parameter.
+const RET: &str = "UNION (Elem -> Ret) = #{Of: :(FN :{x :Number} -> Elem), None: Null}\n";
+
+/// `SUBJECT`'s body: `s` constructs `Ret.Of` over `g :Outer`, and `t` reads `s` alone.
+const CONSTRUCTS: &str = "#(SUBJECT g :Outer) -> Any = #(\n  LET s = (Ret.Of g)\n  \
+                          LET t = s\n  t\n)";
+
+/// `Elem` is solved from `Outer`'s return through its bound, which a binding lower solves
+/// otherwise, so the construction is the decided name on whether it solves, typed by the
+/// construction's own: a binding of `Outer` gives `s` and `t` what a fresh load gives them.
+#[test]
+fn a_construction_a_run_may_solve_otherwise_is_a_derived_name() {
+    let declared = ":(FN :{x :Number} -> Number)";
+    let source = format!(
+        "LET Bound = {declared}\n{RET}\
+         EXPR FOR ALL #{{Outer: :(FN :{{x :Number}} -> Number)}} {CONSTRUCTS}"
+    );
+    let (load, under) = resumed(&source, |door| {
+        let f = subject(door.root());
+        let outer = unknown(door.symbols(), f, "Outer");
+        let binding = door.binding(&[(outer, door.declared("Bound"))]);
+        let resumed = (door.resume(None, binding, false)).expect("the resumption refuses nothing");
+        let read = |facts| ["s", "t"].map(|name| ends(door, facts, f, name));
+        (read(door.load()), read(resumed))
+    });
+    let restart = format!("{RET}LET Outer = {declared}\nEXPR {CONSTRUCTS}");
+    let restarted = resumed(&restart, |door| {
+        let f = subject(door.root());
+        ["s", "t"].map(|name| ends(door, door.load(), f, name))
+    });
+    assert!(
+        load[0].contains("CONSTRUCTED"),
+        "the load reads the construction's name: {load:?}"
+    );
+    assert_eq!(under, restarted);
+}
+
+/// `SUBJECT`'s body: `f` is a quantified `FN` wanted at a function type over `Outer`, and `t`
+/// reads `f` alone.
+const INSTANCES: &str = "#(SUBJECT g :Outer) -> Any = #(\n  \
+     LET f :(FN :{x :Outer} -> Number) = (FN FOR ALL #[Pick] :{x :Pick} -> Pick = #(x))\n  \
+     LET t = f\n  t\n)";
+
+/// The instance `f` takes is solved over `Outer`, a solve a binding may make otherwise, so the
+/// load fixes it at each variable's derived name, instantiated again under a binding: under
+/// `Outer := Number`, `f` and `t` are what a fresh load with `Outer` declared gives them.
+#[test]
+fn an_instance_a_run_may_make_otherwise_is_its_variables_derived_names() {
+    let source = format!("EXPR FOR ALL #[Outer] {INSTANCES}");
+    let (spelled, under) = resumed(&source, |door| {
+        let f = subject(door.root());
+        let outer = unknown(door.symbols(), f, "Outer");
+        let binding = door.binding(&[(outer, KType::NUMBER)]);
+        let resumed = (door.resume(None, binding, false)).expect("the resumption refuses nothing");
+        let derived = door.load().base_layer().derived();
+        let spelled: Vec<String> = (derived.names().iter())
+            .map(|name| display_name(name.ty, door.types, door.symbols()).to_string())
+            .collect();
+        (spelled, ["f", "t"].map(|name| ends(door, resumed, f, name)))
+    });
+    let restart = format!("LET Outer = :Number\nEXPR {INSTANCES}");
+    let restarted = resumed(&restart, |door| {
+        let f = subject(door.root());
+        ["f", "t"].map(|name| ends(door, door.load(), f, name))
+    });
+    assert!(
+        spelled.iter().any(|name| name.starts_with("(INSTANCE ")),
+        "the load fixes the instance at a derived name: {spelled:?}"
+    );
+    assert_eq!(under, restarted);
 }
 
 /// A unit a resumption absorbs keeps what its facts gave the body's class: a porous exit a unit
@@ -420,7 +1202,7 @@ fn an_absorbed_unit_keeps_the_body_s_porous_exit() {
         let porous =
             |facts: &LoadFacts<'_>| matches!(facts.class(f), Some(BodyClass::Porous { .. }));
         assert!(
-            (resumed.own_units().iter()).all(|(unit, _)| unit.unit.run_index() != Some(0)),
+            (resumed.own_units()).all(|(unit, _)| unit.unit.run_index() != Some(0)),
             "the `EVAL`'s unit is absorbed, not re-run"
         );
         (porous(door.load()), porous(resumed))
@@ -469,7 +1251,7 @@ fn an_inner_callable_inside_a_block_settles_under_its_binding() {
         let resumed = (door.resume(None, binding, false)).expect("the resumption refuses nothing");
         let arm_unit = (f.segment(), f.unit_of_statement(0));
         assert!(
-            (resumed.own_units().iter()).all(|(unit, _)| (unit.segment, unit.unit) != arm_unit),
+            (resumed.own_units()).all(|(unit, _)| (unit.segment, unit.unit) != arm_unit),
             "the unit running the arm is absorbed"
         );
         (before, narrowing(door, resumed, g, "p"))
@@ -697,6 +1479,33 @@ fn a_binding_that_closes_a_registration_checks_its_overlap() {
         refused.contains("this overload of `_ + _` takes operands the builtin"),
         "{refused}"
     );
+    // Under `Str` it overlaps no overload of `+`, so the resumption refuses nothing.
+    let source = "EXPR FOR ALL #[Elt] #(SUBJECT x :Elt) -> Any = #(\n  \
+                  OP #(+) OVER Elt = #(x)\n  x\n)";
+    let resumed = resumed(source, |door| {
+        let f = quantified(door);
+        let elt = unknown(door.symbols(), f, "Elt");
+        door.resume(None, door.binding(&[(elt, KType::STR)]), false)
+            .map(|_| ())
+    });
+    assert_eq!(resumed, Ok(()));
+}
+
+/// A registration over a name whose bound already misses every builtin overload at its key never
+/// overlaps one: the check asks nothing.
+#[test]
+fn a_registration_whose_bound_misses_the_builtins_asks_nothing() {
+    let source = "EXPR FOR ALL #{Elt: Str} #(SUBJECT x :Elt) -> Any = #(\n  \
+                  OP #(+) OVER Elt = #(x)\n  x\n)";
+    let marked = resumed(source, |door| {
+        (door.load().own_units()).any(|(_, (_, frontier))| {
+            (frontier.marks().iter()).any(|noted| {
+                matches!(noted.mark, crate::scope::Mark::Open(open)
+                    if open.kind == crate::scope::OpenKind::Overlap)
+            })
+        })
+    });
+    assert!(!marked, "no unit is marked for an overlap");
 }
 
 /// A binding that closes a cycle the load did not see unfolds no call on it: the resumption runs
@@ -736,8 +1545,9 @@ fn a_binding_that_closes_a_cycle_unfolds_neither_call() {
     );
 }
 
-/// A quote's code read under a binding of its `$` capture decides what reads it: binding `$r` to
-/// `ints` in the code's activation types `$r.zero` exactly, which the load leaves open.
+/// A quote's code read under a binding of its `$` capture decides what reads it: the load types
+/// `$r.zero` over the type the module `$r` holds carries, which binding `$r` to `ints` in the
+/// code's activation closes.
 #[test]
 fn an_eval_frame_settles_facts_waiting_on_its_dollar_names_in_its_activation() {
     let source = "SIG Counter FOR ALL #[Carrier] = \
@@ -774,6 +1584,30 @@ fn an_eval_frame_settles_facts_waiting_on_its_dollar_names_in_its_activation() {
     });
 }
 
+/// A quote's `$` capture of a module binder is bound as its source: resuming `USE` with `r` bound
+/// to `ints` types the code's `$r.zero` as the activation binding `$r` itself does, and the load
+/// types it over the capture alone, whatever `r` binds.
+#[test]
+fn a_binding_of_a_captured_module_binder_closes_its_capture_as_its_source() {
+    let source = "SIG Counter FOR ALL #[Carrier] = \
+                  #[(VAL zero :Carrier) (VAL succ :(FN :{x :Carrier} -> Carrier))]\n\
+                  MODULE ints = ((LET zero = 0) \
+                  (LET succ = (FN :{x :Number} -> Number = #(x + 1))))\n\
+                  EXPR #(USE r :Counter) -> Any = #(EVAL #($r.zero) -> Any)\n";
+    resumed(source, |door| {
+        let code = (door.running.program().shapes().bodies().iter())
+            .find(|shape| shape.kind() == ShapeKind::Code)
+            .expect("the program quotes code");
+        let r = unknown(door.symbols(), subject(door.root()), "r");
+        let resumed = (door.resume(None, door.bound(&[(r, door.module("ints"))]), false))
+            .expect("the resumption refuses nothing");
+        assert_eq!(
+            resumed.statement_type(door.types, code, 0),
+            Some(crate::type_lattice::Interval::point(KType::NUMBER.into()))
+        );
+    });
+}
+
 /// `SUBJECT`'s body: the last callable the top level births.
 pub(super) fn subject<'graph>(root: &'graph BodyShape<'graph>) -> &'graph BodyShape<'graph> {
     (root.nested_shapes().iter().rev())
@@ -791,57 +1625,440 @@ fn node_of(symbols: &SymbolInterner, shape: &BodyShape<'_>, name: &str) -> Site 
 }
 
 /// A module unknown binds to a closed content tree, so a view over a bound module parameter is
-/// over a closed tree: it mints nothing at run.
+/// over a closed tree: the load sees an open one, and the view's record, absorbed under the
+/// binding, reads the closed tree the binding substitutes, as a fresh load builds it.
 #[test]
 fn a_view_over_a_bound_module_is_settled() {
     let source = format!(
         "{COUNTER}MODULE bound = ((LET Carrier = Number) (LET zero = 0) \
          (LET succ = (FN :{{x :Number}} -> Number = #(x))))\n\
+         LET stamped :Counter = bound\n\
          EXPR #(SUBJECT m :Counter) -> Any = #(\n  LET v = (m :| Counter)\n  v\n)\n"
     );
-    let (load, resumed) = resumed(&source, |door| {
+    let (mint, load, resumed, v_reran) = resumed(&source, |door| {
         let body = subject(door.root());
         let site = node_of(door.symbols(), body, "v");
         let m = unknown(door.symbols(), body, "m");
-        let binding = door.bound(&[(m, door.module("bound"))]);
+        let binding = door.bound(&[(m, door.module("stamped"))]);
         let resumed = (door.resume(None, binding, false)).expect("the resumption refuses nothing");
-        (door.load().mint_at(body, site), resumed.mint_at(body, site))
+        let closed = |facts: &LoadFacts<'_>| facts.view_tree(body, site).map(|tree| tree.closed());
+        (
+            door.load().mint_at(body, site),
+            closed(door.load()),
+            closed(resumed),
+            reran(resumed, unit_of(door, body, "v")),
+        )
     });
-    assert_eq!(load, Some(Mint::Invariant), "the load sees an open tree");
-    assert_eq!(resumed, Some(Mint::Closed), "the bound tree is closed");
+    assert_eq!(mint, Some(Mint::Invariant), "the load sees an open tree");
+    assert_eq!(load, Some(false));
+    assert_eq!(resumed, Some(true), "the bound tree is closed");
+    assert!(!v_reran, "`v`'s record names `m`, and is absorbed");
 }
 
-/// The upper end of the binder `name` of `SUBJECT`'s body, as `facts` holds it.
-fn subject_upper(door: &Door<'_, '_>, facts: &LoadFacts<'_>, name: &str) -> String {
-    upper(door, facts, subject(door.root()), name)
+/// A view a binder holds over a module parameter is the view rule over the paths through its tree
+/// at the load, and the view a fresh load builds under a binding of the parameter: its unit is
+/// absorbed, its type closed through the carrier the substituted view hides.
+#[test]
+fn a_view_a_binder_holds_is_the_view_rule_under_every_binding() {
+    let body = "EXPR #(SUBJECT m :Counter) -> Any = #(\n  LET w = (m :| Counter)\n  w\n)\n";
+    let module = "MODULE bound = ((LET Carrier = Number) (LET zero = 0) \
+                  (LET succ = (FN :{x :Number} -> Number = #(x))))\n\
+                  LET stamped :Counter = bound\n";
+    let source = format!("{COUNTER}{module}{body}");
+    let (load, under, w_reran) = resumed(&source, |door| {
+        let f = subject(door.root());
+        let load = upper(door, door.load(), f, "w");
+        let m = unknown(door.symbols(), f, "m");
+        let binding = door.bound(&[(m, door.module("stamped"))]);
+        let resumed = (door.resume(None, binding, false)).expect("the resumption refuses nothing");
+        let w_reran = reran(resumed, unit_of(door, f, "w"));
+        (load, upper(door, resumed, f, "w"), w_reran)
+    });
+    let restart = format!(
+        "{COUNTER}{module}EXPR #(SUBJECT n :Any) -> Any = #(\n  LET m = stamped\n  \
+         LET w = (m :| Counter)\n  w\n)\n"
+    );
+    let restarted = resumed(&restart, |door| {
+        upper(door, door.load(), subject(door.root()), "w")
+    });
+    assert!(load.starts_with("(VIEW OF "), "{load}");
+    assert_eq!(under, restarted);
+    assert!(!w_reran, "`w` names `m`, and is absorbed");
+}
+
+/// A view written in place over a module parameter is the view rule over the paths through its
+/// own site at the load, and the view a fresh load builds under a binding of the parameter: its
+/// statement's unit is absorbed, its type closed through the carrier the substituted view hides.
+#[test]
+fn a_view_written_in_place_is_the_view_rule_under_every_binding() {
+    let body = "#(\n  LET k = 1\n  (m :| Counter)\n)\n";
+    let module = "MODULE bound = ((LET Carrier = Number) (LET zero = 0) \
+                  (LET succ = (FN :{x :Number} -> Number = #(x))))\n\
+                  LET stamped :Counter = bound\n";
+    let viewed = |door: &Door<'_, '_>, facts: &LoadFacts<'_>| {
+        let typed = (facts.statement_type(door.types, subject(door.root()), 1))
+            .expect("the view's statement is typed");
+        display_name(typed.upper, door.types, door.symbols()).to_string()
+    };
+    let source = format!("{COUNTER}{module}EXPR #(SUBJECT m :Counter) -> Any = {body}");
+    let (load, under, reran_view) = resumed(&source, |door| {
+        let f = subject(door.root());
+        let m = unknown(door.symbols(), f, "m");
+        let binding = door.bound(&[(m, door.module("stamped"))]);
+        let resumed = (door.resume(None, binding, false)).expect("the resumption refuses nothing");
+        let unit = crate::scope::UnitId {
+            segment: f.segment(),
+            unit: f.unit_of_statement(1),
+        };
+        (
+            viewed(door, door.load()),
+            viewed(door, resumed),
+            reran(resumed, unit),
+        )
+    });
+    let restart = format!(
+        "{COUNTER}{module}EXPR #(SUBJECT n :Any) -> Any = \
+         #(\n  LET m = stamped\n  (m :| Counter)\n)\n"
+    );
+    let restarted = resumed(&restart, |door| viewed(door, door.load()));
+    assert!(load.starts_with("(VIEW OF "), "{load}");
+    assert_eq!(under, restarted);
+    assert!(!reran_view, "the view names `m`, and is absorbed");
+}
+
+/// A local reading a view over a module parameter reads the view's own paths, which a binding of
+/// the parameter closes by tree substitution: the run never binds the view, so the reader marks
+/// nothing on it, and under the parameter's binding is typed as a fresh load types it.
+#[test]
+fn a_local_reading_a_view_marks_only_what_the_view_reads() {
+    let body = "LET w = (m :| Counter)\n  LET k = w.zero\n  k\n)\n";
+    let module = "MODULE bound = ((LET Carrier = Number) (LET zero = 0) \
+                  (LET succ = (FN :{x :Number} -> Number = #(x))))\n\
+                  LET stamped :Counter = bound\n";
+    let source = format!("{COUNTER}{module}EXPR #(SUBJECT m :Counter) -> Any = #(\n  {body}");
+    let (under, w_marked) = resumed(&source, |door| {
+        let f = subject(door.root());
+        let m = unknown(door.symbols(), f, "m");
+        let w = unknown(door.symbols(), f, "w");
+        let w_marked = waits_on(door, unit_of(door, f, "k"), w);
+        let binding = door.bound(&[(m, door.module("stamped"))]);
+        let resumed = (door.resume(None, binding, false)).expect("the resumption refuses nothing");
+        (upper(door, resumed, f, "k"), w_marked)
+    });
+    let restart =
+        format!("{COUNTER}{module}EXPR #(SUBJECT n :Any) -> Any = #(\n  LET m = stamped\n  {body}");
+    let restarted = resumed(&restart, |door| {
+        upper(door, door.load(), subject(door.root()), "k")
+    });
+    assert_eq!(w_marked, None, "`k` marks nothing on `w`");
+    assert_eq!(under, restarted);
+}
+
+/// A `:Module` parameter is exactly the type its argument carries, the derived name a binding of
+/// it gives: a reader of it, of a list over it, of a view of it or of its member holds no read of
+/// its content, and under a binding of it is typed as a fresh load types it. A reader of it or a
+/// list over it names it alone and is absorbed; whether the module fits a view, or declares the
+/// member read, is a question about which module the binding gives.
+#[test]
+fn a_module_parameter_is_the_type_its_argument_carries() {
+    let module = "MODULE bound = ((LET Carrier = Number) (LET zero = 0) \
+                  (LET succ = (FN :{x :Number} -> Number = #(x))))\n\
+                  LET stamped :Module = bound\n";
+    for (body, named) in [
+        ("LET k = m\n  k\n)\n", true),
+        ("LET k = [m]\n  k\n)\n", true),
+        ("LET k = (m :| Counter)\n  k\n)\n", false),
+        ("LET k = m.zero\n  k\n)\n", false),
+    ] {
+        let source = format!("{COUNTER}{module}EXPR #(SUBJECT m :Module) -> Any = #(\n  {body}");
+        let (waits, under, reran_k) = resumed(&source, |door| {
+            let f = subject(door.root());
+            let (m, k) = (unknown(door.symbols(), f, "m"), unit_of(door, f, "k"));
+            let waits = waits_on(door, k, m).expect("`k` reads `m`");
+            let binding = door.bound(&[(m, door.module("stamped"))]);
+            let resumed =
+                (door.resume(None, binding, false)).expect("the resumption refuses nothing");
+            (waits, ends(door, resumed, f, "k"), reran(resumed, k))
+        });
+        let restart = format!(
+            "{COUNTER}{module}EXPR #(SUBJECT n :Any) -> Any = #(\n  LET m = stamped\n  {body}"
+        );
+        let restarted = resumed(&restart, |door| {
+            ends(door, door.load(), subject(door.root()), "k")
+        });
+        assert!(
+            !waits
+                .iter()
+                .any(|mark| mark.is_some_and(|kind| kind.holds())),
+            "{body}: {waits:?}"
+        );
+        assert_eq!(under, restarted, "{body}");
+        if named {
+            assert!(waits.iter().all(Option::is_none), "{body}: {waits:?}");
+            assert!(!reran_k, "{body}: `k` is absorbed");
+        }
+    }
+}
+
+/// `MAKE`, its own `FOR ALL` group's or none, nested in `SUBJECT` or not: the text selects it, so
+/// `LET a = (MAKE x)` unfolds over `x`'s leaf and `a.Zero` reads `built`'s `Number`, at load and
+/// under `Elt := Number` alike, as a fresh load with `x :Number` reads it.
+#[test]
+fn a_call_the_text_selects_unfolds_over_names() {
+    let made = "(MODULE built OVER #[e] = (LET Zero = Number))\n    built\n  ";
+    for (outer, inner) in [
+        (
+            String::new(),
+            format!("EXPR #(MAKE e :Elt) -> Module = #(\n    {made})\n  "),
+        ),
+        (
+            format!("EXPR FOR ALL #[Tee] #(MAKE e :Tee) -> Module = #(\n    {made})\n"),
+            String::new(),
+        ),
+    ] {
+        let body = |declared: &str, inner: &str| {
+            format!(
+                "{outer}EXPR {declared} -> Any = #(\n  {inner}LET a = (MAKE x)\n  \
+                 LET z :(a.Zero) = 5\n  z\n)\n"
+            )
+        };
+        let (loaded, under) = resumed(&body("FOR ALL #[Elt] #(SUBJECT x :Elt)", &inner), |door| {
+            let f = subject(door.root());
+            let elt = unknown(door.symbols(), f, "Elt");
+            let binding = door.binding(&[(elt, KType::NUMBER)]);
+            let resumed =
+                (door.resume(None, binding, false)).expect("the resumption refuses nothing");
+            (ends(door, door.load(), f, "z"), ends(door, resumed, f, "z"))
+        });
+        let declared = inner.replace(":Elt", ":Number");
+        let restarted = resumed(&body("#(SUBJECT x :Number)", &declared), |door| {
+            ends(door, door.load(), subject(door.root()), "z")
+        });
+        assert_eq!(loaded, "[Number, Number]", "{outer}{inner}");
+        assert_eq!(under, restarted, "{outer}{inner}");
+    }
+}
+
+/// A parameter over a name binds its argument retyped to it, which a binding of the name closes:
+/// under `Elt := Named` the argument `x` is keyed at `Named`, as a fresh load with `x :Named` keys
+/// it, though the load could not say whether the retype lays a header.
+#[test]
+fn an_argument_retyped_to_a_name_is_retyped_as_the_binding_closes_it() {
+    let body = |declared: &str, parameter: &str| {
+        format!(
+            "SIG Named = #[(VAL name :Str)]\nLET Sig = :Named\n\
+             EXPR {declared} -> Any = #(\n  EXPR #(KEEP e :{parameter}) -> {parameter} = #(e)\n  \
+             LET a = (KEEP x)\n  a\n)\n"
+        )
+    };
+    let tree = |door: &Door<'_, '_>, facts: &LoadFacts<'_>| {
+        let f = subject(door.root());
+        facts
+            .content(f, slot(door.symbols(), f, "a"))
+            .map(|tree| tree.identity())
+    };
+    let under = resumed(&body("FOR ALL #[Elt] #(SUBJECT x :Elt)", "Elt"), |door| {
+        let elt = unknown(door.symbols(), subject(door.root()), "Elt");
+        let binding = door.binding(&[(elt, door.declared("Sig"))]);
+        let resumed = (door.resume(None, binding, false)).expect("refuses nothing");
+        tree(door, resumed)
+    });
+    let fresh = resumed(&body("#(SUBJECT x :Named)", "Named"), |door| {
+        tree(door, door.load())
+    });
+    assert!(fresh.is_some());
+    assert_eq!(under, fresh);
+}
+
+/// A closure over `Elt` called by name unfolds, and a module viewed at an application over `Elt`
+/// is a view at it: each binder's tree under `Elt := Number` is a fresh load's with `Number`
+/// written for `Elt`, and the call's member reads `Number` at load already.
+#[test]
+fn a_call_by_name_and_a_view_over_a_name_are_trees_a_binding_closes() {
+    let body = |declared: &str, elt: &str| {
+        format!(
+            "SIG Coll FOR ALL #[Elem] = #[(VAL first :Elem)]\n\
+             EXPR {declared} -> Any = #(\n  \
+             LET h = (FN :{{y :{elt}}} -> Module = #(\n    \
+             (MODULE built OVER #[y] = (LET Zero = Number))\n    built\n  ))\n  \
+             LET a = (h {{y = x}})\n  LET z :(a.Zero) = 5\n  \
+             MODULE made OVER #[x] = (LET first = x)\n  \
+             LET v = (made :| (Coll WITH {{Elem = {elt}}}))\n  z\n)\n"
+        )
+    };
+    let trees = |door: &Door<'_, '_>, facts: &LoadFacts<'_>| {
+        let f = subject(door.root());
+        let tree = |name| {
+            facts
+                .content(f, slot(door.symbols(), f, name))
+                .map(|t| t.identity())
+        };
+        (tree("a"), tree("v"), ends(door, facts, f, "z"))
+    };
+    let (loaded, under) = resumed(&body("FOR ALL #[Elt] #(SUBJECT x :Elt)", "Elt"), |door| {
+        let elt = unknown(door.symbols(), subject(door.root()), "Elt");
+        let binding = door.binding(&[(elt, KType::NUMBER)]);
+        let resumed = (door.resume(None, binding, false)).expect("refuses nothing");
+        (trees(door, door.load()), trees(door, resumed))
+    });
+    let fresh = resumed(&body("#(SUBJECT x :Number)", "Number"), |door| {
+        trees(door, door.load())
+    });
+    assert_eq!(loaded.2, "[Number, Number]");
+    assert!(fresh.0.is_some() && fresh.1.is_some(), "{fresh:?}");
+    assert_eq!(under, fresh);
+}
+
+/// A type literal over `Elt` is a type value written over the name, which a binding closes to the
+/// type value a fresh load reads: the module built over it is a fresh load's under
+/// `Elt := Number`.
+#[test]
+fn a_type_literal_over_a_name_is_the_type_value_a_binding_closes() {
+    let body = |declared: &str, elt: &str| {
+        format!(
+            "EXPR {declared} -> Any = #(\n  LET t = :(LIST OF {elt})\n  \
+             MODULE built OVER #[t] = (LET Zero = Number)\n  LET a = built\n  a\n)\n"
+        )
+    };
+    let tree = |door: &Door<'_, '_>, facts: &LoadFacts<'_>| {
+        let f = subject(door.root());
+        facts
+            .content(f, slot(door.symbols(), f, "a"))
+            .map(|tree| tree.identity())
+    };
+    let under = resumed(&body("FOR ALL #[Elt] #(SUBJECT x :Elt)", "Elt"), |door| {
+        let elt = unknown(door.symbols(), subject(door.root()), "Elt");
+        let binding = door.binding(&[(elt, KType::NUMBER)]);
+        let resumed = (door.resume(None, binding, false)).expect("refuses nothing");
+        tree(door, resumed)
+    });
+    let fresh = resumed(&body("#(SUBJECT x :Number)", "Number"), |door| {
+        tree(door, door.load())
+    });
+    assert!(
+        fresh.is_some_and(|tree| matches!(tree, Identity::Closed(_))),
+        "{fresh:?}"
+    );
+    assert_eq!(under, fresh);
+}
+
+/// `LET a = (MKU x)` and `LET b = (MKU x)` call two overloads only a binding of `Elt` selects
+/// among: each is the leaf keyed on the call, one tree at load and under `Elt := (Number | Str)`,
+/// which selects neither; under `Elt := Number` both unfold to the `Number` overload's module, as
+/// a fresh load with `x :Number` reads them.
+#[test]
+fn two_writes_of_a_call_an_answer_selects_are_one_tree() {
+    let body = |declared: &str| {
+        format!(
+            "LET Either = :(Number | Str)\nEXPR {declared} -> Any = #(\n  \
+             EXPR #(MKU n :Number) -> Module = #(\n    \
+             (MODULE built OVER #[n] = ((LET Zero = Number) (LET zero = n)))\n    built\n  )\n  \
+             EXPR #(MKU s :Str) -> Module = #(\n    \
+             (MODULE built OVER #[s] = ((LET Zero = Str) (LET zero = s)))\n    built\n  )\n  \
+             LET a = (MKU x)\n  LET b = (MKU x)\n  LET z :(a.Zero) = b.zero\n  z\n)\n"
+        )
+    };
+    let tree = |door: &Door<'_, '_>, facts: &LoadFacts<'_>, name: &str| {
+        let f = subject(door.root());
+        facts
+            .content(f, slot(door.symbols(), f, name))
+            .map(|tree| tree.identity())
+    };
+    let (load, either, number, z) = resumed(&body("FOR ALL #[Elt] #(SUBJECT x :Elt)"), |door| {
+        let f = subject(door.root());
+        let elt = unknown(door.symbols(), f, "Elt");
+        let either = door.binding(&[(elt, door.declared("Either"))]);
+        let either = (door.resume(None, either, false)).expect("refuses nothing");
+        let number = door.binding(&[(elt, KType::NUMBER)]);
+        let number = (door.resume(None, number, false)).expect("refuses nothing");
+        let pair = |facts| (tree(door, facts, "a"), tree(door, facts, "b"));
+        (
+            pair(door.load()),
+            pair(either),
+            pair(number),
+            ends(door, number, f, "z"),
+        )
+    });
+    let (fresh, fresh_z) = resumed(&body("#(SUBJECT x :Number)"), |door| {
+        let f = subject(door.root());
+        (
+            (tree(door, door.load(), "a"), tree(door, door.load(), "b")),
+            ends(door, door.load(), f, "z"),
+        )
+    });
+    assert!(
+        load.0.is_some_and(|a| matches!(a, Identity::Open(_))),
+        "{load:?}"
+    );
+    assert_eq!(
+        load.0, load.1,
+        "two writes of one call are one tree at load"
+    );
+    assert_eq!(either.0, either.1, "and under a binding selecting neither");
+    assert_eq!(number, fresh, "a binding selecting one unfolds it");
+    assert_eq!(z, fresh_z);
+}
+
+/// `Paired`, and a module stamped at it with `Left = Number`.
+const PAIRED: &str = "SIG Paired FOR ALL #[Left Right] = #[(VAL left :Left) (VAL right :Right)]\n\
+                      MODULE pair = ((LET left = 1) (LET right = \"r\"))\n\
+                      LET stamped :(Paired WITH {Left = Number}) = pair\n";
+
+/// `p.Right` reads through `Paired WITH {Left = Elt}`: binding `Elt` alone moves its paths to the
+/// class over `Paired WITH {Left = Number}`, which a re-run of every unit names too; binding `p`
+/// over that layer closes them to the module's `Right`, as a fresh load reads it.
+#[test]
+fn binding_a_path_s_application_alone_moves_it_to_the_class_a_fresh_load_names() {
+    let body = "#(WRAP x :Elt AND p :(Paired WITH {Left = Elt})) -> Any = #(\n  \
+                LET k = p.right\n  LET j :(p.Right) = k\n  j\n)\n";
+    let source = format!("{PAIRED}EXPR FOR ALL #[Elt] {body}");
+    let (skipping, everything, closed) = resumed(&source, |door| {
+        let f = quantified(door);
+        let elt = unknown(door.symbols(), f, "Elt");
+        let p = unknown(door.symbols(), f, "p");
+        let once = door.binding(&[(elt, KType::NUMBER)]);
+        let resume = |everything| (door.resume(None, once, everything)).expect("refuses nothing");
+        let (skipping, everything) = (resume(false), resume(true));
+        let both = door.bound(&[
+            (elt, Bound::Type(KType::NUMBER)),
+            (p, door.module("stamped")),
+        ]);
+        let closed = (door.resume(Some(skipping), both, false)).expect("refuses nothing");
+        (
+            upper(door, skipping, f, "k"),
+            upper(door, everything, f, "k"),
+            upper(door, closed, f, "k"),
+        )
+    });
+    let restart = format!(
+        "{PAIRED}LET Elt = Number\nEXPR #(WRAP x :Elt) -> Any = #(\n  LET p = stamped\n  \
+         LET k = p.right\n  LET j :(p.Right) = k\n  j\n)\n"
+    );
+    let restarted = resumed(&restart, |door| {
+        upper(door, door.load(), subject(door.root()), "k")
+    });
+    assert_eq!(skipping, everything);
+    assert_eq!(closed, restarted);
+}
+
+/// Two views over two module parameters are two types at the load, and one at the run where the
+/// parameters are bound alike: the load refuses nothing reading one's carrier as the other's.
+#[test]
+fn views_over_two_parameters_refuse_nothing_at_the_load() {
+    let source = format!(
+        "{COUNTER}MODULE ints = ((LET Carrier = Number) (LET zero = 0) \
+         (LET succ = (FN :{{x :Number}} -> Number = #(x))))\n\
+         LET stamped :Counter = ints\n\
+         EXPR #(OUTER m :Counter AND n :Counter) -> Any = #(\n  LET w = (m :| Counter)\n  \
+         LET v = (n :| Counter)\n  LET mixed :(v.Carrier) = w.zero\n  mixed\n)\n\
+         PRINT (OUTER stamped AND ints)\n"
+    );
+    assert_eq!(super::run(&source), "Carrier(0)");
 }
 
 /// `Picks`, a signature over a `Carrier` whose `PICK` head a `USING` surfaces.
 const PICKS: &str = "SIG Picks FOR ALL #[Carrier] = \
                      #[(VAL zero :Carrier) (EXPR #(PICK x :Carrier) -> Str)]\n";
-
-/// A surfaced head waits on its ascription: rigid over `Elt` at the load, which leaves the head
-/// unknown, and closed under `Elt := Number`, which types it as a restart with `Elt` declared does.
-#[test]
-fn a_surfaced_head_waits_on_its_ascription() {
-    let body = "#(SUBJECT x :Elt AND m :Picks) -> Any = #(\n  \
-                LET s = (USING (m :! (Picks WITH {Carrier = Elt})) SCOPE (PICK zero))\n  s\n)\n";
-    let source = format!("{PICKS}EXPR FOR ALL #[Elt] {body}");
-    let restart = format!("{PICKS}LET Elt = Number\nEXPR {body}");
-    let (load, under) = resumed(&source, |door| {
-        let elt = unknown(door.symbols(), subject(door.root()), "Elt");
-        let binding = door.binding(&[(elt, KType::NUMBER)]);
-        let resumed = (door.resume(None, binding, false)).expect("the resumption refuses nothing");
-        (
-            subject_upper(door, door.load(), "s"),
-            subject_upper(door, resumed, "s"),
-        )
-    });
-    let restarted = resumed(&restart, |door| subject_upper(door, door.load(), "s"));
-    assert_eq!(load, "Any", "the load leaves the head unknown");
-    assert_eq!(under, restarted);
-    assert_eq!(under, "Str", "the head's return");
-}
 
 /// The unit binding `name` in `shape`.
 pub(super) fn unit_of(
@@ -875,7 +2092,7 @@ fn waits_on(
 
 /// Whether `resumed` re-ran `unit`.
 fn reran(resumed: &LoadFacts<'_>, unit: crate::scope::UnitId) -> bool {
-    (resumed.own_units().iter()).any(|(held, _)| *held == unit)
+    (resumed.own_units()).any(|(held, _)| held == unit)
 }
 
 /// A unit over a list of a bound name only names it: a binding absorbs its record, reads it with
@@ -892,7 +2109,12 @@ fn a_unit_over_a_list_of_its_name_is_read_closed_through_its_layers_table() {
         let binding = door.binding(&[(elt, KType::NUMBER)]);
         let resumed = (door.resume(None, binding, false)).expect("the resumption refuses nothing");
         let tabled: Vec<String> = (resumed.base_layer().closed().entries())
-            .map(|(_, value)| display_name(value, door.types, door.symbols()).to_string())
+            .map(|(_, value)| match value {
+                crate::scope::Closed::Type(closed) => {
+                    display_name(closed, door.types, door.symbols()).to_string()
+                }
+                other => format!("{other:?}"),
+            })
             .collect();
         (
             named,
@@ -917,30 +2139,33 @@ fn a_unit_over_a_list_of_its_name_is_read_closed_through_its_layers_table() {
     );
 }
 
-/// A reader of a bare-variable parameter re-runs: a binding makes the parameter exactly its type,
-/// which no substitution of its load-time `[Never, Elt]` gives, so its seed is open by `Retype`.
+/// A reader of a bare-variable parameter holds on no retype: the parameter's load-time type is
+/// `[(RETYPED TO Elt), Elt]`, whose lower end a binding gives the retype's own, so `Elt := Number`
+/// makes it exactly `Number` by substitution. Only a discrete question marks the reader.
 #[test]
-fn a_bare_parameters_reader_re_runs_by_retype() {
+fn a_bare_parameters_reader_commutes_by_its_retype() {
     let source = "EXPR FOR ALL #[Elt] #(WRAP x :Elt) -> Any = #(\n  LET y = x\n  y\n)";
-    let (marks, rerun) = resumed(source, |door| {
+    let (marks, typed) = resumed(source, |door| {
         let f = quantified(door);
         let elt = unknown(door.symbols(), f, "Elt");
         let y = unit_of(door, f, "y");
         let marks = waits_on(door, y, elt).unwrap_or_default();
         let binding = door.binding(&[(elt, KType::NUMBER)]);
         let resumed = (door.resume(None, binding, false)).expect("the resumption refuses nothing");
-        (marks, reran(resumed, y))
+        (marks, upper(door, resumed, f, "y"))
     });
     assert!(
-        marks.contains(&Some(crate::scope::OpenKind::Retype)),
+        !marks
+            .iter()
+            .any(|mark| mark.is_some_and(|kind| kind.holds())),
         "{marks:?}"
     );
-    assert!(rerun, "a binding of `Elt` re-runs `y`");
+    assert_eq!(typed, "Number");
 }
 
 /// A binder's reader reaches its seed alone: a reader of `xs` names `Elt` and waits on nothing of
-/// `Key`, and a value read of `Key` is open over it. A type naming `Key` reads no seed: `zs`'s
-/// annotation is open only by the check its rigid type skips.
+/// `Key`, and a value read of `Key` names it and asks nothing. A type naming
+/// `Key` reads no seed: `zs`'s annotation is open only by its retype.
 #[test]
 fn a_binders_reader_reaches_its_seed_alone() {
     let source = "EXPR FOR ALL #[Elt Key] #(WRAP xs :(LIST OF Elt) AND k :Key) -> Any = #(\n  \
@@ -971,19 +2196,22 @@ fn a_binders_reader_reaches_its_seed_alone() {
         )
     });
     assert_eq!(ys, (Some(vec![None]), None), "`ys` names `Elt` alone");
-    assert!(
-        t.is_some_and(|marks| marks.contains(&Some(crate::scope::OpenKind::Kind))),
-        "`t` reads `Key`'s value, open on its kind"
+    assert_eq!(
+        t,
+        Some(vec![None]),
+        "`t` reads `Key`'s value, whose type asks nothing: `Key`'s bound is no signature, so `t` \
+         is no module binder"
     );
     assert_eq!(
         zs,
-        Some(vec![Some(crate::scope::OpenKind::Unclosed)]),
-        "`zs` reaches no seed of `Key`: its marks are its own"
+        Some(vec![Some(crate::scope::OpenKind::Retype)]),
+        "`zs` reaches no seed of `Key`: its marks are its own, its retype alone, since `[]` is no \
+         module the annotation could check"
     );
     assert_eq!(
         rerun,
-        (false, true, true),
-        "a binding of `Key` re-runs `t` and `zs`, not `ys`"
+        (false, false, true),
+        "a binding of `Key` re-runs `zs` alone"
     );
 }
 
@@ -1058,8 +2286,7 @@ pub(super) mod laws {
     };
     use crate::symbols::{BinderSymbol, SymbolInterner};
     use crate::type_lattice::{
-        DeclaredType, Interval, KType, Parametric, Side, Variable, Verdict, display_name, fits,
-        read_through,
+        DeclaredType, Interval, KType, Parametric, Variable, Verdict, display_name, fits,
     };
     use crate::values::tests::reading;
     use crate::values::{BuildBudget, Chain};
@@ -1100,24 +2327,40 @@ pub(super) mod laws {
             let declared = Resumable::declared(name);
             let given = match (
                 name,
-                matches!(name, "m" | "n").then(|| door.module(&declared)),
+                matches!(name, "m" | "n").then(|| door.module(&Resumable::stamped(name))),
             ) {
                 (_, Some(Bind::Module { carried, tree })) if by_digest => {
-                    let bare = matches!(tree, Tree::Body { .. }).then(|| {
+                    // The module's own content beside the module as a view over it reads it, a
+                    // `MODULE` body a transparent view of itself, retyped as a frame stamps it.
+                    let (own, source) = match tree {
+                        Tree::Retyped { source, .. } => {
+                            let Bind::Module { carried: own, .. } = door.module(&declared) else {
+                                unreachable!("a module binds a module")
+                            };
+                            (own, **source)
+                        }
+                        _ => (carried, *tree),
+                    };
+                    let bare = matches!(source, Tree::Body { .. }).then(|| {
                         crate::memory::resident(
                             door.bump,
                             crate::scope::Bare {
-                                signature: Some(carried),
+                                signature: Some(own),
                                 sealing: None,
                             },
                         )
                     });
+                    let digest = Tree::Digest(source.digest().expect("a closed tree"), bare);
+                    let tree = match tree {
+                        Tree::Retyped { .. } => Tree::retyped_closed(
+                            carried,
+                            crate::memory::resident(door.bump, digest),
+                        ),
+                        _ => digest,
+                    };
                     Bind::Module {
                         carried,
-                        tree: crate::memory::resident(
-                            door.bump,
-                            Tree::Digest(tree.digest().expect("a closed tree"), bare),
-                        ),
+                        tree: crate::memory::resident(door.bump, tree),
                     }
                 }
                 (_, Some(module)) => module,
@@ -1216,49 +2459,25 @@ pub(super) mod laws {
             display_name(typed, self.types, self.symbols).to_string()
         }
 
-        /// `typed` as this render reads it: with the binding's levels written in under law 14.
+        /// `typed` as this render reads it: with the binding's levels written in under law 14,
+        /// each derived name its term handed again with them written in.
         fn read(&self, typed: DeclaredType<Parametric>) -> DeclaredType<Parametric> {
             let Some(substituting) = self.substituting else {
                 return typed;
             };
             let scratch = Bump::new();
-            let bound = |level| {
-                (substituting.levels.iter())
-                    .find(|(held, _)| *held == level)
-                    .map(|(_, typed)| *typed)
+            let levels = crate::scope::Levels::from_bound(&scratch, &substituting.levels);
+            let names = |id| self.facts.derived_name(id);
+            let binds = crate::scope::LevelsOver {
+                levels: &levels,
+                names: &names,
+                spellings: crate::scope::Spellings::new(self.symbols),
+                laid: &|_| {},
             };
-            let read = match typed {
-                DeclaredType::Type(typed) => DeclaredType::Type(read_through(
-                    self.types,
-                    &scratch,
-                    typed,
-                    Side::Above,
-                    &mut |variable| match variable {
-                        Variable::Lexical { level, .. } => {
-                            bound(level).map(|typed| Interval::point(typed.into()))
-                        }
-                        _ => None,
-                    },
-                )),
-                DeclaredType::Scheme(scheme) => {
-                    let free = crate::elaborate::judge::free_variables(self.types, &scratch, typed);
-                    let top = (free.iter())
-                        .filter_map(|variable| match variable {
-                            Variable::Lexical { level, .. } => Some(*level),
-                            _ => None,
-                        })
-                        .max();
-                    match top {
-                        None => typed,
-                        // A level the binding leaves unbound keeps its variable.
-                        Some(top) => {
-                            let dense: Vec<_> = (0..=top).map(bound).collect();
-                            DeclaredType::Scheme(crate::type_lattice::substitute_levels(
-                                self.types, &scratch, scheme, &dense,
-                            ))
-                        }
-                    }
-                }
+            let read = match crate::scope::rebound(self.types, &scratch, typed, &binds) {
+                crate::scope::Closed::Same => typed,
+                crate::scope::Closed::Type(closed) => closed.into(),
+                crate::scope::Closed::Partial(partial) => partial,
             };
             let rigid = match read {
                 DeclaredType::Type(typed) => self.types.concrete(typed).is_none(),
@@ -1422,10 +2641,10 @@ pub(super) mod laws {
                         }
                     }
                 }
-                if let Some(tree) = facts.content(self.types, shape, at)
+                if let Some(tree) = facts.content(shape, at)
                     && self.keeps(Line::Slot(segment, at))
                 {
-                    binders.push(format!("{name} holds a tree closed {}", tree.closed()));
+                    binders.push(format!("{name} holds a tree {}", super::tree_line(&tree)));
                 }
             }
             binders.sort();
@@ -1519,10 +2738,10 @@ pub(super) mod laws {
                             out.push(format!("{part} by name {named:?}"));
                         }
                     }
-                    if let Some(tree) = facts.view_tree(self.types, shape, *site)
+                    if let Some(tree) = facts.view_tree(shape, *site)
                         && self.keeps(line)
                     {
-                        out.push(format!("{part} views a tree closed {}", tree.closed()));
+                        out.push(format!("{part} views a tree {}", super::tree_line(tree)));
                     }
                 }
                 let mut uses = vec![shape.site_of_node(statement)];
@@ -1588,19 +2807,29 @@ pub(super) mod laws {
             born: std::collections::HashMap::new(),
             open: Vec::new(),
         };
+        // Law 14 writes in a binding's type levels alone: a record naming a module binder the
+        // binding binds, or holding a tree written over names, closes by module and tree
+        // substitution, which the restart laws check.
+        let module_named = |frontier: crate::scope::Frontier<'_>| {
+            (frontier.marks().iter())
+                .any(|noted| matches!(binding.bound(noted.unknown), Some(Bind::Module { .. })))
+        };
         for (unit, (facts, frontier)) in load.own_units() {
-            if frontier.meets_open(binding) {
-                substituting.open.push(*unit);
+            if frontier.meets_open(binding)
+                || module_named(frontier)
+                || super::writes_tree_names(door.types, facts)
+            {
+                substituting.open.push(unit);
             }
             for (segment, typed) in facts.typed.iter() {
                 typed.held(*segment, &mut |held| {
                     if let crate::scope::Held::Site(segment, site) = held {
-                        substituting.sites.insert((segment, site), *unit);
+                        substituting.sites.insert((segment, site), unit);
                     }
                 });
             }
             for (segment, _) in facts.born.iter() {
-                substituting.born.insert(*segment, *unit);
+                substituting.born.insert(*segment, unit);
             }
         }
         let names = left_out(bound);
@@ -1615,7 +2844,7 @@ pub(super) mod laws {
         };
         let mut out = Vec::new();
         reader.render(subject(load.shapes().root()), "", &mut out);
-        out
+        out.iter().map(|line| canonical(line)).collect()
     }
 
     /// Every fact of `SUBJECT`'s body as `facts` holds them, but of the binders `bound` names.
@@ -1658,15 +2887,125 @@ pub(super) mod laws {
         };
         let mut out = Vec::new();
         reader.render(subject(facts.shapes().root()), "", &mut out);
-        out
+        out.iter().map(|line| canonical(line)).collect()
     }
 
     /// A refusal's message, its location dropped.
     fn unlocated(message: &str) -> String {
-        match message.split_once(": ") {
-            Some((at, rest)) if at.starts_with('<') => rest.to_string(),
-            _ => message.to_string(),
+        canonical(match message.split_once(": ") {
+            Some((at, rest)) if at.starts_with('<') => rest,
+            _ => message,
+        })
+    }
+
+    /// `line` with each record type's fields, `:{x :Number y :Str}`, in name order, and each
+    /// union's members, `(Number | Str)`, in text order: a record's and a union's identity is
+    /// blind to their order, which a rendering takes from the spelling that made the type first,
+    /// and two programs may make one type first from different spellings.
+    pub(in super::super) fn canonical(line: &str) -> String {
+        let chars: Vec<char> = line.chars().collect();
+        let mut at = 0;
+        canonical_until(&chars, &mut at, None)
+    }
+
+    /// The canonical text from `at` up to `close`, or the end, `at` left past it.
+    fn canonical_until(chars: &[char], at: &mut usize, close: Option<char>) -> String {
+        let mut out = String::new();
+        while *at < chars.len() {
+            let c = chars[*at];
+            *at += 1;
+            if Some(c) == close {
+                return out;
+            }
+            match c {
+                '{' if out.ends_with(':') => {
+                    let inner = canonical_until(chars, at, Some('}'));
+                    out.push('{');
+                    out.push_str(&sorted_fields(&inner));
+                    out.push('}');
+                }
+                '(' => {
+                    let inner = canonical_until(chars, at, Some(')'));
+                    out.push('(');
+                    out.push_str(&sorted_members(&inner));
+                    out.push(')');
+                }
+                '{' | '[' => {
+                    let closing = match c {
+                        '{' => '}',
+                        _ => ']',
+                    };
+                    out.push(c);
+                    out.push_str(&canonical_until(chars, at, Some(closing)));
+                    out.push(closing);
+                }
+                _ => out.push(c),
+            }
         }
+        out
+    }
+
+    /// A parenthesized group's text, its members in order where it is a union, `Number | Str`: its
+    /// parts split at its own depth.
+    fn sorted_members(inner: &str) -> String {
+        let mut members: Vec<String> = Vec::new();
+        let mut depth = 0i32;
+        let mut member = String::new();
+        let chars: Vec<char> = inner.chars().collect();
+        let mut at = 0;
+        while at < chars.len() {
+            let c = chars[at];
+            match c {
+                '(' | '[' | '{' => depth += 1,
+                ')' | ']' | '}' => depth -= 1,
+                _ => {}
+            }
+            if depth == 0 && chars[at..].starts_with(&[' ', '|', ' ']) {
+                members.push(std::mem::take(&mut member));
+                at += 3;
+                continue;
+            }
+            member.push(c);
+            at += 1;
+        }
+        members.push(member);
+        if members.len() > 1 {
+            members.sort();
+        }
+        members.join(" | ")
+    }
+
+    /// A record's fields, `x :Number y :Str`, in name order: each a name, then its type's
+    /// tokens, which open with `:` at the record's own depth.
+    fn sorted_fields(inner: &str) -> String {
+        let mut fields: Vec<String> = Vec::new();
+        let mut depth = 0i32;
+        let mut token = String::new();
+        let mut tokens = Vec::new();
+        for c in inner.chars() {
+            match c {
+                '(' | '[' | '{' => depth += 1,
+                ')' | ']' | '}' => depth -= 1,
+                _ => {}
+            }
+            if c == ' ' && depth == 0 {
+                tokens.push(std::mem::take(&mut token));
+            } else {
+                token.push(c);
+            }
+        }
+        tokens.push(token);
+        for token in tokens.into_iter().filter(|token| !token.is_empty()) {
+            match fields.last_mut() {
+                Some(field) if token.starts_with(':') => {
+                    field.push(' ');
+                    field.push_str(&token);
+                }
+                _ => fields.push(token),
+            }
+        }
+        fields.sort();
+        fields.join(" ")
     }
 
     /// Resume `door`'s load under each of `bindings` in turn, each extending the one before it,
@@ -1712,13 +3051,20 @@ pub(super) mod laws {
             };
             match *given {
                 Bind::Type(named) => crate::scheduler::Asked::Type { slot, named },
-                Bind::Module { carried, tree } => crate::scheduler::Asked::Module {
-                    slot,
-                    composition: None,
-                    carried,
-                    content: tree.digest().expect("a module binds a closed tree"),
-                    retyped: false,
-                },
+                Bind::Module { carried, tree } => {
+                    // A frame asks for the module's own content, retyped where it stamps it.
+                    let (content, retyped) = match tree {
+                        Tree::Retyped { source, .. } => (*source, true),
+                        _ => (tree, false),
+                    };
+                    crate::scheduler::Asked::Module {
+                        slot,
+                        composition: None,
+                        carried,
+                        content: content.digest().expect("a module binds a closed tree"),
+                        retyped,
+                    }
+                }
             }
         });
         crate::scheduler::Ask {
@@ -1925,6 +3271,95 @@ pub(super) mod laws {
             prop_assert_eq!(resumed, loaded_rendered(&restart, &case.bound), "in\n{}\nrestarted as\n{}", case.render(), restart);
         }
 
+        /// Naming commutes with binding: under the binding, each derived name the load laid
+        /// gives what its term, with the binding written in, hands back afresh — a closed type, a
+        /// spelling, or the name of the term left open, one handle wherever a table holds it.
+        #[test]
+        fn naming_commutes_with_binding(case in resumable()) {
+            let broken = resumed(&case.render(), |door| {
+                let shapes = door.running.program().shapes();
+                let levels = crate::scope::Levels::of(door.bump, shapes, binding(door, &case.bound));
+                let Ok(resumed) = resume_all(door, std::slice::from_ref(&case.bound), false) else {
+                    return Vec::new();
+                };
+                let names = |id| resumed.derived_name(id).or_else(|| door.load().derived_name(id));
+                let binds = crate::scope::LevelsOver {
+                    levels: &levels,
+                    names: &names,
+                    spellings: crate::scope::Spellings::new(door.symbols()),
+                    laid: &|_| {},
+                };
+                let mut broken = Vec::new();
+                for name in door.load().base_layer().derived().names() {
+                    let image = match crate::scope::rebound(door.types, door.bump, name.ty.into(), &binds) {
+                        crate::scope::Closed::Same => continue,
+                        crate::scope::Closed::Type(closed) => DeclaredType::from(closed),
+                        crate::scope::Closed::Partial(partial) => partial,
+                    };
+                    let (term, _) = name.term.substituted(door.types, door.bump, &binds);
+                    let spellings = crate::scope::Spellings::new(door.symbols());
+                    let fresh = crate::scope::handed(door.types, door.bump, term, &mut |term| {
+                        Some(spellings.named((door.types, door.bump), term).ty)
+                    });
+                    if fresh.map(DeclaredType::Type) != Some(image) {
+                        broken.push(format!("{name:?} gives {image:?}, its term afresh {fresh:?}"));
+                    }
+                    if let DeclaredType::Type(image) = image
+                        && let crate::type_lattice::TypeNode::Derived { term: id, .. } = door.types.node(image)
+                        && let Some(held) = names(id)
+                        && held.ty != image
+                    {
+                        broken.push(format!("{name:?} gives {image:?}, a table holds {held:?}"));
+                    }
+                }
+                broken
+            });
+            prop_assert!(broken.is_empty(), "{:?} in\n{}", broken, case.render());
+        }
+
+        /// A derived name lies within its ends: each one the load or a resumption laid gives,
+        /// under every binding that closes its term, a type between the closed ends of the node
+        /// naming it.
+        #[test]
+        fn a_derived_name_lies_within_its_ends(case in resumable()) {
+            let outside = resumed(&case.render(), |door| {
+                let shapes = door.running.program().shapes();
+                let levels = crate::scope::Levels::of(door.bump, shapes, binding(door, &case.bound));
+                let resumed = resume_all(door, std::slice::from_ref(&case.bound), false).ok();
+                let tables: Vec<_> = std::iter::once(door.load())
+                    .chain(resumed)
+                    .map(|facts| facts.base_layer().derived())
+                    .collect();
+                let names = |id| {
+                    (resumed.and_then(|facts| facts.derived_name(id)))
+                        .or_else(|| door.load().derived_name(id))
+                };
+                let binds = crate::scope::LevelsOver {
+                    levels: &levels,
+                    names: &names,
+                    spellings: crate::scope::Spellings::new(door.symbols()),
+                    laid: &|_| {},
+                };
+                let mut outside = Vec::new();
+                for name in tables.iter().flat_map(|table| table.names()) {
+                    let crate::scope::Closed::Type(DeclaredType::Type(applied)) =
+                        crate::scope::rebound(door.types, door.bump, name.ty.into(), &binds)
+                    else {
+                        continue;
+                    };
+                    let crate::type_lattice::TypeNode::Derived { lower, bound, .. } = door.types.node(name.ty) else {
+                        unreachable!("a derived name is a derived node")
+                    };
+                    let within = |a, b| crate::type_lattice::is_subtype_of(door.types, door.bump, a, b);
+                    if !(within(lower, applied) && within(applied, bound)) {
+                        outside.push(format!("{name:?} gives {applied:?}"));
+                    }
+                }
+                outside
+            });
+            prop_assert!(outside.is_empty(), "{:?} in\n{}", outside, case.render());
+        }
+
         /// 2. Resumptions are confluent: reaching a binding in two steps, either half first,
         /// settles what reaching it in one does. A refusal on the way agrees with a binding that
         /// leaves its site vacuous, as the monotone law reads one typed `Never`.
@@ -1955,9 +3390,9 @@ pub(super) mod laws {
             let everything = resume_rendered(&case, std::slice::from_ref(&case.bound), true);
             prop_assert_eq!(skipping, everything, "in\n{}", case.render());
             let foreign = resumed(&case.render(), |door| {
-                (door.load().own_units().iter())
+                (door.load().own_units())
                     .flat_map(|(unit, (_, frontier))| {
-                        frontier.unknowns().into_iter().filter(|unknown| !on_chain(door, unit.segment, unknown.segment))
+                        frontier.unknowns().into_iter().filter(move |unknown| !on_chain(door, unit.segment, unknown.segment))
                             .map(move |unknown| format!("{unit:?} waits on {unknown:?}"))
                     })
                     .collect::<Vec<_>>()
@@ -1967,7 +3402,8 @@ pub(super) mod laws {
 
         /// 4. A resumption is monotone: each fact it re-runs lies within the load's with the
         /// binding substituted, a verdict of *always* stays, a narrowing only shrinks, and a
-        /// settled site stays settled. A fact typed `Never` never arrives: it is the bottom.
+        /// settled site stays settled. A fact typed `Never` never arrives: it is the bottom, as is
+        /// every fact of a quote's code the binding refuses.
         #[test]
         fn a_resumption_is_monotone(case in resumable()) {
             let broken = resumed(&case.render(), |door| monotone(door, &case.bound));
@@ -1975,17 +3411,19 @@ pub(super) mod laws {
         }
 
         /// 5. A resumption re-runs exactly the units whose frontier at the load reaches an open
-        /// mark on a name its binding binds, each once: so it terminates.
+        /// mark on a name its binding binds, each once: so it terminates. A unit of a quote's code
+        /// the binding refuses that it marks unreached ran to no record: the refusal cut it off.
         #[test]
         fn a_resumption_reruns_only_the_units_it_wakes(case in resumable()) {
             let compared = resumed(&case.render(), |door| {
                 let binding = binding(door, &case.bound);
                 let resumed = (door.running).resume::<Koan>(door.types, None, binding, false, door.bump).ok()?;
-                let reran: Vec<_> = resumed.own_units().iter().map(|(unit, _)| *unit).collect();
-                let woken: Vec<_> = (door.load().own_units().iter())
+                let reran: Vec<_> = resumed.own_units().map(|(unit, _)| unit).collect();
+                let woken: Vec<_> = (door.load().own_units())
                     .filter(|(_, (_, frontier))| frontier.meets_open(binding))
-                    .map(|(unit, _)| *unit)
+                    .map(|(unit, _)| unit)
                     .collect();
+                let woken = uncut(woken, resumed.unreached_units());
                 Some((reran, woken))
             });
             // A resumption that refuses re-runs nothing to compare: law 1 holds its refusal.
@@ -2067,7 +3505,11 @@ pub(super) mod laws {
                     .map(|(name, _)| {
                         let at = slot(symbols, body, name).expect("the unknown is `SUBJECT`'s");
                         let unknown = Unknown { segment: body.segment(), at: Address::Slot(at) };
-                        (unknown, Resumable::declared(name))
+                        let named = match *name {
+                            "m" | "n" => Resumable::stamped(name),
+                            _ => Resumable::declared(name),
+                        };
+                        (unknown, named)
                     })
                     .collect();
                 framed::<Koan>(running, slots, render_facts, left_out(&case.bound))
@@ -2142,8 +3584,9 @@ pub(super) mod laws {
 
         /// 9. Levels and path identities depend on the shape alone: every path entry a record
         /// holds at a level the shape numbers is the path the shape spells there, at the load and
-        /// under the binding, so no record changes a level. The shape's own numbering is
-        /// `scope`'s `two_builds_of_one_text_agree`.
+        /// under the binding, so no record changes a level. A derived name is named by its term's
+        /// content: each one a walk laid carries the id its term digests to. The shape's own
+        /// numbering is `scope`'s `two_builds_of_one_text_agree`.
         #[test]
         fn levels_and_path_identities_depend_on_the_shape_alone(case in resumable()) {
             let broken = resumed(&case.render(), |door| {
@@ -2154,6 +3597,17 @@ pub(super) mod laws {
                     facts.push(resumed);
                 }
                 let mut broken = Vec::new();
+                for (at, facts) in facts.iter().enumerate() {
+                    for name in facts.base_layer().derived().names() {
+                        let named = match door.types.node(name.ty) {
+                            crate::type_lattice::TypeNode::Derived { term, .. } => Some(term),
+                            _ => None,
+                        };
+                        if name.id != name.term.id() || named != Some(name.id) {
+                            broken.push(format!("records {at} name {name:?} by another id"));
+                        }
+                    }
+                }
                 for shape in shapes.bodies() {
                     let root = shapes.shape_at(shapes.chain_root(shape.segment()));
                     for (index, spelled) in shape.spelled().iter().enumerate() {
@@ -2190,28 +3644,62 @@ pub(super) mod laws {
                 let door = Door { running, types: &types, bump: &bump };
                 classes(&door, door.load())
             });
+            // A refused quote's code never runs, nor any body it nests: each is vacuously sealed.
+            let refused: Vec<String> = (sealed.iter().chain(restarted.iter()))
+                .filter(|(_, class)| class.is_none())
+                .map(|(path, _)| format!("{path}/"))
+                .collect();
+            let run = |classes: Vec<(String, Option<bool>)>| -> Vec<(String, Option<bool>)> {
+                (classes.into_iter())
+                    .filter(|(path, _)| !refused.iter().any(|under| path.starts_with(under.as_str())))
+                    .collect()
+            };
+            let (sealed, restarted) = (run(sealed), run(restarted));
             // The restart's own `LET`s birth no body, so both hold one frame body at each path.
-            let paths = |classes: &[(String, bool)]| classes.iter().map(|(path, _)| path.clone()).collect::<Vec<_>>();
+            let paths = |classes: &[(String, Option<bool>)]| classes.iter().map(|(path, _)| path.clone()).collect::<Vec<_>>();
             prop_assert_eq!(paths(&sealed), paths(&restarted), "in\n{}\nrestarted as\n{}", case.render(), restart);
             for ((path, was), (_, is)) in sealed.iter().zip(restarted.iter()) {
-                if *was {
-                    prop_assert!(*is, "{} is porous in the restart\n{}\nrestarted as\n{}", path, case.render(), restart);
+                if *was == Some(true) {
+                    prop_assert!(*is != Some(false), "{} is porous in the restart\n{}\nrestarted as\n{}", path, case.render(), restart);
                 }
             }
         }
     }
 
+    /// `woken` but the units of `cut`, which a walk marked unreached: a refusal before or in them
+    /// left them no record.
+    fn uncut(
+        woken: Vec<crate::scope::UnitId>,
+        cut: impl Iterator<Item = crate::scope::UnitId>,
+    ) -> Vec<crate::scope::UnitId> {
+        let cut: Vec<_> = cut.collect();
+        woken
+            .into_iter()
+            .filter(|unit| !cut.contains(unit))
+            .collect()
+    }
+
     /// Whether each frame body of `SUBJECT`'s subtree is sealed, by path: each step a nested
-    /// body's place in program order.
-    fn classes(door: &Door<'_, '_>, facts: &LoadFacts<'_>) -> Vec<(String, bool)> {
+    /// body's place in program order. A quote's code the load refuses is neither (`None`).
+    fn classes(door: &Door<'_, '_>, facts: &LoadFacts<'_>) -> Vec<(String, Option<bool>)> {
         fn walk(
             facts: &LoadFacts<'_>,
             shape: &BodyShape<'_>,
             path: String,
-            out: &mut Vec<(String, bool)>,
+            out: &mut Vec<(String, Option<bool>)>,
         ) {
+            if facts
+                .closing(shape.segment())
+                .is_some_and(|(closing, _)| closing.refusal.is_some())
+            {
+                out.push((path, None));
+                return;
+            }
             if let Some(class) = facts.class(shape) {
-                out.push((path.clone(), matches!(class, BodyClass::Sealed { .. })));
+                out.push((
+                    path.clone(),
+                    Some(matches!(class, BodyClass::Sealed { .. })),
+                ));
             }
             let nested =
                 (0..shape.statements() as usize).flat_map(|statement| shape.nested_in(statement));
@@ -2246,39 +3734,44 @@ pub(super) mod laws {
         levels
     }
 
-    /// `value` with each level `levels` binds read as its type, where every lexical variable it
-    /// names is bound: `None` where one is not.
-    fn substitute(
+    /// `value` with each level `levels` binds read as its type, each derived name its term handed
+    /// again with them written in, where every name it reads is bound: `None` where one is not.
+    pub(super) fn substitute(
         door: &Door<'_, '_>,
         levels: &[(usize, KType)],
         value: Parametric,
     ) -> Option<Parametric> {
         let scratch = Bump::new();
-        let mut open = false;
-        let read = read_through(door.types, &scratch, value, Side::Above, &mut |variable| {
-            let level = match variable {
-                Variable::Lexical { level, .. } => level,
-                // A path's variable is no level a binding binds.
-                Variable::Path { .. } => {
-                    open = true;
-                    return None;
-                }
-                _ => return None,
-            };
-            match levels.iter().find(|(held, _)| *held == level) {
-                Some((_, typed)) => Some(Interval::point((*typed).into())),
-                None => {
-                    open = true;
-                    None
-                }
-            }
-        });
+        let bound = crate::scope::Levels::from_bound(&scratch, levels);
+        let names = |id| door.load().derived_name(id);
+        let binds = crate::scope::LevelsOver {
+            levels: &bound,
+            names: &names,
+            spellings: crate::scope::Spellings::new(door.symbols()),
+            laid: &|_| {},
+        };
+        let read = match crate::scope::rebound(door.types, &scratch, value.into(), &binds) {
+            crate::scope::Closed::Same => value,
+            crate::scope::Closed::Type(DeclaredType::Type(closed)) => closed.into(),
+            crate::scope::Closed::Partial(DeclaredType::Type(partial)) => partial,
+            _ => unreachable!("a type substitutes to a type"),
+        };
+        // A path's variable is no level a binding binds.
+        let open = (crate::scope::free_variables(door.types, &scratch, read.into()).iter()).any(
+            |variable| {
+                matches!(
+                    variable,
+                    Variable::Lexical { .. } | Variable::Path { .. } | Variable::Derived { .. }
+                )
+            },
+        );
         (!open).then_some(read)
     }
 
     /// The lines of `SUBJECT`'s render of each type fact the load fixes rigid — a type expression's
-    /// type, a nested callable's type, a registration's bucket entry — read with the binding `bound`
-    /// substituted, where it binds every name the fact reads: what the run solves at its use.
+    /// type, a nested callable's type, a type binder's declaration, a registration's bucket entry —
+    /// read with the binding `bound` substituted, where it binds every name the fact reads: what
+    /// the run solves at its use.
     fn substituted(door: &Door<'_, '_>, bound: &Bound) -> Vec<String> {
         let levels = levels(door, bound);
         let (facts, types, symbols) = (door.load(), door.types, door.symbols());
@@ -2311,8 +3804,16 @@ pub(super) mod laws {
             {
                 out.push(format!("{path} callable closed {read}"));
             }
-            // A type binder's declared type is closed or unknown, never rigid: none to substitute.
             for at in (0..shape.slots()).map(|at| Slot(at as u32)) {
+                if let BinderSymbol::Type(name) = shape.slot_name(at)
+                    && let Static::Rigid { value, .. } = facts.declared_type(door.types, shape, at)
+                    && let Some(read) = read(DeclaredType::Type(value))
+                {
+                    out.push(format!(
+                        "{path} {} declares closed {read}",
+                        symbols.display(name.symbol())
+                    ));
+                }
                 if let BinderSymbol::Registration(name) = shape.slot_name(at)
                     && let Static::Rigid { value, .. } =
                         facts.registered_type(door.types, shape, at)
@@ -2325,7 +3826,7 @@ pub(super) mod laws {
                 }
             }
         }
-        out
+        out.iter().map(|line| canonical(line)).collect()
     }
 
     /// Whether the refusal met reaching `case`'s binding by `first` and then the rest lies in a
@@ -2395,6 +3896,12 @@ pub(super) mod laws {
         };
         let mut shapes = vec![subject(door.root())];
         while let Some(shape) = shapes.pop() {
+            // A quote's code the binding refuses never runs, nor any body it nests: the bottom.
+            if (resumed.closing(shape.segment()))
+                .is_some_and(|(closing, _)| closing.refusal.is_some())
+            {
+                continue;
+            }
             shapes.extend(shape.nested_shapes().iter().map(|(_, nested)| *nested));
             for at in (0..shape.slots()).map(|at| Slot(at as u32)) {
                 if let (Some(DeclaredType::Type(was)), Some(DeclaredType::Type(is))) = (
@@ -2546,7 +4053,7 @@ pub(super) mod laws {
         whole && alone
     }
 
-    /// The levels `binding` binds `SUBJECT`'s type names at, beside their types.
+    /// The closed type `binding` gives each type name's level of `SUBJECT`'s chain.
     fn levels_of(door: &Door<'_, '_>, binding: crate::scope::Binding<'_>) -> Vec<(usize, KType)> {
         let body = subject(door.root());
         let mut levels = Vec::new();
@@ -2567,15 +4074,25 @@ pub(super) mod laws {
         levels
     }
 
-    /// Whether a binding whose levels are `levels` keeps `answered`.
+    /// Whether a binding whose levels are `levels` keeps `answered`, a question of `layer`: each
+    /// derived name it holds read off the tables of `layer`, those beneath and the load's, a term
+    /// they lack named afresh.
     fn keeps_under(
         door: &Door<'_, '_>,
+        layer: &crate::scope::BuildLayer<'_>,
         answered: &crate::scope::Answered<'_>,
         levels: &[(usize, KType)],
     ) -> bool {
         let scratch = Bump::new();
         let levels = crate::scope::Levels::from_bound(&scratch, levels);
-        crate::scope::keeps(door.types, &scratch, answered, &levels)
+        let names = |id| (layer.derived_name(id)).or_else(|| door.load().derived_name(id));
+        let binds = crate::scope::LevelsOver {
+            levels: &levels,
+            names: &names,
+            spellings: crate::scope::Spellings::new(door.symbols()),
+            laid: &|_| {},
+        };
+        crate::scope::keeps(door.types, &scratch, answered, &binds)
     }
 
     /// `case`'s load witnessed under its binding, and the binding the witnessed laws compare under:
@@ -2622,24 +4139,14 @@ pub(super) mod laws {
             });
             let found = (0..3).find(|index| {
                 let alternate = door.declared(&Witnessable::alternate(name, *index));
-                (bare.iter()).all(|answered| keeps_under(door, answered, &[(level, alternate)]))
+                (bare.iter())
+                    .all(|answered| keeps_under(door, witnessed, answered, &[(level, alternate)]))
             });
             if let Some(index) = found {
                 let alternate = door.declared(&Witnessable::alternate(name, index));
                 differs |= read && alternate != was;
                 chosen.push((name, index));
                 rebound.push((unknown, alternate));
-                if name == "Elt"
-                    && case.case.bound.pair.is_some()
-                    && let Some(at) = slot(door.symbols(), body, "Pair")
-                {
-                    let pair = Unknown {
-                        segment: body.segment(),
-                        at: Address::Slot(at),
-                    };
-                    let declared = door.declared(&Witnessable::alternate("Pair", index));
-                    rebound.push((pair, declared));
-                }
             }
         }
         let mut staged: Vec<_> = (a.entries().iter())
@@ -2653,7 +4160,8 @@ pub(super) mod laws {
         staged.sort_by_key(|(unknown, _)| *unknown);
         let b = door.bound(&staged);
         let levels = levels_of(door, b);
-        let kept = (questions.iter()).all(|answered| keeps_under(door, answered, &levels));
+        let kept =
+            (questions.iter()).all(|answered| keeps_under(door, witnessed, answered, &levels));
         Some(Witnessed {
             witnessed,
             first: first.layer,
@@ -2686,14 +4194,18 @@ pub(super) mod laws {
         top: &crate::scope::BuildLayer<'d>,
         unit: crate::scope::UnitId,
     ) -> Option<crate::scope::Frontier<'d>> {
-        (std::iter::successors(Some(top), |layer| layer.parent()))
-            .find_map(|layer| layer.unit(unit))
-            .or_else(|| door.load().unit(unit))
-            .map(|(_, frontier)| frontier)
+        let record = (std::iter::successors(Some(top), |layer| layer.parent()))
+            .find_map(|layer| layer.unit(unit));
+        match record {
+            Some(record) => record.typed(),
+            None => door.load().unit(unit),
+        }
+        .map(|(_, frontier)| frontier)
     }
 
     /// The units a closing walk under `binding` over `witnessed` re-runs, by the flattened oracle:
-    /// each whose frontier over it reaches a question on a checked name the binding does not keep.
+    /// each whose frontier over it reaches a question on a checked name the binding does not keep,
+    /// and each the layer marks unreached whose running unit re-runs, which may reach it now.
     fn woken_over<'d>(
         door: &Door<'d, '_>,
         witnessed: &crate::scope::BuildLayer<'d>,
@@ -2717,16 +4229,40 @@ pub(super) mod laws {
         levels: &[(usize, KType)],
     ) -> Vec<crate::scope::UnitId> {
         let checked = checked_of(door, witnessed, binding);
-        let keeps = |answered: &crate::scope::Answered<'_>| keeps_under(door, answered, levels);
-        (door.load().own_units().iter())
-            .map(|(unit, _)| *unit)
+        let keeps =
+            |answered: &crate::scope::Answered<'_>| keeps_under(door, top, answered, levels);
+        let units: Vec<_> = door.load().own_units().map(|(unit, _)| unit).collect();
+        let mut woken: Vec<_> = (units.iter().copied())
             .filter(|unit| {
                 frontier_over(door, top, *unit).is_some_and(|frontier| {
                     frontier.wakes_flat(checked, crate::scope::Binding::EMPTY, binding, &keeps)
                         == crate::scope::Wake::Open
                 })
             })
-            .collect()
+            .collect();
+        // A unit a layer marks unreached runs again wherever the unit running it does.
+        let shapes = door.running.program().shapes();
+        let running = |unit: crate::scope::UnitId| {
+            let (parent, statement) = shapes.parent(unit.segment)?;
+            Some(crate::scope::UnitId {
+                segment: parent,
+                unit: shapes
+                    .shape_at(parent)
+                    .unit_of_statement(statement as usize),
+            })
+        };
+        loop {
+            let reached: Vec<_> = (units.iter().copied())
+                .filter(|unit| !woken.contains(unit) && frontier_over(door, top, *unit).is_none())
+                .filter(|unit| running(*unit).is_some_and(|at| woken.contains(&at)))
+                .collect();
+            if reached.is_empty() {
+                break;
+            }
+            woken.extend(reached);
+        }
+        woken.sort();
+        woken
     }
 
     /// The lines of `SUBJECT`'s render over `witnessed` that units a closing walk under `b` does
@@ -2755,15 +4291,19 @@ pub(super) mod laws {
             open,
         };
         for (unit, (facts, _)) in load.own_units() {
+            // A tree written over names closes by tree substitution, which a walk does.
+            if super::writes_tree_names(door.types, facts) {
+                substituting.open.push(unit);
+            }
             for (segment, typed) in facts.typed.iter() {
                 typed.held(*segment, &mut |held| {
                     if let crate::scope::Held::Site(segment, site) = held {
-                        substituting.sites.insert((segment, site), *unit);
+                        substituting.sites.insert((segment, site), unit);
                     }
                 });
             }
             for (segment, _) in facts.born.iter() {
-                substituting.born.insert(*segment, *unit);
+                substituting.born.insert(*segment, unit);
             }
         }
         let names = left_out(bound);
@@ -2778,7 +4318,7 @@ pub(super) mod laws {
         };
         let mut out = Vec::new();
         reader.render(subject(load.shapes().root()), "", &mut out);
-        out
+        out.iter().map(|line| canonical(line)).collect()
     }
 
     /// The closing walk under `b` over the witnessed layer: its render, or its refusal.
@@ -2853,7 +4393,9 @@ pub(super) mod laws {
         /// reaches an undecided question on a witnessed name and no undecided one of a holding
         /// kind, or one on a module binder it binds; a closing walk over its layer, exactly those
         /// whose frontier over the layer reaches a question on a checked name its binding does not
-        /// keep — under the witness, and under another binding.
+        /// keep, or which the layer marks unreached and a re-run unit runs — under the witness,
+        /// and under another binding. Each walk's units it marks unreached ran to no record, as in
+        /// law 5.
         #[test]
         fn a_witnessed_resumption_reruns_only_the_units_it_wakes(case in witnessable()) {
             let compared = resumed(&case.render(), |door| {
@@ -2871,17 +4413,48 @@ pub(super) mod laws {
                 modules.sort_by_key(|(unknown, _)| *unknown);
                 let modules = door.bound(&modules);
                 let first: Vec<_> = witnessed.witnessed.own_units().collect();
-                let woken_first: Vec<_> = (door.load().own_units().iter())
-                    .filter(|(_, (_, frontier))| {
-                        frontier.wakes_flat(modules, witness, modules, &|_| false) == crate::scope::Wake::Open
+                let wakes = |unit: crate::scope::UnitId| {
+                    (door.load().own_units()).any(|(at, (_, frontier))| {
+                        at == unit
+                            && frontier.wakes_flat(modules, witness, modules, &|_| false)
+                                == crate::scope::Wake::Open
                     })
-                    .map(|(unit, _)| *unit)
+                };
+                // A unit of an inline body is absorbed with the unit running it, whose record reads
+                // its own.
+                let shapes = door.running.program().shapes();
+                let running = |unit: crate::scope::UnitId| {
+                    let shape = shapes.shape_at(unit.segment);
+                    if !matches!(shape.kind(), ShapeKind::Block | ShapeKind::Module) {
+                        return None;
+                    }
+                    let (parent, statement) = shapes.parent(unit.segment)?;
+                    Some(crate::scope::UnitId {
+                        segment: parent,
+                        unit: shapes.shape_at(parent).unit_of_statement(statement as usize),
+                    })
+                };
+                let woken_first: Vec<_> = (door.load().own_units())
+                    .map(|(unit, _)| unit)
+                    .filter(|unit| {
+                        std::iter::successors(Some(*unit), |at| running(*at)).all(wakes)
+                    })
                     .collect();
+                let woken_first = uncut(woken_first, witnessed.witnessed.unreached_units());
                 let closing: Vec<_> = witnessed.first.own_units().collect();
-                let woken_closing = woken_over(door, witnessed.witnessed, witnessed.a);
+                let woken_closing = uncut(
+                    woken_over(door, witnessed.witnessed, witnessed.a),
+                    witnessed.first.unreached_units(),
+                );
                 let over = door.resumption(witnessed.b, Some(witnessed.witnessed), false).ok();
-                let over: Option<Vec<_>> = over.map(|resumed| resumed.layer.own_units().collect());
+                let over: Option<(Vec<_>, Vec<_>)> = over.map(|resumed| {
+                    (resumed.layer.own_units().collect(), resumed.layer.unreached_units().collect())
+                });
                 let woken_over = woken_over(door, witnessed.witnessed, witnessed.b);
+                let (over, woken_over) = match over {
+                    Some((over, cut)) => (Some(over), uncut(woken_over, cut.into_iter())),
+                    None => (None, woken_over),
+                };
                 Some(((first, woken_first), (closing, woken_closing), (over, woken_over)))
             });
             if let Some(((first, woken_first), (closing, woken_closing), (over, woken))) = compared {
@@ -2913,6 +4486,35 @@ pub(super) mod laws {
             })
         });
         assert!(differs, "no case binds an alternate a question reads");
+    }
+
+    /// The resumption laws draw a `:Module` parameter, and one declared at a meet, that a binding
+    /// binds and a statement reads: on a fixed seed, one of 128 cases does, for each.
+    #[test]
+    fn the_resumption_laws_draw_a_bound_module_parameter() {
+        use super::super::generate::ModuleAt;
+        use proptest::strategy::ValueTree;
+        use proptest::test_runner::{RngAlgorithm, TestRng, TestRunner};
+        for at in [ModuleAt::Module, ModuleAt::Meet] {
+            let mut runner = TestRunner::new_with_rng(
+                ProptestConfig::default(),
+                TestRng::deterministic_rng(RngAlgorithm::ChaCha),
+            );
+            let strategy = super::super::generate::resumable();
+            let drawn = (0..128).any(|_| {
+                let case = strategy.new_tree(&mut runner).expect("a case").current();
+                let rendered = case.render();
+                case.module_at == at
+                    && case.bound.module.is_some()
+                    && ["m.zero", "(m :|", "(m :!"]
+                        .iter()
+                        .any(|read| rendered.contains(read))
+            });
+            assert!(
+                drawn,
+                "no case binds an `m` declared at {at:?} that it reads"
+            );
+        }
     }
 
     /// The `CELL` registration `SUBJECT`'s body holds, where a [`Statement::Cell`] wrote one.
@@ -2948,7 +4550,7 @@ pub(super) mod laws {
         let body = subject(door.root());
         let (index, cell) = cell(door)?;
         let (running, types) = (door.running, door.types);
-        let names = ["Elt", "Key", "Item", "Pair", "m", "n"];
+        let names = ["Elt", "Key", "Item", "m", "n"];
         let a = bind(door, &case.case.bound.only(&names), true);
         let entry = |segment| Activating::Witnessing {
             site: EventSite::entry(segment),
@@ -2999,7 +4601,6 @@ pub(super) mod laws {
         // Only a name the case's binding binds is alternated, as the witnessed laws draw.
         let elt =
             (level_of(door, "Elt").zip(unknown("Elt"))).filter(|_| case.case.bound.elt.is_some());
-        let pair = unknown("Pair").filter(|_| case.case.bound.pair.is_some());
         // `SUBJECT`'s binding and `Cel`'s type under the alternates `chosen`, whether they bind a
         // name a question reads to another type than the witness, and the levels each binds.
         let under = |chosen: &[(&str, usize)]| {
@@ -3014,11 +4615,6 @@ pub(super) mod laws {
                             && !matches!(was, Some((_, Bind::Type(was))) if *was == alternate);
                         staged.retain(|(unknown, _)| *unknown != elt);
                         staged.push((elt, Bind::Type(alternate)));
-                        if let Some(pair) = pair {
-                            let declared = door.declared(&Witnessable::alternate("Pair", *found));
-                            staged.retain(|(unknown, _)| *unknown != pair);
-                            staged.push((pair, Bind::Type(declared)));
-                        }
                     }
                     _ => {
                         differs |= reads(cel_level) && alternate != witness;
@@ -3033,8 +4629,8 @@ pub(super) mod laws {
             (staged, cel_bound, differs, (subject_levels, levels))
         };
         let keeps_all = |(subject, cell): &(Vec<_>, Vec<_>)| {
-            (theirs.iter()).all(|answered| keeps_under(door, answered, subject))
-                && (ours.iter()).all(|answered| keeps_under(door, answered, cell))
+            (theirs.iter()).all(|answered| keeps_under(door, encloser, answered, subject))
+                && (ours.iter()).all(|answered| keeps_under(door, witnessed, answered, cell))
         };
         let elts: &[Option<usize>] = match elt {
             Some(_) => &[None, Some(0), Some(1), Some(2)],
@@ -3152,4 +4748,237 @@ pub(super) mod laws {
         });
         assert!(differs, "no case binds an alternate a question reads");
     }
+}
+
+/// A field read of a variable whose bound guarantees the field names the variable and judges
+/// nothing over it, so a binding absorbs the unit; over an unbounded variable `ATTR` may read a
+/// module member, which the binding's module declares or not: a question, which holds nothing.
+#[test]
+fn a_field_read_through_a_guaranteeing_bound_names_its_variable() {
+    let marks = |group: &str| {
+        let source =
+            format!("EXPR FOR ALL {group} #(GET x :Elt) -> Any = #(\n  LET y = x.f\n  y\n)");
+        resumed(&source, |door| {
+            let f = quantified(door);
+            let elt = unknown(door.symbols(), f, "Elt");
+            let y = unit_of(door, f, "y");
+            waits_on(door, y, elt).unwrap_or_default()
+        })
+    };
+    let bounded = marks("#{Elt: :{f :Number}}");
+    assert!(
+        bounded.iter().flatten().all(|kind| !kind.holds()),
+        "{bounded:?}"
+    );
+    let unbounded = marks("#[Elt]");
+    assert!(
+        unbounded.iter().flatten().all(|kind| !kind.holds()),
+        "{unbounded:?}"
+    );
+    assert!(
+        unbounded.contains(&Some(crate::scope::OpenKind::Spells)),
+        "{unbounded:?}"
+    );
+}
+
+/// A field read of a variable is exact under a binding whose retype makes it so: bound to
+/// `{f :Number}`, `x` is exactly that record, so `x.f` is exactly `Number`, where the load gave
+/// `[Never, (FIELD f OF Elt)]`.
+#[test]
+fn a_field_read_of_a_variable_is_exact_under_a_binding() {
+    let source = "EXPR FOR ALL #{Elt: :{f :Number}} #(GET x :Elt) -> Any = #(\n  \
+                  LET y = x.f\n  y\n)";
+    let (lower, upper) = resumed(source, |door| {
+        let f = quantified(door);
+        let elt = unknown(door.symbols(), f, "Elt");
+        let field = BinderSymbol::declared("f", door.symbols()).expect("a value token");
+        let record = door.types.record(door.bump, &[(field, KType::NUMBER)]);
+        let binding = door.binding(&[(elt, record)]);
+        let resumed = (door.resume(None, binding, false)).expect("the resumption refuses nothing");
+        let at = slot(door.symbols(), f, "y");
+        let Some(DeclaredType::Type(typed)) = resumed.binder_type(door.types, f, at) else {
+            panic!("`y` is typed, and no scheme");
+        };
+        let show = |end| display_name(end, door.types, door.symbols()).to_string();
+        (show(typed.lower), show(typed.upper))
+    });
+    assert_eq!((lower.as_str(), upper.as_str()), ("Number", "Number"));
+}
+
+/// `SUBJECT`'s body: `m` constructs `Meters` over `y :Item`, and `t` reads `m` alone.
+const METERS: &str = "#(SUBJECT y :Item) -> Any = #(\n  LET m = (Meters y)\n  LET t = m\n  t\n)";
+
+/// A construction of a closed newtype over a run-bound payload is `Meters` at most where the
+/// payload may not fit, and exactly `Meters` under `Item := Number`, as a fresh load with the
+/// binding declared types it.
+#[test]
+fn a_construction_over_a_run_bound_payload_resumed_is_what_a_fresh_load_types() {
+    let declared = ":Number";
+    let source =
+        format!("LET Bound = {declared}\nNEWTYPE Meters = Number\nEXPR FOR ALL #[Item] {METERS}");
+    let under = resumed(&source, |door| {
+        let f = subject(door.root());
+        let item = unknown(door.symbols(), f, "Item");
+        let binding = door.binding(&[(item, door.declared("Bound"))]);
+        let resumed = (door.resume(None, binding, false)).expect("the resumption refuses nothing");
+        ["m", "t"].map(|name| ends(door, resumed, f, name))
+    });
+    let restart = format!("NEWTYPE Meters = Number\nLET Item = {declared}\nEXPR {METERS}");
+    let restarted = resumed(&restart, |door| {
+        let f = subject(door.root());
+        ["m", "t"].map(|name| ends(door, door.load(), f, name))
+    });
+    assert_eq!(
+        under,
+        ["[Meters, Meters]", "[Meters, Meters]"].map(String::from)
+    );
+    assert_eq!(under, restarted);
+}
+
+/// `SUBJECT`'s body: `s` calls `f :Fn` by name, and `t` reads `s` alone.
+const CALLS: &str = "#(SUBJECT f :Fn) -> Any = #(\n  LET s = (f {x = 1})\n  LET t = s\n  t\n)";
+
+/// A call through a head whose type is a run-bound name is typed by the call a binding gives it:
+/// under `Fn := (FN :{x :Number} -> Number)` and `Fn := (FN :{x :Any} -> Str)`, `s` and `t` are
+/// what a fresh load with `Fn` declared gives them.
+#[test]
+fn a_call_through_a_run_bound_head_resumed_is_what_a_fresh_load_types() {
+    for declared in [":(FN :{x :Number} -> Number)", ":(FN :{x :Any} -> Str)"] {
+        let source = format!(
+            "LET Bound = {declared}\nEXPR FOR ALL #{{Fn: :(FN :{{x :Number}} -> Any)}} {CALLS}"
+        );
+        let under = resumed(&source, |door| {
+            let f = subject(door.root());
+            let fun = unknown(door.symbols(), f, "Fn");
+            let binding = door.binding(&[(fun, door.declared("Bound"))]);
+            let resumed =
+                (door.resume(None, binding, false)).expect("the resumption refuses nothing");
+            ["s", "t"].map(|name| ends(door, resumed, f, name))
+        });
+        let restart = format!("LET Fn = {declared}\nEXPR {CALLS}");
+        let restarted = resumed(&restart, |door| {
+            let f = subject(door.root());
+            ["s", "t"].map(|name| ends(door, door.load(), f, name))
+        });
+        assert_eq!(under, restarted, "under `Fn := {declared}`");
+    }
+}
+
+/// `SUBJECT`'s body: `s` calls the closed `g` by name over `p :Arg`, and `t` reads `s` alone.
+const LAYS: &str = "#(SUBJECT p :Arg) -> Any = #(\n  \
+                    LET g = (FN :{x :Number} -> Number = #(x))\n  \
+                    LET s = (g p)\n  LET t = s\n  t\n)";
+
+/// A call by name whose argument's type is a run-bound name lays it out by the rule a binding
+/// closes: under `Arg := {x :Number}`, `s` and `t` are what a fresh load with `Arg` declared gives
+/// them, and under `Arg := {x :Number y :Str}`, which names a field `g` does not declare, the
+/// resumption refuses as the closed layout does.
+#[test]
+fn a_call_over_a_run_bound_argument_resumed_is_what_a_fresh_load_lays_out() {
+    let source =
+        |declared: &str| format!("LET Bound = {declared}\nEXPR FOR ALL #{{Arg: :Any}} {LAYS}");
+    let under = resumed(&source(":{x :Number}"), |door| {
+        let f = subject(door.root());
+        let arg = unknown(door.symbols(), f, "Arg");
+        let binding = door.binding(&[(arg, door.declared("Bound"))]);
+        let resumed = (door.resume(None, binding, false)).expect("the resumption refuses nothing");
+        ["s", "t"].map(|name| ends(door, resumed, f, name))
+    });
+    let restart = format!("LET Arg = :{{x :Number}}\nEXPR {LAYS}");
+    let restarted = resumed(&restart, |door| {
+        let f = subject(door.root());
+        ["s", "t"].map(|name| ends(door, door.load(), f, name))
+    });
+    assert_eq!(under, restarted, "under `Arg := {{x :Number}}`");
+    let refused = resumed(&source(":{x :Number y :Str}"), |door| {
+        let f = subject(door.root());
+        let arg = unknown(door.symbols(), f, "Arg");
+        let binding = door.binding(&[(arg, door.declared("Bound"))]);
+        door.resume(None, binding, false).err()
+    });
+    let refused = refused.expect("the binding refuses the call");
+    assert!(
+        refused.contains("can never satisfy the parameters"),
+        "{refused}"
+    );
+}
+
+/// A content tree as a law prints it: whether it is closed, beside its root node's kind. Not its
+/// identity: a restart declares a bound name outside the body, where a module body does not
+/// capture it, and keys a leaf on a slot it moves.
+fn tree_line(tree: &crate::scope::Tree<'_>) -> String {
+    use crate::scope::Tree;
+    let kind = match tree {
+        Tree::Digest(..) => "digest",
+        Tree::Body { .. } => "body",
+        Tree::Knot { .. } => "knot",
+        Tree::View { .. } => "view",
+        Tree::Retyped { .. } => "retyped",
+        Tree::TypeValue { .. } => "type value",
+        Tree::Leaf(_) => "leaf",
+    };
+    format!("closed {} {kind}", tree.closed())
+}
+
+/// Whether a binding of the names `facts`' trees are written over may change one of them: such a
+/// record closes by tree substitution, which a walk does, not by a binding's type levels alone.
+fn writes_tree_names(types: &Chain<'_, '_, '_, '_>, facts: &crate::scope::UnitFacts<'_>) -> bool {
+    (facts.typed.iter()).any(|(_, typed)| {
+        (typed.contents.iter()).any(|(_, tree)| writes_names(types, tree))
+            || (typed.trees.iter()).any(|(_, tree)| writes_names(types, tree))
+    })
+}
+
+/// Whether a binding of the names `tree`'s types are written over may change it: a type a node
+/// holds written over names, a type value, or a call only an answer selects among.
+fn writes_names(types: &Chain<'_, '_, '_, '_>, tree: &crate::scope::Tree<'_>) -> bool {
+    use crate::scope::{Leaf, Tree, Within};
+    if tree.closed() {
+        return false;
+    }
+    let open = |ty: &crate::type_lattice::Parametric| {
+        crate::elaborate::judge::static_of(types, *ty).is_none()
+    };
+    let own = match tree {
+        Tree::Knot { members, .. } => members.iter().any(|node| node.instance.iter().any(open)),
+        Tree::View { application, .. } => open(application),
+        Tree::Retyped { carried, .. } => open(carried),
+        Tree::TypeValue { .. } | Tree::Leaf(Leaf::Call { .. }) => true,
+        Tree::Leaf(Leaf::Bound {
+            within: Some(Within::Call(call)),
+            ..
+        }) => call.solution.iter().any(|(_, point)| open(point)),
+        _ => false,
+    };
+    let mut nested = false;
+    tree.subtrees(&mut |subtree| nested |= !nested && writes_names(types, subtree));
+    own || nested
+}
+
+/// A `USING` header over a closed module body, retyped to an application over a run-bound name,
+/// picks the body's registrations by questions: whether each covers the header's keyworded member.
+/// Its unit holds nothing, and under a binding it is what a fresh load with the name declared reads.
+#[test]
+fn header_picks_over_a_run_bound_name_are_asked() {
+    let body = "#(SUBJECT x :Elt) -> Any = #(\n  \
+                LET s0 = (USING (pk :! (Picks WITH {Carrier = Elt})) SCOPE (PICK zero))\n  s0\n)\n";
+    let module = "MODULE pk = ((LET zero = 1) (EXPR #(PICK x :Number) -> Str = #(\"n\")))\n";
+    let source = format!("{PICKS}{module}EXPR FOR ALL #[Elt] {body}");
+    let (holding, under) = resumed(&source, |door| {
+        let f = subject(door.root());
+        let elt = unknown(door.symbols(), f, "Elt");
+        let unit = unit_of(door, f, "s0");
+        let holding = (waits_on(door, unit, elt).into_iter().flatten().flatten())
+            .filter(|kind| kind.holds())
+            .collect::<Vec<_>>();
+        let binding = door.binding(&[(elt, KType::NUMBER)]);
+        let resumed = (door.resume(None, binding, false)).expect("no refusal");
+        (holding, ends(door, resumed, f, "s0"))
+    });
+    let restarted = resumed(
+        &format!("{PICKS}{module}LET Elt = Number\nEXPR {body}"),
+        |door| ends(door, door.load(), subject(door.root()), "s0"),
+    );
+    assert!(holding.is_empty(), "{holding:?}");
+    assert_eq!(under, restarted);
 }

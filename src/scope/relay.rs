@@ -17,7 +17,10 @@ use super::keyed::Keyed;
 use super::question::Answered;
 use super::records::{Born, Closing, Deps, Retypes, SiteDeps, Traced, Typed, UnitFacts};
 use super::shape::{Repeated, Scalar, ShapeError};
-use super::tree::{Bare, KnotNode, Leaf, NodeCapture, Sealing, Tree, Unfolded, Within};
+use super::tree::{
+    Bare, Called, Callee, KnotNode, Leaf, NodeCapture, Sealing, Tree, UndecidedCall, Unfolded,
+    Within,
+};
 use super::typed::{
     Arms, Callable, Elimination, FunctionGroupMap, InstanceRead, Kept, Narrowing, ParameterBinding,
     PathEntry, Pick, Points, Registered, Resolution, Route, ShapeGroupMap, Static, StaticInstance,
@@ -266,11 +269,50 @@ impl<'to, 'x, 'bind, 'from, L: Lays<'to>> Relay<'to, 'x, 'bind, 'from, L> {
                 }),
                 identity: *identity,
             }),
+            Tree::TypeValue { named, identity } => Tree::TypeValue {
+                named: *named,
+                identity: *identity,
+            },
+            Tree::Leaf(Leaf::Call {
+                call,
+                holder,
+                chain,
+                identity,
+            }) => Tree::Leaf(Leaf::Call {
+                call: resident(
+                    self.lay,
+                    Called {
+                        at: call.at,
+                        callees: self.lay.fill(call.callees.len(), |at| Callee {
+                            parameters: self.copied(call.callees[at].parameters),
+                            ..call.callees[at]
+                        }),
+                        arguments: self
+                            .lay
+                            .fill(call.arguments.len(), |at| self.tree(&call.arguments[at])),
+                        undecided: self.undecided(&call.undecided),
+                    },
+                ),
+                holder: *holder,
+                chain: self.copied(chain),
+                identity: *identity,
+            }),
             Tree::Leaf(Leaf::Unnamed(site)) => Tree::Leaf(Leaf::Unnamed(*site)),
         }
     }
 
     /// Each `(slot, tree)` laid again.
+    /// What a use an answer selects among keeps, laid again.
+    fn undecided(&self, undecided: &UndecidedCall<'_>) -> UndecidedCall<'to> {
+        UndecidedCall {
+            kept: self
+                .lay
+                .fill(undecided.kept.len(), |at| undecided.kept[at].laid(self.lay)),
+            positions: self.copied(undecided.positions),
+            unfilled: undecided.unfilled,
+        }
+    }
+
     fn trees(&self, trees: &[(u32, Tree<'_>)]) -> &'to [(u32, Tree<'to>)] {
         self.lay
             .fill(trees.len(), |at| (trees[at].0, self.tree(&trees[at].1)))
@@ -533,8 +575,10 @@ impl<'to, 'x, 'bind, 'from, L: Lays<'to>> Relay<'to, 'x, 'bind, 'from, L> {
         let UseStatics {
             narrowing,
             contributions,
+            undecided,
         } = statics;
         UseStatics {
+            undecided: undecided.map(|undecided| resident(self.lay, self.undecided(undecided))),
             narrowing: match narrowing {
                 Narrowing::Full => Narrowing::Full,
                 Narrowing::Kept(Kept {
@@ -670,16 +714,14 @@ impl<'to, 'x, 'bind, 'from, L: Lays<'to>> Relay<'to, 'x, 'bind, 'from, L> {
             ShapeError::NoAdmittingCandidate {
                 key,
                 arguments,
-                lines,
-                shown,
-                against,
+                listed,
+                shapes,
                 at,
             } => ShapeError::NoAdmittingCandidate {
                 key: self.copied(key),
-                arguments,
-                lines: self.copied(lines),
-                shown: self.copied(shown),
-                against: self.copied(against),
+                arguments: self.copied(arguments),
+                listed: self.copied(listed),
+                shapes: self.copied(shapes),
                 at,
             },
             ShapeError::NoField { of, field, at } => ShapeError::NoField { of, field, at },
@@ -706,18 +748,12 @@ impl<'to, 'x, 'bind, 'from, L: Lays<'to>> Relay<'to, 'x, 'bind, 'from, L> {
                 count,
                 at,
             },
-            ShapeError::ReturnNeverSatisfied { body, returns, at } => {
-                ShapeError::ReturnNeverSatisfied { body, returns, at }
+            ShapeError::ReturnNeverSatisfied { refused, at } => {
+                ShapeError::ReturnNeverSatisfied { refused, at }
             }
-            ShapeError::AscriptionNeverSatisfied {
-                value,
-                ascribed,
-                at,
-            } => ShapeError::AscriptionNeverSatisfied {
-                value,
-                ascribed,
-                at,
-            },
+            ShapeError::AscriptionNeverSatisfied { refused, at } => {
+                ShapeError::AscriptionNeverSatisfied { refused, at }
+            }
             ShapeError::ViewReveals {
                 member,
                 ascribed,
@@ -727,23 +763,17 @@ impl<'to, 'x, 'bind, 'from, L: Lays<'to>> Relay<'to, 'x, 'bind, 'from, L> {
                 ascribed,
                 at,
             },
-            ShapeError::AnnotationNeverSatisfied {
-                value,
-                annotated,
-                at,
-            } => ShapeError::AnnotationNeverSatisfied {
-                value,
-                annotated,
-                at,
-            },
+            ShapeError::AnnotationNeverSatisfied { refused, at } => {
+                ShapeError::AnnotationNeverSatisfied { refused, at }
+            }
             ShapeError::CallNeverSatisfied {
                 callee,
-                arguments,
+                payload,
                 parameters,
                 at,
             } => ShapeError::CallNeverSatisfied {
                 callee,
-                arguments,
+                payload,
                 parameters,
                 at,
             },
@@ -788,17 +818,17 @@ impl<'to, 'x, 'bind, 'from, L: Lays<'to>> Relay<'to, 'x, 'bind, 'from, L> {
                 ShapeError::Uncovered { union, variant, at }
             }
             ShapeError::LoneVariant { name, at } => ShapeError::LoneVariant { name, at },
-            ShapeError::NotCode { value, at } => ShapeError::NotCode { value, at },
-            ShapeError::BodyNotCode { value, at } => ShapeError::BodyNotCode { value, at },
+            ShapeError::NotCode { refused, at } => ShapeError::NotCode { refused, at },
+            ShapeError::BodyNotCode { refused, at } => ShapeError::BodyNotCode { refused, at },
             ShapeError::ParameterOutsideBody { name, at } => {
                 ShapeError::ParameterOutsideBody { name, at }
             }
-            ShapeError::NotAModule { value, at } => ShapeError::NotAModule { value, at },
+            ShapeError::NotAModule { refused, at } => ShapeError::NotAModule { refused, at },
             ShapeError::NotASignature { ascribed, at } => {
                 ShapeError::NotASignature { ascribed, at }
             }
-            ShapeError::EvalNeverSatisfied { code, returns, at } => {
-                ShapeError::EvalNeverSatisfied { code, returns, at }
+            ShapeError::EvalNeverSatisfied { refused, at } => {
+                ShapeError::EvalNeverSatisfied { refused, at }
             }
             ShapeError::Type { error, at } => ShapeError::Type { error, at },
             ShapeError::UnderCall { call, refusal } => ShapeError::UnderCall {

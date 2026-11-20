@@ -498,6 +498,7 @@ impl Knotted for Stand<'_> {
             Stand::Code(node) => Some(CodeView {
                 body: node,
                 bound: &[],
+                composed: &[],
             }),
             _ => None,
         }

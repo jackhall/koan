@@ -187,7 +187,9 @@ The solve asks only that each variable's pair of ends denote some type
 ([the unifier](solving.md#the-unifier-collects-it-does-not-bind)); it picks no instance.
 [`instance_under`](sig_relations.rs) shares `admits_function`'s walk and picks
 one: the least instance of a function scheme under a function type it is
-wanted at, each variable bound to the least instance of its pair. It fails
+wanted at, each variable bound to the least instance of its pair, handed back
+as a [solve record](solving.md#the-unifier-collects-it-does-not-bind) that
+says whether a run reproduces the solve. It fails
 where the scheme does not fit that type, and names each variable no
 contribution reaches rather than read it as its bound. The instance fits the
 wanted type, and need not lie under it in the order: a signature is ordered by

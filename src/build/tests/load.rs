@@ -2,7 +2,7 @@
 //! a record keys, each in the record of the unit that wrote it.
 
 use crate::memory::{BumpVec, resident};
-use crate::scope::tests::with_shapes;
+use crate::scope::tests::{spellings, with_shapes};
 use crate::scope::{
     Address, Binding, Frontier, Keyed, Noted, Slot, Store, Typed, UnitFacts, UnitId, UnitIndex,
     Unknown, each_part,
@@ -17,7 +17,7 @@ const SOURCE: &str = "LET a = 1\nLET b = (a + 2)\nPRINT b";
 fn a_write_reads_back_and_the_laid_facts_find_every_site_it_keys() {
     with_shapes(SOURCE, |shapes, writer, scratch, _| {
         let root = shapes.root();
-        let store = LoadStore::new(writer, scratch, shapes, Binding::EMPTY);
+        let store = LoadStore::new(writer, scratch, (shapes, spellings()), Binding::EMPTY);
         let unknown = Unknown {
             segment: root.segment(),
             at: Address::Slot(Slot(0)),
@@ -52,7 +52,7 @@ fn a_write_reads_back_and_the_laid_facts_find_every_site_it_keys() {
                     ..UnitFacts::EMPTY
                 },
             );
-            store.write(unit, facts, frontier);
+            store.write(unit, crate::scope::UnitRecord::Typed(facts, frontier));
             let (back, at) = store.fact(unit).expect("a write reads back");
             assert!(std::ptr::eq(back, facts) && at.identity() == frontier.identity());
             written.push((index, sites));

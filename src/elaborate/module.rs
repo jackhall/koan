@@ -2,7 +2,8 @@
 //! member per type binder at the handle it holds, and a keyworded member per registration at the
 //! expression shape its function registers.
 //!
-//! One builder, [`module_signature`], serves both ends. The run reads it off the activation its
+//! One builder, [`module_signature`], serves both ends, and a `SIG` declaration besides: it is the
+//! closed rule [`sealed_signature`] over the body's skeleton ([`module_signing`]). The run reads it off the activation its
 //! body ran in ([`self_signature`]), each value slot at the memo its value already carries; the
 //! load's walk hands it each binder's exact static type, where the load
 //! knows every one. So the load's exact signature is the very handle the run computes. A
@@ -11,9 +12,9 @@
 //! binds every name it declares.
 
 use crate::memory::BumpAllocator;
-use crate::scope::{BodyShape, Reading, ShapeKind, Slot};
+use crate::scope::{BodyShape, Reading, ShapeKind, Signed, Signing, Slot, sealed_signature};
 use crate::symbols::BinderSymbol;
-use crate::type_lattice::{DeclaredType, KType, Parametric, SchemaDraft};
+use crate::type_lattice::{DeclaredType, KType, Parametric};
 use crate::values::{Chain, KnottedFamily, Value};
 
 /// The self-signature of the module whose body `activation` ran, `keyworded` holding the shape each
@@ -48,8 +49,23 @@ pub fn module_signature(
     types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'_>,
 ) -> KType {
+    let keyworded = keyworded
+        .iter()
+        .map(|shape| DeclaredType::<Parametric>::from(*shape));
+    let (signed, operands) = module_signing(shape, members, keyworded, scratch);
+    sealed_signature(types, scratch, &signed, operands)
+}
+
+/// The skeleton of [`module_signature`] over `members` and `keyworded`, each written over names,
+/// beside the types it reads: what a binding seals as a fresh load's module signature.
+pub fn module_signing<'x>(
+    shape: &BodyShape<'_>,
+    members: impl IntoIterator<Item = (Slot, DeclaredType<Parametric>)>,
+    keyworded: impl IntoIterator<Item = DeclaredType<Parametric>>,
+    scratch: BumpAllocator<'x>,
+) -> (Signed<'x>, &'x [DeclaredType<Parametric>]) {
     debug_assert_eq!(shape.kind(), ShapeKind::Module);
-    let mut draft = SchemaDraft::new(scratch);
+    let mut draft = Signing::module(scratch);
     for (slot, bound) in members {
         match (shape.slot_name(slot), bound) {
             (BinderSymbol::Value(name), bound) => draft.insert_value_slot(name, bound),
@@ -65,12 +81,12 @@ pub fn module_signature(
         }
     }
     for shape in keyworded {
-        draft.push_keyworded(*shape);
+        draft.push_keyworded(shape);
     }
     // A `GROUP` body holds the group it declares, and that chaining is part of what the module is:
     // a signature stating the same group is what it satisfies. A `MODULE` holds none.
     for group in shape.held_groups() {
         draft.push_operator_group(group.members, group.mode);
     }
-    types.signature(scratch, draft)
+    draft.finished()
 }

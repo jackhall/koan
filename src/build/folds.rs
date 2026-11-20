@@ -17,32 +17,35 @@
 //!   seam here, and the slots any body binds at a statement that any frontier holds are where the
 //!   cell running it decides again.
 //! - **Contract.** Each lexical variable a contribution or a solution names is composed by every
-//!   callable or `MODULE` body between the body reading it and its home. The walk refuses a
-//!   `MODULE` body composing a type its `OVER` list does not name.
+//!   callable, `MODULE` body or quote's code between the body reading it and its home. The walk
+//!   refuses a `MODULE` body composing a type its `OVER` list does not name. A quote's code also
+//!   composes each variable some unit inside it holds in its frontier: its frame reads through no
+//!   activation around it, so its entry binds what its value carries.
 //!
 //! These are the frontier keys. The [trace](trace.rs) then widens each callable's keys to its
 //! traced slots and fills each body's call-site traces over them.
 
 use crate::memory::{BumpAllocator, BumpBackedMap, BumpVec, Lays, bump_table, collect, resident};
 use crate::scope::{
-    Address, BindSite, BodyClass, Caching, Cut, Deps, DepsGathering, Folds, Frontier, Keyed,
-    LoadFacts, Mint, Position, Resolved, Root, Segment, ShapeKind, Shapes, SiteDeps, Slot,
+    Address, BindSite, BodyClass, Caching, Cut, Deps, DepsGathering, Flattened, Folds, Frontier,
+    Keyed, LoadFacts, Mint, Position, Resolved, Root, Segment, ShapeKind, Shapes, SiteDeps, Slot,
     UnitIndex, tree_deps,
 };
+use crate::values::Chain;
 
 /// The folds of every body `load` holds records for, by segment, laid through `lay`.
 pub fn fold<'o>(
-    load: &LoadFacts<'o>,
+    (load, types): (&LoadFacts<'o>, &Chain<'_, '_, '_, '_>),
     lay: impl Lays<'o>,
     scratch: BumpAllocator<'_>,
 ) -> &'o [Folds<'o>] {
-    collect(lay, staged(load, lay, scratch).iter().copied())
+    collect(lay, staged((load, types), lay, scratch).iter().copied())
 }
 
 /// [`fold`], each body's folds laid through `lay` but their run staged in `scratch`, for the trace
 /// to lay once with its traces.
 pub(super) fn staged<'o, 'x>(
-    load: &LoadFacts<'o>,
+    (load, types): (&LoadFacts<'o>, &Chain<'_, '_, '_, '_>),
     lay: impl Lays<'o>,
     scratch: BumpAllocator<'x>,
 ) -> BumpVec<'x, Folds<'o>> {
@@ -59,7 +62,14 @@ pub(super) fn staged<'o, 'x>(
         each.resize(shapes.layout(shape.segment()).len(), false);
         contract.push(each);
     }
+    let mut flat = Flattened::new(scratch);
     for (unit, (facts, frontier)) in load.own_units() {
+        for noted in flat.of(frontier) {
+            let home = noted.unknown;
+            if let Some(level) = shapes.level(home.segment, home.at) {
+                compose_code(shapes, unit.segment, level, &mut contract);
+            }
+        }
         sites.extend(facts.sites.iter().copied());
         digestible.extend((facts.born.iter()).map(|(body, born)| (*body, born.digestible)));
         rooting.extend((facts.paths.iter()).filter_map(|(_, (entry, resolution))| {
@@ -68,7 +78,7 @@ pub(super) fn staged<'o, 'x>(
                 _ => None,
             }
         }));
-        frontiers.push((unit.segment, unit.unit, *frontier));
+        frontiers.push((unit.segment, unit.unit, frontier));
         for named in facts.named_variables {
             compose(shapes, named.reading, named.level, &mut contract);
         }
@@ -93,7 +103,13 @@ pub(super) fn staged<'o, 'x>(
         let mut deps = DepsGathering::new(scratch);
         deps.add(site.deps);
         for tree in site.pending {
-            tree_deps(shapes, (site.holder, site.frame), tree, &mut deps, scratch);
+            tree_deps(
+                (shapes, types),
+                (site.holder, site.frame),
+                tree,
+                &mut deps,
+                scratch,
+            );
         }
         match deps.laid(lay) {
             Deps::Closed => (Mint::Closed, &[]),
@@ -417,8 +433,31 @@ fn summarize<'x>(
     summaries[&frontier.identity()]
 }
 
-/// Mark the lexical variable at `level`, read from `reading`, composed by each callable or
-/// `MODULE` body between `reading` and its home.
+/// Mark the lexical variable at `level`, which a unit of `reading` holds in its frontier, composed
+/// by each quote's code between `reading` and its home.
+fn compose_code(
+    shapes: &Shapes<'_>,
+    reading: Segment,
+    level: usize,
+    contract: &mut BumpVec<'_, BumpVec<'_, bool>>,
+) {
+    let mut at = reading;
+    while shapes.home(at, level).is_none() {
+        if shapes.shape_at(at).kind() == ShapeKind::Code {
+            let layout = shapes.layout(at);
+            if let Some(index) = layout.iter().position(|(held, _)| *held == level) {
+                contract[at.index() as usize][index] = true;
+            }
+        }
+        let Some((parent, _)) = shapes.parent(at) else {
+            return;
+        };
+        at = parent;
+    }
+}
+
+/// Mark the lexical variable at `level`, read from `reading`, composed by each callable, `MODULE`
+/// body or quote's code between `reading` and its home.
 fn compose(
     shapes: &Shapes<'_>,
     reading: Segment,
@@ -431,15 +470,18 @@ fn compose(
             return;
         }
         let shape = shapes.shape_at(at);
-        if matches!(shape.kind(), ShapeKind::Callable | ShapeKind::Module) {
+        if matches!(
+            shape.kind(),
+            ShapeKind::Callable | ShapeKind::Module | ShapeKind::Code
+        ) {
             let layout = shapes.layout(at);
             if let Some(index) = layout.iter().position(|(held, _)| *held == level) {
                 contract[at.index() as usize][index] = true;
             }
         }
-        match (shape.kind(), shapes.parent(at)) {
-            (ShapeKind::Program | ShapeKind::Code, _) | (_, None) => return,
-            (_, Some((parent, _))) => at = parent,
+        match shapes.parent(at) {
+            None => return,
+            Some((parent, _)) => at = parent,
         }
     }
 }

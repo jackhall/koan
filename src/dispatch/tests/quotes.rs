@@ -270,16 +270,19 @@ fn a_quote_reads_its_dollar_names_at_their_static_types() {
         assert!(always, "`$n + 2`'s builtin is admitted at the load");
         assert!(
             facts
-                .typing_refusal(&program.tiers().resting(), code)
+                .typing_refusal(
+                    &program.tiers().resting(),
+                    &crate::memory::Bump::new(),
+                    code,
+                    &mut |_| None,
+                )
                 .is_none()
         );
     });
     let refused = "LET n = 1\nLET q = #(LET a :Str = $n)\nPRINT \"loaded\"\nEVAL q -> Any";
     super::statics::loaded(refused, |program| {
-        let refusal = program
-            .facts()
-            .typing_refusal(&program.tiers().resting(), code(program));
-        assert!(refusal.is_some(), "`a :Str = $n` refuses the code");
+        let refusal = program.facts().refuses(code(program));
+        assert!(refusal, "`a :Str = $n` refuses the code");
     });
     assert_eq!(
         run(refused),
@@ -315,4 +318,114 @@ fn an_eval_of_a_written_quote_runs_no_overlap_check() {
         "{printed}"
     );
     assert_eq!(checks() - before, at_load, "the run checks nothing");
+}
+
+/// An `EVAL` reports its code's refusal as a load with the call's binding declared words it: the
+/// code's `$Elt` reads `SUBJECT`'s `Elt`, which `SUBJECT 1` solves to `Number` and `SUBJECT true`
+/// to `Bool`.
+#[test]
+fn an_eval_words_its_code_s_refusal_under_the_call_s_binding() {
+    for (argument, name) in [("1", "Number"), ("true", "Bool")] {
+        let source = format!(
+            "EXPR FOR ALL #{{Elt: :(Number | Bool)}} #(SUBJECT x :Elt) -> Any = #(\n  \
+             LET c = #(LET a :($Elt) = \"a\")\n  \
+             EVAL c -> Any\n\
+             )\n\
+             SUBJECT {argument}"
+        );
+        let output = run(&source);
+        let worded = format!("this value is Str, which can never satisfy its annotation {name}\n");
+        assert!(output.contains(&worded), "{output}");
+    }
+}
+
+/// `PICK`, whose overloads tell a number from a string: what a quote's `$(PICK $x)` selects tells
+/// which type name a code's `x` was born under.
+const PICK: &str = "EXPR #(PICK x :Number) -> Str = #(\"n\")\n\
+                    EXPR #(PICK x :Str) -> Number = #(1)\n";
+
+/// A quote's code lies on its encloser's chain and carries the type names around it, so it keeps
+/// the binding it was born under wherever it runs: in another callable, in another call of its
+/// own callable that binds the name otherwise, or spliced among fragments born under others.
+#[test]
+fn a_quote_s_code_keeps_the_binding_it_was_born_under() {
+    let made = format!(
+        "{PICK}EXPR FOR ALL #{{Elt: :(Number | Str)}} #(MAKE x :Elt) -> Any = #(\n  \
+         #($(PICK $x))\n\
+         )\n\
+         EXPR FOR ALL #{{Elt: :(Number | Str)}} #(RUN x :Elt code :Any) -> Any = #(\n  \
+         EVAL code -> Any\n\
+         )\n\
+         LET born = (MAKE 5)\n\
+         PRINT (RUN \"s\" born)\n\
+         PRINT (RUN 7 (MAKE \"t\"))"
+    );
+    assert_eq!(run(&made), "n\n1", "a code run in another callable");
+    let down = format!(
+        "{PICK}EXPR FOR ALL #{{Elt: :(Number | Str)}} \
+         #(DOWN x :Elt code :Any depth :Number) -> Any = #(\n  \
+         LET mine = #($(PICK $x))\n  \
+         MATCH depth WITH #{{0: (EVAL code -> Any), Number: (DOWN \"s\" mine 0)}}\n\
+         )\n\
+         PRINT (DOWN 5 #(0) 1)"
+    );
+    assert_eq!(
+        run(&down),
+        "n",
+        "a code run in a call binding its name otherwise"
+    );
+    let parts = format!(
+        "{PICK}EXPR FOR ALL #{{Elt: :(Number | Str)}} #(MAKE x :Elt) -> Any = #(\n  \
+         #(PRINT $(PICK $x))\n\
+         )\n\
+         LET parts = [(MAKE 5) (MAKE \"s\")]\n\
+         EVAL #($..parts) -> Any"
+    );
+    assert_eq!(
+        run(&parts),
+        "n\n1",
+        "fragments born under two bindings, spliced"
+    );
+}
+
+/// A candidate over a name around a quote's code is rigid in the code, and the run instantiates
+/// it from the type the code carries.
+#[test]
+fn a_candidate_over_a_name_around_code_instantiates_from_the_code_s_binding() {
+    let source = "EXPR FOR ALL #[Elt] #(ONLY x :Elt) -> Elt = #(x)\n\
+                  EXPR FOR ALL #[Outer] #(WRAP a :Outer) -> Any = #(\n  \
+                  #($(ONLY $a))\n\
+                  )\n\
+                  PRINT (EVAL (WRAP 1) -> Any)\n\
+                  PRINT (EVAL (WRAP \"s\") -> Any)";
+    assert_eq!(run(source), "1\ns");
+}
+
+/// A quote written in a quote's code reads a name around both through both codes' captures.
+#[test]
+fn a_quote_in_a_quote_reads_a_name_around_both() {
+    let source = "EXPR FOR ALL #{Elt: :(Number | Str)} #(MAKE x :Elt) -> Any = #(\n  \
+                  #((LET y = $x) (#(PRINT $y)))\n\
+                  )\n\
+                  EVAL (EVAL (MAKE 5) -> Any) -> Any\n\
+                  EVAL (EVAL (MAKE \"s\") -> Any) -> Any";
+    assert_eq!(run(source), "5\ns");
+}
+
+/// Code whose content composes a name around it is unequal to the same quote born under another
+/// binding of it; code that composes none is one value under every binding.
+#[test]
+fn code_equals_code_born_under_a_binding_its_content_composes_alike() {
+    let source = "EXPR FOR ALL #{Elt: :(Number | Str)} #(KEEP x :Elt) -> Any = #(\n  \
+                  #(PICK $x)\n\
+                  )\n\
+                  EXPR FOR ALL #{Elt: :(Number | Str)} #(SUM x :Elt) -> Any = #(\n  \
+                  #(1 + 2)\n\
+                  )\n\
+                  LET v :(Number | Str) = 5\n\
+                  PRINT ((KEEP 5) == (KEEP v))\n\
+                  PRINT ((KEEP 5) == (KEEP 5))\n\
+                  PRINT ((SUM 5) == (SUM v))\n\
+                  PRINT ((SUM 5) == (SUM \"s\"))";
+    assert_eq!(run(source), "false\ntrue\ntrue\ntrue");
 }

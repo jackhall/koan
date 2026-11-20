@@ -123,7 +123,9 @@ pub fn may_hold_record(
             TypeNode::Record { .. }
             | TypeNode::Quantified { .. }
             | TypeNode::Lexical { .. }
-            | TypeNode::Path { .. } => {
+            | TypeNode::Path { .. }
+            | TypeNode::Derived { .. }
+            | TypeNode::Projection { .. } => {
                 return true;
             }
             TypeNode::List { element } => stack.push(element),

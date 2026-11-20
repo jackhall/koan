@@ -394,7 +394,9 @@ fn admits_part_at(
         TypeNode::Any => true,
         TypeNode::Quantified { bound, .. }
         | TypeNode::Lexical { bound, .. }
-        | TypeNode::Path { bound, .. } => admits_part_at(bound.into(), part, types, at),
+        | TypeNode::Path { bound, .. }
+        | TypeNode::Derived { bound, .. }
+        | TypeNode::Projection { bound, .. } => admits_part_at(bound.into(), part, types, at),
         TypeNode::Never => false,
         TypeNode::AnyValue => matches!(
             part,

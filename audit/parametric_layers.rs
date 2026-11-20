@@ -115,26 +115,7 @@ fn counted(depth: u32, source: &str) -> Counted {
 }
 
 /// The kinds a re-run is counted by, in [`RERUNS`]' order.
-const KINDS: [OpenKind; UNMARKED] = [
-    OpenKind::Verdict,
-    OpenKind::NeverSatisfies,
-    OpenKind::Fits,
-    OpenKind::LowerEndOutside,
-    OpenKind::Settles,
-    OpenKind::Solve,
-    OpenKind::Instance,
-    OpenKind::EndRead,
-    OpenKind::TypeNodeOfVariable,
-    OpenKind::Retype,
-    OpenKind::TypeExpression,
-    OpenKind::Unequal,
-    OpenKind::Unclosed,
-    OpenKind::Overlap,
-    OpenKind::Kind,
-    OpenKind::ModuleBinder,
-    OpenKind::TypeValue,
-    OpenKind::ModuleContent,
-];
+const KINDS: [OpenKind; UNMARKED] = OpenKind::ALL;
 
 /// Every re-run `reruns` counts.
 fn all(reruns: &Reruns) -> f64 {

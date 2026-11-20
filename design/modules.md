@@ -235,13 +235,20 @@ its parameters as leaves. At a call it substitutes the arguments' trees for
 those leaves and the call's solution for the function's type parameters, so
 `(MAKESET ints)` is the tree `MAKESET` builds over `ints`. The load reads a
 functor through its body, not its signature alone, as the run identifies a
-module by its content.
+module by its content. A tree's types may be written over the names a run
+binds: a type name the body captures is the type value it names, into which
+the call writes its solution, and a binding writes its types in as it
+substitutes the tree's leaves.
 
-A call that does not unfold is a leaf: one of a function a parameter holds or
-that dispatch picks only at the run, one of a recursive function, or one whose
-result is chosen by a `MATCH` or read out of a list or a dictionary. Bound by a `LET`, it
-is keyed on that binder, so after `LET s = (BUILD p)`, `s.zero` and `s.succ`
-share a type; written inline, it is unlike every tree.
+A keyworded call whose text selects no one overload is a leaf keyed on the
+call — its candidates and its arguments' trees — so two writes of one call are
+one tree at load and under every binding, and a binding that selects one
+overload unfolds it there as a load with that binding declared does. Any
+other call that does not unfold is a leaf too: one of a function a parameter
+holds, one of a recursive function, or one whose result is chosen by a `MATCH`
+or read out of a list or a dictionary. Bound by a `LET`, it is keyed on that
+binder, so after `LET s = (make p)` over a function parameter `make`, `s.zero`
+and `s.succ` share a type; written inline, it is unlike every tree.
 
 A leaf inside the function's body is bound once per call, so an unfolded tree
 keys it on its binder and on what the call substitutes: the arguments' trees

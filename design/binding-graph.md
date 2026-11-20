@@ -143,6 +143,57 @@ Stepping a statement at build time to keep its value is a separate
 abstraction over this one
 ([partial evaluation](../roadmap/one-build/partial-evaluation.md)).
 
+## Where a solve is decided
+
+A generic call solves its callee's group from its arguments'
+[contributions](../src/dispatch/README.md#static-types), each a type written
+over names. The solve is a closed rule like any other the graph stores, and
+it is decided in one of three places:
+
+- **By the text.** Where the load writes the solution over the names its
+  contributions read, the solve is laid with the graph and is no question.
+  The solution is the mapping on the call's `PassesName` edge, and a frame
+  writes its own content in. `KEEP [y]` over `y :Item` solves `Elem` to
+  `LIST OF Item`.
+- **At the bind site that owns it.** Where no type the lattice builds spells
+  the solution over those names, the solve is stored whole, owned by the bind
+  site where the last name it reads is bound. That is a solve which reads a
+  name through its bound, chooses a declared union's member by it, meets with
+  it, or fails at a verdict over it
+  ([solving](../lattice/src/types/solving.md#the-unifier-collects-it-does-not-bind)).
+  Whether it solves is a `NameQuestion`, and each variable's solution is an
+  answered name typed by the solve as its term. An instance of that bind site
+  answers the question, and a frame applies the term: the closed solve, run
+  with its content written in.
+- **At the call.** An argument whose static type is at most `Any`
+  contributes the type its value carries, so only the call can solve.
+
+So no solve is refused, or left to the call, for want of a spelling. One
+over names is closed where its owner is bound, and a closed solve is the
+call's own. An
+[instance of a quantified function](quantified-types.md#where-a-quantified-function-is-instantiated)
+is made where the solve that fixes it is decided. Under
+
+```text
+EXPR #(APPLY 2 TO 1)
+EXPR FOR ALL #[Elt] #(APPLY f :(FN :{x :Elt} -> Elt) TO y :(FN :{x :Number} -> Elt)) -> Elt = #(
+  f {x = 1}
+)
+MODULE lib = (
+  LET pick = (FN FOR ALL #[Elt] :{x :Elt} -> Elt = #(x))
+  EXPR FOR ALL #{Outer: :(FN :{x :Number} -> Number)} #(WRAP g :Outer) -> Any = #(
+    APPLY pick TO g
+  )
+)
+```
+
+`g` at `y` solves `Elt` from `Outer`'s return type, which no lattice type
+spells over `Outer`. `WRAP`'s entry owns that solve, and with it the instance
+of `pick` wanted at `FN :{x :Elt} -> Elt`: a call binding `Outer` to
+`FN :{x :Number} -> Never` makes `pick` at `Elt = Never`. With `g` declared
+`Any` instead, each call of `APPLY` solves `Elt` from the function `g`
+carries and makes the instance itself.
+
 ## Edges
 
 **`BindsAfter`** orders the bind sites of one lexical chain.
@@ -208,7 +259,8 @@ PRINT ((SPIN 5 3).sample)
 
 `SPIN`'s result is `BOX x`'s module at every level, so `sample` is `Number`
 at the build. A tail loop with no arm that ends it keeps its rigids
-([the crate's knots](../bindgraph/README.md#instances)). The same edge carries
+([the crate's knots](../bindgraph/README.md#instances)). Such a loop never
+returns, so nothing that reads its result ever runs. The same edge carries
 an earlier answer of one body to a later question of it: an arm that decides
 a type binds the name later questions read, and no question reads another's
 answer. Only a type crosses the edge, never a value.
@@ -264,7 +316,11 @@ at once ([where answers rest](../bindgraph/README.md#instances)). An instance is
 were dropped evaluates the stored questions again, served the handle's own
 answers, and no reader can tell. Nothing of the build rests in a run region
 but a frame's handles, and the crate keeps no type of a binding: a view holds
-digests, and an answered name's type lives for one evaluation. A type with a
+digests, and an answered name's type lives for one evaluation. A term
+applied to a binding that leaves some of its names open hands back a name for
+the term it leaves, named by that term's content, so every evaluation under
+that binding names it alike; it is derived again each evaluation and never
+kept. A type with a
 frame's content written in is a lattice type, and rests in
 [the lattice's tiers](type-tiers.md).
 
@@ -339,7 +395,12 @@ The embedder also supplies the function that answers one `SiteQuestion` under
 a binding, asking only the `NameQuestion`s the text declares for it. Koan's
 domain is static types and verdicts over the
 [type lattice](../lattice/src/types/README.md), and its function evaluates
-one stored question.
+one stored question. A koan term is a type written over names, or a closed
+rule deferred over them — a piece, a meet, a nominal's declaration, a solve —
+which applying runs with the binding written in, as a load with that binding
+declared runs it. So an answered name whose type no lattice node spells is
+typed by its term, as a [derived name](../src/build/README.md#derived-names)
+is at the load.
 
 The crate owns which bind site owns a question and binds an answered name,
 the edges, the knots, the refusal of a walk that grows, and how a
@@ -384,8 +445,9 @@ is a reference that evaluates the same graph from scratch.
 
 ## Open work
 
-- [Every typing rule states its question](../roadmap/one-build/typing-rules-state-their-questions.md)
-  — the questions the load stores.
+- [Module content and unstorable solves stated as questions](../roadmap/one-build/module-content-questions.md)
+  — the reads of a module binder's content and the solves that hold rather
+  than ask.
 - [The build over the binding graph](../roadmap/one-build/build-over-the-binding-graph.md)
   — koan's load laying it, and the build and the run cells executing it.
 - [An exhaustive check](../roadmap/one-build/exhaustive-check.md) — an
@@ -394,7 +456,9 @@ is a reference that evaluates the same graph from scratch.
 - [The run reads site answers](../roadmap/one-build/run-reads-site-answers.md)
   — the run performing a `SiteAnswer` where it now reads a node's syntax.
 - [A recursion that grows its type is refused](../roadmap/types/growing-recursion-refused.md)
+- [An instance made by the call](../roadmap/types/instance-made-by-the-call.md)
+  — an instance site whose solve only the call decides.
+- [A solve reports what it could not establish](../roadmap/types/solve-reports-what-it-could-not-establish.md)
+  — a stored solve the load keeps its own answers of.
 - [Partial evaluation of the top level](../roadmap/one-build/partial-evaluation.md)
   — values decided at build, over this graph.
-- [Rigids that name their knot](../bindgraph/roadmap/knot-rigids.md) — the
-  names a knot of takes makes equal, judged equal.

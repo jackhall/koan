@@ -142,7 +142,7 @@ proptest! {
                     Drawing::Named => Mark::Named,
                     Drawing::Undecided { holding } => {
                         let kind = match holding {
-                            true => OpenKind::EndRead,
+                            true => OpenKind::ModuleContent,
                             false => OpenKind::Verdict,
                         };
                         Mark::Open(OpenMark::undecided(kind, None, judged))

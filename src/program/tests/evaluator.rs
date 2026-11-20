@@ -449,7 +449,7 @@ fn evaluate<'graph, 'here, 'scratch>(
             let offered = Record::new(step.writer(), &fields, types, &scratch);
             match eval(
                 program,
-                (&door, &facts),
+                (&door, &facts, &scratch),
                 types,
                 code,
                 Value::Record(offered),

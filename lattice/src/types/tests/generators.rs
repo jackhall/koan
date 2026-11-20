@@ -40,7 +40,7 @@ use crate::types::SEED;
 use crate::types::chain::TypeChain;
 use crate::types::handle::{DeclaredType, Handle, KType, Parametric, Scheme, TypeHandle, wrap};
 use crate::types::kind::KKind;
-use crate::types::node::{ContentKey, PathClass, TypeNode};
+use crate::types::node::{ContentKey, DerivedId, PathClass, Step, TypeNode};
 use crate::types::operators::{FoldDirection, ReductionMode};
 use crate::types::schema::{SchemaDraft, SigOrigin};
 use crate::types::shape::shape_slots;
@@ -562,6 +562,7 @@ fn arb_leaf(
     let opaque = arb_opaque(world.clone()).prop_map(KType::raw);
     let lexical = prop_oneof![
         3 => arb_lexical(world.clone()).prop_map(|variable| variable.raw()),
+        2 => arb_projection(world.clone()).prop_map(|variable| variable.raw()),
         1 => arb_path_variable(world.clone()).prop_map(|variable| variable.raw()),
     ];
     // A code kind needing names: a kind from three levels of the code tree, needing one to three
@@ -650,17 +651,107 @@ pub fn arb_opaque(world: World) -> BoxedStrategy<KType> {
         .boxed()
 }
 
-/// A lexical variable: one of two levels, named from the type alphabet, over a ground bound —
-/// weighted toward the `Number | Str` ground, where it may sit above a lower end of one member.
+/// A lexical variable at one of two levels or a derived name, which every relation treats as one,
+/// named from the type alphabet, over a ground bound — weighted toward the `Number | Str` ground,
+/// where it may sit above a lower end of one member.
 pub fn arb_lexical(world: World) -> BoxedStrategy<Parametric> {
     let grounds = world.grounds().len();
     let bound = prop_oneof![2 => Just(world.spanning_ground()), 1 => 0..grounds];
-    (0..2usize, 0..world.type_names.len(), bound, 0..3u8)
+    (0..RIGID_LEVELS, 0..world.type_names.len(), bound, 0..3u8)
         .prop_map(move |(level, name, bound, lower)| {
             let (name, bound) = (world.type_names[name], world.grounds()[bound]);
             with_scratch(|scratch| lexical_over(&world, scratch, level, name, bound, lower))
         })
         .boxed()
+}
+
+/// A projection of a lexical variable at a step its bound guarantees. The bound is a list, a dict
+/// or a record of one to three fields, each child a ground or one such composite over grounds, or a
+/// union of two of one kind, two records sharing a field: a union draws a lower end, and two members
+/// whose pieces meet reduce the projection to that point. A quarter of the time the piece is read
+/// once more, where it guarantees a step of its own.
+pub fn arb_projection(world: World) -> BoxedStrategy<Parametric> {
+    let grounds = world.grounds().len();
+    let ground_world = world.clone();
+    let ground = (0..grounds)
+        .prop_map(move |index| ground_world.grounds()[index])
+        .boxed();
+    let names = prop::sample::subsequence(world.binders.as_ref().clone(), 1..=3);
+    let composite = |world: World, child: BoxedStrategy<KType>| {
+        (0..3u8, child.clone(), child, names.clone())
+            .prop_map(move |(kind, a, b, names)| composite_over(&world, kind, a, b, &names))
+            .boxed()
+    };
+    let child = prop_oneof![2 => ground.clone(), 1 => composite(world.clone(), ground)].boxed();
+    let union_world = world.clone();
+    let union = (
+        0..3u8,
+        (child.clone(), child.clone(), child.clone(), child.clone()),
+        names.clone(),
+        any::<bool>(),
+    )
+        .prop_map(move |(kind, (a, b, c, d), names, same)| {
+            let first = composite_over(&union_world, kind, a, b, &names);
+            let second =
+                composite_over(&union_world, kind, if same { a } else { c }, d, &names[..1]);
+            with_scratch(|scratch| union_world.types.union_of(scratch, &[first, second]))
+        });
+    let bound = prop_oneof![2 => composite(world.clone(), child), 1 => union];
+    (
+        bound,
+        0..RIGID_LEVELS,
+        0..world.type_names.len(),
+        0..3u8,
+        (any::<u8>(), any::<u8>()),
+        prop::bool::weighted(0.25),
+    )
+        .prop_map(move |(bound, level, name, lower, (first, second), again)| {
+            with_scratch(|scratch| {
+                let name = world.type_names[name];
+                let base = lexical_over(&world, scratch, level, name, bound, lower);
+                let piece = project_at(&world, scratch, base, first).unwrap_or(base);
+                match again {
+                    true => project_at(&world, scratch, piece, second).unwrap_or(piece),
+                    false => piece,
+                }
+            })
+        })
+        .boxed()
+}
+
+/// A list of `a` (`kind` 0), a dict from `b` to `a` (1), or a record over `names`, its first field
+/// `a` and the rest `b` (2).
+fn composite_over(world: &World, kind: u8, a: KType, b: KType, names: &[BinderSymbol]) -> KType {
+    let types = &world.types;
+    match kind {
+        0 => types.list(a),
+        1 => types.dict(b, a),
+        _ => {
+            let fields: Vec<_> = names
+                .iter()
+                .enumerate()
+                .map(|(at, name)| (*name, if at == 0 { a } else { b }))
+                .collect();
+            with_scratch(|scratch| types.record(scratch, &fields))
+        }
+    }
+}
+
+/// The `pick`th piece of `base` its bound guarantees, counting round, or `None` where it
+/// guarantees none.
+fn project_at(
+    world: &World,
+    scratch: BumpAllocator<'_>,
+    base: Parametric,
+    pick: u8,
+) -> Option<Parametric> {
+    let steps = [Step::Element, Step::Key, Step::Value]
+        .into_iter()
+        .chain(world.binders.iter().map(|name| Step::Field(*name)));
+    let pieces: Vec<_> = steps
+        .filter_map(|step| world.types.projection(scratch, base, step))
+        .collect();
+    (!pieces.is_empty()).then(|| pieces[usize::from(pick) % pieces.len()])
 }
 
 /// A path class's variable: one of two classes, named from the type alphabet, over a ground
@@ -677,8 +768,12 @@ pub fn arb_path_variable(world: World) -> BoxedStrategy<Parametric> {
         .boxed()
 }
 
-/// The lexical variable at `level` named `name` over `bound`, above a lower end of one member —
-/// the first for `lower` 1, the second for 2 — where `bound` is a union.
+/// The levels [`lexical_over`] reads: two lexical levels, then a derived name.
+const RIGID_LEVELS: usize = 3;
+
+/// The lexical variable at `level` named `name` over `bound`, or a derived name for the last of
+/// [`RIGID_LEVELS`], above a lower end of one member — the first for `lower` 1, the second for 2 —
+/// where `bound` is a union.
 fn lexical_over(
     world: &World,
     scratch: BumpAllocator<'_>,
@@ -688,14 +783,15 @@ fn lexical_over(
     lower: u8,
 ) -> Parametric {
     let types = &world.types;
-    match (types.node(bound), lower) {
-        (TypeNode::Union { members }, 1 | 2) => {
-            let member = members
-                .get(usize::from(lower) - 1)
-                .expect("a union has two members");
-            types.lexical_between(scratch, level, name, member, bound)
-        }
-        _ => types.lexical(level, name, bound),
+    let lower = match (types.node(bound), lower) {
+        (TypeNode::Union { members }, 1 | 2) => members
+            .get(usize::from(lower) - 1)
+            .expect("a union has two members"),
+        _ => KType::NEVER,
+    };
+    match level + 1 == RIGID_LEVELS {
+        true => types.derived(scratch, DerivedId([7, 0]), name, lower, bound),
+        false => types.lexical_between(scratch, level, name, lower, bound),
     }
 }
 
@@ -1254,15 +1350,20 @@ pub enum Placement {
     InSchemeBound,
 }
 
+impl Placement {
+    /// Every placement.
+    pub const ALL: [Placement; 5] = [
+        Placement::Bare,
+        Placement::InSignature,
+        Placement::InApplication,
+        Placement::InBound,
+        Placement::InSchemeBound,
+    ];
+}
+
 /// Any [`Placement`].
 pub fn arb_placement() -> impl Strategy<Value = Placement> {
-    prop_oneof![
-        Just(Placement::Bare),
-        Just(Placement::InSignature),
-        Just(Placement::InApplication),
-        Just(Placement::InBound),
-        Just(Placement::InSchemeBound),
-    ]
+    prop::sample::select(&Placement::ALL[..])
 }
 
 /// `sibling` held at `placement` — the relative type a member names its successor by. A signature
@@ -2209,11 +2310,13 @@ pub fn arb_bounded_head_chain(world: World) -> BoxedStrategy<(KType, KType, KTyp
 /// a binder over one variable at two positions, `b` its instance at the least instance `c`'s two
 /// positions give that variable, and `c` puts two ground types at those positions.
 ///
-/// The binder is a function, or a shape with both slots in one class. A position is the variable
-/// itself — two ground types join into it — or `FN :{x :_} -> Null` over it, where they meet; or
-/// one of each, where the bare position's ground pours in from below, the wrapped one holds its
-/// join with the other ground as a cap, and the instance is the bare one's ground. An optional
-/// filler position holds one generated type in all three.
+/// The binder is a function, or a shape with both slots in one class or in written order. A
+/// position is the variable itself — two ground types join into it — or `FN :{x :_} -> Null` over
+/// it, where they meet; or one of each, where the bare position's ground pours in from below, the
+/// wrapped one holds its join with the other ground as a cap, and the instance is the bare one's
+/// ground. In written order, `b` and `c` put a rigid variable at both positions instead. An
+/// optional filler position holds one generated type in all three. `c` may narrow one position to
+/// `Never`, which lies under every parameter type, so every instance still fits it.
 pub fn arb_instance_chain(
     world: World,
 ) -> BoxedStrategy<(
@@ -2235,78 +2338,106 @@ pub fn arb_instance_chain(
         [false, true],
         [true, false],
     ]);
-    (any::<bool>(), 0..pool.len(), 0..pool.len(), wrapped, filler)
-        .prop_map(move |(shape, g1, g2, wrapped, filler)| {
-            let (g1, g2) = (pool[g1], pool[g2]);
-            let position = |kt, wrap: bool| if wrap { function_of(&world, kt) } else { kt };
-            let variable = world.types.quantified(0, KType::ANY).raw();
-            // The two grounds and the least instance the binder has at them.
-            let ([g1, g2], instance) = with_scratch(|scratch| match wrapped {
-                [false, false] => ([g1, g2], join(&world.types, scratch, g1, g2)),
-                [true, true] => ([g1, g2], meet(&world.types, scratch, g1, g2)),
-                [false, true] => ([g1, join(&world.types, scratch, g1, g2)], g1),
-                [true, false] => ([join(&world.types, scratch, g1, g2), g2], g2),
-            });
-            let (g1, g2, instance) = (g1.raw(), g2.raw(), instance.raw());
-            let build = |quantifiers: &[TypeSymbol], first: Handle, second: Handle| {
-                with_scratch(|scratch| {
-                    if shape {
-                        let (pure, wrap) = (world.keywords[0], world.keywords[1]);
-                        let mut run = vec![
-                            DispatchTokenElement::Keyword(pure),
-                            DispatchTokenElement::Slot(first),
-                            DispatchTokenElement::Keyword(wrap),
-                            DispatchTokenElement::Slot(second),
-                        ];
-                        if let Some(filler) = filler {
-                            run.push(DispatchTokenElement::Keyword(pure));
-                            run.push(DispatchTokenElement::Slot(filler));
+    let narrowed = prop::option::of(0..2usize);
+    let order = (any::<bool>(), any::<bool>());
+    (
+        order,
+        0..pool.len(),
+        0..pool.len(),
+        wrapped,
+        filler,
+        narrowed,
+    )
+        .prop_map(
+            move |((shape, written), g1, g2, wrapped, filler, narrowed)| {
+                let (g1, g2) = (pool[g1], pool[g2]);
+                let position = |kt, wrap: bool| if wrap { function_of(&world, kt) } else { kt };
+                let variable = world.types.quantified(0, KType::ANY).raw();
+                // The two grounds and the least instance the binder has at them.
+                let ([g1, g2], instance) = with_scratch(|scratch| match wrapped {
+                    [false, false] => ([g1, g2], join(&world.types, scratch, g1, g2)),
+                    [true, true] => ([g1, g2], meet(&world.types, scratch, g1, g2)),
+                    [false, true] => ([g1, join(&world.types, scratch, g1, g2)], g1),
+                    [true, false] => ([join(&world.types, scratch, g1, g2), g2], g2),
+                });
+                let (mut g1, mut g2, mut instance) = (g1.raw(), g2.raw(), instance.raw());
+                // In written order an earlier class fixes the variable to the interval a call's
+                // types reach, so the binder's instance is a rigid variable, read as one unknown.
+                if shape && written {
+                    let rigid = world
+                        .types
+                        .lexical(0, world.type_names[1], KType::ANY)
+                        .raw();
+                    (g1, g2, instance) = (rigid, rigid, rigid);
+                }
+                let build = |quantifiers: &[TypeSymbol], first: Handle, second: Handle| {
+                    with_scratch(|scratch| {
+                        if shape {
+                            let (pure, wrap) = (world.keywords[0], world.keywords[1]);
+                            let mut run = vec![
+                                DispatchTokenElement::Keyword(pure),
+                                DispatchTokenElement::Slot(first),
+                                DispatchTokenElement::Keyword(wrap),
+                                DispatchTokenElement::Slot(second),
+                            ];
+                            if let Some(filler) = filler {
+                                run.push(DispatchTokenElement::Keyword(pure));
+                                run.push(DispatchTokenElement::Slot(filler));
+                            }
+                            let slots = run.len() / 2;
+                            let rank = match written {
+                                true => RawRank::Unnumbered,
+                                false => RawRank::Numbered(1),
+                            };
+                            let ranks = vec![rank; slots];
+                            let classes = dense_classes(scratch, &ranks);
+                            world
+                                .types
+                                .shape_scheme_raw(
+                                    scratch,
+                                    quantifiers,
+                                    &[KType::ANY][..quantifiers.len()],
+                                    &run,
+                                    classes,
+                                    KType::NULL.raw(),
+                                )
+                                .0
+                        } else {
+                            let mut params =
+                                vec![(world.binders[1], first), (world.binders[2], second)];
+                            if let Some(filler) = filler {
+                                params.push((world.binders[0], filler));
+                            }
+                            world
+                                .types
+                                .function_scheme_raw(
+                                    scratch,
+                                    quantifiers,
+                                    &[KType::ANY][..quantifiers.len()],
+                                    &params,
+                                    KType::NULL.raw(),
+                                )
+                                .0
                         }
-                        let slots = run.len() / 2;
-                        let ranks = vec![RawRank::Numbered(1); slots];
-                        let classes = dense_classes(scratch, &ranks);
-                        world
-                            .types
-                            .shape_scheme_raw(
-                                scratch,
-                                quantifiers,
-                                &[KType::ANY][..quantifiers.len()],
-                                &run,
-                                classes,
-                                KType::NULL.raw(),
-                            )
-                            .0
-                    } else {
-                        let mut params =
-                            vec![(world.binders[1], first), (world.binders[2], second)];
-                        if let Some(filler) = filler {
-                            params.push((world.binders[0], filler));
-                        }
-                        world
-                            .types
-                            .function_scheme_raw(
-                                scratch,
-                                quantifiers,
-                                &[KType::ANY][..quantifiers.len()],
-                                &params,
-                                KType::NULL.raw(),
-                            )
-                            .0
-                    }
-                })
-            };
-            let a = build(
-                &world.type_names[..1],
-                position(variable, wrapped[0]),
-                position(variable, wrapped[1]),
-            );
-            let b = build(
-                &[],
-                position(instance, wrapped[0]),
-                position(instance, wrapped[1]),
-            );
-            let c = build(&[], position(g1, wrapped[0]), position(g2, wrapped[1]));
-            (world.declared(a), world.declared(b), world.declared(c))
-        })
+                    })
+                };
+                let a = build(
+                    &world.type_names[..1],
+                    position(variable, wrapped[0]),
+                    position(variable, wrapped[1]),
+                );
+                let b = build(
+                    &[],
+                    position(instance, wrapped[0]),
+                    position(instance, wrapped[1]),
+                );
+                let at = |index: usize, kt| match narrowed == Some(index) {
+                    true => KType::NEVER.raw(),
+                    false => position(kt, wrapped[index]),
+                };
+                let c = build(&[], at(0, g1), at(1, g2));
+                (world.declared(a), world.declared(b), world.declared(c))
+            },
+        )
         .boxed()
 }

@@ -12,10 +12,12 @@
 //! that refuses is dropped and the event walked closed, so a closed walk words every refusal.
 //!
 //! Over a witnessed layer whose questions a later binding keeps, and where nothing holds — the
-//! first closing walk re-ran no unit, and no witnessed closing reached a question it did not keep
-//! — no walk runs: the binding's layer is its table of closed types alone, closed over the keys
-//! the first closing walk laid and those the witnessed closings name ([`closed_under`]), which it
-//! reads through. Otherwise the closing walk runs alone over it.
+//! first closing walk re-ran no unit, substituted no open content tree and closed no key reading
+//! a module binder the witness binds otherwise than the binding's levels do, and no witnessed
+//! closing reached a question it did not keep — no walk runs: the binding's layer is its table of
+//! closed types alone, closed over the keys the first closing walk laid and those the witnessed
+//! closings name ([`closed_under`]), which it reads through. Otherwise the closing walk runs alone
+//! over it.
 //!
 //! Every walk lays through the one `lay` its caller hands in: program storage for the load, a
 //! depot slot's bump for a settlement, a scratch bump an activation relays into its region.
@@ -23,9 +25,10 @@
 use crate::build::LayerStore;
 use crate::memory::{Bump, BumpVec, Lays, resident};
 use crate::scope::{
-    Admission, Answered, Binding, Bound, BuildLayer, Closed, EventSite, Facts, Flattened, Frontier,
-    Keeping, KeyedWrites, Levels, Mark, Segment, ShapeError, Shapes, Store, Unknown, Wake,
-    Witnessing, closed_under, keeps, rebound, witnessed_digest,
+    Admission, Answered, Binding, Bound, BuildLayer, Derived, DerivedName, EventSite, Facts,
+    Flattened, Frontier, Keeping, KeyedWrites, Levels, LevelsOver, Mark, Segment, ShapeError,
+    Shapes, Spellings, Store, Unknown, Wake, Witnessing, closed_under, keeps, rebound,
+    witnessed_digest,
 };
 use crate::values::Chain;
 
@@ -81,9 +84,10 @@ pub(crate) struct Resumed<'a> {
 /// adopts, so each frontier is flattened once. A refusal is a closing walk's.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn resumed<'a, 'graph: 'a, 'tier: 'a, L: Language>(
-    (shapes, builtins): (
+    (shapes, builtins, spellings): (
         &'graph Shapes<'graph>,
         &'graph crate::knot::KBuiltins<'graph, 'graph>,
+        Spellings<'_>,
     ),
     (lay, scratch, flat): (impl Lays<'a>, &Bump, &mut Flattened<'_, 'a>),
     facts: Facts<'a>,
@@ -96,9 +100,10 @@ pub(crate) fn resumed<'a, 'graph: 'a, 'tier: 'a, L: Language>(
     match resuming {
         Resuming::Closed => {
             let base = facts.whole(types);
+            let stores = (lay, scratch, spellings);
             let store = match rewakes {
-                true => LayerStore::waking_all(lay, scratch, base, binding),
-                false => LayerStore::new(lay, scratch, base, binding),
+                true => LayerStore::waking_all(stores, base, binding),
+                false => LayerStore::new(stores, base, binding),
             };
             L::facts(shapes, builtins, &store, types, scratch, body)?;
             count_laid();
@@ -115,25 +120,28 @@ pub(crate) fn resumed<'a, 'graph: 'a, 'tier: 'a, L: Language>(
             let types_of = type_names(lay, scratch, own);
             if kept == Keeping::All && !witnessing.holds {
                 let levels = Levels::of(scratch, shapes, binding);
-                let closed = closed_under(lay, scratch, witnessing.keys, &mut |key| match rebound(
-                    types,
-                    scratch,
-                    key,
-                    &mut |level| levels.bound(level),
-                ) {
-                    Closed::Type(closed) => Some(closed),
-                    Closed::Partial(_) | Closed::Same => None,
+                let beneath = facts.beneath(over);
+                let laid = std::cell::RefCell::new(BumpVec::new_in(scratch));
+                let binds = LevelsOver {
+                    levels: &levels,
+                    names: &|id| beneath.derived_name(id),
+                    spellings,
+                    laid: &|name: DerivedName<'_>| laid.borrow_mut().push(name.laid(scratch)),
+                };
+                let closed = closed_under(lay, scratch, witnessing.keys, &mut |key| {
+                    rebound(types, scratch, key, &binds)
                 });
+                let derived = Derived::sorted(lay, scratch, &laid.borrow());
                 count_laid();
                 let admission = Admission::binding(lay, own);
                 return Ok(Resumed {
                     witnessed: None,
-                    layer: BuildLayer::kept(over, types_of, admission, closed),
+                    layer: BuildLayer::kept(over, types_of, admission, (closed, derived)),
                 });
             }
             let checked = checked(lay, scratch, binding, witnessing.names);
             let (writes, _) = closing::<L>(
-                (shapes, builtins),
+                (shapes, builtins, spellings),
                 (lay, scratch),
                 facts.beneath(over),
                 (binding, checked),
@@ -154,11 +162,11 @@ pub(crate) fn resumed<'a, 'graph: 'a, 'tier: 'a, L: Language>(
             #[cfg(test)]
             WITNESS_WALKS.with(|walks| walks.set(walks.get() + 1));
             let base = spine.whole(types);
-            let store = LayerStore::witnessing(lay, scratch, base, own, witness);
+            let store = LayerStore::witnessing((lay, scratch, spellings), base, own, witness);
             if L::facts(shapes, builtins, &store, types, scratch, body).is_err() {
                 // A closed walk words every refusal.
                 return resumed::<L>(
-                    (shapes, builtins),
+                    (shapes, builtins, spellings),
                     (lay, scratch, flat),
                     facts,
                     (binding, own),
@@ -177,7 +185,7 @@ pub(crate) fn resumed<'a, 'graph: 'a, 'tier: 'a, L: Language>(
             let mut held = BumpVec::new_in(scratch);
             held.extend(closings.iter().map(|(_, (_, frontier))| *frontier));
             let (writes, rewrote) = closing::<L>(
-                (shapes, builtins),
+                (shapes, builtins, spellings),
                 (lay, scratch),
                 facts.beneath(provisional),
                 (binding, checked),
@@ -193,10 +201,33 @@ pub(crate) fn resumed<'a, 'graph: 'a, 'tier: 'a, L: Language>(
                 closing.each_type(&mut |ty| keys.push(ty));
             }
             let admission = Admission::keeping(lay, &answered);
+            // The witness's module binders are its layer's, so every binding joining it binds
+            // them alike: a key the closing walk closed as the levels of the binding's chain do
+            // needs no walk. A key the walk never named walks where it reads a module binder.
+            let beneath = facts.beneath(provisional);
+            let levels = Levels::of(scratch, shapes, binding);
+            let by_levels = LevelsOver {
+                levels: &levels,
+                names: &|id| beneath.derived_name(id),
+                spellings,
+                laid: &|_: DerivedName<'_>| {},
+            };
+            let walked = writes.closed();
+            let over_modules = !modules.entries().is_empty()
+                && (keys.iter()).any(|key| match walked.probe(*key) {
+                    Some(made) => made != rebound(types, scratch, *key, &by_levels),
+                    None => crate::scope::reads_module_binders(types, scratch, *key, &|id| {
+                        beneath.derived_name(id)
+                    }),
+                });
             let witnessing = Witnessing {
                 names,
                 keys: crate::memory::collect(lay, keys.iter().copied()),
-                holds: rewrote,
+                // A binding keeping every question closes the keys by the levels of its chain,
+                // which substitute no tree and close no module binder's class or carried type: a
+                // layer whose closing walk substitutes an open tree, or whose keys read a module
+                // binder its witness binds, walks.
+                holds: rewrote || walked.substitutes_trees() || over_modules,
                 digest: witnessed_digest(site, names, modules, admission),
             };
             let witnessed = resident(lay, laid.witnessed(admission, witnessing));
@@ -221,9 +252,10 @@ pub(crate) fn resumed<'a, 'graph: 'a, 'tier: 'a, L: Language>(
 /// it holds anything — re-ran a unit, or reached a question it does not keep from one of the
 /// closings' frontiers `witnessed`. Walking a body rewrites its closing whether or not it wakes.
 fn closing<'a, 'p, 'graph: 'a, 'tier: 'a, L: Language>(
-    (shapes, builtins): (
+    (shapes, builtins, spellings): (
         &'graph Shapes<'graph>,
         &'graph crate::knot::KBuiltins<'graph, 'graph>,
+        Spellings<'p>,
     ),
     (lay, scratch): (impl Lays<'a>, &'p Bump),
     facts: Facts<'a>,
@@ -231,7 +263,12 @@ fn closing<'a, 'p, 'graph: 'a, 'tier: 'a, L: Language>(
     (types, witnessed): (&Chain<'tier, '_, '_, '_>, &[Frontier<'a>]),
     body: Segment,
 ) -> Result<(KeyedWrites<'a, 'p>, bool), ShapeError<'a>> {
-    let store = LayerStore::checking(lay, scratch, facts.whole(types), binding, checked);
+    let store = LayerStore::over_witnessed(
+        (lay, scratch, spellings),
+        facts.whole(types),
+        binding,
+        checked,
+    );
     L::facts(shapes, builtins, &store, types, scratch, body)?;
     let woke = (witnessed.iter()).any(|frontier| store.wakes(*frontier, types) == Wake::Open);
     let writes = store.into_writes();
@@ -289,8 +326,8 @@ fn answered_on<'a, 'x>(
             }
         }
     };
-    for (_, (facts, frontier)) in units.iter() {
-        each(*frontier);
+    for (facts, frontier) in units.iter().filter_map(|(_, record)| record.typed()) {
+        each(frontier);
         (facts.seeds.iter()).for_each(|(_, seed)| each(*seed));
     }
     closings
@@ -299,13 +336,28 @@ fn answered_on<'a, 'x>(
     answered
 }
 
-/// Whether a binding whose levels are `levels` keeps `answered`, judged through `types`.
-pub(crate) fn kept_by(
-    types: &Chain<'_, '_, '_, '_>,
-    scratch: &Bump,
-    levels: &Levels<'_>,
-) -> impl Fn(&Answered<'_>) -> bool {
-    move |answered| keeps(types, scratch, answered, levels)
+/// Whether a binding whose levels are `levels` keeps a candidate's `answered`, judged through
+/// `types`: each derived name its question holds read off the candidate's layers first, which laid
+/// it, then `facts`', and a term no table holds named through `spellings`.
+pub(crate) fn kept_by<'q>(
+    (types, scratch, spellings): (&'q Chain<'_, '_, '_, '_>, &'q Bump, Spellings<'q>),
+    facts: Facts<'q>,
+    levels: &'q Levels<'_>,
+) -> impl Fn(&BuildLayer<'_>, &Answered<'_>) -> bool + 'q {
+    move |candidate, answered| {
+        let names = |id| {
+            candidate
+                .derived_name(id)
+                .or_else(|| facts.derived_name(id))
+        };
+        let binds = LevelsOver {
+            levels,
+            names: &names,
+            spellings,
+            laid: &|_| {},
+        };
+        keeps(types, scratch, answered, &binds)
+    }
 }
 
 /// Count a binding layer laid, walked or not.
@@ -320,7 +372,7 @@ pub(crate) fn count_laid() {
 /// others is no fit.
 pub(crate) fn chosen<'a, T>(
     candidates: impl Iterator<Item = (T, &'a BuildLayer<'a>)>,
-    keeps: &dyn Fn(&Answered<'_>) -> bool,
+    keeps: &dyn Fn(&BuildLayer<'_>, &Answered<'_>) -> bool,
     own: Binding<'_>,
 ) -> Option<(T, Keeping)> {
     let mut best: Option<(T, usize)> = None;
@@ -330,7 +382,10 @@ pub(crate) fn chosen<'a, T>(
         if !modules_alike {
             continue;
         }
-        match candidate.admission().kept(&mut |answered| keeps(answered)) {
+        match candidate
+            .admission()
+            .kept(&mut |answered| keeps(candidate, answered))
+        {
             Keeping::All => return Some((carried, Keeping::All)),
             Keeping::Some(count) if best.as_ref().is_none_or(|(_, held)| count > *held) => {
                 best = Some((carried, count));

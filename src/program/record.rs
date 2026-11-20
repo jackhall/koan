@@ -343,7 +343,11 @@ impl<'graph> Program<'graph> {
     ) -> usize {
         use crate::build::trace::{Bindings, bindings, edge_reads};
         let scratch = Bump::new();
-        let folds = crate::build::fold(self.facts, &scratch, &scratch);
+        let folds = crate::build::fold(
+            (self.facts, &self.tiers.settling(&scratch)),
+            &scratch,
+            &scratch,
+        );
         let before = edge_reads();
         let bodies = bindings(self.facts, folds, limit, &scratch);
         let reads = edge_reads() - before;
@@ -361,7 +365,11 @@ impl<'graph> Program<'graph> {
     #[cfg(test)]
     pub(crate) fn fact_keys(&self, mut each: impl FnMut(Option<&[crate::scope::Slot]>)) {
         let scratch = Bump::new();
-        for folds in crate::build::fold(self.facts, &scratch, &scratch) {
+        for folds in crate::build::fold(
+            (self.facts, &self.tiers.settling(&scratch)),
+            &scratch,
+            &scratch,
+        ) {
             each(folds.keys);
         }
     }

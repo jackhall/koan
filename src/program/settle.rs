@@ -56,8 +56,8 @@ use crate::scheduler::{Ask, Asked, Seek, Sought};
 use crate::scope::{
     Address, Binding, Bound, BuildLayer, CallTrace, Composition, Content, EventSite, Facts, Fixed,
     Flattened, Keyed, Level, Levels, LoadFacts, LoadLayer, Named, Segment, ShapeError, ShapeKind,
-    Shapes, Site, SiteRequest, Slot, SlotMap, Tree, Unknown, Untraced, Written, quote_paths,
-    relaid_error,
+    Shapes, Site, SiteRequest, Slot, SlotMap, Spellings, Tree, Unknown, Untraced, Written,
+    quote_paths, relaid_error,
 };
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::{DeclaredType, KType, Parametric, Term, TypeDigest, TypeNode};
@@ -576,9 +576,10 @@ fn passed_at_its_own_type(
 /// runs for its settlement.
 #[allow(clippy::too_many_arguments)]
 pub(crate) fn layer_of<'a, 'graph: 'a, 'tier: 'a, L: Language>(
-    (shapes, builtins): (
+    (shapes, builtins, spellings): (
         &'a Shapes<'a>,
         &'graph crate::knot::KBuiltins<'graph, 'graph>,
+        Spellings<'_>,
     ),
     (lay, scratch): (impl crate::memory::Lays<'a>, &Bump),
     (facts, candidates, witnesses): (Facts<'a>, &[&'a BuildLayer<'a>], bool),
@@ -602,7 +603,7 @@ pub(crate) fn layer_of<'a, 'graph: 'a, 'tier: 'a, L: Language>(
     // The binding's types resolve before a question is asked of them.
     resting();
     let levels = Levels::of(scratch, shapes, binding);
-    let keeps = resume::kept_by(types, scratch, &levels);
+    let keeps = resume::kept_by((types, scratch, spellings), facts, &levels);
     let candidates = candidates.iter().map(|each| (*each, *each));
     let resuming = match resume::chosen(candidates, &keeps, own) {
         Some((witnessed, kept)) => Resuming::Over(witnessed, kept),
@@ -626,7 +627,7 @@ pub(crate) fn layer_of<'a, 'graph: 'a, 'tier: 'a, L: Language>(
         Resuming::Closed => Resumed {
             witnessed: None,
             layer: walked_layer::<L, _>(
-                (shapes, builtins),
+                (shapes, builtins, spellings),
                 (lay, scratch),
                 (base, facts.innermost()),
                 (binding, own),
@@ -637,7 +638,7 @@ pub(crate) fn layer_of<'a, 'graph: 'a, 'tier: 'a, L: Language>(
         },
         _ => {
             match resume::resumed::<L>(
-                (shapes, builtins),
+                (shapes, builtins, spellings),
                 (lay, scratch, &mut Flattened::new(scratch)),
                 facts,
                 (binding, own),
@@ -721,7 +722,11 @@ pub(crate) fn settled<'a, 'graph, L: Language>(
     }
     // A composition's body indexes its own shapes, never the load's slot maps.
     let settlement = layer_of::<L>(
-        (shapes, program.builtins()),
+        (
+            shapes,
+            program.builtins(),
+            Spellings::new(program.symbols()),
+        ),
         (bump, &scratch),
         (parent, &candidates, false),
         (load, !composed),
@@ -765,7 +770,7 @@ pub(crate) fn staged<'a, 'x>(
                 Bound::Module {
                     carried,
                     tree: match retyped {
-                        true => resident(lay, Tree::retyped(carried, tree)),
+                        true => resident(lay, Tree::retyped_closed(carried, tree)),
                         false => tree,
                     },
                 }
@@ -793,9 +798,10 @@ pub(crate) fn walked_layer<
     L: Language,
     B: crate::scope::RecordSource<'a>,
 >(
-    (shapes, builtins): (
+    (shapes, builtins, spellings): (
         &'a Shapes<'a>,
         &'graph crate::knot::KBuiltins<'graph, 'graph>,
+        Spellings<'_>,
     ),
     (lay, scratch): (impl crate::memory::Lays<'a>, &Bump),
     (base, below): (B, Option<&'a BuildLayer<'a>>),
@@ -804,16 +810,18 @@ pub(crate) fn walked_layer<
     body: crate::scope::Segment,
     named: &mut BumpVec<'_, DeclaredType<Parametric>>,
 ) -> BuildLayer<'a> {
-    let layer = LayerStore::new(lay, scratch, base, binding);
+    let layer = LayerStore::new((lay, scratch, spellings), base, binding);
     let walked = L::facts(shapes, builtins, &layer, types, scratch, body);
     match walked {
         Ok(()) => {
             let (units, closings) = layer.writes().sorted(scratch);
             let mut name = |kt| named.push(kt);
-            units.iter().for_each(|(_, (facts, frontier))| {
-                facts.each_type(&mut name);
-                frontier.each_type(&mut name);
-            });
+            (units.iter().filter_map(|(_, record)| record.typed())).for_each(
+                |(facts, frontier)| {
+                    facts.each_type(&mut name);
+                    frontier.each_type(&mut name);
+                },
+            );
             closings.iter().for_each(|(_, (closing, frontier))| {
                 closing.each_type(&mut name);
                 frontier.each_type(&mut name);
@@ -880,9 +888,10 @@ fn text_order(map: &SlotMap<'_>) -> (u32, u32) {
 /// the same layer where the binding keeps its questions. A layer whose walk refused refuses the
 /// load, naming the first call in text order whose binding it is.
 pub(crate) fn traced<'graph, L: Language>(
-    (shapes, builtins): (
+    (shapes, builtins, spellings): (
         &'graph Shapes<'graph>,
         &'graph crate::knot::KBuiltins<'graph, 'graph>,
+        Spellings<'_>,
     ),
     types: &Chain<'graph, 'graph, 'graph, '_>,
     writer: Writer<'graph, '_>,
@@ -955,7 +964,7 @@ pub(crate) fn traced<'graph, L: Language>(
                 );
                 named.clear();
                 let Some(resumed) = layer_of::<L>(
-                    (shapes, builtins),
+                    (shapes, builtins, spellings),
                     (writer, scratch),
                     (facts, &candidates, true),
                     (&load, true),
@@ -1078,17 +1087,18 @@ pub(crate) fn composed<'a, 'graph, L: Language>(
         &scratch,
     );
     let writer = brand.writer();
-    let store = LoadStore::new(writer, &scratch, shapes, Binding::EMPTY);
+    let spellings = crate::scope::Spellings::new(symbols);
+    let store = LoadStore::new(writer, &scratch, (shapes, spellings), Binding::EMPTY);
     let root = shapes.root();
     let walked = L::facts(shapes, builtins, &store, &types, &scratch, root.segment());
     let unfolded = resident(writer, store.facts(&scratch));
     let facts = resident(
         writer,
-        unfolded.folded(writer, fold(unfolded, writer, &scratch)),
+        unfolded.folded(writer, fold((unfolded, &types), writer, &scratch)),
     );
     let refusal = match walked {
         Err(error) => Some(relaid_error(bump, &scratch, &error)),
-        Ok(()) => (facts.typing_refusal(&types, root))
+        Ok(()) => (facts.typing_refusal(&types, &scratch, root, &mut |_| None))
             .or_else(|| facts.overlap(&types, root))
             .map(|error| relaid_error(bump, &scratch, error)),
     };

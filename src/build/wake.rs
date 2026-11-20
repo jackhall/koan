@@ -96,6 +96,12 @@ impl<'o, 'p> Wakes<'o, 'p> {
         self.latest(frontier, keeps).open.is_some()
     }
 
+    /// Whether the walk checks `unknown`.
+    #[cfg(test)]
+    pub fn checks(&self, unknown: crate::scope::Unknown) -> bool {
+        self.checked.bound(unknown).is_some()
+    }
+
     /// Whether `keeps` keeps `answered`, asked once per question.
     fn kept(&self, answered: &Answered<'_>, keeps: &dyn Fn(&Answered<'_>) -> bool) -> bool {
         let at = std::ptr::from_ref(answered).addr();

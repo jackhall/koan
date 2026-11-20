@@ -71,7 +71,7 @@ impl Asked {
                 retyped,
                 ..
             } => match retyped {
-                true => retyped_content(carried.into(), content),
+                true => retyped_content(DeclaredType::Type(carried), content),
                 false => content,
             },
         }

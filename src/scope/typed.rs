@@ -27,6 +27,7 @@ use crate::values::digest::{DigestHasher, Tag};
 
 use super::keyed::Keyed;
 use super::shape::{Candidate, Coordinate, Segment, Site, Slot};
+use super::tree::UndecidedCall;
 use super::tree::{Binder, Identity, Tree};
 
 /// A callable's type, and how its `FOR ALL` group's declaration order maps onto that type's
@@ -319,9 +320,9 @@ impl fmt::Debug for PathEntry<'_> {
 pub struct Resolution<'graph> {
     pub tree: Tree<'graph>,
     pub resolved: Resolved,
-    /// The signature the root holds at every run, where the path reads no type member off it:
-    /// every run refuses the path.
-    pub lacks: Option<KType>,
+    /// The signature the root holds at every run, written over names, where the path may read no
+    /// type member off it: a run that finds none refuses the path, naming it.
+    pub lacks: Option<Parametric>,
 }
 
 impl Resolution<'_> {
@@ -329,7 +330,7 @@ impl Resolution<'_> {
     pub fn closed(&self) -> Option<KType> {
         match self.resolved {
             Resolved::Closed(closed) => Some(closed),
-            Resolved::Class(_) => None,
+            Resolved::Over(_) | Resolved::Class(_) => None,
         }
     }
 }
@@ -339,6 +340,9 @@ impl Resolution<'_> {
 pub enum Resolved {
     /// The same type at every run.
     Closed(KType),
+    /// A type written over run-bound names, which a binding closes: a pin over a name read where
+    /// the root carries its application at every run.
+    Over(Parametric),
     /// The variable of this class: the paths read at one label, through one application, off
     /// trees of one identity. Every path of one class is one type at every run.
     Class(PathClass),
@@ -589,8 +593,51 @@ impl<'graph> Table<'graph> {
         builtin: impl Fn(usize) -> bool,
         ranked: &mut dyn FnMut(),
     ) -> Option<Self> {
-        // Only the ranking is read, which a scheme's body spells as a type's does.
-        let classes = shapes
+        let classes = Self::classes(types, shapes);
+        let mut outranks = |class, a: usize, b: usize| {
+            ranked();
+            outranks(types, scratch, shapes[a], shapes[b], class)
+        };
+        Self::laid(lay, shapes.len(), classes, &mut outranks, builtin)
+    }
+
+    /// The table of `shapes`, registered shapes under one key and one ranking, each pair's answer
+    /// `asked` of `(class, a, b)`, laid through `lay`: `None` where some pair is left unanswered,
+    /// every pair asked still, or past [`MOST`](Self::MOST).
+    pub fn asked(
+        lay: impl Lays<'graph>,
+        types: &Chain<'_, '_, '_, '_>,
+        scratch: BumpAllocator<'_>,
+        shapes: &[DeclaredType<Parametric>],
+        builtin: impl Fn(usize) -> bool,
+        asked: &mut dyn FnMut(u16, usize, usize) -> Option<bool>,
+    ) -> Option<Self> {
+        let (len, classes) = (shapes.len(), Self::classes(types, shapes));
+        if len > Self::MOST {
+            return None;
+        }
+        let mut answers = BumpVec::with_capacity_in(classes * len * len, scratch);
+        let mut answered = true;
+        for class in 0..classes {
+            let class = u16::try_from(class).expect("a shape has fewer than 65536 slots");
+            for a in 0..len {
+                for b in 0..len {
+                    let answer = (a != b).then(|| asked(class, a, b)).flatten();
+                    answered &= a == b || answer.is_some();
+                    answers.push(answer == Some(true));
+                }
+            }
+        }
+        let at = |class: u16, a: usize, b: usize| answers[(usize::from(class) * len + a) * len + b];
+        answered
+            .then(|| Self::laid(lay, len, classes, at, builtin))
+            .flatten()
+    }
+
+    /// How many classes `shapes`' ranking has: only the ranking is read, which a scheme's body
+    /// spells as a type's does.
+    fn classes(types: &Chain<'_, '_, '_, '_>, shapes: &[DeclaredType<Parametric>]) -> usize {
+        shapes
             .first()
             .map_or(0, |shape| match shape.view(types).body {
                 TypeNode::ExpressionShape { classes, .. } => classes
@@ -598,12 +645,7 @@ impl<'graph> Table<'graph> {
                     .max()
                     .map_or(0, |highest| usize::from(highest) + 1),
                 _ => unreachable!("a registered shape is an expression shape"),
-            });
-        let mut outranks = |class, a: usize, b: usize| {
-            ranked();
-            outranks(types, scratch, shapes[a], shapes[b], class)
-        };
-        Self::laid(lay, shapes.len(), classes, &mut outranks, builtin)
+            })
     }
 
     /// Which of those `admitted` names, by position, survive the class-by-class elimination: at
@@ -655,6 +697,9 @@ pub struct UseStatics<'graph> {
     /// Per argument, the static type its solving slot is solved from — `Unknown` where the call
     /// reads the carried type. Empty for a use every argument of which does.
     pub contributions: &'graph [StaticType<'graph>],
+    /// Where the text does not select one candidate, what an answer selects among, which the
+    /// use's content tree is keyed on ([`Called`](super::Called)).
+    pub undecided: Option<&'graph UndecidedCall<'graph>>,
 }
 
 impl UseStatics<'_> {
@@ -662,11 +707,14 @@ impl UseStatics<'_> {
     pub const UNFIXED: Self = UseStatics {
         narrowing: Narrowing::Full,
         contributions: &[],
+        undecided: None,
     };
 
     /// Whether the load fixed nothing about the use.
     pub fn is_unfixed(&self) -> bool {
-        matches!(self.narrowing, Narrowing::Full) && self.contributions.is_empty()
+        matches!(self.narrowing, Narrowing::Full)
+            && self.contributions.is_empty()
+            && self.undecided.is_none()
     }
 }
 

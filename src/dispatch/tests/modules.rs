@@ -189,6 +189,116 @@ fn a_missing_member_and_an_ascription_that_can_never_hold_refuse_the_load() {
 }
 
 #[test]
+fn a_member_a_parameter_s_parametric_signature_lacks_refuses_the_load_uncalled() {
+    let counter = "SIG Counter FOR ALL #[Carrier] = #[(VAL zero :Carrier)]\n\
+                   MODULE ints = ((LET Carrier = Number) (LET zero = 0) (LET extra = \"e\"))\n";
+    assert_eq!(
+        run(&format!(
+            "{counter}LET peek = (FN :{{m :Counter}} -> Any = #(m.extra))\nPRINT \"start\""
+        )),
+        "load: <test>:3:40: SIG FOR ALL #{Carrier: Any} (zero: Carrier) has no member extra"
+    );
+    // What it declares loads; so does a type member it lacks, which the run refuses, as it does
+    // through a module the load sees whole; and through `:Module`, the argument decides.
+    assert_eq!(
+        run(&format!(
+            "{counter}LET zero = (FN :{{m :Counter}} -> Any = #(m.zero))\n\
+             LET carrier = (FN :{{m :Counter}} -> Any = #(m.Carrier))\n\
+             LET extra = (FN :{{m :Module}} -> Any = #(m.extra))\n\
+             LET missing = (FN :{{m :Counter}} -> Any = #(m.Missing))\n\
+             PRINT (zero {{m = ints}})\nPRINT (carrier {{m = ints}})\nPRINT (extra {{m = ints}})\n\
+             PRINT (missing {{m = ints}})"
+        )),
+        "0\nNumber\ne\nerror: SIG FOR ALL #{Carrier: Any} (zero: Carrier) WITH {Carrier = Number} \
+         has no member Missing\n  in :(FN :{m :SIG FOR ALL #{Carrier: Any} (zero: Carrier)} -> \
+         Any) (missing {m = ints}) at <test>:10:7"
+    );
+    // A type member a `:Module` parameter's module lacks refuses where the argument decides it.
+    assert_eq!(
+        run(&format!(
+            "{counter}LET missing = (FN :{{m :Module}} -> Any = #(\n  LET Ks = :(m.Missing)\n  1\n))\n\
+             PRINT (missing {{m = ints}})"
+        )),
+        "error: SIG (Carrier: Number, zero: Number, extra: Str) has no member Missing\n  \
+         in :(FN :{m :Module} -> Any) (missing {m = ints}) at <test>:7:7"
+    );
+}
+
+/// A module binder no instance of whose signature declares what a slot's signature asks for can
+/// never fill it, so the call refuses at load; a parameter of a meet of signatures is pinned at
+/// its paths member by member, so a member every instance lacks refuses at load too.
+#[test]
+fn a_module_binder_a_slot_s_signature_asks_more_of_refuses_the_load_uncalled() {
+    let signatures = "SIG Counter FOR ALL #[Carrier] = #[(VAL zero :Carrier)]\n\
+                      SIG Extra = #[(VAL extra :Str)]\n\
+                      SIG Named = #[(VAL name :Str)]\n\
+                      MODULE ints = ((LET Carrier = Number) (LET zero = 0) (LET name = \"i\"))\n";
+    assert_eq!(
+        run(&format!(
+            "{signatures}LET wants = (FN :{{x :Extra}} -> Any = #(x.extra))\n\
+             LET peek = (FN :{{m :Counter}} -> Any = #(wants {{x = m}}))\nPRINT \"start\""
+        )),
+        "load: <test>:6:40: this argument is :{x :SIG FOR ALL #{Carrier: Any} (zero: Carrier)}, \
+         which can never satisfy the parameters :{x :SIG (extra: Str)} of :(FN :{x :SIG (extra: \
+         Str)} -> Any)"
+    );
+    assert_eq!(
+        run(&format!(
+            "{signatures}LET peek = (FN :{{m :(Counter & Named)}} -> Any = #(m.extra))\n\
+             PRINT \"start\""
+        )),
+        "load: <test>:5:50: SIG (name: Str) & SIG FOR ALL #{Carrier: Any} (zero: Carrier) has no \
+         member extra"
+    );
+    assert_eq!(
+        run(&format!(
+            "{signatures}LET both = (FN :{{m :(Counter & Named)}} -> Any = #(m.name))\n\
+             LET zeroed = (FN :{{m :(Counter & Named)}} -> Any = #(m.zero))\n\
+             PRINT (both {{m = ints}})\nPRINT (zeroed {{m = ints}})"
+        )),
+        "i\n0"
+    );
+}
+
+/// A call the text selects unfolds over a run-bound name, so what the callee builds refuses at
+/// load; a call only a binding selects is left to the binding, which refuses at the build.
+#[test]
+fn a_call_over_a_name_unfolds_where_the_text_selects_it() {
+    let built =
+        |zero: &str| format!("(MODULE built OVER #[e] = (LET Zero = {zero}))\n    built\n  )\n");
+    let subject = |inner: &str| {
+        format!(
+            "EXPR FOR ALL #[Elt] #(SUBJECT x :Elt) -> Any = #(\n  {inner}\
+             LET a = (MAKE x)\n  LET z :(a.Zero) = \"no\"\n  z\n)\nPRINT \"start\"\n\
+             PRINT (SUBJECT 5)"
+        )
+    };
+    let refused = "this value is Str, which can never satisfy its annotation Number";
+    let nested = subject(&format!(
+        "EXPR #(MAKE e :Elt) -> Module = #(\n    {}  ",
+        built("Number")
+    ));
+    assert_eq!(run(&nested), format!("load: <test>:7:3: {refused}"));
+    let quantified = format!(
+        "EXPR FOR ALL #[Tee] #(MAKE e :Tee) -> Module = #(\n  {}{}",
+        built("Number").replace("\n    ", "\n  "),
+        subject("")
+    );
+    assert_eq!(run(&quantified), format!("load: <test>:7:3: {refused}"));
+    let overloads = subject(&format!(
+        "EXPR #(BUILD e :Number) -> Module = #(\n    {}  EXPR #(BUILD e :Str) -> Module = #(\n    \
+         {}  ",
+        built("Number"),
+        built("Str")
+    ))
+    .replace("(MAKE x)", "(BUILD x)");
+    assert_eq!(
+        run(&overloads),
+        format!("load: <test>:11:3: {refused}\n  in (SUBJECT 5) at <test>:15:7")
+    );
+}
+
+#[test]
 fn what_the_load_cannot_see_faults_at_run() {
     let hide = "EXPR #(HIDE x :Any) -> Any = #(x)\n";
     assert_eq!(
@@ -984,6 +1094,22 @@ fn a_value_retyped_in_place_stays_at_most_its_signature() {
     assert!(refused.contains("no overload of `ECHO _`"), "{refused}");
 }
 
+/// A body holding a value no module binder names in place, beside a binder that names it, is
+/// refused at the load as the hold alone is: the binder is no unknown the run binds behind the
+/// hold's back.
+#[test]
+fn a_hold_in_place_beside_a_binder_of_its_operand_is_refused_at_the_load() {
+    for go in [
+        "EXPR #(MIX g :Any) -> Any = \
+         #((LET x = g) (PRINT (ECHO (g :! Counter))) (ECHO (x :! Counter)))\nPRINT (MIX ints)",
+        "EXPR #(BOTH g :Any) -> Any = \
+         #((LET m = (g :! Counter)) (PRINT (ECHO m)) (ECHO (g :! Counter)))\nPRINT (BOTH ints)",
+    ] {
+        let refused = run(&format!("{ECHO}{go}"));
+        assert!(refused.contains("no overload of `ECHO _`"), "{refused}");
+    }
+}
+
 /// A pin over a variable solves it once across the call: two arguments that pin it to unrelated
 /// types refuse the call, and one that agrees solves it.
 #[test]
@@ -1461,4 +1587,22 @@ fn a_signature_in_a_recursive_group_types_a_list_of_modules() {
          Number)), next: Number): its representation is SIG (count: SIG FOR ALL #{Carrier: Any} \
          (zero: Carrier, succ: :(FN :{x :Carrier} -> Carrier)), next: :(End | More))"
     );
+}
+
+/// A value member read through a variable bounded by a signature declaring it lies under the
+/// bound's member at load, so an annotation that member can never satisfy refuses the load, and
+/// one it satisfies runs.
+#[test]
+fn a_member_read_through_a_signature_bound_lies_under_the_bound_s_member() {
+    let has = "SIG Has = #[(VAL f :Number)]\nMODULE hm = ((LET f = 1))\nLET h :Has = hm\n";
+    let program = |body: &str| {
+        format!(
+            "{has}EXPR FOR ALL #{{Elt: Has}} #(GET x :Elt) -> Any = #(\n  {body}\n)\nPRINT (GET h)"
+        )
+    };
+    assert_eq!(
+        run(&program("LET z :Str = x.f\n  z")),
+        "load: <test>:5:3: this value is Number, which can never satisfy its annotation Str"
+    );
+    assert_eq!(run(&program("LET z = x.f\n  z")), "1");
 }

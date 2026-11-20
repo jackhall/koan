@@ -29,7 +29,7 @@ use crate::knot::module::view;
 use crate::memory::{Bump, BumpAllocator, BumpVec, Lays, Writer, resident};
 use crate::scope::{
     Bare, Binding, Bound, BuildLayer, EventSite, Facts, Flattened, Keeping, RecordSource, Relay,
-    Sealing, Segment, ShapeError, Tree, Unknown, relaid_error,
+    Sealing, Segment, ShapeError, Spellings, Tree, Unknown, relaid_error,
 };
 use crate::values::{Chain, ContentDigest, Value};
 
@@ -75,7 +75,7 @@ pub fn bound_of<'o>(
         (true, None) => Tree::Digest(bare.digest(types, scratch), as_view),
         (false, _) => {
             let member = resident(lay, Tree::Digest(bare.digest(types, scratch), as_view));
-            Tree::retyped(carried, member)
+            Tree::retyped_closed(carried, member)
         }
     };
     memo.filter(|memo| memo.get().is_none())
@@ -200,9 +200,10 @@ pub(crate) fn activated<'here, L: Language>(
     let mine = Binding::laid(&bump, &mut bound);
     let resuming = match activating {
         Activating::Closed => {
+            let stores = (&bump, &scratch, Spellings::new(program.symbols()));
             let layer = match rewakes {
-                true => LayerStore::waking_all(&bump, &scratch, base, binding),
-                false => LayerStore::new(&bump, &scratch, base, binding),
+                true => LayerStore::waking_all(stores, base, binding),
+                false => LayerStore::new(stores, base, binding),
             };
             // The base the frame's chain rests on: the load's shapes, or its composition's.
             let walked = L::facts(
@@ -246,7 +247,11 @@ pub(crate) fn activated<'here, L: Language>(
     };
     let mut flat = Flattened::new(&scratch);
     let resumed = resumed::<L>(
-        (facts.shapes(), program.builtins()),
+        (
+            facts.shapes(),
+            program.builtins(),
+            Spellings::new(program.symbols()),
+        ),
         (&bump, &scratch, &mut flat),
         facts,
         (binding, mine),

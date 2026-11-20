@@ -29,7 +29,7 @@ use super::signatures::{Application, applications, applications_under};
 use super::stored::Linked;
 use super::substitute::{instantiate_quantified, substitute_parameters};
 use super::tiers::Habitat;
-use super::unify::{Collector, UnifyFailure, admits};
+use super::unify::{Collector, Interval, Solution, SolveRecord, UnifyFailure, admits};
 use super::walk::Variance;
 use super::walk::unary::{Visit, visit};
 
@@ -130,25 +130,17 @@ fn collect_function<'run, T>(
     .is_ok()
 }
 
-/// Why a scheme has no least instance under a wanted function type.
-pub enum InstanceFailure<'s> {
-    /// The scheme does not fit the wanted type: no instance lies under it.
-    NoInstance,
-    /// The scheme fits, but no contribution from the wanted type reaches these variables of its
-    /// group, by group index, so nothing fixes them.
-    Unfixed(BumpVec<'s, usize>),
-}
-
 /// The least instance of `scheme` under `wanted`, a function type: *fits*' instantiation clause
 /// for a function scheme, answering the solution in group order rather than whether one exists.
-/// Each variable some contribution reaches takes its least instance; one none reaches is named,
-/// never read as its bound.
-pub(super) fn instance_under<'s, 'run: 's, T: Naming<'run>>(
+/// Each variable some contribution reaches takes its least instance; one none reaches is reported
+/// unreached ([`SolveRecord::reached`]), never read as its bound. Unsolved where the scheme does not
+/// fit `wanted`. Each interval is its solution: the instance is wanted at one type.
+pub(super) fn instance_under<'s, 'run: 's, T: Naming<'run> + Eq>(
     types: &TypeChain<'run, impl Habitat<'run>>,
     scratch: BumpAllocator<'s>,
     scheme: Linked<'run>,
     wanted: Linked<'run>,
-) -> Result<BumpVec<'s, T>, InstanceFailure<'s>> {
+) -> SolveRecord<'s, T> {
     let (group, body) = scheme.split();
     debug_assert!(!group.bounds.is_empty(), "a scheme binds a group");
     debug_assert!(
@@ -160,18 +152,20 @@ pub(super) fn instance_under<'s, 'run: 's, T: Naming<'run>>(
         "an instance is wanted at a function type"
     );
     let mut collector = Collector::<T>::new(types, scratch, group.bounds);
-    if !collect_function(types, scratch, body, wanted, &mut collector) {
-        return Err(InstanceFailure::NoInstance);
-    }
-    let solution = collector
-        .solve(types)
-        .map_err(|_| InstanceFailure::NoInstance)?;
-    let mut unfixed = BumpVec::new_in(scratch);
-    unfixed.extend((0..group.bounds.len()).filter(|index| !collector.reached(*index)));
-    if unfixed.is_empty() {
-        Ok(solution)
-    } else {
-        Err(InstanceFailure::Unfixed(unfixed))
+    let solution = collect_function(types, scratch, body, wanted, &mut collector)
+        .then(|| collector.solve(types).ok())
+        .flatten();
+    SolveRecord {
+        solved: solution.map(|solution| {
+            let types = solution.leak();
+            Solution {
+                types,
+                intervals: scratch
+                    .alloc_slice_fill_iter(types.iter().map(|each| Interval::point(*each))),
+            }
+        }),
+        reached: collector.reach(),
+        reproducible: collector.reproducible(types),
     }
 }
 

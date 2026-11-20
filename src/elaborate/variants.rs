@@ -1,8 +1,5 @@
-//! A union's variants, as a `MATCH … UNDER` clause names them: the members of the clause's
-//! `Union` node, in stored order. A label names the member of its name: a declared variant by its
-//! own name, and a variant applied to arguments, as `:(Number -> Option)` applies each, by its
-//! constructor's. A structural member, `Number` in `:(Maybe | Number)`, has no name, so no label
-//! names it. Read through the lattice's public node doors only.
+//! A `MATCH … UNDER`'s arms against its union clause, whose variants
+//! [`variants`](crate::scope::variants) reads.
 //!
 //! [`arms_under`] checks a `MATCH … UNDER`'s arms against its clause beside the guards' check
 //! ([`guards`](super::guards)), wherever the walk closes the clause: its labels and its coverage.
@@ -13,39 +10,9 @@ use crate::memory::{BumpAllocator, BumpVec};
 use crate::parse::{ExpressionPart, KExpression};
 use crate::scope::{
     BodyShape, Guard, ShapeError, Static, StaticType, TypeExpression, each_part, source_of,
+    variant_label, variant_named, variants,
 };
-use crate::symbols::Symbol;
-use crate::type_lattice::{KType, TypeNode};
 use crate::values::Chain;
-
-/// `union`'s members in stored order, or `None` where `union` is no `Union` node.
-pub fn variants<'tier>(
-    types: &Chain<'tier, '_, '_, '_>,
-    union: KType,
-) -> Option<impl Iterator<Item = KType> + 'tier> {
-    match super::judge::closed_type_node(types, union) {
-        TypeNode::Union { members } => Some(members.iter()),
-        _ => None,
-    }
-}
-
-/// The member of `union` that `label` names, or `None` where none does or `union` is no union.
-pub fn variant_named(types: &Chain<'_, '_, '_, '_>, union: KType, label: Symbol) -> Option<KType> {
-    variants(types, union)?.find(|member| variant_label(types, *member) == Some(label))
-}
-
-/// The name a label gives `variant`: a declared variant's own, an applied one's constructor's, and
-/// `None` for a structural member.
-pub fn variant_label(types: &Chain<'_, '_, '_, '_>, variant: KType) -> Option<Symbol> {
-    let declared = match super::judge::closed_type_node(types, variant) {
-        TypeNode::ConstructorApply { constructor, .. } => constructor,
-        _ => variant,
-    };
-    match super::judge::closed_type_node(types, declared) {
-        TypeNode::SetMember { name, .. } => Some(name.symbol()),
-        _ => None,
-    }
-}
 
 /// Check each `MATCH … UNDER` among `shape`'s `expressions` whose union clause `typed` closes:
 /// the clause is a union, each label names one of its variants, and, where no `_` arm is written,
@@ -65,7 +32,10 @@ pub fn arms_under<'graph, 'o>(
         let statement = &shape.body()[expression.statement as usize];
         let at = source_of(shape, statement, expression.site).unwrap_or(statement.source);
         if variants(types, union).is_none() {
-            return Err(ShapeError::NotUnion { clause: union, at });
+            return Err(ShapeError::NotUnion {
+                clause: union.into(),
+                at,
+            });
         }
         let node = clause_node(statement, expression.part);
         let mut labels = BumpVec::new_in(scratch);

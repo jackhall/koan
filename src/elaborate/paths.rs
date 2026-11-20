@@ -38,8 +38,11 @@ pub fn declared_through(
             _ => return None,
         }
     }
-    let signature = match judge::type_node(marks, types, held) {
-        TypeNode::Signature { .. } => judge::closed(marks, types, held)?,
+    // A variable — the type a `:Module` binder carries, a view's name — is a signature pinning
+    // every head parameter at every binding, so no application: the path reads its own member.
+    let signature = match judge::node_unless_variable(types, held)? {
+        // A signature is closed content, which no substitution enters.
+        TypeNode::Signature { .. } => judge::static_of(types, held)?,
         TypeNode::SignatureApply { signature, .. } => signature,
         _ => return None,
     };

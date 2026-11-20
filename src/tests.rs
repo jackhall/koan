@@ -67,16 +67,18 @@ pub(crate) fn composed_syntax() -> crate::scope::ComposedSyntax {
 
 /// The load's walk of koan over `shapes`, as a program's load runs it: what a suite below the
 /// language reads facts through where it needs the walk's, beside the walk's refusal, rendered.
-pub(crate) fn walked<'graph>(
+pub(crate) fn walked<'graph, 'x>(
     shapes: &'graph crate::scope::Shapes<'graph>,
     builtins: &'graph crate::knot::KBuiltins<'graph, 'graph>,
     types: &crate::values::Chain<'graph, 'graph, 'graph, '_>,
     writer: crate::memory::Writer<'graph, 'graph>,
-    scratch: crate::memory::BumpAllocator<'_>,
-    symbols: &crate::symbols::SymbolInterner,
+    scratch: crate::memory::BumpAllocator<'x>,
+    symbols: &'x crate::symbols::SymbolInterner,
 ) -> Result<&'graph crate::scope::LoadFacts<'graph>, String> {
-    crate::program::walked::<crate::dispatch::Koan>(shapes, builtins, types, writer, scratch)
-        .map_err(|error| error.display(symbols, types).to_string())
+    crate::program::walked::<crate::dispatch::Koan>(
+        shapes, builtins, types, writer, scratch, symbols,
+    )
+    .map_err(|error| error.display(symbols, types).to_string())
 }
 
 /// Koan's load walk over the records `store` keeps, rooted at `at`: what a test language below

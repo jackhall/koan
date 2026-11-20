@@ -50,12 +50,11 @@
 
 use crate::knot::{KReading, KValue, Knotted, composed};
 use crate::memory::{BumpAllocator, BumpVec, Writer};
-use crate::scope::{Bare, Pick, Revealed, Sealing, ViewRecord, ViewSlots};
+use crate::scope::{Bare, Pick, Revealed, Sealing, ViewRecord, ViewSlots, view_signature};
 use crate::symbols::{BinderSymbol, TypeSymbol, ValueSymbol};
 use crate::type_lattice::{
     ContentKey, DeclaredType, DispatchTokenElement, FitsFailure, KType, Members, Parametric,
-    SchemaDraft, SigSchema, TypeNode, member as bound_member, substitute_carriers,
-    substitute_parameters,
+    SigSchema, TypeNode, member as bound_member, substitute_carriers, substitute_parameters,
 };
 use crate::values::{Chain, ContentDigest, Digests, TypeValue, Value, fit_solution};
 
@@ -1103,33 +1102,4 @@ fn carriers<'x>(
             (*name, to)
         }),
     )
-}
-
-/// The signature the view itself carries: each of `sig`'s parameters a manifest member at what `to`
-/// gives it, each manifest member, value slot and keyworded member at its declared type read under
-/// `to`. A view's signature is a module's, so it has no parameters, and it fits the signature it
-/// was ascribed to.
-pub(super) fn view_signature(
-    sig: &SigSchema<'_>,
-    to: Members<'_, TypeSymbol, KType>,
-    types: &Chain<'_, '_, '_, '_>,
-    scratch: BumpAllocator<'_>,
-) -> KType {
-    let mut draft = SchemaDraft::new(scratch);
-    for (name, _) in sig.parameters.iter().copied() {
-        draft.insert_manifest(
-            name,
-            bound_member(to, name).expect("every parameter is bound"),
-        );
-    }
-    for (name, fixed) in sig.manifest_members.iter().copied() {
-        draft.insert_manifest(name, substitute_parameters(types, scratch, fixed, to));
-    }
-    for (name, declared) in sig.value_slots.iter().copied() {
-        draft.insert_value_slot(name, substitute_parameters(types, scratch, declared, to));
-    }
-    for declared in sig.keyworded.iter().copied() {
-        draft.push_keyworded(substitute_parameters(types, scratch, declared, to));
-    }
-    types.signature(scratch, draft)
 }

@@ -1,7 +1,10 @@
 //! A **layer**: a resumption's store over the facts it extends. Its binding extends its base's,
 //! a unit re-runs where its frontier reaches a mark the layer **checks** that the binding does not
 //! keep ([`Wakes`]), and every other read falls to the base. It writes only what re-runs, so its
-//! writes are keyed, sized by what it wrote ([the store](README.md#the-store)).
+//! writes are keyed, sized by what it wrote ([the store](README.md#the-store)). It lays each
+//! [derived name](README.md#derived-names) its walk meets that no layer beneath holds, named
+//! through its [`Spellings`], and a binding gives a derived name its term handed again with the
+//! binding written in ([`StoreBinds`]).
 //!
 //! A **witnessing** layer binds only its base's names and the event's module binders, and leaves
 //! the event's type names rigid: its walk asks the doors' questions of them under the witness
@@ -11,8 +14,9 @@
 use crate::memory::resident;
 use crate::memory::{BumpAllocator, BumpVec, Lays};
 use crate::scope::{
-    Answered, Binding, Bound, ClosedTypes, Closing, Frontier, Held, Identity, KeyedWrites, Levels,
-    Question, RecordSource, Segment, Slot, Store, UnitFacts, UnitId, Unknown, Wake, answer, keeps,
+    Answered, Binding, Bound, ClosedTypes, Closing, DerivedId, DerivedName, DerivedTerm, Frontier,
+    Held, Holder, Identity, KeyedWrites, Levels, Question, RecordSource, Segment, Spellings, Store,
+    StoreBinds, UnitFacts, UnitId, UnitRecord, Unknown, Wake, answer, keeps,
 };
 use crate::values::Chain;
 
@@ -31,21 +35,30 @@ pub(crate) struct LayerStore<'o, 'p, L, B> {
     levels: Levels<'p>,
     wakes: Wakes<'o, 'p>,
     writes: KeyedWrites<'o, 'p>,
+    /// What it names a derived name through.
+    spellings: Spellings<'p>,
+    /// Whether its walk is a closing walk over a witnessed layer: what the tests count held units
+    /// by.
+    #[cfg(test)]
+    over_witnessed: bool,
 }
 
 impl<'o, 'p, L: Lays<'o>, B: RecordSource<'o>> LayerStore<'o, 'p, L, B> {
     /// A layer over `base` binding `binding`, which binds every unknown the base's binds alike: it
     /// checks what `binding` binds that the base's does not.
-    pub(crate) fn new(lay: L, scratch: BumpAllocator<'p>, base: B, binding: Binding<'o>) -> Self {
+    pub(crate) fn new(
+        (lay, scratch, spellings): (L, BumpAllocator<'p>, Spellings<'p>),
+        base: B,
+        binding: Binding<'o>,
+    ) -> Self {
         let fresh = fresh(lay, scratch, &base, binding);
-        Self::checking(lay, scratch, base, binding, fresh)
+        Self::checking((lay, scratch, spellings), base, binding, fresh)
     }
 
     /// A layer over `base` binding `binding`, as [`new`](Self::new), checking `checked`: names
     /// `binding` binds whose marks a record laid over a witnessed layer may hold answered.
     pub(crate) fn checking(
-        lay: L,
-        scratch: BumpAllocator<'p>,
+        (lay, scratch, spellings): (L, BumpAllocator<'p>, Spellings<'p>),
         base: B,
         binding: Binding<'o>,
         checked: Binding<'o>,
@@ -68,19 +81,38 @@ impl<'o, 'p, L: Lays<'o>, B: RecordSource<'o>> LayerStore<'o, 'p, L, B> {
             witness: Binding::EMPTY,
             wakes: Wakes::new(checked, Binding::EMPTY, binding, scratch),
             writes: KeyedWrites::new(scratch),
+            spellings,
+            #[cfg(test)]
+            over_witnessed: false,
         }
+    }
+
+    /// A closing walk's layer over `base`, whose innermost layer is a witnessed one, checking
+    /// `checked`, as [`checking`](Self::checking) is.
+    pub(crate) fn over_witnessed(
+        stores: (L, BumpAllocator<'p>, Spellings<'p>),
+        base: B,
+        binding: Binding<'o>,
+        checked: Binding<'o>,
+    ) -> Self {
+        let store = Self::checking(stores, base, binding, checked);
+        #[cfg(test)]
+        let store = LayerStore {
+            over_witnessed: true,
+            ..store
+        };
+        store
     }
 
     /// A layer over `base` binding `binding`, as [`new`](Self::new), waking every record whose
     /// frontier meets anything `binding` binds: one a base layered over another walked without
     /// its names still names them.
     pub(crate) fn waking_all(
-        lay: L,
-        scratch: BumpAllocator<'p>,
+        stores: (L, BumpAllocator<'p>, Spellings<'p>),
         base: B,
         binding: Binding<'o>,
     ) -> Self {
-        Self::checking(lay, scratch, base, binding, binding)
+        Self::checking(stores, base, binding, binding)
     }
 
     /// A witnessing layer over `base`: it binds the base's names and the module binders of `own`,
@@ -88,8 +120,7 @@ impl<'o, 'p, L: Lays<'o>, B: RecordSource<'o>> LayerStore<'o, 'p, L, B> {
     /// earlier event of the cell bound. A module binder is bound, never witnessed: every read of
     /// one reads its content.
     pub(crate) fn witnessing(
-        lay: L,
-        scratch: BumpAllocator<'p>,
+        (lay, scratch, spellings): (L, BumpAllocator<'p>, Spellings<'p>),
         base: B,
         own: Binding<'o>,
         witness: Binding<'o>,
@@ -120,6 +151,9 @@ impl<'o, 'p, L: Lays<'o>, B: RecordSource<'o>> LayerStore<'o, 'p, L, B> {
             witness,
             wakes: Wakes::new(checked, witness, binding, scratch),
             writes: KeyedWrites::new(scratch),
+            spellings,
+            #[cfg(test)]
+            over_witnessed: false,
         }
     }
 
@@ -167,8 +201,12 @@ impl<'o, L: Lays<'o>, B: RecordSource<'o>> Store<'o> for LayerStore<'o, '_, L, B
         self.binding.bound(unknown)
     }
 
+    /// This walk's record of `unit`, where it wrote one: none where it marked the unit unreached.
     fn fact(&self, unit: UnitId) -> Option<(&'o UnitFacts<'o>, Frontier<'o>)> {
-        self.writes.unit(unit).or_else(|| self.base.unit(unit))
+        match self.writes.unit(unit) {
+            Some(record) => record.typed(),
+            None => self.base.unit(unit),
+        }
     }
 
     fn close(&self, body: Segment) -> Option<(&'o Closing<'o>, Frontier<'o>)> {
@@ -177,15 +215,17 @@ impl<'o, L: Lays<'o>, B: RecordSource<'o>> Store<'o> for LayerStore<'o, '_, L, B
 
     fn wakes(&self, frontier: Frontier<'_>, types: &Chain<'_, '_, '_, '_>) -> Wake {
         let scratch = self.scratch;
+        let binds = StoreBinds::of(&self.levels, self);
         (self.wakes).wakes(frontier, &|answered| {
-            keeps(types, scratch, answered, &self.levels)
+            keeps(types, scratch, answered, &binds)
         })
     }
 
     fn checks_open(&self, frontier: Frontier<'_>, types: &Chain<'_, '_, '_, '_>) -> bool {
         let scratch = self.scratch;
+        let binds = StoreBinds::of(&self.levels, self);
         (self.wakes).checks_open(frontier, &|answered| {
-            keeps(types, scratch, answered, &self.levels)
+            keeps(types, scratch, answered, &binds)
         })
     }
 
@@ -199,11 +239,10 @@ impl<'o, L: Lays<'o>, B: RecordSource<'o>> Store<'o> for LayerStore<'o, '_, L, B
         if self.witness.is_empty() {
             return None;
         }
-        let mut witnessed = |level| match self.witness.bound(unknown_of(level)?)? {
-            Bound::Type(closed) => Some(closed),
-            Bound::Module { .. } => None,
-        };
-        let (substituted, changed) = question.substituted(types, scratch, &mut witnessed);
+        // A derived name's witness is its term handed again under the chain's binding and the
+        // witness.
+        let witnessed = StoreBinds::of(&self.levels, self).witnessing(self.witness, unknown_of);
+        let (substituted, changed) = question.substituted(types, scratch, &witnessed);
         if !changed {
             return None;
         }
@@ -221,16 +260,39 @@ impl<'o, L: Lays<'o>, B: RecordSource<'o>> Store<'o> for LayerStore<'o, '_, L, B
         (self.witness.entries().iter()).for_each(|(unknown, _)| each(*unknown));
     }
 
-    fn holding(&self, held: Held) -> Option<UnitId> {
-        self.base.holding(held).map(|(unit, _)| unit)
+    #[cfg(test)]
+    fn held(&self, frontier: Frontier<'_>) -> bool {
+        use crate::scope::Mark;
+        self.over_witnessed
+            && (frontier.marks().iter()).any(|noted| {
+                matches!(noted.mark, Mark::Open(open) if open.answered.is_none())
+                    && self.wakes.checks(noted.unknown)
+            })
     }
 
-    fn holders(&self, segment: Segment, identity: Identity, each: &mut dyn FnMut(UnitId, Slot)) {
+    fn holding(&self, held: Held) -> Option<(UnitId, &'o UnitFacts<'o>)> {
+        self.base.holding(held)
+    }
+
+    fn holders(&self, segment: Segment, identity: Identity, each: &mut dyn FnMut(UnitId, Holder)) {
         self.base.holders(segment, identity, each);
     }
 
-    fn write(&self, unit: UnitId, facts: &'o UnitFacts<'o>, frontier: Frontier<'o>) {
-        self.writes.write(unit, facts, frontier);
+    /// The name a layer beneath holds for `term`, else the one this walk laid, else laid now.
+    fn derived(&self, types: &Chain<'_, '_, '_, '_>, term: DerivedTerm<'_>) -> DerivedName<'_> {
+        if let Some(held) = self.derived_name(term.id()) {
+            return held;
+        }
+        let name = (self.spellings).named((types, self.scratch), term);
+        self.writes.write_derived(name)
+    }
+
+    fn derived_name(&self, id: DerivedId) -> Option<DerivedName<'_>> {
+        (self.base.derived_name(id)).or_else(|| self.writes.derived_name(id))
+    }
+
+    fn write(&self, unit: UnitId, record: UnitRecord<'o>) {
+        self.writes.write(unit, record);
     }
 
     fn write_close(&self, body: Segment, closing: &'o Closing<'o>, frontier: Frontier<'o>) {

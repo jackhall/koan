@@ -214,8 +214,7 @@ of a cell the names the cell's earlier events witnessed — that the binding
 does not keep ([resumption](#resumption)), and reads one closed where its
 frontier reaches any mark on a name its chain binds. A **witnessing** layer
 store binds only its base's names and the event's module binders, so the
-names it witnesses read rigid, and also stands a record that reaches an
-undecided question that holds. Both answers come from one pass
+names it witnesses read rigid. Both answers come from one pass
 per frontier through the [wake memo](wake.rs), since frontiers share
 structure. A settlement and an activation each run the walk over a layer
 store, as the load does for each binding [the trace](#the-trace) names. The
@@ -265,17 +264,27 @@ load with the binding declared words it.
 
 Every judgement over a run-bound name goes through a **door**
 ([`judge.rs`](../elaborate/judge.rs)), so a unit record is a function of the
-text and its door answers. Each unknown a unit gathers is **open** or
-**named**: open where a door read the variable through its ends and reached
-no answer that holds at every binding within them — a *maybe* verdict, a type
-expression left unknown, a type read off an end and laid in a fact — and
-named where the unit record only names the variable. An open mark is a
-**question**: its kind, the slot type it was judged against, the type it
-judged and the door's other inputs, beside the **answer** the walk took, or
-**undecided** where no binding answered it. A door that hands back a type —
-an end read, a type node destructured, a piece, an instance, a type
-expression, a module's content — always leaves its question undecided, and
-its unit **holds**: it re-runs under every binding. A frontier **meets** a
+text and its door answers. A door hands back a discrete answer — a verdict, a
+bool, a kind, a stamp, the branch a rule takes — or a type written over the
+names: the variable itself, a
+[projection](../../lattice/src/types/vocabulary.md#the-node-vocabulary), or a
+[derived name](#derived-names); never a type read off a variable's end. Each
+unknown a unit gathers is **open** or **named**: open where a door judged the
+variable and reached no answer that holds at every binding within its ends — a
+*maybe* verdict, a fit that may fail, a branch the binding decides — and named
+where the unit record only names the variable. An open mark is a **question**
+with finitely many answers: its kind and the types it judged, written over
+names, beside the **answer** the walk took, or **undecided** where no binding
+answered it. A refusal keeps the types it was judged over the same way, and is
+worded by reading them, the binding written in, through their bounds. So a
+unit re-runs only under a binding that changes an answer it took. Three marks
+stand for no question, and a unit they leave undecided **holds**, re-running
+under every binding: a `FOR ALL` bound naming a run-bound name, which the run
+registers (`ForAllBound`); a read of a module binder's content the run builds
+(`ModuleContent`); and a solve no stored solve stands for, one over an
+argument the load left untyped or over more slots than a stored solve's bits
+(`Unreproduced`). A
+frontier **meets** a
 binding where it reaches, through its own unknowns or its reads, a question
 on a name the binding binds that the binding does not **keep**: an undecided
 question keeps no binding, and an answered one keeps every binding under
@@ -291,24 +300,23 @@ binding of the body; so is one whose questions the binding keeps.
 A resumption that **witnesses** a binding runs two walks over its body. The
 first leaves the binding's names rigid, as the load reads them, and asks each
 door rigid first and the binding, as **witness**, where the rigid answer is
-undecided: a door with a discrete answer — a verdict, a bool, a stamp, a
-kind — takes the witness's answer and records it, and a door that hands back
-a type answers rigidly and leaves its question undecided. The witness is
-reached only through the doors and hands back no type, so no fact is built
-from it. The first walk re-runs only the units whose frontier reaches a
-question the witness does not keep and none undecided that holds, and lays
-their rigid unit records, each beside its questions, as the **witnessed
-layer**, which binds the event's module binders alone. The second walk is a closed resumption over it:
-it re-runs every unit whose frontier reaches a question the binding does not
-keep — a held unit, and every unit that read one — and lays those unit
-records and the table of closed types as the **binding's layer**, a child of
-the witnessed one. A later binding is found by identity first. Else one that
-keeps every question of a witnessed layer, where nothing holds — the second
-walk re-ran no unit, and no witnessed closing record reached a question it
-does not keep — lays only its table of closed types, over the types the
-second walk's table and the witnessed closing records name, and walks
-nothing; one that keeps some, or whose layer holds, runs the second walk
-alone over it. The load's traced layers and an activation's events witness —
+undecided: every door takes the witness's answer to its question and records
+it, and a type it hands back is written over names. The witness is reached
+only through the doors and hands back no type, so no fact is built from it.
+The first walk re-runs only the units whose frontier reaches a question the
+witness does not keep, and lays their rigid unit records, each beside its
+questions, as the **witnessed layer**, which binds the event's module binders
+alone. The second walk is a closed resumption over it: it re-runs every unit
+whose frontier reaches a question the binding does not keep, and lays those
+unit records and the table of closed types as the **binding's layer**, a child
+of the witnessed one. A later binding is found by identity first. Else one
+that keeps every question of a witnessed layer lays only its table of closed
+types, over the types the second walk's table and the witnessed closing
+records name, and walks nothing — save where the second walk re-ran a unit,
+substituted a content tree written over names, or closed a type reading a
+module binder the witness binds, where it runs the second walk again,
+re-running only what it wakes; one that keeps some runs the second walk alone
+over it. The load's traced layers and an activation's events witness —
 an event only where its memo has room to keep the witnessed layer, else it
 walks closed — and a traced binding reads over a witnessed layer the load
 laid for its body beneath the same layer, where it keeps the questions. A
@@ -317,12 +325,12 @@ under the root or a load layer it reads over a witnessed layer the load laid
 for its body beneath that layer, where its binding keeps the questions, and
 otherwise walks closed. A module binder is bound, never witnessed, so a
 witnessed layer serves only its binders' content and a later event reads
-them bound through it; and the first walk holds every
-unit that finds a module binder, a path or a class by content, hit or miss,
-since what a held unit holds is not in the witnessed layer. Keeping a question
+them bound through it; a unit that finds a module binder, a path or a class
+by content records a question about the binder it finds, save a read of
+content the run builds, which holds. Keeping a question
 costs no walk: the binding is written into its types — a bare name by the
 binding itself, a name nested in a composite by substitution into that one
-type — and the closed door asked. Every refusal is worded by a closed walk:
+type, a derived name by its term applied — and the closed door asked. Every refusal is worded by a closed walk:
 where the first walk refuses, it is discarded and the event walked closed. A unit that re-runs reads an absorbed unit record with the binding
 written in: the walk closes each type the unit record names over the levels
 its binding binds on that unit record's own chain, never over a lexical type
@@ -413,8 +421,7 @@ included, and the decisions made at the next event, a bounded number, the
 earliest laid dropped. Every event runs its first walk over its chain's spine,
 witnessing every name the spine's witnessed layers witnessed — its cell's
 earlier events' and its enclosers' — beside its own, so its decisions serve
-every binding of those names that keeps their questions; an encloser's held
-unit stays undecided there, so a unit reading it holds. A cell probes identity
+every binding of those names that keeps their questions. A cell probes identity
 first and the questions after, follows the tree while some decision at each
 event admits its binding, and decides from the first event none admits, laying
 a binding's layer under the decision that admitted it, or a new decision
@@ -425,10 +432,9 @@ answers nothing a later binding or a cell beneath could keep, and else joins
 the decision keeping most. A join that walks nothing lays no binding's layer,
 which admits by an identity a deepening encloser never repeats: the cell walks
 on from the decision it joined, and the memo's room goes to decisions that
-cost a walk. So a loop alternating two bindings decides each once, one binding
-a novel type each hop re-runs only the units held, a statement seam under an
-entry bound to a novel type each hop decides once per answer its questions
-take, and so does a block, or a callee born in the loop's body and called in
+cost a walk. So a loop alternating two bindings decides each once, an entry
+or a statement seam bound to a novel type each hop decides once per answer its
+questions take, and so does a block, or a callee born in the loop's body and called in
 its tail chain; and a tail loop through mutually recursive bodies decides each
 body once. A callee under a settlement of its own whose closure carries its
 encloser's layers walks closed at its entry, waking every name the two leave
@@ -442,10 +448,11 @@ equal to a decision made from scratch.
 ### Unknowns
 
 Every lexical variable is an unknown, a `USING … SCOPE` block's surfaced names
-and a quote's holes, `\` marks and `$` names among them, and so is a type
-binder the walk leaves unknown and a module binder: every fact reading a
-module binder's content tree — a view, a path resolution, an unfold over it —
-waits on it. A binding removes a parameter's content, which is its path class
+and a quote's holes, `\` marks and `$` names among them, and so is a module
+binder: every fact reading a module binder's content tree — a view, a path
+resolution, an unfold over it — waits on it. A [derived name](#derived-names)
+is no unknown: a fact reading one waits on the names its term reads. A binding
+removes a parameter's content, which is its path class
 ([paths](../dispatch/README.md#paths)), a `FOR ALL` group's solution and a
 `:Type` argument at frame entry; a lexical variable's type at the statement
 that binds it; and a path variable's hop at the statement that binds its
@@ -468,8 +475,58 @@ the same whatever order the members are typed in. A callable body nested in a
 member is walked after the component and reads the fellow's fact. The facts
 form no cycle outside a component.
 
-The lattice is untouched: `substitute`, *fits*, `judge_by_class` and the
-unifier are what the rules call, and this module lives downstream of them.
+### Derived names
+
+A rule may need a type written over run-bound names that no lattice node
+spells: a piece of a variable whose bound does not guarantee it; the result of
+a read or a call whose case a binding decides; a meet; a nominal
+declared over a run-bound name; a solve a run would not reproduce. Such a type
+is a **derived name**: a rigid variable named by its term's content, between
+closed ends that hold every binding's type, beside its **term**, which is the spelling
+or the closed rule it stands for, written over the names it reads. A binding
+gives a derived name the type its term gives, applied by the closed rule a
+load with that binding declared runs at its site, so a unit record naming one
+is absorbed as any rigid record is, and a mark on one is a mark on each name
+its term reads. Under
+
+```koan
+EXPR FOR ALL #[Elt] #(AT xs :Elt) -> Any = #((xs 0))
+PRINT (AT [5, 6])
+```
+
+the read asks which container `Elt` is bound to, and types the read as a
+derived name decided by that question: on its list answer the read's type is
+the piece `(ELEMENT OF Elt)`, so `Elt := LIST OF Number` gives it `Number`.
+
+A rule hands back the same type at load and under every binding: closed where
+its operands are, else written over the names, or a derived name. A type that
+depends on a question's answer is a **decided** derived name: the question,
+beside one type per answer, each written over names by the load, so a binding
+gives it the type on the answer the closed door gives. A type no question
+decides, a piece or a meet, is typed by the rule's closed function over its
+operands. The answer chooses only a discrete outcome beside: a refusal, which
+candidate a call selects, which sub-rule runs. A call that keeps several
+candidates under a binding is typed by one decided name per candidate,
+joined, so it gives exactly the survivors' join.
+
+A derived name is named by its term's content, as a class is, so two sites
+retyping to `Elt` share one name and every walk that meets a term names it
+alike. A walk lays each name it meets that no layer beneath it holds, in its
+own layer. A binding gives a derived name what the rule gives its term with
+the binding written in: a type where the binding closes the term, else the
+name of the term it leaves. A unit record absorbed under a binding and one
+re-run under it so hold one type, by one handle.
+
+A module binder's binding is written into the path variables of its classes
+(**module substitution**), and its tree over each content tree that is a leaf
+on the binder (**tree substitution**). So a path or a view over a module
+binder is named, and a binding of the binder writes its content in.
+
+A derived name is a lattice node, a rigid variable beside the lexical and
+path variables, which every relation treats as a lexical one. The lattice
+holds its term's digest, never its term: `substitute`, *fits*,
+`judge_by_class` and the unifier are what the rules call, and this module
+lives downstream of them.
 
 ## Frontiers and seams
 
@@ -949,8 +1006,8 @@ bindings; the closed one-shot load is the oracle.
   declared on its unit's chain.
 - **A resumption re-runs only what it wakes.** Each of its walks re-runs
   exactly the units whose frontier, over the layers that walk reads, meets
-  the names it checks — a witnessing walk none whose frontier reaches an
-  undecided question that holds — each once.
+  the names it checks, each once. A closing walk over a witnessed layer whose
+  binding keeps every question re-runs none.
 - **A unit record whose questions a binding keeps commutes with binding.** A
   unit record that is not open over a binding's names, or whose every
   question on them the binding keeps, substituted by the binding, is the
@@ -969,11 +1026,14 @@ bindings; the closed one-shot load is the oracle.
 - **An activation is a restart.** A frame's activation equals a restart with
   its bindings declared, and a [memoized](#activations) one equals one
   decided from scratch.
-- **Levels are the shape's, and path names their content's.** No unit
-  record changes a level a shape numbers: a spelled path keeps the level the
-  shape numbers it at, and a class and a path no type spells are named by their
-  content, so every walk names them alike. Two builds of one text agree on
-  every text fact.
+- **Levels are the text's, and path names their content's.** No unit
+  record changes a level the shape numbers: a spelled path keeps the level
+  the shape numbers it at, and a derived name, a class and a path no type
+  spells are named by their content, so every walk names them alike. Two
+  builds of one text agree on every text fact.
+- **A derived name holds its binding's type.** Its term, applied to a binding,
+  gives a type within its ends: the type a load with that binding declared
+  gives its site, or the name of the term the binding leaves open.
 - **Order does not matter.** Reordering independent declarations, or
   independent statements of a callable's body, changes no fact but where each
   statement sits.
@@ -1030,9 +1090,12 @@ and the scheduler hands a step its door and no more.
   slot map.
 - [Callees built by a call traced](../../roadmap/one-build/built-module-members.md)
   — a callee that is a call's result traced, and its layer laid by the load.
-- [Every typing rule states its question](../../roadmap/one-build/typing-rules-state-their-questions.md)
-  — no unit held: each judgement about a bound name a question with finitely
-  many answers.
+- [Module content and unstorable solves stated as questions](../../roadmap/one-build/module-content-questions.md)
+  — `ModuleContent` and `Unreproduced` no longer holding.
+- [A `FOR ALL` bound over a run-bound name](../../roadmap/types/run-bound-for-all-bounds.md)
+  — `ForAllBound` no longer holding.
+- [A run-bound name bound to a signature type](../../roadmap/types/run-bound-signature-binding.md)
+  — a binding that makes a value binder a module binder, as a fresh load does.
 - [The build over the binding graph](../../roadmap/one-build/build-over-the-binding-graph.md)
   — the load laying [the binding graph](../../design/binding-graph.md), and
   the build and every run cell executing it, the depot holding compositions

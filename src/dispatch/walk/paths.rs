@@ -21,9 +21,10 @@
 //! two member reads through one module share a type. A value the run retypes by its fit at such a
 //! signature — a parameter, an annotated `LET`, a `LET` binding a call, ascription or `EVAL`
 //! whole, a module member read through a chain of module members, an arm's `it` — is typed
-//! exactly at that pinned application, rooted at its binder; one written in place, or read through
-//! a record's field, stays at most its signature. A path written through a binder exact at an
-//! application pinning its label reads that pin.
+//! exactly at that pinned application, rooted at its binder, and so is a `:!` held in place over a
+//! chain of module members rooted at a module binder, pinned at the paths through that chain; any
+//! other value written in place, or read through a record's field, stays at most its signature. A
+//! path written through a binder exact at an application pinning its label reads that pin.
 //!
 //! A path variable reaches a static type only where its class is **reachable**, by the class's
 //! content alone ([`reachable`](Pass::reachable)): a binder on the chain the reading shape reads
@@ -39,11 +40,11 @@ use crate::elaborate::{SignatureMember, applied_member, path_binding, signature_
 use crate::memory::{BumpBackedMap, BumpVec, bump_table, collect};
 use crate::parse::ExpressionPart;
 use crate::scope::{
-    Address, Binder, BodyShape, Callable, CaptureSlot, CaptureSource, Coordinate, Held, Identity,
-    Leaf, PathEntry, PathName, Position, Registered, Resolution, Resolved, Root, Segment,
-    ShapeError, ShapeKind, Site, Slot, SpelledRoot, Static, StaticCallable, StaticRegistered,
-    StaticType, Store, Target, Tree, Unknown, Variable as Located, part_of, path_spelling,
-    source_of,
+    Address, Binder, BodyShape, Callable, CaptureSlot, CaptureSource, Closed, Coordinate, Held,
+    Holder, Identity, Leaf, PathEntry, PathName, Position, Registered, Resolution, Resolved, Root,
+    Segment, ShapeError, ShapeKind, Site, Slot, SpelledRoot, Static, StaticCallable,
+    StaticRegistered, StaticType, Store, Target, Tree, Unknown, Variable as Located, part_of,
+    path_spelling, source_of,
 };
 use crate::symbols::{BinderSymbol, TypeSymbol, ValueSymbol};
 use crate::type_lattice::{
@@ -86,7 +87,7 @@ struct Entry<'o> {
 /// A path of a class beside its resolution: what the class reads. Any of the class's paths says
 /// alike, since its content names the class; so a read of it gathers nothing.
 #[derive(Clone, Copy)]
-struct ClassOf<'o> {
+pub(super) struct ClassOf<'o> {
     entry: PathEntry<'o>,
     resolution: Resolution<'o>,
 }
@@ -103,13 +104,14 @@ struct BinderRoot<'o> {
     site: Site,
 }
 
-/// Where a shape reads a class's variable: a path of the class rooted at a binder it reaches,
-/// through `chain`, beside where it reads the binder, and what the class reads.
+/// Where a shape reads a class's variable: a path of the class rooted at a binder it reaches or a
+/// view it writes in place, through `chain`, beside where it reads a binder root, and what the
+/// class reads. A root written in place has no coordinate: the run reads no rigid fact.
 #[derive(Clone, Copy)]
 pub(super) struct Witness<'o> {
-    binder: Binder,
+    root: Root,
     chain: &'o [ValueSymbol],
-    pub(super) coordinate: Coordinate,
+    pub(super) coordinate: Option<Coordinate>,
     of: ClassOf<'o>,
 }
 
@@ -216,8 +218,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         root: Segment,
         name: PathName,
     ) -> Option<(PathEntry<'o>, Resolution<'o>, Tag)> {
-        self.read_by_content();
-        let unit = self.store.holding(Held::Path(root, name))?;
+        let (unit, _) = self.store.holding(Held::Path(root, name))?;
         let level = self
             .level_of(unit.segment)
             .filter(|at| self.standing(*at))?;
@@ -230,8 +231,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     /// off a record holding one of its paths, one at or before the unit birthing the next level
     /// where that record is a standing body's.
     fn recovered(&self, root: Segment, class: PathClass) -> Option<ClassOf<'o>> {
-        self.read_by_content();
-        let unit = self.store.holding(Held::Class(root, class))?;
+        let (unit, _) = self.store.holding(Held::Class(root, class))?;
         let (_, facts) = match self.level_of(unit.segment).filter(|at| self.standing(*at)) {
             Some(level) => self.stood_record(level, unit.unit)?,
             None => self.read_unit(unit)?,
@@ -470,6 +470,15 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         {
             self.open_path = Some(at);
         }
+        self.settle(level, entry, resolution);
+        Ok(resolution.resolved)
+    }
+
+    /// Note that `entry`, a path of the chain `level` sits on, resolved to `resolution`, as the
+    /// unit running resolved it.
+    fn settle(&mut self, level: usize, entry: PathEntry<'o>, resolution: Resolution<'o>) {
+        let table = self.table(level);
+        let root = self.paths[table].root.segment();
         let tag = self.innermost();
         let table = &mut self.paths[table];
         if let Some(held) = table.entries.get_mut(&entry.name) {
@@ -481,7 +490,25 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 .paths
                 .push(((root, entry.name), (entry, resolution)));
         }
-        Ok(resolution.resolved)
+    }
+
+    /// What `entry`, a path rooted at the view written in place whose tree is `tree`, resolves
+    /// to: its class over that tree, settled now where the walk has not. Resolving it as any other
+    /// root would type the view again.
+    fn resolve_in_place(&mut self, level: usize, entry: PathEntry<'o>, tree: Tree<'o>) -> Resolved {
+        let table = self.table(level);
+        if let Some((_, Some((resolution, tag)))) = self.paths[table].at(entry.name) {
+            self.gather(tag);
+            return resolution.resolved;
+        }
+        let resolved = Resolved::Class(self.class_of(level, entry, tree));
+        let resolution = Resolution {
+            tree,
+            resolved,
+            lacks: None,
+        };
+        self.settle(level, entry, resolution);
+        resolved
     }
 
     /// `entry`'s resolution, read from `level`, beside where its root is written where it is
@@ -491,7 +518,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         level: usize,
         entry: PathEntry<'o>,
     ) -> Read<'o, (Resolution<'o>, Option<crate::source::SourceRef>)> {
-        let (types, scratch) = (self.types, self.scratch);
+        let types = self.types;
         let (root, held, exact, site, at) = match entry.root {
             Root::Binder(binder) => match self.binder_root(level, binder)? {
                 Some(BinderRoot {
@@ -529,13 +556,12 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                         self.chain[level].statement = was;
                         let at =
                             (source_of(shape, node, site)).expect("the part lies in its statement");
-                        (
-                            tree,
-                            judge::exactly(self, types, typed),
-                            None,
-                            site,
-                            Some(at),
-                        )
+                        // An exact root over names resolves its paths by class, which a
+                        // binding substitutes, so reading it closed judges nothing.
+                        let held = judge::exact(self, types, typed)
+                            .then(|| judge::static_of(types, typed.upper))
+                            .flatten();
+                        (tree, held, None, site, Some(at))
                     }
                     None => (Tree::Leaf(Leaf::Unnamed(site)), None, None, site, None),
                 }
@@ -545,7 +571,8 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             (self.read_chain(root, entry.chain, site)?).unwrap_or(Tree::Leaf(Leaf::Unnamed(site)));
         let through = match entry.through {
             None => Some(None),
-            Some(through) => judge::closed(self, types, through).map(Some),
+            // An application over names is read by class, which a binding rebinds.
+            Some(through) => judge::static_of(types, through).map(Some),
         };
         // The signature of the module the root names, or the chain reaches, where the load knows
         // it exactly: the path is then what the run reads off it.
@@ -555,6 +582,33 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 .map(|built| built.view),
             _ => None,
         };
+        let (resolved, lacks) = match self.resolved_off(entry, through, (held, exact, view), tree) {
+            Ok(resolved) => (resolved, None),
+            Err(lacks) => (Resolved::Class(self.class_of(level, entry, tree)), lacks),
+        };
+        Ok((
+            Resolution {
+                tree,
+                resolved,
+                lacks,
+            },
+            at,
+        ))
+    }
+
+    /// What `entry` reads off its root's content tree `tree`, through its application closed
+    /// (`through`, `None` where it is not): a root holding the signature `held` exactly, exact at
+    /// `exact`, or a view showing `view`. The type it is at every run; else `Err` beside the
+    /// signature every run finds no such member in. Module substitution runs it again over what a
+    /// binding makes the root ([`class_bound`](Self::class_bound)).
+    fn resolved_off(
+        &self,
+        entry: PathEntry<'o>,
+        through: Option<Option<KType>>,
+        (held, exact, view): (Option<KType>, Option<Parametric>, Option<KType>),
+        tree: Tree<'o>,
+    ) -> Result<Resolved, Option<Parametric>> {
+        let (types, scratch) = (self.types, self.scratch);
         let closed = through.and_then(|through| {
             let read = |held: KType, chain: &[ValueSymbol]| {
                 path_binding(types, scratch, held, chain, entry.label, through)
@@ -588,24 +642,49 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         // class: at every run the root carries that application, so the path binds what the pin
         // does.
         let read_pin = exact.and_then(|exact| self.read_pin(exact, entry.chain, entry.label));
-        let (resolved, lacks) = match (read_pin, pinned.or(closed).or_else(bound)) {
-            (Some(resolved), _) => (resolved, None),
-            (None, Some(closed)) => (Resolved::Closed(closed), None),
+        match (read_pin, pinned.or(closed).or_else(bound)) {
+            (Some(resolved), _) => Ok(resolved),
+            (None, Some(closed)) => Ok(Resolved::Closed(closed)),
             // A root of an exact signature through a known application that reads no type here
-            // reads none at any run.
-            (None, None) => (
-                Resolved::Class(self.class_of(level, entry, tree)),
-                held.filter(|_| through.is_some()),
-            ),
+            // reads none at any run, and nor does a root exact at a signature over names that
+            // declares no such member. A root exact at a variable — the type a `:Module` binder
+            // carries, a view's name — is what a run finding no such member names.
+            (None, None) => Err(match held {
+                Some(held) => through.and(Some(Parametric::from(held))),
+                None => exact.filter(|exact| {
+                    judge::node_unless_variable(types, *exact).is_none()
+                        || self.declares_none(*exact, entry.chain, entry.label)
+                }),
+            }),
+        }
+    }
+
+    /// Whether a module of `exact`, a root's exact static type written over names, holds after
+    /// the value members `chain` no type member `label` at any binding: a signature declares its
+    /// members whatever its pins are.
+    fn declares_none(&self, exact: Parametric, chain: &[ValueSymbol], label: TypeSymbol) -> bool {
+        let (types, scratch) = (self.types, self.scratch);
+        let signature = |held: Parametric| {
+            matches!(
+                judge::node_unless_variable(types, held),
+                Some(TypeNode::Signature { .. } | TypeNode::SignatureApply { .. })
+            )
         };
-        Ok((
-            Resolution {
-                tree,
-                resolved,
-                lacks,
-            },
-            at,
-        ))
+        let mut held = exact;
+        for step in chain {
+            if !signature(held) {
+                return false;
+            }
+            match signature_member(self, types, scratch, held, BinderSymbol::Value(*step)) {
+                Some(SignatureMember {
+                    declared: DeclaredType::Type(inner),
+                    unpinned: None,
+                }) => held = inner,
+                _ => return false,
+            }
+        }
+        signature(held)
+            && signature_member(self, types, scratch, held, BinderSymbol::Type(label)).is_none()
     }
 
     /// What a path reads of the binder `binder` its root names, read from `level`. `None` where
@@ -626,21 +705,44 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         else {
             return Ok(None);
         };
-        let tree = match shape.position_of(binder.slot) == Position::PARAMETER {
-            true => self.leaf_on(Scope::Chain(home), binder.slot)?,
+        // A parameter's path reads its class alone, which a binding of the parameter closes by
+        // module substitution: it names the parameter. Any other root's path reads its content.
+        let parameter = shape.position_of(binder.slot) == Position::PARAMETER;
+        let tree = match parameter {
+            true => Tree::bound(binder, &[], None),
             false => self.slot_tree(Scope::Chain(home), binder.slot, site)?,
         };
         // A module binder the binding binds is exactly the type it carries. One it leaves unbound
-        // over open content is what the path waits on, whatever its static type.
+        // over open content is what the path waits on, whatever its static type: a parameter by
+        // name, any other root by its content and each binder its content's leaves read.
         let unknown = self.unknown_at(home, binder.slot);
         let bound = self.binds(unknown);
         if bound.is_none() && !tree.closed() {
-            self.note_content(unknown, self.binder_fact(home, binder.slot));
+            match parameter {
+                true => self.note_named_unknown(unknown),
+                // A root's paths close by module substitution where its tree reads only module
+                // binders: a binding of them substitutes the tree, which shows the signature or
+                // the carriers the paths are read off.
+                false if self.substitutes(tree) => self.note_named_of(tree),
+                false => {
+                    self.note_content(unknown, self.binder_fact(home, binder.slot));
+                    self.note_content_of(tree);
+                }
+            }
         }
-        let (held, exact) = match (bound, self.binder_at(home, binder.slot)) {
+        // A parameter's static type is read for its paths' sake, which name it already.
+        let typed = match parameter {
+            true => self.binder_fact(home, binder.slot),
+            false => self.binder_holding(home, binder.slot, Some(tree)),
+        };
+        let (held, exact) = match (bound, typed) {
             (Some(carried), _) => (Some(carried), None),
+            // An exact root over names resolves its paths by class, which a binding substitutes,
+            // so reading it closed judges nothing.
             (None, DeclaredType::Type(typed)) => (
-                judge::exactly(self, self.types, typed),
+                (judge::exact(self, self.types, typed))
+                    .then(|| judge::static_of(self.types, typed.upper))
+                    .flatten(),
                 (typed.lower == typed.upper).then_some(typed.upper),
             ),
             (None, DeclaredType::Scheme(_)) => (None, None),
@@ -672,7 +774,198 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         if let Some(class) = judge::path_class(types, pin) {
             return Some(Resolved::Class(class));
         }
-        judge::closed(self, types, pin).map(Resolved::Closed)
+        // A pin over names is that type at every run, which a binding closes.
+        Some(match judge::static_of(types, pin) {
+            Some(closed) => Resolved::Closed(closed),
+            None => Resolved::Over(pin),
+        })
+    }
+
+    /// What the binding makes the variable of `class`, named by a record of `segment`'s: where the
+    /// class's paths read through a module binder the binding binds, the path read off the module
+    /// it carries, as a walk resolving the path under that binding reads it
+    /// ([`resolve_entry`](Self::resolve_entry)) — module substitution; a view's own class, the
+    /// carrier the view the binding substitutes hides its label behind; otherwise the class the
+    /// paths fall in with the binding written into their application and tree, where it differs
+    /// ([`Resolved::class_of`]). `None` where the walk holds no path of the class, or the binding
+    /// leaves it as it is.
+    pub(super) fn class_bound(&self, segment: Segment, class: PathClass) -> Option<Resolved> {
+        let of = self.class_read(class)?;
+        let tree = of.resolution.tree;
+        let substituted = (self.rebound.borrow().trees.get(&tree.identity())).map(|tree| **tree);
+        // The application the paths are read through, the binding written in.
+        let (through, closed) = match of.entry.through {
+            None => (None, Some(None)),
+            Some(through) => match self.rebind(segment, through.into()) {
+                Closed::Same => (
+                    Some(through),
+                    judge::static_of(self.types, through).map(Some),
+                ),
+                Closed::Type(DeclaredType::Type(closed)) => {
+                    (Some(closed.into()), Some(Some(closed)))
+                }
+                Closed::Partial(DeclaredType::Type(partial)) => (Some(partial), None),
+                _ => return None,
+            },
+        };
+        match tree {
+            // A view's own class: the carrier the view the binding substitutes hides its label
+            // behind.
+            Tree::View { .. } if of.entry.chain.is_empty() => {
+                if let Some(substituted) = substituted
+                    && let Some((viewed, _)) = self.views.get(&substituted.identity())
+                    && let Some(built) = (*viewed).and_then(|viewed| viewed.built)
+                    && let Some(carrier) =
+                        crate::type_lattice::member(built.to.bindings, of.entry.label)
+                {
+                    return judge::static_of(self.types, carrier).map(Resolved::Closed);
+                }
+            }
+            _ => {}
+        }
+        // The root as the binding shows it: a bound leaf's module, by the type it carries, read
+        // through the leaf's chain; else the substituted tree, by the signature it shows closed.
+        let shown = match tree {
+            Tree::Leaf(Leaf::Bound {
+                binder,
+                chain,
+                within: None,
+                ..
+            }) => (self.binds(Unknown {
+                segment: binder.body,
+                at: Address::Slot(binder.slot),
+            }))
+            .map(|carried| (carried, None, chain, tree)),
+            _ => substituted.and_then(|tree| {
+                let held = self.shown(tree)?;
+                Some((held, Some(held.into()), &[][..], tree))
+            }),
+        };
+        if let Some((held, exact, chain, tree)) = shown {
+            let entry = PathEntry { chain, ..of.entry };
+            if let Ok(resolved) = self.resolved_off(entry, closed, (Some(held), exact, None), tree)
+            {
+                return Some(resolved);
+            }
+        }
+        // The class the paths fall in, the binding written into their application and tree.
+        let tree = substituted.unwrap_or(tree);
+        let renamed = Resolved::class_of(of.entry.label, through, tree.identity())?;
+        if renamed == class {
+            return None;
+        }
+        let entry = PathEntry {
+            through,
+            name: PathEntry::minted(of.entry.root, of.entry.chain, of.entry.label, through),
+            ..of.entry
+        };
+        let resolution = Resolution {
+            tree,
+            resolved: Resolved::Class(renamed),
+            ..of.resolution
+        };
+        (self.rebound.borrow_mut().classes).insert(renamed, ClassOf { entry, resolution });
+        Some(Resolved::Class(renamed))
+    }
+
+    /// The signature `tree`, a module's content tree, shows at every run, where it is closed: a
+    /// retype's carried type, a frame's module by the signature recorded beside its digest, a
+    /// body's own.
+    fn shown(&self, tree: Tree<'o>) -> Option<KType> {
+        if !tree.closed() {
+            return None;
+        }
+        match tree {
+            Tree::Retyped { carried, .. } => judge::static_of(self.types, carried),
+            Tree::Digest(_, Some(bare)) => bare.signature,
+            Tree::Body { body, .. } => self.signature_of(self.shape_at(body)),
+            _ => None,
+        }
+    }
+
+    /// Hand `each` every module binder the paths of `class` read through: the binder a leaf class
+    /// reads, or each binder a leaf of a view class's tree reads. The unknowns a binding writes
+    /// into the class's variable.
+    pub(super) fn class_binders(&self, class: PathClass, each: &mut dyn FnMut(Unknown)) {
+        if let Some(unknown) = self.class_binder(class) {
+            return each(unknown);
+        }
+        let Some(of) = self.class_read(class) else {
+            return;
+        };
+        if let Tree::View { .. } = of.resolution.tree {
+            for binder in self.leaf_binders(of.resolution.tree) {
+                each(Unknown {
+                    segment: binder.body,
+                    at: Address::Slot(binder.slot),
+                });
+            }
+        }
+        self.call_unknowns(&of.resolution.tree, each);
+    }
+
+    /// Hand `each` what decides each call leaf in `tree` ([`Leaf::Call`]): the binder holding it,
+    /// which the run binds where no answer selects, and the unknowns the types its choice is
+    /// judged over are written over, a binding of which may select.
+    fn call_unknowns(&self, tree: &Tree<'o>, each: &mut dyn FnMut(Unknown)) {
+        if tree.closed() {
+            return;
+        }
+        if let Tree::Leaf(Leaf::Call { call, holder, .. }) = tree {
+            if let Some(holder) = holder {
+                each(Unknown {
+                    segment: holder.body,
+                    at: Address::Slot(holder.slot),
+                });
+            }
+            for running in call.undecided.kept {
+                let mut named = |ty: DeclaredType<Parametric>| {
+                    for variable in judge::free_variables(self.types, self.scratch, ty) {
+                        self.each_unknown_of(call.at, variable, each);
+                    }
+                };
+                named(running.shape);
+                for argument in running.arguments {
+                    named(argument.lower.into());
+                    named(argument.upper.into());
+                }
+            }
+        }
+        tree.subtrees(&mut |subtree| self.call_unknowns(subtree, each));
+    }
+
+    /// The module binder the paths of `class` read through, where the class's tree is a leaf on
+    /// one: the unknown a binding writes into the class's variable.
+    pub(super) fn class_binder(&self, class: PathClass) -> Option<Unknown> {
+        let of = self.class_read(class)?;
+        let Tree::Leaf(Leaf::Bound {
+            binder,
+            within: None,
+            ..
+        }) = of.resolution.tree
+        else {
+            return None;
+        };
+        Some(Unknown {
+            segment: binder.body,
+            at: Address::Slot(binder.slot),
+        })
+    }
+
+    /// What `class` reads, where the walk holds one of its paths: an open table's, else one the
+    /// binding moved a record's paths to ([`class_bound`](Self::class_bound)), else a record's
+    /// resolving one under one of the open tables' roots. Marks nothing.
+    fn class_read(&self, class: PathClass) -> Option<ClassOf<'o>> {
+        if let Some(of) = (self.paths.iter().rev()).find_map(|table| table.classes.get(&class)) {
+            return Some(*of);
+        }
+        if let Some(of) = self.rebound.borrow().classes.get(&class) {
+            return Some(*of);
+        }
+        self.paths.iter().rev().find_map(|table| {
+            let (entry, resolution) = self.class_held(table.root.segment(), class)?;
+            Some(ClassOf { entry, resolution })
+        })
     }
 
     /// `entry`'s class: the paths read at its label, through its application, off a tree of
@@ -722,6 +1015,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             let (_, resolved) = points.iter().find(|(held, _)| *held == class)?;
             match *resolved {
                 Resolved::Closed(closed) => Some(closed.into()),
+                Resolved::Over(over) => Some(over),
                 Resolved::Class(now) if now == class => None,
                 Resolved::Class(now) => Some(types.path_variable(now, label, KType::ANY)),
             }
@@ -851,7 +1145,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             Located::Path { root, entry, .. } => match self.resolved_at(root, entry) {
                 Some(held) => match self.noted(held).resolved {
                     Resolved::Class(class) => self.reachable(level, class).is_some(),
-                    Resolved::Closed(_) => true,
+                    Resolved::Closed(_) | Resolved::Over(_) => true,
                 },
                 // An unresolved path reads as unknown.
                 None => true,
@@ -898,12 +1192,11 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     /// class's paths the walk resolved first. The search is kept per shape and class until
     /// the walk fixes another content tree; a kept answer gathers again what the search gathered.
     pub(super) fn reachable(&self, level: usize, class: PathClass) -> Option<Witness<'o>> {
-        // Kept or searched afresh, a read by content holds a witnessing walk's unit.
-        self.read_by_content();
         let table = &self.paths[self.table(level)];
+        let renamed = || self.rebound.borrow().classes.get(&class).copied();
         let of = match table.classes.get(&class) {
             Some(of) => *of,
-            None => self.recovered(table.root.segment(), class)?,
+            None => (self.recovered(table.root.segment(), class)).or_else(renamed)?,
         };
         let key = (self.chain[level].shape.segment(), class, self.fixings);
         let kept = self.reached.borrow().get(&key).copied();
@@ -932,10 +1225,13 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         if !self.locatable(of.entry) {
             return None;
         }
-        let witness = |binder: Binder, chain: &'o [ValueSymbol]| {
-            let coordinate = self.binder_coordinate(level, binder)?;
+        let witness = |root: Root, chain: &'o [ValueSymbol]| {
+            let coordinate = match root {
+                Root::Binder(binder) => Some(self.binder_coordinate(level, binder)?),
+                Root::Inline { .. } => None,
+            };
             Some(Witness {
-                binder,
+                root,
                 chain,
                 coordinate,
                 of,
@@ -946,66 +1242,89 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         // where its tree is a leaf: whichever of its paths `of` is, the witness is the class's, and
         // locating it reads the chain's text alone, so gathers nothing.
         if Resolved::class_of(of.entry.label, of.entry.through, identity).is_none() {
-            let Root::Binder(binder) = of.entry.root else {
+            let Root::Binder(_) = of.entry.root else {
                 return None;
             };
-            return witness(binder, of.entry.chain);
+            return witness(of.entry.root, of.entry.chain);
         }
         if let Tree::Leaf(Leaf::Bound { binder, chain, .. }) = of.resolution.tree
-            && let Some(found) = witness(binder, chain)
+            && let Some(found) = witness(Root::Binder(binder), chain)
         {
             return Some(found);
         }
-        self.first_reached(level, identity, &mut |binder, tree, tag| {
+        self.first_reached(level, identity, &mut |root, tree, tag| {
             let mut read = BumpVec::new_in(self.scratch);
             let chain = self.member_chain(tree, identity, &mut read)?;
-            let found = witness(binder, chain)?;
+            let found = witness(root, chain)?;
             gathered.push(tag);
             gathered.extend(read);
             Some(found)
         })
     }
 
-    /// The first of the module binders the shape at `level` reaches holding a module of
-    /// `identity`'s tree, itself or through a member of a module body, that `found` takes, beside
-    /// its content tree and the unit that fixed it: those of each shape out to the first callable
-    /// or module around `level` — a block reads its encloser's — in slot order, innermost shape
-    /// first, then each that callable or module captures, in capture order. Each is found by
-    /// `identity`: on a level the walk runs through its own index, on a standing one through the
-    /// layers' index, at or before the unit birthing the next level, and read only as it is
-    /// offered. So what a shape reaches costs its own text's binders, however large the program
-    /// around it.
+    /// The first of the roots the shape at `level` reaches holding a module of `identity`'s tree,
+    /// itself or through a member of a module body, that `found` takes, beside its content tree
+    /// and the unit that fixed it: the module binders of each shape out to the first callable or
+    /// module around `level` — a block reads its encloser's — in slot order, innermost shape
+    /// first, then the views `level`'s own shape writes in place, in site order, then each binder
+    /// that callable or module captures, in capture order. Each is found by `identity`: on a level
+    /// the walk runs through its own index, on a standing one through the layers' index, at or
+    /// before the unit birthing the next level, and read only as it is offered. So what a shape
+    /// reaches costs its own text's holders, however large the program around it.
     fn first_reached<R>(
         &self,
         level: usize,
         identity: Identity,
-        found: &mut dyn FnMut(Binder, Tree<'o>, Tag) -> Option<R>,
+        found: &mut dyn FnMut(Root, Tree<'o>, Tag) -> Option<R>,
     ) -> Option<R> {
         let first = self.chain_root(level);
         let mut at = level;
+        // A view written in place is a root of its own shape alone: a path entry names its site
+        // and statement, not its shape.
+        let mut views = BumpVec::new_in(self.scratch);
         loop {
             let shape = self.chain[at].shape;
             let body = shape.segment();
             match self.standing(at) {
                 false => {
-                    for (slot, tag, tree) in self.holding_binders(body, identity) {
-                        if let Some(taken) = found(Binder { body, slot }, tree, tag) {
+                    for (holder, tag, tree) in self.holding_at(body, identity) {
+                        let slot = match holder {
+                            Holder::Slot(slot) => slot,
+                            Holder::Site(site) if at == level => {
+                                views.push((site, tree, tag));
+                                continue;
+                            }
+                            Holder::Site(_) => continue,
+                        };
+                        if let Some(taken) = found(Root::Binder(Binder { body, slot }), tree, tag) {
                             return Some(taken);
                         }
                     }
                 }
                 true => {
-                    let mut slots = BumpVec::new_in(self.scratch);
+                    let mut holders = BumpVec::new_in(self.scratch);
                     self.store
-                        .holders(body, identity, &mut |_, slot| slots.push(slot));
-                    slots.sort_unstable();
-                    slots.dedup();
-                    for slot in slots {
+                        .holders(body, identity, &mut |_, holder| holders.push(holder));
+                    holders.sort_unstable();
+                    holders.dedup();
+                    for holder in holders {
+                        let Holder::Slot(slot) = holder else {
+                            continue;
+                        };
                         if let Some((tree, tag)) = self.stood_content(at, slot)
-                            && let Some(taken) = found(Binder { body, slot }, tree, tag)
+                            && let Some(taken) =
+                                found(Root::Binder(Binder { body, slot }), tree, tag)
                         {
                             return Some(taken);
                         }
+                    }
+                }
+            }
+            if at == level {
+                for (site, tree, tag) in views.drain(..) {
+                    let statement = self.statement_holding(level, site) as u32;
+                    if let Some(taken) = found(Root::Inline { site, statement }, tree, tag) {
+                        return Some(taken);
                     }
                 }
             }
@@ -1028,12 +1347,12 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             let body = self.chain[home].shape.segment();
             let held = match self.standing(home) {
                 true => self.stood_holding(home, slot, identity),
-                false => (self.holding.get(&(body, slot)))
+                false => (self.holding.get(&(body, Holder::Slot(slot))))
                     .filter(|(_, _, identities)| identities.contains(&identity))
                     .map(|(tree, tag, _)| (*tree, *tag)),
             };
             if let Some((tree, tag)) = held
-                && let Some(taken) = found(Binder { body, slot }, tree, tag)
+                && let Some(taken) = found(Root::Binder(Binder { body, slot }), tree, tag)
             {
                 return Some(taken);
             }
@@ -1106,13 +1425,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     pub(super) fn witnessed(&mut self, level: usize, witness: Witness<'o>) -> PathEntry<'o> {
         let label = witness.of.entry.label;
         let through = witness.of.entry.through;
-        let entry = self.path(
-            level,
-            Root::Binder(witness.binder),
-            witness.chain,
-            label,
-            through,
-        );
+        let entry = self.path(level, witness.root, witness.chain, label, through);
         let table = self.table(level);
         if let Some((_, Some(_))) = self.paths[table].at(entry.name) {
             return entry;
@@ -1173,23 +1486,10 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 upper: KType::ANY.into(),
             })
         };
+        // Only a path variable is read through, whose class no binding of a lexical name moves.
         Interval {
-            lower: judge::read_ends(
-                self,
-                types,
-                scratch,
-                typed.lower,
-                Side::Below,
-                &mut unreached,
-            ),
-            upper: judge::read_ends(
-                self,
-                types,
-                scratch,
-                typed.upper,
-                Side::Above,
-                &mut unreached,
-            ),
+            lower: judge::read_points(types, scratch, typed.lower, Side::Below, &mut unreached),
+            upper: judge::read_points(types, scratch, typed.upper, Side::Above, &mut unreached),
         }
     }
 
@@ -1207,21 +1507,25 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     /// is no application with a parameter unpinned, or one of its paths is out of reach.
     ///
     /// A member is read under these pins, and a value the run retypes by its fit, rooted at a
-    /// binder, is typed exactly at their application ([`at_its_paths`](Self::at_its_paths)).
-    fn pinned(
+    /// binder, is typed exactly at their application ([`at_its_paths`](Self::at_its_paths)). A
+    /// root `view` names is a view written in place of that tree, its paths over it.
+    pub(super) fn pinned(
         &mut self,
         level: usize,
         root: Root,
         chain: &[ValueSymbol],
         upper: Parametric,
+        view: Option<Tree<'o>>,
     ) -> Read<'o, Option<(KType, Pins<'p>)>> {
         let types = self.types;
-        let (signature, pinned) = match judge::type_node(self, types, upper) {
-            TypeNode::Signature { .. } => match judge::closed(self, types, upper) {
+        // A variable pins nothing: whatever a binding gives it, at most is right. A signature is
+        // closed content, which no substitution enters.
+        let (signature, pinned) = match judge::node_unless_variable(types, upper) {
+            Some(TypeNode::Signature { .. }) => match judge::static_of(types, upper) {
                 Some(signature) => (signature, None),
                 None => return Ok(None),
             },
-            TypeNode::SignatureApply { signature, pins } => (signature, Some(pins)),
+            Some(TypeNode::SignatureApply { signature, pins }) => (signature, Some(pins)),
             _ => return Ok(None),
         };
         let Some(schema) = crate::elaborate::schema_of(signature, types) else {
@@ -1240,8 +1544,13 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 continue;
             }
             let entry = self.path(level, root, chain, *name, Some(upper));
-            let pin = match self.resolve_path(level, entry)? {
+            let resolved = match view {
+                Some(tree) => self.resolve_in_place(level, entry, tree),
+                None => self.resolve_path(level, entry)?,
+            };
+            let pin = match resolved {
                 Resolved::Closed(closed) => closed.into(),
+                Resolved::Over(over) => over,
                 // A path this shape cannot read the root of — across a quote's code — names no
                 // type here.
                 Resolved::Class(class) if !typing && self.reachable(level, class).is_none() => {
@@ -1256,22 +1565,49 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     }
 
     /// Whether [`at_its_paths`](Self::at_its_paths) may pin `typed`: it is at most `declared`, a
-    /// signature or an application of one. A variable is declined, not judged: whatever a binding
-    /// gives it, at most is right.
+    /// signature or an application of one — its lower end `Never`, or the retype rule's name for
+    /// what a retype to `declared` re-stamps at, which every binding closes to `Never` there. A
+    /// variable is declined, not judged: whatever a binding gives it, at most is right.
     pub(super) fn pins_at_paths(&self, declared: Parametric, typed: Interval) -> bool {
-        typed == under(declared)
+        typed.upper == declared
+            && (typed.lower == KType::NEVER.into()
+                || judge::retyped_lower(self, self.types, typed.lower, declared))
             && matches!(
                 judge::node_unless_variable(self.types, declared),
-                Some(TypeNode::Signature { .. } | TypeNode::SignatureApply { .. })
+                Some(
+                    TypeNode::Signature { .. }
+                        | TypeNode::SignatureApply { .. }
+                        | TypeNode::SignatureMeet { .. }
+                )
             )
+    }
+
+    /// Whether the signature type `member` leaves a head parameter unpinned.
+    fn leaves_unpinned(&self, member: Parametric) -> bool {
+        let types = self.types;
+        let (signature, pins) = match judge::node_unless_variable(types, member) {
+            Some(TypeNode::Signature { .. }) => (judge::static_of(types, member), None),
+            Some(TypeNode::SignatureApply { signature, pins }) => (Some(signature), Some(pins)),
+            _ => return false,
+        };
+        let Some(schema) = signature.and_then(|each| crate::elaborate::schema_of(each, types))
+        else {
+            return false;
+        };
+        (schema.parameters.iter()).any(|(name, _)| {
+            let parameter = BinderSymbol::Type(*name);
+            !pins.is_some_and(|pins| pins.iter().any(|(pin, _)| pin == parameter))
+        })
     }
 
     /// `typed`, the static type of a value the run retypes by its fit to `declared`, rooted at
     /// `root` through `chain` in the shape at `level`: where it is at most `declared`, a signature
     /// or an application leaving a head parameter unpinned, exactly `declared` pinned at the paths
     /// through the value ([`pinned`](Self::pinned)), since the run re-stamps the value at what its
-    /// fit solves and each path reads that; `typed` otherwise. A meet stays at most itself. A root
-    /// binder the binding binds is exactly the module it carries, so its paths pin nothing.
+    /// fit solves and each path reads that; `typed` otherwise. A meet is the meet of its members
+    /// each so pinned, as the run's fit pins each; it stays at most itself where some member's
+    /// path is out of reach. A root binder the binding binds is exactly the module it carries, so
+    /// its paths pin nothing.
     pub(super) fn at_its_paths(
         &mut self,
         level: usize,
@@ -1284,18 +1620,26 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         if !self.pins_at_paths(declared, typed) {
             return Ok(typed);
         }
-        // Resolving a path is a read by content, which would hold a witnessing walk's unit on
-        // every witnessed name for a pin the binding makes moot.
-        if let Root::Binder(binder) = root
-            && (self.binds(Unknown {
-                segment: binder.body,
-                at: Address::Slot(binder.slot),
-            }))
-            .is_some()
+        if let Some(TypeNode::SignatureMeet { members }) =
+            judge::node_unless_variable(types, declared)
         {
-            return Ok(typed);
+            let mut each = BumpVec::with_capacity_in(members.len(), self.scratch);
+            for member in members.iter() {
+                each.push(match self.pinned(level, root, chain, member, None)? {
+                    Some((signature, pins)) => {
+                        types.signature_apply(self.scratch, signature, &pins)
+                    }
+                    None if self.leaves_unpinned(member) => return Ok(typed),
+                    None => member,
+                });
+            }
+            let met = types.signature_meet(self.scratch, &each);
+            return Ok(match met == declared {
+                true => typed,
+                false => Interval::point(met),
+            });
         }
-        Ok(match self.pinned(level, root, chain, declared)? {
+        Ok(match self.pinned(level, root, chain, declared, None)? {
             Some((signature, pins)) => {
                 Interval::point(types.signature_apply(self.scratch, signature, &pins))
             }
@@ -1337,7 +1681,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 )
             }
         };
-        Ok(match self.pinned(level, root, &chain, upper)? {
+        Ok(match self.pinned(level, root, &chain, upper, None)? {
             Some((signature, pins)) => applied_member(types, scratch, signature, &pins, name),
             None => member,
         })
@@ -1370,6 +1714,27 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         }
         chain.push(name);
         self.at_its_paths(level, Root::Binder(binder), &chain, read.upper, read)
+    }
+
+    /// The paths a `:!` held in place over the operand `part` of the shape at `level` is pinned
+    /// at: the operand's [module chain](Self::module_chain), read through each `:!` it is itself,
+    /// since a hold is see-through. `None` unless the chain's root is a module binder, the
+    /// binder a binding binds.
+    pub(super) fn held_chain(
+        &self,
+        level: usize,
+        part: &'graph ExpressionPart<'graph>,
+    ) -> Option<(Binder, BumpVec<'p, ValueSymbol>)> {
+        if let super::Form::Ascribe(node, crate::knot::module::view::Ascription::Transparent) =
+            super::of_part(self.chain[level].shape, part)
+        {
+            return self.held_chain(level, &node.parts[0].value);
+        }
+        let (binder, chain) = self.module_chain(level, part)?;
+        let home = self.level_of(binder.body)?;
+        let bound = self.binder_fact(home, binder.slot);
+        self.module_unknown(home, binder.slot, bound)?;
+        Some((binder, chain))
     }
 
     /// [`name_chain`](Self::name_chain) where every step reads a module's member: the run reads a
@@ -1420,7 +1785,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         typed: Interval,
     ) -> Read<'o, Interval> {
         let (types, scratch) = (self.types, self.scratch);
-        if judge::is(self, types, typed.upper, KType::NEVER) {
+        if self.never_arrives(&[typed.upper]) {
             return Ok(typed);
         }
         let site = self.site(level, operand);
@@ -1438,16 +1803,11 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             return Ok(typed);
         }
         Ok(match self.member_read(level, operand, upper, label)? {
+            // Written over names, the member's declared type is what a binding closes it to.
             Some(SignatureMember {
                 declared: DeclaredType::Type(declared),
                 unpinned: None,
-            }) if !matches!(
-                judge::type_node(self, types, declared),
-                TypeNode::SignatureApply { .. }
-            ) || judge::closed(self, types, declared).is_some() =>
-            {
-                under(declared)
-            }
+            }) => self.arriving(&[typed.upper], under(declared)),
             _ => typed,
         })
     }

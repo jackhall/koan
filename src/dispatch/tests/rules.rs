@@ -240,15 +240,19 @@ fn law(
         let given: Vec<Given<'_>> = (drawn.iter().enumerate())
             .map(|(index, slot)| slot.given(pick(index, slot), named))
             .collect();
-        typed(
+        let typed = typed(
             &crate::elaborate::judge::NoMarks,
             native,
             declared,
             &given,
             world.types,
             &scratch,
-        )
-        .returns
+        );
+        // A call a need drops never runs.
+        match typed.dropped {
+            Some(_) => Interval::point(KType::NEVER.into()),
+            None => typed.read,
+        }
     };
 
     for named in [true, false] {

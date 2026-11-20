@@ -11,7 +11,7 @@ use crate::types::component::Component;
 use crate::types::digest::{ComponentMember, node_digest};
 use crate::types::handle::{DeclaredType, Handle, KType, Parametric, TypeHandle, builtin_types};
 use crate::types::kind::KKind;
-use crate::types::node::{ContentKey, Group, NodeSchema, PathClass, TypeNode};
+use crate::types::node::{ContentKey, DerivedId, Group, NodeSchema, PathClass, Step, TypeNode};
 use crate::types::record::Record;
 use crate::types::render::display_name;
 use crate::types::run::{Elements, Run};
@@ -517,11 +517,48 @@ fn every_compound_variant_digests_as_pinned() {
             0x3aafb1d8a61c89a70c6463338076a428,
         ),
         (
+            "Projection",
+            types
+                .projection(
+                    scratch,
+                    types.lexical(3, elt, types.list(KType::NUMBER)),
+                    Step::Element,
+                )
+                .expect("a list's element")
+                .raw(),
+            0x2ab5b4b8bed4d75fd16fc745425f780a,
+        ),
+        (
+            "Projection",
+            types
+                .projection(
+                    scratch,
+                    types.lexical(3, elt, types.record(scratch, &[(x, KType::NUMBER)])),
+                    Step::Field(x),
+                )
+                .expect("a record's field")
+                .raw(),
+            0x10eec1708a1283399035be2420e63f3e,
+        ),
+        (
             "Path",
             types
                 .path_variable(PathClass([3, 0]), elt, KType::ANY)
                 .raw(),
             0x0fc2ed31c2082cce1f9edf9d40dd80b9,
+        ),
+        (
+            "Derived",
+            types
+                .derived(
+                    scratch,
+                    DerivedId([3, 0]),
+                    elt,
+                    KType::NUMBER,
+                    number_or_str,
+                )
+                .raw(),
+            0x032fe2283320fac2a71f60e1983387f5,
         ),
         (
             "Union",
@@ -617,6 +654,8 @@ fn every_compound_variant_digests_as_pinned() {
         "Quantified",
         "Lexical",
         "Path",
+        "Derived",
+        "Projection",
         "Union",
         "ConstructorApply",
         "Signature",
@@ -674,6 +713,8 @@ fn variant_name<'run, H: crate::types::handle::Naming<'run>>(
         TypeNode::Quantified { .. } => "Quantified",
         TypeNode::Lexical { .. } => "Lexical",
         TypeNode::Path { .. } => "Path",
+        TypeNode::Derived { .. } => "Derived",
+        TypeNode::Projection { .. } => "Projection",
         TypeNode::Union { .. } => "Union",
         TypeNode::ConstructorApply { .. } => "ConstructorApply",
         TypeNode::Signature { .. } => "Signature",

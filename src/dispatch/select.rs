@@ -27,12 +27,15 @@
 use crate::knot::module::layout;
 use crate::knot::{BuiltinFunction, KValue, Knotted};
 use crate::memory::{Bump, BumpAllocator, BumpVec, Lays, Writer};
-use crate::scope::{Arms, Candidate, Coordinate, Elimination, Guard, IMPLICIT, Points, Table};
+use crate::scope::{
+    Arms, Candidate, Coordinate, Elimination, Guard, IMPLICIT, Points, Table, first_ranked,
+    guard_outranks, winner,
+};
 use crate::scope::{ParameterBinding, Registered, ShapeGroupMap};
 use crate::symbols::BinderSymbol;
 use crate::type_lattice::{
-    DeclaredType, KType, Parametric, Verdict, admit_by_class, is_subtype_of, outranks,
-    satisfied_by, scheme_slots, select_by_class, shape_slots, solving_slots, substitute_quantified,
+    DeclaredType, KType, Parametric, Verdict, admit_by_class, satisfied_by, scheme_slots,
+    select_by_class, shape_slots, solving_slots, substitute_quantified,
 };
 use crate::values::{Chain, List, Record, TypeValue, Value};
 
@@ -194,22 +197,6 @@ pub(super) fn selected<'x, 'graph, 'here>(
     }
 }
 
-/// The candidate a call runs among `survivors` — the indices `select_by_class` kept — where
-/// `is_builtin` says which are builtins: the lone survivor, or else the first builtin among
-/// several; `Err` with the survivors' count where several survive and none is a builtin. The run's
-/// selection and the load's both end here.
-pub(super) fn winner(
-    survivors: &[usize],
-    is_builtin: impl Fn(usize) -> bool,
-) -> Result<usize, usize> {
-    match survivors {
-        [only] => Ok(*only),
-        _ => (survivors.iter().copied())
-            .find(|survivor| is_builtin(*survivor))
-            .ok_or(survivors.len()),
-    }
-}
-
 /// The elimination table of `shapes`, registered shapes under one key and one ranking, laid
 /// through `lay`; `builtin` says which are builtins. `None` for more shapes than a table ranks.
 pub(super) fn table<'l>(
@@ -271,25 +258,6 @@ pub(super) fn checked(
     SUBSETS.with(|subsets| subsets.set(Some(count + 1)));
 }
 
-/// Whether the arm guarded by `a`, admitting by the closed type beside it, strictly outranks the
-/// one guarded by `b`: a value outranks every type, a type outranks another it lies strictly
-/// under, and nothing else outranks — labels admit disjoint variants, and `_` ranks below every
-/// guarded arm. The load's ranking and the run's both read it.
-pub(super) fn guard_outranks(
-    types: &Chain<'_, '_, '_, '_>,
-    scratch: BumpAllocator<'_>,
-    (a, a_type): (Guard<'_>, Option<KType>),
-    (b, b_type): (Guard<'_>, Option<KType>),
-) -> bool {
-    match (a, b, a_type, b_type) {
-        (Guard::Value(_), Guard::Type(_), _, _) => true,
-        (Guard::Type(_), Guard::Type(_), Some(a), Some(b)) => {
-            is_subtype_of(types, scratch, a, b) && !is_subtype_of(types, scratch, b, a)
-        }
-        _ => false,
-    }
-}
-
 /// The arm a `MATCH` the load recorded `arms` for runs, `guards` beside the closed type each admits
 /// by where the run reads it, `admits` saying whether a *maybe* arm admits the scrutinee: the arm
 /// the load chose, else the one the admitting guarded arms rank first, else `_` where it admits.
@@ -323,7 +291,8 @@ pub(super) fn arm(
     if admitted.is_empty() {
         return default.ok_or(None);
     }
-    let outranks = |a: usize, b: usize| guard_outranks(types, scratch, guards[a], guards[b]);
+    let ranked = |at: usize| (guards[at].0.kind(), guards[at].1);
+    let outranks = |a: usize, b: usize| guard_outranks(types, scratch, ranked(a), ranked(b));
     let decided = match arms.ranking {
         Elimination::Table(table) => {
             // A table lays at most `Table::MOST` arms, so each position is one bit.
@@ -339,35 +308,6 @@ pub(super) fn arm(
         Elimination::Open => first_ranked(&admitted, outranks),
     };
     decided.map_err(Some)
-}
-
-/// The one arm of `admitted`, by position, that no other one there `outranks`; `Err` with how many
-/// none outranks where that is not one. What an arm table decides, without a table's bound on how
-/// many arms it ranks.
-pub(super) fn first_ranked(
-    admitted: &[usize],
-    outranks: impl Fn(usize, usize) -> bool,
-) -> Result<usize, usize> {
-    let mut first =
-        (admitted.iter().copied()).filter(|at| !admitted.iter().any(|by| outranks(*by, *at)));
-    match (first.next(), first.count()) {
-        (Some(only), 0) => Ok(only),
-        (Some(_), more) => Err(more + 1),
-        (None, _) => Err(0),
-    }
-}
-
-/// Whether a candidate that may admit, registered at `maybe`, never runs beside candidates that
-/// always admit, registered at `always`: one outranks it at the first class, and wherever it admits
-/// that one admits too and eliminates it there. Only the first class is safe: past it, a survivor
-/// that would eliminate it may itself be gone.
-pub(super) fn never_runs(
-    types: &Chain<'_, '_, '_, '_>,
-    scratch: &Bump,
-    maybe: DeclaredType<Parametric>,
-    always: impl IntoIterator<Item = DeclaredType<Parametric>>,
-) -> bool {
-    (always.into_iter()).any(|always| outranks(types, scratch, always, maybe, 0))
 }
 
 /// What a keyworded call of `callee` binds its arguments by: a registration's function's own

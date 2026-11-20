@@ -312,9 +312,29 @@ pub const fn is_type_name(tok: &str) -> bool {
     false
 }
 
-/// True iff `text` classifies as a value token: neither keyword-class nor Type-class.
+/// True iff `text` classifies as a value token: neither keyword-class nor Type-class, nor a
+/// type spelling ([`is_type_spelling`]).
 pub const fn is_value_name(text: &str) -> bool {
-    !is_keyword_token(text) && !is_type_name(text)
+    !is_keyword_token(text) && !is_type_name(text) && !is_type_spelling(text)
+}
+
+/// True iff `text` is a **type spelling**: a parenthesized rendering, holding a space, that names
+/// a type no token names — `(ELEMENT OF Elt)`, which [`TypeSymbol::spelled`] mints. No token holds
+/// a space, so a spelling is disjoint from every token class and no parse reads one.
+pub const fn is_type_spelling(text: &str) -> bool {
+    let bytes = text.as_bytes();
+    let n = bytes.len();
+    if n < 3 || bytes[0] != b'(' || bytes[n - 1] != b')' {
+        return false;
+    }
+    let mut index = 1;
+    while index < n - 1 {
+        if bytes[index] == b' ' {
+            return true;
+        }
+        index += 1;
+    }
+    false
 }
 
 /// Suggest a value-classified rewrite of a Type-classified binder name: `IntOrd` → `int_ord`. Each
@@ -440,6 +460,18 @@ classified_symbol!(
     is_keyword_token,
     "a keyword-class token"
 );
+
+impl TypeSymbol {
+    /// The **spelling door**: a type symbol over a type spelling ([`is_type_spelling`]), recorded for
+    /// rendering — the name of a lexical variable standing for a type no token names, spelled as
+    /// that type renders. `None` where `text` is no spelling. A parse never mints one: a token is
+    /// classified, and a spelling is no token.
+    pub fn spelled(text: &str, symbols: &SymbolInterner) -> Option<Self> {
+        let spelled = is_type_spelling(text).then(|| TypeSymbol(Symbol::of(text)))?;
+        symbols.record_text(spelled.symbol(), text);
+        Some(spelled)
+    }
+}
 
 impl KeywordSymbol {
     /// The probe constructor: classify `text` without interning it. The operator and dispatch

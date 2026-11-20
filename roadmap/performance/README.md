@@ -50,6 +50,15 @@ as surprises, not scheduled.
   of the body (`dispatch/walk.rs` `source`, `walk/paths.rs` `resolve_entry`),
   so a body of n such reads loads in O(n²). The base the one walk replaced
   searched alike. A site-to-statement index on the shape would answer both.
+- **A binding over trees written over names walks.** A binding that keeps
+  every question of a witnessed layer lays only its table of closed types
+  ([resumption](../../src/build/README.md#resumption)), save where the layer's
+  first closing walk substituted a content tree written over names, or closed
+  a type reading a module binder the witness binds (`Witnessing.holds` in
+  [`resume.rs`](../../src/program/resume.rs)). There it walks the whole chain
+  again, re-running nothing, to substitute those trees. A pass over just the
+  records holding such trees, substituting without walking units, would keep
+  the no-walk path, at the cost of a second walk entry point.
 - **A member chain written through a leaf.** Each part of a written chain
   `p.a1.….an` through a leaf is its own tree holding its own chain, so the load
   lays n(n+1)/2 labels for it and hashes each of them again in the leaf's

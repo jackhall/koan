@@ -23,7 +23,8 @@ use super::raw::shape::{keys_equal, shape_classes, shape_of};
 use super::raw::sig_relations::{admits_shape, shape_specificity, sig_fits};
 use super::raw::signatures::{applications, applications_under, is_signature_type};
 use super::raw::substitute::{
-    Side, bound_above, collect_siblings, read_through, substitute_parameters, substitute_quantified,
+    Side, bound_above, collect_siblings, read_through, substitute_derived, substitute_levels,
+    substitute_parameters, substitute_quantified,
 };
 use super::raw::unify::{admits, most_determined_first, ties};
 use super::raw::walk::{visit, visit_free_quantified};
@@ -32,17 +33,16 @@ use crate::symbols::{BinderSymbol, TypeSymbol};
 use crate::types::chain::TypeChain;
 use crate::types::handle::{DeclaredType, Handle, KType, Parametric, TypeHandle, wrap};
 use crate::types::kind::KKind;
-use crate::types::node::{NodeSchema, TypeNode, Variable};
+use crate::types::node::{DerivedId, NodeSchema, Step, TypeNode, Variable};
 use crate::types::ranking::STAND_IN_LEVEL;
 use crate::types::schema::{Members, canonical_overloads, member};
 use crate::types::shape::{DispatchTokenElement, Specificity, shape_slots};
-use crate::types::sig_relations::InstanceFailure;
 use crate::types::tiers::{Agent, BumpHalf, Habitat};
 use crate::types::typed::{
     fits, fits_application, instance_under, instantiate_quantified, is_subtype_of, join, meet,
     satisfied_by,
 };
-use crate::types::unify::{Collector, Interval, UnifyFailure, intervals};
+use crate::types::unify::{Collector, Interval, SolveRecord, UnifyFailure};
 use crate::types::walk::Variance;
 use crate::types::walk::unary::Visit;
 use crate::types::window::{RecursiveGroupWindow, RelativeSchema};
@@ -53,8 +53,8 @@ use super::generators::{
     arb_argument_pair, arb_arguments, arb_bounded_head_chain, arb_chain, arb_concrete,
     arb_fits_chain, arb_function_type, arb_instance_chain, arb_lexical, arb_opaque,
     arb_ordered_pair, arb_over_head_parameter, arb_own_instance, arb_pinnable, arb_placement,
-    arb_sealed_member, arb_shape_below, arb_shape_pair, arb_shape_type, arb_signature,
-    arb_signature_type, arb_wanted_instance, placed, under_with, with_scratch,
+    arb_projection, arb_sealed_member, arb_shape_below, arb_shape_pair, arb_shape_type,
+    arb_signature, arb_signature_type, arb_wanted_instance, placed, under_with, with_scratch,
 };
 
 thread_local! {
@@ -356,6 +356,14 @@ proptest! {
     }
 }
 
+/// An instance record's solution where every variable was reached: the instance the load makes.
+fn fixed_instance<T: Copy>(record: SolveRecord<'_, T>) -> Option<&[T]> {
+    record
+        .solved
+        .filter(|_| record.reached.iter().all(|reached| *reached))
+        .map(|solved| solved.types)
+}
+
 proptest! {
     #![proptest_config(strict())]
 
@@ -373,7 +381,7 @@ proptest! {
         let scratch = &bump;
         let result = instance_under(&types, scratch, scheme, wanted);
         prop_assert_eq!(
-            matches!(result, Err(InstanceFailure::NoInstance)),
+            result.solved.is_none(),
             !fits(&types, scratch, scheme, wanted)
         );
     }
@@ -389,11 +397,11 @@ proptest! {
         let bump = Bump::new();
         let scratch = &bump;
         let wanted = types.concrete(wanted).expect("a concrete scheme's ground instance is concrete");
-        let solution = instance_under(&types, scratch, scheme, wanted).ok();
+        let solution = fixed_instance(instance_under(&types, scratch, scheme, wanted));
         prop_assume!(solution.is_some());
         let solution = solution.expect("assumed");
         let instance = types
-            .concrete(instantiate_quantified(&types, scratch, scheme, &solution))
+            .concrete(instantiate_quantified(&types, scratch, scheme, solution))
             .expect("a concrete scheme's instance under a concrete type is concrete");
         prop_assert!(fits(&types, scratch, instance, wanted));
     }
@@ -410,7 +418,7 @@ proptest! {
         let types = registry();
         let bump = Bump::new();
         let scratch = &bump;
-        let solution = instance_under(&types, scratch, scheme, wanted).ok();
+        let solution = fixed_instance(instance_under(&types, scratch, scheme, wanted));
         prop_assume!(solution.is_some());
         let solution = solution.expect("assumed");
         prop_assert!(
@@ -419,7 +427,7 @@ proptest! {
         );
         let bind = |kt: Handle| instance(&types, scratch, kt, &draw);
         let run_solution: Vec<Handle> = solution.iter().map(|each| bind(each.raw())).collect();
-        let made = instantiate_quantified(&types, scratch, scheme, &solution);
+        let made = instantiate_quantified(&types, scratch, scheme, solution);
         let (run_made, run_wanted) = (bind(made.raw()), bind(wanted.raw()));
         // A scheme binding no nested group holds no variable a run leaves free.
         prop_assert!(
@@ -546,6 +554,7 @@ proptest! {
             TypeNode::Quantified { .. }
             | TypeNode::Lexical { .. }
             | TypeNode::Path { .. }
+            | TypeNode::Derived { .. }
             | TypeNode::Parameter { .. } => Visit::Stop,
             _ => Visit::Descend,
         });
@@ -556,6 +565,7 @@ proptest! {
             TypeNode::Quantified { .. }
             | TypeNode::Lexical { .. }
             | TypeNode::Path { .. }
+            | TypeNode::Derived { .. }
             | TypeNode::Parameter { .. } => Visit::Stop,
             _ => Visit::Descend,
         });
@@ -635,22 +645,33 @@ proptest! {
         );
         prop_assert!(!read.contains_deep_carrier());
     }
+}
 
-    /// The same at each placement a sibling takes, a scheme's group bound among them, and the
-    /// read-back is the type written at the answer: one type, one handle.
-    #[test]
-    fn a_carrier_reads_back_at_every_placement(placement in arb_placement()) {
-        // A bound holds no carrier outside a signature.
-        prop_assume!(placement != Placement::InBound);
-        let (types, world) = (registry(), world());
-        let bump = Bump::new();
-        let scratch = &bump;
-        let carrier = types.carrier(world.type_names[1], KType::ANY, crate::types::ContentKey(7));
+/// Reading carriers back holds at each placement a sibling takes, a scheme's group bound among
+/// them, and the read-back is the type written at the answer: one type, one handle. The placements
+/// are few, so each is checked once.
+#[test]
+fn a_carrier_reads_back_at_every_placement() {
+    let (types, world) = (registry(), world());
+    let bump = Bump::new();
+    let scratch = &bump;
+    let carrier = types.carrier(world.type_names[1], KType::ANY, crate::types::ContentKey(7));
+    // A bound holds no carrier outside a signature.
+    for placement in Placement::ALL
+        .into_iter()
+        .filter(|at| *at != Placement::InBound)
+    {
         let held = placed(&*types, scratch, &world, carrier, placement);
-        prop_assert!(types.enter(held.raw()).contains_deep_carrier(), "a placed carrier is reachable");
+        assert!(
+            types.enter(held.raw()).contains_deep_carrier(),
+            "a carrier placed {placement:?} is reachable"
+        );
         let mut answer = |at: KType| (at == carrier).then_some(KType::NUMBER);
         let read = crate::types::typed::substitute_carriers(&*types, scratch, held, &mut answer);
-        prop_assert_eq!(read, placed(&*types, scratch, &world, KType::NUMBER, placement));
+        assert_eq!(
+            read,
+            placed(&*types, scratch, &world, KType::NUMBER, placement)
+        );
     }
 }
 
@@ -785,6 +806,8 @@ fn porous_walk<'ty>(types: &TypeChain<'ty, impl Habitat<'ty>>, kt: Handle) -> bo
         | TypeNode::Quantified { .. }
         | TypeNode::Lexical { .. }
         | TypeNode::Path { .. }
+        | TypeNode::Derived { .. }
+        | TypeNode::Projection { .. }
         | TypeNode::Parameter { .. }
         | TypeNode::DeferredReturn(_)
         | TypeNode::Sibling(_) => true,
@@ -827,6 +850,8 @@ fn exposing_walk<'ty>(types: &TypeChain<'ty, impl Habitat<'ty>>, kt: Handle) -> 
         | TypeNode::Quantified { .. }
         | TypeNode::Lexical { .. }
         | TypeNode::Path { .. }
+        | TypeNode::Derived { .. }
+        | TypeNode::Projection { .. }
         | TypeNode::Parameter { .. }
         | TypeNode::Carrier { .. }
         | TypeNode::DeferredReturn(_)
@@ -980,6 +1005,104 @@ proptest! {
         if let Some(solved) = solved {
             let at = types.signature_apply::<Handle>(scratch, signature, &[(parameter, solved)]);
             prop_assert!(order::fits(&types, scratch, offered.raw(), at));
+        }
+    }
+}
+
+proptest! {
+    #![proptest_config(binary())]
+
+    /// A projection bound at its base is the binding's piece: substituting a binding of the base
+    /// variable, drawn within its ends as a run binds one, gives what the door answers over that
+    /// binding at the same steps, and it lies between the projection's two ends.
+    #[test]
+    fn a_projection_over_a_binding_is_its_piece(
+        projection in arb_projection(world()),
+        drawn in concrete(),
+    ) {
+        let types = registry();
+        let bump = Bump::new();
+        let scratch = &bump;
+        let projection = projection.raw();
+        let TypeNode::Projection { lower: ends_lower, bound: ends_bound, .. } = types.node(projection)
+        else {
+            return Ok(());
+        };
+        // The steps from the base out, and the base lexical variable.
+        let mut steps = Vec::new();
+        let mut at = projection;
+        while let TypeNode::Projection { base, step, .. } = types.node(at) {
+            steps.push(step);
+            at = base;
+        }
+        let (lower, bound) = types.node(at).rigid_lower().zip(types.node(at).rigid_bound())
+            .expect("a projection's base is a rigid variable or a projection");
+        let binding = join(&types, scratch, lower, meet(&types, scratch, bound, drawn));
+        let substituted = match types.node(at) {
+            TypeNode::Lexical { level, .. } => {
+                let mut bindings = vec![None; level + 1];
+                bindings[level] = Some(binding);
+                substitute_levels(&types, scratch, projection, &bindings)
+            }
+            TypeNode::Derived { .. } => {
+                substitute_derived(&types, scratch, projection, &mut |_| Some(binding.raw()))
+            }
+            _ => panic!("a projection's base is a lexical variable, a derived name or a projection"),
+        };
+        let mut piece = Parametric::from(binding);
+        for step in steps.iter().rev() {
+            piece = types
+                .projection(scratch, piece, *step)
+                .expect("every binding has the piece");
+        }
+        prop_assert_eq!(substituted, piece.raw());
+        prop_assert!(order::is_subtype_of(&types, scratch, ends_lower.raw(), substituted));
+        prop_assert!(order::is_subtype_of(&types, scratch, substituted, ends_bound.raw()));
+    }
+
+    /// The door's answers are canonical: a projection it answers is over a variable — never over
+    /// a composite or a union, which it reads through — with ends that do not meet and a bound
+    /// above `Never`; and where it answers a variable's piece, the variable's two ends have that
+    /// piece too, so no binding lacks it.
+    #[test]
+    fn a_projection_is_canonical(a in one()) {
+        let types = registry();
+        let bump = Bump::new();
+        let scratch = &bump;
+        let Some(a) = a.as_type() else {
+            return Ok(());
+        };
+        let variable = types.node(a.raw()).rigid_interval();
+        let world = world();
+        let steps = [Step::Element, Step::Key, Step::Value]
+            .into_iter()
+            .chain(world.binders.iter().map(|name| Step::Field(*name)));
+        for step in steps {
+            let answer = types.projection(scratch, a, step);
+            if let Some(answer) = answer
+                && let TypeNode::Projection { base, lower, bound, .. } = types.node(answer.raw())
+            {
+                let over_a_variable = matches!(
+                    types.node(base),
+                    TypeNode::Lexical { .. } | TypeNode::Derived { .. } | TypeNode::Projection { .. }
+                );
+                prop_assert!(over_a_variable, "a projection is over a variable");
+                prop_assert_ne!(lower, bound, "a projection whose ends meet is their point");
+                prop_assert_ne!(bound, KType::NEVER);
+            }
+            if types.is_concrete(a.raw()) {
+                prop_assert!(answer.is_none_or(|answer| types.is_concrete(answer.raw())));
+            }
+            match (variable, answer) {
+                (Some(ends), Some(_)) if matches!(
+                    types.node(a.raw()),
+                    TypeNode::Lexical { .. } | TypeNode::Projection { .. }
+                ) => {
+                    prop_assert!(types.projection(scratch, ends.upper.into(), step).is_some());
+                    prop_assert!(types.projection(scratch, ends.lower.into(), step).is_some());
+                }
+                _ => {}
+            }
         }
     }
 }
@@ -1445,7 +1568,22 @@ proptest! {
                 }
             };
             if !lower.is_empty() {
-                prop_assert_eq!(*solved, lattice::join_iter(&types, scratch, lower.iter().copied()));
+                // The join, but that a parametric join an upper contribution equals in the order is
+                // spelled as that ceiling: a pin contributes from both sides and fits by handle.
+                let joined = lattice::join_iter(&types, scratch, lower.iter().copied());
+                prop_assert!(
+                    *solved == joined
+                        || (!types.is_concrete(joined)
+                            && upper.contains(solved)
+                            && agrees(*solved, joined, false)),
+                    "the solution is the join or a ceiling it equals"
+                );
+                let concrete_ceiling = upper.iter().find(|ceiling| {
+                    types.is_concrete(**ceiling) && agrees(**ceiling, joined, false)
+                });
+                if let Some(ceiling) = concrete_ceiling.filter(|_| !types.is_concrete(joined)) {
+                    prop_assert_eq!(*solved, *ceiling);
+                }
                 for ceiling in upper.iter().chain([&bound]) {
                     prop_assert!(order::fits(&types, scratch, *solved, *ceiling));
                 }
@@ -1495,6 +1633,12 @@ fn candidate_pair() -> BoxedStrategy<(DeclaredType<Parametric>, DeclaredType<Par
     arb_argument_pair(world(), 3, Vocabulary::ANY)
 }
 
+/// A candidate shape over anything beside arguments it admits by construction: what the laws
+/// needing a call to solve draw, since an unrelated shape admits a candidate only by accident.
+fn admitted_pair() -> BoxedStrategy<(DeclaredType<Parametric>, DeclaredType<Parametric>)> {
+    arb_admitted_pair(world(), 3, Vocabulary::ANY)
+}
+
 /// A [`Draw`], weighted toward the candidate's own slot and the argument shape's, mostly its
 /// instance, so the static solve succeeds often enough for the laws to bite.
 fn draw() -> impl Strategy<Value = Draw> {
@@ -1525,7 +1669,8 @@ fn draw_from(source: impl Strategy<Value = u8>) -> impl Strategy<Value = Draw> {
 
 /// `kt` as the run carries it: each lexical variable replaced by the type the run binds its level
 /// to — its bound, its lower end, or the bound met with a pool type and joined with the lower end,
-/// as `draw` says — and each path variable alike, by its class.
+/// as `draw` says — and each path variable alike, by its class. A run binds a name to the type a
+/// value carries, which is never `Never`: where the draw's choice is `Never`, it binds the bound.
 fn instance<'ty>(
     types: &TypeChain<'ty, impl Habitat<'ty>>,
     scratch: BumpAllocator<'_>,
@@ -1538,13 +1683,18 @@ fn instance<'ty>(
         kt,
         Side::Above,
         &mut |_, node| match Variable::of(node)? {
-            Variable::Lexical {
-                level,
-                lower,
-                bound,
-                ..
-            } => Some(Interval::point(
-                match draw.instances.get(level).copied().unwrap_or(0) {
+            // A derived name is bound as the lexical variable at its term's first word is.
+            variable @ (Variable::Lexical { lower, bound, .. }
+            | Variable::Derived { lower, bound, .. }) => Some(Interval::point({
+                let level = match variable {
+                    Variable::Derived {
+                        term: DerivedId([word, _]),
+                        ..
+                    } => word as usize,
+                    Variable::Lexical { level, .. } => level,
+                    _ => unreachable!("matched above"),
+                };
+                let chosen = match draw.instances.get(level).copied().unwrap_or(0) {
                     0 => bound,
                     1 => lower,
                     _ => join(
@@ -1553,32 +1703,35 @@ fn instance<'ty>(
                         lower,
                         meet(types, scratch, bound, draw.pool[level % draw.pool.len()]),
                     ),
-                }
-                .raw(),
-            )),
+                };
+                inhabited(chosen, bound).raw()
+            })),
             // A path class's variable is bound as the lexical variable at its class's index is,
-            // its lower end `Never`.
-            Variable::Path { class, bound, .. } => Some(Interval::point(
-                match draw
-                    .instances
-                    .get(class.0[0] as usize)
-                    .copied()
-                    .unwrap_or(0)
-                {
+            // its lower end `Never`: to its bound, or its bound met with one of two pool types.
+            Variable::Path { class, bound, .. } => Some(Interval::point({
+                let index = class.0[0] as usize;
+                let chosen = match draw.instances.get(index).copied().unwrap_or(0) {
                     0 => bound,
-                    1 => KType::NEVER,
-                    _ => meet(
+                    pick => meet(
                         types,
                         scratch,
                         bound,
-                        draw.pool[class.0[0] as usize % draw.pool.len()],
+                        draw.pool[(index + pick as usize) % draw.pool.len()],
                     ),
-                }
-                .raw(),
-            )),
+                };
+                inhabited(chosen, bound).raw()
+            })),
             _ => None,
         },
     )
+}
+
+/// `chosen`, the type a run binds a name to, where some value carries it; else `bound`.
+fn inhabited(chosen: KType, bound: KType) -> KType {
+    match chosen == KType::NEVER {
+        true => bound,
+        false => chosen,
+    }
 }
 
 /// Static arguments for `a`, one per slot, beside carried arguments within them. Slot `k`'s static
@@ -1587,14 +1740,15 @@ fn instance<'ty>(
 /// static type, carried as the run carries it; `2`, where the static type holds no rigid variable
 /// and meets a drawn type above `Never`, is bounded below by that meet, which it carries; anything
 /// else is within the static type, carrying it met with a drawn type, or as the run carries it where
-/// that meet is `Never`. `None` where some static type is `Never`.
+/// that meet is `Never`. No call passes an argument no value carries: a slot whose drawn static type
+/// is `Never`, or runs as `Never`, takes the next source in turn, and `Any` past the last.
 fn static_and_carried<'ty>(
     types: &TypeChain<'ty, impl Habitat<'ty>>,
     scratch: BumpAllocator<'_>,
     a: Handle,
     b: Handle,
     draw: &Draw,
-) -> Option<(Vec<Interval<Handle>>, Vec<Handle>)> {
+) -> (Vec<Interval<Handle>>, Vec<Handle>) {
     // Each slot at its group's bounds: the instance a call reaches when every variable takes its
     // bound.
     let at_bounds = |shape: Handle| -> Vec<Handle> {
@@ -1607,12 +1761,16 @@ fn static_and_carried<'ty>(
     let mut arguments = Vec::with_capacity(own.len());
     let mut carried = Vec::with_capacity(own.len());
     for (k, (source, mode)) in draw.picks.iter().take(own.len()).enumerate() {
-        let static_type = match source {
-            0 => own[k],
-            1 if !other.is_empty() => other[k % other.len()],
-            _ => draw.pool[k].raw(),
+        let from = |source: u8| match source {
+            0 => Some(own[k]),
+            1 => (!other.is_empty()).then(|| other[k % other.len()]),
+            _ => Some(draw.pool[k].raw()),
         };
-        let run = instance(types, scratch, static_type, draw);
+        let (static_type, run) = (0..3)
+            .filter_map(|turn| from((source + turn) % 3))
+            .map(|static_type| (static_type, instance(types, scratch, static_type, draw)))
+            .find(|(static_type, run)| *static_type != Handle::NEVER && *run != Handle::NEVER)
+            .unwrap_or((KType::ANY.raw(), KType::ANY.raw()));
         let below =
             lattice::meet_through_variables(types, scratch, static_type, draw.drawn[k].raw());
         let (argument, one) = match mode {
@@ -1635,13 +1793,11 @@ fn static_and_carried<'ty>(
                 },
             ),
         };
-        if argument.upper == Handle::NEVER || one == Handle::NEVER {
-            return None;
-        }
+        debug_assert!(argument.upper != Handle::NEVER && one != Handle::NEVER);
         arguments.push(argument);
         carried.push(one);
     }
-    Some((arguments, carried))
+    (arguments, carried)
 }
 
 /// `interval` with each end as the run carries it.
@@ -1668,39 +1824,49 @@ fn within<'ty>(
         && order::is_subtype_of(types, scratch, kt, interval.upper)
 }
 
-/// `shape`'s group solved jointly over one argument per slot, or `None`.
+/// The class-step door over every slot of `shape` at once, nothing pinned: each slot admits its
+/// argument, jointly, then the group solves.
+fn step_jointly<'s, 'run: 's>(
+    types: &TypeChain<'run, impl Habitat<'run>>,
+    scratch: BumpAllocator<'s>,
+    shape: Handle,
+    arguments: &[Handle],
+    exact: bool,
+) -> SolveRecord<'s> {
+    step_pinned(types, scratch, shape, arguments, None, exact)
+}
+
+/// [`step_jointly`] with the group's first variable pinned to `first`, where one is given.
+fn step_pinned<'s, 'run: 's>(
+    types: &TypeChain<'run, impl Habitat<'run>>,
+    scratch: BumpAllocator<'s>,
+    shape: Handle,
+    arguments: &[Handle],
+    first: Option<Handle>,
+    exact: bool,
+) -> SolveRecord<'s> {
+    let bounds: Vec<_> = (types.split(shape).0.bounds.iter())
+        .map(|bound| types.enter(bound.raw()))
+        .collect();
+    let mut pinned = vec![None; bounds.len()];
+    if let Some(slot) = pinned.first_mut() {
+        *slot = first.map(|first| types.enter(first));
+    }
+    let pairs: Vec<_> = (shape_slots(shape, types).zip(arguments))
+        .map(|(slot, argument)| (types.enter(slot), types.enter(*argument)))
+        .collect();
+    crate::types::ranking::class_step(types, scratch, &bounds, &pinned, &pairs, exact)
+}
+
+/// [`step_jointly`]'s solution, where it solves.
 fn solve_jointly<'s, 'run: 's>(
     types: &TypeChain<'run, impl Habitat<'run>>,
     scratch: BumpAllocator<'s>,
     shape: Handle,
     arguments: &[Handle],
-) -> Option<BumpVec<'s, Handle>> {
-    collect_jointly(types, scratch, shape, arguments).0
-}
-
-/// [`solve_jointly`]'s solution beside the collector it ran in.
-fn collect_jointly<'s, 'run: 's>(
-    types: &TypeChain<'run, impl Habitat<'run>>,
-    scratch: BumpAllocator<'s>,
-    shape: Handle,
-    arguments: &[Handle],
-) -> (Option<BumpVec<'s, Handle>>, Collector<'s, 'run, Handle>) {
-    let mut collector = Collector::<Handle>::new(types, scratch, types.split(shape).0.bounds);
-    for (slot, argument) in shape_slots(shape, types).zip(arguments) {
-        if admits(
-            types,
-            scratch,
-            slot,
-            *argument,
-            Variance::Co,
-            &mut collector,
-        )
-        .is_err()
-        {
-            return (None, collector);
-        }
-    }
-    (collector.solve(types).ok(), collector)
+) -> Option<Vec<Handle>> {
+    let solved = step_jointly(types, scratch, shape, arguments, false).solved?;
+    Some(solved.types.iter().map(|each| each.raw()).collect())
 }
 
 proptest! {
@@ -1710,37 +1876,25 @@ proptest! {
     /// lies in the interval reported over the static ones.
     #[test]
     fn a_carried_solution_lies_in_its_static_interval(
-        (a, b) in candidate_pair(),
+        (a, b) in admitted_pair(),
         draw in admitted_draw(),
     ) {
         let (a, b) = (a.raw(), b.raw());
         let types = registry();
         let bump = Bump::new();
         let scratch = &bump;
-        let pair = static_and_carried(&types, scratch, a, b, &draw);
-        prop_assume!(pair.is_some());
-        let (arguments, carried) = pair.expect("assumed");
+        let (arguments, carried) = static_and_carried(&types, scratch, a, b, &draw);
         let run_interval = |interval| carried_interval(&types, scratch, interval, &draw);
         let uppers: Vec<Handle> = arguments.iter().map(|argument| argument.upper).collect();
-        let (statics, collector) = collect_jointly(&types, scratch, a, &uppers);
-        let solution = solve_jointly(&types, scratch, instance(&types, scratch, a, &draw), &carried);
-        prop_assume!(statics.is_some() && solution.is_some());
-        let (statics, solution) = (statics.expect("assumed"), solution.expect("assumed"));
-        let slots: Vec<Handle> = shape_slots(a, &types).collect();
         // Over exact arguments the static solve is the call's own where a run reproduces it.
-        let all_exact = arguments.iter().all(|argument| argument.is_exact())
-            && collector.reproducible(&types);
-        let reported = intervals(
-            &types,
-            scratch,
-            &slots,
-            types.split(a).0.bounds,
-            &statics,
-            all_exact,
-        );
+        let all_exact = arguments.iter().all(|argument| argument.is_exact());
+        let statics = step_jointly(&types, scratch, a, &uppers, all_exact);
+        let solution = solve_jointly(&types, scratch, instance(&types, scratch, a, &draw), &carried);
+        prop_assume!(statics.solved.is_some() && solution.is_some());
+        let (reported, solution) = (statics.intervals().expect("assumed"), solution.expect("assumed"));
         for (solved, interval) in solution.iter().zip(reported.iter()) {
             prop_assert!(
-                within(&types, scratch, *solved, run_interval(*interval)),
+                within(&types, scratch, *solved, run_interval(interval.raw())),
                 "a carried solution left its static interval",
             );
         }
@@ -1758,16 +1912,15 @@ proptest! {
         let types = registry();
         let bump = Bump::new();
         let scratch = &bump;
-        let pair = static_and_carried(&types, scratch, a, b, &draw);
-        prop_assume!(pair.is_some());
-        let (arguments, _) = pair.expect("assumed");
+        let (arguments, _) = static_and_carried(&types, scratch, a, b, &draw);
         let uppers: Vec<Handle> = arguments.iter().map(|argument| argument.upper).collect();
         // A closed solve is the closed laws' to state.
         prop_assume!(
             types.contains_rigid(a) || uppers.iter().any(|upper| types.contains_rigid(*upper))
         );
-        let (statics, collector) = collect_jointly(&types, scratch, a, &uppers);
-        prop_assume!(collector.reproducible(&types));
+        let statics = step_jointly(&types, scratch, a, &uppers, false);
+        prop_assume!(statics.reproducible);
+        let statics = statics.solved.map(|solved| solved.types);
         let bound: Vec<Handle> = uppers
             .iter()
             .map(|upper| instance(&types, scratch, *upper, &draw))
@@ -1777,9 +1930,85 @@ proptest! {
         if let (Some(statics), Some(run)) = (statics, run) {
             for (solved, ran) in statics.iter().zip(run.iter()) {
                 prop_assert_eq!(
-                    instance(&types, scratch, *solved, &draw),
+                    instance(&types, scratch, solved.raw(), &draw),
                     *ran,
                     "a run's solution is not the static one bound",
+                );
+            }
+        }
+    }
+
+    /// A reproducible judged solve commutes with binding: where a candidate's solve record says a
+    /// run reproduces it, judging the candidate bound over its arguments bound reaches the
+    /// intervals the load reached, bound, wherever both solve.
+    #[test]
+    fn a_reproducible_judged_solve_commutes_with_binding(
+        (a, b) in candidate_pair(),
+        draw in draw(),
+    ) {
+        let (a, b) = (a.raw(), b.raw());
+        let types = registry();
+        let bump = Bump::new();
+        let scratch = &bump;
+        let (arguments, _) = static_and_carried(&types, scratch, a, b, &draw);
+        let judged = judge_by_class(&types, scratch, a, &arguments);
+        let bind = |kt: Handle| instance(&types, scratch, kt, &draw);
+        let bound: Vec<Interval<Handle>> = (arguments.iter())
+            .map(|argument| Interval { lower: bind(argument.lower), upper: bind(argument.upper) })
+            .collect();
+        let run = judge_by_class(&types, scratch, bind(a), &bound);
+        if let (true, Some(load), Some(run)) =
+            (judged.solve.reproducible, judged.solve.intervals(), run.solve.intervals())
+        {
+            for (load, run) in load.iter().zip(run) {
+                prop_assert_eq!(bind(load.lower.raw()), run.lower.raw(), "a lower end moved");
+                prop_assert_eq!(bind(load.upper.raw()), run.upper.raw(), "an upper end moved");
+            }
+        }
+    }
+
+    /// A pinned step commutes with binding as an unpinned one does: with the group's first variable
+    /// pinned to a type under its bound, as an earlier class pins it, a reproducible static step
+    /// bound is the run's step, pinned to that type bound, and fails exactly where the run fails.
+    #[test]
+    fn a_reproducible_pinned_step_commutes_with_binding(
+        (a, b) in candidate_pair(),
+        draw in draw(),
+        pin in 0usize..3,
+    ) {
+        let (a, b) = (a.raw(), b.raw());
+        let types = registry();
+        let bump = Bump::new();
+        let scratch = &bump;
+        let (arguments, _) = static_and_carried(&types, scratch, a, b, &draw);
+        // The pin: the first variable's bound, `Never`, or a static argument's upper end where it
+        // lies under that bound. A shape binding no group pins nothing.
+        let uppers: Vec<Handle> = arguments.iter().map(|argument| argument.upper).collect();
+        let first = types.split(a).0.bounds.first().map(|bound| match pin {
+            1 => Handle::NEVER,
+            2 => uppers
+                .first()
+                .copied()
+                .filter(|upper| order::fits(&types, scratch, *upper, bound.raw()))
+                .unwrap_or(bound.raw()),
+            _ => bound.raw(),
+        });
+        let statics = step_pinned(&types, scratch, a, &uppers, first, false);
+        prop_assume!(statics.reproducible);
+        let bound: Vec<Handle> = uppers
+            .iter()
+            .map(|upper| instance(&types, scratch, *upper, &draw))
+            .collect();
+        let run_first = first.map(|first| instance(&types, scratch, first, &draw));
+        let run_shape = instance(&types, scratch, a, &draw);
+        let run = step_pinned(&types, scratch, run_shape, &bound, run_first, false);
+        prop_assert_eq!(run.solved.is_some(), statics.solved.is_some(), "a run failed where the load did not, or the other way");
+        if let (Some(statics), Some(run)) = (statics.solved, run.solved) {
+            for (solved, ran) in statics.types.iter().zip(run.types.iter()) {
+                prop_assert_eq!(
+                    instance(&types, scratch, solved.raw(), &draw),
+                    ran.raw(),
+                    "a run's pinned solution is not the static one bound",
                 );
             }
         }
@@ -1790,7 +2019,7 @@ proptest! {
     /// would carry another call's argument into the solve.
     #[test]
     fn a_solution_reads_only_its_solving_slots(
-        (a, b) in candidate_pair(),
+        (a, b) in admitted_pair(),
         draw in admitted_draw(),
         others in prop::collection::vec(draw(), 4),
     ) {
@@ -1798,18 +2027,14 @@ proptest! {
         let types = registry();
         let bump = Bump::new();
         let scratch = &bump;
-        let pair = static_and_carried(&types, scratch, a, b, &draw);
-        prop_assume!(pair.is_some());
-        let (_, carried) = pair.expect("assumed");
+        let (_, carried) = static_and_carried(&types, scratch, a, b, &draw);
         let run_shape = instance(&types, scratch, a, &draw);
         let solution = admit_by_class(&types, scratch, run_shape, &carried);
         prop_assume!(solution.is_some());
         let solution = solution.expect("assumed");
         let solving = solving_slots(&types, scratch, run_shape);
         for other in &others {
-            let Some((_, elsewhere)) = static_and_carried(&types, scratch, a, b, other) else {
-                continue;
-            };
+            let (_, elsewhere) = static_and_carried(&types, scratch, a, b, other);
             // The other call's arguments at every slot that solves nothing at once, then at each
             // alone: one argument that misses its slot leaves the others to be checked.
             let swapped = |at: &dyn Fn(usize) -> bool| -> Vec<Handle> {
@@ -1846,9 +2071,7 @@ proptest! {
         let types = registry();
         let bump = Bump::new();
         let scratch = &bump;
-        let pair = static_and_carried(&types, scratch, a, b, &draw);
-        prop_assume!(pair.is_some());
-        let (arguments, carried) = pair.expect("assumed");
+        let (arguments, carried) = static_and_carried(&types, scratch, a, b, &draw);
         let run_interval = |interval| carried_interval(&types, scratch, interval, &draw);
         let judged = judge_by_class(&types, scratch, a, &arguments);
         // The run binds the candidate's lexical variables as it binds its arguments'.
@@ -1859,7 +2082,7 @@ proptest! {
             Verdict::Never => prop_assert!(admitted.is_none(), "a never candidate admitted"),
             Verdict::Maybe => {}
         }
-        if let (Some(reported), Some(solution)) = (judged.intervals, admitted) {
+        if let (Some(reported), Some(solution)) = (judged.solve.solved.map(|solved| solved.intervals), admitted) {
             for (solved, interval) in solution.iter().zip(reported) {
                 prop_assert!(
                     within(&types, scratch, *solved, run_interval(interval.raw())),
@@ -1941,6 +2164,57 @@ proptest! {
             let admitted = first(&orders[0]);
             for order in &orders[1..] {
                 prop_assert_eq!(first(order), admitted);
+            }
+        }
+    }
+}
+
+proptest! {
+    #![proptest_config(binary())]
+
+    /// A carried lexical variable, or a projection of one, against a declared list, dict or record
+    /// over a group's variables, solves each to its projection at that child wherever its bound
+    /// guarantees every piece — a solve each run reproduces, since each binding's solve pairs the
+    /// child with that projection's reduction.
+    #[test]
+    fn a_solve_over_a_carried_lexical_variable_contributes_its_projection(
+        carried in prop_oneof![arb_projection(world()), arb_lexical(world())],
+    ) {
+        let types = registry();
+        let bump = Bump::new();
+        let scratch = &bump;
+        let variable = matches!(
+            types.node(carried.raw()),
+            TypeNode::Lexical { .. } | TypeNode::Derived { .. } | TypeNode::Projection { .. }
+        );
+        prop_assume!(variable);
+        let (first, second) = (types.quantified(0, KType::ANY), types.quantified(1, KType::ANY));
+        let mut declared = vec![
+            (types.list(first), vec![Step::Element]),
+            (types.dict(first, second), vec![Step::Key, Step::Value]),
+        ];
+        for name in world().binders.iter() {
+            let record = types.record(scratch, &[(*name, first)]);
+            declared.push((record, vec![Step::Field(*name)]));
+        }
+        for (declared, steps) in declared {
+            let pieces: Option<Vec<Parametric>> = steps
+                .iter()
+                .map(|step| types.projection(scratch, carried, *step))
+                .collect();
+            let Some(pieces) = pieces else {
+                continue;
+            };
+            let mut collector = Collector::<Handle>::new(&types, scratch, &[KType::ANY, KType::ANY]);
+            prop_assert!(
+                admits(&types, scratch, declared.raw(), carried.raw(), Variance::Co, &mut collector)
+                    .is_ok(),
+                "a position every binding fills refused the variable",
+            );
+            prop_assert!(collector.reproducible(&types));
+            let solution = collector.solve(&types).expect("a solve over pieces succeeds");
+            for (solved, piece) in solution.iter().zip(&pieces) {
+                prop_assert_eq!(*solved, piece.raw());
             }
         }
     }

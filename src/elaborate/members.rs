@@ -20,7 +20,7 @@
 use crate::memory::{BumpAllocator, BumpVec};
 use crate::symbols::{BinderSymbol, TypeSymbol};
 use crate::type_lattice::{
-    DeclaredType, KType, Members, Parametric, SigSchema, TypeNode, meet, substitute_parameters,
+    DeclaredType, KType, Members, Parametric, SigSchema, TypeNode, substitute_parameters,
 };
 use crate::values::Chain;
 
@@ -107,7 +107,14 @@ pub struct SignatureMember {
 /// declares no such member, or is a meet leaving a parameter the member names unpinned or
 /// declaring a type member or a scheme two ways. An application's pins are read as they are, a
 /// variable in one kept: a pin is invariant, so its variable has no bound to read it through.
-/// Reading a variable through its bound is a judgement, which marks through `marks`.
+/// A variable no binding gives a type is read through its bound ([`judge::variable_above`]); a
+/// variable whose declared bound holds no module has no member at any binding. A value
+/// member of a type a run's binding decides is [`Rule::SignatureValue`]'s output over it, partial
+/// on whether the binding's module declares it ([`judge::defined_else`]), `Any` where it does not,
+/// as a closed operand declaring none reads unknown. An arrival guard is read at the type it
+/// arrives at ([`judge::arriving`]).
+///
+/// [`Rule::SignatureValue`]: crate::scope::Rule::SignatureValue
 pub fn signature_member(
     marks: &dyn Marks,
     types: &Chain<'_, '_, '_, '_>,
@@ -115,11 +122,46 @@ pub fn signature_member(
     upper: Parametric,
     name: BinderSymbol,
 ) -> Option<SignatureMember> {
-    if let Some(above) = judge::variable_above(marks, types, scratch, upper) {
+    // An operand's arrival guard is its type where it arrives; every caller guards again.
+    let upper = judge::arriving(marks, types, upper);
+    // A module's own signature written over names declares its members over them.
+    if let Some(read) = judge::signed_member(marks, types, upper, name) {
+        return read.map(|declared| SignatureMember {
+            declared,
+            unpinned: None,
+        });
+    }
+    if judge::variable_outside(types, scratch, upper, KType::EMPTY_SIGNATURE) {
+        return None;
+    }
+    // A value member of a type a binding decides — a variable a run binds, a union holding one —
+    // is what the binding's module declares, read whole; `Any`, the read's fallback, where it
+    // declares none.
+    if let BinderSymbol::Value(value) = name
+        && judge::varies(types, upper)
+        && matches!(
+            judge::names_held(types, scratch, upper),
+            judge::Names::RunBound | judge::Names::Path
+        )
+    {
+        let operands = [DeclaredType::Type(upper)];
+        let rule = crate::scope::Rule::SignatureValue(value);
+        let read = (rule, &operands[..]);
+        if let Some(read) = judge::defined_else(marks, types, scratch, read, KType::ANY.into()) {
+            return read.map(|declared| SignatureMember {
+                declared: DeclaredType::Type(declared),
+                unpinned: None,
+            });
+        }
+        return None;
+    }
+    if let Some(above) = judge::variable_above(types, scratch, upper) {
         return signature_member(marks, types, scratch, above.into(), name);
     }
-    let (declared, pinned) = match judge::type_node(marks, types, upper) {
-        TypeNode::Signature { .. } => (judge::closed(marks, types, upper)?, None),
+    // A variable is read through its bound above, so the node read here is none; a signature is
+    // closed content, which no substitution enters.
+    let (declared, pinned) = match judge::node_unless_variable(types, upper)? {
+        TypeNode::Signature { .. } => (judge::static_of(types, upper)?, None),
         TypeNode::SignatureApply { signature, pins } => (signature, Some(pins)),
         // A union's value member is the join of its members', where each declares it at a type.
         TypeNode::Union { members } if matches!(name, BinderSymbol::Value(_)) => {
@@ -140,7 +182,7 @@ pub fn signature_member(
         }
         // A meet's member is the meet of the types each application declaring it reads it at.
         TypeNode::SignatureMeet { members } => {
-            let mut met = None;
+            let mut met: Option<DeclaredType<Parametric>> = None;
             for each in members.iter() {
                 let Some(read) = signature_member(marks, types, scratch, each, name) else {
                     continue;
@@ -150,16 +192,14 @@ pub fn signature_member(
                 }
                 met = Some(match met {
                     None => read.declared,
-                    Some(held) if judge::same(marks, types, held, read.declared) => held,
-                    // Two applications declaring a type member, or a scheme, otherwise disagree.
                     Some(held) => match (name, held.as_type(), read.declared.as_type()) {
-                        (BinderSymbol::Value(_), Some(held), Some(read)) => {
-                            let (held, read) = (
-                                judge::closed(marks, types, held)?,
-                                judge::closed(marks, types, read)?,
-                            );
-                            DeclaredType::Type(meet(types, scratch, held, read).into())
+                        // A value member is read at the meet of the types each declares it at.
+                        (BinderSymbol::Value(_), Some(a), Some(b)) => {
+                            DeclaredType::Type(judge::met(marks, types, scratch, a, b)?)
                         }
+                        // Two applications declaring a type member, or a scheme, otherwise
+                        // disagree.
+                        _ if judge::same(marks, types, held, read.declared) => held,
                         _ => return None,
                     },
                 });

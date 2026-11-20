@@ -11,11 +11,12 @@
 //! kind, which [`Content::flags`] answers.
 //!
 //! A few fields a hot path never reads sit behind one `&'run` reference, laid in the half on an
-//! intern miss: a carrier's key and name, a lexical variable's name, a signature's schema, a
-//! deferred return's surface, and a sealed member's [`Component`]. A lexical level and a member's
-//! index are stored narrowed to `u32`. A shape stores each slot's priority class in that
-//! slot's element, where the view reads its ranking. A reader that needs only inline fields, such
-//! as [`kind_of`](super::handle::KType::kind_of), matches the stored content and skips the hop.
+//! intern miss: a carrier's key and name, a lexical variable's name, a projection's step and lower
+//! end, a signature's schema, a deferred return's surface, and a sealed member's [`Component`]. A
+//! lexical level and a member's index are stored narrowed to `u32`. A shape stores each slot's
+//! priority class in that slot's element, where the view reads its ranking. A reader that needs
+//! only inline fields, such as [`kind_of`](super::handle::KType::kind_of), matches the stored
+//! content and skips the hop.
 //!
 //! Each child, and each concrete field — a bound, a lower end, a code kind, a carrier's met bound,
 //! an application's signature — is a [`Linked`] reference to its node, so a walk steps from node to
@@ -41,7 +42,7 @@ use super::component::Component;
 use super::digest::TypeDigest;
 use super::handle::{DeclaredType, Handle, Naming, Parametric, wrap};
 use super::kind::KKind;
-use super::node::{ContentKey, Group, PathClass, TypeNode};
+use super::node::{ContentKey, DerivedId, Group, PathClass, Step, TypeNode};
 use super::record::Record;
 use super::run::{Elements, Run};
 use super::schema::SigSchema;
@@ -71,7 +72,8 @@ impl Flags {
     pub(super) const NONE: Self = Flags(0);
     /// A `Quantified` position is reachable without crossing a scheme.
     pub(super) const QUANTIFIED: Self = Flags(1);
-    /// A rigid variable — `Quantified`, `Lexical`, `Path` or `Parameter` — is reachable.
+    /// A rigid variable — `Quantified`, `Lexical`, `Path`, `Parameter` or a projection — is
+    /// reachable.
     pub(super) const RIGID: Self = Flags(2);
     /// A free `Quantified`, a `Lexical`, a `Path`, a head `Parameter` or a scheme is reachable
     /// outside sealed content: the type is parametric rather than concrete.
@@ -212,6 +214,25 @@ pub enum Content<'run> {
         flags: Flags,
         class: &'run PathClass,
         name: &'run TypeSymbol,
+        bound: Linked<'run>,
+    },
+    Derived {
+        /// Only [`Flags::DEEP`] answers, folded from its two ends: every other is a variable's
+        /// constant.
+        flags: Flags,
+        /// Its term's digest and its name, laid together so the content fits its word budget.
+        named: &'run (DerivedId, TypeSymbol),
+        lower: Linked<'run>,
+        bound: Linked<'run>,
+    },
+    Projection {
+        /// Only [`Flags::DEEP`] answers, folded from its base: every other is a variable's
+        /// constant.
+        flags: Flags,
+        /// Its step and its lower end, laid together: its bound is the one end the rigid rule
+        /// reads on a hot path.
+        step: &'run (Step, Linked<'run>),
+        base: Linked<'run>,
         bound: Linked<'run>,
     },
     Union {
@@ -412,6 +433,25 @@ impl<'run> StoredNode<'run> {
                 name: *name,
                 bound: C::read_bound(bound),
             },
+            Content::Derived {
+                named: (term, name),
+                lower,
+                bound,
+                ..
+            } => TypeNode::Derived {
+                term: *term,
+                name: *name,
+                lower: C::read_bound(lower),
+                bound: C::read_bound(bound),
+            },
+            Content::Projection {
+                step, base, bound, ..
+            } => TypeNode::Projection {
+                base: C::read(base),
+                step: step.0,
+                lower: C::read_bound(step.1),
+                bound: C::read_bound(bound),
+            },
             Content::Union { members, .. } => TypeNode::Union {
                 members: Run::over(members.raw()),
             },
@@ -483,8 +523,8 @@ impl<'run> StoredNode<'run> {
         self.flags().holds(Flags::QUANTIFIED)
     }
 
-    /// Whether any rigid variable — `Quantified`, `Lexical` or `Parameter` — is reachable from the
-    /// node. Read off the flags interning stored in the node.
+    /// Whether any rigid variable — `Quantified`, `Lexical`, `Path`, `Parameter` or a projection —
+    /// is reachable from the node. Read off the flags interning stored in the node.
     ///
     /// The invariant a **bound** carries: a bound is a variable-free type. That is what keeps the
     /// order's two rigid clauses consistent, since below a rigid variable are only itself and
@@ -666,6 +706,28 @@ impl<'run> Content<'run> {
                 name: lay_one(lay, name),
                 bound,
             },
+            TypeNode::Derived {
+                term,
+                name,
+                lower,
+                bound,
+            } => Content::Derived {
+                flags: flags.within(Flags::DEEP),
+                named: lay_one(lay, (term, name)),
+                lower,
+                bound,
+            },
+            TypeNode::Projection {
+                base,
+                step,
+                lower,
+                bound,
+            } => Content::Projection {
+                flags: flags.within(Flags::DEEP),
+                step: lay_one(lay, (step, lower)),
+                base,
+                bound,
+            },
             TypeNode::Union { members } => Content::Union { flags, members },
             TypeNode::ConstructorApply {
                 constructor,
@@ -831,6 +893,28 @@ impl<'run> Content<'run> {
                 name: lay_one(lay, *name),
                 bound: map(bound),
             },
+            Content::Derived {
+                flags,
+                named,
+                lower,
+                bound,
+            } => Content::Derived {
+                flags,
+                named: lay_one(lay, *named),
+                lower: map(lower),
+                bound: map(bound),
+            },
+            Content::Projection {
+                flags,
+                step,
+                base,
+                bound,
+            } => Content::Projection {
+                flags,
+                step: lay_one(lay, (step.0, map(step.1))),
+                base: map(base),
+                bound: map(bound),
+            },
             Content::Union { flags, members } => Content::Union {
                 flags,
                 members: Run::over(mapped(lay, members.raw(), map)),
@@ -914,7 +998,9 @@ impl<'run> Content<'run> {
             }
             Content::Lexical { flags, .. }
             | Content::Path { flags, .. }
-            | Content::Parameter { flags, .. } => {
+            | Content::Derived { flags, .. }
+            | Content::Parameter { flags, .. }
+            | Content::Projection { flags, .. } => {
                 Flags::RIGID | Flags::PARAMETRIC | Flags::POROSITY | flags
             }
             // An opaque carrier: a value carries it and dispatches on it, so it is concrete. Its

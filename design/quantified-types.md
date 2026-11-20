@@ -68,7 +68,7 @@ other value, and every reader but a call's head takes `Value::concrete_ktype`.
 An **instance site** is a quantified function, a name bound to one, a
 module's quantified member read through the module, `m.pick`, or a
 `FN FOR ALL` literal, written anywhere but the head of a call or a `MODULE` or
-`GROUP` body's binding. The load solves its group there from the type it is **wanted**
+`GROUP` body's binding. Its group is solved there from the type it is **wanted**
 at, and the value read there is the **instance**: a function stamped with the
 concrete type its group was solved at, which is stored, passed, returned and
 dispatched on like any unquantified function. A type is wanted at:
@@ -107,14 +107,24 @@ The solve is the least instance of the scheme under the wanted type
 ([`instance_under`](../lattice/src/types/relations.md#quantified-binders)). A
 variable no contribution from the wanted type reaches is refused and named,
 never read as its bound; one some contribution reaches binds its least
-instance, so `:(FN :{x :Number} -> Any)` fixes `Elt` to `Number`. A solution
-may name a type a run binds, such as an enclosing `EXPR FOR ALL #[Outer]`'s
-`Outer`, and the instance is then made at the type each run binds it to. A
+instance, so `:(FN :{x :Number} -> Any)` fixes `Elt` to `Number`. A
 quantified callee's other arguments solve its group first, a variable a class
-ranked before the slot's solves taken as the call solves it — from contributions
-closed or naming a type a run binds, where each run reproduces that solve — and
-the slot is read through that solve. The candidates a keyworded use keeps must agree on each
-instance.
+ranked before the slot's solves taken as the call solves it, and the slot is
+read through that solve. The candidates a keyworded use keeps must agree on
+each instance.
+
+The instance is made where the solve that fixes it is decided
+([where a solve is decided](binding-graph.md#where-a-solve-is-decided)):
+
+- by the load, where the wanted type is closed;
+- at the type each run binds, where the wanted type names a type a run binds,
+  such as an enclosing `EXPR FOR ALL #[Outer]`'s `Outer`, whether the lattice
+  spells the solution over `Outer` or each binding of `Outer` solves it;
+- by the call, where an argument that solves the callee's group contributes
+  the type its value carries, its static type being at most `Any`.
+
+A site nothing wants at a type, one wanted at a union or `Any`, and one whose
+solving argument is itself an instance site are refused at the load.
 [Dispatch](../src/dispatch/README.md#static-types) owns the rule and its
 refusals.
 
@@ -249,3 +259,10 @@ call, from the upper end of each argument's static type and from the type it
 binds, so a solve always has concrete types to read and never infers a
 scheme. And its `Any` is the top of a
 lattice, not an unknown type, so nothing here is checked by consistency.
+
+## Open work
+
+- [A head reading its parameters' types](../roadmap/types/head-parameter-reads.md)
+  — the hidden variable a head's read of its own parameters introduces.
+- [An instance made by the call](../roadmap/types/instance-made-by-the-call.md)
+  — an instance site whose group only the call can solve.

@@ -16,7 +16,7 @@ use crate::scope::{
     StaticType, Store, TypeExpression, Unknown,
 };
 use crate::symbols::BinderSymbol;
-use crate::type_lattice::{KType, Parametric, is_subtype_of};
+use crate::type_lattice::{KType, Parametric};
 
 use super::super::check::overlap;
 use super::{Pass, Tag};
@@ -94,6 +94,7 @@ impl<'p, 'o: 'p, 'x, 'graph: 'o + 'p, 'tier: 'o, 'pair, 'reg, S: Store<'o>>
         elaborate::declarations(
             &*self,
             self.tools(),
+            self.lay,
             shape,
             component,
             &mut |slot, typed| {
@@ -165,14 +166,11 @@ impl<'p, 'o: 'p, 'x, 'graph: 'o + 'p, 'tier: 'o, 'pair, 'reg, S: Store<'o>>
             &mut signatures,
         )?;
         self.set_registered(level, registration.slot, typed);
-        let root = self.shape_at(self.chain_root_segment(level));
-        if root.kind() != ShapeKind::Code {
-            // A rigid entry is checked where its binding closes it: a binding may make it overlap.
-            if let crate::scope::Static::Rigid { value, .. } = typed {
-                use crate::elaborate::judge::Marks;
-                self.open(crate::scope::OpenKind::Overlap, None, value.shape);
-            }
+        // A quote's code keeps its overlap for the `EVAL` running it to report.
+        let in_code = (self.chain[..=level].iter()).any(|at| at.shape.kind() == ShapeKind::Code);
+        if !in_code {
             overlap(
+                &*self,
                 shape,
                 registration,
                 typed,
@@ -226,8 +224,8 @@ impl<'p, 'o: 'p, 'x, 'graph: 'o + 'p, 'tier: 'o, 'pair, 'reg, S: Store<'o>>
         let typed = self.part(level, part)?;
         let (types, scratch) = (self.types, self.scratch);
         match judge::never_satisfies(self, types, scratch, typed, KType::ANY_CODE.into()) {
-            Some((value, _)) => Err(ShapeError::BodyNotCode {
-                value,
+            Some(refused) => Err(ShapeError::BodyNotCode {
+                refused,
                 at: self.source(level, site),
             }),
             None => Ok(()),
@@ -255,13 +253,16 @@ impl<'p, 'o: 'p, 'x, 'graph: 'o + 'p, 'tier: 'o, 'pair, 'reg, S: Store<'o>>
             if let BinderSymbol::Type(_) = name {
                 return true;
             }
-            let declared = params
-                .and_then(|params| params.get(name.symbol()))
-                .and_then(|declared| judge::closed(self, types, declared));
-            declared.is_some_and(|declared| {
-                is_subtype_of(types, scratch, declared, KType::EMPTY_SIGNATURE)
-                    || is_subtype_of(types, scratch, declared, KType::ANY_TYPE)
-            })
+            let declared = params.and_then(|params| params.get(name.symbol()));
+            // A parameter over names digests where its declared bound lies under a module or a
+            // type value, as every binding of it does: a key's cost is the load's to fix, so it
+            // asks nothing a binding answers, and a binding never keys more than the load does.
+            let under = |ceiling: KType| {
+                declared.is_some_and(|declared| {
+                    judge::under_every_binding(types, scratch, declared, ceiling)
+                })
+            };
+            under(KType::EMPTY_SIGNATURE) || under(KType::ANY_TYPE)
         };
         let mut digestible = BumpVec::new_in(scratch);
         for slot in (0..frame.slots() as u32).map(Slot) {

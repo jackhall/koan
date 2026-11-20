@@ -34,7 +34,10 @@
 //! Over static types naming lexical variables, [`Collector::reproducible`] reports whether a run,
 //! binding each variable, reproduces the solve: not where an admission read a variable through its
 //! ends or chose a declared union's member that a binding may change, a variable's answer is a meet
-//! over one, or the solve fails at a verdict over one. A closed solve always is.
+//! over one, or the solve fails at a verdict over one. A closed solve always is. A carried variable
+//! against a declared list, dict or record whose pieces its bound guarantees is read through no end:
+//! it is unfolded into that composite over its projections ([`TypeNode::Projection`]), so each
+//! child contributes the piece every binding reduces it to.
 
 use crate::symbols::BinderSymbol;
 use bumpstorage::{BumpAllocator, BumpVec};
@@ -44,8 +47,8 @@ use std::marker::PhantomData;
 use super::chain::TypeChain;
 use super::handle::{Handle, KType, Naming, Parametric, TypeHandle, wrap};
 use super::lattice::{join_iter, meet_through_variables};
-use super::node::TypeNode;
-use super::order::fits;
+use super::node::{Step, TypeNode};
+use super::order::{fits, is_subtype_of};
 use super::schema::member;
 use super::sig_relations::fits_at_open;
 use super::signatures::{Application, applications, is_signature_type};
@@ -149,6 +152,34 @@ impl<'run> Interval<Linked<'run>> {
     }
 }
 
+/// What every door that runs a solve hands back, the **solve record**: the solution where the
+/// contributions admit one, which variables a contribution reached, and whether a run reproduces
+/// the solve ([`Collector::reproducible`]), a failure included. A run reproduces a reproducible
+/// record's answer with each lexical variable bound, so a caller may name that answer.
+#[derive(Clone, Copy, Debug)]
+pub struct SolveRecord<'s, T = Parametric> {
+    /// `None` where the contributions admit no solve.
+    pub solved: Option<Solution<'s, T>>,
+    /// Per variable, in group order, whether some contribution reached it.
+    pub reached: &'s [bool],
+    pub reproducible: bool,
+}
+
+impl<'s, T> SolveRecord<'s, T> {
+    /// Each variable's interval, where the solve succeeded.
+    pub fn intervals(&self) -> Option<&'s [Interval<T>]> {
+        self.solved.as_ref().map(|solved| solved.intervals)
+    }
+}
+
+/// A solve's answer, in group order: each variable's type beside its interval, the solutions a
+/// call within the arguments' static types reaches ([`intervals_in`]).
+#[derive(Clone, Copy, Debug)]
+pub struct Solution<'s, T = Parametric> {
+    pub types: &'s [T],
+    pub intervals: &'s [Interval<T>],
+}
+
 /// A concrete interval stands where a parametric one may.
 impl From<Interval<KType>> for Interval<Parametric> {
     fn from(interval: Interval<KType>) -> Self {
@@ -164,34 +195,7 @@ impl From<Interval<KType>> for Interval<Parametric> {
 /// its solution. Otherwise the upper end is the solution where some covariant position under no
 /// union names the variable — every admitted argument reaches one — and the bound elsewhere; and
 /// the lower end is `Never` where some covariant position names it, and the solution elsewhere.
-///
-/// Each end is a solution or a bound, so an interval over a `T` solution is a `T` interval.
-pub fn intervals<'ty, 's, D: TypeHandle, T: TypeHandle>(
-    types: &TypeChain<'ty, impl Habitat<'ty>>,
-    scratch: BumpAllocator<'s>,
-    declared: &[D],
-    bounds: &[KType],
-    solution: &[T],
-    exact: bool,
-) -> BumpVec<'s, Interval<T>> {
-    let enter = |handles: &mut dyn Iterator<Item = Handle>| {
-        let mut nodes = BumpVec::new_in(scratch);
-        nodes.extend(handles.map(|handle| types.enter(handle)));
-        nodes
-    };
-    let declared = enter(&mut declared.iter().map(|position| position.raw()));
-    let bounds = enter(&mut bounds.iter().map(|bound| bound.raw()));
-    let solved = enter(&mut solution.iter().map(|solved| solved.raw()));
-    let mut out = BumpVec::with_capacity_in(solution.len(), scratch);
-    out.extend(
-        intervals_in(types, scratch, &declared, &bounds, &solved, exact)
-            .iter()
-            .map(|interval| interval.typed()),
-    );
-    out
-}
-
-/// [`intervals`] over nodes, each group bound among them.
+/// Each end is a solution or a bound, each group bound among the nodes.
 pub(super) fn intervals_in<'s, 'run>(
     types: &TypeChain<'run, impl Habitat<'run>>,
     scratch: BumpAllocator<'s>,
@@ -470,6 +474,12 @@ impl<'s, 'run, T> Collector<'s, 'run, T> {
         reached(&self.lower) || reached(&self.upper)
     }
 
+    /// [`reached`](Self::reached) for every variable of the group, in its scratch.
+    pub(super) fn reach(&self) -> &'s [bool] {
+        self.scratch
+            .alloc_slice_fill_iter((0..self.bounds.len()).map(|index| self.reached(index)))
+    }
+
     /// The lower and upper contributions to the `index`-th variable, in arrival order — what
     /// reached it at a covariant position and what reached it at a contravariant one, each by its
     /// handle. Empty for an index no argument reached.
@@ -540,9 +550,10 @@ impl<'s, 'run, T> Collector<'s, 'run, T> {
             })
     }
 
-    /// The `index`-th variable's answer: the join of its lower contributions where any reached it,
-    /// else the meet of its upper ones and its bound; or, where the join does not lie under some
-    /// ceiling — an upper contribution or the bound — the join beside the first such ceiling.
+    /// The `index`-th variable's answer: the join of its lower contributions where any reached it —
+    /// spelled as an upper contribution a parametric join equals ([`equal_ceiling`]) — else the
+    /// meet of its upper ones and its bound; or, where the join does not lie under some ceiling —
+    /// an upper contribution or the bound — the join beside the first such ceiling.
     ///
     /// A cell holding a parametric contribution is read in handle order, not arrival order. A join
     /// or meet that keeps a variable beside a member the rigid rule orders under it answers
@@ -587,10 +598,35 @@ impl<'s, 'run, T> Collector<'s, 'run, T> {
             None => joined,
         };
         match fits(types, scratch, held, bound) {
-            true => Ok(joined),
+            true => Ok(equal_ceiling(types, scratch, joined, upper).unwrap_or(joined)),
             false => Err((joined, bound)),
         }
     }
+}
+
+/// The ceiling among `upper` that a parametric `joined` is at every binding — each ordered under
+/// the other, as a join keeping a variable beside a member above its bound is that member — a
+/// concrete one first. A pin contributes its type from both sides, and a substituted pin fits by
+/// handle, so the least instance is spelled as the ceiling. `None` over a concrete join, which a
+/// ceiling over it already is by handle.
+fn equal_ceiling<'run>(
+    types: &TypeChain<'run, impl Habitat<'run>>,
+    scratch: BumpAllocator<'_>,
+    joined: Linked<'run>,
+    upper: &[Linked<'run>],
+) -> Option<Linked<'run>> {
+    if joined.is_concrete() {
+        return None;
+    }
+    let equal = |ceiling: &&Linked<'run>| {
+        is_subtype_of(types, scratch, joined, ceiling)
+            && is_subtype_of(types, scratch, ceiling, joined)
+    };
+    let concrete = upper
+        .iter()
+        .filter(|ceiling| ceiling.is_concrete())
+        .find(equal);
+    concrete.or_else(|| upper.iter().find(equal)).copied()
 }
 
 /// A collector cell in handle order where it holds a parametric contribution among two or more,
@@ -1055,6 +1091,38 @@ fn split_pins<'s, 'run>(
     (open, fixed)
 }
 
+/// `carried`, a lexical variable or a projection of one, as the composite `declared`'s head names,
+/// each child the projection at that child's step: `LIST OF (ELEMENT OF Ll)` for a declared list,
+/// `MAP (KEY OF Dd) -> (VALUE OF Dd)` for a dict, and for a record each of the declared record's
+/// fields at `(FIELD f OF Rr)`, in its order. `None` where `carried` is no such variable,
+/// `declared` is no list, dict or record, or a binding of `carried` may lack a piece.
+fn unfold<'run>(
+    types: &TypeChain<'run, impl Habitat<'run>>,
+    scratch: BumpAllocator<'_>,
+    declared: Linked<'run>,
+    carried: Linked<'run>,
+) -> Option<Linked<'run>> {
+    if !matches!(
+        carried.view(),
+        TypeNode::Lexical { .. } | TypeNode::Derived { .. } | TypeNode::Projection { .. }
+    ) {
+        return None;
+    }
+    let piece = |step| types.projection_node(scratch, carried, step);
+    Some(match declared.view() {
+        TypeNode::List { .. } => types.list(piece(Step::Element)?),
+        TypeNode::Dict { .. } => types.dict(piece(Step::Key)?, piece(Step::Value)?),
+        TypeNode::Record { fields } => {
+            let mut pieces = BumpVec::with_capacity_in(fields.len(), scratch);
+            for name in fields.keys() {
+                pieces.push((name, piece(Step::Field(name))?));
+            }
+            types.record(scratch, &pieces)
+        }
+        _ => return None,
+    })
+}
+
 impl<'run, T> Lockstep<'run> for Admits<'_, '_, 'run, T> {
     type Out = Admission<'run>;
 
@@ -1140,6 +1208,14 @@ impl<'run, T> Lockstep<'run> for Admits<'_, '_, 'run, T> {
         carried: Linked<'run>,
         v: Variance,
     ) -> Admission<'run> {
+        // A carried lexical variable or projection, against a declared list, dict or record, fills
+        // each child with its projection there wherever every binding has that piece: each
+        // binding's solve pairs the child with that projection's reduction, so no end is read.
+        if v == Variance::Co
+            && let Some(unfolded) = unfold(types, scratch, declared, carried)
+        {
+            return lockstep(types, scratch, declared, unfolded, v, self);
+        }
         // A carried rigid variable fills, at a covariant position, what its bound fills, and at a
         // contravariant one what its lower end fills: below one lie itself and what lies under its
         // lower end.

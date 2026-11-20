@@ -303,3 +303,21 @@ fn a_quote_spreading_a_list_digests_apart_from_one_holding_it() {
     assert_ne!(spread, held);
     assert_eq!(spread, again);
 }
+
+/// A written quote's code is its content over the type names around it that content composes:
+/// `#(PICK $x)` waits on `Elt`, so `KEEP 5` under `Elt := Number` and under `Elt := Number | Str`
+/// digest apart; `#(1 + 2)` reads no name, so `SUM` digests alike under every binding.
+#[test]
+fn a_quote_is_its_code_over_the_names_around_it_its_content_composes() {
+    let [narrow, again, wide, sum, other] = digests(
+        "EXPR FOR ALL #{Elt: :(Number | Str)} #(KEEP x :Elt) -> Any = #(\n  #(PICK $x)\n)\n\
+         EXPR FOR ALL #{Elt: :(Number | Str)} #(SUM x :Elt) -> Any = #(\n  #(1 + 2)\n)\n\
+         LET v :(Number | Str) = 5\n\
+         LET narrow = (KEEP 5)\nLET again = (KEEP 5)\nLET wide = (KEEP v)\n\
+         LET sum = (SUM 5)\nLET other = (SUM \"s\")",
+        ["narrow", "again", "wide", "sum", "other"],
+    );
+    assert_eq!(narrow, again);
+    assert_ne!(narrow, wide, "`Elt` is `Number | Str` for `wide`");
+    assert_eq!(sum, other, "the contract trims `Elt`");
+}

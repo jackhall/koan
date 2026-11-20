@@ -55,22 +55,23 @@ mod variants;
 #[cfg(test)]
 mod tests;
 
+pub use crate::scope::{applied_union, declared_field, declared_variant, tag_union};
+pub use crate::scope::{variant_label, variant_named, variants};
 #[cfg(test)]
 pub use builtin::{builtin_error, builtin_result, builtin_shape_types};
 pub use declaration::declares_nominal;
-pub use expression::{applied_union, declared_field, declared_variant, tag_union};
 pub use members::{
     SignatureMember, applied_member, member_count, schema_member, schema_of, signature_member,
     type_members, value_count,
 };
-pub use module::{module_signature, self_signature};
+pub use module::{module_signature, module_signing, self_signature};
 pub use paths::{declared_through, path_binding};
 pub use reads::{Reads, TypeAt};
 pub use unit::{
-    Mode, Reader, Signatures, Tools, TypeContext, callable, declarations, expression, guards,
-    own_levels, registration,
+    Reader, Signatures, Tools, TypeContext, callable, declarations, expression, guards, own_levels,
+    registration,
 };
-pub use variants::{arm_guards, arm_shapes, arms_under, variant_label, variant_named, variants};
+pub use variants::{arm_guards, arm_shapes, arms_under};
 
 #[cfg(test)]
 thread_local! {

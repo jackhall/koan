@@ -2,9 +2,9 @@
 
 What a type can say, and what type a value has. Generic code is typed as far
 as its static types reach and checked by the call for the rest, so the items
-here widen what the declarations can decide — a type naming a piece of a
-variable or a parameter, a static type pinning a parameter to a variable, a
-nominal over a run-bound type typed at load, an overload a builtin always beats
+here widen what the declarations can decide — a head's type reading its own
+parameters, a static type pinning a parameter to a variable, a
+`FOR ALL` bound over a run-bound name typed at load, an overload a builtin always beats
 refused whatever its signature, a projection by schema — settle what a value
 carries where today's rule loses something, as at a view's barrier or a tail
 call, and keep a solve blind to the order a union's members are written in.
@@ -28,14 +28,19 @@ hand.
 
 - [What a barrier rebuilds](barrier-coercion.md)
 - [A carried union at a contravariant position](contravariant-union-solve.md)
+- [A hold no binding can fit, refused at load](hold-no-binding-fits.md)
+- [An instance made by the call](instance-made-by-the-call.md)
+- [A value binder held as a module](module-binder-by-hold.md)
 - [A nested projection](nested-projection.md)
 - [The overlap check over a parametric registration](parametric-overlap.md)
 - [A value retyped in place, pinned at its paths](pinned-in-place.md)
-- [Projection types](projection-types.md)
-- [A nominal over a run-bound type, typed at load](run-bound-nominals.md)
+- [A `FOR ALL` bound over a run-bound name](run-bound-for-all-bounds.md)
+- [A run-bound name bound to a signature type](run-bound-signature-binding.md)
+- [A solve reports what it could not establish](solve-reports-what-it-could-not-establish.md)
 - [A surfaced head reads only the parameters its shape names](surfaced-head-parameters.md)
 - [A tail call keeps every retype](tail-retypes.md)
 - [Types held in record values](types-in-records.md)
+- [A slot type no value inhabits](uninhabited-slot-types.md)
 - [A parameterized union's variant takes only the parameters its payload names](variant-parameters.md)
 
 ## Unplanned work
@@ -93,3 +98,13 @@ as surprises, not scheduled.
   typing would keep a fact; `solved_from` falls back to carried types on a
   length mismatch rather than refusing. A typing whose writes have nowhere to
   land would let the types carry what the flag carries.
+- **A projection's base rebuilt outside its bound panics.** A rebuild that
+  replaces a projection's base by a type outside the base's bound panics in
+  `reassemble` ([`unary.rs`](../../lattice/src/types/walk/unary.rs)): the piece
+  of such a type does not exist, and the rebuild has no variance to pick an
+  end. Today only `substitute_levels` reaches it, with bindings under their
+  bounds; `read_through` reads a projection by its base and falls back to the
+  projection's own end
+  ([reading through intervals](../../lattice/src/types/solving.md#substitute-then-ask)).
+  A level's binding that carried that it lies under its bound would make the
+  check unable to fire.

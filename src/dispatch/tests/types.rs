@@ -116,10 +116,6 @@ fn closed(typed: StaticType<'_>) -> KType {
     }
 }
 
-fn unknown(typed: StaticType<'_>) -> bool {
-    matches!(typed, Static::Unknown)
-}
-
 fn type_name(program: &Program<'_>, name: &str) -> TypeSymbol {
     TypeSymbol::declared(name, program.symbols()).expect("a Type token")
 }
@@ -364,7 +360,7 @@ fn a_bound_naming_a_run_bound_name_is_left_for_the_run() {
 }
 
 #[test]
-fn a_dollar_name_crossing_into_code_is_a_name_of_the_code_s_own() {
+fn a_dollar_name_crossing_into_code_is_the_encloser_s_name() {
     let source = "EXPR FOR ALL #[Elt] #(FUN x :Elt) -> Elt = #(\n  \
                   LET q = #(PRINT :(LIST OF $Elt))\n  \
                   x\n)";
@@ -393,26 +389,55 @@ fn a_dollar_name_crossing_into_code_is_a_name_of_the_code_s_own() {
     });
 }
 
+/// A meet, a member read, an application, a code kind and a pin over a run-bound head are each a
+/// derived name: a meet the name of its term, the others the name decided on whether the binding's
+/// head spells them.
 #[test]
-fn a_non_commuting_spelling_is_left_for_the_run() {
+fn a_spelling_over_a_run_bound_head_is_a_derived_name() {
     let source = "EXPR FOR ALL #[Elt] #(FUN x :Elt) -> Any = #(\
                   (:(Elt & Number)) \
                   (:(Elt.x)) \
                   (:(FN :{y :Number, z :Elt} -> Number)) \
                   (:(Number -> Elt)) \
                   (:(Elt NEEDING #[y])) \
-                  (:(Number & Str)))";
+                  (:(Number & Str)) \
+                  (:(UNBUILT Elt)) \
+                  (:(Elt WITH {Set = Number})))";
     loaded(source, |program| {
         let (facts, body) = (program.facts(), registered(program));
         let typed = |expression: &TypeExpression<'_>| {
             facts.typed_expression(&program.tiers().resting(), body, expression.site)
         };
-        for statement in [0, 1, 3, 4] {
+        let spelled = [
+            (1, "(MEMBER x OF Elt)"),
+            (3, "(Number -> Elt)"),
+            (4, "(Elt NEEDING #[y])"),
+            (6, "(UNBUILT Elt)"),
+            (7, "(Elt WITH {Set = Number})"),
+        ];
+        for (statement, spelled) in spelled {
             let [expression] = written_in(body, statement)[..] else {
                 panic!("one expression in statement {statement}")
             };
-            assert!(unknown(typed(expression)), "statement {statement}");
+            let (value, _) = rigid(typed(expression));
+            let types = program.tiers().resting();
+            assert_eq!(
+                display_name(value, &types, program.symbols()).to_string(),
+                format!("(ONE OF Never, {spelled})"),
+                "statement {statement}"
+            );
         }
+        // A meet over a run-bound name is the derived name of its term, which a binding meets.
+        let [met] = written_in(body, 0)[..] else {
+            panic!("one expression in statement 0")
+        };
+        let (value, _) = rigid(typed(met));
+        let types = program.tiers().resting();
+        assert!(matches!(types.node(value), TypeNode::Derived { .. }));
+        assert_eq!(
+            display_name(value, &types, program.symbols()).to_string(),
+            "(Elt & Number)"
+        );
         let [function] = written_in(body, 2)[..] else {
             panic!("one expression in statement 2")
         };
@@ -438,24 +463,27 @@ fn a_non_commuting_spelling_is_left_for_the_run() {
     });
 }
 
+/// A nominal over a run-bound name declares rigid, over the derived name a binding seals, and a
+/// reader of it is rigid over that name, waiting on the name its declaration reads.
 #[test]
-fn a_nominal_over_a_run_bound_type_is_declared_where_it_runs() {
+fn a_nominal_over_a_run_bound_type_is_rigid_over_a_derived_name() {
     let source = "EXPR FOR ALL #[Elt] #(FUN x :Elt) -> Any = #(\
                   (NEWTYPE Boxed = :{v :Elt}) \
                   (:(LIST OF Boxed)))";
     loaded(source, |program| {
         let (facts, body) = (program.facts(), registered(program));
         let slot = type_slot(program, body, "Boxed");
-        assert!(unknown(facts.declared_type(
-            &program.tiers().resting(),
-            body,
-            slot
-        )));
+        let (boxed, levels) = rigid(facts.declared_type(&program.tiers().resting(), body, slot));
+        let types = program.tiers().resting();
+        assert_eq!(
+            display_name(boxed, &types, program.symbols()).to_string(),
+            "(Boxed DECLARED OVER :{v :Elt})"
+        );
+        assert_eq!(levels, [0]);
         let bump = Bump::new();
         let (value, levels) = rigid(only(program, body));
-        let boxed = lexical(program, 1, "Boxed");
         assert_eq!(value, reading(program.tiers(), &bump).list(boxed));
-        assert_eq!(levels, [1]);
+        assert_eq!(levels, [0]);
     });
 }
 
@@ -529,9 +557,14 @@ fn a_quote_s_holes_are_rigid_variables() {
         };
         let bump = Bump::new();
         let types = reading(program.tiers(), &bump);
+        // The hole is the code's own name, homed past the program's on the chain they share.
         let (value, levels) = rigid(only(program, hole));
-        assert_eq!(value, types.list(lexical(program, 0, "Tee")));
-        assert_eq!(levels, [0]);
+        let [level] = levels[..] else {
+            panic!("the hole is one name")
+        };
+        assert_eq!(value, types.list(lexical(program, level, "Tee")));
+        let homed = program.shapes().unknown_of_level(hole.segment(), level);
+        assert_eq!(homed.map(|unknown| unknown.segment), Some(hole.segment()));
         assert_eq!(closed(only(program, alias)), types.list(KType::NUMBER));
     });
 }
@@ -557,9 +590,11 @@ fn a_closed_type_that_does_not_elaborate_refuses_the_load() {
 fn a_refusal_in_a_quote_s_code_is_kept_for_its_eval() {
     loaded("LET q = #(PRINT :(Number.z))", |program| {
         let code = nested(program.shape(), ShapeKind::Code);
-        let refusal = program
-            .facts()
-            .typing_refusal(&program.tiers().resting(), code);
+        let scratch = crate::memory::Bump::new();
+        let refusal =
+            program
+                .facts()
+                .typing_refusal(&program.tiers().resting(), &scratch, code, &mut |_| None);
         assert!(matches!(
             refusal,
             Some(crate::scope::ShapeError::Type { .. })

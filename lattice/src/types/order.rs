@@ -336,6 +336,8 @@ fn family_top<'run>(node: &TypeNode<'run, Linked<'run>>) -> Option<Handle> {
         | TypeNode::Quantified { .. }
         | TypeNode::Lexical { .. }
         | TypeNode::Path { .. }
+        | TypeNode::Derived { .. }
+        | TypeNode::Projection { .. }
         | TypeNode::Parameter { .. }
         | TypeNode::Carrier { .. }
         | TypeNode::DeferredReturn(_) => None,

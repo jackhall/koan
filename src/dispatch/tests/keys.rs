@@ -77,7 +77,7 @@ fn some(names: &[&str]) -> Option<Vec<String>> {
 
 /// Whether some unit of `shape` waits on every one of `unknowns` and seams at `shape`'s entry.
 fn seams_at_entry_over(program: &Program<'_>, shape: &BodyShape<'_>, unknowns: &[Unknown]) -> bool {
-    (program.facts().own_units().iter())
+    (program.facts().own_units())
         .filter(|(unit, (_, frontier))| {
             unit.segment == shape.segment()
                 && unknowns
@@ -85,7 +85,7 @@ fn seams_at_entry_over(program: &Program<'_>, shape: &BodyShape<'_>, unknowns: &
                     .all(|unknown| frontier.unknowns().contains(unknown))
         })
         .any(|(unit, _)| {
-            seam(program, *unit).is_some_and(|site| {
+            seam(program, unit).is_some_and(|site| {
                 (site.segment, site.unit) == (shape.segment(), UnitIndex::ENTRY)
             })
         })

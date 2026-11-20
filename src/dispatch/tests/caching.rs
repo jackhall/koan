@@ -1594,17 +1594,86 @@ fn a_request_names_the_key_its_values_give() {
     assert!(checked > 0, "no seek read a request");
 }
 
+/// The questions each kind records per unit record over the example programs, and how many units
+/// held: what the item that states every rule's question measures before and after.
+#[test]
+#[ignore = "a measurement: run it with --ignored --nocapture"]
+fn questions_over_the_example_programs() {
+    use crate::dispatch::walk::{HELD, TALLY, Tallied, UNMARKED};
+    use crate::scope::OpenKind;
+    TALLY.with(|tally| tally.set([Tallied::default(); UNMARKED]));
+    HELD.with(|held| held.set(0));
+    let programs = (tutorial_snippets().into_iter()).chain(super::laid::fixtures());
+    let (mut ran, mut refused, mut derived) = (0, 0, 0);
+    let mut loading = std::time::Duration::ZERO;
+    for (_, code) in programs {
+        let started = std::time::Instant::now();
+        let loaded =
+            CellSubstrate::load::<Koan>(&code, "<measured>", 2, BuildBudget::default(), output());
+        loading += started.elapsed();
+        let Ok(mut substrate) = loaded else {
+            refused += 1;
+            continue;
+        };
+        ran += 1;
+        derived += substrate.with(|running| {
+            let names = running
+                .program()
+                .facts()
+                .base_layer()
+                .derived()
+                .names()
+                .len();
+            let _ = running.ran();
+            names
+        });
+    }
+    println!("programs run: {ran}, refused at load: {refused}");
+    println!("derived names laid at load: {derived}, load time: {loading:?}");
+    let rows = TALLY.with(std::cell::Cell::get);
+    println!("| kind | records | answered | undecided | per record |");
+    println!("|---|---|---|---|---|");
+    for (kind, row) in OpenKind::ALL.iter().zip(rows.iter()) {
+        let per = match row.records {
+            0 => 0.0,
+            records => (row.answered + row.undecided) as f64 / records as f64,
+        };
+        println!(
+            "| {kind:?} | {} | {} | {} | {per:.2} |",
+            row.records, row.answered, row.undecided
+        );
+    }
+    println!("held: {}", HELD.with(std::cell::Cell::get));
+}
+
+/// No statement of the example programs holds: no closing walk over a witnessed layer re-runs a
+/// unit for an undecided mark on a name it checks.
+#[test]
+fn no_statement_holds_over_the_example_programs() {
+    use crate::dispatch::walk::HELD;
+    HELD.with(|held| held.set(0));
+    let programs = (tutorial_snippets().into_iter()).chain(super::laid::fixtures());
+    for (_, code) in programs {
+        let loaded =
+            CellSubstrate::load::<Koan>(&code, "<measured>", 2, BuildBudget::default(), output());
+        if let Ok(mut substrate) = loaded {
+            let _ = substrate.with(|running| running.ran());
+        }
+    }
+    assert_eq!(HELD.with(std::cell::Cell::get), 0);
+}
+
 /// A tail edge into a registration the load types `Unknown` pairs by its written slots (D1.9):
-/// `SPIN`'s parameter `e` reads a meet over `Elt`, so its registration is untyped, and its tail
-/// call passes `Item` on bare, so the nominal it declares over it is invariant.
+/// `SPIN`'s group bounds `Tee` by `Elt`, a bound left for the run, so its registration is untyped,
+/// and its tail call passes `Item` on bare, so the nominal it declares over it is invariant.
 #[test]
 fn a_tail_edge_into_an_untyped_registration_pairs_by_its_written_slots() {
     let source = program(
         1,
         "EXPR FOR ALL #[Elt] #(DRIVE x :Elt AND m :Counter) -> Any = #(\n  \
-         EXPR #(SPIN e :(Elt & Number) Item :Type link :Link) -> Number = \
+         EXPR FOR ALL #{Tee: Elt} #(SPIN e :Tee Item :Type link :Link) -> Number = \
          #((NEWTYPE Boxed = :{v :Item}) (SPIN e Item (ATTR link next)))\n  \
-         EXPR #(SPIN e :(Elt & Number) Item :Type end :Null) -> Number = #(7)\n  \
+         EXPR FOR ALL #{Tee: Elt} #(SPIN e :Tee Item :Type end :Null) -> Number = #(7)\n  \
          x\n)\n",
     );
     loaded(&source, |program| {

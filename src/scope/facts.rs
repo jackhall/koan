@@ -17,8 +17,9 @@ use crate::memory::{BumpAllocator, BumpBackedMap, BumpVec, Lays, bump_table, col
 use crate::type_lattice::{DeclaredType, KType, Parametric, TypeDigest};
 use crate::values::{Chain, ContentDigest};
 
+use super::derived::{DerivedName, DerivedTerm};
 use super::question::{Answered, Question};
-use super::records::{Closing, UnitFacts};
+use super::records::{Closing, UnitFacts, UnitRecord};
 use super::shape::{CaptureSlot, Segment, Slot, UnitIndex};
 use super::tree::Tree;
 
@@ -47,48 +48,66 @@ pub enum OpenKind {
     NeverSatisfies,
     Fits,
     LowerEndOutside,
-    /// A selection left several candidates.
+    /// A selection's question: what a candidate or an arm does at its call, or one bit of a use's
+    /// ranking.
     Settles,
     /// A solve the collector reports not reproducible at the run.
     Solve,
     Instance,
-    /// A type read off an end and laid in a fact or a refusal's wording.
-    EndRead,
-    /// A variable's own type node read where a rule matches on structure.
-    TypeNodeOfVariable,
+    /// Whether a partial rule over a run-bound name has an answer: a spelling over a head — a
+    /// member read, an application, a pin, a code kind — a variant read, or a type naming fields.
+    Spells,
     /// A retype not the point at its declared type.
     Retype,
-    /// A type expression left unknown over the name.
-    TypeExpression,
+    /// A `FOR ALL` bound naming a run-bound name, which the run registers: what it bounds is left
+    /// unknown over the name.
+    ForAllBound,
     Unequal,
-    /// A check skipped because a type is not closed.
-    Unclosed,
+    /// Whether one type lies under another in the order.
+    Under,
     Overlap,
     /// The kind of the type above a variable, or of a type name's own seed.
     Kind,
     /// Whether a binder declared at a variable is a module binder.
     ModuleBinder,
-    /// A run-bound type name read as a value, or a bound code capture read: its fact is the
-    /// binding itself.
-    TypeValue,
+    /// A solve a run may solve otherwise that no stored solve stands for: one over an argument the
+    /// load left untyped, or too wide for a stored solve's bits.
+    Unreproduced,
     ModuleContent,
 }
 
 impl OpenKind {
+    /// Every kind, in discriminant order: what the tests tally marks by.
+    #[cfg(test)]
+    pub const ALL: [OpenKind; OpenKind::ModuleContent as usize + 1] = [
+        OpenKind::Verdict,
+        OpenKind::NeverSatisfies,
+        OpenKind::Fits,
+        OpenKind::LowerEndOutside,
+        OpenKind::Settles,
+        OpenKind::Solve,
+        OpenKind::Instance,
+        OpenKind::Spells,
+        OpenKind::Retype,
+        OpenKind::ForAllBound,
+        OpenKind::Unequal,
+        OpenKind::Under,
+        OpenKind::Overlap,
+        OpenKind::Kind,
+        OpenKind::ModuleBinder,
+        OpenKind::Unreproduced,
+        OpenKind::ModuleContent,
+    ];
+
     /// Whether a unit left undecided by this kind **holds** — re-runs under every binding — since
-    /// its door hands back a type, which no answer holding no type can stand for. A discrete
-    /// door's kind holds only where no witness answered it.
+    /// no question stands for what its door read: a `FOR ALL` bound over a run-bound name, a read
+    /// of a module binder's content, or a solve no stored solve stands for. Every other kind is a
+    /// question's ([`Question::kind`](crate::scope::Question::kind)), whose answer a binding keeps
+    /// or changes.
     pub fn holds(self) -> bool {
-        !matches!(
+        matches!(
             self,
-            OpenKind::Verdict
-                | OpenKind::NeverSatisfies
-                | OpenKind::Fits
-                | OpenKind::LowerEndOutside
-                | OpenKind::Retype
-                | OpenKind::Unequal
-                | OpenKind::Kind
-                | OpenKind::ModuleBinder
+            OpenKind::ForAllBound | OpenKind::ModuleContent | OpenKind::Unreproduced
         )
     }
 }
@@ -572,27 +591,28 @@ pub trait Store<'o> {
     }
 
     /// Hand `each` every name this store witnesses, its witness kept: none outside a witnessing
-    /// walk. A read by content in a witnessing walk holds its unit on each.
+    /// walk.
     fn each_witnessed(&self, each: &mut dyn FnMut(Unknown)) {
         let _ = each;
     }
 
-    /// The unit whose record holds `held` among the records this store extends: what a rooted
-    /// walk reads a standing body's site or path fact from. None in the load's store, which stands
-    /// no chain.
-    fn holding(&self, held: super::Held) -> Option<UnitId> {
+    /// The unit whose record holds `held` among the records this store extends, beside that
+    /// record, which a newer record of the unit may replace: what a rooted walk reads a standing
+    /// body's site or path fact from, and a class's recipe. None in the load's store, which
+    /// stands no chain.
+    fn holding(&self, held: super::Held) -> Option<(UnitId, &'o super::UnitFacts<'o>)> {
         let _ = held;
         None
     }
 
-    /// Hand `each` every module binder of `segment` the records this store extends say holds a
-    /// module of `identity`'s tree, beside the unit holding its content: what a rooted walk finds
+    /// Hand `each` every holder in `segment` the records this store extends say holds a module of
+    /// `identity`'s tree, beside the unit holding its content: what a rooted walk finds
     /// a standing body's holders of a class by. Nothing in the load's store, which stands no chain.
     fn holders(
         &self,
         segment: Segment,
         identity: super::Identity,
-        each: &mut dyn FnMut(UnitId, Slot),
+        each: &mut dyn FnMut(UnitId, super::Holder),
     ) {
         let _ = (segment, identity, each);
     }
@@ -603,7 +623,25 @@ pub trait Store<'o> {
         false
     }
 
-    fn write(&self, unit: UnitId, facts: &'o UnitFacts<'o>, frontier: Frontier<'o>);
+    /// Test-only: whether this is a closing walk over a witnessed layer and a record whose
+    /// frontier is `frontier` reaches an undecided open mark on a name it checks — a unit that
+    /// held through the witnessing walk.
+    #[cfg(test)]
+    fn held(&self, frontier: Frontier<'_>) -> bool {
+        let _ = frontier;
+        false
+    }
+
+    /// The derived name for `term`: the one a layer beneath holds, else the one this store's walk
+    /// laid, else laid now in this store's own table, named through its
+    /// [`Spellings`](super::Spellings). Every walk names a term alike.
+    fn derived(&self, types: &Chain<'_, '_, '_, '_>, term: DerivedTerm<'_>) -> DerivedName<'_>;
+
+    /// The derived name `id`, where this store's table or a layer beneath holds it.
+    fn derived_name(&self, id: crate::type_lattice::DerivedId) -> Option<DerivedName<'_>>;
+
+    /// Write this walk's record of `unit`: its facts, or the mark that the walk did not reach it.
+    fn write(&self, unit: UnitId, record: UnitRecord<'o>);
 
     fn write_close(&self, body: Segment, closing: &'o Closing<'o>, frontier: Frontier<'o>);
 

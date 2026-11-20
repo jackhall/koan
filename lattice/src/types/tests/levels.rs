@@ -1,6 +1,6 @@
 //! Lexical variables: a name only a run binds, read at load. The examples pin what no law states —
 //! that no binder captures one, that the order reads it as a rigid variable, that no solve binds it,
-//! and that its identity is every field.
+//! that its identity is every field, and how a projection of one is spelled.
 
 use crate::symbols::{BinderSymbol, SymbolInterner, TypeSymbol, ValueSymbol};
 use bumpstorage::{Bump, BumpAllocator};
@@ -13,7 +13,7 @@ use super::raw::substitute::{
 use super::raw::unify::admits;
 use crate::types::chain::TypeChain;
 use crate::types::handle::{Handle, KType, TypeHandle};
-use crate::types::node::{ContentKey, PathClass};
+use crate::types::node::{ContentKey, PathClass, Step};
 use crate::types::render::display_handle;
 use crate::types::schema::{SchemaDraft, SigOrigin};
 use crate::types::unify::Collector;
@@ -418,4 +418,34 @@ fn substituting_carriers_reads_a_carrier_inside_a_signature() {
         substituted(types.list(applied(carrier))),
         types.list(applied(KType::NUMBER))
     );
+}
+
+/// A projection renders by its step over its base, chained outward. No law states a spelling: the
+/// words are render-only, so no parser round-trips them.
+#[test]
+fn a_projection_renders_its_step_over_its_base() {
+    let bump = Bump::new();
+    let world = World::new(&bump);
+    let (types, region) = (&world.types, world.region);
+    let (f, g) = (world.field("f"), world.field("g"));
+    let inner = types.record(region, &[(g, KType::NUMBER)]);
+    let elt = world.lexical(0, "Elt", types.record(region, &[(f, inner)]));
+    let ll = world.lexical(0, "Ll", types.list(KType::NUMBER));
+    let dd = world.lexical(0, "Dd", types.dict(KType::STR, KType::NUMBER));
+    let project = |base: Handle, step| {
+        types
+            .projection(region, crate::types::handle::wrap(base), step)
+            .expect("the bound guarantees the piece")
+    };
+    let render = |kt: crate::types::handle::Parametric| {
+        display_handle(kt.raw(), types, &world.symbols).to_string()
+    };
+    let field = project(elt, Step::Field(f));
+    assert_eq!(
+        render(project(field.raw(), Step::Field(g))),
+        "(FIELD g OF (FIELD f OF Elt))"
+    );
+    assert_eq!(render(project(ll, Step::Element)), "(ELEMENT OF Ll)");
+    assert_eq!(render(project(dd, Step::Key)), "(KEY OF Dd)");
+    assert_eq!(render(project(dd, Step::Value)), "(VALUE OF Dd)");
 }

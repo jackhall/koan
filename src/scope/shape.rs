@@ -41,6 +41,7 @@
 
 use std::fmt;
 
+use super::runs::GuardKind;
 use crate::memory::BumpAllocator;
 use crate::parse::BuiltinShapeId;
 use crate::parse::{DefinitionKind, Heads, Role};
@@ -748,6 +749,18 @@ pub enum Guard<'graph> {
     Default,
 }
 
+impl Guard<'_> {
+    /// What kind of guard it is, as an arm's ranking reads it.
+    pub fn kind(&self) -> GuardKind {
+        match self {
+            Guard::Type(_) => GuardKind::Type,
+            Guard::Value(_) => GuardKind::Value,
+            Guard::Label(_) => GuardKind::Label,
+            Guard::Default => GuardKind::Default,
+        }
+    }
+}
+
 /// A scalar literal compared by value, so `1` and `1.0` are one: a number by its bits, with `-0`
 /// read as `0`, and a string by its text.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -1251,16 +1264,18 @@ pub enum ShapeError<'graph> {
     /// body's, and a keyworded form's function is read only at the head of a call.
     QuantifiedValue { at: SourceRef },
     /// A quantified function read or bound where nothing fixes `variables`, in group order: no type
-    /// is wanted there, the `wanted` type is no function type, or it reaches none of them.
+    /// is wanted there, the `wanted` type is no function type, or it reaches none of them. `wanted`
+    /// is written over names, and named through its bound.
     Unfixed {
         variables: &'graph [TypeSymbol],
-        wanted: Option<KType>,
+        wanted: Option<Parametric>,
         at: SourceRef,
     },
-    /// A quantified function wanted at a type no instance of it lies under.
+    /// A quantified function wanted at a type no instance of it lies under, named through its
+    /// bound.
     NoInstance {
         scheme: Scheme,
-        wanted: KType,
+        wanted: Parametric,
         at: SourceRef,
     },
     /// A keyworded use whose kept candidates want a quantified function argument at different
@@ -1377,28 +1392,29 @@ pub enum ShapeError<'graph> {
         builtin: KType,
         at: SourceRef,
     },
-    /// A keyworded use of `arguments` arguments none of whose candidates can admit their static
-    /// types. Each candidate with a shape names its refusal on a [line](self::RefusedLine): a span
-    /// of `shown`, each argument [shown](self::Shown) by the end that decides or an instance
-    /// argument's scheme, beside the span of `against` it can never satisfy.
+    /// A keyworded use none of whose candidates can admit its `arguments`' static types. Each of
+    /// `shapes`, the candidates with a shape, names its refusal on a line of its own
+    /// ([`refused_lines`]): each argument shown by the end that decides against its slot, or —
+    /// where some argument is an instance argument — `listed`, each argument's upper end or scheme,
+    /// against the whole shape.
     NoAdmittingCandidate {
         key: &'graph [KeyElement],
-        arguments: usize,
-        lines: &'graph [RefusedLine],
-        shown: &'graph [Shown],
-        against: &'graph [DeclaredType<Parametric>],
+        arguments: &'graph [Interval],
+        listed: &'graph [DeclaredType<Parametric>],
+        shapes: &'graph [DeclaredType<Parametric>],
         at: SourceRef,
     },
     /// A keyworded use whose last candidate a builtin's type rule dropped, the argument's static
-    /// type `of` naming no field `field` the rule needs.
+    /// type `of`, named through its bound, naming no field `field` the rule needs.
     NoField {
-        of: KType,
+        of: Parametric,
         field: BinderSymbol,
         at: SourceRef,
     },
-    /// A member read whose operand's static type `of`, a signature, names no member `member`.
+    /// A member read whose operand's static type `of`, a signature named through its bound, names
+    /// no member `member`.
     NoMember {
-        of: KType,
+        of: Parametric,
         member: BinderSymbol,
         at: SourceRef,
     },
@@ -1426,14 +1442,12 @@ pub enum ShapeError<'graph> {
     },
     /// A callable body whose static type can never satisfy its declared return.
     ReturnNeverSatisfied {
-        body: Shown,
-        returns: KType,
+        refused: NeverSatisfied,
         at: SourceRef,
     },
     /// An ascription whose operand's static type can never satisfy its type.
     AscriptionNeverSatisfied {
-        value: Shown,
-        ascribed: KType,
+        refused: NeverSatisfied,
         at: SourceRef,
     },
     /// A view of a view at `ascribed` that shows `member`, a value slot or a keyworded member's
@@ -1445,47 +1459,57 @@ pub enum ShapeError<'graph> {
     },
     /// An annotated binder whose value's static type can never satisfy its annotation.
     AnnotationNeverSatisfied {
-        value: Shown,
-        annotated: KType,
+        refused: NeverSatisfied,
         at: SourceRef,
     },
     /// A call by name whose callee is exactly an unquantified function its argument's static type
-    /// can never satisfy the parameters of, or a quantified one whose group the argument's static
-    /// type can never solve.
+    /// `payload` can never satisfy the parameters of, the record type `parameters`, or a quantified
+    /// one whose group the argument's static type can never solve. Each is named through its bound.
     CallNeverSatisfied {
-        callee: DeclaredType<KType>,
-        arguments: Shown,
-        parameters: Option<KType>,
+        callee: DeclaredType<Parametric>,
+        payload: Interval,
+        parameters: Parametric,
         at: SourceRef,
     },
-    /// A spread, `..value`, whose static type can never be a list.
-    SpreadNeverAList { value: KType, at: SourceRef },
-    /// A splice, `$..value`, whose static type can never be a list of code.
-    SpliceNeverCode { value: KType, at: SourceRef },
+    /// A spread, `..value`, whose static type, named through its bound, can never be a list.
+    SpreadNeverAList { value: Parametric, at: SourceRef },
+    /// A splice, `$..value`, whose static type, named through its bound, can never be a list of
+    /// code.
+    SpliceNeverCode { value: Parametric, at: SourceRef },
     /// A quote holding a splice whose `$` name names a fellow member of the knot its binder ties:
     /// it is composed when it is born, before that knot is tied.
     SpliceInKnot { at: SourceRef },
-    /// A read whose argument's static type can never read its list, dict or string head.
+    /// A read whose argument's static type can never read its list, dict or string head, each
+    /// named through its bound.
     ReadNeverSatisfied {
-        container: KType,
-        argument: KType,
+        container: Parametric,
+        argument: Parametric,
         at: SourceRef,
     },
     /// An `EVAL` whose operand's static type can never be code.
-    NotCode { value: Shown, at: SourceRef },
+    NotCode {
+        refused: NeverSatisfied,
+        at: SourceRef,
+    },
     /// A callable's body, not written as a quote, whose static type can never be code.
-    BodyNotCode { value: Shown, at: SourceRef },
+    BodyNotCode {
+        refused: NeverSatisfied,
+        at: SourceRef,
+    },
     /// A callable's body, not written as a quote, reading `name`, one of the callable's own
     /// parameters, which only a body reads.
     ParameterOutsideBody { name: BinderSymbol, at: SourceRef },
     /// A view ascription whose operand's static type can never be a module.
-    NotAModule { value: Shown, at: SourceRef },
+    NotAModule {
+        refused: NeverSatisfied,
+        at: SourceRef,
+    },
     /// A view ascription at a type the view door never takes: no one application of a signature.
-    NotASignature { ascribed: KType, at: SourceRef },
+    /// `ascribed` is written over names.
+    NotASignature { ascribed: Parametric, at: SourceRef },
     /// An `EVAL` of traced code whose static type can never satisfy the type the `EVAL` declares.
     EvalNeverSatisfied {
-        code: KType,
-        returns: KType,
+        refused: NeverSatisfied,
         at: SourceRef,
     },
     /// A closed type that does not elaborate.
@@ -1495,20 +1519,21 @@ pub enum ShapeError<'graph> {
     /// A `UNION` declaring one variant, which is the same type as that variant.
     LoneVariant { name: TypeSymbol, at: SourceRef },
     /// A `MATCH` none of whose arms can ever admit its scrutinee, of static type at most
-    /// `scrutinee`; `union` is the union clause of a `MATCH … UNDER`.
+    /// `scrutinee`, named through its bound; `union` is the union clause of a `MATCH … UNDER`.
     NoAdmittingArm {
-        scrutinee: KType,
+        scrutinee: Parametric,
         union: Option<KType>,
         at: SourceRef,
     },
-    /// A `MATCH` `count` of whose arms always admit its scrutinee, none ranking first.
+    /// A `MATCH` `count` of whose arms always admit its scrutinee, none ranking first: of static
+    /// type at most `scrutinee`, named through its bound.
     AmbiguousArms {
         count: usize,
-        scrutinee: KType,
+        scrutinee: Parametric,
         at: SourceRef,
     },
     /// A `MATCH … UNDER` clause that is no union.
-    NotUnion { clause: KType, at: SourceRef },
+    NotUnion { clause: Parametric, at: SourceRef },
     /// A `MATCH … UNDER` arm's `label` naming no variant of `union`.
     NoVariant {
         label: Symbol,
@@ -1681,6 +1706,10 @@ impl ShapeErrorDisplay<'_, '_, '_, '_> {
     /// The error's message, after where it was found.
     fn message(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let name = |name: &BinderSymbol| self.symbols.display(name.symbol());
+        // A refusal stores the types it judged, written over names, and words them here.
+        let bump = crate::memory::Bump::new();
+        let scratch: BumpAllocator<'_> = &bump;
+        let above = |ty: Parametric| crate::type_lattice::bound_above(self.types, scratch, ty);
         let operator = |symbol: &KeywordSymbol| self.symbols.display(symbol.symbol());
         match self.error {
             ShapeError::UnderCall { call, refusal } => {
@@ -1727,7 +1756,7 @@ impl ShapeErrorDisplay<'_, '_, '_, '_> {
                         write!(
                             f,
                             "{} does not fix ",
-                            display_name(*wanted, self.types, self.symbols)
+                            display_name(above(*wanted), self.types, self.symbols)
                         )?;
                         types(f)
                     }
@@ -1737,7 +1766,7 @@ impl ShapeErrorDisplay<'_, '_, '_, '_> {
                 f,
                 "{} has no instance under {}",
                 display_name(*scheme, self.types, self.symbols),
-                display_name(*wanted, self.types, self.symbols)
+                display_name(above(*wanted), self.types, self.symbols)
             ),
             ShapeError::QuantifiedRead { name: read, .. } => write!(
                 f,
@@ -1824,10 +1853,17 @@ impl ShapeErrorDisplay<'_, '_, '_, '_> {
             ),
             ShapeError::NoAdmittingArm {
                 scrutinee, union, ..
-            } => arm_refused(f, *scrutinee, *union, None, self.symbols, self.types),
+            } => arm_refused(f, above(*scrutinee), *union, None, self.symbols, self.types),
             ShapeError::AmbiguousArms {
                 count, scrutinee, ..
-            } => arm_refused(f, *scrutinee, None, Some(*count), self.symbols, self.types),
+            } => arm_refused(
+                f,
+                above(*scrutinee),
+                None,
+                Some(*count),
+                self.symbols,
+                self.types,
+            ),
             ShapeError::NotUnion { clause, .. } => {
                 write!(
                     f,
@@ -1899,12 +1935,11 @@ impl ShapeErrorDisplay<'_, '_, '_, '_> {
             ShapeError::NoAdmittingCandidate {
                 key,
                 arguments,
-                lines,
-                shown,
-                against,
+                listed: listing,
+                shapes,
                 ..
             } => {
-                let noun = match arguments {
+                let noun = match arguments.len() {
                     1 => "this argument",
                     _ => "these arguments",
                 };
@@ -1928,8 +1963,9 @@ impl ShapeErrorDisplay<'_, '_, '_, '_> {
                     Ok(())
                 };
                 let (types, symbols) = (self.types, self.symbols);
-                for line in lines.iter() {
-                    let (shown, against) = (line.shown.of(shown), line.against.of(against));
+                for shape in shapes.iter() {
+                    let (shown, against) =
+                        refused_lines(types, scratch, arguments, listing, *shape);
                     f.write_str("\n  ")?;
                     listed(f, shown.len(), &|f, index| {
                         write!(f, "{}", shown[index].display(types, symbols))
@@ -1944,13 +1980,13 @@ impl ShapeErrorDisplay<'_, '_, '_, '_> {
             ShapeError::NoField { of, field, .. } => write!(
                 f,
                 "{} has no field {}",
-                display_name(*of, self.types, self.symbols),
+                display_name(above(*of), self.types, self.symbols),
                 name(field)
             ),
             ShapeError::NoMember { of, member, .. } => write!(
                 f,
                 "{} has no member {}",
-                display_name(*of, self.types, self.symbols),
+                display_name(above(*of), self.types, self.symbols),
                 name(member)
             ),
             ShapeError::Unlisted { name: read, .. } => {
@@ -1986,63 +2022,79 @@ impl ShapeErrorDisplay<'_, '_, '_, '_> {
                 count,
                 ..
             } => selection_refused(f, key, arguments, Some(*count), self.symbols, self.types),
-            ShapeError::ReturnNeverSatisfied { body, returns, .. } => write!(
-                f,
-                "this body returns {}, which can never satisfy its declared return {}",
-                body.display(self.types, self.symbols),
-                display_name(*returns, self.types, self.symbols)
-            ),
-            ShapeError::AscriptionNeverSatisfied {
-                value, ascribed, ..
-            } => write!(
-                f,
-                "this value is {}, which can never satisfy its ascription {}",
-                value.display(self.types, self.symbols),
-                display_name(*ascribed, self.types, self.symbols)
-            ),
+            ShapeError::ReturnNeverSatisfied { refused, .. } => {
+                let (body, returns) = refused.worded(self.types, scratch);
+                write!(
+                    f,
+                    "this body returns {}, which can never satisfy its declared return {}",
+                    body.display(self.types, self.symbols),
+                    display_name(returns, self.types, self.symbols)
+                )
+            }
+            ShapeError::AscriptionNeverSatisfied { refused, .. } => {
+                let (value, ascribed) = refused.worded(self.types, scratch);
+                write!(
+                    f,
+                    "this value is {}, which can never satisfy its ascription {}",
+                    value.display(self.types, self.symbols),
+                    display_name(ascribed, self.types, self.symbols)
+                )
+            }
             ShapeError::ViewReveals { member, .. } => write!(
                 f,
                 "this view shows `{}` where its source hides it: a view of a view must hide \
                  again everything its source hides",
                 self.symbols.display(*member)
             ),
-            ShapeError::AnnotationNeverSatisfied {
-                value, annotated, ..
-            } => write!(
-                f,
-                "this value is {}, which can never satisfy its annotation {}",
-                value.display(self.types, self.symbols),
-                display_name(*annotated, self.types, self.symbols)
-            ),
+            ShapeError::AnnotationNeverSatisfied { refused, .. } => {
+                let (value, annotated) = refused.worded(self.types, scratch);
+                write!(
+                    f,
+                    "this value is {}, which can never satisfy its annotation {}",
+                    value.display(self.types, self.symbols),
+                    display_name(annotated, self.types, self.symbols)
+                )
+            }
             ShapeError::CallNeverSatisfied {
                 callee,
-                arguments,
+                payload,
                 parameters,
                 ..
             } => {
+                let payload = Interval {
+                    upper: above(payload.upper).into(),
+                    ..*payload
+                };
+                let arguments = shown_against(self.types, scratch, payload, *parameters);
                 write!(
                     f,
                     "this argument is {}, which can never satisfy the parameters ",
                     arguments.display(self.types, self.symbols)
                 )?;
-                if let Some(parameters) = parameters {
-                    write!(
-                        f,
-                        "{} ",
-                        display_name(*parameters, self.types, self.symbols)
-                    )?;
-                }
-                write!(f, "of {}", display_name(*callee, self.types, self.symbols))
+                let callee = match *callee {
+                    DeclaredType::Type(function) => {
+                        write!(
+                            f,
+                            "{} ",
+                            display_name(above(*parameters), self.types, self.symbols)
+                        )?;
+                        DeclaredType::Type(above(function))
+                    }
+                    DeclaredType::Scheme(scheme) => DeclaredType::Scheme(
+                        crate::type_lattice::scheme_bound_above(self.types, scratch, scheme),
+                    ),
+                };
+                write!(f, "of {}", display_name(callee, self.types, self.symbols))
             }
             ShapeError::SpreadNeverAList { value, .. } => write!(
                 f,
                 "`..` spreads a list, and this value is {}, which can never be one",
-                display_name(*value, self.types, self.symbols)
+                display_name(above(*value), self.types, self.symbols)
             ),
             ShapeError::SpliceNeverCode { value, .. } => write!(
                 f,
                 "`$..` splices a list of code, and this value is {}, which can never be one",
-                display_name(*value, self.types, self.symbols)
+                display_name(above(*value), self.types, self.symbols)
             ),
             ShapeError::SpliceInKnot { .. } => f.write_str(
                 "a quote holding a splice is composed when it is born, so it cannot name a fellow \
@@ -2055,40 +2107,46 @@ impl ShapeErrorDisplay<'_, '_, '_, '_> {
             } => write!(
                 f,
                 "{} can never be read by {}",
-                display_name(*container, self.types, self.symbols),
-                display_name(*argument, self.types, self.symbols)
+                display_name(above(*container), self.types, self.symbols),
+                display_name(above(*argument), self.types, self.symbols)
             ),
-            ShapeError::NotAModule { value, .. } => {
-                view_refused(f, ViewRefused::NotAModule(*value), self.symbols, self.types)
-            }
+            ShapeError::NotAModule { refused, .. } => view_refused(
+                f,
+                ViewRefused::NotAModule(refused.worded(self.types, scratch).0),
+                self.symbols,
+                self.types,
+            ),
             ShapeError::NotASignature { ascribed, .. } => view_refused(
                 f,
                 ViewRefused::NotASignature(*ascribed),
                 self.symbols,
                 self.types,
             ),
-            ShapeError::NotCode { value, .. } => write!(
+            ShapeError::NotCode { refused, .. } => write!(
                 f,
                 "this value is {}, which can never be code for `EVAL` to run",
-                value.display(self.types, self.symbols)
+                (refused.worded(self.types, scratch).0).display(self.types, self.symbols)
             ),
-            ShapeError::BodyNotCode { value, .. } => write!(
+            ShapeError::BodyNotCode { refused, .. } => write!(
                 f,
                 "this body is {}, which can never be code: write the body as a quote, #(…), or \
                  name code",
-                value.display(self.types, self.symbols)
+                (refused.worded(self.types, scratch).0).display(self.types, self.symbols)
             ),
             ShapeError::ParameterOutsideBody { name: read, .. } => write!(
                 f,
                 "`{}` is a parameter, which only the body reads: write the body as a quote, #(…)",
                 name(read)
             ),
-            ShapeError::EvalNeverSatisfied { code, returns, .. } => write!(
-                f,
-                "this `EVAL`'s code returns {}, which can never satisfy its declared return {}",
-                display_name(*code, self.types, self.symbols),
-                display_name(*returns, self.types, self.symbols)
-            ),
+            ShapeError::EvalNeverSatisfied { refused, .. } => {
+                let (code, returns) = refused.worded(self.types, scratch);
+                write!(
+                    f,
+                    "this `EVAL`'s code returns {}, which can never satisfy its declared return {}",
+                    code.display(self.types, self.symbols),
+                    display_name(returns, self.types, self.symbols)
+                )
+            }
             ShapeError::Type { error, .. } => {
                 write!(f, "{}", error.display(self.symbols, self.types))
             }
@@ -2171,27 +2229,121 @@ pub fn arm_refused(
     }
 }
 
-/// One candidate's line in a refused keyworded use: the span of its arguments, shown, beside the
-/// span of what they can never satisfy — the slots they lie at, or a quantified candidate's whole
-/// shape.
+/// A refusal a never-satisfies door decided: the static type `value`, which can never satisfy
+/// `wanted`, both written over names. It is worded by reading them through their bounds where it
+/// renders, a binding written in where one closes them, so it holds no end read at the walk.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct RefusedLine {
-    pub shown: Span,
-    pub against: Span,
+pub struct NeverSatisfied {
+    pub value: Interval,
+    pub wanted: Parametric,
 }
 
-/// A span of a slice, by its start and length.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub struct Span {
-    pub start: u16,
-    pub len: u16,
-}
-
-impl Span {
-    /// This span of `all`.
-    pub fn of<T>(self, all: &[T]) -> &[T] {
-        &all[self.start as usize..][..self.len as usize]
+impl NeverSatisfied {
+    /// The value shown by the end that decides, beside `wanted` read through its bound
+    /// ([`unsatisfiable`](super::question::unsatisfiable)): what the refusal words. A refusal a
+    /// *fits* decided where no end alone decides shows the upper end.
+    pub fn worded(
+        self,
+        types: &Chain<'_, '_, '_, '_>,
+        scratch: BumpAllocator<'_>,
+    ) -> (Shown, KType) {
+        super::question::unsatisfiable(types, scratch, self.value, self.wanted).unwrap_or_else(
+            || {
+                let wanted = crate::type_lattice::bound_above(types, scratch, self.wanted);
+                (Shown::Is(self.value.upper.into()), wanted)
+            },
+        )
     }
+
+    /// Hand `each` every type it names.
+    pub fn each_type(self, each: &mut dyn FnMut(DeclaredType<Parametric>)) {
+        each(self.value.lower.into());
+        each(self.value.upper.into());
+        each(self.wanted.into());
+    }
+}
+
+/// `typed` as a refusal names it against `slot`: its upper end where that meets `slot` at `Never`,
+/// at least its lower end where that alone lies outside `slot`, each read through their bounds,
+/// and its upper end otherwise.
+pub fn shown_against(
+    types: &Chain<'_, '_, '_, '_>,
+    scratch: BumpAllocator<'_>,
+    typed: Interval,
+    slot: Parametric,
+) -> Shown {
+    use crate::type_lattice::{bound_above, lower_end_outside, meet};
+    let (upper, bound) = (
+        bound_above(types, scratch, typed.upper),
+        bound_above(types, scratch, slot),
+    );
+    match meet(types, scratch, upper, bound) != KType::NEVER
+        && lower_end_outside(types, scratch, typed, bound)
+    {
+        true => Shown::at_least(types, typed),
+        false => Shown::Is(typed.upper.into()),
+    }
+}
+
+/// One candidate's line in a refused keyworded use: its arguments shown, beside what they can
+/// never satisfy. Where some argument is an instance argument, `listed` lists each against the
+/// whole shape. Else a quantified shape's slots read its group, so every argument, shown against
+/// its slot, stands beside the whole shape; and an unquantified one names a lone argument it judges
+/// *never* however the others lie beside its slot, else every argument beside every slot.
+pub fn refused_lines<'x>(
+    types: &Chain<'_, '_, '_, '_>,
+    scratch: BumpAllocator<'x>,
+    arguments: &[Interval],
+    listed: &[DeclaredType<Parametric>],
+    shape: DeclaredType<Parametric>,
+) -> (
+    crate::memory::BumpVec<'x, Shown>,
+    crate::memory::BumpVec<'x, DeclaredType<Parametric>>,
+) {
+    use crate::memory::BumpVec;
+    use crate::type_lattice::{Verdict, judge_by_class, scheme_slots, shape_slots};
+    let (mut shown, mut against) = (BumpVec::new_in(scratch), BumpVec::new_in(scratch));
+    if !listed.is_empty() {
+        shown.extend(listed.iter().map(|each| Shown::Is(*each)));
+        against.push(shape);
+        return (shown, against);
+    }
+    let mut slots = BumpVec::new_in(scratch);
+    match shape {
+        DeclaredType::Type(shape) => slots.extend(shape_slots(shape, types)),
+        DeclaredType::Scheme(scheme) => slots.extend(scheme_slots(scheme, types)),
+    }
+    let shown_of = |at: usize| shown_against(types, scratch, arguments[at], slots[at]);
+    if slots.iter().any(|slot| types.concrete(*slot).is_none()) {
+        shown.extend((0..arguments.len()).map(shown_of));
+        against.push(shape);
+        return (shown, against);
+    }
+    // `arguments` with every other than the one at `position` unknown.
+    let alone = |position: usize| {
+        let mut read = BumpVec::with_capacity_in(arguments.len(), scratch);
+        read.extend(
+            (arguments.iter().enumerate()).map(|(at, each)| match at == position {
+                true => *each,
+                false => crate::values::unknown(),
+            }),
+        );
+        read
+    };
+    let lone = (0..arguments.len()).find(|position| {
+        judge_by_class(types, scratch, shape, &alone(*position)).verdict == Verdict::Never
+    });
+    match lone {
+        Some(position) => {
+            shown.push(shown_of(position));
+            against.push(DeclaredType::Type(slots[position]));
+        }
+        None => {
+            shown.extend((0..arguments.len()).map(shown_of));
+            against.extend(slots.iter().map(|slot| DeclaredType::Type(*slot)));
+        }
+    }
+    (shown, against)
 }
 
 /// A refused value's static type as its refusal names it: its upper end, or — where the lower end
@@ -2212,14 +2364,6 @@ impl Shown {
                 Shown::AtLeast(lower)
             }
             _ => Shown::Is(typed.upper.into()),
-        }
-    }
-
-    /// The type this names, as an error's types are visited.
-    pub fn named(self) -> DeclaredType<Parametric> {
-        match self {
-            Shown::Is(named) => named,
-            Shown::AtLeast(lower) => lower.into(),
         }
     }
 
@@ -2256,7 +2400,7 @@ pub enum ViewRefused {
     /// The operand, of this type, is no module.
     NotAModule(Shown),
     /// The type ascribed is no one application of a signature.
-    NotASignature(KType),
+    NotASignature(Parametric),
 }
 
 /// A refused view worded, for the load's refusal and the run's fault alike.

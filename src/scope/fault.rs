@@ -650,9 +650,12 @@ impl<X: Knotted> fmt::Display for FaultDisplay<'_, '_, '_, '_, '_, Value<'_, X>>
                 let refused = ViewRefused::NotAModule(value.concrete_ktype().into());
                 view_refused(f, refused, symbols, types)
             }
-            Fault::NotASignature { ascribed } => {
-                view_refused(f, ViewRefused::NotASignature(ascribed), symbols, types)
-            }
+            Fault::NotASignature { ascribed } => view_refused(
+                f,
+                ViewRefused::NotASignature(ascribed.into()),
+                symbols,
+                types,
+            ),
             Fault::ViewReveals { member, .. } => write!(
                 f,
                 "this view shows `{}` where its source hides it: a view of a view must hide again \

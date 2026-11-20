@@ -68,8 +68,9 @@ fn swapped(growth: Growth, n: usize, early: bool, step: &str) -> String {
 }
 
 /// `OUTER`, whose body reads `n` paths through views of its module parameter before or after a
-/// callable `g`, which reads a path of the same class and is called over two modules, so each call
-/// misses and resumes rooted at `g`, `OUTER` standing around it. `OUTER` is called over `ints`,
+/// callable `g`, which reads a path of the same class, and picks a `PICKY` overload by its own
+/// module's carrier, and is called over two modules, so each call misses and resumes rooted at
+/// `g`, `OUTER` standing around it. `OUTER` is called over `ints`,
 /// which the load traces, so its own settlement is laid at the load.
 fn enclosed(n: usize, early: bool) -> String {
     let grown: String = (0..n)
@@ -79,13 +80,15 @@ fn enclosed(n: usize, early: bool) -> String {
         .collect();
     let callee = "(LET w = (m :| Counter)) \
                   (LET g = (FN :{k :Counter} -> Str = #((LET u :(w.Carrier) = w.zero) \
-                  (LET y = (k :| Counter)) (\"x\")))) ";
+                  (LET y = (k :| Counter)) (PICKY k.zero)))) ";
     let (before, after) = match early {
         true => (callee.to_string(), grown),
         false => (grown, callee.to_string()),
     };
     format!(
-        "{PRELUDE}EXPR #(OUTER m :Counter) -> Str = \
+        "{PRELUDE}EXPR #(PICKY x :Number) -> Str = #(\"n\")\n\
+         EXPR #(PICKY x :Str) -> Str = #(\"s\")\n\
+         EXPR #(OUTER m :Counter) -> Str = \
          #({before}{after}(g {{k = (EVAL #($ints) -> Counter)}}) \
          (g {{k = (EVAL #($words) -> Counter)}}))\n\
          PRINT (OUTER ints)"

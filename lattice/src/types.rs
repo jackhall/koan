@@ -94,13 +94,13 @@ pub use handle::{
 };
 pub use image::seed::IMAGE as SEED;
 pub use kind::KKind;
-pub use node::{ContentKey, Group, NodeSchema, PathClass, TypeNode, Variable};
+pub use node::{ContentKey, DerivedId, Group, NodeSchema, PathClass, Step, TypeNode, Variable};
 pub use operators::{FoldDirection, ReductionMode};
 pub use ranking::{Judged, Verdict};
 pub use record::Record;
 pub use render::{
-    TypeNameDisplay, display_name, display_symbol, render_fits_failure, render_keyworded_head,
-    render_symbol,
+    ProjectionDisplay, TypeNameDisplay, display_name, display_projection, display_symbol,
+    render_fits_failure, render_keyworded_head, render_symbol,
 };
 pub use run::{Elements, Run};
 pub use schema::{
@@ -110,21 +110,21 @@ pub use shape::{
     Classes, DeferredReturnSurface, DispatchTokenElement, RawRank, Specificity, dense_classes,
     scheme_return, scheme_slots, shape_return, shape_slots,
 };
-pub use sig_relations::{FitsFailure, InstanceFailure};
+pub use sig_relations::FitsFailure;
 pub use substitute::Side;
 pub use term::Term;
 pub use tiers::{Agent, Branch, Frozen, Habitat, Halves, Own, RegionRead, RootBuilder};
 #[cfg(any(test, feature = "counters"))]
 pub use transfer::{ADOPT_ASKED, ADOPT_HITS, ADOPT_LAID, ADOPT_PROBES};
 pub use typed::{
-    Substitutable, admit_by_class, bound_above, erase_rigid, fits, fits_application,
+    Substitutable, admit_by_class, bound_above, class_step, erase_rigid, fits, fits_application,
     instance_under, instantiate_quantified, is_subtype_of, join, join_iter, judge_by_class,
     lower_end_outside, meet, outranks, read_through, satisfied_by, scheme_bound_above,
     select_by_class, shape_specificity, sig_fits, solving_slots, substitute_carriers,
-    substitute_levels, substitute_parameters, substitute_paths, substitute_quantified,
-    tied_members,
+    substitute_derived, substitute_levels, substitute_parameters, substitute_paths,
+    substitute_quantified, tied_members,
 };
-pub use unify::{Collector, Interval, UnifyFailure, admits_with, intervals};
+pub use unify::{Collector, Interval, Solution, SolveRecord, UnifyFailure, admits_with};
 pub use verdicts::MemoKind;
 pub use walk::Variance;
 pub use window::{RecursiveGroupWindow, RelativeSchema, SealedGroup};

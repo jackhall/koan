@@ -234,9 +234,10 @@ where
     }
 
     /// A fresh activation of the code shape `shape` over its closure bindings — its `$` names and
-    /// filled marks, its keyworded holes and its offered names, in capture order — every slot empty. Like a module's,
-    /// it runs no knot member and reads through no enclosing activation: code reaches nothing the
-    /// `EVAL` running it does not hand it.
+    /// filled marks, its keyworded holes and its offered names, in capture order, then the type
+    /// names of the chain around it its layout carries — every slot empty. Like a module's, it runs
+    /// no knot member and reads through no enclosing activation: code reaches nothing the `EVAL`
+    /// running it does not hand it, and nothing its value does not carry.
     pub fn of_code(
         writer: Writer<'cell, '_>,
         shape: &BodyShape<'_>,
@@ -247,7 +248,7 @@ where
         debug_assert_eq!(shape.kind(), ShapeKind::Code);
         debug_assert_eq!(
             closure.len(),
-            shape.captures().len(),
+            facts.capture_count(shape),
             "the closure bindings follow the shape's capture layout",
         );
         Self::laid_down(writer, shape, facts, closure, builtins, None, None)

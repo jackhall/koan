@@ -297,14 +297,18 @@ pub fn children<'run>(
             out(constructor, false);
             arguments.values().for_each(|kt| out(kt, false));
         }
-        // A rigid variable's one child is its bound; a lexical variable's are its two ends.
-        TypeNode::Lexical { lower, bound, .. } => {
+        // A rigid variable's one child is its bound; a lexical variable's and a derived name's
+        // are its two ends.
+        TypeNode::Lexical { lower, bound, .. } | TypeNode::Derived { lower, bound, .. } => {
             out(lower, false);
             out(bound, false);
         }
         TypeNode::Quantified { bound, .. }
         | TypeNode::Path { bound, .. }
         | TypeNode::Parameter { bound, .. } => out(bound, false),
+        // A projection's one child is its base: its ends are the pieces of the base's, so a
+        // rebuild of the base rebuilds them.
+        TypeNode::Projection { base, .. } => out(base, false),
         // An application's pins; its signature is closed.
         TypeNode::SignatureApply { pins, .. } => pins.values().for_each(|kt| out(kt, false)),
         TypeNode::SignatureMeet { members } => members.iter().for_each(|m| out(m, false)),
@@ -369,7 +373,16 @@ fn reassemble<'run>(
             types.lexical_node(scratch, level, name, new[0], new[1])
         }
         TypeNode::Path { class, name, .. } => types.path_node(class, name, new[0]),
+        TypeNode::Derived { term, name, .. } => {
+            types.derived_node(scratch, term, name, new[0], new[1])
+        }
         TypeNode::Parameter { name, .. } => types.parameter(name, new[0]),
+        // The rebuilt base may be a binding, so the door reduces the projection to its piece. A
+        // binding outside the base's bound would lack it: a runtime check no handle type yet
+        // enforces (roadmap/types/README.md § Unplanned work).
+        TypeNode::Projection { step, .. } => types
+            .projection_node(scratch, new[0], step)
+            .expect("every type a projection's base is rebuilt to has its piece"),
         TypeNode::SignatureApply { signature, pins } => {
             let mut values = new.iter();
             let pins = map_fields(scratch, pins.raw(), |_| {

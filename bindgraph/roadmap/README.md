@@ -3,12 +3,10 @@
 Open work on the [`bindgraph`](../README.md) crate as a library: its text,
 graph and bound layers, and the doors an embedder reaches them through.
 Koan's [build image](../../roadmap/one-build/build-image.md) waits on the
-graph written out. One optional item refines the knots: rigids that name
-their knot. Koan's work over the crate is on
+graph written out. Koan's work over the crate is on
 [its own roadmap](../../roadmap/README.md).
 
 - [The graph written out and read back](graph-export.md)
-- [Rigids that name their knot](knot-rigids.md)
 
 ## Next items
 

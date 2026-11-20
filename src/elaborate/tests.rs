@@ -8,6 +8,7 @@ mod builtin;
 mod declarations;
 mod examples;
 mod families;
+mod judge;
 mod module;
 mod projections;
 mod variants;
@@ -122,7 +123,9 @@ impl<'p, 'graph, 'cell> Program<'p, 'graph, 'cell> {
             }
             let handles = type_declarations(component, &self.reading, self.types, self.scratch)?;
             for (slot, handle) in component.members.iter().zip(handles) {
-                let value = Value::Type(TypeValue::new(self.writer, *handle, self.types));
+                let handle = super::judge::static_of(self.types, *handle)
+                    .expect("a test program declares closed types");
+                let value = Value::Type(TypeValue::new(self.writer, handle, self.types));
                 self.activation
                     .bind(*slot, value)
                     .expect("an empty slot binds");

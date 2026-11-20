@@ -486,10 +486,9 @@ fixed:
   `Never` never arrives, and the `EVAL` is `Never`; a type the load leaves
   unknown makes it at most `Any`. Where the load traces the code
   to a written quote — its operand, or a name `LET` binds to one — it types the
-  code's last statement as the code runs there, read through
-  [`bound_above`](../../lattice/src/types/solving.md#substitute-then-ask) since the code
-  roots a chain of its own, and checks that type against the declared return as
-  the return check below checks a body's. An `EVAL` fills only the code's
+  code's last statement as the code runs there, written over the names of the
+  chain the code lies on, its encloser's, and checks that type against the
+  declared return as the return check below checks a body's. An `EVAL` fills only the code's
   `\` keys, so an unmarked keyworded use's hole holds nothing as the traced code
   runs, and the load types the code a second time that way: after
   `LET q = #(1 + 2)`, the code `EVAL q -> Number` runs is `Number`, while the
@@ -619,30 +618,43 @@ solves, whose argument contributes, exactly at its upper end. So under
 `Elt = Number | Str`, the type the call solves from `b`'s contribution, and so
 does `h {x = b, f = pick}` by name under the same `FN FOR ALL`. A variable that a class before the slot's
 [solves](../../lattice/src/types/solving.md#priority-classes) is taken as the call
-solves it: class by class, from each class's solving slots at their arguments'
+solves it: class by class through the lattice's door that admits one class,
+from each class's solving slots at their arguments'
 contributions, each class pinned to what the classes before it solved. Under
 `EXPR #(APPLY 2 TO 1)` and
 `EXPR FOR ALL #[Elt] #(APPLY f :(FN :{x :Elt} -> Elt) TO y :Elt) -> Elt`,
 `APPLY pick TO b` over a parameter `b :(Number | Str)` instantiates `pick` at
 `Elt = Number | Str`. A contribution holding a lexical variable fixes the
-variable where a run
-[reproduces the solve](../../lattice/src/types/solving.md#the-unifier-collects-it-does-not-bind):
+variable too. Where a run
+[reproduces the solve](../../lattice/src/types/solving.md#the-unifier-collects-it-does-not-bind),
+the solution is written over the variable:
 in the body of `EXPR FOR ALL #[Outer] #(WRAP xs :(LIST OF Outer)) -> Any`,
 `APPLY pick TO xs` instantiates `pick` at `Elt = LIST OF Outer`, a solution
 naming a lexical variable as above, and so does one under
 `#{Outer: :(LIST OF Number)}` with `xs :Outer` and `y :(LIST OF Elt)`, at
 `Elt = (ELEMENT OF Outer)`, the projection a run binding `Outer` reduces to
-that binding's element. A solving argument there that is itself an instance site, whose
-contribution is unknown, or whose solve a run may not reproduce, fixes nothing.
+that binding's element. Where a run does not, the solve is stored whole at the
+bind site that owns it, and `Elt` is a
+[derived name](../build/README.md#derived-names) whose term is that solve
+([where a solve is decided](../../design/binding-graph.md#where-a-solve-is-decided)):
+under `#{Outer: :(FN :{x :Number} -> Number)}` with `g :Outer` and
+`y :(FN :{x :Number} -> Elt)`, `APPLY pick TO g` instantiates `pick` at the
+return type each binding of `Outer` has. A solving argument there whose static
+type is at most `Any` contributes the type its value carries, so the call
+solves its class and makes the instance itself. One that is itself an instance
+site fixes nothing.
 Any other variable the slot shares with the other arguments must come out one
-point the call reproduces — a closed one, or one of a reproducible solve — and
+point — a closed one, one written over a lexical variable, or a derived name —
+and
 one only the slot names is read through `[Never, bound]`, so under
 `EXPR FOR ALL #[Elt Out] #(MAP f :(FN :{x :Elt} -> Out) AT y :Elt) -> Out`,
 `MAP pick AT 1` instantiates `pick` at `Elt = Number` and is `Number`, while
 `MAP pick AT y` over a parameter `y :(Number | Str)` refuses — and loads under
 `EXPR #(MAP 2 AT 1)`, `Elt` taken from `y`. An other argument
 that does not admit its slot fixes nothing either, so it refuses the load as
-`Unfixed` too — save one that can never fit its slot, as `never_satisfies`
+`Unfixed` too — save one whose admission turns on a lexical variable, which is
+part of the stored solve and asked where the variable is bound, and one that
+can never fit its slot, as `never_satisfies`
 reads it: at a keyworded use that
 candidate is dropped and left to the judge's own refusal, and a call by name is
 refused `CallNeverSatisfied`. A candidate whose
@@ -670,7 +682,10 @@ solve hands it whole to a variable, so a point may name it: `BOTH m WITH m`
 over `m :(LIST OF Outer)`, under
 `EXPR FOR ALL #[Elt] #(BOTH x :(LIST OF Elt) WITH y :(LIST OF Elt))`, solves
 `Elt` to `Outer` and is selected. A solve that reads the variable through its
-bound is not, since the call solves through the type the run binds it to. A
+bound is not: the load stores it whole at the bind site that owns it, each
+variable a [derived name](../build/README.md#derived-names) whose term is the
+solve, and the candidate's verdict is asked there
+([where a solve is decided](../../design/binding-graph.md#where-a-solve-is-decided)). A
 call binds each variable to one
 type, the
 [least instance](../../lattice/src/types/solving.md#the-unifier-collects-it-does-not-bind)
@@ -719,16 +734,21 @@ names a run binds. A body runs under one call of each body enclosing it, so a
 variable is one type wherever that body reads it, a capture included: `Elt` lies
 under `Elt`, and a parameter `x :Elt` fills a slot `:Elt` with nothing to solve.
 Against any other type a variable lies under what its bound lies under, and a
-meet reads both sides through `bound_above`. A quote's code roots a chain of its
-own, so a static type crossing into it, a `$` name's, or leaving it, an
-`EVAL`'s, is read through `bound_above` too. A read crosses into code where,
-following its capture by the shapes' one rule
-([`follow`](../scope/README.md#load-time-types)), it takes a capture of a
-chain's root through to a shape outside it. A candidate a use in the code
-reaches across its root, a `$(…)` use's, keeps its registered shape where that
-shape is closed and is unknown to the load where the shape names a variable of
-the chain outside: read through its bounds, `#(GREET x :Outer) -> Outer` would
-admit nothing.
+meet reads both sides through `bound_above` where the rule's answer holds at
+every binding; a meet a binding decides is a
+[derived name](../build/README.md#derived-names). A written quote's code lies
+on its encloser's chain: a `$Elt` in it is the encloser's `Elt`, and a static
+type crossing into it, a `$` name's, or leaving it, an `EVAL`'s, is written
+over the encloser's names. The code value carries the type each name its
+content reads is bound to where the quote is born, and an `EVAL` binds them at
+the code's entry, so the code keeps the binding it was born under wherever it
+runs. A read crosses into code where, following its capture by the shapes' one
+rule ([`follow`](../scope/README.md#load-time-types)), it takes a capture of
+the code through to a shape outside it; one through a module binder's capture
+is written over that capture. A candidate a use in the code reaches across its
+root, a `$(…)` use's, keeps its registered shape, rigid over the chain's
+names, so `#(GREET x :Outer) -> Outer` admits `x` at the binding the code was
+born under.
 
 **Verdicts.** Each keyworded use gives each candidate one of three, as
 [`judge_by_class`](../../lattice/src/types/solving.md#priority-classes) judges it:
@@ -947,10 +967,10 @@ seed note **named** each variable the types they fix hold. A callable's entry
 seeds each binder in a gathering of its own, its **seed**, which a read of the
 binder gathers alone, so a reader of one parameter waits on that parameter's
 type only; the entry unit's frontier reads every seed. A run-bound type name's
-seed is open on its kind (`Kind`), a question a witness answers, since a
-binding seeds the name as a type value of its type's kind; any other
-run-bound binder's seed, and a code capture's read, are open by `TypeValue`,
-which holds, since a binding makes the name's value exact. A name a
+seed is the [derived name](../build/README.md#derived-names) decided on the
+kind its binding has, a type value of that kind, so it is one type at load and
+under every binding and marks nothing; a module binder's seed is the binder
+itself, every read of which is a read of its content. A name a
 `USING … SCOPE` surfaces waits on what its module's static type waits on. A
 resumption runs the same rules under a binding: a bound type name seeds as a
 closed type binder does, a bound `FOR ALL` name closes the body's type, and a
@@ -1528,7 +1548,9 @@ The suites load whole programs under `Koan` and read back what they wrote to
 either sink, one line per write ([tests.rs](tests.rs)):
 [reads](tests/reads.rs) — the builtin `Result`, an index, a slice forward and
 backward with each bound's `Error` in order, a dict lookup, the load's typing
-from both ends of a head and its refusals, `LENGTH`, a list read through
+from both ends of a head and its refusals, a head typed by a variable bounded
+by a list or a dict, or by a field of one, read through its projections, and
+one no bound makes a container routing by name at run, `LENGTH`, a list read through
 its knot, a flat string read in one scan of its bytes, and code read by its
 parts as unbuilt code, typed as code at load and crossing its frame flat;
 [splicing](tests/splicing.rs) — `$..` at statement and part level, one line or
@@ -1562,7 +1584,8 @@ own arguments, a `USING … SCOPE` block's surfaced heads typed through the
 ascription's pins, a wider signature *always* at a narrower one's slot and
 outranking it, a component's members typed alike whatever their order —
 an annotated fellow read at its annotation, a fellow's callable body reading
-the fellow's own type — and the laws that reordering independent declarations,
+the fellow's own type — a lexical variable's field and `FROM` at its
+projection, checked at its bound, and the laws that reordering independent declarations,
 or independent statements of a callable's body, changes no fact; [constructions](tests/constructions.rs) — a
 construction's static type: a newtype's, a family's applied at its payload, and
 a union variant's between what it builds and the union its head's path reaches,
@@ -1573,12 +1596,14 @@ end's refusals, named `at least` it; [types](tests/types.rs) — the walk's
 [generic](tests/generic.rs) — generic code at load: a nested callable
 substituted by level and agreeing with its load-time type where it is born, a
 quote's code typed twice interning nothing, a nested group's parameters and
-return check, exact static types, crossings into and out of code, a candidate
-over a variable outside code unknown in it, an `EVAL`'s declared type, a
+return check, exact static types, crossings into and out of code read over
+the encloser's names, a candidate over a variable outside code rigid in it, an
+`EVAL`'s declared type, a
 quantified candidate selected where its static solve is the call's, a
 *maybe* an *always* outranks dropped, a use ranked at load and one ranked at the
-call, returns read through a group's intervals, by keyword and by name, and a
-union in a group's parameter tried most specific member first, a tie refused;
+call, returns read through a group's intervals, by keyword and by name, a
+union in a group's parameter tried most specific member first, a tie refused,
+and a solve over a list-bounded variable reading its element;
 [rankings](tests/rankings.rs) — declarations, their idempotence, each
 disagreement site, a ranking as part of the shape type, and a written-order
 module failing a ranked signature member; [programs](tests/programs.rs) — the
@@ -1701,7 +1726,9 @@ a `Never` binding drops, a check one half of a binding refuses that the whole
 binding starves, re-running every unit agreeing with skipping, a resumption
 extending the one before it, a binding that closes a registration checking its
 overlap, a binding that closes a cycle unfolding neither call, a view over a
-bound module settled, and a surfaced head waiting on its ascription; and the
+bound module settled, a surfaced head waiting on its ascription, and a field
+read through a bound guaranteeing the field naming its variable and exact
+under a binding that makes it so; and the
 laws, over the [generated](tests/generate.rs) programs — quotes with holes,
 marks and `$` names, `USING`-surfaced names and heads, meets, nested
 callables, type binders over paths, views over bound modules, unfolding calls,
@@ -1886,9 +1913,9 @@ tutorial snippet is checked against its shown output by
 
 - [Invariance around a tail cycle](../../roadmap/one-build/cycle-invariance.md)
   — an argument built over invariant leaves classed invariant.
-- [Projection types](../../roadmap/types/projection-types.md) — a read out of
-  a lexical variable's value typed by its projection, and a head reading its
-  own parameters' types.
+- [A head reading its parameters' types](../../roadmap/types/head-parameter-reads.md)
+  — a slot's or a return's type reading a type member of its head's own
+  parameters, and `TYPE OF`.
 - [The features project's unplanned work](../../roadmap/features/README.md#unplanned-work) — a
   warning for an overload never selected.
 - [A value retyped in place, pinned at its paths](../../roadmap/types/pinned-in-place.md)
@@ -1898,3 +1925,5 @@ tutorial snippet is checked against its shown output by
   — a quantified or rigid registration checked at load.
 - [A surfaced head reads only the parameters its shape names](../../roadmap/types/surfaced-head-parameters.md)
   — a head over an unpinned parameter it never names, exact at load.
+- [An instance made by the call](../../roadmap/types/instance-made-by-the-call.md)
+  — an instance argument beside a solving argument the load knows nothing of.

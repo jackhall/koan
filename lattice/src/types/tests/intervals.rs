@@ -9,7 +9,7 @@ use super::raw::substitute::{Side, read_through};
 use super::raw::unify::admits;
 use crate::types::chain::TypeChain;
 use crate::types::handle::{Handle, KType, TypeHandle};
-use crate::types::unify::{Collector, Interval, intervals};
+use crate::types::unify::{Collector, Interval};
 use crate::types::walk::Variance;
 
 /// A chain, an interner and a region.
@@ -47,25 +47,16 @@ impl<'r> World<'r> {
         carried: Handle,
         exact: bool,
     ) -> Interval<Handle> {
-        let mut collector = Collector::<Handle>::new(&self.types, self.region, &[bound]);
-        admits(
+        let entered = |handle: Handle| self.types.enter(handle);
+        let record = crate::types::ranking::class_step(
             &self.types,
             self.region,
-            declared,
-            carried,
-            Variance::Co,
-            &mut collector,
-        )
-        .expect("the argument admits");
-        let solution = collector.solve(&self.types).expect("the group solves");
-        intervals(
-            &self.types,
-            self.region,
-            &[declared],
-            &[bound],
-            &solution,
+            &[entered(bound.raw())],
+            &[None],
+            &[(entered(declared), entered(carried))],
             exact,
-        )[0]
+        );
+        record.intervals().expect("the group solves")[0].raw()
     }
 }
 
@@ -166,6 +157,7 @@ mod reproducible {
     use super::*;
     use crate::symbols::TypeSymbol;
     use crate::types::handle::wrap;
+    use crate::types::node::Step;
 
     /// The lexical variable `Outer` at level 0 under `bound`.
     fn outer(world: &World<'_>, bound: KType) -> Handle {
@@ -214,8 +206,10 @@ mod reproducible {
         assert!(collector.reproducible(&world.types));
     }
 
+    /// A declared list against `Outer` bounded by a list reads no end: `Elt` takes `Outer`'s
+    /// element, which each binding reduces to what its own solve gives.
     #[test]
-    fn a_read_through_a_variables_bound_is_not_reproducible() {
+    fn a_solve_over_a_variables_piece_is_reproducible() {
         let bump = Bump::new();
         let world = World::new(&bump);
         let elt = world.types.quantified(0, KType::ANY).raw();
@@ -223,10 +217,29 @@ mod reproducible {
         let outer = outer(&world, closed(&world, numbers));
         let (collector, admitted) = collect(&world, &[(world.types.list(elt), outer)]);
         assert!(admitted);
+        let element = world
+            .types
+            .projection(world.region, wrap(outer), Step::Element)
+            .expect("a list's element");
         assert_eq!(
             collector.solve(&world.types).unwrap().as_slice(),
-            [KType::NUMBER.raw()]
+            [element.raw()]
         );
+        assert!(collector.reproducible(&world.types));
+    }
+
+    /// A declared function against `Outer` bounded by one has no piece to unfold into, so the
+    /// solve reads `Outer` through its bound.
+    #[test]
+    fn a_read_through_a_variables_bound_is_not_reproducible() {
+        let bump = Bump::new();
+        let world = World::new(&bump);
+        let elt = world.types.quantified(0, KType::ANY).raw();
+        let number = KType::NUMBER.raw();
+        let outer = outer(&world, closed(&world, world.function("x", number, number)));
+        let (collector, admitted) = collect(&world, &[(world.function("x", number, elt), outer)]);
+        assert!(admitted);
+        assert_eq!(collector.solve(&world.types).unwrap().as_slice(), [number]);
         assert!(!collector.reproducible(&world.types));
     }
 

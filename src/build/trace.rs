@@ -30,6 +30,7 @@ use crate::scope::{
     Slot, SlotMap, Untraced,
 };
 use crate::source::SourceRef;
+use crate::values::Chain;
 
 /// The cap on a body's bindings at load.
 pub const CAP: usize = 8;
@@ -353,13 +354,13 @@ fn enumerate<'e>(
 /// The load's folds of every body `load` holds records for, its call sites traced, laid through
 /// `lay` once: [`fold`](super::fold) staged in `scratch`, then [`trace`].
 pub fn traced<'o>(
-    load: &LoadFacts<'o>,
+    (load, types): (&LoadFacts<'o>, &Chain<'_, '_, '_, '_>),
     lay: impl Lays<'o>,
     scratch: BumpAllocator<'_>,
 ) -> &'o [Folds<'o>] {
     trace(
         load,
-        &super::folds::staged(load, lay, scratch),
+        &super::folds::staged((load, types), lay, scratch),
         lay,
         scratch,
     )

@@ -1002,13 +1002,16 @@ impl Over {
 #[derive(Clone, Debug)]
 pub(super) struct Resumable {
     /// Whether `SUBJECT` takes each drawn parameter: `k :Key`, `xs :(LIST OF Elt)`, `Item :Type`,
-    /// `m :Counter`, `mk :(FN :{} -> Counter)` and `p :Picks`. `x :Elt` it always takes.
+    /// `m :Counter` (or `:Module`, or `:(Counter & Zeroed)`), `mk :(FN :{} -> Counter)` and `p :Picks`. `x :Elt` it always
+    /// takes.
     pub(super) key: bool,
     pub(super) list: bool,
     pub(super) item: bool,
     pub(super) module: bool,
     pub(super) maker: bool,
     pub(super) picks: bool,
+    /// The type `m` is declared at.
+    pub(super) module_at: ModuleAt,
     /// Whether the body binds the local module `n` and the type binder `Pair` over `Elt`, ahead
     /// of its drawn statements.
     pub(super) local: bool,
@@ -1017,8 +1020,8 @@ pub(super) struct Resumable {
     /// run-bound name in a type binder; only when it takes `m`.
     pub(super) both: bool,
     pub(super) statements: Vec<Statement>,
-    /// What the binding gives each unknown it binds: `Elt`, `Key`, `Item` and `Pair` a closed type,
-    /// and `m` and `n` a module over a drawn `Carrier`.
+    /// What the binding gives each unknown it binds: `Elt`, `Key` and `Item` a closed type, and `m`
+    /// and `n` a module over a drawn `Carrier`. `Pair` is rigid over `Elt`, so no binding binds it.
     pub(super) bound: Bound,
 }
 
@@ -1029,7 +1032,6 @@ pub(super) struct Bound {
     pub(super) elt: Option<Desc>,
     pub(super) key: Option<Desc>,
     pub(super) item: Option<Desc>,
-    pub(super) pair: Option<Desc>,
     pub(super) module: Option<(Desc, String)>,
     pub(super) local: Option<(Desc, String)>,
     /// What a [`Statement::Cell`]'s own type name binds: its entry's binding, not `SUBJECT`'s.
@@ -1037,7 +1039,7 @@ pub(super) struct Bound {
 }
 
 /// The unknowns a [`Bound`] may bind, by the names the program spells them with.
-pub(super) const UNKNOWNS: [&str; 7] = ["Elt", "Key", "Item", "Pair", "m", "n", "Cel"];
+pub(super) const UNKNOWNS: [&str; 6] = ["Elt", "Key", "Item", "m", "n", "Cel"];
 
 impl Bound {
     /// Each unknown it binds, by name, beside the closed type it binds — a module's `Carrier`.
@@ -1046,7 +1048,6 @@ impl Bound {
             self.elt.as_ref(),
             self.key.as_ref(),
             self.item.as_ref(),
-            self.pair.as_ref(),
             self.module.as_ref().map(|(carrier, _)| carrier),
             self.local.as_ref().map(|(carrier, _)| carrier),
             self.cel.as_ref(),
@@ -1063,7 +1064,6 @@ impl Bound {
             elt: self.elt.clone().filter(|_| kept("Elt")),
             key: self.key.clone().filter(|_| kept("Key")),
             item: self.item.clone().filter(|_| kept("Item")),
-            pair: self.pair.clone().filter(|_| kept("Pair")),
             module: self.module.clone().filter(|_| kept("m")),
             local: self.local.clone().filter(|_| kept("n")),
             cel: self.cel.clone().filter(|_| kept("Cel")),
@@ -1085,6 +1085,22 @@ impl Bound {
 pub(super) enum Statement {
     /// `LET s = (OP <argument>)`.
     Call(Argument),
+    /// `LET s = (FIRST x)` and `LET t = (OP s)`: a call over two candidates whose selection a
+    /// binding of `Elt` decides, the record's returning its field `x`, a piece of the argument,
+    /// and a later call reading its result.
+    FirstCall,
+    /// `LET s = (MATCH x WITH …)` and `LET t = (OP s)`: a `MATCH` over `x` whose arm a binding
+    /// of `Elt` decides, and a later call reading it.
+    Matched,
+    /// `LET w :(FN :{y :Elt} -> Number) = (FN FOR ALL #[Tee] :{y :Tee} -> Tee = #(y))`: an instance
+    /// wanted at a type over `Elt`, whose solve a binding may make otherwise.
+    InstanceOverName,
+    /// A local registration whose first class solves `Tee` from `y :(LIST OF Tee)`, called on `x`
+    /// beside an instance argument: a solve read through `Elt`'s bound, stored whole.
+    StoredSolve,
+    /// `LET s = [x, 1]` and `LET t = {"k": x}`: container literals over `x`, typed through the
+    /// fill.
+    Literals,
     /// `LET s = m.zero`.
     Member,
     /// `LET s :(Elt & Number) = x`.
@@ -1101,6 +1117,18 @@ pub(super) enum Statement {
     InnerLocal,
     /// `LET s = (USING (m :! Counter) SCOPE (OP zero))`: a surfaced name.
     Using,
+    /// `LET s = x.zero` and `LET t = s.zero`: a member read through a variable a binding decides,
+    /// and through that read.
+    VariableMember,
+    /// `LET s = (m :! Counter).zero`: a member read through a hold written in place.
+    HeldMember,
+    /// `LET s = ((m :! Counter) :! Counter).zero`: a member read through a hold of a hold.
+    HeldTwice,
+    /// `(m :! Counter)` and `LET s = [(m :! Counter)]`: holds written in place, as a statement and
+    /// as a list's element.
+    HeldInPlace,
+    /// `LET s = (m :! (Counter WITH {Carrier = Elt}))`: a hold a binding may refuse.
+    HeldPinned,
     /// `LET s = (USING (p :! (Picks WITH {Carrier = Elt})) SCOPE (PICK zero))`: a surfaced head,
     /// its ascription rigid over `Elt`.
     UsingHead,
@@ -1113,16 +1141,31 @@ pub(super) enum Statement {
     Quote(Quoted),
     /// `LET v = (m :| Counter)`: a view over the module parameter.
     ViewParameter,
+    /// `(m :| Counter)` and `LET s = [(m :| Counter)]`: views over the module parameter written in
+    /// place, as a statement and as a list's element.
+    ViewInPlace,
     /// A local `MODULE` body, and a view over it.
     ViewLocal,
     /// A local registration quantified over `Tee`, and a call selecting it at a closed solution.
     Unfolding,
+    /// A local registration building a `MODULE` over its parameter, `e :Elt` or quantified
+    /// `e :Tee` as drawn, called on `x`, and an annotation through the built module's member: a
+    /// call the text selects, unfolded over `x`'s name.
+    UnfoldModule(bool),
+    /// Two local registrations building a `MODULE` over a `Number` or a `Str`, called twice on
+    /// `x`, and an annotation through one call's module of the other's member: a call only a
+    /// binding of `Elt` selects among, two writes of which are one tree.
+    UndecidedModule,
     /// A local callable over `Elt`, and a call of it by name over a record literal.
     ByName,
     /// A local registration over `Elt`, and a call of it.
     LocalRegistration,
     /// A local `MODULE` body holding a callable over `Elt`.
     ModuleBody,
+    /// A local `MODULE` body over `Elt` whose members never name it.
+    ModuleOverName,
+    /// A local `MODULE` body over a local alias of a type written over `Elt`.
+    ModuleOverAlias,
     /// Two local callables over `Elt`, each calling the other: one component.
     Component,
     /// A quantified callable a local `MODULE` holds, read where it is wanted at a type over `Elt`.
@@ -1134,6 +1177,10 @@ pub(super) enum Statement {
     /// class through one view, read beside a path of the class through another, both views of a
     /// module the load does not see, declared ahead of `SUBJECT` ([`PREFIX_CLASS`]).
     PrefixClass,
+    /// `LET s = (FN :{q :(Paired WITH {Left = Elt})} -> Any = #(…))`: a callable reading a path
+    /// through an application over `Elt` that leaves a parameter unpinned, so binding `Elt` alone
+    /// moves the path's class ([`PAIRED`]), and the label it pins at `Elt`, which is that pin.
+    PartialPath,
     /// `EXPR FOR ALL #[Cel] #(CELL t :Cel) -> Any`, whose body asks `OP` of `t` and `BOTH2` of `t`
     /// and `SUBJECT`'s `x`: a cell under `SUBJECT`, its entry over `SUBJECT`'s. It reads `Elt`
     /// through `x`, not its signature, whose registration a binding of `Elt` would leave rigid and
@@ -1147,6 +1194,9 @@ const PREFIX_CLASS: &str = "MODULE pints = ((LET zero = 0) \
      LET pm = (EVAL #($pints) -> Counter)\n\
      LET pv = (pm :| Counter)\nLET pw = (pm :| Counter)\nLET px :(pv.Carrier) = pv.zero\n";
 
+/// What a [`Statement::PartialPath`] reads, declared at the top level ahead of `SUBJECT`.
+const PAIRED: &str = "SIG Paired FOR ALL #[Left Right] = #[(VAL left :Left) (VAL right :Right)]\n";
+
 /// The quote's code a [`Statement::Quote`] writes.
 #[derive(Clone, Copy, Debug)]
 pub(super) enum Quoted {
@@ -1158,6 +1208,12 @@ pub(super) enum Quoted {
     Dollar,
     /// `(EVAL #(LET t :($Elt) = $x) -> Any)`: a `$` name over `Elt`.
     DollarType,
+    /// `(EVAL #($m.zero) -> Any)`: a `$` name over the module binder `m`, whose capture holds the
+    /// module the binding binds `m` to.
+    DollarModule,
+    /// `(EVAL #($(OP $x)) -> Any)`: a `$(…)` candidate over `x`, selected where the quote is born
+    /// and typed in the code over `Elt`.
+    DollarCall,
 }
 
 /// What a drawn `OP` call is applied to.
@@ -1209,16 +1265,16 @@ fn carrier() -> BoxedStrategy<(Desc, String)> {
         .boxed()
 }
 
-/// `desc` with `Elt`, its variable 0, read as `elt`.
-pub(super) fn substituted(desc: &Desc, elt: &Desc) -> Desc {
-    match desc {
-        Desc::Variable(0) => elt.clone(),
-        Desc::List(each) => Desc::List(Box::new(substituted(each, elt))),
-        Desc::Union(a, b) => {
-            Desc::Union(Box::new(substituted(a, elt)), Box::new(substituted(b, elt)))
-        }
-        other => other.clone(),
-    }
+/// The type a [`Resumable`] program's module parameter `m` is declared at.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum ModuleAt {
+    /// `:Counter`, a signature with a head parameter its paths pin.
+    Counter,
+    /// `:Module`: exactly the type its argument carries, a stamp at `Module` keeping the
+    /// module's own signature.
+    Module,
+    /// `:(Counter & Zeroed)`, a meet pinned member by member.
+    Meet,
 }
 
 /// A [`Resumable`] program and a binding of its unknowns.
@@ -1230,6 +1286,11 @@ pub(super) fn resumable() -> impl Strategy<Value = Resumable> {
         any::<bool>(),
         any::<bool>(),
         any::<bool>(),
+        prop_oneof![
+            2 => Just(ModuleAt::Counter),
+            1 => Just(ModuleAt::Module),
+            1 => Just(ModuleAt::Meet),
+        ],
     );
     let bodies = (
         any::<bool>(),
@@ -1244,23 +1305,21 @@ pub(super) fn resumable() -> impl Strategy<Value = Resumable> {
         prop::collection::vec(statement(), 1..5),
         any::<bool>(),
     );
-    // `Pair` is read over `Elt`: a binding gives it what the solve that gives `Elt` its type does.
     let bindings = (
         closed(),
         prop::option::weighted(0.6, Just(())),
         prop::option::weighted(0.4, closed()),
         prop::option::weighted(0.4, closed()),
-        prop::option::weighted(0.4, Just(())),
         prop::option::weighted(0.5, carrier()),
         prop::option::weighted(0.5, carrier()),
     );
     (parameters, bodies, bindings).prop_map(
-        |((key, list, item, module, maker, picks), (local, pair, statements, both), bindings)| {
-            let (solved, elt, bound_key, bound_item, bound_pair, bound_module, bound_local) =
-                bindings;
-            let bound_pair = bound_pair
-                .and(pair.as_ref())
-                .map(|pair| substituted(pair, &solved));
+        |(
+            (key, list, item, module, maker, picks, module_at),
+            (local, pair, statements, both),
+            bindings,
+        )| {
+            let (solved, elt, bound_key, bound_item, bound_module, bound_local) = bindings;
             let elt = elt.map(|()| solved);
             let local = local && maker;
             let mut case = Resumable {
@@ -1270,15 +1329,18 @@ pub(super) fn resumable() -> impl Strategy<Value = Resumable> {
                 module,
                 maker,
                 picks,
+                module_at: match module {
+                    true => module_at,
+                    false => ModuleAt::Counter,
+                },
                 local,
                 pair: pair.clone(),
-                both: both && module,
+                both: both && module && module_at != ModuleAt::Module,
                 statements,
                 bound: Bound {
                     elt,
                     key: bound_key.filter(|_| key),
                     item: bound_item.filter(|_| item),
-                    pair: bound_pair,
                     module: bound_module.filter(|_| module),
                     local: bound_local.filter(|_| local),
                     cel: None,
@@ -1286,15 +1348,22 @@ pub(super) fn resumable() -> impl Strategy<Value = Resumable> {
             };
             // A statement reads only what the program binds.
             let (module, local, pair, item) = (case.module, case.local, case.pair.is_some(), item);
+            let counter = module && case.module_at != ModuleAt::Module;
             case.statements.retain(|statement| match statement {
+                // A path reads a type member `Module` declares none of.
+                Statement::PathAfterMeet | Statement::PathBinder => counter,
                 Statement::Call(Argument::Xs) => list,
                 Statement::Call(Argument::K) | Statement::MeetKey => key,
                 Statement::Call(Argument::MZero)
                 | Statement::Member
                 | Statement::Using
-                | Statement::PathAfterMeet
-                | Statement::PathBinder
-                | Statement::ViewParameter => module,
+                | Statement::HeldMember
+                | Statement::HeldTwice
+                | Statement::HeldInPlace
+                | Statement::HeldPinned
+                | Statement::ViewParameter
+                | Statement::ViewInPlace
+                | Statement::Quote(Quoted::DollarModule) => module,
                 Statement::UsingHead => picks,
                 Statement::Call(Argument::NZero) => local,
                 Statement::Annotated(Typed::Item) | Statement::Ascribed(Typed::Item) => item,
@@ -1319,22 +1388,13 @@ pub(super) struct Witnessable {
 
 impl Witnessable {
     /// The program: `case`'s, each alternate declared at the top level as
-    /// [`alternate`](Self::alternate), and `Pair` over each `Elt` alternate.
+    /// [`alternate`](Self::alternate).
     pub(super) fn render(&self) -> String {
         let mut out = self.case.render();
         for (name, alternates) in ALTERNATED.iter().zip(&self.alternates) {
             for (index, desc) in alternates.iter().enumerate() {
                 let declared = Self::alternate(name, index);
                 out += &format!("LET {declared} = {}\n", ascribed(desc, &[]));
-            }
-        }
-        if let Some(pair) = &self.case.pair {
-            for (index, elt) in self.alternates[0].iter().enumerate() {
-                let declared = Self::alternate("Pair", index);
-                out += &format!(
-                    "LET {declared} = {}\n",
-                    ascribed(&substituted(pair, elt), &[])
-                );
             }
         }
         out
@@ -1345,8 +1405,7 @@ impl Witnessable {
         format!("Alt{name}{index}")
     }
 
-    /// `case`'s binding with each name `chosen` names given its alternate there, `Pair` following
-    /// `Elt` where the binding gives it a type.
+    /// `case`'s binding with each name `chosen` names given its alternate there.
     pub(super) fn bound(&self, chosen: &[(&str, usize)]) -> Bound {
         let mut bound = self.case.bound.clone();
         for (name, index) in chosen {
@@ -1358,9 +1417,6 @@ impl Witnessable {
                 "Cel" => bound.cel = desc,
                 _ => bound.item = desc,
             }
-        }
-        if let (Some(pair), Some(elt), true) = (&self.case.pair, &bound.elt, bound.pair.is_some()) {
-            bound.pair = Some(substituted(pair, elt));
         }
         bound
     }
@@ -1412,9 +1468,16 @@ fn statement() -> impl Strategy<Value = Statement> {
         Just(Quoted::Mark),
         Just(Quoted::Dollar),
         Just(Quoted::DollarType),
+        Just(Quoted::DollarModule),
+        Just(Quoted::DollarCall),
     ];
     prop_oneof![
         3 => argument.prop_map(Statement::Call),
+        1 => Just(Statement::FirstCall),
+        1 => Just(Statement::Matched),
+        1 => Just(Statement::InstanceOverName),
+        1 => Just(Statement::StoredSolve),
+        1 => Just(Statement::Literals),
         1 => Just(Statement::Member),
         1 => Just(Statement::Meet),
         1 => Just(Statement::MeetKey),
@@ -1423,20 +1486,31 @@ fn statement() -> impl Strategy<Value = Statement> {
         1 => Just(Statement::Inner),
         1 => Just(Statement::InnerLocal),
         1 => Just(Statement::Using),
+        1 => Just(Statement::VariableMember),
+        1 => Just(Statement::HeldMember),
+        1 => Just(Statement::HeldTwice),
+        1 => Just(Statement::HeldInPlace),
+        1 => Just(Statement::HeldPinned),
         1 => Just(Statement::UsingHead),
         1 => Just(Statement::PathAfterMeet),
         1 => Just(Statement::PathBinder),
         1 => quoted.prop_map(Statement::Quote),
         1 => Just(Statement::ViewParameter),
+        1 => Just(Statement::ViewInPlace),
         1 => Just(Statement::ViewLocal),
         1 => Just(Statement::Unfolding),
+        1 => any::<bool>().prop_map(Statement::UnfoldModule),
+        1 => Just(Statement::UndecidedModule),
         1 => Just(Statement::ByName),
         1 => Just(Statement::LocalRegistration),
         1 => Just(Statement::ModuleBody),
+        1 => Just(Statement::ModuleOverName),
+        1 => Just(Statement::ModuleOverAlias),
         1 => Just(Statement::Component),
         1 => Just(Statement::RigidInstance),
         1 => Just(Statement::SchemeOverBoth),
         1 => Just(Statement::PrefixClass),
+        1 => Just(Statement::PartialPath),
     ]
 }
 
@@ -1444,17 +1518,21 @@ fn statement() -> impl Strategy<Value = Statement> {
 const RESUMABLE_PRELUDE: &str = "SIG Counter FOR ALL #[Carrier] = \
      #[(VAL zero :Carrier) (VAL succ :(FN :{x :Carrier} -> Carrier))]\n\
      SIG Picks FOR ALL #[Carrier] = #[(VAL zero :Carrier) (EXPR #(PICK x :Carrier) -> Str)]\n\
+     SIG Zeroed = #[(VAL zero :Any)]\n\
      EXPR #(OP x :Number) -> Str = #(\"n\")\n\
      EXPR #(OP x :Str) -> Number = #(1)\n\
      EXPR FOR ALL #[Elt] #(OP x :(LIST OF Elt)) -> :(LIST OF Elt) = #(x)\n\
+     EXPR FOR ALL #[Elt] #(FIRST r :{x :Elt}) -> Elt = #(r.x)\n\
+     EXPR #(FIRST n :Number) -> Number = #(n)\n\
      EXPR #(BOTH2 x :Number AND y :Number) -> Str = #(\"nn\")\n\
      EXPR #(BOTH2 x :Number AND y :Str) -> Str = #(\"ns\")\n\
      EXPR #(BOTH2 x :Str AND y :Any) -> Number = #(1)\n";
 
 impl Resumable {
     /// The program, `SUBJECT` written over every unknown — and, beside it, each type the binding
-    /// gives an unknown declared as `Bound<name>`, and each module it binds as `bound<name>`, so the
-    /// binding reads its types and trees off the load.
+    /// gives an unknown declared as `Bound<name>`, and each module it binds as `bound<name>` beside
+    /// `stamped<name>`, that module at the type a frame's retype stamps on it, so the binding reads
+    /// its types and trees off the load.
     pub(super) fn render(&self) -> String {
         self.source(&Bound::default())
     }
@@ -1462,7 +1540,8 @@ impl Resumable {
     /// The program's **restart** under `bound`: each bound `FOR ALL` name dropped from the group
     /// and the `:Type` parameter from the shape, each declared at the top level as an alias of the
     /// type it binds; a bound module parameter dropped from the shape and a bound local rebound,
-    /// each to the module it binds, at the body's head; and a bound `Pair` declared as its type.
+    /// each to the module it binds at the type its retype stamps, at the body's head; and a bound
+    /// `Pair` declared as its type.
     pub(super) fn restart(&self, bound: &Bound) -> String {
         self.source(bound)
     }
@@ -1475,15 +1554,34 @@ impl Resumable {
         }
     }
 
+    /// The name the module `bound` gives the module binder `name` is declared under at the type
+    /// the binder's retype stamps on it: what a frame binds the binder to.
+    pub(super) fn stamped(name: &str) -> String {
+        format!("stamped{name}")
+    }
+
+    /// The type the module binder `name` is declared at: `m`'s as drawn, else `Counter`.
+    fn module_declared(&self, name: &str) -> &'static str {
+        match (name, self.module_at) {
+            ("m", ModuleAt::Module) => "Module",
+            ("m", ModuleAt::Meet) => "(Counter & Zeroed)",
+            _ => "Counter",
+        }
+    }
+
     fn source(&self, restart: &Bound) -> String {
         let mut out = String::from(RESUMABLE_PRELUDE);
         for (name, desc) in self.bound.entries() {
             out += &match self.bound.module_of(name) {
                 Some((carrier, zero)) => format!(
                     "MODULE {} = ((LET Carrier = {}) (LET zero = {zero}) \
-                     (LET succ = (FN :{{x :Carrier}} -> Carrier = #(x))))\n",
+                     (LET succ = (FN :{{x :Carrier}} -> Carrier = #(x))))\n\
+                     LET {} :{} = {}\n",
                     Self::declared(name),
                     ascribed(carrier, &[]),
+                    Self::stamped(name),
+                    self.module_declared(name),
+                    Self::declared(name),
                 ),
                 None => format!("LET {} = {}\n", Self::declared(name), ascribed(desc, &[])),
             };
@@ -1512,13 +1610,16 @@ impl Resumable {
             parameters.push("Item :Type".to_string());
         }
         if self.module && restart.module.is_none() {
-            parameters.push("m :Counter".to_string());
+            parameters.push(format!("m :{}", self.module_declared("m")));
         }
         if self.maker {
             parameters.push("mk :(FN :{} -> Counter)".to_string());
         }
         if self.picks {
             parameters.push("p :Picks".to_string());
+        }
+        if (self.statements.iter()).any(|statement| matches!(statement, Statement::PartialPath)) {
+            out += PAIRED;
         }
         if (self.statements.iter()).any(|statement| matches!(statement, Statement::PrefixClass)) {
             out += PREFIX_CLASS;
@@ -1528,20 +1629,16 @@ impl Resumable {
             parameters.join(" AND ")
         );
         if self.module && restart.module.is_some() {
-            out += &format!("  LET m = {}\n", Self::declared("m"));
+            out += &format!("  LET m = {}\n", Self::stamped("m"));
         }
         if self.local {
             match &restart.local {
-                Some(_) => out += &format!("  LET n = {}\n", Self::declared("n")),
+                Some(_) => out += &format!("  LET n = {}\n", Self::stamped("n")),
                 None => out += "  LET n = (mk {})\n",
             }
         }
         if let Some(pair) = &self.pair {
-            let written = match &restart.pair {
-                Some(bound) => ascribed(bound, &[]),
-                None => ascribed(pair, &VARIABLES),
-            };
-            out += &format!("  LET Pair = {written}\n");
+            out += &format!("  LET Pair = {}\n", ascribed(pair, &VARIABLES));
         }
         if self.both {
             out += "  LET Both = :{a :Elt b :(m.Carrier)}\n";
@@ -1578,6 +1675,25 @@ impl Statement {
                 };
                 format!("LET s{index} = (OP {argument})")
             }
+            Statement::FirstCall => {
+                format!("LET s{index} = (FIRST x)\n  LET t{index} = (OP s{index})")
+            }
+            Statement::Matched => format!(
+                "LET s{index} = (MATCH x WITH #{{:Number: (1), _: (\"s\")}})\n  \
+                 LET t{index} = (OP s{index})"
+            ),
+            Statement::InstanceOverName => format!(
+                "LET w{index} :(FN :{{y :Elt}} -> Number) = \
+                 (FN FOR ALL #[Tee] :{{y :Tee}} -> Tee = #(y))"
+            ),
+            Statement::StoredSolve => format!(
+                "EXPR FOR ALL #[Tee] #(APPLY{letter} y :(LIST OF Tee) WITH f :(FN :{{x :Tee}} -> Tee)) \
+                 -> Any = #(y)\n  \
+                 LET s{index} = (APPLY{letter} x WITH (FN FOR ALL #[Pick] :{{x :Pick}} -> Pick = #(x)))"
+            ),
+            Statement::Literals => {
+                format!("LET s{index} = [x, 1]\n  LET t{index} = {{\"k\": x}}")
+            }
             Statement::Member => format!("LET s{index} = m.zero"),
             Statement::Meet => format!("LET s{index} :(Elt & Number) = x"),
             Statement::MeetKey => format!("LET s{index} :(Key & Number) = k"),
@@ -1592,6 +1708,15 @@ impl Statement {
                 format!("LET l{index} = x\n  LET g{index} = (FN :{{}} -> Any = #(OP l{index}))")
             }
             Statement::Using => format!("LET s{index} = (USING (m :! Counter) SCOPE (OP zero))"),
+            Statement::VariableMember => {
+                format!("LET s{index} = x.zero\n  LET t{index} = s{index}.zero")
+            }
+            Statement::HeldMember => format!("LET s{index} = (m :! Counter).zero"),
+            Statement::HeldTwice => format!("LET s{index} = ((m :! Counter) :! Counter).zero"),
+            Statement::HeldInPlace => format!("(m :! Counter)\n  LET s{index} = [(m :! Counter)]"),
+            Statement::HeldPinned => {
+                format!("LET s{index} = (m :! (Counter WITH {{Carrier = Elt}}))")
+            }
             Statement::UsingHead => format!(
                 "LET s{index} = (USING (p :! (Picks WITH {{Carrier = Elt}})) SCOPE (PICK zero))"
             ),
@@ -1605,7 +1730,14 @@ impl Statement {
             Statement::Quote(Quoted::DollarType) => {
                 format!("LET s{index} = (EVAL #(LET t :($Elt) = $x) -> Any)")
             }
+            Statement::Quote(Quoted::DollarModule) => {
+                format!("LET s{index} = (EVAL #($m.zero) -> Any)")
+            }
+            Statement::Quote(Quoted::DollarCall) => {
+                format!("LET s{index} = (EVAL #($(OP $x)) -> Any)")
+            }
             Statement::ViewParameter => format!("LET v{index} = (m :| Counter)"),
+            Statement::ViewInPlace => format!("(m :| Counter)\n  LET s{index} = [(m :| Counter)]"),
             Statement::ViewLocal => format!(
                 "MODULE lm{index} = ((LET Carrier = Number) (LET zero = 0) \
                  (LET succ = (FN :{{x :Number}} -> Number = #(x))))\n  \
@@ -1615,6 +1747,32 @@ impl Statement {
                 "EXPR FOR ALL #[Tee] #(UNF{letter} y :Tee) -> Tee = #(y)\n  \
                  LET u{index} = (UNF{letter} 1)"
             ),
+            Statement::UnfoldModule(quantified) => {
+                let (group, declared) = match quantified {
+                    true => ("FOR ALL #[Tee] ", "Tee"),
+                    false => ("", "Elt"),
+                };
+                format!(
+                    "EXPR {group}#(MKM{letter} e :{declared}) -> Module = #(\n    \
+                     (MODULE built OVER #[e] = (LET Zero = Number))\n    built\n  )\n  \
+                     LET a{index} = (MKM{letter} x)\n  LET z{index} :(a{index}.Zero) = 5"
+                )
+            }
+            Statement::UndecidedModule => {
+                let built = |name: &str, typed: &str| {
+                    format!(
+                        "EXPR #(MKU{letter} {name} :{typed}) -> Module = #(\n    \
+                         (MODULE built OVER #[{name}] = ((LET Zero = {typed}) \
+                         (LET zero = {name})))\n    built\n  )\n  "
+                    )
+                };
+                format!(
+                    "{}{}LET a{index} = (MKU{letter} x)\n  LET b{index} = (MKU{letter} x)\n  \
+                     LET z{index} :(a{index}.Zero) = b{index}.zero",
+                    built("n", "Number"),
+                    built("s", "Str")
+                )
+            }
             Statement::ByName => format!(
                 "LET h{index} = (FN :{{y :Elt}} -> Elt = #(y))\n  LET c{index} = (h{index} {{y = x}})"
             ),
@@ -1624,6 +1782,12 @@ impl Statement {
             Statement::ModuleBody => {
                 format!("MODULE md{index} OVER #[Elt] = (LET f = (FN :{{y :Elt}} -> Elt = #(y)))")
             }
+            Statement::ModuleOverName => format!("MODULE mn{index} OVER #[Elt] = (LET f = 7)"),
+            Statement::ModuleOverAlias => format!(
+                "LET Row{index} = :(LIST OF Elt)\n  \
+                 MODULE ma{index} OVER #[Row{index}] = \
+                 (LET f = (FN :{{y :Row{index}}} -> Row{index} = #(y)))"
+            ),
             Statement::Component => format!(
                 "LET ev{index} = (FN :{{y :Elt}} -> Any = #(od{index} {{y = y}}))\n  \
                  LET od{index} = (FN :{{y :Elt}} -> Any = #(ev{index} {{y = y}}))"
@@ -1639,6 +1803,10 @@ impl Statement {
             Statement::PrefixClass => {
                 format!("LET s{index} = px\n  LET t{index} :(pw.Carrier) = pw.zero")
             }
+            Statement::PartialPath => format!(
+                "LET s{index} = (FN :{{q :(Paired WITH {{Left = Elt}})}} -> Any = #(\n    \
+                 LET r = q.right\n    LET t :(q.Right) = r\n    LET l :(q.Left) = q.left\n    t\n  ))"
+            ),
             Statement::Cell => {
                 let group = match restart.cel {
                     Some(_) => "",

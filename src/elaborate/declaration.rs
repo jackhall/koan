@@ -16,7 +16,7 @@
 
 use std::cell::Cell;
 
-use crate::memory::{BumpAllocator, BumpVec};
+use crate::memory::{BumpAllocator, BumpVec, collect};
 use crate::parse::BuiltinShapeId;
 use crate::parse::{DefinitionKind, Role};
 use crate::parse::{ExpressionPart, KExpression};
@@ -24,12 +24,12 @@ use crate::parse::{
     bounded, declarator_parameters, family_head, quoted_body, quoted_part, symbol_from_quote_body,
 };
 use crate::scope::{
-    BodyShape, BuiltinGroup, Component, Elaboration, Site, Slot, Which, is_equality,
+    BodyShape, BuiltinGroup, Component, DerivedTerm, Elaboration, Handed, Nominals, Schema,
+    Signing, Site, Slot, Which, handed, is_equality, sealed_nominals, sealed_signature,
 };
 use crate::symbols::{KeywordSymbol, TypeSymbol};
 use crate::type_lattice::{
-    DeclaredGroup, DeclaredType, FoldDirection, KKind, KType, Parametric, RecursiveGroupWindow,
-    ReductionMode, RelativeSchema, SchemaDraft, SigOrigin,
+    DeclaredGroup, DeclaredType, FoldDirection, KKind, KType, Parametric, ReductionMode,
 };
 
 use super::expression::{Elaborator, Fellow, Fellows, Groups};
@@ -51,10 +51,16 @@ pub fn declares_nominal(node: &KExpression<'_>) -> bool {
     })
 }
 
-/// One `KType` per member of `component`, in member order: a `NEWTYPE`'s newtype over its
+/// One type per member of `component`, in member order: a `NEWTYPE`'s newtype over its
 /// representation, a `NEWTYPE (Key Val -> Pair)`'s constructor family, a `UNION`'s canonical union
 /// over its variants — each variant a family over the union's parameters when its declarator names
 /// any — a `SIG`'s signature, and a `LET` of a type name's type expression.
+///
+/// A lone alias reading a name a run binds is rigid as written, over that name's lexical variable.
+/// A nominal component reading one is rigid too: each member is the derived name of the group a
+/// binding seals ([`Nominals`]), through the one closed rule a closed group seals by
+/// ([`sealed_nominals`]), and so is a lone signature ([`sealed_signature`]). A signature or alias
+/// fellow of a nominal reading one is [`Elaboration::Unknown`]: its relative type is read closed.
 ///
 /// Every member is read and every schema elaborated before the group seals, so a member of a
 /// sealed group reads its fellows as siblings and a ring of declarations needs no placeholder. Only
@@ -71,7 +77,7 @@ pub fn type_declarations<'graph, 'x, R: Reads<'graph> + ?Sized>(
     reader: &R,
     types: &Chain<'_, '_, '_, '_>,
     scratch: BumpAllocator<'x>,
-) -> Result<&'x [KType], Elaboration> {
+) -> Result<&'x [Parametric], Elaboration> {
     let shape = reader.shape();
     let mut read = BumpVec::with_capacity_in(component.members.len(), scratch);
     for slot in component.members {
@@ -150,7 +156,6 @@ pub fn type_declarations<'graph, 'x, R: Reads<'graph> + ?Sized>(
             Declared::Signature { .. } | Declared::Alias(_) => {}
         }
     }
-    let window = RecursiveGroupWindow::for_component(scratch, &members, &binders);
 
     // Each signature and alias, relative: over its nominal fellows' handles, and over each other
     // signature or alias it names, read first. They are read in written order — a component's
@@ -185,8 +190,11 @@ pub fn type_declarations<'graph, 'x, R: Reads<'graph> + ?Sized>(
         }
     }
 
-    let mut sealed = None;
-    let mut index = 0;
+    // Each window member's schema, every type it reads an operand: a newtype's representation, a
+    // family's over its parameters' quantifiers.
+    let rigid = reader.rigid_reads();
+    let mut operands = BumpVec::new_in(scratch);
+    let mut schemas = BumpVec::with_capacity_in(members.len(), scratch);
     for member in read.iter() {
         let elaborator = Elaborator {
             reader,
@@ -199,29 +207,29 @@ pub fn type_declarations<'graph, 'x, R: Reads<'graph> + ?Sized>(
             locals: &[],
             binder: Cell::new(false),
         };
+        let mut operand = |ty: Parametric| {
+            operands.push(ty);
+            (operands.len() - 1) as u16
+        };
         match member.kind {
             Declared::NewType { repr } => {
-                let repr = closed(types, elaborator.part(repr, &TOP)?);
-                sealed = window.fill_member(index, RelativeSchema::NewType(repr), types, scratch);
-                index += 1;
+                schemas.push(Schema::NewType(operand(elaborator.part(repr, &TOP)?)));
             }
             // A one-parameter family wraps a payload of its parameter's type; a wider one is
             // type-position only.
             Declared::Family { params } => {
                 let representation = (params.len() == 1).then(|| types.quantified(0, KType::ANY));
-                let schema = RelativeSchema::constructor(scratch, scratch, representation, params);
-                sealed = window.fill_member(index, schema, types, scratch);
-                index += 1;
+                schemas.push(Schema::Constructor {
+                    representation: representation.map(operand),
+                    params,
+                });
             }
             Declared::Union {
                 variants,
                 params: [],
             } => {
                 for (_, payload) in variants {
-                    let payload = closed(types, elaborator.part(payload, &TOP)?);
-                    sealed =
-                        window.fill_member(index, RelativeSchema::NewType(payload), types, scratch);
-                    index += 1;
+                    schemas.push(Schema::NewType(operand(elaborator.part(payload, &TOP)?)));
                 }
             }
             // Each variant is a family over all of the union's parameters, its payload read with
@@ -245,41 +253,67 @@ pub fn type_declarations<'graph, 'x, R: Reads<'graph> + ?Sized>(
                         (family.names, family.bounds),
                         [representation],
                     )?;
-                    let schema =
-                        RelativeSchema::constructor(scratch, scratch, Some(representation), params);
-                    sealed = window.fill_member(index, schema, types, scratch);
-                    index += 1;
+                    schemas.push(Schema::Constructor {
+                        representation: Some(operand(representation)),
+                        params,
+                    });
                 }
             }
             Declared::Signature { .. } | Declared::Alias(_) => {}
         }
     }
-    let sealed = sealed.expect("the last fill seals a window whose every member was filled");
 
+    // How each component member's handle is read off the sealed group.
     let mut handles = BumpVec::with_capacity_in(read.len(), scratch);
     let mut index = 0;
     for (member, relative) in read.iter().zip(&relatives) {
-        let handle = match member.kind {
+        handles.push(match member.kind {
             Declared::NewType { .. } | Declared::Family { .. } => {
-                let handle = sealed.member(index).expect("a filled member seals");
                 index += 1;
-                handle
+                Handed::Member(index - 1)
             }
             Declared::Union { variants, .. } => {
                 index += variants.len();
-                sealed
-                    .binder_type(member.name)
-                    .expect("a declaring binder seals its union")
+                Handed::Binder(member.name)
             }
-            Declared::Signature { .. } | Declared::Alias(_) => sealed.absolute(
-                types,
-                scratch,
-                relative.expect("a signature or alias is read relative"),
-            ),
-        };
-        handles.push(handle);
+            Declared::Signature { .. } | Declared::Alias(_) => {
+                let relative = relative.expect("a signature or alias is read relative");
+                operands.push(relative.into());
+                Handed::Relative((operands.len() - 1) as u16)
+            }
+        });
     }
-    Ok(scratch.alloc_slice_copy(&handles))
+    let nominals = Nominals {
+        members: &members,
+        binders: &binders,
+        schemas: &schemas,
+        handles: &handles,
+    };
+    // Over a run-bound name, each member is the derived name of the group a binding seals.
+    if reader.rigid_reads() > rigid {
+        let site = read
+            .iter()
+            .map(|member| member.site)
+            .min()
+            .expect("a member");
+        let mut named = BumpVec::with_capacity_in(handles.len(), scratch);
+        for output in 0..handles.len() {
+            let term = DerivedTerm::Nominal {
+                group: &nominals,
+                operands: &operands,
+                output: output as u8,
+            };
+            let derive = &mut |term: DerivedTerm<'_>| reader.marks().derive(term);
+            named.push(handed(types, scratch, term, derive).ok_or(Elaboration::Unknown { site })?);
+        }
+        return Ok(named.leak());
+    }
+    let sealed = sealed_nominals(types, scratch, &nominals, &operands)
+        .expect("a window whose every member a closed schema filled seals");
+    Ok(collect(
+        scratch,
+        sealed.iter().map(|handle| Parametric::from(*handle)),
+    ))
 }
 
 /// How far a component's signature or alias member has been read.
@@ -332,7 +366,12 @@ impl<'graph, R: Reads<'graph> + ?Sized> Relatives<'_, 'graph, '_, '_, '_, '_, '_
             locals: &[],
             binder: Cell::new(false),
         };
-        let handle = self.read[index].elaborate(&elaborator)?;
+        // A fellow over a run-bound name is left to the run, with the nominals it reads.
+        let handle = closed(
+            self.types,
+            self.read[index].site,
+            self.read[index].elaborate(&elaborator)?,
+        )?;
         self.state[index].set(Reading::Read(handle));
         Ok(handle)
     }
@@ -344,13 +383,15 @@ const TOP: Groups<'static> = Groups {
     outer: None,
 };
 
-/// Why a declared type is concrete: its part reads under no `FOR ALL` group and no head
-/// parameter, and a name a run binds is unknown where a declaration is typed at load.
-const DECLARED: &str = "a declared type reads no variable";
-
-/// A declared type, read under [`TOP`] with no head parameter in reach: concrete.
-fn closed(types: &Chain<'_, '_, '_, '_>, declared: Parametric) -> KType {
-    super::judge::static_of(types, declared).expect(DECLARED)
+/// A nominal's declared part, read under [`TOP`] with no head parameter in reach: concrete where
+/// it read no name a run binds, and left unknown at `site` otherwise, since a nominal over a
+/// run-bound name is declared where it runs.
+fn closed(
+    types: &Chain<'_, '_, '_, '_>,
+    site: Site,
+    declared: Parametric,
+) -> Result<KType, Elaboration> {
+    super::judge::static_of(types, declared).ok_or(Elaboration::Unknown { site })
 }
 
 /// One member of a component, read off its declaration node before anything is elaborated.
@@ -482,9 +523,11 @@ impl<'graph, 'x> Declaration<'graph, 'x> {
     fn elaborate<R: Reads<'graph> + ?Sized>(
         &self,
         elaborator: &Elaborator<'_, '_, '_, '_, '_, R>,
-    ) -> Result<KType, Elaboration> {
+    ) -> Result<Parametric, Elaboration> {
         match self.kind {
-            Declared::Alias(rhs) => Ok(closed(elaborator.types, elaborator.part(rhs, &TOP)?)),
+            // An alias is rigid as written.
+            Declared::Alias(rhs) => elaborator.part(rhs, &TOP),
+            // A signature over a run-bound name is the derived name of the one a binding declares.
             Declared::Signature { group, body } => {
                 let mut heads = BumpVec::new_in(elaborator.scratch);
                 signature_type(elaborator, group, body, self.site, &mut heads)
@@ -523,6 +566,9 @@ pub(super) fn signature_heads<'graph, 'x, R: Reads<'graph> + ?Sized>(
     };
     let mut heads = BumpVec::new_in(scratch);
     let signature = signature_type(&elaborator, group, body, declaration.site, &mut heads)?;
+    let signature = super::judge::static_of(types, signature).ok_or(Elaboration::Unknown {
+        site: declaration.site,
+    })?;
     Ok((signature, heads))
 }
 
@@ -582,15 +628,15 @@ fn signature_type<'graph, 'h, R: Reads<'graph> + ?Sized>(
     body: &'graph ExpressionPart<'graph>,
     site: Site,
     heads: &mut BumpVec<'h, HeadShape>,
-) -> Result<KType, Elaboration> {
+) -> Result<Parametric, Elaboration> {
     let unsupported = Elaboration::Unsupported { site };
     let ExpressionPart::ListLiteral(body) = body else {
         return Err(unsupported);
     };
     let scratch = elaborator.scratch;
     let types = elaborator.types;
-    let mut draft = SchemaDraft::new(scratch);
-    draft.origin = SigOrigin::Declared;
+    let rigid = elaborator.reader.rigid_reads();
+    let mut draft = Signing::new(scratch);
     let mut locals: BumpVec<'_, (TypeSymbol, Parametric)> = BumpVec::new_in(scratch);
     if let Some(group) = group {
         let group = elaborator.group(group, &TOP)?;
@@ -746,7 +792,17 @@ fn signature_type<'graph, 'h, R: Reads<'graph> + ?Sized>(
             return Err(Elaboration::Unsupported { site: *site });
         }
     }
-    Ok(types.signature(scratch, draft))
+    let (signed, operands) = draft.finished();
+    if elaborator.reader.rigid_reads() == rigid {
+        return Ok(sealed_signature(types, scratch, &signed, operands).into());
+    }
+    // Over a run-bound name, the derived name of the signature a binding declares.
+    let term = DerivedTerm::Signature {
+        signed: &signed,
+        operands,
+    };
+    let derive = &mut |term: DerivedTerm<'_>| elaborator.reader.marks().derive(term);
+    handed(types, scratch, term, derive).ok_or(Elaboration::Unknown { site })
 }
 
 /// How a run of a `SIG` body's bodyless `GROUP` head reduces, read off its form id and — for a
@@ -778,7 +834,7 @@ fn group_members<'graph, 'x, R: Reads<'graph> + ?Sized>(
     elaborator: &Elaborator<'_, '_, '_, '_, '_, R>,
     definition: &'graph ExpressionPart<'graph>,
     mode: ReductionMode,
-    draft: &mut SchemaDraft<'x>,
+    draft: &mut Signing<'x>,
     scratch: BumpAllocator<'x>,
 ) -> Result<BumpVec<'x, KeywordSymbol>, Elaboration> {
     let unsupported = Elaboration::Unsupported {

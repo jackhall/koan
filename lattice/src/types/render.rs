@@ -17,7 +17,7 @@ use crate::symbols::{
 
 use super::chain::TypeChain;
 use super::handle::{DeclaredType, Handle, KType, MODULE_NAME, Parametric, TypeHandle, leaf_name};
-use super::node::{Group, TypeNode};
+use super::node::{Group, Step, TypeNode};
 use super::operators::{FoldDirection, ReductionMode};
 use super::record::Record;
 use super::run::Elements;
@@ -214,8 +214,13 @@ fn write_name_in<'run>(
         TypeNode::Parameter { name, .. }
         | TypeNode::Carrier { name, .. }
         | TypeNode::Lexical { name, .. }
-        | TypeNode::Path { name, .. } => {
+        | TypeNode::Path { name, .. }
+        | TypeNode::Derived { name, .. } => {
             write!(f, "{}", display_symbol(name.symbol(), symbols))
+        }
+        // A projection is render-only: no parser reads these words, so it opens no sigil.
+        TypeNode::Projection { base, step, .. } => {
+            write_projection(base, *step, f, types, symbols, binder)
         }
         // A sealed nominal member renders by its own member name — a bare newtype (`:Wrapper`) or a
         // per-variant member reached through its union.
@@ -281,6 +286,56 @@ pub struct TypeNameDisplay<'r, 'run, H> {
 impl<'run, H: Habitat<'run>> std::fmt::Display for TypeNameDisplay<'_, 'run, H> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write_name_in(self.ktype, f, self.types, self.symbols, &[])
+    }
+}
+
+/// `(ELEMENT OF base)`: the spelling of `base`'s `step` piece. A projection is render-only: no
+/// parser reads these words, so it opens no sigil.
+fn write_projection<'run>(
+    base: Linked<'run>,
+    step: Step,
+    f: &mut std::fmt::Formatter<'_>,
+    types: &TypeChain<'run, impl Habitat<'run>>,
+    symbols: &SymbolInterner,
+    binder: &[TypeSymbol],
+) -> std::fmt::Result {
+    match step {
+        Step::Field(name) => write!(f, "(FIELD {} OF ", display_symbol(name.symbol(), symbols))?,
+        Step::Element => f.write_str("(ELEMENT OF ")?,
+        Step::Key => f.write_str("(KEY OF ")?,
+        Step::Value => f.write_str("(VALUE OF ")?,
+    }
+    write_name_in(base, f, types, symbols, binder)?;
+    f.write_str(")")
+}
+
+/// A [`display_projection`] view.
+pub struct ProjectionDisplay<'r, 'run, H> {
+    base: Linked<'run>,
+    step: Step,
+    types: &'r TypeChain<'run, H>,
+    symbols: &'r SymbolInterner,
+}
+
+impl<'run, H: Habitat<'run>> std::fmt::Display for ProjectionDisplay<'_, 'run, H> {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write_projection(self.base, self.step, f, self.types, self.symbols, &[])
+    }
+}
+
+/// The spelling a projection of `base` by `step` renders as, whether or not the lattice builds
+/// the projection: what a name standing for that piece is spelled by.
+pub fn display_projection<'r, 'run, H: Habitat<'run>>(
+    base: Parametric,
+    step: Step,
+    types: &'r TypeChain<'run, H>,
+    symbols: &'r SymbolInterner,
+) -> ProjectionDisplay<'r, 'run, H> {
+    ProjectionDisplay {
+        base: types.enter(base.raw()),
+        step,
+        types,
+        symbols,
     }
 }
 

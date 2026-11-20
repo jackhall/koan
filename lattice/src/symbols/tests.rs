@@ -170,6 +170,23 @@ proptest! {
         }
     }
 
+    /// A type spelling is no token: it classifies into no token class, and the spelling door
+    /// mints the bare digest of its text, recorded for rendering. A token is no spelling.
+    #[test]
+    fn a_type_spelling_is_no_token(
+        text in "\\((ELEMENT|KEY|VALUE) OF [A-Z][a-z]{1,4}( & [A-Z][a-z]{1,4})?\\)",
+        token in token_text(),
+    ) {
+        prop_assert!(ValueSymbol::classify(&text).is_none());
+        prop_assert!(TypeSymbol::classify(&text).is_none());
+        prop_assert!(KeywordSymbol::of(&text).is_none());
+        let symbols = SymbolInterner::new();
+        let spelled = TypeSymbol::spelled(&text, &symbols).expect("a spelling");
+        prop_assert_eq!(spelled.symbol(), Symbol::of(&text));
+        prop_assert_eq!(symbols.display(spelled.symbol()).to_string(), text);
+        prop_assert!(TypeSymbol::spelled(&token, &symbols).is_none());
+    }
+
     /// The three classes partition token text: every spelling lands in exactly one, a classified
     /// symbol is the bare digest of its own text, and `BinderSymbol` is the union of the two
     /// binding classes tagged with the channel each binds in. A `static_name!` memo is what its

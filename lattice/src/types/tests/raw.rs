@@ -345,6 +345,18 @@ pub(super) mod substitute {
         .handle()
     }
 
+    pub(in crate::types::tests) fn substitute_derived<'ty>(
+        types: &TypeChain<'ty, impl Habitat<'ty>>,
+        scratch: BumpAllocator<'_>,
+        kt: Handle,
+        binding: &mut impl FnMut(crate::types::node::DerivedId) -> Option<Handle>,
+    ) -> Handle {
+        crate::types::substitute::substitute_derived(types, scratch, types.enter(kt), &mut |term| {
+            binding(term).map(|answer| types.enter(answer))
+        })
+        .handle()
+    }
+
     pub(in crate::types::tests) fn bound_above<'ty>(
         types: &TypeChain<'ty, impl Habitat<'ty>>,
         scratch: BumpAllocator<'_>,

@@ -406,8 +406,12 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 .map(|built| built.view),
             // A module a frame binds, by the signature it recorded beside the digest.
             Carried::Tree(Tree::Digest(_, Some(bare))) => bare.signature,
-            // A closed header's type is the one the load computed for it.
-            Carried::Tree(tree @ Tree::Retyped { carried, .. }) => tree.closed().then_some(carried),
+            // A closed header's type is the one the load computed for it: a closed tree's carried
+            // type is closed ([`Tree::retyped`]).
+            Carried::Tree(tree @ Tree::Retyped { carried, .. }) => tree
+                .closed()
+                .then(|| judge::static_of(self.types, carried))
+                .flatten(),
             Carried::Tree(_) => None,
             Carried::Across(across) => across.held,
         })
@@ -440,6 +444,10 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             self.gather(tag);
             return Ok(viewed);
         }
+        // A closed view's application is closed ([`Tree::view`]).
+        let Some(application) = judge::static_of(self.types, application) else {
+            return Ok(None);
+        };
         let viewed = self.view_read(application, source, site)?;
         let tag = self.innermost();
         self.views.insert(identity, (viewed, tag));
@@ -592,6 +600,10 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                     carried, source, ..
                 },
             ) if tree.closed() => {
+                // A closed tree's carried type is closed ([`Tree::retyped`]).
+                let Some(carried) = judge::static_of(types, carried) else {
+                    return Ok(None);
+                };
                 let Some(declared) = slot_type(carried, name, types, scratch) else {
                     return Ok(None);
                 };
@@ -705,11 +717,12 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             if judge::same(pass, types, src, dst) {
                 return Sides::Alike;
             }
+            // A view is laid over a closed tree at a closed application, so its sides hold head
+            // parameters and quantifiers, never a run-bound name: reading them closed judges
+            // nothing a binding changes.
             match (
-                src.as_type()
-                    .and_then(|src| judge::closed(pass, types, src)),
-                dst.as_type()
-                    .and_then(|dst| judge::closed(pass, types, dst)),
+                src.as_type().and_then(|src| judge::static_of(types, src)),
+                dst.as_type().and_then(|dst| judge::static_of(types, dst)),
             ) {
                 (Some(src), Some(dst)) => Sides::Apart(src, dst),
                 _ => Sides::Open,

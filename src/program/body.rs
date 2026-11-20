@@ -853,12 +853,22 @@ fn decided_at_entry<'graph, 'here>(
 ) -> Result<&'here KActivation<'graph, 'here>, &'here ShapeError<'here>> {
     let (code, facts) = step.door();
     let below = activation.view().decided();
-    let facts = facts.activated(below);
     let segment = activation.segment();
     let shape = code.shape(segment);
+    let facts = match shape.kind() {
+        ShapeKind::Code => facts.undeposited(),
+        _ => facts,
+    };
+    let facts = facts.activated(below);
     let waits = facts.entry_waits(shape);
     let rewakes = activation.view().closure().decided().is_some() && facts.top().is_some();
-    if waits.is_empty() && !rewakes {
+    // A quote's code binds the type names of the chain around it its content composes, as its
+    // value carries them: its frame reads through no activation around it.
+    let carried = match shape.kind() {
+        ShapeKind::Code => code.shapes().layout(segment),
+        _ => &[],
+    };
+    if waits.is_empty() && carried.is_empty() && !rewakes {
         return Ok(activation);
     }
     let scratch = Bump::new();
@@ -890,6 +900,29 @@ fn decided_at_entry<'graph, 'here>(
                     Bound::Type(_) => matches!(name, BinderSymbol::Type(_)),
                     Bound::Module { .. } => matches!(name, BinderSymbol::Value(_)),
                 })
+                .map(|bound| (unknown, bound)),
+        );
+    }
+    let contract = facts.contract(shape);
+    let parent = code.shapes().parent(segment).map(|(parent, _)| parent);
+    for (index, (level, _)) in carried.iter().enumerate() {
+        let base = shape.captures().len();
+        let unknown = parent.and_then(|parent| code.shapes().unknown_of_level(parent, *level));
+        // The cell's own layers may bind the name at another binding, the code having been born
+        // in another activation of its encloser: the carried one is read first.
+        let Some(unknown) = unknown.filter(|_| contract[index]) else {
+            continue;
+        };
+        let Link::Value(value) = activation
+            .view()
+            .closure()
+            .get(crate::scope::CaptureSlot((base + index) as u32))
+        else {
+            unreachable!("a type capture is a value")
+        };
+        own.extend(
+            bound_of(&scratch, value, types, &scratch, None)
+                .filter(|bound| matches!(bound, Bound::Type(_)))
                 .map(|bound| (unknown, bound)),
         );
     }
@@ -1003,7 +1036,8 @@ fn decide<'graph, 'here>(
     let chosen = match (rewakes, entry) {
         (false, Some(entry)) => {
             let candidates = entry.witnessed(memo.at, site, own, &earlier);
-            let chosen = read_over(types, facts, own, candidates);
+            let spellings = crate::scope::Spellings::new(program.symbols());
+            let chosen = read_over((types, spellings), facts, own, candidates);
             // Keeping only some questions, a binding witnesses afresh while the event has room
             // for another decision: a join walks closed and answers nothing, so a later binding
             // taking its answers would keep all of no layer, nor would a cell beneath it.
@@ -1076,7 +1110,7 @@ fn decide<'graph, 'here>(
 /// beside how many of its questions the binding keeps ([`chosen`](super::resume::chosen)): each
 /// question asked closed under the whole chain's binding, through the frame's chain `types`.
 fn read_over<'here>(
-    types: &Chain<'_, '_, '_, '_>,
+    (types, spellings): (&Chain<'_, '_, '_, '_>, crate::scope::Spellings<'_>),
     facts: Facts<'_>,
     own: &[(Unknown, Bound<'_>)],
     candidates: impl Iterator<Item = &'here Decision<'here>>,
@@ -1092,7 +1126,7 @@ fn read_over<'here>(
     mine.extend(own.iter().copied());
     let own = Binding::laid(&scratch, &mut mine);
     let levels = Levels::of(&scratch, facts.shapes(), binding);
-    let keeps = super::resume::kept_by(types, &scratch, &levels);
+    let keeps = super::resume::kept_by((types, &scratch, spellings), facts, &levels);
     let candidates = candidates.filter_map(|decision| Some((decision, decision.witnessed()?)));
     super::resume::chosen(candidates, &keeps, own)
 }
@@ -1191,25 +1225,38 @@ pub fn under_composition<'graph, 'here>(
 /// which shares its operands' storage. Refused before anything is spawned, with the fault the
 /// `EVAL` raises, when the code's shape kept an error, or a name it reads — or a keyworded hole
 /// some use of it selects from alone — is bound neither by a `USING` nor by `offered`, read
-/// through `types`. The frame owes `returns`, the type the `EVAL` declares, as a called frame owes
+/// through `types`, a refusal closed in `scratch`. The frame owes `returns`, the type the `EVAL` declares, as a called frame owes
 /// its own; `call` is the extent of the `EVAL`'s node. Nothing builds a shape here: the code's was
 /// built where the program loaded.
 #[allow(clippy::too_many_arguments)]
-pub fn eval<'step, 'graph, 'here>(
+pub fn eval<'step: 'x, 'x, 'graph, 'here>(
     program: &'graph Program<'graph>,
-    (door, facts): (&Code<'step>, &Facts<'step>),
+    (door, facts, scratch): (
+        &Code<'step>,
+        &Facts<'step>,
+        crate::memory::BumpAllocator<'x>,
+    ),
     types: &Chain<'_, '_, '_, '_>,
     code: Knotted<'graph, 'here>,
     offered: KValue<'graph, 'here>,
     (returns, call): (KType, SourceRef),
     inherit: Option<MemoHome>,
     use_: Use,
-) -> Result<Request<'graph, 'here, KBundle>, Fault<'step, KValue<'graph, 'here>>> {
+) -> Result<Request<'graph, 'here, KBundle>, Fault<'x, KValue<'graph, 'here>>> {
     let node = code.code().expect("an `EVAL` is handed a quote's code");
     // Composed code's shape lies in its composition, where its frame checks it.
     if let Some(CodeSyntax::Written { segment, .. }) = node.flat() {
         let shape = door.shape(segment);
-        if let Some(error) = facts.typing_refusal(types, shape) {
+        // A capture the code binds to a type value is that type, as a load declaring it reads it.
+        let mut captured = |capture: crate::scope::CaptureSlot| {
+            let capture = shape.captures()[capture.index()];
+            let binding = binding_at(node.bound(), capture.scope(), capture.name)?;
+            match binding.link.resolve(code) {
+                Value::Type(value) => Some(value.handle()),
+                _ => None,
+            }
+        };
+        if let Some(error) = facts.typing_refusal(types, scratch, shape, &mut captured) {
             return Err(Fault::Refused { error });
         }
         match unbound(code, shape, offered, types) {
@@ -2017,7 +2064,8 @@ fn code_frame<'graph, 'here>(
 /// filled mark from the binding the code carries at its mark's scope and name, a filled key from
 /// its list there, each `$(…)` key from the registrations it carries at that scope with that key,
 /// each `\` name from `offered` — every edge resolved to the member it names, so the run holds
-/// value words only. A keyworded hole holds no function. `None` when a name is bound nowhere.
+/// value words only — then each type capture the code carries. A keyworded hole holds no function.
+/// `None` when a name is bound nowhere.
 fn code_closure<'graph, 'here, 'x>(
     writer: Writer<'here, '_>,
     types: &Chain<'_, 'here, '_, '_>,
@@ -2055,6 +2103,11 @@ fn code_closure<'graph, 'here, 'x>(
         };
         links.push(Link::Value(value));
     }
+    links.extend(
+        node.layout()
+            .iter()
+            .map(|capture| Link::Value(capture.value)),
+    );
     Some(links)
 }
 
@@ -2460,7 +2513,7 @@ fn decided_at_seams<'graph, 'here>(
         // whose declaration they close, was decided where they were — save one an open path is
         // rooted at over an open tree, which the path reads off what the run binds.
         let rooting = facts.rooting_seams(shape).binary_search(slot).is_ok();
-        let seen = (facts.content(types, shape, *slot))
+        let seen = (facts.content(shape, *slot))
             .is_some_and(|tree| !matches!(tree, Tree::Leaf(_)) && (!rooting || tree.closed()));
         let closed = seen || matches!(facts.declared_type(types, shape, *slot), Static::Closed(_));
         if closed || facts.binds(unknown) {

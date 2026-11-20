@@ -67,12 +67,12 @@ fn facts_over_no_layers_answer_as_the_load_does() {
             alike!(caches());
             alike!(digested_count());
             typed!(overlap());
-            typed!(typing_refusal());
+            laid!(typing_refusal(&mut |_| None));
             for slot in (0..shape.slots()).map(|slot| Slot(slot as u32)) {
                 typed!(declared_type(slot));
                 typed!(registered_type(slot));
                 typed!(binder_type(slot));
-                typed!(content(slot));
+                alike!(content(slot));
                 alike!(digested_index(slot));
             }
             for site in shape.sites().all() {
@@ -85,7 +85,7 @@ fn facts_over_no_layers_answer_as_the_load_does() {
                 laid!(named_contributions(site));
                 alike!(mint_at(site));
                 alike!(mints_at(site));
-                typed!(view_tree(site));
+                alike!(view_tree(site));
                 alike!(path_read(site));
             }
             for index in 0..shape.body().len() {

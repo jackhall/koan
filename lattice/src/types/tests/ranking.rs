@@ -111,9 +111,13 @@ impl<'r> World<'r> {
         arguments: &[Interval<Handle>],
     ) -> (Verdict, Option<Vec<Interval<Handle>>>) {
         let judged = judge_by_class(&self.types, self.region, shape, arguments);
-        let intervals = judged
-            .intervals
-            .map(|intervals| intervals.iter().map(|interval| interval.raw()).collect());
+        let intervals = judged.solve.solved.map(|solved| {
+            solved
+                .intervals
+                .iter()
+                .map(|interval| interval.raw())
+                .collect()
+        });
         (judged.verdict, intervals)
     }
 
@@ -777,8 +781,9 @@ fn a_later_slot_reads_an_earlier_lexical_end_at_its_ends() {
 }
 
 /// One class `FOR ALL #[Elt Key] #(PUT x :Elt WITH f :(FN :{v :Elt} -> Null) AT k :(LIST OF Key))`:
-/// `Elt` fails at a concrete verdict, which every binding of `Outer` reproduces, so no call admits;
-/// a solve reading `Outer` through its bound is not the call's own.
+/// `Elt` fails at a concrete verdict, which every binding of `Outer` reproduces, so no call admits.
+/// A solve over `Outer`'s element reads no end, so every call admits; a solve reading `Outer`
+/// through its bound is not the call's own.
 #[test]
 fn an_exact_class_over_a_lexical_variable_is_judged_by_a_reproducible_solve() {
     let bump = Bump::new();
@@ -824,6 +829,32 @@ fn an_exact_class_over_a_lexical_variable_is_judged_by_a_reproducible_solve() {
                 &[
                     Interval::point(bounded),
                     Interval::point(world.types.list(KType::STR.raw()))
+                ]
+            )
+            .0,
+        Verdict::Always
+    );
+
+    let v = BinderSymbol::declared("v", &world.symbols).expect("a bindable token");
+    let returning = |ret: Handle| {
+        world
+            .types
+            .function_type(world.region, &[(v, KType::NUMBER.raw())], ret)
+    };
+    let functions = returning(world.var(0));
+    let pair = world.head(
+        &["Elt"],
+        &[Kw("PAIR"), Slot(functions), Kw("WITH"), Slot(functions)],
+        &[0, 0],
+    );
+    let bounded = outer(&world, returning(KType::NUMBER.raw()));
+    assert_eq!(
+        world
+            .judge(
+                pair,
+                &[
+                    Interval::point(bounded),
+                    Interval::point(returning(KType::STR.raw()))
                 ]
             )
             .0,

@@ -6,12 +6,12 @@ use crate::memory::Bump;
 use crate::parse::{ExpressionPart, KExpression};
 use crate::program::Program;
 use crate::scope::{BodyShape, Narrowing, ShapeKind, Static};
-use crate::type_lattice::{DeclaredType, Interval, KType, Parametric, shape_slots};
+use crate::type_lattice::{DeclaredType, KType, Parametric, shape_slots};
 use crate::values::tests::reading;
 
 use super::run;
 use super::statics::{
-    binder, body, interval, let_narrowing, lexical, loaded, module_body, rendered, top,
+    binder, body, ends, interval, let_narrowing, lexical, loaded, module_body, rendered, top,
     typed_parts, upper,
 };
 
@@ -207,7 +207,7 @@ fn a_static_type_is_exact_where_the_load_knows_the_carried_type() {
 }
 
 #[test]
-fn a_crossing_into_code_or_out_of_it_is_read_through_bounds() {
+fn a_crossing_into_code_reads_over_the_encloser_s_name() {
     loaded(
         "MODULE lib = (LET f = (FN FOR ALL #{Elt: Number} :{x :Elt} -> Elt = #(\n  \
          LET q = #(PRINT $x)\n  \
@@ -215,10 +215,10 @@ fn a_crossing_into_code_or_out_of_it_is_read_through_bounds() {
          )))",
         |program| {
             let f = body(program, module_body(program, "lib"), "f");
-            assert_eq!(
-                typed_parts(program, code(f)),
-                [Interval::point(KType::NUMBER.into())]
-            );
+            let [read] = typed_parts(program, code(f))[..] else {
+                panic!("the code reads one part")
+            };
+            assert_eq!(ends(program, read), "[(RETYPED TO Elt), Elt]");
         },
     );
     assert_eq!(
@@ -252,9 +252,9 @@ fn use_leading<'graph>(
 }
 
 #[test]
-fn a_candidate_over_a_variable_outside_code_is_unknown_in_it() {
-    // `GREET`'s registered shape names `Outer`, a variable of the chain outside the code: in the
-    // code it is unknown, so `ONLY` solves from nothing the load can name.
+fn a_candidate_over_a_variable_outside_code_is_rigid_in_it() {
+    // `GREET`'s registered shape names `Outer`, a variable of the chain the code lies on: in the
+    // code it is rigid, so the load selects `GREET` over it.
     let wrap = |quoted: &str| {
         format!(
             "EXPR FOR ALL #[Elt] #(ONLY x :Elt) -> Elt = #(x)\n\
@@ -282,7 +282,7 @@ fn a_candidate_over_a_variable_outside_code_is_unknown_in_it() {
                         )
                         .narrowing
                 ),
-                "full",
+                "selected",
                 "`{source}`"
             );
         });
@@ -678,4 +678,21 @@ fn an_instance_type_is_read_and_never_instantiated_at_the_run() {
     INSTANTIATED.with(|count| count.set(0));
     assert_eq!(run(source), "1\ns");
     assert_eq!(INSTANTIATED.with(std::cell::Cell::get), 0);
+}
+
+/// A solve over an argument typed by a list-bounded lexical variable contributes the variable's
+/// element, a solve each run reproduces: the call is exactly that element, and a use over it is
+/// selected at load.
+#[test]
+fn a_solve_over_a_list_bounded_variable_reads_its_element() {
+    let source = "EXPR #(NEED n :Number) -> Number = #(n)\n\
+                  EXPR FOR ALL #[Elem] #(FIRST xs :(LIST OF Elem)) -> Elem = #(1)\n\
+                  EXPR FOR ALL #{Ll: :(LIST OF Number)} #(HEAD xs :Ll) -> Any = #(\n  \
+                  LET y = (FIRST xs)\n  LET n = (NEED (FIRST xs))\n  y\n)";
+    loaded(source, |program| {
+        let head = expressed(program, program.shape(), "HEAD");
+        assert_eq!(binder(program, head, "y"), "(ELEMENT OF Ll)");
+        assert_eq!(let_narrowing(program, head, "n"), "selected");
+    });
+    assert_eq!(run(&format!("{source}\nPRINT (HEAD [4])")), "1");
 }

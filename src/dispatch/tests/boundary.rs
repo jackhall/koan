@@ -204,6 +204,7 @@ const JUDGEMENTS: &[&str] = &[
     "retyped_to(",
     "never_satisfies(",
     "read_through(",
+    "construction(",
 ];
 
 /// The methods that judge: on a collector, an interval, or a type's handle.

@@ -29,14 +29,15 @@ use std::fmt;
 
 use crate::memory::{BumpAllocator, BumpBackedSet, BumpVec, Lays, bump_set, collect};
 use crate::symbols::{KeySymbol, ValueSymbol};
-use crate::type_lattice::KType;
-use crate::values::ContentDigest;
+use crate::type_lattice::{DeclaredType, KType, Parametric};
 use crate::values::digest::{
     DigestHasher, Operator, Tag, body_content, edge_at, function_content, knot_digest, lone_member,
     member_digest, retyped_content, view_content,
 };
+use crate::values::{Chain, ContentDigest};
 
 use super::keyed::Keyed;
+use super::runs::Running;
 use super::shape::{BodyShape, Segment, Site, Slot};
 
 /// What the load knows of one module-valued expression's content. Built through the constructors
@@ -62,19 +63,25 @@ pub enum Tree<'graph> {
     /// An opaque view: the application it is built at over its operand, `source`, which admits it,
     /// and its **underlying**'s tree, which its members are read from and its identity is digested
     /// over, beside `from*`, what its fit solves over the underlying. The underlying is a `MODULE`
-    /// body, or a module a frame binds, never a view.
+    /// body, or a module a frame binds, never a view. The application may be written over names.
     View {
-        application: KType,
+        application: Parametric,
         source: &'graph Tree<'graph>,
         underlying: &'graph Tree<'graph>,
         identity: Identity,
     },
     /// A value retyped to `carried` over its bare member's tree: a knot member under a header.
     /// Where the load knows the source's own type it is built only where `carried` differs from
-    /// it; otherwise it keys an open source at the type it was retyped to.
+    /// it; otherwise it keys an open source at the type it was retyped to, which may be written
+    /// over names.
     Retyped {
-        carried: KType,
+        carried: Parametric,
         source: &'graph Tree<'graph>,
+        identity: Identity,
+    },
+    /// A type value written over names: what a binding closes to the type value's digest.
+    TypeValue {
+        named: Parametric,
         identity: Identity,
     },
     Leaf(Leaf<'graph>),
@@ -90,12 +97,12 @@ pub enum Identity {
     Unnamed,
 }
 
-/// One closure of a knot: its body, the solution it is an instance at, and each capture its content
-/// composes, beside its closure slot.
+/// One closure of a knot: its body, the solution it is an instance at, which may be written over
+/// names, and each capture its content composes, beside its closure slot.
 #[derive(Clone, Copy)]
 pub struct KnotNode<'graph> {
     pub body: Segment,
-    pub instance: &'graph [KType],
+    pub instance: &'graph [Parametric],
     pub captures: &'graph [(u32, NodeCapture<'graph>)],
 }
 
@@ -117,8 +124,51 @@ pub enum Leaf<'graph> {
         within: Option<&'graph Within<'graph>>,
         identity: Identity,
     },
+    /// The result of a call only an answer selects among, read through `chain`'s value members:
+    /// keyed on the call, so two writes of one call are one tree. `holder` is the `LET` binder
+    /// whose whole right-hand side the call is, which the run binds where no binding selects; it
+    /// takes no part in the identity.
+    Call {
+        call: &'graph Called<'graph>,
+        holder: Option<Binder>,
+        chain: &'graph [ValueSymbol],
+        identity: Identity,
+    },
     /// An expression no binder names, written at `Site`: unlike every tree.
     Unnamed(Site),
+}
+
+/// A call a binding's answer selects among: each candidate's callee and the call's argument trees,
+/// beside what [`runs`](super::runs) reads to choose among them.
+#[derive(Clone, Copy)]
+pub struct Called<'graph> {
+    /// The body the use is written in, whose levels its types are read at.
+    pub at: Segment,
+    /// Each candidate of the use, in list order.
+    pub callees: &'graph [Callee<'graph>],
+    /// Each argument's tree, in the call's slot order.
+    pub arguments: &'graph [Tree<'graph>],
+    pub undecided: UndecidedCall<'graph>,
+}
+
+/// A candidate of a [`Called`]: its callable body, `None` for one no body of the program's
+/// declares — a builtin — each argument's parameter slot there in the call's slot order, and
+/// whether a `FOR ALL` group quantifies it.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct Callee<'graph> {
+    pub body: Option<Segment>,
+    pub parameters: &'graph [Slot],
+    pub quantified: bool,
+}
+
+/// What a use whose selection an answer decides keeps: the candidates some binding may run, each
+/// beside its position in the use's candidate list, written over names, and whether the use is in
+/// unfilled code.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub struct UndecidedCall<'graph> {
+    pub kept: &'graph [Running<'graph>],
+    pub positions: &'graph [u16],
+    pub unfilled: bool,
 }
 
 /// A binder, by the body declaring it and its slot there.
@@ -137,13 +187,13 @@ pub enum Within<'graph> {
 }
 
 /// A call the load unfolded: its callee's body, each parameter's argument tree by the callee's
-/// parameter slot, and the closed point each of its `FOR ALL` variables solves to, by the
-/// variable's slot there.
+/// parameter slot, and the point each of its `FOR ALL` variables solves to, by the variable's slot
+/// there, closed or written over names.
 #[derive(Clone, Copy)]
 pub struct Unfolded<'graph> {
     pub callee: Segment,
     pub arguments: &'graph [(Slot, Tree<'graph>)],
-    pub solution: &'graph [(Slot, KType)],
+    pub solution: &'graph [(Slot, Parametric)],
 }
 
 /// What a view node keeps of how it was built, so a view of it can be keyed and checked: the
@@ -233,8 +283,9 @@ impl<'graph> Tree<'graph> {
     }
 
     /// Member `index` of the knot `members` tie; `code` is the code digest of each member's body,
-    /// by its segment.
+    /// by its segment. Open where an instance is written over names.
     pub fn knot(
+        types: &Chain<'_, '_, '_, '_>,
         code: &dyn Fn(Segment) -> ContentDigest,
         members: &'graph [KnotNode<'graph>],
         index: u32,
@@ -262,18 +313,21 @@ impl<'graph> Tree<'graph> {
             });
             member_digest(knot_digest(members.len(), contents), index as usize)
         });
+        let over_names = (members.iter().flat_map(|node| node.instance))
+            .any(|solved| types.concrete(*solved).is_none());
         Tree::Knot {
             members,
             index,
-            identity,
+            identity: identity.opened(over_names),
         }
     }
 
     /// The opaque view at `application` over `source`, built over `underlying`, whose fit solves
     /// `from*` where the load knows it: digested over the underlying, and open where `from*` is
-    /// unknown.
+    /// unknown or the application is written over names.
     pub fn view(
-        application: KType,
+        types: &Chain<'_, '_, '_, '_>,
+        application: Parametric,
         source: &'graph Tree<'graph>,
         underlying: &'graph Tree<'graph>,
         from: Option<KType>,
@@ -287,10 +341,7 @@ impl<'graph> Tree<'graph> {
                 from,
             ))
         });
-        let identity = match (identity, from) {
-            (Identity::Closed(digest), None) => Identity::Open(digest),
-            (identity, _) => identity,
-        };
+        let identity = identity.opened(from.is_none() || types.concrete(application).is_none());
         Tree::View {
             application,
             source,
@@ -299,14 +350,32 @@ impl<'graph> Tree<'graph> {
         }
     }
 
-    /// `source` retyped to `carried`, as the run digests a member under a header.
-    pub fn retyped(carried: KType, source: &'graph Tree<'graph>) -> Self {
+    /// `source` retyped to `carried`, as the run digests a member under a header: open where
+    /// `carried` is written over names.
+    pub fn retyped(
+        types: &Chain<'_, '_, '_, '_>,
+        carried: Parametric,
+        source: &'graph Tree<'graph>,
+    ) -> Self {
         let identity = Identity::over(std::iter::once(source.identity()), |digests| {
             let source = digests.next().expect("the source's identity");
-            retyped_content(carried.into(), source)
+            retyped_content(DeclaredType::Type(carried), source)
         });
         Tree::Retyped {
             carried,
+            source,
+            identity: identity.opened(types.concrete(carried).is_none()),
+        }
+    }
+
+    /// [`retyped`](Self::retyped) to a closed type, where a binding names the module.
+    pub fn retyped_closed(carried: KType, source: &'graph Tree<'graph>) -> Self {
+        let identity = Identity::over(std::iter::once(source.identity()), |digests| {
+            let source = digests.next().expect("the source's identity");
+            retyped_content(DeclaredType::Type(carried), source)
+        });
+        Tree::Retyped {
+            carried: carried.into(),
             source,
             identity,
         }
@@ -375,6 +444,50 @@ impl<'graph> Tree<'graph> {
         })
     }
 
+    /// The result of `call`, held whole by `holder` where a `LET` holds it, read through `chain`:
+    /// open, and keyed on the callees, the chain and the argument trees.
+    pub fn called(
+        call: &'graph Called<'graph>,
+        holder: Option<Binder>,
+        chain: &'graph [ValueSymbol],
+    ) -> Self {
+        let children = call.arguments.iter().map(Tree::identity);
+        let identity = match Identity::over(children, |digests| {
+            let mut hasher = DigestHasher::new(Tag::Leaf);
+            hasher.count(3).count(call.callees.len());
+            for callee in call.callees {
+                match callee.body {
+                    Some(body) => hasher.count(1).count(body.index() as usize),
+                    None => hasher.count(0),
+                };
+            }
+            hasher.count(chain.len());
+            for label in chain {
+                hasher.feed(label);
+            }
+            hasher.count(call.arguments.len());
+            for digest in digests {
+                hasher.digest(digest);
+            }
+            hasher.finished()
+        }) {
+            Identity::Closed(digest) => Identity::Open(digest),
+            identity => identity,
+        };
+        Tree::Leaf(Leaf::Call {
+            call,
+            holder,
+            chain,
+            identity,
+        })
+    }
+
+    /// A type value naming `named`, written over names: open, keyed on the type.
+    pub fn type_value(named: Parametric) -> Self {
+        let identity = Identity::Open(DigestHasher::new(Tag::Leaf).count(4).feed(named).finished());
+        Tree::TypeValue { named, identity }
+    }
+
     /// The tree's identity.
     pub fn identity(&self) -> Identity {
         match *self {
@@ -383,7 +496,9 @@ impl<'graph> Tree<'graph> {
             | Tree::Knot { identity, .. }
             | Tree::View { identity, .. }
             | Tree::Retyped { identity, .. }
-            | Tree::Leaf(Leaf::Bound { identity, .. }) => identity,
+            | Tree::TypeValue { identity, .. }
+            | Tree::Leaf(Leaf::Bound { identity, .. })
+            | Tree::Leaf(Leaf::Call { identity, .. }) => identity,
             Tree::Leaf(Leaf::Unnamed(_)) => Identity::Unnamed,
         }
     }
@@ -421,9 +536,9 @@ impl<'graph> Tree<'graph> {
     }
 
     /// Each tree this one is built over, a leaf's key included.
-    fn subtrees(&self, each: &mut impl FnMut(&'graph Tree<'graph>)) {
+    pub fn subtrees(&self, each: &mut impl FnMut(&'graph Tree<'graph>)) {
         match *self {
-            Tree::Digest(..) | Tree::Leaf(Leaf::Unnamed(_)) => {}
+            Tree::Digest(..) | Tree::TypeValue { .. } | Tree::Leaf(Leaf::Unnamed(_)) => {}
             Tree::Body { captures, .. } => captures.iter().for_each(|(_, tree)| each(tree)),
             Tree::Knot { members, .. } => {
                 for member in members {
@@ -441,6 +556,7 @@ impl<'graph> Tree<'graph> {
                 each(underlying);
             }
             Tree::Retyped { source, .. } => each(source),
+            Tree::Leaf(Leaf::Call { call, .. }) => call.arguments.iter().for_each(each),
             Tree::Leaf(Leaf::Bound { within, .. }) => match within {
                 None => {}
                 Some(Within::Body(captures)) => captures.iter().for_each(|(_, tree)| each(tree)),
@@ -508,6 +624,15 @@ impl Identity {
             false => Identity::Closed(digest),
         }
     }
+
+    /// This identity, open where `open` says a part of the node no child holds is: a type written
+    /// over names.
+    fn opened(self, open: bool) -> Identity {
+        match self {
+            Identity::Closed(digest) if open => Identity::Open(digest),
+            identity => identity,
+        }
+    }
 }
 
 impl fmt::Debug for Tree<'_> {
@@ -545,6 +670,13 @@ impl fmt::Debug for Tree<'_> {
             Tree::Leaf(Leaf::Bound { binder, chain, .. }) => f
                 .debug_struct("Leaf")
                 .field("slot", &binder.slot)
+                .field("chain", chain)
+                .finish(),
+            Tree::TypeValue { named, .. } => f.debug_tuple("TypeValue").field(named).finish(),
+            Tree::Leaf(Leaf::Call { call, chain, .. }) => f
+                .debug_struct("Call")
+                .field("callees", &call.callees)
+                .field("arguments", &call.arguments)
                 .field("chain", chain)
                 .finish(),
             Tree::Leaf(Leaf::Unnamed(site)) => f.debug_tuple("Unnamed").field(site).finish(),

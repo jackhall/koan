@@ -207,6 +207,13 @@ src/
 │   ├── closed.rs         ClosedTypes — a layer's table of closed types: the parametric types the records it absorbed name, sorted by digest, beside the closed type each takes under its chain's binding; closed_under, the one lay of a table over its keys
 │   ├── admission.rs      Admission — the conditions on a binding, up to its event, under which a layer's decision holds: a binding layer's by identity, a witnessed layer's by the questions it keeps; how the decision memo finds a decision
 │   ├── question.rs       Question / Answer — what a discrete door judged of a run-bound name, beside the answer a witnessing walk took; answer, the closed re-ask, and keeps, whether a binding keeps an answered question; rebound, the substitution of a binding into a type
+│   ├── rule.rs           Rule — the typing rules over run-bound names with no case split, each a closed function over its operands, and the spelling a rule writes over names
+│   ├── derived.rs        DerivedTerm / DerivedName — a derived name's term, named by its content, the store of the names a walk lays, and handed, the one function giving a term its type under a binding
+│   ├── runs.rs           runs — which of a keyworded use's candidates runs, as every binding agrees, beside winner and never_runs, the two steps of selection the run shares
+│   ├── application.rs    an application over a head written over names: a read, a call by name or unknown by what a binding gives the head
+│   ├── heads.rs          spellings over a head — a member read, an application, a pin, a code kind, a construction's upper end — each a closed function of the head, and a view's shown signature
+│   ├── nominal.rs        a NEWTYPE, UNION or family over run-bound names: each member a derived name over the group, sealed by the binding that closes it
+│   ├── signed.rs         a SIG over run-bound names: a derived name over the signature's skeleton, sealed by one closed rule
 │   ├── relay.rs          Relay — the copier of unit and closing records: each laid again through another layer, every slice and tree with it, a frontier laid flat
 │   ├── build_layer.rs    BuildLayer — one body's facts decided under one binding over the layer below, wherever it rests (program storage, a depot slot's bump, a frame's region): the names it bound alone, the unit records its binding woke and its closing records, its closed trees, its closed types, whether a layer of its chain holds any, and its admission, its terms under a composition or its refusal
 │   ├── filled.rs         filled_sites — where the holes a USING fills lie in the syntax its code was written as, each operator run read through the rewrite's origins

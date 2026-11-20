@@ -53,7 +53,7 @@ subtree.
   group: for an empty one they answer the plain body. Every walk asks
   [`binds_quantifiers`](node.rs), true of a scheme alone, rather than naming
   the arm.
-- **Four rigid variables**, and the split is deliberate. `Quantified` is
+- **Five rigid variables**, and the split is deliberate. `Quantified` is
   positional and bound by the enclosing scheme, so two schemes alpha-equivalent
   under a renaming intern to one node, and a free one in a declared slot is what
   a call solves. `Parameter` is *named*: a signature's head parameter, which its
@@ -66,8 +66,14 @@ subtree.
   ([module design](../../../design/modules.md#comparing-two-paths)). It is
   named by a `PathClass`, a digest of the class's content computed outside the
   lattice and held as identity alone, and carries the member's name, which
-  renders it. No scheme captures a lexical or a path variable and no solve
-  binds one. The four share the rigid rule in
+  renders it. A **derived name** (`Derived`) is a type a rule over lexical
+  variables hands back that no other node spells
+  ([derived names](../../../src/build/README.md#derived-names)): it is named
+  by a `DerivedId`, a digest of its term computed outside the lattice and held
+  as identity alone, carries a name that renders it, and has a lower end and
+  a bound, and every relation treats it as a lexical variable. No scheme
+  captures a lexical, a path or a derived variable and no solve binds one.
+  The five share the rigid rule in
   *fits*, the substitution mechanism, and the role of the rigid side in a
   specificity check. Each is **bounded by** a closed type — a `KType` that holds
   no opaque carrier and is not `Never` — and lies under its bound and
@@ -84,7 +90,7 @@ subtree.
   rather than a child, and only a signature's fit reads it, where a solved head
   parameter is checked against the asked bound
   ([*fits* over signatures](relations.md#signature-types)).
-  A lexical variable has a **lower end** too, a closed type under its bound:
+  A lexical variable and a derived name have a **lower end** too, a closed type under its bound:
   below it lie itself and whatever lies under that end, where below
   `Quantified`, `Path` and `Parameter` lie only themselves and `Never`. A name a
   `FOR ALL` declares has the lower end `Never`; a later priority class reads an

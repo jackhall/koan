@@ -1,12 +1,17 @@
 //! The load's side of a read ([lookup.rs](../lookup.rs)): `(head argument)` where the head's
 //! static type is a list, a dict, a string or code, typed at both ends of that type.
 //!
-//! The head is read as a container where either end of its static type is one; a variable, a
-//! union, `Any` or `Never` is none, so a head typed by a variable bounded by a list types as an
-//! unknown head does. Where only the lower end is a container, the upper end's element, key and
+//! The head is read as a container where either end of its static type is one; a union, `Any` or
+//! `Never` is none. A lexical variable, or a projection of one, whose bound is a list, a dict, a
+//! string or code is read as that container, its element, key and value its projections there
+//! (`(ELEMENT OF Ll)`), which name the variable and judge nothing. Any other run-bound name is
+//! read by what a binding gives it — a read, a call by name or neither — through one closed rule
+//! ([`Rule::Application`](crate::scope::Rule::Application)); a head typed by a signature's head
+//! parameter or a path stays unknown: a view's carrier lies under `Any` alone. Where only the lower end is a container, the upper end's element, key and
 //! value are `Any`. The argument's lower end decides the refusals: a list or a string refuses one
 //! lying outside `Number | {}`, a record naming a bound outside `Number`, and a record naming
-//! neither bound; a dict refuses a key outside `Str | Number | Bool` or outside its key type. The
+//! neither bound; a dict refuses a key outside `Str | Number | Bool` or outside its key type, a
+//! variable's read at its bound's key, which every binding's lies under. The
 //! read's upper end is `Result {Ok = O, Error = E}`: an index reads the element (`Str` for a
 //! string), a slice the container's own type, either `E = Number`; an argument that may be either
 //! reads their union. Code reads `Code` either way: a part or a slice is code no load can type, so
@@ -18,9 +23,9 @@ use crate::elaborate::applied_union;
 use crate::elaborate::judge::{self, Marks};
 use crate::memory::BumpVec;
 use crate::parse::{ExpressionPart, KExpression};
-use crate::scope::{ShapeError, Store};
+use crate::scope::{Rule, ShapeError, Store};
 use crate::symbols::{BinderSymbol, TypeSymbol};
-use crate::type_lattice::{Interval, KType, Parametric, TypeNode, is_subtype_of};
+use crate::type_lattice::{DeclaredType, Interval, KType, Parametric, Step, TypeNode};
 
 use super::super::builtins::result_type;
 use super::super::lookup::bound;
@@ -34,8 +39,16 @@ pub(super) fn variant(name: &str) -> BinderSymbol {
 /// What one end of a read's head type is.
 #[derive(Clone, Copy)]
 enum Container {
-    List { element: Parametric },
-    Dict { key: Parametric, value: Parametric },
+    List {
+        element: Parametric,
+    },
+    Dict {
+        key: Parametric,
+        value: Parametric,
+        /// The key of a variable's bound, where the dict is read through one: what its key
+        /// refusal reads, since every binding's key lies under it.
+        bound_key: Option<KType>,
+    },
     Str,
     Code,
 }
@@ -43,20 +56,48 @@ enum Container {
 impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     super::Pass<'p, 'o, '_, 'graph, 'tier, '_, '_, S>
 {
-    /// What `end` is as a read's head, read off its node: `None` for anything but a list, a dict or
-    /// `Str`.
+    /// What `end` is as a read's head, read off its node: `None` for anything but a list, a dict,
+    /// `Str` or code, or a lexical variable bounded by one.
     fn container(&self, end: Parametric) -> Option<Container> {
+        let (types, scratch) = (self.types, self.scratch);
+        let piece = |step| judge::projection(types, scratch, end, step);
+        if let Some(element) = piece(Step::Element) {
+            return Some(Container::List {
+                element: element.ty,
+            });
+        }
+        if let (Some(key), Some(value)) = (piece(Step::Key), piece(Step::Value)) {
+            return Some(Container::Dict {
+                key: key.ty,
+                value: value.ty,
+                bound_key: Some(key.bound),
+            });
+        }
+        if judge::rigid_within(types, scratch, end, KType::STR) {
+            return Some(Container::Str);
+        }
+        if judge::rigid_within(types, scratch, end, KType::ANY_CODE) {
+            return Some(Container::Code);
+        }
         if judge::is(self, self.types, end, KType::STR) {
             return Some(Container::Str);
         }
-        let code = (judge::closed(self, self.types, end))
-            .is_some_and(|end| is_subtype_of(self.types, self.scratch, end, KType::ANY_CODE));
+        // A variable is no container but through its bound's pieces, above: any other is read by
+        // what a binding gives it ([`Rule::Application`](crate::scope::Rule::Application)).
+        let node = judge::node_unless_variable(types, end)?;
+        // Code where every binding, or the witness, puts it under `Code`.
+        let any_code = KType::ANY_CODE.into();
+        let code = judge::under_decided(self, types, scratch, end, any_code) == Some(true);
         if code && !judge::is(self, self.types, end, KType::NEVER) {
             return Some(Container::Code);
         }
-        match judge::type_node(self, self.types, end) {
+        match node {
             TypeNode::List { element } => Some(Container::List { element }),
-            TypeNode::Dict { key, value } => Some(Container::Dict { key, value }),
+            TypeNode::Dict { key, value } => Some(Container::Dict {
+                key,
+                value,
+                bound_key: None,
+            }),
             _ => None,
         }
     }
@@ -83,6 +124,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             (None, Some(Container::Dict { .. })) => Container::Dict {
                 key: KType::ANY.into(),
                 value: KType::ANY.into(),
+                bound_key: None,
             },
             (None, Some(Container::Str)) => Container::Str,
             (None, Some(Container::Code)) => Container::Code,
@@ -95,20 +137,26 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             |slot: Parametric| judge::lower_end_outside(marks, types, scratch, payload, slot);
         let number: Parametric = KType::NUMBER.into();
         let union = |members: &[Parametric]| types.union_of(scratch, members);
-        let bounds = |end: Parametric| match judge::type_node(marks, types, end) {
+        let bounds = |end: Parametric| match judge::node_unless_variable(types, end)? {
             TypeNode::Record { fields } => {
                 let named = |name| fields.get(bound(name));
                 Some([named("from"), named("to")])
             }
             _ => None,
         };
+        // A variable's binding decides whether its bounds refuse ([`Rule::SliceBounds`]).
+        let variable = judge::node_unless_variable(types, payload.lower).is_none();
+        let operands = [DeclaredType::Type(payload.lower)];
+        let unbounded = variable
+            && judge::defined(marks, types, scratch, Rule::SliceBounds, &operands).0 == Some(false);
         let refused = match shape {
-            Container::Dict { key, .. } => {
+            Container::Dict { key, bound_key, .. } => {
                 let scalar = [KType::STR, KType::NUMBER, KType::BOOL].map(Parametric::from);
-                outside(union(&scalar)) || outside(key)
+                outside(union(&scalar)) || outside(bound_key.map_or(key, Parametric::from))
             }
             _ => {
                 outside(union(&[number, KType::EMPTY_RECORD.into()]))
+                    || unbounded
                     || bounds(payload.lower).is_some_and(|named| {
                         named.iter().all(Option::is_none)
                             || named.iter().flatten().any(|bound| {
@@ -120,17 +168,26 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         };
         if refused {
             return Err(ShapeError::ReadNeverSatisfied {
-                container: judge::bound_above(marks, types, scratch, typed.upper),
-                argument: judge::bound_above(marks, types, scratch, payload.upper),
+                container: typed.upper,
+                argument: payload.upper,
                 at: node.source,
             });
         }
         let (ok, error) = match shape {
-            Container::Dict { key, value } => {
-                let under = judge::closed(marks, types, payload.upper).is_some_and(|upper| {
-                    judge::closed(marks, types, key)
-                        .is_some_and(|key| is_subtype_of(types, scratch, upper, key))
-                });
+            Container::Dict {
+                key,
+                value,
+                bound_key,
+            } => {
+                // A variable's key is no closed type, so whether the argument lies under it is
+                // *fits*, by the rigid rule; a written key's is the order, decided once closed.
+                let under = match bound_key {
+                    Some(_) => judge::fits(marks, types, scratch, payload.upper, key),
+                    None => {
+                        judge::under_decided(marks, types, scratch, payload.upper, key)
+                            == Some(true)
+                    }
+                };
                 (
                     value,
                     if under {

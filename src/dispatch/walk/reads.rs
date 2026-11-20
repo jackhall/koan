@@ -23,21 +23,21 @@
 
 use crate::elaborate::judge::{self, Marks, free_variables};
 use crate::elaborate::schema_of;
-use crate::memory::BumpBackedMap;
 use crate::memory::BumpVec;
+use crate::memory::{BumpBackedMap, bump_table, resident};
 use crate::scope::{
-    Address, Answer, Arms, BodyShape, Born, CloseLaying, Closed, Closer, Closing, Cut, Frontier,
-    Held, Identity, InstanceRead, Mark, Narrowing, Noted, OpenKind, OpenMark, Pick, Points,
-    Question, Route, Segment, ShapeKind, Site, Slot, Static, StaticCallable, StaticInstance,
-    StaticRegistered, StaticType, Store, Target, Traced, Tree, Typed, UnitFacts, UnitId, UnitIndex,
-    Unknown, UseStatics, Wake, in_body_of,
+    Address, Answer, Arms, BodyShape, Born, CloseLaying, Closed, Closer, Closing, Cut, DerivedId,
+    DerivedTerm, Frontier, Held, Holder, Identity, InstanceRead, Mark, Narrowing, Noted, OpenKind,
+    OpenMark, Pick, Points, Question, Restamp, Route, Segment, ShapeError, ShapeKind, Site, Slot,
+    Static, StaticCallable, StaticInstance, StaticRegistered, StaticType, Store, Traced, Tree,
+    Typed, UnitFacts, UnitId, UnitIndex, Unknown, UseStatics, Wake, in_body_of,
 };
-use crate::symbols::{BinderSymbol, Symbol, TypeSymbol};
+use crate::symbols::{BinderSymbol, Symbol};
 use crate::type_lattice::{
     DeclaredType, Interval, KType, Parametric, Record, Side, TypeNode, Variable,
 };
-use crate::values::Retype;
 
+use super::trees::Substitution;
 use super::{Bound, Pass, READ, Tag, Wrote};
 
 /// Which part of a callable's function type a read takes: what the read gathers is the names
@@ -101,7 +101,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     /// chain of `segment`'s record. The chain is a root path: level 0 is the program, which
     /// encloses every body, and each level the body enclosing the next, the levels above a callee's
     /// parent set aside while it is walked on demand.
-    fn meet(&self, mut segment: Segment) -> Segment {
+    pub(super) fn meet(&self, mut segment: Segment) -> Segment {
         while self.level_of(segment).is_none() {
             segment = (self.shapes.parent(segment))
                 .expect("the program encloses every body")
@@ -132,23 +132,58 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     /// the first body outward from it that homes the level. A type the walk judges names only
     /// levels its chain homes, each homed once along it.
     fn unknown_of_level(&self, level: usize) -> Option<Unknown> {
-        self.unknown_of_level_in(self.chain.last()?.shape.segment(), level)
+        self.shapes
+            .unknown_of_level(self.chain.last()?.shape.segment(), level)
     }
 
-    /// The unknown the lexical variable at `level` is, read from `segment`: the first body outward
-    /// from it that homes the level.
-    fn unknown_of_level_in(&self, mut segment: Segment, level: usize) -> Option<Unknown> {
-        loop {
-            if let Some(target) = self.shapes.home(segment, level) {
-                return Some(Unknown {
-                    segment,
-                    at: match target {
-                        Target::Local(slot) => Address::Slot(slot),
-                        Target::Capture(capture) => Address::Capture(capture),
-                    },
+    /// Hand `each` the unknowns `variable` is, read from `segment`: for a lexical variable the
+    /// one homing its level, and for a
+    /// [derived name](crate::scope::DerivedName) those of every variable its term reads,
+    /// transitively, or the `:Module` binder whose carried type it is. A mark on a derived name is a mark on each name its term reads, and one on a
+    /// path class's variable a mark on the module binder its paths read through.
+    pub(super) fn each_unknown_of(
+        &self,
+        segment: Segment,
+        variable: Variable,
+        each: &mut dyn FnMut(Unknown),
+    ) {
+        match variable {
+            Variable::Lexical { level, .. } => {
+                if let Some(unknown) = self.shapes.unknown_of_level(segment, level) {
+                    each(unknown);
+                }
+            }
+            Variable::Derived { term, .. } => {
+                let Some(name) = self.store.derived_name(term) else {
+                    return;
+                };
+                if let DerivedTerm::Carried { binder, .. } = name.term {
+                    // A capture crossing into code is its source wherever a binding binds that.
+                    let mut binder = Some(binder);
+                    while let Some(unknown) = binder {
+                        each(unknown);
+                        binder = self.shapes.crossed(unknown);
+                    }
+                    return;
+                }
+                name.term.each_type(&mut |ty| {
+                    for variable in free_variables(self.types, self.scratch, ty) {
+                        self.each_unknown_of(segment, variable, each);
+                    }
                 });
             }
-            segment = self.shapes.parent(segment)?.0;
+            Variable::Path { class, .. } => self.class_binders(class, each),
+            _ => {}
+        }
+    }
+
+    /// The closed type the binding gives the lexical variable at `level`, read from `segment`: a
+    /// bound type name's.
+    fn level_bound(&self, segment: Segment, level: usize) -> Option<KType> {
+        let unknown = self.shapes.unknown_of_level(segment, level)?;
+        match self.bound_to(unknown)? {
+            crate::scope::Bound::Type(bound) => Some(bound),
+            crate::scope::Bound::Module { .. } => None,
         }
     }
 
@@ -213,6 +248,17 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     /// What the binding binds `unknown` to, where it binds it.
     pub(super) fn bound_to(&self, unknown: Unknown) -> Option<crate::scope::Bound<'o>> {
         self.store.binding(unknown)
+    }
+
+    /// What the binding binds `unknown` to, where it binds it or, for a capture crossing into
+    /// code, its source ([`Shapes::crossed`](crate::scope::Shapes::crossed)), as a level is bound.
+    pub(super) fn bound_through(&self, mut unknown: Unknown) -> Option<crate::scope::Bound<'o>> {
+        loop {
+            match self.bound_to(unknown) {
+                Some(bound) => return Some(bound),
+                None => unknown = self.shapes.crossed(unknown)?,
+            }
+        }
     }
 
     /// The closed type the binding gives `unknown`: a type name's type, or a module binder's
@@ -280,6 +326,80 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         closed
     }
 
+    /// Substitute the walk's binding into each open tree `facts`, a record the walk absorbs, holds,
+    /// before the record is read closed: the tree a fresh load builds under the binding, entered
+    /// in the walk's table of trees where it differs ([`Closer`]'s trees). A view that shows a
+    /// member its substituted source hides refuses at its `:|`, as a fresh load does.
+    pub(super) fn substitute_trees(
+        &mut self,
+        facts: &'o UnitFacts<'o>,
+    ) -> Result<(), ShapeError<'o>> {
+        let mut done = bump_table(self.scratch);
+        for (segment, typed) in facts.typed.iter() {
+            let shape = self.shape_at(*segment);
+            // A content tree is substituted at the site a fresh load reads it from.
+            let contents = (typed.contents.iter()).filter_map(|(slot, tree)| {
+                let site = match (shape.rhs(*slot), shape.birth_site(*slot)) {
+                    (Some(rhs), _) => shape.site(rhs),
+                    (None, born) => born?,
+                };
+                Some((site, *tree, false))
+            });
+            let views = typed.trees.iter().map(|(site, tree)| (*site, **tree, true));
+            for (site, tree, view) in views.chain(contents) {
+                let identity = tree.identity();
+                if !matches!(identity, Identity::Open(_))
+                    || self.rebound.borrow().trees.contains_key(&identity)
+                {
+                    continue;
+                }
+                let substituted =
+                    self.substituted(tree, Substitution::Binding(*segment), site, &mut done)?;
+                if view
+                    && let Tree::View {
+                        application,
+                        source,
+                        ..
+                    } = substituted
+                    // Bindings are cumulative, so the one closing the application checks it.
+                    && let Some(ascribed) = judge::static_of(self.types, application)
+                    && let (_, _, Some(member)) = self.view_tree_held(application, *source, site)?
+                {
+                    // The `:|`'s own node, whose site is its first part's, as a fresh load refuses
+                    // at it.
+                    let mut at = None;
+                    for statement in shape.body() {
+                        if shape.site_of_node(statement) == site {
+                            at = Some(statement.source);
+                        }
+                        crate::scope::each_part(statement, |part| {
+                            if let crate::parse::ExpressionPart::Expression(viewing) = part
+                                && !viewing.parts.is_empty()
+                                && shape.site_of_node(viewing) == site
+                            {
+                                at = Some(viewing.source);
+                            }
+                        });
+                    }
+                    let at = at.expect("a view's site lies in its shape's statements");
+                    return Err(ShapeError::ViewReveals {
+                        member: member.symbol(),
+                        ascribed,
+                        at,
+                    });
+                }
+                if substituted.identity() != identity {
+                    let substituted = resident(self.lay, substituted);
+                    self.rebound
+                        .borrow_mut()
+                        .trees
+                        .insert(identity, substituted);
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// `closing`, the closing record of `segment` the store holds beside `frontier`, as this walk
     /// reads it: closed under the binding where it stands named, as a unit record is.
     pub(super) fn standing_closing(
@@ -304,30 +424,46 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     }
 
     /// `ty`, named by a record of `segment`'s, under the binding: each lexical variable it names
-    /// that the binding binds, read from `segment`, written in. Each type closed whole is an entry
-    /// of the layer's table.
-    fn rebind(&self, segment: Segment, ty: DeclaredType<Parametric>) -> Closed {
+    /// that the binding binds, read from `segment`, written in. Each type closed, whole or in part,
+    /// is an entry of the layer's table.
+    pub(super) fn rebind(&self, segment: Segment, ty: DeclaredType<Parametric>) -> Closed {
         if let Some(closed) = self.rebound.borrow().types.get(&(segment, ty)) {
             return *closed;
         }
-        let closed = crate::scope::rebound(self.types, self.scratch, ty, &mut |level| match self
-            .bound_to(self.unknown_of_level_in(segment, level)?)?
-        {
-            crate::scope::Bound::Type(bound) => Some(bound),
-            crate::scope::Bound::Module { .. } => None,
-        });
+        let rebinding = Rebinds {
+            pass: self,
+            segment,
+        };
+        let closed = crate::scope::rebound(self.types, self.scratch, ty, &rebinding);
         let mut rebound = self.rebound.borrow_mut();
         rebound.types.insert((segment, ty), closed);
-        if let Closed::Type(value) = closed {
+        if !matches!(closed, Closed::Same) {
             // One handle names one unknown along a chain, whose bodies hold disjoint levels, so
-            // every segment closing it whole closes it alike (`closed.rs`).
-            let held = *rebound.table.entry(ty).or_insert(value);
+            // every segment closing it closes it alike (`closed.rs`).
+            let held = *rebound.table.entry(ty).or_insert(closed);
             debug_assert!(
-                held == value,
+                held == closed,
                 "a type closes alike from every segment of a chain"
             );
         }
         closed
+    }
+
+    /// A path of `class` under the chain root `root`, beside its resolution, as the record holding
+    /// the class rests: what the class reads by its content, which no binding changes but for the
+    /// application's names, read where it is used. Gathers nothing.
+    pub(super) fn class_held(
+        &self,
+        root: Segment,
+        class: crate::type_lattice::PathClass,
+    ) -> Option<(crate::scope::PathEntry<'o>, crate::scope::Resolution<'o>)> {
+        // The record holding the class: a newer record of its unit may type its root otherwise.
+        let (_, facts) = self.store.holding(crate::scope::Held::Class(root, class))?;
+        let (_, (entry, resolution)) =
+            (facts.paths.iter()).find(|((at, _), (_, resolution))| {
+                *at == root && resolution.resolved == crate::scope::Resolved::Class(class)
+            })?;
+        Some((*entry, *resolution))
     }
 
     /// The record of `unit` the store holds, beside the tag a read of one of its facts gathers:
@@ -391,7 +527,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     /// `level`.
     fn stood_site(&self, level: usize, site: Site) -> Option<(Tag, &'o Typed<'o>)> {
         let segment = self.chain[level].shape.segment();
-        let unit = self.store.holding(Held::Site(segment, site))?;
+        let (unit, _) = self.store.holding(Held::Site(segment, site))?;
         self.stood(level, unit.unit)
     }
 
@@ -494,14 +630,170 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     /// The static type of the binder at `slot` of the shape at `level`, as the walk has it now,
     /// and the binder itself where it is a module binder a binding may pin.
     pub(super) fn binder_at(&self, level: usize, slot: Slot) -> Bound {
+        self.binder_holding(level, slot, None)
+    }
+
+    /// [`binder_at`](Self::binder_at) for a binder whose content tree the reader holds as `tree`,
+    /// where the walk may not have fixed it yet.
+    pub(super) fn binder_holding(&self, level: usize, slot: Slot, tree: Option<Tree<'o>>) -> Bound {
         let (bound, tag) = self.binder_held(level, slot);
         if let Some(tag) = tag {
             self.gather(tag);
         }
         if let Some(unknown) = self.module_unknown(level, slot, bound) {
-            self.note_content(unknown, bound);
+            self.note_module(unknown, bound, tree);
         }
         bound
+    }
+
+    /// Gather the module binder `unknown`, of static type `bound`, its content tree `tree` where
+    /// the reader holds it: named where `bound` is exact over its own paths, or the type it carries,
+    /// alone, which a binding of it closes to the type its retype stamps, the type it binds to;
+    /// else open, as a read of its content, but for a local the run never binds.
+    fn note_module(&self, unknown: Unknown, bound: Bound, tree: Option<Tree<'o>>) {
+        let own = match bound {
+            DeclaredType::Type(typed) if typed.lower == typed.upper => {
+                let upper = DeclaredType::Type(typed.upper);
+                (free_variables(self.types, self.scratch, upper).iter()).all(|variable| {
+                    match *variable {
+                        Variable::Path { class, .. } => self.class_binder(class) == Some(unknown),
+                        Variable::Derived { term, .. } => matches!(self.term(term),
+                            Some(DerivedTerm::Carried { binder, .. }) if binder == unknown),
+                        _ => false,
+                    }
+                })
+            }
+            _ => false,
+        };
+        if own {
+            return self.note_named_unknown(unknown);
+        }
+        // A local the run never binds marks nothing: one whose content the load built closed, or
+        // one whose tree a binding of the module binders its leaves read gives whole, its type
+        // over the paths through that tree, which those bindings close.
+        match tree.or_else(|| self.local_content(unknown)) {
+            Some(tree) if tree.closed() && !matches!(tree, Tree::Leaf(_)) => {}
+            Some(tree) if self.substitutes(tree) => self.note_named_of(tree),
+            _ => self.note_content(unknown, bound),
+        }
+    }
+
+    /// The content tree the walk holds for `unknown`, a module binder no parameter: the newest a
+    /// unit of a level the walk runs fixed, else the one its own unit read off its right-hand side
+    /// before fixing it, else a standing level's record's.
+    fn local_content(&self, unknown: Unknown) -> Option<Tree<'o>> {
+        let Address::Slot(slot) = unknown.at else {
+            return None;
+        };
+        let level = self.level_of(unknown.segment)?;
+        if self.chain[level].shape.position_of(slot) == crate::scope::Position::PARAMETER {
+            return None;
+        }
+        match self.standing(level) {
+            true => self.stood_content(level, slot).map(|(tree, _)| tree),
+            false => (self.holding.get(&(unknown.segment, Holder::Slot(slot))))
+                .map(|(tree, _, _)| *tree)
+                .or_else(|| {
+                    let shape = super::address(self.chain[level].shape);
+                    (self.binders.get(&(shape, slot, None))).map(|(tree, _)| *tree)
+                }),
+        }
+    }
+
+    /// Gather the binder at `slot` of the shape at `level` named where a content tree holds a leaf
+    /// on it: a module binder the binding leaves unbound, whose content a binding gives the tree
+    /// by tree substitution as the walk absorbs the record holding it.
+    pub(super) fn note_leaf(&self, level: usize, slot: Slot) {
+        let (bound, _) = self.binder_held(level, slot);
+        if let Some(unknown) = self.module_unknown(level, slot, bound)
+            && self.binds(unknown).is_none()
+        {
+            self.note_named_unknown(unknown);
+        }
+    }
+
+    /// Gather open each module binder of the chain a leaf of `tree` reads in the run being typed,
+    /// where the binding leaves it unbound: a type read off `tree` is one a binding of the binder
+    /// changes, past what tree substitution gives.
+    pub(super) fn note_content_of(&self, tree: Tree<'o>) {
+        for binder in self.leaf_binders(tree) {
+            if let Some(level) = self.level_of(binder.body) {
+                let (bound, _) = self.binder_held(level, binder.slot);
+                if let Some(unknown) = self.module_unknown(level, binder.slot, bound)
+                    && self.binds(unknown).is_none()
+                {
+                    self.note_content(unknown, bound);
+                }
+            }
+        }
+    }
+
+    /// Gather named each module binder of the chain a leaf of `tree` reads in the run being typed,
+    /// where the binding leaves it unbound: a binding of it substitutes the tree.
+    pub(super) fn note_named_of(&self, tree: Tree<'o>) {
+        for binder in self.leaf_binders(tree) {
+            if let Some(level) = self.level_of(binder.body) {
+                let (bound, _) = self.binder_held(level, binder.slot);
+                if let Some(unknown) = self.module_unknown(level, binder.slot, bound)
+                    && self.binds(unknown).is_none()
+                {
+                    self.note_named_unknown(unknown);
+                }
+            }
+        }
+    }
+
+    /// Whether a binding of the module binders the leaves of `tree` read gives its content whole:
+    /// an open tree each of whose leaves is on such a binder of the chain.
+    pub(super) fn substitutes(&self, tree: Tree<'o>) -> bool {
+        let binders = self.leaf_binders(tree);
+        matches!(tree.identity(), Identity::Open(_))
+            && !binders.is_empty()
+            && binders.iter().all(|binder| {
+                self.level_of(binder.body).is_some_and(|level| {
+                    let (bound, _) = self.binder_held(level, binder.slot);
+                    self.module_unknown(level, binder.slot, bound).is_some()
+                })
+            })
+    }
+
+    /// Each binder a leaf of `tree` reads in the run being typed, once, memoized by identity: a
+    /// tree shares its subtrees, so a chain of views over one leaf reads it once.
+    pub(super) fn leaf_binders(&self, tree: Tree<'o>) -> &'p [crate::scope::Binder] {
+        let identity = tree.identity();
+        if tree.closed() {
+            return &[];
+        }
+        if let Some(binders) = self.leaf_binders.borrow().get(&identity) {
+            return binders;
+        }
+        let mut binders = BumpVec::new_in(self.scratch);
+        if let Tree::Leaf(crate::scope::Leaf::Bound {
+            binder,
+            within: None,
+            ..
+        }) = tree
+        {
+            binders.push(binder);
+        }
+        tree.subtrees(&mut |subtree| {
+            for binder in self.leaf_binders(*subtree) {
+                if !binders.contains(binder) {
+                    binders.push(*binder);
+                }
+            }
+        });
+        let binders: &'p [crate::scope::Binder] =
+            crate::memory::collect(self.scratch, binders.iter().copied());
+        if identity != Identity::Unnamed {
+            self.leaf_binders.borrow_mut().insert(identity, binders);
+        }
+        binders
+    }
+
+    /// Gather `unknown` named: a fact the walk wrote over it closes under a binding of it.
+    pub(super) fn note_named_unknown(&self, unknown: Unknown) {
+        self.noting(std::iter::once(Noted::named(unknown)));
     }
 
     /// Note named each lexical variable the types `visit` hands out hold, each read from
@@ -514,36 +806,12 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         let mut named = BumpVec::new_in(self.scratch);
         visit(&mut |ty| {
             for variable in free_variables(self.types, self.scratch, ty) {
-                if let Variable::Lexical { level, .. } = variable
-                    && let Some(unknown) = self.unknown_of_level_in(segment, level)
-                {
+                self.each_unknown_of(segment, variable, &mut |unknown| {
                     named.push(Noted::named(unknown));
-                }
+                });
             }
         });
         self.noting(named.into_iter());
-    }
-
-    /// Gather `unknown`, a name read as a value at `bound`, open: a binding makes it exactly the
-    /// type it binds, as the retype makes a bound parameter.
-    pub(super) fn note_retyped(&self, unknown: Unknown, bound: Bound) {
-        let judged = match bound {
-            DeclaredType::Type(typed) => DeclaredType::Type(typed.upper),
-            DeclaredType::Scheme(scheme) => DeclaredType::Scheme(scheme),
-        };
-        let mark = OpenMark::undecided(OpenKind::TypeValue, None, judged);
-        self.note_open(unknown, mark);
-    }
-
-    /// Gather the type name at `slot` of the shape at `level` open on its kind: a binding seeds it
-    /// as the type value of its type's kind ([`seeded`](Pass::seeded)), which a witness answers.
-    pub(super) fn note_kind(&self, level: usize, slot: Slot, name: TypeSymbol) {
-        let shape = self.chain[level].shape;
-        let at = (self.shapes.level(shape.segment(), Address::Slot(slot)))
-            .expect("a homed type name has its level");
-        let variable = self.types.lexical(at, name, KType::ANY);
-        let mark = OpenMark::undecided(OpenKind::Kind, None, DeclaredType::Type(variable));
-        self.note_open(self.unknown_at(level, slot), mark);
     }
 
     /// Gather the module binder `unknown`, of static type `bound`, open: every read of a module
@@ -695,6 +963,22 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         self.wrote(level, tag, Wrote::Use(index));
     }
 
+    /// Record what an answer selects among at the keyworded use at `index` of the shape at
+    /// `level`.
+    pub(super) fn set_undecided(
+        &mut self,
+        level: usize,
+        index: usize,
+        undecided: &'o crate::scope::UndecidedCall<'o>,
+    ) {
+        debug_assert!(!self.standing(level), "a standing level fixes nothing");
+        let tag = self.innermost();
+        let at = &mut self.chain[level].uses[index];
+        at.0.undecided = Some(undecided);
+        at.1 = Some(tag);
+        self.wrote(level, tag, Wrote::Use(index));
+    }
+
     /// Fix the contributions of the keyworded use at `index` of the shape at `level`.
     pub(super) fn set_contributions(
         &mut self,
@@ -750,6 +1034,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         let index = self.chain[level].trees.len();
         self.chain[level].trees.push((site, tree, tag));
         self.wrote(level, tag, Wrote::Tree(index));
+        self.hold_view(self.chain[level].shape.segment(), site, tree, tag);
     }
 
     /// Record the picks of the view the `:|` at `site` builds.
@@ -773,7 +1058,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         self.wrote(level, tag, Wrote::Content(index));
         self.hold(
             self.chain[level].shape.segment(),
-            slot,
+            Holder::Slot(slot),
             tree,
             identities,
             tag,
@@ -827,7 +1112,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     }
 
     /// Record what the retype at `site` re-stamps at.
-    pub(super) fn record_retype(&mut self, level: usize, site: Site, retype: Retype) {
+    pub(super) fn record_retype(&mut self, level: usize, site: Site, retype: Restamp) {
         debug_assert!(!self.standing(level), "a standing level fixes nothing");
         let tag = self.innermost();
         let index = self.chain[level].retypes.len();
@@ -894,7 +1179,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     }
 
     /// The declaration the walk fixed for the type binder at `slot` of `shape`, and the binder
-    /// itself where it is not closed.
+    /// itself where it is unknown.
     pub(super) fn declared_cell(&self, shape: &BodyShape<'graph>, slot: Slot) -> StaticType<'o> {
         let segment = shape.segment();
         let typed = match self.level_of(segment) {
@@ -917,7 +1202,8 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             .flatten()
             .unwrap_or(Static::Unknown),
         };
-        if shape.declarations(slot).is_some() && !matches!(typed, Static::Closed(_)) {
+        // A rigid declaration is read over the names it reads, which its reader gathers.
+        if shape.declarations(slot).is_some() && matches!(typed, Static::Unknown) {
             self.note(&[Unknown {
                 segment,
                 at: Address::Slot(slot),
@@ -994,9 +1280,10 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         callable: StaticCallable<'o>,
         levels: &[Parametric],
     ) -> Option<(Record<'tier, Parametric>, Parametric)> {
+        // A callable's own type is a function, never a variable.
         let ktype = in_body_of(callable, levels, self.types, self.scratch)?;
-        match judge::type_node(self, self.types, ktype) {
-            TypeNode::KFunction { params, ret } => Some((params, ret)),
+        match judge::node_unless_variable(self.types, ktype) {
+            Some(TypeNode::KFunction { params, ret }) => Some((params, ret)),
             _ => None,
         }
     }
@@ -1114,10 +1401,11 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     /// The signature every run of the `MODULE` or `GROUP` body `body` ties, where the walk typed it
     /// exactly.
     pub(super) fn signature_of(&self, body: &BodyShape<'graph>) -> Option<KType> {
-        match self.level_of(body.segment()) {
+        let kept = match self.level_of(body.segment()) {
             Some(level) => self.chain[level].signature,
             None => self.inline_facts(body.segment(), |facts| facts.signature)?,
-        }
+        };
+        judge::static_of(self.types, kept?)
     }
 
     /// The last statement's static type of the quote's code `code` as it runs unfilled.
@@ -1155,8 +1443,25 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         // own node is read as a variable, so a type built over one is no module.
         let node = judge::module_node(self, types, typed.upper)?;
         let signature = match node {
-            TypeNode::Signature { .. } => judge::closed(self, types, typed.upper)?,
+            // A signature is closed content: no substitution enters one.
+            TypeNode::Signature { .. } => judge::static_of(types, typed.upper)?,
             TypeNode::SignatureApply { signature, .. } => signature,
+            // A meet is a module binder's where each member is. A meet over a variable is the meet
+            // rule's name, so no member is one.
+            TypeNode::SignatureMeet { members } => {
+                for member in members.iter() {
+                    let signature = match judge::node_unless_variable(types, member)? {
+                        TypeNode::Signature { .. } => judge::static_of(types, member)?,
+                        TypeNode::SignatureApply { signature, .. } => signature,
+                        _ => return None,
+                    };
+                    schema_of(signature, types)?;
+                }
+                return Some(Unknown {
+                    segment: shape.segment(),
+                    at: Address::Slot(slot),
+                });
+            }
             _ => {
                 let bound = node.rigid_bound()?;
                 match judge::closed_type_node(types, bound) {
@@ -1174,10 +1479,9 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     }
 
     /// Gather the unknown the binder at `slot` of the shape at `level`, of static type `bound`,
-    /// is itself, where it is one: a type name the chain numbers and no closed declaration fixes,
-    /// or a module binder. Both are open: a binding makes a type name, read as a value, exactly
-    /// the type value it binds ([`seeded`](Pass::seeded)), which no substitution of `bound` gives.
-    pub(super) fn note_own(&self, level: usize, slot: Slot, bound: Bound) {
+    /// is itself, where it is one: a module binder, whose every read is of its content. A type
+    /// name's seed asks nothing: it is the same at load and under every binding.
+    pub(super) fn note_own(&self, level: usize, slot: Slot, bound: Bound, tree: Option<Tree<'o>>) {
         debug_assert!(!self.standing(level), "a standing level seeds nothing");
         let shape = self.chain[level].shape;
         let homed = (self.shapes.level(shape.segment(), Address::Slot(slot))).is_some();
@@ -1185,14 +1489,18 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             self.chain[level].declared[slot.index()],
             Some((Static::Closed(_), _))
         );
-        match (homed && !closed, shape.slot_name(slot)) {
-            (true, BinderSymbol::Type(name)) => self.note_kind(level, slot, name),
-            (true, _) => self.note_retyped(self.unknown_at(level, slot), bound),
-            (false, _) => {
-                if let Some(own) = self.module_unknown(level, slot, bound) {
-                    self.note_content(own, bound);
-                }
-            }
+        // A type name's seed is the decided name of its kind's type value, the same at load and
+        // under every binding ([`kind_value`](crate::elaborate::judge::kind_value)). The chain
+        // homes type names alone.
+        if homed && !closed {
+            assert!(
+                matches!(shape.slot_name(slot), BinderSymbol::Type(_)),
+                "a homed value name"
+            );
+            return;
+        }
+        if let Some(own) = self.module_unknown(level, slot, bound) {
+            self.note_module(own, bound, tree);
         }
     }
 
@@ -1238,13 +1546,15 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>> Marks
     ) {
         let mark = OpenMark::undecided(kind, slot, judged);
         let (types, scratch) = (self.types, self.scratch);
+        let Some(innermost) = self.chain.last() else {
+            return;
+        };
+        let segment = innermost.shape.segment();
         for ty in std::iter::once(judged).chain(slot) {
             for variable in free_variables(types, scratch, ty) {
-                if let Variable::Lexical { level, .. } = variable
-                    && let Some(unknown) = self.unknown_of_level(level)
-                {
+                self.each_unknown_of(segment, variable, &mut |unknown| {
                     self.note_open(unknown, mark);
-                }
+                });
             }
         }
     }
@@ -1264,13 +1574,15 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>> Marks
             answered: Some(answered),
         };
         let mut noted = BumpVec::new_in(scratch);
+        let segment = (self.chain.last()).map(|innermost| innermost.shape.segment());
         question.each_type(&mut |ty| {
             for variable in free_variables(types, scratch, ty) {
-                if let Variable::Lexical { level, .. } = variable
-                    && let Some(unknown) = self.unknown_of_level(level)
-                    && !noted.contains(&unknown)
-                {
-                    noted.push(unknown);
+                if let Some(segment) = segment {
+                    self.each_unknown_of(segment, variable, &mut |unknown| {
+                        if !noted.contains(&unknown) {
+                            noted.push(unknown);
+                        }
+                    });
                 }
             }
         });
@@ -1281,19 +1593,20 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>> Marks
         super::QUESTIONS.with(|asked| asked.set(asked.get() + 1));
         Some(answered.answer)
     }
-}
 
-impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
-    Pass<'p, 'o, '_, 'graph, 'tier, '_, '_, S>
-{
-    /// Hold the running unit on every witnessed name, where a read finds a module binder, a path
-    /// or a class by content: such a read gathers nothing where it misses, and a held unit's
-    /// holding lies only in the binding's layer, so a witnessing walk cannot tell what a binding
-    /// would find. Nothing outside a witnessing walk.
-    pub(super) fn read_by_content(&self) {
-        let judged = DeclaredType::Type(KType::ANY.into());
-        let mark = OpenMark::undecided(OpenKind::ModuleContent, None, judged);
-        (self.store).each_witnessed(&mut |unknown| self.note_open(unknown, mark));
+    /// The name for `term`: every walk names a term alike, and the store lays it where no layer
+    /// beneath holds it. A term whose ends hold an opaque carrier has none, as a bound holds no
+    /// carrier, so its site keeps the type it gives outside a walk.
+    fn derive(&self, term: DerivedTerm<'_>) -> Option<Parametric> {
+        let (lower, bound) = term.ends(self.types, self.scratch);
+        if self.types.holds_carrier(lower) || self.types.holds_carrier(bound) {
+            return None;
+        }
+        Some(self.store.derived(self.types, term).ty)
+    }
+
+    fn term(&self, id: DerivedId) -> Option<DerivedTerm<'_>> {
+        self.store.derived_name(id).map(|name| name.term)
     }
 }
 
@@ -1306,7 +1619,14 @@ pub(super) struct Rebound<'p, 'o> {
     pub(super) types: BumpBackedMap<'p, (Segment, DeclaredType<Parametric>), Closed>,
     pub(super) units: BumpBackedMap<'p, usize, &'o UnitFacts<'o>>,
     pub(super) closings: BumpBackedMap<'p, usize, &'o Closing<'o>>,
-    pub(super) table: BumpBackedMap<'p, DeclaredType<Parametric>, DeclaredType<KType>>,
+    pub(super) table: BumpBackedMap<'p, DeclaredType<Parametric>, Closed>,
+    /// Each open tree an absorbed record holds that the binding changes, by identity, beside the
+    /// tree a fresh load builds for it: the entries of the layer's table of trees.
+    pub(super) trees: BumpBackedMap<'p, Identity, &'o Tree<'o>>,
+    /// Each class the binding moves a record's paths to, beside what it reads: found as a class
+    /// the walk resolved is, though no record holds it.
+    pub(super) classes:
+        BumpBackedMap<'p, crate::type_lattice::PathClass, super::paths::ClassOf<'o>>,
 }
 
 /// The walk's closer for a record of `segment`'s: substitution under the walk's binding, each
@@ -1322,6 +1642,10 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>> Closer
     fn close(&mut self, ty: DeclaredType<Parametric>) -> Closed {
         self.pass.rebind(self.segment, ty)
     }
+
+    fn class(&mut self, class: crate::type_lattice::PathClass) -> Option<crate::scope::Resolved> {
+        self.pass.class_bound(self.segment, class)
+    }
 }
 
 impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>> crate::scope::Laying<'o>
@@ -1331,5 +1655,54 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>> crate::scope::Laying<
 
     fn lay(&self) -> S::Lay {
         self.pass.lay
+    }
+
+    fn tree(&mut self, identity: Identity) -> Option<&'o Tree<'o>> {
+        self.pass.rebound.borrow().trees.get(&identity).copied()
+    }
+}
+
+/// The walk's binding as a substitution reads it from `segment`: each level the binding gives a
+/// type, each derived name's term from the tables the store reads, and a term no table holds named
+/// and laid by the store.
+struct Rebinds<'c, P> {
+    pass: &'c P,
+    segment: Segment,
+}
+
+impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>> crate::scope::Binds
+    for Rebinds<'_, Pass<'p, 'o, '_, 'graph, 'tier, '_, '_, S>>
+{
+    fn level(&self, _: &crate::values::Chain<'_, '_, '_, '_>, level: usize) -> Option<KType> {
+        self.pass.level_bound(self.segment, level)
+    }
+
+    fn term(&self, id: crate::type_lattice::DerivedId) -> Option<DerivedTerm<'_>> {
+        self.pass.store.derived_name(id).map(|name| name.term)
+    }
+
+    fn class(
+        &self,
+        _: &crate::values::Chain<'_, '_, '_, '_>,
+        _: crate::memory::BumpAllocator<'_>,
+        class: crate::type_lattice::PathClass,
+    ) -> Option<crate::scope::Resolved> {
+        self.pass.class_bound(self.segment, class)
+    }
+
+    fn name(
+        &self,
+        types: &crate::values::Chain<'_, '_, '_, '_>,
+        _: crate::memory::BumpAllocator<'_>,
+        term: DerivedTerm<'_>,
+    ) -> Option<Parametric> {
+        Some(self.pass.store.derived(types, term).ty)
+    }
+
+    fn carried(&self, binder: Unknown) -> Option<KType> {
+        match self.pass.bound_through(binder)? {
+            crate::scope::Bound::Module { carried, .. } => Some(carried),
+            crate::scope::Bound::Type(_) => None,
+        }
     }
 }

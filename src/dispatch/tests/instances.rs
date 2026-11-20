@@ -627,9 +627,10 @@ fn an_earlier_argument_over_a_lexical_variable_fixes_the_instance_at_each_bindin
     assert_eq!(run(&source), "[1]\n[s]");
 }
 
-/// `Outer` is read through its bound, which a run binding it lower does not reproduce.
+/// `Outer`'s element fixes the instance: the solve over `xs :Outer` reads no end, so `pick` is
+/// made at `Elt = (ELEMENT OF Outer)`, which each binding of `Outer` reduces to its own element.
 #[test]
-fn an_earlier_argument_read_through_a_lexical_bound_fixes_nothing() {
+fn an_earlier_argument_over_a_lexical_variables_element_fixes_the_instance() {
     let apply = "EXPR #(APPLY 2 TO 1)\n\
                  EXPR FOR ALL #[Elt] #(APPLY f :(FN :{x :Elt} -> Elt) TO y :(LIST OF Elt)) -> Elt = \
                  #(f {x = 1})\n";
@@ -637,11 +638,28 @@ fn an_earlier_argument_read_through_a_lexical_bound_fixes_nothing() {
         "{apply}{}",
         module(
             "(EXPR FOR ALL #{Outer: :(LIST OF Number)} #(WRAP xs :Outer) -> Any = \
-             #(APPLY pick TO xs))"
+             #(APPLY pick TO xs)) (PRINT (WRAP [1])) (PRINT (WRAP [2, 3]))"
         )
     );
-    let column = pick_column(&source);
-    assert_eq!(run(&source), format!("load: <test>:3:{column}: {UNFIXED}"));
+    assert_eq!(run(&source), "1\n1");
+}
+
+/// A function has no piece to read, so `Outer` is read through its bound, which a run binding it
+/// lower does not reproduce: the solve is stored whole, and `Elt` is the name its solution types.
+/// The instance is fixed at that name, and each run solves it under its own binding of `Outer`.
+#[test]
+fn an_earlier_argument_read_through_a_lexical_bound_fixes_the_instance_at_its_solve() {
+    let apply = "EXPR #(APPLY 2 TO 1)\n\
+                 EXPR FOR ALL #[Elt] #(APPLY f :(FN :{x :Elt} -> Elt) TO y :(FN :{x :Number} -> Elt)) \
+                 -> Elt = #(f {x = 1})\n";
+    let source = format!(
+        "{apply}{}",
+        module(
+            "(EXPR FOR ALL #{Outer: :(FN :{x :Number} -> Number)} #(WRAP g :Outer) -> Any = \
+             #(APPLY pick TO g)) (PRINT (WRAP (FN :{x :Number} -> Number = #(x))))"
+        )
+    );
+    assert_eq!(run(&source), "1");
 }
 
 #[test]

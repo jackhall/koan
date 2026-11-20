@@ -102,9 +102,11 @@ this body returns Number, which can never satisfy its declared return Str
 ```
 
 A quantified function written anywhere but the head of a call or a `MODULE` or
-`GROUP` member's binding is instantiated where the load reads it, at the type it is
+`GROUP` member's binding is an instance site, instantiated at the type it is
 wanted at there — an annotation, an ascription, a declared return, a slot — or
-refused where that type fixes nothing
+refused where nothing fixes that type. The load makes the instance where the
+text fixes the type, a binding where the type names what a run binds, and the
+call where only the type an argument carries fixes it
 ([quantified types](quantified-types.md#where-a-quantified-function-is-instantiated)).
 
 ### Where a call runs
@@ -168,9 +170,12 @@ argument's static type does ([where a call runs](#where-a-call-runs)).
   does.
 - Where a relation holds at some bindings and not others, the answer is
   *maybe* or *unknown*, and the call decides.
-- A static solve naming a lexical variable is the call's own only where a run,
-  binding each variable, [reproduces it](../lattice/src/types/solving.md#the-unifier-collects-it-does-not-bind):
-  a solve that reads a variable through its bound is not.
+- A static solve naming a lexical variable is written over the variable only
+  where a run, binding each variable,
+  [reproduces it](../lattice/src/types/solving.md#the-unifier-collects-it-does-not-bind).
+  A solve that reads a variable through its bound is not: it is stored whole
+  and decided where the variable is bound
+  ([where a solve is decided](binding-graph.md#where-a-solve-is-decided)).
 
 Under `EXPR #(WHICH x :Number) -> Str`, `WHICH a` over a parameter
 `a :(Number | Str)` is *maybe*: `a` may carry a `Number`. The load reads an
@@ -236,6 +241,7 @@ changes what a reader sees and which overload runs.
 - [A value retyped in place, pinned at its paths](../roadmap/types/pinned-in-place.md)
 - [What a barrier rebuilds](../roadmap/types/barrier-coercion.md)
 - [A carried union at a contravariant position](../roadmap/types/contravariant-union-solve.md)
-- [Projection types](../roadmap/types/projection-types.md) — a type naming
-  a piece of what a variable or a parameter is bound to, read at load and
-  written in a signature.
+- [An instance made by the call](../roadmap/types/instance-made-by-the-call.md)
+- [A head reading its parameters' types](../roadmap/types/head-parameter-reads.md)
+  — a signature's types reading a type member of its own parameters, and
+  `TYPE OF` naming a value's type.

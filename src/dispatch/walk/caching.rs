@@ -95,7 +95,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
         let mut deps = DepsGathering::new(self.scratch);
         if !tree.closed() {
             tree_deps(
-                self.shapes,
+                (self.shapes, self.types),
                 self.holding(level),
                 tree,
                 &mut deps,
@@ -168,7 +168,13 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             slot,
         };
         let leaf = Tree::bound(binder, &[], None);
-        tree_deps(self.shapes, self.holding(level), &leaf, into, self.scratch);
+        tree_deps(
+            (self.shapes, self.types),
+            self.holding(level),
+            &leaf,
+            into,
+            self.scratch,
+        );
     }
 
     /// Record the composite site at `site` in the shape at `level`, built over `parts`, each beside

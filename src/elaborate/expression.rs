@@ -19,13 +19,13 @@ use crate::parse::{BuiltinShapeId, KEYWORDS};
 use crate::parse::{ExpressionPart, KExpression};
 use crate::parse::{SlotLabel, needed_entry, needing, quantifier_entries};
 use crate::scope::{
-    Coordinate, Elaboration, PathSpelling, Site, Slot, SpelledRoot, Target, pair_label,
-    path_spelling,
+    Coordinate, Elaboration, PathSpelling, Rule, Site, Slot, SpelledRoot, Target, applied,
+    declared_member, head_params, pair_label, path_spelling, unbuilt,
 };
-use crate::symbols::{BinderSymbol, KeywordSymbol, StaticName, Symbol, TypeSymbol};
+use crate::symbols::{BinderSymbol, KeywordSymbol, StaticName, TypeSymbol};
 use crate::type_lattice::{
-    DeclaredType, DispatchTokenElement, GroupIntern, KType, NodeSchema, Parametric, SigOrigin,
-    TypeNode, constructor_param_names, dense_classes, meet, member, tied_members,
+    DeclaredType, DispatchTokenElement, GroupIntern, KType, Parametric, SigOrigin, TypeNode,
+    dense_classes, member, tied_members,
 };
 use crate::values::Chain;
 
@@ -312,10 +312,8 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, '_, 'x, '_, R> {
         }
     }
 
-    /// `operands` elaborated, and refused `Unknown` at `site` when one read a lexical variable: the
-    /// operands of a spelling whose value over a variable can differ from substituting first and
-    /// elaborating after — a meet, a projection's owner, an application's head, a `NEEDING` kind —
-    /// and a bound, which holds no variable.
+    /// `operands` elaborated, and refused `Unknown` at `site` when one read a lexical variable: a
+    /// bound's, which holds no variable.
     fn closed_operands<T>(
         &self,
         site: Site,
@@ -329,17 +327,45 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, '_, 'x, '_, R> {
         Ok(elaborated)
     }
 
-    /// The operand `operands` elaborates to, read concrete: refused `Unknown` where it read a
-    /// lexical variable, and `Unsupported` where it names a `FOR ALL` variable or a head parameter,
-    /// which no spelling that reads its operand concrete takes.
-    fn closed_concrete(
+    /// The head `head` of a spelling over a head, at `site`: closed where it is, `None` over
+    /// run-bound names, whose spelling is the rule's ([`spelled`](Self::spelled)). Refused `refused`
+    /// where it names a `FOR ALL` variable or a head parameter, which no head spelling takes, and
+    /// left `Unknown` over a path's variable, for the run.
+    fn head(
         &self,
         site: Site,
-        operands: impl FnOnce() -> Result<Parametric, Elaboration>,
-    ) -> Result<KType, Elaboration> {
-        let operand = self.closed_operands(site, operands)?;
-        judge::closed(self.reader.marks(), self.types, operand)
-            .ok_or(Elaboration::Unsupported { site })
+        head: Parametric,
+        refused: Elaboration,
+    ) -> Result<Option<KType>, Elaboration> {
+        match judge::names_held(self.types, self.scratch, head) {
+            judge::Names::Closed => Ok(judge::static_of(self.types, head)),
+            judge::Names::RunBound => Ok(None),
+            judge::Names::Path => Err(Elaboration::Unknown { site }),
+            judge::Names::Unbound => Err(refused),
+        }
+    }
+
+    /// The spelling `rule` over `operands`, at `site`, its head over run-bound names
+    /// ([`judge::spelled`]): refused `refused` where no binding spells it, `Unknown` outside a
+    /// walk, where no binding is written in.
+    fn spelled(
+        &self,
+        site: Site,
+        rule: Rule,
+        operands: &[DeclaredType<Parametric>],
+        refused: Elaboration,
+    ) -> Result<Parametric, Elaboration> {
+        let marks = self.reader.marks();
+        match judge::spelled(marks, self.types, self.scratch, rule, operands) {
+            None => Err(refused),
+            Some(None) => Err(Elaboration::Unknown { site }),
+            Some(Some(spelled)) => Ok(spelled),
+        }
+    }
+
+    /// The record type over `named`, by name: the arguments or names a spelling's rule reads.
+    fn named(&self, named: &[(BinderSymbol, Parametric)]) -> DeclaredType<Parametric> {
+        DeclaredType::Type(self.types.record(self.scratch, named))
     }
 
     /// A parenthesized or sigiled type expression, refusing a scheme as [`part`](Self::part) does.
@@ -376,14 +402,21 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, '_, 'x, '_, R> {
         if let [head, payload] = parts
             && let ExpressionPart::RecordLiteral(arguments) = &payload.value
         {
-            let constructor = self.closed_concrete(site, || self.part(&head.value, groups))?;
-            let mut applied = BumpVec::with_capacity_in(arguments.len(), self.scratch);
+            let head = self.part(&head.value, groups)?;
+            let constructor = self.head(site, head, unsupported)?;
+            let mut arguments_typed = BumpVec::with_capacity_in(arguments.len(), self.scratch);
             for (name, argument) in arguments.iter() {
-                applied.push((*name, self.part(argument, groups)?));
+                arguments_typed.push((*name, self.part(argument, groups)?));
             }
-            return self
-                .apply(site, constructor, &applied)
-                .map(DeclaredType::Type);
+            let applied = match constructor {
+                Some(constructor) => self.apply(site, constructor, &arguments_typed)?,
+                None => {
+                    let operands = [head.into(), self.named(&arguments_typed)];
+                    let rule = Rule::Applied { sole: false };
+                    self.spelled(site, rule, &operands, unsupported)?
+                }
+            };
+            return Ok(DeclaredType::Type(applied));
         }
         if let Some(form) = node.cache().builtin_shape() {
             let part = |index: usize| &parts[index].value;
@@ -410,20 +443,24 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, '_, 'x, '_, R> {
                     if let Some(member) = self.module_member(site, node) {
                         return member.map(DeclaredType::Type);
                     }
-                    let owner = self.closed_operands(site, || self.part(part(1), groups))?;
+                    let owner = self.part(part(1), groups)?;
                     let name = match part(2) {
                         ExpressionPart::Type(name) => name.symbol(),
                         ExpressionPart::Identifier(name) => name.symbol(),
                         _ => return Err(unsupported),
                     };
-                    // An owner naming a variable declares no member.
-                    judge::closed(self.reader.marks(), self.types, owner)
-                        .and_then(|owner| {
-                            declared_variant(self.types, self.scratch, owner, name)
-                                .or_else(|| declared_field(self.types, self.scratch, owner, name))
-                        })
-                        .map(|member| DeclaredType::Type(member.into()))
-                        .ok_or(Elaboration::NoSuchMember { owner, name, site })
+                    // An owner naming a `FOR ALL` variable declares no member.
+                    let refused = Elaboration::NoSuchMember { owner, name, site };
+                    let member = match self.head(site, owner, refused)? {
+                        Some(owner) => declared_member(self.types, self.scratch, owner, name)
+                            .map(Parametric::from)
+                            .ok_or(refused)?,
+                        None => {
+                            let operands = [DeclaredType::Type(owner)];
+                            self.spelled(site, Rule::Member(name), &operands, refused)?
+                        }
+                    };
+                    Ok(DeclaredType::Type(member))
                 }
                 _ => Err(unsupported),
             };
@@ -449,8 +486,17 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, '_, 'x, '_, R> {
             // `Type -> Ctor` — the arity-one sugar for the application above. A function type
             // starts with `FN`, so a bare `->` here is always an application.
             3 if keyword(1, &KEYWORDS.arrow) => {
-                let constructor =
-                    self.closed_concrete(site, || self.part(&parts[2].value, groups))?;
+                let head = self.part(&parts[2].value, groups)?;
+                let Some(constructor) = self.head(site, head, unsupported)? else {
+                    let argument = self.part(&parts[0].value, groups)?;
+                    let operands = [head.into(), argument.into()];
+                    return self.spelled(
+                        site,
+                        Rule::Applied { sole: true },
+                        &operands,
+                        unsupported,
+                    );
+                };
                 let [param] = self.param_names(constructor).ok_or(unsupported)? else {
                     return Err(unsupported);
                 };
@@ -460,8 +506,9 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, '_, 'x, '_, R> {
             // `Kind NEEDING #[y …]` — a code kind below `Code`, and a list of quotes each of one
             // name or of a bucket key.
             3 if let Some((kind, quotes)) = needing(node) => {
-                let kind = self.closed_concrete(site, || self.part(kind, groups))?;
-                if kind.code_parent().is_none() {
+                let head = self.part(kind, groups)?;
+                let kind = self.head(site, head, unsupported)?;
+                if kind.is_some_and(|kind| kind.code_parent().is_none()) {
                     return Err(unsupported);
                 }
                 let mut names = BumpVec::with_capacity_in(quotes.len(), self.scratch);
@@ -470,22 +517,44 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, '_, 'x, '_, R> {
                         needed_entry(quote.as_part().ok_or(unsupported)?).ok_or(unsupported)?,
                     );
                 }
-                Ok(self.types.code_needing(self.scratch, kind, &names).into())
+                let Some(kind) = kind else {
+                    // The names as a record's fields: their set, each once.
+                    let mut fields = BumpVec::with_capacity_in(names.len(), self.scratch);
+                    for name in names.iter() {
+                        if !fields.iter().any(|(seen, _)| seen == name) {
+                            fields.push((*name, Parametric::from(KType::ANY)));
+                        }
+                    }
+                    let operands = [head.into(), self.named(&fields)];
+                    return self.spelled(site, Rule::Needing, &operands, unsupported);
+                };
+                Ok(
+                    crate::scope::needing(self.types, self.scratch, kind, &names)
+                        .ok_or(unsupported)?
+                        .into(),
+                )
             }
             // `UNBUILT Kind` — `Code` or a code kind below it, whatever its code needs.
             2 if keyword(0, &KEYWORDS.unbuilt) => {
-                let kind = self.closed_concrete(site, || self.part(&parts[1].value, groups))?;
-                if kind != KType::ANY_CODE && kind.code_parent().is_none() {
-                    return Err(unsupported);
-                }
-                Ok(self.types.code_unbuilt(kind).into())
+                let head = self.part(&parts[1].value, groups)?;
+                let Some(kind) = self.head(site, head, unsupported)? else {
+                    return self.spelled(site, Rule::Unbuilt, &[head.into()], unsupported);
+                };
+                Ok(unbuilt(self.types, kind).ok_or(unsupported)?.into())
             }
             // `Sig WITH {Param = Type, …}` — a declared signature with some head parameters pinned.
             3 if keyword(1, &KEYWORDS.with)
                 && let ExpressionPart::RecordLiteral(pins) = &parts[2].value =>
             {
-                let signature =
-                    self.closed_concrete(site, || self.part(&parts[0].value, groups))?;
+                let head = self.part(&parts[0].value, groups)?;
+                let Some(signature) = self.head(site, head, unsupported)? else {
+                    let mut pinned = BumpVec::with_capacity_in(pins.len(), self.scratch);
+                    for (name, pin) in pins.iter() {
+                        pinned.push((*name, self.part(pin, groups)?));
+                    }
+                    let operands = [head.into(), self.named(&pinned)];
+                    return self.spelled(site, Rule::Pinned, &operands, unsupported);
+                };
                 self.pin(site, signature, pins, groups)
             }
             4 if keyword(0, &CONNECTORS.map) && keyword(2, &KEYWORDS.arrow) => {
@@ -518,26 +587,21 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, '_, 'x, '_, R> {
             // naming a `FOR ALL` variable or a head parameter is refused: each call solves the
             // variable, so the meet cannot be taken here.
             3 if keyword(1, &CONNECTORS.meet) => {
-                let operands = self.closed_operands(site, || {
-                    Ok([
-                        self.part(&parts[0].value, groups)?,
-                        self.part(&parts[2].value, groups)?,
-                    ])
-                })?;
+                let operands = [
+                    self.part(&parts[0].value, groups)?,
+                    self.part(&parts[2].value, groups)?,
+                ];
                 self.meet(self.reader.shape().site(&parts[1].value), &operands)
             }
             2 if keyword(0, &CONNECTORS.meet) => {
                 let ExpressionPart::ListLiteral(written) = parts[1].value else {
                     return Err(unsupported);
                 };
-                let operands = self.closed_operands(site, || {
-                    let mut operands = BumpVec::with_capacity_in(written.len(), self.scratch);
-                    for operand in written.iter() {
-                        let operand = operand.as_part().ok_or(unsupported)?;
-                        operands.push(self.part(operand, groups)?);
-                    }
-                    Ok(operands)
-                })?;
+                let mut operands = BumpVec::with_capacity_in(written.len(), self.scratch);
+                for operand in written.iter() {
+                    let operand = operand.as_part().ok_or(unsupported)?;
+                    operands.push(self.part(operand, groups)?);
+                }
                 self.meet(self.reader.shape().site(&parts[0].value), &operands)
             }
             _ => Err(unsupported),
@@ -545,15 +609,25 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, '_, 'x, '_, R> {
     }
 
     /// The meet of `operands`, refused at `site` — the `&` — when one names a `FOR ALL` variable or
-    /// a head parameter: the meet relates concrete types only.
+    /// a head parameter: the meet relates concrete types only, and each call solves the variable.
+    /// Each operand past the first is met through the rule ([`Rule::Meet`](crate::scope::Rule::Meet)):
+    /// closed operands meet, and over a run-bound name the meet is a derived name whose term meets
+    /// what the binding gives each: `Elt & Number` is `Number` where `Elt` is `Number`. One naming
+    /// a path's variable is left for the run, as is one over names outside a walk, where no
+    /// binding is written in.
     fn meet(&self, site: Site, operands: &[Parametric]) -> Result<Parametric, Elaboration> {
-        let mut met = KType::ANY;
+        use judge::Names;
+        let mut met: Parametric = KType::ANY.into();
         for operand in operands {
-            let operand = judge::closed(self.reader.marks(), self.types, *operand)
-                .ok_or(Elaboration::MeetOverVariable { site })?;
-            met = meet(self.types, self.scratch, met, operand);
+            match judge::names_held(self.types, self.scratch, *operand) {
+                Names::Unbound => return Err(Elaboration::MeetOverVariable { site }),
+                Names::Path => return Err(Elaboration::Unknown { site }),
+                Names::Closed | Names::RunBound => {}
+            }
+            met = judge::met(self.reader.marks(), self.types, self.scratch, met, *operand)
+                .ok_or(Elaboration::Unknown { site })?;
         }
-        Ok(met.into())
+        Ok(met)
     }
 
     /// A `FOR ALL` group's names and bounds, in written order: a list of name quotes, or a dict of
@@ -601,8 +675,9 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, '_, 'x, '_, R> {
         };
         let bound =
             self.closed_operands(self.reader.shape().site(part), || self.part(part, groups))?;
-        // An opaque carrier is concrete, but a variable's bound holds none.
-        match judge::closed(self.reader.marks(), self.types, bound) {
+        // An opaque carrier is concrete, but a variable's bound holds none. A bound over names no
+        // binding gives at load is refused, so reading it closed judges nothing.
+        match judge::static_of(self.types, bound) {
             Some(bound) if bound != KType::NEVER && !self.types.holds_carrier(bound) => Ok(bound),
             _ => Err(refused),
         }
@@ -620,14 +695,7 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, '_, 'x, '_, R> {
         {
             return Some(fellow.params);
         }
-        if let TypeNode::Union { members } = judge::closed_type_node(self.types, constructor) {
-            let mut members = members.iter();
-            let names = constructor_param_names(members.next()?, self.types)?;
-            return members
-                .all(|member| constructor_param_names(member, self.types) == Some(names))
-                .then_some(names);
-        }
-        constructor_param_names(constructor, self.types)
+        head_params(self.types, constructor)
     }
 
     /// A declared type constructor applied to `arguments`, keyed by the parameter names the
@@ -641,28 +709,7 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, '_, 'x, '_, R> {
     ) -> Result<Parametric, Elaboration> {
         let unsupported = Elaboration::Unsupported { site };
         let declared = self.param_names(constructor).ok_or(unsupported)?;
-        if arguments.len() != declared.len()
-            || !arguments.iter().all(
-                |(name, _)| matches!(name, BinderSymbol::Type(name) if declared.contains(name)),
-            )
-            || arguments
-                .iter()
-                .enumerate()
-                .any(|(index, (name, _))| arguments[..index].iter().any(|(seen, _)| seen == name))
-        {
-            return Err(unsupported);
-        }
-        if self.types.is_union(constructor) {
-            return Ok(applied_union(
-                self.types,
-                self.scratch,
-                constructor,
-                arguments,
-            ));
-        }
-        Ok(self
-            .types
-            .constructor_apply(self.scratch, constructor, arguments))
+        applied(self.types, self.scratch, constructor, declared, arguments).ok_or(unsupported)
     }
 
     /// `signature` with `pins` fixing head parameters by name: `signature` a declared signature,
@@ -692,7 +739,7 @@ impl<'graph, 'x, R: Reads<'graph> + ?Sized> Elaborator<'_, '_, '_, 'x, '_, R> {
             }
             pinned.push((*name, self.part(pin, groups)?));
         }
-        Ok(self.types.signature_apply(self.scratch, signature, &pinned))
+        crate::scope::pinned(self.types, self.scratch, signature, &pinned).ok_or(unsupported)
     }
 
     /// `FN [FOR ALL <names>] <schema> -> <return>`: a scheme over a non-empty group.
@@ -917,106 +964,6 @@ pub(super) fn walk_head<'p, 'graph, E>(
         }
     }
     Ok(())
-}
-
-/// The type the record under `owner` declares `name` with, read through every newtype layer above
-/// it — a `NEWTYPE`'s representation, a union variant's payload. `None` when no record lies under
-/// `owner` or it declares no `name`; a ring of newtypes with no record under it, `NEWTYPE Loop =
-/// Loop`, is peeled once round and then refused.
-pub fn declared_field(
-    types: &Chain<'_, '_, '_, '_>,
-    scratch: BumpAllocator<'_>,
-    owner: KType,
-    name: Symbol,
-) -> Option<KType> {
-    through_layers(
-        types,
-        scratch,
-        owner,
-        |layer| match judge::closed_type_node(types, layer) {
-            TypeNode::Record { fields } => Some(fields.get(name)),
-            _ => None,
-        },
-    )
-    .flatten()
-}
-
-/// The union a tag projection off `owner` reads its tags from: `owner` where it is a union, else
-/// the first union its newtype layers peel down to, as [`declared_field`] peels to a record.
-pub fn tag_union(
-    types: &Chain<'_, '_, '_, '_>,
-    scratch: BumpAllocator<'_>,
-    owner: KType,
-) -> Option<KType> {
-    through_layers(types, scratch, owner, |layer| {
-        types.is_union(layer).then_some(layer)
-    })
-}
-
-/// The variant `name` a tag projection off `owner` names: the member `name` of its
-/// [`tag_union`]. `None` where no union lies under `owner` or it declares no `name`.
-pub fn declared_variant(
-    types: &Chain<'_, '_, '_, '_>,
-    scratch: BumpAllocator<'_>,
-    owner: KType,
-    name: Symbol,
-) -> Option<KType> {
-    tag_union(types, scratch, owner).and_then(|union| types.union_member_named(union, name))
-}
-
-/// The parameterized union `union`, not yet applied, applied at `arguments`: each of its variants
-/// applied at the same arguments, unioned. The caller has checked `arguments` against the
-/// parameters the variants declare.
-pub fn applied_union(
-    types: &Chain<'_, '_, '_, '_>,
-    scratch: BumpAllocator<'_>,
-    union: KType,
-    arguments: &[(BinderSymbol, Parametric)],
-) -> Parametric {
-    let TypeNode::Union { members } = judge::closed_type_node(types, union) else {
-        unreachable!("`applied_union` applies a union")
-    };
-    debug_assert!(
-        (members.iter()).all(|member| {
-            !matches!(
-                judge::closed_type_node(types, member),
-                TypeNode::ConstructorApply { .. }
-            )
-        }),
-        "`applied_union` applies an unapplied union"
-    );
-    let mut applied = BumpVec::with_capacity_in(members.len(), scratch);
-    applied.extend(
-        members
-            .iter()
-            .map(|member| types.constructor_apply(scratch, member, arguments)),
-    );
-    types.union_of(scratch, &applied)
-}
-
-/// The first of `owner` and the representations its newtype layers peel down to — a `NEWTYPE`'s,
-/// a union variant's payload — that `read` answers, stopping at a layer that is no newtype or one
-/// already peeled.
-fn through_layers<R>(
-    types: &Chain<'_, '_, '_, '_>,
-    scratch: BumpAllocator<'_>,
-    owner: KType,
-    read: impl Fn(KType) -> Option<R>,
-) -> Option<R> {
-    let mut peeled = BumpVec::new_in(scratch);
-    let mut layer = owner;
-    loop {
-        if let Some(answer) = read(layer) {
-            return Some(answer);
-        }
-        match types.member_schema(layer) {
-            Some(NodeSchema::NewType(repr)) if !peeled.contains(&repr) => {
-                peeled.push(layer);
-                layer = repr;
-            }
-            _ => return None,
-        }
-    }
 }
 
 /// What a path spelled at `site` reads, as a type: `NotAType` is a member `owner`, the module's

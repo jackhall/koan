@@ -81,11 +81,11 @@ fn seams_on(
         }
         false
     };
-    (program.facts().own_units().iter())
+    (program.facts().own_units())
         .filter(|(unit, (_, frontier))| {
             within(unit.segment) && frontier.unknowns().contains(&unknown)
         })
-        .any(|(unit, _)| seam(program, *unit).is_some_and(&at))
+        .any(|(unit, _)| seam(program, unit).is_some_and(&at))
 }
 
 /// The unknown the slot `name` of `shape` is: a type name's or a value binder's.
@@ -247,11 +247,11 @@ fn a_quote_s_hole_seams_at_its_code_s_entry() {
     loaded("LET q = #(PRINT :(LIST OF Tee))", |program| {
         let code = nested_of(program.shape(), ShapeKind::Code);
         let capture = |unknown: &Unknown| matches!(unknown.at, Address::Capture(_));
-        let seamed: Vec<_> = (program.facts().own_units().iter())
+        let seamed: Vec<_> = (program.facts().own_units())
             .filter(|(unit, (_, frontier))| {
                 unit.segment == code.segment() && frontier.unknowns().iter().any(capture)
             })
-            .map(|(unit, _)| seam(program, *unit).expect("a unit over the hole seams"))
+            .map(|(unit, _)| seam(program, unit).expect("a unit over the hole seams"))
             .collect();
         assert!(!seamed.is_empty(), "a unit of the code waits on the hole");
         assert!(
@@ -295,22 +295,42 @@ fn a_name_using_surfaces_from_a_parameter_waits_on_the_parameter() {
     });
 }
 
+/// A quote's capture of a module binder holds the module its `EVAL` hands it, which binds at the
+/// code's entry, so a unit reading it seams there. A capture no module binder sources, the `\y`
+/// mark, holds a value no binding binds, and no unit waits on it.
 #[test]
-fn a_quote_s_mark_seams_at_its_code_s_entry() {
-    loaded(&format!("{PICK}LET q = #(PICK \\y)"), |program| {
-        let code = nested_of(program.shape(), ShapeKind::Code);
+fn a_quote_s_module_capture_seams_at_its_code_s_entry() {
+    let source = format!(
+        "{COUNTER}{PICK}LET step = (FN :{{m :Counter}} -> Any = #(\n  \
+         LET q = #(PICK \\y)\n  LET r = #($m.zero)\n  r\n))"
+    );
+    loaded(&source, |program| {
+        let step = body(program, program.shape(), "step");
         let capture = |unknown: &Unknown| matches!(unknown.at, Address::Capture(_));
-        let seamed: Vec<_> = (program.facts().own_units().iter())
-            .filter(|(unit, (_, frontier))| {
-                unit.segment == code.segment() && frontier.unknowns().iter().any(capture)
-            })
-            .map(|(unit, _)| seam(program, *unit).expect("a unit over the mark seams"))
-            .collect();
-        assert!(!seamed.is_empty(), "a unit of the code waits on the mark");
+        let mut codes = Vec::new();
+        for (_, nested) in step.nested_shapes() {
+            if nested.kind() == ShapeKind::Code {
+                codes.push(*nested);
+            }
+        }
+        let [marked, read] = codes[..] else {
+            panic!("`step` quotes two codes")
+        };
+        let seamed = |code: &BodyShape<'_>| -> Vec<_> {
+            (program.facts().own_units())
+                .filter(|(unit, (_, frontier))| {
+                    unit.segment == code.segment() && frontier.unknowns().iter().any(capture)
+                })
+                .map(|(unit, _)| seam(program, unit).expect("a unit over the capture seams"))
+                .collect()
+        };
+        assert!(seamed(marked).is_empty(), "no unit waits on the mark");
+        let seamed = seamed(read);
+        assert!(!seamed.is_empty(), "a unit of the code waits on `$m`");
         assert!(
             seamed
                 .iter()
-                .all(|site| (site.segment, site.unit) == entry_of(code))
+                .all(|site| (site.segment, site.unit) == entry_of(read))
         );
     });
 }
@@ -324,19 +344,16 @@ fn a_dollar_name_in_a_quote_waits_on_the_outer_binder_s_type() {
         let f = quantified(program);
         let code = nested_of(f, ShapeKind::Code);
         let elt = unknown(program, f, "Elt");
-        assert!(
-            seams_on(program, code, |_| true, elt),
-            "the code's call reads `x` through its outer binder"
-        );
-        // The call reads its `$` capture too, which binds at the code's entry, past `f`'s.
+        // The call reads `x` through its outer binder; its `$` capture holds no module, which no
+        // binding binds, so the code's unit seams where `Elt` binds.
         assert!(
             seams_on(
                 program,
                 code,
-                |site| (site.segment, site.unit) == entry_of(code),
+                |site| (site.segment, site.unit) == entry_of(f),
                 elt
             ),
-            "the code's unit seams at the later of the two entries"
+            "the code's call reads `x` through its outer binder"
         );
     });
 }
@@ -481,9 +498,9 @@ fn a_call_reads_its_callee_s_closing_cut_to_the_caller_s_chain() {
             "`BOTH`'s closing waits on `Outer`"
         );
         let closing = facts.closing(wide.segment()).map(|(_, waits)| waits);
-        let units = (facts.own_units().iter())
+        let units = (facts.own_units())
             .filter(|(unit, _)| unit.segment == wide.segment())
-            .map(|(_, (_, waits))| *waits);
+            .map(|(_, (_, waits))| waits);
         for waits in units.chain(closing) {
             assert!(
                 !waits.unknowns().contains(&outer),

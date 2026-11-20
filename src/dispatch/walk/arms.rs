@@ -3,7 +3,10 @@
 //! ([catching.rs](catching.rs)).
 //!
 //! Each arm's guard is read as a type: a type guard's recorded expression, a value guard's scalar
-//! type, a label's variant of the closed union clause, and none for `_`. Its `it` is the
+//! type, a label's variant of the union clause, and none for `_`. A clause written over run-bound
+//! names is read by its questions — whether each label names a variant, and whether the labels
+//! cover it — and each variant, payload and `_`'s payload is the derived name a binding reads it
+//! through ([`Rule::Variant`], [`Rule::Payload`], [`Rule::Uncovered`]). Its `it` is the
 //! scrutinee retyped to that type ([`retyped_to`]), as a parameter is retyped to its declared
 //! type — a label's the variant's payload at the variant's representation — and `_`'s the
 //! scrutinee as it is, or under `UNDER` a payload of a variant no label names. Each arm is typed as
@@ -22,8 +25,10 @@
 //! — is laid in a table where every guard is closed and the arms fit one, which the run reads
 //! instead of ranking; past a table's bound, both rank by brute force ([`first_ranked`]).
 //!
-//! The `MATCH` is its kept arms' static types spanned: the chosen arm's, or else the plain union
-//! of their upper ends over the lattice meet of their lower ends where each is closed.
+//! The `MATCH` is the static types of the arms that may run spanned, as every binding agrees which
+//! do ([`arms_run`]): the chosen arm's, or else the plain union of their upper ends over the meet
+//! of their lower ends. Where a binding decides which run, each arm's type is a decided name on
+//! [`Question::Arms`], so the `MATCH` is the same at load and under every binding.
 //!
 //! See [README.md § Static types](../README.md#static-types).
 
@@ -31,11 +36,13 @@ use crate::elaborate::judge::{self, Marks};
 use crate::elaborate::{arm_shapes, variant_label, variant_named, variants};
 use crate::memory::{BumpVec, collect};
 use crate::parse::KExpression;
-use crate::scope::{Arms, BodyShape, Elimination, Guard, Scalar, ShapeError, Store, Table};
-use crate::type_lattice::{Interval, KType, Parametric, Verdict, meet};
-use crate::values::{Retype, representation, under, unknown};
+use crate::scope::{
+    ArmRunning, Arms, BodyShape, Elimination, Guard, Question, Restamp, Rule, Run, Scalar,
+    ShapeError, Store, Table, arms_run, first_ranked, guard_outranks,
+};
+use crate::type_lattice::{DeclaredType, Interval, KType, Parametric, Verdict};
+use crate::values::{representation, under, unknown};
 
-use super::super::select::{first_ranked, guard_outranks};
 use super::{Entering, Pass};
 
 /// One arm as the walk reads it: what admits a value to it, and the interval its `it` lies in.
@@ -64,8 +71,13 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             true => self.declared(level, &node.parts[3].value),
             false => None,
         };
+        // A clause over run-bound names is read by its questions ([`Named`]); one over a path is
+        // read again where its module binder's content holds, and no binding closes any other.
         let union = clause
-            .and_then(|clause| judge::closed(self, types, clause))
+            .filter(|clause| {
+                judge::names_held(types, self.scratch, *clause) != judge::Names::RunBound
+            })
+            .and_then(|clause| judge::static_of(types, clause))
             .filter(|union| variants(types, *union).is_some());
         self.armed(level, node, scrutinee, clause, union, under_union)
     }
@@ -89,10 +101,24 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             arms.extend(arm_shapes(shape, node));
             arms
         };
+        let named = match (under_union, union, clause) {
+            (true, None, Some(clause))
+                if judge::names_held(types, scratch, clause) == judge::Names::RunBound =>
+            {
+                Some(self.named(node, clause, &arms)?)
+            }
+            _ => None,
+        };
+        let clause_read = match (union, named) {
+            (Some(union), _) => Clause::Closed(union),
+            (None, Some(named)) => Clause::Named(named),
+            (None, None) => Clause::Unread,
+        };
         let mut reads = BumpVec::with_capacity_in(arms.len(), scratch);
         for arm in arms.iter() {
             let guard = arm.arm().expect("an arm knows it is one").guard;
-            let (read, retype) = self.read_arm(level, guard, scrutinee, under_union, union, &arms);
+            let (read, retype) =
+                self.read_arm(level, guard, scrutinee, under_union, clause_read, &arms);
             // The arm's site keeps its `it`'s interval and what the run re-stamps `it` at.
             let site = self.arm_site(level, arm);
             self.record_part(level, site, read.it);
@@ -111,19 +137,24 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             typed.push(last.unwrap_or_else(unknown));
         }
         // A scrutinee that never arrives takes no arm.
-        if judge::is(self, types, scrutinee.upper, KType::NEVER) {
+        if self.never_arrives(&[scrutinee.upper]) {
             return Ok(Interval::point(KType::NEVER.into()));
         }
         let verdicts = self.verdicts(scrutinee, clause, &reads);
-        let closed = (reads.iter()).all(|read| {
-            matches!(read.guard, Guard::Default)
-                || read
-                    .admits
-                    .and_then(|admits| judge::closed(self, types, admits))
-                    .is_some()
-        });
         let marks: &dyn Marks = &*self;
-        let outranks = |a: usize, b: usize| outranks(marks, types, scratch, &reads[a], &reads[b]);
+        // How each pair of arms ranks, decided where a binding does not decide it: the load ranks
+        // only where every pair is decided, and leaves the rest to the run.
+        let mut ranks = BumpVec::with_capacity_in(reads.len() * reads.len(), scratch);
+        for a in 0..reads.len() {
+            for b in 0..reads.len() {
+                ranks.push(match a == b {
+                    true => Some(false),
+                    false => outranks(marks, types, scratch, &reads[a], &reads[b]),
+                });
+            }
+        }
+        let closed = ranks.iter().all(Option::is_some);
+        let outranks = |a: usize, b: usize| ranks[a * reads.len() + b] == Some(true);
         let mut kept = BumpVec::with_capacity_in(reads.len(), scratch);
         for (at, verdict) in verdicts.iter().enumerate() {
             let dropped = match verdict {
@@ -140,11 +171,9 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 kept.push((at as u16, *verdict));
             }
         }
-        // Named only in a refusal, an end read only there.
-        let scrutinee_named = || judge::bound_above(marks, types, scratch, scrutinee.upper);
         if kept.is_empty() {
             return Err(ShapeError::NoAdmittingArm {
-                scrutinee: scrutinee_named(),
+                scrutinee: scrutinee.upper,
                 union,
                 at: node.source,
             });
@@ -174,7 +203,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                     Some(Err(count)) => {
                         return Err(ShapeError::AmbiguousArms {
                             count,
-                            scrutinee: scrutinee_named(),
+                            scrutinee: scrutinee.upper,
                             at: node.source,
                         });
                     }
@@ -194,34 +223,130 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
             };
             self.record_arms(level, self.node_site(level, node), arms);
         }
-        Ok(match chosen {
-            Some(chosen) => typed[chosen as usize],
-            None => {
-                let mut kept_types = BumpVec::with_capacity_in(kept.len(), scratch);
-                kept_types.extend(kept.iter().map(|(at, _)| typed[*at as usize]));
-                spanned(self, types, scratch, &kept_types)
+        let armed = self.arms_type(scrutinee, clause, &reads, &typed);
+        Ok(self.arriving(&[scrutinee.upper], armed))
+    }
+
+    /// The type of arms read as `reads` and typed as `typed`, over a scrutinee of the static type
+    /// `scrutinee` under the union `clause`: each arm's type on what it does as every binding
+    /// agrees ([`arms_run`]) — closed where they do, else a decided name per arm on
+    /// [`Question::Arms`] — the plain union of the upper ends of those that may run, over the meet
+    /// of their lower ends, so it is the same at load and under every binding.
+    fn arms_type(
+        &self,
+        scrutinee: Interval,
+        clause: Option<Parametric>,
+        reads: &[Read<'graph>],
+        typed: &[Interval],
+    ) -> Interval {
+        let (types, scratch) = (self.types, self.scratch);
+        let (never, any) = (Parametric::from(KType::NEVER), Parametric::from(KType::ANY));
+        let arms = collect(
+            scratch,
+            (reads.iter()).map(|read| ArmRunning {
+                guard: read.guard.kind(),
+                admits: read.admits,
+            }),
+        );
+        let answers = arms_run(types, scratch, scrutinee, clause, arms);
+        let (mut lower, mut uppers) = (any, BumpVec::with_capacity_in(typed.len(), scratch));
+        for (at, each) in typed.iter().enumerate() {
+            let (low, up) = match &answers {
+                Some(answers) => match answers[at] {
+                    Run::Never => (any, never),
+                    Run::May | Run::Selected => (each.lower, each.upper),
+                },
+                None => {
+                    let question = Question::Arms {
+                        scrutinee,
+                        clause,
+                        arms,
+                        arm: at as u16,
+                    };
+                    let decided = |arms: &[Parametric], undecided| {
+                        judge::decided(self, types, scratch, (question, arms), undecided)
+                    };
+                    (
+                        decided(&[any, each.lower, each.lower], never),
+                        decided(&[never, each.upper, each.upper], each.upper),
+                    )
+                }
+            };
+            lower = judge::met(self, types, scratch, lower, low).unwrap_or(never);
+            uppers.push(up);
+        }
+        Interval {
+            lower,
+            upper: types.union_of(scratch, &uppers),
+        }
+    }
+
+    /// The union clause `clause` of the `MATCH … UNDER` `node`, written over run-bound names,
+    /// read by its questions: whether each label among `arms` names a variant of it, and whether
+    /// the labelled variants cover it or, beside a `_` arm, whether it is a union at all
+    /// ([`Rule::Variant`], [`Rule::Covered`], [`Rule::Uncovered`]). A binding answering no refuses,
+    /// and the closed walk words the refusal. Each labelled variant is the derived name a binding
+    /// reads it through.
+    fn named(
+        &self,
+        node: &'graph KExpression<'graph>,
+        clause: Parametric,
+        arms: &[&'graph BodyShape<'graph>],
+    ) -> Result<Named<'p>, ShapeError<'o>> {
+        let (types, scratch) = (self.types, self.scratch);
+        let refused = ShapeError::NotUnion {
+            clause,
+            at: node.source,
+        };
+        let operand = [DeclaredType::Type(clause)];
+        let mut operands = BumpVec::with_capacity_in(arms.len() + 1, scratch);
+        operands.push(DeclaredType::Type(clause));
+        let mut defaulted = false;
+        for arm in arms {
+            match arm.arm().expect("an arm knows it is one").guard {
+                Guard::Label(label) => {
+                    let rule = Rule::Variant(label);
+                    if judge::defined(self, types, scratch, rule, &operand).0 == Some(false) {
+                        return Err(refused);
+                    }
+                    let variant = judge::ruled_one(self, types, scratch, rule, &operand);
+                    operands.push(DeclaredType::Type(variant.unwrap_or(KType::ANY.into())));
+                }
+                Guard::Default => defaulted = true,
+                Guard::Type(_) | Guard::Value(_) => {}
             }
+        }
+        let rule = if defaulted {
+            Rule::Uncovered
+        } else {
+            Rule::Covered
+        };
+        if judge::defined(self, types, scratch, rule, &operands).0 == Some(false) {
+            return Err(refused);
+        }
+        Ok(Named {
+            clause,
+            operands: operands.leak(),
         })
     }
 
     /// How the arm guarded by `guard` reads a scrutinee of the static type `scrutinee` — under a
-    /// union clause where `under_union`, `union` where the load closed it — among `arms`, beside
-    /// what its `it` is re-stamped at where the load closed the guard's type.
+    /// union clause where `under_union`, read as `clause` — among `arms`, beside what its `it` is
+    /// re-stamped at where the load knows the guard's type.
     fn read_arm(
         &self,
         level: usize,
         guard: Guard<'graph>,
         scrutinee: Interval,
         under_union: bool,
-        union: Option<KType>,
+        clause: Clause<'p>,
         arms: &[&'graph BodyShape<'graph>],
-    ) -> (Read<'graph>, Option<Retype>) {
+    ) -> (Read<'graph>, Option<Restamp>) {
         let (types, scratch) = (self.types, self.scratch);
         let retyped = |declared: Option<Parametric>| match declared {
             Some(declared) => (
                 judge::retyped(self, types, scratch, declared),
-                judge::closed(self, types, declared)
-                    .map(|closed| Retype::of(types, scratch, closed)),
+                judge::restamp(self, types, scratch, declared),
             ),
             None => (unknown(), None),
         };
@@ -234,19 +359,43 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
                 let admits: Parametric = scalar_type(scalar).into();
                 (Some(admits), (Interval::point(admits), None))
             }
-            Guard::Label(label) => {
-                let variant = union.and_then(|union| variant_named(types, union, label));
-                let payload = variant.and_then(|variant| representation(types, scratch, variant));
-                (
-                    variant.map(Parametric::from),
-                    retyped(payload.map(Parametric::from)),
-                )
-            }
+            Guard::Label(label) => match clause {
+                Clause::Closed(union) => {
+                    let variant = variant_named(types, union, label);
+                    let payload =
+                        variant.and_then(|variant| representation(types, scratch, variant));
+                    (
+                        variant.map(Parametric::from),
+                        retyped(payload.map(Parametric::from)),
+                    )
+                }
+                // Over names, the variant and its payload a binding reads.
+                Clause::Named(named) => {
+                    let operand = [DeclaredType::Type(named.clause)];
+                    let read = |rule| judge::ruled_one(self, types, scratch, rule, &operand);
+                    (
+                        read(Rule::Variant(label)),
+                        retyped(read(Rule::Payload(label))),
+                    )
+                }
+                Clause::Unread => (None, retyped(None)),
+            },
             Guard::Default => {
-                let it = match (under_union, union) {
+                let it = match (under_union, clause) {
                     (false, _) => scrutinee,
-                    (true, Some(union)) => self.uncovered_payload(union, arms),
-                    (true, None) => unknown(),
+                    (true, Clause::Closed(union)) => self.uncovered_payload(union, arms),
+                    (true, Clause::Named(named)) => {
+                        let operands = (Rule::Uncovered, named.operands);
+                        let undecided = [KType::NEVER.into(), KType::ANY.into()];
+                        match judge::ruled(self, types, scratch, operands, &undecided) {
+                            Some([lower, upper]) => Interval {
+                                lower: *lower,
+                                upper: *upper,
+                            },
+                            _ => unknown(),
+                        }
+                    }
+                    (true, Clause::Unread) => unknown(),
                 };
                 (None, (it, None))
             }
@@ -291,7 +440,7 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     ) -> BumpVec<'p, Verdict> {
         let (types, scratch) = (self.types, self.scratch);
         let judge = |admits: Parametric, may_always: bool| {
-            if judge::never_satisfies(self, types, scratch, scrutinee, admits).is_some() {
+            if judge::never_satisfied(self, types, scratch, scrutinee, admits) {
                 Verdict::Never
             } else if may_always && judge::fits(self, types, scratch, scrutinee.upper, admits) {
                 Verdict::Always
@@ -321,6 +470,25 @@ impl<'p, 'o: 'p, 'graph: 'o + 'p, 'tier: 'o, S: Store<'o>>
     }
 }
 
+/// What the load reads of a `MATCH … UNDER`'s union clause.
+#[derive(Clone, Copy)]
+enum Clause<'p> {
+    /// A union the load closed.
+    Closed(KType),
+    /// A clause written over run-bound names, read by its questions.
+    Named(Named<'p>),
+    /// A clause the load does not read: none, or one it leaves to the run.
+    Unread,
+}
+
+/// A union clause written over run-bound names ([`Pass::named`]): the clause, and the operands of
+/// the rules over it, the clause beside each labelled variant's derived name.
+#[derive(Clone, Copy)]
+struct Named<'p> {
+    clause: Parametric,
+    operands: &'p [DeclaredType<Parametric>],
+}
+
 /// The type a value guard's scalar is.
 fn scalar_type(scalar: Scalar<'_>) -> KType {
     match scalar {
@@ -338,17 +506,35 @@ fn outranks(
     scratch: crate::memory::BumpAllocator<'_>,
     a: &Read<'_>,
     b: &Read<'_>,
-) -> bool {
-    let closed = |read: &Read<'_>| {
-        read.admits
-            .and_then(|admits| judge::closed(marks, types, admits))
+) -> Option<bool> {
+    let (Guard::Type(_), Guard::Type(_), Some(x), Some(y)) = (a.guard, b.guard, a.admits, b.admits)
+    else {
+        // No other pair ranks by its types.
+        return Some(guard_outranks(
+            types,
+            scratch,
+            (a.guard.kind(), None),
+            (b.guard.kind(), None),
+        ));
     };
-    guard_outranks(types, scratch, (a.guard, closed(a)), (b.guard, closed(b)))
+    if let (Some(x), Some(y)) = (judge::static_of(types, x), judge::static_of(types, y)) {
+        return Some(guard_outranks(
+            types,
+            scratch,
+            (a.guard.kind(), Some(x)),
+            (b.guard.kind(), Some(y)),
+        ));
+    }
+    // A type guard outranks one it lies strictly under: the order both ways.
+    match judge::under_decided(marks, types, scratch, x, y)? {
+        false => Some(false),
+        true => Some(!judge::under_decided(marks, types, scratch, y, x)?),
+    }
 }
 
-/// The static types `typed` spanned — a `MATCH`'s kept arms', or a `TRY`'s body's beside its kept
-/// arms': the plain union of their upper ends, over the lattice meet of their lower ends where every
-/// one is closed and `Never` otherwise.
+/// The static types `typed` spanned — a `TRY`'s body's beside its arms': the plain union of their
+/// upper ends, over the meet of their lower ends through the meet rule ([`judge::met`]), so it is
+/// the same at load and under every binding.
 pub(super) fn spanned(
     marks: &dyn Marks,
     types: &crate::values::Chain<'_, '_, '_, '_>,
@@ -358,14 +544,10 @@ pub(super) fn spanned(
     let mut uppers = BumpVec::with_capacity_in(typed.len(), scratch);
     uppers.extend(typed.iter().map(|each| each.upper));
     let upper = types.union_of(scratch, &uppers);
-    let mut lower = Some(KType::ANY);
+    let never = Parametric::from(KType::NEVER);
+    let mut lower = Parametric::from(KType::ANY);
     for each in typed {
-        lower = lower
-            .zip(judge::closed(marks, types, each.lower))
-            .map(|(met, lower)| meet(types, scratch, met, lower));
+        lower = judge::met(marks, types, scratch, lower, each.lower).unwrap_or(never);
     }
-    Interval {
-        lower: lower.map_or(KType::NEVER.into(), Parametric::from),
-        upper,
-    }
+    Interval { lower, upper }
 }

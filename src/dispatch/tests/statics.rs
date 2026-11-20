@@ -600,8 +600,9 @@ fn a_surfaced_head_reads_the_ascription_s_pins() {
                 program.symbols()
             )
             .to_string(),
-            ":(LIST OF Elt)",
-            "an unpinned parameter reads as the block's own type name"
+            "(ONE OF Never, :(LIST OF Elt), :(LIST OF Elt))",
+            "an unpinned parameter reads as the block's own type name: at most the head's return \
+             while the head is open, exactly it once a binding closes the head and retypes to it"
         );
     });
 }
@@ -880,4 +881,46 @@ fn a_container_literal_is_typed_by_its_cells_filled_types() {
             assert_eq!(binder(program, program.shape(), "l"), typed);
         });
     }
+}
+
+/// A lexical variable bounded by `{f :Number}`: a body with `x.f` and `#[f] FROM x` over
+/// `x :Elt`, each read into a binder of its own.
+const FIELD_READS: &str = "EXPR FOR ALL #{Elt: :{f :Number, g :Str}} #(GET x :Elt) -> Any = #(\n  \
+                           LET y = x.f\n  LET z = x.f\n  LET p = (#[f] FROM x)\n  y\n)";
+
+/// A field of a value typed by a lexical variable whose bound guarantees it is at most the
+/// variable's projection there, and two reads of one field are one type.
+#[test]
+fn a_field_of_a_lexical_variable_is_at_most_its_projection() {
+    loaded(FIELD_READS, |program| {
+        let get = super::frontiers::quantified(program);
+        assert_eq!(
+            ends(program, interval(program, get, "y")),
+            "[(ONE OF Never, (RETYPED TO (FIELD f OF Elt))), (FIELD f OF Elt)]"
+        );
+        assert_eq!(upper(program, get, "y"), upper(program, get, "z"));
+        // `Never` where `Elt` is, since no record holds a field at `Never`.
+        assert_eq!(
+            binder(program, get, "p"),
+            "(ONE OF :{f :(FIELD f OF Elt)}, Never)"
+        );
+    });
+}
+
+/// The projection lies under its bound's field, so a return the field can never satisfy still
+/// refuses the load, worded at the bound's field; and a call reads the field of what it is handed.
+#[test]
+fn a_field_of_a_lexical_variable_is_checked_at_its_bound_and_read_at_its_binding() {
+    assert_eq!(
+        run("EXPR FOR ALL #{Elt: :{f :Number}} #(GET x :Elt) -> Str = #(x.f)"),
+        "load: <test>:1:59: this body returns Number, which can never satisfy its declared \
+         return Str"
+    );
+    assert_eq!(
+        run(
+            "EXPR FOR ALL #{Elt: :{f :Number}} #(GET x :Elt) -> Number = #(x.f)\n\
+             PRINT (GET {f = 1})"
+        ),
+        "1"
+    );
 }

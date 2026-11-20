@@ -87,7 +87,7 @@ fn output() -> Output {
 
 /// Load `source` under dispatch and run it: every line it wrote, one per write, or the load's
 /// refusal as `load: <diagnostic>`.
-fn run(source: &str) -> String {
+pub(super) fn run(source: &str) -> String {
     WRITTEN.with(|written| written.borrow_mut().clear());
     let mut substrate =
         match CellSubstrate::load::<Koan>(source, "<test>", 8, BuildBudget::default(), output()) {

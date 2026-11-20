@@ -6,17 +6,18 @@
 //! wrote. Each store keeps one, and lays it into a [`LoadFacts`] once its walk returns.
 
 use super::closed::ClosedTypes;
+use super::derived::{Derived, DerivedName};
 use std::cell::Cell;
 
 use crate::memory::{BumpAllocator, BumpBackedMap, BumpVec, Lays, bump_table, resident};
 
 use super::facts::{Binding, Frontier, UnitId};
-use super::records::{Closing, LoadFacts, UnitFacts};
+use super::records::{Closing, LoadFacts, UnitRecord};
 use super::shape::{Segment, UnitIndex};
 use super::shapes::Shapes;
 
-/// A unit's record beside its frontier.
-type Unit<'o> = (&'o UnitFacts<'o>, Frontier<'o>);
+/// A unit's record: its facts beside its frontier, or the mark that the walk did not reach it.
+type Unit<'o> = UnitRecord<'o>;
 
 /// An owning body's closing record beside its frontier.
 type Close<'o> = (&'o Closing<'o>, Frontier<'o>);
@@ -113,9 +114,9 @@ impl<'o, 'p> Writes<'o, 'p> {
         self.closings[body.index() as usize].get()
     }
 
-    pub fn write(&self, unit: UnitId, facts: &'o UnitFacts<'o>, frontier: Frontier<'o>) {
+    pub fn write(&self, unit: UnitId, record: Unit<'o>) {
         debug_assert!(self.units.get(unit).is_none(), "a walk runs each unit once");
-        self.units.set(unit, (facts, frontier));
+        self.units.set(unit, record);
     }
 
     pub fn write_close(&self, body: Segment, closing: &'o Closing<'o>, frontier: Frontier<'o>) {
@@ -131,6 +132,7 @@ impl<'o, 'p> Writes<'o, 'p> {
         lay: impl Lays<'o>,
         scratch: BumpAllocator<'_>,
         base: Option<&'o LoadFacts<'o>>,
+        derived: Derived<'o>,
         binding: Binding<'o>,
     ) -> LoadFacts<'o> {
         let mut units = BumpVec::new_in(scratch);
@@ -142,7 +144,16 @@ impl<'o, 'p> Writes<'o, 'p> {
                 closings.push((self.shapes.bodies()[at].segment(), record));
             }
         }
-        LoadFacts::of_records(lay, scratch, self.shapes, base, binding, &units, &closings)
+        LoadFacts::of_records(
+            lay,
+            scratch,
+            self.shapes,
+            base,
+            derived,
+            binding,
+            &units,
+            &closings,
+        )
     }
 }
 
@@ -154,6 +165,8 @@ pub struct KeyedWrites<'o, 'p> {
     closings: Cell<BumpBackedMap<'p, Segment, Close<'o>>>,
     /// The table of closed types the walk laid for what it absorbed.
     closed: Cell<ClosedTypes<'o>>,
+    /// Each derived name the walk met that no layer beneath held, in the order met.
+    derived: Cell<BumpVec<'p, DerivedName<'p>>>,
 }
 
 impl<'o, 'p> KeyedWrites<'o, 'p> {
@@ -164,7 +177,34 @@ impl<'o, 'p> KeyedWrites<'o, 'p> {
             units: Cell::new(bump_table(scratch)),
             closings: Cell::new(bump_table(scratch)),
             closed: Cell::new(ClosedTypes::EMPTY),
+            derived: Cell::new(BumpVec::new_in(scratch)),
         }
+    }
+
+    /// `read` of the derived names laid so far, which it holds meanwhile.
+    fn names<R>(&self, read: impl FnOnce(&mut BumpVec<'p, DerivedName<'p>>) -> R) -> R {
+        let mut names = self.derived.replace(BumpVec::new_in(self.scratch));
+        let read = read(&mut names);
+        self.derived.set(names);
+        read
+    }
+
+    /// The derived name the walk laid whose id is `id`, where it laid one.
+    pub fn derived_name(&self, id: crate::type_lattice::DerivedId) -> Option<DerivedName<'p>> {
+        self.names(|names| names.iter().find(|name| name.id == id).copied())
+    }
+
+    /// Keep `name`, a derived name the walk met that no layer beneath holds, its term laid in the
+    /// walk's scratch.
+    pub fn write_derived(&self, name: DerivedName<'_>) -> DerivedName<'p> {
+        let name = name.laid(self.scratch);
+        self.names(|names| names.push(name));
+        name
+    }
+
+    /// The derived names the walk laid, as a table laid through `lay`.
+    pub fn derived<'to>(&self, lay: impl Lays<'to>, scratch: BumpAllocator<'_>) -> Derived<'to> {
+        self.names(|names| Derived::sorted(lay, scratch, names))
     }
 
     /// The table of closed types the walk laid for what it absorbed.
@@ -208,8 +248,8 @@ impl<'o, 'p> KeyedWrites<'o, 'p> {
         self.closings(|closings| closings.get(&body).copied())
     }
 
-    pub fn write(&self, unit: UnitId, facts: &'o UnitFacts<'o>, frontier: Frontier<'o>) {
-        let held = self.units(|units| units.insert(unit, (facts, frontier)));
+    pub fn write(&self, unit: UnitId, record: Unit<'o>) {
+        let held = self.units(|units| units.insert(unit, record));
         debug_assert!(held.is_none(), "a walk runs each unit once");
     }
 
@@ -240,12 +280,21 @@ impl<'o, 'p> KeyedWrites<'o, 'p> {
         binding: Binding<'o>,
     ) -> LoadFacts<'o> {
         let (units, closings) = self.sorted(scratch);
-        let facts = LoadFacts::of_records(lay, scratch, shapes, base, binding, &units, &closings);
+        let facts = LoadFacts::of_records(
+            lay,
+            scratch,
+            shapes,
+            base,
+            self.derived(lay, scratch),
+            binding,
+            &units,
+            &closings,
+        );
         match self.closed().is_empty() {
             true => facts,
             false => facts.rebased(resident(
                 lay,
-                (*facts.base_layer()).with_closed(self.closed().copied(lay)),
+                (*facts.base_layer()).with_closed(self.closed().copied(lay, |tree| tree)),
             )),
         }
     }

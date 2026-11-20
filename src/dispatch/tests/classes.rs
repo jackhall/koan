@@ -344,6 +344,12 @@ fn a_module_capturing_a_local_is_read_through_it() {
             "a type capture of the body's own variable"
         );
     });
+    // A view over that module reads the parameter and the `FOR ALL` name the module captures.
+    let viewed = source.replace("(PEEK pack)", "(LET w = (pack :| Holder))");
+    loaded(&format!("{COUNTER}{viewed}"), |program| {
+        let f = body(program, module_body(program, "lib"), "f");
+        assert_eq!(rendered(program.facts().class(f)), "sealed 2 caches");
+    });
 }
 
 #[test]

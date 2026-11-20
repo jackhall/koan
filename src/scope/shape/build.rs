@@ -80,7 +80,7 @@ use crate::symbols::{
 };
 use crate::values::{Chain, ContentDigest, Knotted, Types, admits_part};
 
-use crate::type_lattice::{DeclaredGroup, KType, ReductionMode, dense_classes};
+use crate::type_lattice::{DeclaredGroup, Interval, KType, ReductionMode, dense_classes};
 
 use super::super::builtins::{BuiltinNames, Builtins};
 use super::super::channels::Channels;
@@ -2390,7 +2390,10 @@ impl<'graph, 'x, 'e> Builder<'graph, 'x, 'e> {
         {
             let site = self.site(level, part);
             return Err(ShapeError::BodyNotCode {
-                value: KType::BOOL.into(),
+                refused: super::NeverSatisfied {
+                    value: Interval::point(KType::BOOL.into()),
+                    wanted: KType::ANY_CODE.into(),
+                },
                 at: self.part_source(level, statement, site),
             });
         }

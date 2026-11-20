@@ -154,6 +154,8 @@ pub enum Tag {
     Spine = 0x3B,
     /// An answered question: the question, its types and the answer.
     Answered = 0x3C,
+    /// A derived name's term: a rule's output over its operands, or a question beside its arms.
+    Derived = 0x3D,
 }
 
 /// The one hasher every digest is computed through: a tag first, then payload, then each part's
@@ -549,9 +551,9 @@ pub fn lone_member(content: ContentDigest) -> ContentDigest {
 
 /// A closure's content: its body's `code` digest, the solution it is an instance at, and the
 /// digest of each capture its code digest does not name, beside its slot.
-pub fn function_content(
+pub fn function_content<T: Hash>(
     code: ContentDigest,
-    instance: &[KType],
+    instance: &[T],
     captures: impl Iterator<Item = (usize, ContentDigest)>,
 ) -> ContentDigest {
     let mut hasher = DigestHasher::new(Tag::Function);
@@ -592,9 +594,9 @@ pub enum Operator {
 /// member's digest and `from`, the substitution its fit solved — a signature declaring each
 /// binding a manifest member. The load keys a view whose fit it cannot compute on no `from`, a key
 /// no run digests.
-pub fn view_content(
+pub fn view_content<T: Hash>(
     operator: Operator,
-    application: KType,
+    application: T,
     source: ContentDigest,
     from: Option<KType>,
 ) -> ContentDigest {
@@ -613,7 +615,7 @@ pub fn view_content(
 /// A knot member's digest where it is seen at `carried`, a type other than its own: the type, over
 /// the bare `member`'s digest. A member's content is its knot's, never the members a type shows,
 /// so a type hiding a brand keeps the brand in the digest.
-pub fn retyped_content(carried: DeclaredType<KType>, member: ContentDigest) -> ContentDigest {
+pub fn retyped_content<T: Hash>(carried: DeclaredType<T>, member: ContentDigest) -> ContentDigest {
     DigestHasher::new(Tag::Retyped)
         .feed(carried)
         .digest(member)

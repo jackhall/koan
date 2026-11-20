@@ -22,7 +22,7 @@ use super::shape::{
     Position, Segment, ShapeError, ShapeKind, Site, Slot, Target, UnitIndex, follow,
 };
 use super::signature::declare_quantifiers;
-use super::typed::{Handoff, ViewSlots};
+use super::typed::{Handoff, Root, ViewSlots};
 
 mod memos;
 mod tails;
@@ -98,17 +98,18 @@ pub enum Origin<'graph> {
 #[derive(Clone, Copy)]
 struct Levels<'graph> {
     /// Each run-bound type name the shape declares, by level, beside where its activation holds
-    /// it: its own `FOR ALL` names in written order, its other type names in slot order, then — at
-    /// a chain root — its captures naming a type.
+    /// it: its own `FOR ALL` names in written order, its other type names in slot order, then its
+    /// captures naming a type that no body around it binds — every one at a chain root, and at a
+    /// quote's code each one its `EVAL` or its entry binds.
     homes: &'graph [(usize, Target)],
     /// [`homes`](Self::homes) by where the activation holds each name, sorted.
     levels_by_home: &'graph [(Target, usize)],
     /// The level of each of [`BodyShape::spelled`]'s paths, parallel to it: `None` for one that
     /// names no identity.
     paths: &'graph [Option<usize>],
-    /// A callable's or a `MODULE` body's closure layout past its builder captures: each run-bound
-    /// type name of the bodies around it on its chain that is bound when its birth runs, by level,
-    /// beside where the birth reads it in the activation around it.
+    /// A callable's, a `MODULE` body's or a written quote's code's closure layout past its builder
+    /// captures: each run-bound type name of the bodies around it on its chain that is bound when
+    /// its birth runs, by level, beside where the birth reads it in the activation around it.
     layout: &'graph [(usize, Coordinate)],
 }
 
@@ -185,15 +186,16 @@ impl<'graph> Shapes<'graph> {
                 layout: &[],
             },
         );
-        for body in bodies {
-            if matches!(body.kind(), ShapeKind::Program | ShapeKind::Code) {
-                number_chain(writer, scratch, body, &mut levels);
-            }
-        }
+        // The root numbers the one chain: a quote's code written in it lies on it too.
+        let root = bodies.last().expect("a load builds its root");
+        number_chain(writer, scratch, root, &mut levels);
         // A body's encloser seals after it, so walking the segments down lays each encloser's
         // layout before any body nested in it reads it.
         for body in bodies.iter().rev() {
-            if matches!(body.kind(), ShapeKind::Callable | ShapeKind::Module) {
+            let nested = parents[body.segment().index() as usize].is_some();
+            if matches!(body.kind(), ShapeKind::Callable | ShapeKind::Module)
+                || (body.kind() == ShapeKind::Code && nested)
+            {
                 let table = Table {
                     bodies,
                     parents,
@@ -313,6 +315,32 @@ impl<'graph> Shapes<'graph> {
         Some(segment)
     }
 
+    /// The unknown `unknown` reads, where it is a capture crossing into a quote's code: the name
+    /// its source reads where the code is born. A module binder's capture carries the module its
+    /// source holds, so a binding of the source gives the capture's carried type.
+    pub fn crossed(&self, unknown: Unknown) -> Option<Unknown> {
+        let Address::Capture(capture) = unknown.at else {
+            return None;
+        };
+        let shape = self.shape_at(unknown.segment);
+        if shape.kind() != ShapeKind::Code {
+            return None;
+        }
+        let CaptureSource::Read(Coordinate::Activation { hops, target }) =
+            shape.captures()[capture.index()].source
+        else {
+            return None;
+        };
+        let born = self.up(self.parent(unknown.segment)?.0, hops)?;
+        Some(Unknown {
+            segment: born,
+            at: match target {
+                Target::Local(slot) => Address::Slot(slot),
+                Target::Capture(capture) => Address::Capture(capture),
+            },
+        })
+    }
+
     /// Whether `outer` is `inner` or a body around it. A body's segment exceeds every body's it
     /// encloses ([`Segment`]), so the walk up stops once it reaches `outer`'s segment.
     pub fn encloses(&self, outer: Segment, mut inner: Segment) -> bool {
@@ -381,6 +409,23 @@ impl Shapes<'_> {
         self.levels[segment.index() as usize].home(level)
     }
 
+    /// The unknown the run-bound type name at `level` is, read from `segment`: the first body
+    /// outward from it that homes the level.
+    pub fn unknown_of_level(&self, mut segment: Segment, level: usize) -> Option<Unknown> {
+        loop {
+            if let Some(target) = self.home(segment, level) {
+                return Some(Unknown {
+                    segment,
+                    at: match target {
+                        Target::Local(slot) => Address::Slot(slot),
+                        Target::Capture(capture) => Address::Capture(capture),
+                    },
+                });
+            }
+            segment = self.parent(segment)?.0;
+        }
+    }
+
     /// The level of the run-bound type name `address` of `segment`; `None` for any other address.
     pub fn level(&self, segment: Segment, address: Address) -> Option<usize> {
         let target = match address {
@@ -400,20 +445,19 @@ impl Shapes<'_> {
         self.levels[segment.index() as usize].paths[index]
     }
 
-    /// The chain root `segment` lies on: the program, or the quote's code around it.
+    /// The chain root `segment` lies on: the program, or the composed code it lies in.
     pub fn chain_root(&self, mut segment: Segment) -> Segment {
-        loop {
-            match self.shape_at(segment).kind() {
-                ShapeKind::Program | ShapeKind::Code => return segment,
-                _ => segment = self.parent(segment).expect("a chain has a root").0,
-            }
+        while let Some((parent, _)) = self.parent(segment) {
+            segment = parent;
         }
+        segment
     }
 }
 
 /// Number the chain `root` roots: each shape's names after its encloser's, siblings alike, then
 /// each spelled path identity past every name level, in first-spelling order over the chain's
-/// shapes in program order.
+/// shapes in program order. An expression written in place is its shape's own: a quote and the
+/// bodies traced from its code spell one site, and each evaluates it apart.
 fn number_chain<'graph>(
     writer: Writer<'graph, '_>,
     scratch: BumpAllocator<'_>,
@@ -423,13 +467,15 @@ fn number_chain<'graph>(
     let mut order = BumpVec::new_in(scratch);
     let top = number_names(writer, scratch, root, true, 0, levels, &mut order);
     // Each path identity's index, handed out in first-spelling order.
-    let mut identities: BumpBackedMap<'_, PathId<'graph>, usize> = bump_table(scratch);
+    let mut identities: BumpBackedMap<'_, (Option<Segment>, PathId<'graph>), usize> =
+        bump_table(scratch);
     for shape in order.iter() {
         let mut paths = BumpVec::with_capacity_in(shape.spelled().len(), scratch);
         for spelled in shape.spelled() {
             paths.push(spelled.id.map(|id| {
+                let inline = matches!(id.root, Root::Inline { .. }).then_some(shape.segment());
                 let next = identities.len();
-                top + *identities.entry(id).or_insert(next)
+                top + *identities.entry((inline, id)).or_insert(next)
             }));
         }
         levels[shape.segment().index() as usize].paths = collect(writer, paths.iter().copied());
@@ -467,11 +513,15 @@ fn number_names<'graph>(
             homes.push(Target::Local(slot));
         }
     }
-    if root {
-        for (index, capture) in shape.captures().iter().enumerate() {
-            if matches!(capture.name, BinderSymbol::Type(_)) {
-                homes.push(Target::Capture(CaptureSlot(index as u32)));
-            }
+    // A type name a quote's code reads through `$` is the name it reads; one bound at the code's
+    // entry or by its `EVAL` is the code's own.
+    for (index, capture) in shape.captures().iter().enumerate() {
+        let entered = match capture.source {
+            CaptureSource::Read(_) | CaptureSource::Member { .. } => root,
+            CaptureSource::Hole | CaptureSource::Offered | CaptureSource::Entry { .. } => true,
+        };
+        if entered && matches!(capture.name, BinderSymbol::Type(_)) {
+            homes.push(Target::Capture(CaptureSlot(index as u32)));
         }
     }
     let next = base + homes.len();
@@ -484,10 +534,8 @@ fn number_names<'graph>(
     shape_levels.levels_by_home = collect(writer, by_home.iter().copied());
     let mut deepest = next;
     for (_, nested) in shape.nested_shapes() {
-        if nested.kind() != ShapeKind::Code {
-            let past = number_names(writer, scratch, nested, false, next, levels, order);
-            deepest = deepest.max(past);
-        }
+        let past = number_names(writer, scratch, nested, false, next, levels, order);
+        deepest = deepest.max(past);
     }
     deepest
 }
@@ -505,8 +553,9 @@ fn own_quantifiers(form: &KExpression<'_>, into: &mut BumpVec<'_, BinderSymbol>)
 }
 
 impl Shapes<'_> {
-    /// The closure layout of `segment` past its builder captures, a callable's or a `MODULE`
-    /// body's: entry `i` is closure slot `captures().len() + i`. Empty for any other kind.
+    /// The closure layout of `segment` past its builder captures, a callable's, a `MODULE` body's or
+    /// a written quote's code's: entry `i` is closure slot `captures().len() + i`. Empty for any
+    /// other kind, and for composed code, which roots a chain of its own.
     pub fn layout(&self, segment: Segment) -> &[(usize, Coordinate)] {
         self.levels[segment.index() as usize].layout
     }
@@ -540,8 +589,8 @@ impl<'graph> Table<'_, 'graph> {
         self.parents[segment.index() as usize]
     }
 
-    /// The layout of `segment`, a callable or a `MODULE` body: see [`Levels::layout`]. Reads the
-    /// layouts of the bodies around it, which must be laid.
+    /// The layout of `segment`, a callable, a `MODULE` body or a written quote's code: see
+    /// [`Levels::layout`]. Reads the layouts of the bodies around it, which must be laid.
     fn layout_of(
         &self,
         writer: Writer<'graph, '_>,
@@ -566,10 +615,10 @@ impl<'graph> Table<'_, 'graph> {
                     entries.push((*level, read));
                 }
             }
-            if matches!(enclosing.kind(), ShapeKind::Program | ShapeKind::Code) {
+            let Some(parent) = self.parent(holder) else {
                 break;
-            }
-            (holder, statement) = self.parent(holder).expect("a nested body has a parent");
+            };
+            (holder, statement) = parent;
         }
         entries.sort_unstable_by_key(|(level, _)| *level);
         collect(writer, entries.iter().copied())
@@ -589,7 +638,7 @@ impl<'graph> Table<'_, 'graph> {
                     at = self.parent(at)?.0;
                     hops += 1;
                 }
-                ShapeKind::Callable | ShapeKind::Module => {
+                ShapeKind::Callable | ShapeKind::Module | ShapeKind::Code => {
                     let index = (levels.layout)
                         .binary_search_by_key(&level, |(held, _)| *held)
                         .ok()?;
@@ -600,7 +649,7 @@ impl<'graph> Table<'_, 'graph> {
                         )),
                     });
                 }
-                ShapeKind::Program | ShapeKind::Code => return None,
+                ShapeKind::Program => return None,
             }
         }
     }

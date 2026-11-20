@@ -605,6 +605,23 @@ fn a_view_over_a_module_bound_in_an_activation_is_refused_where_it_shows_what_th
 }
 
 #[test]
+fn a_view_a_binder_holds_over_a_module_bound_in_an_activation_is_refused_where_it_shows_what_the_module_hides()
+ {
+    // As above, the view bound by a `LET`: its unit is absorbed under the binding, and the tree
+    // the binding substitutes refuses at the view's site, as a fresh load does.
+    let source = format!(
+        "{BOUND_VIEWS}LET f = (FN :{{x :(Inner WITH {{Elem = Any, Extra = Str}})}} -> Any = \
+         #((LET w = (x :| (Inner WITH {{Elem = Any, Extra = Str}}))) w.two))\n"
+    );
+    assert_eq!(super::run(&format!("{source}PRINT (f {{x = arg}})\n")), "a");
+    let refused = super::run(&format!("{source}PRINT (f {{x = (arg :| First)}})\n"));
+    assert!(
+        refused.contains("<test>:4:78: this view shows `one` where its source hides it"),
+        "{refused}"
+    );
+}
+
+#[test]
 fn a_captured_layer_over_a_keyed_settlement_wakes_its_units() {
     // `g` keys a settlement on `k`, load content, which leaves `r` open; what `r`'s statement
     // decided leaves `k` open. The call wakes the units both leave open, and decides them.

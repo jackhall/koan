@@ -201,22 +201,51 @@ pub fn functions_at<'graph, 'cell, 'x>(
     found
 }
 
-/// What a header carrying `carried` offers for each keyworded member, by its position among
-/// [`keyworded_members`], over a body-born module whose registrations register at `registered`
-/// in their run's order: [`functions_at`]'s pick, recorded where the load sees all of the module.
+/// What a header carrying `carried`, written over names or not, offers for each keyworded member,
+/// by its position among [`keyworded_members`], over a body-born module whose registrations
+/// register at `registered` in their run's order: [`functions_at`]'s pick, recorded where the
+/// load sees all of the module. Over names, whether two members are one is `same`'s answer and
+/// whether a registration covers a member `covers`', as [`covered`] judges them closed: `None`
+/// where some cover is undecided, or `carried` spells no application.
 pub fn header_picks<'x>(
-    carried: KType,
+    carried: Parametric,
     registered: &[DeclaredType<KType>],
-    types: &Chain<'_, '_, '_, '_>,
-    scratch: BumpAllocator<'x>,
+    (types, scratch): (&Chain<'_, '_, '_, '_>, BumpAllocator<'x>),
+    same: &mut dyn FnMut(DeclaredType<Parametric>, DeclaredType<Parametric>) -> bool,
+    covers: &mut dyn FnMut(DeclaredType<KType>, DeclaredType<Parametric>) -> Option<bool>,
 ) -> Option<BumpVec<'x, (u16, BumpVec<'x, u32>)>> {
-    let members = keyworded_members(carried, types, scratch);
+    let reads = keyworded_reads(carried, types, scratch);
+    if reads.is_empty() && types.concrete(carried).is_none() {
+        return None;
+    }
+    let mut members: BumpVec<'_, DeclaredType<Parametric>> = BumpVec::new_in(scratch);
+    for read in reads {
+        if !members.iter().any(|held| same(*held, read)) {
+            members.push(read);
+        }
+    }
     let mut picks = BumpVec::with_capacity_in(members.len(), scratch);
-    for (member, declared) in members.into_iter().enumerate() {
-        let offered = offered_at(registered, declared, types, scratch);
+    let mut decided = true;
+    for (member, declared) in members.iter().enumerate() {
+        let key = key_of(*declared, types);
+        let mut at_key = BumpVec::new_in(scratch);
+        at_key.extend((0..registered.len()).filter(|at| key_of(registered[*at], types) == key));
+        let mut covering = BumpVec::new_in(scratch);
+        for at in at_key.iter().copied() {
+            match covers(registered[at], *declared) {
+                Some(true) => covering.push(at),
+                Some(false) => {}
+                None => decided = false,
+            }
+        }
+        let mut offered = BumpVec::new_in(scratch);
+        offered.extend(
+            (first_ranked(registered, &covering, types, scratch).iter())
+                .map(|at| u32::try_from(*at).expect("a module has fewer than 2^32 members")),
+        );
         picks.push((u16::try_from(member).ok()?, offered));
     }
-    Some(picks)
+    decided.then_some(picks)
 }
 
 /// The positions among `registered`, a module's registered shapes in their run's order, of the
@@ -292,13 +321,25 @@ pub fn covered<'x>(
     scratch: BumpAllocator<'x>,
 ) -> BumpVec<'x, usize> {
     let mut covers = BumpVec::new_in(scratch);
-    let mut ranked = BumpVec::new_in(scratch);
-    for (at, registered) in shapes.iter().enumerate() {
-        if satisfied_by(types, scratch, declared, *registered) {
-            covers.push(at);
-            ranked.push(DeclaredType::<Parametric>::from(*registered));
-        }
-    }
+    covers
+        .extend((0..shapes.len()).filter(|at| satisfied_by(types, scratch, declared, shapes[*at])));
+    first_ranked(shapes, &covers, types, scratch)
+}
+
+/// Those of `covers`, positions among `shapes`, registered shapes, ranking first among
+/// themselves: the most specific, or every one where none ranks first.
+fn first_ranked<'x>(
+    shapes: &[DeclaredType<KType>],
+    covers: &[usize],
+    types: &Chain<'_, '_, '_, '_>,
+    scratch: BumpAllocator<'x>,
+) -> BumpVec<'x, usize> {
+    let mut ranked = BumpVec::with_capacity_in(covers.len(), scratch);
+    ranked.extend(
+        covers
+            .iter()
+            .map(|at| DeclaredType::<Parametric>::from(shapes[*at])),
+    );
     let mut picked = BumpVec::new_in(scratch);
     // No registration is a builtin; more overloads than a table ranks fall to the lattice's own
     // elimination.
@@ -339,10 +380,43 @@ pub fn keyworded_members<'x>(
     scratch: BumpAllocator<'x>,
 ) -> BumpVec<'x, DeclaredType<KType>> {
     let mut members: BumpVec<'x, DeclaredType<KType>> = BumpVec::new_in(scratch);
-    for application in applications(types, scratch, carried) {
+    for read in keyworded_reads(carried.into(), types, scratch) {
+        let read = match read {
+            DeclaredType::Type(read) => DeclaredType::Type(
+                types
+                    .concrete(read)
+                    .expect("a carried application pins every parameter"),
+            ),
+            DeclaredType::Scheme(scheme) => DeclaredType::Scheme(scheme),
+        };
+        if !members.contains(&read) {
+            members.push(read);
+        }
+    }
+    members
+}
+
+/// Each keyworded member the signature type `carried`, written over names or not, declares, read
+/// under its application's pins, a pin over names kept: every application a meet holds, in order,
+/// a shape two applications declare read twice. None where `carried` spells no application.
+fn keyworded_reads<'x>(
+    carried: Parametric,
+    types: &Chain<'_, '_, '_, '_>,
+    scratch: BumpAllocator<'x>,
+) -> BumpVec<'x, DeclaredType<Parametric>> {
+    let mut applications = BumpVec::new_in(scratch);
+    match types.node(carried) {
+        TypeNode::SignatureMeet { members } => applications.extend(members.iter()),
+        _ => applications.push(carried),
+    }
+    let mut reads = BumpVec::new_in(scratch);
+    for application in applications {
         let (signature, pinned) = match types.node(application) {
             TypeNode::SignatureApply { signature, pins } => (signature, Some(pins)),
-            _ => (application, None),
+            _ => match types.concrete(application) {
+                Some(signature) => (signature, None),
+                None => continue,
+            },
         };
         let Some(schema) = schema_of(signature, types) else {
             continue;
@@ -357,20 +431,10 @@ pub fn keyworded_members<'x>(
                 }),
         );
         for declared in schema.keyworded.iter().copied() {
-            let read = match substitute_parameters(types, scratch, declared, pins) {
-                DeclaredType::Type(read) => DeclaredType::Type(
-                    types
-                        .concrete(read)
-                        .expect("a carried application pins every parameter"),
-                ),
-                DeclaredType::Scheme(scheme) => DeclaredType::Scheme(scheme),
-            };
-            if !members.contains(&read) {
-                members.push(read);
-            }
+            reads.push(substitute_parameters(types, scratch, declared, pins));
         }
     }
-    members
+    reads
 }
 
 /// The expression shape a registration member registers at: a function's own, the shape a

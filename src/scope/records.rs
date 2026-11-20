@@ -27,11 +27,13 @@ use crate::values::{Chain, ContentDigest, LayerKey, Restamping, Retype, Weight};
 
 use super::build_layer::BuildLayer;
 use super::composition::Composition;
+use super::derived::{Derived, DerivedName, DerivedTerm};
 use super::facts::{Address, Binding, Bound, Frontier, UnitId, Unknown};
 use super::keyed::Keyed;
 use super::record_types::{Close, CloseLaying, Closed, Closer, Laying, Named};
 use super::shape::{
-    BodyShape, Coordinate, Lands, Located, Position, Segment, ShapeError, Site, Slot, Target,
+    BodyShape, CaptureSlot, Coordinate, Lands, Located, Position, Segment, ShapeError, Site, Slot,
+    Target,
 };
 use super::shapes::Shapes;
 use super::stamp::SiteRequest;
@@ -54,6 +56,25 @@ pub enum AtRun<T> {
     Refused(Elaboration),
 }
 
+/// A walk's record of one unit: its facts beside the frontier it gathered, or the mark that the
+/// walk never reached it, as a quote's code refused before it. A mark hides every older record of
+/// the unit, so a reader finds none, as one does where no walk reached the unit.
+#[derive(Clone, Copy)]
+pub enum UnitRecord<'a> {
+    Typed(&'a UnitFacts<'a>, Frontier<'a>),
+    Unreached,
+}
+
+impl<'a> UnitRecord<'a> {
+    /// Its facts beside its frontier, where the walk reached the unit.
+    pub fn typed(self) -> Option<(&'a UnitFacts<'a>, Frontier<'a>)> {
+        match self {
+            UnitRecord::Typed(facts, frontier) => Some((facts, frontier)),
+            UnitRecord::Unreached => None,
+        }
+    }
+}
+
 /// One unit's facts: everything the walk computed running it.
 #[derive(Clone, Copy)]
 pub struct UnitFacts<'a> {
@@ -72,6 +93,32 @@ pub struct UnitFacts<'a> {
     /// An entry unit's frontier of each binder it seeds, by slot: a read of a binder's static type
     /// gathers its seed alone, and the unit's own frontier reads every seed.
     pub seeds: Keyed<'a, (Slot, Frontier<'a>)>,
+}
+
+/// Whether `key` reads a path class or the type a `:Module` binder carries, itself or through a
+/// derived name's term (`names` finds each): a substitution by levels closes neither, so a
+/// binding that keeps every question walks a layer whose keys read one.
+pub fn reads_module_binders<'n>(
+    types: &crate::values::Chain<'_, '_, '_, '_>,
+    scratch: BumpAllocator<'_>,
+    key: DeclaredType<Parametric>,
+    names: &dyn Fn(crate::type_lattice::DerivedId) -> Option<DerivedName<'n>>,
+) -> bool {
+    use crate::type_lattice::Variable;
+    (super::free_variables(types, scratch, key).iter()).any(|variable| match variable {
+        Variable::Path { .. } => true,
+        Variable::Derived { term, .. } => names(*term).is_some_and(|name| match name.term {
+            DerivedTerm::Carried { .. } => true,
+            term => {
+                let mut reads = false;
+                term.each_type(&mut |operand| {
+                    reads = reads || reads_module_binders(types, scratch, operand, names);
+                });
+                reads
+            }
+        }),
+        _ => false,
+    })
 }
 
 /// One body's facts from one unit, each table sorted by its key: the type channel's, then the
@@ -106,7 +153,7 @@ pub struct Typed<'a> {
     pub arms: Keyed<'a, (Site, Arms<'a>)>,
     /// Each retype to a closed declared type, by the site its check is settled at, and each module
     /// member read's, by its node's site.
-    pub retypes: Keyed<'a, (Site, Retype)>,
+    pub retypes: Keyed<'a, (Site, Restamp)>,
     /// Each `:|` at a closed signature, beside its view's content tree.
     pub trees: Keyed<'a, (Site, &'a Tree<'a>)>,
     /// Each `:|` over a body-born module whose content is closed, beside its keyworded members'
@@ -119,8 +166,8 @@ pub struct Typed<'a> {
     pub holding: Keyed<'a, (Slot, &'a [Identity])>,
     /// The body's own minting sites.
     pub minting: Keyed<'a, Site>,
-    /// A `MODULE` or `GROUP` body's exact signature, where the walk typed one.
-    pub signature: Option<KType>,
+    /// A `MODULE` or `GROUP` body's exact signature, written over names, where the walk typed one.
+    pub signature: Option<Parametric>,
     /// What the unit's facts give the body's class, folded back in where a resumption absorbs
     /// the unit: a porous exit, how many of its minting sites are views over closed trees, and
     /// the run mints of the blocks and module bodies it ran.
@@ -455,9 +502,11 @@ impl<'x> DepsGathering<'x> {
 /// Gather what the content `tree`, read at `holder` whose frame body is `frame`, depends on: each
 /// leaf bound to a parameter of the frame body, no parameter for a leaf captured from a body
 /// enclosing the frame, and anything for a leaf no binder names, one bound per run of a body, or
-/// one bound by a non-parameter of the frame or of a block or module body it runs.
+/// one bound by a non-parameter of the frame or of a block or module body it runs. A type value
+/// written over names depends on the binder of each run-bound name it is written over, and on
+/// anything where it holds another variable.
 pub fn tree_deps(
-    shapes: &Shapes<'_>,
+    (shapes, types): (&Shapes<'_>, &Chain<'_, '_, '_, '_>),
     (holder, frame): (Segment, Segment),
     tree: &Tree<'_>,
     into: &mut DepsGathering<'_>,
@@ -486,13 +535,62 @@ pub fn tree_deps(
                 source, underlying, ..
             } => stack.extend([*source, *underlying]),
             Tree::Retyped { source, .. } => stack.push(*source),
-            Tree::Leaf(Leaf::Unnamed(_))
+            Tree::TypeValue { named, .. } => {
+                type_value_deps((shapes, types), (holder, frame), named, into, scratch);
+            }
+            Tree::Leaf(Leaf::Unnamed(_) | Leaf::Call { .. })
             | Tree::Leaf(Leaf::Bound {
                 within: Some(_), ..
             }) => return into.add(Deps::Varying),
             Tree::Leaf(Leaf::Bound { binder, .. }) => {
                 binder_deps(shapes, (holder, frame), (binder.body, binder.slot), into);
             }
+        }
+    }
+}
+
+/// Gather what the type value `named`, read at `holder` whose frame body is `frame`, depends on:
+/// the binder each lexical variable in it is homed at, the first body outward from `holder`
+/// declaring its level; anything for any other variable, or a level no body there declares.
+fn type_value_deps(
+    (shapes, types): (&Shapes<'_>, &Chain<'_, '_, '_, '_>),
+    (holder, frame): (Segment, Segment),
+    named: Parametric,
+    into: &mut DepsGathering<'_>,
+    scratch: BumpAllocator<'_>,
+) {
+    let mut levels = BumpVec::new_in(scratch);
+    let mut varying = false;
+    crate::type_lattice::read_through(
+        types,
+        scratch,
+        named,
+        crate::type_lattice::Side::Above,
+        &mut |variable| {
+            match variable {
+                crate::type_lattice::Variable::Lexical { level, .. } => levels.push(level),
+                _ => varying = true,
+            }
+            None
+        },
+    );
+    if varying {
+        return into.add(Deps::Varying);
+    }
+    for level in levels {
+        let mut at = Some(holder);
+        let declared = loop {
+            let Some(segment) = at else {
+                break None;
+            };
+            if let Some(Target::Local(slot)) = shapes.home(segment, level) {
+                break Some((segment, slot));
+            }
+            at = shapes.parent(segment).map(|(parent, _)| parent);
+        };
+        match declared {
+            Some(binder) => binder_deps(shapes, (holder, frame), binder, into),
+            None => return into.add(Deps::Varying),
         }
     }
 }
@@ -674,6 +772,15 @@ impl<'step> Facts<'step> {
         self.activated(spine)
     }
 
+    /// These facts without the depot's layers: what a quote's code's entry decides over, its frame
+    /// reading through no settlement around it — its own decided layers read before them.
+    pub fn undeposited(self) -> Self {
+        FactsOver(Layers {
+            depot: None,
+            ..self.0
+        })
+    }
+
     /// The innermost depot layer these facts read, if any.
     pub fn top(&self) -> Option<&'step BuildLayer<'step>> {
         self.0.depot
@@ -760,7 +867,8 @@ impl<'step> Facts<'step> {
             Some(top) => top.refusal(),
             None => self.0.base.layer.refusal(),
         };
-        self.resolved(types, refusal)
+        // A walk's own refusal is worded under the binding it walked: nothing to close.
+        self.minted(types, refusal)
     }
 }
 
@@ -800,15 +908,18 @@ pub(crate) trait RecordSource<'a>: Copy {
     /// The record holding `held`, beside its unit.
     fn holding(&self, held: Held) -> Option<(UnitId, &'a UnitFacts<'a>)>;
 
-    /// Hand `each` every module binder of `segment` a current record says holds a module of
-    /// `identity`'s tree, beside its unit, perhaps more than once.
-    fn holders(&self, segment: Segment, identity: Identity, each: &mut dyn FnMut(UnitId, Slot));
+    /// Hand `each` every holder in `segment` a current record says holds a module of `identity`'s
+    /// tree, beside its unit, perhaps more than once.
+    fn holders(&self, segment: Segment, identity: Identity, each: &mut dyn FnMut(UnitId, Holder));
 
     /// `body` as its load laid it.
     fn laid(&self, body: Segment) -> &'a Laid<'a>;
 
     /// The folds of `body`.
     fn folds(&self, body: Segment) -> Option<Folds<'a>>;
+
+    /// The derived name `id`, which the innermost layer that laid it holds.
+    fn derived_name(&self, id: crate::type_lattice::DerivedId) -> Option<DerivedName<'a>>;
 
     /// The closed tree whose identity is `digest`.
     fn tree_of(&self, digest: ContentDigest) -> Option<&'a Tree<'a>>;
@@ -830,9 +941,15 @@ pub(crate) trait RecordSource<'a>: Copy {
         false
     }
 
-    /// The closed type the innermost layer whose table holds `ty` gives it.
-    fn closed(&self, ty: DeclaredType<Parametric>) -> Option<DeclaredType<KType>> {
+    /// What the innermost layer whose table holds `ty` closes it to, whole or in part.
+    fn closed(&self, ty: DeclaredType<Parametric>) -> Option<Closed> {
         let _ = ty;
+        None
+    }
+
+    /// The tree the innermost layer whose table holds the tree of `identity` gives it.
+    fn closed_tree(&self, identity: Identity) -> Option<&'a Tree<'a>> {
+        let _ = identity;
         None
     }
 }
@@ -860,7 +977,10 @@ impl<'graph> RecordSource<'graph> for LoadRecords<'graph> {
     }
 
     fn unit(&self, unit: UnitId) -> Option<(&'graph UnitFacts<'graph>, Frontier<'graph>)> {
-        (self.layer.unit(unit)).or_else(|| self.base?.0.unit(unit))
+        match self.layer.unit(unit) {
+            Some(record) => record.typed(),
+            None => self.base?.0.unit(unit),
+        }
     }
 
     fn closing(&self, body: Segment) -> Option<(&'graph Closing<'graph>, Frontier<'graph>)> {
@@ -877,12 +997,12 @@ impl<'graph> RecordSource<'graph> for LoadRecords<'graph> {
         self.layer.unit(unit).is_none().then_some((unit, facts))
     }
 
-    fn holders(&self, segment: Segment, identity: Identity, each: &mut dyn FnMut(UnitId, Slot)) {
+    fn holders(&self, segment: Segment, identity: Identity, each: &mut dyn FnMut(UnitId, Holder)) {
         self.layer.holders(segment, identity, each);
         if let Some(base) = self.base {
-            base.0.holders(segment, identity, &mut |unit, slot| {
+            base.0.holders(segment, identity, &mut |unit, holder| {
                 if self.layer.unit(unit).is_none() {
-                    each(unit, slot);
+                    each(unit, holder);
                 }
             });
         }
@@ -907,14 +1027,25 @@ impl<'graph> RecordSource<'graph> for LoadRecords<'graph> {
         }
     }
 
+    fn derived_name(&self, id: crate::type_lattice::DerivedId) -> Option<DerivedName<'graph>> {
+        match self.layer.derived().get(id) {
+            Some(name) => Some(*name),
+            None => self.base?.0.derived_name(id),
+        }
+    }
+
     /// Whether this load's layer or its base's holds a table of closed types: a test's resumption
     /// laid as a load closes what it absorbed as a layer does.
     fn closes(&self) -> bool {
         self.layer.closes() || self.base.is_some_and(|base| base.0.closes())
     }
 
-    fn closed(&self, ty: DeclaredType<Parametric>) -> Option<DeclaredType<KType>> {
+    fn closed(&self, ty: DeclaredType<Parametric>) -> Option<Closed> {
         (self.layer.closed().probe(ty)).or_else(|| self.base?.0.closed(ty))
+    }
+
+    fn closed_tree(&self, identity: Identity) -> Option<&'graph Tree<'graph>> {
+        (self.layer.closed().tree(identity)).or_else(|| self.base?.0.closed_tree(identity))
     }
 
     fn tree_of(&self, digest: ContentDigest) -> Option<&'graph Tree<'graph>> {
@@ -931,8 +1062,13 @@ impl<'step> RecordSource<'step> for Layers<'step> {
         self.decided.is_some_and(BuildLayer::closes) || self.depot.is_some_and(BuildLayer::closes)
     }
 
-    fn closed(&self, ty: DeclaredType<Parametric>) -> Option<DeclaredType<KType>> {
+    fn closed(&self, ty: DeclaredType<Parametric>) -> Option<Closed> {
         self.layers().find_map(|layer| layer.closed().probe(ty))
+    }
+
+    fn closed_tree(&self, identity: Identity) -> Option<&'step Tree<'step>> {
+        self.layers()
+            .find_map(|layer| layer.closed().tree(identity))
     }
 
     fn term(&self, digest: TypeDigest) -> Option<&'step Term<'step>> {
@@ -978,9 +1114,10 @@ impl<'step> RecordSource<'step> for Layers<'step> {
     }
 
     fn unit(&self, unit: UnitId) -> Option<(&'step UnitFacts<'step>, Frontier<'step>)> {
-        (self.layers())
-            .find_map(|layer| layer.unit(unit))
-            .or_else(|| self.base.unit(unit))
+        match self.layers().find_map(|layer| layer.unit(unit)) {
+            Some(record) => record.typed(),
+            None => self.base.unit(unit),
+        }
     }
 
     fn closing(&self, body: Segment) -> Option<(&'step Closing<'step>, Frontier<'step>)> {
@@ -999,17 +1136,17 @@ impl<'step> RecordSource<'step> for Layers<'step> {
         (!self.rerun_within(None, unit)).then_some((unit, facts))
     }
 
-    fn holders(&self, segment: Segment, identity: Identity, each: &mut dyn FnMut(UnitId, Slot)) {
+    fn holders(&self, segment: Segment, identity: Identity, each: &mut dyn FnMut(UnitId, Holder)) {
         for layer in self.layers() {
-            layer.holders(segment, identity, &mut |unit, slot| {
+            layer.holders(segment, identity, &mut |unit, holder| {
                 if !self.rerun_within(Some(layer), unit) {
-                    each(unit, slot);
+                    each(unit, holder);
                 }
             });
         }
-        self.base.holders(segment, identity, &mut |unit, slot| {
+        self.base.holders(segment, identity, &mut |unit, holder| {
             if !self.rerun_within(None, unit) {
-                each(unit, slot);
+                each(unit, holder);
             }
         });
     }
@@ -1020,6 +1157,12 @@ impl<'step> RecordSource<'step> for Layers<'step> {
 
     fn folds(&self, body: Segment) -> Option<Folds<'step>> {
         self.base.folds(body)
+    }
+
+    fn derived_name(&self, id: crate::type_lattice::DerivedId) -> Option<DerivedName<'step>> {
+        (self.layers())
+            .find_map(|layer| layer.derived().get(id).copied())
+            .or_else(|| self.base.derived_name(id))
     }
 
     fn tree_of(&self, digest: ContentDigest) -> Option<&'step Tree<'step>> {
@@ -1057,7 +1200,7 @@ impl<'a> RecordSource<'a> for LoadFacts<'a> {
         self.0.holding(held)
     }
 
-    fn holders(&self, segment: Segment, identity: Identity, each: &mut dyn FnMut(UnitId, Slot)) {
+    fn holders(&self, segment: Segment, identity: Identity, each: &mut dyn FnMut(UnitId, Holder)) {
         self.0.holders(segment, identity, each);
     }
 
@@ -1069,8 +1212,16 @@ impl<'a> RecordSource<'a> for LoadFacts<'a> {
         self.0.folds(body)
     }
 
+    fn derived_name(&self, id: crate::type_lattice::DerivedId) -> Option<DerivedName<'a>> {
+        self.0.derived_name(id)
+    }
+
     fn tree_of(&self, digest: ContentDigest) -> Option<&'a Tree<'a>> {
         self.0.tree_of(digest)
+    }
+
+    fn closed_tree(&self, identity: Identity) -> Option<&'a Tree<'a>> {
+        self.0.closed_tree(identity)
     }
 }
 
@@ -1438,9 +1589,18 @@ pub enum Held {
     /// A class a path entry resolved to, by its chain root and the class: where a reader finds
     /// what a class reads. Of the units resolving a path to one class, a layer keeps the first.
     Class(Segment, PathClass),
-    /// A module binder of a body holding a module of a tree of this identity, by the body, the
-    /// identity and the binder's slot: where a reader finds the binders a class is read through.
-    Holder(Segment, Identity, Slot),
+    /// A module binder or a view written in place of a body holding a module of a tree of this
+    /// identity, by the body, the identity and the holder: where a reader finds the roots a class
+    /// is read through.
+    Holder(Segment, Identity, Holder),
+}
+
+/// What holds a module of a tree in a body: a module binder, by its slot, or a view written in
+/// place, by the site of the `:|` building it. Binders order first.
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Debug)]
+pub enum Holder {
+    Slot(Slot),
+    Site(Site),
 }
 
 impl<'graph> LoadFacts<'graph> {
@@ -1481,7 +1641,7 @@ impl<'graph> LoadFacts<'graph> {
                 + size_of_val(typed.minting.entries())
                 + size_of_val(typed.holding.entries())
         };
-        (self.own_units().iter())
+        (self.own_units())
             .map(|(_, (facts, _))| {
                 size_of_val(facts.paths.entries())
                     + facts.typed.iter().map(|(_, at)| typed(at)).sum::<usize>()
@@ -1506,13 +1666,15 @@ impl<'graph> LoadFacts<'graph> {
 
     /// One walk's records over `shapes`, laid through `lay`, over `base` where the walk resumed
     /// one under `binding`: `units` and `closings` sorted by id, not yet folded.
+    #[allow(clippy::too_many_arguments)]
     pub fn of_records(
         lay: impl Lays<'graph>,
         scratch: BumpAllocator<'_>,
         shapes: &'graph Shapes<'graph>,
         base: Option<&'graph LoadFacts<'graph>>,
+        derived: Derived<'graph>,
         binding: Binding<'graph>,
-        units: &[(UnitId, (&'graph UnitFacts<'graph>, Frontier<'graph>))],
+        units: &[(UnitId, UnitRecord<'graph>)],
         closings: &[(Segment, (&'graph Closing<'graph>, Frontier<'graph>))],
     ) -> Self {
         if cfg!(debug_assertions)
@@ -1524,7 +1686,8 @@ impl<'graph> LoadFacts<'graph> {
             });
         }
         debug_assert!(base.is_none_or(|base| std::ptr::eq(base.0.shapes, shapes)));
-        let layer = BuildLayer::laid(lay, scratch, shapes, None, binding, units, closings);
+        let layer = BuildLayer::laid(lay, scratch, shapes, None, binding, units, closings)
+            .deriving(derived);
         FactsOver(LoadRecords {
             shapes,
             layer: resident(lay, layer),
@@ -1687,9 +1850,19 @@ impl<'graph> LoadFacts<'graph> {
         self.0.layer.request(shape.segment(), site)
     }
 
+    /// The units this load marked unreached, sorted.
+    #[cfg(test)]
+    pub fn unreached_units(&self) -> impl Iterator<Item = UnitId> + 'graph {
+        self.0.layer.unreached_units()
+    }
+
     /// The units this load ran itself, each beside its record and frontier, sorted.
-    pub fn own_units(&self) -> &'graph [(UnitId, (&'graph UnitFacts<'graph>, Frontier<'graph>))] {
-        self.0.layer.units.entries()
+    pub fn own_units(
+        &self,
+    ) -> impl Iterator<Item = (UnitId, (&'graph UnitFacts<'graph>, Frontier<'graph>))> + 'graph
+    {
+        (self.0.layer.units.entries().iter())
+            .filter_map(|(unit, record)| Some((*unit, record.typed()?)))
     }
 }
 
@@ -1820,7 +1993,7 @@ impl<'a, S: RecordSource<'a>> FactsOver<S> {
                 && let Some(owner) = resolution.lacks
             {
                 return Elaboration::NoSuchMember {
-                    owner: owner.into(),
+                    owner,
                     name: entry.label.symbol(),
                     site,
                 };
@@ -1849,6 +2022,16 @@ impl<'a, S: RecordSource<'a>> FactsOver<S> {
     /// The shape table these are facts of.
     pub fn shapes(&self) -> &'a Shapes<'a> {
         self.0.shapes()
+    }
+
+    /// The term of the derived name `id`, which the innermost layer that laid it holds.
+    pub fn term_of(&self, id: crate::type_lattice::DerivedId) -> Option<DerivedTerm<'a>> {
+        self.0.derived_name(id).map(|name| name.term)
+    }
+
+    /// The derived name `id`, which the innermost layer that laid it holds.
+    pub fn derived_name(&self, id: crate::type_lattice::DerivedId) -> Option<DerivedName<'a>> {
+        self.0.derived_name(id)
     }
 
     /// What any layer binds `unknown` to.
@@ -2075,21 +2258,51 @@ impl<'a, S: RecordSource<'a>> FactsOver<S> {
         shape: &BodyShape<'_>,
     ) -> Option<&'a ShapeError<'a>> {
         let overlap = (self.0.closing(shape.segment())).and_then(|(closing, _)| closing.overlap);
-        self.resolved(types, overlap)
+        // An overlap names a builtin overload's closed type: nothing to close.
+        self.minted(types, overlap)
     }
 
     /// Why the code shape `shape`'s code cannot be built or does not type, reported when an `EVAL`
-    /// runs it.
-    pub fn typing_refusal(
+    /// runs it, worded as a load with its bindings declared words it: closed through the chain's
+    /// tables, as a re-run under them reads it, then each capture of the code through `captured`,
+    /// the closed type the `EVAL`'s code binds it to, where it binds one. Laid in `scratch` where
+    /// some type closes.
+    pub fn typing_refusal<'l>(
         &self,
         types: &Chain<'_, '_, '_, '_>,
+        scratch: BumpAllocator<'l>,
         shape: &BodyShape<'_>,
-    ) -> Option<&'a ShapeError<'a>> {
+        captured: &mut dyn FnMut(CaptureSlot) -> Option<KType>,
+    ) -> Option<&'l ShapeError<'l>>
+    where
+        'a: 'l,
+    {
+        let refusal: Option<&'l ShapeError<'l>> = self.refused(shape);
+        let refusal = self.resolved_laying(types, scratch, refusal)?;
+        let (shapes, segment) = (self.0.shapes(), shape.segment());
+        let captured = std::cell::RefCell::new(captured);
+        Some(refusal.closed_laying(&mut Capturing {
+            types,
+            lay: scratch,
+            bound: &|level| match shapes.home(segment, level)? {
+                Target::Capture(capture) => (captured.borrow_mut())(capture),
+                Target::Local(_) => None,
+            },
+        }))
+    }
+
+    /// Whether the code shape `shape`'s code cannot be built or does not type: a binding closes a
+    /// refusal's wording, never whether there is one.
+    pub fn refuses(&self, shape: &BodyShape<'_>) -> bool {
+        self.refused(shape).is_some()
+    }
+
+    /// The refusal of the code shape `shape`, as laid.
+    fn refused(&self, shape: &BodyShape<'_>) -> Option<&'a ShapeError<'a>> {
         // A code shape the builder could not build holds its refusal itself.
-        let refusal = (self.0.closing(shape.segment()))
+        (self.0.closing(shape.segment()))
             .and_then(|(closing, _)| closing.refusal)
-            .or_else(|| self.at(shape).refusal());
-        self.resolved(types, refusal)
+            .or_else(|| self.at(shape).refusal())
     }
 
     /// The static type of the part at `site` of `shape`, where the load typed one.
@@ -2151,15 +2364,16 @@ impl<'a, S: RecordSource<'a>> FactsOver<S> {
         self.at_site(shape, site, |typed| typed.arms)
     }
 
-    /// What the load recorded a retype at `site` of `shape` re-stamps at, where it closed the
-    /// declared type.
+    /// What the load recorded a retype at `site` of `shape` re-stamps at, where it knew how and
+    /// the reading frame's binding closes the type it re-stamps at.
     pub fn retype(
         &self,
         types: &Chain<'_, '_, '_, '_>,
         shape: &BodyShape<'_>,
         site: Site,
     ) -> Option<Retype> {
-        self.resolved(types, self.at_site(shape, site, |typed| typed.retypes))
+        let restamp = self.resolved(types, self.at_site(shape, site, |typed| typed.retypes))?;
+        restamp.retype(types)
     }
 
     /// What a frame of the callable `shape` re-stamps its arguments and its value at, where the
@@ -2225,13 +2439,9 @@ impl<'a, S: RecordSource<'a>> FactsOver<S> {
 
     /// The content tree of the view the `:|` at `site` of `shape` builds, where its signature is
     /// closed.
-    pub fn view_tree(
-        &self,
-        types: &Chain<'_, '_, '_, '_>,
-        shape: &BodyShape<'_>,
-        site: Site,
-    ) -> Option<&'a Tree<'a>> {
-        self.resolved(types, self.at_site(shape, site, |typed| typed.trees))
+    pub fn view_tree(&self, shape: &BodyShape<'_>, site: Site) -> Option<&'a Tree<'a>> {
+        let tree = self.at_site(shape, site, |typed| typed.trees)?;
+        Some(self.substitution(*tree).unwrap_or(tree))
     }
 
     /// What the view the `:|` at `site` of `shape` builds carries for each keyworded member, where
@@ -2277,13 +2487,18 @@ impl<'a, S: RecordSource<'a>> FactsOver<S> {
     }
 
     /// The content tree of the module the binder at `slot` of `shape` holds, if the load read it.
-    pub fn content(
-        &self,
-        types: &Chain<'_, '_, '_, '_>,
-        shape: &BodyShape<'_>,
-        slot: Slot,
-    ) -> Option<Tree<'a>> {
-        self.resolved(types, self.at_slot(shape, slot, |typed| typed.contents))
+    pub fn content(&self, shape: &BodyShape<'_>, slot: Slot) -> Option<Tree<'a>> {
+        let tree = self.at_slot(shape, slot, |typed| typed.contents)?;
+        Some(self.substitution(tree).copied().unwrap_or(tree))
+    }
+
+    /// The tree a table of its chain's layers gives `tree` under their binding, where `tree` is
+    /// open and one does: the tree a fresh load reads under it.
+    fn substitution(&self, tree: Tree<'a>) -> Option<&'a Tree<'a>> {
+        match tree.identity() {
+            identity @ Identity::Open(_) if self.0.closes() => self.0.closed_tree(identity),
+            _ => None,
+        }
     }
 
     /// What each parameter of the call by name whose argument sits at `site` of `shape` is solved
@@ -2379,7 +2594,13 @@ impl Typed<'_> {
         sites.for_each(|site| each(Held::Site(segment, site)));
         for (slot, held) in self.holding.iter() {
             held.iter()
-                .for_each(|identity| each(Held::Holder(segment, *identity, *slot)));
+                .for_each(|identity| each(Held::Holder(segment, *identity, Holder::Slot(*slot))));
+        }
+        // A view written in place holds a module of its own tree, where a binder could name it.
+        for (site, tree) in self.trees.iter() {
+            if tree.identity() != Identity::Unnamed {
+                each(Held::Holder(segment, tree.identity(), Holder::Site(*site)));
+            }
         }
     }
 }
@@ -2404,6 +2625,29 @@ thread_local! {
     pub(crate) static TERM_PROBES: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
 }
 
+/// A closer writing in the closed type `bound` gives a level: a quote's code's captures, as its
+/// `EVAL` binds them.
+struct Capturing<'q, 'tier, 'pair, 'reg, 'door, 'l> {
+    types: &'q Chain<'tier, 'pair, 'reg, 'door>,
+    lay: BumpAllocator<'l>,
+    bound: &'q dyn Fn(usize) -> Option<KType>,
+}
+
+impl Closer for Capturing<'_, '_, '_, '_, '_, '_> {
+    fn close(&mut self, ty: DeclaredType<Parametric>) -> Closed {
+        let binds = super::derived::LevelsOnly(self.bound);
+        super::question::rebound(self.types, self.lay, ty, &binds)
+    }
+}
+
+impl<'l> Laying<'l> for Capturing<'_, '_, '_, '_, '_, 'l> {
+    type Lay = BumpAllocator<'l>;
+
+    fn lay(&self) -> BumpAllocator<'l> {
+        self.lay
+    }
+}
+
 /// The run's closer: a probe of the tables of closed types the chain's layers hold, laying what it
 /// copies in `lay`. It never interns.
 struct Probing<'q, S, L> {
@@ -2413,7 +2657,7 @@ struct Probing<'q, S, L> {
 
 impl<'a, S: RecordSource<'a>, L> Closer for Probing<'_, S, L> {
     fn close(&mut self, ty: DeclaredType<Parametric>) -> Closed {
-        self.source.closed(ty).map_or(Closed::Same, Closed::Type)
+        self.source.closed(ty).unwrap_or(Closed::Same)
     }
 }
 

@@ -106,9 +106,12 @@ Neither grain is where content arrives.
 **Directions.**
 
 - *The grain of work — decided.* A stored question evaluated, never a body or
-  a statement typed again.
-  [Every typing rule states its question](typing-rules-state-their-questions.md)
-  first, and none keeps an escape or is left to the run.
+  a statement typed again. Every judgement about a bound name is a question
+  ([resumption](../../src/build/README.md#resumption)), save the three marks
+  that hold, which
+  [module content and unstorable solves stated as questions](module-content-questions.md)
+  and [a `FOR ALL` bound over a run-bound name](../types/run-bound-for-all-bounds.md)
+  take.
 - *Where the load starts — decided.* At the root alone: the build does no
   work a run may never use.
   [An exhaustive check](exhaustive-check.md) starts from every entry under an
@@ -134,8 +137,10 @@ Neither grain is where content arrives.
 
 - [`bindgraph`](../../bindgraph/README.md) — shipped: the graph the build
   stores.
-- [Every typing rule states its question](typing-rules-state-their-questions.md)
-  — the questions the load stores.
+- [Module content and unstorable solves stated as questions](module-content-questions.md)
+  — no unit re-runs over a module binder's content or an unstored solve.
+- [A `FOR ALL` bound over a run-bound name](../types/run-bound-for-all-bounds.md)
+  — no unit re-runs over such a bound.
 
 **Unblocks:**
 
@@ -156,3 +161,5 @@ Neither grain is where content arrives.
   edge to a callee that is a call's result.
 - [Warm composed types](warm-composed-types.md) — restated over a
   composition's own graph.
+- [A head reading its parameters' types](../types/head-parameter-reads.md)
+  — a `TYPE OF` is answered where its operand is bound.

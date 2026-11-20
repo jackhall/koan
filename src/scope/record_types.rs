@@ -7,13 +7,15 @@
 //! type-bearing field a record gains does not compile until it is visited.
 
 use crate::memory::{Lays, resident};
-use crate::type_lattice::{DeclaredType, Interval, KType, Parametric};
+use crate::type_lattice::{DeclaredType, Interval, KType, Parametric, PathClass};
 use crate::values::Retype;
 
 use super::keyed::Keyed;
 use super::records::{AtRun, Born, Closing, Restamp, Retypes, Typed, UnitFacts};
-use super::shape::{Repeated, ShapeError};
-use super::tree::{KnotNode, Leaf, NodeCapture, Tree, Unfolded, ViewRecord, Within};
+use super::shape::{NeverSatisfied, Repeated, ShapeError};
+use super::tree::{
+    Identity, KnotNode, Leaf, NodeCapture, Tree, UndecidedCall, Unfolded, ViewRecord, Within,
+};
 use super::typed::{
     Callable, Elaboration, InstanceRead, Kept, Narrowing, PathEntry, Point, Points, Registered,
     Resolution, Resolved, Static, StaticInstance, StaticType, UseStatics,
@@ -64,6 +66,7 @@ impl UnitFacts<'_> {
             }
             match resolved {
                 Resolved::Closed(ktype) => each((*ktype).into()),
+                Resolved::Over(over) => each((*over).into()),
                 Resolved::Class(_) => {}
             }
         }
@@ -278,9 +281,26 @@ fn born_types(born: &Born<'_>, each: &mut Each<'_>) {
     }
 }
 
+/// Every type a use an answer selects among keeps names: each kept candidate's shape and its
+/// arguments' ends.
+pub(super) fn undecided_types(undecided: &UndecidedCall<'_>, each: &mut Each<'_>) {
+    for running in undecided.kept {
+        each(running.shape);
+        for argument in running.arguments {
+            each(argument.lower.into());
+            each(argument.upper.into());
+        }
+    }
+}
+
 /// Every type `tree` names, its subtrees' included.
 pub(super) fn tree_types(tree: &Tree<'_>, each: &mut Each<'_>) {
     match tree {
+        Tree::TypeValue { named, .. } => each((*named).into()),
+        Tree::Leaf(Leaf::Call { call, .. }) => {
+            undecided_types(&call.undecided, each);
+            call.arguments.iter().for_each(|at| tree_types(at, each));
+        }
         Tree::Digest(_, None) | Tree::Leaf(Leaf::Unnamed(_)) => {}
         Tree::Digest(_, Some(bare)) => {
             bare.signature
@@ -374,13 +394,13 @@ fn error_types(error: &ShapeError<'_>, each: &mut Each<'_>) {
             variables: _,
             wanted,
             at: _,
-        } => wanted.into_iter().for_each(ktype),
+        } => (wanted.into_iter()).for_each(|wanted| each(wanted.into())),
         ShapeError::NoInstance {
             scheme,
             wanted,
             at: _,
         } => {
-            ktype(wanted);
+            each(wanted.into());
             each(DeclaredType::Scheme(scheme));
         }
         ShapeError::Inadmissible {
@@ -396,14 +416,16 @@ fn error_types(error: &ShapeError<'_>, each: &mut Each<'_>) {
         } => ktype(builtin),
         ShapeError::NoAdmittingCandidate {
             key: _,
-            arguments: _,
-            lines: _,
-            shown,
-            against,
+            arguments,
+            listed,
+            shapes,
             at: _,
         } => {
-            shown.iter().for_each(|shown| each(shown.named()));
-            against.iter().for_each(|against| each(*against));
+            for argument in arguments {
+                each(argument.lower.into());
+                each(argument.upper.into());
+            }
+            (listed.iter().chain(shapes)).for_each(|ty| each(*ty));
         }
         ShapeError::Ambiguous {
             key: _,
@@ -420,66 +442,37 @@ fn error_types(error: &ShapeError<'_>, each: &mut Each<'_>) {
             of,
             member: _,
             at: _,
-        } => ktype(of),
-        ShapeError::ReturnNeverSatisfied {
-            body,
-            returns,
-            at: _,
-        } => {
-            each(body.named());
-            each(returns.into());
-        }
-        ShapeError::EvalNeverSatisfied {
-            code: body,
-            returns,
-            at: _,
-        } => {
-            ktype(body);
-            ktype(returns);
-        }
-        ShapeError::AscriptionNeverSatisfied {
-            value,
-            ascribed: other,
-            at: _,
-        }
-        | ShapeError::AnnotationNeverSatisfied {
-            value,
-            annotated: other,
-            at: _,
-        } => {
-            each(value.named());
-            each(other.into());
-        }
+        } => each(of.into()),
+        ShapeError::ReturnNeverSatisfied { refused, at: _ }
+        | ShapeError::EvalNeverSatisfied { refused, at: _ }
+        | ShapeError::AscriptionNeverSatisfied { refused, at: _ }
+        | ShapeError::AnnotationNeverSatisfied { refused, at: _ }
+        | ShapeError::NotCode { refused, at: _ }
+        | ShapeError::BodyNotCode { refused, at: _ }
+        | ShapeError::NotAModule { refused, at: _ } => refused.each_type(each),
         ShapeError::CallNeverSatisfied {
             callee,
-            arguments,
+            payload,
             parameters,
             at: _,
         } => {
-            each(declared(callee));
-            each(arguments.named());
-            parameters
-                .into_iter()
-                .for_each(|parameters| each(parameters.into()));
+            each(callee);
+            each(payload.lower.into());
+            each(payload.upper.into());
+            each(parameters.into());
         }
         ShapeError::SpreadNeverAList { value, at: _ }
-        | ShapeError::SpliceNeverCode { value, at: _ } => ktype(value),
+        | ShapeError::SpliceNeverCode { value, at: _ } => each(value.into()),
         ShapeError::ReadNeverSatisfied {
             container,
             argument,
             at: _,
         } => {
-            ktype(container);
-            ktype(argument);
+            each(container.into());
+            each(argument.into());
         }
-        ShapeError::NotCode { value, at: _ }
-        | ShapeError::BodyNotCode { value, at: _ }
-        | ShapeError::NotAModule { value, at: _ } => each(value.named()),
-        ShapeError::NotASignature {
-            ascribed: value,
-            at: _,
-        }
-        | ShapeError::ViewReveals {
+        ShapeError::NotASignature { ascribed, at: _ } => each(ascribed.into()),
+        ShapeError::ViewReveals {
             member: _,
             ascribed: value,
             at: _,
@@ -489,15 +482,15 @@ fn error_types(error: &ShapeError<'_>, each: &mut Each<'_>) {
             union,
             at: _,
         } => {
-            ktype(scrutinee);
-            union.into_iter().for_each(ktype);
+            each(scrutinee.into());
+            (union.into_iter()).for_each(|union| each(union.into()));
         }
         ShapeError::AmbiguousArms {
             count: _,
             scrutinee,
             at: _,
-        } => ktype(scrutinee),
-        ShapeError::NotUnion { clause, at: _ } => ktype(clause),
+        } => each(scrutinee.into()),
+        ShapeError::NotUnion { clause, at: _ } => each(clause.into()),
         ShapeError::Uncovered {
             union,
             variant,
@@ -658,7 +651,11 @@ impl Named for UseStatics<'_> {
         let UseStatics {
             narrowing,
             contributions,
+            undecided,
         } = self;
+        if let Some(undecided) = undecided {
+            undecided_types(undecided, each);
+        }
         // A kept list's *always* candidates solve to closed points; the rest names candidates,
         // verdicts and a table of positions.
         match narrowing {
@@ -716,6 +713,7 @@ impl Named for Resolution<'_> {
         lacks.each_named(each);
         match resolved {
             Resolved::Closed(ktype) => each((*ktype).into()),
+            Resolved::Over(over) => each((*over).into()),
             Resolved::Class(_) => {}
         }
     }
@@ -846,7 +844,7 @@ fn points_types(points: &Points<'_>, each: &mut dyn FnMut(DeclaredType<Parametri
 
 /// What a [`Closer`] makes of one type: the closed type a binding gives it, the type with only
 /// some of its variables closed, or the type unchanged.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub enum Closed {
     Type(DeclaredType<KType>),
     Partial(DeclaredType<Parametric>),
@@ -858,6 +856,13 @@ pub enum Closed {
 /// ([`records`](super::records)).
 pub trait Closer {
     fn close(&mut self, ty: DeclaredType<Parametric>) -> Closed;
+
+    /// What the binding makes the variable of the path class `class` ([`Binds::class`](super::Binds::class)): module
+    /// substitution, which only the walk does.
+    fn class(&mut self, class: PathClass) -> Option<Resolved> {
+        let _ = class;
+        None
+    }
 }
 
 /// A [`Closer`] that lays the slices it copies through [`lay`](Self::lay).
@@ -865,6 +870,13 @@ pub trait Laying<'l>: Closer {
     type Lay: Lays<'l>;
 
     fn lay(&self) -> Self::Lay;
+
+    /// The tree the binding gives the open tree of `identity`, where it changes it: tree
+    /// substitution, which only the walk does.
+    fn tree(&mut self, identity: Identity) -> Option<&'l Tree<'l>> {
+        let _ = identity;
+        None
+    }
 }
 
 /// A fact whose types a [`Closer`] maps without laying, beside the visitor's [`Named`]: the lists
@@ -982,6 +994,12 @@ impl<C: Closer> Closer for Counting<'_, C> {
         self.changed |= !matches!(closed, Closed::Same);
         closed
     }
+
+    fn class(&mut self, class: PathClass) -> Option<Resolved> {
+        let closed = self.closer.class(class);
+        self.changed |= closed.is_some();
+        closed
+    }
 }
 
 impl<'l, C: Laying<'l>> Laying<'l> for Counting<'_, C> {
@@ -989,6 +1007,12 @@ impl<'l, C: Laying<'l>> Laying<'l> for Counting<'_, C> {
 
     fn lay(&self) -> C::Lay {
         self.closer.lay()
+    }
+
+    fn tree(&mut self, identity: Identity) -> Option<&'l Tree<'l>> {
+        let tree = self.closer.tree(identity);
+        self.changed |= tree.is_some();
+        tree
     }
 }
 
@@ -1169,8 +1193,7 @@ impl<A: Close, B: Close> Close for (A, B) {
     }
 }
 
-/// What names only closed types: a resolution, a content tree, a retype table. A refusal that
-/// names a variable is marked open where the walk keeps it, so it is never read closed.
+/// What names only closed types: a content tree, a retype table.
 macro_rules! closes_as_is {
     ($($fact:ty),* $(,)?) => {
         $(impl Close for $fact {
@@ -1181,15 +1204,137 @@ macro_rules! closes_as_is {
     };
 }
 
-closes_as_is!(
-    KType,
-    Retype,
-    Resolution<'_>,
-    Tree<'_>,
-    &Tree<'_>,
-    &ShapeError<'_>,
-    Elaboration,
-);
+/// A resolution to a class closes where the binding binds the module binder the class's paths
+/// read through, to the path read off the module it carries, and falls in another class where the
+/// binding is written into its application or tree; a type over names closes as any type does. Its
+/// tree is what the walk resolved it off, which a binding of a parameter leaves a leaf.
+impl Close for Resolution<'_> {
+    fn closed(self, closer: &mut impl Closer) -> Self {
+        let resolved = match self.resolved {
+            Resolved::Class(class) => closer.class(class).unwrap_or(self.resolved),
+            Resolved::Over(over) => match closer.close(DeclaredType::Type(over)) {
+                Closed::Type(DeclaredType::Type(closed)) => Resolved::Closed(closed),
+                Closed::Partial(DeclaredType::Type(partial)) => Resolved::Over(partial),
+                _ => self.resolved,
+            },
+            Resolved::Closed(_) => self.resolved,
+        };
+        Resolution {
+            resolved,
+            lacks: self.lacks.map(|lacks| lacks.closed(closer)),
+            ..self
+        }
+    }
+}
+
+closes_as_is!(KType, Retype, Tree<'_>, &Tree<'_>, Elaboration,);
+
+impl Close for NeverSatisfied {
+    fn closed(self, closer: &mut impl Closer) -> Self {
+        NeverSatisfied {
+            value: self.value.closed(closer),
+            wanted: self.wanted.closed(closer),
+        }
+    }
+}
+
+/// A refusal closed, laid again only where some type it judged changes: a quote's code's, written
+/// over the code's captures, which a binding of a capture's source closes as a re-run reads them
+/// (`a_code_s_refusal_reads_its_captures_as_a_re_run_does`). An elaboration's names are closed.
+impl<'l> CloseLaying<'l> for &'l ShapeError<'l> {
+    fn closed_laying(self, closer: &mut impl Laying<'l>) -> Self {
+        let mut counting = Counting {
+            closer,
+            changed: false,
+        };
+        let error = closed_error(*self, &mut counting);
+        match counting.changed {
+            false => self,
+            true => resident(counting.lay(), error),
+        }
+    }
+}
+
+/// `error` with every type it judged closed, a refusal under a call's laid again where it changes:
+/// one closer type all the way down, so the descent instantiates once.
+fn closed_error<'l, C: Laying<'l>>(
+    mut error: ShapeError<'l>,
+    closer: &mut Counting<'_, C>,
+) -> ShapeError<'l> {
+    {
+        match &mut error {
+            ShapeError::Unfixed { wanted, .. } => *wanted = wanted.closed(closer),
+            ShapeError::NoInstance { scheme, wanted, .. } => {
+                *wanted = wanted.closed(closer);
+                if let DeclaredType::Scheme(closed) =
+                    DeclaredType::<Parametric>::Scheme(*scheme).closed(closer)
+                {
+                    *scheme = closed;
+                }
+            }
+            ShapeError::NoAdmittingCandidate {
+                arguments,
+                listed,
+                shapes,
+                ..
+            } => {
+                *arguments = close_slice(closer, arguments, |typed, closer| typed.closed(closer));
+                *listed = close_slice(closer, listed, |ty, closer| ty.closed(closer));
+                *shapes = close_slice(closer, shapes, |ty, closer| ty.closed(closer));
+            }
+            ShapeError::Ambiguous { arguments, .. } => {
+                *arguments = close_slice(closer, arguments, |ty, closer| ty.closed(closer));
+            }
+            ShapeError::NoField { of, .. } | ShapeError::NoMember { of, .. } => {
+                *of = of.closed(closer)
+            }
+            ShapeError::ReturnNeverSatisfied { refused, .. }
+            | ShapeError::EvalNeverSatisfied { refused, .. }
+            | ShapeError::AscriptionNeverSatisfied { refused, .. }
+            | ShapeError::AnnotationNeverSatisfied { refused, .. }
+            | ShapeError::NotCode { refused, .. }
+            | ShapeError::BodyNotCode { refused, .. }
+            | ShapeError::NotAModule { refused, .. } => *refused = refused.closed(closer),
+            ShapeError::CallNeverSatisfied {
+                callee,
+                payload,
+                parameters,
+                ..
+            } => {
+                *callee = callee.closed(closer);
+                *payload = payload.closed(closer);
+                *parameters = parameters.closed(closer);
+            }
+            ShapeError::SpreadNeverAList { value, .. }
+            | ShapeError::SpliceNeverCode { value, .. } => *value = value.closed(closer),
+            ShapeError::ReadNeverSatisfied {
+                container,
+                argument,
+                ..
+            } => {
+                *container = container.closed(closer);
+                *argument = argument.closed(closer);
+            }
+            ShapeError::NoAdmittingArm { scrutinee, .. }
+            | ShapeError::AmbiguousArms { scrutinee, .. } => *scrutinee = scrutinee.closed(closer),
+            ShapeError::NotUnion { clause, .. } => *clause = clause.closed(closer),
+            ShapeError::RepeatedGuard {
+                guard: Repeated::Type(guard),
+                ..
+            } => *guard = guard.closed(closer),
+            ShapeError::UnderCall { refusal, .. } => {
+                let before = std::mem::replace(&mut closer.changed, false);
+                let inner = closed_error(**refusal, closer);
+                if closer.changed {
+                    *refusal = resident(closer.lay(), inner);
+                }
+                closer.changed |= before;
+            }
+            _ => {}
+        }
+    }
+    error
+}
 
 impl<'l> CloseLaying<'l> for Points<'l> {
     fn closed_laying(self, closer: &mut impl Laying<'l>) -> Self {
@@ -1241,7 +1386,23 @@ impl<'l> CloseLaying<'l> for UseStatics<'l> {
         let UseStatics {
             narrowing,
             contributions,
+            undecided,
         } = self;
+        let undecided = undecided.map(|undecided| {
+            let kept = close_slice(closer, undecided.kept, |running, closer| super::Running {
+                shape: running.shape.closed(closer),
+                arguments: close_slice(closer, running.arguments, |argument, closer| {
+                    argument.closed(closer)
+                }),
+                ..running
+            });
+            match std::ptr::addr_eq(kept, undecided.kept) {
+                true => undecided,
+                false => {
+                    crate::memory::resident(closer.lay(), UndecidedCall { kept, ..*undecided })
+                }
+            }
+        });
         let narrowing = match narrowing {
             Narrowing::Full | Narrowing::Selected(_) => narrowing,
             Narrowing::Kept(kept) => {
@@ -1260,6 +1421,7 @@ impl<'l> CloseLaying<'l> for UseStatics<'l> {
         UseStatics {
             narrowing,
             contributions: close_slice(closer, contributions, |each, closer| each.closed(closer)),
+            undecided,
         }
     }
 }
@@ -1346,16 +1508,34 @@ impl<'l> CloseLaying<'l> for Typed<'l> {
             routes,
             arms,
             retypes,
-            trees,
+            trees: close_keyed(closer, trees, |tree, closer| {
+                substituted_tree(closer, *tree).unwrap_or(tree)
+            }),
             picks,
-            contents,
+            contents: close_keyed(closer, contents, |tree, closer| {
+                substituted_tree(closer, tree).map_or(tree, |tree| *tree)
+            }),
             holding,
             minting,
-            signature,
+            signature: signature.map(|signature| {
+                match closer.close(DeclaredType::Type(signature)) {
+                    Closed::Type(DeclaredType::Type(closed)) => closed.into(),
+                    Closed::Partial(DeclaredType::Type(partial)) => partial,
+                    _ => signature,
+                }
+            }),
             exits,
             closed,
             folded,
         }
+    }
+}
+
+/// The tree the closer's binding gives `tree`, where `tree` is open and the binding changes it.
+fn substituted_tree<'l>(closer: &mut impl Laying<'l>, tree: Tree<'l>) -> Option<&'l Tree<'l>> {
+    match tree.identity() {
+        identity @ Identity::Open(_) => closer.tree(identity),
+        Identity::Closed(_) | Identity::Unnamed => None,
     }
 }
 
@@ -1388,24 +1568,26 @@ impl<'l> CloseLaying<'l> for &'l UnitFacts<'l> {
     }
 }
 
-/// A closing record closed: only a quote's code's unfilled type names a type a binding closes;
-/// a summary is a content tree, and a refusal naming a variable is marked open where it is kept.
+/// A closing record closed: a quote's code's unfilled type and its refusal name types a binding
+/// closes; a summary is a content tree, and an overlap names a builtin's closed type.
 impl<'l> CloseLaying<'l> for &'l Closing<'l> {
     fn closed_laying(self, closer: &mut impl Laying<'l>) -> Self {
-        let Some(ran) = self.ran else {
+        if self.ran.is_none() && self.refusal.is_none() {
             return self;
-        };
+        }
         let mut counting = Counting {
             closer,
             changed: false,
         };
-        let closed = ran.closed(&mut counting);
+        let ran = self.ran.closed(&mut counting);
+        let refusal = (self.refusal).map(|refusal| refusal.closed_laying(&mut counting));
         match counting.changed {
             false => self,
             true => resident(
                 counting.lay(),
                 Closing {
-                    ran: Some(closed),
+                    ran,
+                    refusal,
                     ..*self
                 },
             ),

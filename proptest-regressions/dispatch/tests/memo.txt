@@ -5,3 +5,4 @@
 # It is recommended to check this file in to source control so that
 # everyone who runs the test benefits from these saved cases.
 cc 3ead8e8626110fbce5c58bd60d574f9ac2f2ef8e738fb47186f88b80f9a85954 # shrinks to hops = [(false, false)]
+cc 751f00c9517c847e3e7d30669aef8d2d35eb5ec5afb3e39f902e3468d97f7c30 # shrinks to hops = [(false, false, false)], deepens = true

@@ -344,10 +344,12 @@ fn witnessed_counts(source: &str) -> ((usize, usize), (usize, usize), Ran) {
 }
 
 #[test]
-fn a_capped_bodys_callee_lays_one_layer_and_settles_its_other_bindings_over_it() {
+fn a_capped_bodys_callee_lays_one_layer_and_settles_its_other_bindings() {
     // `ENTRY` has a binding past the cap, so its bindings are open and `MIDDLE x` names none: the
     // load lays `MIDDLE` one layer, under `ENTRY`'s first, which witnesses `Elt`. Each other
-    // binding misses at run and settles over that witnessed layer, witnessing nothing.
+    // binding misses at run, witnessing nothing. The witnessed layer asks one question, how
+    // `LET y = x` retypes `Elt`: `Str` and `null` keep it and read the layer whole; a record
+    // re-answers it, keeps no question, and walks closed.
     let values = ["1", "\"s\"", "null"].into_iter().map(String::from);
     let values = values.chain((0..CAP - 2).map(|at| format!("{{a{at} = 1}}")));
     let calls: String = values
@@ -371,8 +373,8 @@ fn a_capped_bodys_callee_lays_one_layer_and_settles_its_other_bindings_over_it()
     assert_eq!(run_walks, walks, "the run witnesses nothing");
     assert_eq!(
         run_laid - laid,
-        CAP,
-        "each settlement reads over the witnessed layer"
+        2,
+        "`Str` and `null` read the witnessed layer whole; no record reads over it"
     );
     assert_eq!(
         (ran.tiers.laid, ran.tiers.settled),

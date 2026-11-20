@@ -34,7 +34,7 @@ use super::handle::{KType, Naming};
 use super::kind::KKind;
 #[cfg(any(test, feature = "generator"))]
 use super::node::TypeNode;
-use super::node::{ContentKey, NodeSchema, PathClass};
+use super::node::{ContentKey, DerivedId, NodeSchema, PathClass, Step};
 use super::schema::{SigOrigin, SigSchema};
 use super::shape::{DeferredReturnSurface, DispatchTokenElement};
 
@@ -138,6 +138,8 @@ const TAG_SCHEME: u8 = 0x31;
 const TAG_MEMO_GROUP: u8 = 0x32;
 const TAG_CODE_UNBUILT: u8 = 0x33;
 const TAG_PATH: u8 = 0x34;
+const TAG_PROJECTION: u8 = 0x35;
+const TAG_DERIVED: u8 = 0x36;
 
 /// The one place the hash function is touched. Feeds a domain-tagged, length-prefixed,
 /// little-endian byte stream into a BLAKE3 hasher and truncates the result to a `u128`.
@@ -280,6 +282,13 @@ pub(super) fn node_digest<'run, C: Naming<'run>>(
             bound,
         } => lexical_digest(*level, *name, lower.digest(), bound.digest()),
         TypeNode::Path { class, name, bound } => path_digest(*class, *name, bound.digest()),
+        TypeNode::Derived {
+            term,
+            name,
+            lower,
+            bound,
+        } => derived_digest(*term, *name, lower.digest(), bound.digest()),
+        TypeNode::Projection { base, step, .. } => projection_digest(base.digest(), *step),
         TypeNode::Union { members } => union_digest(scratch, members.raw()),
         TypeNode::ConstructorApply {
             constructor,
@@ -493,6 +502,36 @@ pub(super) fn path_digest(class: PathClass, name: TypeSymbol, bound: TypeDigest)
         .symbol(name.symbol())
         .digest(bound)
         .finish()
+}
+
+/// A derived name: its term's digest, its name and its two ends.
+pub(super) fn derived_digest(
+    term: DerivedId,
+    name: TypeSymbol,
+    lower: TypeDigest,
+    bound: TypeDigest,
+) -> TypeDigest {
+    DigestHasher::new(TAG_DERIVED)
+        .count(term.0[0] as usize)
+        .count(term.0[1] as usize)
+        .symbol(name.symbol())
+        .digest(lower)
+        .digest(bound)
+        .finish()
+}
+
+/// A projection: its base and its step. Its two ends are a function of its base, so they feed
+/// nothing.
+pub(super) fn projection_digest(base: TypeDigest, step: Step) -> TypeDigest {
+    let mut h = DigestHasher::new(TAG_PROJECTION);
+    h.digest(base);
+    match step {
+        Step::Field(name) => h.byte(0).symbol(name.symbol()),
+        Step::Element => h.byte(1),
+        Step::Key => h.byte(2),
+        Step::Value => h.byte(3),
+    };
+    h.finish()
 }
 
 /// A union — order-blind, matching its set-based identity: the member digests feed sorted, staged

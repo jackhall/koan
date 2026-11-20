@@ -15,16 +15,16 @@ use bumpstorage::{BumpAllocator, BumpVec};
 use super::chain::TypeChain;
 use super::handle::{DeclaredType, Handle, KType, Naming, Parametric, Scheme, TypeHandle};
 use super::lattice;
-use super::node::{PathClass, Variable};
+use super::node::{DerivedId, PathClass, Variable};
 use super::order;
 use super::ranking::{self, Judged};
 use super::schema::Members;
 use super::shape::Specificity;
-use super::sig_relations::{self, FitsFailure, InstanceFailure};
+use super::sig_relations::{self, FitsFailure};
 use super::stored::Linked;
 use super::substitute::{self, Side};
 use super::tiers::Habitat;
-use super::unify::Interval;
+use super::unify::{Interval, SolveRecord};
 
 /// Each of `handles`' nodes, entered once into `scratch`.
 fn enter_all<'s, 'run>(
@@ -160,6 +160,29 @@ pub fn judge_by_class<'ty, 's>(
     let mut nodes = BumpVec::with_capacity_in(arguments.len(), scratch);
     nodes.extend(arguments.iter().map(|argument| argument.linked(types)));
     ranking::judge_by_class(types, scratch, types.enter(declared.raw()), &nodes)
+}
+
+/// One priority class's step over the slots a caller knows: each `(slot, argument)` of `slots`
+/// admits the argument, jointly, in a collector over the group bounded by `bounds` with each
+/// variable `pinned` names pinned — what an earlier class solved — then the collector solves. Each
+/// interval is read over `slots`' positions, a point where `exact` (every argument one type)
+/// and the solve is reproducible.
+pub fn class_step<'s, 'ty: 's>(
+    types: &TypeChain<'ty, impl Habitat<'ty>>,
+    scratch: BumpAllocator<'s>,
+    bounds: &[KType],
+    pinned: &[Option<Parametric>],
+    slots: &[(Parametric, Parametric)],
+    exact: bool,
+) -> SolveRecord<'s> {
+    let bounds = enter_all(types, scratch, bounds.iter().map(|bound| bound.raw()));
+    let mut entered = BumpVec::with_capacity_in(pinned.len(), scratch);
+    entered.extend(pinned.iter().map(|to| to.map(|to| to.linked(types))));
+    let mut pairs = BumpVec::with_capacity_in(slots.len(), scratch);
+    pairs.extend(
+        (slots.iter()).map(|(slot, argument)| (slot.linked(types), argument.linked(types))),
+    );
+    ranking::class_step(types, scratch, &bounds, &entered, &pairs, exact)
 }
 
 /// The first two members of a union at a covariant position of `declared` — a binder's parameter,
@@ -307,15 +330,15 @@ pub fn instantiate_quantified<'ty, B: TypeHandle>(
 }
 
 /// *Fits*' instantiation clause for a function scheme, answering the least instance under
-/// `wanted`, a function type, in group order: [`InstanceFailure::NoInstance`] where the scheme does
-/// not fit `wanted`, and [`InstanceFailure::Unfixed`] where it does but no contribution reaches
-/// some variable. Each entry is a contribution's join or meet, so a solution under a `T` is a `T`.
+/// `wanted`, a function type, as a solve record in group order: unsolved where the scheme does not
+/// fit `wanted`, and a variable no contribution reaches reported unreached. Each entry is a
+/// contribution's join or meet, so a solution under a `T` is a `T`.
 pub fn instance_under<'s, 'run: 's, T: TypeHandle>(
     types: &TypeChain<'run, impl Habitat<'run>>,
     scratch: BumpAllocator<'s>,
     scheme: Scheme,
     wanted: T,
-) -> Result<BumpVec<'s, T>, InstanceFailure<'s>> {
+) -> SolveRecord<'s, T> {
     let scheme = types.enter(scheme.raw());
     sig_relations::instance_under(types, scratch, scheme, wanted.linked(types))
 }
@@ -471,6 +494,21 @@ pub fn substitute_paths<'ty, S: Substitutable>(
     sealed::Substitutable::through(kt, types, |node| {
         substitute::substitute_paths(types, scratch, node, &mut |class, name| {
             binding(class, name).map(|answer| answer.linked(types))
+        })
+    })
+}
+
+/// `kt` with each derived name `binding` answers for replaced by its answer: a type read under a
+/// binding, each derived name in it the type or the name its term gives there.
+pub fn substitute_derived<'ty, S: Substitutable>(
+    types: &TypeChain<'ty, impl Habitat<'ty>>,
+    scratch: BumpAllocator<'_>,
+    kt: S,
+    binding: &mut impl FnMut(DerivedId) -> Option<Parametric>,
+) -> S {
+    sealed::Substitutable::through(kt, types, |node| {
+        substitute::substitute_derived(types, scratch, node, &mut |term| {
+            binding(term).map(|answer| answer.linked(types))
         })
     })
 }

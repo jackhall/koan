@@ -63,12 +63,14 @@ pub enum Resolved<'a, X> {
 }
 
 /// A quote's code as `values` reads it, through [`Knotted::code_view`]: its flat syntax at `'read`,
-/// the storage a reader owns where the code is a view it lays flat, and the bindings its code
+/// the storage a reader owns where the code is a view it lays flat, the bindings its code
 /// carries, value words at `'a`, each a link read through the member — its `$` names' and its
-/// filled marks' — sorted by scope, then name.
+/// filled marks' — sorted by scope, then name, and each run-bound type name around it its content
+/// composes, by its index in the code's layout, beside the type it names.
 pub struct CodeView<'read, 'a, X> {
     pub body: &'read KExpression<'read>,
     pub bound: &'read [Binding<'a, X>],
+    pub composed: &'read [(u32, KType)],
 }
 
 /// One binding a code value carries — a `$` name's, a `$(…)` registration's or a fill's — in the

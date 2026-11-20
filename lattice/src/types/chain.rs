@@ -62,7 +62,7 @@ use super::digest::{self, ComponentMember, TypeDigest, schema_content_digest};
 use super::handle::{DeclaredType, Handle, KType, Naming, Parametric, TypeHandle, wrap};
 #[cfg(test)]
 use super::kind::KKind;
-use super::node::{ContentKey, Group, NodeSchema, PathClass, TypeNode};
+use super::node::{ContentKey, DerivedId, Group, NodeSchema, PathClass, Step, TypeNode};
 use super::numbering;
 use super::order::{Dropped, is_subtype_of, unsubsumed};
 use super::record::{Record, map_fields};
@@ -956,6 +956,121 @@ impl<'t, H: Habitat<'t>> TypeChain<'t, H> {
             name,
             lower,
             bound,
+        })
+    }
+
+    /// The derived name of the term whose digest is `term`, rendered `name`, between `lower` and
+    /// `bound`. A `lower` other than `Never` lies strictly under `bound`, as a lexical variable's
+    /// does.
+    pub fn derived(
+        &self,
+        scratch: BumpAllocator<'_>,
+        term: DerivedId,
+        name: TypeSymbol,
+        lower: KType,
+        bound: KType,
+    ) -> Parametric {
+        let (lower, bound) = (lower.linked(self), bound.linked(self));
+        Parametric::read(self.derived_node(scratch, term, name, lower, bound))
+    }
+
+    /// [`derived`](Self::derived) as a node.
+    pub(super) fn derived_node(
+        &self,
+        scratch: BumpAllocator<'_>,
+        term: DerivedId,
+        name: TypeSymbol,
+        lower: Linked<'t>,
+        bound: Linked<'t>,
+    ) -> Linked<'t> {
+        self.assert_bound(lower);
+        self.assert_bound(bound);
+        debug_assert!(
+            lower == Handle::NEVER
+                || (lower != bound && is_subtype_of(self, scratch, lower, bound)),
+            "a derived name's lower end lies strictly under its bound",
+        );
+        let digest = digest::derived_digest(term, name, lower.digest(), bound.digest());
+        self.intern_digested(digest, || TypeNode::Derived {
+            term,
+            name,
+            lower,
+            bound,
+        })
+    }
+
+    /// The `step` piece of whatever `base` is at every binding, where every binding has it: the
+    /// piece itself where `base` is a list, dict or record that has it (concrete or not), `Never`
+    /// over `Never`, the union of the pieces over a union, and over a lexical variable or a
+    /// projection whose bound lies under the step's family — a record with the field, a list, a
+    /// dict — a [`TypeNode::Projection`] between the pieces of its two ends, or the one type they
+    /// meet at. `None` where some binding of `base` may lack the piece: a type lacking it, a
+    /// variable whose bound does not guarantee it, any other variable, a scheme.
+    pub fn projection(
+        &self,
+        scratch: BumpAllocator<'_>,
+        base: Parametric,
+        step: Step,
+    ) -> Option<Parametric> {
+        let base = base.linked(self);
+        Some(Parametric::read(self.projection_node(scratch, base, step)?))
+    }
+
+    /// [`projection`](Self::projection) as a node. The canonical shape is the door's: no
+    /// projection over a composite or a union, and none whose ends meet.
+    pub(super) fn projection_node(
+        &self,
+        scratch: BumpAllocator<'_>,
+        base: Linked<'t>,
+        step: Step,
+    ) -> Option<Linked<'t>> {
+        Some(match (base.view(), step) {
+            (TypeNode::Never, _) => self.never,
+            (TypeNode::List { element }, Step::Element) => element,
+            (TypeNode::Dict { key, .. }, Step::Key) => key,
+            (TypeNode::Dict { value, .. }, Step::Value) => value,
+            (TypeNode::Record { fields }, Step::Field(name)) => fields.get(name.symbol())?,
+            (TypeNode::Union { members }, _) => {
+                let mut pieces = BumpVec::with_capacity_in(members.len(), scratch);
+                for member in members.iter() {
+                    pieces.push(self.projection_node(scratch, member, step)?);
+                }
+                self.union_of(scratch, &pieces)
+            }
+            (
+                TypeNode::Lexical { lower, bound, .. }
+                | TypeNode::Derived { lower, bound, .. }
+                | TypeNode::Projection { lower, bound, .. },
+                _,
+            ) => {
+                // Every binding lies under the bound, so where the bound lies under the family
+                // every binding has the piece.
+                let family = match step {
+                    Step::Field(name) => self.record(scratch, &[(name, self.any)]),
+                    Step::Element => self.list(self.any),
+                    Step::Key | Step::Value => self.dict(self.any, self.any),
+                };
+                if !is_subtype_of(self, scratch, bound, family) {
+                    return None;
+                }
+                let upper = self.projection_node(scratch, bound, step)?;
+                let lower = self.projection_node(scratch, lower, step)?;
+                if upper == self.never || lower == upper {
+                    return Some(upper);
+                }
+                debug_assert!(
+                    is_subtype_of(self, scratch, lower, upper),
+                    "a projection's lower end lies under its bound",
+                );
+                let digest = digest::projection_digest(base.digest(), step);
+                self.intern_digested(digest, || TypeNode::Projection {
+                    base,
+                    step,
+                    lower,
+                    bound: upper,
+                })
+            }
+            _ => return None,
         })
     }
 

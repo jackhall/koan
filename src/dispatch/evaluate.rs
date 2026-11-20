@@ -558,7 +558,7 @@ fn ascribe<'step, 'graph, 'here, 'scratch>(
             Ok(view) => {
                 #[cfg(test)]
                 if (at.view.facts())
-                    .view_tree(types, at.view.shape(), at.view.shape().site_of_node(node))
+                    .view_tree(at.view.shape(), at.view.shape().site_of_node(node))
                     .and_then(|tree| tree.digest())
                     .is_none()
                 {
@@ -569,7 +569,7 @@ fn ascribe<'step, 'graph, 'here, 'scratch>(
                 debug_assert!(
                     at.view
                         .facts()
-                        .view_tree(types, at.view.shape(), at.view.shape().site_of_node(node))
+                        .view_tree(at.view.shape(), at.view.shape().site_of_node(node))
                         .and_then(|tree| tree.digest())
                         .is_none_or(|digest| digest
                             == Value::Knotted(view).digest(types, &scratch)),
@@ -858,7 +858,7 @@ fn evaluated<'step, 'graph, 'here, 'scratch>(
         exit.value(&offered);
         exit.handle(returns);
     });
-    let door = (&at.code, at.view.facts());
+    let door = (&at.code, at.view.facts(), &scratch);
     match crate::program::eval(
         program,
         door,

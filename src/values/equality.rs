@@ -49,7 +49,8 @@ impl<'left, X: Knotted> Value<'left, X> {
     /// compares its identity first, so it never equals its bare payload; two types are equal when
     /// they are the same handle; a knot's data node compares as the plain value of its kind would,
     /// its cells read through it; two functions by identity, then their closure bindings; two
-    /// quotes' code as syntax, part by part with spans ignored, then the values their names bind.
+    /// quotes' code as syntax, part by part with spans ignored, then the type values its content
+    /// composes and the values their names bind.
     /// Each side compares at the type it is seen at: a record by the fields that type names, a
     /// tagged value's payload at its representation. The two sides may live at unrelated
     /// lifetimes. A module or a barrier on either side is [`Incomparable`], and so is a pair whose
@@ -224,7 +225,12 @@ fn code_gate<'left, 'right, X: Knotted, Y: Knotted>(
                 .zip(right)
                 .all(|(left, right)| left.key() == right.key())
     };
-    if !expression_equal(left.body, right.body) || !names(left.bound, right.bound) {
+    // Code whose content composes a name around it is that name's: one written quote born under
+    // two bindings of it is two codes.
+    if !expression_equal(left.body, right.body)
+        || !names(left.bound, right.bound)
+        || left.composed != right.composed
+    {
         return false;
     }
     pending.extend(left.bound.iter().zip(right.bound).map(|(left, right)| {

@@ -163,13 +163,12 @@ never a bundle — the lattice knows about types and symbols and nothing else.
 - [Recursion over run-time types](../../../roadmap/performance/recursion-over-run-time-types.md)
   — every structural walk, relation and rendering over types as deep as a
   run-time value's carried type.
-- [Projection types](../../../roadmap/types/projection-types.md) — the
-  projection node and the unifier's descent into it.
 - [A carried union at a contravariant position](../../../roadmap/types/contravariant-union-solve.md)
   — a solve over an argument's union blind to its member order.
-- [Every typing rule states its question](../../../roadmap/one-build/typing-rules-state-their-questions.md)
-  — each judgement about a lexical variable a question with finitely many
-  answers, where a rule is handed a type today.
+- [A solve reports what it could not establish](../../../roadmap/types/solve-reports-what-it-could-not-establish.md)
+  — a solve that is not reproducible handed back with its reason.
+- [A slot type no value inhabits](../../../roadmap/types/uninhabited-slot-types.md)
+  — `{x :Never}` at a slot read as the `Never` it is in the class walk.
 - [The types project's unplanned work](../../../roadmap/types/README.md#unplanned-work)
   — anonymous structural recursion in types, and a singleton static type for
   a type value.

@@ -21,7 +21,7 @@ use crate::symbols::TypeSymbol;
 use bumpstorage::{BumpAllocator, BumpVec};
 
 use super::chain::TypeChain;
-use super::node::{PathClass, TypeNode, Variable};
+use super::node::{DerivedId, PathClass, TypeNode, Variable};
 use super::schema::{Members, member};
 use super::stored::Linked;
 use super::tiers::Habitat;
@@ -83,6 +83,24 @@ pub(super) fn substitute_paths<'run>(
     }
     rebuild(types, scratch, kt, &mut |_, node, _| match *node {
         TypeNode::Path { class, name, .. } => binding(class, name),
+        _ => None,
+    })
+}
+
+/// `kt` with every derived name `binding` answers for replaced by its answer, under any scheme —
+/// no scheme captures one. What a binding reads a derived name through: the type its term gives,
+/// or the name of the term the binding leaves open.
+pub(super) fn substitute_derived<'run>(
+    types: &TypeChain<'run, impl Habitat<'run>>,
+    scratch: BumpAllocator<'_>,
+    kt: Linked<'run>,
+    binding: &mut impl FnMut(DerivedId) -> Option<Linked<'run>>,
+) -> Linked<'run> {
+    if !kt.contains_rigid() {
+        return kt;
+    }
+    rebuild(types, scratch, kt, &mut |_, node, _| match *node {
+        TypeNode::Derived { term, .. } => binding(term),
         _ => None,
     })
 }
@@ -151,7 +169,10 @@ pub enum Side {
 /// `kt` read through intervals: each free variable — a `Quantified` under none of `kt`'s own
 /// schemes, a lexical variable, a `Parameter` — and each opaque carrier that `interval` answers for
 /// replaced by the end `side` takes at its position; one it answers `None` for is kept. A signature
-/// is opaque.
+/// is opaque. A projection is read through its base, which the reader is handed: every step is
+/// covariant, so the piece of the base's end is the projection's end. A reader may answer a type
+/// that is no binding of the base, which may lack the piece; the projection then reads as its own
+/// end, which lies around every binding's piece.
 ///
 /// An application's pin is compared by handle, so it is read by its own rule
 /// ([`read_application`]): kept where it reads alike from both sides, else the application is
@@ -192,15 +213,32 @@ fn read_through_dyn<'run>(
         return kt;
     }
     rebuild(types, scratch, kt, &mut |at, node, context| {
+        let above = matches!(
+            (side, context.variance()),
+            (Side::Above, Variance::Co) | (Side::Below, Variance::Contra)
+        );
         let free = match *node {
             TypeNode::SignatureApply { .. } | TypeNode::SignatureMeet { .. } => {
                 return Some(read_application(
                     types, scratch, at, side, context, interval,
                 ));
             }
+            // Its base sits at its own position, read by a walk rooted there.
+            TypeNode::Projection {
+                base,
+                step,
+                lower,
+                bound,
+            } => {
+                let side = if above { Side::Above } else { Side::Below };
+                let base = read_through_dyn(types, scratch, base, side, interval);
+                let end = if above { bound } else { lower };
+                return Some(types.projection_node(scratch, base, step).unwrap_or(end));
+            }
             TypeNode::Quantified { .. } => context.binder_depth() == 0,
             TypeNode::Lexical { .. }
             | TypeNode::Path { .. }
+            | TypeNode::Derived { .. }
             | TypeNode::Parameter { .. }
             | TypeNode::Carrier { .. } => true,
             _ => false,
@@ -209,10 +247,7 @@ fn read_through_dyn<'run>(
             return None;
         }
         let ends = interval(at, node)?;
-        Some(match (side, context.variance()) {
-            (Side::Above, Variance::Co) | (Side::Below, Variance::Contra) => ends.upper,
-            _ => ends.lower,
-        })
+        Some(if above { ends.upper } else { ends.lower })
     })
 }
 

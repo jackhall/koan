@@ -28,26 +28,33 @@
 
 mod activation;
 mod admission;
+mod application;
 mod build_layer;
 mod builtins;
 mod channels;
 mod closed;
 mod closure;
 mod composition;
+mod derived;
 mod facts;
 mod fault;
 mod filled;
 mod groups;
 mod header;
+mod heads;
 mod keyed;
 mod memo;
+mod nominal;
 mod question;
 mod record_types;
 mod records;
 mod relay;
+mod rule;
+mod runs;
 mod shape;
 mod shapes;
 mod signature;
+mod signed;
 mod spelling;
 mod stamp;
 mod tree;
@@ -65,6 +72,7 @@ pub(crate) use shape::IMPLICIT;
 pub(crate) use signature::{pair_label, traced_quote};
 pub(crate) use spelling::{PathSpelling, SpelledRoot, path_spelling, tag_projection};
 
+pub use crate::type_lattice::DerivedId;
 pub use activation::{Activation, ActivationView, Reading};
 pub use admission::{Admission, Condition, Keeping};
 pub use build_layer::{BuildLayer, Witnessing};
@@ -74,6 +82,10 @@ pub(crate) use closed::CLOSED_LAID;
 pub use closed::{ClosedTypes, closed_under};
 pub use closure::ClosureBindings;
 pub use composition::{ComposedSyntax, Composition, quote_paths};
+pub use derived::{
+    Binds, Decider, Derived, DerivedName, DerivedTerm, LevelsOnly, Spellings, bare_variable,
+    handed, is_variable, kind_varies, may_be_never, rigid_answer,
+};
 pub(crate) use facts::Flattened;
 pub use facts::{
     Address, Binding, Bound, Cut, Frontier, Mark, Noted, OpenKind, OpenMark, Store, UnitId,
@@ -87,6 +99,11 @@ pub use fault::{
 pub use filled::{FilledSites, filled_sites};
 pub use groups::{BuiltinGroup, GroupFrame, is_equal, is_equality, is_unequal};
 pub use header::{HalfHeader, RegionHeader};
+pub use heads::{
+    applied, applied_union, constructed_upper, declared_field, declared_member, declared_variant,
+    head_params, judge_signed, needing, pinned, shown_view, signature_outside, tag_union, unbuilt,
+    variant_label, variant_named, variants, view_signature,
+};
 pub use keyed::{Keyed, KeyedEntry};
 pub use memo::{
     Decided, Decision, DecisionMemo, Entry, EntryFamily, EventSite, FANOUT, MemoFamily, MemoKey,
@@ -94,30 +111,38 @@ pub use memo::{
 };
 #[cfg(test)]
 pub(crate) use memo::{HASH_MASK, PROBED};
+pub use nominal::{Handed, Nominals, Schema, sealed_nominals};
 pub use question::{
-    Answer, Answered, Levels, Question, answer, free_variables, keeps, rebound, unsatisfiable,
+    Answer, Answered, Levels, LevelsOver, Question, StoreBinds, answer, free_variables, is_module,
+    keeps, rebound, unsatisfiable,
 };
 pub use record_types::{CloseLaying, Closed, Closer, Laying, Named};
 pub use records::{
     AtRun, BodyAt, BodyRef, Born, CallTrace, Closing, CodeSyntax, ComposedRoot, Content, Deps,
-    DepsGathering, Facts, FactsOver, Fixed, Folds, Held, Layers, LoadFacts, LoadLayer, LoadRecords,
-    NamedVariable, Open, Restamp, Retypes, SiteDeps, SlotMap, Traced, Typed, UnitFacts, Untraced,
-    Written, tree_deps,
+    DepsGathering, Facts, FactsOver, Fixed, Folds, Held, Holder, Layers, LoadFacts, LoadLayer,
+    LoadRecords, NamedVariable, Open, Restamp, Retypes, SiteDeps, SlotMap, Traced, Typed,
+    UnitFacts, UnitRecord, Untraced, Written, reads_module_binders, tree_deps,
+};
+pub use rule::Rule;
+pub use runs::{
+    ArmRunning, GuardKind, Run, Running, Surfacing, arms_run, first_ranked, guard_outranks,
+    never_runs, runs, solve_read, winner,
 };
 pub use shape::{
     Arm, BodyShape, BuiltinIndex, Candidate, CandidateList, CaptureChain, CaptureSlot,
     CaptureSource, CaptureSpec, Component, ComponentIndex, Coordinate, Guard, Lands, Listed,
-    Located, Mention, MentionClass, Offer, PathId, Position, QuotedPart, Ranking, RefusedLine,
-    Registration, Repeated, Scalar, Segment, ShapeError, ShapeKind, Shown, Site, Sites, Slot, Span,
+    Located, Mention, MentionClass, NeverSatisfied, Offer, PathId, Position, QuotedPart, Ranking,
+    Registration, Repeated, Scalar, Segment, ShapeError, ShapeKind, Shown, Site, Sites, Slot,
     SpelledPath, SurfacedHead, Target, TopLevel, TypeExpression, Unit, UnitHolds, UnitIndex,
     UnitWork, ViewRefused, Which, arm_refused, each_part, follow, in_body_of, part_of,
-    selection_refused, source_of, spelled, view_refused,
+    refused_lines, selection_refused, shown_against, source_of, spelled, view_refused,
 };
 pub use shapes::{BindSite, CallSite, Code, Origin, Shapes};
+pub use signed::{Signed, Signing, sealed_signature};
 pub use stamp::{Ask, Asked, Level, SiteRequest, Sought, Stamp};
 pub use tree::{
-    Bare, Binder, Identity, KnotNode, Leaf, NodeCapture, Revealed, Sealing, Tree, Unfolded,
-    ViewRecord, Within, hides,
+    Bare, Binder, Called, Callee, Identity, KnotNode, Leaf, NodeCapture, Revealed, Sealing, Tree,
+    UndecidedCall, Unfolded, ViewRecord, Within, hides,
 };
 pub use typed::{
     Arms, BodyClass, Caching, Callable, CandidateRoute, Elaboration, ElaborationDisplay,

@@ -31,9 +31,10 @@ use crate::values::{ContentDigest, Weight};
 
 use super::admission::Admission;
 use super::closed::ClosedTypes;
+use super::derived::Derived;
 use super::facts::{Binding, Bound, Frontier, UnitId, Unknown};
 use super::keyed::Keyed;
-use super::records::{Closing, Held, UnitFacts};
+use super::records::{Closing, Held, Holder, UnitFacts, UnitRecord};
 use super::relay::Relay;
 use super::shape::{Segment, ShapeError, Site, Slot};
 use super::shapes::Shapes;
@@ -52,7 +53,8 @@ pub struct Witnessing<'a> {
     /// keeps every question changes, and the types its own closing records name.
     pub keys: &'a [DeclaredType<Parametric>],
     /// Whether a binding keeping every question still walks: the first closing walk over it re-ran
-    /// a unit, or one of its closing records' frontiers woke under that walk.
+    /// a unit, one of its closing records' frontiers woke under that walk, the walk substituted an
+    /// open tree, or a key it closed reads a module binder the witness binds.
     pub holds: bool,
     /// Its [`witnessed_digest`](super::memo::witnessed_digest): what the spine of a cell over it
     /// carries in its memo key.
@@ -77,14 +79,18 @@ pub struct BuildLayer<'a> {
     closes: bool,
     /// What it keeps for the bindings it admits, where a witnessing walk laid it.
     witnessing: Option<Witnessing<'a>>,
-    /// Each unit the walk ran, beside its record and the frontier it gathered.
-    pub(super) units: Keyed<'a, (UnitId, (&'a UnitFacts<'a>, Frontier<'a>))>,
+    /// Each unit the walk ran, beside its record and the frontier it gathered, and each it marked
+    /// unreached.
+    pub(super) units: Keyed<'a, (UnitId, UnitRecord<'a>)>,
     /// Each owning body the walk closed.
     pub(super) closings: Keyed<'a, (Segment, (&'a Closing<'a>, Frontier<'a>))>,
     /// Which of `units` holds each site, through and path fact: the facts the shape cannot place.
     pub(super) index: Keyed<'a, (Held, u32)>,
     /// Each closed tree `units` computed, a subtree included, by its identity.
     pub(super) trees: Keyed<'a, (ContentDigest, &'a Tree<'a>)>,
+    /// Each derived name the walk met that no layer beneath held: where a reader finds the term
+    /// of a name this layer's records hold.
+    derived: Derived<'a>,
     refusal: Option<&'a ShapeError<'a>>,
     /// By the type's digest: empty under the root and in a region.
     terms: Keyed<'a, (TypeDigest, Term<'a>)>,
@@ -107,6 +113,7 @@ impl<'a> BuildLayer<'a> {
         closings: Keyed::EMPTY,
         index: Keyed::EMPTY,
         trees: Keyed::EMPTY,
+        derived: Derived::EMPTY,
         refusal: None,
         terms: Keyed::EMPTY,
         requests: Keyed::EMPTY,
@@ -125,6 +132,7 @@ impl<'a> BuildLayer<'a> {
         let (units, closings) = writes.sorted(scratch);
         BuildLayer::laid(lay, scratch, shapes, parent, own, &units, &closings)
             .with_closed(writes.closed())
+            .deriving(writes.derived(lay, scratch))
     }
 
     /// The one lay: a walk's records over `shapes`, `units` and `closings` sorted by id, laid
@@ -135,13 +143,15 @@ impl<'a> BuildLayer<'a> {
         shapes: &Shapes<'_>,
         parent: Option<&'a BuildLayer<'a>>,
         own: Binding<'a>,
-        units: &[(UnitId, (&'a UnitFacts<'a>, Frontier<'a>))],
+        units: &[(UnitId, UnitRecord<'a>)],
         closings: &[(Segment, (&'a Closing<'a>, Frontier<'a>))],
     ) -> Self {
         let units = Keyed::from_sorted(collect(lay, units.iter().copied()));
         let mut held = BumpVec::new_in(scratch);
-        for (at, (_, (facts, _))) in units.iter().enumerate() {
-            facts.held(&mut |key| held.push((key, at as u32)));
+        for (at, (_, record)) in units.iter().enumerate() {
+            if let UnitRecord::Typed(facts, _) = record {
+                facts.held(&mut |key| held.push((key, at as u32)));
+            }
         }
         held.sort_unstable();
         // A class many units resolve a path to is found through the first.
@@ -153,17 +163,17 @@ impl<'a> BuildLayer<'a> {
             "each fact lies in one unit's record"
         );
         if cfg!(debug_assertions) {
-            for (id, (facts, _)) in units.iter() {
+            for (id, facts) in typed(units) {
                 let placed = facts.typed.iter().all(|(segment, typed)| {
                     let mut slots = (typed.declared.iter().map(|(slot, _)| *slot))
                         .chain(typed.registered.iter().map(|(slot, _)| *slot))
                         .chain(typed.binders.iter().map(|(slot, _)| *slot))
                         .chain(typed.contents.iter().map(|(slot, _)| *slot));
-                    slots.all(|slot| shapes.slot_unit(*segment, slot) == *id)
+                    slots.all(|slot| shapes.slot_unit(*segment, slot) == id)
                         && (typed.statements.iter())
-                            .all(|(index, _)| shapes.running(*segment, *index) == *id)
+                            .all(|(index, _)| shapes.running(*segment, *index) == id)
                 }) && (facts.born.iter())
-                    .all(|(body, _)| shapes.birth_unit(*body) == Some(*id));
+                    .all(|(body, _)| shapes.birth_unit(*body) == Some(id));
                 assert!(
                     placed,
                     "a slot's, statement's or birth's fact lies in the unit the shape names"
@@ -181,6 +191,7 @@ impl<'a> BuildLayer<'a> {
             closings: Keyed::from_sorted(collect(lay, closings.iter().copied())),
             index: Keyed::from_sorted(collect(lay, held.iter().copied())),
             trees: computed_trees(lay, scratch, units),
+            derived: Derived::EMPTY,
             refusal: None,
             terms: Keyed::EMPTY,
             requests: Keyed::EMPTY,
@@ -190,18 +201,20 @@ impl<'a> BuildLayer<'a> {
 
     /// A binding's layer over `parent`, a witnessed layer the binding keeps every question of and
     /// re-runs nothing over: it binds `own`, admits by `admission`, and holds no record, only
-    /// `closed`, its table of closed types. No walk lays it.
+    /// `closed`, its table of closed types, beside the derived names that table names that no
+    /// layer beneath holds. No walk lays it.
     pub fn kept(
         parent: &'a BuildLayer<'a>,
         own: Binding<'a>,
         admission: Admission<'a>,
-        closed: ClosedTypes<'a>,
+        (closed, derived): (ClosedTypes<'a>, Derived<'a>),
     ) -> Self {
         BuildLayer {
             parent: Some(parent),
             binding: own,
             admission,
             closed,
+            derived,
             ..BuildLayer::EMPTY
         }
         .flagged()
@@ -268,6 +281,25 @@ impl<'a> BuildLayer<'a> {
         BuildLayer { closed, ..self }.flagged()
     }
 
+    /// These facts beside `derived`, the derived names their walk met that no layer beneath held.
+    pub(super) fn deriving(self, derived: Derived<'a>) -> Self {
+        BuildLayer { derived, ..self }
+    }
+
+    /// The derived names this layer's walk met that no layer beneath held.
+    pub fn derived(&self) -> Derived<'a> {
+        self.derived
+    }
+
+    /// The derived name `id`, where this layer or one below it laid it.
+    pub fn derived_name(
+        &self,
+        id: crate::type_lattice::DerivedId,
+    ) -> Option<super::derived::DerivedName<'a>> {
+        self.chain()
+            .find_map(|layer| layer.derived.get(id).copied())
+    }
+
     /// This layer with [`closes`](Self::closes) set from its own table and its parent's: every
     /// constructor that sets either ends here.
     fn flagged(self) -> Self {
@@ -297,9 +329,8 @@ impl<'a> BuildLayer<'a> {
         let mut relay = Relay::new(lay, scratch, binding);
         let (units, closings) = writes.sorted(scratch);
         let mut laid = BumpVec::with_capacity_in(units.len(), scratch);
-        for (unit, (facts, frontier)) in units.iter() {
-            let frontier = relay.frontier(*frontier);
-            laid.push((*unit, (resident(lay, relay.unit(facts)), frontier)));
+        for (unit, record) in units.iter() {
+            laid.push((*unit, relaid_record(lay, &mut relay, *record)));
         }
         let mut closed = BumpVec::with_capacity_in(closings.len(), scratch);
         for (body, (closing, frontier)) in closings.iter() {
@@ -310,7 +341,12 @@ impl<'a> BuildLayer<'a> {
         bound.extend(own.iter().map(|(unknown, at)| (*unknown, relay.bound(at))));
         let own = Binding::laid(lay, &mut bound);
         BuildLayer::laid(lay, scratch, shapes, parent, own, &laid, &closed)
-            .with_closed(writes.closed().copied(lay))
+            .with_closed(
+                writes
+                    .closed()
+                    .copied(lay, |tree| resident(lay, relay.tree(tree))),
+            )
+            .deriving(writes.derived(lay, scratch))
     }
 
     /// These facts admitting a binding by `admission`.
@@ -354,9 +390,8 @@ impl<'a> BuildLayer<'a> {
             "a region layer holds no refusal, no term and no request"
         );
         let mut units = BumpVec::with_capacity_in(self.units.len(), scratch);
-        for (unit, (facts, frontier)) in self.units.iter() {
-            let frontier = relay.frontier(*frontier);
-            units.push((*unit, (resident(lay, relay.unit(facts)), frontier)));
+        for (unit, record) in self.units.iter() {
+            units.push((*unit, relaid_record(lay, relay, *record)));
         }
         let mut closings = BumpVec::with_capacity_in(self.closings.len(), scratch);
         for (body, (closing, frontier)) in self.closings.iter() {
@@ -373,7 +408,7 @@ impl<'a> BuildLayer<'a> {
             parent,
             binding,
             admission: self.admission.relaid(lay, relay),
-            closed: self.closed.copied(lay),
+            closed: (self.closed).copied(lay, |tree| resident(lay, relay.tree(tree))),
             closes: false,
             witnessing: self.witnessing.map(|witnessing| Witnessing {
                 names: collect(lay, witnessing.names.iter().copied()),
@@ -385,6 +420,7 @@ impl<'a> BuildLayer<'a> {
             closings: Keyed::from_sorted(collect(lay, closings.iter().copied())),
             index: Keyed::from_sorted(collect(lay, self.index.iter().copied())),
             trees: computed_trees(lay, scratch, units),
+            derived: self.derived.laid(lay),
             refusal: None,
             terms: Keyed::EMPTY,
             requests: Keyed::EMPTY,
@@ -414,8 +450,8 @@ impl<'a> BuildLayer<'a> {
     pub fn weight(&self) -> Weight {
         let mut weight = Weight::flat::<()>();
         for layer in self.chain() {
-            let units = Weight::run::<(UnitId, (&UnitFacts<'_>, Frontier<'_>))>(layer.units.len())
-                .plus(Weight::run::<UnitFacts<'_>>(layer.units.len()));
+            let units = Weight::run::<(UnitId, UnitRecord<'_>)>(layer.units.len())
+                .plus(Weight::run::<UnitFacts<'_>>(typed(layer.units).count()));
             let closings =
                 Weight::run::<(Segment, (&Closing<'_>, Frontier<'_>))>(layer.closings.len())
                     .plus(Weight::run::<Closing<'_>>(layer.closings.len()));
@@ -431,7 +467,10 @@ impl<'a> BuildLayer<'a> {
                     Weight::run::<(DeclaredType<Parametric>, DeclaredType<KType>)>(
                         layer.closed.len(),
                     ),
-                );
+                )
+                .plus(Weight::run::<super::derived::DerivedName<'_>>(
+                    layer.derived.names().len(),
+                ));
         }
         weight
     }
@@ -443,9 +482,11 @@ impl<'a> BuildLayer<'a> {
 
     /// Hand `each` every type this layer's own records and requests name.
     pub(crate) fn each_own_type(&self, each: &mut dyn FnMut(DeclaredType<Parametric>)) {
-        for (_, (facts, frontier)) in self.units.iter() {
-            facts.each_type(each);
-            frontier.each_type(each);
+        for (_, record) in self.units.iter() {
+            if let UnitRecord::Typed(facts, frontier) = record {
+                facts.each_type(each);
+                frontier.each_type(each);
+            }
         }
         for (_, (closing, frontier)) in self.closings.iter() {
             closing.each_type(each);
@@ -455,6 +496,7 @@ impl<'a> BuildLayer<'a> {
             request.each_type(each);
         }
         self.closed.each_type(each);
+        self.derived.each_type(each);
         (self.admission).each_kept(&mut |answered| answered.question.each_type(each));
         for key in self
             .witnessing
@@ -530,17 +572,23 @@ impl<'a> BuildLayer<'a> {
     /// Its own record of `unit`, where its walk ran it.
     #[cfg(test)]
     pub(crate) fn unit_of(&self, unit: UnitId) -> Option<&'a UnitFacts<'a>> {
-        self.unit(unit).map(|(facts, _)| facts)
+        self.unit(unit)?.typed().map(|(facts, _)| facts)
     }
 
-    /// The units it holds a record of, by id.
+    /// The units it holds a record of, by id: not those it marked unreached.
     #[cfg(test)]
     pub(crate) fn own_units(&self) -> impl Iterator<Item = UnitId> + '_ {
-        self.units.iter().map(|(unit, _)| *unit)
+        typed(self.units).map(|(unit, _)| unit)
     }
 
-    /// Its own record of `unit`, beside its frontier.
-    pub(crate) fn unit(&self, unit: UnitId) -> Option<(&'a UnitFacts<'a>, Frontier<'a>)> {
+    /// The units it marked unreached, by id.
+    #[cfg(test)]
+    pub(crate) fn unreached_units(&self) -> impl Iterator<Item = UnitId> + '_ {
+        (self.units.iter()).filter_map(|(unit, record)| record.typed().is_none().then_some(*unit))
+    }
+
+    /// Its own record of `unit`, or its mark that its walk did not reach `unit`.
+    pub(crate) fn unit(&self, unit: UnitId) -> Option<UnitRecord<'a>> {
         self.units.get(unit).map(|(_, record)| *record)
     }
 
@@ -552,7 +600,8 @@ impl<'a> BuildLayer<'a> {
     /// Its own record holding `held`, beside its unit.
     pub(super) fn holding(&self, held: Held) -> Option<(UnitId, &'a UnitFacts<'a>)> {
         let (_, at) = self.index.get(held)?;
-        let (unit, (facts, _)) = self.units[*at as usize];
+        let (unit, record) = self.units[*at as usize];
+        let (facts, _) = record.typed().expect("the index points at reached units");
         Some((unit, facts))
     }
 
@@ -562,25 +611,27 @@ impl<'a> BuildLayer<'a> {
         &self,
         segment: Segment,
         identity: Identity,
-        each: &mut dyn FnMut(UnitId, Slot),
+        each: &mut dyn FnMut(UnitId, Holder),
     ) {
         let entries = self.index.entries();
-        let from =
-            entries.partition_point(|(held, _)| *held < Held::Holder(segment, identity, Slot(0)));
+        let first = Held::Holder(segment, identity, Holder::Slot(Slot(0)));
+        let from = entries.partition_point(|(held, _)| *held < first);
         for (held, at) in &entries[from..] {
-            let Held::Holder(body, holding, slot) = *held else {
+            let Held::Holder(body, holding, holder) = *held else {
                 break;
             };
             if body != segment || holding != identity {
                 break;
             }
-            each(self.units[*at as usize].0, slot);
+            each(self.units[*at as usize].0, holder);
         }
     }
 
-    /// The closed tree whose identity is `digest`, among those its own records computed.
+    /// The closed tree whose identity is `digest`, among those its own records computed and those
+    /// its binding gives the trees of the records it absorbed.
     pub(super) fn tree_of(&self, digest: ContentDigest) -> Option<&'a Tree<'a>> {
-        self.trees.get(digest).map(|(_, tree)| *tree)
+        (self.trees.get(digest).map(|(_, tree)| *tree))
+            .or_else(|| self.closed.tree(Identity::Closed(digest)))
     }
 }
 
@@ -588,13 +639,35 @@ impl<'a> BuildLayer<'a> {
 fn computed_trees<'a>(
     lay: impl Lays<'a>,
     scratch: BumpAllocator<'_>,
-    units: Keyed<'a, (UnitId, (&'a UnitFacts<'a>, Frontier<'a>))>,
+    units: Keyed<'a, (UnitId, UnitRecord<'a>)>,
 ) -> Keyed<'a, (ContentDigest, &'a Tree<'a>)> {
-    let computed = (units.iter())
-        .flat_map(|(_, (facts, _))| facts.typed.iter())
+    let computed = typed(units)
+        .flat_map(|(_, facts)| facts.typed.iter())
         .flat_map(|(_, typed)| {
             (typed.contents.iter().map(|(_, tree)| tree))
                 .chain(typed.trees.iter().map(|(_, tree)| *tree))
         });
     closed_trees(lay, scratch, computed)
+}
+
+/// The units of `units` a walk reached, each beside its facts.
+pub(super) fn typed<'a>(
+    units: Keyed<'a, (UnitId, UnitRecord<'a>)>,
+) -> impl Iterator<Item = (UnitId, &'a UnitFacts<'a>)> + 'a {
+    (units.entries().iter()).filter_map(|(unit, record)| Some((*unit, record.typed()?.0)))
+}
+
+/// `record` laid again through `lay` by `relay`.
+fn relaid_record<'to, 'from, L: Lays<'to>>(
+    lay: L,
+    relay: &mut Relay<'to, '_, '_, 'from, L>,
+    record: UnitRecord<'from>,
+) -> UnitRecord<'to> {
+    match record {
+        UnitRecord::Typed(facts, frontier) => {
+            let frontier = relay.frontier(frontier);
+            UnitRecord::Typed(resident(lay, relay.unit(facts)), frontier)
+        }
+        UnitRecord::Unreached => UnitRecord::Unreached,
+    }
 }

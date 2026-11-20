@@ -1662,6 +1662,9 @@ type outside the one error that lists names, and on a retired lifetime name.
 
 ## Open work
 
+- [A head reading its parameters' types](../../roadmap/types/head-parameter-reads.md)
+  — a mention, in a head's types, of one of that head's own parameters
+  ([visibility](#visibility)).
 - [Dict defaults](../../roadmap/features/dict-defaults.md) — a value dict's `_`
   default, which lifts the dict-default refusal.
 - [The features project's unplanned work](../../roadmap/features/README.md#unplanned-work) — `CLOSE

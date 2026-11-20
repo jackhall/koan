@@ -277,16 +277,14 @@ fn a_quantified_member_through_a_module_is_instanced_where_the_load_names_its_pa
         )),
         format!("load: <test>:5:83: `apply` {unpinned}")
     );
+    // Under a call, the binding names the module, so a quote's code over it types as a load
+    // declaring that module does: `USEIT nums` pins `Carrier` where the code reads `$m`.
     assert_eq!(
         run(&format!(
             "{MAPPER}EXPR #(USEIT m :Mapper) -> Any = \
              #(EVAL #({wanted} = $m.apply) -> Any)\nPRINT (USEIT nums)"
         )),
-        format!(
-            "error: <test>:5:92: `apply` {unpinned}\n  in :(FN :{{m :SIG FOR ALL #{{Carrier: Any}} \
-             (seed: Carrier, apply: :(FN FOR ALL #[Elt] :{{x :Carrier y :Elt}} -> Elt))}} -> Any) \
-             (USEIT nums) at <test>:6:7"
-        )
+        ":(FN :{x :Number y :Number} -> Number)"
     );
     assert_eq!(
         run(&format!(
@@ -305,7 +303,7 @@ fn each_open_path_reads_back_its_tree() {
     );
     loaded(&source, |program| {
         let (root, facts) = (program.shape(), program.facts());
-        let mut names: Vec<_> = (facts.own_units().iter())
+        let mut names: Vec<_> = (facts.own_units())
             .flat_map(|(_, (record, _))| record.paths.iter())
             .filter(|((at, _), _)| *at == root.segment())
             .map(|((_, name), _)| *name)
@@ -315,7 +313,7 @@ fn each_open_path_reads_back_its_tree() {
             let (entry, resolution) = facts.path(&program.tiers().resting(), root, name)?;
             match resolution.resolved {
                 Resolved::Class(_) => Some((entry.label, resolution.tree)),
-                Resolved::Closed(_) => None,
+                Resolved::Closed(_) | Resolved::Over(_) => None,
             }
         });
         let label = |entry| program.symbols().display(entry).to_string();
@@ -327,13 +325,20 @@ fn each_open_path_reads_back_its_tree() {
         assert!(chain.is_empty());
         let declaring = program.shapes().shape_at(binder.body);
         assert_eq!(label(declaring.slot_name(binder.slot).symbol()), "p");
-        let (carrier, tree) = trees.next().expect("`a`'s `Carrier` is open");
-        assert_eq!(label(carrier.symbol()), "Carrier");
-        let Tree::View { source, .. } = tree else {
-            panic!("the view `BUILD` builds: {tree:?}");
-        };
-        assert!(!source.closed());
-        assert!(trees.next().is_none());
+        // `a`'s `Carrier` reads the view `BUILD` builds, and each functor's `:|` over a body
+        // capturing its parameter writes a view in place whose head parameter is read through
+        // that site: `MAKESET`'s and `PICK`'s `Set`, and `BUILD`'s own `Carrier`.
+        let mut rest: Vec<_> = trees
+            .map(|(held, tree)| {
+                let Tree::View { source, .. } = tree else {
+                    panic!("a view: {tree:?}");
+                };
+                assert!(!source.closed());
+                label(held.symbol())
+            })
+            .collect();
+        rest.sort();
+        assert_eq!(rest, ["Carrier", "Carrier", "Set", "Set"]);
     });
 }
 
@@ -554,7 +559,7 @@ fn a_class_is_reachable_through_a_captured_holder_in_any_order() {
             super::statics::ends(program, interval(program, inner, "z"))
         });
         assert_eq!(
-            z, "[Never, Carrier]",
+            z, "[(ONE OF (RETYPED TO Carrier), Never), (ONE OF Carrier, Never)]",
             "with `{before}` before `inner`, `{after}` after"
         );
     }
@@ -575,7 +580,10 @@ fn a_class_is_reachable_through_a_member_of_a_captured_module() {
         let inner = body(program, outer, "inner");
         super::statics::ends(program, interval(program, inner, "z"))
     });
-    assert_eq!(z, "[Never, Carrier]");
+    assert_eq!(
+        z,
+        "[(ONE OF (RETYPED TO Carrier), Never), (ONE OF Carrier, Never)]"
+    );
 }
 
 /// A class's variable reaches through a member chain however deep: `inner` reads `Carrier`
@@ -594,5 +602,8 @@ fn a_class_is_reachable_through_a_nested_member_chain() {
         let inner = body(program, outer, "inner");
         super::statics::ends(program, interval(program, inner, "z"))
     });
-    assert_eq!(z, "[Never, Carrier]");
+    assert_eq!(
+        z,
+        "[(ONE OF (RETYPED TO Carrier), Never), (ONE OF Carrier, Never)]"
+    );
 }
